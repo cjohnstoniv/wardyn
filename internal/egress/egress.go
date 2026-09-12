@@ -54,6 +54,17 @@ type DecisionLog struct {
 	// recorded as scanned=false ("blind") so audit cannot imply coverage it does
 	// not have. The control plane turns it into an llm.scan.* audit event.
 	Scan *ScanSummary `json:"scan,omitempty"`
+	// Repeat, when non-zero, marks this row as the SUMMARY of a streak of
+	// IDENTICAL refusals the proxy answered from a memo instead of re-deciding
+	// (today only builtin:private-ip — see privateIPMemo in
+	// internal/egress/proxy). It counts the attempts that were refused WITHOUT a
+	// row of their own, so the trail says "this happened N more times" rather
+	// than either flooding with duplicates or under-reporting silently.
+	//
+	// It always arrives as a NEW row, never as an update of the row that opened
+	// the streak: the audit chain is append-only (migration 0047) and a decision
+	// already recorded is not rewritten because it happened again.
+	Repeat int `json:"repeat,omitempty"`
 }
 
 // ScanSummary is the CONTENT-FREE summary of one LLM content-inspection pass.

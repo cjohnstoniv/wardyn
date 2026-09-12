@@ -85,6 +85,12 @@ type Proxy struct {
 	blindMu    sync.Mutex
 	blindHosts map[string]struct{}
 
+	// privIP is B6's per-run builtin:private-ip memo — the one egress verdict
+	// that cannot change mid-run, so an identical retry is answered without a
+	// re-resolve and without a second decision row. See private_ip_memo.go for
+	// the rule, the ceiling and why no other refusal is memoed.
+	privIP privateIPMemo
+
 	// gitGrants is the per-run git-broker allowlist: canonical lowercased
 	// "<org>/<repo>" -> the github_token grant to mint from. It is the unit of
 	// trust for the /wardyn/gh/ route — a repo absent here is 403. Empty/nil ==
@@ -713,6 +719,12 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		}
 		return egress.Allow, target, &log
 	}
+	// B6, BEFORE the re-resolve: an identical attempt against a host already
+	// refused by the private-address guard gets the same 403 from the memo, and
+	// leaves one summary row instead of a row per retry (private_ip_memo.go).
+	if p.privateIPMemoHit(host, port) {
+		return egress.Deny, "", nil
+	}
 	target, ruleSource, terr := p.egressTarget(host, port)
 	if terr != nil {
 		// A name that never resolved is not an SSRF block, and auditing it as
@@ -725,6 +737,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 			return egress.Deny, "", &log
 		}
 		log := decisionLog(req, egress.Deny, "builtin:private-ip")
+		p.privateIPRefused(req)
 		return egress.Deny, "", &log
 	}
 	log := p.allowLog(req, approvalID)

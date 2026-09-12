@@ -315,9 +315,15 @@ type SiteConfig struct {
 	// corporate registry, the internal model gateway) the proxy's unconditional
 	// private/reserved-IP SSRF guard would otherwise refuse regardless of
 	// policy. Each entry LIFTS that guard for addresses matching its
-	// host_suffix, scoped to its own CIDRs (or the full RFC1918/ULA/CGNAT set
-	// when CIDRs is empty) — never loopback/link-local/metadata/unspecified/
-	// multicast/NAT64, which stay denied unconditionally. The policy verdict
+	// host_suffix. LEAVE CIDRs EMPTY unless you know the addresses the SANDBOX
+	// resolves — empty is the full RFC1918/ULA/CGNAT liftable set, still scoped
+	// to the suffix, and it is the right default: a list drawn from what an
+	// operator's own machine resolves for a private endpoint (a corporate
+	// resolver's CGNAT answer) excludes the in-VPC address the sandbox actually
+	// gets, and the denial then looks identical to having no entry at all.
+	// Tighten only from sandbox-side resolution evidence. Never
+	// loopback/link-local/metadata/unspecified/multicast/NAT64, which stay denied
+	// unconditionally. The policy verdict
 	// (allowed_domains/denied_domains) still has to allow the host separately —
 	// this only lifts the SSRF builtin. Admin-only; validated at write time
 	// (validateInternalHosts) so every declared CIDR lies inside

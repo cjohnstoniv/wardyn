@@ -277,6 +277,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		<-s.renewStopped
 	}
 	httpErr := s.http.Shutdown(ctx)
+	// Run end closes every open private-ip streak (B6), BEFORE the sink drains,
+	// so a repeat count that never hit the eviction path is still recorded.
+	s.proxy.flushPrivateIPMemo()
 	sinkErr := s.sink.close(ctx)
 	if httpErr != nil {
 		return httpErr

@@ -495,6 +495,64 @@ func (p *Policy) AuthoredPortFor(host string, port int) bool {
 // already carries that).
 const egressHeaderDetail = "X-Wardyn-Egress-Detail"
 
+// egressHeaderRetry / egressRetryNever tell the sandbox a refusal is TERMINAL
+// for this run, so a client with a retry loop of its own (the agent CLI has one;
+// the proxy has none) can stop instead of spending ten attempts on an answer
+// that cannot change.
+//
+// Set on the builtin:private-ip arm below and on NOTHING else. That is the one
+// refusal whose remedy is out of reach mid-run: the internal_hosts lift is
+// compiled into this sidecar's config at dispatch and read once at startup, so
+// the guard cannot change its mind about this host while the run lasts — which
+// is what egressDenialSuffix says in the body. A builtin:resolve-failed is a
+// resolver outage that may clear on the next attempt, and an approval-pending
+// refusal is waiting for a human to answer; telling either of those "never"
+// would turn a transient fault into a dead run.
+const (
+	egressHeaderRetry = "X-Wardyn-Egress-Retry"
+	egressRetryNever  = "never"
+)
+
+// DRAFT (M2 canon pending) — the four sentences a builtin:private-ip 403 tells
+// a HOSTNAME's operator, each its own constant so the owner's canon sitting is a
+// one-line diff. literalIPDenialDetail joins them in exactly one place (its
+// hostname arm below) and nothing else concatenates them.
+//
+// The canon keys these carry on the M2 sheet are named beside each one. They are
+// server-composed, not console copy: this text reaches a human as an
+// X-Wardyn-Egress-Detail header and a 403 body, and docs/OPERATIONS.md quotes
+// the hint verbatim.
+const (
+	// egressPrivateRangeCause is today's sentence, unchanged.
+	egressPrivateRangeCause = "this host resolves into a private/reserved address range, " +
+		"which the built-in guard denies regardless of policy"
+	// egressInternalHostsRemedy is B7's remedy. The parenthetical used to read
+	// "host_suffix plus the cidrs it may resolve into" — advice that cost the
+	// field report two runs, because the ranges an operator can see from their
+	// own machine are a corporate resolver's, not the ones the SANDBOX resolves
+	// into, and a cidrs list drawn from the wrong side excludes the address the
+	// guard actually refuses. Empty cidrs is the full liftable set, still
+	// suffix-scoped (types.InternalHost).
+	egressInternalHostsRemedy = "declare it in site config under internal_hosts " +
+		"(host_suffix; leave cidrs empty unless you know the ranges the SANDBOX resolves into) " +
+		"to lift the guard for it"
+	// siteInternalHostsCIDRHint is SITE.INTERNAL_HOSTS_CIDR_HINT: B7's hint, for
+	// the operator who is about to write the entry. It says the same thing as the
+	// remedy's parenthetical a SECOND time, deliberately and knowingly — the two
+	// land on different readers and the owner's sitting may keep either one
+	// alone. Dropping one is a one-line change at the join site below.
+	siteInternalHostsCIDRHint = "Leave `cidrs` empty unless you know the addresses the sandbox resolves. " +
+		"What your own machine sees for a private endpoint is usually not what the cluster sees."
+	// egressDenialSuffix is EGRESS.DENIAL_SUFFIX: B2's lifetime clause. The
+	// internal_hosts lift the remedy names is compiled into this sidecar's config
+	// at dispatch and read once at startup (LoadConfigBytes), so a site-config
+	// change cannot reach the run reading this sentence. It is the one denial an
+	// operator acts on, and the field report is of an operator acting on it and
+	// then watching nine more retries fail with the identical message.
+	egressDenialSuffix = "Site config is read at run start, so change it and start a new run — " +
+		"this one will keep being refused."
+)
+
 // literalIPDenialDetail is egressHeaderDetail's value for a builtin:private-ip
 // refusal of host: which of the three causes fired, and the one place to fix
 // it. Returns "" when host is neither a literal IP nor a hostname (i.e. there
@@ -506,8 +564,12 @@ func literalIPDenialDetail(host string, port int, pol *Policy) string {
 	}
 	ip := net.ParseIP(h)
 	if ip == nil {
-		return "this host resolves into a private/reserved address range, which the built-in guard denies regardless of policy; " +
-			"declare it in site config under internal_hosts (host_suffix plus the cidrs it may resolve into) to lift the guard for it"
+		// THE join site for the four DRAFT sentences above: cause, remedy, hint,
+		// lifetime. The owner's ruling on any of them — reword one, drop the
+		// hint, drop the remedy's parenthetical — is an edit to this one
+		// expression and to the constant it names, nowhere else.
+		return egressPrivateRangeCause + "; " + egressInternalHostsRemedy + ". " +
+			siteInternalHostsCIDRHint + " " + egressDenialSuffix
 	}
 	if pol != nil {
 		if _, denied := pol.deniedExact[ip.String()]; denied {
@@ -545,8 +607,27 @@ const resolveFailedDetail = "this host did not resolve (DNS failure, no such nam
 // the rule it explains (and so proxy.go stays under the 1000-line split gate).
 func (p *Proxy) writeEgressDeny(w http.ResponseWriter, host string, port int, log *egress.DecisionLog) {
 	body := "egress denied by policy"
-	switch decisionReason(log) {
+	reason := decisionReason(log)
+	// A DENY carrying no decision log is B6's memoed private-ip refusal:
+	// evaluate() answered an identical repeat out of the per-run memo — no
+	// re-resolve, and no second row for a verdict already recorded — so the 403
+	// has to be rebuilt here to stay byte-identical to the first one, retry
+	// header included.
+	//
+	// The memo is ASKED, never inferred from the nil. A future deny path that
+	// returns no log for some unrelated reason gets the plain "denied by policy"
+	// body it would have got anyway, because the lookup answers false for a host
+	// this guard never refused — pinned as the negative case in policy_test.go.
+	// The residual, stated: such a path would inherit this body for a host that
+	// IS memoed. Closing it properly means passing the reason explicitly from
+	// both evaluate() callers, one of which is plain_lane.go — another lane's
+	// file this wave. Filed, not smuggled in.
+	if reason == "" && p.privateIPMemoed(host, port) {
+		reason = "builtin:private-ip"
+	}
+	switch reason {
 	case "builtin:private-ip":
+		w.Header().Set(egressHeaderRetry, egressRetryNever)
 		if detail := literalIPDenialDetail(host, port, p.policy); detail != "" {
 			w.Header().Set(egressHeaderDetail, detail)
 			body = "egress denied: " + detail
@@ -555,7 +636,7 @@ func (p *Proxy) writeEgressDeny(w http.ResponseWriter, host string, port int, lo
 		w.Header().Set(egressHeaderDetail, resolveFailedDetail)
 		body = "egress denied: " + resolveFailedDetail
 	}
-	setEgressRefusalHeadersWithReason(w, egressRefusalDenied, host, decisionReason(log))
+	setEgressRefusalHeadersWithReason(w, egressRefusalDenied, host, reason)
 	http.Error(w, body, http.StatusForbidden)
 }
 

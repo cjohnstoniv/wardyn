@@ -67,14 +67,19 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, _ := json.Marshal(map[string]any{
+	fields := map[string]any{
 		"host":        dl.Request.Host,
 		"port":        dl.Request.Port,
 		"method":      dl.Request.Method,
 		"path":        dl.Request.Path,
 		"rule_source": dl.RuleSource,
 		"approval_id": dl.ApprovalID,
-	})
+	}
+	// B6 streak summary only: an ordinary decision's data column stays as it was.
+	if dl.Repeat > 0 {
+		fields["repeat"] = dl.Repeat
+	}
+	data, _ := json.Marshal(fields)
 	outcome := decisionOutcome(dl.Decision)
 	ev := s.auditEvent(&runID, types.ActorAgent, claims.SPIFFEID,
 		"egress."+string(dl.Decision), dl.Request.Host, outcome, data)
