@@ -176,22 +176,31 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     await expect(page.getByTestId("provider-row-github").getByText(/Stored as/)).toBeVisible();
   });
 
-  test("a malformed base URL is refused with the SERVER's own PROVIDERS_400 body, and writes nothing", async ({
+  test("a malformed base URL is flagged before any request, and a server-only refusal renders the SERVER's own PROVIDERS_400 body — writing nothing", async ({
     page,
   }) => {
     await gotoProviders(page);
     const row = page.getByTestId("provider-row-github");
     const before = await (await page.request.get("/api/v1/workspace-providers", { headers: auth })).json();
 
+    // The client mirror (providers/display.tsx baseURLError) flags the shape
+    // the server would 400, and the screen offers no enabled Save while a row
+    // is invalid — the request is never made.
     await row.locator("textarea").fill("not-a-url");
+    await expect(row.getByText(PROVIDERS.BASE_URL_INVALID)).toBeVisible();
+    await expect(page.getByRole("button", { name: PROVIDERS.SAVE_CTA, disabled: false })).toHaveCount(0);
+
+    // A rule the mirror does not carry — the address COUNT — reaches the
+    // server, whose own bytes (internal/api/workspace_providers.go's
+    // providers400BaseURLNone) render under SAVE_REFUSED_TITLE, never a
+    // console paraphrase. Nine valid GHES hosts pass every client rule.
+    const nine = Array.from({ length: 9 }, (_, i) => `https://git${i + 1}.corp.example`).join("\n");
+    await row.locator("textarea").fill(nine);
+    await expect(row.getByText(PROVIDERS.BASE_URL_INVALID)).toHaveCount(0);
     await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
 
     await expect(page.getByText(PROVIDERS.SAVE_REFUSED_TITLE)).toBeVisible();
-    // The server's own bytes (internal/api/workspace_providers.go's
-    // providers400BaseURL) — never a console paraphrase.
-    await expect(
-      page.getByText("base_urls[0]: must be an https URL with a host and no credentials, query or fragment"),
-    ).toBeVisible();
+    await expect(page.getByText("git[0].base_urls: name at least one address (at most 8)")).toBeVisible();
 
     // Nothing was written: the stored document is byte-identical to before.
     const after = await (await page.request.get("/api/v1/workspace-providers", { headers: auth })).json();

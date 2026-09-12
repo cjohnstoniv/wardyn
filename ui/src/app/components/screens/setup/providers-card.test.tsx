@@ -63,6 +63,8 @@ const agent = (id: string, enabled = true): SetupHarnessTool => ({
   has_gateway: true,
   has_login: true,
   enabled,
+  // a STORED row: the server stamps `mechanism` only when an agent row exists
+  mechanism: "anthropic_api_key",
 });
 
 beforeEach(() => {
@@ -131,11 +133,29 @@ describe("ProvidersCard", () => {
     });
 
     // Legacy open mode: no agent row is stored, so every catalog row comes back
-    // with `enabled` absent — UNKNOWN per row, never false, and the deployment
-    // really does offer them all. A "0 agents" here would be the false claim.
-    it("counts a row whose `enabled` is absent as offered", async () => {
+    // with `enabled` absent. Nothing has been ENABLED by an admin — the summary
+    // is about the policy, not the catalog — so the agents half is omitted and
+    // the card reads git providers alone (and CARD_EMPTY when those are zero
+    // too: the providers e2e pins that on the funnel card). "3 agents" here
+    // would claim a decision nobody made.
+    it("a roster with no stored rows (legacy open mode: enabled on every row, no mechanism) names git providers alone", async () => {
       getWorkspaceProvidersMock.mockResolvedValue(snap([row("acme")]));
-      renderCard(true, [{ id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true }]);
+      renderCard(true, [{ id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true, enabled: true }]);
+      expect(await screen.findByText(PROVIDERS.CARD_PROVIDERS(1))).toBeInTheDocument();
+      expect(screen.queryByText(PROVIDERS.CARD_AGENTS(1), { exact: false })).not.toBeInTheDocument();
+    });
+
+    it("a legacy roster with zero git rows is CARD_EMPTY", async () => {
+      getWorkspaceProvidersMock.mockResolvedValue(snap([]));
+      renderCard(true, [{ id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true, enabled: true }]);
+      expect(await screen.findByText(PROVIDERS.CARD_EMPTY)).toBeInTheDocument();
+    });
+
+    // Within a STAMPED roster a single row whose `enabled` is absent is UNKNOWN,
+    // never false (setup.ts's rule) — it counts as offered.
+    it("inside a roster with a policy, a row whose `enabled` is absent counts as offered", async () => {
+      getWorkspaceProvidersMock.mockResolvedValue(snap([row("acme")]));
+      renderCard(true, [agent("codex-cli", false), { id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true }]);
       expect(
         await screen.findByText(PROVIDERS.CARD_SUMMARY(PROVIDERS.CARD_PROVIDERS(1), PROVIDERS.CARD_AGENTS(1))),
       ).toBeInTheDocument();
