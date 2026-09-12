@@ -117,6 +117,7 @@ export function Lane({
   connectedDetail,
   selected,
   onSelect,
+  disabled,
   children,
 }: {
   id: string;
@@ -126,6 +127,11 @@ export function Lane({
   connectedDetail?: string;
   selected: boolean;
   onSelect: () => void;
+  /** Not selectable, and so never expandable — the Git tab passes this when the
+   *  row names no host to key a credential by (git-tab.tsx's `host`). A lane
+   *  that cannot be opened cannot Save, which is the point: the alternative was
+   *  a Save that wrote the secret of a DIFFERENT host. */
+  disabled?: boolean;
   children?: React.ReactNode;
 }) {
   return (
@@ -133,6 +139,7 @@ export function Lane({
       className={cn(
         "rounded-lg border transition-colors",
         selected ? "border-primary bg-primary/5" : "border-border",
+        disabled && "opacity-60",
       )}
     >
       <button
@@ -140,6 +147,7 @@ export function Lane({
         role="radio"
         aria-checked={selected}
         id={id}
+        disabled={disabled}
         onClick={onSelect}
         className="flex w-full items-start gap-2.5 p-3 text-left"
       >
@@ -167,7 +175,7 @@ export function Lane({
           </span>
         </span>
       </button>
-      {selected && children && <div className="border-t border-border px-3 py-3">{children}</div>}
+      {selected && !disabled && children && <div className="border-t border-border px-3 py-3">{children}</div>}
     </div>
   );
 }

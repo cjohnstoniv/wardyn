@@ -24,6 +24,7 @@ import * as React from "react";
 import { Loader2, ShieldCheck, TriangleAlert, KeyRound, Square, ExternalLink, CornerDownLeft } from "lucide-react";
 import { harnessAuth as harnessAuthApi } from "../../../lib/api/harness-auth";
 import { runs as runsApi } from "../../../lib/api/runs";
+import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { AttachTerminal, type AttachTerminalHandle } from "../../attach-terminal";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
@@ -237,17 +238,30 @@ function ExpectList({ items }: { items: React.ReactNode[] }) {
 
 export function HarnessLoginPane({
   provider = "anthropic",
+  startURLManaged = false,
   onDone,
   onCancel,
 }: {
   provider?: string;
+  // The ORG's access portal is already stored and the server will use it: this
+  // sign-in runs under a per_user agent row (the member's Getting Started CTA,
+  // and the admin's own sign-in on a per_user row of the Agents tab). The
+  // start-URL PROMPT is then skipped for a one-line note — harnessLogin's
+  // startUrl argument is ignored server-side under such a row, so asking was a
+  // field whose value could not take effect, and every member had to hunt down a
+  // URL their admin had already entered.
+  //
+  // Default false: the ordinary Settings flow (no row, or `shared`) has nothing
+  // stored to sign in against, so it still asks.
+  startURLManaged?: boolean;
   // Called after the token is captured (parent refreshes setup status + closes).
   onDone: () => void;
   // Called when the operator backs out before capturing.
   onCancel: () => void;
 }) {
   const flow = loginFlow(provider);
-  const [phase, setPhase] = React.useState<Phase>(flow.needsStartUrl ? "prompt" : "intro");
+  const askStartUrl = !!flow.needsStartUrl && !startURLManaged;
+  const [phase, setPhase] = React.useState<Phase>(askStartUrl ? "prompt" : "intro");
   const [startUrl, setStartUrl] = React.useState("");
   const [runId, setRunId] = React.useState<string | null>(null);
   const [token, setToken] = React.useState("");
@@ -381,6 +395,10 @@ export function HarnessLoginPane({
       {phase === "intro" && (
         <div className="space-y-3" data-testid="login-intro">
           <ExpectList items={flow.expects} />
+          {/* The portal the sign-in will use is the row's, not one to type. */}
+          {flow.needsStartUrl && startURLManaged && (
+            <p className="text-xs leading-relaxed text-muted-foreground">{AGENTS.SSO_START_URL_MANAGED}</p>
+          )}
           <div className="flex flex-wrap gap-2">
             <Button size="sm" onClick={() => void launch()}>
               <KeyRound className="size-3.5" /> Start login
@@ -393,7 +411,7 @@ export function HarnessLoginPane({
       )}
 
       {phase === "prompt" && (
-        <div className="space-y-2">
+        <div className="space-y-2" data-testid="login-start-url-prompt">
           <ExpectList items={flow.expects} />
           <label className="block text-xs font-medium text-foreground" htmlFor="harness-login-start-url">
             Your AWS access portal URL

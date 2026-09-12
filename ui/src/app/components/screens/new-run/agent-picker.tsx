@@ -7,16 +7,22 @@
 // (the file-size gate) the way new-run-rail.tsx/workspace-card.tsx were.
 //
 // Options come from SetupStatus.harnesses. Roster-unknown (harnesses
-// undefined — the fetch never landed, or failed) keeps today's two catalog
-// literals and marks nothing unavailable: "unknown stays unknown — never
-// claim a missing model path on a blip." Once the roster arrives, every
-// catalog row renders — a disabled one WITH AGENTS.UNAVAILABLE as its reason,
-// never hidden.
+// undefined — the fetch never landed, or failed) falls back to WIZARD_AGENTS
+// and marks nothing unavailable: "unknown stays unknown — never claim a
+// missing model path on a blip." Once the roster arrives, every catalog row
+// renders — a disabled one WITH AGENTS.UNAVAILABLE as its reason, never hidden.
+//
+// WIZARD_AGENTS, not a second pair of literals: the fallback listed
+// claude-code/codex-cli only, so a cloned BYOA run (`agent: "none"`, label
+// "Your own tools") painted an EMPTY trigger — Radix has no item to read the
+// selected value from — and no way back to the value the run would actually
+// launch with. For the same reason the CURRENT value is appended whenever the
+// options don't already carry it, which also covers a roster that omits it.
 import type { SetupHarnessTool } from "../../../lib/types";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { Field } from "../../wardyn/form-primitives";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
-import type { WizardAgent } from "./wizard-types";
+import { agentLabel, WIZARD_AGENTS, type WizardAgent } from "./wizard-types";
 
 export function AgentPicker({
   value,
@@ -29,10 +35,11 @@ export function AgentPicker({
 }) {
   const options: { id: string; label: string; disabled?: boolean }[] = harnesses
     ? harnesses.map((h) => ({ id: h.id, label: h.display, disabled: h.enabled === false }))
-    : [
-        { id: "claude-code", label: "Claude Code" },
-        { id: "codex-cli", label: "Codex CLI" },
-      ];
+    : WIZARD_AGENTS.map((id) => ({ id, label: agentLabel(id) }));
+  // The selected value ALWAYS has an item: without one the trigger renders
+  // nothing at all, which is the screen claiming no agent for the agent the run
+  // will use. Never disabled — this is the run's own value, not an offer.
+  if (!options.some((o) => o.id === value)) options.push({ id: value, label: agentLabel(value) });
 
   return (
     <Field label="Agent" htmlFor="nr-agent">

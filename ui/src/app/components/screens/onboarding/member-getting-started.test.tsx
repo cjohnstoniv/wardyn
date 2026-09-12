@@ -58,6 +58,7 @@ import { OperatorProvider } from "../../wardyn/operator-context";
 import { MEMBER } from "../../../lib/governance-copy";
 import { DRIVES, DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
+import { MEMBER_GETTING_STARTED as T } from "../../wardyn/copy";
 
 function status(overrides: Partial<SetupStatus> = {}): SetupStatus {
   return baseStatus({
@@ -411,6 +412,36 @@ describe("MemberGettingStarted", () => {
       renderPage();
       await user.click(await screen.findByRole("button", { name: AGENTS.SIGN_IN_AWS }));
       expect(screen.getByTestId("harness-login-pane")).toBeInTheDocument();
+    });
+
+    // V1 r2 LOW: the pane's start-URL field started EMPTY, so every member had to
+    // find their org's access portal themselves — and the server ignores what
+    // they type under a per_user row, signing in against the row's own
+    // sso_start_url. The field was a control with no effect; the note is the fact.
+    it("...and that pane asks for no access portal — the admin's is the one used", async () => {
+      const user = userEvent.setup();
+      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_configured" } }));
+      renderPage();
+      await user.click(await screen.findByRole("button", { name: AGENTS.SIGN_IN_AWS }));
+      expect(screen.getByText(AGENTS.SSO_START_URL_MANAGED)).toBeInTheDocument();
+      expect(document.getElementById("harness-login-start-url")).toBeNull();
+      // The pane is at its consent gate, ready to launch — not stuck waiting on
+      // a field it no longer shows.
+      expect(screen.getByTestId("login-intro")).toBeInTheDocument();
+    });
+
+    // V1 r2 LOW: every unrecognised state fell through to
+    // MODEL_ACCESS_NOT_CONFIGURED — so `expired_renewable`, which dispatch
+    // RENEWS, told the member they were not signed in, with no CTA to fix it.
+    it("a state outside the five renders NO chip and no CTA — unknown is not 'not configured'", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "expired_renewable" }, llm_ready: true }));
+      renderPage();
+      // Something from the card renders, so this is not an empty-page false pass.
+      await screen.findByText(T.SETUP_SUMMARY_HELPER);
+      expect(screen.queryByText(AGENTS.MODEL_ACCESS_NOT_CONFIGURED)).not.toBeInTheDocument();
+      expect(screen.queryByText(AGENTS.MODEL_ACCESS_LIVE)).not.toBeInTheDocument();
+      expect(screen.queryByText(/^Model access · /)).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
     });
   });
 });

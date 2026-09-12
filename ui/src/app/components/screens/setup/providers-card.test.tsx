@@ -30,6 +30,7 @@ vi.mock("react-router-dom", async () => {
 });
 
 import type { GitProvider } from "../../../lib/api/providers";
+import type { SetupHarnessTool } from "../../../lib/types";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { ProvidersCard } from "./providers-card";
@@ -43,15 +44,26 @@ const row = (id: string, disabled = false): GitProvider => ({
   disabled,
 });
 
-function renderCard(operator = true) {
+// `harnesses` is the roster BOTH homes already hold (SetupStatus.harnesses),
+// passed in rather than fetched again — setup-screen.test.tsx pins that walking
+// the funnel makes exactly ONE getSetupStatus call.
+function renderCard(operator = true, harnesses?: SetupHarnessTool[]) {
   render(
     <MemoryRouter>
       <OperatorProvider operator={operator}>
-        <ProvidersCard />
+        <ProvidersCard harnesses={harnesses} />
       </OperatorProvider>
     </MemoryRouter>,
   );
 }
+
+const agent = (id: string, enabled = true): SetupHarnessTool => ({
+  id,
+  display: id,
+  has_gateway: true,
+  has_login: true,
+  enabled,
+});
 
 beforeEach(() => {
   getWorkspaceProvidersMock.mockReset();
@@ -102,6 +114,61 @@ describe("ProvidersCard", () => {
     expect(screen.getByText(PROVIDERS.TITLE)).toBeInTheDocument();
     expect(screen.queryByText(PROVIDERS.CARD_OPEN)).not.toBeInTheDocument();
     expect(getWorkspaceProvidersMock).not.toHaveBeenCalled();
+  });
+
+
+  // V1 r2 MEDIUM: CARD_AGENTS and CARD_SUMMARY were frozen in the 98-key pin and
+  // rendered NOWHERE — the card still summarised git rows alone, behind its own
+  // header note saying the agent count "rides along once C-UI lands (W4)". W4
+  // landed in the same delta.
+  describe("the summary names both halves once the roster is known", () => {
+    it("n git providers · m agents, from the roster's own `enabled`", async () => {
+      getWorkspaceProvidersMock.mockResolvedValue(snap([row("acme"), row("acme-labs")]));
+      renderCard(true, [agent("claude-code"), agent("codex-cli"), agent("none", false)]);
+      expect(
+        await screen.findByText(PROVIDERS.CARD_SUMMARY(PROVIDERS.CARD_PROVIDERS(2), PROVIDERS.CARD_AGENTS(2))),
+      ).toBeInTheDocument();
+    });
+
+    // Legacy open mode: no agent row is stored, so every catalog row comes back
+    // with `enabled` absent — UNKNOWN per row, never false, and the deployment
+    // really does offer them all. A "0 agents" here would be the false claim.
+    it("counts a row whose `enabled` is absent as offered", async () => {
+      getWorkspaceProvidersMock.mockResolvedValue(snap([row("acme")]));
+      renderCard(true, [{ id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true }]);
+      expect(
+        await screen.findByText(PROVIDERS.CARD_SUMMARY(PROVIDERS.CARD_PROVIDERS(1), PROVIDERS.CARD_AGENTS(1))),
+      ).toBeInTheDocument();
+    });
+
+    it("zero on BOTH sides is still CARD_EMPTY — one sentence, not '0 git providers · 0 agents'", async () => {
+      getWorkspaceProvidersMock.mockResolvedValue(snap([]));
+      renderCard(true, [agent("claude-code", false)]);
+      expect(await screen.findByText(PROVIDERS.CARD_EMPTY)).toBeInTheDocument();
+    });
+
+    it("zero git rows with agents offered says so, rather than claiming nothing is enabled", async () => {
+      getWorkspaceProvidersMock.mockResolvedValue(snap([]));
+      renderCard(true, [agent("claude-code")]);
+      expect(
+        await screen.findByText(PROVIDERS.CARD_SUMMARY(PROVIDERS.CARD_PROVIDERS(0), PROVIDERS.CARD_AGENTS(1))),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(PROVIDERS.CARD_EMPTY)).not.toBeInTheDocument();
+    });
+
+    it("an UNKNOWN roster (an older daemon, or status not landed) names git providers alone", async () => {
+      getWorkspaceProvidersMock.mockResolvedValue(snap([row("acme")]));
+      renderCard(true, undefined);
+      expect(await screen.findByText(PROVIDERS.CARD_PROVIDERS(1))).toBeInTheDocument();
+    });
+
+    it("a failed providers read leaves NO confident summary, roster or not", async () => {
+      getWorkspaceProvidersMock.mockRejectedValue(new Error("boom"));
+      renderCard(true, [agent("claude-code")]);
+      expect(await screen.findByText(PROVIDERS.CARD_OPEN)).toBeInTheDocument();
+      expect(screen.queryByText(PROVIDERS.CARD_EMPTY)).not.toBeInTheDocument();
+      expect(screen.queryByText(PROVIDERS.CARD_AGENTS(1))).not.toBeInTheDocument();
+    });
   });
 
   it("carries zero teal in either home", async () => {

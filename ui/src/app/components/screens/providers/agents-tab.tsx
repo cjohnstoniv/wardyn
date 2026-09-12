@@ -29,7 +29,8 @@ import { agentProviders as api, type AgentProvider, type AgentProviders } from "
 import { AI_TYPES, IMPOSSIBLE, type AiType } from "../../../lib/integrations";
 import type { SetupHarnessTool, SetupModelAccess } from "../../../lib/types";
 import { getErrorMessage } from "../../../lib/format";
-import { AGENTS, PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { ACCESS_STATE } from "../../../lib/people-access-copy";
+import { AGENTS, MODEL_ACCESS_CHIP_LABEL, PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Field, Switch } from "../../wardyn/form-primitives";
@@ -113,22 +114,38 @@ function rowEnabled(agents: AgentProvider[], harness: SetupHarnessTool): boolean
   return stored ? !stored.disabled : harness.enabled !== false;
 }
 
+// per_user is captured for an AWS SSO sign-in ONLY (validateAgentCredentialSource,
+// and PER_USER_UNAVAILABLE says so). A STORED row pairing it with any other
+// mechanism is a row the admin can neither see nor clear: "Per person" painted
+// active AND disabled, the start-URL field hidden, and both fields re-PUT
+// verbatim by the next unrelated Save.
+//
+// So the pair is dropped ON LOAD, exactly as the mechanism radio's own onChange
+// already does on an edit — the row renders `shared`, and the next Save writes
+// what the admin was shown. A row that carries neither field is returned
+// UNTOUCHED, which is what keeps a custom WARDYN_AGENT_IMAGES row byte-for-byte.
+function normalizeAgentRow(a: AgentProvider): AgentProvider {
+  if (a.mechanism === "bedrock_sso") return a;
+  if (a.credential_source === undefined && a.sso_start_url === undefined) return a;
+  return { ...a, credential_source: undefined, sso_start_url: undefined };
+}
+
+function normalizeAgentProviders(p: AgentProviders): AgentProviders {
+  return p.agents ? { ...p, agents: p.agents.map(normalizeAgentRow) } : p;
+}
+
 const MODEL_ACCESS_TONE: Record<string, "success" | "warning"> = { live: "success" };
 
 function ModelAccessNote({ access }: { access: SetupModelAccess }) {
-  const label =
-    access.state === "live"
-      ? AGENTS.MODEL_ACCESS_LIVE
-      : access.state === "expiring"
-        ? AGENTS.MODEL_ACCESS_EXPIRING
-        : access.state === "expired_signin"
-          ? AGENTS.MODEL_ACCESS_EXPIRED
-          : access.state === "shared_expired"
-            ? AGENTS.MODEL_ACCESS_SHARED_EXPIRED
-            : AGENTS.MODEL_ACCESS_NOT_CONFIGURED;
+  // NO CHIP for a state outside the five (MODEL_ACCESS_CHIP_LABEL's own doc
+  // comment): the old final `else` painted MODEL_ACCESS_NOT_CONFIGURED over
+  // anything unrecognised, so a daemon reporting `expired_renewable` — a live,
+  // renewable credential — told the admin they were signed out. The server's own
+  // action line still renders: unknown to us is not unknown to it.
+  const label = MODEL_ACCESS_CHIP_LABEL[access.state];
   return (
     <div>
-      <Chip tone={MODEL_ACCESS_TONE[access.state] ?? "warning"}>{label}</Chip>
+      {label && <Chip tone={MODEL_ACCESS_TONE[access.state] ?? "warning"}>{label}</Chip>}
       {/* The server's own words, verbatim — never reworded client-side. */}
       {access.action && <p className="mt-1 text-meta text-warning">{access.action}</p>}
     </div>
@@ -265,7 +282,17 @@ function Row({
               <p className="mt-1 text-meta text-muted-foreground">{AGENTS.ADMIN_OWN_CHIP_NOTE}</p>
               {loginOpen ? (
                 <div className="mt-2">
-                  <HarnessLoginPane provider="aws" onDone={() => setLoginOpen(false)} onCancel={() => setLoginOpen(false)} />
+                  {/* Under a per_user row the server signs in against THAT row's
+                      stored sso_start_url and ignores a typed one, so the pane's
+                      start-URL field is suppressed for a note (the member's CTA
+                      does the same). A shared row has nothing stored, so the
+                      ordinary flow still asks. */}
+                  <HarnessLoginPane
+                    provider="aws"
+                    startURLManaged={perUserAvailable && credentialSource === "per_user"}
+                    onDone={() => setLoginOpen(false)}
+                    onCancel={() => setLoginOpen(false)}
+                  />
                 </div>
               ) : (
                 (modelAccess.state === "not_configured" ||
@@ -289,6 +316,7 @@ export function AgentsTab({
   harnesses,
   modelAccess,
   operator,
+  onRetryRoster,
 }: {
   /** The harness catalog off SetupStatus.harnesses. UNDEFINED is "unknown"
    *  (an older daemon omits the field, or the status read failed) — NEVER an
@@ -300,6 +328,11 @@ export function AgentsTab({
   /** The SIGNED-IN caller's own model-access state — claude-code only. */
   modelAccess?: SetupModelAccess;
   operator: boolean;
+  /** Re-fires the PARENT's /setup/status read — the one the roster comes from.
+   *  Required rather than optional: the roster-unknown Retry used to call this
+   *  tab's own load(), which re-reads /agent-providers, a read that had not
+   *  failed, so the control did nothing three clicks running. */
+  onRetryRoster: () => void;
 }) {
   const [draft, setDraft] = React.useState<AgentProviders | null>(null);
   const [etag, setEtag] = React.useState<string | null>(null);
@@ -314,7 +347,7 @@ export function AgentsTab({
     api
       .getAgentProviders()
       .then((snap) => {
-        setDraft(snap.providers);
+        setDraft(normalizeAgentProviders(snap.providers));
         setEtag(snap.etag);
         setStatus("ready");
       })
@@ -359,7 +392,7 @@ export function AgentsTab({
       });
       const next: AgentProviders = { agents: [...catalogRows, ...customRows] };
       const result = await api.putAgentProviders(next, etag);
-      setDraft(result.providers);
+      setDraft(normalizeAgentProviders(result.providers));
       setEtag(result.etag);
       toast.success(PROVIDERS.SAVED_TOAST);
     } catch (e) {
@@ -387,8 +420,8 @@ export function AgentsTab({
         title={PROVIDERS.FETCH_FAILED_TITLE}
         description={PROVIDERS.FETCH_FAILED_BODY}
         action={
-          <Button variant="outline" size="sm" onClick={load}>
-            Retry
+          <Button variant="outline" size="sm" onClick={onRetryRoster}>
+            {ACCESS_STATE.FETCH_FAILED_RETRY}
           </Button>
         }
       />
@@ -410,7 +443,7 @@ export function AgentsTab({
         description={PROVIDERS.FETCH_FAILED_BODY}
         action={
           <Button variant="outline" size="sm" onClick={load}>
-            Retry
+            {ACCESS_STATE.FETCH_FAILED_RETRY}
           </Button>
         }
       />
@@ -426,7 +459,7 @@ export function AgentsTab({
           <p className="text-sm font-medium text-foreground">{PROVIDERS.SAVED_ELSEWHERE_TITLE}</p>
           <p className="text-body text-muted-foreground">{PROVIDERS.SAVED_ELSEWHERE_BODY}</p>
           <Button variant="outline" size="sm" onClick={load}>
-            Retry
+            {ACCESS_STATE.FETCH_FAILED_RETRY}
           </Button>
         </div>
       ) : (

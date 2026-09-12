@@ -11,9 +11,17 @@
 //
 // ZERO TEAL, both places — a two-line link button into /providers, where the
 // tab forms and the one Save providers button live. It counts ENABLED git
-// provider rows, never hosts (§7.5). The Agents-tab count (CARD_AGENTS) rides
-// along once C-UI's agent-providers.ts lands (W4) — until then the summary
-// names git providers alone rather than a false "0 agents".
+// provider rows, never hosts (§7.5), and ENABLED agent rows beside them —
+// CARD_SUMMARY(CARD_PROVIDERS(n), CARD_AGENTS(m)), the shape §7.5 froze.
+//
+// The agent count comes from the roster BOTH homes already hold (SetupStatus.
+// harnesses, passed in) rather than a fetch of this card's own: `enabled` is the
+// org's answer per row — may a run name this agent — and it is true for every
+// catalog row in legacy-open mode, so a deployment that has saved no agent
+// roster reads honestly instead of a false "0 agents". A second
+// getSetupStatus() here would also re-fetch what the funnel walked in with, which
+// setup-screen.test.tsx pins against. An older daemon omits the field: the
+// summary then names git providers alone, as it did before W4.
 //
 // SUPER only, the same reason /drives has no nav item: a security admin's
 // authority is the governance profile's two limit rows, not this registry.
@@ -26,11 +34,19 @@ import * as React from "react";
 import { useNavigate } from "react-router-dom";
 import { ChevronRight } from "lucide-react";
 import { providers as api } from "../../../lib/api/providers";
+import type { SetupHarnessTool } from "../../../lib/types";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { OperatorOnlyHint } from "../../wardyn/primitives";
 import { useOperator } from "../../wardyn/operator-context";
 
-export function ProvidersCard() {
+export function ProvidersCard({
+  /** The harness roster off SetupStatus — the SAME read both homes already made.
+   *  Undefined is UNKNOWN (an older daemon omits it, or status hasn't landed):
+   *  the summary then names git providers alone rather than a false "0 agents". */
+  harnesses,
+}: {
+  harnesses?: SetupHarnessTool[];
+} = {}) {
   const operator = useOperator();
   const navigate = useNavigate();
   const [count, setCount] = React.useState<number | null>(null);
@@ -72,7 +88,23 @@ export function ProvidersCard() {
     );
   }
 
-  const summary = count === null ? "" : count === 0 ? PROVIDERS.CARD_EMPTY : PROVIDERS.CARD_PROVIDERS(count);
+  // CARD_EMPTY only when there is genuinely nothing enabled on either side —
+  // otherwise both counts ride, including a zero half (0 git providers IS the
+  // legacy-open fact, and CARD_PROVIDERS(0) says it without claiming the agents
+  // are gone too).
+  // `enabled !== false`, never `=== true`: absent is UNKNOWN per row (setup.ts's
+  // own rule), and legacy-open mode omits it on every row.
+  const agents = harnesses ? harnesses.filter((h) => h.enabled !== false).length : null;
+  const summary =
+    count === null
+      ? ""
+      : agents === null
+        ? count === 0
+          ? PROVIDERS.CARD_EMPTY
+          : PROVIDERS.CARD_PROVIDERS(count)
+        : count === 0 && agents === 0
+          ? PROVIDERS.CARD_EMPTY
+          : PROVIDERS.CARD_SUMMARY(PROVIDERS.CARD_PROVIDERS(count), PROVIDERS.CARD_AGENTS(agents));
 
   return (
     <section className="rounded-xl border border-border bg-card p-4" data-testid="providers-card">

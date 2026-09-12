@@ -35,7 +35,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../../ui/alert-dialog";
-import { appLaneAvailable, invalidBaseURLLines, KIND_LABEL, LANE_META, laneUnavailableReason, sshLaneAvailable, sshScopedHostLevel } from "./display";
+import { appLaneAvailable, hostOf, invalidBaseURLLines, KIND_LABEL, LANE_META, laneUnavailableReason, sshLaneAvailable, sshScopedHostLevel } from "./display";
 
 const ALL_LANES: GitLane[] = ["app", "pat", "ssh"];
 const ALL_KINDS: GitProviderKind[] = ["github", "azure_devops"];
@@ -84,12 +84,16 @@ function withLaneToggled(row: GitProvider, lane: GitLane): GitLane[] {
 // both rows would be the same KIND; name the second host a second row is not
 // offered in v1) if that ever matters; the mock draws only the single-host
 // case.
-function primaryHost(row: GitProvider): string {
-  try {
-    return new URL(row.base_urls[0] ?? "").hostname.toLowerCase() || "github.com";
-  } catch {
-    return "github.com";
-  }
+//
+// "" WHEN THERE IS NO PARSEABLE FIRST ADDRESS, and never a default. This used
+// to fall back to "github.com" — so an Azure DevOps row with an empty or
+// mid-typed address keyed every credential lane to github.com, and a PAT saved
+// inside a radiogroup labelled "Azure DevOps credentials" landed in
+// git-pat-github-com: the secret the GitHub clone helper reads. The empty host
+// is what the caller renders the lanes DISABLED on (LANES_NEED_ADDRESS), so
+// there is no name to save under until a real address exists.
+function rowHost(row: GitProvider): string {
+  return hostOf(row.base_urls[0] ?? "");
 }
 
 function Row({
@@ -137,9 +141,9 @@ function Row({
   // operator's own tab selection out from under them.
   const [credLane, setCredLane] = React.useState<GitLane>(() => {
     if (!row) return "pat";
-    const initialHost = primaryHost(row);
+    const initialHost = rowHost(row);
     const initialSlug = slugHost(initialHost);
-    if (present.includes(`ssh-key-${initialSlug}`)) return "ssh";
+    if (initialHost && present.includes(`ssh-key-${initialSlug}`)) return "ssh";
     if (row.kind === "github" && githubApp) return "app";
     return "pat";
   });
@@ -161,7 +165,9 @@ function Row({
     );
   }
 
-  const host = primaryHost(row);
+  // "" when the row names no parseable address — see rowHost. Everything keyed
+  // off it is gated on it being non-empty.
+  const host = rowHost(row);
   const slug = slugHost(host);
   const patName = `git-pat-${slug}`;
   const sshName = `ssh-key-${slug}`;
@@ -171,6 +177,11 @@ function Row({
   // exactly what the admin needs flagged while typing, and a trailing blank
   // line the array drops must not un-flag the line above it.
   const invalidLines = invalidBaseURLLines(baseURLText, kind);
+  // A PRESENT row with zero addresses is invalid, not a saveable no-op: the
+  // server refuses it outright (`git[i].base_urls: name at least one address`),
+  // and until this flagged it, clearing the textarea left Save enabled and the
+  // row's credential lanes keyed to a defaulted host.
+  const noAddresses = normalizeBaseURLText(baseURLText).length === 0;
 
   return (
     <div className="rounded-lg border border-border" data-testid={`provider-row-${kind}`}>
@@ -200,6 +211,10 @@ function Row({
       {row.disabled ? (
         <div className="p-3">
           <p className="text-body text-muted-foreground">{PROVIDERS.ROW_DISABLED_HINT}</p>
+          {/* The server refuses a zero-address row whether it is on or off, so
+              Save is withheld either way — the cause has to stay readable on a
+              row whose textarea is collapsed. */}
+          {row.base_urls.length === 0 && <p className="mt-1 text-xs leading-snug text-danger">{PROVIDERS.BASE_URLS_REQUIRED}</p>}
         </div>
       ) : (
         <div className="space-y-4 p-3">
@@ -209,7 +224,7 @@ function Row({
                 id={`provider-${kind}-base-urls`}
                 className="font-mono"
                 rows={3}
-                aria-invalid={invalidLines.length > 0}
+                aria-invalid={invalidLines.length > 0 || noAddresses}
                 disabled={!operator}
                 value={baseURLText}
                 onChange={(e) => {
@@ -217,7 +232,14 @@ function Row({
                   onUpdate({ ...row, base_urls: normalizeBaseURLText(e.target.value) });
                 }}
               />
-              {invalidLines.length > 0 && <p className="text-xs leading-snug text-danger">{PROVIDERS.BASE_URL_INVALID}</p>}
+              {noAddresses ? (
+                // Its own sentence, not BASE_URL_INVALID: that one diagnoses a
+                // typed LINE ("must be an https:// URL with ...") and reads as
+                // nonsense over an empty field.
+                <p className="text-xs leading-snug text-danger">{PROVIDERS.BASE_URLS_REQUIRED}</p>
+              ) : (
+                invalidLines.length > 0 && <p className="text-xs leading-snug text-danger">{PROVIDERS.BASE_URL_INVALID}</p>
+              )}
             </Field>
             <Field label={PROVIDERS.FIELD_LANES} hint={PROVIDERS.LANES_HINT}>
               {/* A group, not a labelled control: the Field's label cannot point at
@@ -256,15 +278,21 @@ function Row({
 
           {/* The credential lanes, INSIDE the row — GitHostCard's Lane/
               SecretLane/HostSummary, unchanged, keyed to THIS row's host. No
-              free-text Host field: the host is the row's own (§2.1, Q4). */}
+              free-text Host field: the host is the row's own (§2.1, Q4).
+              WITH NO HOST (no parseable first address) every lane is DISABLED
+              and names no secret: the secret name is derived from the host, so a
+              defaulted host wrote one row's token into another host's secret.
+              The moment a valid address exists the lanes key off ITS host. */}
           <div role="radiogroup" aria-label={`${KIND_LABEL[kind]} credentials`} className="space-y-2">
+            {!host && <p className="text-xs leading-snug text-muted-foreground">{PROVIDERS.LANES_NEED_ADDRESS}</p>}
             <CredentialLane
               id={`lane-${kind}-pat`}
               title="Personal access token"
               hint="The simplest lane — stored once; a per-run helper hands it to git inside the sandbox at clone time."
-              connected={present.includes(patName)}
+              connected={!!host && present.includes(patName)}
               connectedDetail={`${host} · stored as ${patName}`}
-              selected={credLane === "pat"}
+              selected={!!host && credLane === "pat"}
+              disabled={!host}
               onSelect={() => setCredLane("pat")}
             >
               <SecretLane
@@ -285,9 +313,10 @@ function Row({
                 id={`lane-${kind}-app`}
                 title="GitHub App"
                 hint="Repo-scoped tokens brokered at the proxy — the token never enters the sandbox."
-                connected={githubApp}
+                connected={!!host && githubApp}
                 connectedDetail="Installation credentials stored"
-                selected={credLane === "app"}
+                selected={!!host && credLane === "app"}
+                disabled={!host}
                 onSelect={() => setCredLane("app")}
               >
                 <div className="space-y-4">
@@ -318,9 +347,10 @@ function Row({
                 id={`lane-${kind}-ssh`}
                 title="SSH key"
                 hint="A per-run copy is written inside the sandbox for the clone, then shredded."
-                connected={present.includes(sshName)}
+                connected={!!host && present.includes(sshName)}
                 connectedDetail={`${host} · stored as ${sshName}`}
-                selected={credLane === "ssh"}
+                selected={!!host && credLane === "ssh"}
+                disabled={!host}
                 onSelect={() => setCredLane("ssh")}
               >
                 <SecretLane

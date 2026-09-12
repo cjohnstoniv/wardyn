@@ -7,6 +7,7 @@ import * as React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { extractSetupToken, extractAuthUrl, isLikelyStartUrl, HarnessLoginPane, loginFlow } from "./harness-login-pane";
 
 // A realistic setup-token body: sk-ant-oat<2 digits>-<long url-safe blob>.
@@ -157,5 +158,35 @@ describe("HarnessLoginPane — the consent gate", () => {
     expect(screen.getByLabelText(/aws access portal start url/i)).toBeInTheDocument();
     expect(screen.getByText(/verification page/i)).toBeInTheDocument();
     expect(harnessLoginMock).not.toHaveBeenCalled();
+  });
+
+  // V1 r2 LOW: under a per_user agent row the server signs in against the ROW's
+  // stored sso_start_url and IGNORES whatever is typed here, so asking was a
+  // field that could not take effect — and every member had to hunt down a URL
+  // their admin had already entered.
+  describe("startURLManaged — the org's portal is a fact, not a question", () => {
+    it("skips the start-URL gate for the note, and launches with an empty start URL", async () => {
+      render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+      expect(screen.queryByLabelText(/aws access portal start url/i)).toBeNull();
+      expect(screen.getByText(AGENTS.SSO_START_URL_MANAGED)).toBeInTheDocument();
+      // Straight to the consent gate, with the same "what happens next" list.
+      expect(screen.getByTestId("login-intro")).toBeInTheDocument();
+      expect(screen.getByText(/verification page/i)).toBeInTheDocument();
+
+      await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+      expect(harnessLoginMock).toHaveBeenCalledWith("aws", "");
+    });
+
+    it("the DEFAULT is unchanged — the ordinary Settings sign-in still asks", () => {
+      render(<HarnessLoginPane provider="aws" onDone={vi.fn()} onCancel={vi.fn()} />);
+      expect(screen.getByLabelText(/aws access portal start url/i)).toBeInTheDocument();
+      expect(screen.queryByText(AGENTS.SSO_START_URL_MANAGED)).toBeNull();
+    });
+
+    it("means nothing to a flow that never asked (anthropic)", () => {
+      render(<HarnessLoginPane provider="anthropic" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+      expect(screen.getByTestId("login-intro")).toBeInTheDocument();
+      expect(screen.queryByText(AGENTS.SSO_START_URL_MANAGED)).toBeNull();
+    });
   });
 });

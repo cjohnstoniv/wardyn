@@ -737,7 +737,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             step's one affirmative; the forms and Save providers live on
             /providers). setup/providers-card.tsx is also the Settings card,
             replacing Git host. */}
-        {stepId === "providers" && <ProvidersCard />}
+        {stepId === "providers" && <ProvidersCard harnesses={status?.harnesses} />}
         {stepId === "workspaces" && (
           <WorkspacesStep
             workspaces={workspaces}

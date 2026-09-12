@@ -10,7 +10,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpError } from "../../../lib/api/core";
-import { PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { AGENTS, PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { baseStatus } from "../../../lib/test-fixtures";
 import { ProvidersScreen } from "./providers-screen";
@@ -26,6 +27,15 @@ vi.mock("../../../lib/api/providers", async () => {
       getWorkspaceProviders: (...a: unknown[]) => getWorkspaceProvidersMock(...a),
       putWorkspaceProviders: (...a: unknown[]) => putWorkspaceProvidersMock(...a),
     },
+  };
+});
+
+const getAgentProvidersMock = vi.fn();
+vi.mock("../../../lib/api/agent-providers", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/api/agent-providers")>("../../../lib/api/agent-providers");
+  return {
+    ...actual,
+    agentProviders: { ...actual.agentProviders, getAgentProviders: (...a: unknown[]) => getAgentProvidersMock(...a) },
   };
 });
 
@@ -57,6 +67,8 @@ beforeEach(() => {
   putWorkspaceProvidersMock.mockReset();
   getSetupStatusMock.mockReset();
   getSetupStatusMock.mockResolvedValue(baseStatus());
+  getAgentProvidersMock.mockReset();
+  getAgentProvidersMock.mockResolvedValue({ providers: {}, etag: '"a0"' });
 });
 
 describe("ProvidersScreen", () => {
@@ -227,5 +239,54 @@ describe("ProvidersScreen", () => {
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
     expect(await screen.findByText(PROVIDERS.SAVE_REFUSED_TITLE)).toBeInTheDocument();
     expect(screen.getByText('id "github" is not unique')).toBeInTheDocument();
+  });
+
+  // V1 r2 MEDIUM: an emptied base-URLs field committed `base_urls: []` with Save
+  // still enabled — a guaranteed 400 (validateWorkspaceProviders refuses a row
+  // with no addresses), so there was nothing honest to send. The PUT carries the
+  // whole document, so the withhold is not per-tab.
+  it("Save is withheld while any git row has no addresses, and returns the moment one is typed", async () => {
+    getWorkspaceProvidersMock.mockResolvedValue({
+      providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
+      etag: '"ec"',
+    });
+    renderScreen();
+    const row = await screen.findByTestId("provider-row-github");
+    const save = screen.getByRole("button", { name: PROVIDERS.SAVE_CTA });
+    expect(save).toBeEnabled();
+    const textarea = within(row).getByLabelText(PROVIDERS.FIELD_BASE_URLS);
+    await userEvent.clear(textarea);
+    expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeDisabled();
+    await userEvent.type(textarea, "https://github.com/acme");
+    expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeEnabled();
+    expect(putWorkspaceProvidersMock).not.toHaveBeenCalled();
+  });
+
+  // V1 r2 HIGH: the roster comes from THIS screen's /setup/status read, but the
+  // Agents tab's roster-unknown Retry called the tab's own load() — which
+  // re-reads /agent-providers, the read that had NOT failed. Three clicks, three
+  // getAgentProviders calls, the same dead end.
+  it("the Agents tab's roster-unknown Retry re-fires the screen's setup-status read", async () => {
+    getWorkspaceProvidersMock.mockResolvedValue({ providers: {}, etag: '"ed"' });
+    // baseStatus() carries no `harnesses` — an older daemon, or a partial read:
+    // UNKNOWN, which the tab renders as the same dead end a failed GET does.
+    renderScreen();
+    await screen.findByText(PROVIDERS.LEGACY_OPEN_TITLE);
+    await userEvent.click(screen.getByRole("button", { name: AGENTS.AGENTS_TITLE }));
+    expect(await screen.findByText(PROVIDERS.FETCH_FAILED_TITLE)).toBeInTheDocument();
+
+    const statusReads = getSetupStatusMock.mock.calls.length;
+    const agentReads = getAgentProvidersMock.mock.calls.length;
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ harnesses: [{ id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true }] }),
+    );
+    await userEvent.click(screen.getByRole("button", { name: ACCESS_STATE.FETCH_FAILED_RETRY }));
+
+    expect(getSetupStatusMock.mock.calls.length).toBe(statusReads + 1);
+    // The roster lands, so the rows render and the tab's own Save appears.
+    expect(await screen.findByTestId("agent-row-claude-code")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeInTheDocument();
+    // The dead-end click used to spend a /agent-providers read instead.
+    expect(getAgentProvidersMock.mock.calls.length).toBe(agentReads);
   });
 });

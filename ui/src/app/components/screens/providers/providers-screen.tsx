@@ -41,6 +41,7 @@ import { EmptyState, TableSkeleton } from "../../wardyn/states";
 import { useOperator } from "../../wardyn/operator-context";
 import { Segmented } from "../permissions";
 import { AgentsTab } from "./agents-tab";
+import { gitRowInvalid } from "./display";
 import { GitTab } from "./git-tab";
 import { StorageTab } from "./storage-tab";
 
@@ -118,6 +119,13 @@ export function ProvidersScreen() {
       setSaving(false);
     }
   };
+
+  // Any row the server is guaranteed to refuse withholds Save — on EVERY tab,
+  // because the PUT carries the whole document: a git row with no addresses is a
+  // 400 whichever tab is open when Save is pressed, and there is nothing honest
+  // to send. The row itself carries the reason (BASE_URLS_REQUIRED under its
+  // textarea), so this is a withheld button with a visible cause, not a dead end.
+  const invalidGitRow = (draft.git ?? []).some(gitRowInvalid);
 
   const secretsPresent = setupStatus?.secrets.present ?? [];
   const githubApp = setupStatus?.secrets.github_app ?? false;
@@ -218,6 +226,11 @@ export function ProvidersScreen() {
                   harnesses={setupStatus?.harnesses}
                   modelAccess={setupStatus?.model_access}
                   operator={operator}
+                  /* The roster comes from THIS screen's /setup/status read, so
+                     the tab's roster-unknown Retry has to re-fire THAT — its own
+                     load() re-reads /agent-providers, which is not the read that
+                     failed, and clicking it changed nothing. */
+                  onRetryRoster={load}
                 />
               )}
               {/* ONE teal button at a time (CONSOLE-RULES §6, prompt §4): in
@@ -231,7 +244,7 @@ export function ProvidersScreen() {
                   too (Save appears the moment the draft has a row). */}
               {tab !== "agents" && !(tab === "git" && loadedEmpty && (draft.git ?? []).length === 0) && (
                 <div className="flex justify-end border-t border-border pt-4">
-                  <Button disabled={!operator || saving} onClick={save}>
+                  <Button disabled={!operator || saving || invalidGitRow} onClick={save}>
                     {PROVIDERS.SAVE_CTA}
                   </Button>
                 </div>

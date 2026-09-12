@@ -251,7 +251,7 @@ export function SettingsScreen() {
               lanes moved into a provider row on /providers, and this card is
               the same shared component the funnel's `providers` step body
               renders (setup/providers-card.tsx). */}
-          <ProvidersCard />
+          <ProvidersCard harnesses={status?.harnesses} />
           <SshKeysPane heading="h3" />
           {/* The FIFTH card, and so the last one (user-drives-prompt.md §6) —
               the SAME component the setup funnel's Workspaces step renders,

@@ -7,7 +7,7 @@
 // invent copy: they decide how a FROZEN string is presented, or mirror a
 // server rule so a bad row is caught before an attempt — never a second
 // opinion about what the server ultimately decides.
-import type { GitLane, GitProviderKind } from "../../../lib/api/providers";
+import type { GitLane, GitProvider, GitProviderKind } from "../../../lib/api/providers";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 
 export const KIND_LABEL: Record<GitProviderKind, string> = {
@@ -85,6 +85,20 @@ export function baseURLError(raw: string, kind: GitProviderKind): string | null 
     if (host === "dev.azure.com" && segments.length !== 1) return PROVIDERS.BASE_URL_INVALID;
   }
   return null;
+}
+
+// Whether this row is one the server is GUARANTEED to refuse, so the screen can
+// withhold Save rather than spend a round trip on a 400 it already knows about.
+// Both arms mirror validateWorkspaceProviders exactly, and NEITHER is gated on
+// `disabled`: the server validates every row it is handed, on or off.
+//
+// The zero-address arm is the one this was added for (V1 r2): baseURLError("")
+// returns null by design — a blank LINE in a textarea is not an error — so an
+// emptied field flagged nothing and committed `base_urls: []`, which the server
+// refuses and which left the row's credential lanes with no host to key by.
+export function gitRowInvalid(row: GitProvider): boolean {
+  if (row.base_urls.length === 0) return true;
+  return row.base_urls.some((u) => baseURLError(u, row.kind) !== null);
 }
 
 /** Every non-blank line of a base-URLs textarea that fails baseURLError. */

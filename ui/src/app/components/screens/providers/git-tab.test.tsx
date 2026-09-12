@@ -14,8 +14,9 @@ import type { GitProvider } from "../../../lib/api/providers";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { GitTab } from "./git-tab";
 
+const setSecretMock = vi.fn();
 vi.mock("../../../lib/api/secrets", () => ({
-  secrets: { setSecret: vi.fn(), deleteSecret: vi.fn() },
+  secrets: { setSecret: (...a: unknown[]) => setSecretMock(...a), deleteSecret: vi.fn() },
 }));
 
 function Harness({
@@ -373,5 +374,97 @@ describe("GitTab", () => {
     const dialog = screen.getByRole("alertdialog");
     const confirm = within(dialog).getByRole("button", { name: "Remove" });
     expect(confirm.className.split(/\s+/)).not.toContain("bg-primary");
+  });
+
+  // V1 r2 BLOCKER: primaryHost() defaulted to "github.com" whenever base_urls[0]
+  // was absent or unparseable, and EVERY credential lane in the row keys off it —
+  // so an Azure DevOps row with no address wrote the admin's ADO PAT to
+  // git-pat-github-com, the secret the GitHub clone helper reads, from inside a
+  // radiogroup labelled "Azure DevOps credentials".
+  describe("the credential lanes never default to github.com (BLOCKER)", () => {
+    it("a row with no parseable address disables every lane, names no secret, and can save nothing", async () => {
+      setSecretMock.mockReset();
+      render(<CredHarness initial={[{ id: "ado", kind: "azure_devops", base_urls: [] }]} present={[]} githubApp={false} />);
+      const row = screen.getByTestId("provider-row-azure_devops");
+      expect(within(row).getByText(PROVIDERS.LANES_NEED_ADDRESS)).toBeInTheDocument();
+      const lanes = within(row).getAllByRole("radio");
+      expect(lanes.length).toBeGreaterThan(0);
+      for (const lane of lanes) {
+        expect(lane).toBeDisabled();
+        // Nothing is OPEN either: a lane body is where Save and the secret name live.
+        expect(lane).toHaveAttribute("aria-checked", "false");
+      }
+      expect(within(row).queryByText(/git-pat-/)).not.toBeInTheDocument();
+      expect(within(row).queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+      for (const lane of lanes) await userEvent.click(lane);
+      expect(setSecretMock).not.toHaveBeenCalled();
+    });
+
+    it("an Azure DevOps row with its own address saves the PAT under ITS host", async () => {
+      setSecretMock.mockReset();
+      render(
+        <CredHarness
+          initial={[{ id: "ado", kind: "azure_devops", base_urls: ["https://dev.azure.com/acme"] }]}
+          present={[]}
+          githubApp={false}
+        />,
+      );
+      const row = screen.getByTestId("provider-row-azure_devops");
+      expect(within(row).queryByText(PROVIDERS.LANES_NEED_ADDRESS)).not.toBeInTheDocument();
+      await userEvent.type(within(row).getByLabelText("Access token"), "ado-pat-value");
+      await userEvent.click(within(row).getByRole("button", { name: "Save" }));
+      expect(setSecretMock).toHaveBeenCalledWith("git-pat-dev-azure-com", "ado-pat-value");
+    });
+
+    it("a github row still saves the PAT under github.com — the host is the row's, not a default", async () => {
+      setSecretMock.mockReset();
+      render(
+        <CredHarness
+          initial={[{ id: "gh", kind: "github", base_urls: ["https://github.com/acme"] }]}
+          present={[]}
+          githubApp={false}
+        />,
+      );
+      const row = screen.getByTestId("provider-row-github");
+      await userEvent.type(within(row).getByLabelText("Access token"), "ghp_x");
+      await userEvent.click(within(row).getByRole("button", { name: "Save" }));
+      expect(setSecretMock).toHaveBeenCalledWith("git-pat-github-com", "ghp_x");
+    });
+  });
+
+  // V1 r2 MEDIUM: baseURLError("") returns null by design (a blank LINE is not an
+  // error), so an emptied textarea flagged nothing, committed `base_urls: []` —
+  // which the server refuses outright — and dropped the row into the BLOCKER above.
+  it("clearing the addresses flags the row instead of silently committing an empty list", async () => {
+    let latest: GitProvider[] = [];
+    render(
+      <Harness
+        initial={[{ id: "gh", kind: "github", base_urls: ["https://github.com/acme"] }]}
+        onLatest={(g) => (latest = g)}
+      />,
+    );
+    const row = screen.getByTestId("provider-row-github");
+    const textarea = within(row).getByLabelText(PROVIDERS.FIELD_BASE_URLS);
+    await userEvent.clear(textarea);
+    expect(latest[0].base_urls).toEqual([]);
+    expect(textarea).toHaveAttribute("aria-invalid", "true");
+    // Its own sentence, not BASE_URL_INVALID's "must be an https:// URL ...",
+    // which diagnoses a typed line and reads wrong over an empty field.
+    expect(within(row).getByText(PROVIDERS.BASE_URLS_REQUIRED)).toBeInTheDocument();
+    expect(within(row).queryByText(PROVIDERS.BASE_URL_INVALID)).not.toBeInTheDocument();
+    // ...and with no host there is no credential lane to save under.
+    expect(within(row).getByText(PROVIDERS.LANES_NEED_ADDRESS)).toBeInTheDocument();
+
+    await userEvent.type(textarea, "https://github.com/acme");
+    expect(textarea).toHaveAttribute("aria-invalid", "false");
+    expect(within(row).queryByText(PROVIDERS.BASE_URLS_REQUIRED)).not.toBeInTheDocument();
+    expect(within(row).queryByText(PROVIDERS.LANES_NEED_ADDRESS)).not.toBeInTheDocument();
+  });
+
+  it("an off row with no addresses keeps the reason readable — its textarea is collapsed", () => {
+    render(<Harness initial={[{ id: "gh", kind: "github", base_urls: [], disabled: true }]} />);
+    const row = screen.getByTestId("provider-row-github");
+    expect(within(row).getByText(PROVIDERS.ROW_DISABLED_HINT)).toBeInTheDocument();
+    expect(within(row).getByText(PROVIDERS.BASE_URLS_REQUIRED)).toBeInTheDocument();
   });
 });

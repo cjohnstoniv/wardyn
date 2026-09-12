@@ -36,7 +36,7 @@ import {
   SectionLabel,
 } from "../../wardyn/primitives";
 import { EPISODES_COPY as EP, MEMBER_GETTING_STARTED as T } from "../../wardyn/copy";
-import { AGENTS } from "../../../lib/workspace-providers-copy";
+import { AGENTS, MODEL_ACCESS_CHIP_LABEL } from "../../../lib/workspace-providers-copy";
 import { HarnessLoginPane } from "../settings/harness-login-pane";
 import { CC_META } from "../../wardyn/cc-meta";
 import { strongestAvailable } from "../../wardyn/default-confinement";
@@ -59,19 +59,10 @@ import type { AgentRun, SetupStatus } from "../../../lib/types";
 
 type Variant = "default" | "outline";
 
-// SetupModelAccess.state -> AGENTS.MODEL_ACCESS_* label. FIVE keys, not the
-// six lifecycle states §5c.6 names: `expired_renewable` is NOT one of them
-// because dispatch renews it, so it folds into `live` server-side and never
-// reaches this map (setup.ts's own doc comment says the same). The five are
-// live / expiring / expired_signin / not_configured / shared_expired. "live"
-// alone is success-toned above; every other key here renders warning.
-const MODEL_ACCESS_CHIP_LABEL: Record<string, string> = {
-  live: AGENTS.MODEL_ACCESS_LIVE,
-  expiring: AGENTS.MODEL_ACCESS_EXPIRING,
-  expired_signin: AGENTS.MODEL_ACCESS_EXPIRED,
-  not_configured: AGENTS.MODEL_ACCESS_NOT_CONFIGURED,
-  shared_expired: AGENTS.MODEL_ACCESS_SHARED_EXPIRED,
-};
+// The state -> label map MOVED to workspace-providers-copy.ts: the Agents tab's
+// admin-own chip renders the same five and had its own copy, and BOTH fell back
+// to MODEL_ACCESS_NOT_CONFIGURED for anything else — one root cause, one table.
+// A MISS is "no chip", never a default label (see its doc comment).
 
 export function MemberGettingStarted() {
   const [status, setStatus] = React.useState<SetupStatus | null>(null);
@@ -252,9 +243,18 @@ export function MemberGettingStarted() {
                   // fact) and reads THIS caller's own model-access state —
                   // success ONLY for live; the action rides its own line
                   // below, never inside the chip.
-                  <Chip tone={status.model_access.state === "live" ? "success" : "warning"}>
-                    {MODEL_ACCESS_CHIP_LABEL[status.model_access.state] ?? AGENTS.MODEL_ACCESS_NOT_CONFIGURED}
-                  </Chip>
+                  //
+                  // A state outside the five renders NO CHIP: the old `??`
+                  // fallback claimed "Not signed in" over, say, an
+                  // `expired_renewable` credential that dispatch renews — a
+                  // false claim with no CTA to act on it. Unknown ≠ not
+                  // configured, and the server's own action line (below) is the
+                  // one thing still worth rendering.
+                  MODEL_ACCESS_CHIP_LABEL[status.model_access.state] ? (
+                    <Chip tone={status.model_access.state === "live" ? "success" : "warning"}>
+                      {MODEL_ACCESS_CHIP_LABEL[status.model_access.state]}
+                    </Chip>
+                  ) : null
                 ) : llmReady ? (
                   // model_access absent (older daemon, or the fetch failed) —
                   // today's rendering, unchanged: never claim a dead
@@ -292,6 +292,11 @@ export function MemberGettingStarted() {
                   <div className="mt-3 max-w-md">
                     <HarnessLoginPane
                       provider="aws"
+                      /* This CTA renders for the per_user states only, so the
+                         org's access portal is the admin's stored one and the
+                         server uses it regardless of what is typed — the member
+                         is told, not asked. */
+                      startURLManaged
                       onDone={() => {
                         setAwsLoginOpen(false);
                         setRetryTick((n) => n + 1);

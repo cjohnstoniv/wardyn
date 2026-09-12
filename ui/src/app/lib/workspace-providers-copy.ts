@@ -76,6 +76,12 @@ export const PROVIDERS = {
   BASE_URLS_HINT: "One per line, over HTTPS. A repository is admitted when its URL starts with one of these.",
   BASE_URL_INVALID:
     "Must be an https:// URL with a host and at least one path segment — no port, no credentials, no trailing wildcard.",
+  // The ZERO-address arm of the same pre-attempt mirror: the server refuses a
+  // row with no base URLs outright (validateWorkspaceProviders' own "name at
+  // least one address"), so an emptied field is invalid rather than a saveable
+  // no-op — BASE_URL_INVALID's sentence diagnoses a typed LINE and reads wrong
+  // for none.
+  BASE_URLS_REQUIRED: "Name at least one address. A row with none admits nothing and is refused at save.",
   FIELD_LANES: "Permitted lanes",
   LANES_HINT: "Which credential a run may use for this provider. Turning one off does not delete its stored secret.",
   LANE_APP_UNAVAILABLE: "Not available: the App broker mints repository-scoped GitHub tokens and has no Azure DevOps equivalent.",
@@ -88,6 +94,11 @@ export const PROVIDERS = {
   // together make the row look narrower than it is.
   SSH_HOST_LEVEL_HINT:
     "SSH clones are admitted for the whole host: an SSH URL carries no org path to bound. Drop SSH here to keep this row's addresses binding.",
+  // The credential lanes are keyed by the host of the row's FIRST address. With
+  // no parseable address there is no host, so there is no secret name to store
+  // under: every lane renders disabled with this reason rather than defaulting
+  // the host — the default wrote an Azure DevOps PAT into git-pat-github-com.
+  LANES_NEED_ADDRESS: "Add an allowed address first — a credential is stored under its host.",
   LEGACY_OPEN_TITLE: "No git provider rows",
   LEGACY_OPEN_BODY: "Runs clone whatever host has a credential stored, as they do today. Add a provider to bound that to addresses you name.",
   LEGACY_OPEN_OTHER_HOSTS: "A GitLab or Bitbucket token has no provider row yet — store and rotate it on the Secrets page.",
@@ -206,6 +217,10 @@ export const AGENTS = {
   PER_USER_UNAVAILABLE: "Not available: only an AWS SSO sign-in is captured per person in this release.",
   FIELD_SSO_START_URL: "AWS access portal start URL",
   SSO_START_URL_HINT: "Everyone signs in against this portal. A sign-in never chooses another.",
+  // Replaces the login pane's start-URL FIELD when the sign-in runs under a
+  // per_user row: the server signs in against the row's stored sso_start_url and
+  // IGNORES a typed one, so the field was a control with no effect.
+  SSO_START_URL_MANAGED: "Your admin set this organization's access portal. Your sign-in uses it — there is nothing to enter here.",
   ADMIN_OWN_CHIP_NOTE: "This is your own sign-in — the same one a member makes. Under a shared credential it is the one everyone uses.",
   // The picker item's sub-line for a disabled row (the plan's fragment,
   // sentence-cased per CONSOLE-RULES §10 — round note #4).
@@ -237,3 +252,22 @@ export const AGENTS = {
   // sliced at its colon — a reworded hint must not silently reword a chip.
   AGENT_ROW_DISABLED_CHIP: "Off",
 } as const;
+
+// SetupModelAccess.state -> the AGENTS chip label. FIVE keys, not the six
+// lifecycle states §7.7 names: `expired_renewable` folds into `live`
+// server-side (dispatch renews it) and never reaches a console surface.
+//
+// A lookup over frozen keys, not new copy — and ONE table rather than two,
+// because the two surfaces that render this chip (the member's Getting Started
+// and the Agents tab's admin-own chip) each fell back to
+// MODEL_ACCESS_NOT_CONFIGURED for a state outside the five, which paints
+// "Not signed in" over a credential nobody has any reading of. An ABSENT entry
+// is the honest answer: no chip, no CTA. Callers must treat a miss as "no
+// chip", never as a default label.
+export const MODEL_ACCESS_CHIP_LABEL: Record<string, string> = {
+  live: AGENTS.MODEL_ACCESS_LIVE,
+  expiring: AGENTS.MODEL_ACCESS_EXPIRING,
+  expired_signin: AGENTS.MODEL_ACCESS_EXPIRED,
+  not_configured: AGENTS.MODEL_ACCESS_NOT_CONFIGURED,
+  shared_expired: AGENTS.MODEL_ACCESS_SHARED_EXPIRED,
+};

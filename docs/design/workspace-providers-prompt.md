@@ -607,11 +607,13 @@ door, so they are keyed (§7.4, `PROVIDER_MEMBER`) the way `DRIVE_MEMBER`'s refu
 | `FIELD_BASE_URLS` | Allowed addresses |
 | `BASE_URLS_HINT` | One per line, over HTTPS. A repository is admitted when its URL starts with one of these. |
 | `BASE_URL_INVALID` | Must be an `https://` URL with a host and at least one path segment — no port, no credentials, no trailing wildcard. |
+| `BASE_URLS_REQUIRED` | Name at least one address. A row with none admits nothing and is refused at save. |
 | `FIELD_LANES` | Permitted lanes |
 | `LANES_HINT` | Which credential a run may use for this provider. Turning one off does not delete its stored secret. |
 | `LANE_APP_UNAVAILABLE` | Not available: the App broker mints repository-scoped GitHub tokens and has no Azure DevOps equivalent. |
 | `LANE_SSH_UNAVAILABLE` | Not available: SSH over port 443 is offered for `github.com` and `dev.azure.com` only — a self-hosted host clones over HTTPS. |
 | `SSH_HOST_LEVEL_HINT` | SSH clones are admitted for the whole host: an SSH URL carries no org path to bound. Drop SSH here to keep this row's addresses binding. |
+| `LANES_NEED_ADDRESS` | Add an allowed address first — a credential is stored under its host. |
 | `LEGACY_OPEN_TITLE` | No git provider rows |
 | `LEGACY_OPEN_BODY` | Runs clone whatever host has a credential stored, as they do today. Add a provider to bound that to addresses you name. |
 | `LEGACY_OPEN_OTHER_HOSTS` | A GitLab or Bitbucket token has no provider row yet — store and rotate it on the Secrets page. |
@@ -638,6 +640,13 @@ that names the retired card. `REMOVE_CONFIRM_TITLE`'s `{kind}` is `KIND_*`, and 
 console that splits one frozen sentence at its question mark reflows a canon edit into the wrong slot.
 `ROW_DISABLED_CHIP` is the off row's neutral chip (the `AGENT_ROW_DISABLED_CHIP` precedent) — its own key,
 not `ROW_DISABLED_HINT` sliced at the colon.
+`BASE_URLS_REQUIRED` is the ZERO-address arm of the same pre-attempt mirror (the server's own
+`git[i].base_urls: name at least one address` heads the post-attempt refusal): a present row with no
+address is `aria-invalid` and withholds `SAVE_CTA`, because an empty list is a guaranteed 400 and
+there is nothing honest to send. `LANES_NEED_ADDRESS` renders in place of a secret name when the
+row's first address names no host: the credential lanes are keyed by THAT host, so with none there is
+no name to store under — every lane is disabled with this reason rather than defaulted to
+`github.com`, which wrote an Azure DevOps PAT into `git-pat-github-com`.
 
 ### 7.3 `PROVIDERS` — the Storage tab (every row DRAFT)
 
@@ -830,6 +839,7 @@ GROUPS` verbatim, and `unmountable` renders `NR_UNAVAILABLE` too — NOT `REFUSE
 | `PER_USER_UNAVAILABLE` | Not available: only an AWS SSO sign-in is captured per person in this release. |
 | `FIELD_SSO_START_URL` | AWS access portal start URL |
 | `SSO_START_URL_HINT` | Everyone signs in against this portal. A sign-in never chooses another. |
+| `SSO_START_URL_MANAGED` | Your admin set this organization's access portal. Your sign-in uses it — there is nothing to enter here. |
 | `ADMIN_OWN_CHIP_NOTE` | This is your own sign-in — the same one a member makes. Under a shared credential it is the one everyone uses. |
 | `UNAVAILABLE` | Not enabled by your admin |
 | `MODEL_ACCESS_LIVE` | Model access · Your AWS sign-in |
@@ -865,6 +875,11 @@ empty arm is `EFFECTIVE_NONE`, which the New Run rail's preflight block renders 
 `LAUNCH_WARNING_TITLE` heads the 201's advisory `warnings[]` inline in that rail, and `OPEN_RUN_CTA` is the
 primary button the screen becomes while they are on screen: a run that launched WITH a warning is never
 navigated away from on a timer — the member opens it when they have read them.
+`SSO_START_URL_MANAGED` replaces the login pane's start-URL FIELD whenever the sign-in runs under a
+`per_user` row (the member's Getting Started button, and the admin's own sign-in on the Agents tab):
+the server signs in against the row's stored `sso_start_url` and ignores a typed one, so the field
+was a control with no effect. The admin's ordinary Settings sign-in — no row, or `shared` — still
+asks for the portal, because nothing is stored to use.
 
 ## 8. Where to apply (once implemented, out of scope this round)
 

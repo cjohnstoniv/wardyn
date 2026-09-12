@@ -16,7 +16,7 @@
 // and not the other reds the other side. Keep the two lists in lockstep.
 import { describe, it, expect } from "vitest";
 import type { GitProviderKind } from "../../../lib/api/providers";
-import { baseURLError, invalidBaseURLLines } from "./display";
+import { baseURLError, gitRowInvalid, invalidBaseURLLines } from "./display";
 
 const PARITY: [url: string, kind: GitProviderKind, refused: boolean][] = [
   // github.com: an optional single /<org>, never a repo path.
@@ -70,5 +70,29 @@ describe("baseURLError — parity with the server validator (Go twin: TestBaseUR
     expect(invalidBaseURLLines("https://github.com/acme\nhttps://github.com/acme/repo", "github")).toEqual([
       "https://github.com/acme/repo",
     ]);
+  });
+});
+
+// V1 r2 MEDIUM: baseURLError("") is null BY DESIGN (see above), so nothing
+// flagged a row whose addresses had all been deleted — the screen kept Save
+// enabled over a body the server refuses outright, and the row's credential
+// lanes had no host left to key a secret by. gitRowInvalid is the row-level
+// mirror the screen withholds Save on.
+describe("gitRowInvalid — the rows the server is guaranteed to refuse", () => {
+  it("a row with zero addresses is invalid, ON or OFF — the server validates both", () => {
+    expect(gitRowInvalid({ id: "gh", kind: "github", base_urls: [] })).toBe(true);
+    expect(gitRowInvalid({ id: "gh", kind: "github", base_urls: [], disabled: true })).toBe(true);
+  });
+
+  it("a row whose address fails the shape rule is invalid", () => {
+    expect(gitRowInvalid({ id: "gh", kind: "github", base_urls: ["http://github.com/acme"] })).toBe(true);
+    expect(gitRowInvalid({ id: "ado", kind: "azure_devops", base_urls: ["https://dev.azure.com/"] })).toBe(true);
+  });
+
+  it("a well-formed row is valid, one address or two", () => {
+    expect(gitRowInvalid({ id: "gh", kind: "github", base_urls: ["https://github.com/acme"] })).toBe(false);
+    expect(
+      gitRowInvalid({ id: "gh", kind: "github", base_urls: ["https://github.com/acme", "https://git.corp.example"] }),
+    ).toBe(false);
   });
 });
