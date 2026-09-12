@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
@@ -35,6 +36,9 @@ func (r *recRecorder) Record(_ context.Context, ev types.AuditEvent) error {
 }
 
 type fakeApprovals struct {
+	// mu guards every field: the completion watcher's goroutine calls
+	// CancelForRun while a test polls cancelledCalls(), and -race sees it.
+	mu         sync.Mutex
 	requested  []types.ApprovalRequest
 	byID       map[uuid.UUID]types.ApprovalRequest
 	decideErr  error
@@ -53,6 +57,8 @@ func newFakeApprovals() *fakeApprovals {
 }
 
 func (f *fakeApprovals) Request(_ context.Context, req types.ApprovalRequest) (types.ApprovalRequest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.requestErr != nil {
 		return types.ApprovalRequest{}, f.requestErr
 	}
@@ -66,6 +72,8 @@ func (f *fakeApprovals) Request(_ context.Context, req types.ApprovalRequest) (t
 }
 
 func (f *fakeApprovals) Decide(_ context.Context, id uuid.UUID, byType types.ActorType, decision types.ApprovalDecision) (types.ApprovalRequest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.decideErr != nil {
 		return types.ApprovalRequest{}, f.decideErr
 	}
@@ -81,6 +89,8 @@ func (f *fakeApprovals) Decide(_ context.Context, id uuid.UUID, byType types.Act
 }
 
 func (f *fakeApprovals) Get(_ context.Context, id uuid.UUID) (types.ApprovalRequest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	ap, ok := f.byID[id]
 	if !ok {
 		return types.ApprovalRequest{}, errStoreNotFound
@@ -89,6 +99,8 @@ func (f *fakeApprovals) Get(_ context.Context, id uuid.UUID) (types.ApprovalRequ
 }
 
 func (f *fakeApprovals) List(_ context.Context, _ types.ApprovalState) ([]types.ApprovalRequest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	out := make([]types.ApprovalRequest, 0, len(f.byID))
 	for _, ap := range f.byID {
 		out = append(out, ap)
@@ -100,6 +112,8 @@ func (f *fakeApprovals) List(_ context.Context, _ types.ApprovalState) ([]types.
 // THIS run move, and cancelled records what the handler passed so a test can
 // assert the reason the terminal transition supplied.
 func (f *fakeApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.cancelErr != nil {
 		return 0, f.cancelErr
 	}
@@ -120,7 +134,17 @@ func (f *fakeApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason 
 }
 
 // CountForRun counts this run's rows in any state (R3-F071's cap reads it).
+// cancelledCalls returns a snapshot of what CancelForRun recorded, under the
+// lock — the watcher test polls this from the test goroutine.
+func (f *fakeApprovals) cancelledCalls() []cancelCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]cancelCall(nil), f.cancelled...)
+}
+
 func (f *fakeApprovals) CountForRun(_ context.Context, runID uuid.UUID) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.countErr != nil {
 		return 0, f.countErr
 	}

@@ -90,10 +90,10 @@ func TestKillRun_CancelsPendingApprovalsAndIsIdempotent(t *testing.T) {
 		t.Errorf("approval decided_by/reason = %q/%q, want system/run_killed", ap.DecidedBy, ap.Reason)
 	}
 
-	if len(fa.cancelled) != 1 {
-		t.Fatalf("the cancel cascade moved rows %d times, want exactly 1", len(fa.cancelled))
+	if len(fa.cancelledCalls()) != 1 {
+		t.Fatalf("the cancel cascade moved rows %d times, want exactly 1", len(fa.cancelledCalls()))
 	}
-	if got := fa.cancelled[0]; got.Reason != "run_killed" || got.Count != 1 || got.RunID != runID {
+	if got := fa.cancelledCalls()[0]; got.Reason != "run_killed" || got.Count != 1 || got.RunID != runID {
 		t.Errorf("cascade call = %+v, want {run:%s reason:run_killed count:1}", got, runID)
 	}
 
@@ -103,9 +103,9 @@ func TestKillRun_CancelsPendingApprovalsAndIsIdempotent(t *testing.T) {
 	if w.Code == http.StatusConflict {
 		t.Fatalf("re-kill of a KILLED run 409'd; it must re-run the idempotent cascade. body=%s", w.Body.String())
 	}
-	if len(fa.cancelled) != 1 {
+	if len(fa.cancelledCalls()) != 1 {
 		t.Errorf("a re-kill moved rows %d times in total, want still 1 — with nothing left PENDING the "+
-			"cascade is a no-op, in the append-only log too", len(fa.cancelled))
+			"cascade is a no-op, in the append-only log too", len(fa.cancelledCalls()))
 	}
 	if again, _ := fa.Get(context.Background(), apID); again.Reason != "run_killed" {
 		t.Errorf("a re-kill rewrote the cancelled row's reason to %q", again.Reason)
@@ -133,7 +133,7 @@ func TestFinalizeRunTail_CancelsPendingApprovalsOnCompletion(t *testing.T) {
 	srv.startCompletionWatcher(runID, "ref-c", "exec-c")
 
 	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) && len(fa.cancelled) == 0 {
+	for time.Now().Before(deadline) && len(fa.cancelledCalls()) == 0 {
 		time.Sleep(10 * time.Millisecond)
 	}
 
@@ -150,8 +150,8 @@ func TestFinalizeRunTail_CancelsPendingApprovalsOnCompletion(t *testing.T) {
 	if ap.Reason != "run_completed" {
 		t.Errorf("reason = %q, want run_completed (the transition that actually won)", ap.Reason)
 	}
-	if len(fa.cancelled) != 1 {
-		t.Errorf("the cascade ran %d times on one clean completion, want 1", len(fa.cancelled))
+	if len(fa.cancelledCalls()) != 1 {
+		t.Errorf("the cascade ran %d times on one clean completion, want 1", len(fa.cancelledCalls()))
 	}
 	if !audit.has(runID, "run.complete", "success") {
 		t.Error("the shared terminal tail must still emit run.complete/success")
@@ -188,8 +188,8 @@ func TestFailAndRevoke_EmitsNoApprovalCancellation(t *testing.T) {
 		t.Errorf("failAndRevoke emitted %d approval.cancelled rows; a run that never reached RUNNING has "+
 			"no approval to cancel", len(rows))
 	}
-	if len(fa.cancelled) != 0 {
-		t.Errorf("failAndRevoke called the cancel cascade %d times; it is exempt by construction", len(fa.cancelled))
+	if len(fa.cancelledCalls()) != 0 {
+		t.Errorf("failAndRevoke called the cancel cascade %d times; it is exempt by construction", len(fa.cancelledCalls()))
 	}
 	if !audit.has(runID, "run.fail", "success") && !audit.has(runID, "run.fail", "failure") {
 		t.Log("no run.fail row recorded; the exemption assertion above is what this test owns")
