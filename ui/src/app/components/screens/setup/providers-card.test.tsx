@@ -91,10 +91,16 @@ describe("ProvidersCard", () => {
     expect(screen.queryByText(PROVIDERS.CARD_EMPTY)).not.toBeInTheDocument();
   });
 
-  it("renders nothing for a caller without the SUPER tier, and asks the server nothing", () => {
+  // V1 lens E finding 6: the card is the funnel's `providers` step BODY and that
+  // step is walked by everyone, so `return null` left a non-operator on a step
+  // with a heading, an Optional badge and NOTHING underneath. The tier refusal
+  // is said, the way /providers says it — and still no fetch, no link, no teal.
+  it("says the tier to a caller without the SUPER tier, never an empty body, and asks the server nothing", () => {
     getWorkspaceProvidersMock.mockResolvedValue(snap([row("acme")]));
     renderCard(false);
-    expect(screen.queryByTestId("providers-card")).not.toBeInTheDocument();
+    expect(screen.getByText(/requires the admin role/i)).toBeInTheDocument();
+    expect(screen.getByText(PROVIDERS.TITLE)).toBeInTheDocument();
+    expect(screen.queryByText(PROVIDERS.CARD_OPEN)).not.toBeInTheDocument();
     expect(getWorkspaceProvidersMock).not.toHaveBeenCalled();
   });
 

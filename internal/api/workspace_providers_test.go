@@ -212,6 +212,62 @@ func TestValidateWorkspaceProvidersRefusalStrings(t *testing.T) {
 	}
 }
 
+// TestBaseURLClientMirrorParity is the SERVER half of the base-URL parity table.
+// Its twin is ui/src/app/components/screens/providers/display.test.tsx's PARITY
+// list — the SAME literal cases, kinds, verdicts and order, asserted there
+// against baseURLError, the console's pre-attempt mirror of this gate. A rule
+// ported to one side and not the other reds the other side. The mirror existed
+// and silently admitted five shapes this validator 400s (V1 lens E, finding 5),
+// including `dev.azure.com/org/project` — the URL an ADO user copies out of
+// their browser. Keep the two lists in lockstep.
+func TestBaseURLClientMirrorParity(t *testing.T) {
+	for _, tc := range []struct {
+		url     string
+		kind    types.GitProviderKind
+		refused bool
+	}{
+		// github.com: an optional single /<org>, never a repo path.
+		{"https://github.com", types.GitProviderGitHub, false},
+		{"https://github.com/acme", types.GitProviderGitHub, false},
+		{"https://github.com/acme/repo", types.GitProviderGitHub, true},
+		// A doubled slash is one segment (normalizeProviderBaseURL rebuilds the path).
+		{"https://github.com//acme", types.GitProviderGitHub, false},
+		// dev.azure.com: the org segment is REQUIRED, and it is the ONLY one.
+		{"https://dev.azure.com/acme", types.GitProviderAzureDevOps, false},
+		{"https://dev.azure.com", types.GitProviderAzureDevOps, true},
+		{"https://dev.azure.com/acme/proj", types.GitProviderAzureDevOps, true},
+		// kind x host: the two well-known hosts belong to exactly one kind each.
+		{"https://github.com/acme", types.GitProviderAzureDevOps, true},
+		{"https://dev.azure.com/acme", types.GitProviderGitHub, true},
+		{"https://acme.visualstudio.com", types.GitProviderGitHub, true},
+		{"https://acme.visualstudio.com", types.GitProviderAzureDevOps, false},
+		// Any OTHER host is accepted for either kind, with an OPTIONAL path (Q12).
+		{"https://git.corp.example", types.GitProviderGitHub, false},
+		{"https://git.corp.example/acme/team", types.GitProviderGitHub, false},
+		{"https://git.corp.example/a/b/c", types.GitProviderGitHub, true},
+		{"https://tfs.corp.example/acme", types.GitProviderAzureDevOps, false},
+		// Shape: https only, no userinfo, no port, no query or fragment, a dotted
+		// host, and no percent-escape in the path (it hides a second segment).
+		{"http://github.com/acme", types.GitProviderGitHub, true},
+		{"https://user:pw@github.com/acme", types.GitProviderGitHub, true},
+		{"https://github.com:8443/acme", types.GitProviderGitHub, true},
+		{"https://github.com/acme?x=1", types.GitProviderGitHub, true},
+		{"https://github.com/acme#frag", types.GitProviderGitHub, true},
+		{"https://localhost/acme", types.GitProviderGitHub, true},
+		{"https://github.com/acme%2Fevil", types.GitProviderGitHub, true},
+		{"https://github.com/%60id%60", types.GitProviderGitHub, true},
+		{"not a url", types.GitProviderGitHub, true},
+	} {
+		block := &types.WorkspaceProviders{Git: []types.GitProvider{
+			{ID: "row", Kind: tc.kind, BaseURLs: []string{tc.url}},
+		}}
+		err := validateWorkspaceProviders(normalizeWorkspaceProviders(block))
+		if (err != nil) != tc.refused {
+			t.Errorf("validate(%q, %s) = %v, want refused=%v", tc.url, string(tc.kind), err, tc.refused)
+		}
+	}
+}
+
 // TestNormalizeWorkspaceProviders pins the two write-time canonicalizations —
 // {} becomes an ABSENT key (or GET /site-config renders an empty object forever)
 // and a base URL is stored in one canonical form.

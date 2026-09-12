@@ -600,8 +600,10 @@ door, so they are keyed (§7.4, `PROVIDER_MEMBER`) the way `DRIVE_MEMBER`'s refu
 | `FIELD_ENABLED` | Enabled |
 | `ROW_ABSENT_HINT` | Not configured. Its host follows the legacy list, if listed there — every address on it, no bound. |
 | `ROW_DISABLED_HINT` | Off: this host is refused. Turn it on to admit the addresses below again. |
+| `ROW_DISABLED_CHIP` | Off |
 | `ADD_ROW_CTA` | Add provider |
-| `REMOVE_CONFIRM(kind)` | Remove the {kind} row? Its host goes back to the legacy list — admitted if listed there, with no address bound. Stored credentials stay. |
+| `REMOVE_CONFIRM_TITLE(kind)` | Remove the {kind} row? |
+| `REMOVE_CONFIRM_BODY` | Its host goes back to the legacy list — admitted if listed there, with no address bound. Stored credentials stay. |
 | `FIELD_BASE_URLS` | Allowed addresses |
 | `BASE_URLS_HINT` | One per line, over HTTPS. A repository is admitted when its URL starts with one of these. |
 | `BASE_URL_INVALID` | Must be an `https://` URL with a host and at least one path segment — no port, no credentials, no trailing wildcard. |
@@ -631,7 +633,11 @@ is the client mirror rendered pre-attempt under an `aria-invalid` textarea; the 
 note under the tab, and is not keyed here (§5 #1). `SAVED_TOAST` is the transient confirmation;
 `SAVED_NARROWED` is the one toast worth reading twice, so it ALSO stays on the page as an amber
 note until the next save (Q8). `ADD_WORKSPACE_REPO_HINT` replaces the Add-workspace dialog's hint
-that names the retired card. `REMOVE_CONFIRM`'s `{kind}` is `KIND_*`.
+that names the retired card. `REMOVE_CONFIRM_TITLE`'s `{kind}` is `KIND_*`, and it is the confirm dialog's title over
+`REMOVE_CONFIRM_BODY` — two keys because Radix's `AlertDialog` renders a title and a description, and a
+console that splits one frozen sentence at its question mark reflows a canon edit into the wrong slot.
+`ROW_DISABLED_CHIP` is the off row's neutral chip (the `AGENT_ROW_DISABLED_CHIP` precedent) — its own key,
+not `ROW_DISABLED_HINT` sliced at the colon.
 
 ### 7.3 `PROVIDERS` — the Storage tab (every row DRAFT)
 

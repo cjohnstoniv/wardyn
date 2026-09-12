@@ -18,10 +18,20 @@ vi.mock("../../../lib/api/secrets", () => ({
   secrets: { setSecret: vi.fn(), deleteSecret: vi.fn() },
 }));
 
-function Harness({ initial, onLatest }: { initial: GitProvider[]; onLatest?: (git: GitProvider[]) => void }) {
+function Harness({
+  initial,
+  onLatest,
+  // What the screen passes: whether the LOADED snapshot was empty. Defaults to
+  // the initial draft's own emptiness, which is what a fresh load looks like.
+  loadedEmpty = initial.length === 0,
+}: {
+  initial: GitProvider[];
+  onLatest?: (git: GitProvider[]) => void;
+  loadedEmpty?: boolean;
+}) {
   const [git, setGit] = React.useState(initial);
   onLatest?.(git);
-  return <GitTab git={git} onChange={setGit} present={[]} githubApp={false} operator />;
+  return <GitTab git={git} onChange={setGit} present={[]} githubApp={false} operator loadedEmpty={loadedEmpty} />;
 }
 
 function CredHarness({ initial, present, githubApp }: { initial: GitProvider[]; present: string[]; githubApp: boolean }) {
@@ -124,6 +134,66 @@ describe("GitTab", () => {
     expect(textarea).toHaveAttribute("aria-invalid", "false");
   });
 
+  // V1 lens E finding 1 (HIGH): the textarea split on every keystroke and fed
+  // the filtered array back through `value`, so Enter could never survive a
+  // render and the two addresses concatenated into one garbage base URL. The
+  // hint BASE_URLS_HINT gives ("one per line") was unenterable.
+  describe("the base-URLs textarea keeps its newlines (HIGH fix)", () => {
+    it("typing a second line yields TWO base URLs, not one concatenation", async () => {
+      let latest: GitProvider[] = [];
+      render(
+        <Harness
+          initial={[{ id: "gh", kind: "github", base_urls: ["https://github.com/acme"] }]}
+          onLatest={(g) => (latest = g)}
+        />,
+      );
+      const textarea = screen.getByLabelText(PROVIDERS.FIELD_BASE_URLS) as HTMLTextAreaElement;
+      await userEvent.type(textarea, "{Enter}https://git.corp.example/team");
+      expect(textarea.value).toBe("https://github.com/acme\nhttps://git.corp.example/team");
+      expect(latest[0].base_urls).toEqual(["https://github.com/acme", "https://git.corp.example/team"]);
+    });
+
+    it("the invalid hint stays live WHILE typing, on the text rather than the committed array", async () => {
+      render(<Harness initial={[{ id: "gh", kind: "github", base_urls: ["https://github.com/acme"] }]} />);
+      const row = screen.getByTestId("provider-row-github");
+      const textarea = within(row).getByLabelText(PROVIDERS.FIELD_BASE_URLS) as HTMLTextAreaElement;
+      await userEvent.type(textarea, "{Enter}http://plain.example");
+      expect(within(row).getByText(PROVIDERS.BASE_URL_INVALID)).toBeInTheDocument();
+      expect(textarea).toHaveAttribute("aria-invalid", "true");
+      // Correcting the second line clears it, with both lines still there.
+      await userEvent.clear(textarea);
+      await userEvent.type(textarea, "https://github.com/acme{Enter}https://git.corp.example");
+      expect(textarea.value).toBe("https://github.com/acme\nhttps://git.corp.example");
+      expect(within(row).queryByText(PROVIDERS.BASE_URL_INVALID)).not.toBeInTheDocument();
+    });
+
+    it("a reload from outside re-seeds the textarea", () => {
+      const { rerender } = render(
+        <GitTab
+          git={[{ id: "gh", kind: "github", base_urls: ["https://github.com/acme"] }]}
+          onChange={() => {}}
+          present={[]}
+          githubApp={false}
+          operator
+          loadedEmpty={false}
+        />,
+      );
+      rerender(
+        <GitTab
+          git={[{ id: "gh", kind: "github", base_urls: ["https://github.com/other"] }]}
+          onChange={() => {}}
+          present={[]}
+          githubApp={false}
+          operator
+          loadedEmpty={false}
+        />,
+      );
+      expect((screen.getByLabelText(PROVIDERS.FIELD_BASE_URLS) as HTMLTextAreaElement).value).toBe(
+        "https://github.com/other",
+      );
+    });
+  });
+
   it("the app lane is disabled with its reason on an Azure DevOps row", () => {
     render(
       <Harness
@@ -169,6 +239,9 @@ describe("GitTab", () => {
     await userEvent.click(screen.getByRole("button", { name: "Remove" }));
     const dialog = screen.getByRole("alertdialog");
     expect(dialog).toBeInTheDocument();
+    // Two canon keys, one per slot — never one sentence sliced on "? ".
+    expect(within(dialog).getByText(PROVIDERS.REMOVE_CONFIRM_TITLE(PROVIDERS.KIND_GITHUB))).toBeInTheDocument();
+    expect(within(dialog).getByText(PROVIDERS.REMOVE_CONFIRM_BODY)).toBeInTheDocument();
     await userEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
     // The only row is gone — back to true legacy open mode (the banner alone).
     expect(await screen.findByText(PROVIDERS.LEGACY_OPEN_TITLE)).toBeInTheDocument();
@@ -237,7 +310,23 @@ describe("GitTab", () => {
       />,
     );
     const row = screen.getByTestId("provider-row-github");
-    expect(within(row).getByText("Off")).toBeInTheDocument();
+    // The CHIP's own canon key, not ROW_DISABLED_HINT sliced at its colon: a
+    // canon edit that drops the colon used to dump the whole sentence in here.
+    expect(within(row).getByText(PROVIDERS.ROW_DISABLED_CHIP)).toBeInTheDocument();
+    expect(PROVIDERS.ROW_DISABLED_CHIP).toBe("Off");
+  });
+
+  // V1 lens E finding 2 (HIGH): with a row LOADED, an empty draft is a pending
+  // removal — the screen's Save owns the affirmative, so the banner's Add steps
+  // down to outline rather than showing a second teal (CONSOLE-RULES §2).
+  it("the legacy-open banner's Add is teal on a loaded-empty snapshot and outline after a removal", () => {
+    const { unmount } = render(<Harness initial={[]} />);
+    expect(screen.getByRole("button", { name: PROVIDERS.ADD_ROW_CTA }).className.split(/\s+/)).toContain("bg-primary");
+    unmount();
+    render(<Harness initial={[]} loadedEmpty={false} />);
+    expect(screen.getByRole("button", { name: PROVIDERS.ADD_ROW_CTA }).className.split(/\s+/)).not.toContain(
+      "bg-primary",
+    );
   });
 
   describe("the credential lane opens on whatever is already connected (MEDIUM 4)", () => {

@@ -25,15 +25,26 @@ export function hostOf(raw: string): string {
   }
 }
 
+// adoEgressDomains' own classifier (internal/api/runs_scm.go:484), ported: the
+// two ADO hosts, which belong to the azure_devops kind and to no other.
+function isADOHost(host: string): boolean {
+  return host === "dev.azure.com" || host.endsWith(".visualstudio.com");
+}
+
 // Client mirror of validateWorkspaceProviders' base-URL shape rule
-// (internal/api/workspace_providers.go), checked BEFORE a credential is
+// (internal/api/workspace_providers.go:230-310), checked BEFORE a credential is
 // written (§2.5) — the server's own 400s (§7.1, unparsed) are still what a
-// post-attempt refusal renders, under SAVE_REFUSED_TITLE. Deliberately does
-// NOT enforce "at least one path segment" (Q12, open at the prompt's
-// Adjudication gate): the model admits a bare `https://github.com` GHES-style
-// host with an optional org path (prompt §5.1), and a stricter client mirror
-// would reject a row the server accepts. dev.azure.com's REQUIRED org path
-// (§5.1) is unambiguous and is enforced here.
+// post-attempt refusal renders, under SAVE_REFUSED_TITLE. The exact-segment and
+// kind x host branches below are validateProviderHostForKind's own four, ported
+// case for case; the shared literal table both sides are checked against lives
+// in display.test.tsx and internal/api/workspace_providers_test.go
+// (TestBaseURLClientMirrorParity) — a rule changed on one side reds the other.
+//
+// Deliberately does NOT enforce "at least one path segment" on a host that is
+// neither well-known (Q12, open at the prompt's Adjudication gate): the model
+// admits a bare `https://git.corp.example` GHES-style host with an OPTIONAL org
+// path (prompt §5.1), and a stricter client mirror would reject a row the server
+// accepts.
 export function baseURLError(raw: string, kind: GitProviderKind): string | null {
   const s = raw.trim();
   if (!s) return null;
@@ -48,10 +59,30 @@ export function baseURLError(raw: string, kind: GitProviderKind): string | null 
   if (u.port) return PROVIDERS.BASE_URL_INVALID;
   if (u.search || u.hash) return PROVIDERS.BASE_URL_INVALID;
   if (u.pathname.includes("*")) return PROVIDERS.BASE_URL_INVALID;
+  // No percent-encoding in the path — the server refuses `u.Path !=
+  // u.EscapedPath()`, which ANY escape in the path trips: "acme%2Fevil" hides a
+  // second segment from the count below, and "%60id%60" decodes to a backtick
+  // shellSafeSiteString refuses on sight.
+  if (u.pathname.includes("%")) return PROVIDERS.BASE_URL_INVALID;
+  const host = u.hostname.toLowerCase();
+  // hostrules.ValidApprovedHost's dotted-host rule, reached through validSiteURL:
+  // a single-label host ("localhost") is refused at write.
+  if (!host.includes(".")) return PROVIDERS.BASE_URL_INVALID;
   const segments = u.pathname.split("/").filter(Boolean);
   if (segments.length > 2) return PROVIDERS.BASE_URL_INVALID;
-  if (kind === "azure_devops" && u.hostname.toLowerCase() === "dev.azure.com" && segments.length < 1) {
-    return PROVIDERS.BASE_URL_INVALID;
+  // validateProviderHostForKind: the two well-known hosts belong to exactly one
+  // kind each, and each takes an exact number of path segments there. Any OTHER
+  // host is accepted for either kind — nothing on the wire distinguishes a GHES
+  // host from an ADO Server one, so the admin's own label is the only fact there.
+  if (kind === "github") {
+    if (isADOHost(host)) return PROVIDERS.BASE_URL_INVALID;
+    // github.com takes an optional single /<org>; a deeper path names a repo.
+    if (host === "github.com" && segments.length > 1) return PROVIDERS.BASE_URL_INVALID;
+  } else {
+    if (host === "github.com") return PROVIDERS.BASE_URL_INVALID;
+    // dev.azure.com is shared by every org on the planet, so the organization
+    // segment is REQUIRED there — and only the organization.
+    if (host === "dev.azure.com" && segments.length !== 1) return PROVIDERS.BASE_URL_INVALID;
   }
   return null;
 }

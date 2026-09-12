@@ -15,7 +15,7 @@ import { DRIVES, DRIVE_MEMBER, DRIVE_RUN } from "./user-drives-copy";
 // precedent, user-drives-copy.test.ts's parseFrozenTables()): this suite does
 // not hand-retype a sample of the canon — it PARSES docs/design/
 // workspace-providers-prompt.md §7.2-§7.5 + §7.7 back out of the doc and
-// compares all 96 keys. A swapped hyphen, a dropped ellipsis, a reworded
+// compares all 98 keys. A swapped hyphen, a dropped ellipsis, a reworded
 // clause, a new doc row or a deleted one all fail here rather than shipping.
 //
 // §7.6 is STAGING (field-report strings owned by other lanes, parsed by
@@ -28,8 +28,8 @@ import { DRIVES, DRIVE_MEMBER, DRIVE_RUN } from "./user-drives-copy";
 //     DISPLAY concern applied by the consuming component; the frozen string
 //     itself is plain text.
 //   - A PARAMETERIZED key is called with its own placeholder text, so
-//     REMOVE_CONFIRM("{kind}") must reproduce the doc's `Remove the {kind}
-//     row?…` character for character. The pluralised keys (§5 #9) can't be
+//     REMOVE_CONFIRM_TITLE("{kind}") must reproduce the doc's `Remove the {kind}
+//     row?` character for character. The pluralised keys (§5 #9) can't be
 //     checked that way and get their own tests below.
 
 // process.cwd() is the vitest root — ui/ — for every entry point that runs
@@ -67,19 +67,19 @@ const doc = parseFrozenTables();
 const PLURALISED = ["SAVED_NARROWED(n)", "CARD_PROVIDERS(n)", "CARD_AGENTS(n)", "STEP_BADGE_READY(n)", "STEP_BADGE_READY_AGENTS(n)"];
 
 // Every other key is rendered FROM THE DOC's own key cell rather than from a
-// hand-typed table (the drives precedent): `REMOVE_CONFIRM(kind)` is split
+// hand-typed table (the drives precedent): `REMOVE_CONFIRM_TITLE(kind)` is split
 // into the module symbol and its argument names, and the value is called with
 // "{kind}" so it must reproduce the doc cell character for character.
 const NAMESPACES: Record<string, unknown>[] = [PROVIDERS, PROVIDER_MEMBER, AGENTS];
 
-/** `REMOVE_CONFIRM(kind)` -> ["REMOVE_CONFIRM", ["kind"]]. */
+/** `REMOVE_CONFIRM_TITLE(kind)` -> ["REMOVE_CONFIRM_TITLE", ["kind"]]. */
 function splitKey(docKey: string): [string, string[]] {
   const m = /^([A-Z0-9_]+)\((.*)\)$/.exec(docKey);
   return m ? [m[1], m[2].split(",").map((a) => a.trim())] : [docKey, []];
 }
 
 // ONE lookup across the three namespaces is safe because none of their keys
-// collide (57 / 3 / 36); the completeness test below is what keeps that true.
+// collide (59 / 3 / 36); the completeness test below is what keeps that true.
 function render(docKey: string): string {
   const [name, args] = splitKey(docKey);
   const ns = NAMESPACES.find((n) => name in n);
@@ -91,8 +91,8 @@ function render(docKey: string): string {
 const RENDERABLE = [...doc.keys()].filter((k) => !PLURALISED.includes(k));
 
 describe("workspace-providers-copy — §7.2-§7.5 + §7.7 parsed out of the prompt doc", () => {
-  it("finds all 96 frozen keys in the doc (§7.6 excluded)", () => {
-    expect(doc.size).toBe(96);
+  it("finds all 98 frozen keys in the doc (§7.6 excluded)", () => {
+    expect(doc.size).toBe(98);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {
@@ -174,7 +174,7 @@ describe("workspace-providers-copy — the reuse and no-shadow rules §5 spells 
   // PROVIDERS and DRIVES are two separate admin screens that deliberately
   // freeze the SAME short field names for the same concept (TITLE,
   // FIELD_ENABLED, SAVE_CTA/SAVE_ERROR/SAVE_REFUSED_TITLE,
-  // FETCH_FAILED_TITLE/_BODY, CARD_LEAD/_EMPTY/_SUMMARY/_OPEN, REMOVE_CONFIRM)
+  // FETCH_FAILED_TITLE/_BODY, CARD_LEAD/_EMPTY/_SUMMARY/_OPEN)
   // — the drives precedent (user-drives-copy.test.ts's own "documents that
   // DRIVES intentionally reuses GOVERNANCE's inner key names"): §5 #10's
   // "no name" guarantee is the NAMESPACE name (checked above), not every

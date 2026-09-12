@@ -15,7 +15,7 @@
 // their own.
 //
 // workspace-providers-copy.test.ts PARSES §7.2-§7.5 + §7.7 back out of the
-// prompt doc and compares all 95 keys below against them (§7.6 is STAGING —
+// prompt doc and compares all 98 keys below against them (§7.6 is STAGING —
 // field-report strings owned by other lanes — and is excluded, the way this
 // doc's own header says: `/^### 7\.[2-57]\b/`), so a swapped hyphen, a dropped
 // ellipsis or a new doc row fails a gate instead of shipping.
@@ -60,9 +60,18 @@ export const PROVIDERS = {
   FIELD_ENABLED: "Enabled",
   ROW_ABSENT_HINT: "Not configured. Its host follows the legacy list, if listed there — every address on it, no bound.",
   ROW_DISABLED_HINT: "Off: this host is refused. Turn it on to admit the addresses below again.",
+  // The off row's neutral chip. Its own key rather than ROW_DISABLED_HINT
+  // sliced at its colon (the AGENT_ROW_DISABLED_CHIP precedent) — a reworded
+  // hint must not silently reword a chip.
+  ROW_DISABLED_CHIP: "Off",
   ADD_ROW_CTA: "Add provider",
-  REMOVE_CONFIRM: (kind: string) =>
-    `Remove the ${kind} row? Its host goes back to the legacy list — admitted if listed there, with no address bound. Stored credentials stay.`,
+  // Two keys, not one sentence split at its question mark: Radix's
+  // AlertDialog renders a title and a description, and slicing one frozen
+  // string on "? " reflows a canon edit into the wrong slot (or dumps the
+  // whole sentence into the title).
+  REMOVE_CONFIRM_TITLE: (kind: string) => `Remove the ${kind} row?`,
+  REMOVE_CONFIRM_BODY:
+    "Its host goes back to the legacy list — admitted if listed there, with no address bound. Stored credentials stay.",
   FIELD_BASE_URLS: "Allowed addresses",
   BASE_URLS_HINT: "One per line, over HTTPS. A repository is admitted when its URL starts with one of these.",
   BASE_URL_INVALID:

@@ -7,7 +7,7 @@
 // the TIER, not the network), fetch-failed (distinct from empty), the legacy
 // banner (zero rows), populated, and exactly ONE teal button at a time.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpError } from "../../../lib/api/core";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
@@ -132,6 +132,58 @@ describe("ProvidersScreen", () => {
     await screen.findByTestId("provider-row-github");
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
     expect(putWorkspaceProvidersMock).toHaveBeenCalled();
+  });
+
+  // V1 lens E finding 2 (HIGH): Save was withheld on the DRAFT's emptiness, so
+  // removing the last row hid the only button that could commit the removal —
+  // the tab flipped to the legacy-open banner whose only action is Add, and the
+  // change was discarded on navigation. The withhold is on the LOADED snapshot.
+  it("removing the last row leaves Save available, and the PUT carries an empty git set", async () => {
+    getWorkspaceProvidersMock.mockResolvedValue({
+      providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
+      etag: '"e7"',
+    });
+    putWorkspaceProvidersMock.mockResolvedValue({ providers: {}, etag: '"e8"', sourcesNoLongerAdmitted: 0 });
+    renderScreen();
+    const row = await screen.findByTestId("provider-row-github");
+    await userEvent.click(within(row).getByRole("button", { name: "Remove" }));
+    await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Remove" }));
+
+    expect(await screen.findByText(PROVIDERS.LEGACY_OPEN_TITLE)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    expect(putWorkspaceProvidersMock).toHaveBeenCalledWith({ git: [] }, '"e7"');
+    // Saved: the org IS in legacy-open mode now, so the banner's Add owns the
+    // one affirmative again and Save steps back off.
+    await waitFor(() => expect(screen.queryByRole("button", { name: PROVIDERS.SAVE_CTA })).not.toBeInTheDocument());
+  });
+
+  it("a genuinely empty loaded state still withholds Save", async () => {
+    getWorkspaceProvidersMock.mockResolvedValue({ providers: {}, etag: '"e9"' });
+    renderScreen();
+    await screen.findByText(PROVIDERS.LEGACY_OPEN_TITLE);
+    expect(screen.queryByRole("button", { name: PROVIDERS.SAVE_CTA })).not.toBeInTheDocument();
+  });
+
+  // V1 lens E finding 1 (HIGH), the other half: a second address typed into the
+  // textarea reaches the PUT — the write path, not just the rendered value.
+  it("Save sends a second base URL typed into the textarea", async () => {
+    getWorkspaceProvidersMock.mockResolvedValue({
+      providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
+      etag: '"ea"',
+    });
+    putWorkspaceProvidersMock.mockResolvedValue({
+      providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
+      etag: '"eb"',
+      sourcesNoLongerAdmitted: 0,
+    });
+    renderScreen();
+    const row = await screen.findByTestId("provider-row-github");
+    await userEvent.type(within(row).getByLabelText(PROVIDERS.FIELD_BASE_URLS), "{Enter}https://git.corp.example/team");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    expect(putWorkspaceProvidersMock.mock.calls[0][0].git[0].base_urls).toEqual([
+      "https://github.com/acme",
+      "https://git.corp.example/team",
+    ]);
   });
 
   it("a 412 renders the saved-elsewhere state and never overwrites", async () => {

@@ -52,6 +52,12 @@ function availableLanes(kind: GitProviderKind, baseUrls: string[]): GitLane[] {
   return ALL_LANES.filter((l) => !laneUnavailableReason(l, kind, baseUrls));
 }
 
+// The one derivation of base_urls from textarea bytes — used BOTH to commit a
+// change and to decide whether an outside change should re-seed the textarea.
+function normalizeBaseURLText(text: string): string[] {
+  return text.split("\n").map((l) => l.trim()).filter(Boolean);
+}
+
 function permittedLanes(row: GitProvider): Set<GitLane> {
   const available = availableLanes(row.kind, row.base_urls);
   const stored = row.lanes && row.lanes.length > 0 ? row.lanes : available;
@@ -106,6 +112,23 @@ function Row({
   onAdd: () => void;
 }) {
   const [confirmRemove, setConfirmRemove] = React.useState(false);
+  // The textarea's RAW text, held here rather than derived from
+  // row.base_urls.join("\n") every render: splitting on every keystroke fed the
+  // filtered array straight back into `value`, so a newline could never survive
+  // one render and a second address typed after Enter concatenated onto the
+  // first. Each change still commits the split/trimmed array to the row (so
+  // Save needs no pending-text dance and the parent's draft is always current),
+  // but the DISPLAYED text — and the invalidLines/aria-invalid the field flags
+  // while typing — come from these bytes.
+  const joinedURLs = (row?.base_urls ?? []).join("\n");
+  const [baseURLText, setBaseURLText] = React.useState(joinedURLs);
+  // Re-seed only when the row's URLs changed from OUTSIDE this textarea (a
+  // Retry reload, a 412 reload, a row just added): our own commits always
+  // leave normalizeBaseURLText(baseURLText) === joinedURLs, so they never
+  // clobber the newline the admin just typed. Setting state during render is
+  // React's own documented shape for prop-derived state; it converges in one
+  // extra pass.
+  if (normalizeBaseURLText(baseURLText).join("\n") !== joinedURLs) setBaseURLText(joinedURLs);
   // The retired GitHostCard's own derivation (present.includes(sshName) ?
   // "ssh" : appStored ? "app" : "pat") — a row's credential lanes open on
   // whatever is already connected, not always the first lane, and the mock
@@ -144,11 +167,10 @@ function Row({
   const sshName = `ssh-key-${slug}`;
   const permitted = permittedLanes(row);
   const hosts = row.base_urls.map((u) => u.replace(/^https?:\/\//, "")).join(" · ");
-  const invalidLines = invalidBaseURLLines(row.base_urls.join("\n"), kind);
-  const removeConfirm = PROVIDERS.REMOVE_CONFIRM(KIND_LABEL[kind]);
-  const qIdx = removeConfirm.indexOf("? ");
-  const removeConfirmHead = qIdx < 0 ? removeConfirm : removeConfirm.slice(0, qIdx + 1);
-  const removeConfirmBody = qIdx < 0 ? "" : removeConfirm.slice(qIdx + 2);
+  // The TEXT, not the committed array: a line typed but not yet valid is
+  // exactly what the admin needs flagged while typing, and a trailing blank
+  // line the array drops must not un-flag the line above it.
+  const invalidLines = invalidBaseURLLines(baseURLText, kind);
 
   return (
     <div className="rounded-lg border border-border" data-testid={`provider-row-${kind}`}>
@@ -165,11 +187,11 @@ function Row({
         </div>
         {/* Mock states 1 & 3: the row's own on/off fact as a neutral chip —
             off is a fact, never red (§4's colour rule) — not left to the
-            switch position + collapsed-body prose alone. "Off" has no chip
-            key of its own; it is ROW_DISABLED_HINT's own leading word
-            ("Off: this host is refused…"), taken rather than a second,
-            hand-typed copy of it. */}
-        <Chip tone="neutral">{row.disabled ? PROVIDERS.ROW_DISABLED_HINT.split(":")[0] : PROVIDERS.FIELD_ENABLED}</Chip>
+            switch position + collapsed-body prose alone. ROW_DISABLED_CHIP is
+            its OWN canon key (the AGENT_ROW_DISABLED_CHIP precedent), never
+            ROW_DISABLED_HINT sliced at its colon: a canon edit that drops the
+            colon used to dump a whole sentence into the chip. */}
+        <Chip tone="neutral">{row.disabled ? PROVIDERS.ROW_DISABLED_CHIP : PROVIDERS.FIELD_ENABLED}</Chip>
         <Button variant="outline" size="sm" disabled={!operator} onClick={() => setConfirmRemove(true)}>
           {PERM.REMOVE}
         </Button>
@@ -189,10 +211,11 @@ function Row({
                 rows={3}
                 aria-invalid={invalidLines.length > 0}
                 disabled={!operator}
-                value={row.base_urls.join("\n")}
-                onChange={(e) =>
-                  onUpdate({ ...row, base_urls: e.target.value.split("\n").map((l) => l.trim()).filter(Boolean) })
-                }
+                value={baseURLText}
+                onChange={(e) => {
+                  setBaseURLText(e.target.value);
+                  onUpdate({ ...row, base_urls: normalizeBaseURLText(e.target.value) });
+                }}
               />
               {invalidLines.length > 0 && <p className="text-xs leading-snug text-danger">{PROVIDERS.BASE_URL_INVALID}</p>}
             </Field>
@@ -319,11 +342,11 @@ function Row({
       <AlertDialog open={confirmRemove} onOpenChange={setConfirmRemove}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            {/* REMOVE_CONFIRM is one frozen sentence (the doc's single cell);
-                split at the question mark for the Title/Description Radix
-                wants — the bytes are unchanged, only where the line breaks. */}
-            <AlertDialogTitle>{removeConfirmHead}</AlertDialogTitle>
-            <AlertDialogDescription>{removeConfirmBody}</AlertDialogDescription>
+            {/* One canon key per slot Radix renders (§7.2) — never one frozen
+                sentence sliced on "? ", which reflowed a canon edit into the
+                wrong half. */}
+            <AlertDialogTitle>{PROVIDERS.REMOVE_CONFIRM_TITLE(KIND_LABEL[kind])}</AlertDialogTitle>
+            <AlertDialogDescription>{PROVIDERS.REMOVE_CONFIRM_BODY}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{PEOPLE.CANCEL}</AlertDialogCancel>
@@ -352,12 +375,20 @@ export function GitTab({
   present,
   githubApp,
   operator,
+  // Whether the LOADED snapshot had zero rows — true legacy-open mode, where
+  // this tab's own Add provider is the state's one affirmative and the screen
+  // withholds Save. FALSE with an empty `git` means the admin just REMOVED the
+  // last row: the banner still describes what an empty set means, but Save is
+  // what commits that removal, so Add steps down to outline (CONSOLE-RULES §2
+  // — one teal per surface).
+  loadedEmpty = true,
 }: {
   git: GitProvider[];
   onChange: (next: GitProvider[]) => void;
   present: string[];
   githubApp: boolean;
   operator: boolean;
+  loadedEmpty?: boolean;
 }) {
   const rowFor = (kind: GitProviderKind) => git.find((r) => r.kind === kind);
 
@@ -387,7 +418,7 @@ export function GitTab({
           <h4 className="text-sm font-medium text-foreground">{PROVIDERS.LEGACY_OPEN_TITLE}</h4>
           <p className="mt-1.5 text-body text-muted-foreground">{PROVIDERS.LEGACY_OPEN_BODY}</p>
           <p className="mt-1 text-meta text-muted-foreground">{PROVIDERS.LEGACY_OPEN_OTHER_HOSTS}</p>
-          <Button className="mt-4" disabled={!operator} onClick={() => addRow("github")}>
+          <Button className="mt-4" variant={loadedEmpty ? "default" : "outline"} disabled={!operator} onClick={() => addRow("github")}>
             {PROVIDERS.ADD_ROW_CTA}
           </Button>
         </div>

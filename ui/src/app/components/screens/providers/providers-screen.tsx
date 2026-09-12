@@ -63,12 +63,19 @@ export function ProvidersScreen() {
   // — a count of newly-refused sources is worth reading twice, not only in
   // the transient toast.
   const [narrowed, setNarrowed] = React.useState<number | null>(null);
+  // Whether the LOADED snapshot — never the draft — has zero git rows. The Save
+  // withhold below is about the state the ORG is in: true legacy-open mode,
+  // whose own banner owns the one affirmative. Gating it on the DRAFT meant
+  // removing the last row hid the only button that could save that removal,
+  // and the change was silently discarded on navigation.
+  const [loadedEmpty, setLoadedEmpty] = React.useState(true);
 
   const load = React.useCallback(() => {
     setSavedElsewhere(false);
     Promise.all([api.getWorkspaceProviders(), setupApi.getSetupStatus()])
       .then(([snap, s]) => {
         setDraft(snap.providers);
+        setLoadedEmpty((snap.providers.git ?? []).length === 0);
         setEtag(snap.etag);
         setSetupStatus(s);
         setStatus("ready");
@@ -85,6 +92,10 @@ export function ProvidersScreen() {
     try {
       const result = await api.putWorkspaceProviders(draft, etag);
       setDraft(result.providers);
+      // The PUT response IS the new loaded snapshot: saving a removal down to
+      // zero rows puts the org in true legacy-open mode, and the banner's Add
+      // owns the affirmative again.
+      setLoadedEmpty((result.providers.git ?? []).length === 0);
       setEtag(result.etag);
       setNarrowed(result.sourcesNoLongerAdmitted > 0 ? result.sourcesNoLongerAdmitted : null);
       if (result.sourcesNoLongerAdmitted > 0) {
@@ -181,6 +192,7 @@ export function ProvidersScreen() {
                   present={secretsPresent}
                   githubApp={githubApp}
                   operator={operator}
+                  loadedEmpty={loadedEmpty}
                 />
               )}
               {tab === "storage" && (
@@ -209,10 +221,14 @@ export function ProvidersScreen() {
                 />
               )}
               {/* ONE teal button at a time (CONSOLE-RULES §6, prompt §4): in
-                  the legacy-open empty state (zero git rows) the Git tab's own
-                  banner action IS the state's one affirmative, so the
-                  screen's Save providers is withheld rather than doubling it. */}
-              {tab !== "agents" && !(tab === "git" && (draft.git ?? []).length === 0) && (
+                  the legacy-open empty state the Git tab's own banner action IS
+                  the state's one affirmative, so the screen's Save providers is
+                  withheld rather than doubling it. The test is the LOADED
+                  snapshot, not the draft: a draft emptied by Remove is a pending
+                  CHANGE, and withholding Save there left no way to commit it
+                  (the banner's Add steps down to outline instead — git-tab.tsx's
+                  `loadedEmpty`). */}
+              {tab !== "agents" && !(tab === "git" && loadedEmpty) && (
                 <div className="flex justify-end border-t border-border pt-4">
                   <Button disabled={!operator || saving} onClick={save}>
                     {PROVIDERS.SAVE_CTA}

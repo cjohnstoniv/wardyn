@@ -17,6 +17,8 @@
 //
 // SUPER only, the same reason /drives has no nav item: a security admin's
 // authority is the governance profile's two limit rows, not this registry.
+// Anyone else gets the TIER, said as a tier (OperatorOnlyHint) rather than an
+// empty card — the funnel walks its `providers` step for every role.
 //
 // Every product string comes from workspace-providers-copy.ts. This file adds
 // none.
@@ -25,6 +27,7 @@ import { useNavigate } from "react-router-dom";
 import { ChevronRight } from "lucide-react";
 import { providers as api } from "../../../lib/api/providers";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { OperatorOnlyHint } from "../../wardyn/primitives";
 import { useOperator } from "../../wardyn/operator-context";
 
 export function ProvidersCard() {
@@ -51,7 +54,23 @@ export function ProvidersCard() {
     };
   }, [operator]);
 
-  if (!operator) return null;
+  // The tier said as a tier, never a blank body. This card IS the funnel's
+  // `providers` step body and `providers` is in stepOrder unconditionally, so
+  // returning null left a security admin or a member on a step with a heading,
+  // an Optional badge and NOTHING underneath — the hidden-instead-of-disabled
+  // shape §2.6's state list forbids. ProvidersScreen answers the same refusal
+  // the same way (its forbidden arm). Still zero teal, and still no fetch.
+  if (!operator) {
+    return (
+      <section className="rounded-xl border border-border bg-card p-4" data-testid="providers-card">
+        <h3 className="flex items-center text-sm font-medium text-foreground">
+          {PROVIDERS.TITLE}
+          <OperatorOnlyHint />
+        </h3>
+        <p className="mt-0.5 text-body leading-snug text-muted-foreground">{PROVIDERS.CARD_LEAD}</p>
+      </section>
+    );
+  }
 
   const summary = count === null ? "" : count === 0 ? PROVIDERS.CARD_EMPTY : PROVIDERS.CARD_PROVIDERS(count);
 
