@@ -1692,6 +1692,22 @@ func (a *authzApprovals) List(_ context.Context, state types.ApprovalState) ([]t
 	return out, nil
 }
 
+func (a *authzApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason string) (int, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	n := 0
+	for id, ap := range a.byID {
+		if ap.RunID != runID || ap.State != types.ApprovalPending {
+			continue
+		}
+		ap.State = types.ApprovalCancelled
+		ap.DecidedBy, ap.Reason = "system", reason
+		a.byID[id] = ap
+		n++
+	}
+	return n, nil
+}
+
 // ListApprovalsPageByRunCreator: item 2's optional scoped-list interface.
 func (a *authzApprovals) ListApprovalsPageByRunCreator(ctx context.Context, createdBy string, stateFilter types.ApprovalState, _ store.Page) ([]types.ApprovalRequest, error) {
 	a.mu.Lock()

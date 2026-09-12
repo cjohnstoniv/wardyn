@@ -6,6 +6,8 @@ package approval_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -22,6 +24,12 @@ type fakeStore struct {
 	mu      sync.Mutex
 	records []types.ApprovalRequest
 	audit   []types.AuditEvent
+	// decideErrOn fails the Nth DecideApproval call (1-based) with decideErr,
+	// which is how a test reaches a PARTLY applied cascade — some rows durably
+	// moved, then the store refused.
+	decideCalls int
+	decideErrOn int
+	decideErr   error
 }
 
 func (f *fakeStore) CreateApproval(_ context.Context, a types.ApprovalRequest) (types.ApprovalRequest, error) {
@@ -57,6 +65,10 @@ func (f *fakeStore) ListApprovals(_ context.Context, stateFilter types.ApprovalS
 func (f *fakeStore) DecideApproval(_ context.Context, id uuid.UUID, decision types.ApprovalDecision) (types.ApprovalRequest, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.decideCalls++
+	if f.decideErrOn != 0 && f.decideCalls == f.decideErrOn {
+		return types.ApprovalRequest{}, f.decideErr
+	}
 	for i, a := range f.records {
 		if a.ID == id {
 			if a.State != types.ApprovalPending {
@@ -370,6 +382,220 @@ func TestExpireStale_AlreadyDecidedRace(t *testing.T) {
 	// Zero expired because the approval was already decided.
 	if expired != 0 {
 		t.Errorf("expected 0 expired, got %d", expired)
+	}
+}
+
+// ─── CancelForRun (B4: a run's terminal transition ends its open questions) ──
+
+// TestCancelForRun_MovesOnlyThisRunsPending is the whole contract in one drive:
+// only PENDING rows move, only this run's, they land on CANCELLED with
+// decided_by=system and the transition as the reason, and the batch emits ONE
+// approval.cancelled audit row carrying the count.
+func TestCancelForRun_MovesOnlyThisRunsPending(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	killed, other := uuid.New(), uuid.New()
+
+	a1, _ := approval.RequestApproval(ctx, st, newReq(killed, types.ApprovalEgressDomain, json.RawMessage(`{"host":"a.example.com"}`)))
+	a2, _ := approval.RequestApproval(ctx, st, newReq(killed, types.ApprovalToolCall, json.RawMessage(`{"tool":"Bash"}`)))
+	decided, _ := approval.RequestApproval(ctx, st, newReq(killed, types.ApprovalEgressDomain, json.RawMessage(`{"host":"decided.example.com"}`)))
+	foreign, _ := approval.RequestApproval(ctx, st, newReq(other, types.ApprovalEgressDomain, json.RawMessage(`{"host":"b.example.com"}`)))
+	if _, err := approval.Decide(ctx, st, decided.ID, types.ActorHuman, types.ApprovalDecision{
+		State: types.ApprovalApproved, DecidedBy: "human", Reason: "ok",
+	}); err != nil {
+		t.Fatalf("seed decide: %v", err)
+	}
+
+	n, err := approval.CancelForRun(ctx, st, killed, "run_killed")
+	if err != nil {
+		t.Fatalf("cancel for run: %v", err)
+	}
+	if n != 2 {
+		t.Fatalf("cancelled = %d, want 2 (the run's two PENDING rows)", n)
+	}
+	byID := map[uuid.UUID]types.ApprovalRequest{}
+	for _, r := range st.records {
+		byID[r.ID] = r
+	}
+	for _, id := range []uuid.UUID{a1.ID, a2.ID} {
+		got := byID[id]
+		if got.State != types.ApprovalCancelled {
+			t.Errorf("approval %s state = %q, want CANCELLED", id, got.State)
+		}
+		if got.DecidedBy != "system" {
+			t.Errorf("approval %s decided_by = %q, want system — nobody decided it", id, got.DecidedBy)
+		}
+		if got.Reason != "run_killed" {
+			t.Errorf("approval %s reason = %q, want run_killed", id, got.Reason)
+		}
+		if got.DecisionScope != "" {
+			t.Errorf("approval %s decision_scope = %q; a cancellation authorizes nothing", id, got.DecisionScope)
+		}
+	}
+	if got := byID[decided.ID].State; got != types.ApprovalApproved {
+		t.Errorf("an already-APPROVED row became %q — a decision must never be overwritten", got)
+	}
+	if got := byID[foreign.ID].State; got != types.ApprovalPending {
+		t.Errorf("another run's PENDING row became %q — cancellation is run-scoped", got)
+	}
+
+	var evs []types.AuditEvent
+	for _, ev := range st.audit {
+		if ev.Action == "approval.cancelled" {
+			evs = append(evs, ev)
+		}
+	}
+	if len(evs) != 1 {
+		t.Fatalf("approval.cancelled rows = %d, want exactly 1 for the batch", len(evs))
+	}
+	if evs[0].ActorType != types.ActorSystem {
+		t.Errorf("actor_type = %q, want system", evs[0].ActorType)
+	}
+	if evs[0].RunID == nil || *evs[0].RunID != killed {
+		t.Errorf("the row must be keyed to the run so it lands in its evidence rail; run_id = %v", evs[0].RunID)
+	}
+	var data struct {
+		RunID  string `json:"run_id"`
+		Reason string `json:"reason"`
+		Count  int    `json:"count"`
+	}
+	if err := json.Unmarshal(evs[0].Data, &data); err != nil {
+		t.Fatalf("decode audit data: %v", err)
+	}
+	if data.Count != 2 || data.Reason != "run_killed" || data.RunID != killed.String() {
+		t.Errorf("audit data = %+v, want {run_id:%s reason:run_killed count:2}", data, killed)
+	}
+}
+
+// TestCancelForRun_IdempotentAndSilentWithNothingPending pins the re-kill path:
+// a second cancellation finds nothing PENDING, moves nothing and — the part
+// that matters for the append-only log — writes NO audit row at all.
+func TestCancelForRun_IdempotentAndSilentWithNothingPending(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	runID := uuid.New()
+	_, _ = approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalEgressDomain, json.RawMessage(`{"host":"a.example.com"}`)))
+
+	if n, err := approval.CancelForRun(ctx, st, runID, "run_killed"); err != nil || n != 1 {
+		t.Fatalf("first cancel = (%d, %v), want (1, nil)", n, err)
+	}
+	before := len(st.audit)
+	n, err := approval.CancelForRun(ctx, st, runID, "run_killed")
+	if err != nil {
+		t.Fatalf("second cancel: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("second cancel moved %d rows, want 0 — a re-kill must be a no-op", n)
+	}
+	if len(st.audit) != before {
+		t.Errorf("second cancel wrote %d new audit rows, want 0", len(st.audit)-before)
+	}
+}
+
+// TestCancelForRun_PartialFailureStillRecordsWhatMoved is the trail's half of the
+// cascade. A store error part-way through leaves the approvals it already moved
+// durably CANCELLED — the operator's queue empties — so returning the error
+// before the audit block meant exactly the unexplained emptying this row exists
+// to explain. The row goes out with the PARTIAL count, outcome=failure and the
+// error, and the caller still gets the failure.
+func TestCancelForRun_PartialFailureStillRecordsWhatMoved(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{decideErrOn: 2, decideErr: errors.New("store: connection reset")}
+	runID := uuid.New()
+	for i := range 3 {
+		_, _ = approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalEgressDomain,
+			json.RawMessage(`{"host":"h`+strconv.Itoa(i)+`.example.com"}`)))
+	}
+
+	n, err := approval.CancelForRun(ctx, st, runID, "run_killed")
+	if err == nil {
+		t.Fatal("a refused DecideApproval must be surfaced, not swallowed")
+	}
+	if n != 1 {
+		t.Fatalf("cancelled = %d, want 1 (the row that moved before the store refused)", n)
+	}
+	var evs []types.AuditEvent
+	for _, ev := range st.audit {
+		if ev.Action == "approval.cancelled" {
+			evs = append(evs, ev)
+		}
+	}
+	if len(evs) != 1 {
+		t.Fatalf("approval.cancelled rows = %d, want 1 — one approval is durably CANCELLED, so the trail must "+
+			"say who emptied it", len(evs))
+	}
+	if evs[0].Outcome != "failure" {
+		t.Errorf("outcome = %q, want failure — the count is partial and the row must say so", evs[0].Outcome)
+	}
+	var data struct {
+		Count int    `json:"count"`
+		Error string `json:"error"`
+	}
+	if uerr := json.Unmarshal(evs[0].Data, &data); uerr != nil {
+		t.Fatalf("decode audit data: %v", uerr)
+	}
+	if data.Count != 1 {
+		t.Errorf("audit count = %d, want 1 (what actually moved)", data.Count)
+	}
+	if data.Error == "" {
+		t.Error("the failure row carries no error field; the partial count alone reads as a bug rather than an " +
+			"interrupted cascade")
+	}
+}
+
+// TestCancelForRun_AFailureBeforeAnythingMovedRecordsNothing: the other side of
+// the same rule. Nothing moved, so there is no state change to explain — a row
+// here would claim a cancellation that never happened.
+func TestCancelForRun_AFailureBeforeAnythingMovedRecordsNothing(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{decideErrOn: 1, decideErr: errors.New("store: connection reset")}
+	runID := uuid.New()
+	_, _ = approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalEgressDomain, json.RawMessage(`{"host":"h.example.com"}`)))
+
+	n, err := approval.CancelForRun(ctx, st, runID, "run_killed")
+	if err == nil || n != 0 {
+		t.Fatalf("CancelForRun = (%d, %v), want (0, an error)", n, err)
+	}
+	for _, ev := range st.audit {
+		if ev.Action == "approval.cancelled" {
+			t.Errorf("a cascade that moved nothing emitted %+v", ev)
+		}
+	}
+}
+
+// TestExpireStale_LeavesCancelledAlone: the stale sweeper reads PENDING only, so
+// a cancelled row is out of its reach by construction. Pinned because the
+// alternative — a sweeper that re-decides a terminal row — would rewrite the
+// reason an operator reads on the queue AND emit an approval.expire row for a
+// question the run's own end had already closed.
+func TestExpireStale_LeavesCancelledAlone(t *testing.T) {
+	ctx := context.Background()
+	st := &fakeStore{}
+	runID := uuid.New()
+	ap, _ := approval.RequestApproval(ctx, st, newReq(runID, types.ApprovalEgressDomain, json.RawMessage(`{"host":"a.example.com"}`)))
+	for i := range st.records {
+		st.records[i].RequestedAt = time.Now().UTC().Add(-10 * time.Hour)
+	}
+	if _, err := approval.CancelForRun(ctx, st, runID, "run_completed"); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+
+	expired, err := approval.ExpireStale(ctx, st, 5*time.Hour)
+	if err != nil {
+		t.Fatalf("expire stale: %v", err)
+	}
+	if expired != 0 {
+		t.Errorf("expired = %d, want 0 — a CANCELLED row is not PENDING", expired)
+	}
+	for _, r := range st.records {
+		if r.ID == ap.ID && (r.State != types.ApprovalCancelled || r.Reason != "run_completed") {
+			t.Errorf("the sweeper rewrote a cancelled row: state=%q reason=%q", r.State, r.Reason)
+		}
+	}
+	for _, ev := range st.audit {
+		if ev.Action == "approval.expire" {
+			t.Error("the sweeper emitted approval.expire over an already-cancelled approval")
+		}
 	}
 }
 

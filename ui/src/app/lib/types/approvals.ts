@@ -6,7 +6,11 @@
 // Approval requests — human-gated credential/egress/tool decisions.
 export type ApprovalKind = "credential" | "egress_domain" | "tool_call";
 
-export type ApprovalState = "PENDING" | "APPROVED" | "DENIED" | "EXPIRED";
+// CANCELLED is the terminal state a run's own end writes: the run reached
+// COMPLETED/FAILED/STOPPED/KILLED while this approval was still PENDING, so
+// nobody decided it (internal/types/types.go ApprovalCancelled). Mirrors the Go
+// union; hand-maintained, so a value added there and not here is silent drift.
+export type ApprovalState = "PENDING" | "APPROVED" | "DENIED" | "EXPIRED" | "CANCELLED";
 
 // How far a human's approve/deny decision reaches — egress_domain carries all
 // four; a credential carries only "run" (the per-run lease: a git_pat approved

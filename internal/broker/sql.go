@@ -78,7 +78,11 @@ const selectLiveCredentialApproval = `
 // request left for a human to decide. An expiry is a sweep nobody decided
 // (types.ApprovalDecision), so re-raising a fresh PENDING is the honest
 // recovery. DENIED is a real human decision and stays terminal — it is
-// deliberately NOT skipped.
+// deliberately NOT skipped. CANCELLED is on the DENIED side of that line and is
+// likewise not skipped: the predicate is `state <> 'EXPIRED'`, so a cancelled
+// row is re-found and MintForGrant maps it to ErrApprovalDenied, which is the
+// honest answer — its run has ENDED, so unlike an expiry there is nothing left
+// to re-raise a fresh PENDING request for, and no human to decide it.
 func (b *Broker) ensureApproval(ctx context.Context, grantID, runID uuid.UUID, spec types.GrantSpec) (types.ApprovalRequest, error) {
 	tx, err := b.db.BeginReadCommitted(ctx)
 	if err != nil {

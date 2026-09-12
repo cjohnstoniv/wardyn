@@ -389,7 +389,13 @@ func (b *Broker) MintForGrant(ctx context.Context, caller *identity.Claims, gran
 	switch ap.State {
 	case types.ApprovalPending:
 		return Minted{}, ErrApprovalPending{ApprovalID: ap.ID}
-	case types.ApprovalDenied, types.ApprovalExpired:
+	case types.ApprovalDenied, types.ApprovalExpired, types.ApprovalCancelled:
+		// CANCELLED joins the deny arm so the message an in-sandbox helper sees
+		// is honest: the run ended and the approval carries reason=run_killed
+		// (or run_completed/...), which ErrApprovalDenied surfaces verbatim. It
+		// is NOT a default-case fallthrough — that arm errors as "unexpected
+		// approval state", which would read as a Wardyn bug rather than as the
+		// run's own end.
 		return Minted{}, ErrApprovalDenied{ApprovalID: ap.ID, Reason: ap.Reason}
 	case types.ApprovalApproved:
 		return b.mint(ctx, caller, grantID, ap.ID)
@@ -453,6 +459,10 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 	}
 
 	if row.hasApproval {
+		// Anything that is not APPROVED refuses here, so DENIED, EXPIRED and
+		// CANCELLED all land on ErrNotApproved — the mint chokepoint's
+		// fail-closed default needs no per-state arm, and a state it has never
+		// heard of refuses too.
 		if row.approvalState != types.ApprovalApproved {
 			if row.approvalState == types.ApprovalPending {
 				return Minted{}, ErrApprovalPending{ApprovalID: row.approvalID}

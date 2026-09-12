@@ -564,6 +564,14 @@ const (
 	ApprovalApproved ApprovalState = "APPROVED"
 	ApprovalDenied   ApprovalState = "DENIED"
 	ApprovalExpired  ApprovalState = "EXPIRED"
+	// ApprovalCancelled: the RUN this approval belongs to reached a terminal
+	// state (killed, completed, failed, stopped) while the approval was still
+	// PENDING, so the question it asked can no longer be answered — approving it
+	// would mint a credential for a sandbox that is gone. Distinct from DENIED
+	// (a human refused) and from EXPIRED (a sweeper aged it out undecided):
+	// nobody decided this one and nothing was refused. Terminal, like the other
+	// three, and every reader treats it as a refusal to proceed.
+	ApprovalCancelled ApprovalState = "CANCELLED"
 )
 
 // The approval sentinels live here, in the one package both internal/store and

@@ -534,6 +534,11 @@ func (p *Proxy) waitForGitApproval(ctx context.Context, grantID, approvalID uuid
 			return "", "", 0, fmt.Errorf("credential approval %s was denied by the operator", approvalID)
 		case types.ApprovalExpired:
 			return "", "", 0, fmt.Errorf("credential approval %s expired before a decision was made", approvalID)
+		case types.ApprovalCancelled:
+			// Terminal, like DENIED/EXPIRED: the default arm keeps polling until
+			// the deadline, so a run that was killed while this mint waited would
+			// block the git operation for the whole timeout for no reason.
+			return "", "", 0, fmt.Errorf("credential approval %s was cancelled: the run ended before anyone decided it", approvalID)
 		default: // still PENDING: keep polling
 		}
 	}

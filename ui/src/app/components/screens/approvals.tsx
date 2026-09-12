@@ -277,19 +277,25 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // MEDIUM fix: EXPIRED approvals were never fetched, so a request that timed
   // out without a human decision silently vanished from the console. Include
   // EXPIRED in the decided view alongside APPROVED/DENIED (finding D12).
+  // CANCELLED is fetched for the same reason (B4): a run's terminal transition
+  // moves its PENDING approvals there, and a row that left the pending queue
+  // without appearing in the decided one would just vanish.
   const fetchAll = React.useCallback(() => {
     return Promise.all([
       api.listApprovals("PENDING"),
       api.listApprovals("APPROVED"),
       api.listApprovals("DENIED"),
       api.listApprovals("EXPIRED"),
-    ]).then(([pending, approved, denied, expired]) => {
+      api.listApprovals("CANCELLED"),
+    ]).then(([pending, approved, denied, expired, cancelled]) => {
       setPendingItems(pending);
       // Each state is its own capped fetch, so the truncation test is per list:
       // the merged decidedItems length would false-positive on three large but
       // complete lists. Decided history only grows, so this one does get hit.
-      setLongestList(Math.max(pending.length, approved.length, denied.length, expired.length));
-      setDecidedItems([...approved, ...denied, ...expired].sort(
+      setLongestList(Math.max(
+        pending.length, approved.length, denied.length, expired.length, cancelled.length,
+      ));
+      setDecidedItems([...approved, ...denied, ...expired, ...cancelled].sort(
         (a, b) => Date.parse(b.requested_at) - Date.parse(a.requested_at),
       ));
     });
@@ -551,6 +557,9 @@ function PendingCard({
 
 function DecidedRow({ item }: { item: ApprovalRequest }) {
   const scope = item.requested_scope ?? {};
+  // A CANCELLED row carries decided_by="system" (the terminal-run cascade wrote
+  // it), so it reads with the same "by …" prefix an expiry-with-a-writer does —
+  // honest: something, not someone, ended it.
   const who = item.decided_by || (item.state === "EXPIRED" ? "unanswered" : "system");
   const when = relativeTime(item.decided_at ?? item.requested_at);
   const meta = item.state === "EXPIRED" && !item.decided_by ? `${who} · ${when}` : `by ${who} · ${when}`;

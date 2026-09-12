@@ -551,6 +551,10 @@ func mintWithApproval(ctx context.Context, client *http.Client, proxyURL, grantI
 			return "", "", fmt.Errorf("credential approval %s was denied by the operator", approvalID)
 		case "EXPIRED":
 			return "", "", fmt.Errorf("credential approval %s expired before a decision was made", approvalID)
+		case "CANCELLED":
+			// Terminal: the default arm keeps polling to the deadline, so without
+			// this a killed run's git operation would block for the whole timeout.
+			return "", "", fmt.Errorf("credential approval %s was cancelled: the run ended before anyone decided it", approvalID)
 		default:
 			// Still PENDING: keep polling.
 		}

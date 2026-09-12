@@ -405,6 +405,17 @@ func closedEnumChecks() []closedEnumCheck {
 		// column ("no decision recorded", honest for a PENDING row), so it
 		// belongs in the Go-side set rather than being filtered back out of the
 		// parse — filtering it would put the blindness straight back.
+		// 0062: the approvals FSM's own state column. It carried a CHECK from
+		// 0001 that no parity guard read, so CANCELLED (added for the
+		// terminal-run cascade, approval.CancelForRun) could have been defined
+		// in Go and rejected by Postgres with every gate green -- the exact
+		// shape of the COMPLETED incident TestAgentRunStateCheckCoversAllStates
+		// exists for.
+		{"approvals", "state", stringSet(
+			string(types.ApprovalPending), string(types.ApprovalApproved),
+			string(types.ApprovalDenied), string(types.ApprovalExpired),
+			string(types.ApprovalCancelled),
+		)},
 		{"approvals", "decision_scope", stringSet(
 			string(types.ScopeOnce), string(types.ScopeRun), string(types.ScopeUntil), string(types.ScopeAlways),
 			"", // 0039's NOT NULL DEFAULT '' — see above

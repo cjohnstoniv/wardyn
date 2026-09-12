@@ -3,12 +3,13 @@
 
 // Package approval implements the ApprovalRequest FSM service.
 //
-// States:   PENDING -> APPROVED | DENIED | EXPIRED
+// States:   PENDING -> APPROVED | DENIED | EXPIRED | CANCELLED
 //
 // Transitions are single-direction and fail-closed: any attempt to decide
 // an already-decided approval returns ErrAlreadyDecided. Every state
 // change emits an audit event with actor_type=human (for decisions) or
-// actor_type=system (for expirations).
+// actor_type=system (for expirations and for the terminal-run cancellation
+// cascade, CancelForRun).
 //
 // Pure business logic: storage is injected via the Store interface so this
 // package can be tested with an in-memory fake.
@@ -245,6 +246,101 @@ func ExpireStale(ctx context.Context, st Store, olderThan time.Duration) (int, e
 		}
 	}
 	return expired, nil
+}
+
+// CancelForRun transitions every still-PENDING approval belonging to runID to
+// CANCELLED and returns how many it moved. reason is the transition that ended
+// the run ("run_killed", "run_completed", "run_failed", "run_stopped"), recorded
+// on each row and on the ONE audit event this emits.
+//
+// It is ExpireStale's shape deliberately: list PENDING, then move each row with
+// the SAME CAS primitive a human decision uses (DecideApproval is
+// WHERE state='PENDING', which IS the FSM guard), so a human deciding
+// concurrently with the kill cascade wins and is never overwritten —
+// ErrAlreadyDecided is a race, not an error. DecidedBy is "system" for the same
+// reason the sweeper's is: nobody decided this, the run ended.
+//
+// ONE audit row for the batch, carrying the count, rather than one per approval:
+// unlike an expiry sweep (whose rows are independent events spread over days),
+// these all belong to a single run transition an operator reads as one fact, and
+// the row is keyed to the run so it lands in that run's evidence rail. A run
+// with nothing pending emits nothing at all, which is what makes a re-kill
+// idempotent in the audit log as well as in the store.
+//
+// THE ROW IS EMITTED ON THE FAILURE PATH TOO, carrying however many rows DID
+// move plus the error. The first draft returned the CAS failure before reaching
+// the audit block, so a cancel that moved two approvals and then hit a store
+// error left two rows durably CANCELLED and nothing in the trail — exactly the
+// unexplained emptying of the operator's queue this row exists to explain, and
+// the reason ExpireStale records inside its own loop rather than after it.
+func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string) (int, error) {
+	pending, err := st.ListApprovals(ctx, types.ApprovalPending)
+	if err != nil {
+		return 0, fmt.Errorf("approval: list for cancel: %w", err)
+	}
+	cancelled := 0
+	// recordCancelled writes the ONE summary row for whatever this call actually
+	// moved. failure is nil on the clean path and the CAS error on the partial
+	// one; either way a call that moved NOTHING writes nothing, because there is
+	// no state change to explain.
+	recordCancelled := func(failure error) {
+		if cancelled == 0 {
+			return
+		}
+		data := map[string]any{
+			"run_id": runID,
+			"reason": reason,
+			"count":  cancelled,
+		}
+		outcome := "success"
+		if failure != nil {
+			// The count is now a PARTIAL one, and saying so is the point: an
+			// operator reading "3 cancelled" against a queue that still holds two
+			// would have no way to tell a bug from an interrupted cascade.
+			outcome = "failure"
+			data["error"] = failure.Error()
+		}
+		auditData, _ := json.Marshal(data)
+		ev := types.AuditEvent{
+			ID:        uuid.New(),
+			Time:      time.Now().UTC(),
+			RunID:     &runID,
+			ActorType: types.ActorSystem,
+			Actor:     "wardyn/approval-cancel",
+			Action:    "approval.cancelled",
+			Target:    runID.String(),
+			Outcome:   outcome,
+			Data:      json.RawMessage(auditData),
+		}
+		// Log-loud instead of swallowing, same rule as the expiry sweep: a dropped
+		// approval.cancelled row would leave the queue's emptying unexplained.
+		if rerr := st.Record(ctx, ev); rerr != nil {
+			audit.LogWriteFailure(ctx, ev, rerr)
+		}
+	}
+	for _, ap := range pending {
+		if ap.RunID != runID {
+			continue
+		}
+		// Scope is left at its zero value ("", not ScopeRun), exactly as an
+		// expiry does: a cancellation is not a decision, so it authorizes
+		// nothing for the rest of the run — see types.ApprovalDecision.
+		if _, derr := st.DecideApproval(ctx, ap.ID, types.ApprovalDecision{
+			State: types.ApprovalCancelled, DecidedBy: "system", Reason: reason,
+		}); derr != nil {
+			if errors.Is(derr, ErrAlreadyDecided) {
+				// A human decided it between the list and the CAS — their
+				// decision stands.
+				continue
+			}
+			cerr := fmt.Errorf("approval: cancel %s: %w", ap.ID, derr)
+			recordCancelled(cerr)
+			return cancelled, cerr
+		}
+		cancelled++
+	}
+	recordCancelled(nil)
+	return cancelled, nil
 }
 
 // scopeHash produces a stable content hash over (runID, kind, scope) for

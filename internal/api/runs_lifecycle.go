@@ -232,6 +232,66 @@ func (s *Server) revokeRunCascade(ctx context.Context, runID uuid.UUID) {
 	}
 }
 
+// cancelRunApprovals is the approval half of the terminal cascade: every
+// still-PENDING approval of a run that has just ended is moved to CANCELLED, so
+// the operator's queue stops holding a decision nobody can act on and the
+// console stops rendering live Approve/Deny buttons on a run it labels Killed.
+//
+// Nil-safe and best-effort like revokeRunCascade, and for the same reason: the
+// run is already terminal, and a failed cancel must not gate the caller's own
+// outcome. A failure is logged and audited (run.revoke/failure carries the
+// detail) rather than propagated; the stale-PENDING sweeper (ExpireStale) is
+// still behind it as the backstop it has always been.
+//
+// The reason recorded on each row is derived from the run's state, read back
+// from the store rather than passed in: finalizeRunTail's four callers do not
+// all know which terminal state they landed on (the reconciler passes `to` in
+// its audit data, the probe-reclaim path passes none), and the row is the
+// authority on the transition that just won. One read per terminal transition.
+func (s *Server) cancelRunApprovals(ctx context.Context, runID uuid.UUID) {
+	if s.cfg.Approvals == nil {
+		return
+	}
+	n, err := s.cfg.Approvals.CancelForRun(ctx, runID, s.terminalCancelReason(ctx, runID))
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: could not cancel a terminal run's pending approvals",
+			slog.String("run_id", runID.String()), slog.Any("err", err))
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.revoke",
+			runID.String(), "failure", mustJSON(map[string]any{"approval_cancel_error": err.Error()})))
+		return
+	}
+	if n > 0 {
+		slog.InfoContext(ctx, "wardynd: cancelled a terminal run's pending approvals",
+			slog.String("run_id", runID.String()), slog.Int("cancelled", n))
+	}
+}
+
+// terminalCancelReason is the reason string stamped on a cancelled approval and
+// on its audit row: "run_killed", "run_completed", "run_failed", "run_stopped",
+// or (for an archived row, or a state the read could not resolve)
+// "run_terminated" — never a guess that names the wrong transition.
+func (s *Server) terminalCancelReason(ctx context.Context, runID uuid.UUID) string {
+	if s.cfg.Store == nil {
+		return "run_terminated"
+	}
+	run, err := s.cfg.Store.GetRun(ctx, runID)
+	if err != nil {
+		return "run_terminated"
+	}
+	switch run.State {
+	case types.RunKilled:
+		return "run_killed"
+	case types.RunCompleted:
+		return "run_completed"
+	case types.RunFailed:
+		return "run_failed"
+	case types.RunStopped:
+		return "run_stopped"
+	default:
+		return "run_terminated"
+	}
+}
+
 // SweepTerminalSandboxes is the retry surface W22-S1-7 names as missing: a
 // failed StopSandbox/RevokeRun step inside a prior finalize (finalizeRunTail)
 // or kill (handleKillRun) leaves a terminal run row with a sandbox nothing
@@ -333,7 +393,10 @@ func (s *Server) SweepRunSecrets(ctx context.Context) int {
 //     (run.complete{exit_code,state} for the watcher, run.reconcile{to,reason}
 //     for the reconciler);
 //  2. the kill-switch revoke cascade (deny the run token + broker creds), so
-//     EVERY terminal transition revokes, per the docs' revoke-on-every-stop;
+//     EVERY terminal transition revokes, per the docs' revoke-on-every-stop,
+//     followed by the approval half of the same cascade (cancelRunApprovals):
+//     a PENDING approval of a run that has ended is a control that cannot
+//     function, so it is moved to CANCELLED rather than left in the queue;
 //  3. best-effort sandbox teardown — a failed StopSandbox is audited under the
 //     same `action` (the caller's `data` plus teardown_error) because the run is
 //     now terminal, so no future boot reconciles the abandoned container;
@@ -348,6 +411,7 @@ func (s *Server) finalizeRunTail(ctx context.Context, runID uuid.UUID, ref, acti
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", action,
 		runID.String(), outcome, mustJSON(data)))
 	s.revokeRunCascade(ctx, runID)
+	s.cancelRunApprovals(ctx, runID)
 	teardownOK := false
 	if ref != "" && s.cfg.Runner != nil {
 		if serr := s.cfg.Runner.StopSandbox(ctx, ref); serr != nil {
@@ -405,6 +469,16 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 		return
 	}
 	if applied {
+		// NO APPROVAL CASCADE HERE, deliberately (B4): this path fails a run
+		// BEFORE it ever reached RUNNING — every caller is on the create/dispatch
+		// side — and no approval can exist yet. The broker raises a credential
+		// approval only from a mint the sandbox asks for, and the egress/tool
+		// approvals come from the proxy sidecar and the toolgate, neither of which
+		// is running before dispatch completes. Calling CancelForRun here would be
+		// one list-all-PENDING read per failed dispatch that can only ever find
+		// nothing; a negative test pins that a fail at STARTING writes no
+		// approval.cancelled row. The terminal transitions that CAN strand an
+		// approval are finalizeRunTail's and handleKillRun's.
 		if hint != "" {
 			// Optional-interface, not a core Store method (mirrors RunWatcherLeaser):
 			// the ~30 test doubles that embed store.Store never implement it, so a
@@ -501,6 +575,13 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	killData := map[string]any{}
+	// (1b) Approvals: the transition is unambiguously ours, so the run's
+	// outstanding questions are cancelled here — BEFORE teardown, because a
+	// PENDING approval is the one piece of this cascade a human is looking at,
+	// and after the CAS for the same reason revocation is (a kill that lost the
+	// CAS must not touch a still-live run). Kill does NOT route through
+	// finalizeRunTail, so this is the second call site of one function.
+	s.cancelRunApprovals(cascadeCtx, id)
 	// (2) Runner teardown (immediate). Idempotent on a gone sandbox.
 	if s.cfg.Runner != nil && run.SandboxRef != "" {
 		if kerr := s.cfg.Runner.KillSandbox(cascadeCtx, run.SandboxRef); kerr != nil {

@@ -188,6 +188,9 @@ const (
 	ApprovalApproved = types.ApprovalApproved
 	ApprovalDenied   = types.ApprovalDenied
 	ApprovalExpired  = types.ApprovalExpired
+	// ApprovalCancelled: the approval's RUN reached a terminal state while it was
+	// still PENDING, so nobody decided it and nothing was approved or denied.
+	ApprovalCancelled = types.ApprovalCancelled
 )
 
 // ApprovalScope values, for DecisionOpts.Scope on Approve/Deny. Omitting

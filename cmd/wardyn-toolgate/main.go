@@ -354,6 +354,12 @@ func (g *gate) resultForTerminal(state string, a callArgs, by string) (any, bool
 		return permissionResult(deny("denied by " + by)), true
 	case "EXPIRED":
 		return permissionResult(deny("approval expired undecided — denied")), true
+	case "CANCELLED":
+		// Terminal. The fallthrough below means "not terminal, keep waiting", so
+		// a state missing from this switch makes the gate wait forever: a run
+		// killed while a tool call was held would hang the agent instead of
+		// telling it the run has ended.
+		return permissionResult(deny("the run ended before this was decided — denied")), true
 	}
 	return nil, false
 }

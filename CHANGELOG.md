@@ -8,6 +8,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Fixed
+
+- Migration `0062_approval_cancelled` adds the terminal state `CANCELLED` to the
+  `approvals.state` CHECK: a run's terminal transition now cancels the run's
+  still-PENDING approvals instead of leaving them in the operator's queue with
+  live Approve/Deny buttons on a run that has ended.
+
 ## [0.7.1] — 2026-09-11
 
 ### Fixed

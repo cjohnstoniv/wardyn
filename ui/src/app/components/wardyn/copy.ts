@@ -126,6 +126,15 @@ export const APPROVAL_KIND_LABEL: Record<ApprovalKind, string> = {
   egress: "Network egress",
 };
 
+// The ONE console label for the CANCELLED approval state (the run ended before
+// anyone decided it — internal/types/types.go ApprovalCancelled). Every other
+// state is title-cased from the wire value by ApprovalStateBadge; this one is a
+// key so the owner's wording lands in one place.
+// DRAFT (M2) — not yet owner-frozen.
+export const APPROVAL = {
+  STATE_CANCELLED: "Cancelled",
+} as const;
+
 // ============================================================
 // Egress-approval decision scopes — egress_domain only. Canon strings from
 // egress-scopes-PHASE0-COPY.md (the sign-off artifact; the mock/copy spec is

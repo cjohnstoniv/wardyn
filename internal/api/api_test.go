@@ -39,6 +39,8 @@ type fakeApprovals struct {
 	byID       map[uuid.UUID]types.ApprovalRequest
 	decideErr  error
 	requestErr error
+	cancelErr  error
+	cancelled  []cancelCall
 }
 
 func newFakeApprovals() *fakeApprovals {
@@ -87,6 +89,36 @@ func (f *fakeApprovals) List(_ context.Context, _ types.ApprovalState) ([]types.
 		out = append(out, ap)
 	}
 	return out, nil
+}
+
+// CancelForRun mirrors approval.CancelForRun over the map: only PENDING rows of
+// THIS run move, and cancelled records what the handler passed so a test can
+// assert the reason the terminal transition supplied.
+func (f *fakeApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason string) (int, error) {
+	if f.cancelErr != nil {
+		return 0, f.cancelErr
+	}
+	n := 0
+	for id, ap := range f.byID {
+		if ap.RunID != runID || ap.State != types.ApprovalPending {
+			continue
+		}
+		ap.State = types.ApprovalCancelled
+		ap.DecidedBy, ap.Reason = "system", reason
+		f.byID[id] = ap
+		n++
+	}
+	if n > 0 {
+		f.cancelled = append(f.cancelled, cancelCall{RunID: runID, Reason: reason, Count: n})
+	}
+	return n, nil
+}
+
+// cancelCall is one CancelForRun that actually moved rows (the emitting case).
+type cancelCall struct {
+	RunID  uuid.UUID
+	Reason string
+	Count  int
 }
 
 // errStoreNotFound mirrors store.ErrNotFound semantics for the fake (the

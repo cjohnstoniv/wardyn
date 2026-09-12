@@ -626,10 +626,14 @@ func (a *approvalClient) poll(ctx context.Context, id uuid.UUID) (decided bool, 
 	switch ar.State {
 	case types.ApprovalApproved:
 		return true, apApproved, ar.DecisionScope, exp
-	case types.ApprovalDenied, types.ApprovalExpired:
+	case types.ApprovalDenied, types.ApprovalExpired, types.ApprovalCancelled:
 		// EXPIRED rows carry no scope — the stale-PENDING sweeper is not a human
 		// decision and writes the zero value, which normalizes to run: a cached
-		// deny for the rest of the run, exactly today's behavior.
+		// deny for the rest of the run, exactly today's behavior. CANCELLED is
+		// the same shape (the run's terminal transition wrote no scope either)
+		// and MUST be terminal here: the default arm below keeps the request
+		// waiting, and a sidecar whose run has ended would hold its hold window
+		// open against an approval nobody can ever decide.
 		return true, apDenied, ar.DecisionScope, exp
 	default:
 		return false, apPending, "", time.Time{}

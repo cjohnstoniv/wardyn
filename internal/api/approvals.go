@@ -79,7 +79,8 @@ const maxDecisionUntil = 30 * 24 * time.Hour
 func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 	state := types.ApprovalState(r.URL.Query().Get("state"))
 	switch state {
-	case "", types.ApprovalPending, types.ApprovalApproved, types.ApprovalDenied, types.ApprovalExpired:
+	case "", types.ApprovalPending, types.ApprovalApproved, types.ApprovalDenied, types.ApprovalExpired,
+		types.ApprovalCancelled:
 	default:
 		writeError(w, http.StatusBadRequest, "invalid state filter")
 		return

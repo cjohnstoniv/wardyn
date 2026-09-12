@@ -499,7 +499,8 @@ func (c *Client) KillRun(ctx context.Context, id uuid.UUID) (KillRunResponse, er
 // return approvals for every run — the server's own ?run_id= filter
 // (internal/api/approvals.go's handleListApprovals) was otherwise unreachable
 // from the CLI.
-// Valid states: "PENDING", "APPROVED", "DENIED", "EXPIRED" (types.ApprovalState).
+// Valid states: "PENDING", "APPROVED", "DENIED", "EXPIRED", "CANCELLED"
+// (types.ApprovalState).
 // Prefer ListApprovalsPage, which also returns the server's truncation signal.
 func (c *Client) ListApprovals(ctx context.Context, state types.ApprovalState, runID uuid.UUID, opts ...ListOpts) ([]types.ApprovalRequest, error) {
 	aps, _, err := c.ListApprovalsPage(ctx, state, runID, opts...)

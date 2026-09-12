@@ -233,3 +233,31 @@ func TestReconcileAuditsTheWritesItMakes(t *testing.T) {
 			"no trace. events=%+v", f.audit()[before:])
 	}
 }
+
+// TestReconcileIgnoresACancelledVerdict pins the decision B4 made explicitly: a
+// CANCELLED approval is treated like an EXPIRED one — there is nothing to
+// replay. Both carry the ZERO decision scope, so an `always` row that a run's
+// terminal transition cancelled records no human verdict at all; widening a
+// workspace's approved_egress from one would durably grant a host off the back
+// of an approval nobody answered. The heal's state list is the behaviour, so it
+// is pinned rather than left to the reader.
+func TestReconcileIgnoresACancelledVerdict(t *testing.T) {
+	const host = "registry.npmjs.org"
+	f := newScopeFixture(t)
+	wsID := f.seedWorkspace(t, nil, nil)
+	// Seeded with the ALWAYS scope deliberately: had the run's end written a
+	// scope (it does not), this is the row the heal would have replayed.
+	rcSeedDecided(f, host, types.ApprovalCancelled, time.Now().UTC())
+
+	n, err := f.srv.ReconcileWorkspaceEgressDecisions(t.Context())
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("reconciled = %d, want 0 — a cancelled approval is not a decision", n)
+	}
+	approved, denied := f.egressLists(t, wsID)
+	if len(approved) != 0 || len(denied) != 0 {
+		t.Errorf("the heal wrote off a CANCELLED approval: approved=%v denied=%v", approved, denied)
+	}
+}

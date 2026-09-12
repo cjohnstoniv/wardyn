@@ -534,6 +534,9 @@ const approvalHoldWindow = 30 * time.Second
 // way to tell a live 30s hold apart from an ordinary up-to-24h pendency
 // (W19-S1-4 / W20-hold-fsm-7).
 func approvalHoldHint(a types.ApprovalRequest) string {
+	// PENDING only: every terminal state (APPROVED/DENIED/EXPIRED/CANCELLED) has
+	// no live hold left to describe, so the hint is empty rather than a window
+	// counted from a decided row's requested_at.
 	if a.State != types.ApprovalPending {
 		return ""
 	}

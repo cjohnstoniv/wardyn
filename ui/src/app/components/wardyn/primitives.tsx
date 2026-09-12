@@ -6,7 +6,7 @@
 import * as React from "react";
 import { cn } from "../ui/utils";
 import { CC_META } from "./cc-meta";
-import { APPROVAL_KIND_LABEL, OPERATOR_ONLY_REASON, WIRE_TO_COPY } from "./copy";
+import { APPROVAL, APPROVAL_KIND_LABEL, OPERATOR_ONLY_REASON, WIRE_TO_COPY } from "./copy";
 import {
   Archive,
   Bot,
@@ -328,12 +328,20 @@ const apprStateMeta: Record<string, Tone> = {
   APPROVED: "success",
   DENIED: "danger",
   EXPIRED: "neutral",
+  // CANCELLED is neutral, not danger: the run ended, nobody refused anything.
+  CANCELLED: "neutral",
+};
+// Every state's label is title-cased from the wire value; CANCELLED is the one
+// with an owner-facing copy key (copy.ts APPROVAL.STATE_CANCELLED, DRAFT M2),
+// so the wording lives in one place rather than being derived here.
+const apprStateLabel: Record<string, string> = {
+  CANCELLED: APPROVAL.STATE_CANCELLED,
 };
 export function ApprovalStateBadge({ state }: { state: ApprovalState }) {
   const s = String(state);
   return (
     <Chip tone={metaFor<Tone>(apprStateMeta, s, "neutral")} dot>
-      {s ? s.charAt(0) + s.slice(1).toLowerCase() : "Unknown"}
+      {apprStateLabel[s] ?? (s ? s.charAt(0) + s.slice(1).toLowerCase() : "Unknown")}
     </Chip>
   );
 }

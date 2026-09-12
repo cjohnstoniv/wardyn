@@ -131,6 +131,12 @@ func (s *Server) egressDecisionsToReconcile(ctx context.Context) ([]egressDecisi
 	}
 	newest := map[listKey]egressDecision{}
 	edits := map[uuid.UUID]time.Time{}
+	// APPROVED and DENIED only, and that is the whole list on purpose: a durable
+	// `always` verdict is something a human decided. EXPIRED and CANCELLED carry
+	// no decision at all (both write the zero scope — the sweeper because nobody
+	// answered, the terminal-run cascade because the run ended), so there is
+	// nothing to replay into a workspace's egress lists and a cancelled approval
+	// must never widen one. Pinned by a test, since the omission is the behaviour.
 	for _, state := range []types.ApprovalState{types.ApprovalApproved, types.ApprovalDenied} {
 		aps, err := s.cfg.Approvals.List(ctx, state)
 		if err != nil {

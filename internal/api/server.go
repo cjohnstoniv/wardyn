@@ -67,6 +67,14 @@ type ApprovalService interface {
 	Decide(ctx context.Context, id uuid.UUID, decidedByType types.ActorType, decision types.ApprovalDecision) (types.ApprovalRequest, error)
 	Get(ctx context.Context, id uuid.UUID) (types.ApprovalRequest, error)
 	List(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error)
+	// CancelForRun moves every still-PENDING approval of a run that has just
+	// reached a terminal state to CANCELLED, returning how many it moved. It is
+	// part of the terminal cascade, beside identity/broker revocation: an
+	// approval whose run has ended is a control that cannot function, and the
+	// console used to render live Approve/Deny buttons on it. reason names the
+	// transition ("run_killed", "run_completed", ...). Idempotent by
+	// construction — a second call finds nothing PENDING and emits nothing.
+	CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (int, error)
 }
 
 // MintBroker is the credential-mint surface the API depends on (internal/broker).
