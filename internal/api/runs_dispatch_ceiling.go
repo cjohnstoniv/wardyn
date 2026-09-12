@@ -391,8 +391,8 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 		"dropped_injection_hosts": droppedInjection,
 		"dropped_broker_lanes":    droppedLane,
 		"note": "the acting principal's governance profile denies these hosts; the denies are unioned into the run policy " +
-				"(deny beats allow and allow_all_egress at the proxy) and every credential lane that reaches a denied host is withheld — " +
-				"the brokered git/PAT routes mint proxy-side and never consult denied_domains, so dropping the lane is the only thing that binds them",
+			"(deny beats allow and allow_all_egress at the proxy) and every credential lane that reaches a denied host is withheld — " +
+			"the brokered git/PAT routes mint proxy-side and never consult denied_domains, so dropping the lane is the only thing that binds them",
 	}
 	// The SIZE half of the profile, present only when the profile sets one — so a
 	// profile written before 0.7.2 produces a byte-identical row. applyEphemeralDisk
