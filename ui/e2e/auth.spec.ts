@@ -5,6 +5,7 @@
 
 import { test, expect, type Page } from "@playwright/test";
 import { SHELL } from "../src/app/components/wardyn/copy";
+import { GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
 
 // Auth / sign-in lane.
 //
@@ -385,6 +386,32 @@ test.describe("B1 — settled-but-unknown identity (a failed /me renders no nav,
     await expect(runsNav(page)).toBeVisible();
     await expect(banner).toHaveCount(0);
   });
+  // VL-26 (V1 lens D): the gate is the ROUTE SHELL, not the nav. A person who
+  // types /settings (or any admin route) while /me is refused gets the same
+  // banner and no screen — before the fix the nav was hidden but the route
+  // still painted operator controls off the fail-open context default.
+  test("a 500 on /me shows the banner on /settings and /governance — no screen paints for an unknown identity", async ({ page }) => {
+    let meFailing = true;
+    await page.route("**/api/v1/me", (route) => {
+      if (!meFailing) return route.fallback();
+      return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "boom" }) });
+    });
+    await bootWithStoredToken(page, GOOD_TOKEN);
+
+    for (const path of ["/settings", "/governance"]) {
+      await page.goto(path);
+      await expect(page.getByRole("status").filter({ hasText: SHELL.UNKNOWN_BODY })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Settings" })).toHaveCount(0);
+      await expect(page.getByRole("heading", { name: GOV.TITLE })).toHaveCount(0);
+    }
+
+    // Once /me answers, the SAME route paints its real screen — the gate was
+    // about the identity, never about the path.
+    meFailing = false;
+    await page.getByRole("status").filter({ hasText: SHELL.UNKNOWN_BODY }).getByRole("button", { name: SHELL.UNKNOWN_ACTION }).click();
+    await expect(page.getByRole("heading", { name: GOV.TITLE })).toBeVisible();
+  });
+
 });
 
 // R4-F107 — a failed sign-out says so, rather than a console.error nobody
