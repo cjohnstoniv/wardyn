@@ -242,8 +242,10 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 //     claiming to govern the same workspace. A value uuid.Parse cannot read at
 //     all IS refused: it can never name a workspace.
 //
-//   - secret and integration: LOWERCASED, then held to the grammar their own
-//     rows are held to (secretNameRE, integrationRefRE — both lowercase-only).
+//   - secret, integration and workspace_provider: LOWERCASED, then held to the
+//     grammar their own rows are held to (secretNameRE, integrationRefRE — both
+//     lowercase-only; a git provider row's id is validated by integrationRefRE
+//     too, in validateWorkspaceProviders, so the two spellings cannot drift).
 //     This arm's comment used to say the opposite ("lowercasing a secret name
 //     here would stop it matching the row secrets.go stores"), and the premise
 //     was inverted: secrets.go cannot store an uppercase name at all, so an
@@ -286,10 +288,13 @@ func canonicalGrantValue(capability, value string) (string, error) {
 			return "", fmt.Errorf("value: %q is not a workspace id — a workspace capability names a workspace by uuid, and the resolver compares it exactly, so a value it cannot read can never match anything", v)
 		}
 		return id.String(), nil
-	case capSecret, capIntegration:
+	case capSecret, capIntegration, capWorkspaceProvider:
 		grammar, what := secretNameRE, "secret name"
-		if capability == capIntegration {
+		switch capability {
+		case capIntegration:
 			grammar, what = integrationRefRE, "integration id"
+		case capWorkspaceProvider:
+			grammar, what = integrationRefRE, "git provider id"
 		}
 		if !oidc.ASCIIOnly(v) {
 			return "", fmt.Errorf("value: %q is not a %s — one is written in lowercase ASCII, so this value can never match a stored row", v, what)

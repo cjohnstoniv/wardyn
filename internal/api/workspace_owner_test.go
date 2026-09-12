@@ -29,9 +29,43 @@ import (
 
 // ownerStore is authzStore plus a real ListWorkspaces/CreateWorkspace, which
 // the ownership list-scoping and owner-stamp assertions need.
-type ownerStore struct{ *authzStore }
+//
+// siteConfig and caps are opt-in knobs (0.7.2): authzStore answers an EMPTY
+// site config and no capability rows, which is the deployment every ownership
+// test above assumes, and the two workspace doors' provider-capability gate
+// needs both driven. Nil/zero keeps every pre-existing test byte-identical.
+type ownerStore struct {
+	*authzStore
+	siteConfig types.SiteConfig
+	caps       *capStore
+}
 
 func newOwnerStore() *ownerStore { return &ownerStore{authzStore: newAuthzStore()} }
+
+func (s *ownerStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return s.siteConfig, nil
+}
+
+func (s *ownerStore) GetCapabilityEnforcement(ctx context.Context) (map[string]bool, error) {
+	if s.caps == nil {
+		return s.authzStore.GetCapabilityEnforcement(ctx)
+	}
+	return s.caps.GetCapabilityEnforcement(ctx)
+}
+
+func (s *ownerStore) ListCapabilityGrantsFor(ctx context.Context, users, groups []string) ([]types.CapabilityGrant, error) {
+	if s.caps == nil {
+		return s.authzStore.ListCapabilityGrantsFor(ctx, users, groups)
+	}
+	return s.caps.ListCapabilityGrantsFor(ctx, users, groups)
+}
+
+func (s *ownerStore) ListGroupDenyGrants(ctx context.Context, capability string) ([]types.CapabilityGrant, error) {
+	if s.caps == nil {
+		return s.authzStore.ListGroupDenyGrants(ctx, capability)
+	}
+	return s.caps.ListGroupDenyGrants(ctx, capability)
+}
 
 func (s *ownerStore) CreateWorkspace(_ context.Context, ws types.Workspace) (types.Workspace, error) {
 	if ws.ID == uuid.Nil {

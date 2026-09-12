@@ -4,6 +4,7 @@
 package types
 
 import (
+	"bytes"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -738,5 +739,51 @@ func TestReadOnlyOrDefaultMatchesWireDefault(t *testing.T) {
 	}
 	if !m.ReadOnlyOrDefault() {
 		t.Errorf("omitted read_only must resolve read-only=true (safe default), got false")
+	}
+}
+
+// TestGovernanceLimitsWireRoundTrip pins the two 0.7.2 sizes to the wire, and
+// pins the rule every field in that struct follows: ZERO MEANS UNRESTRICTED, so
+// a profile authored before these fields existed must serialize byte-for-byte as
+// it did — `omitempty` on both, and an absent key must decode to 0 rather than
+// to anything an enforcement site could read as a bound.
+func TestGovernanceLimitsWireRoundTrip(t *testing.T) {
+	empty, err := json.Marshal(GovernanceLimits{})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(empty) != "{}" {
+		t.Errorf("an unrestricted profile serializes as %s, want {} — a limit that appears on the wire as 0 "+
+			"is a bound an older reader could enforce", empty)
+	}
+
+	var decoded GovernanceLimits
+	if err := json.Unmarshal([]byte(`{"deny_user_drive":true}`), &decoded); err != nil {
+		t.Fatalf("unmarshal a pre-0.7.2 profile: %v", err)
+	}
+	if decoded.MaxEphemeralDiskMiB != 0 || decoded.MaxDriveSizeMiB != 0 {
+		t.Errorf("a profile written before these fields existed decoded to %+v, want both sizes 0 (unlimited)", decoded)
+	}
+
+	full := GovernanceLimits{
+		DenyTaskModeExec: true, DenyInteractive: true, DenyUserDrive: true,
+		MaxConcurrentRuns: 3, MaxEphemeralDiskMiB: 2048, MaxDriveSizeMiB: 10240,
+	}
+	b, err := json.Marshal(full)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, key := range []string{`"max_ephemeral_disk_mib":2048`, `"max_drive_size_mib":10240`} {
+		if !bytes.Contains(b, []byte(key)) {
+			t.Errorf("wire = %s, want %s — the console mirrors these json tags by hand "+
+				"(ui/src/app/lib/api/governance.ts), so a renamed tag is a runtime-only break", b, key)
+		}
+	}
+	var back GovernanceLimits
+	if err := json.Unmarshal(b, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if back != full {
+		t.Errorf("round trip = %+v, want %+v", back, full)
 	}
 }

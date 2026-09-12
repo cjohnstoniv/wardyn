@@ -432,6 +432,18 @@ func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWrite
 		writeError(w, code, "workspace: "+err.Error())
 		return nil, false
 	}
+	// A3: providerFor admission goes here.
+	//
+	// The capability gate sits at the chokepoint the admission verdict will sit
+	// at, over the RESOLVED spec's repos — the un-bypassable one, reached alike
+	// by workspace_id, a stored policy and a hand-authored inline policy.
+	repos := make([]string, 0, len(spec.WorkspaceRepos))
+	for _, wr := range spec.WorkspaceRepos {
+		repos = append(repos, wr.Repo)
+	}
+	if s.denyMemberWorkspaceProviders(w, r, "runs.workspace_provider", repos...) {
+		return nil, false
+	}
 	return ephemeralDirs, true
 }
 

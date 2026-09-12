@@ -40,6 +40,13 @@ import (
 //     many runs one member holds at once rather than what any single run may be,
 //     which is why its enforcement site answers 422 with no authz.denied while
 //     the booleans answer 403 with one.
+//   - MaxEphemeralDiskMiB and MaxDriveSizeMiB are the two SIZES (0.7.2), and
+//     they are neither doors nor quotas: they CLAMP. A run or a drive at the
+//     bound is capped and told so, never refused — `disk_mib` is authored on
+//     policies, so a 422 would break every stored policy the day a limit is
+//     first written. Their enforcement sites are the two places that hold both
+//     the profile and the deployment ceiling: dispatch for the scratch size,
+//     newResolvedDrive for the drive.
 //
 // A CLOSED struct with `omitempty` on every field, not a map: the set is small,
 // complete, and validated by the Go type itself, so migration 0052 puts no
@@ -78,6 +85,48 @@ type GovernanceLimits struct {
 	// before drives existed keeps meaning exactly what it meant, and a
 	// deployment that never allocates a drive is unaffected either way.
 	DenyUserDrive bool `json:"deny_user_drive,omitempty"`
+	// MaxEphemeralDiskMiB caps the EPHEMERAL scratch a member's run under this
+	// profile may be given — the writable layer a sandbox gets when it mounts no
+	// drive. 0 is unlimited, the same zero-value rule every field here follows.
+	//
+	// A CLAMP, NOT A DOOR, which is why it is a size beside MaxConcurrentRuns
+	// rather than a bool beside the three refusals. `disk_mib` is authored on
+	// POLICIES, so refusing a run that asks for more would break every stored
+	// policy the day an admin first writes a limit; the run is capped and told
+	// so, in composer.Clamp's own idiom ("resources capped to operator
+	// maximum"). An authorized caller at a bound therefore earns no
+	// authz.denied row — nothing was denied.
+	//
+	// ENFORCED AT DISPATCH, in ONE place (runs_dispatch.go, beside the ceiling
+	// deny re-assertion), folded together with the deployment's own
+	// storage.ephemeral.max_disk_mib ceiling — never on the create path, whose
+	// resourceLimitsToRunner is a pure mapper with neither the ceiling nor the
+	// site config in scope. Assigned members only; operators are exempt.
+	//
+	// WHETHER THE CAP BINDS depends on the substrate: it is a request the runner
+	// makes of Kubernetes or Docker, and Docker's overlay2 does not enforce a
+	// size at all. Render it through StorageEnforcement and never claim a cap
+	// the substrate does not keep.
+	MaxEphemeralDiskMiB int `json:"max_ephemeral_disk_mib,omitempty"`
+	// MaxDriveSizeMiB caps how large a USER DRIVE may be for a member under this
+	// profile. 0 is unlimited. The governance twin of DenyUserDrive: that field
+	// answers "may this principal persist anything at all", this one answers
+	// "how much" — and a profile can carry either without the other.
+	//
+	// PER PRINCIPAL, and that is an open question the shape argument has to
+	// name: a drive today is one tree belonging to one subject, so a ceiling on
+	// its size is a ceiling on that person. Team-shared drives (0.8) add a scope
+	// axis on the same row rather than a second field — a shared drive's ceiling
+	// is not the sum of its members' and must not be derived from one. Until
+	// then, "per principal" is the whole meaning.
+	//
+	// CLAMPED IN newResolvedDrive (user_drives_resolve.go), the one scope that
+	// holds BOTH facts — never at grant write, where the profile binding a
+	// subject is claims-resolved and unreadable from the row. It folds with the
+	// deployment's own storage.user_drive.max_size_mib in one min() expression,
+	// so launch, /me and POST /drives/preview cannot disagree about a drive's
+	// size.
+	MaxDriveSizeMiB int `json:"max_drive_size_mib,omitempty"`
 }
 
 // GovernanceProfile is one named, assignable ceiling (migration 0052's

@@ -404,6 +404,14 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
+	// A3: providerFor admission goes here.
+	//
+	// Onboarding is the first door a repository comes through, so the member
+	// capability sits at it too — refusing at create rather than at the first
+	// run against a workspace they were allowed to make.
+	if s.denyMemberWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(req.Sources)...) {
+		return
+	}
 	// OWNERSHIP STAMP (0048). A MEMBER's workspace is owner-stamped from the
 	// authenticated session — never from the body, which carries no owned_by
 	// field at all (strict decoding refuses one). An OPERATOR-created workspace
@@ -545,6 +553,14 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	if msg := s.memberSourcesAllowed(r, ws.OwnedBy, req.Sources); msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
+		return
+	}
+	// A3: providerFor admission goes here.
+	//
+	// Over the INCOMING sources, not the stored ones: an edit is how a member
+	// moves a workspace they were allowed to create onto a provider they are
+	// not granted, and the scan/verify/record clones follow the new sources.
+	if s.denyMemberWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(req.Sources)...) {
 		return
 	}
 	// this GET→mutate→UPDATE can race an async repo-scan upload and
@@ -953,6 +969,16 @@ func (s *Server) handleScanWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	ws, ok := s.getWorkspaceAuthorized(w, r, id)
 	if !ok {
+		return
+	}
+	// A3: providerFor admission goes here.
+	//
+	// A scan is a SERVER-SIDE clone (launchSourceScanRun, repoCloneURL of each
+	// attached source's locator), reachable by the workspace's member owner —
+	// the same reason the Build step is gated. A workspace onboarded before a
+	// row narrowed it, or owned by a member whose grant was taken away, must
+	// not keep cloning through this door.
+	if s.denyMemberWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(ws.Sources)...) {
 		return
 	}
 	s.scanAttachedSources(w, r, ws)

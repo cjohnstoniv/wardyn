@@ -42,6 +42,10 @@ type govEscapeStore struct {
 	token      *types.APIToken
 	tokenRaw   string
 	workspaces []types.Workspace
+	// siteConfig is what GetSiteConfig answers. The zero value is the
+	// deployment every pre-0.7.2 test in this file assumed — no provider rows,
+	// no agent roster — so setting it is opt-in.
+	siteConfig types.SiteConfig
 }
 
 func newGovEscapeStore(cs *capStore) *govEscapeStore {
@@ -60,7 +64,9 @@ func (s *govEscapeStore) ListWorkspaces(context.Context) ([]types.Workspace, err
 	return s.workspaces, nil
 }
 func (s *govEscapeStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
-	return types.SiteConfig{}, nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.siteConfig, nil
 }
 func (s *govEscapeStore) SetRunImage(context.Context, uuid.UUID, string) error   { return nil }
 func (s *govEscapeStore) SetSandboxRef(context.Context, uuid.UUID, string) error { return nil }

@@ -807,3 +807,86 @@ func storageProvidersConfigured(sc types.SiteConfig) bool {
 	return sc.WorkspaceProviders != nil && sc.WorkspaceProviders.Storage != nil &&
 		(sc.WorkspaceProviders.Storage.Ephemeral != nil || sc.WorkspaceProviders.Storage.UserDrive != nil)
 }
+
+// ─── the member capability gate ───────────────────────────────────────────────
+
+// capProvider403 is the member's refusal when a git provider row this
+// deployment admits is one they hold no capability grant for.
+//
+// It names the provider KIND and NOTHING ELSE — never a base URL, never the
+// row's id. GET /workspace-providers is a SUPER-tier door precisely because
+// base URLs name corporate topology, and a 403 body that listed them would be
+// that same document handed to the tier the door refuses. The kind
+// ("github", "azure_devops") is a closed enum this build already ships in its
+// own documentation, so it discloses nothing the console does not already say.
+//
+// DRAFT (M2 canon pending), the same terms as the PROVIDERS_400 block above.
+const capProvider403 = "you are not granted this deployment's %s provider — ask an admin to grant it, " +
+	"or launch against a repository on a provider you hold"
+
+// denyMemberWorkspaceProviders is the member half of provider admission: of the
+// repositories this request brings in, is every one on a provider row the
+// caller holds? Reports true — having written the 403 and an authz.denied row
+// carrying `capability_workspace_provider` — when the caller must stop.
+//
+// It asks admitRepoURL ONLY to learn WHICH ROW a repository belongs to, and
+// keys on `Provider` — NEVER on `Admitted`. The two differ on exactly the case
+// org-path scoping exists for: a row that CLAIMS the host and refuses anyway (a
+// disabled row, or an enabled one whose base paths did not match) answers
+// Admitted=false while naming the row that decided. Keying on the admission bit
+// would skip the capability check there and leave the refusal to the admission
+// site alone, which is the opposite of what this helper's contract says.
+//
+// The admission verdict itself (is this repository admissible at all?) is a
+// separate, operator-binding question wired at the admission sites; a
+// repository NO row matches — legacy open mode, or a host still admitted
+// through the legacy scm_hosts list — is a NO-OP here, because there is no row
+// for a grant to name and the capability has nothing to say about it.
+//
+// Operators are exempt in one line, before the site-config read, exactly as
+// denyMemberRequest is: nothing below ever costs them a store round-trip. A
+// build with no store at all answers "allowed", which is capSeamAllowed's own
+// documented rule for a seam running in a harness that holds no rows.
+//
+// repos are RAW sources (a slug, an https URL or an scp-form SSH target); the
+// derived clone URL is computed HERE, once, so no call site can compare a bare
+// <org>/<name> against a base URL and miss.
+func (s *Server) denyMemberWorkspaceProviders(w http.ResponseWriter, r *http.Request, target string, repos ...string) bool {
+	if len(repos) == 0 || s.cfg.Store == nil || s.isOperator(r.Context()) {
+		return false
+	}
+	sc, err := s.cfg.Store.GetSiteConfig(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		return true
+	}
+	if !providersConfigured(sc) {
+		return false // legacy open mode — byte-identical to 0.7.1
+	}
+	seen := map[string]bool{}
+	for _, repo := range repos {
+		row := admitRepoURL(sc, repoCloneURL(repo)).Provider
+		if row.ID == "" || seen[row.ID] {
+			continue
+		}
+		seen[row.ID] = true
+		if s.denyMemberCapability(w, r, capWorkspaceProvider, row.ID, target,
+			fmt.Sprintf(capProvider403, row.Kind)) {
+			return true
+		}
+	}
+	return false
+}
+
+// repoSourceLocators is the raw repo source of every repo entry in sources —
+// the shape denyMemberWorkspaceProviders takes, and the one every workspace
+// door already holds.
+func repoSourceLocators(sources []types.WorkspaceSource) []string {
+	var out []string
+	for _, src := range sources {
+		if src.Type == types.WorkspaceSourceTypeRepo && src.Source != "" {
+			out = append(out, src.Source)
+		}
+	}
+	return out
+}

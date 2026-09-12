@@ -262,7 +262,7 @@ fail-closed gate".
 | Confused-deputy against the token broker | SVID-authenticated callers; egress allowlist and injection-rule registration are separate capabilities. | B4 |
 | Insider hiding behind agent identity | `sub=human` + `act=agent-run-SPIFFE-ID` + `sponsor` in every token, commit and audit event. The agent never replaces the human in the chain — it is added to it. | AU, ID |
 | Insider exceeding own access via agent | Minted credentials are scoped to the task, not the human's full access; the agent never inherits developer credentials. PARTIAL: that ceiling is set by policy/site-config, and rewriting either is an OPERATOR act — policy CRUD and `PUT /site-config` sit behind `requireOperator`, so with `WARDYN_OIDC_OPERATOR_EMAILS` set a signed-in viewer cannot raise their own ceiling. Above that line nothing separates duties — residual #14. | B5, ID |
-| Member escalating past a capability grant | **[v0.6 shipped; two kinds added in v0.7]** Capability grants (`capability_grants`, migration `0042`) bound what a MEMBER chose on the six closed kinds `capabilityKinds` names, resolved deny-before-allow-before-switch by one resolver (`capAllowed`/`capGranted`). **EVERY switch ships OFF** — fail-open by design, residual #20 — and a capability never narrows what the ADMIN pre-authorized. Mechanism: §4.3 | B5, ID, AU |
+| Member escalating past a capability grant | **[v0.6 shipped; two kinds added in v0.7, one in v0.7.2]** Capability grants (`capability_grants`, migration `0042`) bound what a MEMBER chose on the seven closed kinds `capabilityKinds` names, resolved deny-before-allow-before-switch by one resolver (`capAllowed`/`capGranted`). **EVERY switch ships OFF** — fail-open by design, residual #20 — and a capability never narrows what the ADMIN pre-authorized. Mechanism: §4.3 | B5, ID, AU |
 | Member mounting a host directory the operator never allowed | **[v0.6 shipped]** A member-owned workspace is the ONLY path on which a non-operator supplies a host bind source, gated additively: operator deny-list, then a canonicalized real path inside an operator/MDM-set root, then a credential-dotfile deny-list. Unset roots = no member host mounts at all. Mechanism: §4.4. Residuals #25, #26 | B1, ID |
 | Audit tampering by in-sandbox actor | Append-only Postgres log (UPDATE/DELETE trigger raises exception) **[shipped]**; tamper-proof eBPF/Tetragon ground-truth stream **[shipped]** (host sensor + `wardyn-tetragon-ingest` → `kernel.*` via `POST /api/v1/internal/groundtruth`), correlated on `run_id`, exported free to SIEM. PTY replay is tamper-EVIDENT, not tamper-proof: the upload route accepts a run-token-authenticated PUT for the run's whole lifetime and upserts on conflict, so an in-sandbox actor can overwrite its own cast before the run ends — but every upload emits its own `recording.upload` row, so the overwrite is visible even though the replaced bytes are not recoverable. Detection-only (the `ld-linux`/`mmap` bypass is flagged, never blocked); honestly degradable (`/healthz` reports `ebpf_groundtruth=unavailable`); host eBPF is blind inside CC3/Kata (`kernel.sensor.blind`). | AU |
 | Audit rewriting by a DATABASE-level actor (past the append-only triggers) | **[v0.6 shipped]** Migration `0047_audit_hash_chain.sql` makes ONE such rewrite detectable: every post-migration row carries a `row_hash` computed **inside Postgres** in a `BEFORE INSERT` trigger, so the writer cannot choose it. **Tamper-EVIDENCE, not tamper-proofness** — a re-chained tail verifies clean. Detail: §4.5 | AU |
@@ -404,8 +404,9 @@ lane — is §5.1a's disclosed TOCTOU residual; the guard itself still runs ther
 
 ### 4.3 Capability grants (v0.6) — the mechanism
 
-Six closed kinds — the set is `capabilityKinds` (`internal/api/capabilities.go`),
-and it grew by two in v0.7. Five NARROW what a member could already do:
+Seven closed kinds — the set is `capabilityKinds` (`internal/api/capabilities.go`),
+and it grew by two in v0.7 and one in v0.7.2. Six NARROW what a member could
+already do:
 `egress_host` (the hosts on their inline policy, and which host they may decide an
 `egress_domain` approval for), `secret` (which secret names an inline policy may
 reference, and which names `GET /secrets` lists back), `workspace` (which
@@ -413,7 +414,20 @@ onboarded workspace they may launch against), `agent` (which harness — `req.Ag
 their own free-text choice) and `integration` (which AI-provider integration they
 may name on a run — `req.IntegrationID`, and TIER 1 ONLY: a workspace's own
 `LLMCred` pin and the operator's site default are operator-authored and are
-deliberately not gated). The last three are enforced at `denyMemberRequest`.
+deliberately not gated) and — v0.7.2 — `workspace_provider` (which git provider
+row the repositories a member's work comes from may belong to: the row
+`admitRepoURL` resolves a derived clone URL to, checked at every one of the SIX
+doors a member can reach a clone through — `POST /runs` over both the resolved
+spec and the legacy `repo` field, workspace create and EDIT, and the two
+server-side clones, Scan and Build). The last three request-level kinds are
+enforced at `denyMemberRequest`. `workspace_provider` is deliberately a bound on
+the PROVIDER ROW and not on the repository: admission here is URL-prefix
+matching, not a repo ACL, and the row is the unit an admin writes down. It keys
+on which row CLAIMS the host, not on whether that row admitted — a row that
+claims and refuses anyway (disabled, or a base path that did not match) is still
+the row the grant would name. Its member refusal names the
+provider KIND only — never a base URL, because `GET /workspace-providers` is a
+security-tier door precisely because base URLs name corporate topology.
 `image` WIDENS — without both its switch on and an exact-ref grant a member cannot
 name a custom image at all. `devcontainer_repo` is deliberately not a kind and
 stays unconditionally admin-only: it executes attacker-authored build

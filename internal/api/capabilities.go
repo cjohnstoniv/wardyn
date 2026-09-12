@@ -16,14 +16,14 @@ import (
 
 // ─── the closed kind set ──────────────────────────────────────────────────────
 //
-// Six kinds, and this slice is the ONLY place the set is written down —
+// Seven kinds, and this slice is the ONLY place the set is written down —
 // migration 0042 deliberately puts no CHECK on capability_grants.capability, so
-// a seventh kind is a constant here plus its enforcement call site, with no DDL
-// (0.7 added the fifth and sixth on exactly those terms). The console's own
-// list (ui/src/app/lib/permissions-copy.ts CAPABILITY_KINDS) mirrors these ids
-// and must not drift.
+// an eighth kind is a constant here plus its enforcement call site, with no DDL
+// (0.7 added the fifth and sixth, 0.7.2 the seventh, on exactly those terms).
+// The console's own list (ui/src/app/lib/permissions-copy.ts CAPABILITY_KINDS)
+// mirrors these ids and must not drift.
 //
-// Five of the six NARROW what a member may already do; capImage WIDENS (a
+// Six of the seven NARROW what a member may already do; capImage WIDENS (a
 // member cannot name a custom image at all today). Both directions resolve
 // through the same rules below — the difference lives at the enforcement seam,
 // not here.
@@ -74,16 +74,43 @@ const (
 	// at denyMemberRequest, on the one member-authored input, and never inside
 	// resolveRunIntegration — which operator callers reach too.
 	capIntegration = "integration"
+	// capWorkspaceProvider NARROWS: it bounds which GIT PROVIDER ROW a member's
+	// work may come from — the row workspace_providers.go's providerFor resolves
+	// a repository's derived clone URL to. Values are the provider row's own id
+	// (the lowercase-ASCII slug an integration id is written in), plus `*`.
+	//
+	// NARROWING, on the same rule capAgent's comment states: a member could
+	// already launch a run against ANY onboarded repository, so the unenforced
+	// default stays ALLOWED and an upgraded 0.7.1 deployment is unchanged. A
+	// DENY row still bites immediately, before anyone enforces the kind — which
+	// is what the other six get too, and is the on-ramp the deny-above-the-
+	// switch precedence exists for.
+	//
+	// It gates the member's OWN choice of where work comes from, and nothing
+	// else. Whether a repository is admissible AT ALL is a separate, admin-level
+	// question (admitRepoURL's verdict, an operator's 422) that binds operators
+	// too; this kind only decides whether THIS member may bring work from a
+	// provider row the deployment carries.
+	//
+	// SIX doors, because a repository reaches a clone by six member-reachable
+	// paths: POST /runs over the resolved spec and over the legacy repo field,
+	// workspace create and edit, and the two server-side clones (scan, build).
+	// A gate on fewer is a gate a member walks around by editing the workspace.
+	//
+	// It names the provider ROW, not the repository: a per-repo capability would
+	// be an ACL this feature does not have (admission is URL-prefix), and the
+	// row is the unit an admin actually writes down.
+	capWorkspaceProvider = "workspace_provider"
 )
 
 // capabilityKinds is the closed set, in the order the admin surface shows them.
-var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capIntegration}
+var capabilityKinds = []string{capEgressHost, capSecret, capWorkspace, capImage, capAgent, capIntegration, capWorkspaceProvider}
 
-// validCapabilityKind reports whether kind is one of the six. The API write
+// validCapabilityKind reports whether kind is one of the seven. The API write
 // boundary uses it in place of the CHECK the schema deliberately does not have.
 func validCapabilityKind(kind string) bool { return slices.Contains(capabilityKinds, kind) }
 
-// capWildcard matches every value of its kind. Spelled the same for all six so
+// capWildcard matches every value of its kind. Spelled the same for all seven so
 // an admin does not have to learn a per-kind syntax for "all of them".
 const capWildcard = "*"
 
@@ -426,10 +453,11 @@ func (s *Server) capEnforced(ctx context.Context, kind string) (bool, error) {
 // deny gets bypassed by a port suffix.
 //
 // Every other kind is an exact, case-sensitive compare. A secret name, a
-// workspace uuid, an image ref, an agent id and an integration id are all
-// identifiers where a near-miss must not match; only egress hosts have a
-// defensible subdomain semantics. The two 0.7 kinds therefore need no arm of
-// their own — this default IS their matcher, exact plus the shared wildcard.
+// workspace uuid, an image ref, an agent id, an integration id and a git
+// provider row id are all identifiers where a near-miss must not match; only
+// egress hosts have a defensible subdomain semantics. The two 0.7 kinds and
+// 0.7.2's workspace_provider therefore need no arm of their own — this default
+// IS their matcher, exact plus the shared wildcard.
 func capValueMatches(kind, grantValue, want string) bool {
 	grantValue = strings.TrimSpace(grantValue)
 	if grantValue == capWildcard {

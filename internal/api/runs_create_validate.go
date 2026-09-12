@@ -131,6 +131,18 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		return req, noCeiling, "", "", false
 	}
 
+	// The LEGACY single `repo` field, which reaches neither denyMemberRequest
+	// (it is not a capability kind of its own) nor validateWorkspaceSources (it
+	// is not a spec entry) — and is nonetheless cloned by the sandbox,
+	// broker-minted for and unioned into the run's egress. Its provider is the
+	// member's own free-text choice, so it is gated exactly like the resolved
+	// spec's repos, at the chokepoint A3's admission will share.
+	//
+	// A3: providerFor admission goes here (this field and req.DevcontainerRepo).
+	if req.Repo != "" && s.denyMemberWorkspaceProviders(w, r, "runs.workspace_provider", req.Repo) {
+		return req, noCeiling, "", "", false
+	}
+
 	// BYOI validation (fail closed before any store write): a user-supplied image
 	// is mutually exclusive with a devcontainer build, and — unlike DevcontainerRepo,
 	// which degrades to the convention image — an explicitly chosen image with no

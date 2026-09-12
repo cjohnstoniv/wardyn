@@ -549,7 +549,7 @@ func TestCapabilitySubjectsStaleSnapshot(t *testing.T) {
 // devcontainer_repo, which is deliberately NOT a capability: it executes
 // attacker-authored build config and stays unconditionally admin-only.
 func TestCapabilityKindsAreTheClosedSet(t *testing.T) {
-	want := []string{"egress_host", "secret", "workspace", "image", "agent", "integration"}
+	want := []string{"egress_host", "secret", "workspace", "image", "agent", "integration", "workspace_provider"}
 	if !slices.Equal(capabilityKinds, want) {
 		t.Errorf("capabilityKinds = %v, want %v (and ui/src/app/lib/permissions-copy.ts must match)", capabilityKinds, want)
 	}
@@ -567,12 +567,13 @@ func TestCapabilityKindsAreTheClosedSet(t *testing.T) {
 
 // TestCapValueMatchesIsExactOffTheHostLane: only egress_host has a defensible
 // subdomain semantics. A secret name, a workspace uuid, an image ref, an agent
-// id and an integration id are identifiers where a prefix, a suffix, or a case
-// fold must never match. The two 0.7 kinds are in the list because they ride
-// capValueMatches' DEFAULT arm — nothing was added for them, so nothing but a
-// test proves the default is what they got.
+// id, an integration id and a git provider row id are identifiers where a
+// prefix, a suffix, or a case fold must never match. The two 0.7 kinds and
+// 0.7.2's workspace_provider are in the list because they ride capValueMatches'
+// DEFAULT arm — nothing was added for them, so nothing but a test proves the
+// default is what they got.
 func TestCapValueMatchesIsExactOffTheHostLane(t *testing.T) {
-	for _, kind := range []string{capSecret, capWorkspace, capImage, capAgent, capIntegration} {
+	for _, kind := range []string{capSecret, capWorkspace, capImage, capAgent, capIntegration, capWorkspaceProvider} {
 		if capValueMatches(kind, "*.corp", "api.corp") {
 			t.Errorf("%s: a wildcard-looking grant matched a suffix; only egress_host may do that", kind)
 		}

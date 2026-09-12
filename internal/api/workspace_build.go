@@ -308,6 +308,17 @@ func (s *Server) handleBuildWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, view)
 		return
 	}
+	// A3: providerFor admission goes here.
+	//
+	// This route is on the owner-or-admin router, so a MEMBER reaches it — and
+	// past this point resolveWorkspaceImage clones the workspace's repo
+	// SERVER-SIDE (repoOwnDevcontainerURL -> envbuilder). A member whose
+	// provider grant was taken away must not keep that clone running through
+	// the wizard's Build step on a workspace onboarded before the row existed.
+	// Sited after the two early returns above, which clone nothing.
+	if s.denyMemberWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(ws.Sources)...) {
+		return
+	}
 	if s.cfg.ImageBuilder == nil {
 		writeJSON(w, http.StatusOK, view) // honest "none" + detail; not an error
 		return

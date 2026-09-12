@@ -27,6 +27,7 @@ var authzDeniedReasons = []string{
 	"capability_" + capIntegration,
 	"capability_" + capSecret,
 	"capability_" + capWorkspace,
+	"capability_" + capWorkspaceProvider,
 	"governance_profile",
 	"grant_pairing_not_eligible",
 	"groups_snapshot_stale",
@@ -62,12 +63,13 @@ const authzDeniedWindow = 400
 // capKindValue resolves a cap* identifier to the string it holds, so an emit
 // site written as "capability_" + capAgent compares as "capability_agent".
 var capKindValue = map[string]string{
-	"capEgressHost":  capEgressHost,
-	"capSecret":      capSecret,
-	"capWorkspace":   capWorkspace,
-	"capImage":       capImage,
-	"capAgent":       capAgent,
-	"capIntegration": capIntegration,
+	"capEgressHost":        capEgressHost,
+	"capSecret":            capSecret,
+	"capWorkspace":         capWorkspace,
+	"capImage":             capImage,
+	"capAgent":             capAgent,
+	"capIntegration":       capIntegration,
+	"capWorkspaceProvider": capWorkspaceProvider,
 }
 
 // TestAuthzDeniedReasonsAreDocumented pins the CLOSED reason enum to the code

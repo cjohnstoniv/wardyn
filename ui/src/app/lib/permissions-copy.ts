@@ -22,10 +22,10 @@
 // ============================ Kinds ============================
 
 // The closed set, in the order the admin screen renders them. Mirrors the Go
-// slice in internal/api/capabilities.go (A-B) — a seventh kind is a Go constant
-// plus a row here, no DDL. `agent` and `integration` are 0.7's fifth and sixth,
-// added on exactly those terms.
-export const CAPABILITY_KINDS = ["egress_host", "secret", "workspace", "image", "agent", "integration"] as const;
+// slice in internal/api/capabilities.go (A-B) — an eighth kind is a Go constant
+// plus a row here, no DDL. `agent` and `integration` are 0.7's fifth and sixth
+// and `workspace_provider` is 0.7.2's seventh, added on exactly those terms.
+export const CAPABILITY_KINDS = ["egress_host", "secret", "workspace", "image", "agent", "integration", "workspace_provider"] as const;
 export type CapabilityKind = (typeof CAPABILITY_KINDS)[number];
 
 // Whether granting this kind takes power away from members ("narrows" — the
@@ -118,6 +118,22 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
     // applying to every run whatever the member holds.
     enforced:
       "A member can only name providers granted to them. A workspace's own provider and the site default still apply — a grant bounds what the member chose, never what an admin set up for them.",
+    direction: "narrows",
+  },
+  // ADDITION (0.7.2): the workspace-providers round's kind, added on the same
+  // terms as `agent` and `integration` above. Its six strings are staged in
+  // docs/design/workspace-providers-prompt.md §7.6 and are DRAFT (M2 canon
+  // pending) — the owner's canon sitting freezes them, and the swap is a
+  // one-file diff here.
+  workspace_provider: {
+    // DRAFT (M2 canon pending)
+    label: "Git providers",
+    blurb: "Which git provider a member's own run may bring work from.",
+    valueLabel: "Provider",
+    valueHint: "The exact provider id, as it is written on the Workspace providers page. Use * for every provider.",
+    unenforced: "Members can launch against a repository on any git provider this deployment admits.",
+    enforced:
+      "A member can only bring work from providers granted to them — on a run, and on a workspace they create, edit, scan or build. A repository on another provider is refused, naming the provider's kind and nothing more.",
     direction: "narrows",
   },
 };

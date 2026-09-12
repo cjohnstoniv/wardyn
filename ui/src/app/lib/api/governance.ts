@@ -30,6 +30,14 @@ export interface GovernanceLimits {
   // round-trips a cap it does not yet draw; the control itself lands with the
   // rest of the Governance UI.
   max_concurrent_runs?: number;
+  // types.GovernanceLimits.MaxEphemeralDiskMiB (0.7.2) — the ephemeral scratch
+  // ceiling. 0/absent is unlimited. A CLAMP, not a refusal: a run asking for
+  // more is capped at dispatch and warned, never 403'd.
+  max_ephemeral_disk_mib?: number;
+  // types.GovernanceLimits.MaxDriveSizeMiB (0.7.2) — the per-principal user
+  // drive ceiling, folded with the deployment's own in one min(). 0/absent is
+  // unlimited.
+  max_drive_size_mib?: number;
 }
 
 // types.GovernanceProfile — one named, assignable ceiling.
