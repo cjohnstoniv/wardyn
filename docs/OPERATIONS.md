@@ -2835,6 +2835,29 @@ the role credentials it mints, not the organisation's. The `harness.credential.c
 and `harness.credential.refresh` audit rows carry `owner` and `credential_source`,
 so "whose credential" is answerable from the trail.
 
+**Revoking a session — what 0.7.2 actually gives you.** Disconnect
+(`DELETE /setup/harness-credential/aws`) is admin-only and deletes the
+**caller's own** stored session: under `per_user` every capture, an admin's
+included, lives in that person's own namespace, so this is the admin revoking
+themselves. There is **no** admin route that deletes a named member's stored
+session, and no member-facing Disconnect — both are 0.8 items.
+
+What ends a member's session today, honestly:
+
+- **Their next sign-in supersedes it.** A capture replaces the blob in their own
+  namespace; the previous access/refresh pair stops being used.
+- **Revoking the session at the IdP ends it.** IAM Identity Center is the system
+  of record. Terminate their Identity Center session (or remove their
+  account/permission-set assignment) and the refresh token stops redeeming;
+  Wardyn's next renewal fails visibly and their console reads *sign in again*.
+  This is the offboarding step — do it there, not here.
+- **It expires on its own.** The session dies with its OIDC client registration;
+  Wardyn renews the access token while that lives and never past it.
+
+Deprovisioning the person in the IdP is therefore the complete answer, and
+deleting the Wardyn console account does **not** by itself delete the stored
+blob.
+
 ### Internal model gateway
 
 Point every run's model calls at an internal endpoint instead of

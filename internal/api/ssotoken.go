@@ -5,6 +5,7 @@ package api
 
 import (
 	"cmp"
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -16,6 +17,19 @@ import (
 // ScanFacts), so this is a generous ceiling against a hostile/misbehaving
 // in-sandbox upload rather than a sizing of the real payload.
 const maxSSOTokenUploadBytes = 16 << 10 // 16 KiB
+
+// ── DRAFT (M2 canon pending) ────────────────────────────────────────────────
+
+// ssoTokenUnstampedScopeRefusal answers a login run that carries no launch-time
+// credential-scope stamp on a deployment whose roster now reads `per_user`.
+// Such a run was launched before the stamp existed, so the server cannot prove
+// whose namespace it was authorized to write — and under `per_user` the wrong
+// answer is the operator-wide credential every run inherits. Refused rather
+// than guessed; the person signs in again and the new run carries a stamp.
+//
+// DRAFT (M2 canon pending)
+const ssoTokenUnstampedScopeRefusal = "this sign-in started before Wardyn recorded whose model credential it was for, " +
+	"and this deployment now gives each person their own — start the sign-in again"
 
 // handleUploadSSOToken accepts a PUT /api/v1/internal/sso-token/{runID} from
 // wardyn-aws-sso running inside the AWS SSO container-login run (see
@@ -127,24 +141,40 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 			"sso token region does not match the AWS SSO region this login run was launched with")
 		return
 	}
-	wantStartURL, aerr := s.loginRunSSOStartURL(r.Context(), claims.RunID)
+	stamp, aerr := s.loginRunStamp(r.Context(), claims.RunID)
 	if aerr != nil {
 		writeError(w, http.StatusInternalServerError, "verify sso token against login run: "+aerr.Error())
 		return
 	}
-	if blob.StartURL != wantStartURL {
+	if blob.StartURL != stamp.SSOStartURL {
 		writeError(w, http.StatusBadRequest,
 			"sso token start_url does not match the AWS access portal URL this login run was launched with")
 		return
 	}
-	// WHOSE credential this is. The roster says whether this deployment keeps ONE
-	// model credential for everyone (`shared`, today) or one per person
-	// (`per_user`); the namespace is the login run's OWN identity subject —
-	// claims.Sub, minted at launch from the principal humanOrAdminAuth injected,
-	// and therefore trusted server state rather than anything the sandbox said.
-	// Every read and write below goes through it, so a member's capture lands in
-	// their namespace and can never overwrite the operator's.
-	scope := s.awsSSOScopeForAgent(r.Context(), modelAccessAgent, claims.Sub)
+	// WHOSE credential this is — DECIDED AT LAUNCH, read back here, never
+	// recomputed from the live roster. The roster says whether this deployment
+	// keeps ONE model credential for everyone (`shared`, today) or one per person
+	// (`per_user`), and the namespace is the login run's own identity subject
+	// (runIdentitySubject at launch == claims.Sub here, minted from the principal
+	// humanOrAdminAuth injected) — trusted server state, never anything the
+	// sandbox said. Every read and write below goes through it.
+	//
+	// WHY THE STAMP AND NOT A FRESH RESOLUTION. This handler's other two bindings
+	// (region, start_url) are launch-time state; the scope was not, and a login
+	// run stays alive to harnessLoginIdleCap. An admin flipping the row from
+	// `per_user` to `shared` inside that window turned the member's still-running
+	// sandbox's PUT into a write of the operator-wide reserved harness name — the
+	// one credential every later Bedrock run inherits, with an account_id and
+	// role_name the blob is free to name (repoFieldSafe only). The file's promise
+	// that "a member's capture can never overwrite the operator's" did not hold
+	// across a roster edit; reading the launch-time stamp is what makes it hold.
+	scope, ok := s.loginRunScope(r.Context(), stamp, claims.Sub)
+	if !ok {
+		// No stamp, on a deployment whose row now reads `per_user`: unprovable, so
+		// refused. See ssoTokenUnstampedScopeRefusal.
+		writeError(w, http.StatusConflict, ssoTokenUnstampedScopeRefusal)
+		return
+	}
 
 	// Once only. Even a correctly-bound blob must not be replaceable: the login
 	// run stays alive until its idle auto-stop, so without this the sandbox can
@@ -206,4 +236,32 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 			"owner": scope.owner, "credential_source": awsSSOCredentialSourceLabel(scope),
 		})))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// loginRunScope turns a login run's launch-time stamp into the scope its upload
+// may write under. ok=false means "refuse": there is no stamp AND the roster
+// now reads `per_user`, so the launch-time answer is unknowable and the only
+// fallback available (the operator namespace) is precisely the wrong one.
+//
+// THE UNSTAMPED ARM IS THE OPERATOR ARM. authorizeHarnessLogin lets nobody but
+// an operator launch a login run unless the row is `per_user`, so an unstamped
+// run on a roster that does not read `per_user` today is an operator's — the
+// same For("") this handler has always used, unchanged. If the row DOES read
+// `per_user`, that proof is gone and the run is refused.
+//
+// ponytail: the residual is a run launched under `per_user` BEFORE this commit
+// whose row was flipped to `shared` before it uploaded — unprovable either way,
+// and it needs a pre-upgrade run still alive across the wardynd restart that
+// deployed this code. Every run launched from here on carries a stamp.
+func (s *Server) loginRunScope(ctx context.Context, stamp loginRunStamp, subject string) (awsSSOScope, bool) {
+	switch stamp.CredentialSource {
+	case string(types.CredentialSourcePerUser):
+		// The launch-time owner, not the live roster's answer. Empty is fail-closed
+		// on its own: storeAWSSSOBlob refuses a per-user blob with no owner.
+		return awsSSOScope{perUser: true, owner: cmp.Or(stamp.Owner, subject)}, true
+	case string(types.CredentialSourceShared):
+		return awsSSOScope{}, true
+	default:
+		return awsSSOScope{}, !s.awsSSOScopeForAgent(ctx, modelAccessAgent, subject).perUser
+	}
 }

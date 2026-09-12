@@ -403,11 +403,16 @@ func TestSetupModelAccess_SilentWithNothingToSay(t *testing.T) {
 // the operator's diagnostic detail and KEEPS this — dropping it would leave a
 // member reading llm_ready, the deployment fact that painted a green chip over
 // their own lapsed session, which is the whole reason the field exists.
+//
+// PerUser, because `expired_signin` + "Sign in to AWS" is an answer only a
+// principal who OWNS the credential may be given: under `shared` it is the
+// operator's lifecycle and an instruction the server then refuses, and
+// memberModelAccess collapses it. See modelaccess_member_redaction_test.go.
 func TestRedactSetupStatusForMember_KeepsModelAccess(t *testing.T) {
 	in := SetupStatus{
 		ModelAccess: SetupModelAccess{
 			State: modelAccessExpiredSignin, Mechanism: string(types.AgentMechanismBedrockSSO),
-			Action: modelAccessSignInAction,
+			Action: modelAccessSignInAction, PerUser: true,
 		},
 		Checks:  []SetupCheck{{ID: "runner", Detail: "operator detail"}},
 		Secrets: SetupSecrets{Present: []string{"bedrock-api-key"}},
@@ -583,9 +588,14 @@ func TestHarnessLoginGovernance_ExemptsDenyInteractiveOnly(t *testing.T) {
 func TestUploadSSOToken_PerUserCaptureIsOwnerScopedAndOnceOnly(t *testing.T) {
 	h := newHarness(t)
 	runID := uuid.New()
+	// mintRunToken mints the run identity with subject "alice@example.com" — the
+	// SUBJECT, not the attribution, and the namespace selector. It is also what
+	// launchHarnessLoginRun stamps onto harness.login.started as the launch-time
+	// owner, which is the value handleUploadSSOToken now reads back.
+	const subject = "alice@example.com"
 	st := ssoLoginRunStore{
 		run:    types.AgentRun{ID: runID, Task: harnessLoginTask, Agent: awsSSOAgent},
-		events: ssoLoginStartedEvents(runID, "https://my-sso.awsapps.com/start"),
+		events: ssoLoginStartedPerUser(runID, "https://my-sso.awsapps.com/start", subject),
 		siteCfg: agentRoster(types.AgentProvider{
 			ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
 			CredentialSource: types.CredentialSourcePerUser, SSOStartURL: "https://my-sso.awsapps.com/start",
@@ -599,9 +609,6 @@ func TestUploadSSOToken_PerUserCaptureIsOwnerScopedAndOnceOnly(t *testing.T) {
 	cfg.BedrockRegion = "us-west-2"
 	srv := New(cfg)
 	h.srv = srv
-	// mintRunToken mints the run identity with subject "alice@example.com" —
-	// the SUBJECT, not the attribution, and the namespace selector.
-	const subject = "alice@example.com"
 	tok := h.mintRunToken(t, runID)
 
 	path := "/api/v1/internal/sso-token/" + runID.String()

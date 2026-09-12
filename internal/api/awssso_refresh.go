@@ -40,6 +40,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"sync"
 	"time"
 
@@ -87,6 +88,18 @@ const awsSSORefreshTimeout = 10 * time.Second
 var awsSSOTokenURL = func(ssoRegion string) string {
 	return "https://oidc." + ssoRegion + ".amazonaws.com/token"
 }
+
+// awsSSORegionPattern is the AWS region grammar, and it is a HOST-SHAPE check:
+// the region is concatenated into `oidc.<region>.amazonaws.com`, and the only
+// guard a stored region had passed was repoFieldSafe (control characters and
+// whitespace, ssotoken.go) — which admits `/` and `@`, so a region of
+// `x.attacker.com/` yields the host `oidc.x.attacker.com` and POSTs the client
+// secret and the refresh token to it. Not reachable from a sandbox today (the
+// F006 binding pins an uploaded blob's region to the operator's own boot
+// config), so this is defence in depth for a pre-0.7.2 blob, a direct store
+// write, or an operator typo. Covers the commercial, GovCloud and ISO
+// partitions (us-east-1, us-gov-west-1, us-iso-east-1, us-isob-east-1).
+var awsSSORegionPattern = regexp.MustCompile(`^[a-z]{2}(-gov|-iso[a-z]?)?-[a-z]+-\d$`)
 
 // errAWSSSOCredentialSpent marks the failure class that means the REFRESH TOKEN
 // itself is gone — not that the call failed. Wrapped around the OIDC error code
@@ -392,6 +405,14 @@ func (s *Server) createAWSSSOTokenWithRetry(ctx context.Context, blob awsSSOBlob
 // to follow it.
 func (s *Server) createAWSSSOToken(ctx context.Context, blob awsSSOBlob) (awsSSOTokenResponse, error) {
 	var out awsSSOTokenResponse
+	// BEFORE the URL is composed, never after: a region that is not a region is
+	// a hostname, and this request body carries the client secret and the refresh
+	// token. Returned as an ordinary (non-spent) error, so the credential is left
+	// intact and the failure surfaces on the existing visible-failure path rather
+	// than as a request to a composed host.
+	if !awsSSORegionPattern.MatchString(blob.Region) {
+		return out, fmt.Errorf("aws sso create-token: stored credential region %q is not an AWS region", blob.Region)
+	}
 	body, err := json.Marshal(map[string]string{
 		"clientId":     blob.ClientID,
 		"clientSecret": blob.ClientSecret,

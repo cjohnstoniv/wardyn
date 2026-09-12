@@ -178,6 +178,47 @@ type SetupModelAccess struct {
 	// does. Not a second wire copy of a fact Action already states in the
 	// member's own words — the console never re-composes that sentence.
 	Deadline string `json:"-"`
+	// PerUser says whether this answer is about a credential THIS PRINCIPAL
+	// OWNS. IN-PROCESS only (json:"-"): it is not a fact the console renders, it
+	// is what memberModelAccess needs to decide whether a member may be told a
+	// deadline or offered a sign-in at all. False is `shared` AND legacy open
+	// mode — in both, the graded blob is the OPERATOR's.
+	PerUser bool `json:"-"`
+}
+
+// memberModelAccess is the member-facing projection of a model-access answer,
+// applied by redactSetupStatusForMember.
+//
+// UNDER `shared` (AND LEGACY OPEN MODE) A MEMBER OWNS NOTHING HERE. The blob
+// setupModelAccess graded is the OPERATOR's, so every state that asks the
+// reader to act on their own credential — `expiring` with the admin's lapse
+// timestamp, `expired_signin`/`not_configured` with "Sign in to AWS" — is both
+// a disclosure of the operator's credential lifecycle and an instruction the
+// server then refuses (harnessLoginNotPerUserRefusal). Redaction stripped
+// SetupHarness.ExpiresAt and then republished an equivalent timestamp one field
+// over, which is the exact contradiction the redaction comment calls out about
+// secret names.
+//
+// So for a member under `shared` there are only two things that can be true:
+// the admin's credential works (`live` — including while it is expiring, which
+// is the admin's problem and is still on the admin's OWN setup row with its
+// timestamp), or it does not (`shared_expired`, whose action names the admin
+// and carries no timestamp). A deadline or a sign-in action is reserved for a
+// principal who owns the credential: the operator, or a member under `per_user`
+// (PerUser, untouched here).
+func memberModelAccess(ma SetupModelAccess) SetupModelAccess {
+	if ma.State == "" || ma.PerUser {
+		return ma
+	}
+	out := SetupModelAccess{State: modelAccessLive, Mechanism: ma.Mechanism}
+	switch ma.State {
+	case modelAccessSharedExpired, modelAccessExpiredSignin, modelAccessNotConfigured:
+		out.State = modelAccessSharedExpired
+		// "" for ts: shared_expired's sentence interpolates nothing, and passing
+		// the deadline here would be the leak this function exists to close.
+		out.Action = modelAccessAction(modelAccessSharedExpired, "")
+	}
+	return out
 }
 
 // awsSSOCredentialState grades one captured AWS SSO session into the vocabulary
@@ -261,7 +302,7 @@ func setupModelAccess(sc types.SiteConfig, blob awsSSOBlob, found bool, scope aw
 	}
 	state := awsSSOCredentialState(blob, found, scope.perUser, now)
 	deadline := modelAccessDeadline(blob, found, now)
-	out := SetupModelAccess{State: state, Deadline: deadline, Action: modelAccessAction(state, deadline)}
+	out := SetupModelAccess{State: state, Deadline: deadline, Action: modelAccessAction(state, deadline), PerUser: scope.perUser}
 	if ssoLane {
 		out.Mechanism = string(row.Mechanism)
 	} else {

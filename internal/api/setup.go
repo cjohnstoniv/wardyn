@@ -832,6 +832,11 @@ func redactSetupStatusForMember(st SetupStatus) SetupStatus {
 	// member-facing sentence — no secret names, no topology, no AWS access portal
 	// URL — so there is nothing here to drop, and dropping it would leave the
 	// member exactly where this field was added to stop leaving them.
+	// PROJECTED, not passed through: under `shared` the graded blob is the
+	// OPERATOR's, and the `expiring` arm's action line carried their lapse
+	// timestamp verbatim — a credential deadline put back into a body this
+	// function had just stripped it from. See memberModelAccess (modelaccess.go).
+	st.ModelAccess = memberModelAccess(st.ModelAccess)
 	if len(st.Harness) > 0 {
 		reduced := make([]SetupHarness, len(st.Harness))
 		for i, h := range st.Harness {

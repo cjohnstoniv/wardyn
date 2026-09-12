@@ -53,6 +53,24 @@ func ssoLoginStartedEvents(runID uuid.UUID, startURL string) []types.AuditEvent 
 	}}
 }
 
+// ssoLoginStartedPerUser is ssoLoginStartedEvents PLUS the launch-time
+// credential-scope stamp launchHarnessLoginRun writes under a per_user roster
+// row. handleUploadSSOToken reads WHOSE namespace a capture may land in off
+// this row, never off the live roster — see loginRunScope.
+//
+// The unstamped ssoLoginStartedEvents above is left as it is on purpose: it is
+// what a login run launched BEFORE the stamp existed looks like, and every
+// caller of it runs on a shared/legacy roster, which is the one fallback
+// loginRunScope still admits.
+func ssoLoginStartedPerUser(runID uuid.UUID, startURL, owner string) []types.AuditEvent {
+	ev := ssoLoginStartedEvents(runID, startURL)
+	ev[0].Data = mustJSON(map[string]any{
+		"provider": awsSSOProvider, "sso_start_url": startURL,
+		"credential_source": string(types.CredentialSourcePerUser), "owner": owner,
+	})
+	return ev
+}
+
 // newSSOUploadSrv wires a Server over an aws-sso harness-login run + an
 // in-memory secret store, and returns a valid run token for that run. The boot
 // config and the login-run audit trail declare the same start URL/region

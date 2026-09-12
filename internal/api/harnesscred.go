@@ -510,10 +510,23 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// must not receive a credential, it exists to produce one.
 	extraEnv := hl.loginConfigEnv(ssoStartURL, ssoRegion)
 
+	// THE LAUNCH-TIME CREDENTIAL SCOPE, STAMPED. handleUploadSSOToken used to
+	// re-resolve it from the LIVE roster at upload time, so an admin who flipped
+	// the row from `per_user` to `shared` while a member's login run was still
+	// alive (it lives to harnessLoginIdleCap) turned that member's PUT into a
+	// write of the OPERATOR-WIDE credential every run inherits. Everything else
+	// that handler binds — region, start URL — is launch-time state; this is the
+	// third field, carried the same way the start URL already is (this run's own
+	// audit row, which survives a wardynd restart and needs no new run column).
+	loginScope := s.awsSSOScopeForAgent(ctx, modelAccessAgent, runIdentitySubject(ctx, actor))
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "harness.login.started",
 		runID.String(), "success", mustJSON(map[string]any{
 			"provider": hl.provider, "egress": egress,
 			"sso_start_url": ssoStartURL, // operator config, not a credential
+			// WHOSE credential this run may capture, decided HERE and read back by
+			// handleUploadSSOToken — never recomputed there.
+			"credential_source": awsSSOCredentialSourceLabel(loginScope),
+			"owner":             loginScope.owner,
 		})))
 
 	image := agentImage(hl.agent, s.cfg.AgentImages)
@@ -547,39 +560,49 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 // contains it. It is a bound on a hostile/wedged read, not a sizing.
 const maxLoginStartAuditScan = 100
 
-// loginRunSSOStartURL reads back the operator-declared AWS access-portal URL
-// THIS login run was launched with, from the run's own harness.login.started
-// audit event (launchHarnessLoginRun above, ActorSystem/"wardynd" — server-set
-// at launch from the operator's request, never sandbox input). The audit log is
-// the system of record (Invariant 6), and the same read-back-your-own-run's-
-// trail shape already serves execSucceeded (site_config_probe.go).
+// loginRunStamp is the launch-time state launchHarnessLoginRun wrote onto THIS
+// login run's harness.login.started audit row (ActorSystem/"wardynd" —
+// server-set at launch from the operator's request and the roster as it then
+// read, never sandbox input): the operator-declared AWS access-portal URL, and
+// the credential scope this run may capture under. The audit log is the system
+// of record (Invariant 6), and the same read-back-your-own-run's-trail shape
+// already serves execSucceeded (site_config_probe.go).
 //
 // This exists so handleUploadSSOToken can bind WHAT a login sandbox uploads to
-// WHAT the operator asked for, without a new run column or a new trust source.
-// A missing/blank value is NOT an error here: the caller compares it to the
-// uploaded value, so "no operator declaration on record" fails the comparison
-// and the upload is refused — fail-closed by construction.
-func (s *Server) loginRunSSOStartURL(ctx context.Context, runID uuid.UUID) (string, error) {
+// WHAT THE OPERATOR ASKED FOR AT LAUNCH, without a new run column or a new
+// trust source. A missing/blank SSOStartURL is NOT an error: the caller
+// compares it to the uploaded value, so "no operator declaration on record"
+// fails the comparison and the upload is refused — fail-closed by construction.
+//
+// A zero CredentialSource means "no stamp on record" — a login run launched
+// before this field existed. The caller decides what that is worth; it is never
+// silently read as `shared`, because `shared` IS the operator namespace.
+type loginRunStamp struct {
+	SSOStartURL      string `json:"sso_start_url"`
+	CredentialSource string `json:"credential_source"`
+	Owner            string `json:"owner"`
+}
+
+func (s *Server) loginRunStamp(ctx context.Context, runID uuid.UUID) (loginRunStamp, error) {
+	var out loginRunStamp
 	if s.cfg.Store == nil {
-		return "", fmt.Errorf("no store configured")
+		return out, fmt.Errorf("no store configured")
 	}
 	events, err := s.cfg.Store.QueryAuditEvents(ctx, runID, maxLoginStartAuditScan)
 	if err != nil {
-		return "", fmt.Errorf("read login run audit trail: %w", err)
+		return out, fmt.Errorf("read login run audit trail: %w", err)
 	}
 	for _, ev := range events {
 		if ev.Action != "harness.login.started" || ev.Outcome != "success" {
 			continue
 		}
-		var data struct {
-			SSOStartURL string `json:"sso_start_url"`
-		}
+		var data loginRunStamp
 		if uerr := json.Unmarshal(ev.Data, &data); uerr != nil {
 			continue
 		}
-		return data.SSOStartURL, nil
+		return data, nil
 	}
-	return "", nil
+	return out, nil
 }
 
 // ── HTTP: setup/harness-* (humanOrAdmin group) ───────────────────────────────
@@ -843,6 +866,21 @@ func (s *Server) handleHarnessCredentialPaste(w http.ResponseWriter, r *http.Req
 // handleHarnessDisconnect deletes a stored managed credential:
 //
 //	DELETE /api/v1/setup/harness-credential/{provider}
+//
+// SCOPED THE WAY THE CAPTURE WAS. Under a `per_user` row every AWS SSO capture
+// — the operator's own included — lives in For(subject) (storeAWSSSOBlob), so
+// the unscoped Delete this used to make removed NOTHING anybody had captured
+// and still answered {"captured": false}: an operator's own Disconnect was a
+// no-op on a per-user estate. The delete now goes through the same scope the
+// write did, which makes this the CALLER's own blob.
+//
+// HONEST CEILING (0.7.2): the route stays operatorOnly, so this revokes the
+// OPERATOR's own captured session, never a named member's. A member's stored
+// session is superseded by their next sign-in, ends at the IdP when an admin
+// revokes the session there, and expires with its OIDC client registration.
+// Self-service member Disconnect and an admin "revoke this person's session"
+// arm are 0.8 items — see docs/OPERATIONS.md "AWS SSO per-user" and the
+// THREAT-MODEL residency row, which say so in those words.
 func (s *Server) handleHarnessDisconnect(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Secrets == nil {
 		writeError(w, http.StatusServiceUnavailable, "no secret store configured")
@@ -854,7 +892,17 @@ func (s *Server) handleHarnessDisconnect(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "unknown provider: "+provider)
 		return
 	}
-	if err := s.cfg.Secrets.Delete(r.Context(), hl.secretName); err != nil { // operator-wide route (operatorOnly), not per-principal
+	st := s.cfg.Secrets
+	if hl.provider == awsSSOProvider {
+		// Only the AWS lane can be per-user (per_user is bedrock_sso-only,
+		// types.AgentProvider); every other provider keeps the operator-wide row
+		// this route has always deleted.
+		if scope := s.awsSSOScopeForAgent(r.Context(), modelAccessAgent,
+			runIdentitySubject(r.Context(), principalFromRequest(r))); scope.namespaced() {
+			st = st.For(scope.owner)
+		}
+	}
+	if err := st.Delete(r.Context(), hl.secretName); err != nil {
 		writeError(w, http.StatusInternalServerError, "delete managed credential: "+err.Error())
 		return
 	}

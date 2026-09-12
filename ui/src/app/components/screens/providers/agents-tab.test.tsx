@@ -153,6 +153,93 @@ describe("AgentsTab", () => {
   });
 });
 
+// The tab's Switch is the SERVER's roster answer, and Save writes what the
+// admin can see. `SetupHarnessTool.enabled` is `ok && !row.Disabled`
+// (setupHarnessTools, internal/api) — the same field agent-picker.tsx:31
+// already reads. This tab did not read it: the Switch derived from
+// `!row.disabled` on a row resolvedRow INVENTED for every catalog id with no
+// stored row, so an admin who had narrowed the roster (CLI/MDM/PUT
+// /site-config) and then edited anything here silently re-enabled every catalog
+// agent — the mirror image of the `{agents: []}` wipe, in the same function.
+describe("AgentsTab — the roster on screen is the server's, and Save writes it", () => {
+  const NARROWED: SetupHarnessTool[] = [
+    harness(),
+    harness({ id: "codex-cli", display: "Codex CLI", enabled: false }),
+    harness({ id: "none", display: "Your own tools", no_managed_auth: true, has_gateway: false, has_login: false, enabled: false }),
+  ];
+
+  it("an agent the server does not offer renders OFF, and an unrelated Save never adds it", async () => {
+    getAgentProvidersMock.mockResolvedValue({
+      providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] },
+      etag: '"n1"',
+    });
+    putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"n2"' });
+    render(<AgentsTab harnesses={NARROWED} operator />);
+
+    const codex = await screen.findByTestId("agent-row-codex-cli");
+    expect(within(codex).getByRole("switch")).toHaveAttribute("aria-checked", "false");
+    expect(within(screen.getByTestId("agent-row-claude-code")).getByRole("switch")).toHaveAttribute("aria-checked", "true");
+
+    // An edit to a DIFFERENT row, then Save.
+    const claude = screen.getByTestId("agent-row-claude-code");
+    await userEvent.click(within(claude).getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_BEARER }));
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+
+    const [body] = putAgentProvidersMock.mock.calls[0];
+    expect(body.agents.map((a: { id: string }) => a.id)).toEqual(["claude-code"]);
+    expect(body.agents[0].mechanism).toBe("bedrock_bearer");
+  });
+
+  it("a stored disabled row stays disabled through a Save, never dropped and never re-enabled", async () => {
+    getAgentProvidersMock.mockResolvedValue({
+      providers: {
+        agents: [
+          { id: "claude-code", mechanism: "bedrock_sso" },
+          { id: "codex-cli", mechanism: "openai_api_key", disabled: true },
+        ],
+      },
+      etag: '"n3"',
+    });
+    putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"n4"' });
+    render(<AgentsTab harnesses={NARROWED} operator />);
+    await screen.findByTestId("agent-row-claude-code");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+
+    const [body] = putAgentProvidersMock.mock.calls[0];
+    const codex = body.agents.find((a: { id: string }) => a.id === "codex-cli");
+    expect(codex).toEqual({ id: "codex-cli", mechanism: "openai_api_key", disabled: true });
+  });
+
+  it("legacy open mode (every harness enabled) still pre-fills all-on, in catalog order", async () => {
+    putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"n5"' });
+    render(<AgentsTab harnesses={HARNESSES} operator />);
+    const row = await screen.findByTestId("agent-row-claude-code");
+    // An edit to the FIRST row must not move it to the end of the body.
+    await userEvent.click(within(row).getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_SSO }));
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+
+    const [body] = putAgentProvidersMock.mock.calls[0];
+    expect(body.agents.map((a: { id: string }) => a.id)).toEqual(["claude-code", "codex-cli", "none"]);
+    expect(body.agents.every((a: { disabled?: boolean }) => !a.disabled)).toBe(true);
+  });
+
+  it("turning an off agent on adds exactly that row", async () => {
+    getAgentProvidersMock.mockResolvedValue({
+      providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] },
+      etag: '"n6"',
+    });
+    putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"n7"' });
+    render(<AgentsTab harnesses={NARROWED} operator />);
+    const codex = await screen.findByTestId("agent-row-codex-cli");
+    await userEvent.click(within(codex).getByRole("switch"));
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+
+    const [body] = putAgentProvidersMock.mock.calls[0];
+    expect(body.agents.map((a: { id: string }) => a.id)).toEqual(["claude-code", "codex-cli"]);
+    expect(body.agents.find((a: { id: string }) => a.id === "codex-cli").disabled).toBeFalsy();
+  });
+});
+
 // SetupStatus.harnesses is OPTIONAL on the wire ("older daemons omit it — treat
 // absent as unknown, never as false"). save() builds the whole PUT body from
 // this prop, so an absent roster defaulted to [] PUT `{agents: []}` — after

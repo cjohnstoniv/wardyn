@@ -87,12 +87,30 @@ function defaultMechanism(harness: SetupHarnessTool): string {
   return (choices.find((c) => !c.reason) ?? choices[0]).value;
 }
 
-// The row to EDIT and to SAVE: the stored row if one exists, else a fresh one
-// seeded with a mechanism this agent can actually use — a lanes-catalog row
-// with an empty mechanism 400s at save (validateAgentMechanism's
-// agent400NeedsLane), so the picker never shows a blank, unlaunchable choice.
+// The row to EDIT: the stored row if one exists, else a fresh one seeded with a
+// mechanism this agent can actually use — a lanes-catalog row with an empty
+// mechanism 400s at save (validateAgentMechanism's agent400NeedsLane), so the
+// picker never shows a blank, unlaunchable choice.
+//
+// IT IS NOT THE ANSWER TO "IS THIS AGENT ENABLED" — see rowEnabled. A row this
+// function invents carries no `disabled`, so reading `!row.disabled` off it
+// rendered every not-offered agent as ON.
 function resolvedRow(agents: AgentProvider[], harness: SetupHarnessTool): AgentProvider {
   return agents.find((a) => a.id === harness.id) ?? { id: harness.id, mechanism: defaultMechanism(harness) };
+}
+
+// Whether this agent's Switch is ON. THE SERVER'S OWN ANSWER when there is no
+// stored row to read: SetupHarnessTool.enabled is `ok && !row.Disabled`
+// (setupHarnessTools, internal/api) — true for every catalog id only in legacy
+// open mode, where an all-on pre-fill IS what the admin sees and saves.
+//
+// The stored row wins when there is one, because that is where this tab's own
+// edits land (updateRow writes `disabled` onto it). agent-picker.tsx:31 already
+// reads `enabled === false`; this tab did not, so an admin who had narrowed the
+// roster and then edited anything here silently re-enabled every catalog agent.
+function rowEnabled(agents: AgentProvider[], harness: SetupHarnessTool): boolean {
+  const stored = agents.find((a) => a.id === harness.id);
+  return stored ? !stored.disabled : harness.enabled !== false;
 }
 
 const MODEL_ACCESS_TONE: Record<string, "success" | "warning"> = { live: "success" };
@@ -120,18 +138,21 @@ function ModelAccessNote({ access }: { access: SetupModelAccess }) {
 function Row({
   harness,
   row,
+  enabled,
   modelAccess,
   operator,
   onUpdate,
 }: {
   harness: SetupHarnessTool;
   row: AgentProvider;
+  /** rowEnabled's answer — the server's roster, never `!row.disabled` on a row
+   *  resolvedRow invented. */
+  enabled: boolean;
   modelAccess?: SetupModelAccess;
   operator: boolean;
   onUpdate: (next: AgentProvider) => void;
 }) {
   const [loginOpen, setLoginOpen] = React.useState(false);
-  const enabled = !row.disabled;
   const choices = mechanismChoices(harness);
   const perUserAvailable = row.mechanism === "bedrock_sso";
   const credentialSource = row.credential_source || "shared";
@@ -308,10 +329,16 @@ export function AgentsTab({
   // rewrite here would be a silent drop of an admin's own row.
   const customRows = agents.filter((a) => !catalogIds.has(a.id));
 
+  // In place, never [...rest, next]: appending moved every edited row to the end
+  // of the persisted agents[], so a one-switch change wrote an agent_provider.write
+  // diff that reordered the whole roster.
   const updateRow = (harnessId: string, next: AgentProvider) => {
     setDraft((d) => {
-      const rest = (d?.agents ?? []).filter((a) => a.id !== harnessId);
-      return { ...d, agents: [...rest, next] };
+      const rows = d?.agents ?? [];
+      return {
+        ...d,
+        agents: rows.some((a) => a.id === harnessId) ? rows.map((a) => (a.id === harnessId ? next : a)) : [...rows, next],
+      };
     });
   };
 
@@ -319,7 +346,16 @@ export function AgentsTab({
     setSaving(true);
     setSaveError(null);
     try {
-      const catalogRows = roster.map((h) => resolvedRow(agents, h));
+      // WHAT THE ADMIN SEES IS WHAT IS WRITTEN, in catalog order. A switch that
+      // is ON contributes its row (the stored one, or the defaults for one just
+      // enabled); a switch that is OFF contributes NOTHING unless a stored row
+      // exists for it, which is kept and pinned off. Mapping every catalog id to
+      // an invented row is what made an unrelated edit widen the org's roster.
+      const catalogRows = roster.flatMap((h) => {
+        const stored = agents.find((a) => a.id === h.id);
+        if (rowEnabled(agents, h)) return [stored ?? { id: h.id, mechanism: defaultMechanism(h) }];
+        return stored ? [{ ...stored, disabled: true }] : [];
+      });
       const next: AgentProviders = { agents: [...catalogRows, ...customRows] };
       const result = await api.putAgentProviders(next, etag);
       setDraft(result.providers);
@@ -407,6 +443,7 @@ export function AgentsTab({
                 key={h.id}
                 harness={h}
                 row={resolvedRow(agents, h)}
+                enabled={rowEnabled(agents, h)}
                 modelAccess={h.id === "claude-code" ? modelAccess : undefined}
                 operator={operator}
                 onUpdate={(next) => updateRow(h.id, next)}
