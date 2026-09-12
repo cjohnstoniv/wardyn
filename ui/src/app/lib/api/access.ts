@@ -22,6 +22,11 @@ import { asJson, errText, HttpError, wfetch } from "./core";
 export interface RoleMappingUpsert {
   mapping: { id: string; value: string; role: string; created_by?: string; created_at?: string };
   created: boolean;
+  // R1-F112: handleUpsertRoleMapping embeds this beside the RoleMapping row
+  // (omitempty — absent when the write demoted nobody's outstanding token).
+  // DELETE carries the same count but rides no body (204), so there is
+  // nothing to surface on that side.
+  tokensRevoked?: number;
 }
 
 // Best-effort parse of a POST/DELETE 400 body as JSON — a plain
@@ -107,7 +112,9 @@ export const access = {
     const res = await wfetch("/access/mappings", { method: "POST", body: JSON.stringify(input) });
     if (!res.ok) await throwAccessWriteError(res);
     const created = res.status === 201;
-    return { mapping: await asJson<RoleMappingUpsert["mapping"]>(res), created };
+    const body = await asJson<RoleMappingUpsert["mapping"] & { tokens_revoked?: number }>(res);
+    const { tokens_revoked, ...mapping } = body;
+    return { mapping, created, tokensRevoked: tokens_revoked };
   },
 
   // DELETE /api/v1/access/mappings/{id}?acknowledge_access_change=true — the

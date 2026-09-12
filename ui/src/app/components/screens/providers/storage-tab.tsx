@@ -6,6 +6,7 @@
 // The Storage tab of /providers — ephemeral scratch (default/max, §6.1-§6.3)
 // and the drive ceiling (§6.4), then the EXISTING UserDrivesCard as the link
 // out. No drives table is embedded here (Q7 — the move steps.ts forbids).
+import { nonNegativeInt } from "../../../lib/format";
 import type { StorageProviders } from "../../../lib/api/providers";
 import type { StorageEnforcement } from "../../../lib/api/drives";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
@@ -57,7 +58,7 @@ export function StorageTab({
               className="font-mono"
               disabled={!operator}
               value={numberField(ephemeral.default_disk_mib)}
-              onChange={(e) => setEphemeral({ default_disk_mib: Number(e.target.value) || 0 })}
+              onChange={(e) => setEphemeral({ default_disk_mib: nonNegativeInt(e.target.value) })}
             />
             <span className="mt-1 block text-meta text-muted-foreground">{gloss}</span>
           </Field>
@@ -69,7 +70,7 @@ export function StorageTab({
               className="font-mono"
               disabled={!operator}
               value={numberField(ephemeral.max_disk_mib)}
-              onChange={(e) => setEphemeral({ max_disk_mib: Number(e.target.value) || 0 })}
+              onChange={(e) => setEphemeral({ max_disk_mib: nonNegativeInt(e.target.value) })}
             />
             <span className="mt-1 block text-meta text-muted-foreground">{gloss}</span>
           </Field>
@@ -98,7 +99,7 @@ export function StorageTab({
               className="font-mono"
               disabled={!operator}
               value={numberField(userDrive.max_size_mib)}
-              onChange={(e) => setUserDrive({ max_size_mib: Number(e.target.value) || 0 })}
+              onChange={(e) => setUserDrive({ max_size_mib: nonNegativeInt(e.target.value) })}
             />
           </Field>
         </div>

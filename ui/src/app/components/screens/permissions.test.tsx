@@ -314,6 +314,21 @@ describe("PermissionsScreen — add a grant", () => {
     expect(screen.getByText(KIND.image.valueHint)).toBeInTheDocument();
   });
 
+  // 0.7.2: the seventh kind renders off the same CAPABILITY_KINDS/KIND data
+  // every other kind does — a provider row id is the grant's value, and the
+  // hint says so (A2's KindCopy, wired here with no screen code of its own).
+  it("workspace_provider renders with A2's KindCopy", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+
+    await screen.findByText(PERM.ADD_TITLE);
+    await user.click(screen.getByRole("combobox", { name: PERM.FIELD_CAPABILITY }));
+    await user.click(await screen.findByRole("option", { name: KIND.workspace_provider.label }));
+
+    expect(screen.getByLabelText(KIND.workspace_provider.valueLabel)).toBeInTheDocument();
+    expect(screen.getByText(KIND.workspace_provider.valueHint)).toBeInTheDocument();
+  });
+
   it("the Who hint follows the subject type, and 'all' drops the subject field", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();

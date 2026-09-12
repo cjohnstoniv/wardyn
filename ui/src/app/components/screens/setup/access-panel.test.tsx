@@ -315,6 +315,33 @@ describe("AccessPanel — the security_admin tier (§B, §7.9)", () => {
       acknowledge_access_change: undefined,
     });
   });
+
+  // R1-F112: a demotion revokes outstanding tokens silently on the wire —
+  // handleUpsertRoleMapping now embeds the count, and the console renders it.
+  it("shows the tokens-revoked receipt after a demotion that revoked some", async () => {
+    upsertMappingMock.mockResolvedValue({
+      mapping: { id: "m1", value: "eng-team", role: "member" },
+      created: false,
+      tokensRevoked: 3,
+    });
+    renderPanel(baseAccess());
+
+    await userEvent.type(screen.getByLabelText(PEOPLE.FIELD_VALUE), "eng-team");
+    await userEvent.click(screen.getByRole("button", { name: PEOPLE.ADD_CTA }));
+
+    expect(await screen.findByText(PEOPLE.TOKENS_REVOKED_RECEIPT(3))).toBeInTheDocument();
+  });
+
+  it("shows no receipt when the write revoked nothing", async () => {
+    upsertMappingMock.mockResolvedValue({ mapping: { id: "m1", value: "eng-team", role: "member" }, created: true });
+    renderPanel(baseAccess());
+
+    await userEvent.type(screen.getByLabelText(PEOPLE.FIELD_VALUE), "eng-team");
+    await userEvent.click(screen.getByRole("button", { name: PEOPLE.ADD_CTA }));
+
+    await waitFor(() => expect(upsertMappingMock).toHaveBeenCalled());
+    expect(screen.queryByText(/API tokens? revoked/)).not.toBeInTheDocument();
+  });
 });
 
 describe("AccessPanel — add mapping, posture guard (§2.1/§7.3)", () => {

@@ -26,9 +26,7 @@ export interface GovernanceLimits {
   // user drive even when one is allocated to the person; denyMemberDrive's 403
   // is what enforces it, and this is only what the editor authors.
   deny_user_drive?: boolean;
-  // 0/absent is unlimited. Mirrored here so the editor's `{ ...limits }` spread
-  // round-trips a cap it does not yet draw; the control itself lands with the
-  // rest of the Governance UI.
+  // 0/absent is unlimited (R4/F032). The editor's LimitNumberRow writes this.
   max_concurrent_runs?: number;
   // types.GovernanceLimits.MaxEphemeralDiskMiB (0.7.2) — the ephemeral scratch
   // ceiling. 0/absent is unlimited. A CLAMP, not a refusal: a run asking for

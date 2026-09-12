@@ -499,14 +499,18 @@ function AddMappingForm({
   const [guardOpen, setGuardOpen] = React.useState(false);
   const [ack, setAck] = React.useState(false);
   const [guardBeforeAfter, setGuardBeforeAfter] = React.useState<{ before: string; after: string } | null>(null);
+  // R1-F112: a demotion revokes outstanding tokens SILENTLY on the wire —
+  // this is the one-line receipt for it, cleared on the next attempt.
+  const [tokensRevoked, setTokensRevoked] = React.useState<number | null>(null);
 
   const wouldFlipPosture = access.posture.map_empty && access.posture.changes;
 
   const doSubmit = async (acknowledge: boolean) => {
     setSaving(true);
     setError(null);
+    setTokensRevoked(null);
     try {
-      await api.upsertMapping({
+      const res = await api.upsertMapping({
         value: value.trim(),
         role,
         acknowledge_access_change: acknowledge || undefined,
@@ -514,6 +518,7 @@ function AddMappingForm({
       setValue("");
       setGuardOpen(false);
       setAck(false);
+      setTokensRevoked(res.tokensRevoked ?? null);
       onReload();
     } catch (e) {
       const classified = classifyWriteError(e);
@@ -576,6 +581,11 @@ function AddMappingForm({
         </div>
       </div>
       {error && <Note tone="red">{writeErrorNote(error)}</Note>}
+      {/* R1-F112: the server demoted this value's role and revoked its
+          outstanding tokens as part of the SAME write — the count only
+          renders when it's non-zero, so a fresh mapping (nothing to revoke)
+          says nothing. */}
+      {!error && !!tokensRevoked && <Note tone="plain">{PEOPLE.TOKENS_REVOKED_RECEIPT(tokensRevoked)}</Note>}
 
       <AlertDialog open={guardOpen} onOpenChange={(o) => !o && setGuardOpen(false)}>
         <AlertDialogContent>

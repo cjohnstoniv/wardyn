@@ -55,3 +55,13 @@ export function fmtBytes(n?: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
+
+// nonNegativeInt parses a number-input value into the integer a limit field
+// stores: blank, NaN, negative or fractional input all collapse to the field's
+// zero ("no limit"). `<input type=number min=0>` is only a validation hint —
+// "-5" still arrives as a string — and every server reader treats <= 0 as
+// unlimited, so a negative saved here would render as a cap that binds nothing.
+export function nonNegativeInt(raw: string): number {
+  const n = Math.trunc(Number(raw));
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}

@@ -6,28 +6,38 @@
 // The profile editor — the in-place form the Governance screen opens over its
 // profiles list (docs/design/governance-mock/index.html, states 2 and 3).
 //
-// It authors ONE saved object: a name, a ceiling, and the two launch-mode
-// limits. The ceiling is the SHIPPED spec editor (PolicyPanel instance=
-// "policies", carrying its own templates, field help and SafetyMeter) — this
-// file does not redraw any of it (prompt §3, "no second spec editor"), and the
-// limits are a SECTION of the same form rather than a second card, because a
-// second card implies a second write (§O Q3).
+// It authors ONE saved object: a name, a ceiling, and the Limits section (three
+// launch-mode doors plus, since 0.7.2, three integer ceilings). The ceiling is
+// the SHIPPED spec editor (PolicyPanel instance="policies", carrying its own
+// templates, field help and SafetyMeter) — this file does not redraw any of it
+// (prompt §3, "no second spec editor"), and the limits are a SECTION of the
+// same form rather than a second card, because a second card implies a second
+// write (§O Q3).
 //
 // Every product string comes from the copy modules. This file adds none.
+import { nonNegativeInt } from "../../../lib/format";
 import * as React from "react";
 import { Loader2 } from "lucide-react";
+import { setup as setupApi } from "../../../lib/api/setup";
 import { HttpError } from "../../../lib/api/core";
 import { governance as api, isGrantBoundError, type GovernanceLimits, type GovernanceProfile } from "../../../lib/api/governance";
 import { getErrorMessage } from "../../../lib/format";
 import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
 import type { RunPolicySpec } from "../../../lib/types";
+import type { StorageEnforcement } from "../../../lib/api/drives";
+import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Mono } from "../../wardyn/code-block";
 import { Field, Switch } from "../../wardyn/form-primitives";
 import { POLICY_TEMPLATES, PolicyPanel, parseSpec } from "../../wardyn/policy-panel";
 import { Note, withMono } from "./display";
+
+// A number field renders blank at 0/undefined — 0 IS "unlimited" for all three
+// rows below, not a value worth spelling out in the input (storage-tab.tsx's
+// numberField precedent).
+const numberField = (v: number | undefined): number | "" => (v ? v : "");
 
 // The prefill for a NEW profile is the panel's own Minimal template — the same
 // const policies.tsx's create editor starts from, so there is no second
@@ -59,6 +69,20 @@ export function ProfileEditor({
   // the message alone — a frozen sentence would be less specific than what the
   // server already said.
   const [error, setError] = React.useState<{ title?: string; message: string } | null>(null);
+  // The AUTHORING daemon's disk-cap driver (§6.2) — read once, the same call
+  // the /providers Storage tab makes, never a laptop's. Absent (older daemon,
+  // no runner detected) reads as "can enforce": no warning.
+  const [enforcement, setEnforcement] = React.useState<StorageEnforcement | undefined>(undefined);
+  React.useEffect(() => {
+    let alive = true;
+    void setupApi.getSetupStatus().then((s) => {
+      if (alive) setEnforcement(s.runner.ephemeral_disk_enforcement);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+  const dockerUncapped = !!enforcement && enforcement !== "filesystem";
 
   const save = async () => {
     const parsed = parseSpec(spec);
@@ -145,6 +169,36 @@ export function ProfileEditor({
           disabled={disabled}
           onChange={(v) => setLimits((l) => ({ ...l, deny_user_drive: v }))}
         />
+        {/* R4/F032 + 0.7.2 storage ceilings: three integer limits, one new row
+            shape (a Switch has no number to carry). 0 = unlimited on every
+            one, stated in each hint. The ephemeral row (and only it) carries
+            the Docker uncapped warning U1's Storage tab already renders under
+            its own two disk fields — same string, never a second copy. */}
+        <LimitNumberRow
+          id="governance-limit-concurrent"
+          label={GOV.LIMIT_CONCURRENT_LABEL}
+          hint={GOV.LIMIT_CONCURRENT_HINT}
+          value={limits.max_concurrent_runs}
+          disabled={disabled}
+          onChange={(v) => setLimits((l) => ({ ...l, max_concurrent_runs: v }))}
+        />
+        <LimitNumberRow
+          id="governance-limit-ephemeral"
+          label={GOV.LIMIT_EPHEMERAL_LABEL}
+          hint={GOV.LIMIT_EPHEMERAL_HINT}
+          value={limits.max_ephemeral_disk_mib}
+          disabled={disabled}
+          onChange={(v) => setLimits((l) => ({ ...l, max_ephemeral_disk_mib: v }))}
+          warning={dockerUncapped ? PROVIDERS.DOCKER_UNCAPPED_WARN : undefined}
+        />
+        <LimitNumberRow
+          id="governance-limit-drive-size"
+          label={GOV.LIMIT_DRIVE_SIZE_LABEL}
+          hint={GOV.LIMIT_DRIVE_SIZE_HINT}
+          value={limits.max_drive_size_mib}
+          disabled={disabled}
+          onChange={(v) => setLimits((l) => ({ ...l, max_drive_size_mib: v }))}
+        />
       </section>
 
       {error && (
@@ -198,6 +252,46 @@ function LimitRow({
         <p className="text-body font-medium text-foreground">{label}</p>
         <p className="mt-0.5 max-w-[62ch] text-xs text-muted-foreground">{hint}</p>
       </div>
+    </div>
+  );
+}
+
+// One integer limit (0 = unlimited): a Switch has no number to carry, so
+// MaxConcurrentRuns/MaxEphemeralDiskMiB/MaxDriveSizeMiB share this row instead
+// of LimitRow's above. `warning` renders only for the ephemeral row, under its
+// own input — the Docker uncapped sentence is PROVIDERS.DOCKER_UNCAPPED_WARN,
+// never retyped here.
+function LimitNumberRow({
+  id,
+  label,
+  hint,
+  value,
+  disabled,
+  onChange,
+  warning,
+}: {
+  id: string;
+  label: string;
+  hint: React.ReactNode;
+  value: number | undefined;
+  disabled: boolean;
+  onChange: (next: number) => void;
+  warning?: React.ReactNode;
+}) {
+  return (
+    <div className="mt-3 border-t border-border pt-3 first-of-type:border-t-0" data-testid={id}>
+      <Field label={label} htmlFor={id} hint={hint} className="max-w-[28rem]">
+        <Input
+          id={id}
+          type="number"
+          min={0}
+          className="max-w-[12rem] font-mono"
+          disabled={disabled}
+          value={numberField(value)}
+          onChange={(e) => onChange(nonNegativeInt(e.target.value))}
+        />
+      </Field>
+      {warning && <p className="mt-1.5 max-w-[62ch] text-meta leading-snug text-warning">{warning}</p>}
     </div>
   );
 }

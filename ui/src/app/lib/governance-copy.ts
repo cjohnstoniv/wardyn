@@ -141,6 +141,18 @@ export const GOVERNANCE = {
   LIMIT_DRIVE_LABEL: "Deny mounting a user drive",
   LIMIT_DRIVE_HINT:
     "A run under this profile cannot mount the person's drive, even when one is allocated to them.",
+  // ADDITION to §7.2 (0.7.2 U2): the three integer limits LimitRow (a Switch)
+  // cannot carry — max_concurrent_runs (R4/F032, previously chip-only),
+  // MaxEphemeralDiskMiB and MaxDriveSizeMiB (§5.6/§6.3-§6.4). One zero rule
+  // across all three: 0 means no limit under this profile.
+  LIMIT_CONCURRENT_LABEL: "Concurrent runs",
+  LIMIT_CONCURRENT_HINT: "How many runs a person under this profile may have going at once. 0 means no limit.",
+  LIMIT_EPHEMERAL_LABEL: "Largest ephemeral scratch (MiB)",
+  LIMIT_EPHEMERAL_HINT:
+    "Binds a run's requested scratch size, not a run that requests none. 0 means no limit under this profile.",
+  LIMIT_DRIVE_SIZE_LABEL: "Largest drive (MiB)",
+  LIMIT_DRIVE_SIZE_HINT:
+    "Clamps the drive size a person under this profile resolves to. On a share it bounds the number shown, not the share. 0 means no limit.",
   SAVE_ERROR: "Couldn't save this profile.",
 
   // ---- §7.3 assignments and the resolved preview ----
