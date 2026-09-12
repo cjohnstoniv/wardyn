@@ -157,6 +157,32 @@ func (s *PGStore) OpenCast(ctx context.Context, key string) (io.ReadCloser, erro
 	return io.NopCloser(bytes.NewReader(payload)), nil
 }
 
+// StatAndTail reports the cast's byte size and its last tailBytes, computed
+// and sliced SERVER-SIDE (octet_length/substring on the bytea column) so a
+// caller wanting only a size and a duration never pulls the whole payload
+// across the wire — the same reason FSStore's twin seeks instead of reading
+// the file. tailBytes is clamped down to size when the cast is smaller.
+func (s *PGStore) StatAndTail(ctx context.Context, key string, tailBytes int64) (int64, []byte, error) {
+	if err := validKey(key); err != nil {
+		return 0, nil, err
+	}
+	var size int64
+	var tail []byte
+	err := s.pool.QueryRow(ctx, `
+		SELECT octet_length(payload),
+		       substring(payload from greatest(octet_length(payload) - $2::int + 1, 1)::int for $2::int)
+		FROM recordings WHERE cast_key = $1`,
+		key, tailBytes,
+	).Scan(&size, &tail)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil, ErrNotFound
+	}
+	if err != nil {
+		return 0, nil, fmt.Errorf("recording: stat cast %q: %w", key, err)
+	}
+	return size, tail, nil
+}
+
 // Sweep deletes every cast row last written more than olderThan ago,
 // returning how many rows it removed. It mirrors FSStore.Sweep's age
 // semantics — measured on last write via updated_at, not created_at, so a

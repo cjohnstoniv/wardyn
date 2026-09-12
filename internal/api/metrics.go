@@ -203,7 +203,12 @@ func (m *metrics) write(w io.Writer) {
 	for _, reason := range driveRefusalReasons {
 		fmt.Fprintf(w, "wardyn_drive_refusals_total{reason=%q} %d\n", reason, m.driveRefusals[reason])
 	}
-	fmt.Fprintf(w, "# HELP wardyn_egress_denies_total Egress requests denied by policy (proxy decision ingest).\n"+
+	// HELP text: DRAFT (M2 canon pending) — R4-F065. M2 recommends the HELP-only
+	// remediation (this wording change) over the filed alternative that also
+	// splits the series into {reason="policy"|"dial_failed"|"decisions_dropped"};
+	// no owner ruling yet (M2-canon-sheet.md §2/§6b), so the series itself is
+	// unchanged — still one unlabeled counter, still isPolicyDeny-scoped.
+	fmt.Fprintf(w, "# HELP wardyn_egress_denies_total Egress decisions ingested with decision=deny, by reason (proxy decision ingest).\n"+
 		"# TYPE wardyn_egress_denies_total counter\nwardyn_egress_denies_total %d\n", m.egressDenies)
 	fmt.Fprintf(w, "# HELP wardyn_credential_mints_total Credentials minted by the broker.\n"+
 		"# TYPE wardyn_credential_mints_total counter\nwardyn_credential_mints_total %d\n", m.mints)

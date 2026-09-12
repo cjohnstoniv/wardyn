@@ -1288,6 +1288,12 @@ func (s *probeRecordingStore) OpenCast(context.Context, string) (io.ReadCloser, 
 	}
 	return io.NopCloser(strings.NewReader("cast data")), nil
 }
+func (s *probeRecordingStore) StatAndTail(context.Context, string, int64) (int64, []byte, error) {
+	if s.openErr != nil {
+		return 0, nil, s.openErr
+	}
+	return int64(len("cast data")), []byte("cast data"), nil
+}
 
 // TestProbeRecordingWarning covers probeRecordingWarning's own decision table
 // directly (not through a full probe run): a `reached` verdict whose own

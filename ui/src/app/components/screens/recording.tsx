@@ -19,6 +19,7 @@ import { runHeadline } from "../../lib/types";
 import { recordings as api } from "../../lib/api/recordings";
 import { runs as runsApi } from "../../lib/api/runs";
 import { health } from "../../lib/api/health";
+import { LIST_LIMIT } from "../../lib/api/core";
 import { fmtBytes, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -38,53 +39,29 @@ import {
 } from "../ui/dialog";
 import { AgentBadge, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
 import { Mono } from "../wardyn/code-block";
-import { EmptyState, ErrorState } from "../wardyn/states";
+import { EmptyState, ErrorState, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { TerminalPlayer } from "../wardyn/terminal-player";
 
-// The backend has no "list all recordings" endpoint — a recording is only
-// fetchable at GET /runs/{id}/recording/{key}, and the store has no List. The
-// run's OWN cast is stored under the bare run id (which is what this library
-// probes); an interactive attach session lands under a composite
-// `<run-id>~<session-uuid>` key, discoverable only from that run's audit trail,
-// so those are surfaced on Run Detail instead. So "has a recording" is NOT a
-// field on AgentRun — the only honest signal is whether api.getRecording(run.id)
-// actually resolves with one. We synthesize the library client-side: list every
-// run, then check each one.
-interface RecordedRun {
-  run: AgentRun;
-  /** Real elapsed seconds, taken from the last captured event — never fabricated. */
-  durationSec?: number;
-  /** Real byte size of the fetched cast payload (Blob), not a backend field. */
-  bytes: number;
-  /** The raw asciicast document. Parsed into a Recording only when a viewer
-   *  presses play (playRecording below) — a card renders the two numbers
-   *  above and nothing else, so building an AsciicastEvent per output frame
-   *  for every run on screen was pure waste held live in React state. */
-  cast: string;
-}
-
-// How many runs are probed at once. The list this walks is every run the
-// caller can see (LIST_LIMIT = 1000), and it used to be probed in a bare
-// forEach: 200 runs meant 200 simultaneous requests, which is a self-inflicted
-// burst on the daemon and on the browser's connection pool for a screen nobody
-// is blocked on. A small window keeps the same total work, in order, with the
-// first cards appearing just as fast.
-export const PROBE_CONCURRENCY = 6;
-
-/**
- * Run `work` over `items` with at most `limit` in flight, in list order.
- * `work` must not reject — every caller below already funnels failures into
- * its own counter — because a rejection here would stop that lane's queue.
- */
-function pool<T>(items: T[], limit: number, work: (item: T) => Promise<void>): Promise<void> {
-  let next = 0;
-  const lane = (): Promise<void> => {
-    const i = next++;
-    if (i >= items.length) return Promise.resolve();
-    return work(items[i]).then(lane);
-  };
-  return Promise.all(Array.from({ length: Math.min(limit, items.length) }, lane)).then(() => undefined);
+// R4-F077: has_recording / recording_bytes / recording_duration_sec are
+// DERIVED fields on AgentRun (internal/types.AgentRun; ui/lib/types/runs.ts
+// mirrors them), projected server-side from RecordingStore.StatAndTail. This
+// screen builds its WHOLE library from the one listRuns() call those fields
+// ride on — has_recording filters the library, the other two render straight
+// onto a card. It used to ask every run individually (api.probeRecording,
+// since removed here) because "has a recording" used to be nothing but "does
+// GET .../recording/{id} resolve" — answering that meant downloading every
+// run's WHOLE cast just to learn yes/no/how-big/how-long (39.8 MB measured
+// for 200 runs). A zero recording_duration_sec does NOT mean "no
+// recording" (a header-only cast is a real, zero-length one) — has_recording
+// is the only signal for that. The interactive-attach composite key
+// (`<run-id>~<session-uuid>`) is still outside this projection; those
+// recordings surface on Run Detail instead, from that run's own audit trail.
+// A cast is fetched (api.getRecording) only once a viewer presses play.
+function formatDuration(totalSeconds: number): string {
+  const s = Math.max(0, Math.round(totalSeconds));
+  const m = Math.floor(s / 60);
+  return `${m}:${String(s % 60).padStart(2, "0")}`;
 }
 
 // W21-S1-7: shared copy for both empty states below — a stock Helm install
@@ -94,12 +71,6 @@ const RECORDING_DISABLED_TITLE = "Session recording is disabled on this deployme
 const RECORDING_DISABLED_DESC =
   "No run on this server will ever produce one — set persistence.enabled (Helm) or WARDYN_RECORDING_DIR to turn it on.";
 
-function formatDuration(totalSeconds: number): string {
-  const s = Math.max(0, Math.round(totalSeconds));
-  const m = Math.floor(s / 60);
-  return `${m}:${String(s % 60).padStart(2, "0")}`;
-}
-
 // Only show search/facets once there's enough of a library to make them
 // useful — a filter bar over two cards is just noise.
 // fixed threshold; make it configurable if it ever matters.
@@ -107,22 +78,17 @@ const MIN_CARDS_FOR_FILTERS = 4;
 
 export function RecordingScreen() {
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
-  const [totalRuns, setTotalRuns] = React.useState(0);
-  const [checkedCount, setCheckedCount] = React.useState(0);
-  const [checkFailures, setCheckFailures] = React.useState(0);
-  const [library, setLibrary] = React.useState<RecordedRun[]>([]);
+  const [runs, setRuns] = React.useState<AgentRun[]>([]);
 
   const [query, setQuery] = React.useState("");
   const [agentFacet, setAgentFacet] = React.useState("all");
   const [stateFacet, setStateFacet] = React.useState("all");
-  const [playing, setPlaying] = React.useState<RecordedRun | null>(null);
-  // The parsed cast for the ONE card being replayed. Parsing is synchronous
-  // and happens here rather than at probe time, so closing the dialog drops
-  // the event array with it.
-  const playingRecording = React.useMemo<Recording | null>(
-    () => (playing ? api.parseCast(playing.run.id, playing.cast) : null),
-    [playing],
-  );
+  const [playing, setPlaying] = React.useState<AgentRun | null>(null);
+  // The ONE cast a viewer pressed play on — fetched (never at load time) by
+  // the effect below, which also owns the loading/error state for that fetch.
+  const [playingRecording, setPlayingRecording] = React.useState<Recording | null>(null);
+  const [playError, setPlayError] = React.useState<string | null>(null);
+
   // W21-S1-7: /healthz's components.recording is the honest "will this
   // deployment EVER produce one" signal (server.go's ComponentInfo) — "none"
   // means the recording store never came up (stock Helm install: persistence
@@ -134,88 +100,79 @@ export function RecordingScreen() {
       if (h.components?.recording?.selected === "none") setRecordingDisabled(true);
     });
   }, []);
-  // Holds the in-flight load's cancel fn so a manual Refresh (which calls load()
-  // directly, not via the effect) cancels the PREVIOUS load first. Without this
-  // the prior load's per-run getRecording resolutions keep appending into the
-  // freshly-reset library → duplicate cards and duplicate React keys.
-  const cancelPrev = React.useRef<(() => void) | null>(null);
 
   const load = React.useCallback(() => {
-    cancelPrev.current?.();
     let cancelled = false;
     setStatus("loading");
-    setLibrary([]);
-    setTotalRuns(0);
-    setCheckedCount(0);
-    setCheckFailures(0);
-
     runsApi
-      .listRuns()
-      .then((runs) => {
+      .listRuns({ includeRecordingMeta: true })
+      .then((got) => {
         if (cancelled) return;
+        setRuns(got);
         setStatus("ready");
-        setTotalRuns(runs.length);
-        // One probe per run, PROBE_CONCURRENCY at a time — the backend has no
-        // "list recordings" route, so this screen still has to ask every run,
-        // but it asks in a window instead of all at once, and a cancelled load
-        // (Refresh, unmount) stops ISSUING requests rather than only ignoring
-        // their answers. probeRecording, not getRecording: a card needs a
-        // duration and a size, not a parsed event stream.
-        void pool(runs, PROBE_CONCURRENCY, (run) => {
-          if (cancelled) return Promise.resolve();
-          return api
-            .probeRecording(run.id)
-            .then((probe) => {
-              if (cancelled || !probe) return;
-              setLibrary((prev) => [
-                ...prev,
-                { run, durationSec: probe.durationSec, bytes: probe.bytes, cast: probe.cast },
-              ]);
-            })
-            .catch(() => {
-              if (!cancelled) setCheckFailures((f) => f + 1);
-            })
-            .finally(() => {
-              if (!cancelled) setCheckedCount((c) => c + 1);
-            });
-        });
       })
       .catch(() => {
         if (!cancelled) setStatus("error");
       });
-
-    const cancel = () => {
+    return () => {
       cancelled = true;
     };
-    cancelPrev.current = cancel;
-    return cancel;
   }, []);
 
   React.useEffect(load, [load]);
 
-  const allChecked = totalRuns > 0 && checkedCount >= totalRuns;
+  // Fetches the cast for `playing` — and ONLY `playing` — whenever it
+  // changes. Nothing here runs while the library is just being browsed.
+  React.useEffect(() => {
+    if (!playing) {
+      setPlayingRecording(null);
+      setPlayError(null);
+      return;
+    }
+    let cancelled = false;
+    setPlayingRecording(null);
+    setPlayError(null);
+    api
+      .getRecording(playing.id)
+      .then((rec) => {
+        if (cancelled) return;
+        if (!rec) {
+          setPlayError("This run's recording could not be loaded.");
+          return;
+        }
+        setPlayingRecording(rec);
+      })
+      .catch(() => {
+        if (!cancelled) setPlayError("This run's recording could not be loaded.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [playing]);
+
+  const library = React.useMemo(() => runs.filter((r) => r.has_recording), [runs]);
 
   const agentOptions = React.useMemo(
-    () => Array.from(new Set(library.map((e) => e.run.agent))),
+    () => Array.from(new Set(library.map((r) => r.agent))),
     [library],
   );
   const stateOptions = React.useMemo(
-    () => Array.from(new Set(library.map((e) => e.run.state))),
+    () => Array.from(new Set(library.map((r) => r.state))),
     [library],
   );
 
   const q = query.trim().toLowerCase();
   const filtered = library
-    .filter((e) => {
-      if (agentFacet !== "all" && e.run.agent !== agentFacet) return false;
-      if (stateFacet !== "all" && e.run.state !== stateFacet) return false;
+    .filter((r) => {
+      if (agentFacet !== "all" && r.agent !== agentFacet) return false;
+      if (stateFacet !== "all" && r.state !== stateFacet) return false;
       if (q) {
-        const hay = `${e.run.title ?? ""} ${e.run.task} ${e.run.repo} ${e.run.id} ${e.run.agent}`.toLowerCase();
+        const hay = `${r.title ?? ""} ${r.task} ${r.repo} ${r.id} ${r.agent}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
     })
-    .sort((a, b) => new Date(b.run.created_at).getTime() - new Date(a.run.created_at).getTime());
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
   const clearFilters = () => {
     setQuery("");
@@ -229,13 +186,18 @@ export function RecordingScreen() {
     <div className="mx-auto max-w-[1200px] px-6 py-6">
       <PageHeader
         title="Recordings"
-        description="Captured terminal sessions, replayed byte-for-byte. There's no separate recordings store — this library is built by checking each run for one, so it's only as complete as that check."
+        description="Captured terminal sessions, replayed byte-for-byte. Built from the run list alone — a run's own cast is fetched only when you press play."
         actions={
           <Button variant="outline" size="sm" onClick={load}>
             <RotateCw className="size-3.5" /> Refresh
           </Button>
         }
       />
+
+      {/* R4-F077: past the cap this library only ever saw the fetched
+          window, so a run's recording past it is invisible with no sign why —
+          same reuse as runs.tsx's own TruncatedNote. */}
+      <TruncatedNote count={runs.length} cap={LIST_LIMIT} />
 
       {status === "error" ? (
         <div className="rounded-xl border border-border bg-card">
@@ -245,7 +207,7 @@ export function RecordingScreen() {
         <div className="flex h-[300px] items-center justify-center rounded-xl border border-border bg-card">
           <Loader2 className="size-5 animate-spin text-muted-foreground" />
         </div>
-      ) : totalRuns === 0 ? (
+      ) : runs.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border">
           <EmptyState
             icon={SquareTerminal}
@@ -254,6 +216,27 @@ export function RecordingScreen() {
               recordingDisabled
                 ? RECORDING_DISABLED_DESC
                 : "When a run's runner supports session capture, its terminal is recorded and its replay appears here. Launch a run to get started."
+            }
+            action={
+              recordingDisabled ? undefined : (
+                <Button asChild size="sm">
+                  <Link to="/runs">
+                    <Plus className="size-4" /> Go to Runs
+                  </Link>
+                </Button>
+              )
+            }
+          />
+        </div>
+      ) : library.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-border">
+          <EmptyState
+            icon={SquareTerminal}
+            title={recordingDisabled ? RECORDING_DISABLED_TITLE : "None of your runs have a recording yet"}
+            description={
+              recordingDisabled
+                ? RECORDING_DISABLED_DESC
+                : "A recording is produced once an agent process runs in the sandbox and its PTY is captured by wardyn-rec."
             }
             action={
               recordingDisabled ? undefined : (
@@ -310,13 +293,12 @@ export function RecordingScreen() {
                 </Select>
               )}
               <span className="ml-auto text-xs text-muted-foreground">
-                {filtered.length} of {library.length} recording{library.length === 1 ? "" : "s"}
-                {!allChecked && " so far"}
+                Showing {filtered.length} of {library.length} recording{library.length === 1 ? "" : "s"}
               </span>
             </div>
           )}
 
-          {filtered.length === 0 && library.length > 0 ? (
+          {filtered.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border">
               <EmptyState
                 icon={FilterX}
@@ -328,56 +310,11 @@ export function RecordingScreen() {
                 }
               />
             </div>
-          ) : filtered.length === 0 && !allChecked ? (
-            <div className="flex h-[200px] items-center justify-center gap-2 rounded-xl border border-border bg-card text-sm text-muted-foreground">
-              <Loader2 className="size-4 animate-spin" /> Checking {totalRuns} run
-              {totalRuns === 1 ? "" : "s"} for recordings…
-            </div>
-          ) : filtered.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-border">
-              <EmptyState
-                icon={SquareTerminal}
-                title={recordingDisabled ? RECORDING_DISABLED_TITLE : "None of your runs have a recording yet"}
-                description={
-                  recordingDisabled
-                    ? RECORDING_DISABLED_DESC
-                    : "A recording is produced once an agent process runs in the sandbox and its PTY is captured by wardyn-rec."
-                }
-                action={
-                  recordingDisabled ? undefined : (
-                    <Button asChild size="sm">
-                      <Link to="/runs">
-                        <Plus className="size-4" /> Go to Runs
-                      </Link>
-                    </Button>
-                  )
-                }
-              />
-            </div>
           ) : (
             <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 lg:grid-cols-3">
-              {filtered.map((entry) => (
-                <RecordingCard key={entry.run.id} entry={entry} onPlay={() => setPlaying(entry)} />
+              {filtered.map((run) => (
+                <RecordingCard key={run.id} run={run} onPlay={() => setPlaying(run)} />
               ))}
-            </div>
-          )}
-
-          {!allChecked && library.length > 0 && (
-            <p className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
-              <Loader2 className="size-3 animate-spin" />
-              Checking {Math.max(totalRuns - checkedCount, 0)} more run
-              {totalRuns - checkedCount === 1 ? "" : "s"} for a recording…
-            </p>
-          )}
-          {allChecked && checkFailures > 0 && (
-            <div className="mt-4 flex items-center gap-2 text-xs text-muted-foreground">
-              <span>
-                {checkFailures} run{checkFailures === 1 ? "" : "s"} couldn't be checked for a
-                recording.
-              </span>
-              <Button variant="outline" size="sm" onClick={load}>
-                <RotateCw className="size-3.5" /> Retry
-              </Button>
             </div>
           )}
         </>
@@ -387,14 +324,22 @@ export function RecordingScreen() {
         <Dialog open onOpenChange={(open) => !open && setPlaying(null)}>
           <DialogContent className="sm:max-w-3xl">
             <DialogHeader>
-              <DialogTitle className="truncate pr-6">{runHeadline(playing.run)}</DialogTitle>
+              <DialogTitle className="truncate pr-6">{runHeadline(playing)}</DialogTitle>
               <DialogDescription className="flex flex-wrap items-center gap-2">
-                <AgentBadge agent={playing.run.agent} />
-                <ConfinementChip value={playing.run.confinement_class} />
-                <Mono>{playing.run.repo}</Mono>
+                <AgentBadge agent={playing.agent} />
+                <ConfinementChip value={playing.confinement_class} />
+                <Mono>{playing.repo}</Mono>
               </DialogDescription>
             </DialogHeader>
-            {playingRecording && <TerminalPlayer recording={playingRecording} />}
+            {playError ? (
+              <ErrorState message={playError} onRetry={() => setPlaying({ ...playing })} />
+            ) : playingRecording ? (
+              <TerminalPlayer recording={playingRecording} />
+            ) : (
+              <div className="flex h-[300px] items-center justify-center">
+                <Loader2 className="size-5 animate-spin text-muted-foreground" />
+              </div>
+            )}
           </DialogContent>
         </Dialog>
       )}
@@ -402,8 +347,9 @@ export function RecordingScreen() {
   );
 }
 
-function RecordingCard({ entry, onPlay }: { entry: RecordedRun; onPlay: () => void }) {
-  const { run, durationSec, bytes } = entry;
+function RecordingCard({ run, onPlay }: { run: AgentRun; onPlay: () => void }) {
+  const durationSec = run.recording_duration_sec;
+  const bytes = run.recording_bytes ?? 0;
   return (
     // ui-auditRec-4: the "Open run" link used to nest INSIDE this role=button
     // card (an ARIA nested-interactive anti-pattern — the stopPropagation on

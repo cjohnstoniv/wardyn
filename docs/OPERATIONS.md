@@ -766,6 +766,12 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | the agent roster — `GET /agent-providers` and `PUT /agent-providers`: which coding agents this deployment offers, the one model-access lane each may use, whether that credential is shared or captured per person, and the AWS access portal every person signs in against. Both verbs, for the sibling row's reason: the block names the org's model-provider choices and its identity provider. A member is served a narrower document instead — the `enabled`/`mechanism`/`credential_source` fields on `GET /setup/status`'s harness rows, which carry no portal URL | ⛔ admin only |
 | the two `/site-config` connectivity probes (`POST /site-config/test-proxy`, `/test-redirect`) — non-mutating, and the evidence half of the security admin's job — and the `/permissions` routes below | ⛔ admin or `security_admin` |
 | the rest of that tier: `GET`/`DELETE /tokens`, `POST /sessions/revoke`, `GET /audit/chain/verify`, the `/governance` profile and assignment routes, `GET /access/directory/search` | ⛔ admin or `security_admin` |
+| the `/sources` writes — `POST /sources`, `POST /sources/{id}/scan`, `DELETE /sources/{id}`: registering, rescanning, or removing a source touches the same repo/registry topology the operator-topology reads above expose | ⛔ admin only |
+| the `/base-images` writes — `POST /base-images`, `DELETE /base-images/{id}`: adding or removing a base image changes what every future onboarded workspace can run | ⛔ admin only |
+| `PUT`/`DELETE /integrations/{id}` — editing or removing one integration credential reference outside a full whole-site-config replace | ⛔ admin only |
+| `POST /admin/sandboxes/sweep` — force-reaping sandboxes across every workspace, not just the caller's own | ⛔ admin only |
+| `POST /setup/onboarding-complete` — marks first-run setup done for the whole deployment; a distinct route from the setup family's harness-credential rows above | ⛔ admin only |
+| `GET /runs/{id}/attach` — the interactive PTY WebSocket's ticket-less fallback lane is admin only; a member attaches their own run only via a minted attach ticket (`POST /runs/{id}/attach-ticket`), a separate owner-or-admin check inside the handler | ⛔ admin only |
 | workspace CRUD/scan/build | 🟡 owner-or-admin since 0.6 ("Workspace ownership") |
 | `devcontainer_repo` on a run (`denyMemberRequest`, `internal/api/runs_create_validate.go`) | ⛔ admin only, never grantable |
 | a custom sandbox `image` | 🟡 admin by default; the one power a capability grant can hand a member ("Capabilities") |
@@ -775,20 +781,15 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | mounting YOUR OWN drive on a run (`drive.enabled`) | 🟢 the person, per run — read-only unless their allocation says otherwise, and the run flag may only narrow that, never widen it |
 | `POST /runs`, `POST /runs/{id}/kill` | 🟢 any signed-in human — using the product is a member act |
 
-**Documented gaps — routes gated but not yet named above.** Ten further gated
-routes have no covering row in the tier table — a pre-0.7 omission the F316
-completeness check surfaced, not something this wave caused: the `/sources`
-writes (`POST /sources`, `POST /sources/{id}/scan`, `DELETE /sources/{id}`);
-the `/base-images` writes (`POST /base-images`, `DELETE /base-images/{id}`);
-the integration writes (`PUT /integrations/{id}`, `DELETE /integrations/{id}`,
-implied today only inside the `PUT /site-config` row above); `POST
-/admin/sandboxes/sweep`; `POST /setup/onboarding-complete` (the setup family
-above is named only as "managed harness credential", which this route is
-not); and `GET /runs/{id}/attach`. Each is named, with its reason, in
-`docTierUndocumented` (`internal/api/operations_tier_doc_test.go`), and
-`TestOperationsTierTableMatchesRouteMatrix`'s completeness check blocks any
-new gated route from joining that list unnoticed — a route sits there only
-until a docs pass moves it into `docTierRows` with the token that covers it.
+**Documented gaps — routes gated but not yet named above.** None today. The
+ten pre-0.7 omissions the F316 completeness check surfaced (the `/sources` and
+`/base-images` writes, the two `/integrations/{id}` writes,
+`POST /admin/sandboxes/sweep`, `POST /setup/onboarding-complete`, and
+`GET /runs/{id}/attach`) each moved into a row above this docs pass;
+`docTierUndocumented` (`internal/api/operations_tier_doc_test.go`) is now
+empty. It stays a RATCHET, not a closed list: `TestOperationsTierTableMatchesRouteMatrix`'s
+completeness check still blocks any new gated route from landing without either
+a row above or a filed entry here.
 
 **Ownership scoping — real, not just admin-vs-everyone.** A member reaches their
 OWN resources the same way an admin reaches any of them

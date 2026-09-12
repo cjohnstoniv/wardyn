@@ -58,6 +58,10 @@ func (f *fakeRecordingStore) OpenCast(_ context.Context, _ string) (io.ReadClose
 	return nil, recording.ErrNotFound
 }
 
+func (f *fakeRecordingStore) StatAndTail(_ context.Context, _ string, _ int64) (int64, []byte, error) {
+	return 0, nil, recording.ErrNotFound
+}
+
 // newRecordingHarness builds a harness whose Server has a RecordingStore wired
 // at construction time. The internal recordings route is only mounted when
 // RecordingStore is non-nil at New(), so it must be set up front (not mutated

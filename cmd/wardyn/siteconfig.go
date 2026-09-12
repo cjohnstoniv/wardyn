@@ -9,10 +9,38 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/spf13/cobra"
 )
+
+// siteConfigFieldsAfter066 names the SiteConfig keys added after 0.6.6 (mirrors
+// internal/api/site_config.go's siteConfigFieldsAfter066 — kept as a separate
+// literal because this package cannot import an internal/api unexported var,
+// and the two lists drift no worse than any other doc/code pair the R3 guards
+// don't cover). A key here that this file's JSON does not MENTION is exactly
+// the shape carryForwardUnnamedSiteConfigFields preserves server-side; add a
+// key here when you add one to internal/api's list.
+var siteConfigFieldsAfter066 = []string{"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers"}
+
+// omittedPostV066Fields reports which of siteConfigFieldsAfter066 raw (the
+// file's own bytes, not the decoded struct) never MENTIONS — an absent key,
+// not a present-but-empty one, since only absence triggers the server's
+// carry-forward.
+func omittedPostV066Fields(raw []byte) ([]string, error) {
+	var present map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &present); err != nil {
+		return nil, err
+	}
+	var omitted []string
+	for _, f := range siteConfigFieldsAfter066 {
+		if _, ok := present[f]; !ok {
+			omitted = append(omitted, f)
+		}
+	}
+	return omitted, nil
+}
 
 // siteconfig.go — read/replace the operator-wide corporate baseline (upstream
 // proxy ref, artifact-registry overrides, SCM hosts) from the host.
@@ -99,9 +127,27 @@ func siteConfigApplyCmd(client clientFn) *cobra.Command {
 			if n := len(cfg.Integrations); n > 0 {
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: %d integration(s) in this file were not applied — integrations are managed through their own endpoints (`/api/v1/integrations`, or Settings), never this document; the stored ones are left as they are\n", n)
 			}
+			// F285: a field this file's version predates (upstream_proxy_no_proxy,
+			// internal_hosts, workspace_providers, agent_providers all landed after
+			// 0.6.6) is left as the server already has it, not cleared — the same
+			// carry-forward that protects integrations above, generalized to every
+			// key an older `get` could not have written. Computed against the
+			// FILE's own bytes (raw), not the decoded struct — a present-but-empty
+			// value ({} or []) MENTIONS the key and must stay silent, only an
+			// absent one is this carry-forward's business.
+			omitted, err := omittedPostV066Fields(raw)
+			if err != nil {
+				return fmt.Errorf("parse site config JSON: %w", err)
+			}
 			out, dangling, onboardingIgnored, err := client().PutSiteConfig(cmd.Context(), cfg)
 			if err != nil {
 				return err
+			}
+			// Printed only after a successful apply — an operator debugging a
+			// rejected file doesn't need a note about fields that were never
+			// reached.
+			if len(omitted) > 0 {
+				fmt.Fprintf(cmd.ErrOrStderr(), "note: this file omits %s — left as the server already has it, not cleared; pass it explicitly to change it\n", strings.Join(omitted, ", "))
 			}
 			for _, name := range dangling {
 				fmt.Fprintf(cmd.ErrOrStderr(), "warning: secret %q is referenced but not set — restore it with `wardyn secret set %s`\n", name, name)

@@ -424,6 +424,13 @@ resources:
 # asciicast into Postgres, unbounded. Want that instead? Set
 # env.WARDYN_RECORDING_STORE=pg and leave persistence off: the pg store needs no
 # PVC and is readable from any replica.
+#
+# F199: this switch also decides where the audit spool and its quarantine
+# sidecar (audit-spool.jsonl / audit-spool.jsonl.quarantine, templates/deployment.yaml's
+# WARDYN_AUDIT_SPOOL block) land — the always-present /tmp emptyDir when off,
+# the persistent volume when on. Off is the chart's default, so a stock install
+# keeps both ephemeral: a poisoned event moved to quarantine for an operator to
+# re-feed does not survive a reschedule until persistence is turned on.
 persistence:
   enabled: false
   mountPath: /data

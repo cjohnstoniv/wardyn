@@ -43,10 +43,19 @@ var ErrNotFound = errors.New("recording: not found")
 // OpenCast returns a ReadCloser for the asciicast. The caller is responsible
 // for closing it. Returns ErrNotFound when no recording exists. The key is
 // either a bare runID (batch cast) or a "<runID>~<suffix>" composite.
+//
+// StatAndTail answers "does this key have a recording, how big is it, and what
+// are its last tailBytes" WITHOUT returning the whole payload — R4-F077's
+// server-side half of what used to be a full OpenCast + download per run just
+// to learn a size and a duration. tailBytes is clamped to size when the cast is
+// smaller; a caller wanting the duration parses the tail for the last output
+// event (internal/recording.LastOutputElapsed) rather than the whole document.
+// Returns ErrNotFound when no recording exists, on the same terms as OpenCast.
 type Store interface {
 	SaveCast(ctx context.Context, runID string, r io.Reader) error
 	SaveCastNamed(ctx context.Context, runID, suffix string, r io.Reader) error
 	OpenCast(ctx context.Context, key string) (io.ReadCloser, error)
+	StatAndTail(ctx context.Context, key string, tailBytes int64) (size int64, tail []byte, err error)
 }
 
 // castSep separates the run id from a session suffix in a composite cast key.
@@ -183,6 +192,45 @@ func (s *FSStore) OpenCast(_ context.Context, runID string) (io.ReadCloser, erro
 		return nil, ErrNotFound
 	}
 	return f, err
+}
+
+// StatAndTail reports the cast's size and reads its last tailBytes without
+// opening (or copying) the rest of the file. tailBytes is clamped down to size
+// when the cast is smaller.
+func (s *FSStore) StatAndTail(_ context.Context, key string, tailBytes int64) (int64, []byte, error) {
+	path, err := safeRunPath(s.root, key)
+	if err != nil {
+		return 0, nil, err
+	}
+	f, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil, ErrNotFound
+	}
+	if err != nil {
+		return 0, nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return 0, nil, err
+	}
+	size := info.Size()
+	start := size - tailBytes
+	if start < 0 {
+		start = 0
+	}
+	if _, err := f.Seek(start, io.SeekStart); err != nil {
+		return size, nil, err
+	}
+	// LimitReader, not a bare ReadAll: the file may still be open for writes
+	// elsewhere (wardyn-rec's own upload, or a re-SaveCast) between the Stat
+	// above and this read, and an unbounded read would follow the file past
+	// the tail window this call promised.
+	tail, err := io.ReadAll(io.LimitReader(f, size-start))
+	if err != nil {
+		return size, nil, err
+	}
+	return size, tail, nil
 }
 
 // validKey rejects a cast key (a bare runID or a "<runID>~<suffix>" composite)

@@ -108,4 +108,38 @@ func RunConformance(t *testing.T, newStore func(t *testing.T) recording.Store) {
 			t.Fatalf("named isolation broken: batch=%q attach=%q", b, a)
 		}
 	})
+
+	t.Run("stat_and_tail", func(t *testing.T) {
+		// R4-F077: StatAndTail must answer size/tail without a caller ever
+		// calling OpenCast — both backends compute the size and slice the tail
+		// on their own side (fs Seek, pg substring/octet_length), never by
+		// reading the payload into Go and slicing there, so this only proves
+		// the CONTRACT (right size, right tail bytes), not the mechanism.
+		s := newStore(t)
+		if _, _, err := s.StatAndTail(ctx, uniq("nope"), 16); err != recording.ErrNotFound {
+			t.Fatalf("StatAndTail(missing) = %v, want ErrNotFound", err)
+		}
+
+		runID := uniq("run")
+		body := []byte("0123456789abcdefghij") // 20 bytes
+		if err := s.SaveCast(ctx, runID, bytes.NewReader(body)); err != nil {
+			t.Fatalf("SaveCast: %v", err)
+		}
+
+		if size, tail, err := s.StatAndTail(ctx, runID, 6); err != nil {
+			t.Fatalf("StatAndTail: %v", err)
+		} else if size != int64(len(body)) {
+			t.Errorf("size = %d, want %d", size, len(body))
+		} else if string(tail) != "efghij" {
+			t.Errorf("tail(6) = %q, want the last 6 bytes %q", tail, "efghij")
+		}
+
+		// tailBytes larger than the cast clamps down to the whole payload,
+		// never an error and never padded.
+		if size, tail, err := s.StatAndTail(ctx, runID, 1000); err != nil {
+			t.Fatalf("StatAndTail(tail > size): %v", err)
+		} else if size != int64(len(body)) || string(tail) != string(body) {
+			t.Errorf("StatAndTail(tail > size) = (%d, %q), want (%d, %q)", size, tail, len(body), body)
+		}
+	})
 }

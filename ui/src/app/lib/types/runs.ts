@@ -97,6 +97,17 @@ export interface AgentRun {
   // Nothing else in the console reads this field — don't widen its use beyond
   // runHasWorkspace without re-reading that server-side rule.
   workspace_id?: string;
+  // R4-F077: DERIVED, never stored server-side (internal/types.AgentRun's
+  // matching comment) — has_recording/recording_bytes/recording_duration_sec
+  // let the Recordings library build its list off GET /runs alone (opt-in via
+  // ?include=recording_meta; runs.listRuns({includeRecordingMeta:true})),
+  // without fetching every run's cast just to answer "does one exist, how
+  // big, how long". has_recording is the ONLY "no recording" signal: a zero
+  // (or absent) recording_duration_sec is a real, header-only cast that
+  // captured no output, not "unknown" or "none" — never gate on it.
+  has_recording?: boolean;
+  recording_bytes?: number;
+  recording_duration_sec?: number;
   // READ-ONLY denormalization of the onboarded workspaces this run resolved to
   // at create time (referencedWorkspaces over the widened spec) — mirrors
   // internal/types/types.go's AgentRun.WorkspaceIDs. Distinct from

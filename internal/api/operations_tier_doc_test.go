@@ -128,6 +128,19 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/governance/preview", "`/governance` profile and assignment routes"},
 	{"POST /api/v1/permissions/grants", "the `/permissions` routes below"},
 	{"DELETE /api/v1/permissions/grants/{id}", "the `/permissions` routes below"},
+
+	// F316's ten previously-undocumented gated routes (below), rowed in this
+	// docs pass. Moved OUT of docTierUndocumented, which is now empty.
+	{"POST /api/v1/sources", "the `/sources` writes"},
+	{"POST /api/v1/sources/{id}/scan", "the `/sources` writes"},
+	{"DELETE /api/v1/sources/{id}", "the `/sources` writes"},
+	{"POST /api/v1/base-images", "the `/base-images` writes"},
+	{"DELETE /api/v1/base-images/{id}", "the `/base-images` writes"},
+	{"PUT /api/v1/integrations/{id}", "`PUT`/`DELETE /integrations/{id}`"},
+	{"DELETE /api/v1/integrations/{id}", "`PUT`/`DELETE /integrations/{id}`"},
+	{"POST /api/v1/admin/sandboxes/sweep", "`POST /admin/sandboxes/sweep`"},
+	{"POST /api/v1/setup/onboarding-complete", "`POST /setup/onboarding-complete`"},
+	{"GET /api/v1/runs/{id}/attach", "`GET /runs/{id}/attach`"},
 }
 
 // docTierUndocumented names the gated routes the tier table does not cover, each
@@ -141,22 +154,15 @@ var docTierRows = []struct{ route, token string }{
 // operator reading it to decide what to delegate could not learn that these
 // reads are gated at all. The docs pass landed the replacement row ("the
 // operator-topology READS") and moved all four into docTierRows above.
-var docTierUndocumented = map[string]string{
-	// The pre-existing gaps the completeness check surfaced. Filed as a second,
-	// lower-priority doc item: each is a gated write whose family the table has
-	// never named, so the omission is older than this wave rather than caused
-	// by it.
-	"POST /api/v1/sources":                   "no /sources row in the table (pre-0.7 omission)",
-	"POST /api/v1/sources/{id}/scan":         "no /sources row in the table (pre-0.7 omission)",
-	"DELETE /api/v1/sources/{id}":            "no /sources row in the table (pre-0.7 omission)",
-	"POST /api/v1/base-images":               "no /base-images row in the table (pre-0.7 omission)",
-	"DELETE /api/v1/base-images/{id}":        "no /base-images row in the table (pre-0.7 omission)",
-	"PUT /api/v1/integrations/{id}":          "the table names integration credential refs only inside the PUT /site-config row",
-	"DELETE /api/v1/integrations/{id}":       "as above",
-	"POST /api/v1/admin/sandboxes/sweep":     "no row names the admin sandbox sweep",
-	"POST /api/v1/setup/onboarding-complete": "the setup family is named only as 'managed harness credential', which this route is not",
-	"GET /api/v1/runs/{id}/attach":           "no row names the attach socket's tier",
-}
+//
+// The remaining ten pre-existing gaps the completeness check surfaced (the
+// `/sources` and `/base-images` writes, the two `/integrations/{id}` writes,
+// the admin sandbox sweep, onboarding-complete, and the attach socket) were
+// filed here as a second, lower-priority doc item; this docs pass rowed all
+// ten in docs/OPERATIONS.md and moved them into docTierRows above too, so the
+// map is empty. It stays declared, empty, as the ratchet's landing spot for
+// the next gap a completeness failure surfaces.
+var docTierUndocumented = map[string]string{}
 
 // TestOperationsTierTableMatchesRouteMatrix pins docs/OPERATIONS.md's "What
 // admin-only still means" table — the section the doc's own intro sends a

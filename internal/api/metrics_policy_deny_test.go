@@ -14,8 +14,9 @@ import (
 
 // TestEgressDeniesTotalCountsPolicyDeniesOnly pins F065. Every egress.Deny the
 // proxy ingests used to move wardyn_egress_denies_total, whose exposition
-// declares it "Egress requests denied by policy (proxy decision ingest)" — the
-// only egress counter Wardyn exposes. Two large classes of Deny are not policy
+// declares it "Egress decisions ingested with decision=deny, by reason (proxy
+// decision ingest)" (DRAFT, M2 canon pending) — the only egress counter Wardyn
+// exposes. Two large classes of Deny are not policy
 // denials at all: builtin:dial-failed (a failed upstream dial on a request
 // policy ALLOWED, emitted from four proxy sites) and the synthetic
 // egress.decisions.dropped:<n> summary (an audit-fidelity alert about lost

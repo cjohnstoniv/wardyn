@@ -4,6 +4,7 @@
 package recording
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"sync"
@@ -152,4 +153,40 @@ func (w *CastWriter) HadOutput() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.hadOutput
+}
+
+// LastOutputElapsed returns the elapsed-seconds timestamp of the LAST output
+// ("o") event found in data, scanning backwards from the end. It mirrors the
+// console's former client-side probe byte for byte (recordings.ts's
+// lastOutputAt), so a run's server-projected duration (R4-F077) and a
+// manually-fetched cast's duration read the same number.
+//
+// data need not be the whole document — StatAndTail hands this only a TAIL
+// slice, so the loop may run off the front of an incomplete first line; that
+// line either fails to parse (silently skipped, same as a malformed line
+// anywhere else) or happens to be the last complete line already, which is
+// exactly the case this exists to answer cheaply. Returns (0, false) when no
+// output event is found (header-only cast, or a tail with none).
+func LastOutputElapsed(data []byte) (float64, bool) {
+	lines := bytes.Split(data, []byte("\n"))
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := bytes.TrimSpace(lines[i])
+		if len(line) == 0 || line[0] != '[' {
+			continue
+		}
+		var ev []json.RawMessage
+		if err := json.Unmarshal(line, &ev); err != nil || len(ev) < 3 {
+			continue
+		}
+		var kind string
+		if err := json.Unmarshal(ev[1], &kind); err != nil || kind != "o" {
+			continue
+		}
+		var t float64
+		if err := json.Unmarshal(ev[0], &t); err != nil {
+			continue
+		}
+		return t, true
+	}
+	return 0, false
 }

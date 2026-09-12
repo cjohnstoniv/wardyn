@@ -209,6 +209,25 @@ type AgentRun struct {
 	// carries its exit code instead, and success/terminal-by-kill carry nothing).
 	// Display-only; never interpreted by the control plane.
 	FailureHint string `json:"failure_hint,omitempty"`
+	// HasRecording, RecordingBytes and RecordingDurationSec (R4-F077) are
+	// DERIVED, never stored: projected by handleListRuns/handleGetRun from
+	// RecordingStore.StatAndTail(id) after the store read — but ONLY when the
+	// request opts in with ?include=recording_meta (wantsRecordingMeta,
+	// runs_recording_meta.go): it costs one StatAndTail call per run in the
+	// response, and handleListRuns also backs the Runs board's 3s poll at
+	// limit=1000, which renders none of these three fields. Without the flag
+	// (or with RecordingStore nil) all three sit at their zero value, same as
+	// "not requested". RecordingBytes is the exact payload size;
+	// RecordingDurationSec is the last captured output frame's elapsed time,
+	// read from a small tail of the payload (see
+	// internal/recording.LastOutputElapsed) — the same number recordings.ts's
+	// former client-side probe used to compute by fetching the WHOLE document.
+	// HasRecording is the ONLY "no recording" signal: a zero
+	// RecordingDurationSec on a has_recording=true run is a real, header-only
+	// cast that captured no output, never "unknown" or "none".
+	HasRecording         bool    `json:"has_recording"`
+	RecordingBytes       int64   `json:"recording_bytes,omitempty"`
+	RecordingDurationSec float64 `json:"recording_duration_sec,omitempty"`
 }
 
 // GrantKind enumerates broker-mintable credential kinds.

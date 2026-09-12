@@ -64,3 +64,28 @@ describe("runs.getGrants — grant-record projection", () => {
   });
 });
 
+// R4-F077: listRuns() backs the Runs board's 3s poll AND the Recordings
+// screen. The server charges one RecordingStore.StatAndTail call per run for
+// ?include=recording_meta, so it must be opt-in — a caller that doesn't ask
+// for it (the board) must not send the query key at all.
+describe("runs.listRuns — recording-meta opt-in", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    fetchMock = vi.fn().mockResolvedValue(
+      new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("omits include= by default", async () => {
+    await runs.listRuns();
+    expect(String(fetchMock.mock.calls[0][0])).not.toContain("include=");
+  });
+
+  it("sends include=recording_meta when asked", async () => {
+    await runs.listRuns({ includeRecordingMeta: true });
+    expect(String(fetchMock.mock.calls[0][0])).toContain("include=recording_meta");
+  });
+});
+

@@ -134,15 +134,34 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 		}
 		principal := principalFromRequest(r)
 		servePage(w, page, func(p store.Page) ([]types.AgentRun, error) {
-			return creatorPager.ListRunsPageByCreator(r.Context(), principal, p)
+			runs, err := creatorPager.ListRunsPageByCreator(r.Context(), principal, p)
+			if err != nil {
+				return nil, err
+			}
+			s.projectRecordingMeta(r, runs)
+			return runs, nil
 		}, nil)
 		return
 	}
 	var pageFn func(store.Page) ([]types.AgentRun, error)
 	if pg, ok := s.cfg.Store.(store.Pager); ok {
-		pageFn = func(p store.Page) ([]types.AgentRun, error) { return pg.ListRunsPage(r.Context(), p) }
+		pageFn = func(p store.Page) ([]types.AgentRun, error) {
+			runs, err := pg.ListRunsPage(r.Context(), p)
+			if err != nil {
+				return nil, err
+			}
+			s.projectRecordingMeta(r, runs)
+			return runs, nil
+		}
 	}
-	servePage(w, page, pageFn, func() ([]types.AgentRun, error) { return s.cfg.Store.ListRuns(r.Context()) })
+	servePage(w, page, pageFn, func() ([]types.AgentRun, error) {
+		runs, err := s.cfg.Store.ListRuns(r.Context())
+		if err != nil {
+			return nil, err
+		}
+		s.projectRecordingMeta(r, runs)
+		return runs, nil
+	})
 }
 
 // handleGetRun returns one run by id. Owner-or-admin (getRunAuthorized): a
@@ -157,6 +176,11 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// R4-F077: same server-side projection handleListRuns applies per page —
+	// a single run's own detail read must agree with what the list showed.
+	runs := []types.AgentRun{run}
+	s.projectRecordingMeta(r, runs)
+	run = runs[0]
 	// ui_apps is a READ-ONLY denormalization of the run's EFFECTIVE policy onto
 	// the run payload — the console's UI-apps lane needs it, and the run row
 	// cannot answer it (agent_runs carries policy_id only, and an inline or

@@ -188,3 +188,83 @@ func TestSiteConfigApply_WarnsTheOnboardingMarkWasNotApplied(t *testing.T) {
 		t.Errorf("stderr = %q, want silence when the server reports no dropped mark", quiet)
 	}
 }
+
+// TestSiteConfigApply_NotesFieldsAnOlderClientCannotName pins F285: the server
+// carries forward a stored value for any key the request body did not MENTION
+// (carryForwardUnnamedSiteConfigFields, internal/api/site_config.go), which
+// closes the silent erase for every client — but an operator applying a
+// document captured before those keys existed has no way to learn that from
+// this CLI alone. `apply` says so, once, only for the keys the FILE actually
+// omits, and only after PutSiteConfig has succeeded.
+func TestSiteConfigApply_NotesFieldsAnOlderClientCannotName(t *testing.T) {
+	var got types.SiteConfig
+	srv := applyServer(t, &got)
+
+	_, stderr, err := runSiteConfigApply(t, srv.URL, `{"scm_hosts":["gitlab.corp"]}`)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	for _, want := range []string{"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr = %q, want it to name %q as a field left as-is when this file omits it", stderr, want)
+		}
+	}
+}
+
+// TestSiteConfigApply_NotesOnlyFieldsTheFileOmits: a field the file DOES
+// mention — even as an explicit {} or [] — is not left-as-is (the server
+// clears it, on purpose), so naming it in the note would be a lie.
+func TestSiteConfigApply_NotesOnlyFieldsTheFileOmits(t *testing.T) {
+	var got types.SiteConfig
+	srv := applyServer(t, &got)
+
+	_, stderr, err := runSiteConfigApply(t, srv.URL, `{"scm_hosts":["gitlab.corp"],"internal_hosts":[],"workspace_providers":{}}`)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if strings.Contains(stderr, "internal_hosts") || strings.Contains(stderr, "workspace_providers") {
+		t.Errorf("stderr = %q, want it to NOT name a field this file explicitly mentioned", stderr)
+	}
+	for _, want := range []string{"upstream_proxy_no_proxy", "agent_providers"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr = %q, want it to still name %q, which this file omits", stderr, want)
+		}
+	}
+}
+
+// TestSiteConfigApply_NoOmittedFieldsNoteIsSilent: a file that mentions every
+// post-0.6.6 field gets no note at all — the same "silence is silence" rule
+// the onboarding-mark warning above follows.
+func TestSiteConfigApply_NoOmittedFieldsNoteIsSilent(t *testing.T) {
+	var got types.SiteConfig
+	srv := applyServer(t, &got)
+
+	_, stderr, err := runSiteConfigApply(t, srv.URL,
+		`{"scm_hosts":["gitlab.corp"],"upstream_proxy_no_proxy":[],"internal_hosts":[],"workspace_providers":{},"agent_providers":{}}`)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if strings.Contains(stderr, "left as the server already has it") {
+		t.Errorf("stderr = %q, want no F285 note when the file omits nothing", stderr)
+	}
+}
+
+// TestSiteConfigApply_NoOmittedFieldsNoteOnRejectedApply: the note is about a
+// SUCCESSFUL apply's carry-forward, not the file's shape — a server that
+// rejects the write (500 here) must not print it, or an operator debugging
+// the rejection sees a note about a write that never happened.
+func TestSiteConfigApply_NoOmittedFieldsNoteOnRejectedApply(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"boom"}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	_, stderr, err := runSiteConfigApply(t, srv.URL, `{"scm_hosts":["gitlab.corp"]}`)
+	if err == nil {
+		t.Fatalf("apply against a 500 server: want an error, got none")
+	}
+	if strings.Contains(stderr, "left as the server already has it") {
+		t.Errorf("stderr = %q, want no F285 note when PutSiteConfig failed", stderr)
+	}
+}

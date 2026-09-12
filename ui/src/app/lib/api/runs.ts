@@ -130,8 +130,18 @@ function runWireBody(input: RunWireInput): Record<string, unknown> {
 
 export const runs = {
   // GET /api/v1/runs
-  async listRuns(): Promise<AgentRun[]> {
-    const res = await wfetch(withLimit("/runs"), { method: "GET" });
+  //
+  // includeRecordingMeta asks the server to also project has_recording /
+  // recording_bytes / recording_duration_sec onto every run (R4-F077) —
+  // opt-in (?include=recording_meta) because it costs the server one
+  // RecordingStore.StatAndTail call PER RUN in the response, and this
+  // endpoint also backs the Runs board's POLL_MS=3000 poll at limit=1000,
+  // which renders none of those three fields. Only the Recordings screen,
+  // which actually shows them, should pass true.
+  async listRuns(opts?: { includeRecordingMeta?: boolean }): Promise<AgentRun[]> {
+    let path = withLimit("/runs");
+    if (opts?.includeRecordingMeta) path += "&include=recording_meta";
+    const res = await wfetch(path, { method: "GET" });
     return unwrapList<AgentRun>(await asJson<unknown>(res));
   },
 
