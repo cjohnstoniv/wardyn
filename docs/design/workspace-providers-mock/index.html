@@ -1,0 +1,524 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wardyn — Workspace providers mock · Git · Storage · card</title>
+<!--
+  Workspace-providers mock, page 1 of 3 · static, for owner review.
+  Every visible PRODUCT string below is verbatim from
+  docs/design/workspace-providers-prompt.md §7 (the DRAFT tables — the owner freezes
+  them at this gate; the implementation later transcribes §7.2-§7.5 + §7.7 into
+  ui/src/app/lib/workspace-providers-copy.ts). Strings the prompt's §7.1 marks as
+  REUSED canon come from connection-cards.tsx / scm-provider.ts / wardyn/copy.ts /
+  permissions-copy.ts / user-drives-copy.ts / governance-copy.ts and are rendered
+  unchanged — never re-frozen.
+
+  No build, no deps, no fetch — open the file. The only script is the light/dark
+  toggle carried over from the drives mock. Tokens and idioms are mock.css (the
+  drives mock's block, shared by the three pages). Teal IS in budget on /providers
+  (a full screen): exactly one `default` (teal) button at a time — Save providers
+  under the active tab; in the legacy-open empty state, the banner's own action.
+
+  SCAFFOLD vs PRODUCT: the sticky bar, the `.tag` state labels, the `.varlabel`
+  variant strips and the HTML comments are REVIEW SCAFFOLDING — 11px uppercase,
+  muted, outside the `.frame`. Everything inside a `.frame` is the product.
+-->
+<link rel="stylesheet" href="mock.css">
+</head>
+<body>
+
+<div class="mockbar">
+  <div>
+    <h1>Workspace providers — mock, one round · page 1: the Git and Storage tabs, the step, the card</h1>
+    <div class="sub">Product strings verbatim from <code>docs/design/workspace-providers-prompt.md</code> §7. Static: nothing here is wired.</div>
+  </div>
+  <nav><a class="cur" href="index.html">Git · Storage · card</a><a href="agents.html">Agents · member chip · picker</a><a href="canon.html">Refusals · field-report canon · drives</a></nav>
+  <button id="tt" type="button">Light / dark</button>
+</div>
+
+<div class="sheet">
+
+<!-- ===== STATE 1 ===== The funnel step, populated Git tab -->
+<section class="state" style="margin-top:20px">
+  <div class="tag"><span>State 1</span><b>The funnel step "Providers" (phase Your work, before Workspaces) — its body is the CARD, zero teal (the footer Next is the step's one); then /providers itself: the Git tab, populated (SUPER)</b></div>
+  <div class="frame">
+    <!-- The phase rail: setup/steps.ts PHASES with `providers` inserted before `workspaces`.
+         Every other label is existing canon. Q1 asks whether it belongs in Essentials. -->
+    <div class="pad" style="padding-bottom:10px">
+      <div class="rail">
+        <span class="ph2">Essentials</span><span>Environment</span><span>People</span><span>Network</span><span>Secrets</span>
+        <span class="ph2">Egress demos</span><span>…</span>
+        <span class="ph2">Secrets demos</span><span>…</span>
+        <span class="ph2">Your work</span><span class="cur">Providers</span><span>Workspaces</span>
+        <span class="ph2">Finish</span><span>Review</span>
+      </div>
+    </div>
+    <div class="pad ph" style="padding-top:8px">
+      <div>
+        <h2>What runs can be built from</h2>
+      </div>
+      <!-- The badge ladder: Optional → Skipped (the orchestrator's visited override) → Ready · N providers.
+           The last is drawn; the two before it are the existing words. Q10: git rows decide (drawn). -->
+      <div class="acts"><span class="chip success"><i class="dot"></i>Ready · 2 providers</span></div>
+    </div>
+    <!-- The step's BODY is the card (user-drives-prompt.md §4's shape): the footer Next is the step's
+         one default button, so the forms and their teal live on /providers. Two-line link, no form. -->
+    <div class="pad" style="padding-top:0">
+      <div class="card">
+        <h4 class="sectitle">Workspace providers</h4>
+        <p class="secsub" style="margin-top:6px">Which git hosts a run may clone, and the storage ceilings it works inside.</p>
+        <div class="linkrow"><span><b>Manage providers</b><span>2 git providers · 1 agent</span></span><span class="chev">›</span></div>
+      </div>
+    </div>
+    <hr class="rule">
+    <div class="pad" style="display:flex;gap:10px;justify-content:flex-end"><button class="btn ghost" type="button">Back</button><button class="btn primary" type="button">Next</button></div>
+    <div class="varlabel"><b>→ /providers</b> — the screen itself, the Git tab populated: two rows on, lanes bound, credential lanes inline</div>
+    <div class="pad ph">
+      <div>
+        <h2>Workspace providers</h2>
+        <p class="lead">Where work can come from, and how big it can get. Enable a git provider to bound which repositories a run may clone; set the storage ceilings every run and every drive is held to.</p>
+      </div>
+    </div>
+    <div class="tabs"><span class="sel">Git providers</span><span>Storage</span><span>Agents</span></div>
+    <div class="pad" style="padding-bottom:12px">
+      <p class="secsub">With no provider rows, any host with a stored credential can be cloned. Add a row to bound a host to the addresses you list; a row turned off refuses its host.</p>
+    </div>
+
+    <!-- GitHub row: kind label over the row's hosts in mono (the KIND-over-wire rule). -->
+    <div class="prow">
+      <div class="head">
+        <span class="sw on" aria-hidden="true"></span>
+        <div class="grow"><span class="kind">GitHub</span><span class="hosts">github.com/acme · github.com/acme-labs</span></div>
+        <span class="chip neutral">Enabled</span>
+        <button class="btn sm" type="button">Remove</button>
+      </div>
+      <div class="body">
+        <div class="form two">
+          <div class="f">
+            <label>Allowed addresses</label>
+            <div class="ctl ta mono"><span>https://github.com/acme</span><span>https://github.com/acme-labs</span></div>
+            <div class="hint wide">One per line, over HTTPS. A repository is admitted when its URL starts with one of these.</div>
+          </div>
+          <div class="f">
+            <label>Permitted lanes</label>
+            <!-- The three chips are LANE_META labels with CAPABILITY.* as the tooltip; each keeps its own
+                 residency tone. A checkbox turns the LANE off; it never deletes the secret. -->
+            <div class="lanes">
+              <span class="lc"><span class="box on" style="width:15px;height:15px;border-radius:4px;background:var(--primary);display:inline-block"></span><span class="chip success" title="The run works through a short-lived, scoped credential — your stored key stays in Wardyn.">App · brokered</span></span>
+              <span class="lc"><span class="box on" style="width:15px;height:15px;border-radius:4px;background:var(--primary);display:inline-block"></span><span class="chip info" title="A git access token is handed to git inside the sandbox — the process running there can read it.">PAT · in-sandbox</span></span>
+              <span class="lc"><span style="width:15px;height:15px;border-radius:4px;border:1px solid var(--border-strong);display:inline-block"></span><span class="chip warning" title="A private SSH key is written to disk in the sandbox — the process running there can read it.">SSH · resident</span></span>
+            </div>
+            <div class="hint wide">Which credential a run may use for this provider. Turning one off does not delete its stored secret.</div>
+          </div>
+        </div>
+        <!-- The credential lanes, INSIDE the row, byte-for-byte GitHostCard's Lane/SecretLane. The host
+             is the row's, so the free-text Host field is gone (the drift the card retires with, Q4). -->
+        <div style="padding:0 14px 14px">
+          <div class="lane">
+            <div class="lh"><i></i><span><span class="t">Personal access token</span><span class="conn">✓ Connected</span><span class="h">github.com · stored as git-pat-github-com</span></span></div>
+          </div>
+          <div class="lane sel">
+            <div class="lh"><i class="on"></i><span><span class="t">GitHub App</span><span class="h">Repo-scoped tokens brokered at the proxy — the token never enters the sandbox.</span></span></div>
+            <div class="lb">
+              <div class="form two" style="padding:0">
+                <div class="f"><label>App ID</label><div class="ctl mono ph">123456</div></div>
+                <div class="f"><label>Private key (PEM)</label><div class="ctl mono ph">-----BEGIN RSA PRIVATE KEY-----</div><div class="hint wide">Wardyn stores this — it doesn't dial the provider to check it.</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="lane">
+            <div class="lh"><i></i><span><span class="t">SSH key</span><span class="h">A per-run copy is written inside the sandbox for the clone, then shredded.</span></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Azure DevOps row: the `app` lane is disabled WITH its reason (Q3), never hidden; the App credential
+         lane does not render for a kind that cannot carry it. -->
+    <div class="prow">
+      <div class="head">
+        <span class="sw on" aria-hidden="true"></span>
+        <div class="grow"><span class="kind">Azure DevOps</span><span class="hosts">dev.azure.com/acme</span></div>
+        <span class="chip neutral">Enabled</span>
+        <button class="btn sm" type="button">Remove</button>
+      </div>
+      <div class="body">
+        <div class="form two">
+          <div class="f">
+            <label>Allowed addresses</label>
+            <div class="ctl ta mono"><span>https://dev.azure.com/acme</span></div>
+            <div class="hint wide">One per line, over HTTPS. A repository is admitted when its URL starts with one of these.</div>
+          </div>
+          <div class="f">
+            <label>Permitted lanes</label>
+            <div class="lanes">
+              <span class="lc off"><span style="width:15px;height:15px;border-radius:4px;border:1px solid var(--border-strong);display:inline-block"></span><span><span class="chip success">App · brokered</span><span class="why">Not available: the App broker mints repository-scoped GitHub tokens and has no Azure DevOps equivalent.</span></span></span>
+              <span class="lc"><span class="box on" style="width:15px;height:15px;border-radius:4px;background:var(--primary);display:inline-block"></span><span class="chip info">PAT · in-sandbox</span></span>
+              <span class="lc"><span class="box on" style="width:15px;height:15px;border-radius:4px;background:var(--primary);display:inline-block"></span><span class="chip warning">SSH · resident</span></span>
+            </div>
+            <div class="hint wide">Which credential a run may use for this provider. Turning one off does not delete its stored secret.</div>
+          </div>
+        </div>
+        <div style="padding:0 14px 14px">
+          <div class="lane sel">
+            <div class="lh"><i class="on"></i><span><span class="t">Personal access token</span><span class="conn">✓ Connected</span><span class="h">dev.azure.com · stored as git-pat-dev-azure-com</span></span></div>
+            <div class="lb">
+              <p class="secsub">Clones <span class="mono">dev.azure.com</span> over an injected credential — the value itself is write-only and never read back.</p>
+              <div style="margin-top:8px;display:flex;gap:8px"><button class="btn sm" type="button">Replace</button><button class="btn sm ghost" type="button">Disconnect</button></div>
+            </div>
+          </div>
+          <div class="lane">
+            <div class="lh"><i></i><span><span class="t">SSH key</span><span class="h">A per-run copy is written inside the sandbox for the clone, then shredded.</span></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- S.GIT_FOOTER, once, as the plain note under the tab — imported, not re-frozen (§5 #1). -->
+    <div class="pad" style="padding-top:0;padding-bottom:14px">
+      <div class="note plain" style="margin-top:0"><span>Only the GitHub App lane keeps its token outside the sandbox — a PAT or SSH key enters it for the clone, then is wiped. Public repos clone with no credential at all.</span></div>
+    </div>
+    <hr class="rule">
+    <div class="pad" style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn primary" type="button">Save providers</button>
+    </div>
+    <div class="varlabel"><b>Badge ladder</b> — the three rungs the step climbs, and Q10's variant (c)</div>
+    <div class="pad" style="padding-top:12px;padding-bottom:16px;display:flex;flex-wrap:wrap;gap:8px">
+      <span class="chip neutral">Optional</span>
+      <span class="chip neutral">Skipped</span>
+      <span class="chip success"><i class="dot"></i>Ready · 1 provider</span>
+      <span class="chip success"><i class="dot"></i>Ready · 2 providers</span>
+      <span class="chip success"><i class="dot"></i>Ready · 1 agent</span>
+      <span class="chip success"><i class="dot"></i>Ready · 2 providers · 1 agent</span>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 2 ===== Legacy open mode, and the absent row -->
+<section class="state">
+  <div class="tag"><span>State 2</span><b>Legacy open mode — zero rows (the banner carries the action that fills it, Q6); then one row present, the other absent</b></div>
+  <div class="frame">
+    <div class="pad ph">
+      <div><h2>Workspace providers</h2><p class="lead">Where work can come from, and how big it can get. Enable a git provider to bound which repositories a run may clone; set the storage ceilings every run and every drive is held to.</p></div>
+    </div>
+    <div class="tabs"><span class="sel">Git providers</span><span>Storage</span><span>Agents</span></div>
+    <div class="empty">
+      <h4>No git provider rows</h4>
+      <p>Runs clone whatever host has a credential stored, as they do today. Add a provider to bound that to addresses you name.</p>
+      <p style="margin-top:6px">A GitLab or Bitbucket token has no provider row yet — store and rotate it on the Secrets page.</p>
+      <button class="btn primary" style="margin-top:14px" type="button">Add provider</button>
+    </div>
+    <div class="varlabel"><b>Row absent</b> — GitHub present and on; Azure DevOps has no row: its host follows the legacy list, and the row says so</div>
+    <div style="padding-top:14px">
+      <div class="prow">
+        <div class="head">
+          <span class="sw on" aria-hidden="true"></span>
+          <div class="grow"><span class="kind">GitHub</span><span class="hosts">github.com/acme</span></div>
+          <span class="chip neutral">Enabled</span>
+          <button class="btn sm" type="button">Remove</button>
+        </div>
+      </div>
+      <div class="prow off">
+        <div class="head">
+          <span class="sw" aria-hidden="true" style="opacity:.4"></span>
+          <div class="grow"><span class="kind">Azure DevOps</span><span class="hosts">Not configured. Its host follows the legacy list, if listed there — every address on it, no bound.</span></div>
+          <button class="btn sm" type="button">Add provider</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 3 ===== Row off, and Remove -->
+<section class="state">
+  <div class="tag"><span>State 3</span><b>Provider disabled — row present, body collapsed, dimmed, never removed (its host is REFUSED); and Remove's confirm (outline — deletes no secret)</b></div>
+  <div class="frame">
+    <div style="padding-top:14px">
+      <div class="prow off">
+        <div class="head">
+          <span class="sw" aria-hidden="true"></span>
+          <div class="grow"><span class="kind">Azure DevOps</span><span class="hosts">dev.azure.com/acme</span></div>
+          <span class="chip neutral">Off</span>
+          <button class="btn sm" type="button">Remove</button>
+        </div>
+        <div class="body"><div class="pad" style="padding:10px 14px"><p class="secsub">Off: this host is refused. Turn it on to admit the addresses below again.</p></div></div>
+      </div>
+    </div>
+    <div class="varlabel"><b>Remove</b> — the row goes; the host goes back to legacy; stored credentials stay</div>
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>Remove the Azure DevOps row?</h3>
+        <p>Its host goes back to the legacy list — admitted if listed there, with no address bound. Stored credentials stay.</p>
+        <div class="row"><button class="btn ghost" type="button">Cancel</button><button class="btn" type="button">Remove</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 4 ===== Base URL invalid; lanes unavailable -->
+<section class="state">
+  <div class="tag"><span>State 4</span><b>Base URL invalid (pre-attempt, aria-invalid + the client mirror); the `ssh` lane on a self-hosted GHES row; Q3's losing variant</b></div>
+  <div class="frame">
+    <div style="padding-top:14px">
+      <div class="prow">
+        <div class="head">
+          <span class="sw on" aria-hidden="true"></span>
+          <div class="grow"><span class="kind">GitHub</span><span class="hosts">git.corp.example</span></div>
+          <span class="chip neutral">Enabled</span>
+          <button class="btn sm" type="button">Remove</button>
+        </div>
+        <div class="body">
+          <div class="form two">
+            <div class="f">
+              <label>Allowed addresses</label>
+              <div class="ctl ta mono invalid" aria-invalid="true"><span>https://git.corp.example/platform</span><span>http://github.com/acme:8443/*</span></div>
+              <div class="hint wide err">Must be an <span class="mono">https://</span> URL with a host and at least one path segment — no port, no credentials, no trailing wildcard.</div>
+            </div>
+            <div class="f">
+              <label>Permitted lanes</label>
+              <!-- GHES: the App broker is github.com-only and SSH-over-443 is github.com/dev.azure.com-only —
+                   both disabled with their reason; only the PAT lane can carry a self-hosted host. -->
+              <div class="lanes">
+                <span class="lc off"><span style="width:15px;height:15px;border-radius:4px;border:1px solid var(--border-strong);display:inline-block"></span><span><span class="chip success">App · brokered</span><span class="why">Not available: the App broker mints repository-scoped GitHub tokens and has no Azure DevOps equivalent.</span></span></span>
+                <span class="lc"><span class="box on" style="width:15px;height:15px;border-radius:4px;background:var(--primary);display:inline-block"></span><span class="chip info">PAT · in-sandbox</span></span>
+                <span class="lc off"><span style="width:15px;height:15px;border-radius:4px;border:1px solid var(--border-strong);display:inline-block"></span><span><span class="chip warning">SSH · resident</span><span class="why">Not available: SSH over port 443 is offered for <span class="mono">github.com</span> and <span class="mono">dev.azure.com</span> only — a self-hosted host clones over HTTPS.</span></span></span>
+              </div>
+              <div class="hint wide">Which credential a run may use for this provider. Turning one off does not delete its stored secret.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Q12: the client mirror's "at least one path segment" vs the model's optional org path for github. -->
+    <div class="varlabel"><b>Q3's losing variant</b> — `app` absent on the Azure DevOps row: two checkboxes, no reason</div>
+    <div class="pad" style="padding-top:14px">
+      <div class="lanes">
+        <span class="lc"><span class="box on" style="width:15px;height:15px;border-radius:4px;background:var(--primary);display:inline-block"></span><span class="chip info">PAT · in-sandbox</span></span>
+        <span class="lc"><span class="box on" style="width:15px;height:15px;border-radius:4px;background:var(--primary);display:inline-block"></span><span class="chip warning">SSH · resident</span></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 5 ===== Fetch failed · save error · write refusals · 412 · saved, narrowed -->
+<section class="state">
+  <div class="tag"><span>State 5</span><b>Fetch failed (never a confident empty) · the unreachable-server arm · the five 400s post-attempt under one heading · saved elsewhere (412) · saved, narrowed</b></div>
+  <div class="frame">
+    <div class="empty">
+      <h4>Couldn't load workspace providers</h4>
+      <p>Something went wrong reaching the server. The providers already saved still bound every run — this page just can't show them right now.</p>
+      <button class="btn" style="margin-top:14px" type="button">Retry</button>
+    </div>
+    <div class="varlabel"><b>Write refusals</b> — the console contributes the heading; the body is the server's own 400, verbatim (A1's <span class="mono">PROVIDERS_400.*</span> block)</div>
+    <div class="pad">
+      <div class="note red" style="max-width:none;margin-top:0"><b>These providers can't be saved as written</b><span><span class="mono">base_urls[1]</span>: must be an https URL with a host and no credentials, query or fragment</span></div>
+      <div class="note red" style="max-width:none"><b>These providers can't be saved as written</b><span><span class="mono">base_urls[0]</span>: "https://gitlab.com/acme" is not a github host</span></div>
+      <div class="note red" style="max-width:none"><b>These providers can't be saved as written</b><span><span class="mono">lanes</span>: "app" is not available for azure_devops (the App broker mints repository-scoped GitHub tokens on github.com only)</span></div>
+      <div class="note red" style="max-width:none"><b>These providers can't be saved as written</b><span><span class="mono">storage.ephemeral</span>: default_disk_mib may not exceed max_disk_mib</span></div>
+      <div class="note red" style="max-width:none"><b>These providers can't be saved as written</b><span>id "github" is not unique</span></div>
+      <div class="note red" style="max-width:none">Couldn't save these providers.</div>
+    </div>
+    <div class="varlabel"><b>Saved elsewhere</b> — the PUT carried a stale <span class="mono">If-Match</span>; reload, never overwrite. The 412 body beneath is the server's (M2 sheet)</div>
+    <div class="pad">
+      <div class="note amber" style="max-width:none;margin-top:0"><b>Someone else saved providers since you loaded this page</b><span>Reload to see their version before saving yours.</span></div>
+      <div class="note red" style="max-width:none">providers changed since you loaded them — reload and retry</div>
+      <div style="margin-top:12px;display:flex;gap:10px"><button class="btn" type="button">Reload</button><button class="btn primary" type="button" disabled>Save providers</button></div>
+    </div>
+    <div class="varlabel"><b>Saved, narrowed</b> — the transient toast, and the amber note that stays until the next save (Q8, drawn as (b))</div>
+    <div class="pad" style="display:flex;flex-direction:column;gap:12px">
+      <div class="toast"><b>Providers saved.</b></div>
+      <div class="toast warn"><b>Providers saved.</b><span>2 onboarded sources are now outside every enabled provider — runs can't clone them until an admin widens the addresses or turns their host on.</span></div>
+      <div class="note amber" style="max-width:none;margin-top:0"><span>2 onboarded sources are now outside every enabled provider — runs can't clone them until an admin widens the addresses or turns their host on.</span></div>
+      <div class="note amber" style="max-width:none;margin-top:0"><span>1 onboarded source is now outside every enabled provider — runs can't clone it until an admin widens the addresses or turns its host on.</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 6 ===== The Storage tab -->
+<section class="state">
+  <div class="tag"><span>State 6</span><b>The Storage tab — ephemeral default and maximum with the enforcement word (Kubernetes: eviction), the drive ceiling, the user-drives switch, the link out; the Docker variant; /drives when drives are off</b></div>
+  <div class="frame">
+    <div class="tabs"><span>Git providers</span><span class="sel">Storage</span><span>Agents</span></div>
+    <div class="pad" style="padding-bottom:6px">
+      <h3 class="sectitle">Ephemeral scratch</h3>
+      <p class="secsub">The writable layer a run gets when it mounts no drive. It is wiped when the sandbox exits.</p>
+    </div>
+    <div class="form two" style="padding-top:8px">
+      <div class="f">
+        <label>Default size (MiB)</label>
+        <div class="ctl mono">4096</div>
+        <!-- The enforcement gloss is DRIVES.ENFORCEMENT_EVICTION (drives prompt §7.2, appended by U1),
+             read from /setup/status's runner block. -->
+        <span class="chip neutral" style="align-self:flex-start">Size limited by eviction — over it, the run is stopped, not the write</span>
+        <div class="hint wide">Fills a run that asks for no size. 0 leaves such a run unbounded — the maximum below binds requests, not silence.</div>
+      </div>
+      <div class="f">
+        <label>Maximum size (MiB)</label>
+        <div class="ctl mono">16384</div>
+        <span class="chip neutral" style="align-self:flex-start">Size limited by eviction — over it, the run is stopped, not the write</span>
+        <div class="hint wide">A run asking for more is clamped to this, not refused.</div>
+      </div>
+    </div>
+    <hr class="rule">
+    <div class="pad" style="padding-bottom:6px">
+      <h3 class="sectitle">Drive ceiling</h3>
+    </div>
+    <div class="form two" style="padding-top:8px">
+      <div class="f">
+        <label>User drives</label>
+        <div style="display:flex;align-items:center;gap:10px;min-height:34px"><span class="sw on" aria-hidden="true"></span></div>
+        <div class="hint wide">Off means this deployment offers no drives: nothing is mounted and every drive write is refused. Existing drives and allocations are kept.</div>
+      </div>
+      <div class="f">
+        <label>Largest drive (MiB)</label>
+        <div class="ctl mono">32768</div>
+        <div class="hint wide">An allocation or override above this is refused at write and clamped at resolve. 0 means no ceiling.</div>
+      </div>
+    </div>
+    <div class="pad" style="padding-top:0;padding-bottom:14px">
+      <!-- CEILING, once, beside the ceiling field. The drives HONESTY sentence stays on /drives. -->
+      <div class="note plain" style="margin-top:0"><span>A ceiling bounds what an admin may allocate. It does not bound what the volume will hold.</span></div>
+      <!-- The link out: UserDrivesCard, the drives round's component, in its third home (Q7). -->
+      <div class="card" style="margin-top:14px">
+        <h4 class="sectitle">User drives</h4>
+        <p class="secsub" style="margin-top:6px">Persistent storage people can mount into a run — separate from any workspace.</p>
+        <div class="linkrow"><span><b>Manage drives</b><span>2 drives · 4 allocations</span></span><span class="chev">›</span></div>
+      </div>
+    </div>
+    <hr class="rule">
+    <div class="pad" style="display:flex;gap:10px;justify-content:flex-end"><button class="btn primary" type="button">Save providers</button></div>
+
+    <div class="varlabel"><b>Same fields on a Docker deployment whose driver cannot enforce</b> — the word is <span class="mono">none</span>, and the warning sits under all three disk fields (the third is the profile editor's, state 7)</div>
+    <div class="form two" style="padding-bottom:18px">
+      <div class="f">
+        <label>Default size (MiB)</label>
+        <div class="ctl mono">4096</div>
+        <span class="chip neutral" style="align-self:flex-start">Size shown, not enforced</span>
+        <div class="hint wide">Fills a run that asks for no size. 0 leaves such a run unbounded — the maximum below binds requests, not silence.</div>
+        <div class="note amber" style="max-width:none"><span>This host's storage driver cannot enforce a size. A number filled or clamped from here runs uncapped, with a warning on the run; a size a policy or a profile writes still fails the run at create on this host.</span></div>
+      </div>
+      <div class="f">
+        <label>Maximum size (MiB)</label>
+        <div class="ctl mono">0</div>
+        <span class="chip neutral" style="align-self:flex-start">Size shown, not enforced</span>
+        <div class="hint wide">A run asking for more is clamped to this, not refused.</div>
+        <div class="note amber" style="max-width:none"><span>This host's storage driver cannot enforce a size. A number filled or clamped from here runs uncapped, with a warning on the run; a size a policy or a profile writes still fails the run at create on this host.</span></div>
+      </div>
+    </div>
+    <div class="varlabel"><b>The enforcement words</b> — the drives round's four plus the fifth this round adds (U1 lands it in the drives prompt)</div>
+    <div class="pad" style="padding-top:12px;padding-bottom:16px;display:flex;flex-wrap:wrap;gap:8px">
+      <span class="chip neutral">Size enforced by the filesystem</span>
+      <span class="chip neutral">Size requested; the storage class decides</span>
+      <span class="chip neutral">Size bounded by the share's own quota</span>
+      <span class="chip neutral">Size shown, not enforced</span>
+      <span class="chip neutral">Size limited by eviction — over it, the run is stopped, not the write</span>
+    </div>
+    <div class="varlabel"><b>/drives while user drives are off</b> — the banner above the drives table (Q9 asks where its key lives); every write answers the server's 422</div>
+    <div class="pad">
+      <div class="ph"><div><h2>User drives</h2></div></div>
+      <div class="note amber" style="max-width:none"><span>User drives are turned off for this deployment under Workspace providers. Everything here is kept; nothing mounts until they are turned back on.</span></div>
+      <div class="note red" style="max-width:none"><b>This drive can't be saved as written</b><span>drives are disabled for this deployment</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 7 ===== Security admin + member -->
+<section class="state">
+  <div class="tag"><span>State 7</span><b>Security admin — /providers is the tier sentence; the door is two numeric rows in the profile editor (U2; strings staged in §7.6). Member — nothing: nav unchanged, the URL answers the same sentence</b></div>
+  <div class="frame">
+    <div class="pad ph">
+      <div><h2>Workspace providers</h2></div>
+      <span style="font-size:11px;color:var(--muted-foreground)">Requires the admin role.</span>
+    </div>
+    <div class="varlabel"><b>Governance profile editor · Limits</b> — after the three switches, the numeric rows: 0 = no limit; the Docker warning rides the first when the driver cannot enforce</div>
+    <div class="pad" style="padding-bottom:6px">
+      <h4 class="sectitle">Limits</h4>
+      <p class="secsub">Some of what a run can do routes around the ceiling entirely. Deny it here instead.</p>
+    </div>
+    <div class="pad" style="padding-top:0">
+      <div class="swrow"><span class="sw on" aria-hidden="true"></span><div class="txt"><b>Deny exec runs</b></div></div>
+      <div class="swrow"><span class="sw" aria-hidden="true"></span><div class="txt"><b>Deny interactive runs</b></div></div>
+      <div class="swrow"><span class="sw on" aria-hidden="true"></span><div class="txt"><b>Deny mounting a user drive</b></div></div>
+      <div class="swrow"><div class="ctl mono" style="border:1px solid var(--border-strong);border-radius:8px;padding:5px 10px;font-size:13px;min-width:96px;text-align:right">8192</div><div class="txt"><b>Largest ephemeral scratch (MiB)</b><p>Binds a run's requested scratch size, not a run that requests none. 0 means no limit under this profile.</p></div></div>
+      <div class="swrow"><div class="ctl mono" style="border:1px solid var(--border-strong);border-radius:8px;padding:5px 10px;font-size:13px;min-width:96px;text-align:right">16384</div><div class="txt"><b>Largest drive (MiB)</b><p>Clamps the drive size a person under this profile resolves to. On a share it bounds the number shown, not the share. 0 means no limit.</p></div></div>
+      <div class="swrow"><div class="ctl mono" style="border:1px solid var(--border-strong);border-radius:8px;padding:5px 10px;font-size:13px;min-width:96px;text-align:right">3</div><div class="txt"><b>Concurrent runs</b><p>How many runs a person under this profile may have going at once. 0 means no limit.</p></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 8 ===== The card -->
+<section class="state">
+  <div class="tag"><span>State 8</span><b>The card, one component in two homes — Settings (third card, replacing Git host) and the funnel step's summary; populated and empty; zero teal</b></div>
+  <div class="frame">
+    <div class="pad">
+      <h2 style="font-size:19px">Settings</h2>
+      <div class="card" style="margin-top:14px"><h4 class="sectitle">Host</h4><p class="secsub" style="margin-top:6px">The barriers this machine can build, and what every run inherits by default.</p></div>
+      <div class="card" style="margin-top:14px"><h4 class="sectitle">Model provider</h4><p class="secsub" style="margin-top:6px">Agent runs need one. Governed commands don't.</p></div>
+      <!-- The card. It counts ENABLED rows, never hosts. -->
+      <div class="card" style="margin-top:14px">
+        <h4 class="sectitle">Workspace providers</h4>
+        <p class="secsub" style="margin-top:6px">Which git hosts a run may clone, and the storage ceilings it works inside.</p>
+        <div class="linkrow"><span><b>Manage providers</b><span>2 git providers · 1 agent</span></span><span class="chev">›</span></div>
+      </div>
+      <div class="card" style="margin-top:14px"><h4 class="sectitle">SSH keys</h4></div>
+      <div class="card" style="margin-top:14px"><h4 class="sectitle">User drives</h4><p class="secsub" style="margin-top:6px">Persistent storage people can mount into a run — separate from any workspace.</p><div class="linkrow"><span><b>Manage drives</b><span>2 drives · 4 allocations</span></span><span class="chev">›</span></div></div>
+    </div>
+    <div class="varlabel"><b>Empty</b> — nothing enabled; the link still goes to /providers, where the teal lives</div>
+    <div class="pad">
+      <div class="card">
+        <h4 class="sectitle">Workspace providers</h4>
+        <p class="secsub" style="margin-top:6px">Which git hosts a run may clone, and the storage ceilings it works inside.</p>
+        <div class="linkrow"><span><b>Manage providers</b><span>No providers enabled.</span></span><span class="chev">›</span></div>
+      </div>
+    </div>
+    <!-- A security admin sees no card: /providers is SUPER and there is nothing for them to act on
+         but the door on /governance (state 7). -->
+  </div>
+</section>
+
+<!-- ===== STATE 9 ===== The workspace row -->
+<section class="state">
+  <div class="tag"><span>State 9</span><b>Workspace row "not an enabled provider" (from the server's <span class="mono">admitted</span> flag, U3) — on /workspaces, on the New Run Workspace selection, and the Add-workspace dialog's replaced hint</b></div>
+  <div class="frame">
+    <div class="pad ph">
+      <div><h2>Workspaces</h2><p class="lead">A repo or directory a run can attach. Runs can only attach what's listed here.</p></div>
+      <div class="acts"><button class="btn" type="button">User drives</button><button class="btn primary" type="button">Add workspace</button></div>
+    </div>
+    <div class="pad" style="padding-top:0;display:flex;flex-direction:column;gap:10px">
+      <div class="wsrow"><span style="min-width:0;flex:1"><b style="font-size:13px;font-weight:500">payments-api</b><span class="m">github.com/acme/payments-api</span></span><span class="chip success"><i class="dot"></i>Ready</span></div>
+      <!-- The row keeps its Ready chip (the import is fine); the provider state is the row's own line,
+           the user_drive_unavailable precedent. -->
+      <div class="wsrow"><span style="min-width:0;flex:1"><b style="font-size:13px;font-weight:500">billing-legacy</b><span class="m">gitlab.com/acme/billing-legacy</span><span class="why">Not an enabled git provider — runs can't clone this until an admin enables its host.</span></span><span class="chip success"><i class="dot"></i>Ready</span></div>
+    </div>
+    <div class="varlabel"><b>New Run · Workspace card</b> — the reason rides the SELECTION, one line (the card's own rule)</div>
+    <div class="pad">
+      <h3 class="sectitle">Workspace</h3>
+      <div class="form one" style="padding:12px 0 0"><div class="f"><div class="ctl">billing-legacy</div></div></div>
+      <p class="secsub" style="margin-top:8px;color:var(--warning)">Not an enabled git provider — runs can't clone this until an admin enables its host.</p>
+    </div>
+    <div class="varlabel"><b>Add workspace · Repository</b> — the hint that named the retired card, replaced</div>
+    <div class="form one" style="padding-bottom:18px">
+      <div class="f">
+        <label>Repository</label>
+        <div class="ctl mono ph">github.com/acme/…</div>
+        <div class="hint wide">Cloned into the sandbox when a run starts. Private repos use the credential stored under Settings → Providers for their host.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<script>
+document.getElementById("tt").addEventListener("click", function () {
+  var r = document.documentElement;
+  r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+});
+</script>
+</body>
+</html>

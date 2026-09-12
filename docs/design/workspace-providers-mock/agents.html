@@ -1,0 +1,325 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wardyn — Workspace providers mock · Agents · member chip · picker</title>
+<!--
+  Workspace-providers mock, page 2 of 3 · static, for owner review.
+  Every visible PRODUCT string is verbatim from
+  docs/design/workspace-providers-prompt.md §7.7 (DRAFT; the owner freezes) or is
+  REUSED canon named in §7.1 (the model card's lane titles, HarnessLoginPane's title,
+  MEMBER_GETTING_STARTED.*, the New Run picker's two literals, the Review rail's
+  "No adjustments.", the composer's clamp warnings). See index.html's header for
+  the scaffold-vs-product rule; mock.css carries the tokens.
+-->
+<link rel="stylesheet" href="mock.css">
+</head>
+<body>
+
+<div class="mockbar">
+  <div>
+    <h1>Workspace providers — mock · page 2: the Agents tab, the member's Model access chip, the agent picker, the effective policy</h1>
+    <div class="sub">Product strings verbatim from <code>docs/design/workspace-providers-prompt.md</code> §7.7. Static: nothing here is wired.</div>
+  </div>
+  <nav><a href="index.html">Git · Storage · card</a><a class="cur" href="agents.html">Agents · member chip · picker</a><a href="canon.html">Refusals · field-report canon · drives</a></nav>
+  <button id="tt" type="button">Light / dark</button>
+</div>
+
+<div class="sheet">
+
+<!-- ===== STATE 10 ===== The Agents tab -->
+<section class="state" style="margin-top:20px">
+  <div class="tag"><span>State 10</span><b>The Agents tab — one row per catalog id (+ one per image-map key): Claude Code on, Bedrock SSO, per person; Codex CLI off; Your own tools; a custom image; the signed-in admin's own chip</b></div>
+  <div class="frame">
+    <div class="tabs"><span>Git providers</span><span>Storage</span><span class="sel">Agents</span></div>
+    <div class="pad" style="padding-bottom:12px">
+      <p class="secsub">Which coding agents this Wardyn offers, how each one reaches its model, and whether that credential is one for everyone or one per person.</p>
+    </div>
+
+    <!-- claude-code: enabled · bedrock_sso · per_user · start URL · the admin's own chip -->
+    <div class="prow">
+      <div class="head">
+        <span class="sw on" aria-hidden="true"></span>
+        <div class="grow"><span class="kind">Claude Code</span><span class="hosts">claude-code · bedrock_sso · per_user</span></div>
+        <span class="chip neutral">Enabled</span>
+      </div>
+      <div class="body">
+        <div class="form two">
+          <div class="f">
+            <label>Model access</label>
+            <!-- The radio is the model card's three lane titles with Bedrock's four sub-lanes under its
+                 own; folded to the catalog's coarse values for validation. -->
+            <div class="radio">
+              <span><i></i>Claude subscription</span>
+              <span><i></i>API key</span>
+              <span><i class="on"></i>AWS Bedrock</span>
+              <span class="grp">Bedrock</span>
+              <span><i></i>Bearer key</span>
+              <span><i class="on"></i>SSO sign-in</span>
+              <span><i></i>Daemon environment</span>
+              <span><i></i>Host <span class="mono">~/.aws</span></span>
+              <span><i></i>None — the image brings its own</span>
+              <span class="why">Wardyn wires no model credential. The only choice for an agent outside the catalog.</span>
+            </div>
+            <div class="hint wide">One lane per agent. A run whose lane is not working is refused — Wardyn never substitutes another provider.</div>
+          </div>
+          <div class="f">
+            <label>Credential</label>
+            <div class="seg"><span>Shared</span><span class="sel">Per person</span></div>
+            <div class="hint wide">Each person signs in to AWS themselves. Their runs use their own session; an expiry affects one person.</div>
+            <label style="margin-top:10px">AWS access portal start URL</label>
+            <div class="ctl mono">https://acme.awsapps.com/start</div>
+            <div class="hint wide">Everyone signs in against this portal. A sign-in never chooses another.</div>
+          </div>
+        </div>
+        <!-- The admin's OWN chip (C4.2): the same six states as the member's, drawn live here. -->
+        <div style="padding:0 14px 14px">
+          <div class="chips" style="margin-top:0"><span class="chip success">Model access · Your AWS sign-in</span></div>
+          <p class="secsub" style="margin-top:6px">This is your own sign-in — the same one a member makes. Under a shared credential it is the one everyone uses.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- codex-cli: off, collapsed, dimmed; the impossible pairs would be disabled with the catalog's reason (below) -->
+    <div class="prow off">
+      <div class="head">
+        <span class="sw" aria-hidden="true"></span>
+        <div class="grow"><span class="kind">Codex CLI</span><span class="hosts">codex-cli · openai_api_key · shared</span></div>
+        <span class="chip neutral">Off</span>
+      </div>
+      <div class="body"><div class="pad" style="padding:10px 14px"><p class="secsub">Off: runs naming this agent are refused, and it shows as unavailable in New run.</p></div></div>
+    </div>
+
+    <!-- none (BYOA): mechanism fixed to none -->
+    <div class="prow">
+      <div class="head">
+        <span class="sw on" aria-hidden="true"></span>
+        <div class="grow"><span class="kind">Your own tools</span><span class="hosts">none · none</span></div>
+        <span class="chip neutral">Enabled</span>
+      </div>
+      <div class="body">
+        <div class="form one">
+          <div class="f">
+            <label>Model access</label>
+            <div class="radio"><span><i class="on"></i>None — the image brings its own</span><span class="why">Wardyn wires no model credential. The only choice for an agent outside the catalog.</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- a WARDYN_AGENT_IMAGES-only custom agent: a row the admin may write, mechanism none only -->
+    <div class="prow">
+      <div class="head">
+        <span class="sw on" aria-hidden="true"></span>
+        <div class="grow"><span class="kind">my-agent</span><span class="hosts">my-agent · none · from WARDYN_AGENT_IMAGES</span></div>
+        <span class="chip neutral">Enabled</span>
+      </div>
+      <div class="body">
+        <div class="form one">
+          <div class="f">
+            <label>Model access</label>
+            <div class="radio">
+              <span class="off"><i></i>Claude subscription</span>
+              <span class="off"><i></i>API key</span>
+              <span class="off"><i></i>AWS Bedrock</span>
+              <span><i class="on"></i>None — the image brings its own</span>
+              <span class="why">Wardyn wires no model credential. The only choice for an agent outside the catalog.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- S.MODEL_FOOTER, once, as the plain note under the tab — imported. -->
+    <div class="pad" style="padding-top:0;padding-bottom:14px">
+      <div class="note plain" style="margin-top:0"><span>The egress proxy injects these on the wire, so keys never enter the sandbox — except Bedrock's SSO lane, where AWS credentials sign inside it.</span></div>
+    </div>
+    <hr class="rule">
+    <div class="pad" style="display:flex;gap:10px;justify-content:flex-end"><button class="btn primary" type="button">Save providers</button></div>
+
+    <div class="varlabel"><b>Codex CLI, opened</b> — an impossible pair is disabled with the catalog's EXISTING reason; Per person is disabled off <span class="mono">bedrock_sso</span> with its reason</div>
+    <div class="form two" style="padding-bottom:18px">
+      <div class="f">
+        <label>Model access</label>
+        <div class="radio">
+          <span class="off"><i></i>Claude subscription</span>
+          <span class="why">Codex CLI speaks the OpenAI API only — a Claude login can't drive it. Not a setting.</span>
+          <span class="off"><i></i>API key (Anthropic)</span>
+          <span class="why">Codex CLI speaks the OpenAI API only — an Anthropic key can't drive it. Not a setting.</span>
+          <span><i class="on"></i>API key (OpenAI)</span>
+          <span class="off"><i></i>AWS Bedrock</span>
+          <span class="why">Codex CLI speaks the OpenAI API only — Bedrock can't drive it. Not a setting.</span>
+          <span><i></i>None — the image brings its own</span>
+        </div>
+      </div>
+      <div class="f">
+        <label>Credential</label>
+        <div class="seg"><span class="sel">Shared</span><span class="off">Per person</span></div>
+        <div class="hint wide">One credential, captured by an admin, backs every run.</div>
+        <div class="hint wide">Not available: only an AWS SSO sign-in is captured per person in this release.</div>
+      </div>
+    </div>
+
+    <div class="varlabel"><b>Claude Code, shared</b> — the admin's chip is the credential everyone uses; Sign in to AWS opens HarnessLoginPane in place</div>
+    <div class="pad" style="padding-bottom:18px">
+      <div class="seg"><span class="sel">Shared</span><span>Per person</span></div>
+      <p class="secsub" style="margin-top:6px">One credential, captured by an admin, backs every run.</p>
+      <div class="chips"><span class="chip warning">Model access · Signed out</span></div>
+      <p class="secsub" style="margin-top:6px">This is your own sign-in — the same one a member makes. Under a shared credential it is the one everyone uses.</p>
+      <button class="btn sm" style="margin-top:10px" type="button">Sign in to AWS</button>
+      <div class="card" style="margin-top:12px"><h4 class="sectitle">Connect an AWS SSO session via container login</h4><p class="secsub" style="margin-top:6px">A sandboxed login run starts and a terminal appears here, running <span class="mono">aws sso login</span> — with no credential to start from.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 11 ===== Member Getting Started — the six chip states -->
+<section class="state">
+  <div class="tag"><span>State 11</span><b>Member · Getting Started, "What's set up for you" — the Model access chip reads REAL credential state: success only for live; every other state carries its action as the chip row's own line</b></div>
+  <div class="frame">
+    <div class="varlabel" style="border-top:0"><b>11a — live (per person)</b> — nothing to do; expired-but-renewable renders here too (dispatch renews it)</div>
+    <div class="pad">
+      <div class="card">
+        <h4 class="sectitle">What's set up for you</h4>
+        <div class="chips">
+          <span class="chip neutral">Barrier · Wall</span>
+          <span class="chip success">Model access · Your AWS sign-in</span>
+          <span class="chip info">Sign-in · SSO</span>
+          <span class="chip neutral">Governance · Greenfield contractors</span>
+        </div>
+        <p class="secsub" style="margin-top:10px">Your admin configured the barrier, network and shared credentials. Your runs inherit them.</p>
+      </div>
+    </div>
+    <div class="varlabel"><b>11b — expiring</b> — the registration lapses inside 24 h; the action names the time</div>
+    <div class="pad">
+      <div class="card">
+        <h4 class="sectitle">What's set up for you</h4>
+        <div class="chips"><span class="chip neutral">Barrier · Wall</span><span class="chip warning">Model access · Expiring</span><span class="chip info">Sign-in · SSO</span></div>
+        <p class="secsub" style="margin-top:10px;color:var(--warning)">Sign in again before 2026-09-12 09:00</p>
+        <button class="btn primary sm" style="margin-top:10px" type="button">Sign in to AWS</button>
+      </div>
+    </div>
+    <div class="varlabel"><b>11c — expired, sign in</b> · <b>11d — not signed in yet</b> (per person, no session captured)</div>
+    <div class="pad" style="display:flex;flex-direction:column;gap:14px">
+      <div class="card">
+        <div class="chips" style="margin-top:0"><span class="chip neutral">Barrier · Wall</span><span class="chip warning">Model access · Signed out</span><span class="chip info">Sign-in · SSO</span></div>
+        <button class="btn primary sm" style="margin-top:10px" type="button">Sign in to AWS</button>
+      </div>
+      <div class="card">
+        <div class="chips" style="margin-top:0"><span class="chip neutral">Barrier · Wall</span><span class="chip warning">Model access · Not signed in</span><span class="chip info">Sign-in · SSO</span></div>
+        <button class="btn primary sm" style="margin-top:10px" type="button">Sign in to AWS</button>
+        <!-- The pane opens in place, under the card, on click — HarnessLoginPane unchanged, the admin's start URL. -->
+        <div class="card" style="margin-top:12px"><h4 class="sectitle">Connect an AWS SSO session via container login</h4><p class="secsub" style="margin-top:6px">A browser tab opens the AWS verification page: enter the short code the terminal shows and approve with your IAM Identity Center login.</p></div>
+      </div>
+    </div>
+    <div class="varlabel"><b>11e — shared, live</b> (today's chip, reused) · <b>11f — shared, expired</b> — nothing the member can do, so no button; the action line names who can</div>
+    <div class="pad" style="display:flex;flex-direction:column;gap:14px">
+      <div class="card">
+        <div class="chips" style="margin-top:0"><span class="chip neutral">Barrier · Wall</span><span class="chip success">Model access · Provided by your admin</span><span class="chip info">Sign-in · SSO</span></div>
+      </div>
+      <div class="card">
+        <div class="chips" style="margin-top:0"><span class="chip neutral">Barrier · Wall</span><span class="chip warning">Model access · Your admin's credential expired</span><span class="chip info">Sign-in · SSO</span></div>
+        <p class="secsub" style="margin-top:10px;color:var(--warning)">Your admin's model credential expired — ask them to reconnect it</p>
+      </div>
+    </div>
+    <!-- A green chip over a dead credential no longer exists: `llm_ready` is a deployment fact the
+         member chip stops reading. -->
+  </div>
+</section>
+
+<!-- ===== STATE 12 ===== New Run — the agent picker -->
+<section class="state">
+  <div class="tag"><span>State 12</span><b>New Run · Agent — roster unknown keeps today's two literals and claims nothing; roster arrived renders a disabled row with its reason, never hidden; the unparseable-floor hint; the inline 201 warnings</b></div>
+  <div class="frame">
+    <div class="varlabel" style="border-top:0"><b>12a — roster unknown</b> (the setup fetch failed or <span class="mono">harnesses</span> is absent) — byte-for-byte today</div>
+    <div class="form one" style="padding-bottom:6px">
+      <div class="f">
+        <label>Agent</label>
+        <div class="opts"><div class="o sel">Claude Code</div><div class="o">Codex CLI</div></div>
+      </div>
+    </div>
+    <div class="varlabel"><b>12b — roster arrived</b> — every catalog row, the disabled one with AGENTS.UNAVAILABLE as its sub-line; the custom image-map agent joins the list</div>
+    <div class="form one" style="padding-bottom:6px">
+      <div class="f">
+        <label>Agent</label>
+        <div class="opts">
+          <div class="o sel">Claude Code</div>
+          <div class="o off">Codex CLI<span class="why">Not enabled by your admin</span></div>
+          <div class="o">Your own tools</div>
+          <div class="o">my-agent</div>
+        </div>
+      </div>
+    </div>
+    <div class="varlabel"><b>12c — the JSON policy's floor names no class</b> — one hint; precedence unchanged (the floor is what the JSON parses to, the selector is the request)</div>
+    <div class="form one" style="padding-bottom:6px">
+      <div class="f">
+        <label>Policy (JSON)</label>
+        <div class="ctl ta mono"><span>{</span><span>&nbsp;&nbsp;"min_confinement_class": "vault",</span><span>&nbsp;&nbsp;"allowed_domains": ["api.anthropic.com"]</span><span>}</span></div>
+        <div class="hint wide err">"vault" isn't a barrier class, so this policy sets no floor — the barrier above is what launches.</div>
+      </div>
+    </div>
+    <div class="varlabel"><b>12d — launched with warnings</b> — the 201's lines render INLINE under the launch control instead of a toast, under the existing title</div>
+    <div class="pad">
+      <div style="display:flex;gap:10px;align-items:center"><button class="btn primary" type="button" disabled>Launch</button><span class="secsub">Starting sandbox…</span></div>
+      <div class="note amber" style="max-width:none">
+        <b>Run launched with a warning</b>
+        <ul class="warns" style="color:inherit">
+          <li>dropped 2 egress domain(s) not in operator allowlist: platform.anthropic.com,console.anthropic.com</li>
+          <li>allow_all_egress disabled: operator policy does not permit allow-all egress</li>
+          <li>resources capped to operator maximum</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 13 ===== Run detail — the effective-policy widget -->
+<section class="state">
+  <div class="tag"><span>State 13</span><b>Run detail · Effective policy — one line per tightening from the run's persisted <span class="mono">clamp_warnings</span>, beside the identity rail's Policy row; and with none</b></div>
+  <div class="frame">
+    <div class="pad grid2">
+      <div>
+        <h4 class="sectitle">Identity</h4>
+        <dl class="kv rail">
+          <dt>Run</dt><dd>run_01j8x4k2m9</dd>
+          <dt>Image</dt><dd>ghcr.io/wardyn/agent-base:0.7</dd>
+          <dt>Policy</dt><dd>inline</dd>
+          <dt>Runner</dt><dd>k8s</dd>
+          <dt>Sandbox</dt><dd>wardyn-run-01j8x4k2m9</dd>
+          <dt>Started</dt><dd class="plain">2026-09-11 14:02 · bob@corp.example</dd>
+        </dl>
+      </div>
+      <div>
+        <h4 class="sectitle">Effective policy</h4>
+        <p class="secsub" style="margin-top:4px">What launch narrowed, one line each. Your policy is what you wrote; this is what ran.</p>
+        <ul class="warns">
+          <li>dropped 2 egress domain(s) not in operator allowlist: platform.anthropic.com,console.anthropic.com</li>
+          <li>allow_all_egress disabled: operator policy does not permit allow-all egress</li>
+          <li>confinement raised from "CC1" to operator minimum "CC2"</li>
+          <li>resources capped to operator maximum</li>
+        </ul>
+      </div>
+    </div>
+    <div class="varlabel"><b>No tightening</b> — the rail's own empty arm, reused</div>
+    <div class="pad" style="max-width:520px">
+      <h4 class="sectitle">Effective policy</h4>
+      <p class="secsub" style="margin-top:4px">What launch narrowed, one line each. Your policy is what you wrote; this is what ran.</p>
+      <p class="secsub" style="margin-top:8px">No adjustments.</p>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<script>
+document.getElementById("tt").addEventListener("click", function () {
+  var r = document.documentElement;
+  r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+});
+</script>
+</body>
+</html>

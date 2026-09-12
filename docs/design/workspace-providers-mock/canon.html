@@ -1,0 +1,217 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wardyn — Workspace providers mock · refusals · field-report canon · drives</title>
+<!--
+  Workspace-providers mock, page 3 of 3 · static, for owner review.
+  The server-composed refusals of docs/design/workspace-providers-prompt.md §7.4 and
+  §7.7 drawn where a person meets them (verbatim, under the console's own heading);
+  the §7.6 STAGING strings for the M2 sitting drawn in place; and the two drives
+  states this round owns (the re-home confirm dialog; drives-mock State 3b, F049).
+  See index.html's header for the scaffold-vs-product rule; mock.css carries the
+  tokens.
+-->
+<link rel="stylesheet" href="mock.css">
+</head>
+<body>
+
+<div class="mockbar">
+  <div>
+    <h1>Workspace providers — mock · page 3: refusals as met, the field-report canon in place, the two drives states</h1>
+    <div class="sub">Server strings are the Go literals the lanes will carry (one constants block per lane); console strings are §7 verbatim. Static.</div>
+  </div>
+  <nav><a href="index.html">Git · Storage · card</a><a href="agents.html">Agents · member chip · picker</a><a class="cur" href="canon.html">Refusals · field-report canon · drives</a></nav>
+  <button id="tt" type="button">Light / dark</button>
+</div>
+
+<div class="sheet">
+
+<!-- ===== STATE 14 ===== Admission refusals -->
+<section class="state" style="margin-top:20px">
+  <div class="tag"><span>State 14</span><b>Admission (A3's <span class="mono">ADMIT.*</span>) — a member's refusal names the kind, never a base URL; an operator's 422 lists the addresses; the two 201 warnings</b></div>
+  <div class="frame">
+    <div class="varlabel" style="border-top:0"><b>Member</b> — the 403 (capability door, audited) and the 422 (not admitted, no audit) share one body</div>
+    <div class="pad">
+      <div class="note red" style="margin-top:0">this repository's host is not an enabled git provider — ask an admin</div>
+    </div>
+    <div class="varlabel"><b>Operator</b> — the 422 lists the allowed addresses; when a legacy host was refused by a kind-wide claim, the list is the CLAIMING row's</div>
+    <div class="pad">
+      <div class="note red" style="margin-top:0;max-width:none">repository https://github.com/other/tool.git is outside every enabled provider's allowed addresses (https://github.com/acme, https://github.com/acme-labs)</div>
+    </div>
+    <div class="varlabel"><b>Warnings on the 201</b> — a lane the row does not permit is dropped, never silently; an unclaimed legacy host admits with a warning</div>
+    <div class="pad" style="display:flex;flex-direction:column;gap:10px">
+      <div class="toast warn"><b>Run launched with a warning</b><span>the ssh lane is not permitted for GitHub; the ssh_key grant was not wired</span></div>
+      <div class="toast warn"><b>Run launched with a warning</b><span>host gitlab.com is admitted through the legacy scm_hosts list; enable a provider for it before 0.8</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 15 ===== Agent + model refusals -->
+<section class="state">
+  <div class="tag"><span>State 15</span><b>Agents (C3's 400s at the admin write; the run-create refusal) and the model mechanism (C2's dispatch refusal, and the proxy's self-explaining <span class="mono">brokered:llm</span> detail)</b></div>
+  <div class="frame">
+    <div class="varlabel" style="border-top:0"><b>Saving the Agents tab</b> — the console's heading over the server's 400 (the impossible pair reuses the catalog's reason, unchanged)</div>
+    <div class="pad">
+      <div class="note red" style="max-width:none;margin-top:0"><b>These providers can't be saved as written</b><span>agents: "my-agent" is not in the agent catalog, so its mechanism must be none — Wardyn wires no model credential into a custom image (bedrock_sso would show a live credential that binds nothing)</span></div>
+      <div class="note red" style="max-width:none"><b>These providers can't be saved as written</b><span>agents: "claude-code": credential_source per_user is available for bedrock_sso only, not anthropic_subscription</span></div>
+      <div class="note red" style="max-width:none"><b>These providers can't be saved as written</b><span>agents: "claude-code": sso_start_url is required when mechanism is bedrock_sso and credential_source is per_user</span></div>
+      <div class="note red" style="max-width:none"><b>These providers can't be saved as written</b><span>agents: "gpt-runner" names no agent this deployment can run — a catalog id or a WARDYN_AGENT_IMAGES key</span></div>
+      <div class="note red" style="max-width:none"><b>These providers can't be saved as written</b><span>agents: id "claude-code" is not unique</span></div>
+      <div class="note red" style="max-width:none"><b>These providers can't be saved as written</b><span>Codex CLI speaks the OpenAI API only — Bedrock can't drive it. Not a setting.</span></div>
+    </div>
+    <div class="varlabel"><b>Run create</b> — an agent with no enabled row (the record launcher answers the same sentence)</div>
+    <div class="pad"><div class="note red" style="margin-top:0">agent: "codex-cli" is not an enabled agent on this deployment — ask an admin</div></div>
+    <div class="varlabel"><b>Dispatch</b> — the declared mechanism is dead: the run FAILS naming it, and nothing is substituted (create and Review answer the same 422). Q11: the remedy clause</div>
+    <div class="pad">
+      <div class="note red" style="margin-top:0;max-width:none">this run's model access is configured as Amazon Bedrock (captured AWS SSO session), and that credential expired at 2026-09-11T13:02:11Z and could not be renewed — sign in again under Settings → Model provider. Wardyn does not substitute a different model provider.</div>
+    </div>
+    <div class="varlabel"><b>The proxy's <span class="mono">brokered:llm</span> detail</b> — reachable only for a legacy or no-mechanism run now; names its state and says it is below policy</div>
+    <div class="pad" style="display:flex;flex-direction:column;gap:10px">
+      <div class="note red" style="margin-top:0;max-width:none"><span class="mono">egress.deny api.anthropic.com POST /wardyn/llm/anthropic/v1/messages rule_source=brokered:llm</span><span>no credential is configured for this brokered LLM route — this is below policy: it cannot be approved, and no policy edit changes it.</span></div>
+      <div class="note red" style="margin-top:0;max-width:none"><span class="mono">egress.deny bedrock-runtime.us-east-1.amazonaws.com POST … rule_source=brokered:llm</span><span>Bedrock is configured but its credential expired at 2026-09-11T13:02:11Z; reconnect it — this is below policy: it cannot be approved, and no policy edit changes it.</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 16 ===== Drives + injection refusals -->
+<section class="state">
+  <div class="tag"><span>State 16</span><b>Drives (S2's 422s and the two disclosure-free failure hints) and the injection rule's own 403 (G1, rule source <span class="mono">policy:require-tls</span>)</b></div>
+  <div class="frame">
+    <div class="pad">
+      <div class="note red" style="max-width:none;margin-top:0"><b>This drive can't be saved as written</b><span>size_mib 65536 exceeds this deployment's drive ceiling (32768 MiB)</span></div>
+      <div class="note red" style="max-width:none"><b>This drive can't be saved as written</b><span>drives are disabled for this deployment</span></div>
+      <div class="note red" style="max-width:none">drive: this deployment cannot mount your drive (drives are disabled for this deployment)</div>
+    </div>
+    <div class="varlabel"><b>Run failure hints</b> — the two replacements; neither names a namespace or a subject digest</div>
+    <div class="pad">
+      <div class="note red" style="margin-top:0">drive: your drive's volume is not provisioned on this cluster — ask an admin</div>
+      <div class="note red">drive: your drive's volume is not the one allocated to you — ask an admin</div>
+    </div>
+    <div class="varlabel"><b>The injection rule over plain HTTP</b> — the run's egress panel shows the deny with the proxy's own 403 body</div>
+    <div class="pad"><div class="note red" style="margin-top:0;max-width:none"><span class="mono">egress.deny api.example.com GET http://api.example.com/v1 rule_source=policy:require-tls</span><span>credential injection for api.example.com requires TLS: this rule sets require_tls and the request was plain HTTP</span></div></div>
+  </div>
+</section>
+
+<!-- ===== STATE 17 ===== Field-report canon in place (M2 staging) -->
+<section class="state">
+  <div class="tag"><span>State 17</span><b>Field-report strings, drawn where they land (§7.6 STAGING for the M2 sitting — each row leaves with its lane): B1 shell unknown · B2 save note · B4 cancelled · B4b clone · B7 hint · F16 · F22 · F107 · F144</b></div>
+  <div class="frame">
+    <div class="varlabel" style="border-top:0"><b>B1 — /me did not answer</b> — neither an admin nav nor a member nav; a visible state, not a default</div>
+    <div class="pad">
+      <div class="note amber" style="margin-top:0;max-width:none"><span>We couldn't confirm who you are. Nothing here is hidden from you on purpose — reload, or sign in again.</span></div>
+      <div style="margin-top:10px;display:flex;gap:8px"><button class="btn" type="button">Reload</button><button class="btn ghost" type="button">Sign in again</button></div>
+    </div>
+    <div class="varlabel"><b>B2 — site config saved</b> — the note on the Network step's save; the run keeps what it started with</div>
+    <div class="pad"><div class="toast"><b>Saved. This applies to runs started from now — a run already going keeps the network settings it started with.</b></div></div>
+    <div class="varlabel"><b>B2/B6 — the denial's suffix</b> (server, <span class="mono">policy.go</span>) and <b>B7 — the cidrs remedy</b> (server; quoted by OPERATIONS.md)</div>
+    <div class="pad" style="display:flex;flex-direction:column;gap:10px">
+      <div class="note red" style="margin-top:0;max-width:none"><span class="mono">egress.deny vpce-0a1b.s3.us-east-1.vpce.amazonaws.com CONNECT rule_source=builtin:private-ip</span><span>… declare it under internal_hosts (host_suffix; leave cidrs empty unless you know the sandbox-side ranges). Site config is read at run start, so change it and start a new run — this one will keep being refused.</span></div>
+      <div class="note plain" style="margin-top:0;max-width:none"><span>Leave <span class="mono">cidrs</span> empty unless you know the addresses the sandbox resolves. What your own machine sees for a private endpoint is usually not what the cluster sees.</span></div>
+    </div>
+    <div class="varlabel"><b>B4 — an approval on a killed run</b> — a terminal state of its own; no Approve / Deny on a terminal run</div>
+    <div class="pad">
+      <div class="card" style="max-width:520px">
+        <div class="chips" style="margin-top:0"><span class="chip neutral">Cancelled</span><span class="chip danger">Killed</span></div>
+        <p class="secsub" style="margin-top:8px">The run ended before anyone decided this. Nothing was approved and nothing was denied.</p>
+      </div>
+    </div>
+    <div class="varlabel"><b>B4b — the killed-run panel gains the clone affordance</b>; the note says what is prefilled and what is minted fresh; the ceiling sentence under it for a member</div>
+    <div class="pad">
+      <div class="card" style="max-width:560px">
+        <span class="chip danger">Killed</span>
+        <p class="secsub" style="margin-top:8px">Start a new run if the work still needs doing — a killed run cannot resume.</p>
+        <button class="btn primary sm" style="margin-top:10px" type="button">Start a run like this one</button>
+        <p class="secsub" style="margin-top:8px">Prefilled from this run — task, agent, barrier, policy and what it attached. Credentials and approvals are minted fresh.</p>
+        <p class="secsub" style="margin-top:4px">Your ceiling applies again at launch — anything this run had above it is narrowed, with the reason.</p>
+      </div>
+    </div>
+    <div class="varlabel"><b>F16 — the ConfinementChip on Kubernetes</b> reads <span class="mono">/healthz.network_policy</span> · <b>F22 — the Network step's CA line</b></div>
+    <div class="pad" style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+      <span class="chip success">NetworkPolicy: enforcing</span>
+      <span class="chip danger">NetworkPolicy: not enforcing</span>
+      <span class="chip warning">NetworkPolicy: indeterminate</span>
+      <span class="secsub" style="margin-left:12px">3 trusted CA certificates</span>
+      <span class="secsub">1 trusted CA certificate</span>
+    </div>
+    <div class="varlabel"><b>F107 — sign-out failed</b> (visible, not a console.error) · <b>F144 — the terminal's escape chord</b> (the chord is B-γ's spec)</div>
+    <div class="pad" style="display:flex;flex-direction:column;gap:10px">
+      <div class="note red" style="margin-top:0"><b>Couldn't sign you out</b><span>Your session is still live. Try again, or close every tab on this site.</span></div>
+      <p class="secsub">Ctrl+Shift+] moves focus out of the terminal.</p>
+    </div>
+    <div class="varlabel"><b>U3 — the Workspace card's two unminted <span class="mono">user_drive_unavailable</span> sentences</b> (F139/F052; the other two reuse existing canon) — Q14 asks whether they are this round's</div>
+    <div class="pad" style="display:flex;flex-direction:column;gap:10px">
+      <p class="secsub" style="margin:0">Your drive couldn't be checked, so it stays unmounted for this run. Try again, or ask an admin.</p>
+      <p class="secsub" style="margin:0">Your governance profile couldn't be resolved, so your drive stays unmounted for this run — sign in again.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 18 ===== The re-home confirm dialog -->
+<section class="state">
+  <div class="tag"><span>State 18</span><b>Drives · the re-home confirm (U3) — an identity-affecting edit of an ALLOCATED drive: the console's one heading over the server's 409, the confirm is Save drive painted destructive</b></div>
+  <div class="frame">
+    <div class="dlgwrap">
+      <div class="dlg">
+        <h3>Saving this moves people's directories</h3>
+        <!-- The body is driveRehomeGuard's 409 verbatim; its closing "Confirming is an API action…"
+             sentence is S2's to rewrite once this dialog exists (user-drives-prompt.md §7.1). -->
+        <div class="note red" style="max-width:none;margin-top:12px"><span>this drive is allocated to 4 subjects and this change re-homes them: backend "host_path" → "docker_volume", home_template "email_local" → "hash". Every allocated person's storage object is derived from these fields, so their next run mounts a different object and the one holding their work is left behind with nothing in Wardyn naming it.</span></div>
+        <div class="row"><button class="btn ghost" type="button">Cancel</button><button class="btn danger" type="button">Save drive</button></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== STATE 3b (drives mock) ===== Drive editor, managed backend -->
+<section class="state">
+  <div class="tag"><span>State 3b (drives mock, F049)</span><b>Drive editor (Docker, Wardyn-managed) — the home-template rule's mirror: every non-derived option disabled, HOME_HINT says why (Q13, drawn as (a)); the losing variant beneath</b></div>
+  <div class="frame">
+    <div class="pad" style="padding-bottom:14px"><h3 class="sectitle">Edit "Workbench"</h3></div>
+    <div class="form two" style="padding-top:0">
+      <div class="f">
+        <label>Backend</label>
+        <div class="opts"><div class="o sel">Wardyn-managed volume (this Docker host)</div><div class="o">Share mounted on this host</div></div>
+        <div class="hint wide">Only the backends this deployment's runner can mount are offered.</div>
+      </div>
+      <div class="f">
+        <label>Directory name</label>
+        <div class="opts">
+          <div class="o sel">Derived (stable id)<span class="why">A short id derived from the drive and the person. It never collides and says nothing about who it is — Preview below finds a person's directory.</span></div>
+          <div class="o off">Sign-in subject<span class="why">The subject id your identity provider sends, lowercased. Stable, but rarely what a share already calls a person.</span></div>
+          <div class="o off">Email, before the @<span class="why">The part before the @, lowercased — the usual shape of a corporate home directory.</span></div>
+        </div>
+        <div class="hint wide">How each person's directory is named inside the drive. A share uses the name your directory already has; a managed drive can use a derived id.</div>
+        <div class="hint wide">A directory name is lowercase letters and digits, then any of <span class="mono">. _ -</span>, up to 63 characters. A person whose claim cannot name one is refused at their run, never guessed.</div>
+      </div>
+    </div>
+    <div class="pad" style="padding-top:0">
+      <!-- The API-path 400 an older row or `wardyn drive apply` meets, verbatim (ValidateUserDrive). -->
+      <div class="note red" style="max-width:none"><b>This drive can't be saved as written</b><span><span class="mono">home_template</span> "<span class="mono">email_local</span>" is not allowed on a managed backend — Wardyn names the object after the directory, so the template lands in a docker_volume object name that <span class="mono">docker volume ls</span> and <span class="mono">kubectl get pvc</span> show without inspecting anything; email_local also collides two people whose addresses share the part before the "@". Use hash, which is unique and reveals nothing; a share backend keeps every template</span></div>
+    </div>
+    <div class="varlabel"><b>Q13's losing variant</b> — the two claim options not offered at all on a managed backend</div>
+    <div class="form one" style="padding-bottom:18px">
+      <div class="f">
+        <label>Directory name</label>
+        <div class="opts"><div class="o sel">Derived (stable id)<span class="why">A short id derived from the drive and the person. It never collides and says nothing about who it is — Preview below finds a person's directory.</span></div></div>
+        <div class="hint wide">How each person's directory is named inside the drive. A share uses the name your directory already has; a managed drive can use a derived id.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<script>
+document.getElementById("tt").addEventListener("click", function () {
+  var r = document.documentElement;
+  r.dataset.theme = r.dataset.theme === "dark" ? "light" : "dark";
+});
+</script>
+</body>
+</html>
