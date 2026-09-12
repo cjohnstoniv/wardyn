@@ -34,8 +34,8 @@ const migrationDocFloor = 38
 // 0060 is the one an operator can feel: it adds a CHECK that newly REJECTS a
 // class of api_tokens write that previously succeeded.
 var undocumentedMigrations = map[string]string{
-	"0044_run_failure_hint":                       "adds agent_runs.failure_hint",
-	"0049_oidc_session_revocations":               "adds the oidc_session_revocations table behind POST /sessions/revoke",
+	"0044_run_failure_hint":         "adds agent_runs.failure_hint",
+	"0049_oidc_session_revocations": "adds the oidc_session_revocations table behind POST /sessions/revoke",
 }
 
 // TestEveryMigrationIsDocumented is the ratchet nothing supplied: a migration is
