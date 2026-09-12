@@ -228,6 +228,14 @@ type bedrockAuth struct {
 	// residency note for why this differs from bearer. Mutually exclusive with
 	// awsMount and the resident-key path; bearer still wins over it.
 	ssoInject bool
+	// ssoRefreshFailure carries the refusal sentence when a captured AWS SSO
+	// credential COULD have been renewed but the renewal did not land (the
+	// refresh token is spent, or the OIDC call did not complete). It is set only
+	// on the dispatch pass (refresh=true) and is independent of ready: the SSO
+	// lane simply did not fire, and within Bedrock the mount/static lanes below
+	// it still may. It exists so the dispatch gate can refuse the run with a
+	// reason instead of letting a run boot toward a model it cannot reach.
+	ssoRefreshFailure string
 }
 
 // bedrockRuntimeHost is the regional Bedrock DATA-PLANE host claude-code's
@@ -331,10 +339,29 @@ func awsSSOLoginConfigFileContents(startURL, region string) string {
 
 // awsSSOCacheFileContents generates the SSO token-cache JSON the AWS SDK reads
 // from ~/.aws/sso/cache/<awsSSOCacheFileName>.json: accessToken/expiresAt
-// (RFC3339) are always present; the refresh/registration fields ride along
-// when the login also registered a public client, so the SDK can silently
-// refresh instead of forcing a re-login once only the access token (not the
-// client registration) has lapsed.
+// (RFC3339) are always present.
+//
+// ONE REFRESHER PER TOKEN. refreshToken/clientId/clientSecret are WITHHELD
+// whenever the blob carries a refresh token, because the control plane redeems
+// it at dispatch (awssso_refresh.go) and CreateToken ROTATES the token: with
+// both parties refreshing, a long-lived run would have the sandbox rotate the
+// token in-run, spend the stored one, and the next dispatch's redeem would fail
+// invalid_grant — hourly manual re-auth back as the resting state. Only one
+// party may hold the rotating secret, and only the control plane can persist
+// what comes back.
+//
+// The SDK loads a cache without those three fine: it validates accessToken and
+// expiresAt on load, and the registration fields matter only to its OWN refresh
+// attempt. aws-sdk-js-v3 makes that attempt within 5 minutes of expiry, which
+// awsSSORefreshSkew (10 min) keeps a freshly dispatched run out of; botocore
+// uses a 15-minute window but does not throw on their absence — it loads such a
+// cache at 50 minutes and at 3 minutes of remaining validity alike (verified
+// against botocore 1.43.93) and raises only once the token has EXPIRED. A run
+// that outlives its access token therefore fails visibly at its first model call
+// instead of silently rotating the pair behind the control plane.
+//
+// A blob with NO refresh token keeps today's bytes exactly: there is nothing to
+// rotate, so the registration fields are harmless where they exist.
 func awsSSOCacheFileContents(b awsSSOBlob) string {
 	cache := map[string]any{
 		"startUrl":    b.StartURL,
@@ -342,14 +369,13 @@ func awsSSOCacheFileContents(b awsSSOBlob) string {
 		"accessToken": b.AccessToken,
 		"expiresAt":   b.ExpiresAt.UTC().Format(time.RFC3339),
 	}
-	if b.RefreshToken != "" {
-		cache["refreshToken"] = b.RefreshToken
-	}
-	if b.ClientID != "" {
-		cache["clientId"] = b.ClientID
-	}
-	if b.ClientSecret != "" {
-		cache["clientSecret"] = b.ClientSecret
+	if b.RefreshToken == "" {
+		if b.ClientID != "" {
+			cache["clientId"] = b.ClientID
+		}
+		if b.ClientSecret != "" {
+			cache["clientSecret"] = b.ClientSecret
+		}
 	}
 	if !b.RegistrationExpiresAt.IsZero() {
 		cache["registrationExpiresAt"] = b.RegistrationExpiresAt.UTC().Format(time.RFC3339)
@@ -379,7 +405,13 @@ func awsSSOCacheFileContents(b awsSSOBlob) string {
 // EVERY secret read below is in the OPERATOR namespace on purpose (bare Get ==
 // For("")): Bedrock credentials are MDM/operator-set daemon config, never a
 // member row (writableSecretName refuses these names for a non-operator).
-func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscriptionActive, modelRun bool, ws *types.WorkspaceBedrockRef) bedrockAuth {
+//
+// refresh authorizes SIDE EFFECTS: only with refresh=true may the captured-SSO
+// lane redeem its rotating refresh token and persist the rotated pair. ONLY
+// DISPATCH sets it. Create and preflight pass false — a dry run must never spend
+// a one-use token, and it does not need to: an expired-but-renewable credential
+// reads READY there, because dispatch renews it (see the captured-SSO branch).
+func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscriptionActive, modelRun, refresh bool, ws *types.WorkspaceBedrockRef) bedrockAuth {
 	region, model, profile := s.cfg.BedrockRegion, s.cfg.BedrockModel, s.cfg.BedrockAWSProfile
 	if ws != nil {
 		region = cmp.Or(strings.TrimSpace(ws.Region), region)
@@ -422,6 +454,11 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 		}
 		return env
 	}
+	// ssoRefreshFailure is set by the captured-SSO branch when a renewable
+	// credential could not be renewed. Every return below carries it, because the
+	// dispatch gate must be able to name the reason whichever lane (if any) ended
+	// up winning.
+	var ssoRefreshFailure string
 	// ready return shared by every credential mode below: stamps the EFFECTIVE
 	// region/model so the audit names what this run used, not the global config,
 	// and the EFFECTIVE data-plane host so applyBedrockTransport's audit names
@@ -430,6 +467,7 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 	ready := func(b bedrockAuth) bedrockAuth {
 		b.ready, b.region, b.model, b.runtimeHost = true, region, model, runtimeHost
 		b.runtimePort = runtimePort
+		b.ssoRefreshFailure = ssoRefreshFailure
 		return b
 	}
 
@@ -470,14 +508,34 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 	// Bedrock bearer path above. Until Phase B ships, this is an accepted,
 	// documented tradeoff (same class as the resident-SigV4 fallback), not an
 	// oversight.
+	//
+	// RENEWAL (the fix for a credential the next twenty lines would have healed):
+	// an EXPIRED access token is not a dead credential when the blob carries a
+	// refresh token and its client registration has not lapsed — dispatch renews
+	// it here and the lane fires. The fall-through below is kept for exactly the
+	// two cases nothing can heal: no refresh token at all (a legacy
+	// sso_start_url profile) or a lapsed registration. On a renewal FAILURE the
+	// SSO lane simply is not ready and carries its reason: within Bedrock the
+	// mount and static-key lanes below still run exactly as they do today (the
+	// chain is one mechanism), but no reader may read that as permission to
+	// substitute a DIFFERENT mechanism — a credential must never silently change
+	// source, which is what ssoRefreshFailure exists to let the dispatch gate say.
 	if blob, found, berr := s.readAWSSSOBlob(ctx); berr == nil && found {
-		if blob.expired(s.cfg.Now()) {
-			// Observable so the UI can tell the operator to re-login (setup status
-			// reads the same readAWSSSOBlob + expired() this checks); fall through to
-			// the next credential mode rather than handing the run a dead token.
-			slog.WarnContext(ctx, "wardynd: captured AWS SSO credential expired; falling back to the next Bedrock credential mode",
+		if refresh {
+			blob, ssoRefreshFailure = s.refreshAWSSSOBlob(ctx, "", blob)
+		}
+		switch {
+		case ssoRefreshFailure != "":
+			slog.ErrorContext(ctx, "wardynd: captured AWS SSO credential could not be renewed; this Bedrock lane is not ready",
 				slog.Time("expired_at", blob.ExpiresAt))
-		} else {
+		case !blob.renewable(s.cfg.Now()) && blob.expired(s.cfg.Now()):
+			// Observable so the UI can tell the operator to re-login (setup status
+			// reads the same readAWSSSOBlob + the same predicate this checks); fall
+			// through to the next credential mode rather than handing the run a dead
+			// token.
+			slog.WarnContext(ctx, "wardynd: captured AWS SSO credential expired and cannot be renewed; falling back to the next Bedrock credential mode",
+				slog.Time("expired_at", blob.ExpiresAt))
+		default:
 			env := base()
 			env["AWS_CONFIG_FILE"] = sandboxAWSDir + "/config"
 			// Deliberately not materialized: a missing shared-credentials file is
@@ -539,7 +597,7 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 	accessKey, aerr := s.cfg.Secrets.Get(ctx, bedrockAccessKeyIDSecret)
 	secretKey, serr := s.cfg.Secrets.Get(ctx, bedrockSecretAccessKeySecret)
 	if aerr != nil || serr != nil || len(accessKey) == 0 || len(secretKey) == 0 {
-		return bedrockAuth{}
+		return bedrockAuth{ssoRefreshFailure: ssoRefreshFailure}
 	}
 	env := base()
 	env["AWS_ACCESS_KEY_ID"] = string(accessKey)
@@ -567,7 +625,11 @@ type SetupBedrock struct {
 	CredsPresent  bool `json:"creds_present"`  // resident aws-access-key-id + aws-secret-access-key secrets
 	AWSMount      bool `json:"aws_mount"`      // host-mode read-only ~/.aws bind-mount (SSO auto-refreshes)
 	BearerPresent bool `json:"bearer_present"` // bedrock-api-key bearer token secret (never resident)
-	SSOPresent    bool `json:"sso_present"`    // captured, NON-EXPIRED container-login AWS SSO session
+	// SSOPresent: a captured container-login AWS SSO session that a run would
+	// actually authenticate with — live, OR expired-but-renewable (dispatch
+	// renews it). Only a session nothing can heal (no refresh token, or a lapsed
+	// client registration) reads false.
+	SSOPresent bool `json:"sso_present"`
 	// Ready is the server-computed readiness (region+model+any credential source),
 	// echoed so the UI doesn't re-derive — and drift from — this gate.
 	Ready bool `json:"ready"`
@@ -577,8 +639,10 @@ type SetupBedrock struct {
 // transport right now — mirrors resolveBedrockAuth's gate: region + model AND at
 // least one credential source (a bearer token, a captured AWS SSO session, a
 // ~/.aws mount, or resident keys). Presence, not value, is enough here (no live
-// secret-store read) — except for the SSO session, whose expiry IS honoured
-// because resolveBedrockAuth falls through an expired blob to the next mode.
+// secret-store read) — except for the SSO session, which honours the SAME
+// predicate resolveBedrockAuth's captured-SSO branch uses (renewable ||
+// !expired), so the wizard and the launch gate cannot disagree about whether an
+// expired-but-renewable session counts.
 func (b SetupBedrock) ready() bool {
 	return b.Region != "" && b.Model != "" &&
 		(b.CredsPresent || b.AWSMount || b.BearerPresent || b.SSOPresent)
@@ -601,7 +665,7 @@ func (b SetupBedrock) credSourceDesc() string {
 	case b.BearerPresent:
 		return "a proxy-injected Bedrock API key (never resident in the sandbox)"
 	case b.SSOPresent:
-		return "your captured AWS SSO session (container login; re-login when it expires)"
+		return credSourceSSODesc
 	case b.AWSMount:
 		return "your host AWS credentials via a read-only ~/.aws mount (SSO auto-refreshes)"
 	default:
@@ -622,9 +686,16 @@ func (s *Server) setupBedrock(ctx context.Context, present map[string]bool) Setu
 		st, err := os.Stat(s.cfg.BedrockAWSConfigDir)
 		awsMount = err == nil && st.IsDir()
 	}
+	// The SAME predicate resolveBedrockAuth's captured-SSO branch applies, for the
+	// reason named on SetupBedrock.ready: an expired-but-renewable session IS a
+	// credential (dispatch renews it), so reporting it dead here would tell an
+	// operator to re-login hourly for a credential that heals itself — and, once
+	// a declared mechanism can refuse a run, would refuse a run dispatch heals.
+	// Reading NO refresh is done here: this is a read-only probe.
 	sso := false
 	if blob, found, err := s.readAWSSSOBlob(ctx); err == nil && found {
-		sso = !blob.expired(s.cfg.Now())
+		now := s.cfg.Now()
+		sso = blob.renewable(now) || !blob.expired(now)
 	}
 	b := SetupBedrock{
 		Region:        s.cfg.BedrockRegion,

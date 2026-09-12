@@ -37,12 +37,21 @@ func putAWSSSOBlob(t *testing.T, s *Server, expiresAt time.Time) awsSSOBlob {
 		ExpiresAt:    expiresAt,
 		CapturedAt:   awsSSOTestFixedNow.Add(-time.Hour),
 	}
+	storeSSOBlob(t, s, blob)
+	return blob
+}
+
+// storeSSOBlob writes an already-built blob over whatever putAWSSSOBlob stored,
+// for the cases that need a field putAWSSSOBlob's fixture does not vary (no
+// refresh token, a lapsed registration, a rotated pair read back after a
+// refresh).
+func storeSSOBlob(t *testing.T, s *Server, blob awsSSOBlob) {
+	t.Helper()
 	raw, err := json.Marshal(blob)
 	if err != nil {
 		t.Fatalf("marshal test SSO blob: %v", err)
 	}
 	s.cfg.Secrets.(*memSecrets).m[harnessCredSecretName(awsSSOProvider)] = raw
-	return blob
 }
 
 // decodeSSOFiles parses the awsSSOConfigEnvVar payload back into a
@@ -79,7 +88,7 @@ func TestResolveBedrockAuth_SSOInject_WinsOverMountAndStaticKeys(t *testing.T) {
 	s.cfg.Now = func() time.Time { return awsSSOTestFixedNow }
 	blob := putAWSSSOBlob(t, s, awsSSOTestFixedNow.Add(time.Hour)) // not expired
 
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil)
 	if !ba.ready || !ba.ssoInject {
 		t.Fatalf("ready=%v ssoInject=%v, want both true", ba.ready, ba.ssoInject)
 	}
@@ -160,24 +169,76 @@ func TestResolveBedrockAuth_SSOInject_WinsOverMountAndStaticKeys(t *testing.T) {
 	}
 }
 
-// TestResolveBedrockAuth_SSOInject_ExpiredFallsThrough: an EXPIRED captured
-// blob must NOT be used — the run falls through to the next credential mode
-// (here, the resident static keys) rather than getting a dead token.
-func TestResolveBedrockAuth_SSOInject_ExpiredFallsThrough(t *testing.T) {
+// TestResolveBedrockAuth_SSOInject_ExpiredButRenewableIsUsed is the INVERSION of
+// the old "expired falls through" contract, and the whole point of the C1 fix:
+// putAWSSSOBlob's fixture carries a refresh token, so an expired access token is
+// a credential the control plane heals — not one to throw away in favour of a
+// DIFFERENT credential source. The lane must still win over the resident static
+// keys the fixture also stores.
+//
+// refresh=false here (the create/preflight pass): no renewal is attempted, and
+// the verdict is still READY, because dispatch renews it. That is what stops a
+// declared-mechanism refusal from rejecting a run dispatch would have healed.
+func TestResolveBedrockAuth_SSOInject_ExpiredButRenewableIsUsed(t *testing.T) {
 	s := fullyConfiguredBedrockServer()
 	s.cfg.MaskRegistry = secretmask.NewRegistry()
 	s.cfg.Now = func() time.Time { return awsSSOTestFixedNow }
-	putAWSSSOBlob(t, s, awsSSOTestFixedNow.Add(-time.Minute)) // already expired
+	putAWSSSOBlob(t, s, awsSSOTestFixedNow.Add(-time.Minute)) // access token already expired
 
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil)
+	if !ba.ready || !ba.ssoInject {
+		t.Fatalf("ready=%v ssoInject=%v; want both true (an expired-but-renewable session is a credential)", ba.ready, ba.ssoInject)
+	}
+	if ba.env["AWS_ACCESS_KEY_ID"] != "" {
+		t.Error("fell through to the resident static-key path; a renewable SSO session must not be replaced by another credential source")
+	}
+	if ba.ssoRefreshFailure != "" {
+		t.Errorf("ssoRefreshFailure = %q; want empty (no renewal was attempted on the create pass)", ba.ssoRefreshFailure)
+	}
+}
+
+// TestResolveBedrockAuth_SSOInject_ExpiredUnRENEWABLEFallsThrough keeps the OLD
+// behaviour for the only case nothing can heal: a legacy sso_start_url profile
+// with no refresh token. It falls through to the next credential mode inside the
+// same mechanism rather than being handed a dead token.
+func TestResolveBedrockAuth_SSOInject_ExpiredUnrenewableFallsThrough(t *testing.T) {
+	s := fullyConfiguredBedrockServer()
+	s.cfg.MaskRegistry = secretmask.NewRegistry()
+	s.cfg.Now = func() time.Time { return awsSSOTestFixedNow }
+	blob := putAWSSSOBlob(t, s, awsSSOTestFixedNow.Add(-time.Minute))
+	blob.RefreshToken = ""
+	storeSSOBlob(t, s, blob)
+
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, true /* refresh */, nil)
 	if !ba.ready {
 		t.Fatal("ready = false; want true (falls through to the resident static-key path)")
 	}
 	if ba.ssoInject {
-		t.Fatal("ssoInject = true with an expired blob; want false (must not use a dead token)")
+		t.Fatal("ssoInject = true with an expired, unrenewable blob; want false (must not use a dead token)")
 	}
 	if ba.env["AWS_ACCESS_KEY_ID"] == "" {
 		t.Error("expected fallthrough to the resident static-key path, but AWS_ACCESS_KEY_ID is absent")
+	}
+}
+
+// TestResolveBedrockAuth_SSOInject_LapsedRegistrationFallsThrough: a refresh
+// token whose CLIENT REGISTRATION has lapsed cannot be redeemed either, so the
+// same fall-through applies — and, per the IsZero rule, only a NON-zero
+// registration timestamp in the past counts as lapsed.
+func TestResolveBedrockAuth_SSOInject_LapsedRegistrationFallsThrough(t *testing.T) {
+	s := fullyConfiguredBedrockServer()
+	s.cfg.MaskRegistry = secretmask.NewRegistry()
+	s.cfg.Now = func() time.Time { return awsSSOTestFixedNow }
+	blob := putAWSSSOBlob(t, s, awsSSOTestFixedNow.Add(-time.Minute))
+	blob.RegistrationExpiresAt = awsSSOTestFixedNow.Add(-time.Hour)
+	storeSSOBlob(t, s, blob)
+
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, true /* refresh */, nil)
+	if ba.ssoInject {
+		t.Fatal("ssoInject = true with a lapsed client registration; want false")
+	}
+	if ba.ssoRefreshFailure != "" {
+		t.Errorf("ssoRefreshFailure = %q; want empty — a lapsed registration is a fall-through, not a renewal failure", ba.ssoRefreshFailure)
 	}
 }
 
@@ -190,7 +251,7 @@ func TestResolveBedrockAuth_BearerBeatsSSOInject(t *testing.T) {
 	s.cfg.Secrets.(*memSecrets).m[bedrockAPIKeySecret] = []byte("bedrock-bearer-token-xyz")
 	putAWSSSOBlob(t, s, awsSSOTestFixedNow.Add(time.Hour))
 
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil)
 	if !ba.bearer || ba.ssoInject {
 		t.Fatalf("bearer=%v ssoInject=%v, want bearer preferred over ssoInject", ba.bearer, ba.ssoInject)
 	}
@@ -205,7 +266,7 @@ func TestResolveBedrockAuth_SSOInject_AbsentBlob(t *testing.T) {
 	s.cfg.Now = func() time.Time { return awsSSOTestFixedNow }
 	// No putAWSSSOBlob call: secret store has no aws-sso credential.
 
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil)
 	if !ba.ready || ba.ssoInject {
 		t.Fatalf("ready=%v ssoInject=%v, want ready=true via the static-key fallback, ssoInject=false", ba.ready, ba.ssoInject)
 	}

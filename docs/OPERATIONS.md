@@ -2612,7 +2612,8 @@ literal-IP note above). Prefer the hostname shape.
 **`wardynd`'s own egress is a separate channel.** `upstream_proxy_no_proxy`,
 `internal_hosts` and `WARDYN_BEDROCK_BASE_URL` govern the **sandbox** proxy;
 `wardynd`'s own control-plane calls — OIDC discovery, JWKS, the Entra directory
-connector, STS for a SigV4 Bedrock run — go out over its process HTTP client,
+connector, STS for a SigV4 Bedrock run, and `oidc.<region>.amazonaws.com` to renew
+a captured AWS SSO session at dispatch — go out over its process HTTP client,
 which carries no SSRF guard, so a private (100.64) issuer or Graph host is
 dialled directly and boots fine. What that client *does* honour is the
 process's own `HTTPS_PROXY`/`NO_PROXY` (the published images do not set them at

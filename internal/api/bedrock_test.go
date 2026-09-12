@@ -22,7 +22,7 @@ import (
 // agent or subscription state.
 func TestResolveBedrockAuth_NotConfigured(t *testing.T) {
 	s := &Server{cfg: Config{Secrets: &memSecrets{m: map[string][]byte{}}}}
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil)
 	if ba.ready || ba.env != nil || ba.egressHosts != nil {
 		t.Fatalf("unconfigured Bedrock: got ready=%v env=%v hosts=%v, want false/nil/nil", ba.ready, ba.env, ba.egressHosts)
 	}
@@ -37,7 +37,7 @@ func TestResolveBedrockAuth_MissingCreds(t *testing.T) {
 		BedrockModel:  "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
 		Secrets:       &memSecrets{m: map[string][]byte{}}, // no aws-* secrets stored
 	}}
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil)
 	if ba.ready {
 		t.Fatal("ready = true with no AWS credential secrets stored; want false (degrade, don't break the run)")
 	}
@@ -48,7 +48,7 @@ func TestResolveBedrockAuth_MissingCreds(t *testing.T) {
 // subscription must win even when Bedrock is fully configured.
 func TestResolveBedrockAuth_SubscriptionPreempts(t *testing.T) {
 	s := fullyConfiguredBedrockServer()
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", true /* subscriptionActive */, true /* modelRun */, nil)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", true /* subscriptionActive */, true /* modelRun */, false /* refresh */, nil)
 	if ba.ready {
 		t.Fatal("ready = true with subscription active; want false (subscription pre-empts Bedrock)")
 	}
@@ -58,7 +58,7 @@ func TestResolveBedrockAuth_SubscriptionPreempts(t *testing.T) {
 // (mirrors the existing AgentAnthropicModel gate); a Codex run never gets it.
 func TestResolveBedrockAuth_NonClaudeAgent(t *testing.T) {
 	s := fullyConfiguredBedrockServer()
-	ba := s.resolveBedrockAuth(context.Background(), "codex-cli", false, true /* modelRun */, nil)
+	ba := s.resolveBedrockAuth(context.Background(), "codex-cli", false, true /* modelRun */, false /* refresh */, nil)
 	if ba.ready {
 		t.Fatal("ready = true for codex-cli; want false (Bedrock wiring is Claude-only)")
 	}
@@ -70,7 +70,7 @@ func TestResolveBedrockAuth_NonClaudeAgent(t *testing.T) {
 // control-plane — omitting the latter 403s an inference-profile model id).
 func TestResolveBedrockAuth_Ready(t *testing.T) {
 	s := fullyConfiguredBedrockServer()
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil)
 	if !ba.ready {
 		t.Fatal("ready = false for a fully-configured Bedrock server; want true")
 	}
@@ -119,7 +119,7 @@ func TestResolveBedrockAuth_Ready(t *testing.T) {
 func TestResolveBedrockAuth_WorkspaceRefOverridesGlobal(t *testing.T) {
 	s := fullyConfiguredBedrockServer() // global: us-east-1 / us.anthropic...
 	ws := &types.WorkspaceBedrockRef{Region: "eu-central-1", Model: "eu.anthropic.claude-sonnet-4-5-20250929-v1:0"}
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, ws)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, ws)
 	if !ba.ready {
 		t.Fatal("ready = false with a fully-configured server plus a workspace override; want true")
 	}
@@ -148,7 +148,7 @@ func TestResolveBedrockAuth_WorkspaceRefOverridesGlobal(t *testing.T) {
 func TestResolveBedrockAuth_BearerPreferred(t *testing.T) {
 	s := fullyConfiguredBedrockServer()
 	s.cfg.Secrets.(*memSecrets).m[bedrockAPIKeySecret] = []byte("bedrock-bearer-token-xyz")
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil)
 	if !ba.ready || !ba.bearer {
 		t.Fatalf("ready=%v bearer=%v, want both true (bearer secret present)", ba.ready, ba.bearer)
 	}
@@ -170,7 +170,7 @@ func TestResolveBedrockAuth_BearerPreferred(t *testing.T) {
 // won't sign a Bedrock request. Same fixture as the golden path, modelRun flips.
 func TestResolveBedrockAuth_SkipsNonModelRun(t *testing.T) {
 	s := fullyConfiguredBedrockServer()
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, false /* modelRun */, nil)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, false /* modelRun */, false /* refresh */, nil)
 	if ba.ready || ba.env != nil || ba.egressHosts != nil {
 		t.Fatalf("verify/scan run (modelRun=false): got ready=%v env=%v hosts=%v, want false/nil/nil (no resident AWS creds)", ba.ready, ba.env, ba.egressHosts)
 	}
@@ -181,7 +181,7 @@ func TestResolveBedrockAuth_SkipsNonModelRun(t *testing.T) {
 func TestResolveBedrockAuth_OptionalSessionToken(t *testing.T) {
 	s := fullyConfiguredBedrockServer()
 	s.cfg.Secrets.(*memSecrets).m[bedrockSessionTokenSecret] = []byte("FQoGZXIvYXdzEtemp-session-token")
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil)
 	if !ba.ready {
 		t.Fatal("ready = false; want true")
 	}
@@ -203,7 +203,7 @@ func TestResolveBedrockAuth_AWSDirMount(t *testing.T) {
 		BedrockAWSProfile:   "bedrock-sso",
 		Secrets:             &memSecrets{m: map[string][]byte{}}, // NO static keys stored
 	}}
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil)
 	if !ba.ready || !ba.awsMount {
 		t.Fatalf("ready=%v awsMount=%v, want both true", ba.ready, ba.awsMount)
 	}
@@ -243,7 +243,7 @@ func TestResolveBedrockAuth_AWSDirMountMissingFailsSafe(t *testing.T) {
 		BedrockAWSConfigDir: "/nonexistent/path/dot-aws",
 		Secrets:             &memSecrets{m: map[string][]byte{}},
 	}}
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true, nil)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true, false /* refresh */, nil)
 	if ba.ready || ba.awsMount {
 		t.Fatalf("ready=%v awsMount=%v for a nonexistent mount dir; want both false (fail safe)", ba.ready, ba.awsMount)
 	}
@@ -259,7 +259,7 @@ func TestResolveBedrockAuth_BearerBeatsMount(t *testing.T) {
 		BedrockAWSConfigDir: dir,
 		Secrets:             &memSecrets{m: map[string][]byte{bedrockAPIKeySecret: []byte("bearer-xyz")}},
 	}}
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true, nil)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true, false /* refresh */, nil)
 	if !ba.bearer || ba.awsMount {
 		t.Fatalf("bearer=%v awsMount=%v, want bearer preferred over the mount", ba.bearer, ba.awsMount)
 	}
@@ -276,7 +276,7 @@ func TestResolveBedrockAuth_AWSSSORegionOverride(t *testing.T) {
 		BedrockAWSSSORegion: "us-east-1",
 		Secrets:             &memSecrets{m: map[string][]byte{}},
 	}}
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true, nil)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true, false /* refresh */, nil)
 	hosts := strings.Join(ba.egressHosts, ",")
 	if !strings.Contains(hosts, "portal.sso.us-east-1.amazonaws.com") {
 		t.Errorf("SSO egress %v should use the SSO region us-east-1", ba.egressHosts)
@@ -368,21 +368,38 @@ func TestSetupBedrock_SSOLaneMatchesLaunchGate(t *testing.T) {
 	if !b.SSOPresent || !b.Ready {
 		t.Fatalf("captured non-expired SSO: SSOPresent = %v, Ready = %v; want true/true", b.SSOPresent, b.Ready)
 	}
-	if ba := live.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil); !ba.ready {
+	if ba := live.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil); !ba.ready {
 		t.Fatal("resolveBedrockAuth: ready = false on the config setupBedrock calls ready — the two gates drifted apart again")
 	}
 	if got := b.credSourceDesc(); !strings.Contains(got, "SSO") {
 		t.Errorf("credSourceDesc() = %q; want the winning SSO lane named", got)
 	}
 
+	// INVERTED with the C1 fix: an expired-but-RENEWABLE session (putAWSSSOBlob's
+	// fixture carries a refresh token) reads PRESENT on both surfaces, because
+	// dispatch renews it. The wizard and the launch gate must agree on the same
+	// renewable-or-live predicate — that agreement is what this test exists for.
+	renewable := newServer()
+	putAWSSSOBlob(t, renewable, awsSSOTestFixedNow.Add(-time.Minute)) // access token expired
+	rb := renewable.setupBedrock(context.Background(), nil)
+	if !rb.SSOPresent || !rb.Ready {
+		t.Fatalf("EXPIRED but renewable SSO: SSOPresent = %v, Ready = %v; want true/true", rb.SSOPresent, rb.Ready)
+	}
+	if ba := renewable.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil); !ba.ready || !ba.ssoInject {
+		t.Fatalf("resolveBedrockAuth: ready=%v ssoInject=%v on an expired-but-renewable blob; want true/true — the two gates drifted apart again", ba.ready, ba.ssoInject)
+	}
+
+	// Only a session nothing can heal reads dead on both surfaces.
 	dead := newServer()
-	putAWSSSOBlob(t, dead, awsSSOTestFixedNow.Add(-time.Minute)) // expired
+	deadBlob := putAWSSSOBlob(t, dead, awsSSOTestFixedNow.Add(-time.Minute))
+	deadBlob.RefreshToken = "" // legacy sso_start_url profile: nothing to renew
+	storeSSOBlob(t, dead, deadBlob)
 	db := dead.setupBedrock(context.Background(), nil)
 	if db.SSOPresent || db.Ready {
-		t.Fatalf("EXPIRED SSO: SSOPresent = %v, Ready = %v; want false/false", db.SSOPresent, db.Ready)
+		t.Fatalf("EXPIRED, unrenewable SSO: SSOPresent = %v, Ready = %v; want false/false", db.SSOPresent, db.Ready)
 	}
-	if ba := dead.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil); ba.ready {
-		t.Fatal("resolveBedrockAuth: ready = true on an expired SSO blob with no other credential — fixture no longer models the launch gate")
+	if ba := dead.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil); ba.ready {
+		t.Fatal("resolveBedrockAuth: ready = true on an expired, unrenewable SSO blob with no other credential — fixture no longer models the launch gate")
 	}
 }
 
@@ -405,7 +422,7 @@ const (
 func TestResolveBedrockAuth_BaseURLOverride(t *testing.T) {
 	s := fullyConfiguredBedrockServer()
 	s.cfg.BedrockBaseURL = bedrockOverrideBaseURL
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil)
 	if !ba.ready {
 		t.Fatal("ready = false with a fully-configured Bedrock server plus a base-URL override; want true")
 	}
@@ -441,7 +458,7 @@ func TestResolveBedrockAuth_BaseURLOverride(t *testing.T) {
 	// The no-op counterfactual: unset must be byte-identical to today.
 	t.Run("unset is byte-identical", func(t *testing.T) {
 		plain := fullyConfiguredBedrockServer() // BedrockBaseURL is the zero value
-		pa := plain.resolveBedrockAuth(context.Background(), "claude-code", false, true, nil)
+		pa := plain.resolveBedrockAuth(context.Background(), "claude-code", false, true, false /* refresh */, nil)
 		if pa.runtimeHost != bedrockRuntimeHost("us-east-1") {
 			t.Errorf("runtimeHost = %q, want the regional public host with no override set", pa.runtimeHost)
 		}
@@ -468,7 +485,7 @@ func TestResolveBedrockAuth_BaseURLOverride_Bearer(t *testing.T) {
 	s.cfg.BedrockBaseURL = bedrockOverrideBaseURL
 	s.cfg.Secrets.(*memSecrets).m[bedrockAPIKeySecret] = []byte("bedrock-bearer-token-xyz")
 	s.cfg.Store = vetoGrantStore{}
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, nil)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil)
 	if !ba.ready || !ba.bearer {
 		t.Fatalf("ready=%v bearer=%v, want both true (bearer secret present)", ba.ready, ba.bearer)
 	}

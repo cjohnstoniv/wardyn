@@ -522,7 +522,12 @@ func (s *Server) resolveRunLLMAccess(ctx context.Context, req createRunRequest, 
 	// override is honored here too — a workspace can only narrow region/model, never
 	// supply credentials — matching what launch enforces.
 	if llmAccess == nil || !llmAccess.Provisioned {
-		if ba := s.resolveBedrockAuth(ctx, req.Agent, subscriptionActive, true, bedrockRef); ba.ready {
+		// refresh=false: create is a dry run over a ONE-USE rotating token. An
+		// expired-but-renewable captured SSO session still reads READY here (the
+		// same renewable-or-live predicate the launch gate applies), because
+		// dispatch renews it — warning about it would advertise a failure that
+		// cannot happen, and redeeming it here would spend the token twice.
+		if ba := s.resolveBedrockAuth(ctx, req.Agent, subscriptionActive, true, false, bedrockRef); ba.ready {
 			llmAccess = &composeLLMAccess{
 				Provisioned: true,
 				Note:        "Amazon Bedrock is configured by the operator (region " + ba.region + ", model " + ba.model + "); this run uses it automatically — no per-run API key is needed.",

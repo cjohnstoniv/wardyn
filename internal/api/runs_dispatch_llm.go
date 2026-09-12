@@ -147,7 +147,9 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	// bedrockRef is the picked workspace/container's per-run region/model
 	// override (nil => the global operator config).
 	if !t.harnessLogin {
-		t.bedrock = s.resolveBedrockAuth(ctx, run.Agent, t.subscription, modelRun, bedrockRef)
+		// refresh=true: dispatch is the ONE pass allowed to redeem a captured AWS SSO
+		// session's rotating refresh token and persist the rotated pair.
+		t.bedrock = s.resolveBedrockAuth(ctx, run.Agent, t.subscription, modelRun, true, bedrockRef)
 		t.bedrockReady = t.bedrock.ready
 		// injectBedrockBearer wires bedrock-runtime for proxy-side bearer injection
 		// (never-resident); consumed by the CA / injection / MITM-host wiring

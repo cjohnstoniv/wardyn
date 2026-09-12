@@ -139,9 +139,13 @@ type SetupHarness struct {
 	// — never "it doesn't expire".
 	ExpiresAt string `json:"expires_at,omitempty"`
 	Expired   bool   `json:"expired,omitempty"`
-	// Renewable: the stored credential carries a refresh token, so it can be
-	// renewed without a fresh interactive login (AWS `sso-session` profiles).
-	// Legacy sso_start_url profiles have none and must be re-logged-in.
+	// Renewable: the stored credential can be renewed without a fresh
+	// interactive login — it carries a refresh token AND its OIDC client
+	// registration has not lapsed. The SAME predicate resolveBedrockAuth and
+	// setupBedrock apply (awsSSOBlob.renewable), deliberately: a row that read
+	// "renewable" off the refresh token alone would render "nothing to do" for a
+	// credential whose registration is gone, which dispatch gives up on. Legacy
+	// sso_start_url profiles carry no refresh token and must be re-logged-in.
 	Renewable bool `json:"renewable,omitempty"`
 }
 
@@ -157,12 +161,17 @@ func harnessCredentialCheck(h SetupHarness) (SetupCheck, bool) {
 	// age heuristic below (which exists only because setup-tokens expose none).
 	if h.Provider == awsSSOProvider {
 		switch {
+		// Expired but RENEWABLE is not a problem row any more: the credential
+		// renews itself at dispatch while its refresh token lives (the control
+		// plane redeems it — awssso_refresh.go), so there is nothing for the
+		// operator to do and a warn row would ask for an hourly re-login that the
+		// product no longer needs. Re-login is the answer only when renewal
+		// CANNOT happen, which is the case below.
 		case h.Expired && h.Renewable:
 			return SetupCheck{
-				ID: "harness_credential_aws", Label: "AWS SSO session", Status: "warn",
-				Detail: "Your captured AWS SSO session expired at " + h.ExpiresAt +
-					". It carries a refresh token, so it can be renewed without logging in again.",
-				Fix: "Re-run the containerized AWS SSO login on the provider step to refresh it.",
+				ID: "harness_credential_aws", Label: "AWS SSO session", Status: "ok",
+				Detail: fmt.Sprintf(harnessCredentialAWSRenewingDetail, h.ExpiresAt),
+				Fix:    harnessCredentialAWSRenewingFix,
 			}, true
 		case h.Expired:
 			return SetupCheck{
@@ -934,7 +943,7 @@ func (s *Server) setupHarnessCreds(ctx context.Context) ([]SetupHarness, string)
 			CapturedAt:  blob.CapturedAt.Format(time.RFC3339),
 			ExpiresAt:   blob.ExpiresAt.Format(time.RFC3339),
 			Expired:     blob.expired(s.cfg.Now().UTC()),
-			Renewable:   blob.RefreshToken != "",
+			Renewable:   blob.renewable(s.cfg.Now().UTC()),
 			SourceRunID: blob.SourceRunID,
 		})
 	}

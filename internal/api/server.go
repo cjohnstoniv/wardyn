@@ -715,6 +715,21 @@ type Server struct {
 	// hit once per keystroke, and each miss is an upstream Graph call
 	// (directory_search.go). Zero value is ready to use.
 	dirLimiter principalLimiter
+	// ssoRefreshMu guards the two maps the control-plane AWS SSO refresher owns
+	// (awssso_refresh.go): ssoRefreshLocks is the PER-OWNER single-flight lock
+	// that encloses re-read -> expiry check -> CreateToken -> Put, so two
+	// dispatches of the same principal cannot both redeem one rotating refresh
+	// token (the second re-reads inside the lock and finds it already renewed);
+	// ssoRefreshSpent records the fingerprints of refresh tokens the OIDC
+	// endpoint has already told us are gone, keyed to the TOKEN rather than the
+	// credential, so a later capture is never pre-marked dead. Process-local
+	// like sshSessions and lastTouch above, and correct for the same reason
+	// (replicas>1 is refused by construction). Zero values are ready to use.
+	// ponytail: ssoRefreshSpent grows one small entry per spent token per daemon
+	// lifetime — bound it only if that ever stops being negligible.
+	ssoRefreshMu    sync.Mutex
+	ssoRefreshLocks map[string]*sync.Mutex
+	ssoRefreshSpent map[string]bool
 }
 
 // New constructs a Server and builds its router. It does not start listening.
