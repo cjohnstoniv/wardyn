@@ -3,19 +3,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The two connection cards — Model provider and Git host.
+// The Model provider connection card, plus the Lane/SecretLane/HostSummary
+// primitives the Workspace Providers Git tab reuses for ITS credential lanes
+// (0.7.2; screens/providers/git-tab.tsx).
 //
-// These replace the /integrations page and its 931-line Add dialog. The old
-// surface asked an abstract question ("which of seven integration kinds?") in a
-// catalog; these ask the two concrete ones an operator actually has: what runs
-// my agent, and how do you clone my private repos. Each card is a radio group
-// over real lanes, not a list you add rows to.
+// This used to also carry GitHostCard, the Git host card — retired in 0.7.2
+// (workspace-providers-prompt.md §2.1, Q4): its free-text Host field could
+// store a git-pat-<slug> for a host no provider admitted, a credential that
+// clones nothing. The three git Lanes it rendered move INTO a provider row on
+// /providers unchanged; this file keeps the shared shell (Lane/SecretLane/
+// HostSummary) EXPORTED rather than re-typed there.
 //
 // ONE component, rendered in TWO places: /settings and the Getting Started
-// "Connect your model" step. That is deliberate — the funnel step used to be a
-// thin embed of the whole Integrations page, which is exactly how it drifted
-// into showing an operator-extensibility framework during first-run setup.
-// Sharing the component makes drift impossible rather than merely discouraged.
+// "Secrets" step. That is deliberate — the funnel step used to be a thin embed
+// of the whole Integrations page, which is exactly how it drifted into showing
+// an operator-extensibility framework during first-run setup. Sharing the
+// component makes drift impossible rather than merely discouraged.
 //
 // Reads go through deriveIntegrations (lib/api/integrations.ts) — the SAME
 // derivation lib/readiness.ts uses, so a lane that reads "Connected" here can
@@ -31,7 +34,6 @@ import { Check, Loader2 } from "lucide-react";
 import { deriveIntegrations, type IntegrationRow } from "../../../lib/api/integrations";
 import { harnessAuth } from "../../../lib/api/harness-auth";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
-import { hostError, slugHost } from "../../../lib/scm-provider";
 import { getErrorMessage } from "../../../lib/format";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import type { SetupStatus, SiteConfig } from "../../../lib/types";
@@ -62,8 +64,6 @@ export const S = {
   // than a longer sentence.
   MODEL_FOOTER:
     "The egress proxy injects these on the wire, so keys never enter the sandbox — except Bedrock's SSO lane, where AWS credentials sign inside it.",
-  GIT_TITLE: "Git host",
-  GIT_LEDE: "How Wardyn clones your private repos.",
   // The three lanes differ in WHERE the credential goes, and the footer owns
   // that split so no lane has to overclaim: only the App lane keeps the token
   // outside the sandbox (proxy broker); a PAT or SSH key enters it for the
@@ -109,7 +109,7 @@ function Card({
 // a Disconnect instead. Radio semantics (not aria-pressed) because these are
 // mutually-exclusive choices within one group, which is what a screen reader
 // needs to announce "2 of 3".
-function Lane({
+export function Lane({
   id,
   title,
   hint,
@@ -174,7 +174,7 @@ function Lane({
 
 // A one-secret lane form: a single write-only value + Save, and Disconnect once
 // stored. Every key/token lane in both cards is this shape.
-function SecretLane({
+export function SecretLane({
   label,
   placeholder,
   hint,
@@ -184,6 +184,7 @@ function SecretLane({
   extra,
   summary,
   disabled,
+  saveVariant = "default",
 }: {
   label: string;
   placeholder: string;
@@ -198,6 +199,12 @@ function SecretLane({
    *  unsaved work. */
   summary?: React.ReactNode;
   disabled?: boolean;
+  /** Save/Save replacement's Button variant. Default "default" (teal) keeps
+   *  today's ModelProviderCard/Secrets-step behaviour unchanged; the
+   *  Workspace Providers Git tab passes "secondary" — that screen's one teal
+   *  is its own Save providers button (CONSOLE-RULES §6), so a lane's own
+   *  Save must not compete with it. */
+  saveVariant?: "default" | "secondary";
 }) {
   const [value, setValue] = React.useState("");
   const [busy, setBusy] = React.useState(false);
@@ -272,7 +279,7 @@ function SecretLane({
         />
       </Field>
       <div className="flex items-center gap-2">
-        <Button size="sm" disabled={disabled || busy || !value.trim()} onClick={save}>
+        <Button size="sm" variant={saveVariant} disabled={disabled || busy || !value.trim()} onClick={save}>
           {busy && <Loader2 className="size-3.5 animate-spin" />}
           {stored ? "Save replacement" : "Save"}
         </Button>
@@ -307,7 +314,7 @@ function SecretLane({
 
 // The one fact a stored git credential still needs on screen: which host it
 // clones. (The secret name rides on the Replace/Disconnect row below it.)
-function HostSummary({ host }: { host: string }) {
+export function HostSummary({ host }: { host: string }) {
   return (
     <p className="text-body text-muted-foreground">
       Clones <Mono>{host}</Mono> over an injected credential — the value itself is write-only and never read back.
@@ -562,145 +569,7 @@ export function ModelProviderCard({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Git host
-// ---------------------------------------------------------------------------
-
-type GitLane = "pat" | "ssh" | "app";
-
-export function GitHostCard({
-  status,
-  siteConfig,
-  onChanged,
-}: {
-  status: SetupStatus;
-  siteConfig: SiteConfig | null;
-  onChanged: () => void;
-}) {
-  const operator = useOperator();
-  const present = status.secrets.present;
-  const scm = deriveIntegrations(status, siteConfig, present).scm;
-
-  // Most installs have exactly one git host; the field exists so the lanes can
-  // name a secret per host (git-pat-<slug>) rather than pretending there is a
-  // single global credential.
-  const [host, setHost] = React.useState(scm[0]?.typeLabel || "github.com");
-  const slug = slugHost(host || "github.com");
-  // Mirrors the server's own validSiteHost rule (site_config.go) AND the secret
-  // store's 128-char name limit, checked BEFORE the write. Without it a
-  // shape-invalid host stores its credential and only fails later when the
-  // scm_hosts write 400s — the credential already saved under a name nothing
-  // will ever read.
-  const hostErr = hostError(host);
-
-  const patName = `git-pat-${slug}`;
-  const sshName = `ssh-key-${slug}`;
-  const appStored = status.secrets.github_app;
-
-  const [lane, setLane] = React.useState<GitLane>(
-    present.includes(sshName) ? "ssh" : appStored ? "app" : "pat",
-  );
-
-  const hostField = (
-    <Field
-      label="Host"
-      htmlFor="git-host"
-      hint={hostErr ?? "The git host these credentials are for."}
-    >
-      <Input
-        id="git-host"
-        value={host}
-        placeholder="github.com"
-        disabled={!operator}
-        aria-invalid={!!hostErr}
-        onChange={(e) => setHost(e.target.value.trim())}
-      />
-    </Field>
-  );
-
-  return (
-    <Card title={S.GIT_TITLE} lede={S.GIT_LEDE} footer={S.GIT_FOOTER}>
-      {!operator && <OperatorOnlyHint />}
-      <div role="radiogroup" aria-label={S.GIT_TITLE} className="space-y-2">
-        <Lane
-          id="lane-pat"
-          title="Personal access token"
-          // Was "injected on the wire per run" — FALSE. Wire injection is the
-          // GitHub App broker's mechanism; git-over-HTTPS to a PAT host is an
-          // opaque CONNECT tunnel with no header to swap (ARCHITECTURE.md "Git
-          // egress: two mechanisms"). A PAT is minted to wardyn-git-helper
-          // INSIDE the sandbox, which hands it to git on stdout — so the value
-          // does transit the sandbox during git operations, and the lane must
-          // say so rather than borrowing the App lane's stronger promise.
-          hint="The simplest lane — stored once; a per-run helper hands it to git inside the sandbox at clone time."
-          connected={present.includes(patName)}
-          connectedDetail={`${host} · stored as ${patName}`}
-          selected={lane === "pat"}
-          onSelect={() => setLane("pat")}
-        >
-          <SecretLane
-            label="Access token"
-            placeholder="ghp_…"
-            secretName={patName}
-            stored={present.includes(patName)}
-            disabled={!operator || !!hostErr}
-            onChanged={onChanged}
-            extra={hostField}
-            summary={<HostSummary host={host} />}
-            hint={S.STORE_NOTE}
-          />
-        </Lane>
-
-        <Lane
-          id="lane-ssh"
-          title="SSH key"
-          hint="A per-run copy is written inside the sandbox for the clone, then shredded."
-          connected={present.includes(sshName)}
-          connectedDetail={`${host} · stored as ${sshName}`}
-          selected={lane === "ssh"}
-          onSelect={() => setLane("ssh")}
-        >
-          <SecretLane
-            label="Private key"
-            placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
-            secretName={sshName}
-            stored={present.includes(sshName)}
-            disabled={!operator || !!hostErr}
-            onChanged={onChanged}
-            extra={hostField}
-            summary={<HostSummary host={host} />}
-          />
-        </Lane>
-
-        <Lane
-          id="lane-app"
-          title="GitHub App"
-          hint="Repo-scoped tokens brokered at the proxy — the token never enters the sandbox."
-          connected={appStored}
-          connectedDetail="Installation credentials stored"
-          selected={lane === "app"}
-          onSelect={() => setLane("app")}
-        >
-          <div className="space-y-4">
-            <SecretLane
-              label="App ID"
-              placeholder="123456"
-              secretName="github-app-id"
-              stored={present.includes("github-app-id")}
-              disabled={!operator}
-              onChanged={onChanged}
-            />
-            <SecretLane
-              label="Private key (PEM)"
-              placeholder="-----BEGIN RSA PRIVATE KEY-----"
-              secretName="github-app-key"
-              stored={present.includes("github-app-key")}
-              disabled={!operator}
-              onChanged={onChanged}
-            />
-          </div>
-        </Lane>
-      </div>
-    </Card>
-  );
-}
+// GitHostCard retired in 0.7.2 — see the file header. Its Lane/SecretLane/
+// HostSummary shell lives above, exported; the row shell and the free-text
+// Host field are screens/providers/git-tab.tsx's now (the row's own host,
+// never a second text field).

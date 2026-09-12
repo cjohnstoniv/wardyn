@@ -13,18 +13,25 @@
 // private repos. Its own empty state deferred both — "add an integration when a
 // run or a Wardyn feature needs one".
 //
-// It now renders the SAME two cards as /settings (connection-cards.tsx), which
-// is the point: one component in both places can't drift, and the embed is
+// It now renders the SAME card as /settings (connection-cards.tsx), which is
+// the point: one component in both places can't drift, and the embed is
 // exactly how the old surface leaked back into the funnel in the first place.
+//
+// GitHostCard retired with 0.7.2's Workspace Providers round: the git
+// credential lanes moved INTO a provider row (`/providers`'s Git tab), and the
+// funnel's own `providers` step (steps.ts, phase "Your work", before
+// `workspaces`) is where that now lives — this step keeps ModelProviderCard
+// only, and its own id/label stay `integrations`/"Secrets" (Q5: renaming the
+// id breaks demo-videos.ts's episodesFor).
 //
 // Still optional. Demos, governed commands and terminal recordings need nothing
 // connected; clicking Next past this step with nothing set marks it Skipped
 // (setup-screen.tsx's selectStep).
 import type { SetupStatus, SiteConfig } from "../../../lib/types";
-import { GitHostCard, ModelProviderCard } from "../settings/connection-cards";
+import { ModelProviderCard } from "../settings/connection-cards";
 
 export const STEP_LEDE =
-  "Optional. Wardyn runs governed commands, interactive runs and recordings with nothing connected. The two secrets most runs want are a model credential (for an agent to do the work) and a git credential (for your private code) — any other secret a run needs is added the same way, on the Secrets page, and handed to runs by name.";
+  "Optional. Wardyn runs governed commands, interactive runs and recordings with nothing connected. Most agent runs want a model credential — any other secret a run needs (including a git credential, set up under Providers) is added the same way, on the Secrets page, and handed to runs by name.";
 
 export function IntegrationsStep({
   status,
@@ -41,7 +48,6 @@ export function IntegrationsStep({
     <div className="space-y-4">
       <p className="text-sm leading-relaxed text-muted-foreground">{STEP_LEDE}</p>
       <ModelProviderCard status={status} siteConfig={siteConfig} onChanged={onRecheck} />
-      <GitHostCard status={status} siteConfig={siteConfig} onChanged={onRecheck} />
     </div>
   );
 }

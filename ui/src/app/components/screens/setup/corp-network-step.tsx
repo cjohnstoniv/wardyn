@@ -38,6 +38,7 @@ import { health as healthApi } from "../../../lib/api/health";
 import { HttpError } from "../../../lib/api/core";
 import { getErrorMessage } from "../../../lib/format";
 import { T } from "../../../lib/integrations";
+import { SITE } from "../../wardyn/copy";
 import { Tabs, TabsList, TabsTrigger } from "../../ui/tabs";
 import { useOperator } from "../../wardyn/operator-context";
 import { useSiteConfigStep } from "./step-bodies";
@@ -255,6 +256,11 @@ export function CorpNetworkStep({
   return (
     <div className="space-y-5">
       <p className="text-sm leading-relaxed text-muted-foreground">{T.CORP_LEDE}</p>
+      {/* F22: WARDYN_TRUSTED_CA_FILE's count — a bare number, never a host
+          name or PEM content, so it renders unredacted for every caller. */}
+      {!!status.trusted_ca_certs && (
+        <p className="text-meta text-muted-foreground">{SITE.TRUSTED_CA_COUNT(status.trusted_ca_certs)}</p>
+      )}
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
         <TabsList>

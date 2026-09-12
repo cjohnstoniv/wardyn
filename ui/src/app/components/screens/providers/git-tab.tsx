@@ -1,0 +1,400 @@
+/**
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+// The Git tab of /providers — one row per closed kind, always (§2.1): absent
+// (its host follows the legacy scm_hosts list), present and on (its base URLs
+// admit), present and off (its host is refused — never falls through to
+// legacy). The credential lanes render INSIDE the row, byte-for-byte
+// GitHostCard's shape — Lane/SecretLane/HostSummary, EXPORTED from
+// connection-cards.tsx rather than re-typed here (§9.1's file plan).
+//
+// This file owns the DRAFT array (`git: GitProvider[]`) the parent
+// (providers-screen.tsx) holds; every edit calls `onChange` with the next
+// array, and the parent's single Save button PUTs the whole document.
+import * as React from "react";
+import type { GitLane, GitProvider, GitProviderKind } from "../../../lib/api/providers";
+import { PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { PERM } from "../../../lib/permissions-copy";
+import { PEOPLE } from "../../../lib/people-access-copy";
+import { S as GIT_S, HostSummary, Lane as CredentialLane, SecretLane } from "../settings/connection-cards";
+import { slugHost } from "../../../lib/scm-provider";
+import { Button, buttonVariants } from "../../ui/button";
+import { Textarea } from "../../ui/textarea";
+import { Checkbox } from "../../ui/checkbox";
+import { Field, Switch } from "../../wardyn/form-primitives";
+import { Chip } from "../../wardyn/primitives";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../../ui/alert-dialog";
+import { appLaneAvailable, invalidBaseURLLines, KIND_LABEL, LANE_META, laneUnavailableReason, sshLaneAvailable } from "./display";
+
+const ALL_LANES: GitLane[] = ["app", "pat", "ssh"];
+const ALL_KINDS: GitProviderKind[] = ["github", "azure_devops"];
+
+// The lanes THIS row's kind + base URLs can actually carry — never `app` on
+// azure_devops, never `ssh`/`app` on a self-hosted host that can't offer them
+// (laneUnavailableReason, the same predicate the checkbox itself disables
+// on). permittedLanes/withLaneToggled both filter through this, so an empty
+// `lanes` (wire convention: "every lane the kind supports") can never expand
+// into a lane the kind cannot carry — the bug where toggling `ssh` off an
+// Azure DevOps row wrote `["app","pat"]`, which the server 400s and the
+// disabled `app` checkbox then leaves no way to un-write.
+function availableLanes(kind: GitProviderKind, baseUrls: string[]): GitLane[] {
+  return ALL_LANES.filter((l) => !laneUnavailableReason(l, kind, baseUrls));
+}
+
+function permittedLanes(row: GitProvider): Set<GitLane> {
+  const available = availableLanes(row.kind, row.base_urls);
+  const stored = row.lanes && row.lanes.length > 0 ? row.lanes : available;
+  return new Set(stored.filter((l) => available.includes(l)));
+}
+
+// Wire convention: empty means every lane the kind supports — never a
+// three-item array (GitProvider.Lanes' doc comment) — "every lane" meaning
+// every AVAILABLE one, not literally all three.
+function withLaneToggled(row: GitProvider, lane: GitLane): GitLane[] {
+  const available = availableLanes(row.kind, row.base_urls);
+  const next = permittedLanes(row);
+  if (next.has(lane)) next.delete(lane);
+  else next.add(lane);
+  const filtered = available.filter((l) => next.has(l));
+  return filtered.length === available.length ? [] : filtered;
+}
+
+// The one credential-host GitHostCard used to key its lanes by, now the row's
+// own: the first base URL's host, which is the common case (one provider row
+// = one forge instance). ponytail: a row spanning two distinct hosts under one
+// kind shares one credential set keyed by the first — split it into two rows
+// (two kinds is the model's own escape hatch is not available here, since
+// both rows would be the same KIND; name the second host a second row is not
+// offered in v1) if that ever matters; the mock draws only the single-host
+// case.
+function primaryHost(row: GitProvider): string {
+  try {
+    return new URL(row.base_urls[0] ?? "").hostname.toLowerCase() || "github.com";
+  } catch {
+    return "github.com";
+  }
+}
+
+function Row({
+  kind,
+  row,
+  present,
+  githubApp,
+  operator,
+  onUpdate,
+  onRemove,
+  onAdd,
+}: {
+  kind: GitProviderKind;
+  row: GitProvider | undefined;
+  present: string[];
+  githubApp: boolean;
+  operator: boolean;
+  onUpdate: (next: GitProvider) => void;
+  onRemove: () => void;
+  onAdd: () => void;
+}) {
+  const [confirmRemove, setConfirmRemove] = React.useState(false);
+  // The retired GitHostCard's own derivation (present.includes(sshName) ?
+  // "ssh" : appStored ? "app" : "pat") — a row's credential lanes open on
+  // whatever is already connected, not always the first lane, and the mock
+  // opens the populated GitHub row on App. Computed once, off the row's
+  // INITIAL host/props — a later edit to base_urls must not yank the
+  // operator's own tab selection out from under them.
+  const [credLane, setCredLane] = React.useState<GitLane>(() => {
+    if (!row) return "pat";
+    const initialHost = primaryHost(row);
+    const initialSlug = slugHost(initialHost);
+    if (present.includes(`ssh-key-${initialSlug}`)) return "ssh";
+    if (row.kind === "github" && githubApp) return "app";
+    return "pat";
+  });
+
+  if (!row) {
+    return (
+      <div className="rounded-lg border border-border opacity-70">
+        <div className="flex items-center gap-3 p-3">
+          <span className="size-3.5 rounded-full border border-border-strong" aria-hidden="true" />
+          <div className="min-w-0 flex-1">
+            <span className="block text-sm font-medium text-foreground">{KIND_LABEL[kind]}</span>
+            <span className="block text-meta text-muted-foreground">{PROVIDERS.ROW_ABSENT_HINT}</span>
+          </div>
+          <Button variant="outline" size="sm" disabled={!operator} onClick={onAdd}>
+            {PROVIDERS.ADD_ROW_CTA}
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  const host = primaryHost(row);
+  const slug = slugHost(host);
+  const patName = `git-pat-${slug}`;
+  const sshName = `ssh-key-${slug}`;
+  const permitted = permittedLanes(row);
+  const hosts = row.base_urls.map((u) => u.replace(/^https?:\/\//, "")).join(" · ");
+  const invalidLines = invalidBaseURLLines(row.base_urls.join("\n"), kind);
+  const removeConfirm = PROVIDERS.REMOVE_CONFIRM(KIND_LABEL[kind]);
+  const qIdx = removeConfirm.indexOf("? ");
+  const removeConfirmHead = qIdx < 0 ? removeConfirm : removeConfirm.slice(0, qIdx + 1);
+  const removeConfirmBody = qIdx < 0 ? "" : removeConfirm.slice(qIdx + 2);
+
+  return (
+    <div className="rounded-lg border border-border" data-testid={`provider-row-${kind}`}>
+      <div className="flex items-center gap-3 border-b border-border p-3">
+        <Switch
+          checked={!row.disabled}
+          disabled={!operator}
+          label={`${PROVIDERS.FIELD_ENABLED} — ${KIND_LABEL[kind]}`}
+          onChange={(checked) => onUpdate({ ...row, disabled: !checked })}
+        />
+        <div className="min-w-0 flex-1">
+          <span className="block text-sm font-medium text-foreground">{KIND_LABEL[kind]}</span>
+          <span className="block truncate font-mono text-meta text-muted-foreground">{hosts}</span>
+        </div>
+        {/* Mock states 1 & 3: the row's own on/off fact as a neutral chip —
+            off is a fact, never red (§4's colour rule) — not left to the
+            switch position + collapsed-body prose alone. "Off" has no chip
+            key of its own; it is ROW_DISABLED_HINT's own leading word
+            ("Off: this host is refused…"), taken rather than a second,
+            hand-typed copy of it. */}
+        <Chip tone="neutral">{row.disabled ? PROVIDERS.ROW_DISABLED_HINT.split(":")[0] : PROVIDERS.FIELD_ENABLED}</Chip>
+        <Button variant="outline" size="sm" disabled={!operator} onClick={() => setConfirmRemove(true)}>
+          {PERM.REMOVE}
+        </Button>
+      </div>
+
+      {row.disabled ? (
+        <div className="p-3">
+          <p className="text-body text-muted-foreground">{PROVIDERS.ROW_DISABLED_HINT}</p>
+        </div>
+      ) : (
+        <div className="space-y-4 p-3">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label={PROVIDERS.FIELD_BASE_URLS} hint={PROVIDERS.BASE_URLS_HINT}>
+              <Textarea
+                className="font-mono"
+                rows={3}
+                aria-invalid={invalidLines.length > 0}
+                disabled={!operator}
+                value={row.base_urls.join("\n")}
+                onChange={(e) =>
+                  onUpdate({ ...row, base_urls: e.target.value.split("\n").map((l) => l.trim()).filter(Boolean) })
+                }
+              />
+              {invalidLines.length > 0 && <p className="text-xs leading-snug text-danger">{PROVIDERS.BASE_URL_INVALID}</p>}
+            </Field>
+            <Field label={PROVIDERS.FIELD_LANES} hint={PROVIDERS.LANES_HINT}>
+              <div className="space-y-2">
+                {ALL_LANES.map((lane) => {
+                  const reason = laneUnavailableReason(lane, kind, row.base_urls);
+                  const meta = LANE_META[lane as keyof typeof LANE_META];
+                  return (
+                    <label key={lane} className="flex items-start gap-2">
+                      <Checkbox
+                        checked={permitted.has(lane) && !reason}
+                        disabled={!operator || !!reason}
+                        onCheckedChange={() => onUpdate({ ...row, lanes: withLaneToggled(row, lane) })}
+                      />
+                      <span>
+                        <span className="block text-body font-medium text-foreground" title={meta.tooltip}>
+                          {meta.label}
+                        </span>
+                        {reason && <span className="block text-meta text-muted-foreground">{reason}</span>}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </Field>
+          </div>
+
+          {/* The credential lanes, INSIDE the row — GitHostCard's Lane/
+              SecretLane/HostSummary, unchanged, keyed to THIS row's host. No
+              free-text Host field: the host is the row's own (§2.1, Q4). */}
+          <div role="radiogroup" aria-label={`${KIND_LABEL[kind]} credentials`} className="space-y-2">
+            <CredentialLane
+              id={`lane-${kind}-pat`}
+              title="Personal access token"
+              hint="The simplest lane — stored once; a per-run helper hands it to git inside the sandbox at clone time."
+              connected={present.includes(patName)}
+              connectedDetail={`${host} · stored as ${patName}`}
+              selected={credLane === "pat"}
+              onSelect={() => setCredLane("pat")}
+            >
+              <SecretLane
+                label="Access token"
+                placeholder="ghp_…"
+                secretName={patName}
+                stored={present.includes(patName)}
+                disabled={!operator}
+                onChanged={() => {}}
+                summary={<HostSummary host={host} />}
+                hint={GIT_S.STORE_NOTE}
+                saveVariant="secondary"
+              />
+            </CredentialLane>
+
+            {kind === "github" && appLaneAvailable(kind, row.base_urls) && (
+              <CredentialLane
+                id={`lane-${kind}-app`}
+                title="GitHub App"
+                hint="Repo-scoped tokens brokered at the proxy — the token never enters the sandbox."
+                connected={githubApp}
+                connectedDetail="Installation credentials stored"
+                selected={credLane === "app"}
+                onSelect={() => setCredLane("app")}
+              >
+                <div className="space-y-4">
+                  <SecretLane
+                    label="App ID"
+                    placeholder="123456"
+                    secretName="github-app-id"
+                    stored={present.includes("github-app-id")}
+                    disabled={!operator}
+                    onChanged={() => {}}
+                    saveVariant="secondary"
+                  />
+                  <SecretLane
+                    label="Private key (PEM)"
+                    placeholder="-----BEGIN RSA PRIVATE KEY-----"
+                    secretName="github-app-key"
+                    stored={present.includes("github-app-key")}
+                    disabled={!operator}
+                    onChanged={() => {}}
+                    saveVariant="secondary"
+                  />
+                </div>
+              </CredentialLane>
+            )}
+
+            {sshLaneAvailable(row.base_urls) && (
+              <CredentialLane
+                id={`lane-${kind}-ssh`}
+                title="SSH key"
+                hint="A per-run copy is written inside the sandbox for the clone, then shredded."
+                connected={present.includes(sshName)}
+                connectedDetail={`${host} · stored as ${sshName}`}
+                selected={credLane === "ssh"}
+                onSelect={() => setCredLane("ssh")}
+              >
+                <SecretLane
+                  label="Private key"
+                  placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+                  secretName={sshName}
+                  stored={present.includes(sshName)}
+                  disabled={!operator}
+                  onChanged={() => {}}
+                  summary={<HostSummary host={host} />}
+                  saveVariant="secondary"
+                />
+              </CredentialLane>
+            )}
+          </div>
+        </div>
+      )}
+
+      <AlertDialog open={confirmRemove} onOpenChange={setConfirmRemove}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            {/* REMOVE_CONFIRM is one frozen sentence (the doc's single cell);
+                split at the question mark for the Title/Description Radix
+                wants — the bytes are unchanged, only where the line breaks. */}
+            <AlertDialogTitle>{removeConfirmHead}</AlertDialogTitle>
+            <AlertDialogDescription>{removeConfirmBody}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{PEOPLE.CANCEL}</AlertDialogCancel>
+            {/* Mock State 3: Remove is outline — it deletes no secret, only a
+                row, so it does not carry the destructive/teal weight the
+                shipped default gives every AlertDialogAction. */}
+            <AlertDialogAction
+              className={buttonVariants({ variant: "outline" })}
+              onClick={() => {
+                setConfirmRemove(false);
+                onRemove();
+              }}
+            >
+              {PERM.REMOVE}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
+export function GitTab({
+  git,
+  onChange,
+  present,
+  githubApp,
+  operator,
+}: {
+  git: GitProvider[];
+  onChange: (next: GitProvider[]) => void;
+  present: string[];
+  githubApp: boolean;
+  operator: boolean;
+}) {
+  const rowFor = (kind: GitProviderKind) => git.find((r) => r.kind === kind);
+
+  const updateRow = (kind: GitProviderKind, next: GitProvider) =>
+    onChange(git.some((r) => r.kind === kind) ? git.map((r) => (r.kind === kind ? next : r)) : [...git, next]);
+
+  const removeRow = (kind: GitProviderKind) => onChange(git.filter((r) => r.kind !== kind));
+
+  const addRow = (kind: GitProviderKind) =>
+    onChange([...git, { id: kind, kind, base_urls: [kind === "github" ? "https://github.com" : "https://dev.azure.com"] }]);
+
+  return (
+    <div className="space-y-4">
+      <p className="text-body text-muted-foreground">{PROVIDERS.GIT_LEAD}</p>
+
+      {git.length === 0 ? (
+        // True legacy open mode (mock State 2): the banner ALONE — no
+        // per-kind row list underneath it. Once one row exists, the still-
+        // absent kind gets its own mini "Add provider" affordance instead
+        // (below), which is a DIFFERENT illustration in the mock, not this
+        // same state.
+        <div className="rounded-lg border border-dashed border-border p-6 text-center">
+          <h4 className="text-sm font-medium text-foreground">{PROVIDERS.LEGACY_OPEN_TITLE}</h4>
+          <p className="mt-1.5 text-body text-muted-foreground">{PROVIDERS.LEGACY_OPEN_BODY}</p>
+          <p className="mt-1 text-meta text-muted-foreground">{PROVIDERS.LEGACY_OPEN_OTHER_HOSTS}</p>
+          <Button className="mt-4" disabled={!operator} onClick={() => addRow("github")}>
+            {PROVIDERS.ADD_ROW_CTA}
+          </Button>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {ALL_KINDS.map((kind) => (
+            <Row
+              key={kind}
+              kind={kind}
+              row={rowFor(kind)}
+              present={present}
+              githubApp={githubApp}
+              operator={operator}
+              onUpdate={(next) => updateRow(kind, next)}
+              onRemove={() => removeRow(kind)}
+              onAdd={() => addRow(kind)}
+            />
+          ))}
+        </div>
+      )}
+
+      <p className="text-meta leading-snug text-muted-foreground">{GIT_S.GIT_FOOTER}</p>
+    </div>
+  );
+}

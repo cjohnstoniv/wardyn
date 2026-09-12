@@ -66,6 +66,13 @@ const getDrivesMock = vi.fn();
 vi.mock("../../../lib/api/drives", () => ({
   drives: { getDrives: (...a: unknown[]) => getDrivesMock(...a) },
 }));
+// The `providers` step's own card (setup/providers-card.tsx) and the
+// orchestrator's providerCount both GET /workspace-providers — legacy open
+// mode (zero rows) by default, like the other unconfigured fixtures above.
+const getWorkspaceProvidersMock = vi.fn();
+vi.mock("../../../lib/api/providers", () => ({
+  providers: { getWorkspaceProviders: (...a: unknown[]) => getWorkspaceProvidersMock(...a) },
+}));
 vi.mock("../../../lib/api/runs", () => ({
   // The demo step's useDemoRuns calls getRun (reload re-attach) + killRun (end) in
   // addition to createRun; stub all three so the lazily-loaded step mounts cleanly.
@@ -147,6 +154,9 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     getDrivesMock
       .mockReset()
       .mockResolvedValue({ drives: [], grants: [], host_roots_configured: false, runner_target: "docker" });
+    // The `providers` step's own card and the orchestrator's providerCount
+    // both GET /workspace-providers — legacy open mode (zero rows) by default.
+    getWorkspaceProvidersMock.mockReset().mockResolvedValue({ providers: {}, etag: null });
     // no_runner (this suite mocks no real sandbox runner) is the honest,
     // non-blocking default — see clearCorpNetworkGate for why that's the
     // right fixture for walkthroughs that aren't testing the gate itself.
@@ -278,7 +288,12 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(await screen.findByRole("heading", { name: /no identity, no credential/i })).toBeInTheDocument();
 
-    // your work: the one workspace step (AddWorkspaceDialog + a simple list).
+    // your work: `providers` (0.7.2) comes first — its body is the card, zero
+    // teal (the footer Next is the step's one affirmative).
+    await user.click(screen.getByRole("button", { name: /^next:/i }));
+    expect(await screen.findByTestId("providers-card")).toBeInTheDocument();
+
+    // …then the one workspace step (AddWorkspaceDialog + a simple list).
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(await screen.findByText(/never a raw host path/i)).toBeInTheDocument(); // workspaces
     // …and the user-drives card under that list — persistent storage is not a
@@ -348,7 +363,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     it("the last demo's Next is DISABLED, with the gate's reason as its title — never a dead-enabled button", async () => {
       renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=sts-fail-closed");
       await screen.findByRole("heading", { name: /no identity, no credential/i });
-      const next = screen.getByRole("button", { name: /^next: workspaces$/i });
+      // `providers` (0.7.2) is now the step directly after the last demo.
+      const next = screen.getByRole("button", { name: /^next: providers$/i });
       expect(next).toBeDisabled();
       expect(next.getAttribute("title")).toMatch(/one probe/i);
     });
@@ -611,13 +627,12 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(
       await screen.findByRole("heading", { name: /^secrets$/i }),
     ).toBeInTheDocument();
-    // The two SHARED Settings cards, not the deleted /integrations catalog.
-    // (connection-cards.test.tsx owns their own behaviour; this asserts the
-    // orchestrator mounts them.) The old assertion here looked for the embed's
-    // "AI providers" section heading — that section, and the page it belonged
-    // to, are gone.
+    // The SHARED Settings model-provider card, not the deleted /integrations
+    // catalog. (connection-cards.test.tsx owns its own behaviour; this
+    // asserts the orchestrator mounts it.) GitHostCard retired in 0.7.2 — its
+    // git credential lanes moved to the `providers` step / /providers.
     expect(await screen.findByRole("radiogroup", { name: /model provider/i })).toBeInTheDocument();
-    expect(screen.getByRole("radiogroup", { name: /git host/i })).toBeInTheDocument();
+    expect(screen.queryByRole("radiogroup", { name: /git host/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /add integration/i })).not.toBeInTheDocument();
     // Both PhaseRail landmarks share the "Setup steps" accessible name
     // (ui-setup-5); CSS shows only one at a time in a real browser, jsdom
@@ -821,14 +836,14 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   it("review step renders ok/warn/fail/info rows grouped, and Re-check calls getSetupStatus again", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence"); // environment settled
-    // walk to Review (the last step, 15 of 15 — six conditional demo steps are
-    // filtered out of this fixture's walk) — checks live there, not on the
-    // barrier step
+    // walk to Review (the last step, 16 of 16 — six conditional demo steps are
+    // filtered out of this fixture's walk, and `providers` (0.7.2) is one more
+    // always-walked step) — checks live there, not on the barrier step
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
     await screen.findAllByText("Single-user");
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await clearCorpNetworkGate();
-    for (let i = 0; i < 13; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
+    for (let i = 0; i < 14; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
     await screen.findByRole("heading", { name: /review readiness/i });
     expect(screen.getByText("gVisor runtime")).toBeInTheDocument(); // ok (Ready group)
     expect(screen.getByText("Loopback bind")).toBeInTheDocument(); // warn (Worth a look)
@@ -880,7 +895,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     await screen.findAllByText("Single-user");
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> corp_network
     await clearCorpNetworkGate();
-    for (let i = 0; i < 13; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
+    for (let i = 0; i < 14; i++) await user.click(screen.getByRole("button", { name: /^next:/i }));
     await screen.findByRole("heading", { name: /review readiness/i });
     expect(screen.getByText("Secret store durability")).toBeInTheDocument();
     expect(screen.getByText("About this host")).toBeInTheDocument();

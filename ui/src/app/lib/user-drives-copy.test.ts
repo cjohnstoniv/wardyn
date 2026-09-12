@@ -13,7 +13,7 @@ import { DRIVE_MEMBER, DRIVE_RUN, DRIVES } from "./user-drives-copy";
 
 // The mock round's whole value is that it stays CHECKABLE, so this suite does
 // not hand-retype a sample of the canon — it PARSES docs/design/
-// user-drives-prompt.md §7.2-§7.8 back out of the doc and compares all 140
+// user-drives-prompt.md §7.2-§7.8 back out of the doc and compares all 141
 // keys. A swapped hyphen, a dropped ellipsis, a reworded clause, a new doc
 // row or a deleted one all fail here rather than shipping.
 //
@@ -90,7 +90,7 @@ function splitKey(docKey: string): [string, string[]] {
 }
 
 // ONE lookup across the three namespaces is safe because none of their keys
-// collide (118 / 20 / 2); the completeness test below is what keeps that true.
+// collide (119 / 20 / 2); the completeness test below is what keeps that true.
 function render(docKey: string): string {
   const [name, args] = splitKey(docKey);
   const ns = NAMESPACES.find((n) => name in n);
@@ -105,8 +105,8 @@ const EXCLUDED = [...PLURALISED, ...SIZE_HELPERS];
 const RENDERABLE = [...doc.keys()].filter((k) => !EXCLUDED.includes(k));
 
 describe("user-drives-copy — §7.2-§7.8 parsed out of the prompt doc", () => {
-  it("finds all 140 frozen keys in the doc", () => {
-    expect(doc.size).toBe(140);
+  it("finds all 141 frozen keys in the doc", () => {
+    expect(doc.size).toBe(141);
   });
 
   it("covers every doc key, and freezes no key the doc doesn't", () => {
@@ -430,7 +430,7 @@ describe("user-drives-prompt §7.1 — the server-composed table matches the Go 
 // ---------------------------------------------------------------------------
 // §7.7 — DRIVE_MEMBER's refusals, across the language boundary.
 //
-// The suite above proves TS == doc for all 140 keys. §7.7 is titled
+// The suite above proves TS == doc for all 141 keys. §7.7 is titled
 // "DRIVE_MEMBER — refusals (server-composed)", and that title is the hole this
 // block closes: no production TypeScript renders those eight constants. The
 // bytes a member is actually refused with are composed in Go (user_drives_run.go,

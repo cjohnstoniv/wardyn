@@ -3,13 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// IntegrationsStep is now a thin composition of the two SHARED connection cards
+// IntegrationsStep is now a thin composition of the SHARED ModelProviderCard
 // (../settings/connection-cards) plus its lede — it no longer embeds the whole
 // /integrations page, which is what let an operator-extensibility framework
 // (seven kinds, a probe system, an adopt lifecycle) surface during first-run
-// setup. The cards' own behaviour is covered in connection-cards.test.tsx; what
-// THIS suite owns is that the step renders both of them, in order, wired to the
-// step's status and recheck.
+// setup. GitHostCard retired in 0.7.2; its git credential lanes moved to the
+// `providers` step. The card's own behaviour is covered in
+// connection-cards.test.tsx; what THIS suite owns is that the step renders it,
+// wired to the step's status and recheck.
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -31,15 +32,12 @@ describe("IntegrationsStep", () => {
     expect(screen.getByText(STEP_LEDE)).toBeInTheDocument();
   });
 
-  it("renders BOTH shared connection cards — model provider first, git host second", () => {
+  // GitHostCard retired in 0.7.2 — the step renders ModelProviderCard only now;
+  // the git credential lanes moved to the `providers` step / /providers (its
+  // own test coverage).
+  it("renders the shared model-provider card", () => {
     renderStep();
-    const model = screen.getByRole("radiogroup", { name: S.MODEL_TITLE });
-    const git = screen.getByRole("radiogroup", { name: S.GIT_TITLE });
-    expect(model).toBeInTheDocument();
-    expect(git).toBeInTheDocument();
-    // A model is what gates a first agent run; the git credential only matters
-    // once there's a private repo. Order is the teaching, so it is pinned.
-    expect(model.compareDocumentPosition(git) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("radiogroup", { name: S.MODEL_TITLE })).toBeInTheDocument();
   });
 
   // The regression this whole rework exists to prevent: the step used to embed
@@ -60,10 +58,9 @@ describe("IntegrationsStep", () => {
     expect(screen.queryByText(/Azure/i)).not.toBeInTheDocument();
   });
 
-  it("names the three git-host lanes", () => {
+  it("offers no git-host lanes — retired with GitHostCard", () => {
     renderStep();
-    expect(screen.getByRole("radio", { name: /Personal access token/ })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /SSH key/ })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /GitHub App/ })).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /Personal access token/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /GitHub App/ })).not.toBeInTheDocument();
   });
 });

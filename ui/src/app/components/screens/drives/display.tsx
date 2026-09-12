@@ -39,12 +39,16 @@ export const sizeText = (mib: number | undefined): string => driveSizeLabel(mib)
 
 // The enforcement gloss that rides every rendered size, so the honesty is on
 // each number and not only in the HONESTY note. Total over the vocabulary —
-// including `filesystem`, which no v1 backend yields (§2.7).
-const GLOSS: Record<StorageEnforcement, string> = {
+// including `filesystem`, which no v1 backend yields (§2.7). `eviction`
+// (0.7.2) is Kubernetes' ephemeral-scratch word; the Workspace Providers
+// Storage tab reads this SAME map (workspace-providers-prompt.md §7.3: "the
+// enforcement words are not re-frozen here") rather than a second gloss.
+export const GLOSS: Record<StorageEnforcement, string> = {
   filesystem: DRIVES.ENFORCEMENT_FILESYSTEM,
   request: DRIVES.ENFORCEMENT_REQUEST,
   external: DRIVES.ENFORCEMENT_EXTERNAL,
   none: DRIVES.ENFORCEMENT_NONE,
+  eviction: DRIVES.ENFORCEMENT_EVICTION,
 };
 
 export const enforcementGloss = (e: StorageEnforcement | undefined): string =>

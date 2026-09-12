@@ -207,6 +207,25 @@ describe("deriveIntegrations — SCM hosts", () => {
     expect(row.canReCheck).toBe(true);
     expect(row.posture).toEqual({ kind: "gh_verdict", verdict: "unknown", checkedLabel: "not yet" });
   });
+
+  // §9.4 (round 14): effective_scm_hosts is the server's projected union — a
+  // host a workspace-provider row CLAIMS (enabled or disabled) is removed from
+  // it even though the legacy scm_hosts list still names it, so a disabled
+  // provider's host must not keep reading "Connected" here.
+  it("a host scm_hosts lists but effective_scm_hosts omits renders no row for it", () => {
+    // No stored credential: with the host missing from effective_scm_hosts,
+    // deriveProviders never buckets it — unlike a git-pat-github-com secret,
+    // which would fall into the orphan-guess path regardless of the host
+    // list and is exercised separately above.
+    const data = deriveIntegrations(baseStatus(), { scm_hosts: ["github.com"], effective_scm_hosts: [] }, []);
+    expect(data.scm).toHaveLength(0);
+  });
+
+  it("an older daemon with no effective_scm_hosts falls back to scm_hosts unchanged", () => {
+    const data = deriveIntegrations(baseStatus(), { scm_hosts: ["github.com"] }, ["git-pat-github-com"]);
+    expect(data.scm).toHaveLength(1);
+    expect(data.scm[0].typeLabel).toBe("github.com");
+  });
 });
 
 // Corporate network is the single home for a proxy and for egress redirects

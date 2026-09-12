@@ -33,6 +33,7 @@ const BADGES: Record<SetupStepId, StepBadge> = {
   "ssh-briefly-resident": { text: "Optional", tone: "neutral" },
   "github-app-broker": { text: "Optional", tone: "neutral" },
   "sts-fail-closed": { text: "Optional", tone: "neutral" },
+  providers: { text: "Optional", tone: "neutral" },
   workspaces: { text: "In progress", tone: "info" },
   review: { text: "Review what's left", tone: "neutral" },
 };
@@ -58,6 +59,7 @@ const DONE: Record<SetupStepId, boolean> = {
   "ssh-briefly-resident": false,
   "github-app-broker": false,
   "sts-fail-closed": false,
+  providers: false,
   workspaces: false,
   review: false,
 };

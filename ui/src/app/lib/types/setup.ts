@@ -7,6 +7,7 @@
 // SetupStatus). FROZEN CONTRACT — keep in exact sync with the Go struct.
 // The wizard derives its per-step "done" state from these fields.
 import type { ConfinementClass } from "./runs";
+import type { StorageEnforcement } from "../api/drives";
 
 export type SetupCheckStatus = "ok" | "warn" | "fail" | "info";
 export type SetupCheckPlatform = "linux" | "darwin" | "windows" | "wsl" | "any";
@@ -247,6 +248,12 @@ export interface SetupStatus {
    *  reads as false (not onboarded), which opens the funnel rather than
    *  hiding it. */
   onboarding_complete?: boolean;
+  /** Additional roots WARDYN_TRUSTED_CA_FILE loaded at boot (0/absent =
+   *  unset) — a bare count, never PEM content or a host name, so it carries
+   *  no detail a member is barred from. Rendered by the Network step as
+   *  TRUSTED_CA_COUNT(n) (F22 — the data has shipped server-side since
+   *  before this console read it). */
+  trusted_ca_certs?: number;
   checks: SetupCheck[];
   auth: {
     mode: "local" | "sso" | "token" | "disabled";
@@ -269,6 +276,13 @@ export interface SetupStatus {
     // k8s_egress_containment row in `checks` (environment-step.tsx finds it
     // by id) — a second, unconsumed copy of the same signal here would just
     // be surface for the two to drift.
+    // What actually binds a run's Resources.DiskMiB on THIS deployment —
+    // orchestrator-aggregated, weakest-across-substrates (runner.Capabilities.
+    // EphemeralDiskEnforcement). Stripped for a member by redactSetupStatusForMember
+    // (internal/api/setup.go) — only the /providers screen (SUPER) renders it,
+    // under the ephemeral-scratch fields, via DRIVES.ENFORCEMENT_*. Absent on an
+    // older daemon or on Docker with no runner detected; empty reads as "none".
+    ephemeral_disk_enforcement?: StorageEnforcement;
   };
   providers: SetupProvider[];
   secrets: { present: string[]; github_app: boolean };

@@ -87,6 +87,20 @@ beforeEach(() => {
   setSecretMock.mockReset().mockResolvedValue(undefined);
 });
 
+// F22: the trusted-CA count (WARDYN_TRUSTED_CA_FILE), a bare number with no
+// PEM content or host name — renders unconditionally, never redacted.
+describe("the trusted-CA count (F22)", () => {
+  it("renders the pluralised count when the daemon reports one", () => {
+    renderStep({ status: baseStatus({ trusted_ca_certs: 3 }) });
+    expect(screen.getByText("3 trusted CA certificates")).toBeInTheDocument();
+  });
+
+  it("renders nothing when the daemon sends none (0/absent)", () => {
+    renderStep({ status: baseStatus() });
+    expect(screen.queryByText(/trusted CA certificate/)).not.toBeInTheDocument();
+  });
+});
+
 // ------------------------------------------------------------
 // Pure helpers
 // ------------------------------------------------------------

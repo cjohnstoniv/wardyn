@@ -14,6 +14,7 @@ import { deploymentMode, deriveReadiness, Readiness } from "../../../lib/readine
 import { DEMOS, DEMO_IDS, type Demo, type DemoId } from "../demos/demo-catalog";
 import { isUsable } from "../../../lib/workspace-status";
 import { T } from "../../../lib/integrations";
+import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 
 // ------------------------------------------------------------
 // Steps — ids/labels FROZEN (e2e tests target them). The single source of truth
@@ -56,7 +57,15 @@ const demoStepsIn = (section: Demo["section"]): DemoStepId[] =>
 // full order; stepOrder(status) is the order actually walked — see it below
 // for the conditional steps that drop out. PHASES is the count to trust, not
 // this history.
-export type SetupStepId = "environment" | "people" | "corp_network" | "integrations" | DemoStepId | "workspaces" | "review";
+export type SetupStepId =
+  | "environment"
+  | "people"
+  | "corp_network"
+  | "integrations"
+  | DemoStepId
+  | "providers"
+  | "workspaces"
+  | "review";
 
 // demo id → title, from the catalog (single source of truth for the demo steps'
 // labels + headings, so they can't drift from what the demo pages show). No
@@ -79,6 +88,11 @@ export const STEP_LABEL: Record<SetupStepId, string> = {
   // model or forge is not the one named.
   integrations: "Secrets",
   ...DEMO_TITLES,
+  // §9.1's ORDER test: with azure_devops disabled, onboarding an ADO repo on
+  // Workspaces is refused by admission, and that step looks broken when the
+  // missing thing is a policy row one step earlier — so `providers` sits in
+  // "Your work", right before `workspaces` (PHASES below).
+  providers: PROVIDERS.STEP_LABEL,
   workspaces: "Workspaces",
   review: "Review",
 };
@@ -95,6 +109,7 @@ export const STEP_HEADING: Record<SetupStepId, string> = {
   corp_network: "Network",
   integrations: "Secrets",
   ...DEMO_TITLES,
+  providers: PROVIDERS.STEP_HEADING,
   workspaces: "Onboard a workspace",
   review: "Review readiness",
 };
@@ -128,7 +143,7 @@ export const PHASES: PhaseDef[] = [
   { id: "essentials", label: "Essentials", steps: ["environment", "people", "corp_network", "integrations"] },
   { id: "demos_egress", label: "Egress demos", steps: demoStepsIn("egress") },
   { id: "demos_secrets", label: "Secrets demos", steps: demoStepsIn("secrets") },
-  { id: "work", label: "Your work", steps: ["workspaces"] },
+  { id: "work", label: "Your work", steps: ["providers", "workspaces"] },
   { id: "finish", label: "Finish", steps: ["review"] },
 ];
 
@@ -180,6 +195,10 @@ export const OPTIONAL_STEPS = new Set<SetupStepId>([
   // barrier (Environment) is the sole hard requirement.
   "integrations",
   ...DEMO_STEP_IDS,
+  // Providers is optional for the SAME reason `integrations` is: legacy open
+  // mode means nothing downstream is impossible without a provider row —
+  // every host with a stored credential still clones, as today.
+  "providers",
   "workspaces",
 ]);
 
@@ -376,6 +395,11 @@ export function stepBadges(
   // The SAME list corpNetworkGate/stepDone already take (below) — corpNetworkBadge
   // needs it to know which configured redirects are actually proven.
   corpNetworkRedirects: EgressRedirect[] = [],
+  // Count of ENABLED git-provider rows (§7.5: "counts ENABLED rows, never
+  // hosts") — the orchestrator owns fetching GET /workspace-providers; this
+  // pure function only needs the resulting number. Defaulted like corpNetwork
+  // above, so every existing call site (steps.test.ts) is unaffected.
+  providerCount = 0,
 ): Record<SetupStepId, StepBadge> {
   // Each demo sub-step is a "try it" step. The pure badge stays advisory (neutral
   // "Optional"); the orchestrator upgrades a demo to a green "Done · demo run" once
@@ -400,6 +424,13 @@ export function stepBadges(
         ? { text: `Ready · ${integrationsCount} connected`, tone: "success" }
         : { text: "Optional", tone: "neutral" },
     ...demoBadges,
+    // Same ladder: Optional -> Skipped (orchestrator's visited override) ->
+    // Ready · N providers (Q10: git rows decide the one done rule for this
+    // step; the Agents-tab count rides the card summary, not this badge).
+    providers:
+      providerCount > 0
+        ? { text: PROVIDERS.STEP_BADGE_READY(providerCount), tone: "success" }
+        : { text: "Optional", tone: "neutral" },
     // An onboarded workspace IS a ready workspace as of 0.5 — see
     // lib/workspace-status.ts. This badge used to split them, showing "In
     // progress" for anything not yet scanned and "N of M onboarded" while a
@@ -430,6 +461,7 @@ export function stepDone(
   integrationsCount: number,
   corpNetwork: CorpNetworkState = CORP_NETWORK_UNSET,
   corpNetworkRedirects: EgressRedirect[] = [],
+  providerCount = 0,
 ): Record<SetupStepId, boolean> {
   // Demos: advisory here (all false). The orchestrator ORs in the per-browser
   // "launched demos" set to earn each demo's checkmark — kept out of this pure fn
@@ -459,6 +491,8 @@ export function stepDone(
     // this pure fn only knows about a real connected integration.
     integrations: integrationsCount > 0,
     ...demoDone,
+    // enabledGitProviders > 0 (§9.1) — the same shape as `integrations` above.
+    providers: providerCount > 0,
     // Design delta: done only once a workspace is actually READY, matching the
     // badge above — merely onboarding one (still scanning/building/verifying)
     // no longer earns the stepper checkmark.

@@ -35,6 +35,13 @@ vi.mock("../../../lib/api/drives", () => ({
   drives: { getDrives: (...a: unknown[]) => getDrivesMock(...a) },
 }));
 
+// The Providers card (replacing Git host, 0.7.2) summarises GET
+// /workspace-providers the same way UserDrivesCard summarises GET /drives.
+const getWorkspaceProvidersMock = vi.fn();
+vi.mock("../../../lib/api/providers", () => ({
+  providers: { getWorkspaceProviders: (...a: unknown[]) => getWorkspaceProvidersMock(...a) },
+}));
+
 vi.mock("../../../lib/api/ssh-keys", () => ({
   sshKeys: { listKeys: () => Promise.resolve([]) },
 }));
@@ -75,9 +82,24 @@ beforeEach(() => {
       host_roots_configured: false,
       runner_target: "docker",
     });
+  getWorkspaceProvidersMock.mockReset().mockResolvedValue({ providers: {}, etag: null });
 });
 
 describe("SettingsScreen", () => {
+  // 0.7.2: Git host retired — Providers (setup/providers-card.tsx, the SAME
+  // component the funnel's `providers` step renders) takes its THIRD-card
+  // position (workspace-providers-prompt.md §6).
+  it("draws Host, Model provider, Providers, SSH keys, Drives — in that order", async () => {
+    renderScreen();
+    await screen.findByTestId("user-drives-card");
+    const html = document.body.innerHTML;
+    const positions = ["Host", "Model provider", "Workspace providers", "Your SSH keys", "User drives"].map((label) =>
+      html.indexOf(`>${label}<`),
+    );
+    for (const p of positions) expect(p).toBeGreaterThan(-1);
+    expect(positions).toEqual([...positions].sort((a, b) => a - b));
+  });
+
   it("draws the drives card LAST — the fifth card §6 names, not the fourth", async () => {
     renderScreen();
     const card = await screen.findByTestId("user-drives-card");

@@ -24,7 +24,7 @@ vi.mock("../../../lib/api/secrets", () => ({
 // not render in jsdom — the cards only own the button that opens it.
 vi.mock("./harness-login-pane", () => ({ HarnessLoginPane: () => <div data-testid="login-pane" /> }));
 
-import { ModelProviderCard, GitHostCard, S } from "./connection-cards";
+import { HostSummary, Lane, ModelProviderCard, S, SecretLane } from "./connection-cards";
 import { baseStatus } from "../../../lib/test-fixtures";
 import type { SetupStatus } from "../../../lib/types";
 
@@ -170,59 +170,18 @@ describe("ModelProviderCard — the login dialog's geometry", () => {
   });
 });
 
-describe("GitHostCard", () => {
-  function git(status: SetupStatus = baseStatus()) {
-    return render(<GitHostCard status={status} siteConfig={null} onChanged={vi.fn()} />);
-  }
-
-  it("offers the three lanes and defaults to github.com", () => {
-    git();
-    expect(screen.getByRole("radiogroup", { name: S.GIT_TITLE })).toBeInTheDocument();
-    expect(screen.getAllByRole("radio").length).toBe(3);
-    expect(screen.getByLabelText("Host")).toHaveValue("github.com");
-  });
-
-  // The secret name is per-host, so the card can't pretend there is a single
-  // global git credential — retyping the host retargets the write.
-  it("the PAT write is named for the host, not a global", async () => {
-    git();
-    await user.type(screen.getByLabelText("Access token"), "ghp_test");
-    await user.click(screen.getByRole("button", { name: /^save$/i }));
-    expect(setSecretMock).toHaveBeenCalledWith("git-pat-github-com", "ghp_test");
-  });
-
-  // Reported from the live console: a lane that had just been set up read
-  // "Connected" and STILL showed an empty key box, which looks exactly like a
-  // save that didn't take. The value is write-only, so there is nothing to
-  // prefill it with — the honest surface is a summary plus a deliberate Replace.
-  it("a stored lane shows no input until Replace is pressed", async () => {
-    git(baseStatus({ secrets: { present: ["git-pat-github-com"], github_app: false } }));
-    expect(screen.getByText("Connected")).toBeInTheDocument();
-    expect(screen.queryByLabelText("Access token")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Host")).not.toBeInTheDocument();
-    expect(screen.getByText(/write-only and never read back/i)).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: /^replace$/i }));
-    expect(screen.getByLabelText("Access token")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /save replacement/i })).toBeInTheDocument();
-
-    // Cancel puts it back — an operator who opened it by mistake is not stuck
-    // looking at an empty box again.
-    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
-    expect(screen.queryByLabelText("Access token")).not.toBeInTheDocument();
-  });
-
-  it("an UNSET lane shows its input immediately — nothing to summarise yet", () => {
-    git();
-    expect(screen.getByLabelText("Access token")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^save$/i })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^replace$/i })).not.toBeInTheDocument();
-  });
-
-  it("a stored PAT reads Connected and can be disconnected", async () => {
-    git(baseStatus({ secrets: { present: ["git-pat-github-com"], github_app: false } }));
-    expect(screen.getByText("Connected")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /^disconnect$/i }));
-    expect(deleteSecretMock).toHaveBeenCalledWith("git-pat-github-com");
+// GitHostCard retired in 0.7.2 (workspace-providers-prompt.md §2.1, Q4): the
+// git credential lanes it rendered moved into a provider row on /providers
+// (screens/providers/git-tab.tsx), which has its own test coverage
+// (git-tab.test.tsx) for the lane behaviors this block used to pin here —
+// per-host secret naming, the write-only "Connected" summary + Replace, the
+// unset-lane input, and Disconnect. What stays HERE is the export smoke test:
+// Lane/SecretLane/HostSummary are the shared shell the Git tab reuses rather
+// than re-typing.
+describe("Lane / SecretLane / HostSummary — exported for the Workspace Providers Git tab", () => {
+  it("are exported function components", () => {
+    expect(typeof Lane).toBe("function");
+    expect(typeof SecretLane).toBe("function");
+    expect(typeof HostSummary).toBe("function");
   });
 });

@@ -477,7 +477,7 @@ describe("SidebarNav (member role — B3)", () => {
 // Phase 5: the account-menu Demos entry (TopBar, not SidebarNav — the
 // describe block above only drives the sidebar) is meaningless on a member's
 // own Getting Started, which has no /setup?step= deep link at all.
-function renderTopBar(role: Role) {
+function renderTopBar(role: Role, networkPolicy?: "enforced" | "unenforced" | "acknowledged") {
   return render(
     <MemoryRouter>
       <ThemeProvider>
@@ -500,6 +500,7 @@ function renderTopBar(role: Role) {
             userDrive: null,
             userDriveDeniedByProfile: "",
             userDriveUnavailable: "",
+            networkPolicy,
           }}
           pendingApprovals={0}
           attentionCount={0}
@@ -510,6 +511,31 @@ function renderTopBar(role: Role) {
     </MemoryRouter>,
   );
 }
+
+// F16: the boot-time netpol canary's verdict, otherwise buried on
+// /setup/status — undefined off Kubernetes (and on an older daemon) renders
+// nothing rather than a guessed word.
+describe("TopBar — the netpol chip (F16)", () => {
+  it("renders nothing when the daemon sends no verdict (Docker, or an older build)", () => {
+    renderTopBar("admin");
+    expect(screen.queryByText(/NetworkPolicy:/)).not.toBeInTheDocument();
+  });
+
+  it("enforced", () => {
+    renderTopBar("admin", "enforced");
+    expect(screen.getByText("NetworkPolicy: enforcing")).toBeInTheDocument();
+  });
+
+  it("unenforced", () => {
+    renderTopBar("admin", "unenforced");
+    expect(screen.getByText("NetworkPolicy: not enforcing")).toBeInTheDocument();
+  });
+
+  it("acknowledged reads as indeterminate, never as the stronger 'enforcing' claim", () => {
+    renderTopBar("admin", "acknowledged");
+    expect(screen.getByText("NetworkPolicy: indeterminate")).toBeInTheDocument();
+  });
+});
 
 describe("TopBar — account-menu Demos entry (Phase 5)", () => {
   it("member: no Demos item", async () => {

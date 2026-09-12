@@ -30,6 +30,7 @@ import { Field, OptionCard } from "../wardyn/form-primitives";
 import { useMemberLocalDirRoot, useOperator } from "../wardyn/operator-context";
 import { getErrorMessage } from "../../lib/format";
 import { MEMBER_WORKSPACE } from "../../lib/permissions-copy";
+import { PROVIDERS } from "../../lib/workspace-providers-copy";
 import { workspaces as workspacesApi } from "../../lib/api/workspaces";
 import { useK8sRunner } from "../../lib/use-k8s-runner";
 import type { Workspace, WorkspaceSourceInput } from "../../lib/types";
@@ -237,7 +238,7 @@ export function AddWorkspaceDialog({
             <Field
               label="Repository URL"
               htmlFor="aw-source"
-              hint="Cloned into the sandbox when a run starts. Private repos use the credential from Settings → Git host."
+              hint={PROVIDERS.ADD_WORKSPACE_REPO_HINT}
             >
               <Input
                 id="aw-source"

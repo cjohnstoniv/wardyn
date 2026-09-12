@@ -90,6 +90,14 @@ const DrivesScreen = React.lazy(() =>
     default: m.DrivesScreen,
   })),
 );
+// The org's workspace-provider policy (0.7.2) — git hosts + storage ceilings.
+// No nav item and no member path: reached from the funnel's `providers` step
+// card and the Settings card, each of which renders for an operator only.
+const ProvidersScreen = React.lazy(() =>
+  import("./components/screens/providers/providers-screen").then((m) => ({
+    default: m.ProvidersScreen,
+  })),
+);
 const PermissionsScreen = React.lazy(() =>
   import("./components/screens/permissions").then((m) => ({
     default: m.PermissionsScreen,
@@ -507,6 +515,19 @@ export default function App() {
                 </React.Suspense>
               }
             />
+            {/* SUPER, gated server-side by the operatorOnly route group (both
+                GET/PUT /workspace-providers); the screen itself gates its
+                writes on useOperator, and no nav entry or entry point exists
+                for a member or a security admin (their door is two numeric
+                rows on /governance instead). */}
+            <Route
+              path="/providers"
+              element={
+                <React.Suspense fallback={<RouteFallback />}>
+                  <ProvidersScreen />
+                </React.Suspense>
+              }
+            />
             <Route
               path="/permissions"
               element={
@@ -524,7 +545,7 @@ export default function App() {
               }
             />
             {/* /integrations is gone — Settings is the one home for connections
-              now (Host · Model provider · Git host · Your SSH keys). The
+              now (Host · Model provider · Providers · Your SSH keys). The
               redirect is kept because the barrier chip, the old account menu
               and any operator bookmark pointed here. */}
             <Route

@@ -1,0 +1,214 @@
+/**
+ * Copyright 2025 The Wardyn Authors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+// Workspace providers copy canon (0.7.2) — the frozen canonical-strings tables
+// from docs/design/workspace-providers-prompt.md §7.2-§7.5 + §7.7, transcribed
+// verbatim. The /providers screen (Git tab, Storage tab, the card, the funnel
+// step, the Agents tab), the workspace-row "not an enabled provider" state, and
+// the run-detail "Effective policy" widget all read these instead of retyping
+// the copy, so the shipped wording can't drift from the reviewed mock.
+//
+// Pure TS — no React, no fetch, no DOM. Same discipline as user-drives-copy.ts
+// and governance-copy.ts: the components that consume this add NO copy of
+// their own.
+//
+// workspace-providers-copy.test.ts PARSES §7.2-§7.5 + §7.7 back out of the
+// prompt doc and compares all 93 keys below against them (§7.6 is STAGING —
+// field-report strings owned by other lanes — and is excluded, the way this
+// doc's own header says: `/^### 7\.[2-57]\b/`), so a swapped hyphen, a dropped
+// ellipsis or a new doc row fails a gate instead of shipping.
+//
+// Backtick-mono rule (§7 header note): a backticked substring inside a frozen
+// string (a URL, a wire value, a secret or env name, a field) is PLAIN TEXT
+// here — the mono span is a DISPLAY concern the consuming component applies,
+// uniformly at every recurrence, never baked into the string.
+//
+// §7.1's REUSED canon (S.GIT_FOOTER, CAPABILITY.*, LANE_META.*, PERM.*,
+// DRIVES.*, GOV.*, MEMBER_GETTING_STARTED.*, ...) is imported by the consuming
+// screens directly from its own home — never re-exported here, and never
+// re-frozen (§5 #1, #10): this module carries no HONESTY key and no second
+// wording of where a credential goes.
+//
+// DELIBERATELY ABSENT — §7.1's second table (server-composed admin-facing
+// refusals and run-time details: PROVIDERS_400.*, ADMIT.OPERATOR/LANE_DROPPED/
+// LEGACY_HOST, DRIVES.DISABLED/CEILING, the two claim-refusal replacements,
+// the agent_providers 400s, the injection rule's 403, the brokered:llm
+// details). Those are rendered from the wire, verbatim, one Go constants block
+// per lane — a second copy here would be a claim rather than canon (§5 #3,
+// #10). PROVIDER_MEMBER below is the one place that shape is inverted: its
+// three strings are server-composed too, but §7 froze them as canon keys (the
+// DRIVE_MEMBER precedent in user-drives-copy.ts), so they are transcribed here
+// as the wording the Go side must emit.
+
+// ==================== §7.2-§7.5 — PROVIDERS, the admin screen ==============
+
+export const PROVIDERS = {
+  // ---- §7.2 the screen header + the Git tab ----
+  // TITLE is one string for four places — the screen heading, the Settings
+  // card's title, the funnel step's summary card, and the tier row — the way
+  // DRIVES.TITLE serves its four.
+  TITLE: "Workspace providers",
+  LEAD: "Where work can come from, and how big it can get. Enable a git provider to bound which repositories a run may clone; set the storage ceilings every run and every drive is held to.",
+  GIT_TITLE: "Git providers",
+  GIT_LEAD:
+    "With no provider rows, any host with a stored credential can be cloned. Add a row to bound a host to the addresses you list; a row turned off refuses its host.",
+  STORAGE_TAB: "Storage",
+  KIND_GITHUB: "GitHub",
+  KIND_AZURE_DEVOPS: "Azure DevOps",
+  FIELD_ENABLED: "Enabled",
+  ROW_ABSENT_HINT: "Not configured. Its host follows the legacy list, if listed there — every address on it, no bound.",
+  ROW_DISABLED_HINT: "Off: this host is refused. Turn it on to admit the addresses below again.",
+  ADD_ROW_CTA: "Add provider",
+  REMOVE_CONFIRM: (kind: string) =>
+    `Remove the ${kind} row? Its host goes back to the legacy list — admitted if listed there, with no address bound. Stored credentials stay.`,
+  FIELD_BASE_URLS: "Allowed addresses",
+  BASE_URLS_HINT: "One per line, over HTTPS. A repository is admitted when its URL starts with one of these.",
+  BASE_URL_INVALID:
+    "Must be an https:// URL with a host and at least one path segment — no port, no credentials, no trailing wildcard.",
+  FIELD_LANES: "Permitted lanes",
+  LANES_HINT: "Which credential a run may use for this provider. Turning one off does not delete its stored secret.",
+  LANE_APP_UNAVAILABLE: "Not available: the App broker mints repository-scoped GitHub tokens and has no Azure DevOps equivalent.",
+  LANE_SSH_UNAVAILABLE:
+    "Not available: SSH over port 443 is offered for github.com and dev.azure.com only — a self-hosted host clones over HTTPS.",
+  LEGACY_OPEN_TITLE: "No git provider rows",
+  LEGACY_OPEN_BODY: "Runs clone whatever host has a credential stored, as they do today. Add a provider to bound that to addresses you name.",
+  LEGACY_OPEN_OTHER_HOSTS: "A GitLab or Bitbucket token has no provider row yet — store and rotate it on the Secrets page.",
+  SAVED_ELSEWHERE_TITLE: "Someone else saved providers since you loaded this page",
+  SAVED_ELSEWHERE_BODY: "Reload to see their version before saving yours.",
+  SAVED_TOAST: "Providers saved.",
+  // Inline pluralisation — the PERM.ENFORCE_ON_BODY shape, not a second
+  // helper (§5 #9). Stays on the page as an amber note until the next save
+  // (Q8), in addition to the transient toast.
+  SAVED_NARROWED: (n: number) =>
+    n === 1
+      ? `${n} onboarded source is now outside every enabled provider — runs can't clone it until an admin widens the addresses or turns its host on.`
+      : `${n} onboarded sources are now outside every enabled provider — runs can't clone them until an admin widens the addresses or turns their host on.`,
+  SAVE_CTA: "Save providers",
+  SAVE_ERROR: "Couldn't save these providers.",
+  // SAVE_REFUSED_TITLE heads every 400 the tab can meet, over the server's
+  // text (§7.1's second table, unparsed); SAVE_ERROR is the unreachable-server
+  // arm, not a refusal.
+  SAVE_REFUSED_TITLE: "These providers can't be saved as written",
+  // Replaces the Add-workspace dialog's hint that named the retired
+  // GitHostCard.
+  ADD_WORKSPACE_REPO_HINT: "Cloned into the sandbox when a run starts. Private repos use the credential stored under Settings → Providers for their host.",
+
+  // ---- §7.3 the Storage tab ----
+  EPHEMERAL_TITLE: "Ephemeral scratch",
+  EPHEMERAL_LEAD: "The writable layer a run gets when it mounts no drive. It is wiped when the sandbox exits.",
+  FIELD_DEFAULT_DISK: "Default size (MiB)",
+  DEFAULT_DISK_HINT:
+    "Fills a run that asks for no size. 0 leaves such a run unbounded — the maximum below binds requests, not silence.",
+  FIELD_MAX_DISK: "Maximum size (MiB)",
+  MAX_DISK_HINT: "A run asking for more is clamped to this, not refused.",
+  // Renders under all three disk fields (the two here and the profile
+  // editor's MaxEphemeralDiskMiB row) whenever the enforcement word is not
+  // `filesystem` — read from /setup/status's runner block, the AUTHORING
+  // daemon's driver, never a laptop's (§6.2).
+  DOCKER_UNCAPPED_WARN:
+    "This host's storage driver cannot enforce a size. A number filled or clamped from here runs uncapped, with a warning on the run; a size a policy or a profile writes still fails the run at create on this host.",
+  DRIVE_CEILING_TITLE: "Drive ceiling",
+  FIELD_DRIVES_ENABLED: "User drives",
+  DRIVES_ENABLED_HINT:
+    "Off means this deployment offers no drives: nothing is mounted and every drive write is refused. Existing drives and allocations are kept.",
+  // Renders on /drives (an EmptyState-toned banner above the drives table),
+  // keyed here because the switch it describes lives here (Q9).
+  DRIVES_OFF_BANNER:
+    "User drives are turned off for this deployment under Workspace providers. Everything here is kept; nothing mounts until they are turned back on.",
+  FIELD_MAX_DRIVE: "Largest drive (MiB)",
+  MAX_DRIVE_HINT: "An allocation or override above this is refused at write and clamped at resolve. 0 means no ceiling.",
+  // Renders once, as the plain note under FIELD_MAX_DRIVE. The drives
+  // HONESTY sentence (DRIVES.HONESTY) stays on /drives, unchanged.
+  CEILING: "A ceiling bounds what an admin may allocate. It does not bound what the volume will hold.",
+
+  // ---- §7.4 write refusals and states (console-rendered half) ----
+  FETCH_FAILED_TITLE: "Couldn't load workspace providers",
+  FETCH_FAILED_BODY:
+    "Something went wrong reaching the server. The providers already saved still bound every run — this page just can't show them right now.",
+  // Renders on the workspace row and as the New Run Workspace <Select>'s
+  // reason line, from the server's per-source `admitted` flag (U3's wire).
+  CARD_NOT_ADMITTED: "Not an enabled git provider — runs can't clone this until an admin enables its host.",
+  // The ONE row the re-home confirm dialog adds (lands in
+  // user-drives-prompt.md §7.4 with U3); the body is the server's 409
+  // verbatim, Cancel is PEOPLE.CANCEL, the confirm is DRIVES.SAVE_CTA painted
+  // destructive.
+  REHOME_TITLE: "Saving this moves people's directories",
+
+  // ---- §7.5 the card, the step, and the entry points ----
+  CARD_LEAD: "Which git hosts a run may clone, and the storage ceilings it works inside.",
+  CARD_EMPTY: "No providers enabled.",
+  CARD_PROVIDERS: (n: number) => `${n} git provider${n === 1 ? "" : "s"}`,
+  CARD_AGENTS: (n: number) => `${n} agent${n === 1 ? "" : "s"}`,
+  CARD_SUMMARY: (providers: string, agents: string) => `${providers} · ${agents}`,
+  CARD_OPEN: "Manage providers",
+  STEP_LABEL: "Providers",
+  STEP_HEADING: "What runs can be built from",
+  STEP_BADGE_READY: (n: number) => `Ready · ${n} provider${n === 1 ? "" : "s"}`,
+  STEP_BADGE_READY_AGENTS: (n: number) => `Ready · ${n} agent${n === 1 ? "" : "s"}`,
+} as const;
+
+// ==================== §7.4 (member table) — PROVIDER_MEMBER =================
+
+// Server-composed member doors (the DRIVE_MEMBER precedent in
+// user-drives-copy.ts): keyed in the module AND byte-checked against the Go
+// literal in workspace-providers-copy.test.ts. A member meets these on the
+// launch path; the console renders them verbatim under its own heading. NEVER
+// names a base URL, a host list, or another person (§5 #2).
+export const PROVIDER_MEMBER = {
+  ADMIT_MEMBER: "this repository's host is not an enabled git provider — ask an admin",
+  AGENT_NOT_ENABLED: (id: string) => `agent: "${id}" is not an enabled agent on this deployment — ask an admin`,
+  LLM_MECHANISM_DEAD: (mechanism: string, ts: string) =>
+    `this run's model access is configured as ${mechanism}, and that credential expired at ${ts} and could not be renewed — sign in again under Settings → Model provider. Wardyn does not substitute a different model provider.`,
+} as const;
+
+// ==================== §7.7 — AGENTS =========================================
+
+// The Agents tab (C-UI, W4), the member's Getting Started "Model access" chip,
+// the New Run agent picker, and the run-detail "Effective policy" widget. Kept
+// here (not a separate module) because §7 froze it in the SAME prompt doc as
+// PROVIDERS, over the SAME two-column table shape `parseFrozenTables` clones —
+// a second file would be a second parser for one doc. `AGENTS_TITLE` /
+// `AGENTS_LEAD` / `AGENT_ROW_DISABLED_HINT` are prefixed (round note #7) so no
+// key collides with PROVIDERS across the one cross-namespace lookup the test
+// uses; the row's own Enabled switch reuses `PROVIDERS.FIELD_ENABLED`.
+export const AGENTS = {
+  AGENTS_TITLE: "Agents",
+  AGENTS_LEAD:
+    "Which coding agents this Wardyn offers, how each one reaches its model, and whether that credential is one for everyone or one per person.",
+  AGENT_ROW_DISABLED_HINT: "Off: runs naming this agent are refused, and it shows as unavailable in New run.",
+  FIELD_MECHANISM: "Model access",
+  MECHANISM_HINT: "One lane per agent. A run whose lane is not working is refused — Wardyn never substitutes another provider.",
+  MECHANISM_NONE: "None — the image brings its own",
+  MECHANISM_NONE_HINT: "Wardyn wires no model credential. The only choice for an agent outside the catalog.",
+  MECHANISM_BEDROCK_BEARER: "Bearer key",
+  MECHANISM_BEDROCK_SSO: "SSO sign-in",
+  MECHANISM_BEDROCK_ENV: "Daemon environment",
+  MECHANISM_BEDROCK_AWS_DIR: "Host ~/.aws",
+  FIELD_SOURCE: "Credential",
+  SOURCE_SHARED: "Shared",
+  SOURCE_SHARED_HINT: "One credential, captured by an admin, backs every run.",
+  SOURCE_PER_USER: "Per person",
+  SOURCE_PER_USER_HINT: "Each person signs in to AWS themselves. Their runs use their own session; an expiry affects one person.",
+  PER_USER_UNAVAILABLE: "Not available: only an AWS SSO sign-in is captured per person in this release.",
+  FIELD_SSO_START_URL: "AWS access portal start URL",
+  SSO_START_URL_HINT: "Everyone signs in against this portal. A sign-in never chooses another.",
+  ADMIN_OWN_CHIP_NOTE: "This is your own sign-in — the same one a member makes. Under a shared credential it is the one everyone uses.",
+  // The picker item's sub-line for a disabled row (the plan's fragment,
+  // sentence-cased per CONSOLE-RULES §10 — round note #4).
+  UNAVAILABLE: "Not enabled by your admin",
+  MODEL_ACCESS_LIVE: "Model access · Your AWS sign-in",
+  MODEL_ACCESS_EXPIRING: "Model access · Expiring",
+  MODEL_ACCESS_EXPIRING_ACTION: (ts: string) => `Sign in again before ${ts}`,
+  MODEL_ACCESS_EXPIRED: "Model access · Signed out",
+  MODEL_ACCESS_NOT_CONFIGURED: "Model access · Not signed in",
+  MODEL_ACCESS_SHARED_EXPIRED: "Model access · Your admin's credential expired",
+  MODEL_ACCESS_SHARED_EXPIRED_ACTION: "Your admin's model credential expired — ask them to reconnect it",
+  SIGN_IN_AWS: "Sign in to AWS",
+  // Renders under the JSON policy field only when a parse succeeds and
+  // min_confinement_class names no class; precedence is unchanged.
+  FLOOR_UNPARSEABLE: (value: string) => `"${value}" isn't a barrier class, so this policy sets no floor — the barrier above is what launches.`,
+  EFFECTIVE_TITLE: "Effective policy",
+  EFFECTIVE_LEAD: "What launch narrowed, one line each. Your policy is what you wrote; this is what ran.",
+} as const;

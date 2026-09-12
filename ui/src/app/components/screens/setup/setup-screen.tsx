@@ -51,6 +51,8 @@ import {
   type CorpStepActions,
 } from "./corp-network-step";
 import { IntegrationsStep } from "./integrations-step";
+import { ProvidersCard } from "./providers-card";
+import { providers as providersApi } from "../../../lib/api/providers";
 import { DeploymentStep, ReviewStep, WorkspacesStep } from "./step-bodies";
 import {
   DEMO_STEP_IDS,
@@ -170,6 +172,10 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     () => new Set(loadVisitedSteps()),
   );
   const [secretNames, setSecretNames] = React.useState<string[]>([]);
+  // Count of ENABLED git-provider rows (§7.5: "counts ENABLED rows, never
+  // hosts") — feeds the `providers` step's own badge/done rule, the same
+  // shape `integrationsCount` feeds `integrations`'s.
+  const [providerCount, setProviderCount] = React.useState(0);
   const {
     workspaces,
     loading: wsLoading,
@@ -346,6 +352,18 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
       .catch(() => setSecretNames([]));
   }, []);
 
+  // GET /workspace-providers is operatorOnly — gated on `operator` so a
+  // security admin or a member does not take a swallowed 403 on every
+  // recheck (this funnel runs for every caller); the count just stays 0
+  // (Optional) for them either way.
+  const loadProviderCount = React.useCallback(() => {
+    if (!operator) return;
+    providersApi
+      .getWorkspaceProviders()
+      .then(({ providers }) => setProviderCount((providers.git ?? []).filter((r) => !r.disabled).length))
+      .catch(() => setProviderCount(0));
+  }, [operator]);
+
   const recheck = React.useCallback(() => {
     setRechecking(true);
     // Resync SiteConfig too (F2): the rail's Integrations badge count is
@@ -359,6 +377,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     // embedded step never reaches the rail, which keeps reading the
     // mount-time snapshot until a full page reload.
     loadSecrets();
+    loadProviderCount();
     return setupApi
       .getSetupStatus()
       .then((s) => {
@@ -372,7 +391,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         if (deploymentMode(s) === "multi-user") void loadAccess();
       })
       .finally(() => setRechecking(false));
-  }, [reloadSiteConfig, loadSecrets, loadAccess]);
+  }, [reloadSiteConfig, loadSecrets, loadProviderCount, loadAccess]);
 
   React.useEffect(() => {
     recheck(); // also performs the initial SiteConfig + secrets GET (see recheck)
@@ -509,20 +528,13 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     );
   }
 
-  // The one number the rail's "Model & git host" badge needs: AI + SCM, the two
-  // categories the step's two cards actually configure. It used to add a third
-  // term for the eight GENERIC categories (package feeds, registries, cloud,
-  // data, MCP, work tracking, observability, other) that the old /integrations
-  // catalog could hold — those kinds are gone in 0.5, so counting them would be
-  // counting something that can no longer exist.
-  //
-  // Host proxy / egress redirection are NOT counted here: those moved to their
-  // own Corporate network step (its own "Ready · proxy + N redirects" badge
-  // below) — counting them here too would double-count one configuration under
-  // two steps.
+  // The one number the Secrets rail badge needs: AI only, since 0.7.2 (the git
+  // credential lanes moved to the `providers` step/screen, whose OWN badge now
+  // counts enabled provider rows — see providerCount below). It used to add
+  // SCM's count too, back when a git credential lived on THIS step's shared
+  // GitHostCard; GitHostCard is retired (workspace-providers-prompt.md §2.1).
   const integrationsData = deriveIntegrations(status, siteConfig, secretNames);
-  const integrationsCount =
-    integrationsData.ai.length + integrationsData.scm.length;
+  const integrationsCount = integrationsData.ai.length;
   integrationsCountRef.current = integrationsCount;
   const corpRedirects = siteConfig?.egress_redirects ?? [];
   const corpNetwork: CorpNetworkState = {
@@ -548,6 +560,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     integrationsCount,
     corpNetwork,
     corpRedirects,
+    providerCount,
   );
   const done = stepDone(
     status,
@@ -556,6 +569,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     integrationsCount,
     corpNetwork,
     corpRedirects,
+    providerCount,
   );
   // Each demo sub-step earns its checkmark once THAT demo has been launched (a
   // per-browser signal kept out of the pure stepBadges/stepDone — see steps.ts).
@@ -719,6 +733,11 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             />
           </React.Suspense>
         )}
+        {/* The step's BODY is the card (zero teal — the footer Next is the
+            step's one affirmative; the forms and Save providers live on
+            /providers). setup/providers-card.tsx is also the Settings card,
+            replacing Git host. */}
+        {stepId === "providers" && <ProvidersCard />}
         {stepId === "workspaces" && (
           <WorkspacesStep
             workspaces={workspaces}

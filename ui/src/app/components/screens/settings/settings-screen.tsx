@@ -10,7 +10,9 @@
 // probe system, an adopt/derive lifecycle) as the answer to two questions most
 // operators answer once.
 //
-// Host · Model provider · Git host · Your SSH keys · Drives (last, §6's "fifth card").
+// Host · Model provider · Providers · Your SSH keys · Drives (last, §6's "fifth card").
+// Providers replaced Git host in 0.7.2 (workspace-providers-prompt.md §6): the
+// git credential lanes moved into a provider row on /providers.
 //
 // Two of them are components shared verbatim with the Getting Started
 // funnel (connection-cards.tsx) and one is the barrier picker shared with its
@@ -40,8 +42,9 @@ import { EnvironmentStep } from "../setup/environment-step";
 import { useOperator } from "../../wardyn/operator-context";
 import { isProxyConfigured } from "../setup/corp-network-proxy";
 import { SshKeysPane } from "../ssh-keys";
-import { ModelProviderCard, GitHostCard } from "./connection-cards";
+import { ModelProviderCard } from "./connection-cards";
 import { UserDrivesCard } from "../setup/user-drives-card";
+import { ProvidersCard } from "../setup/providers-card";
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -244,11 +247,11 @@ export function SettingsScreen() {
             siteConfig={siteConfig}
             onChanged={load}
           />
-          <GitHostCard
-            status={status}
-            siteConfig={siteConfig}
-            onChanged={load}
-          />
+          {/* The Providers card replaces Git host (0.7.2): the git credential
+              lanes moved into a provider row on /providers, and this card is
+              the same shared component the funnel's `providers` step body
+              renders (setup/providers-card.tsx). */}
+          <ProvidersCard />
           <SshKeysPane heading="h3" />
           {/* The FIFTH card, and so the last one (user-drives-prompt.md §6) —
               the SAME component the setup funnel's Workspaces step renders,

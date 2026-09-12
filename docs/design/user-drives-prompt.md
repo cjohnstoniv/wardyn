@@ -645,6 +645,7 @@ confirming happens through the API.
 | `ENFORCEMENT_REQUEST` | Size requested; the storage class decides |
 | `ENFORCEMENT_EXTERNAL` | Size bounded by the share's own quota |
 | `ENFORCEMENT_NONE` | Size shown, not enforced |
+| `ENFORCEMENT_EVICTION` | Size limited by eviction — over it, the run is stopped, not the write |
 | `HONESTY` | Wardyn never enforces a drive's size itself. On Kubernetes the size is the volume request and the storage class decides whether it binds — block disks do, network-share provisioners do not. On Docker a managed drive has no byte cap, the same gap `disk_mib` has. A share is bounded by its own quota. The size you see is the allocation, not a guarantee. |
 
 `TITLE` is **one string for four places** — the screen heading, the Workspaces header's outline
@@ -655,7 +656,10 @@ value in mono; the four long `BACKEND_*` labels are the editor's select options 
 cell renders `SIZE_MIB` / `SIZE_GIB` (or `SIZE_NONE`) with the drive's `ENFORCEMENT_*` gloss as
 its sub-line, so the honesty is on every number, not only in the note. `HONESTY` renders once,
 as the plain note under the drives table (Q1). `ENFORCEMENT_FILESYSTEM` is frozen for a value no
-v1 backend yields (§2.7). `HOME_RULE` renders under the directory-name field for every option.
+v1 backend yields (§2.7). `ENFORCEMENT_EVICTION` (0.7.2, appended by U1 — `workspace-providers-
+prompt.md` §2.8/§7.1) is Kubernetes' fifth enforcement word for ephemeral scratch: the kubelet
+measures periodically and evicts the pod over the limit, so the write itself is never refused.
+`HOME_RULE` renders under the directory-name field for every option.
 `SIZE_HINT_REQUIRED` replaces `SIZE_HINT` under the Size field when the backend is `k8s_pvc`
 (Q7); no required-marker glyph exists — the hint carries the word.
 

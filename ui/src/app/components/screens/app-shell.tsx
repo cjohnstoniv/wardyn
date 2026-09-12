@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import { WardynWordmark } from "../wardyn/logo";
 import { Chip, ConfinementChip } from "../wardyn/primitives";
+import { SITE } from "../wardyn/copy";
 import { useTheme } from "../wardyn/theme-provider";
 import { strongestAvailable } from "../wardyn/default-confinement";
 import { lastCheckedLabel } from "../../lib/readiness";
@@ -130,6 +131,10 @@ export interface ShellMeta {
   // default as the two above: an unresolved or failed /me reads as "" —
   // nothing is claimed about a drive that is also null.
   userDriveUnavailable: string;
+  // F16: k8sNetpolVerdict's three-value enum off /healthz — present on
+  // Kubernetes only (undefined on Docker, and on an older daemon, which the
+  // shell reads as "say nothing" rather than a guessed word).
+  networkPolicy?: "enforced" | "unenforced" | "acknowledged";
 }
 
 function useMeta(): ShellMeta {
@@ -150,6 +155,7 @@ function useMeta(): ShellMeta {
     userDrive: null,
     userDriveDeniedByProfile: "",
     userDriveUnavailable: "",
+    networkPolicy: undefined,
   });
   React.useEffect(() => {
     let alive = true;
@@ -179,6 +185,7 @@ function useMeta(): ShellMeta {
           userDrive: me?.user_drive ?? null,
           userDriveDeniedByProfile: me?.user_drive_denied_by_profile ?? "",
           userDriveUnavailable: me?.user_drive_unavailable ?? "",
+          networkPolicy: h.network_policy,
         });
       })
       .catch(() => {
@@ -669,6 +676,11 @@ export function TopBar({
         </Button>
 
         <BarrierChip classes={confinementClasses} />
+        {/* F16: the boot-time netpol canary's verdict, otherwise invisible to
+            an operator who never opens /setup/status. Undefined off
+            Kubernetes (and on an older daemon) renders nothing rather than a
+            guessed word. */}
+        {meta.networkPolicy && <NetworkPolicyChip verdict={meta.networkPolicy} />}
 
         <Button onClick={onNewRun} size="sm">
           <Plus className="size-4" /> New run
@@ -746,7 +758,7 @@ export function TopBar({
               </Link>
             </DropdownMenuItem>
             {/* Settings is the one home for connections — Host · Model provider ·
-                Git host · Your SSH keys. It replaced /integrations, which now
+                Providers · Your SSH keys. It replaced /integrations, which now
                 redirects here, and the barrier chip above points at it too. */}
             <DropdownMenuItem asChild>
               <Link to="/settings">
@@ -851,5 +863,25 @@ function BarrierChip({ classes }: { classes: ConfinementClass[] }) {
         </Chip>
       )}
     </Link>
+  );
+}
+
+// F16: the netpol canary's verdict (k8sNetpolVerdict, Kubernetes only) — a
+// silent boot-time fact otherwise buried on /setup/status. `acknowledged`
+// (WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY) is neutral, not success: it is an
+// operator's override, not proof — see setup.go's own comment on why the two
+// must never collapse into one reading.
+function NetworkPolicyChip({ verdict }: { verdict: "enforced" | "unenforced" | "acknowledged" }) {
+  const label =
+    verdict === "enforced"
+      ? SITE.CONFINEMENT_NETPOL_ENFORCING
+      : verdict === "unenforced"
+        ? SITE.CONFINEMENT_NETPOL_NOT_ENFORCING
+        : SITE.CONFINEMENT_NETPOL_INDETERMINATE;
+  const tone = verdict === "enforced" ? "success" : verdict === "unenforced" ? "danger" : "neutral";
+  return (
+    <Chip tone={tone} dot>
+      {label}
+    </Chip>
   );
 }

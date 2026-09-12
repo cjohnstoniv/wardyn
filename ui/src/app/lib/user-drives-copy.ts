@@ -17,7 +17,7 @@
 // their own.
 //
 // user-drives-copy.test.ts PARSES §7.2-§7.8's tables back out of the prompt
-// doc and compares all 140 keys below against them, so a swapped hyphen, a
+// doc and compares all 141 keys below against them, so a swapped hyphen, a
 // dropped ellipsis or a new doc row fails a gate instead of shipping.
 //
 // Backtick-mono rule (§7 header note): a backticked substring inside a frozen
@@ -213,6 +213,12 @@ export const DRIVES = {
   ENFORCEMENT_REQUEST: "Size requested; the storage class decides",
   ENFORCEMENT_EXTERNAL: "Size bounded by the share's own quota",
   ENFORCEMENT_NONE: "Size shown, not enforced",
+  // 0.7.2: Kubernetes' word for ephemeral scratch, not a drive backend — no v1
+  // drive backend yields it (EnforcementFor is drive-backend-keyed and
+  // untouched). Appended here (workspace-providers-prompt.md §2.8/§7.1) so the
+  // Workspace Providers Storage tab can read the SAME `DRIVES.ENFORCEMENT_*`
+  // map (screens/drives/display.tsx's GLOSS) rather than a second gloss.
+  ENFORCEMENT_EVICTION: "Size limited by eviction — over it, the run is stopped, not the write",
   // Renders once, as the plain note under the drives table (Q1).
   HONESTY:
     "Wardyn never enforces a drive's size itself. On Kubernetes the size is the volume request and the storage class decides whether it binds — block disks do, network-share provisioners do not. On Docker a managed drive has no byte cap, the same gap disk_mib has. A share is bounded by its own quota. The size you see is the allocation, not a guarantee.",

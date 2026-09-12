@@ -215,6 +215,11 @@ export const health = {
     runner?: string;
     confinement_classes?: string[];
     ebpf_groundtruth?: { state?: string; reason?: string };
+    // k8sNetpolVerdict's three-value enum (internal/api/setup.go) — present on
+    // Kubernetes only (absent on Docker, and on an older daemon). F16: the
+    // shell's netpol indicator reads this instead of leaving the boot-time
+    // canary's verdict invisible to an operator who never opens /setup/status.
+    network_policy?: "enforced" | "unenforced" | "acknowledged";
     // OIDC is configured, so GET /auth/login exists — the sign-in screen only
     // offers the SSO link when the server says the flow is actually mounted.
     sso?: boolean;

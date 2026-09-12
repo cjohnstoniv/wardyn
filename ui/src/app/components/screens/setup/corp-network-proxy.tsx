@@ -25,6 +25,7 @@ import { cn } from "../../ui/utils";
 import { Field } from "../../wardyn/form-primitives";
 import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
+import { SITE } from "../../wardyn/copy";
 import { AddSecretDialog } from "../secrets";
 import type { ProbeUiState } from "./corp-network-egress";
 
@@ -566,7 +567,7 @@ export function HostProxyTab({
     if (await mutate({ ...(siteConfig ?? {}), upstream_proxy_url: value || undefined, upstream_proxy_secret_ref: undefined }, "Failed to save the upstream proxy")) {
       setUrl(value);
       setUseSecret(false);
-      toast.success(value ? "Upstream proxy saved" : "Upstream proxy removed");
+      toast.success(value ? "Upstream proxy saved" : "Upstream proxy removed", { description: SITE.SAVE_NOTE });
     }
   };
 
@@ -585,7 +586,7 @@ export function HostProxyTab({
     ) {
       setUseSecret(true);
       setDisclosureOpen(true);
-      toast.success("Upstream proxy saved as a secret");
+      toast.success("Upstream proxy saved as a secret", { description: SITE.SAVE_NOTE });
       // The secret above was just created — the orchestrator's secretNames
       // (last fetched at mount/Re-check) doesn't know about it yet, so
       // secretRefDangling would otherwise misread this freshly-saved ref as
@@ -600,7 +601,7 @@ export function HostProxyTab({
     const trimmed = name.trim();
     if (!trimmed) return;
     if (await mutate({ ...(siteConfig ?? {}), upstream_proxy_secret_ref: trimmed, upstream_proxy_url: undefined }, "Failed to save the proxy secret reference")) {
-      toast.success("Upstream proxy saved");
+      toast.success("Upstream proxy saved", { description: SITE.SAVE_NOTE });
       // Same staleness gap as saveAsSecret above — most commonly hit right
       // after the "Add secret…" dialog just created `name` for real.
       onRecheck();

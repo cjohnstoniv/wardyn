@@ -193,9 +193,11 @@ describe("frozen contract — ids, labels, headings, order", () => {
       ["ssh-briefly-resident", "The one that touches disk — briefly"],
       ["github-app-broker", "A token the sandbox never even sees"],
       ["sts-fail-closed", "No identity, no credential"],
-      // "Your work" is just the one workspace step — the tier-1/2 library
-      // steps (Directories & repos, Base images) retired with
-      // sources-library.tsx/image-catalog.tsx.
+      // "Your work" is `providers` (0.7.2 — org policy over git hosts and
+      // storage ceilings, before Workspaces per the ORDER test §9.1) then
+      // workspaces — the tier-1/2 library steps (Directories & repos, Base
+      // images) retired with sources-library.tsx/image-catalog.tsx.
+      ["providers", "Providers"],
       ["workspaces", "Workspaces"],
       ["review", "Review"],
     ]);
@@ -227,10 +229,11 @@ describe("frozen contract — ids, labels, headings, order", () => {
       "ssh-briefly-resident",
       "github-app-broker",
       "sts-fail-closed",
+      "providers",
       "workspaces",
       "review",
     ]);
-    expect(STEP_ORDER).toHaveLength(22);
+    expect(STEP_ORDER).toHaveLength(23);
     expect(PHASES.flatMap((p) => p.steps)).toEqual(STEP_ORDER);
     // Getting Started is the ONE demos surface: every catalog demo is a
     // sub-step, in catalog order, split into the two sections by `Demo.section`

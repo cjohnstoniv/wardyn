@@ -371,7 +371,13 @@ function scmResidency(lanes: Lane[]): ResidencyKind {
 }
 
 function deriveScmRows(status: SetupStatus, siteConfig: SiteConfig | null, present: string[]): IntegrationRow[] {
-  const rows = deriveProviders(present, siteConfig?.scm_hosts ?? [], status.secrets.github_app);
+  // effective_scm_hosts is the server's projected union (workspace providers
+  // MINUS every host a provider row claims, UNION every enabled row's hosts) —
+  // the one spelling of the claim rule, in Go (internal/api/workspace_providers.go
+  // effectiveScmHosts). Older daemons omit it, so a disabled/claimed host still
+  // reads as "Connected" against them; `?? scm_hosts` is that fallback, not a
+  // second opinion about the rule.
+  const rows = deriveProviders(present, siteConfig?.effective_scm_hosts ?? siteConfig?.scm_hosts ?? [], status.secrets.github_app);
   return rows.map((r) => {
     // SCM-SEAM-2: a host registered in scm_hosts but with no stored credential
     // yet still widens every future run's egress allowlist the moment it's

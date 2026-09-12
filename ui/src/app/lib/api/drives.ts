@@ -29,8 +29,12 @@ export type HomeTemplate = "hash" | "sub" | "email_local";
 // types.DriveReclaim — a DECLARED INTENT the admin carries out by command.
 export type DriveReclaim = "retain" | "delete";
 // types.StorageEnforcement — what actually binds bytes. `filesystem` is in the
-// vocabulary for a value no v1 backend yields (prompt §2.7).
-export type StorageEnforcement = "filesystem" | "request" | "external" | "none";
+// vocabulary for a value no v1 backend yields (prompt §2.7). `eviction` (0.7.2,
+// user-drives-prompt.md §7.2) is Kubernetes' word for ephemeral scratch: the
+// kubelet measures periodically and evicts the pod over the limit — the write
+// is never refused. Surfaced on runner.Capabilities.EphemeralDiskEnforcement
+// and rendered by the Workspace Providers Storage tab.
+export type StorageEnforcement = "filesystem" | "request" | "external" | "none" | "eviction";
 
 // types.UserDrive — one admin-registered drive (migration 0054's row).
 export interface UserDrive {
