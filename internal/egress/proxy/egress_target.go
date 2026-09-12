@@ -65,6 +65,32 @@ const (
 // Wrapped, never returned bare, so the vet's own Reason still reaches the log.
 var errHostUnresolved = errors.New("proxy: host did not resolve")
 
+// hostBlockedError is egressTarget's address-range refusal, carrying WHICH guard
+// class fired. The class is the whole point: only blockPrivate is liftable by
+// SiteConfig.InternalHosts, so a refusal that collapses every class into one
+// error (as this did, a plain fmt.Errorf) leaves writeEgressDeny no way to tell
+// an operator whose loopback/metadata/NAT64 target is unreachable forever apart
+// from one whose RFC1918 endpoint is one site-config line away.
+//
+// A struct rather than a sentinel per class: the classes already exist as
+// blockKind, and errors.As reads the field without a switch over five sentinels.
+type hostBlockedError struct {
+	kind blockKind
+	msg  string
+}
+
+func (e *hostBlockedError) Error() string { return e.msg }
+
+// blockKindOf reports the guard class behind err, or blockNone when err is not a
+// range refusal (a resolver fault, a policy deny, anything else).
+func blockKindOf(err error) blockKind {
+	var hb *hostBlockedError
+	if errors.As(err, &hb) {
+		return hb.kind
+	}
+	return blockNone
+}
+
 // egressTarget resolves host:port to the dial target a forward-egress call
 // site should use for THIS proxy's mode — hiding the corp-upstream branch so
 // every forward-egress caller (evaluate, serveMITMRequest, handleGitBroker,
@@ -121,7 +147,8 @@ func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, 
 		// already decided them, including the operator's egress-redirect trust.
 		if ip := nonCanonicalLiteralIP(host); ip != nil {
 			if kind, why := isBlockedIP(ip); kind != blockNone {
-				return "", "", fmt.Errorf("host %q denied: non-canonical literal for %s: %s", host, ip, why)
+				return "", "", &hostBlockedError{kind: kind,
+					msg: fmt.Sprintf("host %q denied: non-canonical literal for %s: %s", host, ip, why)}
 			}
 		}
 		// The corp proxy dials, but the SSRF guard still binds the NAME. Without
@@ -150,7 +177,7 @@ func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, 
 		// by pinning the vetted address; this branch cannot. THREAT-MODEL.md §4.2
 		// states both.
 		if guard := p.vetHost(host); guard.Denied && !guard.Unresolved {
-			return "", "", fmt.Errorf("host %q denied: %s", host, guard.Reason)
+			return "", "", &hostBlockedError{kind: guard.kind, msg: fmt.Sprintf("host %q denied: %s", host, guard.Reason)}
 		} else if guard.Lifted {
 			ruleSource = ruleSourceInternalHost
 		}
@@ -188,7 +215,7 @@ func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, 
 		if guard.Unresolved {
 			return "", "", fmt.Errorf("host %q: %s: %w", host, guard.Reason, errHostUnresolved)
 		}
-		return "", "", fmt.Errorf("host %q denied: %s", host, guard.Reason)
+		return "", "", &hostBlockedError{kind: guard.kind, msg: fmt.Sprintf("host %q denied: %s", host, guard.Reason)}
 	}
 	if guard.Lifted {
 		ruleSource = ruleSourceInternalHost

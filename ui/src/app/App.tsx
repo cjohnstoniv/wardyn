@@ -223,6 +223,13 @@ function RequireSetup({ status }: { status: SetupStatus | null }) {
   // ADMIN funnel on the fail-open default. Decline to gate instead — the route
   // below still enforces itself server-side, and the shell says why the console
   // looks empty.
+  //
+  // This <Outlet/> is NOT the hole V1-D3 closed: AppShell renders no route at all
+  // while the identity is settled-but-unknown, so nothing downstream of here
+  // paints. Declining to gate stays right for the reason above — bouncing an
+  // unknown human into the ADMIN funnel would be a worse lie than showing them
+  // the banner — and the shell, not this wrapper, is where "every route" is one
+  // place.
   const identityResolved = useOperatorResolved();
   if (roleResolved && !identityResolved) return <Outlet />;
   if (status === null || !roleResolved) return <RouteFallback />;

@@ -57,7 +57,14 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	if run != nil && *f.autoStopInterval > 0 {
 		reaper := lifecycle.New(
 			lifecycleStore{pool: pool},
-			lifecycleStopper{pool: pool, runner: run, identity: idp, broker: brk},
+			lifecycleStopper{
+				pool: pool, runner: run, identity: idp, broker: brk,
+				// The third terminal writer's approval cascade (V1-D1). srv owns the
+				// approvals service; the reaper owns the STOPPED transition. Threading
+				// the one method is smaller than giving the reaper its own approval
+				// store and its own copy of the reason derivation.
+				cancelApprovals: srv.CancelTerminalRunApprovals,
+			},
 			maskedRec,
 			lifecycle.Config{Interval: *f.autoStopInterval, TickLock: reapTickLock(pool)},
 		)
@@ -197,10 +204,10 @@ func startUISandboxGateway(rootCtx context.Context, f *bootFlags, posture tlsPos
 // server has stopped accepting requests, so no further audit events are
 // produced — previously sinks were never Closed on shutdown, abandoning the
 // final batch). Extracted verbatim from run(); fan may be nil.
-func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture, handler http.Handler, idpName string, fan *sinks.Fanout) error {
+func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture, srv *api.Server, idpName string, fan *sinks.Fanout) error {
 	httpSrv := &http.Server{
 		Addr:              *f.listen,
-		Handler:           handler,
+		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		// No ReadTimeout/WriteTimeout: long-lived streaming endpoints (the attach
 		// WebSocket and the fleet SSE stream) must not be killed by a whole-request
@@ -253,6 +260,12 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 	if err := httpSrv.Shutdown(shutCtx); err != nil {
 		return fmt.Errorf("shutdown: %w", err)
 	}
+
+	// BETWEEN the two, deliberately: the server has stopped accepting requests
+	// (so no new auth.failed can open a streak) and the sinks are still open (so
+	// the summary row this emits is actually delivered). Same slot the proxy
+	// flushes its private-IP memo in.
+	srv.FlushAuthFailedStreak()
 
 	if fan != nil {
 		if cerr := fan.Close(); cerr != nil {

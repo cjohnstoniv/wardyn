@@ -10,17 +10,9 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 import { AppShell, MobileNav, TopBar, useFocusMode } from "./app-shell";
-import {
-  useOperator,
-  useRole,
-  useRoleResolved,
-  useSecurityOperator,
-  useUserDrive,
-  type Role,
-} from "../wardyn/operator-context";
+import { useUserDrive, type Role } from "../wardyn/operator-context";
 import { ThemeProvider } from "../wardyn/theme-provider";
 import { baseMeDrive } from "../../lib/test-fixtures";
-import { SHELL } from "../wardyn/copy";
 import type { ConfinementClass } from "../../lib/types";
 
 // below md the desktop aside is hidden, so this Sheet-based hamburger is
@@ -68,8 +60,14 @@ function renderMobileNav(role: Role = "admin") {
 describe("AppShell (control plane unreachable)", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  function renderShell(unreachable: boolean, confinementClasses?: ConfinementClass[]) {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("connection refused")));
+  function renderShell(
+    unreachable: boolean,
+    confinementClasses?: ConfinementClass[],
+  ) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("connection refused")),
+    );
     return render(
       <MemoryRouter>
         <ThemeProvider>
@@ -134,7 +132,10 @@ describe("AppShell — session-expiry warning (W31-S1-7)", () => {
       if (u.endsWith("/healthz")) {
         return Promise.resolve({
           ok: true,
-          json: async () => ({ trust_domain: "wardyn.local", identity_provider: "embedded" }),
+          json: async () => ({
+            trust_domain: "wardyn.local",
+            identity_provider: "embedded",
+          }),
         });
       }
       if (u.endsWith("/api/v1/me")) {
@@ -156,7 +157,11 @@ describe("AppShell — session-expiry warning (W31-S1-7)", () => {
     return render(
       <MemoryRouter>
         <ThemeProvider>
-          <AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />
+          <AppShell
+            pendingApprovals={0}
+            attentionCount={0}
+            onSignOut={() => {}}
+          />
         </ThemeProvider>
       </MemoryRouter>,
     );
@@ -164,8 +169,12 @@ describe("AppShell — session-expiry warning (W31-S1-7)", () => {
 
   it("warns and offers a re-auth link when the session is about to die", async () => {
     renderWithMe(new Date(Date.now() + 2 * 60 * 1000).toISOString());
-    expect(await screen.findByText(/session is expiring soon/i)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /sign in again/i })).toHaveAttribute("href", "/auth/login");
+    expect(
+      await screen.findByText(/session is expiring soon/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: /sign in again/i }),
+    ).toHaveAttribute("href", "/auth/login");
   });
 
   it("stays silent while the session has plenty of time left", async () => {
@@ -195,7 +204,11 @@ describe("AppShell — account-menu role chip gating (L1)", () => {
     render(
       <MemoryRouter>
         <ThemeProvider>
-          <AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />
+          <AppShell
+            pendingApprovals={0}
+            attentionCount={0}
+            onSignOut={() => {}}
+          />
         </ThemeProvider>
       </MemoryRouter>,
     );
@@ -223,7 +236,10 @@ describe("AppShell — top bar barrier chip (stage-1)", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   it("shows the strongest available confinement tier once setup status resolves", () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("network down")),
+    );
     render(
       <MemoryRouter>
         <ThemeProvider>
@@ -257,7 +273,10 @@ describe("AppShell — Sign out hidden in local mode (W31-S1-1)", () => {
       if (u.endsWith("/healthz")) {
         return Promise.resolve({
           ok: true,
-          json: async () => ({ trust_domain: "wardyn.local", identity_provider: "embedded" }),
+          json: async () => ({
+            trust_domain: "wardyn.local",
+            identity_provider: "embedded",
+          }),
         });
       }
       if (u.endsWith("/api/v1/me")) {
@@ -278,7 +297,11 @@ describe("AppShell — Sign out hidden in local mode (W31-S1-1)", () => {
     render(
       <MemoryRouter>
         <ThemeProvider>
-          <AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />
+          <AppShell
+            pendingApprovals={0}
+            attentionCount={0}
+            onSignOut={() => {}}
+          />
         </ThemeProvider>
       </MemoryRouter>,
     );
@@ -295,14 +318,18 @@ describe("AppShell — Sign out hidden in local mode (W31-S1-1)", () => {
   it("hides Sign out and explains local mode when meta.method is local", async () => {
     renderShellAs("local");
     const menu = await openAccountMenu();
-    await waitFor(() => expect(within(menu).getByText(/local mode/i)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(within(menu).getByText(/local mode/i)).toBeInTheDocument(),
+    );
     expect(within(menu).queryByText("Sign out")).toBeNull();
   });
 
   it("still offers Sign out for a real SSO session", async () => {
     renderShellAs("sso");
     const menu = await openAccountMenu();
-    await waitFor(() => expect(within(menu).getByText("Sign out")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(within(menu).getByText("Sign out")).toBeInTheDocument(),
+    );
   });
 });
 
@@ -314,11 +341,18 @@ describe("AppShell — account-menu trigger uses the shared Button (ui-shellAuth
   afterEach(() => vi.unstubAllGlobals());
 
   it("carries the shared Button's focus-visible ring classes", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("network down")),
+    );
     render(
       <MemoryRouter>
         <ThemeProvider>
-          <AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />
+          <AppShell
+            pendingApprovals={0}
+            attentionCount={0}
+            onSignOut={() => {}}
+          />
         </ThemeProvider>
       </MemoryRouter>,
     );
@@ -338,12 +372,37 @@ describe("AppShell — focus mode hides the shell's own chrome", () => {
   afterEach(() => vi.unstubAllGlobals());
 
   function renderShellWithRoute(child: React.ReactNode) {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
+    // A /me that ANSWERS. This describe is about focus mode, not identity, and a
+    // rejecting fetch now also means "settled but unknown" — which paints no
+    // route at all (V1-D3), so the screen under test would never mount.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: RequestInfo | URL) =>
+        String(url).endsWith("/api/v1/me")
+          ? Promise.resolve({
+              ok: true,
+              json: async () => ({
+                principal: "root@wardyn.local",
+                method: "token",
+                role: "admin",
+              }),
+            })
+          : Promise.resolve({ ok: true, json: async () => ({}) }),
+      ) as unknown as typeof fetch,
+    );
     render(
       <MemoryRouter initialEntries={["/x"]}>
         <ThemeProvider>
           <Routes>
-            <Route element={<AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />}>
+            <Route
+              element={
+                <AppShell
+                  pendingApprovals={0}
+                  attentionCount={0}
+                  onSignOut={() => {}}
+                />
+              }
+            >
               <Route path="/x" element={child} />
             </Route>
           </Routes>
@@ -377,7 +436,9 @@ describe("AppShell — focus mode hides the shell's own chrome", () => {
 describe("MobileNav (below-md nav fallback)", () => {
   it("starts collapsed: trigger present, aria-expanded=false, no nav links rendered", () => {
     renderMobileNav();
-    const trigger = screen.getByRole("button", { name: /open navigation menu/i });
+    const trigger = screen.getByRole("button", {
+      name: /open navigation menu/i,
+    });
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("link", { name: "Runs" })).toBeNull();
   });
@@ -385,7 +446,9 @@ describe("MobileNav (below-md nav fallback)", () => {
   it("opening the drawer reveals every nav item and flips aria-expanded to true", async () => {
     const user = userEvent.setup();
     renderMobileNav();
-    const trigger = screen.getByRole("button", { name: /open navigation menu/i });
+    const trigger = screen.getByRole("button", {
+      name: /open navigation menu/i,
+    });
     await user.click(trigger);
 
     expect(trigger).toHaveAttribute("aria-expanded", "true");
@@ -400,19 +463,25 @@ describe("MobileNav (below-md nav fallback)", () => {
       "Audit",
       "Recordings",
     ]) {
-      expect(screen.getByRole("link", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
+      expect(
+        screen.getByRole("link", { name: new RegExp(`^${label}`) }),
+      ).toBeInTheDocument();
     }
   });
 
   it("Escape closes the drawer and returns aria-expanded to false", async () => {
     const user = userEvent.setup();
     renderMobileNav();
-    const trigger = screen.getByRole("button", { name: /open navigation menu/i });
+    const trigger = screen.getByRole("button", {
+      name: /open navigation menu/i,
+    });
     await user.click(trigger);
     expect(trigger).toHaveAttribute("aria-expanded", "true");
 
     await user.keyboard("{Escape}");
-    await waitFor(() => expect(trigger).toHaveAttribute("aria-expanded", "false"));
+    await waitFor(() =>
+      expect(trigger).toHaveAttribute("aria-expanded", "false"),
+    );
     expect(screen.queryByRole("link", { name: "Runs" })).toBeNull();
   });
 });
@@ -430,15 +499,28 @@ describe("SidebarNav (member role — B3)", () => {
   it("shows Runs, Approvals and Workspaces — admin-only items are absent", async () => {
     const user = userEvent.setup();
     renderMobileNav("member");
-    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+    await user.click(
+      screen.getByRole("button", { name: /open navigation menu/i }),
+    );
 
     for (const label of ["Runs", "Approvals", "Workspaces"]) {
-      expect(screen.getByRole("link", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
+      expect(
+        screen.getByRole("link", { name: new RegExp(`^${label}`) }),
+      ).toBeInTheDocument();
     }
     // Governance joins this list in 0.7: MEMBER_NAV_PATHS is unchanged, a
     // member never sees the item, and there is no member governance route.
-    for (const label of ["Policies", "Governance", "Permissions", "Secrets", "Audit", "Recordings"]) {
-      expect(screen.queryByRole("link", { name: new RegExp(`^${label}`) })).toBeNull();
+    for (const label of [
+      "Policies",
+      "Governance",
+      "Permissions",
+      "Secrets",
+      "Audit",
+      "Recordings",
+    ]) {
+      expect(
+        screen.queryByRole("link", { name: new RegExp(`^${label}`) }),
+      ).toBeNull();
     }
   });
 
@@ -448,7 +530,9 @@ describe("SidebarNav (member role — B3)", () => {
   it("admin nav carries every item, with Recordings last — after Audit", async () => {
     const user = userEvent.setup();
     renderMobileNav("admin");
-    await user.click(screen.getByRole("button", { name: /open navigation menu/i }));
+    await user.click(
+      screen.getByRole("button", { name: /open navigation menu/i }),
+    );
 
     // Governance sits BETWEEN Policies and Permissions (mock Q1) — the order is
     // the contract this asserts, not an accident of the array.
@@ -464,21 +548,28 @@ describe("SidebarNav (member role — B3)", () => {
       "Recordings",
     ];
     for (const label of labels) {
-      expect(screen.getByRole("link", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
+      expect(
+        screen.getByRole("link", { name: new RegExp(`^${label}`) }),
+      ).toBeInTheDocument();
     }
     // Order is part of the contract, not an accident of the array.
     const rendered = screen
       .getAllByRole("link")
       .map((el) => el.textContent ?? "")
       .filter((t) => labels.some((l) => t.startsWith(l)));
-    expect(rendered.map((t) => labels.find((l) => t.startsWith(l)))).toEqual(labels);
+    expect(rendered.map((t) => labels.find((l) => t.startsWith(l)))).toEqual(
+      labels,
+    );
   });
 });
 
 // Phase 5: the account-menu Demos entry (TopBar, not SidebarNav — the
 // describe block above only drives the sidebar) is meaningless on a member's
 // own Getting Started, which has no /setup?step= deep link at all.
-function renderTopBar(role: Role, networkPolicy?: "enforced" | "unenforced" | "acknowledged") {
+function renderTopBar(
+  role: Role,
+  networkPolicy?: "enforced" | "unenforced" | "acknowledged",
+) {
   return render(
     <MemoryRouter>
       <ThemeProvider>
@@ -488,8 +579,8 @@ function renderTopBar(role: Role, networkPolicy?: "enforced" | "unenforced" | "a
             trustDomain: "example.test",
             identityProvider: "spiffe",
             principal: "u@example.test",
-          email: "",
-          name: "",
+            email: "",
+            name: "",
             method: "sso",
             resolved: true,
             identityResolved: true,
@@ -529,12 +620,16 @@ describe("TopBar — the netpol chip (F16)", () => {
 
   it("unenforced", () => {
     renderTopBar("admin", "unenforced");
-    expect(screen.getByText("NetworkPolicy: not enforcing")).toBeInTheDocument();
+    expect(
+      screen.getByText("NetworkPolicy: not enforcing"),
+    ).toBeInTheDocument();
   });
 
   it("acknowledged reads as indeterminate, never as the stronger 'enforcing' claim", () => {
     renderTopBar("admin", "acknowledged");
-    expect(screen.getByText("NetworkPolicy: indeterminate")).toBeInTheDocument();
+    expect(
+      screen.getByText("NetworkPolicy: indeterminate"),
+    ).toBeInTheDocument();
   });
 });
 
@@ -556,284 +651,6 @@ describe("TopBar — account-menu Demos entry (Phase 5)", () => {
   });
 });
 
-// Phase 5: the landing gate (App.tsx's FirstRunLanding) waits on the shell's
-// roleResolved signal. It must mean "the /me fetch SETTLED", never "method is
-// non-empty" — a failed /me leaves method "" for good, and a signal derived
-// from it would strand "/" on a spinner forever. Here fetch rejects outright
-// (whoami → null), so the signal has to flip on the failure path too.
-//
-// B1 (0.7.2) RESTATES this describe rather than adding a sibling that would
-// contradict it, because the two halves are one rule and the field report cost
-// a customer hours by reading only the first:
-//
-//   1. roleResolved KEEPS meaning "settled, success or failure". Pointing it at
-//      identityResolved instead — the first draft of this fix — would strand "/"
-//      on RouteFallback forever, since nothing retried /me. The existing cases
-//      below pin that, defaults and all.
-//   2. …and "settled" is therefore NOT "answered". So the SIDEBAR is gated on
-//      identityResolved: a settled-but-unknown identity renders NEITHER the
-//      admin nav nor the member nav, plus one banner saying so and a Retry that
-//      re-fires whoami(). Before this, a human the server had correctly DENIED
-//      saw Policies / Governance / Permissions / Secrets / Audit off the
-//      fail-open "admin" default — indistinguishable from an authz breach, on a
-//      governance product, which is worse than a cosmetic bug.
-//
-// The tier defaults themselves stay fail-OPEN (case 2 below, R4/F119). That is
-// the point: the fix is to stop DRAWING a nav from a guess, not to harden the
-// guess into a different one.
-describe("AppShell (roleResolved after a failed /me)", () => {
-  afterEach(() => vi.unstubAllGlobals());
-
-  function Probe() {
-    return <span data-testid="probe">{useRoleResolved() ? "resolved" : "pending"}</span>;
-  }
-
-  // R4/F119 — the TIER the failed /me leaves behind, which is the half this
-  // describe never read. useMeta seeds operator/securityOperator/role with
-  // `?? true` / `?? "admin"` and the comments around them call the DIRECTION
-  // load-bearing ("an older daemon that never sends this field must fail OPEN
-  // like every other identity signal here"; operator-context.tsx: 'Never
-  // "harden" this default to false either'). Nothing asserted it: flipping all
-  // three to `?? false` / `?? "member"` left the whole suite green, and the one
-  // path where the defaults decide what a real human sees is exactly this one —
-  // a 5xx, a dropped network, a pre-0.7 daemon. Fail-CLOSED here does not
-  // protect anything (the server refuses every write regardless, requireOperator
-  // is the enforcement point); it just hides the console from the admin who is
-  // trying to find out what is wrong.
-  function TierProbe() {
-    return (
-      <span data-testid="tier-probe">
-        {JSON.stringify({
-          operator: useOperator(),
-          securityOperator: useSecurityOperator(),
-          role: useRole(),
-        })}
-      </span>
-    );
-  }
-
-  it("flips to resolved once /me settles, even when it fails", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("connection refused")));
-    render(
-      <MemoryRouter>
-        <ThemeProvider>
-          <Routes>
-            <Route
-              element={
-                <AppShell
-                  pendingApprovals={0}
-                  attentionCount={0}
-                  onSignOut={() => {}}
-                  unreachable={true}
-                  lastOkAt={null}
-                  confinementClasses={[]}
-                />
-              }
-            >
-              <Route index element={<Probe />} />
-            </Route>
-          </Routes>
-        </ThemeProvider>
-      </MemoryRouter>,
-    );
-    // Negative control: the first paint is pending — the signal is not a
-    // constant true (which would defeat the member/admin race the gate closes).
-    expect(screen.getByTestId("probe")).toHaveTextContent("pending");
-    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("resolved"));
-  });
-
-  it("leaves the tier FAIL-OPEN when /me never answers (R4/F119)", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("connection refused")));
-    render(
-      <MemoryRouter>
-        <ThemeProvider>
-          <Routes>
-            <Route
-              element={
-                <AppShell
-                  pendingApprovals={0}
-                  attentionCount={0}
-                  onSignOut={() => {}}
-                  unreachable={true}
-                  lastOkAt={null}
-                  confinementClasses={[]}
-                />
-              }
-            >
-              <Route
-                index
-                element={
-                  <>
-                    <Probe />
-                    <TierProbe />
-                  </>
-                }
-              />
-            </Route>
-          </Routes>
-        </ThemeProvider>
-      </MemoryRouter>,
-    );
-
-    const open = JSON.stringify({ operator: true, securityOperator: true, role: "admin" });
-    // Before the rejection lands…
-    expect(screen.getByTestId("tier-probe")).toHaveTextContent(open);
-    // …and after it has been SEEN (roleResolved is the shell's own "this /me is
-    // settled" signal, so this is the resolved tier and not the seed it equals):
-    // a /me that never answered must not RESTRICT the console. `?? false` / `??
-    // "member"` in useMeta fails here, which is the whole point.
-    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("resolved"));
-    expect(screen.getByTestId("tier-probe")).toHaveTextContent(open);
-  });
-
-  it("keeps the tier fail-OPEN for a daemon whose /me omits the fields entirely", async () => {
-    // A pre-0.7 daemon: /me answers 200 with the identity keys it has always
-    // sent and none of the three tier keys. Absent must read as OPEN, not as
-    // "member" — the same rule, on the path that actually reaches the `??`.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((url: RequestInfo | URL) => {
-        const u = String(url);
-        if (u.endsWith("/healthz")) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({ trust_domain: "wardyn.local", identity_provider: "embedded" }),
-          });
-        }
-        if (u.endsWith("/api/v1/me")) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({ principal: "root@wardyn.local", method: "token" }),
-          });
-        }
-        return Promise.resolve({ ok: true, json: async () => ({}) });
-      }) as unknown as typeof fetch,
-    );
-    render(
-      <MemoryRouter>
-        <ThemeProvider>
-          <Routes>
-            <Route
-              element={<AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />}
-            >
-              <Route
-                index
-                element={
-                  <>
-                    <Probe />
-                    <TierProbe />
-                  </>
-                }
-              />
-            </Route>
-          </Routes>
-        </ThemeProvider>
-      </MemoryRouter>,
-    );
-
-    // Wait for the real /me to settle, so this reads the RESOLVED value rather
-    // than the seed it happens to equal.
-    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("resolved"));
-    expect(screen.getByTestId("tier-probe")).toHaveTextContent(
-      JSON.stringify({ operator: true, securityOperator: true, role: "admin" }),
-    );
-  });
-
-  // ── B1, the half above pins the rule for ─────────────────────────────────
-  // The tier stays fail-open (the three cases above) AND the sidebar stops
-  // drawing anything from it. Both, or the fix is the one the round rejected.
-  it("renders NEITHER nav and says why when /me never answers", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("connection refused")));
-    render(
-      <MemoryRouter>
-        <ThemeProvider>
-          <Routes>
-            <Route
-              element={<AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />}
-            >
-              <Route index element={<Probe />} />
-            </Route>
-          </Routes>
-        </ThemeProvider>
-      </MemoryRouter>,
-    );
-    await waitFor(() => expect(screen.getByTestId("probe")).toHaveTextContent("resolved"));
-
-    // Not the admin set — the fail-open default would have offered all of it…
-    for (const label of ["Policies", "Governance", "Permissions", "Secrets", "Audit", "Recordings"]) {
-      expect(screen.queryByRole("link", { name: new RegExp(`^${label}`) })).toBeNull();
-    }
-    // …and not the member set either. "We don't know" is a THIRD answer, not a
-    // quieter guess: showing the member nav would be just as unfounded.
-    for (const label of ["Runs", "Approvals", "Workspaces"]) {
-      expect(screen.queryByRole("link", { name: new RegExp(`^${label}`) })).toBeNull();
-    }
-    // One sentence in place of the guessed nav, and an action behind it.
-    expect(screen.getByText(SHELL.UNKNOWN_BODY)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: SHELL.UNKNOWN_ACTION })).toBeInTheDocument();
-  });
-
-  it("Retry re-fires /me, and an answer restores the nav it earns", async () => {
-    const user = userEvent.setup();
-    // First /me rejects; the second answers as a MEMBER. Both halves matter:
-    // the retry has to actually re-fetch (the effect ran once, on mount), and
-    // what comes back has to drive the nav — proving the banner state was
-    // ignorance and not a latch.
-    let meCalls = 0;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn((url: RequestInfo | URL) => {
-        const u = String(url);
-        if (u.endsWith("/healthz")) {
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({ trust_domain: "wardyn.local", identity_provider: "embedded" }),
-          });
-        }
-        if (u.endsWith("/api/v1/me")) {
-          meCalls++;
-          if (meCalls === 1) return Promise.reject(new Error("connection refused"));
-          return Promise.resolve({
-            ok: true,
-            json: async () => ({
-              principal: "alice@corp.example",
-              method: "sso",
-              operator: false,
-              security_operator: false,
-              role: "member",
-            }),
-          });
-        }
-        return Promise.resolve({ ok: true, json: async () => ({}) });
-      }) as unknown as typeof fetch,
-    );
-    render(
-      <MemoryRouter>
-        <ThemeProvider>
-          <Routes>
-            <Route
-              element={<AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />}
-            >
-              <Route index element={<Probe />} />
-            </Route>
-          </Routes>
-        </ThemeProvider>
-      </MemoryRouter>,
-    );
-    await waitFor(() => expect(screen.getByText(SHELL.UNKNOWN_BODY)).toBeInTheDocument());
-    expect(meCalls).toBe(1);
-
-    await user.click(screen.getAllByRole("button", { name: SHELL.UNKNOWN_ACTION })[0]);
-
-    await waitFor(() => expect(meCalls).toBe(2));
-    // The banner is gone and the MEMBER nav — not the admin one it defaulted
-    // to a moment ago — is what the answer produced.
-    await waitFor(() => expect(screen.queryByText(SHELL.UNKNOWN_BODY)).toBeNull());
-    expect(screen.getAllByRole("link", { name: /^Runs/ }).length).toBeGreaterThan(0);
-    expect(screen.queryByRole("link", { name: /^Audit/ })).toBeNull();
-  });
-});
-
 // 0.7 — the shell's ONE GET /me is what fills UserDriveContext: New Run and the
 // member Getting Started page read the caller's drive off the context and issue
 // no fetch of their own. That seam had only e2e coverage, and a component test
@@ -847,7 +664,9 @@ describe("AppShell — /me's drive bits reach UserDriveContext", () => {
     const { drive, deniedByProfile, unavailable } = useUserDrive();
     return (
       <>
-        <span data-testid="drive-probe">{JSON.stringify({ drive, deniedByProfile })}</span>
+        <span data-testid="drive-probe">
+          {JSON.stringify({ drive, deniedByProfile })}
+        </span>
         {/* R4/F091 — read as its OWN element rather than folded into the JSON
             above, so the three cases that predate the third key keep asserting
             the exact string they always did. */}
@@ -864,10 +683,14 @@ describe("AppShell — /me's drive bits reach UserDriveContext", () => {
         if (u.endsWith("/healthz")) {
           return Promise.resolve({
             ok: true,
-            json: async () => ({ trust_domain: "wardyn.local", identity_provider: "embedded" }),
+            json: async () => ({
+              trust_domain: "wardyn.local",
+              identity_provider: "embedded",
+            }),
           });
         }
-        if (u.endsWith("/api/v1/me")) return Promise.resolve({ ok: true, json: async () => me });
+        if (u.endsWith("/api/v1/me"))
+          return Promise.resolve({ ok: true, json: async () => me });
         return Promise.resolve({ ok: true, json: async () => ({}) });
       }) as unknown as typeof fetch,
     );
@@ -876,7 +699,13 @@ describe("AppShell — /me's drive bits reach UserDriveContext", () => {
         <ThemeProvider>
           <Routes>
             <Route
-              element={<AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />}
+              element={
+                <AppShell
+                  pendingApprovals={0}
+                  attentionCount={0}
+                  onSignOut={() => {}}
+                />
+              }
             >
               <Route index element={<DriveProbe />} />
             </Route>
@@ -921,13 +750,21 @@ describe("AppShell — /me's drive bits reach UserDriveContext", () => {
 
     await waitFor(() =>
       expect(screen.getByTestId("drive-probe")).toHaveTextContent(
-        JSON.stringify({ drive: null, deniedByProfile: "Greenfield contractors" }),
+        JSON.stringify({
+          drive: null,
+          deniedByProfile: "Greenfield contractors",
+        }),
       ),
     );
   });
 
   it("stays at no-allocation-and-no-door for a pre-0.7 daemon that sends neither field", async () => {
-    renderShellWithMe({ principal: "alice@corp.example", method: "sso", operator: false, role: "member" });
+    renderShellWithMe({
+      principal: "alice@corp.example",
+      method: "sso",
+      operator: false,
+      role: "member",
+    });
 
     // Let /me land before reading the probe, so this is the RESOLVED value and
     // not the seed it happens to equal.
@@ -937,7 +774,9 @@ describe("AppShell — /me's drive bits reach UserDriveContext", () => {
     );
     // …and the third key reads as "nothing is wrong", not as a reason invented
     // out of an absent field.
-    expect(screen.getByTestId("drive-unavailable-probe")).toHaveTextContent("[]");
+    expect(screen.getByTestId("drive-unavailable-probe")).toHaveTextContent(
+      "[]",
+    );
   });
 
   // R4/F091 — the THIRD key. /me suppresses the allocation for all four of
@@ -953,29 +792,36 @@ describe("AppShell — /me's drive bits reach UserDriveContext", () => {
     ["unmountable"],
     ["unavailable"],
     ["governance_unavailable"],
-  ])("carries %s through to UserDriveContext beside the suppressed allocation", async (reason) => {
-    renderShellWithMe({
-      principal: "alice@corp.example",
-      method: "sso",
-      operator: false,
-      role: "member",
-      user_drive: null,
-      user_drive_denied_by_profile: "",
-      user_drive_unavailable: reason,
-    });
+  ])(
+    "carries %s through to UserDriveContext beside the suppressed allocation",
+    async (reason) => {
+      renderShellWithMe({
+        principal: "alice@corp.example",
+        method: "sso",
+        operator: false,
+        role: "member",
+        user_drive: null,
+        user_drive_denied_by_profile: "",
+        user_drive_unavailable: reason,
+      });
 
-    // Negative control: the fail-closed seed paints first, so the assertion
-    // below cannot be a constant.
-    expect(screen.getByTestId("drive-unavailable-probe")).toHaveTextContent("[]");
-    await waitFor(() =>
-      expect(screen.getByTestId("drive-unavailable-probe")).toHaveTextContent(`[${reason}]`),
-    );
-    // The allocation stays null — the reason REPLACES the offer, it does not
-    // ride beside one.
-    expect(screen.getByTestId("drive-probe")).toHaveTextContent(
-      JSON.stringify({ drive: null, deniedByProfile: "" }),
-    );
-  });
+      // Negative control: the fail-closed seed paints first, so the assertion
+      // below cannot be a constant.
+      expect(screen.getByTestId("drive-unavailable-probe")).toHaveTextContent(
+        "[]",
+      );
+      await waitFor(() =>
+        expect(screen.getByTestId("drive-unavailable-probe")).toHaveTextContent(
+          `[${reason}]`,
+        ),
+      );
+      // The allocation stays null — the reason REPLACES the offer, it does not
+      // ride beside one.
+      expect(screen.getByTestId("drive-probe")).toHaveTextContent(
+        JSON.stringify({ drive: null, deniedByProfile: "" }),
+      );
+    },
+  );
 
   it("keeps the reason and the door as SEPARATE bits — a denied door is not an outage", async () => {
     renderShellWithMe({
@@ -990,9 +836,14 @@ describe("AppShell — /me's drive bits reach UserDriveContext", () => {
 
     await waitFor(() =>
       expect(screen.getByTestId("drive-probe")).toHaveTextContent(
-        JSON.stringify({ drive: null, deniedByProfile: "Greenfield contractors" }),
+        JSON.stringify({
+          drive: null,
+          deniedByProfile: "Greenfield contractors",
+        }),
       ),
     );
-    expect(screen.getByTestId("drive-unavailable-probe")).toHaveTextContent("[]");
+    expect(screen.getByTestId("drive-unavailable-probe")).toHaveTextContent(
+      "[]",
+    );
   });
 });

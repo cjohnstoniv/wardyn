@@ -2706,6 +2706,18 @@ forge host is grant-derived), so a declared suffix covering a self-hosted forge
 lets the brokered PAT reach it. A lifted decision's audit `rule_source` reads
 `site-config:internal-host` instead of the default `policy:allowed`.
 
+**Not every `builtin:private-ip` refusal is liftable, and the 403 now says so.**
+`internal_hosts` lifts exactly one class — RFC1918/ULA/CGNAT private space. A host
+that resolves to a loopback address, to link-local space (including the
+`169.254.169.254` metadata address), to multicast or unspecified space, to a
+NAT64- or IPv4-compatible-embedded blocked address, or to any other reserved
+range is refused **unconditionally**: no `internal_hosts` entry, no
+`allowed_domains` entry and no `egress_redirects` target reaches it, and a new
+run behaves identically. The refusal's body names the class and prescribes
+nothing, because there is nothing in site config to change — an agent resolving
+a name into that space is either misconfigured or probing the host's own
+metadata service.
+
 **The guard's memory of a refusal lasts one run.** Once a hostname and port
 have been refused `builtin:private-ip` for a run, that run keeps refusing it for the
 rest of its life even if the name later resolves to a public address — the

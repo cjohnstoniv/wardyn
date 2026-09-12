@@ -451,7 +451,7 @@ func run() error {
 	startUISandboxGateway(rootCtx, f, posture, srv)
 
 	// Serve until signal/error, then drain: HTTP first, audit sinks last.
-	return serveAndShutdown(rootCtx, f, posture, srv.Handler(), idp.Name(), fan)
+	return serveAndShutdown(rootCtx, f, posture, srv, idp.Name(), fan)
 }
 
 // validateModelEndpoints resolves and fail-closed-validates every operator knob

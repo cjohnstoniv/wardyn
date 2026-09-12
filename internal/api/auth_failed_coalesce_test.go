@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -275,4 +276,53 @@ func itoa3(n int) string {
 		n /= 10
 	}
 	return string(b)
+}
+
+// TestAuthFailedCoalesce_ShutdownFlushesTheOpenStreak is V1-D4. A streak closes
+// on a DIFFERENT key, on the 1000-cap, or on the 5m gap timer — and on none of
+// those at shutdown: httpSrv.Shutdown ran, the sinks were closed, and up to 999
+// refusals' count went with the process. The timer could not have saved it
+// either, because it records under BaseCtx and BaseCtx is already cancelled by
+// then. That is the wardynd rollout B5 exists to instrument losing its volume
+// precisely when a deployment restarts.
+//
+// The CANCELLED BaseCtx here is the whole point of the case: the flush must
+// record under context.WithoutCancel(BaseCtx), so the row survives the very
+// cancellation that made the timer useless. The summary is a NEW row through the
+// ordinary recordAudit path (the append the hash chain requires), never an
+// update of the row that opened the streak.
+func TestAuthFailedCoalesce_ShutdownFlushesTheOpenStreak(t *testing.T) {
+	c := newCoalesceHarness(t, 5*time.Minute)
+	baseCtx, cancel := context.WithCancel(context.Background())
+	c.srv.cfg.BaseCtx = baseCtx
+	const refusals = 30
+	for range refusals {
+		do(t, c.srv, http.MethodPost, "/api/v1/internal/approvals", "not-a-real-token", "")
+	}
+	// Shutdown order: the HTTP server has stopped accepting requests and rootCtx
+	// (i.e. BaseCtx) is cancelled by the time serveAndShutdown reaches the flush.
+	cancel()
+	c.srv.FlushAuthFailedStreak()
+
+	rows := authFailedEvents(c.harness)
+	if len(rows) != 2 {
+		t.Fatalf("auth.failed rows = %d after a shutdown flush of %d identical refusals, want 2 "+
+			"(the first + one summary) — a missing summary is %d lost refusals", len(rows), refusals, refusals-1)
+	}
+	_, count, first, last := coalesceData(t, rows[1])
+	if count != refusals {
+		t.Errorf("summary count = %d, want %d", count, refusals)
+	}
+	if first == "" || last == "" {
+		t.Errorf("summary carries first_seen=%q last_seen=%q; both are required to read a streak", first, last)
+	}
+	if rows[0].ID == rows[1].ID {
+		t.Error("the summary reused the first row's id — the chain is append-only, so it must be a new row")
+	}
+	// Idempotent: a second flush has nothing left to close, so a shutdown path
+	// that runs it twice cannot double-count.
+	c.srv.FlushAuthFailedStreak()
+	if got := len(authFailedEvents(c.harness)); got != 2 {
+		t.Errorf("a second flush wrote another row (%d total) — closing an already-closed streak must be a no-op", got)
+	}
 }

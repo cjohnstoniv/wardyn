@@ -630,7 +630,19 @@ export function AppShell({
                   key={location.pathname}
                   region={location.pathname}
                 >
-                  <Outlet />
+                  {/* B1 was a NAV gate only, which left every route reachable by
+                URL: the account menu's Settings link and a bookmark or reload on
+                /permissions, /governance, /policies, /secrets, /audit all painted
+                the full operator screen off the fail-open identity seed
+                (useOperator()/useSecurityOperator() answer true while /me is
+                unknown, and RequireSetup answered an unknown identity with
+                <Outlet/>). The gate belongs HERE, at the one shell every route
+                renders under, rather than in the operator context: that context's
+                defaults must keep failing open for the ordinary not-settled-yet
+                paint, which is the rationale B1 recorded and this does not
+                disturb. The banner above, with its Retry, is the page — as this
+                file already said it was when there was no nav to reach. */}
+                  {identityUnknown ? null : <Outlet />}
                 </ErrorBoundary>
               </main>
             </div>
@@ -801,12 +813,20 @@ export function TopBar({
             </DropdownMenuItem>
             {/* Settings is the one home for connections — Host · Model provider ·
                 Providers · Your SSH keys. It replaced /integrations, which now
-                redirects here, and the barrier chip above points at it too. */}
-            <DropdownMenuItem asChild>
-              <Link to="/settings">
-                <Settings className="size-4" /> Settings
-              </Link>
-            </DropdownMenuItem>
+                redirects here, and the barrier chip above points at it too.
+                Hidden on a SETTLED-but-unknown identity: /settings is the two-click
+                route to the operator-only Model-provider Connect/Disconnect card
+                and the Providers card into admin /providers, and the shell paints
+                no route at all in that state, so the link would be an invitation
+                to a blank page. Sign out below stays — it is the one control that
+                still works. */}
+            {!(meta.resolved && !meta.identityResolved) && (
+              <DropdownMenuItem asChild>
+                <Link to="/settings">
+                  <Settings className="size-4" /> Settings
+                </Link>
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem asChild>
               <Link to="/ssh-keys">
                 <KeyRound className="size-4" /> SSH keys

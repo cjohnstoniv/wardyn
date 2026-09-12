@@ -200,6 +200,14 @@ func (s *Server) handleDenyApproval(w http.ResponseWriter, r *http.Request) {
 // the part a reviewer has to be able to read without scrolling. Each helper
 // writes its own 4xx and reports false: the reply strings are asserted verbatim
 // by the API tests and belong next to the rule that refuses.
+// DRAFT (M2 canon pending) — the one sentence a decision on an already-ended run
+// gets back, wording borrowed from the console's CANCELLED_BODY
+// (ui/.../copy.ts) and the git helper's cancelled-credential error so the three
+// surfaces say the same thing. It is a 409, not a 404: the approval exists and
+// the caller is allowed to see it; what changed is that the question expired
+// with its run.
+const approvalRunEndedBody = "the run ended before anyone decided this; the approval has been cancelled and nothing was approved or denied"
+
 func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	id, ok := parseIDParam(w, r, "id", "approval")
 	if !ok {
@@ -305,6 +313,40 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// did not happen (the repair that moved the emit down here).
 	bypassedSecondHuman, ok := s.requireSecondHuman(w, r, id, ap, run, haveAP, haveRun)
 	if !ok {
+		return
+	}
+
+	// V1-D1 — DEFENCE IN DEPTH: the run may have ENDED while this approval sat in
+	// the queue. The terminal cascade (cancelRunApprovals) is supposed to have
+	// moved it to CANCELLED already, but that cascade is best-effort — a failed
+	// CancelForRun is logged and audited, never retried — and the three terminal
+	// writers all race a decision that is already in flight. A stranded PENDING
+	// row that reaches Decide() here is decided for real: an `always` approve
+	// replays into the workspace allowlist (approvals_reconcile.go) on behalf of
+	// a sandbox that is gone, which is exactly the widening CANCELLED exists to
+	// stop. So CAS-cancel it ourselves and refuse, rather than answer a question
+	// whose asker no longer exists.
+	//
+	// Placed with the other pre-Decide() rules, and for their reason: PENDING ->
+	// decided is one-way. It costs at most two reads, and only on the paths that
+	// had not already loaded the rows (the member gate loads both; an explicit
+	// scope loads the approval).
+	if !haveAP {
+		var err error
+		if ap, err = s.cfg.Approvals.Get(r.Context(), id); err != nil {
+			writeError(w, http.StatusNotFound, "approval not found")
+			return
+		}
+		haveAP = true
+	}
+	if !haveRun && ap.RunID != uuid.Nil && s.cfg.Store != nil {
+		if got, gerr := s.cfg.Store.GetRun(r.Context(), ap.RunID); gerr == nil {
+			run, haveRun = got, true
+		}
+	}
+	if haveRun && isTerminalRunState(run.State) {
+		s.cancelRunApprovals(r.Context(), ap.RunID)
+		writeError(w, http.StatusConflict, approvalRunEndedBody)
 		return
 	}
 

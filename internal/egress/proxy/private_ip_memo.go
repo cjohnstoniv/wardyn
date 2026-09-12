@@ -64,6 +64,12 @@ type privateIPStreak struct {
 	req     egress.Request
 	repeats int
 	last    time.Time
+	// kind is the guard class that refused this host:port — carried so
+	// writeEgressDeny can tell a LIFTABLE refusal (RFC1918, one internal_hosts
+	// line away) from one no site-config entry can lift, without resolving the
+	// name a second time. The memo is already the "we refused this before" record
+	// for exactly the verdict whose detail sentence needs it.
+	kind blockKind
 }
 
 // record opens a streak for a fresh post-resolution private-ip refusal. It
@@ -78,7 +84,7 @@ type privateIPStreak struct {
 // across evaluate(); widening it would serialise every denied request behind
 // one mutex to save, at most, one duplicate row at the start of a streak. Over-
 // reporting a denial is the safe direction for an audit trail.
-func (mo *privateIPMemo) record(req egress.Request) *egress.DecisionLog {
+func (mo *privateIPMemo) record(req egress.Request, kind blockKind) *egress.DecisionLog {
 	mo.mu.Lock()
 	defer mo.mu.Unlock()
 	if mo.m == nil {
@@ -99,7 +105,7 @@ func (mo *privateIPMemo) record(req egress.Request) *egress.DecisionLog {
 		evicted = closeStreak(mo.m[oldestKey])
 		delete(mo.m, oldestKey)
 	}
-	mo.m[key] = &privateIPStreak{req: req, last: req.Time}
+	mo.m[key] = &privateIPStreak{req: req, last: req.Time, kind: kind}
 	return evicted
 }
 
@@ -124,6 +130,19 @@ func (mo *privateIPMemo) memoed(host string, port int) bool {
 	mo.mu.Lock()
 	defer mo.mu.Unlock()
 	return mo.m[hostPortKey(host, port)] != nil
+}
+
+// kindOf returns the guard class recorded for host:port, or blockNone when this
+// memo has never refused it. blockNone makes literalIPDenialDetail fall back to
+// the liftable wording, which is what every refusal got before the class was
+// carried at all.
+func (mo *privateIPMemo) kindOf(host string, port int) blockKind {
+	mo.mu.Lock()
+	defer mo.mu.Unlock()
+	if s := mo.m[hostPortKey(host, port)]; s != nil {
+		return s.kind
+	}
+	return blockNone
 }
 
 // drain closes and removes every open streak, returning their summary rows.
@@ -157,13 +176,29 @@ func closeStreak(s *privateIPStreak) *egress.DecisionLog {
 
 // privateIPRefused opens a memo streak for a refusal evaluate() has just
 // recorded, emitting the summary row of whatever it evicted to make room.
-func (p *Proxy) privateIPRefused(req egress.Request) {
-	if evicted := p.privIP.record(req); evicted != nil && p.sink != nil {
+func (p *Proxy) privateIPRefused(req egress.Request, kind blockKind) {
+	if evicted := p.privIP.record(req, kind); evicted != nil && p.sink != nil {
 		p.sink.emit(*evicted)
 	}
 }
 
 // privateIPMemoHit answers an identical repeat from the memo, counting it.
+//
+// CALLED BEFORE THE FIRST-USE APPROVAL FLOW (V1-D5), not after it. It used to sit
+// below, which meant a memoed host carrying an `unknown` policy verdict re-entered
+// Resolve/ResolveWait on every one of the CLI's ten retries: a spent scope=once
+// grant was consumed, or a fresh egress_domain question was POSTed to a human, or
+// the connection was PARKED in ResolveWait until the hold deadline — and the
+// request was then refused straight out of the memo with a NIL decision log, so a
+// human decision was spent on a request denied with no decision row at all (before
+// the memo existed it at least wrote an egress.deny). A private-IP target can
+// never be approved into reachability: the address guard is unconditional and the
+// internal_hosts lift that would change it is compiled into this sidecar at
+// dispatch, so the question can only ever be answered "yes" and then overruled.
+// Exactly the wasted question F032 moved the method check above the raise to stop.
+//
+// It stays BELOW policy:denied and policy:method: both name a more specific rule
+// for this request, and neither costs a human anything.
 func (p *Proxy) privateIPMemoHit(host string, port int) bool {
 	return p.privIP.hit(host, port, p.now())
 }
@@ -171,6 +206,15 @@ func (p *Proxy) privateIPMemoHit(host string, port int) bool {
 // privateIPMemoed reports a memoed refusal without counting it (writeEgressDeny).
 func (p *Proxy) privateIPMemoed(host string, port int) bool {
 	return p.privIP.memoed(host, port)
+}
+
+// privateIPBlockKind is writeEgressDeny's read of the guard class behind a
+// builtin:private-ip refusal of host:port. See privateIPMemo.kindOf for why
+// blockNone (never refused here — e.g. step 0's literal guard, which resolves
+// nothing and is not memoed) is the safe answer: the literal arm re-derives the
+// class from the address itself, and a hostname falls back to today's wording.
+func (p *Proxy) privateIPBlockKind(host string, port int) blockKind {
+	return p.privIP.kindOf(host, port)
 }
 
 // flushPrivateIPMemo emits every open streak's summary row and empties the memo.

@@ -551,19 +551,78 @@ const (
 	// then watching nine more retries fail with the identical message.
 	egressDenialSuffix = "Site config is read at run start, so change it and start a new run — " +
 		"this one will keep being refused."
+	// egressNeverLiftableRemedy is the ANTI-remedy: the sentence a refusal gets
+	// when the guard class that fired is one no site-config entry can lift.
+	//
+	// It exists because the four sentences above were told to EVERY
+	// post-resolution guard refusal, not just the liftable one. Only blockPrivate
+	// (RFC1918/ULA/CGNAT) is liftable — vetHostLift offers the lift predicate to
+	// that kind alone, and trustsExactLiteralIP additionally refuses the proxy's
+	// own subnet and control-plane host. A host resolving to loopback, to
+	// link-local/169.254.169.254, to a NAT64- or ::/96-embedded blocked v4, or to
+	// any other reserved range got "declare it under internal_hosts", plus B2's
+	// "start a new run", plus X-Wardyn-Egress-Retry: never — i.e. the operator was
+	// INSTRUCTED into a kill-and-redispatch cycle that cannot succeed, and into
+	// widening an SSRF control that would not have helped if it could be widened.
+	//
+	// NO site-config remedy and NO lifetime clause on purpose: there is nothing to
+	// change and nothing a new run would change. The retry header stays `never` on
+	// both variants — both are truly final, which is the one thing the old text
+	// got right.
+	egressNeverLiftableRemedy = "which the proxy denies unconditionally — loopback, link-local " +
+		"(including the 169.254.169.254 metadata address), multicast, NAT64- and " +
+		"IPv4-compatible-embedded and the other reserved ranges are never reachable from a sandbox, " +
+		"and no internal_hosts entry lifts them. There is nothing to change in site config."
 )
+
+// neverLiftableClass names the guard class that refused, for the one-sentence
+// detail above. blockPrivate and blockNone are absent deliberately: blockPrivate
+// is the LIFTABLE kind (it gets the four-sentence remedy instead) and blockNone
+// never refuses, so a lookup miss falls back to the liftable wording — today's
+// behaviour, which is the safe direction for an unknown caller.
+var neverLiftableClass = map[blockKind]string{
+	blockLocal:         "a loopback, link-local/metadata, multicast or unspecified address",
+	blockReservedOther: "a reserved address",
+	blockNAT64:         "a NAT64-embedded address",
+	blockV4Compat:      "an IPv4-compatible-embedded address",
+}
+
+// neverLiftableDetail composes the never-liftable sentence for `subject` ("this
+// host's address", or "literal IP 10.0.0.1"). Returns "" when kind IS liftable,
+// so the single caller can fall through to the remedy text.
+func neverLiftableDetail(subject string, kind blockKind) string {
+	class, ok := neverLiftableClass[kind]
+	if !ok {
+		return ""
+	}
+	return subject + " is " + class + ", " + egressNeverLiftableRemedy
+}
 
 // literalIPDenialDetail is egressHeaderDetail's value for a builtin:private-ip
 // refusal of host: which of the three causes fired, and the one place to fix
 // it. Returns "" when host is neither a literal IP nor a hostname (i.e. there
 // is nothing specific to say), so callers can skip the header.
-func literalIPDenialDetail(host string, port int, pol *Policy) string {
+//
+// kind is the GUARD CLASS that refused, carried out of the vet (hostBlockedError
+// -> the per-run memo -> writeEgressDeny) rather than re-derived here, because
+// re-deriving it for a hostname means resolving the name a second time — which
+// is the very work B6's memo exists to avoid. It decides WHICH detail is told:
+// blockPrivate (the only liftable class) gets the four-sentence internal_hosts
+// remedy verbatim; every other class gets neverLiftableDetail, with no
+// site-config remedy and no "start a new run". An unknown/zero kind falls back
+// to the liftable wording, i.e. exactly the text every caller got before.
+// A LITERAL host needs no carried kind at all — the address is right there — so
+// the literal arm re-derives it and ignores the parameter.
+func literalIPDenialDetail(host string, port int, pol *Policy, kind blockKind) string {
 	h := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".")
 	if h == "" {
 		return ""
 	}
 	ip := net.ParseIP(h)
 	if ip == nil {
+		if never := neverLiftableDetail("this host's address", kind); never != "" {
+			return never
+		}
 		// THE join site for the four DRAFT sentences above: cause, remedy, hint,
 		// lifetime. The owner's ruling on any of them — reword one, drop the
 		// hint, drop the remedy's parenthetical — is an edit to this one
@@ -578,6 +637,15 @@ func literalIPDenialDetail(host string, port int, pol *Policy) string {
 		if _, denied := pol.deniedExactPort[hostPortKey(ip.String(), port)]; denied {
 			return "literal IP " + ip.String() + " is on denied_domains for this port, and a deny always beats an allow"
 		}
+	}
+	// The literal arm carried the SAME lie: only blockPrivate is reachable by an
+	// EXACT allowed_domains entry (trustsExactLiteralIP gates on blockPrivate),
+	// so telling a 127.0.0.1 / 169.254.169.254 / NAT64 literal to list itself
+	// under allowed_domains or an egress_redirects "to" describes a fix that
+	// cannot work. Re-derived here, not carried: the address is the host.
+	litKind, _ := isBlockedIP(ip)
+	if never := neverLiftableDetail("literal IP "+ip.String(), litKind); never != "" {
+		return never
 	}
 	return "literal IP " + ip.String() + " is in a private/reserved range, so only an EXACT allowed_domains entry for that address can reach it — " +
 		"it is not listed; an egress_redirects \"to\" pointing at this address adds that entry automatically for the runs it covers"
@@ -634,7 +702,7 @@ func (p *Proxy) writeEgressDeny(w http.ResponseWriter, host string, port int, lo
 	switch reason {
 	case "builtin:private-ip":
 		w.Header().Set(egressHeaderRetry, egressRetryNever)
-		if detail := literalIPDenialDetail(host, port, p.policy); detail != "" {
+		if detail := literalIPDenialDetail(host, port, p.policy, p.privateIPBlockKind(host, port)); detail != "" {
 			w.Header().Set(egressHeaderDetail, detail)
 			body = "egress denied: " + detail
 		}
@@ -654,6 +722,12 @@ type IPGuardResult struct {
 	Denied bool
 	// Reason explains a denial (for the decision log rule_source).
 	Reason string
+	// kind is WHICH guard class refused — unexported because it is a proxy-internal
+	// classification, and carried because only blockPrivate is ever liftable and
+	// the 403's detail sentence must say so honestly. Zero (blockNone) on every
+	// non-range denial (empty host, resolve failure, no addresses) and on every
+	// admission.
+	kind blockKind
 	// Lifted is true when an address that isBlockedIP would otherwise deny was
 	// admitted only because the caller's lift predicate (vetHostLift) accepted
 	// it — i.e. an operator-declared internal host (SiteConfig.InternalHosts).
@@ -711,21 +785,21 @@ func vetHostLift(host string, res resolver, lift func(net.IP) bool) IPGuardResul
 	if host == "" {
 		return IPGuardResult{Denied: true, Reason: "empty host"}
 	}
-	admit := func(ip net.IP) (bool, bool, string) { // ok, lifted, reason
+	admit := func(ip net.IP) (bool, bool, string, blockKind) { // ok, lifted, reason, kind
 		kind, why := isBlockedIP(ip)
 		if kind == blockNone {
-			return true, false, ""
+			return true, false, "", blockNone
 		}
 		if kind == blockPrivate && lift != nil && lift(ip) {
-			return true, true, ""
+			return true, true, "", blockNone
 		}
-		return false, false, why
+		return false, false, why, kind
 	}
 	// Literal IP fast path.
 	if ip := net.ParseIP(host); ip != nil {
-		ok, lifted, why := admit(ip)
+		ok, lifted, why, kind := admit(ip)
 		if !ok {
-			return IPGuardResult{Denied: true, Reason: why}
+			return IPGuardResult{Denied: true, Reason: why, kind: kind}
 		}
 		return IPGuardResult{IP: ip, Lifted: lifted}
 	}
@@ -744,9 +818,9 @@ func vetHostLift(host string, res resolver, lift func(net.IP) bool) IPGuardResul
 	// shape. Fail closed.
 	anyLifted := false
 	for _, ip := range ips {
-		ok, lifted, why := admit(ip)
+		ok, lifted, why, kind := admit(ip)
 		if !ok {
-			return IPGuardResult{Denied: true, Reason: fmt.Sprintf("blocked address %s: %s", ip, why)}
+			return IPGuardResult{Denied: true, Reason: fmt.Sprintf("blocked address %s: %s", ip, why), kind: kind}
 		}
 		anyLifted = anyLifted || lifted
 	}

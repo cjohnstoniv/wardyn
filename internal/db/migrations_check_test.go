@@ -411,11 +411,14 @@ func closedEnumChecks() []closedEnumCheck {
 		// in Go and rejected by Postgres with every gate green -- the exact
 		// shape of the COMPLETED incident TestAgentRunStateCheckCoversAllStates
 		// exists for.
-		{"approvals", "state", stringSet(
-			string(types.ApprovalPending), string(types.ApprovalApproved),
-			string(types.ApprovalDenied), string(types.ApprovalExpired),
-			string(types.ApprovalCancelled),
-		)},
+		// DERIVED, not re-listed: a hand-typed set here compares the migration
+		// against the test's own memory of the enum, so a sixth ApprovalState
+		// defined in Go and rejected by Postgres would leave every gate green —
+		// the exact blindness this entry was added to close. types.ApprovalStates
+		// is the closed list beside the constants, and internal/types'
+		// TestApprovalStatesCoversEveryConstant reds if a constant is added
+		// without it.
+		{"approvals", "state", enumSet(types.ApprovalStates)},
 		{"approvals", "decision_scope", stringSet(
 			string(types.ScopeOnce), string(types.ScopeRun), string(types.ScopeUntil), string(types.ScopeAlways),
 			"", // 0039's NOT NULL DEFAULT '' — see above

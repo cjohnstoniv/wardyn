@@ -412,14 +412,14 @@ func TestLiteralIPDenialNamesTheCause(t *testing.T) {
 		{"hostname resolving private", "priv.example.test", []string{"internal_hosts"}},
 	}
 	for _, c := range cases {
-		got := literalIPDenialDetail(c.host, 443, pol)
+		got := literalIPDenialDetail(c.host, 443, pol, blockPrivate)
 		for _, want := range c.want {
 			if !strings.Contains(got, want) {
 				t.Errorf("%s: detail %q must name %q", c.name, got, want)
 			}
 		}
 	}
-	if got := literalIPDenialDetail("", 443, pol); got != "" {
+	if got := literalIPDenialDetail("", 443, pol, blockPrivate); got != "" {
 		t.Errorf("empty host detail = %q, want \"\"", got)
 	}
 }

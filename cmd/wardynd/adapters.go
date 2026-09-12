@@ -602,6 +602,17 @@ type lifecycleStopper struct {
 	runner   runner.Runner
 	identity runRevoker // nil-safe; deny-lists the run token on idle stop
 	broker   runRevoker // nil-safe; revokes minted broker credentials on idle stop
+	// cancelApprovals is the APPROVAL half of the same cascade — api.Server's
+	// CancelTerminalRunApprovals, threaded in rather than reimplemented, because
+	// this is the THIRD terminal writer and the other two already call it. Nil-safe
+	// (an embedding with no server, and every test double, leaves it unset).
+	//
+	// Why it is a func and not an approval store: the reason stamped on each
+	// cancelled row is read back from the run row by the server's own
+	// terminalCancelReason, so the reaper hands over a run id and nothing it
+	// could get wrong; and the store this reaper holds is a pool, not the
+	// approval service the API server already owns.
+	cancelApprovals func(context.Context, uuid.UUID)
 }
 
 // runRevoker is the minimal revocation surface the idle reaper needs so a run
@@ -642,6 +653,17 @@ func (l lifecycleStopper) StopRun(ctx context.Context, runID uuid.UUID, notAfter
 	// STOPPED), but a failure MUST be surfaced to the reaper (finding N1) — a
 	// silently-failed teardown leaves a routable sandbox, a silently-failed revoke
 	// leaves the run token valid until its <=1h TTL, while the audit says success.
+	// APPROVALS FIRST, before the destructive teardown, for the same reason
+	// handleKillRun cancels before KillSandbox: a PENDING approval is the one
+	// piece of this cascade a human is looking at, and an idle-stopped run is
+	// typically idle BECAUSE its agent is parked on a wait_for_review hold. Run
+	// AFTER the guarded CAS for the same reason the revokes are: a stop that lost
+	// the CAS must not cancel a still-live run's questions. Best-effort and
+	// non-blocking like the revokes (the server logs + audits its own failure);
+	// the ExpireStale sweeper stays behind it as the backstop it always was.
+	if l.cancelApprovals != nil {
+		l.cancelApprovals(ctx, runID)
+	}
 	errs := map[string]string{}
 	if l.runner != nil && run.SandboxRef != "" {
 		if serr := l.runner.StopSandbox(ctx, run.SandboxRef); serr != nil {

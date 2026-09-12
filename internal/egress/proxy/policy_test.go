@@ -493,7 +493,7 @@ func TestPrivateIPMemo_BoundedAndFlushesTheStreakItEvicts(t *testing.T) {
 	}
 	// The first entry is the only one with repeats, and the least recently hit,
 	// so filling the memo past its ceiling evicts exactly it.
-	if evicted := mo.record(req("first.priv.internal")); evicted != nil {
+	if evicted := mo.record(req("first.priv.internal"), blockPrivate); evicted != nil {
 		t.Fatalf("recording into an empty memo evicted %+v", evicted)
 	}
 	if !mo.hit("first.priv.internal", 443, time.Now()) {
@@ -501,7 +501,7 @@ func TestPrivateIPMemo_BoundedAndFlushesTheStreakItEvicts(t *testing.T) {
 	}
 	var evictedRow *egress.DecisionLog
 	for i := range privateIPMemoMax {
-		if row := mo.record(req("h" + strconv.Itoa(i) + ".priv.internal")); row != nil {
+		if row := mo.record(req("h"+strconv.Itoa(i)+".priv.internal"), blockPrivate); row != nil {
 			evictedRow = row
 		}
 	}
@@ -604,7 +604,7 @@ func TestApprovalPendingRefusalIsRetryableAndReEmits(t *testing.T) {
 // the pin is the composition, not a copy of the text a second time.
 func TestPrivateIPDenialDetailComposesTheFourSentences(t *testing.T) {
 	pol := CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"priv.example.test"}})
-	detail := literalIPDenialDetail("priv.example.test", 443, pol)
+	detail := literalIPDenialDetail("priv.example.test", 443, pol, blockPrivate)
 	for _, want := range []string{
 		egressPrivateRangeCause,
 		egressInternalHostsRemedy,
@@ -625,7 +625,7 @@ func TestPrivateIPDenialDetailComposesTheFourSentences(t *testing.T) {
 	// A LITERAL private address is a policy problem (allowed_domains /
 	// egress_redirects), not a site-config one, so it must not carry site
 	// config's lifetime clause.
-	if got := literalIPDenialDetail("100.64.5.7", 443, pol); strings.Contains(got, egressDenialSuffix) {
+	if got := literalIPDenialDetail("100.64.5.7", 443, pol, blockPrivate); strings.Contains(got, egressDenialSuffix) {
 		t.Errorf("the literal-IP arm carries the site-config lifetime clause:\n\t%s", got)
 	}
 }

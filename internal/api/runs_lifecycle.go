@@ -266,6 +266,20 @@ func (s *Server) cancelRunApprovals(ctx context.Context, runID uuid.UUID) {
 	}
 }
 
+// CancelTerminalRunApprovals is cancelRunApprovals' exported seam for the THIRD
+// terminal writer: cmd/wardynd's idle reaper (lifecycleStopper.StopRun) is the
+// only writer of RunState=STOPPED, it lives outside this package, and before
+// this it ran the revoke half of the cascade and none of the approval half — so
+// an idle-stopped run's PENDING approvals sat in the queue until the 24h
+// ExpireStale sweep, logged "nobody answered" rather than "the run stopped",
+// and stayed decidable (an `always` approve replayed into the workspace
+// allowlist for a sandbox that is gone). One helper, three callers; the reason
+// is still read back from the run row, so the reaper passes nothing it could
+// get wrong.
+func (s *Server) CancelTerminalRunApprovals(ctx context.Context, runID uuid.UUID) {
+	s.cancelRunApprovals(ctx, runID)
+}
+
 // terminalCancelReason is the reason string stamped on a cancelled approval and
 // on its audit row: "run_killed", "run_completed", "run_failed", "run_stopped",
 // or (for an archived row, or a state the read could not resolve)
@@ -477,8 +491,19 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 		// is running before dispatch completes. Calling CancelForRun here would be
 		// one list-all-PENDING read per failed dispatch that can only ever find
 		// nothing; a negative test pins that a fail at STARTING writes no
-		// approval.cancelled row. The terminal transitions that CAN strand an
-		// approval are finalizeRunTail's and handleKillRun's.
+		// approval.cancelled row.
+		//
+		// THE CENSUS OF TRANSITIONS THAT CAN STRAND AN APPROVAL IS THREE, not the
+		// two this comment used to claim: finalizeRunTail's (the completion
+		// watcher, the boot reconciler and the probe reclaim all route through
+		// it), handleKillRun's, and — the one the first version missed —
+		// lifecycleStopper.StopRun's RUNNING->STOPPED in cmd/wardynd, the ONLY
+		// writer of STOPPED, which reaches the cascade through
+		// CancelTerminalRunApprovals below. An idle-stopped run is typically idle
+		// BECAUSE its agent is parked on a wait_for_review hold, so that writer is
+		// the one most likely to have a PENDING approval to strand.
+		// TestTerminalRunStateWriterCensus (cmd/wardynd) freezes the three so a
+		// fourth writer reds instead of silently stranding.
 		if hint != "" {
 			// Optional-interface, not a core Store method (mirrors RunWatcherLeaser):
 			// the ~30 test doubles that embed store.Store never implement it, so a

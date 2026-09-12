@@ -662,6 +662,14 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		return egress.Deny, "", &log
 	}
 
+	// B6, and it sits HERE — above the first-use approval flow, below
+	// policy:denied/policy:method — for the reason privateIPMemoHit's own doc
+	// gives (private_ip_memo.go): a memoed host can never be approved into
+	// reachability, so asking costs a human a decision the next line discards.
+	if p.privateIPMemoHit(host, port) {
+		return egress.Deny, "", nil
+	}
+
 	switch verdict {
 	case egress.VerdictUnknown:
 		// 3. First-use approval (only for the review modes). always_deny falls to
@@ -729,12 +737,6 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 		}
 		return egress.Allow, target, &log
 	}
-	// B6, BEFORE the re-resolve: an identical attempt against a host already
-	// refused by the private-address guard gets the same 403 from the memo, and
-	// leaves one summary row instead of a row per retry (private_ip_memo.go).
-	if p.privateIPMemoHit(host, port) {
-		return egress.Deny, "", nil
-	}
 	target, ruleSource, terr := p.egressTarget(host, port)
 	if terr != nil {
 		// A name that never resolved is not an SSRF block, and auditing it as
@@ -747,7 +749,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 			return egress.Deny, "", &log
 		}
 		log := decisionLog(req, egress.Deny, "builtin:private-ip")
-		p.privateIPRefused(req)
+		p.privateIPRefused(req, blockKindOf(terr))
 		return egress.Deny, "", &log
 	}
 	log := p.allowLog(req, approvalID)

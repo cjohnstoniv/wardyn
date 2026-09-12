@@ -387,6 +387,17 @@ const (
 	ApprovalCancelled ApprovalState = "CANCELLED"
 )
 
+// ApprovalStates is the closed set, in lifecycle order (the one non-terminal
+// state first, then the four terminal ones). It exists so the migration parity
+// guard (internal/db's closedEnumChecks) compares the database's CHECK against
+// the GO SET rather than against a hand-typed list in the test — the blindness
+// the role_mappings.role case argues must be closed by derivation, and the one
+// CHANGELOG 0062 advertises as closed. TestApprovalStatesCoversEveryConstant
+// keeps this slice honest against the constants above.
+var ApprovalStates = []ApprovalState{
+	ApprovalPending, ApprovalApproved, ApprovalDenied, ApprovalExpired, ApprovalCancelled,
+}
+
 // The approval sentinels live here, in the one package both internal/store and
 // internal/approval already import, so the FSM can errors.Is a store error
 // instead of matching its message text (which it used to do, silently breaking

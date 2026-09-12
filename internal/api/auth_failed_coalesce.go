@@ -12,6 +12,7 @@
 package api
 
 import (
+	"context"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -100,6 +101,38 @@ func (s *Server) coalesceAuthFailed(actor, reason, target, sourceIP string) (boo
 	})
 	s.authFailedStreak = fresh
 	return false, summary
+}
+
+// FlushAuthFailedStreak closes whatever streak is still open and records its
+// summary row. Called at daemon shutdown (cmd/wardynd's serveAndShutdown, after
+// httpSrv.Shutdown has stopped accepting requests and before the audit sinks are
+// closed), mirroring the proxy's flushPrivateIPMemo at the same point in its own
+// stop — and for the same reason: a streak closes only on a different key, the
+// 1000-cap, or the 5m gap timer, so a restart during a steady drip lost up to 999
+// refusals' COUNT. The opening row is already in the trail, so what was lost was
+// only the volume — during exactly the rollout this instrument exists to measure.
+//
+// The timer could not have saved it either: a streak's AfterFunc records under
+// BaseCtx, and by shutdown BaseCtx is already cancelled. So this records under
+// context.WithoutCancel(BaseCtx) — the daemon's values (the audit recorder reads
+// them), none of its cancellation.
+//
+// CEILING, stated rather than implied, same as the memo's: this is the ORDERLY
+// stop. A SIGKILL, an OOM kill or a pod deleted out from under the process drops
+// the open streak's count — never the refusals themselves, each of which opened
+// its streak with a row that is already recorded.
+func (s *Server) FlushAuthFailedStreak() {
+	s.authFailedStreakMu.Lock()
+	ev := s.closeAuthFailedStreakLocked()
+	s.authFailedStreakMu.Unlock()
+	if ev == nil {
+		return
+	}
+	base := s.cfg.BaseCtx
+	if base == nil {
+		base = context.Background()
+	}
+	s.recordAudit(context.WithoutCancel(base), *ev)
 }
 
 // closeAuthFailedStreakLocked closes the open streak and returns the summary row

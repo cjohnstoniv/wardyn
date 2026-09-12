@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -193,5 +194,141 @@ func TestFailAndRevoke_EmitsNoApprovalCancellation(t *testing.T) {
 	}
 	if !audit.has(runID, "run.fail", "success") && !audit.has(runID, "run.fail", "failure") {
 		t.Log("no run.fail row recorded; the exemption assertion above is what this test owns")
+	}
+}
+
+// ─── V1-D1: the THIRD terminal writer, and the decide-side backstop ──────────
+
+// TestIdleStopSeam_CancelsWithRunStopped drives CancelTerminalRunApprovals — the
+// exported seam cmd/wardynd's idle reaper (lifecycleStopper.StopRun) calls after
+// it wins the guarded RUNNING->STOPPED transition, the only place STOPPED is ever
+// written.
+//
+// Before this, that writer ran the revoke half of the cascade and none of the
+// approval half: terminalCancelReason's `case types.RunStopped` arm was
+// unreachable dead code and docs/AUDIT-ACTIONS.md documented a reason nothing
+// emitted. The cost was not cosmetic — an idle-stopped run is typically idle
+// BECAUSE its agent is parked on a wait_for_review hold, so its approval stayed
+// PENDING (and decidable, and replayable into the workspace allowlist by an
+// `always` approve) until the 24h stale sweeper aged it out as "nobody answered".
+func TestIdleStopSeam_CancelsWithRunStopped(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New()
+	// The reaper has already won the CAS by the time it calls the seam, so the
+	// run row reads STOPPED — which is what the reason is derived from.
+	st := &dispatchTestStore{
+		run:   types.AgentRun{ID: runID, CreatedBy: "t@example.com", SandboxRef: "sbx-idle"},
+		state: types.RunStopped,
+	}
+	fa := newFakeApprovals()
+	apID := seedPendingApproval(t, fa, runID)
+	audit := &syncAudit{}
+	cfg := baseTestConfig(h, st)
+	cfg.Approvals = fa
+	cfg.Audit = audit
+	srv := New(cfg)
+
+	srv.CancelTerminalRunApprovals(context.Background(), runID)
+
+	ap, err := fa.Get(context.Background(), apID)
+	if err != nil {
+		t.Fatalf("read approval back: %v", err)
+	}
+	if ap.State != types.ApprovalCancelled {
+		t.Fatalf("approval state after an idle stop = %q, want CANCELLED", ap.State)
+	}
+	if ap.Reason != "run_stopped" {
+		t.Errorf("approval reason = %q, want run_stopped — the trail must name the transition that "+
+			"actually ended the run, not approval.expire's \"nobody answered\"", ap.Reason)
+	}
+	calls := fa.cancelledCalls()
+	if len(calls) != 1 {
+		t.Fatalf("the cascade moved rows %d times on one idle stop, want exactly 1", len(calls))
+	}
+	if calls[0].Reason != "run_stopped" || calls[0].Count != 1 || calls[0].RunID != runID {
+		t.Errorf("cancel call = %+v, want {run:%s reason:run_stopped count:1}", calls[0], runID)
+	}
+}
+
+// TestDecideOnTerminalRun_409sAndCancelsRatherThanApproving is the defence in
+// depth behind that cascade. The cascade is best-effort (a failed CancelForRun is
+// logged and audited, never retried) and all three terminal writers race a
+// decision already in flight, so a PENDING approval on an ended run CAN reach
+// decide(). Deciding it for real is the widening CANCELLED exists to stop: an
+// `always` approve is replayed into the workspace allowlist
+// (approvals_reconcile.go) on behalf of a sandbox that no longer exists.
+func TestDecideOnTerminalRun_409sAndCancelsRatherThanApproving(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		state types.RunState
+		path  string
+	}{
+		{"approve a stopped run's approval", types.RunStopped, "approve"},
+		{"approve a killed run's approval", types.RunKilled, "approve"},
+		{"deny a completed run's approval", types.RunCompleted, "deny"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			runID := uuid.New()
+			st := &dispatchTestStore{
+				run:   types.AgentRun{ID: runID, CreatedBy: "t@example.com"},
+				state: tc.state,
+			}
+			fa := newFakeApprovals()
+			apID := seedPendingApproval(t, fa, runID)
+			cfg := baseTestConfig(h, st)
+			cfg.Approvals = fa
+			cfg.Audit = &syncAudit{}
+			srv := New(cfg)
+
+			w := do(t, srv, http.MethodPost, "/api/v1/approvals/"+apID.String()+"/"+tc.path, adminToken, "")
+			if w.Code != http.StatusConflict {
+				t.Fatalf("decide on a %s run: code = %d, want 409. body=%s", tc.state, w.Code, w.Body.String())
+			}
+			if body := w.Body.String(); !strings.Contains(body, approvalRunEndedBody) {
+				t.Errorf("409 body does not carry the sentence that says why:\n\tgot:  %s\n\twant: %s",
+					body, approvalRunEndedBody)
+			}
+			ap, err := fa.Get(context.Background(), apID)
+			if err != nil {
+				t.Fatalf("read approval back: %v", err)
+			}
+			if ap.State != types.ApprovalCancelled {
+				t.Fatalf("approval state after a refused decision = %q, want CANCELLED — the refusal must "+
+					"also CLOSE the question, or the same stranded row is re-offered on every reload", ap.State)
+			}
+			if ap.State == types.ApprovalApproved {
+				t.Fatal("the approval was APPROVED on an ended run")
+			}
+		})
+	}
+}
+
+// TestDecideOnLiveRun_StillDecides is the negative half: the terminal guard must
+// not have turned every ordinary decision into a 409.
+func TestDecideOnLiveRun_StillDecides(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New()
+	st := &dispatchTestStore{
+		run:   types.AgentRun{ID: runID, CreatedBy: "t@example.com"},
+		state: types.RunRunning,
+	}
+	fa := newFakeApprovals()
+	apID := seedPendingApproval(t, fa, runID)
+	cfg := baseTestConfig(h, st)
+	cfg.Approvals = fa
+	cfg.Audit = &syncAudit{}
+	srv := New(cfg)
+
+	w := do(t, srv, http.MethodPost, "/api/v1/approvals/"+apID.String()+"/approve", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("approve on a RUNNING run: code = %d, want 200. body=%s", w.Code, w.Body.String())
+	}
+	ap, err := fa.Get(context.Background(), apID)
+	if err != nil {
+		t.Fatalf("read approval back: %v", err)
+	}
+	if ap.State != types.ApprovalApproved {
+		t.Errorf("approval state = %q, want APPROVED", ap.State)
 	}
 }
