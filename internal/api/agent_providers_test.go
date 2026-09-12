@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -20,6 +22,11 @@ import (
 // harnessByID documents as supported and a roster therefore has to be able to
 // name.
 var testAgentImages = map[string]string{"acme-agent": "ghcr.io/acme/agent:1"}
+
+// agentNotEnabledTail is agent422NotEnabled's half after the agent name — what a
+// body assertion can match without re-spelling the sentence. Derived from the
+// constant, so the M2 canon swap moves both.
+var agentNotEnabledTail = strings.SplitN(agent422NotEnabled, "%q", 2)[1]
 
 func agentRow(id string, m types.AgentMechanism) types.AgentProvider {
 	return types.AgentProvider{ID: id, Mechanism: m}
@@ -139,20 +146,32 @@ func TestAgentMechanismProviderType(t *testing.T) {
 			t.Errorf("%s.ProviderType() = %q, want %q", m, got, want)
 		}
 	}
-	// …and every folded value except "none" must be a key the catalog's claude-code
-	// row actually answers for, or the fold points at nothing.
-	def, ok := harnessByID("claude-code")
-	if !ok {
-		t.Fatal("the catalog has no claude-code row")
-	}
-	for _, m := range types.ClosedAgentMechanismList() {
-		pt := types.AgentMechanism(m).ProviderType()
-		if pt == string(types.AgentMechanismNone) {
+	// …and EVERY folded value except "none" must be a key EVERY credential-wiring
+	// catalog row actually answers for. validateAgentMechanism reads an ABSENT key
+	// as "" — possible — the default harnessProviderReason documents as "never
+	// load-bearing, every type this harness's family is ever asked about is listed
+	// explicitly". This loop is what keeps that true: a row that stops enumerating
+	// a coarse type would otherwise silently ADMIT an impossible pair, and the
+	// admin would get a live credential chip over a lane nothing can honour.
+	//
+	// Every row, not just claude-code: pinning one row is how the next harness
+	// added to the catalog ships with a half-filled map and nothing says so.
+	for _, def := range harnessCatalog {
+		if def.NoManagedAuth {
+			// The BYOA row wires nothing, so its nil map is the answer:
+			// validateAgentMechanism decides it on the flag, never on a lookup.
 			continue
 		}
-		if _, named := def.ProviderTypes[pt]; !named {
-			t.Errorf("mechanism %s folds to %q, which claude-code's ProviderTypes does not name — "+
-				"an unnamed key reads as POSSIBLE, so an impossible pair would be admitted", m, pt)
+		for _, m := range types.ClosedAgentMechanismList() {
+			pt := types.AgentMechanism(m).ProviderType()
+			if pt == string(types.AgentMechanismNone) {
+				continue
+			}
+			if _, named := def.ProviderTypes[pt]; !named {
+				t.Errorf("mechanism %s folds to %q, which %s's ProviderTypes does not name — "+
+					"an unnamed key reads as POSSIBLE, so an impossible pair would be admitted",
+					m, pt, def.ID)
+			}
 		}
 	}
 }
@@ -387,6 +406,13 @@ func agentRosterFixture(t *testing.T, block *types.AgentProviders) *Server {
 	cfg.Broker = h.broker
 	cfg.Runner = &fakeRunner{}
 	cfg.AgentImages = testAgentImages
+	// OIDC + a secret store + the deployment ceiling are what govEscapeFixture
+	// wires for the same store: without them an SSO member's request is refused
+	// before the roster is ever consulted, and the member arm below would pass
+	// for the wrong reason.
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.Secrets = &memSecrets{m: map[string][]byte{govCorpSecret: []byte("v")}}
+	cfg.DefaultPolicy = govDeployment()
 	return New(cfg)
 }
 
@@ -418,13 +444,36 @@ func TestAgentRosterRefusesRunCreate(t *testing.T) {
 		if w.Code != http.StatusUnprocessableEntity {
 			t.Fatalf("create = %d, want 422; body=%s", w.Code, w.Body.String())
 		}
-		want := strings.SplitN(agent422NotEnabled, "%q", 2)[1] // the half after the agent name
-		if !strings.Contains(w.Body.String(), want) {
+		if !strings.Contains(w.Body.String(), agentNotEnabledTail) {
 			t.Errorf("422 body = %s, want the DRAFT sentence", w.Body.String())
 		}
 		// A member-facing refusal names the agent and NOTHING else.
 		if strings.Contains(w.Body.String(), "codex-cli") || strings.Contains(w.Body.String(), "openai") {
 			t.Errorf("the refusal discloses the roster: %s", w.Body.String())
+		}
+	})
+
+	// "Operators and members alike": the roster is the ORG's statement of what
+	// this install runs, not a per-principal ceiling, so the same door answers the
+	// same way to a member — and every other case here drives it as an operator.
+	t.Run("a member is refused the same way, with the same sentence", func(t *testing.T) {
+		srv := agentRosterFixture(t, agentBlock(agentRow("codex-cli", types.AgentMechanismOpenAIAPIKey)))
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs",
+			govSession(t, govMemberSub, []string{"eng"}, false), `{"task":"echo hi","agent":"claude-code"}`)
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("member create = %d, want 422; body=%s", w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), agentNotEnabledTail) {
+			t.Errorf("422 body = %s, want the DRAFT sentence", w.Body.String())
+		}
+	})
+
+	t.Run("a member is admitted by an enabled row", func(t *testing.T) {
+		srv := agentRosterFixture(t, agentBlock(agentRow("claude-code", types.AgentMechanismBedrockSSO)))
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/runs",
+			govSession(t, govMemberSub, []string{"eng"}, false), `{"task":"echo hi","agent":"claude-code"}`)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("member create = %d, want 201; body=%s", w.Code, w.Body.String())
 		}
 	})
 
@@ -497,6 +546,64 @@ func TestAgentRosterRefusesRecordLaunch(t *testing.T) {
 			t.Fatalf("an enabled agent was refused: %v", err)
 		}
 	})
+}
+
+// rosterRecordStore is recordStore with a site config — the record HTTP door's
+// fixture needs the roster the launch path reads, and recordStore's own
+// GetSiteConfig deliberately answers the zero value (legacy open mode).
+type rosterRecordStore struct {
+	*recordStore
+	sc types.SiteConfig
+}
+
+func (s *rosterRecordStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return s.sc, nil
+}
+
+// TestRecordDoorAnswersTheRosterRefusal is the HTTP half of the step-run check,
+// and it pins the two things a unit test on launchRecordRun cannot see:
+//
+//  1. the STATUS. handleRecordWorkspace maps errAgentNotEnabled to 422 by
+//     errors.Is + TrimPrefix; one refactor of that chain and an org-policy
+//     refusal reads as a 500 with the sentinel prefix still on it.
+//  2. that the refusal COSTS NO STATE. It sits above the import-step CAS claim,
+//     so a refused record leaves the workspace's active-run slot free and writes
+//     no failed record result — a member could otherwise wedge a workspace by
+//     asking for an agent their org does not offer.
+func TestRecordDoorAnswersTheRosterRefusal(t *testing.T) {
+	wsID := uuid.New()
+	ws := types.Workspace{
+		ID: wsID, Status: types.WorkspaceScanned,
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/w", Target: "/home/agent/work"}},
+	}
+	st := &rosterRecordStore{
+		recordStore: &recordStore{importStateFake: importStateFake{ws: ws}},
+		sc:          types.SiteConfig{AgentProviders: agentBlock(agentRow("codex-cli", types.AgentMechanismOpenAIAPIKey))},
+	}
+	h := newHarness(t)
+	cfg := baseTestConfig(h, st)
+	cfg.Runner = &fakeRunner{} // past the no-runner 503, into the launch
+	srv := New(cfg)
+
+	w := do(t, srv, http.MethodPost, "/api/v1/workspaces/"+wsID.String()+"/record", adminToken, `{"name":"capture"}`)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("record = %d, want 422 — the status run create answers for the identical cause; body=%s",
+			w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), agentNotEnabledTail) {
+		t.Errorf("422 body = %s, want the DRAFT sentence", w.Body.String())
+	}
+	// The internal sentinel is a Go-side marker, never a member-facing word.
+	if strings.Contains(w.Body.String(), errAgentNotEnabled.Error()) {
+		t.Errorf("the sentinel prefix reached the caller: %s", w.Body.String())
+	}
+	if st.claimedRun != nil {
+		t.Errorf("a refused record claimed the workspace's import-step slot (run %s) — an org-policy "+
+			"refusal must cost no state, like the two refusals beside it", st.claimedRun)
+	}
+	if st.saved != nil {
+		t.Errorf("a refused record wrote a record result (%s) — nothing was launched to report on", st.saved)
+	}
 }
 
 // TestSetupHarnessToolsCarryTheRoster is the member-safe projection: the console's

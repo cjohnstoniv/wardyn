@@ -109,6 +109,14 @@ func (s *Server) claimImportStep(ctx context.Context, ws types.Workspace, runID 
 	}, nil
 }
 
+// stepRunAgent is the agent EVERY server-launched step/probe/login run comes up
+// as unless its own set() overrides it. Named rather than repeated because the
+// agent-roster check in launchRecordRun has to ask about the same literal
+// BEFORE newStepRun has built a row to read it off — two spellings of "which
+// agent does a record session run" is exactly how a refusal drifts off the lane
+// it was meant to guard.
+const stepRunAgent = "claude-code"
+
 // newStepRun mints the run identity and builds the run row every
 // server-launched step/probe/login run shares: PENDING, State/SPIFFEID/
 // RunnerTarget set, agent claude-code unless set overrides it. set customizes
@@ -143,7 +151,7 @@ func (s *Server) newStepRun(ctx context.Context, runID uuid.UUID, actor, task st
 	now := s.cfg.Now().UTC()
 	run := types.AgentRun{
 		ID: runID, CreatedAt: now, UpdatedAt: now, CreatedBy: actor,
-		Agent: "claude-code", Task: task,
+		Agent: stepRunAgent, Task: task,
 		ConfinementClass: cc, State: types.RunPending, SPIFFEID: id.SPIFFEID,
 		RunnerTarget: s.cfg.RunnerTarget,
 	}
@@ -471,6 +479,33 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	if lerr := s.stepRunCeilingLimits(ctx, actor, recordRunGovernance(ceiling)); lerr != nil {
 		return types.AgentRun{}, false, lerr
 	}
+	// THE AGENT ROSTER, on the one step lane it binds (agent_providers.go), and
+	// HERE for the same reason as the two refusals above it: a refusal costs no
+	// state. newStepRun hardcodes stepRunAgent and calls Store.CreateRun/
+	// dispatchRun directly, so every server-launched lane bypasses
+	// decodeAndValidateCreateRun's identical check — and a RECORD session is an
+	// interactive MODEL run, so a codex-only org must not be able to record
+	// through claude-code.
+	//
+	// THE OTHER STEP LANES ARE EXEMPT, deliberately: scan, verify, Build and the
+	// harness-login capture are non-model steps Wardyn authors for its own
+	// purposes, and refusing them on an agent roster would make a login run —
+	// the very thing that repairs a credential — unreachable.
+	//
+	// Returned BARE, never through abort(): abort belongs to failures of a run
+	// that was already claimed and persisted, and routing an org-policy refusal
+	// through it burned the workspace's active-run slot, wrote a failed record
+	// result and called failAndRevoke on a run row that never existed — and put
+	// the internal sentinel prefix ("agent not enabled: ") in front of the
+	// member's sentence in the record panel, the one thing handleRecordWorkspace
+	// strips before answering 422. Nothing this check reads is built yet.
+	//
+	// THREE LINES, and a helper for the two they would otherwise be: this
+	// function is at the funlen ratchet (.golangci.yml, 150 non-comment lines),
+	// so the next lane to add a statement here extracts a block first.
+	if rerr := s.recordRosterRefusal(ctx, stepRunAgent); rerr != nil {
+		return types.AgentRun{}, false, rerr
+	}
 	caps, cerr := s.cfg.Runner.Capabilities(ctx)
 	if cerr != nil {
 		return types.AgentRun{}, false, fmt.Errorf("runner capabilities unavailable: %w", cerr)
@@ -513,27 +548,6 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// The session's policy, built one function over (recordSessionPolicy).
 	policy := s.recordSessionPolicy(ws, cc, confined)
 	run.AutoStopAfterSec = policy.AutoStopAfterSec // reaper reads the run row
-	// THE AGENT ROSTER, on the one step lane it binds (agent_providers.go).
-	// newStepRun hardcodes run.Agent and calls Store.CreateRun/dispatchRun
-	// directly, so every server-launched lane bypasses decodeAndValidateCreateRun's
-	// identical check — and a RECORD session is an interactive MODEL run, so a
-	// codex-only org must not be able to record through claude-code.
-	//
-	// THE OTHER STEP LANES ARE EXEMPT, deliberately: scan, verify, Build and the
-	// harness-login capture are non-model steps Wardyn authors for its own
-	// purposes, and refusing them on an agent roster would make a login run —
-	// the very thing that repairs a credential — unreachable.
-	//
-	// Through abort(), so the refusal leaves the record panel a failure hint with
-	// the sentence in it rather than a silently released slot; the sentinel is
-	// what lets handleStartRecord answer 422 instead of 500.
-	//
-	// THREE LINES, and a helper for the two they would otherwise be: this
-	// function is AT the funlen ratchet (.golangci.yml, 150 non-comment lines)
-	// with them, so the next lane to add a statement here extracts a block first.
-	if rerr := s.recordRosterRefusal(ctx, run.Agent); rerr != nil {
-		return types.AgentRun{}, false, abort(rerr)
-	}
 	cloneURLs, ephemeralDirs, werr := wireWorkspaceSource(&run, &policy, ws)
 	if werr != nil {
 		return types.AgentRun{}, false, abort(werr)
