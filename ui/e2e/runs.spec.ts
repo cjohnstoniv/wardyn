@@ -490,7 +490,12 @@ test.describe("Run cockpit — the failure block sizes to its content, not to ha
     expect(measured.flexGrow).toBe("0");
     // ...and not stretched in effect either: it is as tall as its own content
     // (within a rounding pixel), never a fixed share of the tile.
-    expect(measured.blockH).toBeLessThanOrEqual(measured.scrollH + 2);
+    // CI-flake (the second site of the 300.28px class): getBoundingClientRect
+    // returns a FRACTIONAL height while scrollHeight is integral, so a
+    // sub-pixel of layout jitter (300.28 against 298 + 2) failed a property
+    // that tolerates a fractional pixel and would still catch a genuine
+    // flex-stretch of tens of pixels. Rounded, like the above-the-fold bound.
+    expect(Math.round(measured.blockH)).toBeLessThanOrEqual(measured.scrollH + 2);
     // The replay pane below it is still rendered. (Not a share of the hero:
     // the widget body is the viewport's height, and a long failure detail can
     // legitimately be most of a 720px tile — the F142 property is the two
