@@ -1367,6 +1367,43 @@ an XFS project quota needs `CAP_SYS_ADMIN` the control plane must not hold. A
 `host_path` drive reports `enforcement: external`: the NAS's own quota binds it,
 and Wardyn displays the allocation.
 
+**And a ceiling bounds what you may ALLOCATE, not what the volume will hold.**
+Two numbers can cap a drive, and they are refused and applied in different
+places. `storage.user_drive.max_size_mib` on the **Workspace providers** screen
+is the deployment's: a drive or an allocation override above it is refused at
+the write with **422 `size_mib … exceeds this deployment's drive ceiling`** —
+not a 403, because nobody was denied anything, the deployment simply will not
+hold it. A governance profile's `max_drive_size_mib` is the **per-principal**
+one, and it cannot be refused at a write at all: the profile binding a subject
+is resolved from their claims, and a group or `all` allocation names no single
+principal. It is CLAMPED when the drive is resolved (`newResolvedDrive`), folded
+with the deployment's in one expression — the smaller of the two wins, the
+daemon logs which one bit (`bound_by=deployment` or `bound_by=governance_profile`),
+and the run, `GET /me` and `POST /drives/preview` all report the clamped number,
+so the card cannot offer a size the run will not give. Lowering the deployment
+ceiling after drives exist refuses no run and rewrites no row; it clamps from
+the next resolve onward.
+
+On Docker that clamp is a number and nothing more — `enforcement: none` on a
+managed volume, `external` on a share — so treat the ceiling as governance over
+what admins may write down, never as a cap on bytes.
+
+**Turning drives OFF deployment-wide** is `storage.user_drive.disabled` on the
+same screen, and it is a different question from a profile's `deny_user_drive`.
+The switch is asked FIRST and says *this install offers no drives*: every drive
+and allocation write answers **422 "drives are disabled for this deployment"**,
+a run asking for its drive is refused 422 in the same family, and no
+`authz.denied` row is written, because no profile denied anybody. Every drive
+row and every allocation is KEPT — the screen still lists them, above a banner —
+so turning it back on restores exactly what was there. **Deletes are deliberately
+not refused**: `DELETE /drives/{id}` and `DELETE /drives/grants/{id}` keep
+working while the switch is off, so an operator can still tidy up or offboard
+somebody without turning drives back on first (the `ON DELETE RESTRICT` between
+the two is unchanged, so a drive still cannot be deleted out from under an
+allocation). What the switch refuses is every write that CREATES or EDITS one.
+The per-profile door is unchanged and still answers 403 with its `authz.denied`
+row.
+
 ### Capabilities: what one member, or one group, may do
 
 The role split above is deployment-wide. A **capability grant** is per-human: a
@@ -3814,6 +3851,21 @@ be shrunk, and refusing the run would mean an admin editing an allocation in the
 console breaks every existing member's runs. Grep the daemon log for `disagrees
 with the drive` when a console size and a pod's actual volume do not match.
 
+**A LOWERED CEILING IS DRIFT, and drift is a warning.** A managed claim's
+`requests.storage` is the size the drive resolved to on the run that first
+provisioned it. Lower `storage.user_drive.max_size_mib` (or a profile's
+`max_drive_size_mib`) afterwards and the resolver clamps the number from the
+next run onward — so the claim now asks for more than the drive says, and that
+disagreement is reported by the same warning as any other: *"disagrees with the
+drive"*, naming the claim and `request is 10Gi, the drive's allocation is 2048
+MiB`. Nothing shrinks and nothing is refused. **A PVC request cannot be reduced
+in place**, Wardyn holds no `delete` verb for a claim, and refusing the run would
+mean an admin editing a ceiling breaks every existing member's runs — so the
+product's answer to a lowered ceiling is a smaller number on the next
+allocation, plus this warning on the claims that predate it. To actually reclaim
+the space, plan the data move (the `kubectl cp` / snapshot recipes above) and
+re-provision.
+
 **Two states are refusals, not warnings.** A claim that is **Terminating** fails
 the run outright: a pod mounting a claim under deletion never schedules, and
 re-creating it under the same name would undo the reclaim somebody is in the
@@ -3846,7 +3898,13 @@ label-less claim is FOREIGN here (`driveClaimIdentity`): a claim you create
 yourself under a member's name — from a snapshot, or to move data after a
 rename — needs `wardyn.managed=true`, `wardyn.drive=<drive-id>` and
 `wardyn.home=<home>` (leave `wardyn.subject` off), or every run on it fails as
-*"belongs to a different drive or a different person"*.
+*"drive: your drive's volume is not the one allocated to you — ask an admin"*.
+**The member's hint carries no evidence, and the daemon log carries all of it**:
+the run's failure hint is read by the person whose run failed, and the label
+comparison names a claim, a namespace and — for `wardyn.subject` — a digest of
+*another* person. Grep the daemon log for `a drive claim is not this run's` for
+the claim, the namespace, the deciding label and both values; the unprovisioned
+share is the same split, under `a share drive's claim is not provisioned`.
 
 **`ReadWriteOnce` binds a volume to one NODE — not to one pod, and nothing
 schedules around it.** A managed drive is provisioned RWO, which permits any

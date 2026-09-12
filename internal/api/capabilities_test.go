@@ -51,6 +51,16 @@ func (noGovernanceStore) ResolveUserDrive(context.Context, []string, []string) (
 
 func (noGovernanceStore) HasGroupTierDriveGrants(context.Context) (bool, error) { return false, nil }
 
+// GetSiteConfig answers the ZERO SiteConfig — no workspace providers, so no git
+// rows, no storage ceilings and the user-drive switch off-by-absence, which is
+// again exactly the 0.6-shaped deployment every double here is modelling. It is
+// answered rather than left to panic for the reason above AND for one more: the
+// drive resolver reads storage.user_drive's ceiling on every resolve, so a nil
+// interface here would turn ~30 doubles' GET /me into a segfault.
+func (noGovernanceStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
+
 // capStore holds grants and enforcement in memory. Its ListCapabilityGrantsFor
 // MIRRORS the SQL predicate (store_capabilities.go / its pg test) rather than
 // returning everything: subject fan-out is the store's job, and a fake that
@@ -67,6 +77,10 @@ type capStore struct {
 	grants []types.CapabilityGrant
 	enf    map[string]bool
 	err    error
+	// site is what GetSiteConfig answers — the zero value is "no workspace
+	// providers", and a test sets storage.user_drive on it to drive the org
+	// switch or the deployment drive ceiling.
+	site types.SiteConfig
 
 	// Read counters. fullTableReads is the one that matters: the
 	// unresolvable-group-deny check must never issue a whole-table read again
@@ -136,6 +150,15 @@ func (s *capStore) HasGroupTierDriveGrants(context.Context) (bool, error) {
 		return false, s.driveHasGroupTierErr
 	}
 	return s.driveHasGroupTier, nil
+}
+
+// GetSiteConfig answers the zero SiteConfig — no workspace providers, so no
+// drive ceiling and no org switch, which is what every fixture here means by "a
+// deployment that has adopted none of this". The drive resolver reads the
+// storage.user_drive ceiling on every resolve, so without it this double's
+// GET /me segfaults on a nil embedded interface.
+func (s *capStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return s.site, nil
 }
 
 func (s *capStore) ResolveGovernanceProfile(_ context.Context, _, _ []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {

@@ -38,6 +38,45 @@ const userDriveGrantCols = `id, subject_type, subject, drive_id, priority, ` +
 // and the column it is compared against is written from the same enum.
 const shareBackend = string(types.DriveBackendHostPath)
 
+// driveHomeNamespaceClashPred is the cross-row rule UpsertUserDrive is gated on
+// — "another share on this root derives home directory NAMES by a different
+// rule" — with its three parameter positions left open. The writing statement
+// and the attribution read below fill in different numbers and share this one
+// spelling, so the rule cannot be enforced by one and mis-reported by the other.
+const driveHomeNamespaceClashPred = `EXISTS (
+			SELECT 1
+			FROM user_drives od
+			WHERE od.id <> %s::uuid
+			  AND od.backend = '` + shareBackend + `'
+			  AND od.host_root = %s::text
+			  AND od.home_template <> %s::text
+		)`
+
+// driveHomeNamespaceClashSQL asks that predicate on its own, for the attribution
+// of a refused write (upsertUserDriveOn).
+var driveHomeNamespaceClashSQL = `SELECT ` + fmt.Sprintf(driveHomeNamespaceClashPred, "$1", "$2", "$3")
+
+// userDriveUpsertSQL is the write itself. Two guards ride its WHERE: the
+// PRECONDITION the API's re-home gate hands in ($12, asserted under the row lock
+// UpsertUserDrive takes), and the cross-row home-namespace rule above. An empty
+// result means one of them refused — never that the row is missing.
+var userDriveUpsertSQL = `
+		INSERT INTO user_drives (id, name, backend, host_root, storage_class,
+			home_template, size_mib, writable, reclaim, created_by, name_slug)
+		SELECT $1::uuid,$2::text,$3::text,$4::text,$5::text,$6::text,$7::int,$8::boolean,$9::text,$10::text,$11::text
+		WHERE (NOT $12::boolean OR NOT EXISTS (
+			SELECT 1 FROM user_drive_grants WHERE drive_id = $1::uuid
+		))
+		  AND ($3::text <> '` + shareBackend + `' OR $4::text = '' OR NOT ` +
+	fmt.Sprintf(driveHomeNamespaceClashPred, "$1", "$4", "$6") + `)
+		ON CONFLICT (id) DO UPDATE
+			SET name = EXCLUDED.name, backend = EXCLUDED.backend,
+			    host_root = EXCLUDED.host_root, storage_class = EXCLUDED.storage_class,
+			    home_template = EXCLUDED.home_template, size_mib = EXCLUDED.size_mib,
+			    writable = EXCLUDED.writable, reclaim = EXCLUDED.reclaim,
+			    name_slug = EXCLUDED.name_slug, updated_at = now()
+		RETURNING ` + userDriveCols
+
 // userDriveDest is the scan target list for userDriveCols, written ONCE so the
 // column list and the destinations cannot drift: the resolver selects a drive
 // JOINed to its grant and would otherwise carry a second hand-written copy of
@@ -108,10 +147,12 @@ func userDriveUniqueConflict(err error) error {
 // on a drive that already has grants — backend, home_template, host_root or
 // name, the four columns every allocated person's storage object is derived
 // from — is refused 409 by driveRehomeGuard unless the request carries
-// ?confirm=rehome. This statement stays unconditional and must: the gate belongs
-// at the API boundary, where the request that asked for it is, and a store that
-// re-read the grants on every write would be a second, quieter copy of a rule
-// that already has one.
+// ?confirm=rehome. The RULE stays at the API boundary, where the request that
+// asked for it is; what this statement carries is the guard's PRECONDITION
+// (refuseIfAllocated), which is not a second copy of the rule but the bit the
+// boundary decided, re-asserted where the write happens. Without it the guard was
+// a read followed by an unconditional write, and a grant created in between was
+// re-homed silently — see ErrDriveAllocated.
 //
 // Returns ErrConflict when UNIQUE(name) rejects the write — a new drive taking
 // a taken name, or a rename onto another row's name. The caller maps that to
@@ -168,50 +209,132 @@ func userDriveUniqueConflict(err error) error {
 // created_by and created_at are NOT touched on the update path: creation
 // provenance stays with whoever registered the drive, even after a later edit
 // by a different admin (the same rule UpsertGovernanceProfile follows).
-func (s PG) UpsertUserDrive(ctx context.Context, d types.UserDrive) (types.UserDrive, error) {
+func (s PG) UpsertUserDrive(ctx context.Context, d types.UserDrive, refuseIfAllocated bool) (types.UserDrive, error) {
 	if d.ID == uuid.Nil {
 		d.ID = uuid.New()
 	}
-	const q = `
-		INSERT INTO user_drives (id, name, backend, host_root, storage_class,
-			home_template, size_mib, writable, reclaim, created_by, name_slug)
-		SELECT $1::uuid,$2::text,$3::text,$4::text,$5::text,$6::text,$7::int,$8::boolean,$9::text,$10::text,$11::text
-		WHERE $3::text <> '` + shareBackend + `' OR $4::text = '' OR NOT EXISTS (
-			SELECT 1
-			FROM user_drives od
-			WHERE od.id <> $1::uuid
-			  AND od.backend = '` + shareBackend + `'
-			  AND od.host_root = $4::text
-			  AND od.home_template <> $6::text
-		)
-		ON CONFLICT (id) DO UPDATE
-			SET name = EXCLUDED.name, backend = EXCLUDED.backend,
-			    host_root = EXCLUDED.host_root, storage_class = EXCLUDED.storage_class,
-			    home_template = EXCLUDED.home_template, size_mib = EXCLUDED.size_mib,
-			    writable = EXCLUDED.writable, reclaim = EXCLUDED.reclaim,
-			    name_slug = EXCLUDED.name_slug, updated_at = now()
-		RETURNING ` + userDriveCols
-	out, err := scanUserDrive(s.Pool.QueryRow(ctx, q,
+	if !refuseIfAllocated {
+		return s.upsertUserDriveOn(ctx, s.Pool, d, false)
+	}
+	// THE PREDICATE ALONE IS NOT THE GUARD — THE ROW LOCK IS.
+	//
+	// NOT EXISTS over user_drive_grants is evaluated against the statement's
+	// snapshot, and under READ COMMITTED an INSERT that has not committed yet is
+	// not in it. The upsert would not collide with that INSERT either: the FK on
+	// user_drive_grants.drive_id takes FOR KEY SHARE on the parent row, and an ON
+	// CONFLICT DO UPDATE that changes no unique-indexed column — a re-home moving
+	// home_template, host_root or backend leaves name and name_slug alone — takes
+	// only FOR NO KEY UPDATE, which does not conflict with it. So without this
+	// lock a grant committing a moment after the predicate ran was still re-homed
+	// silently: the window was narrower than the API gate's, not closed.
+	//
+	// FOR UPDATE conflicts with FOR KEY SHARE, so after this line a concurrent
+	// grant INSERT has either COMMITTED (and READ COMMITTED re-reads after the
+	// lock wait, so the predicate sees it) or is WAITING behind us until we
+	// commit (and then meets a drive whose identity has already moved, which is
+	// the outcome the confirmation is about). Either way the predicate is
+	// race-free rather than merely usually right.
+	//
+	// READ COMMITTED IS PINNED rather than inherited, for the reason the audit
+	// chain's tx pins it: default_transaction_isolation is a USERSET GUC, and
+	// under REPEATABLE READ the snapshot is taken before the lock is granted —
+	// which would put the pre-lock snapshot back in charge of the predicate and
+	// undo exactly what the lock is here for.
+	tx, err := s.Pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		return types.UserDrive{}, fmt.Errorf("store: begin user drive write: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // best-effort on the failure path
+	// No row yet means a PUT that CREATES, and nothing can reference a drive that
+	// does not exist — the FK is what makes that true, so an empty lock is the
+	// right answer rather than a missing one.
+	if _, err := tx.Exec(ctx, `SELECT 1 FROM user_drives WHERE id = $1 FOR UPDATE`, d.ID); err != nil {
+		return types.UserDrive{}, fmt.Errorf("store: lock user drive: %w", err)
+	}
+	out, err := s.upsertUserDriveOn(ctx, tx, d, true)
+	if err != nil {
+		return types.UserDrive{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return types.UserDrive{}, fmt.Errorf("store: commit user drive write: %w", err)
+	}
+	return out, nil
+}
+
+// driveQuerier is the pool and a transaction at the one method this file needs
+// from either, so the statement below is written once and runs on both — the
+// guarded path inside a tx that holds the drive's row lock, the ordinary path
+// straight on the pool with no transaction to pay for.
+type driveQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// upsertUserDriveOn is UpsertUserDrive's statement, plus the attribution of a
+// refusal to whichever of its two guards emptied it.
+func (s PG) upsertUserDriveOn(ctx context.Context, q driveQuerier, d types.UserDrive, refuseIfAllocated bool) (types.UserDrive, error) {
+	out, err := scanUserDrive(q.QueryRow(ctx, userDriveUpsertSQL,
 		d.ID, d.Name, d.Backend, d.HostRoot, d.StorageClass,
 		d.HomeTemplate, d.SizeMiB, d.Writable, d.Reclaim, d.CreatedBy,
-		types.DriveSlug(d.Name)))
+		types.DriveSlug(d.Name), refuseIfAllocated))
 	if err != nil {
 		if conflict := userDriveUniqueConflict(err); conflict != nil {
 			return types.UserDrive{}, conflict
 		}
-		// NO ROWS IS THE CROSS-ROW GUARD ABOVE AND NOTHING ELSE. The SELECT is a
-		// row of constants, so only its WHERE can empty it; UNIQUE(name) raises
-		// 23505 (handled just above) and the primary key is absorbed by ON
-		// CONFLICT. scanUserDrive folds pgx.ErrNoRows into ErrNotFound for the
-		// READ callers that share it, which on THIS statement would be the wrong
-		// word to hand a caller — the row it asked to write is not missing, it
-		// was refused.
+		// NO ROWS IS ONE OF THE TWO GUARDS IN THE WHERE AND NOTHING ELSE. The
+		// SELECT is a row of constants, so only its WHERE can empty it;
+		// UNIQUE(name) raises 23505 (handled just above) and the primary key is
+		// absorbed by ON CONFLICT. scanUserDrive folds pgx.ErrNoRows into
+		// ErrNotFound for the READ callers that share it, which on THIS statement
+		// would be the wrong word to hand a caller — the row it asked to write is
+		// not missing, it was refused.
+		//
+		// WHICH guard refused costs one read on this already-failing path, and
+		// the DURABLE blocker is asked FIRST. Both can be true of one write, and
+		// they are not equally actionable: the allocation is transient (the admin
+		// re-sends, sees what re-homing costs, and confirms) while the home-name
+		// disagreement is a stored contradiction that will refuse the confirmed
+		// re-home too. Named the other way round, an admin sends ?confirm=rehome
+		// and only then meets the blocker that was there all along.
+		//
+		// The read is not part of the DECISION — the statement above already made
+		// it, under the row lock — so it cannot reintroduce the window.
 		if errors.Is(err, ErrNotFound) {
+			if string(d.Backend) == shareBackend && d.HostRoot != "" && s.driveHomeNamespaceClash(ctx, q, d) {
+				return types.UserDrive{}, ErrDriveHomeNamespaceConflict
+			}
+			if refuseIfAllocated && s.driveHasGrants(ctx, q, d.ID) {
+				return types.UserDrive{}, ErrDriveAllocated
+			}
 			return types.UserDrive{}, ErrDriveHomeNamespaceConflict
 		}
 		return types.UserDrive{}, err
 	}
 	return out, nil
+}
+
+// driveHasGrants reports whether any allocation points at this drive — one half
+// of the attribution above, and nothing else. A read that FAILS answers false, so
+// the caller falls back to the other refusal's sentence: both are 409s with the
+// same status, and the fallback decides the MESSAGE, never the write.
+func (s PG) driveHasGrants(ctx context.Context, q driveQuerier, id uuid.UUID) bool {
+	var exists bool
+	if err := q.QueryRow(ctx,
+		`SELECT EXISTS (SELECT 1 FROM user_drive_grants WHERE drive_id = $1)`, id).Scan(&exists); err != nil {
+		return false
+	}
+	return exists
+}
+
+// driveHomeNamespaceClash is the other half, asked through the SAME predicate
+// the writing statement is gated on (driveHomeNamespaceClashPred) rather than a
+// second spelling of the cross-row rule. A read that FAILS answers false for
+// driveHasGrants' reason.
+func (s PG) driveHomeNamespaceClash(ctx context.Context, q driveQuerier, d types.UserDrive) bool {
+	var clash bool
+	if err := q.QueryRow(ctx, driveHomeNamespaceClashSQL, d.ID, d.HostRoot, d.HomeTemplate).Scan(&clash); err != nil {
+		return false
+	}
+	return clash
 }
 
 // GetUserDrive returns one drive by id, or ErrNotFound.

@@ -65,13 +65,23 @@ type driveCRUDStore struct {
 	// Without it only UNIQUE(name) was reachable from an api-side test, which is
 	// exactly why the other two 409s shipped the name-taken sentence.
 	upsertErr error
+	// site is what GetSiteConfig answers — the zero value is a deployment with no
+	// workspace providers, which is every case that is not about the org switch or
+	// the deployment's drive ceiling.
+	site types.SiteConfig
+	// grantsAppear runs ONCE, inside the drive write itself, so a test can make
+	// an allocation land in the window between driveRehomeGuard's read and the
+	// statement — the race the guard's precondition exists to close. There is no
+	// other way to express it against an in-memory double: the two happen in one
+	// goroutine, and a real concurrent writer would only make the test flaky.
+	grantsAppear func()
 }
 
 func newDriveCRUDStore() *driveCRUDStore {
 	return &driveCRUDStore{drives: map[uuid.UUID]types.UserDrive{}, grants: map[uuid.UUID]types.UserDriveGrant{}}
 }
 
-func (s *driveCRUDStore) UpsertUserDrive(_ context.Context, d types.UserDrive) (types.UserDrive, error) {
+func (s *driveCRUDStore) UpsertUserDrive(_ context.Context, d types.UserDrive, refuseIfAllocated bool) (types.UserDrive, error) {
 	if s.upsertErr != nil {
 		return types.UserDrive{}, s.upsertErr
 	}
@@ -80,8 +90,28 @@ func (s *driveCRUDStore) UpsertUserDrive(_ context.Context, d types.UserDrive) (
 			return types.UserDrive{}, store.ErrConflict
 		}
 	}
+	// The RE-HOME PRECONDITION, mirrored from the store's own guarded statement
+	// for the same reason the grant double mirrors its NOT EXISTS: this double is
+	// what every handler-level drive test writes through, and a double that cannot
+	// refuse is a double that hides the refusal. grantsAppear is how a test makes
+	// the race happen — a grant written between the gate's read and this write.
+	if s.grantsAppear != nil {
+		s.grantsAppear()
+		s.grantsAppear = nil
+	}
+	if refuseIfAllocated {
+		for _, g := range s.grants {
+			if g.DriveID == d.ID {
+				return types.UserDrive{}, store.ErrDriveAllocated
+			}
+		}
+	}
 	s.drives[d.ID] = d
 	return d, nil
+}
+
+func (s *driveCRUDStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return s.site, nil
 }
 
 func (s *driveCRUDStore) GetUserDrive(_ context.Context, id uuid.UUID) (types.UserDrive, error) {

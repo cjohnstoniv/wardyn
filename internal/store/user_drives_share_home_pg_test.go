@@ -47,7 +47,7 @@ func seedShareDrive(t *testing.T, st store.PG, name, hostRoot string) types.User
 		HomeTemplate: types.HomeTemplateEmailLocal,
 		Reclaim:      types.DriveReclaimRetain,
 		CreatedBy:    "admin@example.com",
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("seed share drive %q on %q: %v", name, hostRoot, err)
 	}

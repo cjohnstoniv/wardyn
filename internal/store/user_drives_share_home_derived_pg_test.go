@@ -55,7 +55,7 @@ func TestPG_UserDrive_TwoSharesOnOneRootMustDeriveHomesTheSameWay(t *testing.T) 
 
 	root := "/srv/homes-" + uuid.NewString()[:8]
 
-	bySub, err := st.UpsertUserDrive(ctx, shareDriveOn("test-derived-sub-"+uuid.NewString(), root, types.HomeTemplateSub))
+	bySub, err := st.UpsertUserDrive(ctx, shareDriveOn("test-derived-sub-"+uuid.NewString(), root, types.HomeTemplateSub), false)
 	if err != nil {
 		t.Fatalf("register the first share on %q: %v", root, err)
 	}
@@ -77,7 +77,7 @@ func TestPG_UserDrive_TwoSharesOnOneRootMustDeriveHomesTheSameWay(t *testing.T) 
 		t.Fatalf("the two shares derive %q and %q for two different principals; the collision this test pins is gone", a, b)
 	}
 
-	_, err = st.UpsertUserDrive(ctx, byEmail)
+	_, err = st.UpsertUserDrive(ctx, byEmail, false)
 	if !errors.Is(err, store.ErrDriveHomeNamespaceConflict) {
 		_ = st.DeleteUserDrive(ctx, byEmail.ID)
 		t.Fatalf("registering a second host_path drive on %q that derives homes by a DIFFERENT rule: err = %v, want "+
@@ -96,7 +96,7 @@ func TestPG_UserDrive_TwoSharesOnOneRootMustDeriveHomesTheSameWay(t *testing.T) 
 	//    This is the read-write/read-only pair the nesting gate deliberately
 	//    permits, and refusing it would be the finding's other remediation
 	//    breaking a documented deployment shape.
-	twin, err := st.UpsertUserDrive(ctx, shareDriveOn("test-derived-twin-"+uuid.NewString(), root, types.HomeTemplateSub))
+	twin, err := st.UpsertUserDrive(ctx, shareDriveOn("test-derived-twin-"+uuid.NewString(), root, types.HomeTemplateSub), false)
 	if err != nil {
 		t.Fatalf("a SECOND same-root share agreeing on home_template must stay legal: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestPG_UserDrive_TwoSharesOnOneRootMustDeriveHomesTheSameWay(t *testing.T) 
 
 	// 2. Another root is another tree entirely.
 	far, err := st.UpsertUserDrive(ctx,
-		shareDriveOn("test-derived-far-"+uuid.NewString(), "/srv/other-"+uuid.NewString()[:8], types.HomeTemplateEmailLocal))
+		shareDriveOn("test-derived-far-"+uuid.NewString(), "/srv/other-"+uuid.NewString()[:8], types.HomeTemplateEmailLocal), false)
 	if err != nil {
 		t.Fatalf("a differing template on ANOTHER root must stay legal: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestPG_UserDrive_TwoSharesOnOneRootMustDeriveHomesTheSameWay(t *testing.T) 
 	managed, err := st.UpsertUserDrive(ctx, types.UserDrive{
 		Name: "test-derived-managed-" + uuid.NewString(), Backend: types.DriveBackendDockerVolume,
 		HomeTemplate: types.HomeTemplateHash, Reclaim: types.DriveReclaimRetain, CreatedBy: "admin@example.com",
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("a managed drive must be untouched by a host_path root rule: %v", err)
 	}
@@ -129,10 +129,10 @@ func TestPG_UserDrive_TwoSharesOnOneRootMustDeriveHomesTheSameWay(t *testing.T) 
 		d := twin
 		d.HomeTemplate = types.HomeTemplateEmailLocal
 		return d
-	}()); !errors.Is(err, store.ErrDriveHomeNamespaceConflict) {
+	}(), false); !errors.Is(err, store.ErrDriveHomeNamespaceConflict) {
 		t.Errorf("editing a same-root share's home_template into disagreement: err = %v, want ErrDriveHomeNamespaceConflict", err)
 	}
-	if _, err := st.UpsertUserDrive(ctx, twin); err != nil {
+	if _, err := st.UpsertUserDrive(ctx, twin, false); err != nil {
 		t.Errorf("re-writing a drive unchanged must not trip the guard on its own row: %v", err)
 	}
 }

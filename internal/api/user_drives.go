@@ -32,6 +32,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -103,11 +104,19 @@ func (s *Server) mountUserDriveRoutes(operatorOnly chi.Router) {
 //     picker can offer the two backends that can actually mount here instead of
 //     letting an admin author a k8s drive on a Docker install and learn about it
 //     from a 400.
+//
+//   - Disabled is the ORG SWITCH (storage.user_drive.disabled on the providers
+//     block), so the screen can say "this install offers no drives" ABOVE a
+//     table it still renders: everything here is kept when the switch is off,
+//     and nothing mounts. It is not the per-profile door — that one is a
+//     member's, answered per principal on /me — and it is not derived from the
+//     rows, which is exactly why the console cannot compute it.
 type userDrivesResponse struct {
 	Drives              []types.UserDriveListItem `json:"drives"`
 	Grants              []types.UserDriveGrant    `json:"grants"`
 	HostRootsConfigured bool                      `json:"host_roots_configured"`
 	RunnerTarget        string                    `json:"runner_target"`
+	Disabled            bool                      `json:"disabled"`
 	// GrantTotal is how many allocations EXIST, against the len(Grants) this
 	// page carries. It costs nothing: every grant's drive_id is an FK to a
 	// drive, so the per-drive counts already in Drives sum to it, and that read
@@ -144,6 +153,15 @@ type userDrivesResponse struct {
 func (s *Server) handleGetUserDrives(w http.ResponseWriter, r *http.Request) {
 	page, ok := parseListPage(w, r, maxListLimit)
 	if !ok {
+		return
+	}
+	// THE ORG SWITCH IS READ, NOT ASSUMED OPEN, and a site-config read that fails
+	// is a 500 rather than a `false`: "drives are on" is an affirmative claim, and
+	// serving it for a read that could not answer would draw the whole admin
+	// screen as if the switch were on for a deployment where every write 422s.
+	provider, err := s.userDriveProvider(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
 		return
 	}
 	drives, err := s.cfg.Store.ListUserDrives(r.Context())
@@ -186,8 +204,87 @@ func (s *Server) handleGetUserDrives(w http.ResponseWriter, r *http.Request) {
 		Grants:              grants,
 		HostRootsConfigured: s.userDriveHostRootsUsable(),
 		RunnerTarget:        s.cfg.RunnerTarget,
+		Disabled:            provider.Disabled,
 		GrantTotal:          total,
 	})
+}
+
+// ─── the org switch and the deployment's drive ceiling ─────────────────────
+
+// DRAFT (M2 canon pending). The two ORG-level refusals every drive write meets,
+// in one block so the post-sitting swap is a one-file diff and the tests assert
+// through the constants (the string gate, §9.3).
+const (
+	// driveDisabledMsg is storage.user_drive.disabled: a 422 in the
+	// REFUSED_BACKEND family and never a 403, because nobody was denied by a
+	// profile — this install offers no drives at all.
+	driveDisabledMsg = "drives are disabled for this deployment"
+	// driveCeilingMsg is storage.user_drive.max_size_mib at the WRITE boundary.
+	// A 422 for decodeUserDriveRequest's own reason: the request is well-formed
+	// and it is the DEPLOYMENT that cannot accept it.
+	driveCeilingMsg = "size_mib %d exceeds this deployment's drive ceiling (%d MiB)"
+	// driveRefusedBackendMsg is REFUSED_BACKEND's frozen shape, whose
+	// parenthesised half is where the reason goes — the canon says the switch's
+	// sentence is this template's {reason} for a run carrying `drive.enabled`, so
+	// it is composed from two constants in this block rather than written out at
+	// the refusal site, and the M2 swap stays a one-file diff.
+	driveRefusedBackendMsg = "this deployment cannot mount your drive (%s)"
+)
+
+// userDriveProvider is the org's storage.user_drive block — the switch and the
+// ceiling — or the zero value, which is exactly today's behaviour (no switch, no
+// ceiling) for every install that has authored no providers.
+//
+// ONE READER for all four sites (this GET, the two write boundaries and the
+// launch path), so the switch cannot be answered one way at a write and another
+// at a mount. A build with no store holds no site config and therefore no
+// provider policy — the same short-circuit every drive seam keeps for the ~30
+// nil-store doubles in this package.
+func (s *Server) userDriveProvider(ctx context.Context) (types.UserDriveProvider, error) {
+	if s.cfg.Store == nil {
+		return types.UserDriveProvider{}, nil
+	}
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		return types.UserDriveProvider{}, err
+	}
+	if sc.WorkspaceProviders == nil || sc.WorkspaceProviders.Storage == nil ||
+		sc.WorkspaceProviders.Storage.UserDrive == nil {
+		return types.UserDriveProvider{}, nil
+	}
+	return *sc.WorkspaceProviders.Storage.UserDrive, nil
+}
+
+// userDriveWriteRefusal is the ORG SWITCH and then the PROVIDER CEILING, in that
+// order, for an admin write carrying sizeMiB. It returns the status and message
+// the caller answers with, or (0, "") when the write may proceed.
+//
+// THE SWITCH IS FIRST because the two answer different questions and only one of
+// them is about the number: with drives off there is nothing for a ceiling to
+// bound. The per-profile DenyUserDrive door is not asked here at all — it is a
+// MEMBER's door, keyed on a principal these routes do not have.
+//
+// A ZERO CEILING IS NO CEILING, and a zero size is "unset" on both a drive row
+// and a grant override (the fold in newResolvedDrive), so neither can be refused
+// by a comparison.
+//
+// A 422, never a 400: the body is well-formed and it is the deployment that has
+// nowhere to put it — decodeUserDriveRequest's own gate rule. And the CEILING is
+// the PROVIDER's only: a grant naming a group or everyone has no single
+// principal, so the per-principal governance ceiling cannot be resolved here at
+// all (it is clamped at resolve, newResolvedDrive).
+func (s *Server) userDriveWriteRefusal(ctx context.Context, sizeMiB int) (int, string) {
+	provider, err := s.userDriveProvider(ctx)
+	if err != nil {
+		return http.StatusInternalServerError, "get site config: " + err.Error()
+	}
+	if provider.Disabled {
+		return http.StatusUnprocessableEntity, driveDisabledMsg
+	}
+	if provider.MaxSizeMiB > 0 && sizeMiB > provider.MaxSizeMiB {
+		return http.StatusUnprocessableEntity, fmt.Sprintf(driveCeilingMsg, sizeMiB, provider.MaxSizeMiB)
+	}
+	return 0, ""
 }
 
 // ─── drive writes ──────────────────────────────────────────────────────────
@@ -249,6 +346,14 @@ func (s *Server) decodeUserDriveRequest(w http.ResponseWriter, r *http.Request, 
 	if err := types.ValidateUserDrive(&d, s.cfg.RunnerTarget); err != nil {
 		return types.UserDrive{}, http.StatusBadRequest, "invalid drive: " + err.Error()
 	}
+	// THE ORG SWITCH AND THE DEPLOYMENT CEILING, in the same arm as the env
+	// host_root ceiling below and for the same reason — both are facts about the
+	// DEPLOYMENT, so both are 422s. Before the host_path gates, because they apply
+	// to every backend and neither costs a store read the switch has already
+	// settled.
+	if code, msg := s.userDriveWriteRefusal(r.Context(), d.SizeMiB); msg != "" {
+		return types.UserDrive{}, code, msg
+	}
 	if d.Backend == types.DriveBackendHostPath {
 		if err := s.userDriveHostRootCheck()(d.HostRoot); err != nil {
 			return types.UserDrive{}, http.StatusUnprocessableEntity, "invalid drive: " + err.Error()
@@ -274,12 +379,12 @@ func (s *Server) writeUserDrive(w http.ResponseWriter, r *http.Request, id uuid.
 		writeError(w, code, msg)
 		return
 	}
-	code, msg, rehomed := s.driveRehomeGuard(r, d)
+	code, msg, rehomed, refuseIfAllocated := s.driveRehomeGuard(r, d)
 	if msg != "" {
 		writeError(w, code, msg)
 		return
 	}
-	saved, err := s.cfg.Store.UpsertUserDrive(r.Context(), d)
+	saved, err := s.cfg.Store.UpsertUserDrive(r.Context(), d, refuseIfAllocated)
 	// THE THREE 409s, and they are three because they have three remedies. All
 	// of them wrap store.ErrConflict, so the STATUS was already right and the
 	// SENTENCE was not: both of the arms below used to fall through to "a user
@@ -292,6 +397,18 @@ func (s *Server) writeUserDrive(w http.ResponseWriter, r *http.Request, id uuid.
 	// matter. store.ErrDriveHomeNamespaceConflict's own doc says it exists so
 	// "the ONE caller that writes the sentence can tell this refusal apart"; this
 	// is that caller.
+	// THE RACE THE GUARD BELOW COULD NOT SEE, refused by the writing statement
+	// under the drive's row lock: the drive looked unallocated when the gate read
+	// it and somebody was allocated it before the write landed. Re-sending is the
+	// whole remedy — the guard then meets the allocation on its own read and says
+	// what re-homing would cost, which is the sentence that was owed in the first
+	// place.
+	if errors.Is(err, store.ErrDriveAllocated) {
+		writeError(w, http.StatusConflict, "somebody was allocated this drive while you were editing it, and this change "+
+			"re-homes them: their next run would mount a different object and the one holding their work would be left "+
+			"behind with nothing in Wardyn naming it. Nothing was written — send the same request again to see what moves.")
+		return
+	}
 	if errors.Is(err, store.ErrDriveSlugConflict) {
 		writeError(w, http.StatusConflict, fmt.Sprintf("another user drive's name folds to the same storage-object name as %q; storage is addressed by the name with case and punctuation removed, so pick a name that differs by more than that", d.Name))
 		return
@@ -470,21 +587,21 @@ const driveRehomeConfirm = "rehome"
 // gate silently stops biting on exactly the deployment whose database is
 // unhappy — the ordering rule driveHostRootNesting states for the same reason.
 //
-// WEAKER THAN THE DELETE 409 IT TAKES ITS STATUS FROM, and that is worth stating
-// rather than implying. handleDeleteUserDrive's 409 is enforced by POSTGRES (ON
-// DELETE RESTRICT on user_drive_grants.drive_id), so it has no window at all.
-// This one is application-level, between a read and an UNCONDITIONAL
-// UpsertUserDrive: a grant created after the list and before the write is
-// re-homed silently, exactly as it was before this gate existed. Closing that
-// needs the read and the write in ONE transaction, and the Store interface
-// exposes finished operations rather than a tx handle — to PG and to every test
-// double alike — so the real fix is a database-level one and it is 0.7.1. What
-// the gate does close is the case that actually happens: an admin editing a
-// drive that people are already allocated on.
-func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int, msg string, rehomed bool) {
+// THE READ-TO-WRITE GAP IS CLOSED IN THE STORE, and the fourth return is how.
+// The gate used to be a read followed by an UNCONDITIONAL UpsertUserDrive: a
+// grant created after the list and before the write was re-homed silently,
+// exactly as it was before the gate existed. refuseIfAllocated carries the
+// decision this gate makes on a read into the writing statement, which applies
+// the write only while the drive is still unallocated and otherwise refuses it
+// (store.ErrDriveAllocated) — asserted there under a row lock, because the
+// predicate on its own would only have narrowed the window, not removed it. The
+// RULE stays here, where the request that asked for it is; only the precondition
+// travels. handleDeleteUserDrive's 409 is still enforced by a constraint rather
+// than by a statement, and that remains the stronger of the two.
+func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int, msg string, rehomed, refuseIfAllocated bool) {
 	drives, err := s.cfg.Store.ListUserDrives(r.Context())
 	if err != nil {
-		return http.StatusInternalServerError, "list user drives: " + err.Error(), false
+		return http.StatusInternalServerError, "list user drives: " + err.Error(), false, false
 	}
 	var before *types.UserDriveListItem
 	for i := range drives {
@@ -493,20 +610,26 @@ func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int,
 			break
 		}
 	}
-	// A PUT that CREATES (an id no row holds) re-homes nobody, and neither does
-	// one on a drive nothing is allocated from.
-	if before == nil || before.GrantCount == 0 {
-		return 0, "", false
+	// A PUT that CREATES (an id no row holds) re-homes nobody: no grant can point
+	// at a drive that does not exist yet (the FK), so there is nothing for the
+	// precondition to assert either.
+	if before == nil {
+		return 0, "", false, false
 	}
 	changes := driveIdentityFields(before.UserDrive, d)
 	if len(changes) == 0 {
-		return 0, "", false
+		return 0, "", false, false
+	}
+	// NOTHING IS ALLOCATED AS OF THIS READ — so the write proceeds, GUARDED on
+	// that still being true when it lands. This is the arm the race lived in.
+	if before.GrantCount == 0 {
+		return 0, "", false, true
 	}
 	// CONFIRMED, and the audit row has to say so: `drive.write` covers a
 	// cosmetic edit and one that moved every allocated member's storage, and
 	// without this flag an auditor cannot tell them apart after the fact.
 	if r.URL.Query().Get("confirm") == driveRehomeConfirm {
-		return 0, "", true
+		return 0, "", true, false
 	}
 	them := "it"
 	if before.GrantCount > 1 {
@@ -524,7 +647,7 @@ func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int,
 		"this drive is allocated to %s and this change re-homes %s: %s. Every allocated person's storage object is derived from "+
 			"these fields, so their next run mounts a different object and the one holding their work is left behind with nothing "+
 			"in Wardyn naming it. Confirming is an API action, not a console one: re-send as PUT /drives/{id}?confirm=%s.",
-		pluralDriveSubjects(before.GrantCount), them, strings.Join(changes, ", "), driveRehomeConfirm), false
+		pluralDriveSubjects(before.GrantCount), them, strings.Join(changes, ", "), driveRehomeConfirm), false, false
 }
 
 // driveGrantConflictMsg is the ONE store.ErrConflict this write can raise, told
@@ -687,6 +810,14 @@ func (s *Server) handleUpsertUserDriveGrant(w http.ResponseWriter, r *http.Reque
 	// user-tier-only home_override rule), then the row is what the store sees.
 	if err := types.ValidateUserDriveGrant(&g); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid allocation: "+err.Error())
+		return
+	}
+	// THE ORG SWITCH AND THE DEPLOYMENT CEILING, the same pair the drive write
+	// meets, against the OVERRIDE — which is the only size this row carries. The
+	// drive's own size was held to the ceiling when it was authored; a grant that
+	// states no override inherits it and has no number of its own to refuse.
+	if code, msg := s.userDriveWriteRefusal(r.Context(), g.SizeMiBOverride); msg != "" {
+		writeError(w, code, msg)
 		return
 	}
 	// THE GROUP SUBJECT, held to the SAME rule as the other two tables written

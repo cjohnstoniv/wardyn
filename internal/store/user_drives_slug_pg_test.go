@@ -51,7 +51,7 @@ func TestPG_UserDrive_TwoNamesThatFoldToOneObjectAreRefused(t *testing.T) {
 	// with nothing else in the lane.
 	base := "test-slug-" + uuid.NewString()[:8]
 
-	first, err := st.UpsertUserDrive(ctx, mintedDrive(base+" nas"))
+	first, err := st.UpsertUserDrive(ctx, mintedDrive(base+" nas"), false)
 	if err != nil {
 		t.Fatalf("register the first drive: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestPG_UserDrive_TwoNamesThatFoldToOneObjectAreRefused(t *testing.T) {
 		t.Fatalf("the two names are equal (%q); UNIQUE(name) would refuse this and the test would prove nothing", first.Name)
 	}
 
-	_, err = st.UpsertUserDrive(ctx, clash)
+	_, err = st.UpsertUserDrive(ctx, clash, false)
 	if !errors.Is(err, store.ErrDriveSlugConflict) {
 		_ = st.DeleteUserDrive(ctx, clash.ID)
 		t.Fatalf("registering %q while %q exists: err = %v, want ErrDriveSlugConflict. Both mint %q, so the two "+
@@ -83,7 +83,7 @@ func TestPG_UserDrive_TwoNamesThatFoldToOneObjectAreRefused(t *testing.T) {
 	// SCOPED, not a blanket ban — three directions.
 
 	// 1. A name that folds to something ELSE is untouched.
-	far, err := st.UpsertUserDrive(ctx, mintedDrive(base+" other"))
+	far, err := st.UpsertUserDrive(ctx, mintedDrive(base+" other"), false)
 	if err != nil {
 		t.Fatalf("a drive whose name folds differently must stay legal: %v", err)
 	}
@@ -93,14 +93,14 @@ func TestPG_UserDrive_TwoNamesThatFoldToOneObjectAreRefused(t *testing.T) {
 	//    two shares whose names fold together collide with nothing and must be
 	//    accepted. This is the half a non-partial index would have broken.
 	root := "/srv/slug-" + uuid.NewString()[:8]
-	shareA, err := st.UpsertUserDrive(ctx, shareDriveOn(base+" share", root, types.HomeTemplateSub))
+	shareA, err := st.UpsertUserDrive(ctx, shareDriveOn(base+" share", root, types.HomeTemplateSub), false)
 	if err != nil {
 		t.Fatalf("register the first share: %v", err)
 	}
 	t.Cleanup(func() { _ = st.DeleteUserDrive(ctx, shareA.ID) })
 	shareB := shareDriveOn(strings.ToUpper(base[:1])+base[1:]+"   SHARE!", root, types.HomeTemplateSub)
 	shareB.ID = uuid.New()
-	saved, err := st.UpsertUserDrive(ctx, shareB)
+	saved, err := st.UpsertUserDrive(ctx, shareB, false)
 	if err != nil {
 		t.Fatalf("two host_path drives whose NAMES fold together must stay legal — a share's object name is "+
 			"<host_root>/<home> and carries no slug at all: %v", err)
@@ -111,7 +111,7 @@ func TestPG_UserDrive_TwoNamesThatFoldToOneObjectAreRefused(t *testing.T) {
 	//    the index is on the row, and the upsert's ON CONFLICT (id) path has to
 	//    carry the slug through.
 	first.SizeMiB = 4096
-	if _, err := st.UpsertUserDrive(ctx, first); err != nil {
+	if _, err := st.UpsertUserDrive(ctx, first, false); err != nil {
 		t.Fatalf("editing a drive in place must not collide with its own name_slug: %v", err)
 	}
 }
@@ -125,20 +125,20 @@ func TestPG_UserDrive_RenameOntoAnotherDrivesFoldIsRefused(t *testing.T) {
 	st := store.NewPG(pool)
 
 	base := "test-rename-" + uuid.NewString()[:8]
-	held, err := st.UpsertUserDrive(ctx, mintedDrive(base+" nas"))
+	held, err := st.UpsertUserDrive(ctx, mintedDrive(base+" nas"), false)
 	if err != nil {
 		t.Fatalf("register the drive that holds the fold: %v", err)
 	}
 	t.Cleanup(func() { _ = st.DeleteUserDrive(ctx, held.ID) })
 
-	other, err := st.UpsertUserDrive(ctx, mintedDrive(base+" other"))
+	other, err := st.UpsertUserDrive(ctx, mintedDrive(base+" other"), false)
 	if err != nil {
 		t.Fatalf("register the drive to be renamed: %v", err)
 	}
 	t.Cleanup(func() { _ = st.DeleteUserDrive(ctx, other.ID) })
 
 	other.Name = strings.ToUpper(base[:1]) + base[1:] + "   NAS!"
-	if _, err := st.UpsertUserDrive(ctx, other); !errors.Is(err, store.ErrDriveSlugConflict) {
+	if _, err := st.UpsertUserDrive(ctx, other, false); !errors.Is(err, store.ErrDriveSlugConflict) {
 		t.Fatalf("renaming %q onto %q's fold: err = %v, want ErrDriveSlugConflict — a rename re-homes every member "+
 			"of the renamed drive onto the object the other drive already owns", other.ID, held.Name, err)
 	}

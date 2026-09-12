@@ -44,10 +44,19 @@ var errMountsUnsupported = errors.New("k8s: host bind mounts are not supported o
 // (k8s_pvc_static) whose claim does not exist in the runs namespace. wardynd
 // deliberately does not create it: that claim is an admin's pre-provisioned
 // handle on a real corporate share, and creating an empty one under the same
-// name would hand the member a blank volume where their files should be. The
-// wording is what an operator reads back, because a CreateSandbox error becomes
-// the run's failure hint verbatim (dispatchRun's failAndRevoke, internal/api).
-var errDriveClaimNotProvisioned = errors.New("your drive's volume is not provisioned on this cluster; ask an administrator to create the claim (or check the drive's directory-name template)")
+// name would hand the member a blank volume where their files should be.
+//
+// THE MEMBER READS THIS, WORD FOR WORD, which is why it names neither the claim
+// nor the namespace: a CreateSandbox error becomes the run's failure hint
+// verbatim (dispatchRun's failAndRevoke, internal/api), and this hint used to be
+// wrapped as `claim %q is absent from namespace %q` — handing every member whose
+// share is unprovisioned the runs namespace, the same string refuseForbiddenDriveClaim
+// already scrubs out of the 403 arm two cases up. The claim, the namespace and
+// the template now ride the operator's log line instead (ensureDrivePVC), where
+// the person who can create the claim already looks.
+//
+// DRAFT (M2 canon pending) — the frozen member sentence for this refusal.
+var errDriveClaimNotProvisioned = errors.New("drive: your drive's volume is not provisioned on this cluster — ask an admin")
 
 // errDrivePVCForbidden is ensureDrivePVC's refusal when the apiserver answers
 // EITHER the claim's Get or its Create with a 403.
@@ -160,7 +169,16 @@ var errDriveClaimVanished = errors.New("your drive's volume claim was deleted wh
 // cannot repair either collision, so the only fail-closed answer is to refuse
 // the run — mounting the claim would put one member's private drive at the
 // drive target inside another member's agent.
-var errDriveClaimForeign = errors.New("your drive's volume claim belongs to a different drive or a different person and will not be mounted; ask an administrator to check the drive's name and directory-name template (two drives whose names differ only in where a dash falls can resolve to the same claim)")
+// THE MEMBER READS THIS, WORD FOR WORD, and that is why the evidence is not in
+// it. driveClaimIdentity used to wrap this sentinel with the claim name, the
+// label it compared and BOTH values — including wardyn.subject, which is a digest
+// of a person: a member whose run met a collision was handed another principal's
+// subject digest in their failure hint. The comparison now goes to the operator's
+// log line (driveClaimIdentity), which is where the admin who has to rename a
+// drive or fix a template already looks, and the member keeps the remedy.
+//
+// DRAFT (M2 canon pending) — the frozen member sentence for this refusal.
+var errDriveClaimForeign = errors.New("drive: your drive's volume is not the one allocated to you — ask an admin")
 
 // errDriveBackendUnsupported is ensureDrivePVC's refusal of a drive whose
 // backend belongs to another substrate (a Docker volume, a host path). The

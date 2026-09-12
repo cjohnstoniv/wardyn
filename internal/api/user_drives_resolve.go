@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"strings"
 
@@ -164,7 +165,12 @@ func writeDriveError(w http.ResponseWriter, err error) {
 //
 // ponytail: no cache, matching effectiveCeiling's own note. One indexed read
 // per resolve; a stale allocation is a correctness bug, not a slow page.
-func (s *Server) resolveUserDrive(ctx context.Context) (*types.ResolvedDrive, error) {
+// profileMaxDriveMiB is this caller's GovernanceLimits.MaxDriveSizeMiB, which
+// every caller already holds (the launch path from the ceiling it resolved for
+// the request, /me the way its door check does) — passed rather than resolved
+// here so the PREVIEW, whose subject is not its caller, can hand in the previewed
+// principal's instead of the admin's.
+func (s *Server) resolveUserDrive(ctx context.Context, profileMaxDriveMiB int) (*types.ResolvedDrive, error) {
 	if s.cfg.Store == nil {
 		return nil, nil
 	}
@@ -172,15 +178,19 @@ func (s *Server) resolveUserDrive(ctx context.Context) (*types.ResolvedDrive, er
 	if len(users) == 0 {
 		return nil, nil
 	}
+	ceiling, err := s.driveSizeCeilingFor(ctx, profileMaxDriveMiB)
+	if err != nil {
+		return nil, err
+	}
 	// TRUNCATED COUNTS AS STALE, the same PF-26 rule effectiveCeiling applies:
 	// the group snapshot is sorted and cut at the cookie byte cap, so a member
 	// in enough groups holds one that is present, non-nil and INCOMPLETE — and
 	// the group whose grant carries their drive is exactly as likely to be
 	// missing as any other.
 	if stale || oidcGroupsTruncatedFromContext(ctx) {
-		return s.driveWithUnusableGroups(ctx, users)
+		return s.driveWithUnusableGroups(ctx, users, ceiling)
 	}
-	return s.resolveUserDriveFor(ctx, users, groups)
+	return s.resolveUserDriveFor(ctx, users, groups, ceiling)
 }
 
 // driveWithUnusableGroups is step 3: the caller's group identity cannot be
@@ -207,13 +217,13 @@ func (s *Server) resolveUserDrive(ctx context.Context) (*types.ResolvedDrive, er
 // HasGroupTierDriveGrants stays a SEPARATE read, deliberately: the case that
 // most needs it is the one where the resolver matched NOTHING, and a zero-row
 // result carries no columns to have piggybacked the answer on.
-func (s *Server) driveWithUnusableGroups(ctx context.Context, users []string) (*types.ResolvedDrive, error) {
+func (s *Server) driveWithUnusableGroups(ctx context.Context, users []string, ceiling driveSizeCeiling) (*types.ResolvedDrive, error) {
 	d, g, tier, err := s.cfg.Store.ResolveUserDrive(ctx, users, nil)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return nil, fmt.Errorf("api: resolve user drive: %w", err)
 	}
 	if err == nil && tier == types.CapabilitySubjectUser {
-		return newResolvedDrive(d, g, tier, users)
+		return newResolvedDrive(d, g, tier, users, ceiling)
 	}
 	hasGroupTier, herr := s.cfg.Store.HasGroupTierDriveGrants(ctx)
 	if herr != nil {
@@ -256,7 +266,7 @@ func (s *Server) driveWithUnusableGroups(ctx context.Context, users []string) (*
 	if err != nil {
 		return nil, nil // ErrNotFound, and no group tier could have been hiding one
 	}
-	return newResolvedDrive(d, g, tier, users)
+	return newResolvedDrive(d, g, tier, users, ceiling)
 }
 
 // displayReadCtxKey marks a resolve made to DISPLAY a state, not to enforce one.
@@ -312,7 +322,7 @@ func isDisplayRead(ctx context.Context) bool {
 // The nil-store guard is repeated here rather than left to resolveUserDrive
 // because THIS is the door the preview handler enters through, and the ~30
 // nil-store doubles in this package must not start panicking on it.
-func (s *Server) resolveUserDriveFor(ctx context.Context, users, groups []string) (*types.ResolvedDrive, error) {
+func (s *Server) resolveUserDriveFor(ctx context.Context, users, groups []string, ceiling driveSizeCeiling) (*types.ResolvedDrive, error) {
 	if s.cfg.Store == nil {
 		return nil, nil
 	}
@@ -323,7 +333,82 @@ func (s *Server) resolveUserDriveFor(ctx context.Context, users, groups []string
 	if err != nil {
 		return nil, nil // ErrNotFound: no grant matched, so no drive
 	}
-	return newResolvedDrive(d, g, tier, users)
+	return newResolvedDrive(d, g, tier, users, ceiling)
+}
+
+// driveSizeCeiling is the TWO numbers that bound a resolved drive's size, folded
+// at one site so launch, GET /me and POST /drives/preview cannot disagree about
+// how big a drive is.
+//
+// Both are 0 = UNLIMITED, and they are kept apart until the fold because the
+// warning has to say which one bit: "this deployment caps every drive" and "the
+// profile you are assigned caps yours" are different facts with different
+// remedies, and an operator reading one clamped number cannot tell them apart.
+//
+// DeploymentMiB is storage.user_drive.max_size_mib — the same ceiling the admin
+// write boundary refuses 422 against (userDriveWriteRefusal). It is re-applied
+// HERE because a ceiling LOWERED after allocations exist binds nothing at that
+// boundary: no row is being written, and every stored size is already above it.
+//
+// ProfileMiB is GovernanceLimits.MaxDriveSizeMiB, which is PER PRINCIPAL and
+// therefore cannot be applied at a grant write at all — the profile binding a
+// subject is claims-resolved and unreadable from the grant row. This resolver is
+// the only scope holding both facts, which is why the clamp lives here.
+//
+// A CLAMP, NEVER A REFUSAL: the size is an allocation an admin already made, and
+// refusing the mount would take a member's storage away over a number. And it
+// clamps a NUMBER — on `external` backends (a share, a static claim) that number
+// binds no bytes at all, which is what the frozen honesty sentence says.
+type driveSizeCeiling struct {
+	DeploymentMiB int
+	ProfileMiB    int
+}
+
+// bound is the ONE expression both ceilings meet: the smaller of the two, with a
+// zero standing for "no ceiling" rather than for "nothing allowed". It answers
+// (0, "") when neither binds, and otherwise the bound and which half set it.
+func (c driveSizeCeiling) bound() (int, string) {
+	orUnlimited := func(v int) int {
+		if v <= 0 {
+			return math.MaxInt
+		}
+		return v
+	}
+	bound := min(orUnlimited(c.DeploymentMiB), orUnlimited(c.ProfileMiB))
+	switch {
+	case bound == math.MaxInt:
+		return 0, ""
+	case bound == c.ProfileMiB:
+		// The profile wins a TIE, deliberately: the number is the same either
+		// way, and the per-principal half is the one an admin can change for this
+		// one member.
+		return bound, driveBoundByProfile
+	default:
+		return bound, driveBoundByDeployment
+	}
+}
+
+// The two values driveSizeCeiling.bound names, and the two the clamp's log line
+// carries — an operator filtering on `bound_by` is asking which ceiling to edit.
+const (
+	driveBoundByProfile    = "governance_profile"
+	driveBoundByDeployment = "deployment"
+)
+
+// driveSizeCeilingFor folds a principal's governance MaxDriveSizeMiB together
+// with the deployment's own storage.user_drive.max_size_mib — the ONE read of the
+// org half, so the three surfaces share a spelling instead of each taking their
+// own.
+//
+// A site-config read that FAILS is an ERROR, never a zero: a ceiling that could
+// not be read is not "no ceiling", and treating it as one is the fail-open this
+// file's ordering rules exist to refuse.
+func (s *Server) driveSizeCeilingFor(ctx context.Context, profileMaxMiB int) (driveSizeCeiling, error) {
+	provider, err := s.userDriveProvider(ctx)
+	if err != nil {
+		return driveSizeCeiling{}, fmt.Errorf("api: resolve user drive: %w", err)
+	}
+	return driveSizeCeiling{DeploymentMiB: provider.MaxSizeMiB, ProfileMiB: profileMaxMiB}, nil
 }
 
 // newResolvedDrive folds one winning (drive, grant) pair into everything a
@@ -347,7 +432,11 @@ func (s *Server) resolveUserDriveFor(ctx context.Context, users, groups []string
 //
 //   - SIZE is the override when the admin set one, else the drive's. 0 means
 //     "unset" on both, so a grant that never mentions size inherits rather than
-//     zeroing the allocation.
+//     zeroing the allocation — and the fold is then CLAMPED to the deployment's
+//     and this principal's ceilings (driveSizeCeiling), which is why every caller
+//     hands one in. The clamp lives here, per RESOLVED drive, rather than in any
+//     singleton helper: "one principal has at most one drive" is today's limit,
+//     not the ceiling's shape.
 //
 //   - WRITABLE is the override when present, else the drive's — a COALESCE, not
 //     an intersection, because both values are admin-authored and the grant is
@@ -358,7 +447,7 @@ func (s *Server) resolveUserDriveFor(ctx context.Context, users, groups []string
 // a fabricated segment either collides with another member's home or escapes
 // it, and both are worse than a refusal naming the field to fix.
 func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
-	tier types.CapabilitySubjectType, users []string) (*types.ResolvedDrive, error) {
+	tier types.CapabilitySubjectType, users []string, ceiling driveSizeCeiling) (*types.ResolvedDrive, error) {
 	// A store answering (nil, nil, "", nil) means the absent-row doctrine
 	// rather than a dereference, so no caller has to have checked on its
 	// behalf — the same guard ceilingFromProfile keeps for a nil profile.
@@ -368,6 +457,16 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 	size := d.SizeMiB
 	if g.SizeMiBOverride > 0 {
 		size = g.SizeMiBOverride
+	}
+	// ONE LINE, naming which ceiling bit: the member's number is bounded, and the
+	// operator's log says which of the two to edit. Not an audit row — nobody was
+	// denied anything (composer.Clamp's own doctrine for the sibling ephemeral
+	// cap), and not a refusal, for the reason driveSizeCeiling states.
+	if bound, by := ceiling.bound(); bound > 0 && size > bound {
+		slog.Warn("wardynd: user drive: a drive's size was clamped to a ceiling",
+			slog.String("drive", d.Name), slog.Int("allocated_mib", size),
+			slog.Int("ceiling_mib", bound), slog.String("bound_by", by))
+		size = bound
 	}
 	writable := d.Writable
 	if g.WritableOverride != nil {
@@ -729,12 +828,20 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 	}
 	// (1) The door, for the claims that were TYPED — the launch path's first
 	// gate, in the launch path's own words.
-	if !s.drivePreviewDoorIsOpen(w, r, users, groups) {
+	previewed, open := s.drivePreviewDoorIsOpen(w, r, users, groups)
+	if !open {
+		return
+	}
+	// (1b) The PREVIEWED principal's ceiling, read off the door's OWN resolve —
+	// the number the launch path clamps with, so the two surfaces print one size.
+	ceiling, err := s.driveSizeCeilingFor(r.Context(), previewed.Limits.MaxDriveSizeMiB)
+	if err != nil {
+		writeDriveError(w, err)
 		return
 	}
 	// (2) The resolver, taking the unusable-groups arm when the request cannot
 	// answer the group tier at all.
-	resolved, err := s.previewResolveUserDrive(r.Context(), users, groups)
+	resolved, err := s.previewResolveUserDrive(r.Context(), users, groups, ceiling)
 	if err != nil {
 		writeDriveError(w, err)
 		return
@@ -801,12 +908,19 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 // for a principal every launch bounces, which is a confidently wrong answer at
 // the moment an admin is deciding whether an allocation is right. Same function
 // as the launch, so the two cannot drift.
-func (s *Server) drivePreviewDoorIsOpen(w http.ResponseWriter, r *http.Request, users, groups []string) bool {
+//
+// IT HANDS THE CEILING BACK, and that is the whole reason it returns two values:
+// it resolves the PREVIEWED principal's ceiling already, and the preview's size
+// has to be clamped to the same MaxDriveSizeMiB the launch path applies
+// (driveSizeCeiling). Discarding it here and resolving a second time is how the
+// preview would come to print a number no launch agrees with — which is the one
+// thing this endpoint exists not to do.
+func (s *Server) drivePreviewDoorIsOpen(w http.ResponseWriter, r *http.Request, users, groups []string) (governanceCeiling, bool) {
 	// A build with no store holds no profiles, so there is no door — the same
 	// short-circuit resolveUserDrive's step 1 makes, and it has to be here too
 	// because this gate runs BEFORE the resolver.
 	if s.cfg.Store == nil {
-		return true
+		return governanceCeiling{}, true
 	}
 	deployment := governanceCeiling{Spec: s.cfg.DefaultPolicy.Clone()}
 	ceiling, err := deployment, error(nil)
@@ -818,13 +932,13 @@ func (s *Server) drivePreviewDoorIsOpen(w http.ResponseWriter, r *http.Request, 
 	}
 	if err != nil {
 		writeCeilingError(w, err)
-		return false
+		return governanceCeiling{}, false
 	}
 	if name, shut := driveDoorShut(ceiling); shut {
 		writeError(w, http.StatusForbidden, driveDeniedByProfileMsg(name))
-		return false
+		return governanceCeiling{}, false
 	}
-	return true
+	return ceiling, true
 }
 
 // previewResolveUserDrive is the preview's entrance to the resolver, and the
@@ -845,7 +959,7 @@ func (s *Server) drivePreviewDoorIsOpen(w http.ResponseWriter, r *http.Request, 
 // to a request that cannot tell the two apart, and the console never sends it
 // (previewClaims splits one box into both lists, so an admin who typed anything
 // has typed groups too).
-func (s *Server) previewResolveUserDrive(ctx context.Context, users, groups []string) (*types.ResolvedDrive, error) {
+func (s *Server) previewResolveUserDrive(ctx context.Context, users, groups []string, ceiling driveSizeCeiling) (*types.ResolvedDrive, error) {
 	// The nil-store guard resolveUserDriveFor already keeps, repeated for the
 	// arm below it: driveWithUnusableGroups is written for the enforcement path,
 	// where resolveUserDrive has already short-circuited a store-less build, and
@@ -855,7 +969,7 @@ func (s *Server) previewResolveUserDrive(ctx context.Context, users, groups []st
 		return nil, nil
 	}
 	if len(groups) == 0 {
-		return s.driveWithUnusableGroups(ctx, users)
+		return s.driveWithUnusableGroups(ctx, users, ceiling)
 	}
-	return s.resolveUserDriveFor(ctx, users, groups)
+	return s.resolveUserDriveFor(ctx, users, groups, ceiling)
 }

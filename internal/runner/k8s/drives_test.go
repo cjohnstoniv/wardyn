@@ -237,10 +237,13 @@ func TestEnsureDrivePVC_StaticShareIsNeverCreated(t *testing.T) {
 		t.Errorf("claim verbs = %v, want no create for a static share", verbs)
 	}
 	// The message is the run's failure hint verbatim, so it has to name the
-	// remedy in words the person reading it can act on.
+	// remedy in words the person reading it can act on — and NOT the namespace it
+	// used to be wrapped with (`claim %q is absent from namespace %q`), which
+	// handed every member of an unprovisioned share the runs namespace.
 	if got := err.Error(); !strings.Contains(got, "not provisioned on this cluster") {
 		t.Errorf("err = %q, want it to say the volume is not provisioned", got)
 	}
+	assertRefusalKeepsClusterNamesToItself(t, err)
 }
 
 // TestEnsureDrivePVC_ForbiddenNamesTheSwitch covers the RBAC arm: a 403 on
@@ -927,9 +930,17 @@ func TestEnsureDrivePVC_RefusesAClaimThatIsNotThisMembers(t *testing.T) {
 			if !errors.Is(err, errDriveClaimForeign) {
 				t.Fatalf("err = %v, want errors.Is(err, errDriveClaimForeign)", err)
 			}
-			if !strings.Contains(err.Error(), tc.want) {
-				t.Errorf("err = %q, want it to name the label that decided it (%s)", err.Error(), tc.want)
+			// THE MEMBER READS THIS VERBATIM (dispatchRun's failAndRevoke), so the
+			// evidence is the OPERATOR's: refuseForeignDriveClaim WARNs the claim,
+			// the namespace, the label and both values, and the hint carries the
+			// frozen sentence and a remedy. The wrapped form named the deciding
+			// label and the value it compared — and one of those labels is a digest
+			// of the person whose claim it really is.
+			if got := err.Error(); strings.Contains(got, tc.want) {
+				t.Errorf("err = %q, want it NOT to name %s or the value it compared — the comparison is the "+
+					"operator's log line, not the member's failure hint", got, tc.want)
 			}
+			assertRefusalKeepsClusterNamesToItself(t, err)
 			// Never a create: the claim under that name is somebody's data and
 			// the driver holds no verb that could move it aside — asserted as
 			// the whole verb set, since "move it aside" is precisely the repair
@@ -1124,9 +1135,17 @@ func TestEnsureDrivePVC_RefusesAClaimStampedForAnotherPerson(t *testing.T) {
 		if verbs := countPVCVerbs(cs); verbs["create"] != 0 {
 			t.Errorf("claim verbs = %v, want no create over somebody else's claim", verbs)
 		}
-		if got := err.Error(); !strings.Contains(got, labelDriveSubject) {
-			t.Errorf("err = %q, want it to name the deciding label", got)
+		// THE DIGEST IS THE ONE VALUE THAT MUST NEVER REACH THE MEMBER: it is a
+		// fingerprint of the OTHER principal, handed out on the one screen a failed
+		// run shows. The deciding label and both digests are in the WARN instead.
+		got := err.Error()
+		for _, leaked := range []string{labelDriveSubject, "2222222222222222bbbb", "1111111111111111aaaa"} {
+			if strings.Contains(got, leaked) {
+				t.Errorf("err = %q, want it NOT to carry %q — a member's failure hint may not carry another "+
+					"principal's subject digest", got, leaked)
+			}
 		}
+		assertRefusalKeepsClusterNamesToItself(t, err)
 	})
 	t.Run("a claim stamped before the label existed still mounts", func(t *testing.T) {
 		drive := testDriveMount()

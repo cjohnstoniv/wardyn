@@ -224,24 +224,21 @@ func driveClaimIdentity(claim *corev1.PersistentVolumeClaim, drive *types.DriveM
 	switch drive.Backend {
 	case types.DriveBackendK8sPVC:
 		if got := claim.Labels[labelDrive]; got != drive.DriveID.String() {
-			return fmt.Errorf("k8s: drive: claim %q carries %s=%q, this drive's row id is %q: %w",
-				claim.Name, labelDrive, got, drive.DriveID, errDriveClaimForeign)
+			return refuseForeignDriveClaim(claim, drive, labelDrive, got, drive.DriveID.String())
 		}
 		if got := claim.Labels[labelDriveHome]; got != drive.HomeName {
-			return fmt.Errorf("k8s: drive: claim %q carries %s=%q, this run's home is %q: %w",
-				claim.Name, labelDriveHome, got, drive.HomeName, errDriveClaimForeign)
+			return refuseForeignDriveClaim(claim, drive, labelDriveHome, got, drive.HomeName)
 		}
 		if got := claim.Labels[labelDriveSubject]; got != "" && got != drive.SubjectHash {
 			// Presence-guarded on purpose: every claim this driver stamped before
 			// the label existed would otherwise turn foreign on upgrade and orphan
 			// every member's drive.
-			return fmt.Errorf("k8s: drive: claim %q carries %s=%q, this run's subject hashes to %q: %w",
-				claim.Name, labelDriveSubject, got, drive.SubjectHash, errDriveClaimForeign)
+			return refuseForeignDriveClaim(claim, drive, labelDriveSubject, got, drive.SubjectHash)
 		}
 	case types.DriveBackendK8sPVCStatic:
 		if claim.Labels[labelManaged] == "true" {
-			return fmt.Errorf("k8s: drive: claim %q is a %s=true claim wardynd provisioned as one person's managed drive, not an administrator's share: %w",
-				claim.Name, labelManaged, errDriveClaimForeign)
+			return refuseForeignDriveClaim(claim, drive, labelManaged, "true",
+				"an administrator's share, which carries none of Wardyn's labels")
 		}
 		// AND THE SAME SUBJECT CHECK THE MANAGED ARM MAKES, presence-guarded for
 		// the same reason. A static claim's NAME is minted by Wardyn
@@ -261,11 +258,32 @@ func driveClaimIdentity(claim *corev1.PersistentVolumeClaim, drive *types.DriveM
 		// never the subject itself, which is why it is a label a share owner can
 		// safely publish.
 		if got := claim.Labels[labelDriveSubject]; got != "" && got != drive.SubjectHash {
-			return fmt.Errorf("k8s: drive: claim %q carries %s=%q, this run's subject hashes to %q: %w",
-				claim.Name, labelDriveSubject, got, drive.SubjectHash, errDriveClaimForeign)
+			return refuseForeignDriveClaim(claim, drive, labelDriveSubject, got, drive.SubjectHash)
 		}
 	}
 	return nil
+}
+
+// refuseForeignDriveClaim is the ONE place a claim-identity mismatch becomes an
+// error somebody reads, and it splits the audience the way refuseForbiddenDriveClaim
+// does — because the reason is the same: a CreateSandbox error is the run's
+// failure hint verbatim, read by the MEMBER whose run failed.
+//
+// The OPERATOR gets the claim, the namespace, the label and both values: that is
+// what tells a name collision from a rename from a template that folded two
+// people onto one home, and nothing has been taken away from them.
+//
+// The MEMBER gets the frozen sentence and a remedy they can carry to an admin.
+// What they must NOT get is the comparison: wardyn.subject is a DIGEST OF A
+// PERSON, and the wrapped form of this refusal handed a member the digest of
+// whoever the claim really belongs to (plus the other party's home name, which is
+// a username as often as not) on the one screen a failed run shows.
+func refuseForeignDriveClaim(claim *corev1.PersistentVolumeClaim, drive *types.DriveMount, label, got, want string) error {
+	slog.Warn("wardynd: k8s substrate: a drive claim is not this run's",
+		slog.String("claim", claim.Name), slog.String("namespace", claim.Namespace),
+		slog.String("label", label), slog.String("claim_value", got), slog.String("run_value", want),
+		slog.String("drive", drive.DriveName), slog.String("backend", string(drive.Backend)))
+	return errDriveClaimForeign
 }
 
 // driveRequestBytes is the allocation in bytes: <SizeMiB>Mi, which is what the
@@ -328,7 +346,13 @@ func ensureDrivePVC(ctx context.Context, client kubernetes.Interface, ns string,
 	case !apierrors.IsNotFound(err):
 		return fmt.Errorf("k8s: drive: look up claim %q: %w", drive.ObjectName, err)
 	case drive.Backend == types.DriveBackendK8sPVCStatic:
-		return fmt.Errorf("k8s: drive: claim %q is absent from namespace %q: %w", drive.ObjectName, ns, errDriveClaimNotProvisioned)
+		// THE CLAIM AND THE NAMESPACE GO TO THE OPERATOR, not into the member's
+		// failure hint — the audience split refuseForbiddenDriveClaim makes two
+		// cases up, for the same reason: this error IS the hint, verbatim.
+		slog.Warn("wardynd: k8s substrate: a share drive's claim is not provisioned",
+			slog.String("claim", drive.ObjectName), slog.String("namespace", ns),
+			slog.String("drive", drive.DriveName), slog.String("home", drive.HomeName))
+		return errDriveClaimNotProvisioned
 	}
 
 	// ObjectName and HomeName are used raw, and validateDriveMount above is what

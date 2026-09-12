@@ -336,7 +336,16 @@ type Store interface {
 	// UNIQUE(name) rejects the write. DeleteUserDrive returns ErrConflict when
 	// the drive is still ALLOCATED — the ON DELETE RESTRICT, which exists so
 	// deleting a drive can never orphan the directories its grants named.
-	UpsertUserDrive(ctx context.Context, d types.UserDrive) (types.UserDrive, error)
+	//
+	// refuseIfAllocated is a PRECONDITION, not a rule: the write applies only
+	// while the drive has no allocations, and answers ErrDriveAllocated when it
+	// has some. The API's re-home guard sets it for an identity-affecting write it
+	// permitted BECAUSE the drive looked unallocated, so the decision it made on a
+	// read is re-asserted inside the writing statement — the same "thread the
+	// request-boundary bit into the statement" shape UpsertUserDriveGrant's
+	// homeOverrideStated has. The rule itself stays at the API boundary, where the
+	// request that asked for it is.
+	UpsertUserDrive(ctx context.Context, d types.UserDrive, refuseIfAllocated bool) (types.UserDrive, error)
 	GetUserDrive(ctx context.Context, id uuid.UUID) (types.UserDrive, error)
 	DeleteUserDrive(ctx context.Context, id uuid.UUID) error
 	// ListUserDrives returns every drive by name WITH its grant count — the

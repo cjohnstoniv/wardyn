@@ -94,6 +94,17 @@ type driveStore struct {
 	// entirely a statement about those arguments.
 	sawGovUsers  [][]string
 	sawGovGroups [][]string
+	// site is what GetSiteConfig answers, shadowing noGovernanceStore's zero
+	// value: the deployment half of the drive size ceiling
+	// (storage.user_drive.max_size_mib) and the org switch live on it.
+	site types.SiteConfig
+}
+
+// GetSiteConfig shadows noGovernanceStore's for the reason ResolveGovernanceProfile
+// does: the resolver folds the DEPLOYMENT's drive ceiling with the principal's,
+// and a double that could only answer "no providers" could not exercise the fold.
+func (s *driveStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return s.site, nil
 }
 
 func (s *driveStore) HasGroupTierAssignments(context.Context) (bool, error) {
@@ -251,7 +262,7 @@ func TestResolveUserDrive(t *testing.T) {
 		// interface here), so this arm proves the short-circuit really happens
 		// before the read — and it is what keeps the nil-store doubles in this
 		// package alive once D2 calls this from run create.
-		got, err := driveServer(nil).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		got, err := driveServer(nil).resolveUserDrive(driveMemberCtx([]string{"eng"}, false), 0)
 		if err != nil || got != nil {
 			t.Errorf("nil store = %+v, %v; want no drive and no error", got, err)
 		}
@@ -271,7 +282,7 @@ func TestResolveUserDrive(t *testing.T) {
 		st := &driveStore{drive: d, grant: grantFixture(d.ID, func(g *types.UserDriveGrant) {
 			g.SubjectType, g.Subject = types.CapabilitySubjectAll, ""
 		}), tier: types.CapabilitySubjectAll, hasGroupTier: true}
-		got, err := driveServer(st).resolveUserDrive(context.Background())
+		got, err := driveServer(st).resolveUserDrive(context.Background(), 0)
 		if err != nil || got != nil {
 			t.Errorf("admin token = %+v, %v; want no drive and no error", got, err)
 		}
@@ -282,7 +293,7 @@ func TestResolveUserDrive(t *testing.T) {
 		// member's storage out of a run on a database hiccup, and the run would
 		// then write its work into a container layer nobody keeps.
 		boom := errors.New("pg: connection refused")
-		got, err := driveServer(&driveStore{err: boom}).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		got, err := driveServer(&driveStore{err: boom}).resolveUserDrive(driveMemberCtx([]string{"eng"}, false), 0)
 		if err == nil {
 			t.Fatalf("a store failure resolved to %+v instead of erroring", got)
 		}
@@ -326,14 +337,14 @@ func TestResolveUserDrive(t *testing.T) {
 			// The ENFORCEMENT entrance: a member whose snapshot is truncated.
 			name: "a member with a truncated snapshot",
 			call: func(srv *Server) (*types.ResolvedDrive, error) {
-				return srv.resolveUserDrive(driveMemberCtx([]string{"eng"}, true))
+				return srv.resolveUserDrive(driveMemberCtx([]string{"eng"}, true), 0)
 			},
 		}, {
 			// The PREVIEW entrance: an admin who typed no groups. Both doors
 			// reach the same function, so both must fail closed at it.
 			name: "an admin preview with no groups",
 			call: func(srv *Server) (*types.ResolvedDrive, error) {
-				return srv.previewResolveUserDrive(context.Background(), []string{"sub-abc"}, nil)
+				return srv.previewResolveUserDrive(context.Background(), []string{"sub-abc"}, nil, driveSizeCeiling{})
 			},
 		}} {
 			t.Run(tc.name, func(t *testing.T) {
@@ -367,7 +378,7 @@ func TestResolveUserDrive(t *testing.T) {
 		// (nil, nil, "", nil) — because the second must mean the same thing
 		// rather than dereferencing a nil row.
 		for _, st := range []*driveStore{{}, {nilAnswer: true}} {
-			got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+			got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false), 0)
 			if err != nil || got != nil {
 				t.Errorf("no grant = %+v, %v; want no drive and no error", got, err)
 			}
@@ -377,7 +388,7 @@ func TestResolveUserDrive(t *testing.T) {
 	t.Run("a matched grant resolves to a mountable drive", func(t *testing.T) {
 		d := driveFixture(nil)
 		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
-		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false), 0)
 		if err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
@@ -416,7 +427,7 @@ func TestResolveUserDrive(t *testing.T) {
 		// it. Counterfactual: fall through and an `all`-tier WRITABLE drive
 		// wins over the group's read-only one by alphabetical luck.
 		st := &driveStore{hasGroupTier: true}
-		_, err := driveServer(st).resolveUserDrive(driveMemberCtx(nil, false))
+		_, err := driveServer(st).resolveUserDrive(driveMemberCtx(nil, false), 0)
 		if !errors.Is(err, errGroupsSnapshotStale) {
 			t.Fatalf("err = %v, want errGroupsSnapshotStale", err)
 		}
@@ -435,7 +446,7 @@ func TestResolveUserDrive(t *testing.T) {
 		// the group carrying this member's drive is as likely to have been
 		// dropped as any other.
 		st := &driveStore{hasGroupTier: true}
-		_, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"a-team"}, true))
+		_, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"a-team"}, true), 0)
 		if !errors.Is(err, errGroupsSnapshotStale) {
 			t.Fatalf("a truncated snapshot resolved (err = %v); truncated must be as unanswerable as nil", err)
 		}
@@ -470,7 +481,7 @@ func TestResolveUserDrive(t *testing.T) {
 			"a truncated snapshot": driveMemberCtx([]string{"a-team"}, true),
 		} {
 			t.Run(name, func(t *testing.T) {
-				got, err := driveServer(allTier()).resolveUserDrive(ctx)
+				got, err := driveServer(allTier()).resolveUserDrive(ctx, 0)
 				if !errors.Is(err, errGroupsSnapshotStale) {
 					t.Fatalf("resolve = %+v, %v; want errGroupsSnapshotStale — the everyone row matched on user subjects "+
 						"alone while a group-tier grant exists that the snapshot may be hiding", got, err)
@@ -483,7 +494,7 @@ func TestResolveUserDrive(t *testing.T) {
 		// The control: with the snapshot COMPLETE the same everyone row is the
 		// honest answer and is served, so the refusal is about the snapshot and
 		// not about all-tier allocations.
-		got, err := driveServer(allTier()).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		got, err := driveServer(allTier()).resolveUserDrive(driveMemberCtx([]string{"eng"}, false), 0)
 		if err != nil || got == nil || !got.Writable || got.Tier != types.CapabilitySubjectAll {
 			t.Fatalf("resolve = %+v, %v; want the writable everyone row served on a complete snapshot", got, err)
 		}
@@ -496,7 +507,7 @@ func TestResolveUserDrive(t *testing.T) {
 		d := driveFixture(nil)
 		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil),
 			tier: types.CapabilitySubjectUser, hasGroupTier: true, userTierOnly: true}
-		got, err := driveServer(st).resolveUserDrive(driveMemberCtx(nil, false))
+		got, err := driveServer(st).resolveUserDrive(driveMemberCtx(nil, false), 0)
 		if err != nil || got == nil {
 			t.Fatalf("user-tier match with a nil snapshot = %+v, %v; want the drive served", got, err)
 		}
@@ -507,7 +518,7 @@ func TestResolveUserDrive(t *testing.T) {
 		// snapshot could be hiding. Refusing here would break "no grant ⇒ no
 		// drive" for every pre-upgrade session on a deployment that allocates
 		// by user only.
-		got, err := driveServer(&driveStore{}).resolveUserDrive(driveMemberCtx(nil, false))
+		got, err := driveServer(&driveStore{}).resolveUserDrive(driveMemberCtx(nil, false), 0)
 		if err != nil || got != nil {
 			t.Errorf("= %+v, %v; want no drive and no refusal", got, err)
 		}
@@ -522,7 +533,7 @@ func TestResolveUserDrive(t *testing.T) {
 			grant: grantFixture(d.ID, func(g *types.UserDriveGrant) {
 				g.SizeMiBOverride, g.WritableOverride, g.HomeOverride = 512, &yes, "bsmith"
 			})}
-		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false), 0)
 		if err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
@@ -548,7 +559,7 @@ func TestResolveUserDrive(t *testing.T) {
 		// inherit, or a writable allocation would silently go read-only.
 		d := driveFixture(func(d *types.UserDrive) { d.Writable = true })
 		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
-		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false), 0)
 		if err != nil || !got.Writable {
 			t.Errorf("writable = %v (err %v), want the drive's true", got, err)
 		}
@@ -559,7 +570,7 @@ func TestResolveUserDrive(t *testing.T) {
 		d := driveFixture(func(d *types.UserDrive) { d.Writable = true })
 		st := &driveStore{drive: d, tier: types.CapabilitySubjectUser,
 			grant: grantFixture(d.ID, func(g *types.UserDriveGrant) { g.WritableOverride = &no })}
-		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false), 0)
 		if err != nil || got.Writable {
 			t.Errorf("writable = %+v (err %v), want the override's false", got, err)
 		}
@@ -574,7 +585,7 @@ func TestResolveUserDrive(t *testing.T) {
 			grant: grantFixture(d.ID, func(g *types.UserDriveGrant) {
 				g.SubjectType, g.Subject, g.HomeOverride = types.CapabilitySubjectGroup, "eng", "shared"
 			})}
-		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false), 0)
 		if err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
@@ -597,7 +608,7 @@ func TestResolveUserDrive(t *testing.T) {
 		// A caller carrying a sub and NO email claim: email_local has nothing to
 		// truncate, so the home cannot be derived at all.
 		noEmail := withOIDCGroups(operatorCtx("sub-drive-bob", "", oidc.RoleMember), []string{"eng"})
-		_, err := driveServer(st).resolveUserDrive(noEmail)
+		_, err := driveServer(st).resolveUserDrive(noEmail, 0)
 		if !errors.Is(err, errDriveUnmountable) {
 			t.Fatalf("err = %v, want errDriveUnmountable", err)
 		}
@@ -617,7 +628,7 @@ func TestResolveUserDrive(t *testing.T) {
 		// IS labelled with this drive, so its id check matches.
 		d := driveFixture(func(d *types.UserDrive) { d.HomeTemplate = types.HomeTemplateEmailLocal })
 		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
-		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false), 0)
 		if !errors.Is(err, errDriveUnmountable) {
 			t.Fatalf("resolve = %+v, err = %v; want errDriveUnmountable", got, err)
 		}
@@ -644,7 +655,7 @@ func TestResolveUserDrive(t *testing.T) {
 		// no inspect. Both sites now ask types.ManagedBackendRejectsTemplate.
 		d := driveFixture(func(d *types.UserDrive) { d.HomeTemplate = types.HomeTemplateSub })
 		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
-		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false), 0)
 		if !errors.Is(err, errDriveUnmountable) {
 			t.Fatalf("resolve = %+v, err = %v; want errDriveUnmountable — a managed `sub` row must not mount", got, err)
 		}
@@ -678,7 +689,7 @@ func TestResolveUserDrive(t *testing.T) {
 		// with it.
 		d := driveFixture(func(d *types.UserDrive) { d.HomeTemplate = types.HomeTemplateHash })
 		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
-		if _, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false)); err != nil {
+		if _, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false), 0); err != nil {
 			t.Fatalf("a managed `hash` drive must still resolve, got %v", err)
 		}
 	})
@@ -690,7 +701,7 @@ func TestResolveUserDrive(t *testing.T) {
 			d.Backend, d.HomeTemplate, d.HostRoot = types.DriveBackendHostPath, types.HomeTemplateEmailLocal, "/srv/homes"
 		})
 		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
-		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false), 0)
 		if err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
@@ -706,7 +717,7 @@ func TestResolveUserDrive(t *testing.T) {
 		// discriminates principals the home name cannot.
 		d := driveFixture(nil)
 		st := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
-		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false), 0)
 		if err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
@@ -716,7 +727,7 @@ func TestResolveUserDrive(t *testing.T) {
 		// A PAUSED row derives nothing, the fingerprint included: there is no
 		// object to stamp, and a digest beside a mount that will not happen is a
 		// value a later reader could take for one that did.
-		paused, err := driveServer(pausedDriveStore(nil)).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		paused, err := driveServer(pausedDriveStore(nil)).resolveUserDrive(driveMemberCtx([]string{"eng"}, false), 0)
 		if err != nil {
 			t.Fatalf("resolve paused: %v", err)
 		}
@@ -747,7 +758,7 @@ func TestResolveUserDrive(t *testing.T) {
 			g.SizeMiBOverride, g.WritableOverride, g.HomeOverride = 512, &yes, "bsmith"
 		})
 		st := &driveStore{drive: d, grant: g, tier: types.CapabilitySubjectUser}
-		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+		got, err := driveServer(st).resolveUserDrive(driveMemberCtx([]string{"eng"}, false), 0)
 		if err != nil {
 			t.Fatalf("resolve: %v", err)
 		}
@@ -787,7 +798,7 @@ func TestResolveUserDrive(t *testing.T) {
 		st := &driveStore{drive: d, tier: types.CapabilitySubjectUser,
 			grant: grantFixture(d.ID, func(g *types.UserDriveGrant) { g.Enabled = false })}
 		noEmail := withOIDCGroups(operatorCtx("sub-drive-bob", "", oidc.RoleMember), []string{"eng"})
-		got, err := driveServer(st).resolveUserDrive(noEmail)
+		got, err := driveServer(st).resolveUserDrive(noEmail, 0)
 		if err != nil {
 			t.Fatalf("resolve = %v, want the paused answer rather than an unmountable refusal", err)
 		}
@@ -817,7 +828,7 @@ func TestResolveUserDrive(t *testing.T) {
 			t.Run(name, func(t *testing.T) {
 				st := pausedDriveStore(nil)
 				st.hasGroupTier, st.userTierOnly = true, true
-				got, err := driveServer(st).resolveUserDrive(ctx)
+				got, err := driveServer(st).resolveUserDrive(ctx, 0)
 				if err != nil {
 					t.Fatalf("resolve with an unusable snapshot: %v", err)
 				}
@@ -1511,7 +1522,7 @@ func TestPreviewUserDriveDerivesTheSameAnswerAsEnforcement(t *testing.T) {
 			if len(tc.homes) > 0 {
 				srv = drivePreviewShareServer(t, st, tc.homes...)
 			}
-			resolved, err := srv.resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+			resolved, err := srv.resolveUserDrive(driveMemberCtx([]string{"eng"}, false), 0)
 			if err != nil {
 				t.Fatalf("enforcement resolve: %v", err)
 			}
@@ -1569,7 +1580,7 @@ func TestResolveUserDriveLooksTheGrantUpForTheCALLER(t *testing.T) {
 
 	users := []string{"sub-drive-bob", "bob@corp.example"}
 	groups := []string{"eng"}
-	if _, err := srv.resolveUserDriveFor(context.Background(), users, groups); err != nil {
+	if _, err := srv.resolveUserDriveFor(context.Background(), users, groups, driveSizeCeiling{}); err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
 	if len(st.sawUsers) != 1 {
@@ -1587,7 +1598,7 @@ func TestResolveUserDriveLooksTheGrantUpForTheCALLER(t *testing.T) {
 	// one place the two arguments deliberately differ, and the place a copy of
 	// the wrong slice would be least visible.
 	st2 := &driveStore{drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser}
-	if _, err := driveServer(st2).driveWithUnusableGroups(context.Background(), users); err != nil {
+	if _, err := driveServer(st2).driveWithUnusableGroups(context.Background(), users, driveSizeCeiling{}); err != nil {
 		t.Fatalf("unusable-groups resolve: %v", err)
 	}
 	if len(st2.sawUsers) != 1 || !reflect.DeepEqual(st2.sawUsers[0], users) {
@@ -1682,7 +1693,7 @@ func TestShareHashRowIsRefusedAtResolveToo(t *testing.T) {
 		t.Fatal("the write boundary accepts share+hash — this test's premise is gone")
 	}
 
-	resolved, err := driveServer(st).resolveUserDriveFor(context.Background(), []string{"sub-drive-bob"}, nil)
+	resolved, err := driveServer(st).resolveUserDriveFor(context.Background(), []string{"sub-drive-bob"}, nil, driveSizeCeiling{})
 	if err == nil {
 		t.Fatalf("a stored share+hash row resolved to %+v, want a refusal — the home it derives is a directory "+
 			"nobody could have created", resolved)
@@ -1705,7 +1716,7 @@ func TestShareHashRowIsRefusedAtResolveToo(t *testing.T) {
 		d.Backend, d.HomeTemplate, d.HostRoot = types.DriveBackendHostPath, types.HomeTemplateSub, "/srv/homes"
 	})
 	okStore := &driveStore{drive: ok, grant: grantFixture(ok.ID, nil), tier: types.CapabilitySubjectUser}
-	if _, err := driveServer(okStore).resolveUserDriveFor(context.Background(), []string{"sub-drive-bob"}, nil); err != nil {
+	if _, err := driveServer(okStore).resolveUserDriveFor(context.Background(), []string{"sub-drive-bob"}, nil, driveSizeCeiling{}); err != nil {
 		t.Errorf("a share templated on sub = %v, want it to resolve", err)
 	}
 }

@@ -65,6 +65,28 @@ var ErrDriveHomeNamespaceConflict = fmt.Errorf(
 var ErrDriveSlugConflict = fmt.Errorf(
 	"%w: another user drive's name folds to the same storage-object name", ErrConflict)
 
+// ErrDriveAllocated is returned by UpsertUserDrive when the caller asked for the
+// write to apply only while the drive has NO allocations (refuseIfAllocated) and
+// the row has some.
+//
+// It is the STATEMENT-LEVEL half of the API's re-home guard, and it exists
+// because that guard is a read followed by an unconditional write: a grant
+// created between the two was re-homed silently, exactly as it was before the
+// guard existed. The precondition now rides the writing statement, under a
+// FOR UPDATE on the drive row taken in the same transaction — which is what
+// makes it race-free rather than merely narrow, because the predicate alone
+// reads a snapshot an uncommitted grant INSERT is not in (see UpsertUserDrive).
+// The guard's own doc named the fix — "the read and the write in ONE
+// transaction" — and this is it, without putting a tx handle on the Store
+// interface.
+//
+// It wraps ErrConflict like the two above: every caller that only asks "is this a
+// 409?" keeps working, and the ONE caller that writes the sentence can say what
+// actually happened — somebody was allocated this drive while it was being
+// edited.
+var ErrDriveAllocated = fmt.Errorf(
+	"%w: this user drive gained an allocation while the write was being prepared", ErrConflict)
+
 // ErrAlreadyDecided is returned when DecideApproval is called on an approval
 // that has already left the PENDING state. Fail closed: never allow a second
 // decision to silently overwrite the first.

@@ -1598,7 +1598,7 @@ func (s *authzStore) HasGroupTierAssignments(context.Context) (bool, error) {
 // under test on a /drives row is the authorization boundary. The precedence
 // table itself is a store-level test against a real Postgres
 // (internal/store/user_drives_test.go), where rows can actually exist.
-func (s *authzStore) UpsertUserDrive(_ context.Context, d types.UserDrive) (types.UserDrive, error) {
+func (s *authzStore) UpsertUserDrive(_ context.Context, d types.UserDrive, _ bool) (types.UserDrive, error) {
 	return d, nil
 }
 func (s *authzStore) GetUserDrive(context.Context, uuid.UUID) (types.UserDrive, error) {

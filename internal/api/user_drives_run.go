@@ -86,7 +86,7 @@ import (
 var driveRefusalReasons = []string{
 	driveRefusalNoAllocation, driveRefusalPaused, driveRefusalRunnerCannotMount,
 	driveRefusalBackendElsewhere, driveRefusalCeilingMoved, driveRefusalHomeMissing,
-	driveRefusalShareUnreachable, driveRefusalReadOnly,
+	driveRefusalShareUnreachable, driveRefusalReadOnly, driveRefusalDrivesDisabled,
 }
 
 const (
@@ -98,6 +98,11 @@ const (
 	driveRefusalHomeMissing       = "home_missing"
 	driveRefusalShareUnreachable  = "share_unreachable"
 	driveRefusalReadOnly          = "read_only"
+	// driveRefusalDrivesDisabled is the ORG SWITCH, not a door: this install
+	// offers no drives at all, so nobody was denied by a profile. Counted like
+	// the rest, because an operator who turns the switch off wants to see how
+	// many runs are still asking.
+	driveRefusalDrivesDisabled = "drives_disabled"
 )
 
 // refuseDrive is the ONE place a run is told it cannot have its drive: it
@@ -151,6 +156,21 @@ func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 	if req.Drive == nil || !req.Drive.Enabled {
 		return nil, true
 	}
+	// THE ORG SWITCH FIRST, and the order is the argument: storage.user_drive's
+	// `disabled` and a profile's DenyUserDrive answer two different questions, and
+	// only the second one is about this member. With drives off deployment-wide
+	// nobody was DENIED — there is nothing here to mount — so it is a 422 in the
+	// REFUSED_BACKEND family and never the door's 403 with its authz.denied row.
+	provider, perr := s.userDriveProvider(r.Context())
+	if perr != nil {
+		writeError(w, http.StatusInternalServerError, "get site config: "+perr.Error())
+		return nil, false
+	}
+	if provider.Disabled {
+		s.refuseDrive(w, http.StatusUnprocessableEntity, driveRefusalDrivesDisabled,
+			fmt.Sprintf(driveRefusedBackendMsg, driveDisabledMsg))
+		return nil, false
+	}
 	if s.denyMemberDrive(w, r, ceiling) {
 		return nil, false
 	}
@@ -158,7 +178,7 @@ func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 	// ERROR here and not "no drive" — writeDriveError's 500 arm — because
 	// mounting nothing where an admin allocated something loses a member's work
 	// silently, while a 500 tells them to try again.
-	resolved, err := s.resolveUserDrive(r.Context())
+	resolved, err := s.resolveUserDrive(r.Context(), ceiling.Limits.MaxDriveSizeMiB)
 	if err != nil {
 		writeDriveError(w, err)
 		return nil, false

@@ -15,6 +15,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -44,7 +45,7 @@ func newUserDrive(name string) types.UserDrive {
 func seedUserDrive(t *testing.T, st store.PG, name string) types.UserDrive {
 	t.Helper()
 	ctx := context.Background()
-	d, err := st.UpsertUserDrive(ctx, newUserDrive(name))
+	d, err := st.UpsertUserDrive(ctx, newUserDrive(name), false)
 	if err != nil {
 		t.Fatalf("seed drive %q: %v", name, err)
 	}
@@ -110,7 +111,7 @@ func TestPG_UserDrive_UpsertRoundTrip(t *testing.T) {
 	renamed.HomeTemplate = types.HomeTemplateEmailLocal
 	renamed.Writable = true
 	renamed.Reclaim = types.DriveReclaimDelete
-	updated, err := st.UpsertUserDrive(ctx, renamed)
+	updated, err := st.UpsertUserDrive(ctx, renamed, false)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
@@ -152,8 +153,124 @@ func TestPG_UserDrive_DuplicateNameConflicts(t *testing.T) {
 
 	name := "test-dupe-drive-" + uuid.NewString()
 	seedUserDrive(t, st, name)
-	if _, err := st.UpsertUserDrive(ctx, newUserDrive(name)); !errors.Is(err, store.ErrConflict) {
+	if _, err := st.UpsertUserDrive(ctx, newUserDrive(name), false); !errors.Is(err, store.ErrConflict) {
 		t.Errorf("second drive with name %q: err = %v, want ErrConflict", name, err)
+	}
+}
+
+// TestPG_UserDrive_RefuseIfAllocatedIsAssertedInTheStatement is the re-home
+// race, closed at the only place that can close it.
+//
+// driveRehomeGuard (internal/api) reads the allocations and then writes; a grant
+// created in between used to be re-homed silently, because the write was
+// unconditional. The precondition now rides the WRITING statement, so the window
+// is gone whatever happens between the read and the write — which is what this
+// asserts: with a grant present, a write carrying refuseIfAllocated changes
+// nothing and answers ErrDriveAllocated; the same write without it still applies,
+// because the rule is the API boundary's and only the precondition lives here.
+func TestPG_UserDrive_RefuseIfAllocatedIsAssertedInTheStatement(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+
+	d := seedUserDrive(t, st, "test-race-drive-"+uuid.NewString())
+	// UNALLOCATED: the precondition holds, so the write lands.
+	renamed := d
+	renamed.Name = "test-race-renamed-" + uuid.NewString()
+	if _, err := st.UpsertUserDrive(ctx, renamed, true); err != nil {
+		t.Fatalf("guarded write on an unallocated drive: %v, want it to apply", err)
+	}
+
+	seedUserDriveGrant(t, st, types.UserDriveGrant{
+		ID: uuid.New(), SubjectType: types.CapabilitySubjectUser,
+		Subject: "test-race-" + uuid.NewString(), DriveID: d.ID, CreatedBy: "admin@example.com",
+	})
+
+	rehomed := renamed
+	rehomed.Name = "test-race-rehomed-" + uuid.NewString()
+	if _, err := st.UpsertUserDrive(ctx, rehomed, true); !errors.Is(err, store.ErrDriveAllocated) {
+		t.Fatalf("guarded write on an ALLOCATED drive: err = %v, want ErrDriveAllocated — this is the grant that "+
+			"appeared after the gate read", err)
+	}
+	if got, err := st.GetUserDrive(ctx, d.ID); err != nil || got.Name != renamed.Name {
+		t.Errorf("stored name = %q (%v), want the refused write to have applied NOTHING", got.Name, err)
+	}
+	// …and the SAME write, unguarded, still applies: the confirmed re-home.
+	if _, err := st.UpsertUserDrive(ctx, rehomed, false); err != nil {
+		t.Errorf("unguarded write on an allocated drive: %v, want it to apply — a confirmed re-home is an "+
+			"admin's to make", err)
+	}
+}
+
+// TestPG_UserDrive_RefuseIfAllocatedWaitsForAnOpenGrant is the race itself, with
+// the two sessions actually interleaved — the assertion the sequential test above
+// cannot make.
+//
+// The predicate alone would NOT have closed this. NOT EXISTS reads the
+// statement's snapshot, which an uncommitted INSERT is not in; the FK on
+// user_drive_grants.drive_id takes FOR KEY SHARE on the drive row, and an
+// ON CONFLICT DO UPDATE that touches no unique-indexed column (this case: only
+// home_template moves) takes FOR NO KEY UPDATE, which does not conflict with it.
+// So before the row lock this write sailed past an open grant and re-homed it
+// the moment that grant committed.
+//
+// The test asserts the WAIT, not just the answer: if the guarded write returns
+// while session A's INSERT is still open, the lock is gone and the window is back
+// — which is a failure even if the error happens to come out right afterwards.
+func TestPG_UserDrive_RefuseIfAllocatedWaitsForAnOpenGrant(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+
+	d := seedUserDrive(t, st, "test-race-lock-"+uuid.NewString())
+
+	// SESSION A: a grant for this drive, inserted and HELD OPEN.
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin the grant session: %v", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // committed below on the happy path
+	grantID := uuid.New()
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO user_drive_grants (id, subject_type, subject, drive_id, enabled, created_by)
+		 VALUES ($1,'user',$2,$3,true,'admin@example.com')`,
+		grantID, "test-race-"+uuid.NewString(), d.ID); err != nil {
+		t.Fatalf("insert the open grant: %v", err)
+	}
+
+	// SESSION B: the guarded re-home — home_template only, so no unique-indexed
+	// column moves and the weaker FOR NO KEY UPDATE would have been taken.
+	rehomed := d
+	rehomed.HomeTemplate = types.HomeTemplateSub
+	done := make(chan error, 1)
+	go func() { _, e := st.UpsertUserDrive(context.Background(), rehomed, true); done <- e }()
+
+	select {
+	case e := <-done:
+		t.Fatalf("the guarded write finished (err = %v) while the grant INSERT was still open — it evaluated its "+
+			"predicate against a snapshot instead of waiting on the drive's row lock, which is the race the "+
+			"precondition exists to close", e)
+	case <-time.After(500 * time.Millisecond):
+		// Still blocked, which is the point.
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit the grant: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM user_drive_grants WHERE id = $1`, grantID)
+	})
+
+	if e := <-done; !errors.Is(e, store.ErrDriveAllocated) {
+		t.Fatalf("guarded write after the grant committed: err = %v, want ErrDriveAllocated", e)
+	}
+	got, err := st.GetUserDrive(ctx, d.ID)
+	if err != nil {
+		t.Fatalf("re-read the drive: %v", err)
+	}
+	if got.HomeTemplate != d.HomeTemplate {
+		t.Errorf("home_template = %q, want the refused write to have applied NOTHING (%q) — this is the silent "+
+			"re-home", got.HomeTemplate, d.HomeTemplate)
 	}
 }
 

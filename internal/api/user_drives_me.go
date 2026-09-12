@@ -66,7 +66,22 @@ func (s *Server) resolveMeUserDrive(r *http.Request) (*meUserDrive, string) {
 	// page views. The refusal itself is unchanged — this still answers
 	// groups_snapshot_stale on the wire.
 	ctx := withDisplayRead(r.Context())
-	resolved, err := s.resolveUserDrive(ctx)
+	// THE CEILING THE DOOR CHECK READS, for the clamp's per-principal half — the
+	// same MaxDriveSizeMiB the launch path applies, so the number on the card is
+	// the number a run gets. It costs no extra read: the per-request ceiling memo
+	// is installed by the auth middleware, so this and userDriveDeniedByProfile's
+	// own resolve are one.
+	//
+	// BEST-EFFORT, and safely so: a ceiling that cannot be resolved makes the DOOR
+	// unknown one line later in /me, which suppresses the whole allocation — so an
+	// unclamped size can never reach the wire through this arm, and answering the
+	// resolver's own error here would only replace that specific reason with a
+	// vaguer one.
+	profileMaxDriveMiB := 0
+	if ceiling, cerr := s.effectiveCeiling(ctx); cerr == nil {
+		profileMaxDriveMiB = ceiling.Limits.MaxDriveSizeMiB
+	}
+	resolved, err := s.resolveUserDrive(ctx, profileMaxDriveMiB)
 	if err != nil {
 		return nil, driveUnavailableReason(err)
 	}

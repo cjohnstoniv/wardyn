@@ -49,7 +49,7 @@ func TestManagedTemplateWriteAndResolveAgree(t *testing.T) {
 				if backend == types.DriveBackendK8sPVC {
 					runner = "k8s"
 				}
-				_, err := driveServerOn(st, runner).resolveUserDrive(driveMemberCtx([]string{"eng"}, false))
+				_, err := driveServerOn(st, runner).resolveUserDrive(driveMemberCtx([]string{"eng"}, false), 0)
 				resolveRefuses := errors.Is(err, errDriveUnmountable)
 
 				if writeRefuses != resolveRefuses {
