@@ -13,7 +13,7 @@ import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { Field, Switch } from "../../wardyn/form-primitives";
 import { Input } from "../../ui/input";
 import { UserDrivesCard } from "../setup/user-drives-card";
-import { enforcementGloss } from "../drives/display";
+import { enforcementGloss, isUncappedEnforcement } from "../drives/display";
 
 function numberField(v: number | undefined): number | "" {
   return v ? v : "";
@@ -38,8 +38,9 @@ export function StorageTab({
   // Any of the three disk fields (the two here + the profile editor's
   // MaxEphemeralDiskMiB row) can leave a run with a non-zero disk_mib on a
   // host whose driver can't enforce it (§6.2) — read from the AUTHORING
-  // daemon's driver, never a laptop's.
-  const dockerUncapped = !!enforcement && enforcement !== "filesystem";
+  // daemon's driver, never a laptop's. Only `none` is that host: `eviction`
+  // (k8s) binds the size on the pod, so it gets the gloss and no warning.
+  const dockerUncapped = isUncappedEnforcement(enforcement);
 
   const setEphemeral = (patch: Partial<typeof ephemeral>) => onChange({ ...storage, ephemeral: { ...ephemeral, ...patch } });
   const setUserDrive = (patch: Partial<typeof userDrive>) => onChange({ ...storage, user_drive: { ...userDrive, ...patch } });

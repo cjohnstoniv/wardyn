@@ -392,11 +392,16 @@ func firstUseApprovalRank(m types.FirstUseMode) int {
 const WarnResourcesCapped = "resources capped to operator maximum"
 
 // CapDiskMiB bounds a NON-ZERO ephemeral-disk size by ONE operator ceiling, with
-// 0 on either side meaning "no bound". It is the whole min() expression, in one
-// place, because it has two call sites that must never disagree: Clamp above
-// (what POST /runs/preflight and the Review rail show) and dispatch's fill+clamp
-// (what the sandbox gets). Sharing the function is why there is no test pinning
-// that the two agree — they are the same code.
+// 0 on either side meaning "no bound". It is ONE ceiling's min(), in one place,
+// for the callers that apply a ceiling: Clamp above (what POST /runs/preflight
+// and the Review rail show) and api.ephemeralDiskFor (the fill + BOTH ceilings
+// the sandbox gets, which the preview now calls too).
+//
+// Sharing this function is NOT what makes the preview and the run agree, and the
+// comment that said so was how they came to disagree: the preview applied the
+// profile ceiling and dispatch applied the org's as well, so a 100000 MiB policy
+// under a 4096 MiB org maximum previewed 100000 and ran on 4096. The agreement
+// is pinned by api.TestPreflightAndDispatchAgreeOnEphemeralDisk, not argued.
 //
 // A ZERO disk STAYS ZERO. A ceiling bounds a request; it does not invent one.
 func CapDiskMiB(disk, ceil int) int {

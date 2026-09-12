@@ -879,10 +879,19 @@ func testEphemeralDiskLimit(t *testing.T, r runner.Runner, opts Options) {
 			t.Skipf("sandbox image has no dd applet; cannot fill the writable layer — an IMAGE contract, not a substrate verdict")
 		}
 
+		// The poll gets its OWN budget, off a FRESH context. r.Wait above is
+		// handed the case's `ctx` and may legitimately drain the whole of it: on
+		// k8s it polls the EXEC ephemeral container, which need never reach
+		// Terminated inside a pod the kubelet is killing. Sharing that one
+		// context then made the first Status call return a context error, and
+		// this case reported a transport failure where "want RunFailed with
+		// Evicted" belongs. Cancelled on return, so nothing outlives the case.
+		pollCtx, pollCancel := context.WithTimeout(context.Background(), ephemeralEvictionBudget)
+		defer pollCancel()
 		deadline := time.Now().Add(ephemeralEvictionBudget)
 		var last runner.Status
 		for time.Now().Before(deadline) {
-			st, err := r.Status(ctx, sb.Ref)
+			st, err := r.Status(pollCtx, sb.Ref)
 			if err != nil {
 				t.Fatalf("Status: %v", err)
 			}

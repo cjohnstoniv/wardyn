@@ -105,7 +105,7 @@ describe("ProfileEditor — the three integer LimitNumberRows", () => {
     );
   });
 
-  it("shows the Docker uncapped warning under the ephemeral row only, and only when the word isn't filesystem", async () => {
+  it("shows the Docker uncapped warning under the ephemeral row only, and only for `none`", async () => {
     getSetupStatusMock.mockResolvedValue(baseStatus({ runner: { driver: "docker", confinement_classes: ["CC1"], ephemeral_disk_enforcement: "none" } }));
     renderEditor();
 
@@ -120,6 +120,22 @@ describe("ProfileEditor — the three integer LimitNumberRows", () => {
 
   it("shows no Docker warning when the driver can enforce (filesystem)", async () => {
     getSetupStatusMock.mockResolvedValue(baseStatus({ runner: { driver: "docker", confinement_classes: ["CC1"], ephemeral_disk_enforcement: "filesystem" } }));
+    renderEditor();
+
+    await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalled());
+    expect(screen.queryByText(PROVIDERS.DOCKER_UNCAPPED_WARN)).not.toBeInTheDocument();
+  });
+
+  it("shows no Docker warning on Kubernetes (eviction) — the pod binds the size", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus({ runner: { driver: "kubernetes", confinement_classes: ["CC2"], ephemeral_disk_enforcement: "eviction" } }));
+    renderEditor();
+
+    await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalled());
+    expect(screen.queryByText(PROVIDERS.DOCKER_UNCAPPED_WARN)).not.toBeInTheDocument();
+  });
+
+  it("shows no Docker warning when the daemon reports no enforcement word at all", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus({ runner: { driver: "docker", confinement_classes: ["CC1"] } }));
     renderEditor();
 
     await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalled());

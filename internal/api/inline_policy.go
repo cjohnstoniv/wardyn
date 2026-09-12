@@ -215,6 +215,11 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 			writeError(w, code, "invalid inline_policy: "+err.Error())
 			return types.RunPolicySpec{}, nil, nil, false
 		}
+		// THE SIZE HALF for the inline arm, the same helper the stored arm calls
+		// below: composer.Clamp bounds a member's disk_mib by the PROFILE, but
+		// the org's default_disk_mib/max_disk_mib are dispatch's and reach no
+		// preview at all without this. A no-op on launch (see the helper).
+		clampWarnings = append(clampWarnings, s.boundEphemeralDisk(ctx, r, &spec, ceiling, dryRun)...)
 		// Audit the use of an inline (non-stored) policy. The run id is not yet
 		// minted at this point, so this event carries a nil run id (like the
 		// secret.* admin events); the subsequent run.create event records
@@ -304,20 +309,8 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	// then the profile's OWN ceiling, which an admin may well have written wider
 	// than the limit standing beside it. That member previewed a scratch size
 	// their run does not get, and a dispatch-side log line is not a disclosure to
-	// them.
-	//
-	// SAFE ON BOTH ARMS: it is the same min() dispatch applies
-	// (composer.CapDiskMiB), so on the stored arm the value is already at the
-	// bound and this is a provable no-op that cannot double-warn.
-	//
-	// IT CLAMPS ONLY. The org's default_disk_mib FILL is dispatch's alone: a fill
-	// written into the spec here would reach the driver as a POLICY-AUTHORED size
-	// and be refused at create on every overlay2-over-ext4 host, which is the
-	// whole reason runner.Resources carries DiskMiBFilled.
-	if ceiling.Profile != nil && !s.isOperator(r.Context()) &&
-		capEphemeralDiskPreview(&spec, ceiling.Limits.MaxEphemeralDiskMiB) {
-		storedWarns = append(storedWarns, composer.WarnResourcesCapped)
-	}
+	// them. Both arms call the SAME helper (runs_dispatch_ceiling.go).
+	storedWarns = append(storedWarns, s.boundEphemeralDisk(ctx, r, &spec, ceiling, dryRun)...)
 	if code, err := s.validateInlineSecretRefs(ctx, s.secretOwnerFromRequest(r), spec); err != nil {
 		writeError(w, code, "invalid policy: "+err.Error())
 		return types.RunPolicySpec{}, nil, nil, false
@@ -326,7 +319,9 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 }
 
 // capEphemeralDiskPreview bounds spec's disk_mib by the profile's
-// MaxEphemeralDiskMiB and reports whether it changed anything.
+// MaxEphemeralDiskMiB and reports whether it changed anything. The LAUNCH half
+// of the pair above; previewEphemeralDisk (runs_dispatch_ceiling.go) is the
+// dry-run half that also fills and applies the org ceiling.
 //
 // A FRESH Resources block, never an in-place write: one shared *ResourceLimits
 // would re-size every later run that reads it — the same aliasing rule dispatch

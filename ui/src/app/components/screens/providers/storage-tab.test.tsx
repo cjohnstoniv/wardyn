@@ -40,15 +40,28 @@ describe("StorageTab", () => {
     expect(screen.getByDisplayValue("4096")).toBeInTheDocument();
     expect(screen.getByDisplayValue("16384")).toBeInTheDocument();
     expect(screen.getAllByText(DRIVES.ENFORCEMENT_EVICTION).length).toBeGreaterThan(0);
+    // k8s BINDS the size (limits[ephemeral-storage]) — the uncapped sentence's
+    // three clauses are all false there, so the gloss rides alone.
+    expect(screen.queryByText(PROVIDERS.DOCKER_UNCAPPED_WARN)).not.toBeInTheDocument();
   });
 
-  it("shows the Docker uncapped warning under the disk fields when enforcement is not filesystem", () => {
+  it("shows the Docker uncapped warning under the disk fields only for `none`", () => {
     render(<Harness initial={{}} enforcement="none" />);
     expect(screen.getByText(PROVIDERS.DOCKER_UNCAPPED_WARN)).toBeInTheDocument();
   });
 
   it("shows no Docker warning when the driver can enforce (filesystem)", () => {
     render(<Harness initial={{}} enforcement="filesystem" />);
+    expect(screen.queryByText(PROVIDERS.DOCKER_UNCAPPED_WARN)).not.toBeInTheDocument();
+  });
+
+  it("shows no Docker warning on Kubernetes (eviction) or with no word at all", () => {
+    const { unmount } = render(<Harness initial={{}} enforcement="eviction" />);
+    expect(screen.queryByText(PROVIDERS.DOCKER_UNCAPPED_WARN)).not.toBeInTheDocument();
+    expect(screen.getAllByText(DRIVES.ENFORCEMENT_EVICTION).length).toBeGreaterThan(0);
+    unmount();
+
+    render(<Harness initial={{}} />);
     expect(screen.queryByText(PROVIDERS.DOCKER_UNCAPPED_WARN)).not.toBeInTheDocument();
   });
 

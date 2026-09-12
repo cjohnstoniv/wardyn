@@ -26,6 +26,14 @@ type memberBoundStore struct {
 	store.Store
 	profile *types.GovernanceProfile
 	policy  types.RunPolicy
+	// site is the org storage block the PREVIEW arm now reads
+	// (boundEphemeralDisk): zero means no default_disk_mib and no max_disk_mib,
+	// which is every test here that is not about the size.
+	site types.SiteConfig
+}
+
+func (s *memberBoundStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return s.site, nil
 }
 
 func (s *memberBoundStore) ResolveGovernanceProfile(context.Context, []string, []string) (*types.GovernanceProfile, types.CapabilitySubjectType, error) {

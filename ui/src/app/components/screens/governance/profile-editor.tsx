@@ -26,6 +26,7 @@ import { GOVERNANCE as GOV } from "../../../lib/governance-copy";
 import { PEOPLE } from "../../../lib/people-access-copy";
 import type { RunPolicySpec } from "../../../lib/types";
 import type { StorageEnforcement } from "../../../lib/api/drives";
+import { isUncappedEnforcement } from "../drives/display";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
@@ -71,7 +72,8 @@ export function ProfileEditor({
   const [error, setError] = React.useState<{ title?: string; message: string } | null>(null);
   // The AUTHORING daemon's disk-cap driver (§6.2) — read once, the same call
   // the /providers Storage tab makes, never a laptop's. Absent (older daemon,
-  // no runner detected) reads as "can enforce": no warning.
+  // no runner detected) reads as "can enforce": no warning, and so does every
+  // word but `none` — see isUncappedEnforcement, which both surfaces share.
   const [enforcement, setEnforcement] = React.useState<StorageEnforcement | undefined>(undefined);
   React.useEffect(() => {
     let alive = true;
@@ -82,7 +84,7 @@ export function ProfileEditor({
       alive = false;
     };
   }, []);
-  const dockerUncapped = !!enforcement && enforcement !== "filesystem";
+  const dockerUncapped = isUncappedEnforcement(enforcement);
 
   const save = async () => {
     const parsed = parseSpec(spec);

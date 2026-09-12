@@ -54,6 +54,17 @@ export const GLOSS: Record<StorageEnforcement, string> = {
 export const enforcementGloss = (e: StorageEnforcement | undefined): string =>
   GLOSS[e ?? "none"] ?? DRIVES.ENFORCEMENT_NONE;
 
+// Does a number typed against this word run UNCAPPED? Only `none` does: the
+// substrate binds nothing, so a filled/clamped size runs with a warning on the
+// run and a policy-authored size fails at create — the three clauses of
+// PROVIDERS.DOCKER_UNCAPPED_WARN. Every other word binds bytes somewhere:
+// `filesystem` refuses the write, `eviction` (k8s) kills the pod over the
+// limit, `request`/`external` bind at the volume. Absent (older daemon, no
+// runner detected) reads as "can enforce" — no warning. The two disk surfaces
+// (/providers Storage tab, the governance profile editor's ephemeral row) BOTH
+// read this predicate so they cannot drift apart.
+export const isUncappedEnforcement = (e: StorageEnforcement | undefined): boolean => e === "none";
+
 // Mode is a fact-chip with a WORD, never colour alone. Writable is amber
 // because it is a widened blast radius (the same reason /permissions paints an
 // allow amber); read-only is neutral.

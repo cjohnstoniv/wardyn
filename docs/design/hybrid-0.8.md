@@ -314,8 +314,9 @@ The same rule governs every other per-substrate capability already in
 Docker and not on Kubernetes, and the ephemeral-disk enforcement word differs by
 substrate (`filesystem` or `none` on Docker, `eviction` on Kubernetes — the word
 0.7.2 added to complete the five-word set). A hybrid Review rail that shows one number for a run whose placement is
-not yet resolved is showing a guess, and the 0.7.2 preview gap on the two org
-storage numbers is the precedent for how to say so honestly instead.
+not yet resolved is showing a guess, and 0.7.2's ephemeral-disk preview is the
+precedent for the answer: ONE expression, called by both the preview and the
+dispatch, rather than two that drift (`api.ephemeralDiskFor`).
 
 ---
 

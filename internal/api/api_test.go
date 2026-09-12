@@ -19,6 +19,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/identity/embedded"
 	"github.com/cjohnstoniv/wardyn/internal/identity/identitytest"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 	"github.com/cjohnstoniv/wardyn/internal/version"
@@ -319,6 +320,41 @@ func TestHealthz(t *testing.T) {
 	names, _ := body["confinement_names"].(map[string]any)
 	if names["CC1"] != "Fence" || names["CC2"] != "Wall" || names["CC3"] != "Vault" {
 		t.Errorf("confinement_names = %v, want CC1/CC2/CC3 -> Fence/Wall/Vault", names)
+	}
+}
+
+// enforcementWordRunner is a driver that DOES declare the ephemeral-disk
+// enforcement word, so the exclusion below is a real assertion rather than a
+// tautology over a fake that never had one to leak.
+type enforcementWordRunner struct{ runner.Runner }
+
+func (enforcementWordRunner) Name() string { return "k8s" }
+func (enforcementWordRunner) Capabilities(context.Context) (runner.Capabilities, error) {
+	return runner.Capabilities{
+		Driver:                   "k8s",
+		ConfinementClasses:       []types.ConfinementClass{types.CC1},
+		EphemeralDiskEnforcement: types.StorageEnforcementEviction,
+	}, nil
+}
+
+// TestHealthz_OmitsTheEnforcementWord pins the half healthz.go states only in a
+// comment: the word is OPERATOR DETAIL, redactSetupStatusForMember strips it
+// from /setup/status for a member (setup_test.go), and /healthz is ANONYMOUS —
+// so it must not carry it at all. handleHealthz composes its body field by
+// field precisely so a field added to the setup status never appears here by
+// accident; this is the test that notices when one does.
+func TestHealthz_OmitsTheEnforcementWord(t *testing.T) {
+	srv := New(Config{Runner: enforcementWordRunner{}})
+	w := do(t, srv, http.MethodGet, "/healthz", "", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("healthz code = %d", w.Code)
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "ephemeral_disk_enforcement") {
+		t.Errorf("/healthz carries the capability field; body = %s", body)
+	}
+	if strings.Contains(body, string(types.StorageEnforcementEviction)) {
+		t.Errorf("/healthz carries the enforcement WORD under some other key; body = %s", body)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net/http"
 	"slices"
 	"strings"
 
@@ -157,25 +158,22 @@ type effectivePolicyDatum struct {
 // ceilingForDispatch above returns no limits at all for Profile == nil (an
 // operator short-circuits earlier still, at effectiveCeiling's step 1).
 //
-// The min() is composer.CapDiskMiB, shared with composer.Clamp so a member's
-// POST /runs/preflight preview and this run cannot disagree about the number.
+// The WHOLE expression is ephemeralDiskFor below, which POST /runs/preflight
+// also calls (previewEphemeralDisk): the preview reports the number this run
+// will get, org fill and both ceilings included. It used to share only the
+// min() (composer.CapDiskMiB), and the preview applied the profile half alone —
+// so a member with a 100000 MiB policy under a 4096 MiB org maximum previewed
+// 100000 and ran on 4096. TestPreflightAndDispatchAgreeOnEphemeralDisk is the
+// pin; a comment claiming the two "cannot disagree" is not one.
 func applyEphemeralDisk(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec,
 	siteCfg types.SiteConfig, c dispatchCeiling,
 ) bool {
-	var eph types.EphemeralProvider
-	if wp := siteCfg.WorkspaceProviders; wp != nil && wp.Storage != nil && wp.Storage.Ephemeral != nil {
-		eph = *wp.Storage.Ephemeral
-	}
+	eph := orgEphemeralOf(siteCfg)
 	requested := 0
 	if policy.Resources != nil {
 		requested = policy.Resources.DiskMiB
 	}
-	disk, filled := requested, false
-	if disk == 0 && eph.DefaultDiskMiB > 0 {
-		disk, filled = eph.DefaultDiskMiB, true
-	}
-	disk = composer.CapDiskMiB(disk, eph.MaxDiskMiB)
-	disk = composer.CapDiskMiB(disk, c.maxEphemeralDiskMiB)
+	disk, filled := ephemeralDiskFor(requested, eph, c.maxEphemeralDiskMiB)
 	if disk == requested {
 		return false
 	}
@@ -199,6 +197,117 @@ func applyEphemeralDisk(ctx context.Context, run types.AgentRun, policy *types.R
 		slog.Int("disk_mib", disk), slog.Int("provider_max_disk_mib", eph.MaxDiskMiB),
 		slog.Int("profile_max_disk_mib", c.maxEphemeralDiskMiB))
 	return false
+}
+
+// ephemeralDiskFor is §6.3's precedence, as ONE expression with TWO callers that
+// must never disagree: applyEphemeralDisk above (what the sandbox gets) and
+// previewEphemeralDisk (what POST /runs/preflight reports). request/policy
+// disk_mib → FILLED from the org's default_disk_mib when that is zero → CLAMPED
+// to min(the org's max_disk_mib, the profile's MaxEphemeralDiskMiB), zeros
+// meaning "no bound" on either ceiling.
+//
+// SCOPE is the CALLER's to decide and differs per ceiling on purpose: eph is the
+// ORG's block and binds every caller, operators and unassigned members included;
+// profileMaxDiskMiB is passed 0 for anyone the profile does not bind.
+//
+// `filled` is the provenance bit, not a second number: a size the org filled in
+// degrades to uncapped on a host that cannot keep it (runner.Resources.
+// DiskMiBFilled → applyDiskQuota), while a policy-authored one fails the create
+// closed there. Only the ORG DEFAULT is a fill — a maximum bounds a request and
+// never invents one.
+func ephemeralDiskFor(requested int, eph types.EphemeralProvider, profileMaxDiskMiB int) (disk int, filled bool) {
+	disk = requested
+	if disk == 0 && eph.DefaultDiskMiB > 0 {
+		disk, filled = eph.DefaultDiskMiB, true
+	}
+	disk = composer.CapDiskMiB(disk, eph.MaxDiskMiB)
+	disk = composer.CapDiskMiB(disk, profileMaxDiskMiB)
+	return disk, filled
+}
+
+// orgEphemeralOf reads the org's storage.ephemeral block out of a site config,
+// absent blocks reading as the zero value (no default, no maximum).
+func orgEphemeralOf(siteCfg types.SiteConfig) types.EphemeralProvider {
+	if wp := siteCfg.WorkspaceProviders; wp != nil && wp.Storage != nil && wp.Storage.Ephemeral != nil {
+		return *wp.Storage.Ephemeral
+	}
+	return types.EphemeralProvider{}
+}
+
+// boundEphemeralDisk is the ephemeral-disk half of resolveRunPolicy, called
+// identically from its inline arm and its stored/default arm (the drift that
+// let one of them preview a size the other did not).
+//
+// SCOPE, per ceiling: the profile's MaxEphemeralDiskMiB binds an ASSIGNED MEMBER
+// only — an operator short-circuits at effectiveCeiling's step 1 and an
+// unassigned member resolves no limits — so it is ZEROED for anyone else rather
+// than the block being skipped, because the ORG's numbers bind every caller.
+//
+// PREVIEW (dryRun) gets the WHOLE dispatch expression, org fill and org clamp
+// included, so POST /runs/preflight reports the number the run will get. LAUNCH
+// gets the clamp half only, and there it is a provable no-op: composer.Clamp (or
+// the stored arm's boundMemberSpec) already applied the same profile min(), and
+// applyEphemeralDisk applies all of it again at dispatch. The FILL is dispatch's
+// alone — written into a spec that goes on to launch it would reach the driver
+// as a POLICY-AUTHORED size and be refused at create on every overlay2-over-ext4
+// host, which is the whole reason runner.Resources carries DiskMiBFilled.
+func (s *Server) boundEphemeralDisk(ctx context.Context, r *http.Request, spec *types.RunPolicySpec,
+	ceiling governanceCeiling, dryRun bool,
+) []string {
+	profileMax := 0
+	if ceiling.Profile != nil && !s.isOperator(r.Context()) {
+		profileMax = ceiling.Limits.MaxEphemeralDiskMiB
+	}
+	capped := false
+	if dryRun {
+		capped = s.previewEphemeralDisk(ctx, spec, profileMax)
+	} else {
+		capped = capEphemeralDiskPreview(spec, profileMax)
+	}
+	if capped {
+		return []string{composer.WarnResourcesCapped}
+	}
+	return nil
+}
+
+// previewEphemeralDisk writes the number dispatch will settle on into a PREVIEW
+// spec and reports whether that was a CLAMP (a fill is a difference, but it is
+// not "capped to operator maximum" and must not borrow that sentence).
+//
+// PREVIEW ONLY — resolveRunPolicy calls it on the dryRun arm alone. A fill
+// written into a spec that goes on to LAUNCH would reach the driver as a
+// POLICY-AUTHORED size and be refused at create on every overlay2-over-ext4
+// host; the fill is dispatch's precisely so DiskMiBFilled can carry the
+// provenance with it. The clamp half is safe on either arm and the create arm
+// keeps doing its own (capEphemeralDiskPreview), so the asymmetry stays.
+//
+// A FRESH Resources block, never an in-place write — the same aliasing rule
+// applyEphemeralDisk obeys. A site-config read that fails degrades to "no org
+// block": the preview is advisory and never blocks Review.
+func (s *Server) previewEphemeralDisk(ctx context.Context, spec *types.RunPolicySpec, profileMaxDiskMiB int) bool {
+	var siteCfg types.SiteConfig
+	if s.cfg.Store != nil {
+		got, err := s.cfg.Store.GetSiteConfig(ctx)
+		if err != nil {
+			slog.WarnContext(ctx, "wardynd: preflight could not read the org storage block; previewing without it", slog.Any("error", err))
+		}
+		siteCfg = got
+	}
+	requested := 0
+	if spec.Resources != nil {
+		requested = spec.Resources.DiskMiB
+	}
+	disk, filled := ephemeralDiskFor(requested, orgEphemeralOf(siteCfg), profileMaxDiskMiB)
+	if disk == requested {
+		return false
+	}
+	rl := types.ResourceLimits{}
+	if spec.Resources != nil {
+		rl = *spec.Resources
+	}
+	rl.DiskMiB = disk
+	spec.Resources = &rl
+	return !filled
 }
 
 // resolveDispatchCeiling is effectiveCeiling + ceilingForDispatch, for the lanes
