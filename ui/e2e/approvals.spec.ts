@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole, mockMemberRole, sql } from "./fixtures";
+import { APPROVAL } from "../src/app/components/wardyn/copy";
 
 // ---------------------------------------------------------------------------
 // Approvals screen e2e (lane: approvals, port 8088, db wardyn_e2e).
@@ -538,6 +539,101 @@ test.describe("Approvals — decision-scope split button (run cockpit)", () => {
       await expect(page.getByRole("menu")).toHaveCount(0);
     } finally {
       deleteApproval(id);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B3 + B4 — the "held" count is now LIVE STATE (isHeld over the run's own
+// pending rows), never a count of historical audit events; and killing a run
+// cancels its still-PENDING approvals rather than stranding them until
+// ExpireStale's 24h sweep.
+// ---------------------------------------------------------------------------
+test.describe("B3 — the egress widget's held chip and the Approvals tab badge count LIVE holds", () => {
+  test("1 PENDING + 1 APPROVED on the same run reads '1 held', never 2", async ({ page }) => {
+    clearPending();
+    const runId = runningRunId();
+    // tool_call is ALWAYS held (isHeld's unconditional true arm) — the
+    // cleanest way to seed a guaranteed hold without also depending on
+    // requested_scope.mode/timing (the egress_domain wait_for_review arm).
+    const heldId = randomUUID();
+    sql(
+      `INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at)
+       VALUES ('${heldId}','${runId}','tool_call','{"tool":"b3-held.exec"}'::jsonb,'PENDING',now())`,
+    );
+    const decidedId = randomUUID();
+    sql(
+      `INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at, decided_at, decided_by, minted_jti, reason, decision_scope)
+       VALUES ('${decidedId}','${runId}','credential','{"audience":"b3-decided.example"}'::jsonb,'APPROVED',now()-interval '5 min',now()-interval '4 min','admin@wardyn','jti-b3','ok','run')`,
+    );
+
+    try {
+      await page.goto(`/runs/${runId}`);
+      await expect(page.getByText("Running", { exact: true }).first()).toBeVisible();
+
+      // The Egress widget's chip: exactly "1 held" — a stale audit-count
+      // implementation would read "2" here (one row per decision recorded),
+      // or would count the APPROVED row's own historical egress.pending audit
+      // entry as still "held" forever. "N held" is this widget's own phrase
+      // (RUN_COCKPIT.held) and appears nowhere else on the Overview tab.
+      await expect(page.getByText("1 held", { exact: true })).toBeVisible();
+      await expect(page.getByText("2 held", { exact: true })).toHaveCount(0);
+
+      // The Approvals tab badge: pending.length, so also 1 — the decided row
+      // never inflates it.
+      const tab = page.getByRole("tab", { name: /^Approvals/ });
+      await expect(tab.getByText("1", { exact: true })).toBeVisible();
+    } finally {
+      deleteApproval(heldId);
+      deleteApproval(decidedId);
+    }
+  });
+});
+
+test.describe("B4 — killing a run cancels its still-PENDING approvals", () => {
+  test("kill ⇒ the PENDING approval becomes CANCELLED with no decision buttons, and the nav badge returns to 0", async ({
+    page,
+  }) => {
+    clearPending();
+    const runId = runningRunId();
+    const heldId = randomUUID();
+    sql(
+      `INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at)
+       VALUES ('${heldId}','${runId}','tool_call','{"tool":"b4-kill.exec"}'::jsonb,'PENDING',now())`,
+    );
+
+    try {
+      await gotoConsole(page);
+      // The sidebar badge reflects the one PENDING row this test just seeded —
+      // the poll may take up to ATTENTION_POLL_MS (5s) to pick it up.
+      await expect(page.getByRole("link", { name: /^Approvals\s+1$/ })).toBeVisible({ timeout: 10_000 });
+
+      await page.goto(`/runs/${runId}`);
+      await expect(page.getByText("Running", { exact: true }).first()).toBeVisible();
+
+      const killBtn = page.getByRole("button", { name: "Kill", exact: true });
+      await expect(killBtn).toBeEnabled();
+      await killBtn.click();
+      const confirm = page.getByRole("alertdialog");
+      await expect(confirm).toBeVisible();
+      await confirm.getByRole("button", { name: "Kill run" }).click();
+      await expect(page.getByText(/Kill requested for|Failed to kill/).first()).toBeVisible({ timeout: 10_000 });
+
+      // The run's own Approvals tab: CANCELLED, no Approve/Deny — `pending &&`
+      // gates those buttons on a.state === "PENDING", so a CANCELLED row
+      // renders none. Poll: finalizeRunTail/handleKillRun's cascade and this
+      // tab's own fetch both need the terminal transition to have landed.
+      const tab = page.getByRole("tab", { name: /^Approvals/ });
+      await tab.click();
+      await expect(page.getByText(APPROVAL.STATE_CANCELLED, { exact: true })).toBeVisible({ timeout: 15_000 });
+      await expect(page.getByRole("button", { name: "Approve" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Deny" })).toHaveCount(0);
+
+      // The nav badge: back to 0 (no number rendered at all) — the cancelled
+      // row is no longer PENDING, so refreshBadges' next tick counts nothing.
+      await expect(page.getByRole("link", { name: "Approvals", exact: true })).toBeVisible({ timeout: 10_000 });
+    } finally {
+      deleteApproval(heldId);
     }
   });
 });

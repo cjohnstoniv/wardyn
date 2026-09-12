@@ -18,8 +18,12 @@
 // capability gate (runs_create.go) is skipped entirely. There is no ai_provider
 // integration at all, so an agent run honestly reports that no model provider
 // is connected.
-import { test, expect, gotoConsole } from "./fixtures";
+import { test, expect, gotoConsole, ADMIN_TOKEN } from "./fixtures";
+import { RUN } from "../src/app/components/wardyn/copy";
+import { CC_META } from "../src/app/components/wardyn/cc-meta";
+import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import type { Page } from "@playwright/test";
+import type { ConfinementClass } from "../src/app/lib/types";
 
 async function openNewRun(page: Page) {
   await gotoConsole(page);
@@ -196,5 +200,97 @@ test.describe("New run — Preflight sends the body Launch sends", () => {
     expect(bodies.preflight).toBeTruthy();
     expect(bodies.create).toBeTruthy();
     expect(JSON.parse(bodies.preflight)).toEqual(JSON.parse(bodies.create));
+  });
+});
+
+// B4b — "Start a run like this one". A killed run's failure block carries a
+// clone button that hands the wizard a RunPrefill via react-router navigation
+// state (run-detail.tsx's onClone -> navigate("/runs/new", { state: { prefill
+// } })) — real navigation, real state, so this has to be driven through the
+// UI click rather than a bare page.goto (which would carry no location state
+// at all).
+test.describe("New run — B4b clone from a killed run", () => {
+  test("clones task/agent/barrier from the killed run, and Launch enables once titled", async ({ page }) => {
+    const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    // "e2e fixture 7" is the seeded backend's KILLED run (scripts/e2e-backend.sh)
+    // — read its real facts rather than hardcode them, so this test tracks the
+    // seed instead of duplicating it.
+    const runs = await (await page.request.get("/api/v1/runs?limit=1000", { headers: auth })).json();
+    const source = runs.find((r: { task: string }) => r.task === "e2e fixture 7");
+    expect(source, "seeded KILLED fixture 7 not found").toBeTruthy();
+    expect(source.state).toBe("KILLED");
+
+    await gotoConsole(page);
+    await page.getByText("e2e fixture 7").click();
+    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page.getByText("Killed", { exact: true })).toBeVisible();
+
+    await page.getByRole("button", { name: RUN.CLONE_CTA }).click();
+    await expect(page).toHaveURL(/\/runs\/new$/);
+    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+
+    // The prefill banner — both standing sentences, and never the inline-
+    // policy ceiling (this run launched against a stored/default policy, not
+    // an inline one).
+    const banner = page.getByRole("status").filter({ hasText: RUN.CLONE_NOTE });
+    await expect(banner).toBeVisible();
+    await expect(banner.getByText(RUN.CLONE_CEILING_NOTE)).toBeVisible();
+
+    // Task carried verbatim.
+    await expect(page.getByLabel("Task")).toHaveValue(source.task);
+    // Agent carried (fixture 7 is claude-code, per the seed's agents array).
+    await expect(page.getByRole("combobox", { name: "Agent" })).toHaveText(/Claude Code/);
+    // Barrier carried — the run's own confinement_class, whatever it is.
+    const barrierLabel = CC_META[source.confinement_class as ConfinementClass].label;
+    await expect(
+      page.getByRole("radiogroup", { name: "Barrier" }).getByRole("radio", { name: barrierLabel }),
+    ).toHaveAttribute("aria-checked", "true");
+
+    // Title does NOT clone (fixture 7 was seeded untitled) — Launch is
+    // withheld until one is given, exactly the fresh-wizard rule.
+    const launch = page.getByRole("button", { name: "Launch run" });
+    await expect(launch).toBeDisabled();
+    await page.getByLabel("Title").fill("cloned from fixture 7");
+    await expect(launch).toBeEnabled();
+  });
+});
+
+// The workspace-row "not an enabled provider" state (A3's per-repo-source
+// `admitted` flag). Spliced onto the real GET /workspaces response — no
+// provider row exists in this harness to genuinely produce admitted:false
+// (legacy open mode admits everything), so this proves the CLIENT's render of
+// a wire fact the server can compose; the admission RULE itself is Go's
+// (user-drives-copy.ts's DRIVE_MEMBER precedent for the same technique).
+test.describe("New run — workspace-card 'not an enabled provider' state", () => {
+  test("a repo source with admitted:false shows PROVIDERS.CARD_NOT_ADMITTED under the picker", async ({
+    page,
+  }) => {
+    // listWorkspaces() calls withLimit("/workspaces"), which appends
+    // "?limit=..." — a bare "**/api/v1/workspaces" glob anchors past the end
+    // of the path and never matches the query-string form (the same trap
+    // drives.spec.ts's own RUNS_LIST_GLOB comment names for /runs).
+    await page.route("**/api/v1/workspaces*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      const list = Array.isArray(json) ? json : (json.workspaces ?? []);
+      const target = list[0];
+      if (target) {
+        target.sources = [
+          ...(target.sources ?? []),
+          { type: "repo", source: "https://gitlab.example/acme/refused.git", admitted: false },
+        ];
+      }
+      await route.fulfill({ response, json });
+    });
+
+    await gotoConsole(page);
+    await page.getByRole("button", { name: "New run" }).click();
+    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+
+    await page.getByRole("combobox").filter({ hasText: /Ephemeral scratch/ }).click();
+    await page.getByRole("option", { name: "payments" }).click();
+
+    await expect(page.getByText(PROVIDERS.CARD_NOT_ADMITTED)).toBeVisible();
   });
 });

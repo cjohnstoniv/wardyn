@@ -4,25 +4,28 @@
  */
 
 import { test, expect, gotoConsole, navToRoute } from "./fixtures";
-import type { Page } from "@playwright/test";
+import type { Page, Route } from "@playwright/test";
 
-// E2E coverage for the redesigned Recordings screen
-// (src/app/components/screens/recording.tsx).
+// E2E coverage for the Recordings screen (src/app/components/screens/
+// recording.tsx) — REWRITTEN per VL-15 (verify ledger, v0.7.2): R4-F077 landed
+// server-side has_recording/recording_bytes/recording_duration_sec projected
+// straight onto listRuns()'s own response (?include=recording_meta), so the
+// library is built from THAT ONE CALL. The mechanism this file drove before —
+// intercepting a per-run GET /runs/{id}/recording/{id} probe fired for every
+// row while the list rendered — no longer happens at all: recording.tsx's own
+// header comment says so ("It used to ask every run individually
+// (api.probeRecording, since removed here)"). A cast is now fetched
+// (api.getRecording) exactly once, when a viewer presses play.
 //
-// The redesign made Recordings a client-SYNTHESIZED library: there is no
-// "list all recordings" API, so the screen lists every run (listRuns) and then
-// probes each one's GET /runs/{id}/recording/{id}, building the card grid from
-// whichever probes return a cast. That makes the seeded `none`-runner backend
-// (where every getRecording 404s) exercise the honest empty/loading states, and
-// lets us drive the with-recordings and failure paths purely via route intercepts.
-//
-// Recording-fetch URLs match /api/v1/runs/{id}/recording/{id}.
-const RECORDING_GLOB = "**/api/v1/runs/*/recording/*";
-// listRuns() requests /api/v1/runs?limit=1000 (withLimit in lib/api/core.ts), and
-// Playwright anchors a "**/api/v1/runs" glob with a trailing `$`, so it never
-// matches the query-string form. A RegExp matches the list endpoint with or without
-// the ?limit= query, while still not matching /api/v1/runs/{id}/... sub-resources.
+// So the browser-vs-API split here is: the LIST is spliced on the way past
+// (route.fetch() + patch + refulfill, the fixtures.ts mockMemberRole
+// technique) because the seeded `none`-runner backend never produces a real
+// recording for any of its 9 fixtures — has_recording is genuinely false for
+// all of them — while the PLAY fetch is proven against a real intercepted
+// response, never a stub standing in for the server's own has_recording
+// computation (which is A4's, pinned in Go).
 const RUNS_LIST_GLOB = /\/api\/v1\/runs(\?|$)/;
+const RECORDING_GLOB = "**/api/v1/runs/*/recording/*";
 
 // A minimal, valid asciicast v2 document (header line + one output event).
 const CAST =
@@ -38,38 +41,75 @@ async function openRecordings(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { name: "Recordings" })).toBeVisible();
 }
 
+// Splices has_recording/recording_bytes/recording_duration_sec onto whichever
+// of the seeded runs `patch` names (by task text), on the ONE listRuns() call
+// this screen makes (?include=recording_meta) — the real 9 fixtures, real
+// ids, real every-other-field, with only the three R4-F077 projection fields
+// stood in for what this `none`-runner harness can never produce for real.
+// Registered BEFORE openRecordings() navigates, so it is in place for the
+// screen's own mount-time fetch.
+async function mockRecordingMeta(page: Page, patch: Record<string, { bytes: number; durationSec: number }>): Promise<void> {
+  await page.route(RUNS_LIST_GLOB, async (route: Route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const response = await route.fetch();
+    const json = await response.json();
+    if (!Array.isArray(json)) return route.fulfill({ response, json });
+    for (const run of json) {
+      const meta = patch[run.task];
+      if (meta) {
+        run.has_recording = true;
+        run.recording_bytes = meta.bytes;
+        run.recording_duration_sec = meta.durationSec;
+      } else {
+        run.has_recording = false;
+      }
+    }
+    await route.fulfill({ response, json });
+  });
+}
+
 test.describe("Recordings library", () => {
-  test("renders the header, honest description and a refresh action", async ({ page }) => {
+  test("renders the header, the run-list-alone description and a refresh action", async ({ page }) => {
     await openRecordings(page);
-    await expect(
-      page.getByText(/Captured terminal sessions, replayed byte-for-byte/i),
-    ).toBeVisible();
-    // The description is honest about the client-synthesized nature of the list.
-    await expect(page.getByText(/this library is built by checking each run/i)).toBeVisible();
+    await expect(page.getByText(/Captured terminal sessions, replayed byte-for-byte/i)).toBeVisible();
+    // The description is honest about WHERE has_recording comes from now: the
+    // run list itself, not a per-run probe — the exact sentence VL-15 exists
+    // because the OLD one ("this library is built by checking each run") no
+    // longer describes what the screen does.
+    await expect(page.getByText(/Built from the run list alone/i)).toBeVisible();
     await expect(page.getByRole("button", { name: "Refresh" })).toBeVisible();
   });
 
-  test("the none-runner backend has no recordings → settles to the empty library (no infinite spinner)", async ({
-    page,
-  }) => {
+  test("the none-runner backend genuinely has no recordings — no probe needed to know that", async ({ page }) => {
+    // UNMOCKED: every one of the 9 seeded runs really does answer
+    // has_recording:false from the real server, because this harness's `none`
+    // runner never produces a cast. If has_recording were still being derived
+    // by probing each run's recording endpoint, this would be the test most
+    // likely to hang on nine outstanding requests instead of settling.
+    const probes: string[] = [];
+    await page.route(RECORDING_GLOB, (route) => {
+      probes.push(route.request().url());
+      return route.continue();
+    });
+
     await openRecordings(page);
 
-    // After probing every run (all 404 on the `none` runner) the library settles
-    // to the "no recordings" empty state — never an endless spinner.
     await expect(page.getByRole("heading", { name: EMPTY_TITLE })).toBeVisible();
-    await expect(
-      page.getByText(/A recording is produced once an agent process runs in the sandbox/i),
-    ).toBeVisible();
+    await expect(page.getByText(/A recording is produced once an agent process runs in the sandbox/i)).toBeVisible();
     await expect(page.getByRole("link", { name: /Go to Runs/ })).toBeVisible();
-
-    // No spinner remains once checking is done.
     await expect(page.locator("main svg.animate-spin")).toHaveCount(0);
+
+    // THE pin VL-15 is for: zero recording-probe requests were made to reach
+    // that empty state. The old mechanism could only ever answer this
+    // question by making nine of them.
+    expect(probes, `expected no per-run recording probes while browsing the list, saw: ${probes.join(", ")}`).toEqual([]);
   });
 
   test("a listRuns() failure renders its own error, and Retry recovers", async ({ page }) => {
-    // Reach the console FIRST so the app's auth probe (which GETs /runs) succeeds
-    // and the shell mounts; only THEN fail the runs list so the RecordingScreen's
-    // own listRuns() hits the 500.
+    // Reach the console FIRST so the app's own auth probe (which GETs /runs
+    // without the recording_meta param) succeeds and the shell mounts; only
+    // THEN fail the runs list so the RecordingScreen's own listRuns() call —
+    // the one that asks for ?include=recording_meta — hits the 500.
     await gotoConsole(page);
     let fail = true;
     await page.route(RUNS_LIST_GLOB, (route, request) => {
@@ -83,47 +123,95 @@ test.describe("Recordings library", () => {
     await expect(page.getByText(RUNS_ERROR)).toBeVisible();
     await expect(page.getByRole("button", { name: /retry/i })).toBeVisible();
 
-    // Heal the route, Retry, and the library recovers to its empty state.
     fail = false;
     await page.getByRole("button", { name: /retry/i }).click();
     await expect(page.getByText(RUNS_ERROR)).toHaveCount(0);
     await expect(page.getByRole("heading", { name: EMPTY_TITLE })).toBeVisible();
   });
 
-  test("runs whose recording probe fails surface a check-failure notice with Retry", async ({
+  test("a library spliced onto the run list renders cards straight off its fields — no per-row fetch", async ({
     page,
   }) => {
-    // listRuns succeeds (9 runs) but every getRecording() probe 500s. The screen
-    // must not pretend those runs simply have no recording — it reports how many
-    // couldn't be checked and offers a Retry.
-    await page.route(RECORDING_GLOB, (route) =>
-      route.fulfill({ status: 500, contentType: "text/plain", body: "boom" }),
-    );
+    const probes: string[] = [];
+    await page.route(RECORDING_GLOB, (route) => {
+      probes.push(route.request().url());
+      return route.continue();
+    });
+    await mockRecordingMeta(page, {
+      "e2e fixture 4": { bytes: 40_960, durationSec: 125 },
+      "e2e fixture 7": { bytes: 2048, durationSec: 0 },
+    });
 
     await openRecordings(page);
 
-    await expect(page.getByText(/9 runs couldn't be checked for a recording\./i)).toBeVisible();
-    await expect(page.getByRole("button", { name: /retry/i })).toBeVisible();
+    // Exactly the two rows the splice marked — the rest of the 9 fixtures
+    // stayed has_recording:false and are absent from the library, not shown
+    // greyed out: this screen has no "no recording" card state.
+    await expect(page.getByText("e2e fixture 4")).toBeVisible();
+    await expect(page.getByText("e2e fixture 7")).toBeVisible();
+    await expect(page.getByRole("link", { name: /Open run/ })).toHaveCount(2);
+
+    // The card's byte size and duration came straight off the LIST response —
+    // rendered without ever asking the recording endpoint for anything.
+    await expect(page.getByText("40.0 KB")).toBeVisible();
+    await expect(page.getByText("2:05")).toBeVisible();
+    expect(probes, `expected zero recording fetches to render the library, saw: ${probes.join(", ")}`).toEqual([]);
   });
 
-  test("a synthesized library renders recording cards and opens the player", async ({ page }) => {
-    // Every run's probe returns a valid cast, so the library fills with one card
-    // per seeded run.
-    await page.route(RECORDING_GLOB, (route) =>
-      route.fulfill({ status: 200, contentType: "text/plain", body: CAST }),
-    );
+  test("opening a card fetches that ONE run's cast, and only that one", async ({ page }) => {
+    const probedIds: string[] = [];
+    await page.route(RECORDING_GLOB, (route) => {
+      probedIds.push(route.request().url());
+      return route.fulfill({ status: 200, contentType: "text/plain", body: CAST });
+    });
+    await mockRecordingMeta(page, {
+      "e2e fixture 4": { bytes: 512, durationSec: 3 },
+      "e2e fixture 7": { bytes: 512, durationSec: 3 },
+    });
 
     await openRecordings(page);
+    await expect(page.getByRole("link", { name: /Open run/ })).toHaveCount(2);
+    expect(probedIds).toEqual([]); // still nothing before a click
 
-    // Nine seeded runs → nine recording cards, each with an "Open run" deep link.
-    await expect(page.getByRole("link", { name: /Open run/ })).toHaveCount(9);
-    await expect(page.getByText("e2e fixture 4")).toBeVisible();
-
-    // Clicking a card opens the replay dialog titled with the run's task.
     await page.getByText("e2e fixture 4").click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText("e2e fixture 4")).toBeVisible();
+
+    // Exactly one recording fetch happened, and it named fixture 4's run —
+    // the sibling card's cast was never touched.
+    expect(probedIds).toHaveLength(1);
+  });
+
+  test("a getRecording() failure at play time surfaces its own error with Retry", async ({ page }) => {
+    await page.route(RECORDING_GLOB, (route) => route.fulfill({ status: 500, contentType: "text/plain", body: "boom" }));
+    await mockRecordingMeta(page, { "e2e fixture 4": { bytes: 512, durationSec: 3 } });
+
+    await openRecordings(page);
+    await page.getByText("e2e fixture 4").click();
+    await expect(page.getByText("This run's recording could not be loaded.")).toBeVisible();
+    await expect(page.getByRole("button", { name: /retry/i })).toBeVisible();
+  });
+
+  // R4-F077's other half: "Showing n of total" only earns its place past
+  // MIN_CARDS_FOR_FILTERS (4) — fewer than that and the facet bar (with its
+  // count) is noise over two cards. Five marked rows crosses it.
+  test("past four cards the filter bar's count reads the library, and search narrows it live", async ({ page }) => {
+    await mockRecordingMeta(page, {
+      "e2e fixture 0": { bytes: 1, durationSec: 1 },
+      "e2e fixture 1": { bytes: 1, durationSec: 1 },
+      "e2e fixture 2": { bytes: 1, durationSec: 1 },
+      "e2e fixture 4": { bytes: 1, durationSec: 1 },
+      "e2e fixture 7": { bytes: 1, durationSec: 1 },
+    });
+    await openRecordings(page);
+
+    await expect(page.getByRole("link", { name: /Open run/ })).toHaveCount(5);
+    await expect(page.getByText("Showing 5 of 5 recordings")).toBeVisible();
+
+    await page.getByPlaceholder(/Search tasks, repos, run IDs/).fill("fixture 4");
+    await expect(page.getByText("Showing 1 of 5 recordings")).toBeVisible();
+    await expect(page.getByRole("link", { name: /Open run/ })).toHaveCount(1);
   });
 
   // Regression for the CSP-vs-WASM replay bug: the recording player is an
@@ -148,6 +236,7 @@ test.describe("Recordings library", () => {
     await page.route(RECORDING_GLOB, (route) =>
       route.fulfill({ status: 200, contentType: "text/plain", body: CAST }),
     );
+    await mockRecordingMeta(page, { "e2e fixture 4": { bytes: 512, durationSec: 3 } });
     await openRecordings(page);
     await page.getByText("e2e fixture 4").click();
     const dialog = page.getByRole("dialog");

@@ -132,6 +132,74 @@ test.describe("permissions — the admin surface, end to end", () => {
   });
 });
 
+// 0.7.2's seventh kind (workspace-providers round) — added to CAPABILITY_KINDS
+// on the same terms as `agent`/`integration`, so the fresh-install and
+// snapshot-failure tests above already walk it for free. This is the one
+// dedicated round trip: grant → enforce → the kind's own value column and
+// enforcement consequence, real writes against Postgres like the egress_host
+// walk above.
+test.describe("permissions — the seventh kind (workspace_provider) round-trips like the others", () => {
+  test.describe.configure({ mode: "serial" });
+  const PROVIDER_ID = "github";
+  const GRANTEE = "bob@corp.example";
+
+  test("granting a provider id lands the row under its own value column", async ({ page }) => {
+    await gotoConsole(page);
+    await navTo(page, "Permissions");
+
+    await page.getByRole("textbox", { name: PERM.FIELD_WHO, exact: true }).fill(GRANTEE);
+    // The Kind picker defaults to the first CAPABILITY_KINDS entry
+    // (egress_host) — the value field's label follows whichever kind is
+    // selected, so workspace_provider has to be picked before its own
+    // "Provider" field appears.
+    await page.getByRole("combobox", { name: PERM.FIELD_CAPABILITY }).click();
+    await page.getByRole("option", { name: KIND.workspace_provider.label }).click();
+    await page.getByRole("textbox", { name: KIND.workspace_provider.valueLabel, exact: true }).fill(PROVIDER_ID);
+    await page.getByRole("button", { name: PERM.ADD_CTA }).click();
+
+    const table = page.getByRole("table");
+    await expect(table.getByRole("cell", { name: PROVIDER_ID, exact: true })).toBeVisible();
+    await expect(page.getByText(PERM.ADVISORY)).toBeVisible();
+  });
+
+  test("enforcing workspace_provider flips its own chip and consequence, independent of the others", async ({
+    page,
+  }) => {
+    await gotoConsole(page);
+    await navTo(page, "Permissions");
+
+    await page.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.workspace_provider.label}` }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog.getByText(PERM.ENFORCE_ON_TITLE(KIND.workspace_provider.label))).toBeVisible();
+    await dialog.getByRole("button", { name: PERM.ENFORCE_CONFIRM, exact: true }).click();
+
+    await expect(page.getByText(KIND.workspace_provider.enforced)).toBeVisible();
+    // A neighbor kind (egress_host) stays unenforced — enforcing one kind
+    // never flips a sibling's switch.
+    await expect(page.getByText(KIND.egress_host.unenforced)).toBeVisible();
+
+    await page.reload();
+    await expect(page.getByText(KIND.workspace_provider.enforced)).toBeVisible();
+  });
+
+  test("removing the grant returns workspace_provider to its unenforced consequence", async ({ page }) => {
+    await gotoConsole(page);
+    await navTo(page, "Permissions");
+
+    // Stop enforcing first (the lockout guard refuses a grantless enforced
+    // kind's removal path the same as any other), then remove the grant.
+    await page.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.workspace_provider.label}` }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: PERM.ENFORCE_STOP, exact: true }).click();
+    await expect(page.getByText(KIND.workspace_provider.unenforced)).toBeVisible();
+
+    await page
+      .getByRole("button", { name: `${PERM.REMOVE} ${KIND.workspace_provider.label} ${PROVIDER_ID}` })
+      .click();
+    await page.getByRole("alertdialog").getByRole("button", { name: PERM.REMOVE, exact: true }).click();
+    await expect(page.getByRole("table").getByRole("cell", { name: PROVIDER_ID, exact: true })).toHaveCount(0);
+  });
+});
+
 // R4/F015 + R4/F133 — the two places this screen used to state, as fact, an
 // answer it never received. Both need a REAL failed response, which only the
 // browser can produce, so they live here rather than only in RTL.

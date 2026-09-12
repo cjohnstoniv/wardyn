@@ -728,3 +728,69 @@ test.describe("governance — a quota-only profile is not 'None' (R4/F032)", () 
     ).toBeVisible();
   });
 });
+
+// The 0.7.2 storage ceilings: two more integer limits share LimitNumberRow's
+// shape with max_concurrent_runs (F032, above) — max_ephemeral_disk_mib and
+// max_drive_size_mib. Neither earns a Limits-column chip (only the run quota
+// does — governance-screen.tsx's derivation of GOV.LIMITS_NONE reads all
+// three doors plus the quota, deliberately not these two, which surface on
+// /providers' Storage tab as the ceiling an admin sets and on /drives at
+// write-time instead), so the round-trip through the EDITOR — real fields,
+// real save, real reload — is the only e2e proof either exists on the wire.
+test.describe("governance — the two storage ceilings round-trip through the editor (0.7.2)", () => {
+  test("both LimitNumberRows write real integers, and 0 means unlimited on both", async ({ page }) => {
+    const name = `storage-ceilings-${randomUUID().slice(0, 8)}`;
+    await gotoConsole(page);
+    await navTo(page, "Governance");
+    await page.getByRole("button", { name: GOV.NEW_CTA, exact: true }).click();
+
+    const editor = page.getByTestId("governance-profile-editor");
+    await page.locator("#governance-profile-name").fill(name);
+
+    // Both rows render their own hint, and both say 0 is unlimited — read
+    // straight off the frozen copy, not retyped.
+    await expect(editor.getByText(GOV.LIMIT_EPHEMERAL_HINT)).toBeVisible();
+    await expect(editor.getByText(GOV.LIMIT_DRIVE_SIZE_HINT)).toBeVisible();
+
+    const ephemeral = page.locator("#governance-limit-ephemeral");
+    const driveSize = page.locator("#governance-limit-drive-size");
+    // Unset reads as the LimitNumberRow's own empty value, never a literal 0 —
+    // the same numberField convention the Storage tab's disk fields use, so an
+    // admin never mistakes "nothing set" for "explicitly zero".
+    await expect(ephemeral).toHaveValue("");
+    await expect(driveSize).toHaveValue("");
+
+    await ephemeral.fill("4096");
+    await driveSize.fill("102400");
+    await page.getByRole("button", { name: GOV.SAVE, exact: true }).click();
+    await expect(editor).toHaveCount(0);
+
+    // The stored row, read back from the server — not local component state.
+    const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    const snap = await (await page.request.get("/api/v1/governance", { headers: auth })).json();
+    const stored = snap.profiles.find((p: { name: string }) => p.name === name);
+    expect(stored, `profile ${name} missing — did the save land?`).toBeTruthy();
+    expect(stored.limits.max_ephemeral_disk_mib).toBe(4096);
+    expect(stored.limits.max_drive_size_mib).toBe(102400);
+
+    // Reopening the SAME profile shows the SAME two numbers — the editor
+    // reads the stored row, not a value it remembers from the form it just
+    // closed.
+    await page.getByRole("button", { name: `${GOV.EDIT} ${name}` }).click();
+    await expect(page.locator("#governance-limit-ephemeral")).toHaveValue("4096");
+    await expect(page.locator("#governance-limit-drive-size")).toHaveValue("102400");
+
+    // Clearing both back to empty and saving persists them as unlimited
+    // (0/absent), never as a refused write — 0 is a valid ceiling, not an
+    // error.
+    await page.locator("#governance-limit-ephemeral").fill("");
+    await page.locator("#governance-limit-drive-size").fill("");
+    await page.getByRole("button", { name: GOV.SAVE, exact: true }).click();
+    await expect(page.getByTestId("governance-profile-editor")).toHaveCount(0);
+
+    const snap2 = await (await page.request.get("/api/v1/governance", { headers: auth })).json();
+    const cleared = snap2.profiles.find((p: { name: string }) => p.name === name);
+    expect(cleared.limits.max_ephemeral_disk_mib ?? 0).toBe(0);
+    expect(cleared.limits.max_drive_size_mib ?? 0).toBe(0);
+  });
+});

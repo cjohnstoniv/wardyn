@@ -4,6 +4,7 @@
  */
 
 import { test, expect, type Page } from "@playwright/test";
+import { SHELL } from "../src/app/components/wardyn/copy";
 
 // Auth / sign-in lane.
 //
@@ -339,5 +340,80 @@ test.describe("a session revoked mid-run (R4/F116)", () => {
     // …and the gate is a real door, not a dead end: the submit control is there
     // to be used.
     await expect(useTokenButton(page)).toBeVisible();
+  });
+});
+
+// B1 — the console fails CLOSED, never open, when /me never answers.
+//
+// A stored admin token still authenticates (probeAuth hits GET /runs, not
+// /me), so the shell mounts — but app-shell.tsx's own effect calls GET /me
+// separately for role/identity, and whoami() (lib/api/health.ts) folds ANY
+// non-ok response to null. Before the fix, `role` defaulted "admin" and
+// `roleResolved` meant only "the fetch settled" — so a failed /me rendered
+// the FULL admin nav off a guess, indistinguishable from an authz breach.
+// identityResolved now gates the nav directly: settled-but-unknown renders
+// NEITHER nav set, and the banner below is the whole page.
+test.describe("B1 — settled-but-unknown identity (a failed /me renders no nav, not a guess)", () => {
+  test("a 500 on /me shows the identity-unknown banner, no admin nav and no member nav", async ({ page }) => {
+    let meFailing = true;
+    await page.route("**/api/v1/me", (route) => {
+      if (!meFailing) return route.fallback();
+      return route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "boom" }),
+      });
+    });
+    await bootWithStoredToken(page, GOOD_TOKEN);
+
+    // The banner IS the page — role="status", never a spinner, never a
+    // silent guess.
+    const banner = page.getByRole("status").filter({ hasText: SHELL.UNKNOWN_BODY });
+    await expect(banner).toBeVisible();
+
+    // Neither the admin nav (Audit, Policies, Secrets, Permissions,
+    // Governance) nor the member nav (Runs, Approvals, Workspaces) renders —
+    // settled-but-unknown is its own third state, not a fallback to either.
+    for (const label of ["Runs", "Approvals", "Workspaces", "Audit", "Policies", "Secrets", "Permissions", "Governance", "Recordings"]) {
+      await expect(page.getByRole("link", { name: new RegExp(`^${label}`) })).toHaveCount(0);
+    }
+
+    // Retry re-fires whoami() and, once /me answers, resolves the real nav —
+    // this was never a dead end.
+    meFailing = false;
+    await banner.getByRole("button", { name: SHELL.UNKNOWN_ACTION }).click();
+    await expect(runsNav(page)).toBeVisible();
+    await expect(banner).toHaveCount(0);
+  });
+});
+
+// R4-F107 — a failed sign-out says so, rather than a console.error nobody
+// sees. POST /auth/logout is best-effort (health.logout() returns a bool, never
+// throws), and the local admin token is always dropped either way — the
+// question this answers is whether the SERVER-side OIDC session might still
+// be live, which matters on a shared machine.
+test.describe("R4-F107 — a failed sign-out is surfaced, not swallowed", () => {
+  test("POST /auth/logout failing still drops the local session, but toasts that the server wasn't confirmed", async ({
+    page,
+  }) => {
+    await bootWithStoredToken(page, GOOD_TOKEN);
+    await expect(runsNav(page)).toBeVisible();
+
+    await page.route("**/api/v1/auth/logout", (route) =>
+      route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "boom" }) }),
+    );
+
+    const userMenuTrigger = page.locator("header button").filter({ hasText: "admin" });
+    await userMenuTrigger.click();
+    await page.getByRole("menuitem", { name: "Sign out" }).click();
+
+    // The gate returns regardless — this tab really is signed out.
+    await expect(signInToken(page)).toBeVisible();
+    expect(await readToken(page)).toBeNull();
+
+    // …but the toast says what a silent success would have hidden: the
+    // server-side session was never confirmed dead.
+    await expect(page.getByText(SHELL.SIGN_OUT_FAILED_TITLE)).toBeVisible();
+    await expect(page.getByText(SHELL.SIGN_OUT_FAILED_BODY)).toBeVisible();
   });
 });

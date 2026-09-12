@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { randomUUID } from "node:crypto";
 import {
   test,
   expect,
@@ -662,6 +663,45 @@ test.describe("drives — what the member is told at New run", () => {
     await expect(page.getByText(DRIVE_MEMBER.NR_CHECKBOX)).toHaveCount(0);
   });
 
+  // R1-F139 == R4-F052: /me.user_drive_unavailable's four closed tokens
+  // (user_drives_resolve.go), spliced the same way ALLOCATED/paused/denied are
+  // above — a display fact this harness cannot genuinely produce (it would
+  // need a truncated groups snapshot or a governance-resolution failure), so
+  // the RENDER contract is what this pins: workspace-card.tsx's
+  // unavailableReason() maps each token to its own sentence, one line where
+  // the checkbox would be, same shape as NR_PAUSED/NR_DENIED.
+  async function mockMemberDriveUnavailable(page: Page, token: string): Promise<void> {
+    await page.route("**/api/v1/me", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.role = "member";
+      json.operator = false;
+      json.security_operator = false;
+      json.user_drive = null;
+      json.user_drive_unavailable = token;
+      await route.fulfill({ response, json });
+    });
+  }
+
+  test("user_drive_unavailable:governance_unavailable renders NR_GOVERNANCE_UNAVAILABLE", async ({ page }) => {
+    await mockMemberDriveUnavailable(page, "governance_unavailable");
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+
+    await expect(page.getByTestId("nr-drive-reason")).toHaveText(DRIVE_MEMBER.NR_GOVERNANCE_UNAVAILABLE);
+    await expect(page.getByTestId("nr-drive")).toHaveCount(0);
+  });
+
+  test("user_drive_unavailable:unavailable and :unmountable both render NR_UNAVAILABLE", async ({ page }) => {
+    for (const token of ["unavailable", "unmountable"]) {
+      await mockMemberDriveUnavailable(page, token);
+      await gotoConsole(page);
+      await navToRoute(page, "/runs/new");
+      await expect(page.getByTestId("nr-drive-reason")).toHaveText(DRIVE_MEMBER.NR_UNAVAILABLE);
+      await expect(page.getByTestId("nr-drive")).toHaveCount(0);
+    }
+  });
+
   test("Getting Started carries the chip and the sentence that a drive is not a workspace", async ({ page }) => {
     await mockMemberDrive(page, ALLOCATED);
     await gotoConsole(page);
@@ -1133,5 +1173,250 @@ test.describe("allocations: a bounded page says so (R4/F092)", () => {
     await gotoDrives(page);
     await expect(page.getByText(DRIVES.ALLOC_TITLE)).toBeVisible();
     await expect(page.getByText(TRUNCATED)).toHaveCount(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D9 / R4-F106-followup — the six §7.7 write refusals (user-drives-copy.ts's
+// own header: "the six REFUSED_NO_GRANT..REFUSED_BACKEND keys are 422s").
+//
+// FINDING (harness ceiling, not a product defect — verified live, not
+// assumed): only REFUSED_NO_GRANT is reachable through a genuine launch in
+// THIS e2e harness, and it is reachable for a reason that also BOUNDS every
+// other one. capabilitySubjects (internal/api/capabilities.go) — the one
+// chokepoint resolveUserDrive calls before it ever looks at a grant row —
+// derives `users` from the OIDC human context alone (oidcHumanFromContext /
+// oidcEmailFromContext). This harness authenticates with a bare admin bearer
+// token and stands up no IdP at all (this file's own header note: "there is
+// no IdP in this harness"), so for every request `users` is EMPTY and
+// resolveUserDrive returns nil before it ever queries user_drive_grants —
+// REGARDLESS of what is allocated to the literal string "admin-token".
+// REFUSED_PAUSED / REFUSED_WRITABLE / REFUSED_HOME_INVALID / REFUSED_BACKEND
+// / REFUSED_HOME_MISSING all require the resolver to first MATCH a row, so
+// none of them can be produced by any wire request this harness can send —
+// verified by writing a real drive + a real PAUSED grant for that exact
+// subject and confirming the launch still answers REFUSED_NO_GRANT (below),
+// not REFUSED_PAUSED. Real coverage for all five already exists at the Go
+// level (internal/api/user_drives_resolve_test.go,
+// internal/api/user_drives_run_test.go, both grep-confirmed), which is where
+// it has to live until this harness can mint a real OIDC session (a bigger
+// e2e-infra change, out of this lane's scope).
+test.describe("drives — the launch-refusal resolver needs a real OIDC subject this harness has none of (D9, R4-F106-followup)", () => {
+  test("a real PAUSED allocation for 'admin-token' still answers REFUSED_NO_GRANT — pinning the ceiling above, not a gap", async ({
+    page,
+  }) => {
+    const driveRes = await page.request.post("/api/v1/drives", {
+      headers: auth,
+      data: { name: `refusal-ceiling-${randomUUID().slice(0, 8)}`, backend: "docker_volume", home_template: "hash", reclaim: "retain" },
+    });
+    expect(driveRes.status(), await driveRes.text()).toBe(201);
+    const driveId = (await driveRes.json()).id as string;
+    const grantRes = await page.request.post("/api/v1/drives/grants", {
+      headers: auth,
+      data: { subject_type: "user", subject: "admin-token", drive_id: driveId, enabled: false },
+    });
+    expect([200, 201]).toContain(grantRes.status());
+
+    try {
+      const res = await page.request.post("/api/v1/runs", {
+        headers: auth,
+        data: {
+          agent: "claude-code",
+          repo: "acme/widgets",
+          title: "refusal ceiling check",
+          task: "e2e refusal ceiling",
+          drive: { enabled: true },
+        },
+      });
+      expect(res.status()).toBe(422);
+      const { error } = await res.json();
+      // NOT REFUSED_PAUSED, even though the row is genuinely paused — the
+      // resolver never reached it.
+      expect(error).toBe(DRIVE_MEMBER.REFUSED_NO_GRANT);
+    } finally {
+      const snap = await (await page.request.get("/api/v1/drives", { headers: auth })).json();
+      const grant = (snap.grants ?? []).find(
+        (g: { subject: string; drive_id: string; id: string }) => g.subject === "admin-token" && g.drive_id === driveId,
+      );
+      if (grant) await page.request.delete(`/api/v1/drives/grants/${grant.id}`, { headers: auth });
+      await page.request.delete(`/api/v1/drives/${driveId}`, { headers: auth });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// §6.4 — the deployment drive ceiling (Storage tab's FIELD_MAX_DRIVE) refuses
+// an over-limit write with the driveCeilingMsg 422 — the providers-side twin
+// of the door test above (a governance LIMIT vs. a deployment CEILING).
+// ---------------------------------------------------------------------------
+test.describe("drives — the deployment drive ceiling refuses an over-limit write (§6.4)", () => {
+  async function getProviders(page: Page): Promise<{ providers: Record<string, unknown>; etag: string | null }> {
+    const res = await page.request.get("/api/v1/workspace-providers", { headers: auth });
+    return { providers: await res.json(), etag: res.headers()["etag"] ?? null };
+  }
+  async function putProviders(
+    page: Page,
+    next: Record<string, unknown>,
+    etag: string | null,
+  ): Promise<string | null> {
+    const headers: Record<string, string> = { ...auth };
+    if (etag) headers["If-Match"] = etag;
+    const res = await page.request.put("/api/v1/workspace-providers", { headers, data: next });
+    expect(res.status(), await res.text()).toBe(200);
+    return res.headers()["etag"] ?? null;
+  }
+
+  test("size_mib over storage.user_drive.max_size_mib is a 422 naming both numbers", async ({ page }) => {
+    const before = await getProviders(page);
+    const storage = (before.providers.storage as Record<string, unknown>) ?? {};
+    const afterEtag = await putProviders(
+      page,
+      { ...before.providers, storage: { ...storage, user_drive: { ...(storage.user_drive as object), max_size_mib: 1024 } } },
+      before.etag,
+    );
+    try {
+      const res = await page.request.post("/api/v1/drives", {
+        headers: auth,
+        data: { name: `over-ceiling-${randomUUID().slice(0, 8)}`, backend: "docker_volume", size_mib: 4096, reclaim: "retain" },
+      });
+      expect(res.status()).toBe(422);
+      const { error } = await res.json();
+      expect(error).toBe("size_mib 4096 exceeds this deployment's drive ceiling (1024 MiB)");
+    } finally {
+      // Restore exactly what was there before — never leave the ceiling set
+      // for the rest of the file's own drive-creation tests.
+      await putProviders(page, before.providers, afterEtag);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The org switch (GET /drives's `disabled`, S2/0.7.2) — set from the
+// providers Storage tab's own FIELD_DRIVES_ENABLED switch, read here on
+// /drives: one notice above a table that still renders in full (RTL already
+// pins the render in drives-screen.test.tsx; this proves the real wire flag
+// a real providers write produces).
+// ---------------------------------------------------------------------------
+test.describe("drives — the org-switch banner (storage.user_drive.disabled)", () => {
+  async function getProviders(page: Page): Promise<{ providers: Record<string, unknown>; etag: string | null }> {
+    const res = await page.request.get("/api/v1/workspace-providers", { headers: auth });
+    return { providers: await res.json(), etag: res.headers()["etag"] ?? null };
+  }
+  async function putProviders(
+    page: Page,
+    next: Record<string, unknown>,
+    etag: string | null,
+  ): Promise<string | null> {
+    const headers: Record<string, string> = { ...auth };
+    if (etag) headers["If-Match"] = etag;
+    const res = await page.request.put("/api/v1/workspace-providers", { headers, data: next });
+    expect(res.status(), await res.text()).toBe(200);
+    return res.headers()["etag"] ?? null;
+  }
+
+  test("disabling drives deployment-wide renders DRIVES_OFF_BANNER over an otherwise-unchanged screen", async ({
+    page,
+  }) => {
+    const before = await getProviders(page);
+    const storage = (before.providers.storage as Record<string, unknown>) ?? {};
+    const afterEtag = await putProviders(
+      page,
+      { ...before.providers, storage: { ...storage, user_drive: { ...(storage.user_drive as object), disabled: true } } },
+      before.etag,
+    );
+    try {
+      const snap = await (await page.request.get("/api/v1/drives", { headers: auth })).json();
+      expect(snap.disabled).toBe(true);
+
+      await gotoDrives(page);
+      await expect(page.getByText(DRIVES.DRIVES_OFF_BANNER)).toBeVisible();
+      // Nothing else moved: the New drive CTA is still there and still the
+      // screen's one teal — "off" withholds nothing, S2/§6.1's own rule.
+      await expect(page.getByRole("button", { name: DRIVES.NEW_CTA, exact: true })).toBeVisible();
+    } finally {
+      await putProviders(page, before.providers, afterEtag);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R4-F129 — "Attach from your terminal" (run-detail-ssh.tsx)'s owner-only
+// gate had no test: the vitest canvas suite mounts run-detail against fake
+// grants/egress/audit but never a non-owner/non-admin identity, and this
+// spec's own file header notes there is no OIDC in this harness to produce a
+// genuine third-party session — so the negative is proved the same way the
+// member fixtures elsewhere in this file are, splicing /me's principal past
+// the operator flag alone (mockMemberRole leaves `principal` — the real
+// "admin-token" — untouched, which would still match every seeded run's
+// created_by and pass the gate vacuously; the point of this test is a caller
+// who is BOTH not an operator AND not the run's creator).
+// ---------------------------------------------------------------------------
+test.describe("run-detail — the SSH/CLI/UI-apps card is owner-or-admin, and nothing else (R4-F129)", () => {
+  async function mockOtherPrincipal(page: Page, principal: string): Promise<void> {
+    await page.route("**/api/v1/me", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.role = "member";
+      json.operator = false;
+      json.security_operator = false;
+      json.principal = principal;
+      await route.fulfill({ response, json });
+    });
+  }
+
+  test("a caller who neither owns the run nor is an operator sees no attach card at all", async ({ page }) => {
+    const auth2 = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    const runs = await (await page.request.get("/api/v1/runs?limit=1000", { headers: auth2 })).json();
+    // A RUNNING seeded run — the gate's second half (`running`) must not be
+    // what hides the card here.
+    const target = runs.find((r: { task: string; state: string }) => r.task === "e2e fixture 2" && r.state === "RUNNING");
+    expect(target, "seeded RUNNING fixture 2 not found").toBeTruthy();
+
+    await mockOtherPrincipal(page, `not-${target.created_by}@corp.example`);
+    await gotoConsole(page);
+    await navToRoute(page, `/runs/${target.id}`);
+    await expect(page.getByRole("heading", { name: "e2e fixture 2", level: 1 })).toBeVisible();
+
+    await expect(page.getByText("Attach from your terminal")).toHaveCount(0);
+  });
+
+  test("the run's own creator sees the card even without operator rights", async ({ page }) => {
+    const auth2 = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    const runs = await (await page.request.get("/api/v1/runs?limit=1000", { headers: auth2 })).json();
+    const target = runs.find((r: { task: string; state: string }) => r.task === "e2e fixture 2" && r.state === "RUNNING");
+    expect(target, "seeded RUNNING fixture 2 not found").toBeTruthy();
+
+    // Same non-operator role, but the principal now MATCHES created_by — the
+    // owner half of the gate alone must be enough.
+    await mockOtherPrincipal(page, target.created_by);
+    await gotoConsole(page);
+    await navToRoute(page, `/runs/${target.id}`);
+    await expect(page.getByRole("heading", { name: "e2e fixture 2", level: 1 })).toBeVisible();
+
+    await expect(page.getByText("Attach from your terminal")).toBeVisible();
+  });
+
+  test("an admin sees the card on a run they did not create", async ({ page }) => {
+    const auth2 = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    const runs = await (await page.request.get("/api/v1/runs?limit=1000", { headers: auth2 })).json();
+    const target = runs.find((r: { task: string; state: string }) => r.task === "e2e fixture 2" && r.state === "RUNNING");
+    expect(target, "seeded RUNNING fixture 2 not found").toBeTruthy();
+
+    // operator:true (the unspliced default) with a mismatched principal — an
+    // admin who is not the owner. One route, not layered over
+    // mockOtherPrincipal: Playwright checks the LAST-registered route first,
+    // so a second registration would simply replace the first rather than
+    // compose with it.
+    await page.route("**/api/v1/me", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.principal = `not-${target.created_by}@corp.example`;
+      await route.fulfill({ response, json });
+    });
+    await gotoConsole(page);
+    await navToRoute(page, `/runs/${target.id}`);
+    await expect(page.getByRole("heading", { name: "e2e fixture 2", level: 1 })).toBeVisible();
+
+    await expect(page.getByText("Attach from your terminal")).toBeVisible();
   });
 });

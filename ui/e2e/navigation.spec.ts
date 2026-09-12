@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, navTo, sidebarLink, type NavLabel } from "./fixtures";
+import { test, expect, gotoConsole, mockMemberRole, navTo, sidebarLink, type NavLabel } from "./fixtures";
+import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
+import { SHELL } from "../src/app/components/wardyn/copy";
 
 // Navigation + theme + error-boundary coverage for the Wardyn admin console.
 //
@@ -25,14 +27,20 @@ import { test, expect, gotoConsole, navTo, sidebarLink, type NavLabel } from "./
 // Every sidebar destination, its <h1> page title, and a distinctive subtitle the
 // screen renders so we prove the *screen content* mounted, not just the heading.
 // Every blurb below is the screen's real PageHeader description.
+// F077: DESTINATIONS gained Governance + Recordings (0.7.2) — the sidebar is
+// nine items (app-shell.tsx's NAV_ITEMS), and this list used to walk seven,
+// leaving the two newest destinations with no "loads its real screen" pin at
+// all.
 const DESTINATIONS: { label: NavLabel; heading: string; blurb: RegExp }[] = [
   { label: "Runs", heading: "Runs", blurb: /each confined behind its own barrier/i },
   { label: "Approvals", heading: "Approvals", blurb: /nothing privileged happens without one/i },
   { label: "Policies", heading: "Policies", blurb: /egress allowlist/i },
+  { label: "Governance", heading: "Governance", blurb: /Named ceilings, assigned to people and groups/i },
   { label: "Permissions", heading: "Permissions", blurb: /Each capability is enforced on its own/i },
   { label: "Secrets", heading: "Secrets", blurb: /values go in and never come out/i },
   { label: "Workspaces", heading: "Workspaces", blurb: /a run can attach\. runs can only attach what's listed here/i },
   { label: "Audit", heading: "Audit", blurb: /Append-only/i },
+  { label: "Recordings", heading: "Recordings", blurb: /Captured terminal sessions, replayed byte-for-byte/i },
 ];
 
 // The set of sidebar links that must remain mounted on every screen — proves
@@ -42,9 +50,11 @@ const SIDEBAR_LABELS: NavLabel[] = [
   "Approvals",
   "Workspaces",
   "Policies",
+  "Governance",
   "Permissions",
   "Secrets",
   "Audit",
+  "Recordings",
 ];
 
 async function expectSidebarMounted(page: import("@playwright/test").Page) {
@@ -139,6 +149,52 @@ test.describe("navigation + shell", () => {
     await navTo(page, "Policies");
     await expect(page.getByRole("heading", { name: "Policies", level: 1 })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Approvals", level: 1 })).toHaveCount(0);
+  });
+
+  // B1 — the sidebar itself is the surface the fail-open bug widened: a
+  // settled-but-unknown /me used to render the FULL admin nav (every item in
+  // NAV_ITEMS) off a guess. The auth-flow assertions (the banner, Retry) are
+  // auth.spec.ts's; this is the sidebar's own pin, that NOTHING renders
+  // rather than the wrong thing rendering.
+  test("B1 — a settled-but-unknown /me renders no nav at all, admin or member", async ({ page }) => {
+    await page.route("**/api/v1/me", (route) =>
+      route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "boom" }) }),
+    );
+    // NOT gotoConsole(): FirstRunLanding (App.tsx) explicitly returns null for
+    // settled-but-unknown (`if (roleResolved && !identityResolved) return
+    // null`) — with /me permanently failing there is no redirect off "/" to
+    // wait for; the shell (and its banner) render right where the app
+    // landed.
+    await page.goto("/");
+    await expect(page.getByRole("status").filter({ hasText: SHELL.UNKNOWN_BODY })).toBeVisible();
+    for (const label of [...SIDEBAR_LABELS, "Workspaces"] as NavLabel[]) {
+      await expect(sidebarLink(page, label)).toHaveCount(0);
+    }
+  });
+
+  // /providers has no nav item at all (§9.1) — the funnel step card and the
+  // Settings card are its only two entry points, the same as /drives. Present
+  // for a member too: SIDEBAR_LABELS above never carried it, so this is the
+  // negative the fixed list alone can't prove — that the omission is by
+  // design, not an accident of the admin nav shrinking to the member set.
+  // BROWSER VS API: mockMemberRole splices /me's role only (fixtures.ts's own
+  // documented ceiling) — this proves the sidebar's RENDER behavior for a
+  // member; server-side authorization over every route behind these links is
+  // pinned in Go (the operatorOnly route group, authz_test.go's route matrix).
+  test("/providers has no sidebar entry for an admin", async ({ page }) => {
+    await gotoConsole(page);
+    await expect(page.getByRole("link", { name: new RegExp(`^${PROVIDERS.TITLE}`) })).toHaveCount(0);
+  });
+
+  test("/providers has no sidebar entry for a member either", async ({ page }) => {
+    // mockMemberRole registered BEFORE the first navigation (the codebase's
+    // own idiom everywhere else it's used) — registering it mid-session and
+    // then reload()ing races the reload against the in-flight /me it is
+    // trying to splice, which Playwright reports as "Response has been
+    // disposed" when the frame navigates out from under route.fetch().
+    await mockMemberRole(page);
+    await gotoConsole(page);
+    await expect(page.getByRole("link", { name: new RegExp(`^${PROVIDERS.TITLE}`) })).toHaveCount(0);
   });
 });
 
