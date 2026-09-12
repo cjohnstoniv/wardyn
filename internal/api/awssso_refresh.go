@@ -203,8 +203,10 @@ func awsSSOTokenFingerprint(refreshToken string) string {
 }
 
 // lockAWSSSOOwner takes the per-owner single-flight lock and returns its
-// release. Owner is the secret-store namespace the blob was read from (the
-// operator-wide "" today).
+// release. Owner is the secret-store namespace the blob was read from: "" is
+// the operator-wide one (a `shared` credential), and under a per_user row it is
+// the principal's own — so two people renewing at once never serialise behind
+// each other, and two dispatches of the SAME person's runs always do.
 func (s *Server) lockAWSSSOOwner(owner string) func() {
 	s.ssoRefreshMu.Lock()
 	if s.ssoRefreshLocks == nil {
@@ -256,7 +258,7 @@ func (s *Server) markAWSSSOTokenSpent(fingerprint string) {
 // throw away a credential we hold. This run is served from the in-memory blob and
 // the persist failure is audited — the NEXT dispatch reads the old, now-spent
 // pair and asks the person to sign in again rather than redeeming it twice.
-func (s *Server) refreshAWSSSOBlob(ctx context.Context, owner string, blob awsSSOBlob) (awsSSOBlob, string) {
+func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob awsSSOBlob) (awsSSOBlob, string) {
 	now := s.cfg.Now()
 	if !blob.renewable(now) || !blob.needsRefresh(now) {
 		return blob, ""
@@ -265,12 +267,14 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, owner string, blob awsSS
 		return blob, awsSSORefreshSpentSentence
 	}
 
-	unlock := s.lockAWSSSOOwner(owner)
+	unlock := s.lockAWSSSOOwner(scope.owner)
 	defer unlock()
 
 	// Re-read inside the lock; a store error here is not fatal (we still hold a
-	// blob), an absent credential is (it was disconnected mid-flight).
-	if cur, found, rerr := s.readAWSSSOBlob(ctx); rerr == nil {
+	// blob), an absent credential is (it was disconnected mid-flight). Through
+	// the SAME scope the caller read it with: re-reading the operator's row for a
+	// per_user principal would renew — and re-persist — the wrong credential.
+	if cur, found, rerr := s.readAWSSSOBlob(ctx, scope); rerr == nil {
 		if !found {
 			return blob, awsSSORefreshSpentSentence
 		}
@@ -293,7 +297,7 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, owner string, blob awsSS
 		}
 		slog.ErrorContext(ctx, "wardynd: renewing the captured AWS SSO credential failed",
 			slog.Bool("credential_spent", spent), slog.Any("err", err))
-		s.auditAWSSSORefresh(ctx, owner, "failure", map[string]any{
+		s.auditAWSSSORefresh(ctx, scope, "failure", map[string]any{
 			"provider": awsSSOProvider, "spent": spent, "error": err.Error(),
 		})
 		if spent {
@@ -333,7 +337,7 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, owner string, blob awsSS
 		"rotated":                 rotated,
 	}
 	outcome := "success"
-	if perr := s.storeAWSSSOBlob(ctx, next); perr != nil {
+	if perr := s.storeAWSSSOBlob(ctx, scope, next); perr != nil {
 		// Redeemed but not stored — see the doc comment. Audited as a failure so
 		// the row is not read as "the rotated pair is safe", and the run still
 		// gets its credential.
@@ -342,15 +346,21 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, owner string, blob awsSS
 		slog.ErrorContext(ctx, "wardynd: persisting the renewed AWS SSO credential failed; serving this run from memory",
 			slog.Any("err", perr))
 	}
-	s.auditAWSSSORefresh(ctx, owner, outcome, data)
+	s.auditAWSSSORefresh(ctx, scope, outcome, data)
 	return next, ""
 }
 
 // auditAWSSSORefresh emits the harness.credential.refresh row. Run-less: the
 // credential is per-principal, not per-run, and resolveBedrockAuth is reached
 // from create and preflight as well as dispatch.
-func (s *Server) auditAWSSSORefresh(ctx context.Context, owner, outcome string, data map[string]any) {
-	data["owner"] = owner
+//
+// owner + credential_source are what make the row answerable under per_user:
+// "" and "shared" is the one credential everybody's runs use, a subject and
+// "per_user" is that person's own — and the pair is how a reader tells a
+// fleet-wide outage from one lapsed sign-in.
+func (s *Server) auditAWSSSORefresh(ctx context.Context, scope awsSSOScope, outcome string, data map[string]any) {
+	data["owner"] = scope.owner
+	data["credential_source"] = awsSSOCredentialSourceLabel(scope)
 	s.recordAudit(ctx, s.auditEvent(nil, types.ActorSystem, "wardynd",
 		"harness.credential.refresh", harnessCredSecretName(awsSSOProvider), outcome, mustJSON(data)))
 }

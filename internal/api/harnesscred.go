@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -365,23 +366,62 @@ func (s *Server) readManagedBlob(ctx context.Context, provider string) (managedC
 		func(b managedCredBlob) bool { return strings.TrimSpace(b.Token) != "" })
 }
 
-// readAWSSSOBlob loads the captured AWS SSO credential; usable = the full shape
-// GetRoleCredentials needs (awsSSOBlob.valid).
-func (s *Server) readAWSSSOBlob(ctx context.Context) (awsSSOBlob, bool, error) {
-	return readHarnessBlob(ctx, s.cfg.Secrets, awsSSOProvider, "aws sso credential", awsSSOBlob.valid)
+// readAWSSSOBlob loads the captured AWS SSO credential from the namespace scope
+// names; usable = the full shape GetRoleCredentials needs (awsSSOBlob.valid).
+//
+// The ZERO scope is the operator namespace — byte-for-byte the read this was
+// before per_user existed, and what a `shared` row (or no roster) resolves to.
+//
+// A PER-USER scope reads that principal's OWN row and never the operator's, and
+// the List-then-Get shape is the whole reason this is not a one-liner:
+// Store.For(owner).Get FALLS BACK to the operator's row by contract
+// (internal/secretstore/pg), so the obvious For(owner).Get would serve the
+// ADMIN'S session to a member who has captured nothing — the exact substitution
+// per_user exists to refuse. For("").List() is never consulted, so the owner's
+// own rows are all this can see. A per-user scope with NO owner reads as
+// ABSENT: a credential nobody owns is not the operator's.
+func (s *Server) readAWSSSOBlob(ctx context.Context, scope awsSSOScope) (awsSSOBlob, bool, error) {
+	st := s.cfg.Secrets
+	if scope.perUser {
+		if st == nil || !scope.namespaced() {
+			return awsSSOBlob{}, false, nil
+		}
+		st = st.For(scope.owner)
+		own, lerr := st.List(ctx)
+		if lerr != nil {
+			return awsSSOBlob{}, false, fmt.Errorf("list own aws sso credential: %w", lerr)
+		}
+		if !slices.Contains(own, harnessCredSecretName(awsSSOProvider)) {
+			return awsSSOBlob{}, false, nil
+		}
+	}
+	return readHarnessBlob(ctx, st, awsSSOProvider, "aws sso credential", awsSSOBlob.valid)
 }
 
 // storeAWSSSOBlob persists a captured AWS SSO credential under the reserved
-// harness secret name. Callers must have validated the blob first.
-func (s *Server) storeAWSSSOBlob(ctx context.Context, blob awsSSOBlob) error {
+// harness secret name, in the namespace scope names. Callers must have validated
+// the blob first.
+//
+// Put never falls back (it is scoped to the view's own row by contract), so the
+// per-user arm needs no List dance — but it DOES need a non-empty owner, or the
+// write would land in the operator namespace and hand every member's runs one
+// person's session.
+func (s *Server) storeAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob awsSSOBlob) error {
 	if s.cfg.Secrets == nil {
 		return fmt.Errorf("no secret store configured")
+	}
+	st := s.cfg.Secrets
+	if scope.perUser {
+		if !scope.namespaced() {
+			return fmt.Errorf("a per-user aws sso credential has no owner to store it under")
+		}
+		st = st.For(scope.owner)
 	}
 	raw, err := json.Marshal(blob)
 	if err != nil {
 		return fmt.Errorf("marshal aws sso credential blob: %w", err)
 	}
-	return s.cfg.Secrets.Put(ctx, harnessCredSecretName(awsSSOProvider), raw) // operator-wide, not per-principal
+	return st.Put(ctx, harnessCredSecretName(awsSSOProvider), raw)
 }
 
 // ── Login run launch ─────────────────────────────────────────────────────────
@@ -423,11 +463,18 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	}
 
 	runID := uuid.New()
-	// The managed-harness login sits on operatorOnly and connects the SHARED
-	// subscription every run inherits — the deployment's credential, not a
-	// principal's work — so neither governance limit binds it (F153). The
-	// ceiling is resolved further down, for the dispatch deny axis.
-	run, token, err := s.newStepRun(ctx, runID, actor, harnessLoginTask, cc, operatorStepGovernance(governanceCeiling{}), func(run *types.AgentRun) {
+	// THE ACTING PRINCIPAL'S CEILING BINDS, with one exemption. This lane used to
+	// sit on operatorOnly and connect the SHARED subscription every run inherits
+	// — the deployment's credential, not a principal's work — so neither limit
+	// bound it (F153). Under a per_user roster row a MEMBER launches it to
+	// capture THEIR OWN credential, which is their own work, so the limits are
+	// read; for an operator effectiveCeiling short-circuits with no profile and
+	// this is byte-for-byte the old no-op.
+	ceiling, cerr := s.effectiveCeiling(ctx)
+	if cerr != nil {
+		return types.AgentRun{}, cerr
+	}
+	run, token, err := s.newStepRun(ctx, runID, actor, harnessLoginTask, cc, harnessLoginGovernance(ceiling), func(run *types.AgentRun) {
 		run.Agent = hl.agent // the vendor CLI being logged into, never the catalog default
 		run.Interactive = true
 	})
@@ -476,12 +523,12 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// No injections, no repo, no verify plan: a blank interactive box (plus, for
 	// AWS, the non-secret ~/.aws/config above). The `--idle` path installs the MITM
 	// CA and attaches; the login pane auto-types the provider's command.
-	// The acting principal's ceiling. This lane is mounted operatorOnly
-	// (mountSetupMutationRoutes), so effectiveCeiling short-circuits at step 1
-	// with no store read and this resolves to the RESOLVED-empty ceiling — a
-	// provable no-op. It is resolved rather than exempted on purpose: an
-	// exemption is a door that can be claimed by mistake if the route is ever
-	// re-tiered, while a resolve simply starts binding.
+	// The acting principal's ceiling, for the dispatch DENY axis. It was resolved
+	// rather than exempted precisely so that re-tiering this route would simply
+	// start binding instead of leaving a door open — which is what happened: the
+	// login lane is member-reachable under a per_user row now, and this reads the
+	// member's own ceiling with no change. The memo makes it the same resolution
+	// the Limits axis above already made.
 	dc, _, dcErr := s.resolveDispatchCeiling(ctx)
 	if dcErr != nil {
 		return types.AgentRun{}, dcErr
@@ -564,9 +611,101 @@ type harnessLoginResponse struct {
 	RunID string `json:"run_id"`
 }
 
+// harnessLoginMechanism is the agent mechanism a login provider's flow actually
+// captures — one row per lane, the house style of this file. "" means no
+// declared mechanism is captured by that flow, which is every provider but AWS
+// in 0.7.2 (per_user is bedrock_sso-only, types.AgentProvider).
+func harnessLoginMechanism(provider string) types.AgentMechanism {
+	if provider == awsSSOProvider {
+		return types.AgentMechanismBedrockSSO
+	}
+	return ""
+}
+
+// perUserLoginRow finds the ENABLED per_user roster row whose declared mechanism
+// this login flow captures — the row that makes a member's sign-in a thing the
+// org asked for rather than a member launching a sandbox on their own authority.
+//
+// It also carries the ADMIN-OWNED start URL the launch must use: a member's
+// login ignores whatever start URL arrived with the request (see the launch
+// below), so the row is the only source of it.
+//
+// KEYED BY AGENT, not only by mechanism, because the capture that follows this
+// door is scoped by agent (awsSSOScopeFor reads the modelAccessAgent row). If
+// the two ever disagreed — a per_user bedrock_sso row on some OTHER agent id —
+// this door would admit a member whose upload then resolved the ZERO scope and
+// wrote into the OPERATOR namespace. Unreachable today (bedrock_sso is
+// claude-code's lane alone, and validation refuses per_user anywhere else), and
+// closed here rather than left to stay that way by coincidence.
+func perUserLoginRow(sc types.SiteConfig, provider string) (types.AgentProvider, bool) {
+	mech := harnessLoginMechanism(provider)
+	if mech == "" {
+		return types.AgentProvider{}, false
+	}
+	row, ok := agentProviderFor(sc, modelAccessAgent)
+	if !ok || row.Disabled || row.Mechanism != mech || row.CredentialSource != types.CredentialSourcePerUser {
+		return types.AgentProvider{}, false
+	}
+	return row, true
+}
+
+// harnessLoginMemberRefusal / harnessLoginAgentRefusal are the two doors a
+// non-operator meets here. DRAFT (M2 canon pending) — server-refusal shape
+// (docs/design/workspace-providers-prompt.md §7): a lowercase-opening clause
+// naming what was refused, rendered verbatim by the console.
+const (
+	// DRAFT (M2 canon pending)
+	harnessLoginNotPerUserRefusal = "signing in to a model provider yourself is not how this deployment is set up — its model credential is one an admin connects for everyone"
+	// DRAFT (M2 canon pending)
+	harnessLoginAgentRefusal = "you are not granted agent %s — ask an admin to grant it before signing in to its model provider"
+)
+
+// authorizeHarnessLogin decides whether THIS caller may launch a container-login
+// sandbox for provider, and returns the per_user roster row when one governs it.
+//
+// An OPERATOR always may — the route's whole original purpose is an admin
+// connecting the shared credential, and under a per_user row the admin captures
+// their OWN session exactly as anyone else does (it is the one they will be
+// asked about first).
+//
+// ANYONE ELSE — a member, and a security admin, who owns their own secrets like
+// any other principal — needs TWO things, and the predicate lives HERE rather
+// than at the router because both are per-request facts the router cannot see:
+// an enabled per_user row for this provider (the org saying "each person signs
+// in"), and capAgent on THAT ROW'S AGENT. capAgent, not the login sandbox's own
+// aws-sso image: what a grant bounds is which agent's runs a member may launch,
+// and the credential this captures is for the row's agent.
+//
+// The login lane never passes denyMemberRequest: there is no policy, image,
+// workspace or integration in this request to narrow.
+//
+// Returns ok=false when it has already written the refusal.
+func (s *Server) authorizeHarnessLogin(w http.ResponseWriter, r *http.Request, provider string) (types.AgentProvider, bool) {
+	sc, _ := s.siteConfigSnapshot(r.Context())
+	row, perUser := perUserLoginRow(sc, provider)
+	if s.isOperator(r.Context()) {
+		return row, true
+	}
+	if !perUser {
+		return types.AgentProvider{}, !s.denyMemberField(w, r, "setup.harness_login",
+			"harness_login_not_per_user", harnessLoginNotPerUserRefusal)
+	}
+	if s.denyMemberCapability(w, r, capAgent, row.ID, "setup.harness_login",
+		fmt.Sprintf(harnessLoginAgentRefusal, row.ID)) {
+		return types.AgentProvider{}, false
+	}
+	return row, true
+}
+
 // handleHarnessLogin launches a container-login sandbox for a provider:
 //
 //	POST /api/v1/setup/harness-login  {provider}
+//
+// RBAC: the signed-in-human group, with the operator-or-per_user-row predicate
+// INSIDE the handler (authorizeHarnessLogin). It is not operatorOnly any more
+// because under a per_user roster row the whole point is that each person signs
+// in themselves — a member who cannot reach this route has no route to model
+// access at all.
 func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.Secrets == nil {
 		writeError(w, http.StatusServiceUnavailable, "no secret store configured; managed harness login unavailable")
@@ -586,11 +725,27 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "provider does not support container login in this version: "+provider)
 		return
 	}
+	row, allowed := s.authorizeHarnessLogin(w, r, provider)
+	if !allowed {
+		return
+	}
 	// AWS: `aws sso login` cannot run at all without an sso_start_url + sso_region
-	// in the sandbox's ~/.aws/config, and Wardyn stores neither — the region is
-	// boot config, the start URL comes with this request. Refuse up front rather
-	// than launching a sandbox whose auto-typed command is guaranteed to fail.
+	// in the sandbox's ~/.aws/config. The region is boot config; the start URL is
+	// the request's ONLY in legacy mode, where the operator is the sole caller and
+	// there is nowhere else to keep it. Refuse up front rather than launching a
+	// sandbox whose auto-typed command is guaranteed to fail.
 	startURL := strings.TrimSpace(req.SSOStartURL)
+	if row.SSOStartURL != "" {
+		// ADMIN-OWNED, and it OVERRIDES the request rather than merely defaulting
+		// it. A per_user row means many people sign in, and the capture is bound to
+		// whatever portal the launch was seeded with (ssotoken.go's F006 check
+		// compares the blob to THIS run's own audit record) — so honouring a
+		// caller-supplied start URL would let anyone bind their capture to an
+		// IdP/account of their choosing and have Wardyn bake it into every later
+		// Bedrock run's ~/.aws/config. It also takes an org URL off the member's
+		// typing surface entirely.
+		startURL = row.SSOStartURL
+	}
 	if hl.regionalSSOEgress {
 		if startURL == "" {
 			writeError(w, http.StatusBadRequest,
@@ -610,6 +765,13 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 	_, actor := actorFromRequest(r)
 	run, err := s.launchHarnessLoginRun(r.Context(), actor, hl, startURL)
 	if err != nil {
+		// A governance limit is the acting principal's own profile refusing, not a
+		// daemon fault — answered the way launchRecordRun's caller answers it
+		// (record.go), with the profile's own sentence and no 500.
+		if errors.Is(err, errRecordCeilingLimit) {
+			writeError(w, http.StatusForbidden, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "))
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "launch login sandbox: "+err.Error())
 		return
 	}

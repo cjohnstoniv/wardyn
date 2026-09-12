@@ -123,7 +123,7 @@ func TestReadHarnessBlob_InputClasses(t *testing.T) {
 		{
 			name: "aws-sso",
 			read: func(s *Server, ctx context.Context) (bool, error) {
-				_, ok, err := s.readAWSSSOBlob(ctx)
+				_, ok, err := s.readAWSSSOBlob(ctx, awsSSOScope{})
 				return ok, err
 			},
 			good:     goodSSO,
@@ -736,10 +736,15 @@ func TestLoginConfigEnv(t *testing.T) {
 }
 
 // TestHandleHarnessLogin_AWSNeedsStartURLAndRegion: `aws sso login` cannot run
-// without an sso_start_url + sso_region, and Wardyn stores neither (there is no
-// start-URL config knob at all — it arrives with the request; the region is boot
-// config). Refuse before launching a sandbox whose auto-typed command is
-// guaranteed to fail.
+// without an sso_start_url + sso_region, so refuse before launching a sandbox
+// whose auto-typed command is guaranteed to fail.
+//
+// The region is boot config. The start URL arrives with the request ONLY in
+// legacy mode, which is what this test drives: since 0.7.2 a `per_user` agent
+// row carries the org's `sso_start_url` and the launch uses THAT, ignoring the
+// request's — see TestHandleHarnessLogin_PerUserUsesTheRowsStartURL. With no
+// such row there is nowhere else to keep it, and the operator is the only
+// caller, so the request stays the source.
 func TestHandleHarnessLogin_AWSNeedsStartURLAndRegion(t *testing.T) {
 	const path = "/api/v1/setup/harness-login"
 	newSrv := func(region string) *Server {

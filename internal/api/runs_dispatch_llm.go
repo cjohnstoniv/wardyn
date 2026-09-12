@@ -93,7 +93,11 @@ func isModelRun(taskMode string, workspaceID, sourceID *uuid.UUID, interactive b
 // transport resolved here is COMPARED against that declaration and a mismatch
 // fails the run closed instead of being served by another provider's credential
 // (enforceConfiguredLLMMechanism).
-func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec, sandboxEnv map[string]string, injections []runner.InjectionGrant, interactive bool, taskMode string, proxyURL string, bedrockRef *types.WorkspaceBedrockRef) llmTransport {
+// sso is WHOSE captured AWS SSO session this run may use — resolved from the
+// roster by the caller, because the caller is the one holding the site config.
+// The zero value is the operator namespace, i.e. every deployment that never
+// declared a per_user credential source.
+func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec, sandboxEnv map[string]string, injections []runner.InjectionGrant, interactive bool, taskMode string, proxyURL string, bedrockRef *types.WorkspaceBedrockRef, sso awsSSOScope) llmTransport {
 	var t llmTransport
 
 	// modelRun gates EVERY proxy-side credential-injection mode below
@@ -155,7 +159,7 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	if !t.harnessLogin {
 		// refresh=true: dispatch is the ONE pass allowed to redeem a captured AWS SSO
 		// session's rotating refresh token and persist the rotated pair.
-		t.bedrock = s.resolveBedrockAuth(ctx, run.Agent, t.subscription, modelRun, true, bedrockRef)
+		t.bedrock = s.resolveBedrockAuth(ctx, run.Agent, t.subscription, modelRun, true, bedrockRef, sso)
 		t.bedrockReady = t.bedrock.ready
 		// injectBedrockBearer wires bedrock-runtime for proxy-side bearer injection
 		// (never-resident); consumed by the CA / injection / MITM-host wiring
@@ -650,7 +654,14 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	policy *types.RunPolicySpec, sandboxEnv map[string]string, injections []runner.InjectionGrant,
 	proxyURL string, artifactPlan artifactRedirectPlan, artifactInject bool, siteCfg types.SiteConfig,
 ) (dispatchLLMPlan, bool) {
-	llm := s.resolveLLMTransport(ctx, run, policy, sandboxEnv, injections, p.Interactive, p.TaskMode, proxyURL, p.BedrockRef)
+	// WHOSE model credential this run may use, from the roster this phase was
+	// already handed. runIdentitySubject(run.CreatedBy) is the SUBJECT the run's
+	// identity was minted with — the same string every other credential-bearing
+	// path resolves a namespace against — and the request's context values
+	// survive dispatch's WithoutCancel, so a detached dispatch resolves the same
+	// namespace the create door did.
+	sso := awsSSOScopeFor(siteCfg, run.Agent, runIdentitySubject(ctx, run.CreatedBy))
+	llm := s.resolveLLMTransport(ctx, run, policy, sandboxEnv, injections, p.Interactive, p.TaskMode, proxyURL, p.BedrockRef, sso)
 	if p.ResolvedManaged != nil {
 		*p.ResolvedManaged = llm.injectManaged
 	}
@@ -724,7 +735,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		llm: llm, injections: injections,
 		mitmCACertPEM: mitmCACertPEM, mitmCAKeyPEM: mitmCAKeyPEM,
 		bedrockMITMHosts:     bedrockMITMHosts,
-		llmUnavailableDetail: s.llmUnavailableDetail(ctx, run, llm, injections),
+		llmUnavailableDetail: s.llmUnavailableDetail(ctx, run, llm, injections, sso),
 		mitmLLM:              llm.injectSub || llm.injectManaged || mitmForInspect,
 	}, true
 }

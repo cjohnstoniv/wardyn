@@ -142,11 +142,11 @@ func (s *Server) selectedMechanism(agent string, subscription bool, b bedrockAut
 // them together would serve the admin's credential to a member — the exact
 // failure per_user exists to prevent.
 //
-// C4: the per-principal half of that promise is C4's — resolveBedrockAuth still
-// reads the OPERATOR's blob, so a per_user row whose operator blob resolves is
-// admitted here today. When C4 gives resolveBedrockAuth its perUser flag (own
-// blob only, no fall-through to the bearer/mount/static arms), that case becomes
-// "nothing selected" and this same predicate refuses it with no change.
+// That promise is now kept at the SOURCE as well as here: resolveBedrockAuth
+// takes the same per_user scope and reads only the principal's own blob, with no
+// fall-through to the bearer/mount/static arms, so a member with no session of
+// their own arrives here as "nothing selected" and this predicate refuses them —
+// never served the admin's session by a lane that fired underneath it.
 //
 // A declared `none` row (BYOA) matches only when NO lane fired, which is what
 // "Wardyn wires no model credential" means. The gate never reaches it in
@@ -285,7 +285,7 @@ type llmLanes struct {
 // resolveLLMTransport's own lane block; the fold from lanes to a mechanism is
 // selectedMechanism, shared with dispatch.
 func (s *Server) resolveRunLLMLanes(ctx context.Context, req createRunRequest, spec *types.RunPolicySpec,
-	bedrockRef *types.WorkspaceBedrockRef,
+	bedrockRef *types.WorkspaceBedrockRef, sso awsSSOScope,
 ) llmLanes {
 	var l llmLanes
 	llmProv, _ := s.llmProviderFor(req.Agent)
@@ -301,7 +301,7 @@ func (s *Server) resolveRunLLMLanes(ctx context.Context, req createRunRequest, s
 	// expired-but-renewable captured SSO session still reads READY here (dispatch
 	// renews it), so create never warns about — or refuses — a failure that
 	// cannot happen.
-	l.bedrock = s.resolveBedrockAuth(ctx, req.Agent, l.subscription, true, false, bedrockRef)
+	l.bedrock = s.resolveBedrockAuth(ctx, req.Agent, l.subscription, true, false, bedrockRef, sso)
 	// The SAME predicate dispatch applies, with the same terms — including the
 	// posture term, whose absence here made every SSO deployment's managed run
 	// read as "subscription" at create and dispatch as something else.
@@ -327,7 +327,7 @@ func (s *Server) resolveRunLLMLanes(ctx context.Context, req createRunRequest, s
 //
 // Returns ok=false when it has already written the 422.
 func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseWriter, req createRunRequest,
-	spec types.RunPolicySpec, bedrockRef *types.WorkspaceBedrockRef,
+	spec types.RunPolicySpec, bedrockRef *types.WorkspaceBedrockRef, subject string,
 ) bool {
 	if !llmMechanismGateApplies(req) || s.cfg.Store == nil {
 		return true
@@ -343,7 +343,12 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 	if !declared {
 		return true
 	}
-	lanes := s.resolveRunLLMLanes(ctx, req, &spec, bedrockRef)
+	// The roster read above is also what says WHOSE credential this run may use,
+	// so the scope costs nothing extra here. The subject is the CALLER's run
+	// identity — never secretOwnerFromRequest, which answers "" for every
+	// operator and would refuse an admin their own per_user capture at create
+	// while dispatch resolved it fine.
+	lanes := s.resolveRunLLMLanes(ctx, req, &spec, bedrockRef, awsSSOScopeFor(sc, req.Agent, subject))
 	selected, ok := s.selectedMechanism(req.Agent, lanes.subscription, lanes.bedrock, lanes.managed, lanes.apiKey)
 	if mechanismSatisfied(row, selected, ok) {
 		return true
@@ -370,18 +375,21 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 // has nothing to do with Bedrock), and a run that already carries an api-key
 // injection for its provider (whatever 404'd, it was not this).
 //
-// C4: readAWSSSOBlob is the OPERATOR's blob. Under a per_user row the expiry
-// named here is the admin's, not the reader's — when C4 makes that read
-// owner-scoped, this call follows it and the sentence becomes the member's own.
+// sso is the RUN'S OWN scope, so the expiry named is the expiry that matters:
+// under a per_user row the operator's blob says nothing about why THIS
+// principal's run has no credential.
 func (s *Server) llmUnavailableDetail(ctx context.Context, run types.AgentRun, llm llmTransport,
-	injections []runner.InjectionGrant,
+	injections []runner.InjectionGrant, sso awsSSOScope,
 ) string {
 	if llm.bedrockReady || !llm.modelRun || llm.harnessLogin ||
 		run.Agent != "claude-code" || s.hasAnthropicAPIKeyInjection(run.Agent, injections) ||
 		s.cfg.BedrockRegion == "" || s.cfg.BedrockModel == "" {
 		return ""
 	}
-	blob, found, err := s.readAWSSSOBlob(ctx)
+	// The run's OWN scope: under per_user the expiry worth naming is this
+	// principal's, and the operator's says nothing about why their run has no
+	// credential.
+	blob, found, err := s.readAWSSSOBlob(ctx, sso)
 	if err != nil || !found || blob.ExpiresAt.IsZero() {
 		return ""
 	}

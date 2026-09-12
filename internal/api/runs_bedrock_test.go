@@ -88,7 +88,7 @@ func TestResolveBedrockAuth_SSOInject_WinsOverMountAndStaticKeys(t *testing.T) {
 	s.cfg.Now = func() time.Time { return awsSSOTestFixedNow }
 	blob := putAWSSSOBlob(t, s, awsSSOTestFixedNow.Add(time.Hour)) // not expired
 
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil, awsSSOScope{})
 	if !ba.ready || !ba.ssoInject {
 		t.Fatalf("ready=%v ssoInject=%v, want both true", ba.ready, ba.ssoInject)
 	}
@@ -185,7 +185,7 @@ func TestResolveBedrockAuth_SSOInject_ExpiredButRenewableIsUsed(t *testing.T) {
 	s.cfg.Now = func() time.Time { return awsSSOTestFixedNow }
 	putAWSSSOBlob(t, s, awsSSOTestFixedNow.Add(-time.Minute)) // access token already expired
 
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil, awsSSOScope{})
 	if !ba.ready || !ba.ssoInject {
 		t.Fatalf("ready=%v ssoInject=%v; want both true (an expired-but-renewable session is a credential)", ba.ready, ba.ssoInject)
 	}
@@ -209,7 +209,7 @@ func TestResolveBedrockAuth_SSOInject_ExpiredUnrenewableFallsThrough(t *testing.
 	blob.RefreshToken = ""
 	storeSSOBlob(t, s, blob)
 
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, true /* refresh */, nil)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, true /* refresh */, nil, awsSSOScope{})
 	if !ba.ready {
 		t.Fatal("ready = false; want true (falls through to the resident static-key path)")
 	}
@@ -233,7 +233,7 @@ func TestResolveBedrockAuth_SSOInject_LapsedRegistrationFallsThrough(t *testing.
 	blob.RegistrationExpiresAt = awsSSOTestFixedNow.Add(-time.Hour)
 	storeSSOBlob(t, s, blob)
 
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, true /* refresh */, nil)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, true /* refresh */, nil, awsSSOScope{})
 	if ba.ssoInject {
 		t.Fatal("ssoInject = true with a lapsed client registration; want false")
 	}
@@ -251,7 +251,7 @@ func TestResolveBedrockAuth_BearerBeatsSSOInject(t *testing.T) {
 	s.cfg.Secrets.(*memSecrets).m[bedrockAPIKeySecret] = []byte("bedrock-bearer-token-xyz")
 	putAWSSSOBlob(t, s, awsSSOTestFixedNow.Add(time.Hour))
 
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil, awsSSOScope{})
 	if !ba.bearer || ba.ssoInject {
 		t.Fatalf("bearer=%v ssoInject=%v, want bearer preferred over ssoInject", ba.bearer, ba.ssoInject)
 	}
@@ -266,7 +266,7 @@ func TestResolveBedrockAuth_SSOInject_AbsentBlob(t *testing.T) {
 	s.cfg.Now = func() time.Time { return awsSSOTestFixedNow }
 	// No putAWSSSOBlob call: secret store has no aws-sso credential.
 
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil)
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil, awsSSOScope{})
 	if !ba.ready || ba.ssoInject {
 		t.Fatalf("ready=%v ssoInject=%v, want ready=true via the static-key fallback, ssoInject=false", ba.ready, ba.ssoInject)
 	}

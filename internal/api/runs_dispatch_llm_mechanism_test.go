@@ -194,7 +194,7 @@ func TestEnforceConfiguredLLMMechanism_SelectedNotDeclared(t *testing.T) {
 			run := types.AgentRun{ID: uuid.New(), Agent: c.agent, Task: c.task, State: types.RunStarting}
 			policy := &types.RunPolicySpec{AllowedDomains: []string{"git.example.com"}, WorkspaceMounts: c.mounts}
 			llm := srv.resolveLLMTransport(context.Background(), run, policy, map[string]string{},
-				c.injections, c.interactive, c.taskMode, "http://wardyn-proxy:3128", nil)
+				c.injections, c.interactive, c.taskMode, "http://wardyn-proxy:3128", nil, awsSSOScope{})
 
 			admitted := srv.enforceConfiguredLLMMechanism(context.Background(), run, c.sc, llm, c.injections)
 			if admitted == c.wantRefused {
@@ -227,7 +227,7 @@ func TestEnforceConfiguredLLMMechanism_LegacyModeRefusesNothing(t *testing.T) {
 			run := types.AgentRun{ID: uuid.New(), Agent: c.agent, Task: c.task, State: types.RunStarting, WorkspaceID: c.workspaceID}
 			policy := &types.RunPolicySpec{AllowedDomains: []string{"git.example.com"}, WorkspaceMounts: c.mounts}
 			llm := srv.resolveLLMTransport(context.Background(), run, policy, map[string]string{},
-				c.injections, c.interactive, c.taskMode, "http://wardyn-proxy:3128", nil)
+				c.injections, c.interactive, c.taskMode, "http://wardyn-proxy:3128", nil, awsSSOScope{})
 
 			// No block at all, and a block whose rows name other agents: both are
 			// legacy for this run.
@@ -288,7 +288,7 @@ func TestEnforceConfiguredLLMMechanism_UngatedRunKinds(t *testing.T) {
 			run := types.AgentRun{ID: uuid.New(), Agent: c.agent, Task: c.task, State: types.RunStarting, WorkspaceID: c.workspaceID}
 			policy := &types.RunPolicySpec{AllowedDomains: []string{"git.example.com"}}
 			llm := srv.resolveLLMTransport(context.Background(), run, policy, map[string]string{},
-				nil, false, c.taskMode, "http://wardyn-proxy:3128", nil)
+				nil, false, c.taskMode, "http://wardyn-proxy:3128", nil, awsSSOScope{})
 
 			if !srv.enforceConfiguredLLMMechanism(context.Background(), run, c.sc, llm, nil) {
 				t.Fatal("an ungated run kind was refused")
@@ -305,11 +305,13 @@ func TestEnforceConfiguredLLMMechanism_UngatedRunKinds(t *testing.T) {
 // the ONLY admissible lane is a captured AWS SSO session, because every other
 // Bedrock arm is an operator-namespace read.
 //
-// C4 INVERTS THE LAST ROW: resolveBedrockAuth still reads the OPERATOR's blob,
-// so a per_user row whose operator blob resolves is admitted TODAY. When C4
-// gives that resolver its perUser flag (own blob only, no fall-through), the
-// member's case becomes "nothing selected" and this same predicate refuses it —
-// flip the row's want and delete this paragraph.
+// The resolver now keeps the same promise at the source: under per_user it
+// reads only the principal's OWN blob and skips the bearer/mount/static arms
+// entirely, so a member with no session of their own arrives here as "nothing
+// selected" — the row below — rather than carrying the admin's session on a
+// lane that fired underneath this predicate. That end of it is pinned by
+// TestResolveBedrockAuth_PerUserNeverReadsTheOperatorRow (modelaccess_test.go);
+// this table pins the predicate itself.
 func TestMechanismSatisfied_PerUserAdmitsOnlyTheSSOLane(t *testing.T) {
 	perUser := types.AgentProvider{
 		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
@@ -436,7 +438,7 @@ func TestEnforceCreateLLMMechanism_RefusesBeforeARunExists(t *testing.T) {
 			srv := New(cfg)
 			rec := httptest.NewRecorder()
 
-			ok := srv.enforceCreateLLMMechanism(context.Background(), rec, c.req, types.RunPolicySpec{}, nil)
+			ok := srv.enforceCreateLLMMechanism(context.Background(), rec, c.req, types.RunPolicySpec{}, nil, "")
 			if ok == c.wantRefused {
 				t.Fatalf("admitted = %v, want refused = %v (body %q)", ok, c.wantRefused, rec.Body.String())
 			}

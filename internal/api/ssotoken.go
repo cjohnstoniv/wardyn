@@ -137,13 +137,29 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 			"sso token start_url does not match the AWS access portal URL this login run was launched with")
 		return
 	}
+	// WHOSE credential this is. The roster says whether this deployment keeps ONE
+	// model credential for everyone (`shared`, today) or one per person
+	// (`per_user`); the namespace is the login run's OWN identity subject —
+	// claims.Sub, minted at launch from the principal humanOrAdminAuth injected,
+	// and therefore trusted server state rather than anything the sandbox said.
+	// Every read and write below goes through it, so a member's capture lands in
+	// their namespace and can never overwrite the operator's.
+	scope := s.awsSSOScopeForAgent(r.Context(), modelAccessAgent, claims.Sub)
+
 	// Once only. Even a correctly-bound blob must not be replaceable: the login
 	// run stays alive until its idle auto-stop, so without this the sandbox can
 	// overwrite the operator's genuine capture (same start_url/region, the
 	// attacker's access_token/account/role) at any point afterwards. The stored
 	// blob carries the SERVER-stamped SourceRunID below, so "this run already
 	// captured" is answerable from the credential itself.
-	if prev, found, rerr := s.readAWSSSOBlob(r.Context()); rerr != nil {
+	//
+	// READ THROUGH THE SAME SCOPE AS THE WRITE. The operator-wide read this used
+	// to make is not the blob this run is about under per_user: prev would be the
+	// ADMIN's capture, its SourceRunID would never equal this run's, and the
+	// member's own login sandbox could PUT over its own genuine capture as often
+	// as it liked — the exact overwrite this guard exists to refuse, reopened by
+	// reading the wrong namespace.
+	if prev, found, rerr := s.readAWSSSOBlob(r.Context(), scope); rerr != nil {
 		writeError(w, http.StatusInternalServerError, "read existing aws sso credential: "+rerr.Error())
 		return
 	} else if found && prev.SourceRunID == claims.RunID.String() {
@@ -155,7 +171,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	blob.CapturedAt = s.cfg.Now().UTC()
 	blob.SourceRunID = claims.RunID.String()
 
-	if err := s.storeAWSSSOBlob(r.Context(), blob); err != nil {
+	if err := s.storeAWSSSOBlob(r.Context(), scope, blob); err != nil {
 		writeError(w, http.StatusInternalServerError, "store aws sso credential: "+err.Error())
 		return
 	}
@@ -181,6 +197,13 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"harness.credential.captured", harnessCredSecretName(awsSSOProvider), "success",
-		mustJSON(map[string]any{"provider": awsSSOProvider, "source": "helper"})))
+		mustJSON(map[string]any{
+			"provider": awsSSOProvider, "source": "helper",
+			// owner + credential_source say WHOSE credential landed: "" / "shared" is
+			// the one every run uses, a subject / "per_user" is one person's. Without
+			// the pair a per_user estate's capture rows are indistinguishable from
+			// each other, and "who signed in" is the first question after an incident.
+			"owner": scope.owner, "credential_source": awsSSOCredentialSourceLabel(scope),
+		})))
 	w.WriteHeader(http.StatusNoContent)
 }

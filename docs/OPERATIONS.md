@@ -757,7 +757,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 
 | Surface | Gate |
 |---|---|
-| managed harness credential; policy create/update/delete; `PUT /site-config` (a full-document replace, integration credential refs included — and the matching `GET` is gated too, see the operator-topology reads below); `GET /metrics`; the `/access` role-mapping routes below — they bound who derives admin at all | ⛔ admin only |
+| managed harness credential — the token PASTE and DISCONNECT (`PUT`/`DELETE /setup/harness-credential/{provider}`), which write the ONE credential every run inherits; the container LOGIN launch moved to the member row below in 0.7.2; policy create/update/delete; `PUT /site-config` (a full-document replace, integration credential refs included — and the matching `GET` is gated too, see the operator-topology reads below); `GET /metrics`; the `/access` role-mapping routes below — they bound who derives admin at all | ⛔ admin only |
 | the operator-topology READS — `GET /site-config`, `GET /sources`, `GET /sources/{id}`, `GET /base-images`: they carry the upstream-proxy secret ref, a `local_dir` source Locator and internal registry refs, so reading them is reading the deployment's own topology | ⛔ admin only |
 | the `/workspaces` routes that BIND CREDENTIAL MATERIAL or WRITE THE HOST — `llm-cred`, `requirements`, `env-as-code/write` — plus `reassign` (user administration) | ⛔ admin only |
 | the `/workspaces` routes that DECIDE AN EGRESS CEILING — `approved-egress`, `denied-egress`, `promote-egress`: deciding which hosts a workspace's runs may reach is the same authority as deciding an egress approval, and `promote-egress` is that decision in bulk | ⛔ admin or `security_admin` |
@@ -779,6 +779,7 @@ classify). Status icons in the tables throughout this document: 🟢 open/works 
 | the `/drives` routes — registering a **user drive**, allocating it to people or groups, previewing whose drive resolves (`mountUserDriveRoutes`, `internal/api/user_drives.go`) | ⛔ admin only, deliberately NOT the security-admin tier: a drive names a host path (`host_root`) or a cluster storage class, and "never the host" is the line between the two admin tiers |
 | the user-drive **door** — `DenyUserDrive` on a governance profile (`internal/types/governance.go`) | 🟡 security admin too, through `/governance` — a limit on a profile, not a drive; it refuses the mount, it does not deallocate anything |
 | mounting YOUR OWN drive on a run (`drive.enabled`) | 🟢 the person, per run — read-only unless their allocation says otherwise, and the run flag may only narrow that, never widen it |
+| signing in to YOUR OWN model provider (`POST /setup/harness-login`) — the container-login sandbox that captures an AWS SSO session | 🟡 any signed-in human, but ONLY under a `per_user` agent row: the agent roster must declare that each person signs in themselves, and the caller must hold the `agent` capability for that row's agent. Otherwise ⛔ admin only. An admin always reaches it, and under a `per_user` row captures their OWN session like anyone else. The start URL is the ADMIN'S — a sign-in can never choose another portal |
 | `POST /runs`, `POST /runs/{id}/kill` | 🟢 any signed-in human — using the product is a member act |
 
 **Documented gaps — routes gated but not yet named above.** None today. The
@@ -2724,6 +2725,51 @@ issuer/Graph/STS ranges to the process `NO_PROXY`, or the corp proxy — which
 cannot reach an internal address — fails discovery at boot, and none of the
 site-config fields above can fix it. For a split-horizon issuer (public URL,
 internal resolution) use `WARDYN_OIDC_INTERNAL_ISSUER`.
+
+### AWS SSO per person
+
+By default a deployment keeps ONE model credential: an admin connects it and
+every run inherits it. An agent roster row can say otherwise —
+`credential_source: per_user` on a `bedrock_sso` row means **each person signs in
+to AWS themselves**, and their runs use their own session.
+
+**How somebody signs in.** They open Getting Started (or the New Run screen) and
+choose "Sign in to AWS". Wardyn launches the same throwaway container-login
+sandbox an admin uses: default-deny egress pinned to the AWS SSO endpoints, a
+30-minute idle cap, no workspace, no repo, no credential mounts, never recorded.
+The sandbox prints a device code; they finish the sign-in in their own browser.
+The route (`POST /setup/harness-login`) admits them only because the roster
+declared `per_user` AND they hold the `agent` capability for that row's agent —
+an admin always reaches it, and under a `per_user` row captures their own
+session exactly as anyone else does.
+
+**The access portal is the admin's, not theirs.** The launch uses the row's
+`sso_start_url` and IGNORES whatever start URL arrives with the request. That is
+a security property, not a convenience: the capture is bound to the portal the
+launch was seeded with, so honouring a caller-supplied URL would let anyone bind
+their capture to an identity provider and account of their choosing and have
+Wardyn bake it into every later Bedrock run. It also takes an org URL off
+everybody's typing surface.
+
+**What the control plane holds.** One age-encrypted blob per person, in that
+person's own secret namespace — the SSO access token, its refresh token, the
+client registration, and the account/role the session mints role credentials
+for. Reads never fall back: a member with no capture of their own resolves as
+*not signed in*, never as the admin's session, and the bearer-key, host
+`~/.aws`-mount and static-key lanes are skipped entirely for them. Wardyn
+renews the access token control-plane side at dispatch while the client
+registration lives (see "wardynd's own egress" above), so a one-hour token does
+not mean an hourly sign-in.
+
+**What it never holds.** Anybody's AWS console password, their MFA, or their
+browser session. A sign-in that Wardyn cannot renew surfaces as "sign in again"
+on their own Getting Started, never as a run that silently borrows somebody
+else's credential — a credential never changes source.
+
+**Blast radius.** A compromised sandbox reaches THAT person's SSO session and
+the role credentials it mints, not the organisation's. The `harness.credential.captured`
+and `harness.credential.refresh` audit rows carry `owner` and `credential_source`,
+so "whose credential" is answerable from the trail.
 
 ### Internal model gateway
 

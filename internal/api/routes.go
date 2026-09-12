@@ -314,19 +314,25 @@ func (s *Server) routes() chi.Router {
 			r.Get("/setup/status", s.handleSetupStatus)
 
 			// Managed harness login: launch an interactive login sandbox where
-			// the operator runs `claude setup-token`, then paste the resulting
-			// long-lived subscription token so Wardyn injects it proxy-side into
-			// every run (compose-mode subscription without a host ~/.claude).
-			// Secret store required (the token is stored age-encrypted).
+			// the caller runs `claude setup-token` (or `aws sso login`), then
+			// paste the resulting long-lived subscription token so Wardyn injects
+			// it proxy-side into every run (compose-mode subscription without a
+			// host ~/.claude). Secret store required (the token is stored
+			// age-encrypted).
 			//
-			// RBAC (same as policy/workspace/site-config below): humanOrAdminAuth
-			// is AUTHENTICATION only, so these are ALSO on operatorOnly — a
-			// signed-in MEMBER (B1's derived role) gets 403 here. An ADMIN role —
-			// the default for every signed-in human when WARDYN_OIDC_ROLE_MAP is
-			// unset — can connect or disconnect the shared managed subscription
-			// every run inherits. Every connect/disconnect is audited
+			// RBAC, and it is SPLIT (0.7.2). The token PASTE and DISCONNECT are on
+			// operatorOnly like policy/workspace/site-config below: humanOrAdminAuth
+			// is AUTHENTICATION only, so a signed-in MEMBER (B1's derived role) gets
+			// 403 there — they write the deployment's SHARED credential, which every
+			// run inherits. The LOGIN LAUNCH is on this group instead, with its
+			// predicate inside the handler: when the agent roster declares
+			// `credential_source: per_user`, the session it captures is the
+			// caller's OWN, so an admin-only door would leave a member with no route
+			// to model access at all. A member with no such row still gets 403 —
+			// from authorizeHarnessLogin, which also requires capAgent on the row's
+			// agent. Every connect/disconnect is audited
 			// (harness.credential.captured/disconnected).
-			s.mountSetupMutationRoutes(operatorOnly)
+			s.mountSetupMutationRoutes(r, operatorOnly)
 
 			// Policy management (gated to authenticated humans — a valid SSO
 			// session or the admin token). WRITES are additionally operator-only:

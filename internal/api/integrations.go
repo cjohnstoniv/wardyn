@@ -49,6 +49,11 @@ type capEnv struct {
 	// both surfaces (GET /integrations, SetupStatus.Integrations) believing a
 	// run that would silently get no Bedrock transport at all.
 	BedrockCredentialPresent bool
+	// BedrockCredentialExpired distinguishes "the captured session is dead" from
+	// "nothing is configured" — same cell state, different instruction. Only
+	// meaningful when BedrockCredentialPresent is false (a live lane of any kind
+	// makes it moot).
+	BedrockCredentialExpired bool
 }
 
 // CapState is one capability's current state.
@@ -87,6 +92,14 @@ const (
 	// credential ladder (bearer, captured AWS SSO, ~/.aws mount, resident SigV4
 	// keys) has nothing to offer — a run still gets no Bedrock transport.
 	reasonBedrockNoCreds = "Region and model are set, but no AWS credential is configured — add a bearer key, resident access keys, an AWS SSO login, or a ~/.aws mount."
+	// reasonBedrockCredExpired: there IS a captured AWS SSO session and nothing
+	// can renew it. Its own row because "no credential is configured" is the
+	// wrong instruction for it — the operator does not add a credential, they
+	// sign the existing one back in — and because a green cell over a dead
+	// session is the exact drift this matrix exists to catch: `configured()` is
+	// true on a region alone, which made a `bedrock` AI row, which made
+	// llm_ready true, which painted a member's chip green.
+	reasonBedrockCredExpired = "An AWS SSO session is captured but expired and cannot be renewed — sign in again; until then Bedrock runs have no credential."
 	// reasonHostCLIOptIn is the canon note for the host-CLI lane's Wardyn-features
 	// cell — kept in sync with ui/src/app/lib/integrations.ts's CAPS.sub hostCli
 	// note, not the (stale) mock: nothing in the console switches this lane on,
@@ -295,11 +308,15 @@ func bedrockCaps(in types.Integration, env capEnv) []Capability {
 	// resolveBedrockAuth's ladder is exactly as unreachable as an unset
 	// region/model — same drift this matrix exists to prevent.
 	if !env.BedrockCredentialPresent {
+		why := reasonBedrockNoCreds
+		if env.BedrockCredentialExpired {
+			why = reasonBedrockCredExpired
+		}
 		return []Capability{
-			{ID: "model_api", State: CapNeedsSetup, Reason: reasonBedrockNoCreds},
-			{ID: "tool:claude-code", State: CapNeedsSetup, Reason: reasonBedrockNoCreds},
+			{ID: "model_api", State: CapNeedsSetup, Reason: why},
+			{ID: "tool:claude-code", State: CapNeedsSetup, Reason: why},
 			{ID: "tool:codex-cli", State: CapImpossible, Reason: harnessProviderReason("codex-cli", in.Kind)},
-			{ID: "wardyn_features", State: CapNeedsSetup, Reason: reasonBedrockNoCreds},
+			{ID: "wardyn_features", State: CapNeedsSetup, Reason: why},
 		}
 	}
 	return []Capability{

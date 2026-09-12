@@ -21,12 +21,19 @@ import (
 // ssoLoginRunStore) so this pin compiles unchanged against the pre-fix tree.
 type ssoBindingStore struct {
 	store.Store
-	run    types.AgentRun
-	events []types.AuditEvent
+	run     types.AgentRun
+	events  []types.AuditEvent
+	siteCfg types.SiteConfig
 }
 
 func (s ssoBindingStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) {
 	return s.run, nil
+}
+
+// GetSiteConfig is the roster read the upload handler makes to decide WHOSE
+// namespace the capture lands in (0.7.2). Zero value = legacy/shared.
+func (s ssoBindingStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return s.siteCfg, nil
 }
 
 func (s ssoBindingStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]types.AuditEvent, error) {

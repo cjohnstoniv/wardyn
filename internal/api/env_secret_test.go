@@ -452,7 +452,7 @@ func TestDispatchEnvSplit_BedrockCredentialsLeaveEnv(t *testing.T) {
 			policy := &types.RunPolicySpec{AllowedDomains: []string{"git.example.com"}}
 			sandboxEnv := map[string]string{"WARDYN_TASK_MODE": "agent"}
 			llm := srv.resolveLLMTransport(context.Background(), run, policy, sandboxEnv, nil,
-				false, "", "http://wardyn-proxy:3128", nil)
+				false, "", "http://wardyn-proxy:3128", nil, awsSSOScope{})
 			if !llm.bedrockReady {
 				t.Fatalf("bedrockReady = false; the fixture never reached the lane under test")
 			}

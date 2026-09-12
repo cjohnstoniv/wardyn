@@ -195,7 +195,9 @@ func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[
 					if present == nil {
 						present = s.presentSecretNames(ctx)
 					}
-					integrationRows = s.effectiveIntegrations(ctx, present, s.setupBedrock(ctx, present))
+					// Operator scope (integrations_write.go's reason): a workspace
+					// requirement names an integration ROW, never a principal's session.
+					integrationRows = s.effectiveIntegrations(ctx, present, s.setupBedrock(ctx, present, awsSSOScope{}))
 					integrationRowsLoaded = true
 				}
 				if ev, ok := s.applyIntegrationRequirement(ctx, present, integrationRows, spec, name); ok {

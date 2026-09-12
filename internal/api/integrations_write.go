@@ -374,7 +374,10 @@ func (s *Server) resolveIntegrationRef(ctx context.Context, owner, ref string) (
 		return types.Integration{}, false
 	}
 	present := s.presentSecretNamesFor(ctx, owner)
-	return resolveIntegrationRefFrom(s.effectiveIntegrations(ctx, present, s.setupBedrock(ctx, present)), ref)
+	// Operator scope: this asks whether the DEPLOYMENT has a bedrock row to
+	// resolve a ref against, not whose session would carry a run — that answer is
+	// resolveBedrockAuth's, and it is scoped there.
+	return resolveIntegrationRefFrom(s.effectiveIntegrations(ctx, present, s.setupBedrock(ctx, present, awsSSOScope{})), ref)
 }
 
 // defaultAgentRunsIntegration returns the STORED AI-provider integration

@@ -20,14 +20,22 @@ import (
 // plus that run's audit trail from QueryAuditEvents — the two reads the
 // sso-token upload handler makes against trusted server state (the run kind,
 // and the operator's own start URL recorded on harness.login.started).
+// siteCfg is the third read (0.7.2): the agent roster says WHOSE namespace a
+// capture lands in, so the handler asks for it on every upload. The zero value
+// is legacy open mode — the operator namespace, i.e. these cases unchanged.
 type ssoLoginRunStore struct {
 	store.Store
-	run    types.AgentRun
-	events []types.AuditEvent
+	run     types.AgentRun
+	events  []types.AuditEvent
+	siteCfg types.SiteConfig
 }
 
 func (s ssoLoginRunStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) {
 	return s.run, nil
+}
+
+func (s ssoLoginRunStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return s.siteCfg, nil
 }
 
 func (s ssoLoginRunStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]types.AuditEvent, error) {

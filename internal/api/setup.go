@@ -111,6 +111,11 @@ type SetupStatus struct {
 	// banner / demo gating keep working for a member without any of that detail
 	// leaking. Kept in exact sync with ui/src/app/lib/types.ts's SetupStatus.
 	LLMReady bool `json:"llm_ready"`
+	// ModelAccess is THIS PRINCIPAL's model-access state — the per-person answer
+	// LLMReady above structurally cannot give (it is a DEPLOYMENT fact, which is
+	// why a member whose own AWS session had lapsed read a green chip off it).
+	// Redaction-safe by construction and KEPT for a member: see SetupModelAccess.
+	ModelAccess SetupModelAccess `json:"model_access,omitzero"`
 	// TrustedCACerts is the number of additional roots WARDYN_TRUSTED_CA_FILE
 	// loaded at boot (0 = unset). Derived from Config.TrustedCAPEM, never a
 	// second boot-time field — see handleSetupStatus. Go + test only: no
@@ -147,60 +152,6 @@ type SetupHarness struct {
 	// credential whose registration is gone, which dispatch gives up on. Legacy
 	// sso_start_url profiles carry no refresh token and must be re-logged-in.
 	Renewable bool `json:"renewable,omitempty"`
-}
-
-// harnessCredentialCheck is the readiness row for a Wardyn-managed subscription
-// token — the compose-mode analogue of claudeSubscriptionStagingCheck. It fires
-// only when a credential is captured (no capture => the llm_provider check
-// already says "connect a model"). Pure: the blob read is done by the caller.
-func harnessCredentialCheck(h SetupHarness) (SetupCheck, bool) {
-	if !h.Captured {
-		return SetupCheck{}, false
-	}
-	// AWS SSO carries a real expiry, so it gets a truthful row rather than the
-	// age heuristic below (which exists only because setup-tokens expose none).
-	if h.Provider == awsSSOProvider {
-		switch {
-		// Expired but RENEWABLE is not a problem row any more: the credential
-		// renews itself at dispatch while its refresh token lives (the control
-		// plane redeems it — awssso_refresh.go), so there is nothing for the
-		// operator to do and a warn row would ask for an hourly re-login that the
-		// product no longer needs. Re-login is the answer only when renewal
-		// CANNOT happen, which is the case below.
-		case h.Expired && h.Renewable:
-			return SetupCheck{
-				ID: "harness_credential_aws", Label: "AWS SSO session", Status: "ok",
-				Detail: fmt.Sprintf(harnessCredentialAWSRenewingDetail, h.ExpiresAt),
-				Fix:    harnessCredentialAWSRenewingFix,
-			}, true
-		case h.Expired:
-			return SetupCheck{
-				ID: "harness_credential_aws", Label: "AWS SSO session", Status: "warn",
-				Detail: "Your captured AWS SSO session expired at " + h.ExpiresAt +
-					" and has no refresh token (legacy sso_start_url profile), so Bedrock runs using it will fail.",
-				Fix: "Re-run the containerized AWS SSO login on the provider step.",
-			}, true
-		default:
-			return SetupCheck{
-				ID: "harness_credential_aws", Label: "AWS SSO session", Status: "ok",
-				Detail: "A captured AWS SSO session is connected (expires " + h.ExpiresAt +
-					"). Bedrock runs exchange it for short-lived role credentials — no host ~/.aws mount and no static keys.",
-			}, true
-		}
-	}
-	if h.Aging {
-		return SetupCheck{
-			ID: "harness_credential", Label: "Managed Claude subscription", Status: "warn",
-			Detail: "Your Wardyn-managed Claude subscription token was captured a long time ago (setup-token lives ~1 year). " +
-				"It may be close to expiring; a run will fail if Anthropic has revoked it.",
-			Fix: "Reconnect via container login on the provider step (Connect via container login → `claude setup-token` → paste).",
-		}, true
-	}
-	return SetupCheck{
-		ID: "harness_credential", Label: "Managed Claude subscription", Status: "ok",
-		Detail: "A Wardyn-managed Claude subscription token is connected and injected proxy-side into every run — the " +
-			"sandbox holds only an inert sentinel. Works in compose mode with no host ~/.claude.",
-	}, true
 }
 
 // SetupDeployment reports whether the wardynd process itself sees a resident
@@ -603,6 +554,16 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	hostProxy := cachedHostProxy()
 	scmPosture := setup.DetectSCMPosture()
 
+	// ONE site-config read for the whole handler. It is hoisted above the Bedrock
+	// and harness blocks because it is what says WHOSE model credential this
+	// caller has: an enabled per_user row scopes every AWS SSO read below to the
+	// caller's own namespace, so an admin sees their own capture and a member
+	// sees theirs — never each other's. A failed read reads as legacy open mode
+	// (the operator namespace), the same direction every other roster consumer
+	// takes on an outage.
+	siteCfg, siteCfgOK := s.siteConfigSnapshot(ctx)
+	ssoScope := awsSSOScopeFor(siteCfg, modelAccessAgent, runIdentitySubject(ctx, principalFromRequest(r)))
+
 	// LLM access provenance: the detail of the WINNING signal (resident CLI
 	// login, or an api-key-ish secret), "" when none. The secret-name scan is a
 	// loose substring signal; the exact truth (a working model call) is only
@@ -616,14 +577,14 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// winning signal (not a change to llmProvenance's own priority order) so a
 	// Bedrock-only operator still sees "LLM access: ok" without touching the
 	// existing CLI/secret-name signals or their tests.
-	bedrock := s.setupBedrock(ctx, present)
+	bedrock := s.setupBedrock(ctx, present, ssoScope)
 	if llmDetail == "" && bedrock.Ready {
 		llmDetail = fmt.Sprintf(
 			"AWS Bedrock is configured (region %s, model %s); Claude runs authenticate via %s.",
 			bedrock.Region, bedrock.Model, bedrock.credSourceDesc())
 	}
 
-	harnessCreds, managedDetail := s.setupHarnessCreds(ctx)
+	harnessCreds, managedDetail, modelAccess := s.setupHarnessCreds(ctx, siteCfg, ssoScope)
 	if llmDetail == "" {
 		llmDetail = managedDetail
 	}
@@ -679,7 +640,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// harness_credential: the compose-mode analogue — a Wardyn-managed subscription
 	// token captured via container login, with an age-based "reconnect" warning.
 	for _, h := range harnessCreds {
-		if chk, ok := harnessCredentialCheck(h); ok {
+		if chk, ok := harnessCredentialCheck(h, modelAccess); ok {
 			checks = append(checks, chk)
 		}
 	}
@@ -701,16 +662,15 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// leaves it false, which is the conservative direction: it opens the funnel
 	// rather than hiding it.
 	onboardingComplete := false
-	// The SAME read feeds the agent roster below (setupHarnessTools): one
-	// site-config read per status call, not two. A failed read leaves the zero
-	// value, which reads as legacy open mode there — see that function.
-	var siteCfg types.SiteConfig
+	// From the hoisted read above — one site-config read per status call, not
+	// two. It also feeds the agent roster below (setupHarnessTools) and the
+	// model-access scope; a failed read leaves the zero value, which reads as
+	// legacy open mode in all three.
+	if siteCfgOK {
+		checks = append(checks, siteConfigCheck(siteCfg, present), artifactRepoCheck(siteCfg))
+		onboardingComplete = siteCfg.OnboardingCompletedAt != nil
+	}
 	if s.cfg.Store != nil {
-		if sc, err := s.cfg.Store.GetSiteConfig(ctx); err == nil {
-			checks = append(checks, siteConfigCheck(sc, present), artifactRepoCheck(sc))
-			onboardingComplete = sc.OnboardingCompletedAt != nil
-			siteCfg = sc
-		}
 		// permissions_posture (#19b): non-blocking/informational, so a read
 		// failure here is skipped rather than surfaced as a setup/status 500 —
 		// unlike secrets/site-config above, nothing else on this page depends
@@ -781,6 +741,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		Integrations: integrations,
 		Harnesses:    setupHarnessTools(siteCfg),
 		LLMReady:     llmReady,
+		ModelAccess:  modelAccess,
 		// A count derived from the SAME PEM string TrustedCAPEM's doc comment
 		// describes — no second boot-time field to keep in sync. 0 when unset.
 		TrustedCACerts: strings.Count(s.cfg.TrustedCAPEM, "-----BEGIN CERTIFICATE-----"),
@@ -865,6 +826,12 @@ func redactSetupStatusForMember(st SetupStatus) SetupStatus {
 	// it passed through, together with the internal egress hosts and the
 	// operator's connection config.
 	st.Integrations = memberSafeIntegrations(st.Integrations)
+	// ModelAccess is KEPT, deliberately, and it is the reason a member's chip can
+	// stop reading llm_ready (a DEPLOYMENT fact that read green over their own
+	// lapsed session). It carries a state name, a wire mechanism value and one
+	// member-facing sentence — no secret names, no topology, no AWS access portal
+	// URL — so there is nothing here to drop, and dropping it would leave the
+	// member exactly where this field was added to stop leaving them.
 	if len(st.Harness) > 0 {
 		reduced := make([]SetupHarness, len(st.Harness))
 		for i, h := range st.Harness {
@@ -930,7 +897,11 @@ func claudeLoginSignal(providers []SetupProvider) (bool, string) {
 // SSO entry is deliberately NOT folded in: it credentials Bedrock specifically,
 // and the bedrock_provider check already owns that story. It reports TRUE expiry
 // rather than the managed token's age heuristic.
-func (s *Server) setupHarnessCreds(ctx context.Context) ([]SetupHarness, string) {
+// It ALSO returns this caller's model-access state, because the AWS SSO read
+// below is the one that answers it: computing the probe anywhere else would mean
+// a second decrypt of the same blob and two surfaces that can disagree about one
+// credential.
+func (s *Server) setupHarnessCreds(ctx context.Context, sc types.SiteConfig, scope awsSSOScope) ([]SetupHarness, string, SetupModelAccess) {
 	var out []SetupHarness
 	managedDetail := ""
 	if blob, ok, err := s.readManagedBlob(ctx, "anthropic"); err == nil && ok {
@@ -942,7 +913,22 @@ func (s *Server) setupHarnessCreds(ctx context.Context) ([]SetupHarness, string)
 		})
 		managedDetail = "A Wardyn-managed Claude subscription token (captured via container login) is injected proxy-side into every run."
 	}
-	if blob, ok, err := s.readAWSSSOBlob(ctx); err == nil && ok {
+	// Scoped: under a per_user row this is the CALLER's own captured session, not
+	// the operator's — the whole point of per_user, and the reason the probe
+	// below can speak for this person rather than for the deployment.
+	blob, found, err := s.readAWSSSOBlob(ctx, scope)
+	if err != nil {
+		// A WEDGED STORE IS NOT A CREDENTIAL FACT. readHarnessBlob propagates
+		// every non-ErrNotFound error precisely so a rotated age key or a PG blip
+		// is never mistaken for "not connected"; grading that into a state would
+		// undo it at the last step and tell a member "Sign in to AWS" (per_user)
+		// or "ask your admin to reconnect it" (shared) about a credential that is
+		// sitting there intact. Say NOTHING instead — the same zero value an
+		// install with nothing to report ships, which leaves the console on the
+		// chip it already renders.
+		return out, managedDetail, SetupModelAccess{}
+	}
+	if found {
 		out = append(out, SetupHarness{
 			Provider: awsSSOProvider, Captured: true,
 			CapturedAt:  blob.CapturedAt.Format(time.RFC3339),
@@ -952,7 +938,22 @@ func (s *Server) setupHarnessCreds(ctx context.Context) ([]SetupHarness, string)
 			SourceRunID: blob.SourceRunID,
 		})
 	}
-	return out, managedDetail
+	return out, managedDetail, setupModelAccess(sc, blob, found, scope, s.cfg.Now().UTC())
+}
+
+// siteConfigSnapshot reads the one site-config document, reporting whether the
+// read SUCCEEDED — as opposed to a zero document, which is a legitimate stored
+// value. A nil store or a failed read is (zero, false): every consumer treats
+// that as legacy open mode rather than as configuration.
+func (s *Server) siteConfigSnapshot(ctx context.Context) (types.SiteConfig, bool) {
+	if s.cfg.Store == nil {
+		return types.SiteConfig{}, false
+	}
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil {
+		return types.SiteConfig{}, false
+	}
+	return sc, true
 }
 
 // setupRunnerInfo reports the live runner selection for /setup/status, copying

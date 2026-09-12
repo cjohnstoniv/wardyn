@@ -174,9 +174,16 @@ func TestIsOperator(t *testing.T) {
 // request stops at a 4xx instead of dereferencing rbacStore's nil embedded
 // Store. That is what TestRequireOperator_OperatorPassesEveryGatedRoute asserts
 // (anything but 401/403).
+//
+// NOT here since 0.7.2: POST /setup/harness-login. The container LOGIN launch
+// moved off operatorOnly — under a `per_user` agent row it captures the
+// CALLER'S OWN model credential, so it admits any signed-in human with such a
+// row and the predicate lives in the handler (authorizeHarnessLogin). "A member
+// always gets 403 here" is no longer the property to assert, which is exactly
+// why it cannot stay in this binary table. Its two credential SIBLINGS below
+// stay: both write the deployment's shared credential.
 var gatedRoutes = []struct{ method, path string }{
 	// 1. managed harness credential
-	{http.MethodPost, "/api/v1/setup/harness-login"},
 	{http.MethodPut, "/api/v1/setup/harness-credential/anthropic"},
 	{http.MethodDelete, "/api/v1/setup/harness-credential/anthropic"},
 	// 2. policies

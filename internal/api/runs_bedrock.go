@@ -402,16 +402,27 @@ func awsSSOCacheFileContents(b awsSSOBlob) string {
 // fallback for whatever the workspace leaves unset. The workspace never carries
 // credentials — those stay operator-global (secrets / ~/.aws / captured SSO).
 //
-// EVERY secret read below is in the OPERATOR namespace on purpose (bare Get ==
-// For("")): Bedrock credentials are MDM/operator-set daemon config, never a
-// member row (writableSecretName refuses these names for a non-operator).
+// Under the ZERO sso scope every secret read below is in the OPERATOR namespace
+// on purpose (bare Get == For("")): Bedrock credentials are MDM/operator-set
+// daemon config, never a member row (writableSecretName refuses these names for
+// a non-operator).
+//
+// sso.perUser INVERTS that for the whole function, which is why it is a
+// parameter and not a lookup: the org declared that this agent's model
+// credential is ONE PER PERSON, so the ONLY admissible lane is that principal's
+// own captured session. The bearer, ~/.aws-mount and static-key arms are all
+// bare operator-namespace reads, so under per_user they are SKIPPED ENTIRELY —
+// a member with no session of their own is not-configured, never silently
+// served the operator's keys. That is also why the skip is a hard return rather
+// than a per-arm condition: a lane added below later must not quietly become
+// reachable for a member.
 //
 // refresh authorizes SIDE EFFECTS: only with refresh=true may the captured-SSO
 // lane redeem its rotating refresh token and persist the rotated pair. ONLY
 // DISPATCH sets it. Create and preflight pass false — a dry run must never spend
 // a one-use token, and it does not need to: an expired-but-renewable credential
 // reads READY there, because dispatch renews it (see the captured-SSO branch).
-func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscriptionActive, modelRun, refresh bool, ws *types.WorkspaceBedrockRef) bedrockAuth {
+func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscriptionActive, modelRun, refresh bool, ws *types.WorkspaceBedrockRef, sso awsSSOScope) bedrockAuth {
 	region, model, profile := s.cfg.BedrockRegion, s.cfg.BedrockModel, s.cfg.BedrockAWSProfile
 	if ws != nil {
 		region = cmp.Or(strings.TrimSpace(ws.Region), region)
@@ -475,12 +486,19 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 	// header, so the proxy TLS-MITMs bedrock-runtime and injects it — the sandbox
 	// holds only a placeholder, never the real token (trust parity with api-key /
 	// subscription). Selected whenever a bedrock-api-key secret exists.
-	if bearer, berr := s.cfg.Secrets.Get(ctx, bedrockAPIKeySecret); berr == nil && len(bearer) > 0 {
-		env := base()
-		// A non-empty sentinel so claude-code uses bearer auth (not SigV4); the proxy
-		// overwrites the Authorization header with the real token on the wire.
-		env["AWS_BEARER_TOKEN_BEDROCK"] = "wardyn-proxy-injected"
-		return ready(bedrockAuth{env: env, egressHosts: hosts, bearer: true})
+	//
+	// Skipped under per_user: the bedrock-api-key secret is an OPERATOR row, and
+	// serving it to a member is the cross-principal substitution per_user refuses.
+	// The guard is on the READ, not just on the selection, so a per-user resolve
+	// makes no operator-namespace store call at all.
+	if !sso.perUser {
+		if bearer, berr := s.cfg.Secrets.Get(ctx, bedrockAPIKeySecret); berr == nil && len(bearer) > 0 {
+			env := base()
+			// A non-empty sentinel so claude-code uses bearer auth (not SigV4); the proxy
+			// overwrites the Authorization header with the real token on the wire.
+			env["AWS_BEARER_TOKEN_BEDROCK"] = "wardyn-proxy-injected"
+			return ready(bedrockAuth{env: env, egressHosts: hosts, bearer: true})
+		}
 	}
 
 	// CAPTURED AWS SSO CREDENTIAL: a container-login `aws sso login` captured an
@@ -520,9 +538,9 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 	// chain is one mechanism), but no reader may read that as permission to
 	// substitute a DIFFERENT mechanism — a credential must never silently change
 	// source, which is what ssoRefreshFailure exists to let the dispatch gate say.
-	if blob, found, berr := s.readAWSSSOBlob(ctx); berr == nil && found {
+	if blob, found, berr := s.readAWSSSOBlob(ctx, sso); berr == nil && found {
 		if refresh {
-			blob, ssoRefreshFailure = s.refreshAWSSSOBlob(ctx, "", blob)
+			blob, ssoRefreshFailure = s.refreshAWSSSOBlob(ctx, sso, blob)
 		}
 		switch {
 		case ssoRefreshFailure != "":
@@ -559,6 +577,18 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 			s.cfg.MaskRegistry.AddGlobal([]byte(blob.ClientSecret))
 			return ready(bedrockAuth{env: env, egressHosts: hosts, ssoInject: true})
 		}
+	}
+
+	// PER_USER STOPS HERE. The org declared one credential per person, and the
+	// three arms below are all operator-namespace reads — the host ~/.aws mount
+	// is the deployer's own AWS state, the static keys are the deployer's
+	// secrets. Falling through would serve a member the admin's credential the
+	// moment their own session lapsed, which is the substitution this whole lane
+	// exists to refuse: a credential must never silently change source. The
+	// caller reads a not-ready bedrockAuth (plus any renewal reason) and refuses
+	// the run naming the lane, rather than dispatching on somebody else's keys.
+	if sso.perUser {
+		return bedrockAuth{ssoRefreshFailure: ssoRefreshFailure}
 	}
 
 	// HOST-MODE ~/.aws MOUNT: bind the operator's host ~/.aws read-only into the
@@ -630,6 +660,13 @@ type SetupBedrock struct {
 	// renews it). Only a session nothing can heal (no refresh token, or a lapsed
 	// client registration) reads false.
 	SSOPresent bool `json:"sso_present"`
+	// SSOExpired: a session IS captured and nothing can heal it (no refresh
+	// token, or a lapsed registration). NOT on the wire, deliberately: it exists
+	// so the capability matrix can say "the credential expired" instead of "no
+	// credential is configured" — two different things an operator fixes two
+	// different ways — and nothing on the console reads a second copy of a fact
+	// SetupStatus.ModelAccess already carries per principal.
+	SSOExpired bool `json:"-"`
 	// Ready is the server-computed readiness (region+model+any credential source),
 	// echoed so the UI doesn't re-derive — and drift from — this gate.
 	Ready bool `json:"ready"`
@@ -680,7 +717,13 @@ func (b SetupBedrock) credSourceDesc() string {
 // exists (stat it, so a since-deleted ~/.aws doesn't read ready). SSOPresent
 // mirrors its captured-SSO branch, which is why this needs a ctx: the blob is a
 // secret-store read, and an expired one is not a credential there either.
-func (s *Server) setupBedrock(ctx context.Context, present map[string]bool) SetupBedrock {
+//
+// sso is the CALLER'S scope, threaded for the reason the resolve threads it:
+// under a per_user row the operator's blob is not this caller's credential, and
+// reading it here would report a member's Bedrock lane ready off somebody else's
+// session — the wizard/launch-gate drift this function's doc opens with, in its
+// per-principal form.
+func (s *Server) setupBedrock(ctx context.Context, present map[string]bool, sso awsSSOScope) SetupBedrock {
 	awsMount := false
 	if s.cfg.BedrockAWSConfigDir != "" {
 		st, err := os.Stat(s.cfg.BedrockAWSConfigDir)
@@ -692,10 +735,11 @@ func (s *Server) setupBedrock(ctx context.Context, present map[string]bool) Setu
 	// operator to re-login hourly for a credential that heals itself — and, once
 	// a declared mechanism can refuse a run, would refuse a run dispatch heals.
 	// Reading NO refresh is done here: this is a read-only probe.
-	sso := false
-	if blob, found, err := s.readAWSSSOBlob(ctx); err == nil && found {
+	ssoLive, ssoDead := false, false
+	if blob, found, err := s.readAWSSSOBlob(ctx, sso); err == nil && found {
 		now := s.cfg.Now()
-		sso = blob.renewable(now) || !blob.expired(now)
+		ssoLive = blob.renewable(now) || !blob.expired(now)
+		ssoDead = !ssoLive
 	}
 	b := SetupBedrock{
 		Region:        s.cfg.BedrockRegion,
@@ -703,7 +747,23 @@ func (s *Server) setupBedrock(ctx context.Context, present map[string]bool) Setu
 		CredsPresent:  present[bedrockAccessKeyIDSecret] && present[bedrockSecretAccessKeySecret],
 		AWSMount:      awsMount,
 		BearerPresent: present[bedrockAPIKeySecret],
-		SSOPresent:    sso,
+		SSOPresent:    ssoLive,
+		SSOExpired:    ssoDead,
+	}
+	// Under per_user the OPERATOR lanes are not this caller's credential either
+	// (resolveBedrockAuth skips all three), so reporting them would read "ready"
+	// for a member whose own session is the only thing that can carry their runs.
+	//
+	// C4.2 — the asymmetry this creates, stated on purpose so the Agents-tab copy
+	// can say it: an ADMIN who declares per_user and has not signed in themselves
+	// reads NOT-READY on their own setup page while GET /integrations still shows
+	// Bedrock credentialed. Both are true of different questions. This one asks
+	// "would MY run authenticate" — and under per_user the admin is a principal
+	// like any other, which is the whole point of the declaration; /integrations
+	// asks "what connections does this deployment have", and the operator's
+	// bearer key and static keys are still connections it has.
+	if sso.perUser {
+		b.CredsPresent, b.AWSMount, b.BearerPresent = false, false, false
 	}
 	b.Ready = b.ready()
 	return b

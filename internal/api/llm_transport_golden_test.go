@@ -389,7 +389,7 @@ func TestLLMTransportGolden(t *testing.T) {
 		}
 		sandboxEnv := map[string]string{}
 		llm := srv.resolveLLMTransport(context.Background(), run, policy, sandboxEnv, c.injections,
-			c.interactive, c.taskMode, "http://wardyn-proxy:3128", nil)
+			c.interactive, c.taskMode, "http://wardyn-proxy:3128", nil, awsSSOScope{})
 		if _, dup := got[c.name]; dup {
 			t.Fatalf("duplicate cell name %q", c.name)
 		}
@@ -418,7 +418,7 @@ func TestLLMTransport_NoSharedSubscriptionOffPosture(t *testing.T) {
 		}
 		sandboxEnv := map[string]string{}
 		llm := srv.resolveLLMTransport(context.Background(), run, policy, sandboxEnv, c.injections,
-			c.interactive, c.taskMode, "http://wardyn-proxy:3128", nil)
+			c.interactive, c.taskMode, "http://wardyn-proxy:3128", nil, awsSSOScope{})
 		if llm.injectSub {
 			t.Errorf("%s: injectSub true off-posture — one operator's subscription would be injected into this run", c.name)
 		}

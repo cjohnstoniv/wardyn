@@ -217,3 +217,71 @@ func firstN(b []byte, n int) []byte {
 	}
 	return b[:n]
 }
+
+// TestPGHarnessBlobIsPerOwnerAndIsolated is the storage half of the per-user
+// AWS SSO credential (0.7.2). The whole lane rests on two properties of this
+// table that no in-memory double can prove:
+//
+//  1. the primary key is COMPOSITE — (owned_by, name) — so two principals hold
+//     rows of the SAME reserved harness name side by side. A name-only key would
+//     make the second person's sign-in overwrite the first's, silently, and the
+//     failure would look like "my session keeps logging out".
+//  2. List is OWN-ROWS-ONLY, while Get falls back to the operator's. That pair
+//     is exactly why the API layer reads a per_user blob List-then-Get: the bare
+//     Get would serve the admin's session to a member who has captured nothing.
+func TestPGHarnessBlobIsPerOwnerAndIsolated(t *testing.T) {
+	s, _, _ := newPGStore(t)
+	ctx := context.Background()
+	name := uniqueName("wardyn-harness-aws-oauth")
+	alice, bob := "alice-"+uuid.NewString(), "bob-"+uuid.NewString()
+
+	if err := s.For("").Put(ctx, name, []byte("operator-session")); err != nil {
+		t.Fatalf("operator put: %v", err)
+	}
+	if err := s.For(alice).Put(ctx, name, []byte("alice-session")); err != nil {
+		t.Fatalf("alice put: %v", err)
+	}
+	if err := s.For(bob).Put(ctx, name, []byte("bob-session")); err != nil {
+		t.Fatalf("bob put: %v", err)
+	}
+
+	// (1) Three rows of ONE name coexist, each read back verbatim.
+	for owner, want := range map[string]string{"": "operator-session", alice: "alice-session", bob: "bob-session"} {
+		got, err := s.For(owner).Get(ctx, name)
+		if err != nil {
+			t.Fatalf("get for %q: %v", owner, err)
+		}
+		if string(got) != want {
+			t.Errorf("owner %q read %q, want %q — the composite key did not keep the rows apart", owner, got, want)
+		}
+	}
+
+	// (2) List is own-rows-only: it is what lets a caller tell "this principal
+	// captured a session" from "Get would have fallen back to the operator's".
+	carol := "carol-" + uuid.NewString()
+	names, err := s.For(carol).List(ctx)
+	if err != nil {
+		t.Fatalf("carol list: %v", err)
+	}
+	for _, n := range names {
+		if n == name {
+			t.Fatalf("List for a principal who stored nothing returned %q — own-rows-only is what the per_user read depends on", n)
+		}
+	}
+	// …while Get for that same principal DOES fall back, which is the contract
+	// the API layer must not use for a per_user credential.
+	if got, gerr := s.For(carol).Get(ctx, name); gerr != nil || string(got) != "operator-session" {
+		t.Fatalf("Get for a principal with no row = (%q, %v); the documented operator fallback is the trap per_user closes", got, gerr)
+	}
+
+	// Deleting one person's row leaves everybody else's alone.
+	if err := s.For(alice).Delete(ctx, name); err != nil {
+		t.Fatalf("alice delete: %v", err)
+	}
+	if got, gerr := s.For(bob).Get(ctx, name); gerr != nil || string(got) != "bob-session" {
+		t.Errorf("bob's session after alice's delete = (%q, %v), want it untouched", got, gerr)
+	}
+	if got, gerr := s.For("").Get(ctx, name); gerr != nil || string(got) != "operator-session" {
+		t.Errorf("the operator's session after alice's delete = (%q, %v), want it untouched", got, gerr)
+	}
+}

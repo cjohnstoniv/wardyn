@@ -211,7 +211,13 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// than let the person watch a sandbox boot and die. With no declaration the
 	// model-access finding stays the 201 advisory it has always been (below).
 	// Writes its own 422; see enforceCreateLLMMechanism.
-	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef) {
+	// runIdentitySubject(principalFromRequest), NEVER secretOwnerFromRequest: the
+	// subject is the secret NAMESPACE a run resolves against, and the adjacent
+	// owner helper answers "" for every operator — which would refuse an ADMIN
+	// their own per_user capture here while dispatch, reading run.CreatedBy,
+	// resolved it fine.
+	ssoSubject := runIdentitySubject(ctx, principalFromRequest(r))
+	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject) {
 		return
 	}
 
@@ -323,7 +329,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// warnings, so the operator sees it before the run wastes a sandbox. Computed on the
 	// resolved spec via the SAME helper preflight's checklist uses, so the two agree.
 	if runNeedsModelWarning(req) {
-		if la := s.resolveRunLLMAccess(ctx, req, spec, present, bedrockRef); la == nil || !la.Provisioned {
+		if la := s.resolveRunLLMAccess(ctx, req, spec, present, bedrockRef, ssoSubject); la == nil || !la.Provisioned {
 			warnings = append(warnings, s.noModelAccessWarningFor(req.Agent))
 		}
 	}
@@ -555,14 +561,17 @@ type createRunResponse struct {
 // caller's spec is still persisted/dispatched here, so it must never be mutated. The
 // grants slice is cloned because a struct copy shares the backing array and
 // slices.DeleteFunc zeroes the vacated tail in place.
-func (s *Server) resolveRunLLMAccess(ctx context.Context, req createRunRequest, spec types.RunPolicySpec, presentSecrets map[string]bool, bedrockRef *types.WorkspaceBedrockRef) *composeLLMAccess {
+// subject is the CALLER's run-identity subject — whose captured AWS SSO session
+// this run would resolve under a per_user roster row. "" is the operator
+// namespace, i.e. every deployment that never declared per_user.
+func (s *Server) resolveRunLLMAccess(ctx context.Context, req createRunRequest, spec types.RunPolicySpec, presentSecrets map[string]bool, bedrockRef *types.WorkspaceBedrockRef, subject string) *composeLLMAccess {
 	llmSpec := spec
 	llmSpec.EligibleGrants = slices.Clone(spec.EligibleGrants)
 	// Which lanes this run has available — resolved by the same helper the
 	// create-time mechanism refusal uses (resolveRunLLMLanes), so the advisory
 	// below and that refusal can never disagree about what would credential this
 	// run.
-	lanes := s.resolveRunLLMLanes(ctx, req, &llmSpec, bedrockRef)
+	lanes := s.resolveRunLLMLanes(ctx, req, &llmSpec, bedrockRef, s.awsSSOScopeForAgent(ctx, req.Agent, subject))
 	var llmAccess *composeLLMAccess
 	if note, provisioned := s.reconcileLLMAccess(&llmSpec, req.Agent, presentSecrets, s.subscriptionInjectEnabled(), lanes.managed); note != "" {
 		llmAccess = &composeLLMAccess{Provisioned: provisioned, Note: note}

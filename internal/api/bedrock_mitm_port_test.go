@@ -62,7 +62,7 @@ func TestAuthorBedrockBearerInjection_MITMEntryIsPortScoped(t *testing.T) {
 			s.cfg.BedrockBaseURL = tc.baseURL
 			s.cfg.Secrets.(*memSecrets).m[bedrockAPIKeySecret] = []byte("bedrock-bearer-token-xyz")
 			s.cfg.Store = vetoGrantStore{}
-			ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil)
+			ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil, awsSSOScope{})
 			if !ba.ready || !ba.bearer {
 				t.Fatalf("ready=%v bearer=%v, want both true (bearer secret present)", ba.ready, ba.bearer)
 			}

@@ -32,9 +32,16 @@ import (
 // operator's behalf, as opposed to the read-only status the whole console
 // polls. The harness-credential trio needs a secret store to write into;
 // the onboarding mark writes site config and mounts unconditionally.
-func (s *Server) mountSetupMutationRoutes(operatorOnly chi.Router) {
+//
+// ONE of them is not operator-only any more. The container LOGIN launch sits on
+// the signed-in-human group with its predicate inside the handler
+// (authorizeHarnessLogin, harnesscred.go), because under a per_user roster row
+// the credential it captures is the CALLER'S OWN and a member with no route to
+// this endpoint has no route to model access at all. The token PASTE and the
+// DISCONNECT stay operator-only: both write the deployment's shared credential.
+func (s *Server) mountSetupMutationRoutes(humanOrAdmin, operatorOnly chi.Router) {
 	if s.cfg.Secrets != nil {
-		operatorOnly.Post("/setup/harness-login", s.handleHarnessLogin)
+		humanOrAdmin.Post("/setup/harness-login", s.handleHarnessLogin)
 		operatorOnly.Put("/setup/harness-credential/{provider}", s.handleHarnessCredentialPaste)
 		operatorOnly.Delete("/setup/harness-credential/{provider}", s.handleHarnessDisconnect)
 	}

@@ -116,7 +116,10 @@ var docTierRows = []struct{ route, token string }{
 	{"POST /api/v1/policies", "policy create/update/delete"},
 	{"PUT /api/v1/policies/{id}", "policy create/update/delete"},
 	{"DELETE /api/v1/policies/{id}", "policy create/update/delete"},
-	{"POST /api/v1/setup/harness-login", "managed harness credential"},
+	// POST /setup/harness-login is NOT here: 0.7.2 moved the container LOGIN
+	// launch off the gated tier (classMember with an in-handler predicate), and
+	// this list covers gated routes only. The tier table names it in its own
+	// member row instead.
 	{"PUT /api/v1/setup/harness-credential/{provider}", "managed harness credential"},
 	{"DELETE /api/v1/setup/harness-credential/{provider}", "managed harness credential"},
 	{"DELETE /api/v1/tokens/{id}", "`GET`/`DELETE /tokens`"},

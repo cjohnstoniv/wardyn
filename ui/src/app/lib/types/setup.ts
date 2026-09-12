@@ -227,6 +227,38 @@ export interface SetupHarnessTool {
   credential_source?: string;
 }
 
+// THIS PRINCIPAL's model-access state (internal/api.SetupModelAccess) — the
+// per-person answer `llm_ready` below structurally cannot give, since that is a
+// DEPLOYMENT fact and read green over a member's own lapsed AWS session.
+//
+// The chip renders the LABEL for `state` and the server's `action` verbatim
+// underneath it (the action is the member's own words and is never reworded
+// client-side). DRAFT canon, docs/design/workspace-providers-prompt.md §7.7:
+//   live           → AGENTS.MODEL_ACCESS_LIVE, success tone, no action
+//                    (expired-but-renewable folds in — dispatch renews it)
+//   expiring       → AGENTS.MODEL_ACCESS_EXPIRING, warning; the server's own
+//                    `action` is MODEL_ACCESS_EXPIRING_ACTION ("Sign in again
+//                    before {ts}"), rendered verbatim — SIGN_IN_AWS is the
+//                    BUTTON beside it, not the line
+//   expired_signin → AGENTS.MODEL_ACCESS_EXPIRED, warning, SIGN_IN_AWS
+//   not_configured → AGENTS.MODEL_ACCESS_NOT_CONFIGURED, warning, SIGN_IN_AWS
+//   shared_expired → AGENTS.MODEL_ACCESS_SHARED_EXPIRED, warning, NO button —
+//                    there is nothing the member can do but ask their admin
+export interface SetupModelAccess {
+  state:
+    | "live"
+    | "expiring"
+    | "expired_signin"
+    | "not_configured"
+    | "shared_expired"
+    | (string & {});
+  // The declared lane, as the roster's wire value ("bedrock_sso"). Member-safe:
+  // a lane name, never a portal URL or a secret name.
+  mechanism?: string;
+  // The one thing to do, already composed by the server ("" when nothing).
+  action?: string;
+}
+
 export interface SetupStatus {
   ready: boolean;
   // Server-computed "does SOME run/compose LLM access path exist" (resident
@@ -239,6 +271,12 @@ export interface SetupStatus {
   // reason as `bedrock` — READY_FALLBACK and older daemons omit it; treat
   // absent as "unknown", not "false".
   llm_ready?: boolean;
+  // The CALLER's own model-access state — kept through the member redaction on
+  // purpose, and what the member's Getting Started chip reads INSTEAD of
+  // llm_ready. Absent when there is nothing per-principal to say (no roster row
+  // declares a lane for claude-code and no session is captured), in which case
+  // the console renders today's chip.
+  model_access?: SetupModelAccess;
   /** Whether an operator has finished (or deliberately left) the Getting
    *  Started funnel ON THIS INSTALL — SiteConfig.OnboardingCompletedAt
    *  flattened to one bit. A fact about the install, never the browser: the

@@ -56,6 +56,7 @@ func (s *Server) liveCapEnv(ctx context.Context, present map[string]bool, provid
 		// mirrors setupBedrock's own four-lane OR (runs_bedrock.go) — reused, not
 		// re-derived, so this can never drift from what resolveBedrockAuth accepts.
 		BedrockCredentialPresent: bedrock.CredsPresent || bedrock.AWSMount || bedrock.BearerPresent || bedrock.SSOPresent,
+		BedrockCredentialExpired: bedrock.SSOExpired,
 	}
 }
 
@@ -92,9 +93,15 @@ func (si *SetupIntegration) UnmarshalJSON(b []byte) error {
 // disagree. `present` is the CALLER's presence map — owner-scoped for a
 // request (presentSecretNamesFor with secretOwnerFromRequest), so a member's
 // own key lists exactly as it resolves in their run; operator-wide elsewhere.
+//
+// The Bedrock snapshot is OPERATOR-scoped even so: this surface answers "what
+// connections does this deployment have", and the per-principal answer is
+// SetupStatus.ModelAccess, computed on its own caller-scoped read. Handing this
+// a per-user scope would blank an admin's bedrock row on the integrations page
+// the moment they declared per_user, which is not what that page is about.
 func (s *Server) integrationsWithCapabilities(ctx context.Context, present map[string]bool) []SetupIntegration {
 	providers, _ := s.setupProviders()
-	return s.integrationsWithCapabilitiesUsing(ctx, present, providers, s.setupBedrock(ctx, present))
+	return s.integrationsWithCapabilitiesUsing(ctx, present, providers, s.setupBedrock(ctx, present, awsSSOScope{}))
 }
 
 // integrationsWithCapabilitiesUsing is integrationsWithCapabilities' pure-ish
@@ -281,7 +288,7 @@ func (s *Server) integrationByID(ctx context.Context, sc types.SiteConfig, id st
 		row := integrationRow{Integration: in, Source: "stored"}
 		present := s.presentSecretNames(ctx)
 		providers, _ := s.setupProviders()
-		bedrock := s.setupBedrock(ctx, present)
+		bedrock := s.setupBedrock(ctx, present, awsSSOScope{})
 		return SetupIntegration{integrationRow: row, Capabilities: capabilitiesFor(row.Integration, s.liveCapEnv(ctx, present, providers, bedrock))}
 	}
 	return SetupIntegration{}

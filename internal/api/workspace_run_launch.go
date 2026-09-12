@@ -302,6 +302,24 @@ func scanRunGovernance(ceiling governanceCeiling) stepRunGovernance {
 	return stepRunGoverned(ceiling, false, true)
 }
 
+// harnessLoginGovernance: the container-login box, which is the ONE step lane
+// whose answer changed in 0.7.2.
+//
+// deny_interactive does NOT bind it, deliberately and narrowly. That limit is
+// about a person getting a shell for THEIR OWN WORKLOAD; this box carries no
+// workload, mounts nothing, mints nothing, and its "terminal" shows a device
+// code and a verification URL — it is a credential-capture step WARDYN authors
+// and auto-types, not the member's session. It is also the only way a principal
+// under a per_user roster row can obtain model access at all, so refusing it
+// there would wall a member out of the product with a limit aimed at something
+// else entirely.
+//
+// max_concurrent_runs DOES bind it: a login sandbox is a real run, attributed to
+// that person, holding a real slot for up to its idle cap.
+func harnessLoginGovernance(ceiling governanceCeiling) stepRunGovernance {
+	return stepRunGoverned(ceiling, false, true)
+}
+
 // operatorStepGovernance: a lane mounted operator-only, whose run is the
 // DEPLOYMENT's diagnostic rather than any principal's work (the site-config
 // proxy probe, the managed-harness login). Neither limit binds — and the

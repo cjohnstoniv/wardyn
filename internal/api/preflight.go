@@ -224,7 +224,12 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// the SAME 422 launch would, from the same predicate — a checklist that said
 	// "ready" for a run create refuses is the worse of the two lies. Writes its
 	// own 422; see enforceCreateLLMMechanism.
-	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef) {
+	// The caller's own run-identity subject, for the reason named at the create
+	// door (runs.go): a per_user lane resolves against the principal's namespace,
+	// and secretOwnerFromRequest's "" for an operator would preview "sign in
+	// again" for an admin whose own capture is right there.
+	ssoSubject := runIdentitySubject(ctx, principalFromRequest(r))
+	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject) {
 		return
 	}
 
@@ -240,7 +245,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// a false "missing model access" blocker on every CI exec job's --dry-run.
 	var llmAccess *composeLLMAccess
 	if req.TaskMode != "exec" {
-		llmAccess = s.resolveRunLLMAccess(ctx, req, spec, presentSecrets, bedrockRef)
+		llmAccess = s.resolveRunLLMAccess(ctx, req, spec, presentSecrets, bedrockRef, ssoSubject)
 	}
 
 	items := s.deriveSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, presentSecrets, llmAccess)

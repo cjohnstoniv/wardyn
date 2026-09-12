@@ -150,6 +150,13 @@ type classifiedRoute struct {
 	// classOwner arm of TestAuthzMatrix fatals on a route that omits it, the
 	// same way it already does for a missing entity.
 	ownerTier ownerTier
+	// body overrides bodyFor's generic "{}" for routes whose AUTHORIZATION —
+	// not merely their shape validation — depends on what is in the request.
+	// The generic body is normally the right probe precisely because a handler
+	// is expected to fail on shape AFTER authorization ran; a route whose
+	// predicate reads a request field is the exception, and probing it with
+	// "{}" asserts nothing about the tier it is classified as.
+	body string
 }
 
 // routeMatrix is keyed exactly as chi.Walk reports a route: "METHOD /pattern".
@@ -175,7 +182,6 @@ var routeMatrix = map[string]classifiedRoute{
 	// ── admin (SUPER only: a security_admin is refused here too) ──
 	"GET /metrics":                                       {class: classAdmin},
 	"POST /api/v1/setup/onboarding-complete":             {class: classAdmin},
-	"POST /api/v1/setup/harness-login":                   {class: classAdmin},
 	"PUT /api/v1/setup/harness-credential/{provider}":    {class: classAdmin},
 	"DELETE /api/v1/setup/harness-credential/{provider}": {class: classAdmin},
 	// The stored-policy WRITES stay SUPER even though /governance's profile
@@ -399,6 +405,22 @@ var routeMatrix = map[string]classifiedRoute{
 	// answers only for the caller's OWN subjects (ListCapabilityGrantsFor), so
 	// it sits on r like every other /me/* read, not operatorOnly.
 	"GET /api/v1/me/capabilities": {class: classMember},
+	// The container LOGIN launch (0.7.2). classMember is AUTHENTICATION only
+	// here: the real predicate is inside the handler (authorizeHarnessLogin) —
+	// an operator always passes, anyone else needs an enabled `per_user` roster
+	// row for the provider AND capAgent on that row's agent. It sits here rather
+	// than on classAdmin because under such a row the credential this captures is
+	// the CALLER'S OWN, and an admin-only door leaves a member with no route to
+	// model access at all. The token PASTE and DISCONNECT above stay SUPER: those
+	// write the deployment's shared credential.
+	//
+	// The body is NOT the generic "{}": handleHarnessLogin defaults an empty
+	// provider to "anthropic", for which no per_user row can exist (per_user is
+	// bedrock_sso-only), so the generic probe would 403 every member on a route
+	// that admits them — asserting the opposite of this row. newAuthzMatrixServer
+	// seeds the matching enabled row; the 403-WITHOUT-a-row case is
+	// TestHarnessLogin_MemberRefusedWithoutPerUserRow, not a matrix arm.
+	"POST /api/v1/setup/harness-login": {class: classMember, body: `{"provider":"aws"}`},
 	// /me/run-layout is the same shape as /me/ssh-keys above: classMember, not
 	// classOwner. It names no entity in its path — the STORE scopes it to the
 	// caller's own principal, so there is no foreign row to 404 on.
@@ -521,9 +543,14 @@ func buildPath(pattern, id string) string {
 // underneath is expected to fail on SHAPE (missing required fields) for a
 // generic body — that failure is a 4xx/5xx the matrix tolerates (see
 // assertNotBlocked); only the AUTHORIZATION status classes are pinned here.
-func bodyFor(method string) string {
+// A route may override it (classifiedRoute.body) when its AUTHORIZATION reads a
+// request field — the generic body then probes the wrong decision entirely.
+func bodyFor(method string, rc classifiedRoute) string {
 	if method == http.MethodGet || method == http.MethodDelete {
 		return ""
+	}
+	if rc.body != "" {
+		return rc.body
 	}
 	return "{}"
 }
@@ -554,11 +581,30 @@ func (fakeAuthzSessionRevocations) RevokeSub(context.Context, string) error { re
 func (fakeAuthzSessionRevocations) RevokeAll(context.Context) error         { return nil }
 
 // newAuthzMatrixServer builds the MAXIMALLY-CONFIGURED server both matrix
-// tests walk — every conditional route mounted (OIDC, Secrets, RecordingStore,
+// tests walk — and, since 0.7.2, the ROSTER-ENFORCED one: it seeds an agent
+// roster (authzMatrixSiteConfig), so every consumer of this fixture now runs
+// with agent-provider enforcement on rather than in legacy open mode. That is
+// deliberate (POST /setup/harness-login's tier is per-request and unprovable
+// without it) and it is why the store's PutSiteConfig must not persist — every conditional route mounted (OIDC, Secrets, RecordingStore,
 // SessionRevocations) — so chi.Walk sees the whole table and the "every
 // conditional route mounted" doctrine holds for TestSecurityAdminRouteTier
 // too. Shared rather than duplicated: a second copy of this config is exactly
 // where a conditional route silently goes unmounted and therefore unprobed.
+// authzMatrixSiteConfig is the roster the matrix walks under: ONE enabled
+// per_user bedrock_sso row for claude-code. It exists because POST
+// /setup/harness-login's tier is per-request — an operator always reaches it, a
+// member reaches it only when the org declared that each person signs in
+// themselves — so without this row the matrix would probe the refusal and pass
+// while asserting the opposite of that route's classification.
+func authzMatrixSiteConfig() types.SiteConfig {
+	return types.SiteConfig{AgentProviders: &types.AgentProviders{Agents: []types.AgentProvider{{
+		ID:               "claude-code",
+		Mechanism:        types.AgentMechanismBedrockSSO,
+		CredentialSource: types.CredentialSourcePerUser,
+		SSOStartURL:      "https://matrix-org.awsapps.com/start",
+	}}}}
+}
+
 func newAuthzMatrixServer(t *testing.T) (*Server, *authzStore, *authzApprovals, *recording.FSStore) {
 	t.Helper()
 	ast := newAuthzStore()
@@ -573,6 +619,7 @@ func newAuthzMatrixServer(t *testing.T) (*Server, *authzStore, *authzApprovals, 
 	}
 	cfg.RecordingStore = rs
 	cfg.SessionRevocations = fakeAuthzSessionRevocations{}
+	ast.siteCfg = authzMatrixSiteConfig()
 	return New(cfg), ast, aap, rs
 }
 
@@ -601,6 +648,7 @@ func newAuthzMatrixServerWithUI(t *testing.T) *Server {
 	}
 	cfg.RecordingStore = fs
 	cfg.SessionRevocations = fakeAuthzSessionRevocations{}
+	ast.siteCfg = authzMatrixSiteConfig()
 	cfg.UIDir = dir
 	return New(cfg)
 }
@@ -694,7 +742,7 @@ func TestAuthzMatrix(t *testing.T) {
 			t.Fatalf("malformed routeMatrix key %q", key)
 		}
 		t.Run(key, func(t *testing.T) {
-			body := bodyFor(method)
+			body := bodyFor(method, rc)
 			// A route the UI-less server does not register (today: the SPA
 			// catch-all) is probed against the server that DOES register it.
 			srv := srv
@@ -923,7 +971,7 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 				default:
 					t.Fatalf("classOwner route %q has no entity set", key)
 				}
-				w := doSSO(t, srv, method, buildPath(pattern, foreignID.String()), sec, bodyFor(method))
+				w := doSSO(t, srv, method, buildPath(pattern, foreignID.String()), sec, bodyFor(method, rc))
 				switch rc.ownerTier {
 				case tierSuper:
 					// The byte-identical 404 a non-owner gets: no existence
@@ -971,7 +1019,7 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 			t.Fatalf("malformed routeMatrix key %q", key)
 		}
 		t.Run(key, func(t *testing.T) {
-			body := bodyFor(method)
+			body := bodyFor(method, rc)
 			p := buildPath(pattern, "x1")
 			if rc.class == classSecurity {
 				assertNotBlocked(t, "security_admin", doSSO(t, srv, method, p, secSess, body))
@@ -1008,11 +1056,17 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// so 21 SEC / 38 SUPER. 0.7.2 then added the two /workspace-providers verbs,
 	// born SUPER for the same topology reason as those four reads, = 40 SUPER,
 	// and the two /agent-providers verbs beside them for the same reason again,
-	// = 42 SUPER. A route silently reclassified in the table above
+	// = 42 SUPER. 0.7.2 then moved ONE route OUT: POST /setup/harness-login, the
+	// container LOGIN launch, which under a `per_user` agent row captures the
+	// CALLER'S OWN model credential — an admin-only door there leaves a member
+	// with no route to model access at all, so the tier moved and the predicate
+	// went inside the handler. Its two sibling credential verbs (the token paste
+	// and the disconnect) did NOT move: they write the deployment's shared
+	// credential. = 41 SUPER. A route silently reclassified in the table above
 	// would still pass every probe — it would just be enforcing the WRONG tier,
 	// exactly the drift the per-route loop cannot see.
-	if sec != 21 || super != 42 {
-		t.Errorf("tier split = %d security / %d admin, want 21 / 42 (§B's 14 SEC + governance's 7 + §I's directory search, MINUS record; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers)", sec, super)
+	if sec != 21 || super != 41 {
+		t.Errorf("tier split = %d security / %d admin, want 21 / 41 (§B's 14 SEC + governance's 7 + §I's directory search, MINUS record; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers and GET/PUT /agent-providers, MINUS the reclassified POST /setup/harness-login)", sec, super)
 	}
 }
 
@@ -1093,6 +1147,13 @@ type authzStore struct {
 	// above walks reads exactly as it did before.
 	workspaces map[uuid.UUID]types.Workspace
 	tickets    map[string]store.AttachTicket
+	// siteCfg is real rather than a hard-wired zero because 0.7.2 put a ROUTE'S
+	// TIER behind it: POST /setup/harness-login admits a member only when the
+	// agent roster declares a per_user credential source, so a zero site config
+	// would make the matrix's member arm assert the refusal instead of the
+	// admission. Seeded by newAuthzMatrixServer; every other consumer reads the
+	// same empty document it read before.
+	siteCfg types.SiteConfig
 }
 
 func newAuthzStore() *authzStore {
@@ -1425,8 +1486,16 @@ func (s *authzStore) LatestAuditEventByAction(context.Context, string) (types.Au
 }
 
 func (s *authzStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
-	return types.SiteConfig{}, nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.siteCfg, nil
 }
+
+// PutSiteConfig ECHOES without persisting, and that is deliberate: the matrix
+// probes every write route with a generic body, so a persisting double would
+// let `PUT /site-config` (or `PUT /agent-providers`) blank the seeded roster
+// mid-walk and make a LATER route's classification depend on map iteration
+// order. Nothing in the matrix reads back what a probe wrote.
 func (s *authzStore) PutSiteConfig(_ context.Context, cfg types.SiteConfig) (types.SiteConfig, error) {
 	return cfg, nil
 }
