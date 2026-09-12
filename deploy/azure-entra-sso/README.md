@@ -23,13 +23,20 @@ troubleshooting table (redirect loops, `no Wardyn role assigned`,
 2. During or after signup, note the **new tenant's ID** (Entra ID → Overview
    → Tenant ID — a GUID). `01-tenant-prep.sh` below takes it as its one
    argument.
-3. **This tenant is throwaway, on purpose.** Step 1 disables Entra's security
-   defaults (MFA enforcement + a device-code-flow block) tenant-wide — a
-   trade-off that is fine on a tenant with three demo users and nothing else
-   in it, and never fine on a tenant with real ones. `teardown.sh` at the end
-   deletes every object this runbook creates; the very last line is the
-   portal action that deletes the **directory itself** — do that when you're
-   done. Don't point any of this at a tenant you or your org depends on.
+3. **This tenant is throwaway, on purpose.** Before Step 1, disable Entra's
+   security defaults yourself in the portal (MFA enforcement + a
+   device-code-flow block, tenant-wide): **Azure Portal → Microsoft Entra ID →
+   Properties → Manage Security defaults** (link at the bottom of the page) →
+   **Security defaults: Disabled** → give any justification → **Save**.
+   Microsoft Graph refuses an API `PATCH` of this policy on current tenants
+   (`AADSTS65002`) — it is portal-only now, so `01-tenant-prep.sh` only
+   verifies the change took, it does not make it. This trade-off is fine on a
+   tenant with three demo users and nothing else in it, and never fine on a
+   tenant with real ones. `teardown.sh` at the end deletes every object this
+   runbook creates (after listing them and asking you to confirm — see
+   Teardown below); the very last line is the portal action that deletes the
+   **directory itself** — do that when you're done. Don't point any of this
+   at a tenant you or your org depends on.
 
 ## Context — facts this runbook leans on
 
@@ -41,9 +48,10 @@ troubleshooting table (redirect loops, `no Wardyn role assigned`,
 - The `groups` claim itself is free — `groupMembershipClaims: SecurityGroup`
   on the app registration, no P1 required.
 - Tenants created **2026-07 or later** ship with **security defaults ON**:
-  they force MFA and block the device-code flow. `01-tenant-prep.sh` disables
-  them — see the Prelude's trade-off above. Until that runs, use a normal
-  interactive browser `az login`, never `--use-device-code`.
+  they force MFA and block the device-code flow. You disable them yourself in
+  the portal — see the Prelude's trade-off above; `01-tenant-prep.sh` only
+  verifies it took. Until you've disabled them, use a normal interactive
+  browser `az login`, never `--use-device-code`.
 - **Entra never emits `email_verified`.** `WARDYN_OIDC_EMAIL_DOMAINS` fails
   *every* login closed against an Entra tenant if set (`docs/ENV.md`'s own
   row says so) — `04-values.sh` never sets it, and neither should you.
@@ -71,10 +79,11 @@ deploy/azure-entra-sso/01-tenant-prep.sh <tenant-id>
 ```
 
 Interactive browser `az login --tenant <tenant-id> --allow-no-subscriptions`,
-then `az rest PATCH` on
-`policies/identitySecurityDefaultsEnforcementPolicy` (`{"isEnabled": false}`),
-then a GET to confirm it took. Writes `TENANT_ID` to
-`.env.local` (created `chmod 600`, gitignored — see below).
+then a Graph GET on `policies/identitySecurityDefaultsEnforcementPolicy` to
+confirm the portal step in the Prelude actually took — the script exits 1
+with the portal instructions again if it didn't, rather than silently
+continuing on a tenant device-code sign-in will still fail against. Writes
+`TENANT_ID` to `.env.local` (created `chmod 600`, gitignored — see below).
 
 ## Step 2 — app, people, values
 
@@ -306,11 +315,16 @@ half** those seams stub out.
 ## Teardown
 
 ```sh
-deploy/azure-entra-sso/teardown.sh
+deploy/azure-entra-sso/teardown.sh          # lists what it will delete, then asks y/N
+deploy/azure-entra-sso/teardown.sh --dry-run  # lists only, deletes nothing
+deploy/azure-entra-sso/teardown.sh --yes      # skips the prompt, for scripted use
 ```
 
-Deletes the app registration (and its service principal), the 3 users, and
-the 2 groups. Prints — does not run — the cluster/Secret teardown (same
+Lists the app registration, the 3 users and the 2 groups it is about to
+delete before touching anything, and refuses to delete without an explicit
+go-ahead — a `y`/`yes` at the prompt, or `--yes` to skip it. Then deletes the
+app registration (and its service principal), the 3 users, and the 2 groups.
+Prints — does not run — the cluster/Secret teardown (same
 `WARDYN_QUICKSTART_CLUSTER=wardyn-entra ... --down` line as Step 3, plus the
 `kubectl delete secret wardyn-entra-oidc` line) so an operator supervising a
 live run keeps control of when the cluster actually goes away. The very last

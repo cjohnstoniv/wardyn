@@ -42,7 +42,7 @@ env:
   #   WARDYN_OIDC_OPERATOR_EMAILS — an allowlisted email would let it derive
   #     admin regardless of the role map, making the App-Role-path assertion
   #     in the walk unfalsifiable. Not needed either: the chart's render-time
-  #     `wardyn.authConfigured` guard (templates/secret.yaml) is already
+  #     \`wardyn.authConfigured\` guard (templates/secret.yaml) is already
   #     satisfied by WARDYN_OIDC_ISSUER/auth.adminToken being set, and
   #     wardynd's boot-time validateOperatorPosture (cmd/wardynd/boot_posture.go)
   #     is satisfied by WARDYN_OIDC_ROLE_MAP being non-empty (hasRoleMap) —

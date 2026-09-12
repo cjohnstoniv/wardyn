@@ -2,17 +2,20 @@
 # Copyright 2025 The Wardyn Authors
 # SPDX-License-Identifier: Apache-2.0
 #
-# 01-tenant-prep.sh — sign into the throwaway Entra tenant and disable
-# security defaults, which otherwise block the interactive flow used by every
-# later step and force per-user MFA before you've even created the users. See
-# README.md's Prelude for the explicit throwaway-tenant trade-off this is.
+# 01-tenant-prep.sh — sign into the throwaway Entra tenant and VERIFY security
+# defaults are off (they otherwise block the interactive flow used by every
+# later step and force per-user MFA before you've even created the users). See
+# README.md's Prelude for the explicit throwaway-tenant trade-off this is, and
+# for the portal step this script only checks, never performs: Microsoft Graph
+# refuses a PATCH to identitySecurityDefaultsEnforcementPolicy on current
+# tenants (AADSTS65002) — disabling it is portal-only now.
 #
 # Usage: 01-tenant-prep.sh <tenant-id>
 #
-# Order matters: this FIRST `az login` happens BEFORE security defaults are
-# disabled, so it must be the normal interactive browser flow, never
-# `--use-device-code` — device-code sign-in is exactly what security defaults
-# block on a tenant created 2026-07 or later.
+# Order matters: this FIRST `az login` happens BEFORE you disable security
+# defaults in the portal, so it must be the normal interactive browser flow,
+# never `--use-device-code` — device-code sign-in is exactly what security
+# defaults block on a tenant created 2026-07 or later.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -37,27 +40,26 @@ echo "    tenant is fine with --allow-no-subscriptions; do NOT add --use-device-
 echo "    here, security defaults still block it at this point)"
 az login --tenant "${TENANT_ID}" --allow-no-subscriptions >/dev/null
 
-echo "==> disabling security defaults (identitySecurityDefaultsEnforcementPolicy)"
-echo "    Trade-off, spelled out: security defaults force MFA on every user and"
-echo "    block legacy/device-code auth tenant-wide. Turning them off is what makes"
-echo "    'az login --use-device-code' and unattended user creation possible in"
-echo "    the steps that follow. This is acceptable ONLY because this tenant is"
-echo "    throwaway (README.md's Prelude + teardown.sh delete it when you're done)"
-echo "    — never do this on a tenant with real users in it."
-az rest --method PATCH \
-  --url "https://graph.microsoft.com/v1.0/policies/identitySecurityDefaultsEnforcementPolicy" \
-  --headers "Content-Type=application/json" \
-  --body '{"isEnabled": false}'
-
-echo "==> verifying"
+echo "==> checking security defaults (identitySecurityDefaultsEnforcementPolicy)"
+echo "    Microsoft Graph now refuses a PATCH to this policy (AADSTS65002) —"
+echo "    disabling it is PORTAL-ONLY. Trade-off, spelled out: security defaults"
+echo "    force MFA on every user and block legacy/device-code auth tenant-wide;"
+echo "    turning them off is what makes 'az login --use-device-code' and"
+echo "    unattended user creation possible in the steps that follow. YOU turn"
+echo "    them off, in the portal, and only because this tenant is throwaway"
+echo "    (README.md's Prelude; teardown.sh prints the portal tenant-delete step"
+echo "    when you're done) — never do this on a tenant with real users in it."
 STATE="$(az rest --method GET \
   --url "https://graph.microsoft.com/v1.0/policies/identitySecurityDefaultsEnforcementPolicy" \
   --query isEnabled -o tsv)"
-[[ "${STATE}" == "false" ]] || {
-  echo "security defaults still report isEnabled=${STATE} — PATCH did not take. Re-run this script." >&2
+if [[ "${STATE}" != "false" ]]; then
+  echo "security defaults report isEnabled=${STATE}. Disable them yourself, then re-run this script:" >&2
+  echo "  Azure Portal > Microsoft Entra ID > Properties >" >&2
+  echo "  Manage Security defaults (link at the bottom of the page) >" >&2
+  echo "  Security defaults: Disabled > give any justification > Save." >&2
   exit 1
-}
-echo "    security defaults: disabled"
+fi
+echo "    security defaults: disabled (confirmed via Graph GET)"
 
 set_var TENANT_ID "${TENANT_ID}"
 echo "==> wrote TENANT_ID to ${ENV_FILE}"

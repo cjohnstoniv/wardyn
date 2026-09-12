@@ -2306,6 +2306,19 @@ applied after re-onboarding, or the MDM file re-applied to a laptop that has
 since finished its own funnel — the response says so
 (`onboarding_completed_at_ignored`) and `apply` prints it as a warning.
 
+**A SiteConfig write reaches only runs dispatched after it lands.** The fields
+below that shape a run's own egress — `internal_hosts`, `upstream_proxy_no_proxy`,
+`trusted_ca_pem`, the egress redirects — are compiled into the sidecar's proxy
+config at dispatch and read once at sidecar startup; a run already running
+keeps the config it started with for the rest of its life, however many times
+you fix the SiteConfig underneath it. `PUT /site-config`'s response says so
+(`applies_from: "next_dispatch"`). Live
+sidecar reload is deliberately out of scope: a running sandbox's egress
+posture must not change under it with no audit row to show why. A run already
+refused on a field you just corrected stays refused: kill it and start a new
+one — a killed run cannot resume, and the new run reads the corrected config
+from the start.
+
 ### Upstream proxy: plain URL vs. secret
 
 - `upstream_proxy_url` — a plain URL (`http://proxy.corp.internal:8080`), stored
@@ -2544,12 +2557,32 @@ space unreachable even when the policy allowlist named it.
 `SiteConfig` document: each declares a hostname (matched by label suffix —
 `host_suffix` itself, or any host ending in `.`+`host_suffix`) whose
 resolved/literal address is *lifted* out of the private-IP guard, scoped to
-`cidrs` (or the full RFC1918 + `fc00::/7` + 100.64.0.0/10 range when `cidrs` is
-empty). Loopback, link-local, the metadata address, other reserved ranges, and
-NAT64-embedded smuggling stay denied unconditionally — an entry can never lift
-those, whatever `cidrs` says. Every declared CIDR must lie entirely inside that
-liftable set; `PUT /site-config` 400s one that doesn't (`0.0.0.0/0`,
-`169.254.0.0/16`, `127.0.0.0/8` are the obvious mistakes it catches).
+`cidrs` — or, when `cidrs` is empty, to the full RFC1918 + `fc00::/7` +
+100.64.0.0/10 liftable range, still bounded by `host_suffix` alone.
+
+**Leave `cidrs` empty — that is the default, and it is the right one.**
+`host_suffix` is already the control; a `cidrs` list assembled from what you
+can see is usually wrong in a way that looks exactly like a correct
+configuration. A laptop's corporate resolver answers a private-endpoint name
+into CGNAT space; inside the VPC the SAME name resolves to the interface
+endpoint's own ENI address, in the VPC's RFC1918 range. A `cidrs` list drawn
+from what the operator's own machine sees excludes the range the SANDBOX
+actually resolves into, and the resulting 403 is indistinguishable from never
+having declared the entry at all — this cost one deployment two failed runs
+before the mismatch was found. Tighten `cidrs` only once you have evidence of
+what the sandbox itself resolves, never from what your own machine resolves.
+The 403 says the same thing to whoever hits it next:
+
+> Leave `cidrs` empty unless you know the addresses the sandbox resolves. What
+> your own machine sees for a private endpoint is usually not what the
+> cluster sees.
+
+Loopback, link-local, the metadata address, other reserved ranges, and
+NAT64-embedded smuggling stay denied unconditionally regardless of `cidrs` —
+no entry can ever lift those. Every declared CIDR (once you have that
+evidence) must still lie entirely inside the liftable set; `PUT /site-config`
+400s one that doesn't (`0.0.0.0/0`, `169.254.0.0/16`, `127.0.0.0/8` are the
+obvious mistakes it catches).
 
 This lifts ONE thing: the SSRF builtin. The run's own policy allowlist
 (`allowed_domains`) still has to name the host separately. Two more exclusions
@@ -2558,22 +2591,46 @@ resolved control-plane (`wardynd`) host — the sidecar shares its Docker networ
 with Postgres/Dex/the registry container. On Kubernetes the sidecar's interface
 carries only the pod's own address and the control plane's neighbours are
 ClusterIP Services off that interface, so only the resolved `wardynd` address is
-excluded there — declare tight `cidrs` (the workload namespace's pod/Service
-ranges) and never a suffix matching the control-plane namespace's DNS zone (a bare
-`svc.cluster.local` suffix with empty `cidrs` would reach every Service). The lift
+excluded there — this IS the case where you, the cluster operator, have real
+sandbox-side evidence: use a WORKLOAD-SPECIFIC suffix (one Service's own
+name, never the bare `svc.cluster.local`, which would reach every Service in
+the cluster) and narrow `cidrs` to that workload's own Pod range — ClusterIPs
+come from ONE cluster-wide range, so a Service-range CIDR lifts the whole
+cluster, control plane included. The lift
 applies wherever the proxy resolves a hostname for a direct dial — the sandbox's
 CONNECT/plain-HTTP path, the MITM path, and the `git_pat` PAT-broker lane (its
 forge host is grant-derived), so a declared suffix covering a self-hosted forge
 lets the brokered PAT reach it. A lifted decision's audit `rule_source` reads
 `site-config:internal-host` instead of the default `policy:allowed`.
 
+**The guard's memory of a refusal lasts one run.** Once a hostname and port
+have been refused `builtin:private-ip` for a run, that run keeps refusing it for the
+rest of its life even if the name later resolves to a public address — the
+remedy is the same one above (declare it under `internal_hosts`), and a fresh
+run re-resolves the name from scratch.
+
 ```json
 {
   "internal_hosts": [
-    { "host_suffix": "registry.corp.internal", "cidrs": ["10.40.0.0/16"] }
+    { "host_suffix": "registry.corp.internal" }
   ]
 }
 ```
+
+Add `cidrs` only for the Kubernetes in-cluster case above, once you know the
+ranges the SANDBOX resolves into — and scope the suffix to the one workload,
+never to the whole cluster:
+
+```json
+{
+  "internal_hosts": [
+    { "host_suffix": "svc-a.apps.svc.cluster.local", "cidrs": ["10.244.3.0/24"] }
+  ]
+}
+```
+
+(`10.244.3.0/24` stands for that workload's Pod range; a Service-range CIDR
+such as `10.96.0.0/12` would lift every ClusterIP in the cluster.)
 
 ### Bedrock on a private endpoint
 
@@ -2588,8 +2645,10 @@ bearer-injection run), and the dispatch-layer wiring cannot see a TLS failure.
   `bedrock-runtime.<region>.amazonaws.com`, so the SNI stays the public host the
   cert names; the estate's private resolver answers that name into 100.64.
   Reach it by listing the public host in `upstream_proxy_no_proxy` (skip the
-  corp proxy) and in `internal_hosts` with a `100.64.0.0/10` cidr (lift the
-  guard). Nothing about the private address enters the TLS layer.
+  corp proxy) and in `internal_hosts` — leave `cidrs` empty (the default: the
+  CGNAT range is in the liftable set), or name `100.64.0.0/10` only if you have
+  confirmed the sandbox resolves into it (lift the guard). Nothing about the
+  private address enters the TLS layer.
 - **A cert for the endpoint's own name.** Only when the endpoint's cert
   actually covers its `…vpce.amazonaws.com` name (private DNS disabled, or a
   cert issued for it) set `WARDYN_BEDROCK_BASE_URL` to that hostname — then SNI

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -705,5 +706,121 @@ func TestDocsOpsExternalAttributionsAreRight(t *testing.T) {
 	}
 	if !strings.Contains(window, "how-to-connect-fed-group-claims") {
 		t.Error("docs/OPERATIONS.md's nested-group quotation is not cited to the page that carries it (how-to-connect-fed-group-claims)")
+	}
+}
+
+// siteInternalHostsCIDRHintFromSource reads B7's frozen hint straight out of
+// internal/egress/proxy/policy.go, so this guard fails the moment the doc's
+// quote and the landed constant disagree instead of trusting a copy-paste.
+func siteInternalHostsCIDRHintFromSource(t *testing.T, root string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(root, "internal", "egress", "proxy", "policy.go"))
+	if err != nil {
+		t.Fatalf("read internal/egress/proxy/policy.go: %v", err)
+	}
+	decl := regexp.MustCompile(`siteInternalHostsCIDRHint\s*=\s*((?:"(?:[^"\\]|\\.)*"\s*\+?\s*)+)`).
+		FindSubmatch(b)
+	if decl == nil {
+		t.Fatal("internal/egress/proxy/policy.go no longer defines siteInternalHostsCIDRHint — re-anchor this guard")
+	}
+	var sb strings.Builder
+	for _, lit := range regexp.MustCompile(`"(?:[^"\\]|\\.)*"`).FindAllString(string(decl[1]), -1) {
+		s, err := strconv.Unquote(lit)
+		if err != nil {
+			t.Fatalf("unquote %q out of siteInternalHostsCIDRHint: %v", lit, err)
+		}
+		sb.WriteString(s)
+	}
+	return sb.String()
+}
+
+// networkSection extracts docs/OPERATIONS.md's "Network: upstream proxy and
+// egress redirects" section (up to the next top-level heading) — the region
+// B-δ owns and the only one this guard is allowed to read from.
+func networkSection(t *testing.T, doc string) string {
+	t.Helper()
+	const heading = "## Network: upstream proxy and egress redirects"
+	start := strings.Index(doc, heading)
+	if start < 0 {
+		t.Fatal("docs/OPERATIONS.md no longer has the Network section heading — re-anchor this guard")
+	}
+	rest := doc[start+len(heading):]
+	end := strings.Index(rest, "\n## ")
+	if end < 0 {
+		t.Fatal("docs/OPERATIONS.md's Network section has no following top-level heading — re-anchor this guard")
+	}
+	return doc[start : start+len(heading)+end]
+}
+
+// flattenProse joins a blockquote's wrapped "> " lines back into one run of
+// words, so a verbatim-quote check survives the doc's own line wrapping
+// without caring where the markdown source happens to break a line.
+func flattenProse(s string) string {
+	var words []string
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimPrefix(strings.TrimSpace(line), ">")
+		words = append(words, strings.Fields(line)...)
+	}
+	return strings.Join(words, " ")
+}
+
+// networkSectionCIDRGuidanceGaps is the actual check, pulled out of the guard
+// test so TestDocsOpsNetworkCIDRGuardActuallyReds can prove it fires on real
+// drift instead of only ever passing.
+func networkSectionCIDRGuidanceGaps(section, hint string) []string {
+	var gaps []string
+	lower := strings.ToLower(section)
+	if !strings.Contains(lower, "leave `cidrs` empty") || !strings.Contains(lower, "is the default") {
+		gaps = append(gaps, "no sentence saying an empty cidrs is the default")
+	}
+	if !strings.Contains(flattenProse(section), flattenProse(hint)) {
+		gaps = append(gaps, "does not quote siteInternalHostsCIDRHint verbatim")
+	}
+	return gaps
+}
+
+// TestDocsOpsNetworkSectionInvertsTheCIDRSDefault is B7: the Network section
+// used to tell an operator to "declare tight cidrs" — advice that cost a real
+// deployment two failed runs, because the ranges an operator's own machine
+// resolves for a private endpoint are not the ranges the SANDBOX resolves
+// into. The doc must say the opposite (empty cidrs is the default) and must
+// quote the 403's own hint verbatim, not a paraphrase that can drift from it.
+func TestDocsOpsNetworkSectionInvertsTheCIDRSDefault(t *testing.T) {
+	root := repoRoot(t)
+	section := networkSection(t, readOpsDoc(t, "docs", "OPERATIONS.md"))
+	hint := siteInternalHostsCIDRHintFromSource(t, root)
+	if gaps := networkSectionCIDRGuidanceGaps(section, hint); len(gaps) > 0 {
+		t.Errorf("docs/OPERATIONS.md's Network section is missing: %v", gaps)
+	}
+}
+
+// TestDocsOpsNetworkCIDRGuardActuallyReds mutates a scratch copy of the real
+// section to prove networkSectionCIDRGuidanceGaps is not vacuous — each piece
+// it checks for, once removed, must turn up as a gap.
+func TestDocsOpsNetworkCIDRGuardActuallyReds(t *testing.T) {
+	root := repoRoot(t)
+	section := networkSection(t, readOpsDoc(t, "docs", "OPERATIONS.md"))
+	hint := siteInternalHostsCIDRHintFromSource(t, root)
+	if gaps := networkSectionCIDRGuidanceGaps(section, hint); len(gaps) != 0 {
+		t.Fatalf("guard already reds against the real doc (%v) — fix the doc before trusting this mutation test", gaps)
+	}
+
+	withoutDefault := strings.Replace(section,
+		"**Leave `cidrs` empty — that is the default, and it is the right one.**", "", 1)
+	if section == withoutDefault {
+		t.Fatal("the empty-cidrs default sentence is not in the section verbatim — re-anchor this mutation")
+	}
+	if gaps := networkSectionCIDRGuidanceGaps(withoutDefault, hint); len(gaps) == 0 {
+		t.Error("removing the empty-cidrs default sentence did not red the guard")
+	}
+
+	i := strings.Index(section, "> Leave `cidrs` empty")
+	j := strings.Index(section, "cluster sees.")
+	if i < 0 || j < 0 || j < i {
+		t.Fatal("the quoted siteInternalHostsCIDRHint blockquote is not in the section as expected — re-anchor this mutation")
+	}
+	withoutHint := section[:i] + section[j+len("cluster sees."):]
+	if gaps := networkSectionCIDRGuidanceGaps(withoutHint, hint); len(gaps) == 0 {
+		t.Error("removing the quoted siteInternalHostsCIDRHint text did not red the guard")
 	}
 }
