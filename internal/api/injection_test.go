@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,6 +28,12 @@ import (
 // (&memSecrets{m: ...}) keeps behaving exactly as before For existed. owned
 // holds every non-"" owner's rows, lazily allocated by For so every view
 // derived from the same root shares it.
+// memSecretsMu serialises every memSecrets root and every For() view over one
+// lock: views share the root's maps, and C1's single-flight test drives two
+// dispatches at once through them — -race sees the map otherwise. Package-wide
+// on purpose: it is a test double, and nothing here runs t.Parallel.
+var memSecretsMu sync.Mutex
+
 type memSecrets struct {
 	owner string
 	m     map[string][]byte
@@ -35,6 +42,8 @@ type memSecrets struct {
 
 func (s *memSecrets) Name() string { return "mem" }
 func (s *memSecrets) Put(_ context.Context, name string, v []byte) error {
+	memSecretsMu.Lock()
+	defer memSecretsMu.Unlock()
 	if s.owner == "" {
 		if s.m == nil {
 			s.m = map[string][]byte{}
@@ -49,6 +58,8 @@ func (s *memSecrets) Put(_ context.Context, name string, v []byte) error {
 	return nil
 }
 func (s *memSecrets) Get(_ context.Context, name string) ([]byte, error) {
+	memSecretsMu.Lock()
+	defer memSecretsMu.Unlock()
 	if s.owner != "" {
 		if v, ok := s.owned[s.owner][name]; ok {
 			return v, nil
@@ -64,6 +75,8 @@ func (s *memSecrets) Get(_ context.Context, name string) ([]byte, error) {
 	return v, nil
 }
 func (s *memSecrets) Delete(_ context.Context, name string) error {
+	memSecretsMu.Lock()
+	defer memSecretsMu.Unlock()
 	if s.owner == "" {
 		delete(s.m, name)
 		return nil
@@ -72,6 +85,8 @@ func (s *memSecrets) Delete(_ context.Context, name string) error {
 	return nil
 }
 func (s *memSecrets) List(_ context.Context) ([]string, error) {
+	memSecretsMu.Lock()
+	defer memSecretsMu.Unlock()
 	src := s.m
 	if s.owner != "" {
 		src = s.owned[s.owner]
@@ -87,6 +102,8 @@ func (s *memSecrets) List(_ context.Context) ([]string, error) {
 // secretstore.Store.For's doc comment for the fallback/isolation contract
 // this mirrors.
 func (s *memSecrets) For(owner string) secretstore.Store {
+	memSecretsMu.Lock()
+	defer memSecretsMu.Unlock()
 	if s.owned == nil {
 		s.owned = map[string]map[string][]byte{}
 	}
