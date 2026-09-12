@@ -1428,11 +1428,22 @@ hiding them would repeat the failure mode we are designed to avoid.
     ambiguity at all until every minted name took one, which closed a
     re-pointing hole (a `home_override` moved between drives named one volume)
     at the price of extending this one to Docker. **The ambiguity itself is
-    open.** The operator remedy is to rename one of the two drives
-    (with the caveat in #37) or to give the colliding people distinct home
-    names; the product fix — a fixed-width drive id in the object name, or slug
-    uniqueness enforced at the write boundary plus a unique index — is 0.7.1,
-    because it changes an object name people already have storage under.
+    open, and 0.7.1's migration `0061` did NOT close it.** That migration added
+    the `UNIQUE(name_slug)` index — half of the fix this paragraph used to
+    promise — and it closes a different collision: two DRIVES whose *names* fold
+    to one slug (`Corp NAS` and `corp nas`). It cannot close this one, because
+    the ambiguity here is across the SEPARATOR, not within one field: drive `eng`
+    + home `us-bob` and drive `eng-us` + home `bob` are two distinct slugs, both
+    admitted by that index, and joining either pair across the separator still
+    mints one and the same object name. The operator remedy is unchanged — rename one of
+    the two drives (with the caveat in #37) or give the colliding people distinct
+    home names. The product fix is the other half, a **fixed-width drive id in
+    the object name**, and it is **0.8**: it re-homes everyone who already has
+    storage under a minted name, so it is a migration with a data move behind it
+    rather than an index. Until it ships the bound is the one this paragraph
+    opens with — `driveClaimIdentity` and `driveVolumeAdoptable` refuse the
+    claim, so a colliding pair costs one of the two people a refused run, never a
+    cross-mount.
 
 35. **The credential-dotfile deny-list now matches a DRIVE's real path too, and
     that is the whole of what it covers.** The list §4.4 applies to member mount
@@ -1603,6 +1614,73 @@ hiding them would repeat the failure mode we are designed to avoid.
     cannot silently break. Closing this needs a signal the IdP does not send;
     the nearest approximation is warning when a group-subject row stops matching
     anyone, which is not built.
+
+40. **Workspace-provider admission is URL-PREFIX matching over a clone URL, not
+    a repository ACL.** 0.7.2's provider policy bounds which repositories a run
+    may clone: every derived clone URL is resolved against the org's
+    `workspace_providers.git` rows (`admitRepoURL`,
+    `internal/api/workspace_providers.go`) at **ten doors** — workspace create,
+    update, scan and build; `POST /sources`; run create over the RESOLVED spec;
+    the legacy single `repo` field; `devcontainer_repo`; and the two SERVER-SIDE
+    launchers (record and source-scan) that create runs without passing either
+    request-path gate. The census test over `Store.CreateRun`'s callers is what
+    keeps that last pair honest. What the rule actually is: a row's `base_urls`
+    are normalized and matched as PATH PREFIXES on the same host, so
+    `https://github.com/acme` admits every repository under that org and cannot
+    admit a subset of it. Wardyn does not read the forge's own permissions, so
+    admission says "this address is inside an allowed prefix", never "this
+    principal may read this repository" — the forge's ACL is still the only
+    thing that decides the latter, and a credential lane that reaches a repo the
+    prefix admits reaches it. **An SSH clone URL is matched at HOST level only**
+    — `git@ssh.dev.azure.com:v3/org/...` carries no path comparable to a base
+    URL's, so org-path scoping is a documented v1 ceiling on that shape
+    (`cloneTarget`, same file): a row narrowed to one org still admits every
+    repository on that host over SSH. Precedence is BY HOST (a kind cannot be derived for
+    a self-hosted forge): a present row, enabled or disabled, CLAIMS its hosts
+    and then decides them, kind-wide on `github.com` and
+    `dev.azure.com`/`*.visualstudio.com`. One consequence worth stating: a row
+    added ONLY for a GHES host still claims `github.com` kind-wide, so a
+    deployment that adds GHES and lists only its own base URL stops admitting
+    public-github repositories it admitted the day before. With NO rows every
+    predicate is a no-op and the deployment admits exactly what 0.7.1 admitted.
+
+41. **A provider row's `lanes` bound which credential lane a run may use — never
+    what that credential itself can reach.** Dropping `pat` or `ssh` from a row
+    drops the matching grant's wiring at every grant site (and, for `pat`, the
+    ADO egress bundle that arm would have added with it). It does not narrow the
+    credential: a `git_pat` carries whatever scope the operator issued it with,
+    there is no ADO/GitLab equivalent of a repo-scoped installation token, and
+    the default never-resident PAT broker (asset #4, and the `git_pat` row of
+    §5's credential table) makes it NON-RESIDENT, never least-privilege. So a
+    provider row narrowing `base_urls` to `https://dev.azure.com/acme` bounds the
+    URLs a run may *ask* to clone; the PAT behind the `pat` lane still carries
+    the operator's whole scope on that host, and under the
+    `WARDYN_GIT_PAT_BROKER=off` escape hatch the PAT VALUE is resident in the
+    sandbox for the life of the run. Read this residual together with #40: the
+    provider policy is a bound on ADDRESSES, the forge's ACL and the PAT's own
+    scope are the bound on ACCESS, and 0.7.2 adds the first without touching
+    either of the others.
+
+42. **The private-IP denial memo is per run and bounded at 64 entries, so a name
+    that becomes public mid-run stays refused until the run ends.** 0.7.2 answers
+    an identical repeat of a `builtin:private-ip` refusal straight out of a
+    per-run memo — byte-identical 403, no re-resolve, no second audit row —
+    because that one verdict cannot change its mind inside a run: the
+    `internal_hosts` lift that would lift it is compiled into the sidecar's
+    config at dispatch and read once at startup. Two bounds and their costs.
+    (i) The memo's keys are `host:port` strings the SANDBOX chooses, so it takes
+    a ceiling it cannot be pushed past — `privateIPMemoMax = 64`
+    (`internal/egress/proxy/private_ip_memo.go`), evicting the least-recent
+    entry, which costs nothing but a re-resolve and a fresh row on that host's
+    next attempt. (ii) The memo is per RUN, so a hostname whose address genuinely
+    changes from private to public mid-run keeps being refused for the rest of
+    that run; the remedy is the one the 403 itself gives — declare it under
+    `internal_hosts` — and a NEW run re-resolves from scratch. Nothing else is
+    memoed, deliberately: `builtin:resolve-failed` is a DNS fault that may clear
+    on the next attempt and an approval-pending hold is waiting for a human, so
+    both must keep asking. The evidence cost is one summary row carrying the
+    repeat count in place of N identical rows, which is the trade this residual
+    buys.
 
 ### Operator overrides that boot past a fail-closed gate
 

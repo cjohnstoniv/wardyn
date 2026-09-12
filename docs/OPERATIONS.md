@@ -792,6 +792,35 @@ empty. It stays a RATCHET, not a closed list: `TestOperationsTierTableMatchesRou
 completeness check still blocks any new gated route from landing without either
 a row above or a filed entry here.
 
+### Who writes the provider policy: console vs CLI/MDM
+
+0.7.2's two provider blocks — `workspace_providers` (which git hosts and org
+paths a run may clone from, which credential lanes it may use there, and the
+ephemeral/drive storage ceilings) and `agent_providers` (which agents this
+deployment offers, the one model-access lane each may use, and whether that
+credential is shared or captured per person) — are **policy fields on
+`SiteConfig`**, not tables of their own. That is deliberate: `SiteConfig` is the
+org→desktop channel MDM already delivers as `/etc/wardyn/site-config.json`
+([DESKTOP.md](DESKTOP.md)), so a provider policy reaches a managed laptop with no
+new plumbing and no DDL. It also means **two doors write them**, and the grid
+below is what tells them apart.
+
+| | Dedicated endpoints (the console's `/providers` screen) | `PUT /site-config` (the CLI / MDM door) |
+|---|---|---|
+| **Route** | `GET`/`PUT /workspace-providers`, `GET`/`PUT /agent-providers` — both verbs admin-only, for the reason the tier table above gives: a base URL names corporate topology and an `sso_start_url` names the org's IdP | `PUT /site-config`, admin-only, a **full-document replace** of everything except integrations |
+| **Writes what** | exactly one block, replaced whole; `{}` is the clear form | the whole document, provider blocks included when the body NAMES them |
+| **A block the body does NOT name** | n/a — the route IS the block | **carried forward**, not cleared (`carryForwardUnnamedSiteConfigFields`, `internal/api/site_config.go`). Without this, every 5-minute converge on a laptop whose MDM file predates 0.7.2 would silently delete the org's provider policy |
+| **Clearing a block** | `{}` | `{}`. Over raw HTTP an explicit `null` also clears; through `wardyn site-config apply` it does **not** — the CLI strict-decodes into the pointer field and re-marshals it ABSENT under `omitempty`, so `null` in a file reads as "unnamed" and carries forward. Use `{}` on both doors and the question never arises |
+| **Audit row** | `workspace_provider.write` / `agent_provider.write` — the block's own shape, including `base_urls` in the clear (a provider address is topology, not a credential) and never the `sso_start_url` | `site_config.write`, whose datum carries `git_providers`, `storage_configured`, `agent_providers` and — when the body named `workspace_providers` — `sources_no_longer_admitted`, so an MDM-applied narrowing is reviewable with nobody watching a console |
+| **Narrowing is never silent** | the `PUT` response counts the already-onboarded repo sources and library sources the new block refuses; the console renders it on the save toast | the same count, on the response and in `site_config.write` |
+
+**On the desktop tier this grid has a winner.** `wardyn-desktop.sh` re-applies
+`/etc/wardyn/site-config.json` on every converge tick, so on `a′` — where the
+developer IS the admin and can open `/providers` — an MDM file that NAMES a
+provider block overwrites a local console edit within five minutes, and one that
+omits it leaves the edit standing. See
+[DESKTOP.md § Posture switches are env vars, never site-config](DESKTOP.md#posture-switches-are-env-vars-never-site-config).
+
 **Ownership scoping — real, not just admin-vs-everyone.** A member reaches their
 OWN resources the same way an admin reaches any of them
 (`ownsRunOrAdmin`/`getRunAuthorized`, `internal/api/helpers.go`): `GET`/kill/
@@ -2199,9 +2228,17 @@ writable, though a row stored under an earlier release still loads, still sits i
 `SiteConfig`, and is still injected by `internal/api/integrations_run.go`; and
 `azure_openai` is gone as a kind.
 
-**Settings** (account menu) is the one surface for these — a Model provider card
-and a Git host card, each a radio group over concrete lanes; the standalone
-`/integrations` page is deleted and redirects there. Rows are also DERIVED from
+**Settings** (account menu) is the one surface for these — a Model provider card,
+a radio group over concrete lanes; the standalone `/integrations` page is deleted
+and redirects there. **The Git host card retired in 0.7.2.** Its three git
+credential lanes (GitHub App, PAT, SSH key) now render INSIDE the provider row
+they apply to, on the Workspace Providers screen (`/providers`); Settings keeps a
+card in its place that summarizes the provider policy and links there. The lanes
+are the same radio group over the same concrete lanes — what changed is that
+"which git hosts this org clones from" and "how a run authenticates to them"
+stopped being two surfaces that could disagree, and a row's `lanes` list now says
+which of the three it permits at all (a lane a row does not permit drops its
+wiring, with a warning on the 201). Rows are also DERIVED from
 what already exists (stored secret names, site config, setup status), so an
 operator who never opens Settings keeps identical run behavior. Host proxy and
 Egress redirection are deliberately NOT here: that is network topology, configured
@@ -2351,7 +2388,19 @@ below that shape a run's own egress — `internal_hosts`, `upstream_proxy_no_pro
 config at dispatch and read once at sidecar startup; a run already running
 keeps the config it started with for the rest of its life, however many times
 you fix the SiteConfig underneath it. `PUT /site-config`'s response says so
-(`applies_from: "next_dispatch"`). Live
+(`applies_from: "next_dispatch"`), **and since 0.7.2 the console repeats it on
+save** — the upstream-proxy saves
+(`ui/src/app/components/screens/setup/corp-network-proxy.tsx:570,589,604`) carry
+it as the toast's description, so the operator who just changed a field reads the
+lifetime at the moment they change it rather than in this document afterwards.
+Those saves are the ONLY console write that repeats it, and the exception is
+worth knowing before you rely on the toast: the Network step's egress-redirect
+saves (`corp-network-egress.tsx:424`, called from `:468`, `:472`, `:484` and
+`:505`) go through the same `PUT /site-config` and carry no toast and no lifetime
+note — and the redirects are one of the compiled-at-dispatch fields listed above.
+That is a gap in the console, not in the response. A change made through
+`PUT /site-config` or `wardyn site-config apply` has the response field and
+nothing else. Live
 sidecar reload is deliberately out of scope: a running sandbox's egress
 posture must not change under it with no audit row to show why. A run already
 refused on a field you just corrected stays refused: kill it and start a new
@@ -2848,8 +2897,10 @@ naming a field is what decides it.
 
 ### Integrations are not part of this round-trip
 
-`integrations` — the rows behind **Settings**' Model provider and Git host cards,
-plus generic rows stored under an earlier release — lives on the SAME `SiteConfig`
+`integrations` — the rows behind **Settings**' Model provider card and behind the
+git credential lanes on the Workspace Providers screen (which is where the
+retired Git host card's lanes moved in 0.7.2), plus generic rows stored under an
+earlier release — lives on the SAME `SiteConfig`
 document `GET`/`PUT /site-config` reads and writes, but does not travel through
 this door. `PUT /site-config` 400s outright on a body carrying a non-empty
 `integrations` ("integrations are managed through their own endpoints, not PUT

@@ -22,12 +22,28 @@ The full matrix lives in
 this page does not restate it. `GET /me/capabilities` tells you which
 capability grants you personally hold.
 
-Two things worth naming here, because they read as bugs otherwise:
+Three things worth naming here, because they read as bugs otherwise:
 
 - A run id that isn't yours answers **404**, not 403 — Wardyn never confirms
   or denies that something exists for a principal who can't see it.
 - Your unfiltered `GET /audit` (no `?run_id=`) comes back **empty, not an
   error** — see [Where your runs' audit lives](#where-your-runs-audit-lives).
+- **A repository your org's git providers don't cover is refused before your
+  policy is read.** Since 0.7.2 an admin says which git hosts — and which org
+  paths on them — this deployment clones from. A repository outside that is
+  refused at every door one reaches a clone through: onboarding or editing a
+  workspace, scanning or building one, and creating a run. Your refusal says the
+  host is not an enabled git provider and tells you to ask an admin — and that is
+  deliberately all of it, identical at every door: the allowed addresses are the
+  org's own topology and are never shown to a member, and varying the sentence by
+  door would leak the shape of the policy one refusal at a time. No
+  `inline_policy` can widen it, because it is not a policy decision. A separate
+  refusal you may also meet — if your admin has turned on the
+  `workspace_provider` capability kind — says your work may not come from that
+  provider, and names the provider **kind** (`github`, `azure_devops`) only;
+  that one is a grant your admin can write. A deployment whose admin has
+  written no provider rows refuses neither. See [What to ask your admin
+  for](#what-to-ask-your-admin-for).
 
 ## Onboarding your own workspace
 
@@ -210,6 +226,15 @@ their own inline policy.
   policy is clamped — see [DESKTOP.md § Model access on
   m′](DESKTOP.md#model-access-on-m). If you'd rather bring your own key, see
   [Your model key](#your-model-key) above — no admin action needed.
+- **A git provider your repo's host is on.** If onboarding a repository or
+  launching a run against it is refused because its host is not an enabled git
+  provider, only an admin can fix it — by enabling a provider row for that host,
+  or by adding the org path your repository sits under to a row that already
+  covers it. Give them the repository's full clone URL: the rows are matched by
+  host and by URL prefix, so `https://dev.azure.com/acme` and
+  `https://dev.azure.com/acme-labs` are two different answers. If instead the
+  refusal says your work may not come from that provider, ask for a
+  `workspace_provider` capability grant naming it.
 - **A custom sandbox image** — an `image` capability grant.
 - **A workspace root**, if you don't have one yet.
 - **A wider egress ceiling** — the stored policy is your admin's to change,

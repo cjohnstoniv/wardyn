@@ -65,6 +65,18 @@ carry versions rather than floating refs.
 | `WARDYN_CI_SKIP_BUILD` | `1` = reuse existing local images | unset |
 | `WARDYN_DOCKER_SOCK` | which host Docker socket the job drives (two-daemon hosts: pick the daemon with the runtimes you need) | `/var/run/docker.sock` |
 
+**If this deployment has an agent roster, the CI agent needs a row in it.**
+`ci-run.sh` defaults `WARDYN_CI_AGENT` to `claude-code`, and since 0.7.2 a
+deployment that HAS a `site_config.agent_providers` block refuses run creation
+for an agent with no enabled row in it (`422`, `agentRosterRefusal`) — so a job
+that worked against a roster-less install starts failing at the door the day an
+admin writes the first roster row. It binds `exec` mode too: `ci-run.sh` always
+passes `--agent`, since the agent is also where it sources the runner tools.
+Either give the agent CI uses an enabled row (`PUT /api/v1/agent-providers`, or
+the Providers screen) or point `WARDYN_CI_AGENT` at one that has one. A
+deployment with NO `agent_providers` block refuses nothing — which is every
+install upgraded from 0.7.1 until someone writes the first row.
+
 ### Exit codes
 
 `ci-run.sh` propagates `wardyn run --wait`'s exit code. Every `wardyn`

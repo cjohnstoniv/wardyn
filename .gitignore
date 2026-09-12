@@ -119,6 +119,10 @@ ds-bundle/
 # CONSOLE-RULES.md is a permanent doc, not a mock round: docs/README.md indexes it
 # and every UI review cites it, so it ships with the repo like any other doc.
 !/docs/design/CONSOLE-RULES.md
+# hybrid-0.8.md is the same shape: a published design brief, not a mock round.
+# ROADMAP.md's v0.8 row links to it, so it has to ship for a reader following
+# that link out of the repo's own roadmap.
+!/docs/design/hybrid-0.8.md
 /test/e2e/campaign/
 /test/e2e/RESULTS.md
 

@@ -82,7 +82,7 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
   with Docker yet — see [deploy/helm/wardyn/README.md](deploy/helm/wardyn/README.md)'s
   and [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "Kubernetes: known gaps"
   sections for the honest, code-checked list (no BYOI/devcontainer builds, no
-  `local_dir` mounts, no per-pod PIDs/disk enforcement, no ground-truth
+  `local_dir` mounts, no per-pod PIDs limit, no ground-truth
   correlator).
 - **The Helm chart creates sandboxes now, not just the control plane.**
   `deploy/helm/wardyn` with `k8s.enabled=true` wires the substrate above into
@@ -298,7 +298,7 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
   applied the ones a provenance check did not overturn.
 - **What 0.6 deliberately did not ship.** The k8s substrate is still **not** at
   feature parity with Docker — BYOI/devcontainer builds, `local_dir` mounts,
-  per-pod PIDs/disk enforcement and a k8s ground-truth correlator remain on the
+  a per-pod PIDs limit and a k8s ground-truth correlator remain on the
   v1.0 row, and both [`deploy/helm/wardyn/README.md`](deploy/helm/wardyn/README.md)
   and [docs/OPERATIONS.md](docs/OPERATIONS.md) keep the honest, code-checked
   "Kubernetes: known gaps" list rather than letting the cloud-base framing imply
@@ -375,6 +375,68 @@ is the full list.
 - **Still owed, and operator-gated.** The macOS `.pkg` (needs an Apple Developer
   ID), the MDM vendor example (needs a tenant), and the owed real-Mac smoke run.
 
+### What v0.7.2 shipped
+
+Built and awaiting release; [CHANGELOG.md](CHANGELOG.md)'s `[Unreleased]` section
+is the full list. 0.7.2 is a patch line carrying ONE unplanned feature — recorded
+as a dated exception in [RELEASING.md](RELEASING.md), since fast-forwarding
+`release/0.7` onto a feature-carrying `main` IS the release branch taking a
+feature — plus the follow-ups from two customer field reports on a
+private-endpoint Kubernetes estate.
+
+- **Workspace Providers — one admin object for which providers are enabled, for
+  whom, inside what bounds.** Every mechanism this needed already existed in 0.7.1
+  as a separate seam (git-host credential lanes, the never-resident PAT broker,
+  site-config's upstream proxy, user drives with per-tier size overrides,
+  `disk_mib`); what did not exist was a single statement of org policy over them.
+  `SiteConfig` gains `workspace_providers` — git-provider rows (`github` |
+  `azure_devops`, allowed HTTPS base URLs, permitted credential lanes) and two
+  storage ceilings — with its own admin-only `GET`/`PUT /workspace-providers`
+  beside the `PUT /site-config` door MDM already delivers to every laptop. A
+  repository a run clones has to be on an enabled provider, asked at **ten** doors
+  (workspace create/update/scan/build, the source library, run create over the
+  RESOLVED spec, the legacy `repo` field, `devcontainer_repo`, and the record and
+  source-scan launchers that create runs without passing either request-path
+  gate). Providers mint nothing — they veto: a credential lane a row does not
+  permit drops its wiring and says so on the `201`. A seventh capability kind,
+  `workspace_provider`, bounds which row a member's work may come from. The Git
+  host card retires into the provider row it always described. With no rows
+  written every predicate is a no-op, and an upgraded 0.7.1 install answers
+  byte-for-byte what it answered before.
+- **An agent roster, and a model credential per person.** `SiteConfig` gains
+  `agent_providers` — per agent: enabled, ONE model-access mechanism drawn from
+  the lanes that already exist at dispatch, and whether that credential is shared
+  or captured per person — because availability used to be an image map with no
+  auth semantics, and one admin's captured AWS SSO session silently backed every
+  member's runs. A declared mechanism is never quietly swapped for another: the
+  lane dispatch actually SELECTED is compared against the row before a sandbox
+  exists, so a deployment configured for an API key stops dispatching Bedrock
+  because a region and a bearer secret happen to be present. A renewable AWS SSO
+  session is renewed control-plane-side at dispatch rather than discarded, and the
+  sandbox's cache stops carrying the refresh token while the control plane holds
+  it — two parties rotating one token is how hourly re-auth became the resting
+  state.
+- **Ephemeral disk is enforced on Kubernetes.** A run's `disk_mib` becomes the
+  agent container's `resources.limits[ephemeral-storage]`, so the kubelet bounds
+  the writable layer and evicts the pod over it. `StorageEnforcement` gains
+  `eviction`, the honest word that completes its five-word set, and both
+  substrates' disk caps now report one word on the admin setup status. This
+  closes one item on the k8s-parity row
+  below; BYOI/devcontainer builds, `local_dir` mounts, a per-pod PIDs limit and
+  the ground-truth correlator stay open.
+- **The field reports' seven findings.** The console no longer fails OPEN to admin
+  when `/me` does not answer; a SiteConfig save says it applies from the next
+  dispatch; the egress "N held" badge counts only PENDING; a run's terminal
+  transition CANCELS its outstanding approvals (migration `0062`) instead of
+  leaving live Approve/Deny buttons on a dead run; the audit trail stops evicting
+  itself (a self-inflicted renew loop backs off and gives up, and identical
+  consecutive `auth.failed` rows fold into one summary row carrying a count);
+  a private-IP denial is answered once per run rather than once per retry; and the
+  `cidrs` docs trap is inverted — empty is the right default.
+- **Console and refusal copy ships DRAFT.** Every new `400`/`412`/`422` body and
+  console string is a frozen DRAFT constant pending the maintainer's canon sitting;
+  the tests assert through the constants, so the swap is a one-file diff per lane.
+
 ## Planned
 
 Everything below is **planned, unbuilt, and undated**. Where a seam exists but no
@@ -392,10 +454,121 @@ policy file. Researched during 0.7 and deliberately not built in it; the
 groundwork is that the posture inputs and the approval FSM it would ride already
 exist.
 
+**Also new for 0.8: hybrid local + remote.** Today Wardyn has two tiers that do
+not know about each other — an org control plane on Kubernetes
+([docs/OPERATIONS.md](docs/OPERATIONS.md)) and a local daemon per laptop,
+MDM-managed, one machine per developer ([docs/DESKTOP.md](docs/DESKTOP.md): "A
+local daemon per laptop. No shared control plane, no cluster"). Hybrid is the
+deployment where they are one product: the org runs the control plane on the
+cluster, MDM installs Wardyn on the laptop in member mode, and the **same person
+under the same org-managed policy flexes a sandbox between local and remote
+hardware** — a quick edit on the laptop's own CPU, a long build on the cluster's
+— with one identity, one ceiling, one audit stream. The disk half follows: a
+local directory linked into a remote sandbox, and a remote drive readable
+locally. The groundwork exists — member mode (`m′`) already makes the developer a
+non-operator against an org IdP, 0.7.2's `SiteConfig.WorkspaceProviders` is
+already an org-authored provider policy MDM delivers as
+`/etc/wardyn/site-config.json`, and the SSH gateway already carries an sftp
+channel into a running sandbox. What does not exist is enrolment of a desktop
+into a *remote* control plane, per-run placement, and any link between a laptop's
+filesystem and a cluster sandbox. Researched in 0.7.2 and written up in
+[docs/design/hybrid-0.8.md](docs/design/hybrid-0.8.md); not built in it.
+
+**Punted from 0.7.x, by id.** Every deferral 0.7.0/0.7.1/0.7.2 took a disposition
+on and did not build. The ledger is public here rather than only in a plan file;
+each id is searchable in the source it came from
+(`local/review-0.7/FOLLOW-UPS-0.7.1.md`, the drives `DESIGN.md`/`FOLLOWUPS.md`,
+and `threatmodel/THREAT-MODEL.md`'s residual numbers).
+
+- **Drives.** `wardyn drive get|apply` CLI (UD-cli) · in-product reclaim + a PVC
+  delete verb + a `drive.reclaim` audit row (UD-reclaim) · member self-service
+  Reset (UD-reset) · drive-aware concurrent-run collision warning + run-row drive
+  persistence (UD-collision / D3) · widening `/drives/grants` and `/preview` to
+  the security-admin tier (UD-tier) · the share readability probe as uid 1000
+  (UD-readprobe) · **byte enforcement on Docker volumes and shares (TM #36)** —
+  untouched by 0.7.2, whose storage work bounds only the ephemeral writable layer,
+  so a drive's size stays an allocation on every substrate · **team-shared drives**
+  (one object, many principals — it breaks the `UNIQUE(subject_type, subject)` +
+  LIMIT-1 resolver invariant and needs its own design round) · multiple drives per
+  principal · drive as a workspace-library source · a top-level nav item · per-user
+  uid / Kerberos / cifs `multiuser` · wardynd performing NFS/SMB mounts itself ·
+  csi `subDir` templating · cloud-drive providers (rclone/OneDrive) · a read-only
+  `Runner.ProbeDrive` so create, preflight and `/me` share one probe instead of
+  only dispatch knowing (`FOLLOWUPS.md:18`) · **TM #34**, the drive object-name
+  separator collision: 0.7.1's migration `0061` closed the slug-uniqueness half,
+  and the fixed-width drive id that closes the rest re-homes everyone who already
+  has storage under a minted name. Documentation debt on the same feature, by its
+  own `FOLLOWUPS.md` ids: `:3` (the preview resolves claims as typed while the
+  object name is hashed), `:7` (the `disk_mib` text-to-speech trap in a demo
+  script), `:8` (a stale "previewed as a warning" sentence in the design doc),
+  `:11` (a fourth copy of `withMono`), and the three demo-track lines `:4`, `:5`
+  and `:6`, which ride the demo bullet below.
+- **Identity and authz.** Other people's subjects on records (`known_principals`)
+  · PF-48 resident credential lanes above a re-asserted ceiling (architectural) ·
+  **TM #38** (a per-user API token's group snapshot never refreshes — the
+  demoted-admin window) · **TM #39** (an IdP-FILTERED group claim is
+  indistinguishable from a complete one) · governance residuals PF-12/15/16/1 (by
+  design) · the three accepted egress residuals B6/B7/B8 (unassigned-member stored
+  policy, IPv6 redirect literal, SNI-swap probe) · **R4-F110** (a WebSocket close
+  code `4403` on attach: every attach authz refusal is an HTTP 403 BEFORE the
+  upgrade by deliberate invariant, so a 4403 needs a decision to open a socket for
+  an unauthorized caller) · **R1-F289** (a DB-clock cookie `iat`; the shipped
+  comparison-time fix is recorded as safe to leave standing).
+- **Deployment.** Subscription/managed runs through the internal model gateway ·
+  publishing the UI-sandbox images (`vscode`/`novnc`) · direct-dial bypass per
+  target · BYO-Bedrock for members · an air-gapped video mirror + config-driven CSP
+  · the gateway auth-scheme seam · `ssh_key` clone-only vs bind-mounted workspaces
+  (F11) · age-key rotation (F12) · react-router 8 (F13) · the Kata/TPROXY/io_uring
+  quick-hits (F14) · the k8s parity list (F23, on the v1.0 row below) · ADO
+  per-repo scoping (F9 — impossible without an ADO minting API, so it stays a
+  documented ceiling, and 0.7.2's provider rows bound the ADDRESS, never the
+  token's own scope).
+- **Workstream C follow-ons.** Per-user BEARER/API-key credentials (`per_user` is
+  `bedrock_sso`-only in 0.7.2) · explicit opt-in cross-mechanism fallback (needs a
+  policy field, a ceiling term and an audit story) · the rest of Phase B (the
+  LEGACY no-block path still ships refresh fields in the sandbox cache; a mid-run
+  renewal channel for runs longer than one access token) · a background renewer, if
+  dispatch-time refresh proves insufficient.
+- **R3/R4 residue with a written shape, deliberately not pulled.** B3-F073
+  (`llm_inspection` scan-budget policy fields + their POLICIES rows) ·
+  F074-hardening (re-deriving the docker/k8s hardening-cap rationale) · the console
+  copy/state items F141-panes, F143-control, F132-followup, F004-followup, F027-a,
+  F069-a, F051-a/F092-a, F142-copy, F112-nit, F070 and F093 — one owner mock batch
+  · **R4-F009**: the `setup_items` preflight field is fetched on every Review and
+  has no consumer, but deleting it also strips five `preflight_test.go` cases'
+  real coverage of `deriveSetupItems`, so the disposition is to delete the field
+  AND move that coverage onto `deriveSetupItems` directly (or build the rail that
+  consumes it) — not the quick win it was filed as · **R4-F077's pagination
+  control**: the recording-metadata projection shipped, the Recordings screen's
+  own pagination did not, and it is filed for a mock round rather than invented
+  here · **a second terminal-escape chord for AltGr layouts**: 0.7.2's `Ctrl+]`
+  exits the cockpit terminal on US-style keyboards, but on DE/FR/ES layouts `]`
+  needs AltGr, the browser sees `altKey`, and the binding does not fire — so the
+  WCAG 2.1.2 trap stands on those layouts. The fix is a second chord, which is a
+  canon decision (one spelling reaches the on-screen hint) rather than a
+  keyhandler change, so it waits for the sitting that rules it.
+- **Verification debt.** R5's 137 and R6's 70 claim passes · R3/R4 round 2 · R7
+  round 2 · R1's 62 fixed-but-unverified · the Low/Info residue · the TEST-GAPS
+  chronic backlog.
+- **Dev-box tooling** (a decision, not a product gap — none of it reaches a
+  deployment). The `.wslconfig processors=24` bump for the build host · the
+  verification harness's own two: the ledger's `init --resume-from` gap, and the
+  review persona's re-arm on compaction. Recorded so they are not re-discovered as
+  findings in 0.8's rounds.
+- **Demo and video track** (not release-gated, owner-timed). The episode 00 script
+  gate · the dialog rewrite set · the F101 mock round · the eight unrecorded stubs
+  · the 03c act-3 rewrite (a PAT is brokered by default now) · the five held videos'
+  re-take · the 04c re-take · the re-record impact tool, caption lint and quota
+  probe.
+- **Ops-gated** (owner hardware/tenants). The real-tenant Entra walk · the
+  real-AWS PrivateLink walk · adopter acceptance · the macOS `.pkg` (Apple
+  Developer ID) · an MDM vendor example · a real-Mac launchd smoke run · a real
+  playback-engine proof · a live `disk_mib` walk on an xfs+pquota Docker host.
+
 | Milestone | Scope |
 |---|---|
 | **v0.8** | **Alpha RC.** The follow-through on 0.6/0.7 — the remaining enterprise-deployment enhancements, tools, and pieces — and the **last planned release candidate before the alpha go-live** |
-| **v1.0** | SPIRE identity provider (the `identity.Provider` seam ships; the SPIRE impl does not) · OpenBao secret store (same, for `secretstore.Store`) · L3 MCP/tool gateway · arbitrary-domain L2 TLS interception (targeted LLM/registry MITM already ships, opt-in) · cloud STS federation · OTLP/OCSF SIEM sinks (file/webhook/syslog sinks already ship) · Docker/Compose L1 default-deny via nftables (the k8s target's L1 already ships — NetworkPolicy, boot-time-canary-enforced, blocking `169.254.169.254`; Docker/Compose still relies on L0 structural confinement alone) · HA completion — closing the still-open per-process blockers a second replica hits (chiefly the in-memory, fail-open secret-masking registry; see [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "One replica, by construction" for the exact list and what v0.5 already closed) · k8s substrate parity with Docker: BYOI/devcontainer builds, `local_dir` mounts, per-pod PIDs/disk enforcement, and a k8s ground-truth correlator (see [deploy/helm/wardyn/README.md](deploy/helm/wardyn/README.md)'s "Known gaps") · CC3/Vault (Kata) packaged and GA — experimental today · Cilium `toFQDNs` · signed action receipts (the hash chain itself ships — migration `0047`) · separation of duty on the control plane |
+| **v1.0** | SPIRE identity provider (the `identity.Provider` seam ships; the SPIRE impl does not) · OpenBao secret store (same, for `secretstore.Store`) · L3 MCP/tool gateway · arbitrary-domain L2 TLS interception (targeted LLM/registry MITM already ships, opt-in) · cloud STS federation · OTLP/OCSF SIEM sinks (file/webhook/syslog sinks already ship) · Docker/Compose L1 default-deny via nftables (the k8s target's L1 already ships — NetworkPolicy, boot-time-canary-enforced, blocking `169.254.169.254`; Docker/Compose still relies on L0 structural confinement alone) · HA completion — closing the still-open per-process blockers a second replica hits (chiefly the in-memory, fail-open secret-masking registry; see [docs/OPERATIONS.md](docs/OPERATIONS.md)'s "One replica, by construction" for the exact list and what v0.5 already closed) · k8s substrate parity with Docker: BYOI/devcontainer builds, `local_dir` mounts, a per-pod PIDs limit, and a k8s ground-truth correlator (see [deploy/helm/wardyn/README.md](deploy/helm/wardyn/README.md)'s "Known gaps") · CC3/Vault (Kata) packaged and GA — experimental today · Cilium `toFQDNs` · signed action receipts (the hash chain itself ships — migration `0047`) · separation of duty on the control plane |
 | **v1.0 (git-token ref confinement)** | **Token-side** branch-namespace confinement for minted git tokens — the proxy-side push-ref check ships DEFAULT-ON (`agent-run` names the run branch `wardyn/<run-id>/work`; `WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false` opts out) and binds the brokered App lane, but the installation token itself cannot self-restrict to a ref prefix. What now ships, opt-in: Wardyn reads a GitHub repository ruleset back (`VerifyRefRuleset`, `internal/broker/ruleset.go`), grades it on the setup checklist (never `fail`), and can refuse every `github_token` mint until one verifies (`WARDYN_GITHUB_REQUIRE_REF_RULESET`, default off). What's still not built: Wardyn never creates or holds the ruleset itself — that needs repo-admin access it deliberately does not request, so creating one stays a manual operator step (`docs/POLICIES.md`) — and the gate defaults off, so an operator who does neither still has an unbound token. `git_pat`/`ssh_key` remain outside any receive-pack parser regardless of the ruleset (`threatmodel/THREAT-MODEL.md` asset #4) |
 
 ### Named gaps without a milestone

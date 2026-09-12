@@ -559,7 +559,7 @@ its own quota. The size you see is the allocation, not a guarantee."*
 Day-2 detail — backup, offboarding, the per-drive storage class — is in
 [docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s "User drives on Kubernetes".
 
-### Known gaps (v0.6)
+### Known gaps
 
 The k8s substrate is not yet at parity with the Docker Compose one. Fails
 closed with a clear error: **no BYOI/devcontainer image builds**, **no
@@ -569,19 +569,38 @@ only a local-directory source is refused), and therefore **no `~/.aws` /
 credential injection instead — substrate-agnostic, works unchanged here).
 Accepted but not enforced, with a logged warning naming the run: **no per-pod
 PIDs limit** (set the node-level kubelet `podPidsLimit` as a cluster-wide
-backstop). **`DiskMiB` is now enforced, by eviction**: it becomes the agent
-container's `resources.limits[ephemeral-storage]`, and the kubelet kills the
-pod once it exceeds that — a real cap, but not a quota (in-flight work is
-lost, and a burst between two periodic measurements can still overshoot).
-Also:
-**no in-sandbox DNS** (a fast-failing loopback-only resolver — only
-`wardyn-proxy` resolves hostnames, matching Compose's proxy-only egress),
+backstop). Also **no in-sandbox DNS** (a fast-failing loopback-only resolver —
+only `wardyn-proxy` resolves hostnames, matching Compose's proxy-only egress),
 **no k8s ground-truth correlator** (the Tetragon host-sensor pipeline has no
 k8s-substrate equivalent), and **`replicas` stays 1**, same reason as every
 other substrate (see [docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s
-"One replica, by construction"). Full detail, including the exact code each
-claim above is checked against: `docs/OPERATIONS.md`'s "Kubernetes: known
-gaps (v0.6)" section.
+"One replica, by construction").
+
+**Closed in 0.7.2: `DiskMiB` is enforced, by eviction.** A run's `disk_mib`
+becomes the agent container's `resources.limits[ephemeral-storage]` (with a
+small fixed 256Mi request, so scheduling is unchanged except that a node short
+on allocatable ephemeral storage can newly leave the pod Pending), and the
+kubelet kills the pod once it exceeds that. A real cap, but not a quota: the
+kubelet measures periodically, so a burst between two measurements can
+overshoot, in-flight work is lost, and the agent never sees `ENOSPC`. A
+deployment that sets no `storage.ephemeral.default_disk_mib` still leaves
+node-level eviction as the only bound on a run that asked for nothing. It needs
+no new RBAC verb — the limit is a field on a pod spec the runner already
+creates, as the RBAC paragraph above says.
+
+**Not a chart value: the org's provider policy.** `workspace_providers` and
+`agent_providers` — which git hosts a run may clone from, which agents this
+deployment offers, and the ephemeral/drive storage ceilings — live on
+`SiteConfig`, written through `PUT /api/v1/workspace-providers` /
+`/agent-providers` or `PUT /site-config`, never through `values.yaml`. They are
+org policy an admin changes as often as the org's forge list does, and they must
+be identical on the cluster and on the MDM-managed laptops beside it, so a helm
+upgrade is the wrong write path. See
+[docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s "Who writes the provider
+policy: console vs CLI/MDM".
+
+Full detail, including the exact code each claim above is checked against:
+`docs/OPERATIONS.md`'s "Kubernetes: known gaps" section.
 
 What *is* proven, and what the gaps above are measured against: Wardyn ships
 exactly two deployment paths — `deploy/compose` and this chart — and both run

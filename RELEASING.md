@@ -109,6 +109,14 @@ before step 3.
    `git checkout -b release/X.Y`. The branch is where that minor's patch
    releases come from — fixes land on `main` (or the feature branch) first and
    are cherry-picked onto `release/X.Y`; the branch never takes new features.
+
+   **Exception, by maintainer decision (2026-09-12):** 0.7.2 carried the
+   Workspace Providers feature onto `release/0.7` — `feat/v0.7.2` merges to
+   `main` and `release/0.7` fast-forwards onto it, which IS the branch taking a
+   feature; no wording makes it not so, so it is recorded here as a dated
+   exception rather than as a rule change, and in the
+   [CHANGELOG.md](CHANGELOG.md) section for 0.7.2 (`[Unreleased]` until step 1 of
+   this checklist renames it). The rule above stands for every later line.
 4. **Tag** on the release branch: `git tag vX.Y.Z` (tags are `v`-prefixed —
    `v0.1.0` … `v0.4.3`). For a patch release, compute the next patch number
    from the branch's own tags rather than by hand — auto-increment, so two

@@ -8,12 +8,351 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+0.7.2 carries ONE unplanned feature — an admin **Workspace Providers** surface —
+plus the follow-ups from two customer field reports on a private-endpoint
+Kubernetes estate. Carrying a feature onto `release/0.7` breaks one clause of
+[RELEASING.md](RELEASING.md), and it is recorded there as a dated exception
+rather than as a rule change.
+
+**Console and refusal copy is provisional**: every new `400`/`412`/`422` body and
+every new console string in this release ships as a frozen DRAFT constant pending
+the maintainer's canon sitting. The tests assert through those constants, so
+adopting the canon wording is a one-file diff and no behaviour moves with it.
+
+Upgrading from 0.7.1 changes nothing on its own: with no provider rows and no
+agent roster written, every predicate this release adds is a no-op and the
+deployment answers byte-for-byte what it answered before.
+
+### Added
+
+- **Workspace Providers — which git hosts a run may clone from, and how big its
+  scratch may get.** `SiteConfig` gains a `workspace_providers` block: git-provider
+  rows (`github` | `azure_devops`, allowed HTTPS base URLs including self-hosted
+  GHES/ADO Server, and the credential lanes permitted there) plus two storage
+  ceilings. It is edited through its own admin-only
+  `GET`/`PUT /api/v1/workspace-providers` (ETag/412) and is also writable through
+  `PUT /site-config` — the CLI/MDM door a laptop re-applies on every boot — where
+  a block the body does not NAME is carried forward rather than cleared, and `{}`
+  is the clear form on both doors. Zero DDL.
+  - **Admission asks one question at ten doors.** A repository reaching a clone
+    passes `admitRepoURL` at workspace create, update, scan and build; at
+    `POST /sources`; at run create over the RESOLVED spec (so a hand-authored
+    inline policy passes through it too); on the legacy single `repo` field; on
+    `devcontainer_repo`; and in the two SERVER-SIDE launchers, record and source
+    scan, which create runs without passing either request-path gate. A census
+    test over `Store.CreateRun`'s callers is what keeps that last pair honest.
+    The refusal splits by tier: an operator's `422` lists the allowed addresses
+    (or names the claiming row, or says the row is switched off), a member's `403`
+    names nothing but the fact.
+  - **Providers mint nothing; they veto.** A credential lane a row does not permit
+    drops its wiring at all five grant sites — and for `pat`, the ADO egress
+    bundle that arm would have added with it — and says so on the `201`, with an
+    audit row. A host admitted only through the legacy `scm_hosts` list keeps
+    working for one release and warns on the run that clones it.
+  - `scm_hosts` is never written and never folded: `GET /site-config` projects a
+    read-only `effective_scm_hosts` union, so the console never re-implements the
+    claim table. New audit action `workspace_provider.write`; `site_config.write`'s
+    datum gains `git_providers`, `storage_configured` and, when the body named the
+    block, `sources_no_longer_admitted`, so an MDM-applied narrowing is reviewable
+    with nobody watching a console.
+  - A seventh capability kind, **`workspace_provider`**, bounds which provider row
+    a member's work may come from, at the six of those doors a member can reach.
+    NARROWING, like every kind before it: the unenforced default stays allowed and
+    a deny row still bites before anyone enables the kind.
+  - **The Git host card retires.** Its three git credential lanes render inside
+    the provider row they apply to, on the new `/providers` screen (admin-only, no
+    nav item), reached from the funnel's new `providers` step and the Settings
+    card that replaces it.
+- **An agent roster, and one model-access lane per agent.** `SiteConfig` gains an
+  `agent_providers` block — per agent: enabled, ONE mechanism drawn from the lanes
+  that already exist at dispatch, and whether that credential is `shared` or
+  captured `per_user` — with its own `GET`/`PUT /api/v1/agent-providers`, shaped
+  byte-for-byte on `workspace_providers`. It exists because availability was an
+  image map with no auth semantics: "Claude Code is offered here, authenticated via
+  AWS Bedrock SSO, one credential per person" was not a statement the product could
+  hold. Run create refuses a named agent with no enabled row (`422`), and the
+  record launcher asks the same question before it launches, because that path
+  hardcodes its agent and bypasses run create entirely. `credential_source:
+  per_user` is `bedrock_sso`-only — the one mechanism with a per-principal capture
+  path — and such a row must carry the admin-owned `sso_start_url` every principal
+  signs in against, so a member's sign-in can never bind a foreign IdP. The
+  member-safe carrier is three fields per row on `GET /setup/status`; the start URL
+  is in neither that nor the new `agent_provider.write` audit row.
+- **Ephemeral disk is enforced on Kubernetes.** A run's `disk_mib` now becomes the
+  agent container's `resources.limits[ephemeral-storage]` (with a small fixed
+  request, so scheduling is unchanged), so the kubelet bounds the writable layer
+  the clone, `$HOME` and every ephemeral workspace target live on — previously
+  accepted, logged and ignored. Over the limit the pod is **evicted** and the run
+  fails with `Evicted: Pod ephemeral local storage usage exceeds…`, naming the
+  limit. This is eviction, not a filesystem quota: the kubelet measures
+  periodically and kills the pod; it does not refuse the write. `StorageEnforcement`
+  gains `eviction` to say exactly that, and both substrates' disk caps now report
+  one word (`filesystem`, `eviction`, `none`) on the admin setup status and on the
+  Workspace Providers screen. Docker's `applyDiskQuota` is unchanged, including its
+  fail-closed overlay2-on-non-xfs arm.
+- **Storage ceilings, applied at one site each.** `storage.ephemeral.default_disk_mib`
+  fills in for a run that asked for no size, and the smaller of
+  `storage.ephemeral.max_disk_mib` and the profile's `max_ephemeral_disk_mib`
+  bounds one that asked for too much — both at dispatch,
+  the one seam every lane passes after every widening phase. A ceiling bounds a
+  request and never invents one: a run with no `disk_mib` and no org default stays
+  unbounded. `runner.Resources` carries the provenance of its own number
+  (`disk_mib_filled`, also on `run.policy.effective`) because the two are treated
+  differently on a Docker host that cannot keep the cap — an org default runs
+  uncapped with a warning, a policy-authored size keeps today's refusal.
+  `GovernanceLimits` gains `max_ephemeral_disk_mib` and `max_drive_size_mib`
+  (0 = unlimited, no DDL); the drive ceiling is enforced at the resolver fold and
+  refused `422` at the admin write boundary.
+- **Recording metadata on the runs list, opt-in.** `GET /runs` and
+  `GET /runs/{id}` project `has_recording`, `recording_bytes` and
+  `recording_duration_sec` behind `?include=recording_meta`, so the Recordings
+  screen builds its whole library from one list call and fetches a cast only when
+  a viewer presses play — replacing a per-run download of the entire document
+  (39.8 MB measured for 200 runs). Opt-in because a stat-and-tail per run costs
+  real time on the same endpoint that backs the Runs board's 3-second poll. The
+  screen's own pagination control is NOT in this release; it is filed for a mock
+  round.
+- **A person's AWS sign-in is their own credential.** An agent roster row set to
+  `credential_source: per_user` makes the AWS SSO session a run authenticates with
+  the PRINCIPAL's, not the deployment's. One scope is threaded through: under
+  `per_user`, credential resolution reads that principal's own namespace and SKIPS
+  the bearer, host-`~/.aws`-mount and static-key arms outright, because all three
+  are operator reads — a member with no session of their own is not-configured,
+  never quietly served the admin's. `POST /setup/harness-login` widens from
+  admin-only to any signed-in human who holds an enabled `per_user` row's agent
+  capability, since an admin-only door would leave a member no route to model
+  access at all; the launch uses the ROW's access portal and ignores the request's,
+  so a capture can never be bound to an IdP and account of the caller's choosing.
+  `GET /setup/status` carries a five-state `model_access` per principal —
+  registration-first, because the access token lives an hour and a probe keyed on
+  it would make "expiring" permanent — and the member redaction KEEPS it, because
+  it is why a member's chip can stop reading a deployment fact that showed green
+  over their own lapsed session. `harness.credential.captured` and `.refresh` carry
+  the owner and the credential source, so "whose credential" is answerable from the
+  trail.
+- **An org switch for drives, and two drive ceilings.** `storage.user_drive` is the
+  org's half of the drives feature and nothing read it until now. The switch is
+  asked FIRST, ahead of the per-profile door, because the two answer different
+  questions: `disabled` says this install offers no drives at all — every drive and
+  allocation write answers `422`, a run carrying `drive.enabled` is refused, and NO
+  `authz.denied` row is written, because no profile denied anybody. Nothing is
+  deleted, `DELETE` keeps working so an offboarding is not blocked by a switch, and
+  turning it back on restores exactly what was there. The ceiling is two numbers
+  binding in different places: the deployment's `max_size_mib` is refused `422` at
+  the admin write boundary, while a profile's `max_drive_size_mib` cannot be
+  refused at a write at all (the profile binding a subject is claims-resolved and
+  unreadable from the row) and is CLAMPED where both facts are in scope, folded
+  with the deployment's in one `min()`. A lowered ceiling never shrinks anything:
+  on Kubernetes a PVC request cannot be reduced in place, so it is drift, and drift
+  is a warning that already existed.
+- **The profile editor's three number rows.** `max_concurrent_runs`,
+  `max_ephemeral_disk_mib` and `max_drive_size_mib` had no control in the governance
+  profile editor even though the fields, the dispatch clamp and the chip all
+  shipped. One row shape serves all three (`0` = unlimited, stated in every hint),
+  and the ephemeral row carries the Docker-uncapped warning read from the same
+  `/setup/status` call the Storage tab uses rather than a second copy of the string.
+- **Three console surfaces over facts that were already on the wire.** A repo
+  source the provider policy does not admit now dims its `/workspaces` row and
+  says why — naming neither a base URL nor a row id, the same disclosure rule the
+  refusals follow — and repeats the reason on the New Run workspace picker instead
+  of offering a workspace the launch would refuse. New Run's drive block renders a
+  reason line in place of the checkbox for each of `/me`'s four
+  `user_drive_unavailable` tokens, so a member learns before they launch that the
+  drive they expect will not mount. And an identity-affecting edit to an
+  already-allocated drive opens a confirm dialog over the server's own re-home
+  text rather than failing with a bare `409`; confirming retries the same save.
+
 ### Fixed
 
-- Migration `0062_approval_cancelled` adds the terminal state `CANCELLED` to the
-  `approvals.state` CHECK: a run's terminal transition now cancels the run's
-  still-PENDING approvals instead of leaving them in the operator's queue with
-  live Approve/Deny buttons on a run that has ended.
+- **The console stops guessing who you are when `/me` does not answer.** It used
+  to render the full admin nav off the fail-open default, so a human correctly
+  DENIED at login still saw Policies, Governance, Permissions, Secrets and Audit —
+  indistinguishable from an authorization breach, and read as one. The sidebar is
+  now gated on identity being RESOLVED rather than merely settled: settled-but-
+  unknown draws neither nav, says it could not confirm who you are, and offers a
+  Retry that re-fires the call. The context's own defaults stay open, deliberately
+  — the answer to a guess is not a different guess. Server authorization was never
+  affected by any of this.
+- **A SiteConfig change now says it does not reach a run already going.**
+  `internal_hosts`, `upstream_proxy_no_proxy`, `trusted_ca_pem` and the egress
+  redirects are compiled into the sidecar's config at dispatch and read once at
+  startup, so an operator could fix the exact field a denial named and watch the
+  same run fail nine more times with the identical message. `PUT /site-config` now
+  answers `applies_from: "next_dispatch"`, the console repeats it on the Network
+  step's save, and the egress denial itself carries the lifetime clause. Live
+  sidecar reload stays out of scope: a running sandbox's egress posture must not
+  change under it with no audit row to show why.
+- **The egress "N held" badge counts what is actually held.** It counted
+  `egress.pending` rows on an append-only audit trail, so it claimed holds that had
+  been decided an hour earlier while the Approvals tab correctly showed one. One
+  `isHeld` derivation now backs every copy of the count; the audit rows still
+  render as history, carrying their `approval_id`.
+- **A run's end cancels the questions nobody can answer any more.** Migration
+  `0062_approval_cancelled` adds the terminal state `CANCELLED` to the
+  `approvals.state` CHECK — distinct from `DENIED` (a human refused) and `EXPIRED`
+  (a sweeper aged it out), because nobody decided this one. Both terminal writers
+  cascade, so it covers completion and failure and not only kill; the cascade rides
+  the same CAS a human decision uses, so a concurrent human decision wins and is
+  never overwritten; and it emits ONE `approval.cancelled` audit row per
+  transition, carrying the count. `approvals.state` joins `closedEnumChecks`, so
+  the Go set and the database are compared from now on. Every reader that treated
+  an unknown state as "keep waiting" — the toolgate and the git helper both did,
+  which would have hung the agent until its timeout — learns the value.
+- **A killed run can be started again as a new one.** The killed-run panel told the
+  operator to start a new run and gave them nothing to start it with, so they
+  retyped task, agent, barrier and policy — hardest exactly in the loop above,
+  where "kill and start an identical run" is the correct response. "Start a run
+  like this one" prefills from the run row AND from its `run.create` audit event,
+  which is the only place `task_mode`, `interactive_start`, `seed_auto_tools` and
+  `tool_approvals` live — and it names the one thing it cannot carry, since an
+  inline policy is never stored. It is a NEW run request: credentials and approvals
+  are minted fresh and the ceiling re-runs at create, so a cloned admin run under a
+  member clamps honestly.
+- **The decision buttons disappear on a run that has ended.** Approve and Deny are
+  removed, not disabled, once the run is terminal, and the archived `CANCELLED` row
+  says plainly that nothing was approved and nothing denied.
+- **A failed sign-out is visible.** `logout()` now answers whether the server
+  confirmed it, and the shell says so when it did not, instead of writing to a
+  console nobody has open.
+- **The cockpit terminal has a keyboard exit** (WCAG 2.1.2), on US-style layouts.
+  `Ctrl+]` leaves it, announced in the title bar and on the grid's
+  aria-description — `Ctrl+]` rather than the filed chord, because Windows eats
+  that one at OS level. **Known gap:** on DE/FR/ES layouts `]` needs AltGr, the
+  browser then sees `altKey`, and the binding does not fire, so the trap stands
+  there; a second chord for those layouts is on the 0.8 punt list
+  ([ROADMAP.md](ROADMAP.md)). A hint that disagreed with the binding would be
+  worse than no hint, so nothing in the UI promises an exit it cannot deliver.
+- **The audit trail stops evicting itself.** Two halves, because the flood had two
+  causes. The sidecar's token renewer retried ANY failure every 60s forever; it now
+  stops at once on the control plane's own permanent refusals, backs off
+  exponentially otherwise, and gives up with ONE log line — and the healthy-run case
+  underneath it, a run holding a dead identity after a control-plane outage, is now
+  ONE `run.identity.expired` audit row keyed to the run. Structurally, identical
+  consecutive `auth.failed` rows (same boundary, reason, path and peer) fold into
+  their first row plus one NEW summary row carrying `count`/`first_seen`/`last_seen`
+  — a new append, never an update, because `audit_events` is append-only and
+  hash-chained. Bounded by a maximum GAP between identical rows
+  (`WARDYN_AUDIT_COALESCE_WINDOW`, default `5m`, `0` = off) and a 1000-row streak
+  cap. On the deployment that prompted this, 999 of the last 1000 rows were one
+  sidecar's `auth.failed`, and every real security event had aged out of the
+  console's window mid-investigation.
+- **A private-IP denial is answered once, and says when it can change.** The ten
+  retries in the field report are the agent CLI's, and each one re-resolved,
+  re-vetted and emitted another `egress.deny`. The private-address guard is the one
+  refusal that cannot change its mind mid-run, so a bounded per-run memo answers an
+  identical repeat with a byte-identical 403 and leaves ONE row carrying the repeat
+  count when it evicts or the run ends. `X-Wardyn-Egress-Retry: never` rides that
+  arm alone: a resolve failure may clear and an undecided approval is waiting for a
+  human, and telling either "never" would turn a transient fault into a dead run.
+- **The `cidrs` docs trap is inverted.** Scoping an `internal_hosts` entry with
+  `cidrs` is intuitive and wrong from the operator's own machine: a laptop resolves
+  private-endpoint names over the corporate resolver into CGNAT space while inside
+  the VPC an interface endpoint has ENI addresses in the VPC's RFC1918 range, so a
+  `cidrs` list drawn from what the operator can see excludes what the sandbox
+  resolves — and the denial looks identical to having no entry at all. Leaving
+  `cidrs` empty (still host-scoped) is now the documented default, in
+  `docs/OPERATIONS.md`, in the field's own doc comment, and in the 403's remedy
+  sentence.
+- **A declared model-access lane is never quietly swapped for another.** Transport
+  selection knew nothing about what an admin declared, so a deployment whose agent
+  row says "Anthropic API key" dispatched Bedrock the moment a region, a model and
+  a bearer secret existed — and the customer read a Bedrock bill for runs they had
+  configured as api-key. The lane actually SELECTED is now compared against the row
+  ahead of the MITM CA and every grant author, so a refused run mints nothing, and
+  the same predicate answers `422` at create and at Review before a run row exists.
+  With no roster, nothing is refused. The proxy's brokered-LLM refusal stops naming
+  a host the reader can do nothing with and renders the reason the control plane
+  compiled at dispatch, always saying it is below policy — so an agent stops
+  retrying a door that does not exist.
+- **A renewable AWS SSO session is renewed, not thrown away.** An expired-but-
+  renewable captured credential was discarded and the run fell through to the next
+  credential mode — which is what silently crossed into a different auth mechanism.
+  Renewal now happens control-plane-side at dispatch, because `CreateToken` rotates
+  the refresh token and only the control plane can persist what comes back; the
+  sandbox cache therefore stops carrying `refreshToken`/`clientId`/`clientSecret`
+  whenever a refresh token exists, since two parties refreshing one pair is how
+  hourly re-auth became the resting state. Failure is classified on the response
+  body's `error` field, never the status code, so one AWS throttle cannot sign a
+  fleet out. Create and preflight never spend a one-use token; their verdict for
+  expired-but-renewable is READY, because dispatch renews it. New audit action
+  `harness.credential.refresh`.
+- **Create and dispatch fold the managed subscription lane with the same terms.**
+  The two ends disagreed about which lane a run would dispatch on, so a managed
+  token beside a configured Bedrock bearer was refused at the door, and every
+  multi-user deployment under a subscription row went `201` and then FAILED with no
+  sandbox. Both callers use one spelling now, and a refusal that finds a DIFFERENT
+  lane took the run names that lane instead of calling a working credential
+  unconfigured.
+- **Every way launch narrowed a request is recorded on the run.** `run.create`'s
+  success datum gains `clamp_warnings` — the clamp already produced exactly those
+  warnings and they reached nobody, so "the ceiling tightened this" was
+  indistinguishable from "the product ignored my input".
+- **The re-home guard's read-to-write gap is closed, in the store and under a row
+  lock.** Deciding whether a drive may be re-homed was a read followed by an
+  unconditional write, and its own doc named the residual: a grant created between
+  the two was re-homed silently. The decision now travels into the writing
+  statement — and because the predicate alone would only have narrowed the window,
+  the guarded path takes a row lock in the same transaction first. Two Postgres
+  tests cover it, one of them a real two-session interleaving that asserts the
+  write WAITS on an open grant and then refuses.
+- **A write that revoked tokens says so.** `POST /access/mappings` has returned
+  `tokens_revoked` since a demotion started revoking outstanding tokens, and the
+  console rendered neither that nor `stale_token_snapshots`; the People step's
+  add-mapping form now shows the receipt when a write actually revoked some.
+- **A per-run approval cap.** The sandbox picks the hosts and tools it asks about
+  and the dedup guard only collapses repeats of the same scope, so a run walking a
+  thousand unknown hosts put a thousand rows in front of a human.
+  `maxApprovalsPerRun = 4096`, counted in the database, answered `429`, failing
+  CLOSED on a count error and emitting no audit action — a run that hits the cap
+  must not flood the trail with the refusal instead of the rows.
+- **An `egress_domain` approval is HOST-WIDE, and the surfaces say so.** One
+  spelling of "which host this approval is about" now backs both the cache key and
+  the raised `requested_scope`, and it strips a port if one is ever present, so a
+  caller passing `example.com:8443` gets the same grant rather than silently opening
+  a second question for a host the operator already decided.
+- **Tooling and mechanical pulls.** `check-file-size.sh` walks tracked files;
+  `-coverpkg` closes the same-package blind spot; the sidecar's operator knobs now
+  travel on BOTH container substrates from one list (a pod inherits nothing from
+  wardynd, so three switches were not "off" on Kubernetes but unreachable); every
+  gated route the completeness check listed has a row in `docs/OPERATIONS.md`'s
+  tier table; `wardyn site-config apply` prints which post-0.6.6 fields it left as
+  the server already had them; and `values.yaml` documents that
+  `persistence.enabled=false` also leaves the audit spool on the ephemeral
+  `/tmp` emptyDir.
+
+### Security
+
+- **An operator can say a brokered credential is TLS-only.** The `api_key`
+  injection rule gains `require_tls`. The proxy's transport rules already withheld
+  a credential from cleartext to `:443` and from a host it only ever speaks TLS to,
+  but a plaintext connector on `:80` is indistinguishable from an https-only vendor
+  it has no table for — so that one was injected, in the clear. The plain forward
+  lane now refuses such a request outright, ahead of content inspection (a refused
+  request's body is never read), with its own `403` naming the host and the rule
+  and a `policy:require-tls` deny row that REPLACES the allow, because nothing was
+  forwarded. The scope decodes STRICTLY: a misspelled `require_tls` used to read as
+  `false`, a security control failing open on a typo. Unset, every byte is as
+  before.
+- **PAT pushes can be confined to the run's branch namespace.** The never-resident
+  `git_pat` lane has terminated its own cleartext smart-HTTP since 0.7, so the
+  receive-pack parser could always have bound it; leaving it unconfined was a
+  decision, and four texts said so. It is now wired through the one `confinePush`
+  step both brokers call — same words, same `brokered:git:branch-ns*` vocabulary,
+  one rule with two brokers — behind `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS`,
+  **default off**, the opposite default from the App lane: a PAT carries whatever
+  scope the operator issued, over forges whose push-ref conventions are not
+  GitHub's. Off, the lane is byte-for-byte 0.7.1; the four texts and their two
+  guards are re-derived to the new truth rather than deleted.
+- `threatmodel/THREAT-MODEL.md` gains four residuals for what this release does
+  and does not bound: provider admission is URL-prefix matching over a clone URL
+  and not a repository ACL (and is host-level only for an SSH clone URL); a
+  provider row's `lanes` bound which credential lane a run may use and never what
+  that credential itself can reach; the `auth.failed` coalescing key contains
+  `SourceIP`, which does not separate principals behind a Kubernetes ingress; and
+  the private-IP memo is per run and bounded, so a name that becomes public
+  mid-run stays refused until the run ends. The drive object-name residual is
+  corrected: 0.7.1's migration `0061` closed the slug-uniqueness half, not the
+  separator collision, whose real fix re-homes existing storage and is 0.8.
 
 ## [0.7.1] — 2026-09-11
 

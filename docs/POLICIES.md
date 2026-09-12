@@ -653,6 +653,29 @@ profile's eligible grants are within the deployment ceiling.
 | `target` | `string` | (unset) | Optional clone destination; validated and collision-checked against every other target when set — including the reserved `/home/agent/drive` subtree, refused with the same message as `workspace_mounts[].target` above. Unset defers to the `~/work/<name>` convention. |
 | `ref` | `string` | (unset) | Branch, tag, or commit SHA to clone. Unset clones the remote's default branch (shallow, `git clone --depth 1`). A branch/tag clones shallow directly (`--branch`); an arbitrary SHA falls back to a shallow fetch of that exact ref plus checkout. |
 
+**Provider admission is decided WITHOUT reading this policy.** Since 0.7.2 the
+org's `site_config.workspace_providers.git` rows decide which clone URLs this
+deployment admits at all. The check runs at run create over the RESOLVED spec
+(`internal/api/runs.go:477-478`) — so it sees the repositories a hand-authored
+`inline_policy` asked for exactly as it sees a stored policy's, and neither can
+argue with it, because nothing in the spec is an input to the verdict: the only
+things it reads are the clone URL and the org's provider rows. A repository whose
+host no enabled row admits is refused with a
+`422` for an OPERATOR, listing the allowed addresses (or naming the row that
+claims the host and refused anyway), and with a `403` for a MEMBER that names
+nothing but the fact — `GET /workspace-providers` is a security-tier door
+precisely because base URLs name corporate topology. **No policy field can widen
+it**: this is not an egress rule, an `allowed_domains` entry or a grant, so there
+is no field to add and nothing a ceiling narrows. A `workspace_provider`
+capability grant does not widen it either — that kind bounds which provider row a
+MEMBER's work may come from, a second and narrower question; admission binds
+operators too. Read the refusal as "the org does not
+clone from there", never as "your policy is wrong". A deployment with no provider
+rows admits what it admitted in 0.7.1; see
+[OPERATIONS.md](OPERATIONS.md#multi-user-who-can-change-what) for who writes the
+rows and `threatmodel/THREAT-MODEL.md` residual #40 for what the match rule
+actually bounds.
+
 ## `ui_apps[]` — `UIApp`
 
 The in-sandbox loopback HTTP apps Wardyn's UI gateway may relay to a browser (a

@@ -20,25 +20,25 @@ RBAC, no shared docker socket). This tier sits below both.
        MDM (Jamf / Intune / …)
                 │  renders + re-asserts 4 files per device
                 ▼
-  ┌─────────────────────────────────────────────┐
-  │  the developer's laptop                     │
-  │                                             │
-  │   /etc/wardyn/wardyn.env       (envelope)   │
-  │   /etc/wardyn/secret.env       (secrets)    │
-  │   /etc/wardyn/policy.json      (ceiling)    │
-  │   /etc/wardyn/site-config.json (proxy/SCM)  │
-  │   /etc/wardyn/age.key   ← installer-minted, │
-  │                            NEVER from MDM   │
-  │                    │                        │
-  │                    ▼                        │
-  │   wardynd  ── 127.0.0.1:8080 ──▶ console    │
-  │      │        (local mode: no SSO,          │
-  │      │         the developer is admin)      │
-  │      │                                      │
-  │      ├──▶ agent sandbox container           │
-  │      └──▶ wardyn-proxy sidecar ──▶ egress   │
-  │                                             │
-  └──────────────────────┬──────────────────────┘
+  ┌─────────────────────────────────────────────────┐
+  │  the developer's laptop                         │
+  │                                                 │
+  │   /etc/wardyn/wardyn.env       (envelope)       │
+  │   /etc/wardyn/secret.env       (secrets)        │
+  │   /etc/wardyn/policy.json      (ceiling)        │
+  │   /etc/wardyn/site-config.json (proxy/providers)│
+  │   /etc/wardyn/age.key   ← installer-minted,     │
+  │                            NEVER from MDM       │
+  │                    │                            │
+  │                    ▼                            │
+  │   wardynd  ── 127.0.0.1:8080 ──▶ console        │
+  │      │        (local mode: no SSO,              │
+  │      │         the developer is admin)          │
+  │      │                                          │
+  │      ├──▶ agent sandbox container               │
+  │      └──▶ wardyn-proxy sidecar ──▶ egress       │
+  │                                                 │
+  └──────────────────────┬──────────────────────────┘
                          │ audit fanout (webhook, ?device=<serial>)
                          ▼
                      org SIEM
@@ -282,8 +282,47 @@ admin-access limits verbatim.
 | `/etc/wardyn/wardyn.env` | **MDM** | `0644` | the non-secret envelope — `WARDYN_LOCAL_MODE`, `WARDYN_LOCAL_OPERATOR`, `WARDYN_DEFAULT_POLICY`, `WARDYN_AGENT_IMAGES`, `WARDYN_LISTEN`, `WARDYN_RUNNER`, `WARDYN_WORKSPACES_ROOT`, `WARDYN_TRUSTED_CA_FILE` | fleet-uniform, non-sensitive; readable is fine and makes support tractable — a CA cert is public, unlike the age key below |
 | `/etc/wardyn/secret.env` | **MDM** | `0600` | secret-bearing variables — `WARDYN_AUDIT_SINKS` (its JSON carries the SIEM `bearer_token`), and `WARDYN_OIDC_CLIENT_SECRET` on the SSO variant | these are org credentials, uniform across the fleet, so MDM is the right delivery path — but they are not per-device secrets and `0600` does not make them ones |
 | `/etc/wardyn/policy.json` | **MDM** | `0644` | the default `RunPolicySpec` — confinement class, allowed egress, eligible grant kinds ([POLICIES.md](POLICIES.md)) | this file *is* the managed ceiling; it is the reason the tier is called managed |
-| `/etc/wardyn/site-config.json` | **MDM** | `0644` | corporate network facts — upstream proxy, artifact mirrors, SCM hosts (`wardyn site-config apply`) | environment-shaped, identical across the fleet, and re-applied after a reset |
+| `/etc/wardyn/site-config.json` | **MDM** | `0644` | corporate network facts — upstream proxy, artifact mirrors, SCM hosts — and, since 0.7.2, the org's **provider policy**: `workspace_providers` and `agent_providers` (`wardyn site-config apply`; see the note below this table) | environment-shaped, identical across the fleet, and re-applied after a reset |
 | `/etc/wardyn/age.key` | **the installer, on the device** | `0600` | the age X25519 identity backing this laptop's secret store (`WARDYN_AGE_KEY`) | **never via MDM** — see below |
+
+**The two provider blocks, and why an old MDM file cannot delete them.**
+`workspace_providers` says which git hosts and org paths a run may clone from,
+which credential lanes it may use there, and the ephemeral/drive storage
+ceilings; `agent_providers` says which agents this org offers and how each
+reaches its model. `wardyn site-config apply` is a **full-document replace**, but
+a key the file does not NAME is **carried forward, not cleared** — the CLI
+strict-decodes and re-marshals, so an omitted (or `null`) block leaves the stored
+one alone, and `apply` prints which post-0.6.6 keys it left as the server already
+had them. That carry-forward is what stops the 5-minute converge on a laptop
+whose MDM file predates 0.7.2 from silently deleting the org's provider policy on
+every tick. To CLEAR a block deliberately, write it as `{}` — the only clear form
+that behaves the same on this door and on the API.
+
+### An org `default_disk_mib` runs UNCAPPED here, with a warning
+
+The `storage.ephemeral` ceilings in `site-config.json` are the one part of the
+provider policy that lands differently on this tier, and it is deliberate. A
+`default_disk_mib` is a size Wardyn **fills in** for a run that requested none;
+`disk_mib` on a policy is a size an admin **wrote**. On Docker, a writable-layer
+cap needs `overlay2` on an `xfs` filesystem mounted with `pquota` — and the
+desktop default everywhere that matters (Docker Desktop, WSL2, stock
+Ubuntu/Debian) is overlay2 over ext4, which cannot take one. There, a
+policy-authored `disk_mib` is **refused at container create**, because a promised
+cap must not silently evaporate; an org-default-FILLED size instead **runs
+uncapped with a warning** — a `slog.Warn` carrying `enforcement: none`, the same
+word the admin setup status reports for this host's disk cap. The bit that tells
+the two cases apart is on the run's own record: `run.policy.effective` carries
+`disk_mib_filled`, so a reader can see whether the number came from the request
+or from the org.
+
+It never fails closed, and that is the whole reason for the split: an org default
+reaches laptops through this file, so failing closed on it would stop every
+request-less run on every desktop in the estate the day an admin typed a number
+into the Storage tab. A fleet that genuinely needs the cap needs an xfs+pquota
+backing filesystem, or the Kubernetes tier, where the same number is an
+`ephemeral-storage` limit the kubelet enforces by eviction
+([OPERATIONS.md](OPERATIONS.md)'s "Kubernetes: known gaps"). The three-way Docker
+split is in [POLICIES.md](POLICIES.md)'s `disk_mib` row.
 
 ### Why `age.key` never rides in an MDM payload
 
@@ -310,8 +349,35 @@ Anything that changes the *security posture* of this deployment belongs in
 `wardyn.env`, not in `site-config.json`. Site-config is applied as a
 **full-document replace**, so a partial write silently drops whatever the
 previous document held. Keep it to corporate network facts — proxy, mirrors,
-SCM hosts — and keep posture in the env file, where a missing line is a missing
-line and not a reverted setting.
+SCM hosts — and the org's provider policy, and keep posture in the env file,
+where a missing line is a missing line and not a reverted setting.
+
+**Why the provider policy is the exception, and what makes it a safe one.**
+`workspace_providers` and `agent_providers` are *org policy*, not process
+posture, and this file is the only channel MDM already delivers to every laptop
+— routing them through `wardyn.env` would mean a new MDM payload for a document
+that changes as often as the org's forge list does. They are safe on the
+full-document-replace door for one specific reason: both keys are **carried
+forward when the file does not name them** (the MDM-row note above), so they are
+the two keys a partial write does not drop. That protection is the carry-forward,
+not the replace semantics — every other key in this document still behaves the
+way the paragraph above describes, and a `wardyn.env` variable is still the
+answer for anything that decides what this daemon *is* rather than what the org
+*allows*.
+
+**On `a′`, MDM overwrites what the developer changed in the console.** The
+developer is the admin on this tier, so they can edit the provider policy at
+`/providers` — and `wardyn-desktop.sh` re-applies `/etc/wardyn/site-config.json`
+on **every converge tick** (every 5 minutes; the file is a full-document replace,
+so re-applying the same file is a safe no-op rather than accumulation). If the
+MDM file NAMES `workspace_providers` or `agent_providers`, the org's copy wins
+within five minutes and the console edit is gone with no warning — the file is
+the authority, which is the point of the tier. If the MDM file omits those keys,
+the carry-forward leaves the local edit standing indefinitely. Both outcomes are
+correct; which one an org gets is decided by what its MDM payload contains, so
+decide that deliberately rather than discovering it from a support ticket. On
+`m′` the question does not arise: `PUT /site-config` and the provider endpoints
+are admin-only and the developer is a member.
 
 ## The install lane
 
