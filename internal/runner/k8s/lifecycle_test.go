@@ -27,17 +27,35 @@ func TestStatus_MapsPodPhase(t *testing.T) {
 		mutate    func(*corev1.PodStatus)
 		wantState types.RunState
 		wantExit  *int
+		// wantMsg is asserted only when non-empty: most phases carry no detail.
+		wantMsg string
 	}{
-		{"pending", func(s *corev1.PodStatus) { s.Phase = corev1.PodPending }, types.RunStarting, nil},
-		{"running", func(s *corev1.PodStatus) { s.Phase = corev1.PodRunning }, types.RunRunning, nil},
+		{"pending", func(s *corev1.PodStatus) { s.Phase = corev1.PodPending }, types.RunStarting, nil, ""},
+		{"running", func(s *corev1.PodStatus) { s.Phase = corev1.PodRunning }, types.RunRunning, nil, ""},
 		{"succeeded", func(s *corev1.PodStatus) {
 			s.Phase = corev1.PodSucceeded
 			s.ContainerStatuses = []corev1.ContainerStatus{{Name: mainContainerName, State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 0}}}}
-		}, types.RunStopped, intPtr(0)},
+		}, types.RunStopped, intPtr(0), ""},
 		{"failed", func(s *corev1.PodStatus) {
 			s.Phase = corev1.PodFailed
 			s.ContainerStatuses = []corev1.ContainerStatus{{Name: mainContainerName, State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137}}}}
-		}, types.RunFailed, intPtr(137)},
+		}, types.RunFailed, intPtr(137), ""},
+		// An eviction's whole VERDICT is in Status.Reason; the message that follows
+		// names the limit the kubelet measured past. Dropping the reason left a run
+		// failure reading like an unattributed sentence — which is what an over-the
+		// -ephemeral-disk-limit run now surfaces to its owner.
+		{"evicted names the reason and the limit", func(s *corev1.PodStatus) {
+			s.Phase = corev1.PodFailed
+			s.Reason = "Evicted"
+			s.Message = "Pod ephemeral local storage usage exceeds the total limit of containers 64Mi"
+			s.ContainerStatuses = []corev1.ContainerStatus{{Name: mainContainerName, State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137}}}}
+		}, types.RunFailed, intPtr(137), "Evicted: Pod ephemeral local storage usage exceeds the total limit of containers 64Mi"},
+		// Reason alone, no message: the verdict must still arrive whole.
+		{"failed with a reason and no message", func(s *corev1.PodStatus) {
+			s.Phase = corev1.PodFailed
+			s.Reason = "Evicted"
+			s.ContainerStatuses = []corev1.ContainerStatus{{Name: mainContainerName, State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 137}}}}
+		}, types.RunFailed, intPtr(137), "Evicted"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -55,6 +73,9 @@ func TestStatus_MapsPodPhase(t *testing.T) {
 				if st.ExitCode == nil || *st.ExitCode != *tc.wantExit {
 					t.Errorf("ExitCode = %v, want %d", st.ExitCode, *tc.wantExit)
 				}
+			}
+			if tc.wantMsg != "" && st.Message != tc.wantMsg {
+				t.Errorf("Message = %q, want %q", st.Message, tc.wantMsg)
 			}
 		})
 	}

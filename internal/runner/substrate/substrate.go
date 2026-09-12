@@ -91,6 +91,16 @@ type ClassSupport struct {
 	// consulted BEFORE routing, so one substrate that cannot bind a drive makes
 	// the deployment unable to promise one.
 	UserDrives bool
+	// EphemeralDiskEnforcement names WHAT ACTUALLY BINDS a run's
+	// runner.Resources.DiskMiB on this substrate — `filesystem` (a storage-driver
+	// quota refuses the write), `eviction` (the kubelet kills the pod over the
+	// limit; it never refuses the write) or `none`/empty (nothing binds it).
+	//
+	// THE ORCHESTRATOR AGGREGATES THIS AS THE WEAKEST, NOT A UNION — the same
+	// reasoning UserDrives' conjunction rests on: the word is what the control
+	// plane tells an admin a disk number MEANS, so one substrate that enforces
+	// nothing makes the deployment unable to promise enforcement. Never overclaim.
+	EphemeralDiskEnforcement types.StorageEnforcement
 }
 
 // Substrate is runner.Runner's lifecycle contract for ONE confinement substrate,

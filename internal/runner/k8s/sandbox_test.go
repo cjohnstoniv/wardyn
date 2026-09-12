@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
@@ -349,8 +350,11 @@ func TestCreateSandbox_NetworkPolicyFields(t *testing.T) {
 		t.Errorf("agent pod DNSPolicy/DNSConfig = %q / %+v, want None with a loopback nameserver", agentPod.Spec.DNSPolicy, agentPod.Spec.DNSConfig)
 	}
 	ac := agentPod.Spec.Containers[0]
-	if !resourceListsEqual(ac.Resources.Requests, ac.Resources.Limits) {
-		t.Errorf("agent container requests %v != limits %v, want equal (hard cap)", ac.Resources.Requests, ac.Resources.Limits)
+	// CPU and memory ONLY: ephemeral-storage is deliberately asymmetric (a small
+	// floor request under the DiskMiB limit, see resourceRequirements) and is
+	// pinned by TestCreateSandbox_EphemeralDiskLimitAndFloorRequest instead.
+	if !resourceListsEqual(cpuMem(ac.Resources.Requests), cpuMem(ac.Resources.Limits)) {
+		t.Errorf("agent container cpu/memory requests %v != limits %v, want equal (hard cap)", ac.Resources.Requests, ac.Resources.Limits)
 	}
 	if ac.SecurityContext == nil || ac.SecurityContext.RunAsUser == nil || *ac.SecurityContext.RunAsUser != 1000 {
 		t.Errorf("agent container RunAsUser = %v, want *1000 (H2)", ac.SecurityContext.RunAsUser)
@@ -364,6 +368,19 @@ func TestCreateSandbox_NetworkPolicyFields(t *testing.T) {
 	if pc.SecurityContext == nil || pc.SecurityContext.RunAsUser != nil {
 		t.Errorf("proxy container RunAsUser = %v, want nil (H2: image default, distroless nonroot)", pc.SecurityContext.RunAsUser)
 	}
+}
+
+// cpuMem projects a ResourceList onto the two keys this substrate caps
+// symmetrically, so a requests==limits assertion keeps meaning something after
+// ephemeral-storage joined the list with a deliberately smaller request.
+func cpuMem(l corev1.ResourceList) corev1.ResourceList {
+	out := corev1.ResourceList{}
+	for _, k := range []corev1.ResourceName{corev1.ResourceCPU, corev1.ResourceMemory} {
+		if v, ok := l[k]; ok {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 func resourceListsEqual(a, b corev1.ResourceList) bool {
@@ -1116,5 +1133,96 @@ func TestPodStuckReasonCommentDoesNotClaimTheCrossNodeRWOCase(t *testing.T) {
 	}}
 	if got := podStuckReason(pod); strings.Contains(got, "unscheduled") {
 		t.Errorf("podStuckReason(cross-node RWO shape) = %q, want no unscheduled claim — that pod IS scheduled", got)
+	}
+}
+
+// TestCreateSandbox_EphemeralDiskLimitAndFloorRequest pins BOTH halves of the
+// ephemeral-storage shape on the pod Wardyn actually SENDS: the limit is the
+// policy's DiskMiB, and the request is the small explicit floor — or the limit
+// itself when the limit is smaller than the floor (a request may not exceed its
+// own limit).
+//
+// The REQUEST is the assertion that matters. A fake clientset runs no API-server
+// defaulting, so this can only pin what Wardyn sends, and an ABSENT request is
+// exactly the bug: the real API server copies the limit into it, which would hand
+// the scheduler the org's whole ceiling and leave the pod Pending on
+// "Insufficient ephemeral-storage" — a state statusFromPod cannot narrate.
+func TestCreateSandbox_EphemeralDiskLimitAndFloorRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		diskMiB                int64
+		wantLimit, wantRequest string
+	}{
+		{"limit above the floor keeps the floor request", 4096, "4Gi", "256Mi"},
+		{"limit below the floor clamps the request to the limit", 64, "64Mi", "64Mi"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, cs := newTestDriver(t, Config{})
+			installProxyIPReactor(t, cs, "10.244.0.7")
+			installAgentRunningReactor(t, cs)
+
+			spec := testSandboxSpec()
+			spec.Resources.DiskMiB = tc.diskMiB
+			sb, err := d.CreateSandbox(context.Background(), spec)
+			if err != nil {
+				t.Fatalf("CreateSandbox: %v", err)
+			}
+			pod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb.Ref, metav1.GetOptions{})
+			if err != nil {
+				t.Fatalf("get agent pod: %v", err)
+			}
+			res := pod.Spec.Containers[0].Resources
+			for _, want := range []struct {
+				what string
+				got  corev1.ResourceList
+				q    string
+			}{
+				{"limits[ephemeral-storage]", res.Limits, tc.wantLimit},
+				{"requests[ephemeral-storage]", res.Requests, tc.wantRequest},
+			} {
+				got, ok := want.got[corev1.ResourceEphemeralStorage]
+				if !ok {
+					t.Errorf("%s absent, want %s — Kubernetes would then copy the LIMIT into the request", want.what, want.q)
+					continue
+				}
+				if wantQ := resource.MustParse(want.q); got.Cmp(wantQ) != 0 {
+					t.Errorf("%s = %s, want %s", want.what, got.String(), wantQ.String())
+				}
+			}
+			// The two keys that were already capped stay symmetric.
+			if !resourceListsEqual(cpuMem(res.Requests), cpuMem(res.Limits)) {
+				t.Errorf("cpu/memory requests %v != limits %v, want equal (hard cap, unchanged)", res.Requests, res.Limits)
+			}
+		})
+	}
+}
+
+// TestCreateSandbox_NoDiskMiBLeavesEphemeralStorageAbsent is the byte-for-byte
+// pin: a run that asks for no disk cap produces the pod this substrate has always
+// produced. Absent, not zero — a zero quantity IS a limit, and it would evict the
+// pod on its first write.
+func TestCreateSandbox_NoDiskMiBLeavesEphemeralStorageAbsent(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.7")
+	installAgentRunningReactor(t, cs)
+
+	spec := testSandboxSpec()
+	spec.Resources.DiskMiB = 0
+	sb, err := d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	pod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb.Ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get agent pod: %v", err)
+	}
+	res := pod.Spec.Containers[0].Resources
+	for what, list := range map[string]corev1.ResourceList{"limits": res.Limits, "requests": res.Requests} {
+		if q, ok := list[corev1.ResourceEphemeralStorage]; ok {
+			t.Errorf("%s[ephemeral-storage] = %s with DiskMiB 0, want ABSENT", what, q.String())
+		}
+	}
+	if !resourceListsEqual(res.Requests, res.Limits) {
+		t.Errorf("requests %v != limits %v, want the pre-0.7.2 shape exactly", res.Requests, res.Limits)
 	}
 }

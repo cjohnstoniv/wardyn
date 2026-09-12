@@ -42,6 +42,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/runner/k8s"
@@ -101,6 +107,13 @@ func TestConformanceK8s(t *testing.T) {
 		ExitArgv: func(code int) []string {
 			return []string{"sh", "-c", "exit " + strconv.Itoa(code)}
 		},
+		// EphemeralStorageProbe reads the ADMITTED pod back through `pods: get`
+		// (no new RBAC verb — see deploy/helm/wardyn/templates/rbac.yaml) and
+		// asserts the request the apiserver accepted is the small fixed floor.
+		// This is the only assertion that can catch Kubernetes copying a LIMIT
+		// into an unset request: the driver's fake-clientset tests can pin what
+		// Wardyn SENDS, never what a real apiserver then defaults.
+		EphemeralStorageProbe: ephemeralStorageProbe,
 		// DefaultRouteProbe: nil (deliberately). This substrate declares
 		// StructuralEgress:false — it proves L1 (NetworkPolicy), never L0
 		// (see internal/runner/k8s's package doc) — so conformance.go's own
@@ -198,5 +211,45 @@ func testAgentCannotReachAPIServer(t *testing.T, r runner.Runner, agentImage str
 		t.Error("agent pod reached the Kubernetes API server (KUBERNETES_SERVICE_HOST:PORT) directly — L1 confinement breach: the agent NetworkPolicy must allow ONLY the proxy sidecar")
 	default:
 		t.Fatalf("apiserver probe exited %d, a code the script never emits — investigate before trusting this result either way", code)
+	}
+}
+
+// ephemeralStorageProbe is conformance.Options.EphemeralStorageProbe for this
+// substrate: read the admitted agent pod and assert the ACCEPTED
+// ephemeral-storage request is the small floor while the limit is the oversized
+// number the case asked for. It builds its own clientset the same way the
+// substrate's own config does (in-cluster first, then the default kubeconfig
+// loading rules) rather than reaching into the driver, which exposes none.
+func ephemeralStorageProbe(t *testing.T, ref string) {
+	t.Helper()
+	restCfg, err := rest.InClusterConfig()
+	if err != nil {
+		restCfg, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+			clientcmd.NewDefaultClientConfigLoadingRules(), &clientcmd.ConfigOverrides{}).ClientConfig()
+		if err != nil {
+			t.Fatalf("kubeconfig for the ephemeral-storage read-back: %v", err)
+		}
+	}
+	cs, err := kubernetes.NewForConfig(restCfg)
+	if err != nil {
+		t.Fatalf("clientset for the ephemeral-storage read-back: %v", err)
+	}
+	ns := os.Getenv("WARDYN_K8S_NAMESPACE")
+	if ns == "" {
+		ns = "default" // k8s.Config.withDefaults' own fallback
+	}
+	pod, err := cs.CoreV1().Pods(ns).Get(context.Background(), ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("pods get %s/%s: %v", ns, ref, err)
+	}
+	if pod.Spec.NodeName == "" {
+		t.Fatalf("agent pod %s is not scheduled (phase %q) — an ephemeral-storage request copied from the limit is exactly what leaves it Pending", ref, pod.Status.Phase)
+	}
+	res := pod.Spec.Containers[0].Resources
+	if got := res.Requests[corev1.ResourceEphemeralStorage]; got.Cmp(resource.MustParse("256Mi")) != 0 {
+		t.Errorf("accepted requests[ephemeral-storage] = %s, want 256Mi — the apiserver copies an unset request from the LIMIT, so anything else here means the floor was dropped", got.String())
+	}
+	if got := res.Limits[corev1.ResourceEphemeralStorage]; got.Cmp(resource.MustParse("200000Mi")) != 0 {
+		t.Errorf("accepted limits[ephemeral-storage] = %s, want 200000Mi (the case's DiskMiB)", got.String())
 	}
 }

@@ -50,12 +50,30 @@ func statusFromPod(pod *corev1.Pod) runner.Status {
 		code := containerExitCode(pod, mainContainerName)
 		st.State = types.RunFailed
 		st.ExitCode = &code
-		st.Message = pod.Status.Message
+		st.Message = failureDetail(pod)
 	default: // PodUnknown, or the phase hasn't been set yet
 		st.State = types.RunStarting
 		st.Message = waitingDetail(pod)
 	}
 	return st
+}
+
+// failureDetail returns "<reason>: <message>" for a failed pod, or whichever half
+// exists. pod.Status.Reason carries the VERDICT — an eviction's is "Evicted" —
+// and Message the detail that names the limit the kubelet measured past, so
+// dropping the reason left a run failure reading like an unattributed sentence
+// ("Pod ephemeral local storage usage exceeds the total limit of containers 64Mi"
+// with nothing saying who killed it, or why).
+func failureDetail(pod *corev1.Pod) string {
+	reason, msg := pod.Status.Reason, pod.Status.Message
+	switch {
+	case reason == "":
+		return msg
+	case msg == "":
+		return reason
+	default:
+		return reason + ": " + msg
+	}
 }
 
 // waitingDetail returns "<container>: <reason>[: <message>]" for the first

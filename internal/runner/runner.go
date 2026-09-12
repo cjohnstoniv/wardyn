@@ -60,6 +60,21 @@ type Capabilities struct {
 	// omitempty: absent on a driver that predates the field reads the same as
 	// false, which is the safe half.
 	UserDrives bool `json:"user_drives,omitempty"`
+	// EphemeralDiskEnforcement names WHAT ACTUALLY BINDS a run's Resources.DiskMiB
+	// on this deployment: `filesystem` (docker, on a storage driver that can
+	// enforce a per-container size quota), `eviction` (kubernetes — the kubelet
+	// measures periodically and kills the pod over the limit; it never refuses the
+	// write) or `none` (nothing binds it at all).
+	//
+	// EMPTY READS AS `none`, the same fail-closed direction UserDrives takes: a
+	// driver that says nothing claims no enforcement. The orchestrator aggregates
+	// it as the WEAKEST across substrates, not the strongest — a deployment must
+	// not promise an enforcement one of its substrates cannot deliver.
+	//
+	// Surfaced on the admin setup status (internal/api's SetupRunner), so an admin
+	// setting a disk number can see whether anything will hold it. NOT on the
+	// anonymous /healthz.
+	EphemeralDiskEnforcement types.StorageEnforcement `json:"ephemeral_disk_enforcement,omitempty"`
 }
 
 // SandboxSpec is everything a driver needs to create one governed sandbox.
@@ -304,10 +319,14 @@ type Resources struct {
 	// PidsLimit caps the number of processes/threads in the sandbox — the
 	// fork-bomb guard for the host PID space. Zero => driver default.
 	PidsLimit int64
-	// DiskMiB caps writable storage. Best-effort: the docker driver applies it
-	// only when the daemon storage driver supports a per-container quota
-	// (overlay2 with project quota, or btrfs/zfs); otherwise it warns and runs
-	// uncapped rather than hard-failing the run.
+	// DiskMiB caps writable storage. Best-effort, and WHAT BINDS IT DIFFERS BY
+	// SUBSTRATE — Capabilities.EphemeralDiskEnforcement names which: the docker
+	// driver applies it as a storage-driver quota only when the daemon supports a
+	// per-container one (overlay2 on xfs+pquota, or btrfs/zfs), otherwise it warns
+	// and runs uncapped rather than hard-failing the run; the k8s substrate sets
+	// the agent container's resources.limits[ephemeral-storage], where the kubelet
+	// enforces it by EVICTING the pod (periodically measured; the write is never
+	// refused).
 	DiskMiB int64
 }
 

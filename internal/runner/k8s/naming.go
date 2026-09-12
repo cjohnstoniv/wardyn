@@ -172,16 +172,36 @@ func agentSecurityContext() *corev1.SecurityContext {
 func boolPtr(b bool) *bool    { return &b }
 func int64Ptr(i int64) *int64 { return &i }
 
-// resourceRequirements maps runner.Resources onto a k8s ResourceRequirements
-// with requests == limits (a hard cap, not a burst-friendly range — matches
-// the docker driver's "every sandbox is capped" posture), applying the same
-// conservative platform defaults docker uses for any zero field so a policy
-// that sets nothing still gets a real cap. DiskMiB and PidsLimit have NO k8s
-// Pod-API equivalent (there is no per-container "max pids" ResourceName, and
-// ephemeral-storage enforcement is a separate, kubelet-eviction-manager-gated
-// mechanism this lane does not wire up) — both are silently-nothing risks, so
-// callers must warn rather than claim a cap that was dropped (see
-// warnUnenforceableResources).
+// ephemeralStorageRequestFloorMiB is the ephemeral-storage REQUEST the agent
+// container carries whenever a limit is set. Small, fixed, and NEVER the limit:
+// Kubernetes copies a limit into the request when no request is set for that key,
+// so an ABSENT request would hand the scheduler the org's whole ceiling and leave
+// the pod silently Pending on "Insufficient ephemeral-storage" — a scheduler
+// event statusFromPod's waitingDetail never surfaces. 256Mi fits any node that
+// can pull the agent image at all. A limit SMALLER than the floor uses the limit
+// instead (a request may not exceed its own limit).
+const ephemeralStorageRequestFloorMiB int64 = 256
+
+// resourceRequirements maps runner.Resources onto a k8s ResourceRequirements.
+//
+// CPU and memory are requests == limits (a hard cap, not a burst-friendly range —
+// matches the docker driver's "every sandbox is capped" posture), applying the
+// same conservative platform defaults docker uses for any zero field so a policy
+// that sets nothing still gets a real cap.
+//
+// DiskMiB is limits[ephemeral-storage] PLUS an explicit small request
+// (ephemeralStorageRequestFloorMiB) — asymmetric on purpose, see that const. The
+// agent pod has no volumes unless a drive is mounted (drives.go), so the clone,
+// $HOME, /tmp and every WARDYN_EPHEMERAL_DIRS target land on the container
+// writable layer + logs, which is exactly what the kubelet meters as local
+// ephemeral storage; a drive PVC is never counted against it. Enforcement is
+// types.StorageEnforcementEviction, not a quota: the kubelet measures
+// periodically and KILLS THE POD — it never refuses the write. DiskMiB == 0
+// leaves both keys absent.
+//
+// PidsLimit still has NO k8s Pod-API equivalent (there is no per-container "max
+// pids" ResourceName), so that one remains a silently-nothing risk and
+// CreateSandbox warns rather than claiming a cap that was dropped.
 func resourceRequirements(res runner.Resources) corev1.ResourceRequirements {
 	cpuMillis := res.CPUMillis
 	if cpuMillis <= 0 {
@@ -191,11 +211,21 @@ func resourceRequirements(res runner.Resources) corev1.ResourceRequirements {
 	if memMiB <= 0 {
 		memMiB = runner.DefaultMemoryMiB
 	}
-	list := corev1.ResourceList{
-		corev1.ResourceCPU:    *resource.NewMilliQuantity(cpuMillis, resource.DecimalSI),
-		corev1.ResourceMemory: *resource.NewQuantity(memMiB*1024*1024, resource.BinarySI),
+	// Two lists, not one aliased into both: ephemeral-storage differs between
+	// them, and a shared map would put the limit in the requests too.
+	shared := func() corev1.ResourceList {
+		return corev1.ResourceList{
+			corev1.ResourceCPU:    *resource.NewMilliQuantity(cpuMillis, resource.DecimalSI),
+			corev1.ResourceMemory: *resource.NewQuantity(memMiB*1024*1024, resource.BinarySI),
+		}
 	}
-	return corev1.ResourceRequirements{Requests: list, Limits: list}
+	requests, limits := shared(), shared()
+	if res.DiskMiB > 0 {
+		limits[corev1.ResourceEphemeralStorage] = *resource.NewQuantity(res.DiskMiB*1024*1024, resource.BinarySI)
+		floor := min(res.DiskMiB, ephemeralStorageRequestFloorMiB)
+		requests[corev1.ResourceEphemeralStorage] = *resource.NewQuantity(floor*1024*1024, resource.BinarySI)
+	}
+	return corev1.ResourceRequirements{Requests: requests, Limits: limits}
 }
 
 // proxyResourcesMilliCPU/proxyResourcesMemoryMiB are the wardyn-proxy

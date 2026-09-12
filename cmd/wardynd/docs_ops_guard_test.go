@@ -296,27 +296,37 @@ func TestDocsOpsSessionCookieDocsMatchTheCodec(t *testing.T) {
 	}
 }
 
-// TestDocsOpsDiskCapDocSaysWhatBothSubstratesDo is F063: the disk_mib row said the cap
-// "warns/fails closed when a cap is demanded but unsupported". Neither
-// substrate fails closed on that branch — Docker's applyDiskQuota returns
-// without setting StorageOpt, and the k8s sandbox logs and proceeds. Both run
-// UNCAPPED, which is the opposite of what an operator sizing a policy would
-// plan for.
+// TestDocsOpsDiskCapDocSaysWhatBothSubstratesDo is F063, rewritten in 0.7.2 when
+// the two substrates stopped behaving the same way. The row originally said the
+// cap "warns/fails closed when a cap is demanded but unsupported"; neither
+// substrate failed closed on that branch, both ran UNCAPPED. Now only Docker
+// does: the k8s substrate SETS the agent container's
+// resources.limits[ephemeral-storage] and the kubelet enforces it by evicting the
+// pod, so "both substrates warn" became false the moment that warn was deleted.
+//
+// Anchored on all three code facts — Docker's uncapped warning, the ABSENCE of
+// the k8s one, and the limit that replaced it — so a change of posture on either
+// side re-opens this guard rather than leaving the row quietly wrong.
 func TestDocsOpsDiskCapDocSaysWhatBothSubstratesDo(t *testing.T) {
 	root := repoRoot(t)
-
-	for _, rel := range [][]string{
-		{"internal", "runner", "docker", "hardening.go"},
-		{"internal", "runner", "k8s", "sandbox.go"},
-	} {
+	readGo := func(rel ...string) string {
 		b, err := os.ReadFile(filepath.Join(append([]string{root}, rel...)...))
 		if err != nil {
 			t.Fatalf("read %s: %v", filepath.Join(rel...), err)
 		}
-		if !regexp.MustCompile(`(?i)WITHOUT a disk cap`).Match(b) {
-			t.Fatalf("%s no longer carries the uncapped-disk warning this guard is anchored on — re-check whether the substrate now fails closed, and update docs/POLICIES.md with it",
-				filepath.Join(rel...))
-		}
+		return string(b)
+	}
+
+	uncapped := regexp.MustCompile(`(?i)WITHOUT a disk cap`)
+	hardening := readGo("internal", "runner", "docker", "hardening.go")
+	if !uncapped.MatchString(hardening) {
+		t.Fatalf("internal/runner/docker/hardening.go no longer carries the uncapped-disk warning this guard is anchored on — re-check whether the docker substrate now fails closed, and update docs/POLICIES.md with it")
+	}
+	if uncapped.MatchString(readGo("internal", "runner", "k8s", "sandbox.go")) {
+		t.Fatalf("internal/runner/k8s/sandbox.go warns about an unenforced disk cap again — if the ephemeral-storage limit was dropped, docs/POLICIES.md's disk_mib row has to go back to saying the k8s substrate runs uncapped")
+	}
+	if !strings.Contains(readGo("internal", "runner", "k8s", "naming.go"), "ResourceEphemeralStorage") {
+		t.Fatalf("internal/runner/k8s/naming.go no longer sets ephemeral-storage on the agent container — docs/POLICIES.md's disk_mib row promises the kubelet bounds a k8s run's writable layer")
 	}
 
 	doc := readOpsDoc(t, "docs", "POLICIES.md")
@@ -331,10 +341,13 @@ func TestDocsOpsDiskCapDocSaysWhatBothSubstratesDo(t *testing.T) {
 		t.Fatal("docs/POLICIES.md has no `disk_mib` row — re-anchor this guard")
 	}
 	if regexp.MustCompile(`(?i)fails? closed`).MatchString(row) {
-		t.Errorf("docs/POLICIES.md's disk_mib row still says the cap fails closed when unsupported; both substrates warn and run UNCAPPED: %s", row)
+		t.Errorf("docs/POLICIES.md's disk_mib row still says the cap fails closed when unsupported; Docker warns and runs UNCAPPED there: %s", row)
 	}
 	if !regexp.MustCompile(`(?i)uncapped`).MatchString(row) {
-		t.Errorf("docs/POLICIES.md's disk_mib row does not say the run proceeds UNCAPPED on an unsupported driver — that is the outcome an operator has to plan for: %s", row)
+		t.Errorf("docs/POLICIES.md's disk_mib row does not say the run proceeds UNCAPPED on a docker storage driver that cannot take a size quota — that is the outcome an operator has to plan for: %s", row)
+	}
+	if !regexp.MustCompile(`(?i)evict`).MatchString(row) {
+		t.Errorf("docs/POLICIES.md's disk_mib row never says the k8s substrate enforces the cap by EVICTION — the kubelet kills the pod, it does not refuse the write, and a run that dies mid-work is what an operator is actually planning for: %s", row)
 	}
 
 	// F064's doc half. The THIRD outcome is the one the mainstream host gets:
@@ -343,11 +356,7 @@ func TestDocsOpsDiskCapDocSaysWhatBothSubstratesDo(t *testing.T) {
 	// create and the run never starts. Anchored on the warning applyDiskQuota
 	// emits for exactly that branch, so a change of posture re-opens this guard
 	// rather than leaving the row quietly wrong.
-	hardening, err := os.ReadFile(filepath.Join(root, "internal", "runner", "docker", "hardening.go"))
-	if err != nil {
-		t.Fatalf("read internal/runner/docker/hardening.go: %v", err)
-	}
-	if !regexp.MustCompile(`(?i)needs xfs mounted with the pquota option`).Match(hardening) {
+	if !regexp.MustCompile(`(?i)needs xfs mounted with the pquota option`).MatchString(hardening) {
 		t.Fatalf("internal/runner/docker/hardening.go no longer warns that overlay2 needs xfs+pquota — re-check what the disk cap does on a non-xfs overlay2 host and update docs/POLICIES.md's disk_mib row with it")
 	}
 	if !regexp.MustCompile(`(?i)\bxfs\b`).MatchString(row) {

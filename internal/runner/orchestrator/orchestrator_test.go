@@ -5,6 +5,7 @@ package orchestrator
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -26,6 +27,7 @@ type fakeSubstrate struct {
 	structural bool
 	recording  bool
 	drives     bool
+	diskEnf    types.StorageEnforcement
 	refPrefix  string
 
 	mu                            sync.Mutex
@@ -39,11 +41,12 @@ func (f *fakeSubstrate) Name() string { return f.name }
 func (f *fakeSubstrate) Classes(context.Context) (substrate.ClassSupport, error) {
 	f.classesCalls.Add(1)
 	return substrate.ClassSupport{
-		Classes:          f.classes,
-		Resolved:         f.resolved,
-		StructuralEgress: f.structural,
-		SessionRecording: f.recording,
-		UserDrives:       f.drives,
+		Classes:                  f.classes,
+		Resolved:                 f.resolved,
+		StructuralEgress:         f.structural,
+		SessionRecording:         f.recording,
+		UserDrives:               f.drives,
+		EphemeralDiskEnforcement: f.diskEnf,
 	}, nil
 }
 
@@ -370,5 +373,38 @@ func TestCapabilitiesUserDrivesIsAConjunction(t *testing.T) {
 	}
 	if caps.UserDrives {
 		t.Error("UserDrives = true with no substrates wired")
+	}
+}
+
+// TestCapabilities_EphemeralDiskEnforcementIsTheWeakestWord pins the aggregation
+// direction. A UNION would be the bug: the word is what an admin is told a disk
+// number MEANS, and a deployment with one docker-on-xfs substrate must not tell
+// them `filesystem` when the run might be routed to a substrate that only evicts
+// — or to one that binds nothing at all.
+func TestCapabilities_EphemeralDiskEnforcementIsTheWeakestWord(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		subs []types.StorageEnforcement
+		want types.StorageEnforcement
+	}{
+		{"no substrates bind nothing", nil, ""},
+		{"one substrate reports its own word", []types.StorageEnforcement{types.StorageEnforcementEviction}, types.StorageEnforcementEviction},
+		{"eviction is weaker than a filesystem quota", []types.StorageEnforcement{types.StorageEnforcementFilesystem, types.StorageEnforcementEviction}, types.StorageEnforcementEviction},
+		{"order does not matter", []types.StorageEnforcement{types.StorageEnforcementEviction, types.StorageEnforcementFilesystem}, types.StorageEnforcementEviction},
+		{"one substrate that binds nothing wins", []types.StorageEnforcement{types.StorageEnforcementFilesystem, types.StorageEnforcementNone}, types.StorageEnforcementNone},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			subs := make([]substrate.Substrate, 0, len(tc.subs))
+			for i, e := range tc.subs {
+				subs = append(subs, &fakeSubstrate{name: "sub" + strconv.Itoa(i), classes: []types.ConfinementClass{types.CC1}, diskEnf: e})
+			}
+			caps, err := New(subs...).Capabilities(context.Background())
+			if err != nil {
+				t.Fatalf("Capabilities: %v", err)
+			}
+			if caps.EphemeralDiskEnforcement != tc.want {
+				t.Errorf("EphemeralDiskEnforcement = %q, want %q", caps.EphemeralDiskEnforcement, tc.want)
+			}
+		})
 	}
 }

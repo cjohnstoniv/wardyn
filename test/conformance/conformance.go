@@ -18,6 +18,10 @@
 //  6. Loopback relay parity: ExecStream reaches a port the sandbox is already
 //     listening on inside its own netns, full-duplex, with stdin still open —
 //     the transport the UI-sandbox gateway rides.
+//  7. Ephemeral disk enforcement: on a driver that declares
+//     EphemeralDiskEnforcement `eviction`, a run that writes past its DiskMiB
+//     limit really does die, and a run with an oversized limit still schedules
+//     (its request is the small floor, never a copy of the limit).
 package conformance
 
 import (
@@ -60,6 +64,15 @@ type Options struct {
 	// inside SandboxImage. Drivers supply something like
 	// {"sh", "-c", fmt.Sprintf("exit %d", code)} for their minimal image.
 	ExitArgv func(code int) []string
+	// EphemeralStorageProbe, when non-nil, is called by the ephemeral-disk case
+	// with the ref of a sandbox admitted under a DELIBERATELY OVERSIZED disk
+	// limit. It must read that sandbox's own accepted resource requests back from
+	// the substrate (k8s: `pods: get`) and assert the request is the small fixed
+	// floor, NEVER a copy of the limit — the one assertion that catches an
+	// API-server defaulting the driver's own unit tests cannot see. Injected for
+	// DefaultRouteProbe's reason: only the substrate knows how to read its own
+	// object. Nil ⇒ that sub-case is skipped.
+	EphemeralStorageProbe func(t *testing.T, ref string)
 }
 
 func (o Options) timeout() time.Duration {
@@ -88,6 +101,7 @@ func Run(t *testing.T, r runner.Runner, opts Options) {
 	t.Run("InteractiveAttach", func(t *testing.T) { testInteractiveAttach(t, r, opts) })
 	t.Run("ExecStream", func(t *testing.T) { testExecStream(t, r, opts) })
 	t.Run("ExecStreamLoopbackRelay", func(t *testing.T) { testExecStreamLoopbackRelay(t, r, opts) })
+	t.Run("EphemeralDiskLimit", func(t *testing.T) { testEphemeralDiskLimit(t, r, opts) })
 }
 
 // testCapabilities asserts Capabilities invariants.
@@ -774,4 +788,122 @@ func drainBoth(sess *runner.ExecSession) func() string {
 		defer mu.Unlock()
 		return buf.String()
 	}
+}
+
+// ephemeralFillScript writes far past the ephemeral-disk case's 64Mi limit. It is
+// a CODED probe, the same rule loopbackRelayListenScript follows: a missing applet
+// is an IMAGE verdict, never a substrate one, and it says so with its own exit
+// code rather than passing (or failing) silently.
+//
+//	90  no dd applet — image contract, not a substrate verdict
+//
+// Any other outcome is uninteresting on purpose: on a substrate that enforces the
+// limit the write never completes, because the pod carrying it is killed.
+const ephemeralFillScript = `command -v dd >/dev/null 2>&1 || exit 90
+dd if=/dev/zero of="$HOME/wardyn-ephemeral-fill" bs=1M count=256`
+
+// ephemeralDiskLimitMiB is the case's limit and ephemeralOversizedDiskMiB the
+// second sub-case's. The oversized one is deliberately larger than any test node's
+// disk: if the request were ever a COPY of the limit, the pod would not schedule
+// and CreateSandbox would fail loudly, rather than the case passing vacuously.
+const (
+	ephemeralDiskLimitMiB     = 64
+	ephemeralOversizedDiskMiB = 200000
+)
+
+// ephemeralEvictionBudget bounds the eviction wait. This is the FIRST conformance
+// case whose pass depends on a timer, so the budget is deliberately generous: the
+// kubelet meters local ephemeral storage on its periodic housekeeping tick (~10s),
+// so the verdict lands seconds-to-a-minute after the write — never synchronously
+// with it. A tight budget would read a slow node as a substrate that does not
+// enforce, which is the one wrong answer this case must not give.
+const ephemeralEvictionBudget = 4 * time.Minute
+
+// testEphemeralDiskLimit is the ephemeral-disk enforcement gate. It runs ONLY on a
+// driver that declares EphemeralDiskEnforcement `eviction` — every other word
+// means something different (a docker filesystem quota refuses the write and
+// surfaces ENOSPC to the agent; `none` binds nothing), so this case skips them by
+// name instead of pretending one shape fits all.
+//
+// Two sub-cases, and the second is the subtle one:
+//
+//   - Over the limit, the run DIES and says why: the pod is evicted and Status
+//     reports RunFailed with "Evicted" in the message (the reason, which carries
+//     the whole verdict, joined to the kubelet's detail).
+//   - An OVERSIZED limit still schedules, and its accepted request is the small
+//     fixed floor. Kubernetes copies a limit into the request when no request is
+//     set for that key, so a driver that sent the limit alone would produce pods
+//     that need the org's whole ceiling free — Pending, silently, with no
+//     container status to narrate. CreateSandbox waiting for the container to run
+//     is itself the "it scheduled" assertion; the probe then reads the accepted
+//     request back.
+func testEphemeralDiskLimit(t *testing.T, r runner.Runner, opts Options) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout()+ephemeralEvictionBudget)
+	defer cancel()
+
+	caps, err := r.Capabilities(ctx)
+	if err != nil {
+		t.Fatalf("Capabilities: %v", err)
+	}
+	if caps.EphemeralDiskEnforcement != types.StorageEnforcementEviction {
+		t.Skipf("driver %q declares ephemeral-disk enforcement %q, not %q — this case asserts the eviction shape specifically",
+			r.Name(), caps.EphemeralDiskEnforcement, types.StorageEnforcementEviction)
+	}
+	if len(caps.ConfinementClasses) == 0 {
+		t.Skipf("driver %q declares no ConfinementClasses; no sandbox to fill", r.Name())
+	}
+
+	newSandbox := func(t *testing.T, diskMiB int64) runner.Sandbox {
+		t.Helper()
+		spec := minimalSpec(opts.image())
+		spec.ConfinementClass = caps.ConfinementClasses[len(caps.ConfinementClasses)-1]
+		spec.Resources = runner.Resources{DiskMiB: diskMiB}
+		sb, err := r.CreateSandbox(ctx, spec)
+		if err != nil {
+			t.Fatalf("CreateSandbox with DiskMiB %d: %v", diskMiB, err)
+		}
+		t.Cleanup(func() { _ = r.StopSandbox(context.Background(), sb.Ref) })
+		return sb
+	}
+
+	t.Run("OverTheLimitTheRunIsEvicted", func(t *testing.T) {
+		sb := newSandbox(t, ephemeralDiskLimitMiB)
+		if _, err := r.Exec(ctx, sb.Ref, []string{"sh", "-c", ephemeralFillScript}); err != nil {
+			// Not fatal: on a substrate that enforces the limit, the exec's own
+			// transport dies with the pod it is writing inside, which is the
+			// outcome this case is waiting for.
+			t.Logf("Exec(fill): %v (expected once the pod is killed)", err)
+		}
+		if code, err := r.Wait(ctx, sb.Ref); err == nil && code == 90 {
+			t.Skipf("sandbox image has no dd applet; cannot fill the writable layer — an IMAGE contract, not a substrate verdict")
+		}
+
+		deadline := time.Now().Add(ephemeralEvictionBudget)
+		var last runner.Status
+		for time.Now().Before(deadline) {
+			st, err := r.Status(ctx, sb.Ref)
+			if err != nil {
+				t.Fatalf("Status: %v", err)
+			}
+			last = st
+			if st.State == types.RunFailed && strings.Contains(st.Message, "Evicted") {
+				return
+			}
+			time.Sleep(2 * time.Second)
+		}
+		t.Errorf("after %s the run is state=%q message=%q; want RunFailed with \"Evicted\" — a %dMiB limit and a 256MiB write means the kubelet should have killed the pod",
+			ephemeralEvictionBudget, last.State, last.Message, ephemeralDiskLimitMiB)
+	})
+
+	t.Run("AnOversizedLimitStillSchedules", func(t *testing.T) {
+		if opts.EphemeralStorageProbe == nil {
+			t.Skip("no EphemeralStorageProbe injected; the accepted-request read-back is the only assertion that can catch a request copied from the limit — wire it in driver CI")
+		}
+		// A pod that will not schedule is exactly the copy-from-limit bug, and on
+		// this substrate CreateSandbox waits for the container to run, so the
+		// failure lands here rather than as a silent Pending.
+		sb := newSandbox(t, ephemeralOversizedDiskMiB)
+		opts.EphemeralStorageProbe(t, sb.Ref)
+	})
 }

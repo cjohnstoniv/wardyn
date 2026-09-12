@@ -265,6 +265,12 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		// and fails at dispatch, and TestCreateSandbox_MountsAUserDrive pins
 		// the two together.
 		UserDrives: true,
+		// A run's disk_mib becomes the agent container's
+		// resources.limits[ephemeral-storage] (naming.go's resourceRequirements),
+		// where the kubelet enforces it by EVICTING the pod — measured
+		// periodically, and the write is never refused. Not `filesystem`: nothing
+		// here binds a byte.
+		EphemeralDiskEnforcement: types.StorageEnforcementEviction,
 	}, nil
 }
 

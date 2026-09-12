@@ -237,6 +237,11 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		// without the mount is a run that previews green and fails at dispatch,
 		// and TestCreateSandbox_MountsAUserDrive pins the two together.
 		UserDrives: true,
+		// What a run's disk_mib actually binds on this daemon: `filesystem` when
+		// the storage driver can enforce a per-container size quota, `none` when
+		// it cannot — which is EITHER warn-and-run-uncapped (vfs, fuse-overlayfs)
+		// OR create-refused (overlay2 over non-xfs); see capabilitiesForWith.
+		EphemeralDiskEnforcement: c.EphemeralDiskEnforcement,
 	}, nil
 }
 

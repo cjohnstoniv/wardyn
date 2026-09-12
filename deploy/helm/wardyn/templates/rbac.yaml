@@ -9,6 +9,10 @@ substrate actually issues; see internal/runner/k8s/{sandbox,lifecycle,exec,
 canary,driver}.go. In particular:
   - pods: NO watch. Every wait loop (Exec's Wait, teardown's waitPodsGone)
     polls with Get/List; none of them use a watch.Interface.
+  - ephemeral-storage: NO new verbs. A run's disk cap is a FIELD on the pod this
+    substrate already creates (naming.go's resourceRequirements), and the
+    kubelet's eviction verdict comes back through pods: get (lifecycle.go's
+    statusFromPod) — never the Events API, so no "events" verb belongs here.
   - pods/exec: BOTH create and get. session.go's newExecutor builds a
     FallbackExecutor that tries the websocket transport FIRST (SPDY only on
     upgrade failure) — and the websocket leg issues an HTTP GET against the

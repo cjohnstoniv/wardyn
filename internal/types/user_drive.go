@@ -202,10 +202,15 @@ func (r DriveReclaim) Valid() bool {
 // byte cap, the same gap disk_mib has. A share is bounded by its own quota. The
 // size you see is the allocation, not a guarantee."
 //
-// It is introduced ONCE here and is the vocabulary the two existing DiskMiB
-// warn sites (the docker driver's storage-opt warning and the k8s sandbox's)
-// adopt when they are consolidated — the third instance is the trigger, and
-// this is the second.
+// It is introduced ONCE here and it is now also the vocabulary the two DiskMiB
+// warn sites were consolidated ONTO (0.7.2): the k8s sandbox's warning is gone —
+// that substrate SETS the agent container's resources.limits[ephemeral-storage]
+// and reports `eviction` — and the docker driver's storage-opt warning stays,
+// reporting `filesystem` when the daemon can enforce a per-container size quota
+// and `none` when it cannot. The word is SURFACED, not just logged:
+// runner.Capabilities.EphemeralDiskEnforcement carries it to the admin setup
+// status, so a size no substrate will hold is visible as such rather than
+// discoverable only in a log line.
 type StorageEnforcement string
 
 const (
@@ -214,6 +219,14 @@ const (
 	// documented operator recipe earns, and naming it here is what keeps a
 	// future quota lane from inventing a fifth word.
 	StorageEnforcementFilesystem StorageEnforcement = "filesystem"
+	// StorageEnforcementEviction: the kubelet enforces it, and it is MEASURED
+	// PERIODICALLY — over the limit the POD IS KILLED, not the write. This is
+	// what a Kubernetes run's ephemeral disk cap (the agent container's
+	// resources.limits[ephemeral-storage]) actually is: the agent never sees
+	// ENOSPC, it sees its pod evicted, and in-flight work is lost. Never
+	// `filesystem` — nothing on this path refuses a byte. A burst between two
+	// housekeeping ticks can also overshoot the limit before the kubelet looks.
+	StorageEnforcementEviction StorageEnforcement = "eviction"
 	// StorageEnforcementRequest: the size is a scheduling REQUEST (a PVC's
 	// resources.requests.storage). A block storage class binds it; an NFS/EFS
 	// provisioner accepts it and enforces nothing.

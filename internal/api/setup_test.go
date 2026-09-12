@@ -671,7 +671,10 @@ func TestRedactSetupStatusForMember_DropsHostCredentialPosture(t *testing.T) {
 		Checks:    []SetupCheck{{ID: "runner", Status: "ok"}},
 		Providers: []SetupProvider{{Tool: "claude", Installed: true, LoggedIn: true}},
 		Secrets:   SetupSecrets{Present: []string{"anthropic-api-key"}},
-		Runner:    SetupRunner{Driver: "docker", ConfinementClasses: []string{"CC2"}},
+		Runner: SetupRunner{
+			Driver: "docker", ConfinementClasses: []string{"CC2"},
+			EphemeralDiskEnforcement: types.StorageEnforcementFilesystem,
+		},
 		SCM: setup.SCMPosture{
 			GhCLI: true, CredentialHelper: "store", GitCredentialsFile: true, Netrc: true,
 		},
@@ -698,6 +701,16 @@ func TestRedactSetupStatusForMember_DropsHostCredentialPosture(t *testing.T) {
 	}
 	if got.Deployment != (SetupDeployment{}) {
 		t.Errorf("deployment = %+v, want zero — it is derived from the redacted Providers", got.Deployment)
+	}
+	// The ephemeral-disk enforcement word is an operator sizing answer (which
+	// substrate binds a run's disk_mib), actionable only on surfaces a member
+	// cannot reach — and the strip is structural, so this case is what keeps a
+	// later field from riding through on the same struct.
+	if got.Runner.EphemeralDiskEnforcement != "" {
+		t.Errorf("runner.ephemeral_disk_enforcement = %q, want empty — the enforcement word is operator detail", got.Runner.EphemeralDiskEnforcement)
+	}
+	if got.Runner.Driver != "" {
+		t.Errorf("runner.driver = %q, want empty", got.Runner.Driver)
 	}
 	if len(got.Harness) != 1 {
 		t.Fatalf("harness = %+v, want one reduced row", got.Harness)

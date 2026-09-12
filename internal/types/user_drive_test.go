@@ -399,6 +399,7 @@ func TestDriveBackendMapping(t *testing.T) {
 	// constant would leave every row above still passing.
 	for name, got := range map[string]StorageEnforcement{
 		"filesystem": StorageEnforcementFilesystem,
+		"eviction":   StorageEnforcementEviction,
 		"request":    StorageEnforcementRequest,
 		"external":   StorageEnforcementExternal,
 		"none":       StorageEnforcementNone,

@@ -60,10 +60,15 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	body := map[string]any{
 		"status": "ok",
 		// version is the daemon's own build. It is a DELIBERATE disclosure on the
-		// anonymous /healthz (unlike the capability enumeration below, which is
-		// admin-gated on /setup/status): a support issue or a CLI/server skew after
-		// a rolling upgrade has to be answerable without a credential, and the
-		// sign-in screen reads /healthz before anyone is authenticated.
+		// anonymous /healthz: a support issue or a CLI/server skew after a rolling
+		// upgrade has to be answerable without a credential, and the sign-in screen
+		// reads /healthz before anyone is authenticated. The capability enumeration
+		// below is NOT "admin-gated on /setup/status" — that endpoint is
+		// classMember, and the class list is member-visible there too; what
+		// redactSetupStatusForMember withholds is the operator DETAIL (driver name,
+		// per-class substrates, the ephemeral-disk enforcement word). What keeps
+		// THIS endpoint honest is that it composes its body field by field, so a
+		// field added to the setup status never appears here by accident.
 		"version": version.Version,
 		// sso reports whether the OIDC login flow is mounted (/auth/login). The
 		// sign-in screen reads it BEFORE anyone is authenticated to decide whether to

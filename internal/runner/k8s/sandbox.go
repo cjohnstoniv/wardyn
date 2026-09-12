@@ -214,10 +214,6 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if spec.Interactive {
 		idleCmd = []string{"agent-run", "--idle"}
 	}
-	if spec.Resources.DiskMiB > 0 {
-		slog.Warn("wardynd: k8s substrate: DiskMiB requested but not enforced (no per-container writable-storage quota is wired up on this substrate); running WITHOUT a disk cap",
-			slog.Int64("disk_mib", spec.Resources.DiskMiB), slog.String("run_id", spec.RunID.String()))
-	}
 	if spec.Resources.PidsLimit > 0 {
 		slog.Warn("wardynd: k8s substrate: PidsLimit requested but not enforced (Kubernetes has no per-container pids ResourceName; the fork-bomb guard is a node-level kubelet setting, not a per-pod one); running WITHOUT a pids cap",
 			slog.Int64("pids_limit", spec.Resources.PidsLimit), slog.String("run_id", spec.RunID.String()))

@@ -244,6 +244,17 @@ type SetupRunner struct {
 	Driver                string            `json:"driver"`
 	ConfinementClasses    []string          `json:"confinement_classes"`
 	ConfinementSubstrates map[string]string `json:"confinement_substrates,omitempty"`
+	// EphemeralDiskEnforcement is what actually binds a run's disk_mib on this
+	// deployment — `filesystem`, `eviction` or `none`; absent reads as `none`
+	// (runner.Capabilities.EphemeralDiskEnforcement, weakest across substrates).
+	// The Workspace Providers screen renders it beside default_disk_mib so an
+	// admin setting a number can see whether anything will hold it.
+	//
+	// OPERATOR-ONLY: redactSetupStatusForMember rebuilds this struct with
+	// ConfinementClasses alone, so the word never reaches a member. It is
+	// deliberately absent from the ANONYMOUS /healthz, which composes its own body
+	// field by field.
+	EphemeralDiskEnforcement types.StorageEnforcement `json:"ephemeral_disk_enforcement,omitempty"`
 }
 
 // SetupProvider is a resident coding-agent CLI (claude|codex) detected on PATH.
@@ -772,6 +783,20 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
+// consoleRoleMappingsPresent reports whether any console role-mapping rows
+// exist, for ssoRBACCheck's merged-map presence input. It follows the SAME
+// nil-Store guard the permissions_posture read applies: a nil Store or a
+// failed read reports false, the conservative direction — it surfaces the
+// sso_rbac warning rather than silently hiding it behind a People-step row
+// this call could not actually confirm exists.
+func (s *Server) consoleRoleMappingsPresent(ctx context.Context, oidcConfigured bool) bool {
+	if !oidcConfigured || s.cfg.Store == nil {
+		return false
+	}
+	rows, err := s.cfg.Store.ListRoleMappings(ctx)
+	return err == nil && len(rows) > 0
+}
+
 // redactSetupStatusForMember drops the operator/admin-facing DIAGNOSTIC detail
 // a member has no route to act on — the environment/credential checklist rows,
 // resident-CLI login detection, and secret NAMES — item 2's explicit drop list
@@ -791,21 +816,12 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 // button (demo-screen.tsx) for every role. Dropping it zeroed barrierReady
 // for every member regardless of the real runner state. Only Driver and the
 // per-class ConfinementSubstrates map — genuine diagnostic detail — are
-// dropped.
-// consoleRoleMappingsPresent reports whether any console role-mapping rows
-// exist, for ssoRBACCheck's merged-map presence input. It follows the SAME
-// nil-Store guard the permissions_posture read applies: a nil Store or a
-// failed read reports false, the conservative direction — it surfaces the
-// sso_rbac warning rather than silently hiding it behind a People-step row
-// this call could not actually confirm exists.
-func (s *Server) consoleRoleMappingsPresent(ctx context.Context, oidcConfigured bool) bool {
-	if !oidcConfigured || s.cfg.Store == nil {
-		return false
-	}
-	rows, err := s.cfg.Store.ListRoleMappings(ctx)
-	return err == nil && len(rows) > 0
-}
-
+// dropped — and so, from 0.7.2, is EphemeralDiskEnforcement: which word binds a
+// run's disk_mib is an operator's sizing answer, actionable only on the
+// providers/setup surfaces a member has no route to. The strip is structural
+// (the SetupRunner below is rebuilt from ConfinementClasses alone, so a field
+// added later is dropped by default rather than by a line somebody remembered
+// to write); TestRedactSetupStatusForMember_DropsHostCredentialPosture pins it.
 func redactSetupStatusForMember(st SetupStatus) SetupStatus {
 	st.Checks = []SetupCheck{}
 	st.Providers = []SetupProvider{}
@@ -961,6 +977,7 @@ func setupRunnerInfo(ctx context.Context, rn runner.Runner) (SetupRunner, string
 			out.ConfinementSubstrates[string(k)] = v
 		}
 	}
+	out.EphemeralDiskEnforcement = c.EphemeralDiskEnforcement
 	return out, k8sNetpolVerdict(out.Driver, c)
 }
 

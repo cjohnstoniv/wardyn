@@ -156,15 +156,21 @@ func (o *Orchestrator) ImagePresent(ctx context.Context, ref string) (bool, erro
 // mount to a run the orchestrator then hands to one that cannot bind it — the
 // "previewed green, failed at dispatch" shape this flag exists to close. With
 // no substrates wired there is nothing to bind, so it is false there too.
+//
+// EphemeralDiskEnforcement follows the same rule in string form: the WEAKEST word
+// any substrate reports wins, because the word is what an admin is told a disk
+// number means, and one substrate that binds nothing makes the deployment unable
+// to promise enforcement. Empty (no substrates) reads as `none`.
 func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, error) {
 	caps := runner.Capabilities{
 		Driver:   o.Name(),
 		Resolved: map[types.ConfinementClass]string{},
 	}
 	drives := len(o.substrates) > 0
+	var enforcement types.StorageEnforcement
 	seen := map[types.ConfinementClass]bool{}
 	var classes []types.ConfinementClass
-	for _, s := range o.substrates {
+	for i, s := range o.substrates {
 		cs, err := o.classesFor(ctx, s)
 		if err != nil {
 			return runner.Capabilities{}, fmt.Errorf("orchestrator: %s classes: %w", s.Name(), err)
@@ -186,12 +192,31 @@ func (o *Orchestrator) Capabilities(ctx context.Context) (runner.Capabilities, e
 		caps.NetworkPolicyAcknowledged = caps.NetworkPolicyAcknowledged || cs.NetworkPolicyAcknowledged
 		caps.SessionRecording = caps.SessionRecording || cs.SessionRecording
 		drives = drives && cs.UserDrives
+		if i == 0 || ephemeralRank(cs.EphemeralDiskEnforcement) < ephemeralRank(enforcement) {
+			enforcement = cs.EphemeralDiskEnforcement
+		}
 	}
 	caps.UserDrives = drives
+	caps.EphemeralDiskEnforcement = enforcement
 	// Strongest last regardless of substrate order.
 	sort.Slice(classes, func(i, j int) bool { return classes[i].Rank() < classes[j].Rank() })
 	caps.ConfinementClasses = classes
 	return caps, nil
+}
+
+// ephemeralRank orders the ephemeral-disk enforcement words STRONGEST-HIGHEST so
+// Capabilities can pick the weakest across substrates. Only three words can reach
+// this field; anything else — including the drive-only `request`/`external` and
+// the empty value — ranks weakest, which is the safe half (never overclaim).
+func ephemeralRank(e types.StorageEnforcement) int {
+	switch e {
+	case types.StorageEnforcementFilesystem:
+		return 2
+	case types.StorageEnforcementEviction:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // CreateSandbox routes to a substrate that can enforce the requested class, then

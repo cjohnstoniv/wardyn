@@ -314,10 +314,22 @@ func capabilitiesForWith(info system.Info, overrides map[types.ConfinementClass]
 		classes = append(classes, types.CC3)
 		resolved[types.CC3] = "oci/" + rt
 	}
+	// The word is gated on the SAME probe applyDiskQuota consults. `filesystem`
+	// = a per-container quota binds bytes. `none` covers the two arms where no
+	// quota binds: a driver that takes no size option at all (vfs,
+	// fuse-overlayfs — the run is warned and runs uncapped) AND overlay2 over a
+	// non-xfs backing filesystem, where applyDiskQuota still sets StorageOpt
+	// and the daemon REFUSES the create (fail-closed). A reader of `none` must
+	// not assume "uncapped" — §6.2's providers-screen warning covers both.
+	disk := types.StorageEnforcementNone
+	if storageDriverSupportsQuota(info) {
+		disk = types.StorageEnforcementFilesystem
+	}
 	return runner.Capabilities{
-		Driver:             driverName,
-		ConfinementClasses: classes, // strongest last
-		Resolved:           resolved,
+		Driver:                   driverName,
+		ConfinementClasses:       classes, // strongest last
+		Resolved:                 resolved,
+		EphemeralDiskEnforcement: disk,
 		// L0 is structural here: NetworkMode "none" + internal-only per-run
 		// network means the agent has no default route and one egress path.
 		StructuralEgress: true,
