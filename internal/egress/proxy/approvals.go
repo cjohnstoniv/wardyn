@@ -10,7 +10,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -243,6 +245,7 @@ func consumeIfOnce(st *hostApproval) (state approvalState, id uuid.UUID, consume
 // (pending) state, which the caller turns into a 403 with the approval left
 // PENDING (so wait_for_review degrades to deny_with_review, never to allow).
 func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveResult {
+	host = approvalHostKey(host)
 	// Arm the operator's budget HERE, before the first control-plane round trip —
 	// not at the timer below, which is armed only after the concurrent-raise retry
 	// loop. Nothing else bounds these calls: handleConnect/handlePlain carry no
@@ -377,6 +380,33 @@ type resolveResult struct {
 	ApprovalID uuid.UUID
 }
 
+// approvalHostKey is the ONE spelling of "which host this approval is about",
+// used for the cache key AND for the host in the raised requested_scope — the
+// same string in both, deliberately, because those are the two surfaces that
+// would disagree if they ever diverged.
+//
+// P0.3 (R3-F001/F108/F145) asked whether an egress_domain approval is host-wide
+// or host:port-scoped. The answer for 0.7.2 is HOST-WIDE, unchanged, and the
+// three surfaces are being aligned to SAY so rather than quietly relying on it.
+// This function is the server-side half of that: it strips a port if one is ever
+// present, so a caller that passes "example.com:8443" gets the same grant as one
+// that passes "example.com" instead of silently opening a SECOND approval row
+// (and a second question in front of a human) for the same host. Today
+// evaluate's splitHostPort has already removed the port, which is exactly why
+// this has to be written down: the invariant holds by a caller's convention,
+// one call site away, and nothing here enforced it.
+//
+// Port scoping is a 0.8 behaviour change at three places at once — the raised
+// requested_scope the human reads, this key, and hostrules.ValidApprovedHost,
+// which refuses a port by construction and gates the durable always-write.
+func approvalHostKey(host string) string {
+	h, _, err := net.SplitHostPort(host)
+	if err != nil {
+		h = host
+	}
+	return strings.ToLower(strings.TrimRight(h, "."))
+}
+
 // Resolve advances the first-use approval state machine for host and returns
 // the current actionable state. It is safe for concurrent use and never
 // blocks on the request path beyond a single bounded HTTP round-trip used to
@@ -399,6 +429,7 @@ type resolveResult struct {
 // one nearby passage that does mention ports documents the DENY side as
 // port-blind — which a reader can fairly take to imply that a grant is not.
 func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult {
+	host = approvalHostKey(host)
 	a.mu.Lock()
 	st, ok := a.hosts[host]
 	if !ok {
@@ -539,9 +570,20 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 	}
 }
 
-// egressScope is the requested_scope body for an egress_domain approval. Mode
-// carries the run's first-use mode so the UI can tell a live-HELD
+// egressScope is the requested_scope body for an egress_domain approval — the
+// bytes a human is shown, stored verbatim by the control plane.
+//
+// Mode carries the run's first-use mode so the UI can tell a live-HELD
 // (wait_for_review) request apart from a passive deny_with_review pending.
+//
+// HOST, AND NO PORT, AND THAT IS THE SEMANTIC (P0.3 — R3-F001/F108/F145): a
+// decision on this approval reaches EVERY port of that host for whatever span
+// its decision_scope names. Host is always the bare host — approvalHostKey
+// guarantees it, and is the same value this client keys its cache on — so the
+// scope can never render a port and imply a narrowness the grant does not have.
+// A `port` field here is the 0.8 change, and it does not belong to this struct
+// alone: it moves with the console card that renders the scope and with
+// hostrules.ValidApprovedHost, which refuses a port by construction.
 type egressScope struct {
 	Host string `json:"host"`
 	Mode string `json:"mode,omitempty"`

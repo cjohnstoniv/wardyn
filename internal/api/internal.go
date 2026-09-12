@@ -343,7 +343,35 @@ func (s *Server) recordGroundtruthAudit(ctx context.Context, ev types.AuditEvent
 	return s.cfg.Audit.Record(ctx, ev)
 }
 
+// maxApprovalsPerRun caps how many approvals ONE run may ever raise, in any
+// state. The sandbox chooses the hosts and tools it asks about, so the row count
+// a single run can create was bounded by nothing at all: the dedup guard
+// collapses repeats of the SAME scope, and a thousand DIFFERENT unknown hosts is
+// a thousand rows plus a thousand queue entries in front of a human. 4096 is
+// deliberately far above any legitimate run (the `always_deny` and
+// already-approved paths raise nothing, and a real run asks about a handful of
+// hosts) and low enough to bound one run's share of the approvals table.
+//
+// Past it the raise answers 429 and writes NO audit action of its own: the
+// refusal is a rate bound, not a security event — the 4096 rows it already
+// raised are the trail, and inventing an action here would mean a run that
+// hits the cap floods the audit log with the refusal instead, which is the same
+// mistake one wave over (B5).
+const maxApprovalsPerRun = 4096
+
 // internalApprovalRequest is the proxy's POST /internal/approvals body.
+//
+// RequestedScope is stored VERBATIM and is what the approver is shown, so its
+// shape is a contract with the console rather than an internal detail — see
+// docs/AUDIT-ACTIONS.md and the per-kind scopes in internal/egress/proxy
+// (egressScope) and the toolgate. For an `egress_domain` scope specifically
+// (P0.3 — R3-F001/F108/F145): the host it carries is a BARE host and the
+// decision it records is HOST-WIDE, reaching every port of that host for
+// whatever span its decision_scope names. The sidecar guarantees the bare host
+// (approvalHostKey, which is also what it keys its own approval cache on), and
+// hostrules.ValidApprovedHost refuses a port by construction on the durable
+// always-write. Port scoping is the 0.8 change and moves all three of those at
+// once; it is deliberately NOT a field added here alone.
 type internalApprovalRequest struct {
 	Kind           types.ApprovalKind `json:"kind"`
 	RequestedScope json.RawMessage    `json:"requested_scope"`
@@ -381,6 +409,19 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 	if len(body.RequestedScope) == 0 {
 		s.auditAuthFailedAs(r, internalApprovalActor, "missing_requested_scope")
 		writeError(w, http.StatusBadRequest, "requested_scope is required")
+		return
+	}
+
+	// Per-run cap (R3-F071), checked BEFORE the raise. Fail CLOSED on a count
+	// error: an unbounded raise path is the thing being bounded, so "we could not
+	// tell how many this run has" must not read as "allow another one".
+	n, cerr := s.cfg.Approvals.CountForRun(r.Context(), claims.RunID)
+	if cerr != nil {
+		writeError(w, http.StatusServiceUnavailable, "count approvals for run: "+cerr.Error())
+		return
+	}
+	if n >= maxApprovalsPerRun {
+		writeError(w, http.StatusTooManyRequests, "this run has raised too many approvals; no more will be accepted")
 		return
 	}
 

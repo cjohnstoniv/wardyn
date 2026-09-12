@@ -41,6 +41,11 @@ type fakeApprovals struct {
 	requestErr error
 	cancelErr  error
 	cancelled  []cancelCall
+	countErr   error
+	// countForRun, when > 0, is what CountForRun answers regardless of the map —
+	// the per-run cap is 4096 rows and seeding them all would prove nothing the
+	// forced count does not.
+	countForRun int
 }
 
 func newFakeApprovals() *fakeApprovals {
@@ -110,6 +115,23 @@ func (f *fakeApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason 
 	}
 	if n > 0 {
 		f.cancelled = append(f.cancelled, cancelCall{RunID: runID, Reason: reason, Count: n})
+	}
+	return n, nil
+}
+
+// CountForRun counts this run's rows in any state (R3-F071's cap reads it).
+func (f *fakeApprovals) CountForRun(_ context.Context, runID uuid.UUID) (int, error) {
+	if f.countErr != nil {
+		return 0, f.countErr
+	}
+	if f.countForRun > 0 {
+		return f.countForRun, nil // a test forcing the cap without seeding 4096 rows
+	}
+	n := 0
+	for _, ap := range f.byID {
+		if ap.RunID == runID {
+			n++
+		}
 	}
 	return n, nil
 }

@@ -1708,6 +1708,18 @@ func (a *authzApprovals) CancelForRun(_ context.Context, runID uuid.UUID, reason
 	return n, nil
 }
 
+func (a *authzApprovals) CountForRun(_ context.Context, runID uuid.UUID) (int, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	n := 0
+	for _, ap := range a.byID {
+		if ap.RunID == runID {
+			n++
+		}
+	}
+	return n, nil
+}
+
 // ListApprovalsPageByRunCreator: item 2's optional scoped-list interface.
 func (a *authzApprovals) ListApprovalsPageByRunCreator(ctx context.Context, createdBy string, stateFilter types.ApprovalState, _ store.Page) ([]types.ApprovalRequest, error) {
 	a.mu.Lock()

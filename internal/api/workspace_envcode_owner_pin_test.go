@@ -39,25 +39,17 @@ import (
 // the positive control, with the reason. Some are pinned by another test; some
 // are admitted debt. Either way the entry is a decision rather than an omission,
 // and the anti-rot arm below deletes it for you when it stops being true.
-var ownerAdmitNotInTheControl = map[string]string{
-
-	// ADMITTED DEBT, and it is the same class of hole F315 names — recorded
-	// here because the completeness check surfaced it, not because it is fixed.
-	// OwnerReachesOwn is a READ-ONLY positive control by construction: it walks
-	// one fixture workspace, so a PUT would rename it and a DELETE would remove
-	// it under the cases that follow. The {id} MUTATIONS therefore have their
-	// foreign-404 direction pinned and their owner-admit direction pinned
-	// nowhere — TestWorkspaceOwnership_MemberLocalDirGate and
-	// _MemberWritableAllowlist exercise POST /workspaces (create), not these.
-	// A handler that refused the owning member on PUT /workspaces/{id} would
-	// leave the package green, exactly as F315's counterfactual did for
-	// env-as-code. Closing it wants a per-case fixture in that file, which is
-	// another lane's; filed.
-	"PUT ":        "admitted debt (R1 F315): the positive control is read-only, so no test admits the owner on PUT /workspaces/{id}",
-	"DELETE ":     "admitted debt (R1 F315): as above, for DELETE /workspaces/{id}",
-	"POST /scan":  "admitted debt (R1 F315): as above, and a scan has side effects the read-only control avoids",
-	"POST /build": "admitted debt (R1 F315): as above, for the build trigger",
-}
+//
+// It is EMPTY as of 0.7.2, which is the state this guard was built to reach. The
+// four entries it held were the {id} mutations (PUT, DELETE, POST /scan, POST
+// /build): the positive control walked one shared fixture, so a PUT would have
+// renamed it and a DELETE removed it under the cases that followed, and all four
+// had their foreign-404 direction pinned with their owner-ADMIT direction pinned
+// nowhere. TestWorkspaceOwnership_OwnerReachesOwn now takes a FRESH fixture per
+// case inside its loop and covers all four directly. Keep the map: the next
+// delegated route with only half its direction honoured needs somewhere to be
+// written down, and the arms below read it in both directions.
+var ownerAdmitNotInTheControl = map[string]string{}
 
 func TestWorkspaceOwnershipPinsBothDirections(t *testing.T) {
 	fset := token.NewFileSet()

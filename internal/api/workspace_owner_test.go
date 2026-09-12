@@ -154,15 +154,35 @@ func TestWorkspaceOwnership_ForeignOwned404Parity(t *testing.T) {
 func TestWorkspaceOwnership_OwnerReachesOwn(t *testing.T) {
 	srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
 	member := ssoSession(t, ownerMemberSub, "member@corp.example", oidc.RoleMember)
-	own := st.put(types.Workspace{OwnedBy: ownerMemberSub})
 
-	for _, c := range []struct{ method, suffix string }{
-		{http.MethodGet, ""},
-		{http.MethodGet, "/build"},
-		{http.MethodGet, "/observed-egress"},
-		{http.MethodGet, "/env-as-code"},
+	// R1-F315: the MUTATIONS are in here too, and each gets its OWN fixture from
+	// inside the loop. That is the whole reason they were missing — this control
+	// used to walk one shared workspace, so a PUT would rename it and a DELETE
+	// remove it under the cases that follow, and the four {id} mutations sat with
+	// their foreign-404 direction pinned and their owner-ADMIT direction pinned
+	// nowhere (ownerAdmitNotInTheControl's admitted debt). A handler that refused
+	// the owning member on PUT /workspaces/{id} left all 221 test files in this
+	// package green — exactly F315's own counterfactual for env-as-code.
+	//
+	// A fresh fixture per case is what makes the destructive ones safe to include,
+	// which is why the shared one this test used to open is gone.
+	for _, c := range []struct{ method, suffix, body string }{
+		{http.MethodGet, "", ""},
+		{http.MethodGet, "/build", ""},
+		{http.MethodGet, "/observed-egress", ""},
+		{http.MethodGet, "/env-as-code", ""},
+		{http.MethodPut, "", `{"name":"renamed"}`},
+		{http.MethodPost, "/scan", ""},
+		{http.MethodPost, "/build", ""},
+		{http.MethodDelete, "", ""},
 	} {
-		w := doSSO(t, srv, c.method, "/api/v1/workspaces/"+own.String()+c.suffix, member, "")
+		id := st.put(types.Workspace{OwnedBy: ownerMemberSub})
+		w := doSSO(t, srv, c.method, "/api/v1/workspaces/"+id.String()+c.suffix, member, c.body)
+		// ADMITTED, not necessarily successful: a scan or a build may answer 4xx/5xx
+		// for reasons that have nothing to do with who asked (no builder wired, no
+		// source to scan). 403/404 are the two codes that mean "this member was
+		// turned away from their own workspace" — a 404 because that is exactly the
+		// byte-identical refusal the foreign direction pins.
 		if w.Code == http.StatusForbidden || w.Code == http.StatusNotFound {
 			t.Errorf("%s %s on the member's OWN workspace: code = %d, want reachable; body=%s", c.method, c.suffix, w.Code, w.Body.String())
 		}

@@ -314,6 +314,9 @@ func (s *approvalService) List(ctx context.Context, state types.ApprovalState) (
 func (s *approvalService) CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (int, error) {
 	return approval.CancelForRun(ctx, s.st, runID, reason)
 }
+func (s *approvalService) CountForRun(ctx context.Context, runID uuid.UUID) (int, error) {
+	return s.st.CountApprovalsForRun(ctx, runID)
+}
 
 // ListApprovalsPage is the OPTIONAL paged lister the api handler type-asserts
 // for (same pattern as store.Pager): the console polls four single-state lists

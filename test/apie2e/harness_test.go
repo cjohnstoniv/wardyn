@@ -200,6 +200,9 @@ func (s *approvalService) List(ctx context.Context, state types.ApprovalState) (
 func (s *approvalService) CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (int, error) {
 	return approval.CancelForRun(ctx, s.st(), runID, reason)
 }
+func (s *approvalService) CountForRun(ctx context.Context, runID uuid.UUID) (int, error) {
+	return store.NewPG(s.pool).CountApprovalsForRun(ctx, runID)
+}
 
 // ─── fake runner ──────────────────────────────────────────────────────────────
 

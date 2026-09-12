@@ -446,6 +446,22 @@ func (s PG) ListApprovals(ctx context.Context, stateFilter types.ApprovalState) 
 	return s.ListApprovalsPage(ctx, stateFilter, Page{})
 }
 
+// CountApprovalsForRun returns how many approvals a run has raised, in ANY state.
+// It is the per-run DoS bound behind handleInternalRequestApproval
+// (maxApprovalsPerRun): a sandbox picks the hosts it asks about, so without a
+// count it can raise rows without limit, and the only reason it had none was that
+// api.ApprovalService exposed no way to ask. Counted in the DATABASE — the
+// alternative (List + filter in Go) reads every approval row in the deployment on
+// every raise, which is the cost this bound exists to avoid.
+func (s PG) CountApprovalsForRun(ctx context.Context, runID uuid.UUID) (int, error) {
+	var n int
+	err := s.Pool.QueryRow(ctx, `SELECT count(*) FROM approvals WHERE run_id = $1`, runID).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("store: count approvals for run: %w", err)
+	}
+	return n, nil
+}
+
 // DecideApproval transitions an approval from PENDING to decision.State.
 // Returns ErrAlreadyDecided if the approval is not PENDING (fail-closed).
 // Uses a single UPDATE with WHERE state='PENDING' to prevent TOCTOU races.

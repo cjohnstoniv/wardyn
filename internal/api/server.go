@@ -75,6 +75,12 @@ type ApprovalService interface {
 	// transition ("run_killed", "run_completed", ...). Idempotent by
 	// construction — a second call finds nothing PENDING and emits nothing.
 	CancelForRun(ctx context.Context, runID uuid.UUID, reason string) (int, error)
+	// CountForRun returns how many approvals a run has raised, in ANY state —
+	// the per-run cap handleInternalRequestApproval enforces (R3-F071). A
+	// sandbox chooses the hosts it asks about, so the number of rows one run can
+	// create was bounded by nothing; the count had no accessor here, which is the
+	// whole reason the cap did not exist.
+	CountForRun(ctx context.Context, runID uuid.UUID) (int, error)
 }
 
 // MintBroker is the credential-mint surface the API depends on (internal/broker).
