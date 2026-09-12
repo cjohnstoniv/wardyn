@@ -349,6 +349,22 @@ func TestHandlePutSiteConfig_RoundTripAndAudit(t *testing.T) {
 		t.Fatal("valid write did not reach the store")
 	}
 
+	// applies_from (B2): a site-config change does NOT reach a run already
+	// going — the egress sidecar loads its compiled config once at sandbox
+	// start. That lifetime was real and undocumented, and a customer read a 403
+	// naming a field they had just fixed and retried the same run ten times. The
+	// value is a fixed word so the console can switch on it.
+	if !strings.Contains(w.Body.String(), `"applies_from":"next_dispatch"`) {
+		t.Errorf("PUT response carries no applies_from: %s", w.Body.String())
+	}
+	var putResp siteConfigPutResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &putResp); err != nil {
+		t.Fatal(err)
+	}
+	if putResp.AppliesFrom != siteConfigAppliesFromNextDispatch {
+		t.Errorf("applies_from = %q, want the siteConfigAppliesFromNextDispatch constant", putResp.AppliesFrom)
+	}
+
 	// Audit: exactly one site_config.write, success outcome.
 	var writes []types.AuditEvent
 	for _, ev := range audit.events {

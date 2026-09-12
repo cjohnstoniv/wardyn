@@ -559,11 +559,14 @@ func (s *Server) legacyIntegrations(ctx context.Context, sc types.SiteConfig, st
 		})
 	}
 
-	// Source control: git-pat-<slug>/ssh-key-<slug> secrets, merged with
-	// SiteConfig.ScmHosts by host. Built directly (not through add) because
-	// each row's id depends on the derived host; gitHostRows applies the same
-	// stored-wins gate per row.
-	rows = append(rows, gitHostRows(present, sc.ScmHosts, stored)...)
+	// Source control: git-pat-<slug>/ssh-key-<slug> secrets, merged with the
+	// deployment's EFFECTIVE scm hosts by host (workspace_providers.go —
+	// ScmHosts minus every host a provider row claims, union every enabled row's
+	// hosts). The raw list would show a host "Connected" that admission refuses,
+	// which is the one thing this surface must never do. Built directly (not
+	// through add) because each row's id depends on the derived host; gitHostRows
+	// applies the same stored-wins gate per row.
+	rows = append(rows, gitHostRows(present, effectiveScmHosts(sc), stored)...)
 
 	// NOT DERIVED (deliberate): artifact_mirror + host_proxy. Both are network
 	// TOPOLOGY, not connections — their config already lives, and stays, under

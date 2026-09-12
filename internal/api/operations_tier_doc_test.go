@@ -58,6 +58,12 @@ var docTierRows = []struct{ route, token string }{
 	// decides the tier.
 	{"POST /api/v1/drives", "`mountUserDriveRoutes`"},
 	{"POST /api/v1/drives/grants", "`mountUserDriveRoutes`"},
+	// The workspace-provider policy (0.7.2). Separate tokens per verb, the
+	// record/promote-egress precedent: the two share a tier today, and a later
+	// widening of the READ to a member-safe projection must red here rather than
+	// pass on the write's row.
+	{"GET /api/v1/workspace-providers", "`GET /workspace-providers`"},
+	{"PUT /api/v1/workspace-providers", "`PUT /workspace-providers`"},
 	// securityOps (SEC) — the eight the pre-0.7 table marked admin-only, plus
 	// the rest of the tier the same table now names.
 	{"PUT /api/v1/workspaces/{id}/approved-egress", "`approved-egress`"},

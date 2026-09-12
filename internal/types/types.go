@@ -323,6 +323,33 @@ type SiteConfig struct {
 	// (validateInternalHosts) so every declared CIDR lies inside
 	// ipguard.Liftable. Empty (the default) => no lift, byte-identical to today.
 	InternalHosts []InternalHost `json:"internal_hosts,omitempty"`
+	// WorkspaceProviders is the org's workspace-provider POLICY — which git
+	// hosts a run may clone from and with which credential lanes, plus the
+	// ephemeral/drive storage ceilings. See WorkspaceProviders (a POINTER on
+	// purpose: a value struct's omitempty is a no-op, which would add
+	// "workspace_providers":{} to every 0.7.1-shaped GET /site-config and break
+	// the byte-identical upgrade claim). Nil (the default) is legacy open mode.
+	//
+	// Written through its own GET/PUT /workspace-providers endpoints AND through
+	// PUT /site-config, where an ABSENT key carries the stored value forward
+	// (siteConfigFieldsAfter066) and an explicit {} clears it — the site-config
+	// door is what makes providers MDM-deliverable to a laptop, whose
+	// deploy/wardyn-desktop.sh re-applies /etc/wardyn/site-config.json on every
+	// boot.
+	WorkspaceProviders *WorkspaceProviders `json:"workspace_providers,omitempty"`
+	// EffectiveScmHosts is READ-ONLY and SERVER-OWNED: the one spelling of
+	// "which git hosts does this deployment actually admit" — ScmHosts MINUS
+	// every host a present provider row claims, UNION the hosts of every ENABLED
+	// provider row's base URLs (internal/api's effectiveScmHosts).
+	//
+	// It is a real field of this struct rather than a response-wrapper key
+	// because `wardyn site-config get > f && wardyn site-config apply f` decodes
+	// with DisallowUnknownFields — a wrapper-only key would 400 that documented
+	// round trip. PUT /site-config therefore IGNORES a submitted value (cleared
+	// before the write, the way Integrations is carried forward) and the console
+	// strips it from every GET-spread write body
+	// (SERVER_OWNED_SITE_CONFIG_KEYS). Projected on read; never stored.
+	EffectiveScmHosts []string `json:"effective_scm_hosts,omitempty"`
 	// OnboardingCompletedAt records when an operator finished (or deliberately
 	// left) the Getting Started funnel on THIS INSTALL. Nil until then.
 	//

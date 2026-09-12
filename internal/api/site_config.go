@@ -244,7 +244,11 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 	if err := validateUpstreamProxyNoProxy(cfg.UpstreamProxyNoProxy); err != nil {
 		return err
 	}
-	return nil
+	// The workspace-provider block, when the body carries one: ONE validator for
+	// both write doors (this one and PUT /workspace-providers), so an
+	// MDM-delivered document can never store a block the providers endpoint
+	// would have refused (workspace_providers.go).
+	return validateWorkspaceProviders(cfg.WorkspaceProviders)
 }
 
 // validateInternalHosts enforces SiteConfig.InternalHosts's write-time
@@ -379,7 +383,13 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
 		return
 	}
+	// The ETag hashes the STORED document, before the projection below: PUT
+	// computes its own from what the store returned, so projecting first would
+	// make GET's ETag one no If-Match could ever satisfy.
 	w.Header().Set("ETag", computeETag(cfg))
+	// effective_scm_hosts: the read-only union (workspace_providers.go) — ONE
+	// spelling of the claim rule, in Go, so the console never re-implements it.
+	cfg.EffectiveScmHosts = effectiveScmHosts(cfg)
 	writeJSON(w, http.StatusOK, cfg)
 }
 
@@ -393,7 +403,7 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 // ADD A KEY HERE WHEN YOU ADD ONE TO types.SiteConfig, and
 // TestSiteConfigRoundTripKeepsFieldsAnOlderClientCannotName fails until you
 // have decided which side of this line it sits on.
-var siteConfigFieldsAfter066 = []string{"upstream_proxy_no_proxy", "internal_hosts"}
+var siteConfigFieldsAfter066 = []string{"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers"}
 
 // carryForwardUnnamedSiteConfigFields preserves a stored value that the request
 // body did not MENTION, for the fields an older client cannot know about.
@@ -416,6 +426,20 @@ func carryForwardUnnamedSiteConfigFields(cfg *types.SiteConfig, existing types.S
 	if !present["internal_hosts"] {
 		cfg.InternalHosts = existing.InternalHosts
 	}
+	// workspace_providers takes the same treatment, and it MATTERS more than the
+	// two above: the MDM-delivered /etc/wardyn/site-config.json a laptop
+	// re-applies on every boot is normally authored before this key existed, so
+	// without the carry-forward every boot would silently delete the org's
+	// provider policy. An explicit {} still clears it (the key is MENTIONED), and
+	// normalizeWorkspaceProviders is what turns that {} back into an absent key
+	// instead of an empty object rendered on every later GET.
+	if !present["workspace_providers"] {
+		cfg.WorkspaceProviders = existing.WorkspaceProviders
+	}
+	// effective_scm_hosts is NOT carried forward: it is server-owned and
+	// PROJECTED on read (handleGetSiteConfig), never stored, so there is nothing
+	// to preserve — the write clears it instead.
+	cfg.EffectiveScmHosts = nil
 }
 
 // handlePutSiteConfig validates and persists the operator-wide site config.
@@ -471,6 +495,10 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "integrations are managed through their own endpoints, not PUT /site-config")
 		return
 	}
+	// Normalize BEFORE validating, so what validateSiteConfig passes is exactly
+	// what gets stored: {} becomes an absent key, base URLs get their canonical
+	// lowercase-host/no-trailing-slash form.
+	cfg.WorkspaceProviders = normalizeWorkspaceProviders(cfg.WorkspaceProviders)
 	if err := validateSiteConfig(cfg); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
 		return
@@ -521,20 +549,49 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// onboarding state — the exact footgun already solved once for Integrations.
 	cfg.OnboardingCompletedAt = existing.OnboardingCompletedAt
 	carryForwardUnnamedSiteConfigFields(&cfg, existing, present)
+	// NARROWING IS NEVER SILENT ON THIS DOOR EITHER, and this is the door where
+	// it matters most: a laptop re-applies /etc/wardyn/site-config.json on EVERY
+	// boot, so an MDM-tightened base URL lands here, not on the providers page,
+	// and nobody is watching a console toast when it does. Counted only when the
+	// body actually NAMED the block (a carried-forward one narrows nothing new),
+	// and an unreadable list FAILS the write rather than reporting a comforting
+	// 0 — the same rule handlePutWorkspaceProviders follows.
+	var narrowed *int
+	if present["workspace_providers"] {
+		n, cerr := s.sourcesNoLongerAdmitted(r.Context(), cfg)
+		if cerr != nil {
+			writeError(w, http.StatusInternalServerError, "count sources this block refuses: "+cerr.Error())
+			return
+		}
+		narrowed = &n
+	}
 	saved, err := s.cfg.Store.PutSiteConfig(r.Context(), cfg)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "put site config: "+err.Error())
 		return
 	}
 	logWarnInternalHostsDeclared(saved.InternalHosts)
+	datum := map[string]any{
+		"upstream_proxy_configured": saved.UpstreamProxySecretRef != "" || saved.UpstreamProxyURL != "",
+		"egress_redirects_count":    len(saved.EgressRedirects),
+		"scm_hosts_count":           len(saved.ScmHosts),
+		"internal_hosts_count":      len(saved.InternalHosts),
+		// The provider policy this door can also write (CLI/MDM): without these
+		// two, an MDM-applied narrowing or opening left nothing but a count of
+		// the legacy lists behind it.
+		"git_providers":      enabledGitProviderCount(saved),
+		"storage_configured": storageProvidersConfigured(saved),
+	}
+	// Only when the body NAMED the block — see the count above.
+	if narrowed != nil {
+		datum["sources_no_longer_admitted"] = *narrowed
+	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"site_config.write", "site_config", "success", mustJSON(map[string]any{
-			"upstream_proxy_configured": saved.UpstreamProxySecretRef != "" || saved.UpstreamProxyURL != "",
-			"egress_redirects_count":    len(saved.EgressRedirects),
-			"scm_hosts_count":           len(saved.ScmHosts),
-			"internal_hosts_count":      len(saved.InternalHosts),
-		})))
+		"site_config.write", "site_config", "success", mustJSON(datum)))
 	w.Header().Set("ETag", computeETag(saved))
+	// Projected onto the response for the same reason GET projects it — and
+	// AFTER the ETag above, which must hash the stored document.
+	saved.EffectiveScmHosts = effectiveScmHosts(saved)
 	// dangling_secret_refs surfaces the "reset+apply came back green but every
 	// credentialed path is dead" gap: this document round-trips secret NAMES
 	// only, so an apply after a secret-store wipe (or a hand-edited file) can
@@ -544,6 +601,8 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		SiteConfig:                   saved,
 		DanglingSecretRefs:           danglingSiteConfigSecretRefs(saved, s.presentSecretNames(r.Context())),
 		OnboardingCompletedAtIgnored: ignoredOnboardingMark,
+		AppliesFrom:                  siteConfigAppliesFromNextDispatch,
+		SourcesNoLongerAdmitted:      narrowed,
 	})
 }
 
@@ -566,4 +625,24 @@ type siteConfigPutResponse struct {
 	// and MDM every-boot flows see instead of the 400 that used to break
 	// them, and `wardyn site-config apply` prints it as a warning.
 	OnboardingCompletedAtIgnored bool `json:"onboarding_completed_at_ignored,omitempty"`
+	// AppliesFrom names WHEN this write takes effect, because the honest answer
+	// is not "now": the egress proxy sidecar loads its compiled config once at
+	// sandbox start (internal/egress/proxy's LoadConfigBytes), so a run already
+	// going keeps the network settings it started with. That was never a bug and
+	// never documented either — a customer read a 403 naming a field they had
+	// just fixed and retried the same run ten times. The console reads this key
+	// into its save toast; the value is a fixed word, not a computed one, so a
+	// client can switch on it.
+	AppliesFrom string `json:"applies_from,omitempty"`
+	// SourcesNoLongerAdmitted is how many already-onboarded repo locators the
+	// workspace_providers block this body carried now refuses — the same count
+	// PUT /workspace-providers returns, on the door MDM and `wardyn site-config
+	// apply` actually use. A POINTER: absent when the body named no provider
+	// block at all (there is nothing to report), and present as 0 when it did,
+	// because 0 is the reassurance an admin narrowing a base URL is looking for.
+	SourcesNoLongerAdmitted *int `json:"sources_no_longer_admitted,omitempty"`
 }
+
+// siteConfigAppliesFromNextDispatch is the ONE value AppliesFrom takes today:
+// the write lands immediately, and every run dispatched from now on compiles it.
+const siteConfigAppliesFromNextDispatch = "next_dispatch"

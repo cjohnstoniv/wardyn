@@ -92,6 +92,12 @@ describe("health — site-config integrations round-trip", () => {
       scm_hosts: ["github.com"],
       integrations: [{ id: "anthropic_api_key" }],
       onboarding_completed_at: "2026-08-01T00:00:00Z",
+      // 0.7.2: the provider block is not REFUSED on PUT /site-config (that door
+      // is how MDM delivers it), but a GET-spread writer must never carry it —
+      // a stale spread would revert an admin's providers to whatever this tab
+      // last read. effective_scm_hosts is a plain read-only projection.
+      workspace_providers: { git: [{ id: "gh", kind: "github", base_urls: ["https://github.com/acme"] }] },
+      effective_scm_hosts: ["github.com"],
     };
     fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(echoed), { status: 200 }));
     const got = await health.getSiteConfig();

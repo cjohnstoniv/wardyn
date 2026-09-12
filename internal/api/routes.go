@@ -112,6 +112,8 @@ func (s *Server) routes() chi.Router {
 			//   mountGovernanceRoutes  (governance.go) — CALLED WITH securityOps,
 			//       despite naming its parameter operatorOnly; read the call site
 			//   mountUserDriveRoutes   (user_drives.go) operatorOnly
+			//   mountWorkspaceProviderRoutes        operatorOnly
+			//       (workspace_providers.go)
 			//
 			// Re-derive by hand ONE ADDEND AT A TIME if you need to (W7-S1-1): a
 			// same-file grep silently misses every addend registered through a
@@ -516,6 +518,12 @@ func (s *Server) routes() chi.Router {
 			// top phase-2 item, not something to fake with a second gate here.
 			securityOps.Post("/site-config/test-proxy", s.handleTestSiteConfigProxy)
 			securityOps.Post("/site-config/test-redirect", s.handleTestSiteConfigRedirect)
+			// Workspace providers (0.7.2) — see mountWorkspaceProviderRoutes. A
+			// MOUNT, and attached to the line above with no blank, because this
+			// function sits at the funlen ratchet (.golangci.yml, 150 non-comment
+			// lines) and is AT it after this line: the next route family to land
+			// here has to extract an existing block into its own mount first.
+			s.mountWorkspaceProviderRoutes(operatorOnly)
 
 			// Effective integration set (stored ∪ legacy-derived) with live
 			// capabilities — see internal/api/integrations.go /

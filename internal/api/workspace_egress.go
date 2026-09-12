@@ -117,7 +117,8 @@ func filterOffEgress(domains []string, off map[string]bool) []string {
 // ADO — whose egress bundles are either baked into the example policies or
 // derived from a git_pat/ssh_key grant's host (adoEgressDomains,
 // sshOver443Endpoint) — a self-hosted GHES or ADO Server has no such built-in
-// bundle, so the operator declares its host(s) once in site-config and every
+// bundle, so the operator declares its host(s) once in site-config — as a
+// provider row's base URL since 0.7.2, or in the legacy ScmHosts list — and every
 // cloning run inherits them. Non-secret, additive: it only ever widens the
 // allowlist with hosts the operator explicitly declared, never anything
 // content-derived. No SiteConfig row / no Store configured / no ScmHosts set
@@ -127,10 +128,18 @@ func (s *Server) unionSiteConfigScmHosts(ctx context.Context, spec *types.RunPol
 		return nil
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
-	if err != nil || len(sc.ScmHosts) == 0 {
+	if err != nil {
 		return nil
 	}
-	return unionAllowedDomains(spec, sc.ScmHosts)
+	// effectiveScmHosts, not the raw ScmHosts list: once a provider row claims a
+	// host, that row decides whether it is reachable — a disabled github row plus
+	// a legacy scm_hosts: ["github.com"] must NOT keep unioning github.com into
+	// every run's egress while admission refuses it (workspace_providers.go).
+	hosts := effectiveScmHosts(sc)
+	if len(hosts) == 0 {
+		return nil
+	}
+	return unionAllowedDomains(spec, hosts)
 }
 
 // substituteArtifactEgress applies the operator's egress redirects to a run's

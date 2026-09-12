@@ -307,10 +307,16 @@ it never blocks, and it is blind inside CC3/Kata microVM guests.
 | `integration.write` | An admin creates/updates an integration (secrets/egress/config/delivery) | `default_for`, `egress`, `header`, `kind` | `internal/api/setup_integrations.go:401` | internal |
 | `integration.delete` | An admin deletes an integration | `credentials`, `egress`, `kind` | `internal/api/setup_integrations.go:442` | internal |
 | `setup.onboarding.completed` | An operator finished (or deliberately left) the Getting Started funnel — stamps `SiteConfig.OnboardingCompletedAt`, the install-side fact the console's landing, welcome hero and setup gate read. Emitted once per install: the handler is idempotent and a later re-finish never moves the timestamp | `completed_at` | `internal/api/setup_onboarding.go:72` | internal |
-| `site_config.write` | `PUT /site-config` (full-document replace) | `egress_redirects_count`, `internal_hosts_count`, `scm_hosts_count`, `upstream_proxy_configured` | `internal/api/site_config.go:531` | internal |
+| `site_config.write` | `PUT /site-config` (full-document replace) | `egress_redirects_count`, `git_providers`, `internal_hosts_count`, `scm_hosts_count`, `sources_no_longer_admitted` (only when the body NAMED `workspace_providers` — this is the CLI/MDM door a laptop re-applies on every boot, so an MDM-tightened base URL narrows here with nobody watching a console), `storage_configured`, `upstream_proxy_configured` | `internal/api/site_config.go:590` | internal |
 | `site_config.test_proxy` | The site-config "test upstream proxy" probe runs | `custom_target`, `elapsed_ms`, `intercepted`, `state`, `target_host` | `internal/api/site_config_probe.go:886` | internal |
 | `site_config.test_redirect` | The site-config "test egress redirect" probe runs | `elapsed_ms`, `from_host`, `state`, `to_host` | `internal/api/site_config_probe.go:965` | internal |
 | `site_config.test_probe` | An egress-redirect probe run's finalize step (via `finalizeRunTail`; `reclaimProbeRun`'s doc comment explains why the audited name must be this endpoint's own, never `run.compose`) | — | `internal/api/site_config_probe.go:762` | internal |
+
+## Workspace providers
+
+| Action | When | Data fields | Where | Stable? |
+|---|---|---|---|---|
+| `workspace_provider.write` | An admin replaces the whole workspace-provider block (`PUT /workspace-providers`). `base_urls` is recorded IN THE CLEAR — a provider address is topology, not a credential, the same disclosure `integration.write` already makes with `egress` — and a narrowing applied by MDM is unreviewable without it. `sources_no_longer_admitted` is how many already-onboarded repo locators the new block refuses, so narrowing is never silent. A block written through `PUT /site-config` instead (the CLI/MDM door) audits as `site_config.write`, whose `git_providers`/`storage_configured` fields exist for exactly that case | `base_urls`, `disabled`, `git_count`, `kinds`, `lanes`, `sources_no_longer_admitted` | `internal/api/workspace_providers.go:748` | internal |
 
 ## System/reaper sources (no HTTP caller)
 

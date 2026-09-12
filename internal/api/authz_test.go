@@ -238,7 +238,14 @@ var routeMatrix = map[string]classifiedRoute{
 	// refs included — so it stays SUPER while its two non-mutating probes go
 	// classSecurity. A SEC-writable per-field subset needs per-field authz
 	// (phase 2), not a second gate on the same full-document write.
-	"PUT /api/v1/site-config":          {class: classAdmin},
+	"PUT /api/v1/site-config": {class: classAdmin},
+	// Workspace providers (0.7.2) — the git-provider policy and storage
+	// ceilings, stored as a sub-object of the same site-config singleton. BOTH
+	// verbs are SUPER for the sibling GET's reason: a provider's base URLs name
+	// the org's forge hosts and org paths, which is corporate topology, and the
+	// member tier is served the provider KIND in a refusal instead.
+	"GET /api/v1/workspace-providers":  {class: classAdmin},
+	"PUT /api/v1/workspace-providers":  {class: classAdmin},
 	"PUT /api/v1/integrations/{id}":    {class: classAdmin},
 	"DELETE /api/v1/integrations/{id}": {class: classAdmin},
 	// Access / role mappings (migration 0051, Phase 2 lane A): the console's
@@ -990,11 +997,13 @@ func TestSecurityAdminRouteTier(t *testing.T) {
 	// deciding anything. R1 also moved FOUR reads OUT of classMember and into
 	// SUPER — GET /site-config, /sources, /sources/{id} and /base-images, which
 	// returned operator topology and credential refs to the whole member tier —
-	// so 21 SEC / 38 SUPER. A route silently reclassified in the table above
+	// so 21 SEC / 38 SUPER. 0.7.2 then added the two /workspace-providers verbs,
+	// born SUPER for the same topology reason as those four reads, = 40 SUPER.
+	// A route silently reclassified in the table above
 	// would still pass every probe — it would just be enforcing the WRONG tier,
 	// exactly the drift the per-route loop cannot see.
-	if sec != 21 || super != 38 {
-		t.Errorf("tier split = %d security / %d admin, want 21 / 38 (§B's 14 SEC + governance's 7 + §I's directory search, MINUS record; and 26 SUPER + /drives' 7 + record + the four operator-topology reads)", sec, super)
+	if sec != 21 || super != 40 {
+		t.Errorf("tier split = %d security / %d admin, want 21 / 40 (§B's 14 SEC + governance's 7 + §I's directory search, MINUS record; and 26 SUPER + /drives' 7 + record + the four operator-topology reads + 0.7.2's GET/PUT /workspace-providers)", sec, super)
 	}
 }
 

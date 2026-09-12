@@ -99,7 +99,11 @@ func TestSiteConfigRoundTripKeepsFieldsAnOlderClientCannotName(t *testing.T) {
 	// same footgun, and nothing would have caught it. Every key must sit on one
 	// declared side of the v0.6.6 line.
 	t.Run("every SiteConfig key has a decided compatibility side", func(t *testing.T) {
-		serverOwned := []string{"integrations", "onboarding_completed_at"} // refused on PUT, carried from the store
+		// Refused (or ignored) on PUT and supplied by the server:
+		// integrations/onboarding_completed_at are carried forward from the
+		// store, effective_scm_hosts is PROJECTED on read and never stored at
+		// all (handleGetSiteConfig; the write clears it).
+		serverOwned := []string{"integrations", "onboarding_completed_at", "effective_scm_hosts"}
 		typ := reflect.TypeOf(types.SiteConfig{})
 		for i := range typ.NumField() {
 			key, _, _ := strings.Cut(typ.Field(i).Tag.Get("json"), ",")

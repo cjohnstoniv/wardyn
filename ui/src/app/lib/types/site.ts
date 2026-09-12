@@ -68,6 +68,23 @@ export interface SiteConfig {
   // reader exists yet (the Network step's rendering ships later); the field
   // mirrors the server shape so a GET/PUT round-trip never drops it.
   internal_hosts?: InternalHost[];
+  // The org's workspace-provider policy — which git hosts a run may clone from
+  // and with which credential lanes, plus the storage ceilings. Absent (the
+  // default) is legacy open mode. Written through its own
+  // GET/PUT /workspace-providers endpoints; PUT /site-config also accepts it
+  // (an absent key carries the stored value forward, `{}` clears it), but no
+  // console surface writes it here — health.putSiteConfig strips it from every
+  // GET-spread body via SERVER_OWNED_SITE_CONFIG_KEYS so a Network-step save
+  // can never clobber the providers page.
+  workspace_providers?: WorkspaceProviders;
+  // RESPONSE-ONLY, never-PUT: the git hosts this deployment actually admits —
+  // scm_hosts MINUS every host a provider row claims, UNION every enabled row's
+  // hosts (internal/api/workspace_providers.go's effectiveScmHosts). ONE
+  // spelling of the claim rule, in Go: the console reads this instead of
+  // re-deriving it, because the rule is kind-wide on the two well-known hosts
+  // and a client mirror of that table would drift. Older daemons omit it — read
+  // it as `effective_scm_hosts ?? scm_hosts`.
+  readonly effective_scm_hosts?: string[];
   // RESPONSE-ONLY, never-PUT, exactly like `integrations` above: when the
   // operator finished (or deliberately left) the Getting Started funnel on
   // THIS INSTALL. Mirrors types.SiteConfig.OnboardingCompletedAt
@@ -85,9 +102,79 @@ export interface SiteConfig {
 // the write. Every SiteConfig writer in the console starts from a GET and
 // spreads onto it (`mutate({ ...(siteConfig ?? {}), field })`), so any such key
 // rides into the PUT body unless it is stripped centrally —
-// health.putSiteConfig does that, ONCE, from this list. A fourth server-owned
+// health.putSiteConfig does that, ONCE, from this list. Another server-owned
 // field is a line here and nothing else.
-export const SERVER_OWNED_SITE_CONFIG_KEYS = ["integrations", "onboarding_completed_at"] as const satisfies readonly (keyof SiteConfig)[];
+//
+// workspace_providers is on this list for a different reason than the other two:
+// the server does NOT refuse it on PUT /site-config (that door is how MDM
+// delivers the policy to a laptop). It is stripped because no console surface
+// that spreads a GET means to write the provider block — only the providers page
+// does, through PUT /workspace-providers with an If-Match — and a stale spread
+// would silently revert an admin's providers to whatever this tab last read.
+export const SERVER_OWNED_SITE_CONFIG_KEYS = [
+  "integrations",
+  "onboarding_completed_at",
+  "workspace_providers",
+  "effective_scm_hosts",
+] as const satisfies readonly (keyof SiteConfig)[];
+
+// The org's workspace-provider policy. Hand-maintained mirror of Go's
+// types.WorkspaceProviders (internal/types/workspace_provider.go) — the json
+// tags verbatim; a removed wire field is a runtime TypeError only e2e catches.
+export interface WorkspaceProviders {
+  git?: GitProvider[];
+  storage?: StorageProviders;
+}
+
+// One git-provider row. `disabled` is negative-sense so the zero value is
+// ENABLED, and a present-but-disabled row still CLAIMS its hosts (admission
+// refuses them) rather than falling back to the legacy scm_hosts list.
+export interface GitProvider {
+  id: string;
+  // The closed kind set (internal/types/workspace_provider.go's
+  // ClosedGitProviderKinds) — a write naming anything else is a 400.
+  kind: GitProviderKind;
+  disabled?: boolean;
+  // The https addresses this row admits — no port, no credentials, no query or
+  // fragment, at most two path segments. A repo is admitted when its clone URL's
+  // scheme and host match one of these and its path equals that base URL's path
+  // or extends it at a "/" boundary.
+  base_urls: string[];
+  // The closed lane set (ClosedGitLanes). EMPTY MEANS EVERY LANE the kind
+  // supports — the field narrows, it never widens.
+  lanes?: GitLane[];
+}
+
+// The closed git-provider kinds. A self-hosted forge is not a third kind: it is
+// a "github" (GHES) or "azure_devops" (ADO Server) row naming its own host.
+export type GitProviderKind = "github" | "azure_devops";
+
+// The closed credential lanes a run may clone with. "app" is github.com only
+// (the broker has no Azure DevOps equivalent); "ssh" reaches only the two hosts
+// publishing an SSH-over-443 endpoint.
+export type GitLane = "app" | "pat" | "ssh";
+
+// The file-system half. Each absent sub-block is legacy behaviour for that half.
+export interface StorageProviders {
+  ephemeral?: EphemeralProvider;
+  user_drive?: UserDriveProvider;
+}
+
+// Ephemeral scratch: the size a run gets when it asks for none, and the ceiling a
+// larger request is CLAMPED to (never refused — disk_mib is authored on
+// policies). 0 = unset/unlimited.
+export interface EphemeralProvider {
+  default_disk_mib?: number;
+  max_disk_mib?: number;
+}
+
+// The org-level user-drive switch and ceiling. `disabled` is the ORG switch
+// ("this install offers no drives"), a different question from a governance
+// profile's per-member door. 0 = no ceiling.
+export interface UserDriveProvider {
+  disabled?: boolean;
+  max_size_mib?: number;
+}
 
 // One SiteConfig.internal_hosts entry — see that field's doc.
 export interface InternalHost {
