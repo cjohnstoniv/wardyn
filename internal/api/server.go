@@ -426,6 +426,17 @@ type Config struct {
 	// of auto-enabling TLS-MITM + injecting the live host token. Default false =
 	// the safe proxy-side default whenever a SubscriptionToken provider is wired.
 	DisableSubscriptionInject bool
+	// AuditCoalesceWindow folds IDENTICAL consecutive auth.failed audit rows —
+	// same boundary, reason, path and peer — into the first row plus one summary
+	// row carrying count/first_seen/last_seen (env WARDYN_AUDIT_COALESCE_WINDOW,
+	// default 5m at the boot flag; 0 or unset = off, one row per refusal exactly
+	// as before). It is a maximum GAP between two consecutive identical rows, not
+	// a cap on a streak's duration: the flood this exists for was one row a
+	// minute forever from a single retrying sidecar, which the 1/sec rate limiter
+	// never trips and which still evicted every real security event out of the
+	// console's 1000-row window in minutes. See coalesceAuthFailed (http.go) for
+	// the bounds that keep a burst from collapsing into one row.
+	AuditCoalesceWindow time.Duration
 	// Now is overridable in tests; defaults to time.Now.
 	Now func() time.Time
 	// BaseCtx is the process-lifetime base context used for detached background
@@ -679,6 +690,21 @@ type Server struct {
 	// adminAuth/auditAuthFailed in http.go) so a scanner cannot flood the
 	// append-only log. Zero value is ready to use.
 	authFailedLimiter authFailedLimiter
+	// authFailedStreak is the open run of identical consecutive auth.failed rows
+	// the coalescer is folding (see coalesceAuthFailed, http.go). Process-local
+	// like the bounds above. Zero value is ready to use.
+	authFailedStreakMu sync.Mutex
+	authFailedStreak   *authFailedStreak
+	// identityExpiredSeen is the per-run once-guard behind run.identity.expired
+	// (claimIdentityExpired, http.go): a run whose identity has expired keeps
+	// calling /internal/* and 401ing, so the row has to be emitted once per run
+	// rather than once per request — the flood is the thing B5 exists to stop.
+	// It is CLAIMED BEFORE the run read, so a repeat refusal costs no store read
+	// either, and bounded at 4096 entries exactly like lastTouch. In memory and
+	// process-local, like lastTouch/sshSessions above: a restart may re-emit once
+	// per run, which is the acceptable end of the trade.
+	identityExpiredMu   sync.Mutex
+	identityExpiredSeen map[uuid.UUID]bool
 	// dirLimiter rate-bounds GET /access/directory/search PER PRINCIPAL — it is
 	// hit once per keystroke, and each miss is an upstream Graph call
 	// (directory_search.go). Zero value is ready to use.

@@ -16,6 +16,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/identity"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -717,6 +719,35 @@ func (s *Server) auditAuthFailedAs(r *http.Request, actor, reason string) {
 			"path", r.URL.Path)
 		s.metrics.authStoreErrorInc()
 	}
+	// COALESCE BEFORE THE LIMITER (B5). The limiter bounds the RATE; it does
+	// nothing about a slow, permanent drip — the field report's flood was one row
+	// a minute from a single retrying sidecar, which a 1/sec limiter never trips,
+	// and it still evicted every real security event out of the console's
+	// 1000-row window in minutes. This folds a run of IDENTICAL consecutive
+	// refusals into their first row plus one summary row carrying the count.
+	// Before the limiter, so the count is the true number of refusals rather than
+	// the number that happened to survive rate-limiting.
+	absorbed, summary := s.coalesceAuthFailed(actor, reason, r.URL.Path, r.RemoteAddr)
+	if summary != nil {
+		// The closing streak's summary goes out FIRST, so the row order in the
+		// trail matches the order the refusals happened in (and so a test reading
+		// "the last row" still reads this request's row, not the previous
+		// streak's summary).
+		s.recordAudit(s.cfg.BaseCtx, *summary)
+	}
+	// The two are INDEPENDENT, and folding them into an if/else got the streak-cap
+	// close wrong: there, the capping refusal both closes the streak (summary
+	// non-nil) and is itself absorbed into that summary's count, so an else-arm
+	// wrote it verbatim as well — counted twice, once as a row and once in the
+	// count — and skipped the suppressed counter for it.
+	if absorbed {
+		// Counted in the SAME series the limiter's drops are: a dropped auth.failed
+		// row is a countable fact whichever mechanism dropped it, and an operator
+		// alerting on volume must not have to know which one did. The summary row
+		// carries the count as well, so the trail is not the only witness.
+		s.metrics.authFailedSuppressedInc()
+		return
+	}
 	if !s.authFailedLimiter.allow(s.cfg.Now()) {
 		// COUNTED, NOT JUST DROPPED. The limiter caps the audit trail at ~1
 		// row/sec, so past the burst the trail stops describing the volume it
@@ -734,6 +765,102 @@ func (s *Server) auditAuthFailedAs(r *http.Request, actor, reason string) {
 		"failure", mustJSON(map[string]any{"reason": reason}))
 	ev.SourceIP = r.RemoteAddr
 	s.recordAudit(r.Context(), ev)
+}
+
+// auditRunIdentityExpired records run.identity.expired ONCE per run when a
+// NON-TERMINAL run presents an expired identity on the internal lane.
+//
+// This is the half of B5 that keeps quieting the sidecar from hiding a real
+// failure. The proxy's renew loop now backs off and gives up instead of retrying
+// a refused renew once a minute forever (internal/egress/proxy/renew.go), which
+// is what stopped the audit flood — but the case underneath it can be a perfectly
+// HEALTHY run: the renewer sleeps half the token's life, so a run that misses
+// renewal through more than 30 minutes of control-plane outage (a wardynd
+// rollout) holds a dead identity for the rest of its life, and every /internal/*
+// call it makes 401s. Before this, that fact existed in the trail only as an
+// undifferentiated pile of auth.failed rows. Now it is one row, keyed to the run,
+// which the cockpit's evidence rail already renders.
+//
+// The run is LEFT RUNNING: mid-flight work is the owner's to abandon, and the
+// remedy the docs give is kill + start a new run. Deliberately quiet otherwise:
+//
+//   - the once-guard is per run id and in memory, so a wardynd restart may emit a
+//     second row for the same run. Acceptable — two rows for one incident, never a
+//     row a minute. Process-local for the same reason every other in-memory bound
+//     in this package is (replicas>1 is refused by construction).
+//   - a TERMINAL run emits nothing: its token is supposed to be dead, a sidecar
+//     the teardown has not reaped yet is not news, and that is precisely the
+//     population a flood would come from.
+//   - only an *identity.ExpiredTokenError reaches here with a run id at all. A
+//     revoked, forged or wrong-audience token names no run of ours and stays
+//     exactly as coarse as the auth.failed row beside it.
+func (s *Server) auditRunIdentityExpired(r *http.Request, verifyErr error) {
+	var exp *identity.ExpiredTokenError
+	if !errors.As(verifyErr, &exp) || s.cfg.Store == nil {
+		return
+	}
+	// THE ONCE-GUARD RUNS BEFORE THE STORE READ, and that ordering is the point.
+	// The internal lane carries no rate limiter (routes.go), so a sidecar — or
+	// anything replaying a captured token — can present the same dead identity as
+	// often as it likes; with the read first, every one of those refusals bought a
+	// GetRun, forever, to decide not to write a row it had already written. The
+	// claim makes the second and every later refusal for a run free.
+	if !s.claimIdentityExpired(exp.RunID) {
+		return
+	}
+	run, gerr := s.cfg.Store.GetRun(r.Context(), exp.RunID)
+	if gerr != nil {
+		// RELEASED on a store error only. "We could not tell whether this run is
+		// live" must not consume the one row the run gets — a control-plane blip
+		// is exactly when this evidence matters. A TERMINAL run keeps its claim
+		// (it is never going to deserve a row), so the quiet case stays at one
+		// read per run, which is what this ordering is for.
+		s.releaseIdentityExpired(exp.RunID)
+		return
+	}
+	if isTerminalRunState(run.State) {
+		return
+	}
+	ev := s.auditEvent(&exp.RunID, types.ActorSystem, "wardynd", "run.identity.expired",
+		exp.RunID.String(), "failure", mustJSON(map[string]any{
+			"run_state": string(run.State),
+			"path":      r.URL.Path,
+		}))
+	ev.SourceIP = r.RemoteAddr
+	s.recordAudit(r.Context(), ev)
+	slog.WarnContext(r.Context(), "api: a running run is presenting an expired identity; its renews are not landing",
+		slog.String("run_id", exp.RunID.String()), slog.String("run_state", string(run.State)))
+}
+
+// claimIdentityExpired returns true for the FIRST caller to claim a run's single
+// run.identity.expired row, and false for every caller after it. Consult and
+// insert are one locked operation so two concurrent refusals cannot both win.
+//
+// Bounded like lastTouch (internal.go's shouldTouch), and for the same reason:
+// the key is a run id, a long-lived daemon accumulates one entry per run that
+// ever presented a dead token, and nothing else would ever evict them. Clearing
+// wholesale past the bound costs at most one extra row per run still refusing —
+// the same acceptable duplicate a restart already produces.
+func (s *Server) claimIdentityExpired(runID uuid.UUID) bool {
+	s.identityExpiredMu.Lock()
+	defer s.identityExpiredMu.Unlock()
+	if s.identityExpiredSeen == nil {
+		s.identityExpiredSeen = map[uuid.UUID]bool{}
+	} else if s.identityExpiredSeen[runID] {
+		return false
+	} else if len(s.identityExpiredSeen) > 4096 {
+		clear(s.identityExpiredSeen)
+	}
+	s.identityExpiredSeen[runID] = true
+	return true
+}
+
+// releaseIdentityExpired gives a claim back, so a refusal the server could not
+// DECIDE about (a failed run read) does not silently spend the run's one row.
+func (s *Server) releaseIdentityExpired(runID uuid.UUID) {
+	s.identityExpiredMu.Lock()
+	delete(s.identityExpiredSeen, runID)
+	s.identityExpiredMu.Unlock()
 }
 
 // internalAuth verifies a per-run token via identity.Provider.Verify with the
@@ -759,6 +886,7 @@ func (s *Server) internalAuth(next http.Handler) http.Handler {
 			// whole verify failure — so the trail records THAT a run token was
 			// refused without telling a brute-forcer which half it got wrong.
 			s.auditAuthFailedAs(r, internalAuthActor, "invalid_run_token")
+			s.auditRunIdentityExpired(r, err)
 			writeError(w, http.StatusUnauthorized, "invalid run token")
 			return
 		}

@@ -222,6 +222,26 @@ func (p *Provider) Verify(ctx context.Context, token, expectedAudience string) (
 		AnyAudience: jwt.Audience{expectedAudience},
 		Time:        p.now(),
 	}); err != nil {
+		// EXPIRY, specifically, is reported with the run id attached. It is the
+		// one verify failure that is a FACT ABOUT A RUN rather than about a
+		// presented string: a healthy long run whose renews were refused through
+		// a control-plane outage holds a dead token and 401s every /internal/*
+		// call from then on, forever, with nothing in the audit trail naming the
+		// run (see internal/api's run.identity.expired). Expiry is checked here,
+		// BEFORE revocation below, so an expired token never reads as a revoked
+		// one; the run id comes from the actor claim, which the signature above
+		// already covered. Everything else — a forged signature, a wrong
+		// audience, a not-yet-valid token — stays a flat error: no run of ours is
+		// named by it, and saying which half a prober got wrong is exactly what
+		// this boundary refuses to do.
+		if errors.Is(err, jwt.ErrExpired) {
+			if runID, rerr := p.runIDFromActor(claims.Act.Sub); rerr == nil {
+				return nil, &identity.ExpiredTokenError{
+					RunID: runID,
+					Err:   fmt.Errorf("embedded identity: validate claims: %w", err),
+				}
+			}
+		}
 		return nil, fmt.Errorf("embedded identity: validate claims: %w", err)
 	}
 

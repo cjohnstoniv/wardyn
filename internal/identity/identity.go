@@ -42,6 +42,29 @@ type Claims struct {
 	Expiry   time.Time
 }
 
+// ExpiredTokenError is the typed refusal a provider returns when a presented
+// token's ONLY defect is that it expired — signature and audience were good, and
+// the token names a run. It carries that run id, which is the whole reason the
+// type exists: the API's internal-auth boundary sees only an error, so without it
+// "a run is calling /internal/* with a dead identity" cannot be recorded against
+// the run it is about (internal/api's run.identity.expired row).
+//
+// It is NOT an authorization result. Verify still returns nil claims with it, and
+// every caller must keep failing closed — this says which run to TELL ABOUT the
+// refusal, never that the refusal was soft. A provider that cannot resolve the
+// run id returns an ordinary error instead, so the API layer's fallback is
+// silence, not a row keyed to the wrong run.
+type ExpiredTokenError struct {
+	RunID uuid.UUID
+	Err   error
+}
+
+func (e *ExpiredTokenError) Error() string {
+	return "identity: token for run " + e.RunID.String() + " has expired: " + e.Err.Error()
+}
+
+func (e *ExpiredTokenError) Unwrap() error { return e.Err }
+
 // RunIdentity is what a provider mints at sandbox start.
 type RunIdentity struct {
 	SPIFFEID string

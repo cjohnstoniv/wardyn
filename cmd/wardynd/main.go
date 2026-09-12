@@ -358,6 +358,7 @@ func run() error {
 		AuditSpool:                auditSpool,
 		AuditDrainRecorder:        auditDrainRec,
 		AuditSinkDrops:            sinkDropsReporter(fan),
+		AuditCoalesceWindow:       *f.auditCoalesceWindow,
 		Runner:                    run,
 		AdminToken:                *f.adminToken,
 		LocalMode:                 lm.enabled,

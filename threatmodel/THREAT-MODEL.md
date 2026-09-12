@@ -1955,6 +1955,34 @@ Local mode carries the same shape under a different label — the injected opera
 IS a verified human, so a self-decision there is refused like any other, which is
 why this switch is not one to turn on for a single-dev machine.
 
+### Coalesced `auth.failed` rows: the peer address is not the bound
+
+Since 0.7.2 the control plane folds IDENTICAL consecutive `auth.failed` audit rows
+— same refusing boundary, same `reason`, same request path, same `SourceIP` — into
+the first row plus one **new** summary row carrying `count`/`first_seen`/
+`last_seen` (`WARDYN_AUDIT_COALESCE_WINDOW`, default `5m`, `0` = off). It exists
+because a self-inflicted drip evicted everything else: one sidecar retrying a
+renew the control plane would never grant wrote one row a minute, forever, past a
+rate limiter set at 1/sec, and pushed every real security event out of the
+console's 1000-row window mid-investigation.
+
+**`SourceIP` being in that key does NOT separate principals on a Kubernetes
+deployment.** Wardyn deliberately does not install a `RealIP` middleware (an
+`X-Forwarded-For` a client can set is not an identity), so behind an ingress or a
+load balancer `SourceIP` is the proxy's address and every caller shares it. A
+credential-stuffing run against the public lane therefore arrives under ONE
+coalescing key, and the fold is what a defender is reading.
+
+What bounds that is the window and the count, not the key: a streak closes after
+`WARDYN_AUDIT_COALESCE_WINDOW` of silence AND at 1000 rows, so one summary row can
+never stand for unbounded volume, and every folded row is still counted in
+`wardyn_auth_failed_suppressed_total` — the series OPERATIONS.md already tells an
+operator to alert on instead of the audit row count. The residual, stated plainly:
+with the default window, a sustained same-reason burst from behind an ingress is
+visible as a count on a periodic row rather than as one row per attempt. An
+operator who wants row-per-attempt on the public lane sets the window to `0`, at
+the cost the limiter's own residual already names.
+
 ### Known latent vulnerabilities
 
 We publish known-uncalled findings here rather than let them sit in a scanner's
