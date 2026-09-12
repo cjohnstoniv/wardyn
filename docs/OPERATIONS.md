@@ -1075,7 +1075,10 @@ accounting: [docs/DESKTOP.md](DESKTOP.md) "Tamper posture, stated honestly".
 A **user drive** is persistent storage an admin registers once and allocates to
 people or groups; a member mounts theirs per run at `/home/agent/drive`. On a
 Docker deployment there are two backends, and the difference is who owns the
-bytes.
+bytes. With `storage.user_drive.disabled` set, all three surfaces answer that one
+switch identically — a run is refused 422, `POST /drives/preview` answers the same
+422, and `GET /me` reports no allocation at all — so nothing in the console ever
+offers a mount the create path refuses (see "Turning drives OFF deployment-wide").
 
 **`docker_volume` — Wardyn allocates.** A per-person named volume
 (`wardyn-drive-<drive-slug>-<home>`), created on first use with the `local`
@@ -1447,7 +1450,12 @@ somebody without turning drives back on first (the `ON DELETE RESTRICT` between
 the two is unchanged, so a drive still cannot be deleted out from under an
 allocation). What the switch refuses is every write that CREATES or EDITS one.
 The per-profile door is unchanged and still answers 403 with its `authz.denied`
-row.
+row. **All three read surfaces answer the switch identically**, off one site
+(`driveSizeCeilingFor`, `internal/api/user_drives_resolve.go`) so they cannot
+drift: a run asking for its drive is refused 422, `POST /drives/preview` answers
+the same 422 with the same sentence, and `GET /me` reports **no** `user_drive`
+with `user_drive_unavailable: "unavailable"` — never an allocation the create
+path would then refuse.
 
 ### Capabilities: what one member, or one group, may do
 
@@ -3891,7 +3899,10 @@ linked above.
 A **user drive** is per-person storage a run mounts at `/home/agent/drive`. On
 this substrate it is always a PersistentVolumeClaim — a pod cannot bind a host
 path, and Pod Security Standards forbids `hostPath` at Baseline and Restricted
-alike, so no drive backend offers one.
+alike, so no drive backend offers one. As on Docker, `storage.user_drive.disabled`
+is answered identically by all three surfaces — launch 422, `POST /drives/preview`
+the same 422, and `GET /me` no allocation — so the console never offers a claim
+this deployment will not bind (see "Turning drives OFF deployment-wide").
 
 **Two backends, two lifecycles.** A **managed** drive (`k8s_pvc`) is one claim
 per person, named `wardyn-drive-<drive-slug>-<home>` (`<drive-slug>` = the

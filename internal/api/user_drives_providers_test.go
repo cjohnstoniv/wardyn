@@ -236,6 +236,109 @@ func TestDriveSizeIsClampedTheSameAtEveryDoor(t *testing.T) {
 	}
 }
 
+// TestDrivesDisabledAnswersTheSameAtEveryDoor is TestDriveSizeIsClampedTheSame-
+// AtEveryDoor's fixture with the ORG SWITCH thrown, and it is the parity that was
+// missing: `disabled` was read at the launch door and at the two admin write
+// boundaries, and asked at NEITHER of the surfaces a member's console draws from.
+//
+// /me shipped `{"name":"Corp NAS","size_mib":…,"writable":…}` with an empty
+// user_drive_unavailable, and the preview answered 200 with the same, on a
+// deployment whose create path answers 422 "drives are disabled for this
+// deployment" — so the New Run card drew the mount checkbox and its writable
+// sentence for a mount no run here can have.
+//
+// THE /me TOKEN IS THE EXISTING `unavailable`, not a fifth member of the closed
+// set: the console already renders it (NR_UNAVAILABLE), and a token no client
+// branches on yet would leave the card rendering nothing at all. A drives-are-off
+// member sentence of its own is a canon item, not a wire one.
+func TestDrivesDisabledAnswersTheSameAtEveryDoor(t *testing.T) {
+	newStore := func() *driveStore {
+		d := driveFixture(nil)
+		return &driveStore{
+			drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser,
+			site: providerSiteConfig(true, 0),
+		}
+	}
+	wantSentence := fmt.Sprintf(driveRefusedBackendMsg, driveDisabledMsg)
+
+	// 1. LAUNCH — unchanged: the 422 the switch has always answered.
+	srv, _ := driveRunServer(newStore(), "docker")
+	mount, ok, w := driveSeed(t, srv, driveRunRequest(true, nil),
+		governanceCeiling{}, driveMemberCtx([]string{"eng"}, false))
+	if ok || mount != nil {
+		t.Fatalf("launch: mount = %+v, ok = %v; want the run refused its drive", mount, ok)
+	}
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), driveDisabledMsg) {
+		t.Errorf("launch: %d %s, want 422 carrying %q", w.Code, w.Body.String(), driveDisabledMsg)
+	}
+
+	// 2. GET /me — NO allocation, and the reason says so on the wire.
+	meSrv, _ := driveRunServer(newStore(), "docker")
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil).WithContext(driveMemberCtx([]string{"eng"}, false))
+	me, unavailable := meSrv.resolveMeUserDrive(r)
+	if me != nil {
+		t.Errorf("/me: user_drive = %+v, want nil — the card must not offer a mount the create path refuses 422", me)
+	}
+	if unavailable != driveUnavailableUnknown {
+		t.Errorf("/me: user_drive_unavailable = %q, want %q — an empty reason is the affirmative \"nothing is wrong\" this deployment cannot make",
+			unavailable, driveUnavailableUnknown)
+	}
+
+	// 3. POST /drives/preview — the launch door's OWN bytes, not a paraphrase and
+	// not a 200.
+	pvSrv, _ := driveRunServer(newStore(), "docker")
+	pw := driveCall(t, pvSrv.handlePreviewUserDrive, http.MethodPost, "/api/v1/drives/preview",
+		`{"user_subjects":["sub-drive-bob"],"groups":["eng"]}`, nil)
+	if pw.Code != http.StatusUnprocessableEntity {
+		t.Errorf("preview: code = %d, want 422 in the REFUSED_BACKEND family: %s", pw.Code, pw.Body.String())
+	}
+	if !strings.Contains(pw.Body.String(), wantSentence) {
+		t.Errorf("preview: body = %s\nwant the launch door's own sentence %q", pw.Body.String(), wantSentence)
+	}
+}
+
+// TestDrivesDisabledBeatsTheProfileDoorAtEverySurface is the ORDER, at the two
+// surfaces that resolve a door: 422 before 403, because the org switch and
+// DenyUserDrive answer different questions and only the second is about a member.
+// With drives off nobody was denied — there is nothing here to mount — so a 403
+// would name a member (or, at the preview, tell an admin about one) that no
+// profile refused, and write an authz.denied row for it.
+func TestDrivesDisabledBeatsTheProfileDoorAtEverySurface(t *testing.T) {
+	newStore := func() *driveStore {
+		d := driveFixture(nil)
+		return &driveStore{
+			drive: d, grant: grantFixture(d.ID, nil), tier: types.CapabilitySubjectUser,
+			profile: &types.GovernanceProfile{
+				Name: "contractors", Limits: types.GovernanceLimits{DenyUserDrive: true},
+			},
+			site: providerSiteConfig(true, 0),
+		}
+	}
+
+	srv, rec := driveRunServer(newStore(), "docker")
+	_, ok, w := driveSeed(t, srv, driveRunRequest(true, nil), deniedCeiling(),
+		driveMemberCtx([]string{"eng"}, false))
+	if ok || w.Code != http.StatusUnprocessableEntity {
+		t.Errorf("launch: ok = %v code = %d, want 422 — a 403 would log a denial nobody made: %s",
+			ok, w.Code, w.Body.String())
+	}
+	if len(rec.events) != 0 {
+		t.Errorf("launch audit = %v, want nothing — the org switch is not an authorization event",
+			driveAuditActions(rec))
+	}
+
+	pvSrv, pvRec := driveRunServer(newStore(), "docker")
+	pw := driveCall(t, pvSrv.handlePreviewUserDrive, http.MethodPost, "/api/v1/drives/preview",
+		`{"user_subjects":["sub-drive-bob"],"groups":["eng"]}`, nil)
+	if pw.Code != http.StatusUnprocessableEntity {
+		t.Errorf("preview: code = %d, want 422 — the switch is asked before the previewed principal's door: %s",
+			pw.Code, pw.Body.String())
+	}
+	if len(pvRec.events) != 0 {
+		t.Errorf("preview audit = %v, want nothing", driveAuditActions(pvRec))
+	}
+}
+
 // TestDriveRehomeRaceIsRefusedAtTheWrite closes the window driveRehomeGuard's own
 // doc used to name as its residual: the gate reads the allocations, finds none,
 // and the write lands AFTER somebody is allocated the drive — re-homing them

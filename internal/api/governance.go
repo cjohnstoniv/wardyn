@@ -144,7 +144,39 @@ func decodeGovernanceProfileRequest(w http.ResponseWriter, r *http.Request) (gov
 	if err := validatePolicySpec(req.Ceiling); err != nil {
 		return governanceProfileRequest{}, "invalid ceiling: " + err.Error()
 	}
+	// THE LIMITS, which had no write boundary at all: req.Limits decoded straight
+	// into the stored row while the sibling ORG block refused the identical shape
+	// by name (validateStorageProviders, providers400Negative). Nothing downstream
+	// mis-enforces a negative — every reader treats <= 0 as unlimited — but this is
+	// the door the console's own nonNegativeInt does not cover, and a stored -5
+	// renders on the profile editor as a cap that binds nothing. 0 stays
+	// unlimited/unset on all three.
+	if msg := governanceLimitsRefusal(req.Limits); msg != "" {
+		return governanceProfileRequest{}, msg
+	}
 	return req, ""
+}
+
+// governanceLimitsRefusal is the negative-value boundary on GovernanceLimits, or
+// "" when every number is writable. It is the profile's half of
+// validateStorageProviders and borrows that function's sentence
+// (providers400Negative) for the two SIZES, so one deployment refusing the same
+// typo at two doors does not read as two different rules.
+//
+// MaxConcurrentRuns takes its own wording because it is a COUNT and not MiB —
+// the one place the shared sentence would be a lie.
+func governanceLimitsRefusal(l types.GovernanceLimits) string {
+	if l.MaxConcurrentRuns < 0 {
+		return fmt.Sprintf("limits.max_concurrent_runs: %d is not a count of runs — use 0 for unlimited",
+			l.MaxConcurrentRuns)
+	}
+	if l.MaxEphemeralDiskMiB < 0 {
+		return fmt.Sprintf(providers400Negative, "limits.max_ephemeral_disk_mib", l.MaxEphemeralDiskMiB)
+	}
+	if l.MaxDriveSizeMiB < 0 {
+		return fmt.Sprintf(providers400Negative, "limits.max_drive_size_mib", l.MaxDriveSizeMiB)
+	}
+	return ""
 }
 
 // writeGovernanceProfile is the shared body of POST and PUT: bound the eligible

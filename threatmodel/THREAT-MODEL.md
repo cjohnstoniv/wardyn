@@ -740,7 +740,7 @@ admin preview and the member preflight are no longer the same claim. The
 only — though less narrowly than that used to mean. Since 0.7 it runs the
 governance door (`drivePreviewDoorIsOpen`), the unusable/stale group-snapshot arm
 (`driveWithUnusableGroups`, reached through `previewResolveUserDrive` in
-`internal/api/user_drives_resolve.go`) and the would-it-bind-here check
+`internal/api/user_drives_preview.go`) and the would-it-bind-here check
 (`driveIsMountableHere` in `internal/api/user_drives_run.go`), in the enforcement
 path's own order and with the enforcement path's own refusals — and for a
 `host_path` share that last check does touch the substrate: `driveShareBindFailure`

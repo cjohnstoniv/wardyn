@@ -51,8 +51,14 @@ export const GLOSS: Record<StorageEnforcement, string> = {
   eviction: DRIVES.ENFORCEMENT_EVICTION,
 };
 
+// ABSENT IS UNKNOWN, NOT `none`, and that is the half that was wrong. An older
+// daemon or an undetected runner sends no word at all, and folding that to
+// "none" printed "nothing binds this size" — a positive claim about the
+// substrate — under all three disk fields, while isUncappedEnforcement below
+// deliberately withheld the matching warning for the same input. One of the two
+// had to be total, and the honest one is silence: no word, no gloss.
 export const enforcementGloss = (e: StorageEnforcement | undefined): string =>
-  GLOSS[e ?? "none"] ?? DRIVES.ENFORCEMENT_NONE;
+  e === undefined ? "" : (GLOSS[e] ?? DRIVES.ENFORCEMENT_NONE);
 
 // Does a number typed against this word run UNCAPPED? Only `none` does: the
 // substrate binds nothing, so a filled/clamped size runs with a warning on the
@@ -60,7 +66,9 @@ export const enforcementGloss = (e: StorageEnforcement | undefined): string =>
 // PROVIDERS.DOCKER_UNCAPPED_WARN. Every other word binds bytes somewhere:
 // `filesystem` refuses the write, `eviction` (k8s) kills the pod over the
 // limit, `request`/`external` bind at the volume. Absent (older daemon, no
-// runner detected) reads as "can enforce" — no warning. The two disk surfaces
+// runner detected) is UNKNOWN and yields no warning — the same input
+// enforcementGloss above now renders no gloss for, so the two halves agree
+// instead of one of them asserting `none` while the other withholds it. The two disk surfaces
 // (/providers Storage tab, the governance profile editor's ephemeral row) BOTH
 // read this predicate so they cannot drift apart.
 export const isUncappedEnforcement = (e: StorageEnforcement | undefined): boolean => e === "none";

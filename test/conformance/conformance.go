@@ -795,12 +795,34 @@ func drainBoth(sess *runner.ExecSession) func() string {
 // is an IMAGE verdict, never a substrate one, and it says so with its own exit
 // code rather than passing (or failing) silently.
 //
-//	90  no dd applet — image contract, not a substrate verdict
+// THE EXIT-CODE CONTRACT (pinned by TestEphemeralFillScriptCodesAreDistinct):
 //
-// Any other outcome is uninteresting on purpose: on a substrate that enforces the
-// limit the write never completes, because the pod carrying it is killed.
+//	90  no dd applet — an IMAGE contract, not a substrate verdict
+//	91  the fill target could not be OPENED — an ENVIRONMENT verdict, and
+//	    explicitly not "the substrate does not enforce"
+//	0   or any other code: the fill ran. On a substrate that enforces the limit
+//	    it never completes, because the pod carrying it is killed.
+//
+// IT WRITES UNDER /tmp, NOT $HOME, and that was finding 2. The agent pod runs as
+// uid 1000 with no HOME in its env and no passwd entry for that uid, so runc's
+// fallback answers HOME=/ — which is root:root 0755 in busybox. Every fill
+// therefore died with `dd: can't open '//wardyn-ephemeral-fill': Permission
+// denied` and exit 1: not the coded 90, so the IMAGE skip never fired, nothing
+// was written, and the case burned the whole eviction budget before reporting
+// "want RunFailed with Evicted" — the false "this substrate does not enforce"
+// its own comment says it must never give. /tmp is 1777 in every image this gate
+// runs against and sits on the same writable layer the kubelet meters, so the
+// bytes still count against ephemeral-storage.
+//
+// THE OPEN IS PROBED SEPARATELY from the fill, with dd itself at count=0, so an
+// unwritable target is distinguishable from a full one: a zero-byte create
+// cannot fail with ENOSPC, which is the outcome the fill below exists to
+// provoke. Folding the two would put "the kubelet is evicting us" and "this
+// image will not let us write" behind one exit code, and the whole point of the
+// case is that those are different verdicts.
 const ephemeralFillScript = `command -v dd >/dev/null 2>&1 || exit 90
-dd if=/dev/zero of="$HOME/wardyn-ephemeral-fill" bs=1M count=256`
+dd if=/dev/zero of=/tmp/wardyn-ephemeral-fill bs=1 count=0 2>/dev/null || exit 91
+dd if=/dev/zero of=/tmp/wardyn-ephemeral-fill bs=1M count=256`
 
 // ephemeralDiskLimitMiB is the case's limit and ephemeralOversizedDiskMiB the
 // second sub-case's. The oversized one is deliberately larger than any test node's
@@ -817,7 +839,22 @@ const (
 // so the verdict lands seconds-to-a-minute after the write — never synchronously
 // with it. A tight budget would read a slow node as a substrate that does not
 // enforce, which is the one wrong answer this case must not give.
+//
+// IT IS SPENT ONCE, NOT TWICE (finding 3). The case's own context is
+// opts.timeout()+ephemeralEvictionBudget and the post-eviction poll is derived
+// FROM it rather than from a fresh Background — r.Wait is bounded to
+// opts.timeout() so it cannot drain the poll's share. Summed instead of shared,
+// one sub-case could run 3m+4m+4m = 11m against the Makefile's `go test
+// -timeout`, and a -timeout expiry is a panic that kills the package and
+// discards every verdict the other seven cases already produced.
+// TestEphemeralCaseBudgetFitsTheMakefileTimeout pins the arithmetic.
 const ephemeralEvictionBudget = 4 * time.Minute
+
+// ephemeralCaseBudget is the WHOLE of the eviction sub-case: the per-operation
+// timeout for everything up to and including r.Wait, plus one eviction budget
+// for the Status poll. Named so the Makefile-timeout pin can read it rather than
+// re-deriving the sum it is asserting about.
+func ephemeralCaseBudget(opts Options) time.Duration { return opts.timeout() + ephemeralEvictionBudget }
 
 // testEphemeralDiskLimit is the ephemeral-disk enforcement gate. It runs ONLY on a
 // driver that declares EphemeralDiskEnforcement `eviction` — every other word
@@ -839,7 +876,9 @@ const ephemeralEvictionBudget = 4 * time.Minute
 //     request back.
 func testEphemeralDiskLimit(t *testing.T, r runner.Runner, opts Options) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout()+ephemeralEvictionBudget)
+	// ONE DEADLINE FOR THE WHOLE CASE, and every wait inside it is a slice of
+	// this rather than a fresh budget of its own — see ephemeralEvictionBudget.
+	ctx, cancel := context.WithTimeout(context.Background(), ephemeralCaseBudget(opts))
 	defer cancel()
 
 	caps, err := r.Capabilities(ctx)
@@ -875,20 +914,39 @@ func testEphemeralDiskLimit(t *testing.T, r runner.Runner, opts Options) {
 			// outcome this case is waiting for.
 			t.Logf("Exec(fill): %v (expected once the pod is killed)", err)
 		}
-		if code, err := r.Wait(ctx, sb.Ref); err == nil && code == 90 {
-			t.Skipf("sandbox image has no dd applet; cannot fill the writable layer — an IMAGE contract, not a substrate verdict")
+		// r.Wait IS BOUNDED TO ONE OPERATION'S TIMEOUT, not to the case's whole
+		// deadline. On k8s it polls the EXEC ephemeral container, which need never
+		// reach Terminated inside a pod the kubelet is killing, so handed the case
+		// context it would legitimately drain every minute the poll below still
+		// needs. That is what made the poll take a fresh Background budget, and
+		// the sum (3m Wait + 4m poll on top of 4m already spent) is what could
+		// outrun the package -timeout and discard every verdict.
+		waitCtx, waitCancel := context.WithTimeout(ctx, opts.timeout())
+		code, werr := r.Wait(waitCtx, sb.Ref)
+		waitCancel()
+		if werr == nil {
+			switch code {
+			case 90:
+				t.Skipf("sandbox image has no dd applet; cannot fill the writable layer — an IMAGE contract, not a substrate verdict")
+			case 91:
+				// AN ENVIRONMENT VERDICT, and deliberately not "the substrate does
+				// not enforce": nothing was written, so the kubelet had nothing to
+				// meter and the eviction this case asserts was never provoked.
+				// Reporting it as a failure of the substrate is the false negative
+				// the whole case exists to avoid — this is the shape the uid-1000
+				// $HOME bug wore for as long as it went unnoticed.
+				t.Skipf("sandbox image could not open /tmp/wardyn-ephemeral-fill for writing (exit 91); the fill never ran, so this says nothing about %q enforcement — an ENVIRONMENT contract, not a substrate verdict",
+					types.StorageEnforcementEviction)
+			}
 		}
 
-		// The poll gets its OWN budget, off a FRESH context. r.Wait above is
-		// handed the case's `ctx` and may legitimately drain the whole of it: on
-		// k8s it polls the EXEC ephemeral container, which need never reach
-		// Terminated inside a pod the kubelet is killing. Sharing that one
-		// context then made the first Status call return a context error, and
-		// this case reported a transport failure where "want RunFailed with
-		// Evicted" belongs. Cancelled on return, so nothing outlives the case.
-		pollCtx, pollCancel := context.WithTimeout(context.Background(), ephemeralEvictionBudget)
+		// The poll's budget is a SLICE OF THE CASE's, derived from ctx rather than
+		// from a fresh Background: the case gets ONE deadline and every wait
+		// inside it spends part of that, never a new allowance on top. Cancelled
+		// on return, so nothing outlives the case.
+		pollCtx, pollCancel := context.WithTimeout(ctx, ephemeralEvictionBudget)
 		defer pollCancel()
-		deadline := time.Now().Add(ephemeralEvictionBudget)
+		deadline, _ := pollCtx.Deadline()
 		var last runner.Status
 		for time.Now().Before(deadline) {
 			st, err := r.Status(pollCtx, sb.Ref)
@@ -901,7 +959,9 @@ func testEphemeralDiskLimit(t *testing.T, r runner.Runner, opts Options) {
 			}
 			time.Sleep(2 * time.Second)
 		}
-		t.Errorf("after %s the run is state=%q message=%q; want RunFailed with \"Evicted\" — a %dMiB limit and a 256MiB write means the kubelet should have killed the pod",
+		// "up to", because the poll shares the case's one deadline: it stops at
+		// whichever comes first, its own budget or what the case has left.
+		t.Errorf("after up to %s the run is state=%q message=%q; want RunFailed with \"Evicted\" — a %dMiB limit and a 256MiB write means the kubelet should have killed the pod",
 			ephemeralEvictionBudget, last.State, last.Message, ephemeralDiskLimitMiB)
 	})
 

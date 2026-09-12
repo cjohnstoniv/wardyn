@@ -262,9 +262,13 @@ test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TE
 	@echo "Running conformance tests on Docker (WARDYN_TEST_DOCKER=1 required)..."
 	WARDYN_TEST_DOCKER=1 go test -v -tags docker -timeout 10m ./test/conformance/...
 
+# 15m, not 10m: the ephemeral-disk eviction case alone may spend opts.timeout() plus
+# ephemeralEvictionBudget (7m) waiting for the kubelet, and a -timeout expiry is a panic
+# that discards every verdict the other cases already produced — headroom for one slow
+# eviction, not a licence for a slower suite (pinned by TestEphemeralCaseBudgetFitsTheMakefileTimeout).
 test-conformance-k8s: ## Run the conformance suite on Kubernetes (needs WARDYN_TEST_K8S=1 + a kubeconfig context)
 	@echo "Running conformance tests on Kubernetes (WARDYN_TEST_K8S=1 + WARDYN_PROXY_IMAGE + WARDYN_TEST_K8S_AGENT_IMAGE required; uses the current kubeconfig context)..."
-	WARDYN_TEST_K8S=1 go test -v -tags k8s -timeout 10m ./test/conformance/...
+	WARDYN_TEST_K8S=1 go test -v -tags k8s -timeout 15m ./test/conformance/...
 
 # H1 (review round 2): the conformance agent image MUST carry wardyn-rec —
 # k8s's SessionRecording is unconditionally true (exec.go's recordCmd has no

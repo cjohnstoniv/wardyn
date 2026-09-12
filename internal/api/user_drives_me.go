@@ -81,6 +81,15 @@ func (s *Server) resolveMeUserDrive(r *http.Request) (*meUserDrive, string) {
 	if ceiling, cerr := s.effectiveCeiling(ctx); cerr == nil {
 		profileMaxDriveMiB = ceiling.Limits.MaxDriveSizeMiB
 	}
+	// THE ORG SWITCH IS IN HERE TOO (errDrivesDisabled, raised by
+	// driveSizeCeilingFor — the one read of storage.user_drive all three surfaces
+	// share). It was read in three places and asked at none of the member's own:
+	// /me shipped a fully populated allocation beside an empty
+	// user_drive_unavailable on a deployment whose launch path answers 422
+	// "drives are disabled for this deployment", so the New Run card drew the
+	// checkbox and its writable sentence for a mount the create path refuses. It
+	// arrives as an ERROR rather than as a fourth branch written out here
+	// precisely so a surface added later cannot forget to ask.
 	resolved, err := s.resolveUserDrive(ctx, profileMaxDriveMiB)
 	if err != nil {
 		return nil, driveUnavailableReason(err)

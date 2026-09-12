@@ -747,7 +747,7 @@ rather than in prose (the governance round's `MATCHED_*` addition, learned from)
 what the console renders today, and the two it drops are named here so the gap is a recorded
 decision rather than drift. `POST /drives/preview` also composes `home_subject` (WHICH of the
 submitted claims the directory name was derived from) and a server-written `warning`
-(`drivePreviewWarning`, `internal/api/user_drives_resolve.go:503-522`, whose one sentence is
+(`drivePreviewWarning`, `internal/api/user_drives_preview.go`, whose one sentence is
 *"the directory name keys on the sign-in subject; paste it first"*, raised for a `hash`/`sub`
 drive previewed with an address pasted first). Both are typed in the TS mirror and rendered by nothing
 (`ui/src/app/lib/api/drives.ts`), because a new row is a new surface and a surface arrives

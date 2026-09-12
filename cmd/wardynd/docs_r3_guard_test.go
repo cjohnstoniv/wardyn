@@ -274,7 +274,9 @@ func TestManagedObjectNameRationaleMatchesTheNamingFunction(t *testing.T) {
 // model that overstates a gap is not conservative; it is wrong about its own
 // system, in the document a reviewer checks first.
 func TestThreatModelDrivePreviewResidualMatchesTheHandler(t *testing.T) {
-	resolve := readSrc(t, "internal", "api", "user_drives_resolve.go")
+	// The preview endpoint moved to its own file when user_drives_resolve.go
+	// crossed the 1000-line ceiling; the resolver it calls into stayed behind.
+	resolve := readSrc(t, "internal", "api", "user_drives_preview.go")
 	preview := methodBody(t, resolve, "handlePreviewUserDrive")
 	for _, gate := range []string{"drivePreviewDoorIsOpen", "previewResolveUserDrive", "driveIsMountableHere"} {
 		if !strings.Contains(preview, gate) {
