@@ -4,6 +4,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -199,15 +200,33 @@ func buildRepoRecords(legacyRepo string, repos []types.WorkspaceRepo) string {
 
 // injectionRuleFromScope decodes an api_key grant scope into its proxy-side
 // injection rule. Mirrors the broker's apiKeyScope shape (host, header,
-// format, secret_name) with the same defaults.
+// format, secret_name, require_tls) with the same defaults.
+//
+// require_tls has no default to apply: absent == false == today's transport
+// rule. This decode is the one that BINDS it — the rule it returns rides
+// runner.InjectionGrant into the proxy's own config (probeInjections,
+// mintRecordAPIKeyInjections), which is where the plain lane reads it.
+//
+// STRICT, and require_tls is why. A plain Unmarshal ignores a key it does not
+// know, so `{"requiretls":true}` or `{"require-tls":true}` decoded to false and
+// the operator's TLS-only declaration silently did not exist — a security
+// control failing OPEN on a typo, with the policy accepted and every gate green.
+// DisallowUnknownFields turns that into a refusal at the write boundary (422,
+// validateEligibleGrant) where the operator is looking at the text they just
+// wrote. Every scope Wardyn itself authors carries exactly these four keys
+// (llmcred.go, runs_create.go, integrations_run.go, artifact_redirect.go,
+// runs_dispatch_llm.go), so nothing shipped is newly refused.
 func injectionRuleFromScope(scope json.RawMessage) (egress.InjectionRule, error) {
 	var sc struct {
 		Host       string `json:"host"`
 		Header     string `json:"header"`
 		Format     string `json:"format"`
 		SecretName string `json:"secret_name"`
+		RequireTLS bool   `json:"require_tls"`
 	}
-	if err := json.Unmarshal(scope, &sc); err != nil {
+	dec := json.NewDecoder(bytes.NewReader(scope))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&sc); err != nil {
 		return egress.InjectionRule{}, err
 	}
 	if sc.Host == "" || sc.SecretName == "" {
@@ -219,7 +238,10 @@ func injectionRuleFromScope(scope json.RawMessage) (egress.InjectionRule, error)
 	if sc.Format == "" {
 		sc.Format = "Bearer %s"
 	}
-	return egress.InjectionRule{Host: sc.Host, Header: sc.Header, SecretName: sc.SecretName, Format: sc.Format}, nil
+	return egress.InjectionRule{
+		Host: sc.Host, Header: sc.Header, SecretName: sc.SecretName, Format: sc.Format,
+		RequireTLS: sc.RequireTLS,
+	}, nil
 }
 
 // githubScopeRepos decodes a github_token grant scope {"repos":[...]} and returns

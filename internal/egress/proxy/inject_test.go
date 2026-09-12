@@ -4,6 +4,7 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -234,5 +235,172 @@ func TestLoadConfigDefaultsAndValidation(t *testing.T) {
 	}
 	if ec.Listen != "127.0.0.1:9999" || ec.DecisionBufferSize != 7 {
 		t.Errorf("explicit overrides not kept: listen=%q buffer=%d", ec.Listen, ec.DecisionBufferSize)
+	}
+}
+
+// requireTLSInj is staticInj plus the rule's transport declaration — the shape
+// buildInjector produces from an api_key grant scope carrying require_tls.
+func requireTLSInj(host string, hdr injectedHeader) *injector {
+	inj := staticInj(map[string]injectedHeader{host: hdr})
+	inj.byHost[host].requireTLS = true
+	return inj
+}
+
+// TestRequireTLSRefusesCleartextRequest (F110 residual): with require_tls on the
+// rule, a plain-HTTP request to that host is DENIED — not merely forwarded
+// uncredentialed.
+//
+// The difference is the whole point of the flag. injectableTransport's own rules
+// withhold the credential silently, which an operator cannot tell apart from a
+// wrong key: the agent sees a 401 from the vendor. An operator who declares the
+// credential TLS-only is refusing the REQUEST, so the refusal has to be Wardyn's,
+// with the reason on the response and a deny row in the trail.
+func TestRequireTLSRefusesCleartextRequest(t *testing.T) {
+	var hits int
+	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { hits++ }))
+	defer upstream.Close()
+
+	p, buf := newTestProxy(t, types.RunPolicySpec{AllowedDomains: []string{"allowed.test"}},
+		upstreamAddr(upstream), nil, requireTLSInj("allowed.test", injectedHeader{name: "X-Api-Key", value: "SECRET-KEY"}))
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustProxyReq(t, http.MethodGet, "http://allowed.test/path"))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (body %q)", rec.Code, rec.Body.String())
+	}
+	if hits != 0 {
+		t.Fatalf("upstream was hit %d times for a refused request", hits)
+	}
+	if got := rec.Header().Get(egressHeaderReason); got != ruleSourceRequireTLS {
+		t.Errorf("%s = %q, want %q", egressHeaderReason, got, ruleSourceRequireTLS)
+	}
+	if got := rec.Header().Get(egressHeaderStatus); got != egressRefusalDenied {
+		t.Errorf("%s = %q, want %q", egressHeaderStatus, got, egressRefusalDenied)
+	}
+	if got := rec.Header().Get(egressHeaderHost); got != "allowed.test" {
+		t.Errorf("%s = %q, want the host", egressHeaderHost, got)
+	}
+	// The body has to say which host and why — writeEgressDeny's fixed "egress
+	// denied by policy" is what this arm exists to avoid.
+	if !strings.Contains(rec.Body.String(), "allowed.test") ||
+		!strings.Contains(rec.Body.String(), "require_tls") {
+		t.Errorf("body = %q, want it to name the host and the rule", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "SECRET-KEY") {
+		t.Fatal("the injected credential leaked into the refusal body")
+	}
+	// ONE row, and it is the deny: the allow the evaluator granted must not also
+	// be emitted, or the trail claims egress that never happened.
+	d := lastDecision(t, buf)
+	if d.RuleSource != ruleSourceRequireTLS || d.Decision != egress.Deny {
+		t.Fatalf("decision = %+v, want a %s deny", d, ruleSourceRequireTLS)
+	}
+	if n := strings.Count(buf.String(), "\n"); n != 1 {
+		t.Fatalf("decision log = %q, want exactly one row", buf.String())
+	}
+}
+
+// TestRequireTLSUnsetKeepsTodaysCleartextInjection is the other half: the flag
+// is opt-in, so a rule without it is judged by injectableTransport exactly as
+// before — port 80 cleartext is injected and forwarded, byte-for-byte today.
+func TestRequireTLSUnsetKeepsTodaysCleartextInjection(t *testing.T) {
+	var gotKey string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKey = r.Header.Get("X-Api-Key")
+	}))
+	defer upstream.Close()
+
+	p, buf := newTestProxy(t, types.RunPolicySpec{AllowedDomains: []string{"allowed.test"}},
+		upstreamAddr(upstream), nil, staticInj(map[string]injectedHeader{
+			"allowed.test": {name: "X-Api-Key", value: "SECRET-KEY"},
+		}))
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustProxyReq(t, http.MethodGet, "http://allowed.test/path"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
+	}
+	if gotKey != "SECRET-KEY" {
+		t.Errorf("upstream X-Api-Key = %q, want the injected credential", gotKey)
+	}
+	if strings.Contains(buf.String(), ruleSourceRequireTLS) {
+		t.Errorf("decision log = %q, want no %s row for a rule that never set it", buf.String(), ruleSourceRequireTLS)
+	}
+}
+
+// TestRequireTLSAllowsTLSTransport: the flag refuses a TRANSPORT, not a host. An
+// https request on the same lane is the transport the operator asked for, so it
+// is injected and forwarded like any other.
+func TestRequireTLSAllowsTLSTransport(t *testing.T) {
+	var gotKey string
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKey = r.Header.Get("X-Api-Key")
+	}))
+	defer upstream.Close()
+
+	buf := &bytes.Buffer{}
+	p := newProxy(Options{
+		RunID:           uuid.New(),
+		Policy:          CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"allowed.test"}}),
+		Injector:        requireTLSInj("allowed.test", injectedHeader{name: "X-Api-Key", value: "SECRET-KEY"}),
+		Sink:            &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Resolver:        publicResolver{},
+		Dial:            redirectDial(upstreamAddr(upstream)),
+		TLSClientConfig: testInsecureTLSConfig,
+	})
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustProxyReq(t, http.MethodGet, "https://allowed.test/path"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
+	}
+	if gotKey != "SECRET-KEY" {
+		t.Errorf("upstream X-Api-Key = %q, want the injected credential over TLS", gotKey)
+	}
+	if strings.Contains(buf.String(), ruleSourceRequireTLS) {
+		t.Errorf("decision log = %q, want no refusal for the transport require_tls asks for", buf.String())
+	}
+}
+
+// TestRequireTLSRefusalPreemptsInspection pins the ORDER of the two things the
+// plain lane does to a request it is about to refuse.
+//
+// The arm sits ahead of the content-inspection block, not beside the injection
+// it guards, because a refusal ends the request: scanning first spends the scan
+// budget on bytes nothing forwards, and the honest-coverage marker
+// (emitLLMBlindOnce) posts a row saying a body went UNINSPECTED to an upstream
+// that never received it. Here the scanner is in BLOCK mode over a body that
+// carries the secret it blocks on, so if inspection ran first the 403 would be
+// inspectLLM's, with a scan:blocked row — a different refusal for a different
+// reason, told to the operator in place of the one that actually applies.
+func TestRequireTLSRefusalPreemptsInspection(t *testing.T) {
+	cu := captureUpstream(t, true, "never-forwarded")
+	p, buf := newPlainLaneProxy(t, upstreamAddr(cu.srv),
+		requireTLSInj(anthropicHost, injectedHeader{name: "X-Api-Key", value: "BROKERED-KEY"}))
+	p.scanner = scanEngine(t, "block", scanTestSecret)
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustAbsReq(t, http.MethodPost, "http://"+anthropicHost+"/v1/messages",
+		anthropicMessagesBody("please use key "+scanTestSecret+" now")))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	if got := rec.Header().Get(egressHeaderReason); got != ruleSourceRequireTLS {
+		t.Fatalf("%s = %q, want %q — the transport refusal is the one that applies",
+			egressHeaderReason, got, ruleSourceRequireTLS)
+	}
+	d := lastDecision(t, buf)
+	if d.RuleSource != ruleSourceRequireTLS || d.Decision != egress.Deny {
+		t.Fatalf("decision = %+v, want the %s deny", d, ruleSourceRequireTLS)
+	}
+	if d.Scan != nil {
+		t.Errorf("scan summary = %+v, want none: the body of a refused request is never read", d.Scan)
+	}
+	if n := strings.Count(strings.TrimSpace(buf.String()), "\n"); n != 0 {
+		t.Errorf("decision log = %q, want exactly one row (no scan:blocked, no llm.scan.blind)", buf.String())
 	}
 }

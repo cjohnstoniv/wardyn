@@ -51,11 +51,18 @@ func newPATBrokerUpstreamTTL(t *testing.T, token, username string, ttl time.Dura
 // TLS server).
 func newPATBrokerProxy(t *testing.T, grants map[string]PATGrant, upstreamAddr string) (*Proxy, *bytes.Buffer) {
 	t.Helper()
+	return newPATBrokerProxySpec(t, types.RunPolicySpec{}, grants, upstreamAddr)
+}
+
+// newPATBrokerProxySpec is newPATBrokerProxy with the run policy under test —
+// the branch-namespace cases need git_push_any_branch.
+func newPATBrokerProxySpec(t *testing.T, spec types.RunPolicySpec, grants map[string]PATGrant, upstreamAddr string) (*Proxy, *bytes.Buffer) {
+	t.Helper()
 	buf := &bytes.Buffer{}
 	sink := &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)}
 	p := newProxy(Options{
 		RunID:           uuid.New(),
-		Policy:          CompilePolicy(types.RunPolicySpec{}),
+		Policy:          CompilePolicy(spec),
 		Sink:            sink,
 		Resolver:        publicResolver{},
 		Dial:            redirectDial(upstreamAddr),
@@ -417,5 +424,201 @@ func TestPATBrokerWaitsOutAPendingApproval(t *testing.T) {
 	}
 	if up.pollCalls < 3 {
 		t.Fatalf("pollCalls = %d, want >= 3 (two PENDING + the APPROVED that releases it)", up.pollCalls)
+	}
+}
+
+// TestPATBranchNSEnforcedEnv: the opt-IN env is the App-lane switch's mirror —
+// OFF when unset (so nothing a 0.7.1 deployment pushed changes), off on an
+// explicit disable word, on for the enable words, and FAIL CLOSED (on) for
+// garbage, because a typo must not undo a control the operator turned on
+// deliberately.
+func TestPATBranchNSEnforcedEnv(t *testing.T) {
+	for _, tc := range []struct {
+		val  string
+		want bool
+	}{
+		{"", false},    // unset => the git_pat lane is unconfined, as in 0.7.1
+		{"   ", false}, // whitespace-only is still "unset"
+		{"off", false}, {"0", false}, {"false", false}, {"disabled", false}, {"none", false},
+		{"1", true}, {"true", true}, {"on", true}, {"enforce", true},
+		{"maybe", true}, // garbage => enforce, never silently off
+	} {
+		t.Run("val="+tc.val, func(t *testing.T) {
+			t.Setenv(envEnforcePATBranchNS, tc.val)
+			if got := PATBranchNSEnforced(); got != tc.want {
+				t.Fatalf("PATBranchNSEnforced(%q) = %v, want %v", tc.val, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPATBrokerPushUnconfinedByDefault is the upgrade pin: with the switch
+// unset, a git_pat push to ANY ref is forwarded byte-for-byte and audited
+// exactly as it is in 0.7.1 — one brokered:git-pat allow, no branch-ns row.
+// The confinement is opt-in, and "opt-in" has to mean the default deployment
+// sees no change at all.
+func TestPATBrokerPushUnconfinedByDefault(t *testing.T) {
+	t.Setenv(envEnforcePATBranchNS, "") // never inherit an operator's setting
+	up := newPATBrokerUpstream(t, "PAT", "oauth2")
+	p, sink := newPATBrokerProxy(t,
+		map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))
+
+	body := pkt(someOID+" "+otherOID+" refs/heads/main"+firstCaps) + "0000" + "PACKDATA"
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost,
+		"/wardyn/git/gitlab.com/org/repo.git/git-receive-pack", strings.NewReader(body)))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (the git_pat lane is unconfined by default); body=%q", rec.Code, rec.Body.String())
+	}
+	if string(up.gitBody) != body {
+		t.Fatalf("upstream body = %q, want the push streamed through unchanged", up.gitBody)
+	}
+	d := lastDecision(t, sink)
+	if d.RuleSource != ruleSourcePAT || d.Decision != egress.Allow {
+		t.Fatalf("decision = %+v, want the ordinary %s allow", d, ruleSourcePAT)
+	}
+	if strings.Contains(sink.String(), "branch-ns") {
+		t.Fatalf("decision log = %q, want no branch-namespace row while the switch is off", sink.String())
+	}
+}
+
+// TestPATBrokerDeniesOutOfNamespacePushWhenEnforcing: opted in, the git_pat lane
+// refuses an out-of-namespace push the way the App lane does — the SAME
+// rule_source (one rule, two brokers), the same 403 words, before the PAT is
+// minted and before a byte reaches the forge. The decision row names the FORGE,
+// not github.com: that is the one thing the two lanes must NOT share.
+func TestPATBrokerDeniesOutOfNamespacePushWhenEnforcing(t *testing.T) {
+	t.Setenv(envEnforcePATBranchNS, "on")
+	up := newPATBrokerUpstream(t, "PAT", "oauth2")
+	p, sink := newPATBrokerProxy(t,
+		map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))
+
+	body := pkt(someOID+" "+otherOID+" refs/heads/main"+firstCaps) + "0000" + "PACKDATA"
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost,
+		"/wardyn/git/gitlab.com/org/repo.git/git-receive-pack", strings.NewReader(body)))
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 (body %q)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "refs/heads/main") ||
+		!strings.Contains(rec.Body.String(), "refs/heads/wardyn/"+p.runID.String()+"/") {
+		t.Fatalf("body = %q, want the App lane's words: the offending ref and the allowed namespace", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "PAT") && strings.Contains(rec.Body.String(), "Basic") {
+		t.Fatal("the brokered PAT leaked into the denial body")
+	}
+	if up.gitHits != 0 || up.mintCalls != 0 {
+		t.Fatalf("upstream hits=%d mints=%d, want 0/0 — a refused push must not mint the PAT", up.gitHits, up.mintCalls)
+	}
+	d := lastDecision(t, sink)
+	if d.RuleSource != ruleSourceGitRef || d.Decision != egress.Deny {
+		t.Fatalf("decision = %+v, want a %s deny (the App lane's value, reused)", d, ruleSourceGitRef)
+	}
+	if d.Request.Host != "gitlab.com" || d.Request.Port != 443 {
+		t.Fatalf("decision row host:port = %s:%d, want the forge (gitlab.com:443)", d.Request.Host, d.Request.Port)
+	}
+}
+
+// TestPATBrokerForwardsInNamespacePushWhenEnforcing: an in-namespace push is
+// forwarded with the command section re-prepended byte-for-byte ahead of the
+// still-streaming pack, and keeps the ordinary brokered:git-pat allow.
+func TestPATBrokerForwardsInNamespacePushWhenEnforcing(t *testing.T) {
+	t.Setenv(envEnforcePATBranchNS, "1")
+	up := newPATBrokerUpstream(t, "PAT", "oauth2")
+	p, sink := newPATBrokerProxy(t,
+		map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))
+
+	ref := "refs/heads/wardyn/" + p.runID.String() + "/feature"
+	body := pkt(someOID+" "+otherOID+" "+ref+firstCaps) + "0000" +
+		"PACK\x00\x02\x00\x00\x00\x01\xff\xfe\x00 binary"
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost,
+		"/wardyn/git/gitlab.com/org/repo.git/git-receive-pack", strings.NewReader(body)))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
+	}
+	if string(up.gitBody) != body {
+		t.Fatalf("upstream body = %q, want the push forwarded byte-for-byte (%q)", up.gitBody, body)
+	}
+	if strings.Contains(sink.String(), ruleSourceGitNSOff) {
+		t.Fatalf("decision log = %q, want NO %s row for a push the parser cleared", sink.String(), ruleSourceGitNSOff)
+	}
+}
+
+// TestPATBrokerFetchUnaffectedWhenEnforcing: confinement is a PUSH rule. Even
+// opted in, refs discovery and upload-pack are pure streaming — nothing
+// buffered, nothing refused, no new row.
+func TestPATBrokerFetchUnaffectedWhenEnforcing(t *testing.T) {
+	t.Setenv(envEnforcePATBranchNS, "on")
+	up := newPATBrokerUpstream(t, "PAT", "oauth2")
+	p, sink := newPATBrokerProxy(t,
+		map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodGet,
+		"/wardyn/git/gitlab.com/org/repo.git/info/refs?service=git-upload-pack", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("info/refs status = %d, want 200 (body %q)", rec.Code, rec.Body.String())
+	}
+	d := lastDecision(t, sink)
+	if d.RuleSource != ruleSourcePAT || d.Decision != egress.Allow {
+		t.Fatalf("decision = %+v, want the ordinary %s allow for a fetch", d, ruleSourcePAT)
+	}
+}
+
+// TestPATBrokerRejectsEncodedPushWhenEnforcing: a content-encoded push body
+// cannot be ref-checked on this lane either, so it is refused (415) rather than
+// waved through unparsed — the same silent-bypass rule, the same words.
+func TestPATBrokerRejectsEncodedPushWhenEnforcing(t *testing.T) {
+	t.Setenv(envEnforcePATBranchNS, "on")
+	up := newPATBrokerUpstream(t, "PAT", "oauth2")
+	p, sink := newPATBrokerProxy(t,
+		map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))
+
+	req := mustLocalReq(t, http.MethodPost,
+		"/wardyn/git/gitlab.com/org/repo.git/git-receive-pack", strings.NewReader("gzipped-bytes"))
+	req.Header.Set("Content-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("status = %d, want 415", rec.Code)
+	}
+	if up.gitHits != 0 {
+		t.Fatal("the forge was reached with an unparseable push body")
+	}
+	if d := lastDecision(t, sink); d.RuleSource != ruleSourceGitEnc {
+		t.Fatalf("decision = %+v, want a %s deny", d, ruleSourceGitEnc)
+	}
+}
+
+// TestPATBrokerPushPolicyOptOut: the run's own git_push_any_branch opts out of
+// the confinement on this lane too, and the allow row SAYS so
+// (brokered:git:branch-ns-off) — which is the only way a PAT push carries that
+// marker, since a push on a proxy whose switch is off was never confined and
+// keeps the ordinary brokered:git-pat allow.
+func TestPATBrokerPushPolicyOptOut(t *testing.T) {
+	t.Setenv(envEnforcePATBranchNS, "on")
+	up := newPATBrokerUpstream(t, "PAT", "oauth2")
+	p, sink := newPATBrokerProxySpec(t, types.RunPolicySpec{GitPushAnyBranch: true},
+		map[string]PATGrant{"gitlab.com": {GrantID: uuid.New()}}, upstreamAddr(up.srv))
+
+	body := pkt(someOID+" "+otherOID+" refs/heads/main"+firstCaps) + "0000" + "PACKDATA"
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustLocalReq(t, http.MethodPost,
+		"/wardyn/git/gitlab.com/org/repo.git/git-receive-pack", strings.NewReader(body)))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (the run opted out); body=%q", rec.Code, rec.Body.String())
+	}
+	if string(up.gitBody) != body {
+		t.Fatalf("upstream body = %q, want the unenforced push streamed through unchanged", up.gitBody)
+	}
+	if d := lastDecision(t, sink); d.RuleSource != ruleSourceGitNSOff {
+		t.Fatalf("decision = %+v, want the %s allow so the opt-out is visible after the fact", d, ruleSourceGitNSOff)
 	}
 }

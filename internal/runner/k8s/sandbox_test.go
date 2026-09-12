@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -1224,5 +1225,88 @@ func TestCreateSandbox_NoDiskMiBLeavesEphemeralStorageAbsent(t *testing.T) {
 	}
 	if !resourceListsEqual(res.Requests, res.Limits) {
 		t.Errorf("requests %v != limits %v, want the pre-0.7.2 shape exactly", res.Requests, res.Limits)
+	}
+}
+
+// TestCreateSandbox_ProxyPodCarriesTheOperatorKnobs pins the pass-through the
+// k8s proxy pod did not have: a pod inherits NOTHING from wardynd's process, so
+// a knob the sidecar reads from its own environment is unreachable on this
+// substrate unless CreateSandbox copies it in.
+//
+// That is worse than "off": the operator sets
+// WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS on the control plane, nothing refuses
+// it, docs say it confines PAT pushes, and on Kubernetes the proxy never saw it.
+// The list is runner.ProxySidecarEnvKnobs, shared with the docker driver, so a
+// knob added later cannot land on one substrate only.
+func TestCreateSandbox_ProxyPodCarriesTheOperatorKnobs(t *testing.T) {
+	t.Setenv("WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS", "on")
+	t.Setenv("WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS", "false")
+	t.Setenv("WARDYN_LLM_SCAN", "off")
+
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.7")
+	installAgentRunningReactor(t, cs)
+
+	spec := testSandboxSpec()
+	if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	proxyPod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), proxyPodName(spec.RunID), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get proxy pod: %v", err)
+	}
+	got := map[string]string{}
+	for _, e := range proxyPod.Spec.Containers[0].Env {
+		got[e.Name] = e.Value
+	}
+	for name, want := range map[string]string{
+		"WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS": "on",
+		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS":     "false",
+		"WARDYN_LLM_SCAN":                         "off",
+	} {
+		if got[name] != want {
+			t.Errorf("proxy pod env %s = %q, want %q — the knob is set on wardynd and unreachable in the pod",
+				name, got[name], want)
+		}
+	}
+	// The three the pod always carries are untouched by the pass-through.
+	for _, name := range []string{"WARDYN_RUN_ID", "WARDYN_CONTROL_PLANE_URL"} {
+		if _, ok := got[name]; !ok {
+			t.Errorf("proxy pod lost %s", name)
+		}
+	}
+}
+
+// TestCreateSandbox_ProxyPodCarriesNoUnsetKnob is the other half: a knob wardynd
+// does not have set must not appear as an EMPTY env var in the pod. Every one of
+// these readers treats "" as "unset" today, but an empty value is a value, and
+// pinning it as ABSENT keeps a future reader that distinguishes the two from
+// inheriting a knob nobody set.
+func TestCreateSandbox_ProxyPodCarriesNoUnsetKnob(t *testing.T) {
+	for _, k := range []string{
+		"WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS",
+		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS",
+		"WARDYN_LLM_SCAN",
+	} {
+		t.Setenv(k, "") // t.Setenv cannot unset; clear then Unsetenv below
+		if err := os.Unsetenv(k); err != nil {
+			t.Fatalf("unset %s: %v", k, err)
+		}
+	}
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.7")
+	installAgentRunningReactor(t, cs)
+
+	spec := testSandboxSpec()
+	if _, err := d.CreateSandbox(context.Background(), spec); err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	proxyPod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), proxyPodName(spec.RunID), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get proxy pod: %v", err)
+	}
+	if n := len(proxyPod.Spec.Containers[0].Env); n != 3 {
+		t.Errorf("proxy pod carries %d env vars, want the 3 it always has: %+v",
+			n, proxyPod.Spec.Containers[0].Env)
 	}
 }

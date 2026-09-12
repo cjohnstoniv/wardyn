@@ -34,6 +34,9 @@ import (
 // grantPairing is the identity a ceiling entry is matched on, as opposed to the
 // BOUNDS (approval, TTL, github scope) that are clamped once a match is found.
 //
+// F110-residual: require_tls rides the same rule for the same reason (see the
+// field below).
+//
 // F097: header/format are part of that IDENTITY for api_key, not a bound. The
 // pairing used to be (host, secret, known_hosts) only, so a member or profile
 // grant that kept the operator's blessed (host, secret) pairing but named a
@@ -55,6 +58,15 @@ type grantPairing struct {
 	// which grants are the same grant.
 	header string
 	format string
+	// requireTLS: api_key only (false, and compared as such, for every other
+	// kind). It is IDENTITY for the same reason header/format are: it is the
+	// operator's transport declaration, and a member grant that keeps the
+	// blessed (host, secret, header, format) pairing while DROPPING require_tls
+	// is asking for the same credential on a transport the operator refused —
+	// the proxy would then inject it over cleartext (internal/egress/proxy's
+	// plain lane reads the rule it is handed, not the ceiling's). Exact match, so
+	// a dropped declaration simply matches nothing and the grant falls out.
+	requireTLS bool
 }
 
 // apiKeyHeader/apiKeyFormat mirror injectionRuleFromScope's defaults
@@ -111,6 +123,7 @@ func grantPairingOf(g types.GrantSpec) (p grantPairing, covered, ok bool) {
 		KnownHostsSecretRef string `json:"known_hosts_secret_ref"`
 		Header              string `json:"header"`
 		Format              string `json:"format"`
+		RequireTLS          bool   `json:"require_tls"`
 	}
 	switch g.Kind {
 	case types.GrantAPIKey:
@@ -121,6 +134,7 @@ func grantPairingOf(g types.GrantSpec) (p grantPairing, covered, ok bool) {
 		return grantPairing{
 			host: sc.Host, secretRef: sc.SecretName,
 			header: apiKeyHeader(sc.Header), format: apiKeyFormat(sc.Format),
+			requireTLS: sc.RequireTLS,
 		}, true, true
 	case types.GrantGitPAT:
 		if json.Unmarshal(g.Scope, &sc) != nil || sc.Host == "" || sc.SecretName == "" {
@@ -155,7 +169,7 @@ func grantPairingOf(g types.GrantSpec) (p grantPairing, covered, ok bool) {
 func samePairing(a, b grantPairing) bool {
 	norm := func(h string) string { return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(h), ".")) }
 	return a.secretRef == b.secretRef && norm(a.host) == norm(b.host) && a.knownHostsRef == b.knownHostsRef &&
-		a.header == b.header && a.format == b.format
+		a.header == b.header && a.format == b.format && a.requireTLS == b.requireTLS
 }
 
 // PairingInCeiling reports whether some ceiling grant of the SAME kind names the

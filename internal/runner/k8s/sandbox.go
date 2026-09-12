@@ -194,6 +194,16 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			}},
 		},
 	}
+	// Operator knobs the sidecar reads from ITS OWN environment. A pod inherits
+	// nothing from wardynd, so without this an operator's
+	// WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS (or the App-lane switch, or the
+	// content-inspection kill-switch) is not "off" on Kubernetes — it is
+	// unreachable, set on the control plane and read by nobody. Same list as the
+	// docker driver's, by construction (runner.ProxySidecarEnvKnobs).
+	for _, kv := range runner.ProxySidecarEnvKnobs() {
+		proxyPod.Spec.Containers[0].Env = append(proxyPod.Spec.Containers[0].Env,
+			corev1.EnvVar{Name: kv[0], Value: kv[1]})
+	}
 	if d.cfg.ImagePullSecret != "" {
 		proxyPod.Spec.ImagePullSecrets = []corev1.LocalObjectReference{{Name: d.cfg.ImagePullSecret}}
 	}

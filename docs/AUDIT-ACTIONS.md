@@ -229,7 +229,8 @@ The row above names `rule_source` as a field but enumerates none of its
 values; they were scattered ad hoc across `docs/ENV.md`, `docs/OPERATIONS.md`
 and `docs/POLICIES.md` prose, with no single table. This is every
 `ruleSource*` constant defined in `internal/egress/proxy` (excluding
-`_test.go`), one row per constant. It is the BROKERED and site-config vocabulary only: the
+`_test.go`) except `ruleSourceRequireTLS`, which is a `policy:` value and is
+documented with that family in "The evaluator's own inline sources" below. It is the BROKERED and site-config vocabulary only: the
 decisions `evaluate` itself writes pass their `rule_source` as an inline literal
 rather than a named constant and are NOT in this table (`builtin:*`, `policy:*`,
 `approval:*`, `internal/egress/proxy/proxy.go`), and the synthetic
@@ -245,10 +246,10 @@ rather than a named constant and are NOT in this table (`builtin:*`, `policy:*`,
 | `policy:tool-deny` | A tool call `tool_rules` refused with no human asked | `internal/egress/proxy/local_routes.go:55` |
 | `brokered:sso-token` | A brokered AWS SSO session upload from a container-login run (`/wardyn/v1/sso-token/`) | `internal/egress/proxy/local_routes.go:56` |
 | `artifact:mitm` | A corp artifact-registry request TLS-MITM'd to inject the operator's registry token — not an LLM/inspection path | `internal/egress/proxy/local_routes.go:60` |
-| `brokered:git` | Every decision the GitHub App-broker route (`/wardyn/gh/`) itself made — the per-repo allowlist ALLOW, and equally the DENY for an unparseable path, an ungranted repo, a non-smart-HTTP verb, or a mint/build failure (`internal/egress/proxy/git_broker.go:69`, `:144`, `:66`, `:58`, `:54`, `:42`); the three `brokered:git:branch-ns*` rows below are the only decisions carved out of it — two refusals (`brokered:git:branch-ns`, `brokered:git:branch-ns-encoding`) and one ALLOW that REPLACES the ordinary `brokered:git` allow when the parser is opted out (`brokered:git:branch-ns-off`, `allowSrc`, `internal/egress/proxy/git_broker.go:144`) | `internal/egress/proxy/git_broker.go:42` |
-| `brokered:git:branch-ns` | A brokered push denied by push branch-namespace confinement (as opposed to the per-repo allowlist) | `internal/egress/proxy/git_broker.go:54` |
-| `brokered:git:branch-ns-encoding` | A brokered push refused because its body had a non-identity `Content-Encoding` the proxy could not inspect while branch-namespace confinement is on | `internal/egress/proxy/git_broker.go:58` |
-| `brokered:git:branch-ns-off` | A brokered push forwarded WITHOUT parsing because branch-namespace confinement is opted out - deployment-wide (`WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false`, `BranchNSEnforced`) or for this one run (`git_push_any_branch`, `internal/types/policy.go:248`); both switches take the same branch (`internal/egress/proxy/git_broker.go:69`), so the marker never says which one was set - see `docs/POLICIES.md`'s "`git_push_any_branch`: the per-run opt-out" | `internal/egress/proxy/git_broker.go:69` |
+| `brokered:git` | Every decision the GitHub App-broker route (`/wardyn/gh/`) itself made — the per-repo allowlist ALLOW, and equally the DENY for an unparseable path, an ungranted repo, a non-smart-HTTP verb, or a mint/build failure (`internal/egress/proxy/git_broker.go:167`, `:177`, `:182`, `:218`, `:232`, `:248`); the three `brokered:git:branch-ns*` rows below are the only decisions carved out of it — two refusals (`brokered:git:branch-ns`, `brokered:git:branch-ns-encoding`) and one ALLOW that REPLACES the ordinary `brokered:git` allow when the parser is opted out (`brokered:git:branch-ns-off`, `allowSrc`, `internal/egress/proxy/git_broker.go:269`) | `internal/egress/proxy/git_broker.go:43` |
+| `brokered:git:branch-ns` | A brokered push denied by push branch-namespace confinement (as opposed to the per-repo allowlist). Emitted by BOTH broker lanes since 0.7.2 - the App lane always, the `git_pat` lane when `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS` is on - from the one shared `confinePush` step, against each lane's own host | `internal/egress/proxy/git_broker.go:54` |
+| `brokered:git:branch-ns-encoding` | A brokered push refused because its body had a non-identity `Content-Encoding` the proxy could not inspect while branch-namespace confinement is on; same two lanes as the row above | `internal/egress/proxy/git_broker.go:58` |
+| `brokered:git:branch-ns-off` | A brokered push forwarded WITHOUT parsing because branch-namespace confinement is opted out - deployment-wide (`WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false`, `BranchNSEnforced`) or for this one run (`git_push_any_branch`, `internal/types/policy.go:248`); both App-lane switches take the same branch (`internal/egress/proxy/git_broker.go:75`), so the marker never says which one was set - see `docs/POLICIES.md`'s "`git_push_any_branch`: the per-run opt-out". Since 0.7.2 the `git_pat` lane emits it too, for its own THIRD switch's counterpart case: `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS` is ON and this run's `git_push_any_branch` opted out (`PATBranchNSEnforced`, `internal/egress/proxy/pat_broker.go:180`). With that switch off - the default - a PAT push is not confined at all and keeps the ordinary `brokered:git-pat` allow, so this row never appears for it | `internal/egress/proxy/git_broker.go:75` |
 | `brokered:git-pat` | A PAT-broker-terminated ADO/GitLab (or unbrokered-GitHub) request, `WARDYN_GIT_PAT_BROKER=on` (`/wardyn/git/<host>/`) | `internal/egress/proxy/pat_broker.go:47` |
 | `brokered:git-pat:denied` | ANY PAT-broker refusal — an unparseable `/wardyn/git/<host>/<rest>` path, a host not in the grant's allowlist, a non-smart-HTTP verb, or a mint / host-vet / request-build failure (`internal/egress/proxy/pat_broker.go:48`, `:48`, `:48`, `:48`, `:48`, `:48`); the row names the LANE that refused, never which of the six causes | `internal/egress/proxy/pat_broker.go:48` |
 | `site-config:internal-host` | An allow via the operator's `internal_hosts` lift of the private/reserved-IP guard | `internal/egress/proxy/egress_target.go:39` |
@@ -264,7 +265,15 @@ rather than a named constant and are NOT in this table (`builtin:*`, `policy:*`,
 values directly at the `decisionLog` call site rather than through a named
 constant — the table above is the BROKERED and site-config vocabulary only;
 this is the rest of it, plus the `approval:<approval-id>` shape whose UUID
-rides in the value itself:
+rides in the value itself.
+
+One row here is NOT the evaluator's: `policy:require-tls` is emitted by the
+plain forward lane (`internal/egress/proxy/plain_lane.go`) from a named
+`ruleSource*` constant, for a refusal the evaluator cannot make — it has
+already allowed the host, and what the lane refuses is the TRANSPORT the
+operator's injection rule named. It sits in this table rather than the one
+above because an operator reading a decision row looks up the `policy:`
+family here:
 
 | `rule_source` | Meaning | Defined at |
 |---|---|---|
@@ -278,8 +287,9 @@ rides in the value itself:
 | `policy:default-deny` | No allowlist entry names the host and no approval covers it | `internal/egress/proxy/proxy.go:686` |
 | `policy:method` | The host is allowed but the request's HTTP method is not | `internal/egress/proxy/proxy.go:651` |
 | `policy:allowed` | An ordinary standing allowlist allow (`allowLog`, `approvalID == Nil`) | `internal/egress/proxy/proxy.go:762` |
+| `policy:require-tls` | The plain forward lane refused a cleartext request to a host whose `api_key` injection rule sets `require_tls` (`docs/POLICIES.md`, `eligible_grants[].scope`): the operator declared the credential TLS-only, so the request is DENIED rather than merely forwarded uncredentialed. The lane writes its own 403 and this deny row REPLACES the allow the evaluator had already granted the host - nothing was forwarded. The one value here declared as a named `ruleSource*` constant rather than written inline, because it is the one decision the lane makes for itself | `internal/egress/proxy/plain_lane.go:35` |
 | `approval:<approval-id>` | Allowed by one specific approval — the UUID rides IN the value, so the trail self-joins to the approval (`allowLog`) | `approvalID.String()`, `internal/egress/proxy/proxy.go:764` |
-| `builtin:dial-failed` | The vetted dial itself failed, so the earlier allow is superseded by a deny rather than over-reported (E3) | `internal/egress/proxy/proxy.go:873` (CONNECT tunnel), `internal/egress/proxy/plain_lane.go:146` (plain forward), `internal/egress/proxy/llm_routes.go:270` (configured gateway did not answer), `internal/egress/proxy/llm_routes.go:381` (brokered LLM round trip) |
+| `builtin:dial-failed` | The vetted dial itself failed, so the earlier allow is superseded by a deny rather than over-reported (E3) | `internal/egress/proxy/proxy.go:875` (CONNECT tunnel), `internal/egress/proxy/plain_lane.go:195` (plain forward), `internal/egress/proxy/llm_routes.go:270` (configured gateway did not answer), `internal/egress/proxy/llm_routes.go:381` (brokered LLM round trip) |
 
 ## Kernel ground-truth (eBPF/Tetragon stream)
 

@@ -73,10 +73,14 @@ type injectedHeader struct {
 // refreshes a given host at a time; others block on reMu and then read the fresh
 // value). expiresAt == 0 marks a static credential that never re-resolves.
 type injEntry struct {
-	grantID   uuid.UUID
-	reMu      sync.Mutex
-	header    injectedHeader
-	expiresAt int64 // unix ms
+	grantID uuid.UUID
+	reMu    sync.Mutex
+	header  injectedHeader
+	// requireTLS is the rule's own transport declaration (egress.InjectionRule).
+	// Immutable after buildInjector — it comes from the authored rule, never from
+	// a re-resolve — so it needs no lock.
+	requireTLS bool
+	expiresAt  int64 // unix ms
 }
 
 // buildInjector mints each injection rule's secret once and formats its
@@ -107,9 +111,10 @@ func buildInjector(ctx context.Context, base string, token *tokenSource, pol *Po
 		// (it holds the secret store); the local rule is authoritative only
 		// for the host binding, which the exact-allowlist check above gates.
 		inj.byHost[host] = &injEntry{
-			grantID:   r.GrantID,
-			header:    injectedHeader{name: resolved.Header, value: resolved.Value},
-			expiresAt: resolved.ExpiresAt,
+			grantID:    r.GrantID,
+			header:     injectedHeader{name: resolved.Header, value: resolved.Value},
+			requireTLS: r.RequireTLS,
+			expiresAt:  resolved.ExpiresAt,
 		}
 
 		// Register the injected credential in the process-global Registry so it
@@ -156,6 +161,24 @@ func (i *injector) resolve(host string) (injectedHeader, bool, error) {
 	e.expiresAt = resolved.ExpiresAt
 	registerHeaderCredential(resolved.Value)
 	return e.header, true, nil
+}
+
+// requiresTLS reports whether host has an injection rule that declares
+// require_tls. Separate from resolve because it must answer WITHOUT minting or
+// re-resolving anything: the plain lane asks it to decide whether to refuse the
+// request, and a refusal must not touch the credential.
+//
+// False for an unknown host — no rule, nothing to require — so a host this run
+// carries no injection for is byte-for-byte unaffected.
+func (i *injector) requiresTLS(host string) bool {
+	if i == nil {
+		return false
+	}
+	key := strings.ToLower(strings.TrimSuffix(host, "."))
+	i.mu.Lock()
+	e, ok := i.byHost[key]
+	i.mu.Unlock()
+	return ok && e.requireTLS
 }
 
 // ─── credential mask renderings ──────────────────────────────────────────────
@@ -324,15 +347,22 @@ func stripSandboxCredentials(h http.Header) {
 //     about the port, so a sandbox-chosen non-default port over cleartext is
 //     the sandbox choosing the transport, and the credential is withheld.
 //
-// Refusal means NO INJECTION (the upstream answers 401), never a deny, so no
-// audit string changes and no request is newly refused.
+// Refusal HERE means NO INJECTION (the upstream answers 401), never a deny: the
+// rules above are the proxy's own reading of a transport, and reading it as
+// "withhold the credential" refuses nothing the operator authored.
 //
-// RESIDUAL, unchanged and stated rather than hedged: an operator who authored
-// an api_key for an https-only vendor that is NOT one of the hosts this proxy
-// knows to be TLS-only still cannot say so — InjectionRule carries no scheme —
-// so `POST http://<that host>/…` on port 80 is indistinguishable from a
-// legitimately plaintext internal connector and is still injected. Closing that
-// needs transport intent declared in the grant scope; see the filed follow-up.
+// The RESIDUAL those rules left — an api_key for an https-only vendor this proxy
+// has no table for, where `POST http://<that host>/…` on port 80 is
+// indistinguishable from a legitimately plaintext internal connector — is now
+// closable by the operator instead of hedged: `require_tls` on the rule
+// (egress.InjectionRule) declares the transport intent this table cannot infer.
+// That one is a DENY, not a silent withhold, and it is enforced a layer out
+// where the response can be written — the plain lane's own arm, before
+// applyInjection (internal/egress/proxy/plain_lane.go, rule_source
+// policy:require-tls) — because an operator who says "TLS only" is refusing the
+// REQUEST, not merely declining to credential it. injectableTransport stays the
+// unconditional floor under it: a rule with require_tls unset is judged exactly
+// as before.
 func (p *Proxy) injectableTransport(scheme, host string, port int) bool {
 	if strings.EqualFold(scheme, "https") {
 		return true // the proxy itself runs the TLS leg

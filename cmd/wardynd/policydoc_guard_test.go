@@ -83,6 +83,17 @@ func TestPolicyDoc_EveryFieldHasRow(t *testing.T) {
 	}
 }
 
+// KNOWN GAP, named rather than implied: both directions police FIELD ROWS of
+// RunPolicySpec, reached by reflection. A `GrantSpec.Scope` key is NOT reachable
+// that way — the scope is json.RawMessage, decoded per kind — so the api_key
+// scope's prose row (docs/POLICIES.md, the `kind`/`scope shape`/`write-time
+// rules` table) is unguarded: `require_tls` could be renamed in Go and that row
+// would rot silently. It is also why require_tls is documented INSIDE that
+// three-column row instead of as a four-column field row, which this guard's
+// reverse direction would red as "a row for a field that does not exist".
+// Closing it means a per-kind scope-doc parser; nothing cheap fits, and a guard
+// nobody can read is worse than a gap somebody wrote down.
+//
 // TestPolicyDoc_EveryRowHasField: the other direction — a row for a field that
 // no longer exists (renamed or deleted) fails, so the doc cannot rot.
 func TestPolicyDoc_EveryRowHasField(t *testing.T) {

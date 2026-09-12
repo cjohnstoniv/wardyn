@@ -64,13 +64,14 @@ const defaultMaxTTL = time.Hour
 // see docs/POLICIES.md.
 //
 // STILL NOT COVERED, stated plainly: the property binds the BROKERED App lane
-// only. An ssh_key push does not traverse this route at all (SSH is not
+// by default. An ssh_key push does not traverse this route at all (SSH is not
 // smart-HTTP). A git_pat push DOES traverse a brokered, cleartext smart-HTTP
 // route since 0.7 (the never-resident lane, default ON — internal/egress/proxy/
-// pat_broker.go), so calling it "an opaque CONNECT" is no longer the reason it
-// is unconfined: the reason is that a PAT carries whatever scope the operator
-// issued and Wardyn cannot narrow it, over forges whose push ref conventions are
-// not GitHub's. Either way both are bounded by the operator who supplied the
+// pat_broker.go), and since 0.7.2 the same parser binds it when the operator
+// wires it behind WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS, DEFAULT OFF: a PAT
+// carries whatever scope the operator issued and Wardyn cannot narrow it, over
+// forges whose push ref conventions are not GitHub's, so opting in is the
+// operator's call rather than Wardyn's default. Either way both are bounded by the operator who supplied the
 // credential, not by this namespace — and on a brokered run no such second path
 // exists for the same forge (validateGrantLaneExclusivity refuses the pairing). On a BROKERED run
 // no such second path is left BY NAME (same IP-literal caveat as above):

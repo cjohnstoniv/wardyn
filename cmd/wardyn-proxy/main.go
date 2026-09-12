@@ -175,6 +175,15 @@ func logBranchNSPosture(runID uuid.UUID) {
 		slog.Warn("wardyn-proxy: WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false — push branch-namespace confinement is OFF for this proxy; a brokered git push may update ANY ref in a granted repo, including the default branch",
 			slog.String("run_id", runID.String()))
 	}
+	// The git_pat lane's switch is the MIRROR of the one above: default OFF, so
+	// the state worth a boot line is the state the operator turned ON. Info, not
+	// Warn — nothing is weakened here — but stated for the same reason: a
+	// confinement that is invisible until a push is refused reads, to whoever
+	// gets the 403, like a bug in the forge.
+	if proxy.PATBranchNSEnforced() {
+		slog.Info("wardyn-proxy: WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS is on — brokered git_pat pushes are confined to this run's branch namespace",
+			slog.String("run_id", runID.String()))
+	}
 }
 
 // cgroupMemoryHeadroom is the fraction of the cgroup ceiling the Go heap may

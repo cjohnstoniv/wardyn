@@ -58,10 +58,21 @@ const (
 	// distinct row so audit never reads an unparseable body as a ref violation.
 	ruleSourceGitEnc = "brokered:git:branch-ns-encoding"
 	// envEnforceBranchNS opts THIS proxy process OUT of push branch-namespace
-	// confinement (=false). See BranchNSEnforced: it is ON by default.
+	// confinement on the App lane (=false). See BranchNSEnforced: it is ON by
+	// default.
 	envEnforceBranchNS = "WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS"
-	// ruleSourceGitNSOff marks a push this proxy FORWARDED WITHOUT PARSING because
-	// envEnforceBranchNS opted the process out. It is the after-the-fact half of
+	// envEnforcePATBranchNS opts THIS proxy process IN to the same confinement on
+	// the git_pat lane. See PATBranchNSEnforced: it is OFF by default — the
+	// opposite default from the App lane, and the whole reason it is a second
+	// switch rather than a widening of the first.
+	envEnforcePATBranchNS = "WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS"
+	// ruleSourceGitNSOff marks a push this proxy FORWARDED WITHOUT PARSING while
+	// the lane's confinement was otherwise in force — on the App lane because
+	// envEnforceBranchNS or the run's git_push_any_branch opted out, on the
+	// git_pat lane (whose switch is off by default, so an unconfined PAT push
+	// keeps the ordinary brokered:git-pat allow) because git_push_any_branch did.
+	//
+	// It is the after-the-fact half of
 	// that opt-out being visible: the boot log (cmd/wardyn-proxy) states the
 	// posture once, and this row proves per push which posture actually applied,
 	// in the same append-only audit stream the ordinary "brokered:git" allow lands
@@ -194,33 +205,12 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	if isPush && (!BranchNSEnforced() || p.policy.GitPushAnyBranch()) {
 		allowSrc = ruleSourceGitNSOff
 	} else if isPush {
-		// git does not gzip receive-pack bodies (remote-curl only sets
-		// gzip_request for fetch), but a compressed body must never be waved
-		// through unparsed — that would be a silent bypass.
-		if encs := r.Header.Values("Content-Encoding"); len(encs) > 1 ||
-			(len(encs) == 1 && encs[0] != "" && !strings.EqualFold(encs[0], "identity")) {
-			p.emitGitDecision(r, egress.Deny, ruleSourceGitEnc)
-			http.Error(w, "wardyn: cannot enforce branch-namespace confinement on a "+
-				strings.Join(encs, ",")+"-encoded push body", http.StatusUnsupportedMediaType)
+		body, ok := p.confinePush(w, r, slog.String("repo", orgRepo),
+			func(ruleSource string) { p.emitGitDecision(r, egress.Deny, ruleSource) })
+		if !ok {
 			return
 		}
-		prefix := BranchNSPrefix(p.runID)
-		head, err := readReceivePackCommands(r.Body, prefix)
-		if err != nil {
-			p.emitGitDecision(r, egress.Deny, ruleSourceGitRef)
-			slog.WarnContext(r.Context(), "wardyn-proxy: git push denied by branch-namespace confinement",
-				slog.String("run_id", p.runID.String()),
-				slog.String("repo", orgRepo),
-				slog.String("reason", err.Error()))
-			// ponytail: plain 403 + text/plain body (git surfaces it as "remote:"
-			// on the paths that show server messages, and always shows the 403).
-			// A sideband report-status would read better but means claiming
-			// "unpack ok" for a pack we never forwarded.
-			http.Error(w, "wardyn: "+err.Error()+
-				"\nthis run may push only to "+prefix+"*", http.StatusForbidden)
-			return
-		}
-		reqBody = io.MultiReader(bytes.NewReader(head), r.Body)
+		reqBody = body
 	}
 
 	token, err := p.gitToken(r.Context(), grantID)
@@ -636,22 +626,24 @@ func BranchNSPrefix(runID uuid.UUID) string {
 // convention in task text. Set WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS=false to opt
 // back out (e.g. an image whose agent-run predates the run branch).
 //
-// SCOPE, honestly: this binds the BROKERED GITHUB path only — handleGitBroker,
-// not its git_pat sibling. It sees git-receive-pack because the sandbox->proxy
-// hop is cleartext on the proxy's own route, and the installation token itself
-// is repo-scoped but not ref-scoped.
+// SCOPE, honestly: THIS switch binds the BROKERED GITHUB path only —
+// handleGitBroker, not its git_pat sibling. It sees git-receive-pack because the
+// sandbox->proxy hop is cleartext on the proxy's own route, and the installation
+// token itself is repo-scoped but not ref-scoped.
 //
 // An SSH push is still an opaque tunnel no pkt-line parser can read. A PAT push
 // is NOT, and saying so was the stale half of this comment: the never-resident
 // git_pat lane (default ON since 0.7) removes that tunnel by design — the proxy
 // terminates the request itself and holds the same cleartext command section
-// (see pat_broker.go). Nothing structural stops the parser there; the reason it
-// is not wired in is a DECISION, and it is this: a PAT carries whatever scope
-// the operator issued and Wardyn cannot narrow it, so the namespace would be a
-// convention imposed on a credential it does not bound, over forges whose push
-// ref conventions are not GitHub's. Extending it needs its own switch, its own
-// decision-log rule_source values and its own row in docs/ENV.md — a deliberate
-// widening, not an implied one. This is not a hole in THIS lane's confinement:
+// (see pat_broker.go). Since 0.7.2 the parser IS wired in there, through the same
+// confinePush step, but behind its OWN switch and DEFAULT OFF
+// (WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS, PATBranchNSEnforced) — the widening
+// stayed deliberate rather than implied, because a PAT carries whatever scope the
+// operator issued and Wardyn cannot narrow it, so on forges whose push ref
+// conventions are not GitHub's the namespace is a convention Wardyn asks for, not
+// a bound it can enforce. The two defaults are therefore opposite ON PURPOSE, and
+// each switch says only what its own lane does. This is not a hole in THIS lane's
+// confinement:
 // api.validateGrantLaneExclusivity already refuses a git_pat grant for the same
 // forge as a github_token grant, so a brokered repo has no PAT path beside it. Dispatch removes AND
 // denies the broker-managed GitHub host names on a brokered run — plus that forge's
@@ -670,26 +662,104 @@ func BranchNSPrefix(runID uuid.UUID) string {
 // Loud parse: an unrecognized value fails CLOSED (enforce + error log) rather than
 // silently disabling a security control on a typo.
 func BranchNSEnforced() bool {
-	switch v := strings.ToLower(strings.TrimSpace(os.Getenv(envEnforceBranchNS))); v {
+	return branchNSSwitch(envEnforceBranchNS, true, &branchNSWarnOnce)
+}
+
+var branchNSWarnOnce sync.Once
+
+// confinePush is the push branch-namespace confinement STEP, shared by both
+// brokered git lanes: it reads the receive-pack command section, validates every
+// ref against this run's namespace, and returns the body to forward (the
+// buffered command section followed by the still-streaming packfile).
+//
+// On a refusal it writes the 403 itself — through deny, so each lane records the
+// decision against ITS OWN host (github.com vs the granted forge) — and returns
+// ok=false. The REFUSAL TEXT is deliberately here and not at the call sites: the
+// git_pat lane must refuse in the same words as the App lane, and the only way
+// two lanes say the same thing forever is that there is one place saying it.
+//
+// The name is the lane-neutral half of the split (F015/F121): the confinement is
+// ONE rule with two brokers, which is also why the git_pat lane reuses the
+// brokered:git:branch-ns* rule sources rather than minting its own vocabulary.
+// Which lane may reach it, and under which switch, stays the caller's decision —
+// BranchNSEnforced for the App lane, PATBranchNSEnforced for git_pat.
+func (p *Proxy) confinePush(w http.ResponseWriter, r *http.Request, subject slog.Attr, deny func(ruleSource string)) (io.Reader, bool) {
+	// git does not gzip receive-pack bodies (remote-curl only sets
+	// gzip_request for fetch), but a compressed body must never be waved
+	// through unparsed — that would be a silent bypass.
+	if encs := r.Header.Values("Content-Encoding"); len(encs) > 1 ||
+		(len(encs) == 1 && encs[0] != "" && !strings.EqualFold(encs[0], "identity")) {
+		deny(ruleSourceGitEnc)
+		http.Error(w, "wardyn: cannot enforce branch-namespace confinement on a "+
+			strings.Join(encs, ",")+"-encoded push body", http.StatusUnsupportedMediaType)
+		return nil, false
+	}
+	prefix := BranchNSPrefix(p.runID)
+	head, err := readReceivePackCommands(r.Body, prefix)
+	if err != nil {
+		deny(ruleSourceGitRef)
+		slog.WarnContext(r.Context(), "wardyn-proxy: git push denied by branch-namespace confinement",
+			slog.String("run_id", p.runID.String()),
+			subject,
+			slog.String("reason", err.Error()))
+		// ponytail: plain 403 + text/plain body (git surfaces it as "remote:"
+		// on the paths that show server messages, and always shows the 403).
+		// A sideband report-status would read better but means claiming
+		// "unpack ok" for a pack we never forwarded.
+		http.Error(w, "wardyn: "+err.Error()+
+			"\nthis run may push only to "+prefix+"*", http.StatusForbidden)
+		return nil, false
+	}
+	return io.MultiReader(bytes.NewReader(head), r.Body), true
+}
+
+// PATBranchNSEnforced reports whether push branch-namespace confinement is ON
+// for the git_pat lane of THIS proxy process. OFF unless the operator opts in
+// with WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS.
+//
+// It is a SECOND switch, with the OPPOSITE default, rather than a widening of
+// BranchNSEnforced, and the asymmetry is the decision itself: a GitHub App
+// installation token is Wardyn's own mint, so a namespace is a bound Wardyn put
+// on a credential it issued, and agent-run already checks the work tree out onto
+// wardyn/<run-id>/work. A PAT is the operator's, carrying whatever scope they
+// issued it with and used against forges whose push-ref conventions are not
+// GitHub's — so the namespace there is a convention imposed on a credential
+// Wardyn cannot narrow, and turning it on by default would break pushes that
+// were never promised to be confined.
+//
+// Once opted IN, the parse is the same loud, fail-closed one BranchNSEnforced
+// uses: garbage ENFORCES and logs, because a typo must never silently undo a
+// control the operator deliberately turned on.
+func PATBranchNSEnforced() bool {
+	return branchNSSwitch(envEnforcePATBranchNS, false, &patBranchNSWarnOnce)
+}
+
+var patBranchNSWarnOnce sync.Once
+
+// branchNSSwitch parses one branch-namespace enforcement env var: unset (or
+// whitespace) means dflt, the disable words mean off, the enable words mean on,
+// and anything else ENFORCES while logging once per process — a misconfiguration
+// is boot-level state, and per-request ERROR spam would bury the signal.
+//
+// One body for both switches so the two can never drift into parsing the same
+// words differently; only the NAME and the unset default differ.
+func branchNSSwitch(name string, dflt bool, warnOnce *sync.Once) bool {
+	switch v := strings.ToLower(strings.TrimSpace(os.Getenv(name))); v {
 	case "":
-		return true
+		return dflt
 	case "0", "false", "no", "off", "disable", "disabled", "none":
 		return false
 	case "1", "true", "yes", "on", "enable", "enabled", "enforce":
 		return true
 	default:
-		// Once per process, not per push: the misconfiguration is boot-level
-		// state and per-request ERROR spam would bury the signal.
-		branchNSWarnOnce.Do(func() {
-			slog.Error("wardyn-proxy: unrecognized "+envEnforceBranchNS+
+		warnOnce.Do(func() {
+			slog.Error("wardyn-proxy: unrecognized "+name+
 				" value; ENFORCING push branch-namespace confinement (fail closed)",
 				slog.String("value", v))
 		})
 		return true
 	}
 }
-
-var branchNSWarnOnce sync.Once
 
 // readReceivePackCommands consumes the pkt-line COMMAND SECTION of a
 // git-receive-pack request body — everything up to and INCLUDING the flush-pkt —

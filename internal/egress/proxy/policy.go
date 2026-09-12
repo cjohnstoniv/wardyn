@@ -605,24 +605,30 @@ const resolveFailedDetail = "this host did not resolve (DNS failure, no such nam
 //
 // It lives here rather than in proxy.go beside its two callers so it sits with
 // the rule it explains (and so proxy.go stays under the 1000-line split gate).
-func (p *Proxy) writeEgressDeny(w http.ResponseWriter, host string, port int, log *egress.DecisionLog) {
+//
+// memoed is the CALLER's declaration that this refusal can have come out of the
+// per-run private-IP memo — true at the two sites that hand on an evaluate()
+// verdict (which is the only thing that answers from the memo), false at a lane
+// that built the deny log itself. See the memo arm below for why it is a
+// parameter and not a lookup on its own.
+func (p *Proxy) writeEgressDeny(w http.ResponseWriter, host string, port int, log *egress.DecisionLog, memoed bool) {
 	body := "egress denied by policy"
 	reason := decisionReason(log)
-	// A DENY carrying no decision log is B6's memoed private-ip refusal:
-	// evaluate() answered an identical repeat out of the per-run memo — no
-	// re-resolve, and no second row for a verdict already recorded — so the 403
+	// An evaluate() DENY carrying no decision log is B6's memoed private-ip
+	// refusal: evaluate() answered an identical repeat out of the per-run memo —
+	// no re-resolve, and no second row for a verdict already recorded — so the 403
 	// has to be rebuilt here to stay byte-identical to the first one, retry
 	// header included.
 	//
-	// The memo is ASKED, never inferred from the nil. A future deny path that
-	// returns no log for some unrelated reason gets the plain "denied by policy"
-	// body it would have got anyway, because the lookup answers false for a host
-	// this guard never refused — pinned as the negative case in policy_test.go.
-	// The residual, stated: such a path would inherit this body for a host that
-	// IS memoed. Closing it properly means passing the reason explicitly from
-	// both evaluate() callers, one of which is plain_lane.go — another lane's
-	// file this wave. Filed, not smuggled in.
-	if reason == "" && p.privateIPMemoed(host, port) {
+	// TWO facts, both required, neither inferred from the other (this closes the
+	// residual the first version of this arm stated): the CALLER says the verdict
+	// could have come from the memo (memoed), and the MEMO says it did for this
+	// host:port. A nil log alone proves nothing — a future deny path that returns
+	// none for an unrelated reason passes memoed=false and gets the plain "denied
+	// by policy" body even for a host that IS memoed, and a caller that does hand
+	// on an evaluate() verdict still gets the plain body when the memo has never
+	// refused this host. policy_test.go pins both negatives and the positive.
+	if memoed && reason == "" && p.privateIPMemoed(host, port) {
 		reason = "builtin:private-ip"
 	}
 	switch reason {

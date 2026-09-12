@@ -372,7 +372,9 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 		if p.sink != nil {
 			p.sink.emit(log)
 		}
-		p.writeEgressDeny(w, host, port, &log)
+		// memoed=false: this deny is built right here (policy:method on an inner
+		// MITM request), so it never comes out of the private-IP memo.
+		p.writeEgressDeny(w, host, port, &log, false)
 		return
 	}
 

@@ -127,3 +127,38 @@ func TestGrantPairingIsExact(t *testing.T) {
 		t.Errorf("GrantPairing(github_token) = (covered=%v ok=%v), want (false, true)", covered, ok)
 	}
 }
+
+// TestAPIKeyPairingIncludesRequireTLS (F110 residual): require_tls is part of an
+// api_key grant's IDENTITY, for the mirror of the reason header/format are.
+//
+// Without it the flag is decorative on every path a member's inline policy takes:
+// a member keeps the operator's blessed (host, secret, header, format), drops
+// require_tls, matches the ceiling, and the proxy — which reads the rule it is
+// handed, not the ceiling's — injects the operator's key over cleartext. Exact
+// match, so a dropped declaration matches nothing and the grant falls out.
+func TestAPIKeyPairingIncludesRequireTLS(t *testing.T) {
+	grant := func(requireTLS bool) types.GrantSpec {
+		sc, err := json.Marshal(map[string]any{
+			"host": "api.corp.example", "secret_name": "corp_key",
+			"header": "Authorization", "format": "Bearer %s", "require_tls": requireTLS,
+		})
+		if err != nil {
+			t.Fatalf("marshal api_key scope: %v", err)
+		}
+		return types.GrantSpec{Kind: types.GrantAPIKey, Scope: sc}
+	}
+	strict := []types.GrantSpec{grant(true)}
+	if !PairingInCeiling(grant(true), strict) {
+		t.Error("an api_key grant that keeps require_tls no longer matches the ceiling entry that declared it")
+	}
+	if PairingInCeiling(grant(false), strict) {
+		t.Error("dropping require_tls matched a ceiling entry that set it — the member re-homed the operator's key onto a transport they refused")
+	}
+	// And the default direction: a ceiling that never mentions require_tls binds
+	// an ordinary grant exactly as it did before the field existed.
+	plain := []types.GrantSpec{{Kind: types.GrantAPIKey, Scope: json.RawMessage(
+		`{"host":"api.corp.example","secret_name":"corp_key","header":"Authorization","format":"Bearer %s"}`)}}
+	if !PairingInCeiling(grant(false), plain) {
+		t.Error("an absent require_tls must compare as false on both sides — the upgrade pin")
+	}
+}

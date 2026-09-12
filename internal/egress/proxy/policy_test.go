@@ -659,15 +659,16 @@ func TestStep0LiteralIPDenialAlsoSaysNeverRetry(t *testing.T) {
 // TestNilDecisionLogWithoutAMemoEntryGetsThePlainRefusal is the negative that
 // keeps writeEgressDeny's memo lookup from becoming an inference: a DENY with no
 // decision log, for a host the private-address guard never refused, must get the
-// plain body and NO retry header. If a future deny path starts returning a nil
-// log, it inherits nothing from B6.
+// plain body and NO retry header — even from a caller that declares the verdict
+// COULD have come from the memo (memoed=true). If a future deny path starts
+// returning a nil log, it inherits nothing from B6.
 func TestNilDecisionLogWithoutAMemoEntryGetsThePlainRefusal(t *testing.T) {
 	p, _ := newInternalHostsProxy(t,
 		types.RunPolicySpec{AllowedDomains: []string{"never-refused.example"}},
 		publicResolver{}, nil, nil, nil, "127.0.0.1:1")
 
 	rec := httptest.NewRecorder()
-	p.writeEgressDeny(rec, "never-refused.example", 443, nil)
+	p.writeEgressDeny(rec, "never-refused.example", 443, nil, true)
 	if body := strings.TrimSpace(rec.Body.String()); body != "egress denied by policy" {
 		t.Errorf("body = %q, want the plain refusal — a nil log is not evidence of a private-IP verdict", body)
 	}
@@ -677,5 +678,57 @@ func TestNilDecisionLogWithoutAMemoEntryGetsThePlainRefusal(t *testing.T) {
 	}
 	if got := rec.Header().Get(egressHeaderDetail); got != "" {
 		t.Errorf("%s = %q, want unset", egressHeaderDetail, got)
+	}
+}
+
+// TestMemoedFlagIsRequiredForTheMemoedRefusal is the pair the negative above was
+// missing: the memo's 403 is rebuilt only when BOTH facts hold, so each one is
+// pinned with the other held true.
+//
+// It closes the residual writeEgressDeny's first version stated out loud — a
+// future deny path returning a nil log would have inherited B6's private-ip body
+// for any host the guard happened to have refused earlier in the run. The flag
+// makes that a caller's declaration instead of a consequence of returning nil.
+func TestMemoedFlagIsRequiredForTheMemoedRefusal(t *testing.T) {
+	const host = "svc.priv.internal"
+	p, _ := newInternalHostsProxy(t,
+		types.RunPolicySpec{AllowedDomains: []string{host}},
+		fakeResolver{m: map[string][]net.IP{host: ips("10.9.8.7")}}, nil, nil, nil, "127.0.0.1:1")
+
+	// Open the memo streak the way the run does: one real refusal.
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, connectReq(t, host+":443"))
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("seed refusal status = %d, want 403", rec.Code)
+	}
+	if !p.privateIPMemoed(host, 443) {
+		t.Fatal("the refusal did not open a memo streak — this test is asserting nothing")
+	}
+
+	// POSITIVE: the caller says the verdict can come from the memo, and it does.
+	memoed := httptest.NewRecorder()
+	p.writeEgressDeny(memoed, host, 443, nil, true)
+	if got := memoed.Header().Get(egressHeaderReason); got != "builtin:private-ip" {
+		t.Errorf("%s = %q, want builtin:private-ip", egressHeaderReason, got)
+	}
+	if got := memoed.Header().Get(egressHeaderRetry); got != egressRetryNever {
+		t.Errorf("%s = %q, want %q — a memoed refusal is what the retry header exists for",
+			egressHeaderRetry, got, egressRetryNever)
+	}
+	if body := memoed.Body.String(); !strings.Contains(body, egressInternalHostsRemedy) {
+		t.Errorf("body = %q, want the private-IP remedy", body)
+	}
+
+	// NEGATIVE: same memoed host, a caller that builds its own denies. It must get
+	// the plain refusal — the memo is not a fallback body for every nil log.
+	own := httptest.NewRecorder()
+	p.writeEgressDeny(own, host, 443, nil, false)
+	if body := strings.TrimSpace(own.Body.String()); body != "egress denied by policy" {
+		t.Errorf("body = %q, want the plain refusal for a caller that never reads the memo", body)
+	}
+	for _, h := range []string{egressHeaderRetry, egressHeaderDetail} {
+		if got := own.Header().Get(h); got != "" {
+			t.Errorf("%s = %q, want unset", h, got)
+		}
 	}
 }

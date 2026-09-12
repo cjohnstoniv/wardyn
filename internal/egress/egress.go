@@ -122,6 +122,18 @@ type InjectionRule struct {
 	SecretName string `json:"secret_name"`
 	// Format wraps the secret, e.g. "Bearer %s".
 	Format string `json:"format"`
+	// RequireTLS declares that this rule's credential may ride ONLY a transport
+	// the proxy runs TLS on (F110's residual half). It is the operator's
+	// transport intent, which no other field could carry: injectableTransport
+	// (internal/egress/proxy/inject.go) can rule out cleartext to :443 and to a
+	// host the proxy itself only ever speaks TLS to, but a plaintext connector on
+	// :80 is indistinguishable from an https-only vendor the proxy has no table
+	// for — so a `POST http://<that host>/…` was injected. Setting this refuses
+	// such a request outright (403, rule_source policy:require-tls) rather than
+	// silently withholding the credential.
+	//
+	// Default false = today's behaviour, so no shipped policy changes meaning.
+	RequireTLS bool `json:"require_tls,omitempty"`
 }
 
 // ValidHeaderName reports whether name is a legal HTTP field-name — an RFC 9110

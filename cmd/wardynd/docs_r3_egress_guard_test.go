@@ -254,17 +254,22 @@ func TestUpstreamGuardResidualIsDocumented(t *testing.T) {
 	)
 }
 
-// TestBranchNSScopeRationaleMatchesThePATLane (F015) pins the two comments that
-// justify confining pushes on the github_token lane only, plus docs/ENV.md's
-// row, to what the git_pat lane actually is.
+// TestBranchNSScopeRationaleMatchesThePATLane (F015, re-derived in 0.7.2) pins
+// the two comments that scope push confinement per lane, plus docs/ENV.md's
+// rows, to what the git_pat lane actually is.
 //
-// Both said a PAT push is "an opaque CONNECT / tunnel no pkt-line parser can
-// read". The never-resident git_pat lane, default ON since 0.7, removes exactly
-// that tunnel — it terminates the request proxy-side and admits POST
-// git-receive-pack in cleartext — so the stated impossibility was false and a
-// live scoping decision was reading as a structural fact. If the lane ever stops
-// admitting receive-pack, or the confinement is extended to it, this guard reds
-// and the three texts get re-decided rather than silently outliving their reason.
+// The first version of this guard held those texts to a NEGATIVE: they had
+// claimed a PAT push was "an opaque CONNECT / tunnel no pkt-line parser can
+// read", the never-resident git_pat lane (default ON since 0.7) had falsified
+// that, and the guard's job was to keep a live scoping DECISION from reading as
+// a structural fact — erroring if pat_broker.go ever grew the parser, because
+// the three texts would then be stale in the other direction.
+//
+// 0.7.2 took that decision: the parser IS wired to the git_pat lane, behind its
+// own switch and default OFF. So the guard is inverted rather than deleted — the
+// premise it pins is now that the confinement REACHES both lanes through one
+// shared step, and the texts must give the operator the switch and its default
+// instead of a reason the lane is unconfined. Unwire it and the guard reds.
 func TestBranchNSScopeRationaleMatchesThePATLane(t *testing.T) {
 	// (1) The premise: the PAT lane is brokered cleartext smart-HTTP and admits
 	// the push verb, i.e. the parser COULD read it.
@@ -276,29 +281,43 @@ func TestBranchNSScopeRationaleMatchesThePATLane(t *testing.T) {
 	if !strings.Contains(gitb, `case "git-upload-pack", "git-receive-pack":`) {
 		t.Error("validGitRest no longer admits git-receive-pack — the shared premise of the scope comments has moved")
 	}
-	// The confinement is still wired to handleGitBroker alone; if that changes,
-	// the texts below are the ones to rewrite.
+	// (1b) The confinement now reaches the PAT lane too — through the SHARED step
+	// both brokers call, behind the PAT lane's own switch. Both halves matter: a
+	// second copy of the parser would let the two lanes' refusals drift apart, and
+	// an unswitched call would make the default-off texts below false.
+	for _, want := range []string{"p.confinePush(", "PATBranchNSEnforced()"} {
+		if !strings.Contains(pat, want) {
+			t.Errorf("pat_broker.go no longer contains %q — push branch-namespace confinement is not wired to the git_pat lane any more; the texts below say it is, behind a default-off switch", want)
+		}
+	}
+	if !strings.Contains(gitb, "func (p *Proxy) confinePush(") ||
+		!strings.Contains(funcBody(t, gitb, "(p *Proxy) confinePush"), "readReceivePackCommands(r.Body, prefix)") {
+		t.Error("confinePush is no longer the one step that parses a receive-pack command section — the two lanes' refusals are free to drift apart again")
+	}
 	if strings.Contains(pat, "readReceivePackCommands") {
-		t.Error("pat_broker.go now parses receive-pack commands — the three texts saying the confinement binds the App lane only are stale")
+		t.Error("pat_broker.go parses receive-pack commands ITSELF — it must go through confinePush so both lanes refuse in the same words")
 	}
 
 	// (2) The rationale each text must now give, and the claim none may make again.
 	fold := func(src string) string { return strings.Join(strings.Fields(strings.ReplaceAll(src, "//", " ")), " ") }
 	mustSay(t, fold(gitb), "internal/egress/proxy/git_broker.go BranchNSEnforced",
 		"A PAT push is NOT, and saying so was the stale half of this comment",
-		"the reason it is not wired in is a DECISION",
+		"Since 0.7.2 the parser IS wired in there, through the same confinePush step, but behind its OWN switch and DEFAULT OFF",
 	)
 	mustNotSay(t, fold(gitb), "internal/egress/proxy/git_broker.go BranchNSEnforced",
 		"a PAT push or an SSH push is an opaque tunnel no pkt-line parser can read",
+		"the reason it is not wired in is a DECISION",
 	)
 	mustSay(t, fold(readSrc(t, "internal", "broker", "broker.go")), "internal/broker/broker.go",
 		"A git_pat push DOES traverse a brokered, cleartext smart-HTTP route since 0.7",
+		"since 0.7.2 the same parser binds it when the operator wires it behind WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS, DEFAULT OFF",
 	)
 	mustNotSay(t, fold(readSrc(t, "internal", "broker", "broker.go")), "internal/broker/broker.go",
 		"SSH is not smart-HTTP; a PAT push is an opaque CONNECT",
 	)
 	mustSay(t, readDoc(t, "docs/ENV.md"), "docs/ENV.md",
-		"Since 0.7 that is a scoping DECISION for `git_pat`, not an impossibility",
+		"and since 0.7.2 it does, behind the separate, **default-off** `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS` below",
+		"`WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS` | enum | (unset = **off**)",
 	)
 }
 
@@ -336,9 +355,9 @@ func TestGatewayPredicateHasOneBody(t *testing.T) {
 	}
 }
 
-// TestPATPushIsNotDocumentedAsAnImpossibility (F121) pins the THREAT-MODEL's
-// half of the branch-namespace scope claim to the same premise its code sibling
-// is pinned to above.
+// TestPATPushIsNotDocumentedAsAnImpossibility (F121, re-derived in 0.7.2) pins
+// the THREAT-MODEL's half of the branch-namespace scope claim to the same
+// premise its code sibling is pinned to above.
 //
 // The document justified the absent git_pat push confinement with an
 // impossibility — "a `git_pat` push is an opaque CONNECT ... so no receive-pack
@@ -348,6 +367,12 @@ func TestGatewayPredicateHasOneBody(t *testing.T) {
 // the identical shape readReceivePackCommands parses on the App lane. A stated
 // impossibility that is really a scoping decision is the worst kind of drift in
 // a threat model: it tells a reader no choice was ever available.
+//
+// 0.7.2 made the choice — the parser is wired to the git_pat lane behind
+// WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS, default off — so the paragraph now
+// has to carry the switch AND its default. Naming the switch without the default
+// would be the opposite drift: a reader would take a shipped confinement for
+// granted on a lane that is unconfined until an operator opts in.
 func TestPATPushIsNotDocumentedAsAnImpossibility(t *testing.T) {
 	// (1) The premise: the git_pat lane terminates the request itself and admits
 	// the push verb, so a parser COULD bind it.
@@ -370,8 +395,10 @@ func TestPATPushIsNotDocumentedAsAnImpossibility(t *testing.T) {
 	tm := readDoc(t, "threatmodel/THREAT-MODEL.md")
 	mustSay(t, tm, "threatmodel/THREAT-MODEL.md",
 		"An `ssh_key` push is not smart-HTTP, so no",
-		"receive-pack parser can bind it. A `git_pat` push is a different case since",
-		"unconfined is a scoping DECISION rather than an impossibility",
+		"receive-pack parser can bind it. A `git_pat` push",
+		"whether it does is a scoping DECISION rather than an\n   impossibility",
+		"wires the SAME parser",
+		"to the git_pat lane behind\n   `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS`, **default off**",
 	)
 	mustNotSay(t, tm, "threatmodel/THREAT-MODEL.md",
 		"A `git_pat` push is an opaque CONNECT",

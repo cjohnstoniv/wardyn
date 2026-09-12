@@ -17,12 +17,27 @@ package proxy
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/contentscan"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+)
+
+const (
+	// ruleSourceRequireTLS marks the one decision this lane makes on its own: a
+	// request refused because its injection rule declares require_tls
+	// (egress.InjectionRule) and the transport is cleartext. It is a `policy:`
+	// value because the operator's authored rule is what denied it — not a
+	// builtin, and not the evaluator, which allowed the host before this arm ran.
+	ruleSourceRequireTLS = "policy:require-tls"
+	// injectRequireTLSBody is the 403 body, with the host substituted.
+	//
+	// DRAFT (M2 canon pending).
+	injectRequireTLSBody = "credential injection for %s requires TLS: " +
+		"this rule sets require_tls and the request was plain HTTP"
 )
 
 // defaultPortForScheme is the port an absolute-form request URI means when its
@@ -58,7 +73,10 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		if log != nil {
 			p.sink.emit(*log)
 		}
-		p.writeEgressDeny(w, host, port, log)
+		// memoed=true for the same reason handleConnect passes it: evaluate's memo
+		// arm is ahead of egressTarget, so a log-less Deny reaches THIS lane too,
+		// and a memoed retry here must get the same 403 as the first attempt.
+		p.writeEgressDeny(w, host, port, log, true)
 		return
 	case egress.Pending:
 		if log != nil {
@@ -66,6 +84,37 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		}
 		setEgressRefusalHeaders(w, egressRefusalPending, host)
 		writeApprovalPending(w, log)
+		return
+	}
+
+	// 4. require_tls (F110's residual half): the operator declared that THIS
+	// host's brokered credential may ride only a transport the proxy runs TLS on,
+	// and this request is cleartext. Unlike injectableTransport's rules — which
+	// are the proxy's own reading of a transport and therefore withhold the
+	// credential silently — an authored require_tls refuses the REQUEST, so the
+	// agent sees why instead of debugging a 401 from the upstream.
+	//
+	// It runs BEFORE the inspection block below, not beside the injection it
+	// guards: a refusal is the end of this request, so buffering and scanning its
+	// body first would spend the scan budget on bytes nothing forwards — and the
+	// blind-coverage marker (emitLLMBlindOnce) would post a row saying a body went
+	// UNINSPECTED to an upstream that never received it. A transport the operator
+	// refused preempts the question of what was in it.
+	//
+	// It writes its OWN 403 rather than going through writeEgressDeny, which
+	// special-cases the two builtin reasons and gives every other one the fixed
+	// "egress denied by policy" body (policy.go) — useless for a transport
+	// mistake an operator can fix in one line. The refusal HEADERS are the same
+	// ones every other refusal on this lane sets, carrying the same rule_source
+	// the decision row does, and the deny row REPLACES the allow row below
+	// (nothing was forwarded, so an allow would be a false record — the same
+	// accuracy rule the dial-failed arm follows).
+	if p.inject.requiresTLS(host) && !strings.EqualFold(r.URL.Scheme, "https") {
+		if log != nil {
+			p.sink.emit(decisionLog(log.Request, egress.Deny, ruleSourceRequireTLS))
+		}
+		setEgressRefusalHeadersWithReason(w, egressRefusalDenied, host, ruleSourceRequireTLS)
+		http.Error(w, fmt.Sprintf(injectRequireTLSBody, host), http.StatusForbidden)
 		return
 	}
 

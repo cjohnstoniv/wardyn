@@ -7,7 +7,6 @@ package docker
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/google/uuid"
@@ -80,13 +79,12 @@ func proxyEnv(runID uuid.UUID, pc runner.ProxyConfig, port int) []string {
 		"WARDYN_RUN_ID=" + runID.String(),
 		"WARDYN_CONTROL_PLANE_URL=" + pc.ControlPlaneURL,
 	}
-	// Operator knobs the sidecar reads from ITS environment: forward them from
-	// wardynd's environment when set, else they are dead on the docker runner
-	// (host-run and custom-image proxies read their own env directly).
-	for _, k := range []string{"WARDYN_LLM_SCAN", "WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS"} {
-		if v, ok := os.LookupEnv(k); ok {
-			env = append(env, k+"="+v)
-		}
+	// Operator knobs the sidecar reads from ITS environment, forwarded from
+	// wardynd's when set. The LIST is runner.ProxySidecarEnvKnobs — shared with
+	// the k8s driver, because a knob one substrate forwards and the other does not
+	// is a control that silently does not exist on that substrate.
+	for _, kv := range runner.ProxySidecarEnvKnobs() {
+		env = append(env, kv[0]+"="+kv[1])
 	}
 	return env
 }

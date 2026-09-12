@@ -489,29 +489,53 @@ func TestAuditActionsDocEnumeratesEveryRuleSource(t *testing.T) {
 	}
 	values = append(values, "approval:<approval-id>")
 
-	// F093 B1 premise: the branch-ns-off row's Meaning cell claims both the
-	// deployment-wide env switch and the per-run git_push_any_branch policy
-	// field feed the SAME branch of this condition — re-derive the row before
-	// trusting this guard if the branch itself changes shape.
+	// F093 B1 premise: the branch-ns-off row's Meaning cell claims both APP-LANE
+	// switches — the deployment-wide env and the per-run git_push_any_branch
+	// policy field — feed the SAME branch of this condition, so the marker cannot
+	// say which was set. Re-derive the row before trusting this guard if the
+	// branch itself changes shape.
 	if !strings.Contains(readSrc(t, "internal", "egress", "proxy", "git_broker.go"),
 		"if isPush && (!BranchNSEnforced() || p.policy.GitPushAnyBranch()) {") {
 		t.Fatal("internal/egress/proxy/git_broker.go no longer branches on " +
 			"\"if isPush && (!BranchNSEnforced() || p.policy.GitPushAnyBranch())\" — " +
 			"re-derive the brokered:git:branch-ns-off row's two-switches claim before trusting this guard")
 	}
+	// The THIRD switch (0.7.2): the git_pat lane reaches the SAME marker, but
+	// only through its own default-off env switch AND a run that opted out — the
+	// row says exactly that, so it rests on this branch's shape too.
+	if !strings.Contains(readSrc(t, "internal", "egress", "proxy", "pat_broker.go"),
+		"if verb == \"git-receive-pack\" && PATBranchNSEnforced() {") {
+		t.Fatal("internal/egress/proxy/pat_broker.go no longer gates push confinement on " +
+			"PATBranchNSEnforced() — re-derive the brokered:git:branch-ns-off row's git_pat clause " +
+			"before trusting this guard")
+	}
 
+	// The ROW shape, not a bare mention anywhere in the file (the same shape the
+	// zero-tolerance guard below matches on). A value's own explanatory PARAGRAPH
+	// satisfied a whole-file Contains by itself, so a table row could be deleted —
+	// losing the Meaning and the emit-site citation, the two things an operator
+	// reading a decision line comes here for — with this guard still green.
+	// Proven, not theorised: deleting the policy:require-tls row while its
+	// paragraph stood left the old check passing.
 	doc := readDoc(t, "docs/AUDIT-ACTIONS.md")
 	for _, v := range values {
-		if !strings.Contains(doc, "`"+v+"`") {
-			t.Errorf("docs/AUDIT-ACTIONS.md's rule_source tables never name %q, a rule_source value emitted by internal/egress/proxy", v)
+		if !strings.Contains(doc, "| `"+v+"` |") {
+			t.Errorf("docs/AUDIT-ACTIONS.md has no rule_source TABLE ROW for %q, a rule_source value emitted "+
+				"by internal/egress/proxy (a mention in prose is not a row: the row carries the Meaning and "+
+				"the emit site)", v)
 		}
 	}
 	mustSay(t, doc, "docs/AUDIT-ACTIONS.md",
 		"the only decisions carved out of it",
 		"one ALLOW that REPLACES the ordinary",
 		"never which of the six causes",
-		"both switches take the same branch",
+		"both App-lane switches take the same branch",
 		"git_push_any_branch",
+		// The THIRD switch (0.7.2): the git_pat lane reuses this vocabulary, so
+		// the row has to say under which switch — and that its default leaves a
+		// PAT push on the ordinary brokered:git-pat allow instead.
+		"WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS",
+		"a PAT push is not confined at all and keeps the ordinary `brokered:git-pat` allow",
 	)
 }
 

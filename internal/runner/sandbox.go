@@ -5,6 +5,7 @@ package runner
 
 import (
 	"encoding/json"
+	"os"
 	"strconv"
 	"strings"
 
@@ -151,6 +152,36 @@ func RecorderArgv(castDir, outDir, uploadURL string, runID uuid.UUID, agentArgv 
 	}
 	out = append(out, "-run", runID.String(), "--")
 	return append(out, agentArgv...)
+}
+
+// ProxySidecarEnvKnobs returns the operator knobs the wardyn-proxy sidecar reads
+// from ITS OWN environment — as name/value pairs, and only for the ones wardynd
+// actually has set — for a substrate to copy into the sidecar it creates.
+//
+// The sidecar does not inherit wardynd's environment on ANY substrate: the
+// docker driver builds an Env slice, the k8s driver an Env array on the pod
+// spec. So a knob a substrate forgets is not "off", it is UNREACHABLE — the
+// operator sets it, nothing refuses it, and the control it names silently never
+// applies on that substrate. That is how the git_pat branch-namespace switch
+// shipped dead on Kubernetes in review, which is why the LIST lives here, beside
+// BuildProxyConfig, rather than once per driver: one list, every substrate.
+//
+// Values are passed through verbatim; each knob's own reader does the parsing
+// and the fail-closed decision (BranchNSEnforced, PATBranchNSEnforced, the
+// WARDYN_LLM_SCAN switch in cmd/wardyn-proxy). Host-run and custom-image proxies
+// read their own env directly and need none of this.
+func ProxySidecarEnvKnobs() [][2]string {
+	var out [][2]string
+	for _, k := range []string{
+		"WARDYN_LLM_SCAN",
+		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS",
+		"WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS",
+	} {
+		if v, ok := os.LookupEnv(k); ok {
+			out = append(out, [2]string{k, v})
+		}
+	}
+	return out
 }
 
 // BuildProxyConfig marshals a run's ProxyConfig (egress policy, MITM CA,

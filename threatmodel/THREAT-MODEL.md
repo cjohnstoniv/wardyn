@@ -86,20 +86,25 @@ invitation, not an embarrassment.
    sandbox asked for, so a raw-IP `CONNECT` is a different key, which
    `allow_all_egress` would permit (measured). See `docs/POLICIES.md`.
 
-   **The parser binds the brokered App lane only, but on the SAME forge no second
-   lane is left beside it.** An `ssh_key` push is not smart-HTTP, so no
-   receive-pack parser can bind it. A `git_pat` push is a different case since
-   0.7 and this paragraph used to get it wrong: the never-resident git_pat lane
-   (default ON) removes the tunnel by design — `pat_broker.go` terminates the
-   sandbox's request on the proxy's own cleartext route and `validGitRest` admits
-   `POST git-receive-pack` there — so a parser COULD bind it, and leaving it
-   unconfined is a scoping DECISION rather than an impossibility. The decision:
-   a PAT carries whatever scope the operator issued and Wardyn cannot narrow it,
-   so the namespace would be a convention imposed on a credential it does not
-   bound, over forges whose push-ref conventions are not GitHub's; extending it
-   needs its own switch, its own decision-log rule sources and its own row in
-   `docs/ENV.md` (`BranchNSEnforced` in `internal/egress/proxy/git_broker.go`
-   states the same reasoning beside the code). Either way it is not a second lane
+   **The parser binds the brokered App lane by default and the `git_pat` lane on
+   request, and on the SAME forge no second lane is left beside it.** An `ssh_key`
+   push is not smart-HTTP, so no receive-pack parser can bind it. A `git_pat` push
+   is a different case since 0.7 and this paragraph used to get it wrong: the
+   never-resident git_pat lane (default ON) removes the tunnel by design —
+   `pat_broker.go` terminates the sandbox's request on the proxy's own cleartext
+   route and `validGitRest` admits `POST git-receive-pack` there — so a parser
+   COULD bind it, and whether it does is a scoping DECISION rather than an
+   impossibility. 0.7.2 takes that decision and wires the SAME parser
+   (`confinePush`, one step both brokers call, reusing the
+   `brokered:git:branch-ns*` rule sources) to the git_pat lane behind
+   `WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS`, **default off** — the opposite
+   default from the App lane, because a PAT carries whatever scope the operator
+   issued and Wardyn cannot narrow it, so the namespace there is a convention
+   imposed on a credential Wardyn does not bound, over forges whose push-ref
+   conventions are not GitHub's. An operator who wants it says so; nothing pushes
+   differently until they do (`PATBranchNSEnforced` in
+   `internal/egress/proxy/git_broker.go` states the same reasoning beside the
+   code, and `docs/ENV.md` carries the row). Either way it is not a second lane
    on a brokered forge: for a forge a run IS brokered for, `api.validateGrantLaneExclusivity` refuses a policy
    declaring a `github_token` grant alongside an `ssh_key` **or** `git_pat` grant
    for it, and dispatch's `api.dropBrokeredGrants` withholds any already-stored

@@ -785,7 +785,9 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		if log != nil {
 			p.sink.emit(*log)
 		}
-		p.writeEgressDeny(w, host, port, log)
+		// memoed=true: this is an evaluate() verdict, and evaluate's memo arm
+		// (privateIPMemoHit) returns a log-less Deny for an identical repeat.
+		p.writeEgressDeny(w, host, port, log, true)
 		return
 	case egress.Pending:
 		if log != nil {

@@ -33,6 +33,8 @@ package proxy
 import (
 	"cmp"
 	"context"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -161,6 +163,35 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Push branch-namespace confinement, OFF unless the operator opted this proxy
+	// in with WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS (PATBranchNSEnforced — its
+	// own switch, its own default, and the reasoning lives there). With the
+	// switch off this whole block is skipped and the lane behaves exactly as it
+	// did: nothing is buffered, no row changes.
+	//
+	// Opted in, it is the SAME confinement the App lane applies, through the same
+	// confinePush step and refused in the same words — one rule, two brokers,
+	// which is why it reuses the brokered:git:branch-ns* rule sources instead of
+	// minting a second vocabulary an operator would have to learn. The run's own
+	// git_push_any_branch still opts out, and then the allow row says so
+	// (brokered:git:branch-ns-off) rather than reading like a confined push.
+	//
+	// A refusal happens BEFORE patToken, so a refused push never mints the PAT.
+	var reqBody io.Reader = r.Body
+	allowSrc := ruleSourcePAT
+	if verb == "git-receive-pack" && PATBranchNSEnforced() {
+		if p.policy.GitPushAnyBranch() {
+			allowSrc = ruleSourceGitNSOff
+		} else {
+			body, ok := p.confinePush(w, r, slog.String("host", host),
+				func(ruleSource string) { p.emitPATDecision(r, host, egress.Deny, ruleSource) })
+			if !ok {
+				return
+			}
+			reqBody = body
+		}
+	}
+
 	token, username, err := p.patToken(r.Context(), grant)
 	if err != nil {
 		p.emitPATDecision(r, host, egress.Deny, ruleSourcePATDenied)
@@ -187,7 +218,7 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 
 	outReq, err := http.NewRequestWithContext(
 		context.WithValue(r.Context(), vettedIPKey{}, target),
-		r.Method, upstream, r.Body)
+		r.Method, upstream, reqBody)
 	if err != nil {
 		p.emitPATDecision(r, host, egress.Deny, ruleSourcePATDenied)
 		p.httpError(w, "build git request", err, http.StatusBadGateway)
@@ -211,7 +242,7 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	outReq.Host = host
 	outReq.Header.Del("Host")
 
-	p.emitPATDecision(r, host, egress.Allow, ruleSourcePAT)
+	p.emitPATDecision(r, host, egress.Allow, allowSrc)
 
 	resp, err := p.transport.RoundTrip(outReq)
 	if err != nil {
