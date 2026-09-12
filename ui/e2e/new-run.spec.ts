@@ -18,7 +18,7 @@
 // capability gate (runs_create.go) is skipped entirely. There is no ai_provider
 // integration at all, so an agent run honestly reports that no model provider
 // is connected.
-import { test, expect, gotoConsole, ADMIN_TOKEN } from "./fixtures";
+import { test, expect, gotoConsole, ADMIN_TOKEN, launchRun } from "./fixtures";
 import { RUN } from "../src/app/components/wardyn/copy";
 import { CC_META } from "../src/app/components/wardyn/cc-meta";
 import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
@@ -163,8 +163,7 @@ test.describe("New run — one page", () => {
   test("launching creates a run and lands on its detail page", async ({ page }) => {
     await openNewRun(page);
     await page.getByLabel("Title").fill("e2e smoke");
-    await page.getByRole("button", { name: "Launch run" }).click();
-    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/, { timeout: 15_000 });
+    await launchRun(page);
   });
 });
 
@@ -194,8 +193,7 @@ test.describe("New run — Preflight sends the body Launch sends", () => {
 
     // Nothing is touched between the two clicks, so Review answered for exactly
     // this launch — or it lied.
-    await page.getByRole("button", { name: "Launch run" }).click();
-    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/, { timeout: 15_000 });
+    await launchRun(page);
 
     expect(bodies.preflight).toBeTruthy();
     expect(bodies.create).toBeTruthy();

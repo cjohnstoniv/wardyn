@@ -48,7 +48,13 @@ async function openRecordings(page: Page): Promise<void> {
 // stood in for what this `none`-runner harness can never produce for real.
 // Registered BEFORE openRecordings() navigates, so it is in place for the
 // screen's own mount-time fetch.
-async function mockRecordingMeta(page: Page, patch: Record<string, { bytes: number; durationSec: number }>): Promise<void> {
+// `ids`, when given, is filled with the run id of every spliced row (keyed by
+// task title) so a test can assert WHICH run a later fetch named.
+async function mockRecordingMeta(
+  page: Page,
+  patch: Record<string, { bytes: number; durationSec: number }>,
+  ids: Record<string, string> = {},
+): Promise<void> {
   await page.route(RUNS_LIST_GLOB, async (route: Route) => {
     if (route.request().method() !== "GET") return route.fallback();
     const response = await route.fetch();
@@ -60,6 +66,7 @@ async function mockRecordingMeta(page: Page, patch: Record<string, { bytes: numb
         run.has_recording = true;
         run.recording_bytes = meta.bytes;
         run.recording_duration_sec = meta.durationSec;
+        ids[run.task] = run.id;
       } else {
         run.has_recording = false;
       }
@@ -164,10 +171,15 @@ test.describe("Recordings library", () => {
       probedIds.push(route.request().url());
       return route.fulfill({ status: 200, contentType: "text/plain", body: CAST });
     });
-    await mockRecordingMeta(page, {
-      "e2e fixture 4": { bytes: 512, durationSec: 3 },
-      "e2e fixture 7": { bytes: 512, durationSec: 3 },
-    });
+    const ids: Record<string, string> = {};
+    await mockRecordingMeta(
+      page,
+      {
+        "e2e fixture 4": { bytes: 512, durationSec: 3 },
+        "e2e fixture 7": { bytes: 512, durationSec: 3 },
+      },
+      ids,
+    );
 
     await openRecordings(page);
     await expect(page.getByRole("link", { name: /Open run/ })).toHaveCount(2);
@@ -181,6 +193,9 @@ test.describe("Recordings library", () => {
     // Exactly one recording fetch happened, and it named fixture 4's run —
     // the sibling card's cast was never touched.
     expect(probedIds).toHaveLength(1);
+    expect(ids["e2e fixture 4"], "the list splice recorded fixture 4's id").toBeTruthy();
+    expect(probedIds[0]).toContain(ids["e2e fixture 4"]);
+    expect(probedIds[0]).not.toContain(ids["e2e fixture 7"]);
   });
 
   test("a getRecording() failure at play time surfaces its own error with Retry", async ({ page }) => {

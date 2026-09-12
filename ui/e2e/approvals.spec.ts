@@ -6,7 +6,7 @@
 import { randomUUID } from "node:crypto";
 import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole, mockMemberRole, sql } from "./fixtures";
-import { APPROVAL } from "../src/app/components/wardyn/copy";
+import { APPROVAL, RUN_COCKPIT } from "../src/app/components/wardyn/copy";
 
 // ---------------------------------------------------------------------------
 // Approvals screen e2e (lane: approvals, port 8088, db wardyn_e2e).
@@ -576,8 +576,8 @@ test.describe("B3 — the egress widget's held chip and the Approvals tab badge 
       // or would count the APPROVED row's own historical egress.pending audit
       // entry as still "held" forever. "N held" is this widget's own phrase
       // (RUN_COCKPIT.held) and appears nowhere else on the Overview tab.
-      await expect(page.getByText("1 held", { exact: true })).toBeVisible();
-      await expect(page.getByText("2 held", { exact: true })).toHaveCount(0);
+      await expect(page.getByText(RUN_COCKPIT.held(1), { exact: true })).toBeVisible();
+      await expect(page.getByText(RUN_COCKPIT.held(2), { exact: true })).toHaveCount(0);
 
       // The Approvals tab badge: pending.length, so also 1 — the decided row
       // never inflates it.

@@ -10,6 +10,7 @@ import {
   type Locator,
   type Page,
 } from "@playwright/test";
+import { AGENTS } from "../src/app/lib/workspace-providers-copy";
 
 // Shared Playwright fixtures for the Wardyn UI e2e suite. Specs run against the
 // seeded test backend booted by scripts/e2e-backend.sh (real wardynd + Postgres +
@@ -95,6 +96,29 @@ export async function navTo(page: Page, label: NavLabel): Promise<void> {
 // that has already installed a failing route intercept would never mount the
 // shell at all. React Router listens to popstate, so pushState + popstate is
 // exactly what a <NavLink> click does.
+// launchRun clicks the wizard's Launch and lands on the run's detail page,
+// through EITHER shape the product has: a clean 201 navigates by itself; a 201
+// carrying `warnings[]` HOLDS the screen (the warnings listed under
+// AGENTS.LAUNCH_WARNING_TITLE, Launch replaced by AGENTS.OPEN_RUN_CTA) until
+// the person clicks through. This harness seeds no model credential, so a
+// task launch here carries the no-model-access advisory and holds; a developer
+// box with a managed Claude credential gets the clean 201. Both are real —
+// a spec that pins one shape would be true on one machine and false on the
+// other, so the helper accepts both and asserts the destination.
+export async function launchRun(page: Page): Promise<void> {
+  const detail = /\/runs\/[0-9a-f-]{8,}/;
+  await page.getByRole("button", { name: "Launch run" }).click();
+  const openRun = page.getByRole("button", { name: AGENTS.OPEN_RUN_CTA });
+  await expect
+    .poll(async () => detail.test(page.url()) || (await openRun.isVisible()), { timeout: 15_000 })
+    .toBe(true);
+  if (!detail.test(page.url())) {
+    await expect(page.getByText(AGENTS.LAUNCH_WARNING_TITLE)).toBeVisible();
+    await openRun.click();
+  }
+  await expect(page).toHaveURL(detail, { timeout: 15_000 });
+}
+
 export async function navToRoute(page: Page, path: string): Promise<void> {
   await page.evaluate((p) => {
     window.history.pushState({}, "", p);

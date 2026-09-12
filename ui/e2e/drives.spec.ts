@@ -14,9 +14,10 @@ import {
   navTo,
   navToRoute,
   sidebarLink,
+  launchRun,
 } from "./fixtures";
 import { DRIVES, DRIVE_MEMBER, PEOPLE, PERM, PREVIEW } from "../src/app/lib/user-drives-copy";
-import { GOVERNANCE as GOV } from "../src/app/lib/governance-copy";
+import { GOVERNANCE as GOV, MEMBER } from "../src/app/lib/governance-copy";
 import { OPERATOR_ONLY_REASON } from "../src/app/components/wardyn/copy";
 import type { MeUserDrive } from "../src/app/lib/api/health";
 import type { Page } from "@playwright/test";
@@ -663,7 +664,7 @@ test.describe("drives — what the member is told at New run", () => {
     await expect(page.getByText(DRIVE_MEMBER.NR_CHECKBOX)).toHaveCount(0);
   });
 
-  // R1-F139 == R4-F052: /me.user_drive_unavailable's four closed tokens
+  // R1-F139 == R4-F052: /me.user_drive_unavailable's four closed tokens (three here, the fourth just below)
   // (user_drives_resolve.go), spliced the same way ALLOCATED/paused/denied are
   // above — a display fact this harness cannot genuinely produce (it would
   // need a truncated groups snapshot or a governance-resolution failure), so
@@ -700,6 +701,16 @@ test.describe("drives — what the member is told at New run", () => {
       await expect(page.getByTestId("nr-drive-reason")).toHaveText(DRIVE_MEMBER.NR_UNAVAILABLE);
       await expect(page.getByTestId("nr-drive")).toHaveCount(0);
     }
+  });
+
+  // The fourth closed token has its own line: the launch path's stale-groups
+  // sentence, reused verbatim by the card (workspace-card.tsx).
+  test("user_drive_unavailable:groups_snapshot_stale renders MEMBER.DENIED_STALE_GROUPS", async ({ page }) => {
+    await mockMemberDriveUnavailable(page, "groups_snapshot_stale");
+    await gotoConsole(page);
+    await navToRoute(page, "/runs/new");
+    await expect(page.getByTestId("nr-drive-reason")).toHaveText(MEMBER.DENIED_STALE_GROUPS);
+    await expect(page.getByTestId("nr-drive")).toHaveCount(0);
   });
 
   test("Getting Started carries the chip and the sentence that a drive is not a workspace", async ({ page }) => {
@@ -785,8 +796,7 @@ test.describe("drives — ticking the box puts `drive` on the wire", () => {
     await expect(page.getByTestId("nr-drive")).toHaveCount(0);
 
     await page.getByLabel("Title").fill("e2e no drive");
-    await page.getByRole("button", { name: "Launch run" }).click();
-    await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{8,}/, { timeout: 15_000 });
+    await launchRun(page);
     expect(seen.body).not.toBeNull();
     expect(seen.body?.drive).toBeUndefined();
   });
