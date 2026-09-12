@@ -182,8 +182,9 @@ function Row({
       ) : (
         <div className="space-y-4 p-3">
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label={PROVIDERS.FIELD_BASE_URLS} hint={PROVIDERS.BASE_URLS_HINT}>
+            <Field label={PROVIDERS.FIELD_BASE_URLS} hint={PROVIDERS.BASE_URLS_HINT} htmlFor={`provider-${kind}-base-urls`}>
               <Textarea
+                id={`provider-${kind}-base-urls`}
                 className="font-mono"
                 rows={3}
                 aria-invalid={invalidLines.length > 0}
@@ -196,13 +197,16 @@ function Row({
               {invalidLines.length > 0 && <p className="text-xs leading-snug text-danger">{PROVIDERS.BASE_URL_INVALID}</p>}
             </Field>
             <Field label={PROVIDERS.FIELD_LANES} hint={PROVIDERS.LANES_HINT}>
-              <div className="space-y-2">
+              {/* A group, not a labelled control: the Field's label cannot point at
+                  three checkboxes, so the group carries the name and each box its own. */}
+              <div className="space-y-2" role="group" aria-label={PROVIDERS.FIELD_LANES}>
                 {ALL_LANES.map((lane) => {
                   const reason = laneUnavailableReason(lane, kind, row.base_urls);
                   const meta = LANE_META[lane as keyof typeof LANE_META];
                   return (
                     <label key={lane} className="flex items-start gap-2">
                       <Checkbox
+                        aria-label={meta.label}
                         checked={permitted.has(lane) && !reason}
                         disabled={!operator || !!reason}
                         onCheckedChange={() => onUpdate({ ...row, lanes: withLaneToggled(row, lane) })}
@@ -363,7 +367,11 @@ export function GitTab({
   const removeRow = (kind: GitProviderKind) => onChange(git.filter((r) => r.kind !== kind));
 
   const addRow = (kind: GitProviderKind) =>
-    onChange([...git, { id: kind, kind, base_urls: [kind === "github" ? "https://github.com" : "https://dev.azure.com"] }]);
+    // A fresh Azure DevOps row starts at `https://dev.azure.com/` — invalid on
+    // purpose (the org segment is REQUIRED there, §5.1), so the row shows
+    // BASE_URL_INVALID until the admin appends their org; a bare
+    // `https://github.com` is a valid host-wide row and needs no edit.
+    onChange([...git, { id: kind, kind, base_urls: [kind === "github" ? "https://github.com" : "https://dev.azure.com/"] }]);
 
   return (
     <div className="space-y-4">

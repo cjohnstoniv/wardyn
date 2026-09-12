@@ -245,8 +245,9 @@ function Row({
           )}
 
           {perUserAvailable && credentialSource === "per_user" && (
-            <Field label={AGENTS.FIELD_SSO_START_URL} hint={AGENTS.SSO_START_URL_HINT}>
+            <Field label={AGENTS.FIELD_SSO_START_URL} hint={AGENTS.SSO_START_URL_HINT} htmlFor={`agent-${row.id}-sso-start-url`}>
               <Input
+                id={`agent-${row.id}-sso-start-url`}
                 value={row.sso_start_url ?? ""}
                 disabled={!operator}
                 onChange={(e) => onUpdate({ ...row, sso_start_url: e.target.value })}

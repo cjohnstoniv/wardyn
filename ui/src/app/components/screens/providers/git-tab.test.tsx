@@ -96,6 +96,34 @@ describe("GitTab", () => {
     expect(screen.getByText(PROVIDERS.BASE_URL_INVALID)).toBeInTheDocument();
   });
 
+  // V1 lens E: every form control on a row is reachable by its label — the
+  // textarea through the Field's htmlFor/id pair, the lane boxes by their own
+  // names inside a named group (a Field label cannot point at three controls).
+  it("the base-URLs textarea and the lane checkboxes are reachable by name", () => {
+    render(<Harness initial={[{ id: "gh", kind: "github", base_urls: ["https://github.com/acme"] }]} />);
+    expect(screen.getByLabelText(PROVIDERS.FIELD_BASE_URLS).tagName).toBe("TEXTAREA");
+    const group = screen.getByRole("group", { name: PROVIDERS.FIELD_LANES });
+    expect(within(group).getAllByRole("checkbox")).toHaveLength(3);
+    for (const box of within(group).getAllByRole("checkbox")) {
+      expect(box).toHaveAccessibleName();
+    }
+  });
+
+  // VL-22: a fresh Azure DevOps row's default address has no org segment, so
+  // the row must say so before the admin ever reaches the server's 400.
+  it("a freshly added Azure DevOps row shows the invalid hint until its org is appended", async () => {
+    render(<Harness initial={[{ id: "gh", kind: "github", base_urls: ["https://github.com"] }]} />);
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.ADD_ROW_CTA }));
+    const row = screen.getByTestId("provider-row-azure_devops");
+    expect(within(row).getByText(PROVIDERS.BASE_URL_INVALID)).toBeInTheDocument();
+    const textarea = within(row).getByLabelText(PROVIDERS.FIELD_BASE_URLS);
+    expect(textarea).toHaveAttribute("aria-invalid", "true");
+    await userEvent.clear(textarea);
+    await userEvent.type(textarea, "https://dev.azure.com/acme");
+    expect(within(row).queryByText(PROVIDERS.BASE_URL_INVALID)).not.toBeInTheDocument();
+    expect(textarea).toHaveAttribute("aria-invalid", "false");
+  });
+
   it("the app lane is disabled with its reason on an Azure DevOps row", () => {
     render(
       <Harness

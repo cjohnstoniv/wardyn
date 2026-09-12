@@ -83,6 +83,20 @@ describe("AgentsTab", () => {
     expect(within(row).getByRole("button", { name: AGENTS.SOURCE_PER_USER })).not.toBeDisabled();
   });
 
+  // VL-23: the start-URL input is reachable by its Field label (htmlFor/id).
+  it("the SSO start-URL input is reachable by its label on a per_user row", async () => {
+    getAgentProvidersMock.mockResolvedValue({
+      providers: {
+        agents: [{ id: "claude-code", mechanism: "bedrock_sso", credential_source: "per_user", sso_start_url: "https://acme.awsapps.com/start" }],
+      },
+      etag: '"e-a11y"',
+    });
+    render(<AgentsTab harnesses={HARNESSES} operator />);
+    const input = await screen.findByLabelText(AGENTS.FIELD_SSO_START_URL);
+    expect(input.tagName).toBe("INPUT");
+    expect(input).toHaveValue("https://acme.awsapps.com/start");
+  });
+
   it("switching the mechanism away from bedrock_sso clears an existing per_user source", async () => {
     getAgentProvidersMock.mockResolvedValue({
       providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso", credential_source: "per_user" }] },
