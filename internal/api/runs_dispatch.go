@@ -324,7 +324,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// subscription sentinel, the Bedrock bearer and the artifact tokens are all
 	// consequences of that one decision, each failing the run closed on its own
 	// authoring failure. ok=false means the run is already marked FAILED.
-	plan, ok := s.resolveLLMInjections(ctx, run, p, &policy, sandboxEnv, injections, proxyURL, artifactPlan, artifactInject)
+	plan, ok := s.resolveLLMInjections(ctx, run, p, &policy, sandboxEnv, injections, proxyURL, artifactPlan, artifactInject, siteCfg)
 	if !ok {
 		return
 	}
@@ -446,6 +446,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			// BASE_URL/WARDYN_OPENAI_BASE_URL, validated at boot. Empty => every
 			// brokered LLM route dials the vendor host, byte-identical to today.
 			LLMUpstreams: s.cfg.LLMGateways,
+			// What the brokered-LLM 404 says when this run reaches that route
+			// with nothing behind it — compiled at dispatch because the sidecar
+			// knows only that no injection matched (see llmUnavailableDetail).
+			LLMUnavailableDetail: plan.llmUnavailableDetail,
 		},
 		// Hard resource caps. A nil policy block (or a zero field) becomes the
 		// driver's conservative platform default, so EVERY sandbox is CPU/memory/

@@ -299,6 +299,12 @@ type ProxyConfig struct {
 	// the vendor host, byte-identical to today. Threaded to the proxy via
 	// proxy.Config's identically-named field (BuildProxyConfig below).
 	LLMUpstreams map[string]string
+	// LLMUnavailableDetail is the control-plane-composed reason the proxy's
+	// brokered-LLM 404 gives when this run has no LLM credential behind that
+	// route (internal/api's llmUnavailableDetail). Empty => the route's own
+	// generic detail. Threaded to the proxy via proxy.Config's identically-named
+	// field (BuildProxyConfig below).
+	LLMUnavailableDetail string
 }
 
 // InjectionGrant pairs an api_key credential grant with its proxy-side

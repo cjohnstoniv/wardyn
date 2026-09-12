@@ -205,6 +205,16 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// NO CROSS-MECHANISM FALLBACK, at the door: when the org declared how this
+	// agent reaches its model and the lane that would carry this run is not that
+	// one, refuse HERE — before a run row, an identity or a grant exists — rather
+	// than let the person watch a sandbox boot and die. With no declaration the
+	// model-access finding stays the 201 advisory it has always been (below).
+	// Writes its own 422; see enforceCreateLLMMechanism.
+	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef) {
+		return
+	}
+
 	createdByType, createdBy := actorFromRequest(r)
 	runID := uuid.New()
 	// SUBJECT vs ATTRIBUTION (F099): createdBy is the ATTRIBUTION — the run row's
@@ -289,7 +299,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	gw.augmentGitBrokerGrants(req.Repo, spec.WorkspaceRepos)
 
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
-		runID.String(), "success", mustJSON(createRunAuditData(req, policyID, enforced, id.JTI))))
+		runID.String(), "success", mustJSON(createRunAuditData(req, policyID, enforced, id.JTI, policyWarns))))
 
 	// Model-resolution fail-fast (AGT4-2): a non-interactive harness run whose agent
 	// needs a model but has NO resolvable credential boots and 404s on its FIRST model
@@ -454,7 +464,9 @@ func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWrite
 // row, so this event is their ONLY provenance record — which makes the payload
 // a contract worth reading in one scope instead of a block interleaved with the
 // dispatch sequence.
-func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced types.ConfinementClass, jti string) map[string]any {
+func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced types.ConfinementClass, jti string,
+	clampWarnings []string,
+) map[string]any {
 	data := map[string]any{
 		"agent": req.Agent, "repo": req.Repo, "policy_id": policyID,
 		"confinement_class": enforced, "jti": jti,
@@ -483,6 +495,15 @@ func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced type
 		// autonomous run's tool calls were routed to Wardyn approvals instead of
 		// running unsupervised.
 		data["tool_approvals"] = req.ToolApprovals
+	}
+	if len(clampWarnings) > 0 {
+		// Every way launch NARROWED what the caller asked for (resolveRunPolicy's
+		// clamp + capability notes). Request-scoped like the fields above, and this
+		// RUN-BOUND row is the only place a member can read them back: an inline
+		// policy's own policy.inline row carries no run id, and run.policy.effective
+		// carries the merged policy, not the list of tightenings that produced it.
+		// The run-detail "Effective policy" widget reads exactly this.
+		data["clamp_warnings"] = clampWarnings
 	}
 	return data
 }
@@ -516,16 +537,13 @@ type createRunResponse struct {
 func (s *Server) resolveRunLLMAccess(ctx context.Context, req createRunRequest, spec types.RunPolicySpec, presentSecrets map[string]bool, bedrockRef *types.WorkspaceBedrockRef) *composeLLMAccess {
 	llmSpec := spec
 	llmSpec.EligibleGrants = slices.Clone(spec.EligibleGrants)
-	llmProv, _ := s.llmProviderFor(req.Agent)
-	_, hasAnthropicKey := apiKeyGrantForHost(&llmSpec, llmProv.host)
-	subscriptionActive := specHasMountTarget(&llmSpec, claudeCredTarget)
-	// managed mirrors dispatch's precedence: a compose-mode managed token credentials a
-	// claude run with no resident subscription mount and no anthropic api-key grant.
-	managed := req.Agent == "claude-code" && !subscriptionActive &&
-		!hasAnthropicKey && s.managedInjectReady(req.Agent) &&
-		(llmSpec.AllowAllEgress || len(llmSpec.AllowedDomains) > 0)
+	// Which lanes this run has available — resolved by the same helper the
+	// create-time mechanism refusal uses (resolveRunLLMLanes), so the advisory
+	// below and that refusal can never disagree about what would credential this
+	// run.
+	lanes := s.resolveRunLLMLanes(ctx, req, &llmSpec, bedrockRef)
 	var llmAccess *composeLLMAccess
-	if note, provisioned := s.reconcileLLMAccess(&llmSpec, req.Agent, presentSecrets, s.subscriptionInjectEnabled(), managed); note != "" {
+	if note, provisioned := s.reconcileLLMAccess(&llmSpec, req.Agent, presentSecrets, s.subscriptionInjectEnabled(), lanes.managed); note != "" {
 		llmAccess = &composeLLMAccess{Provisioned: provisioned, Note: note}
 	}
 	// Operator-configured Bedrock credentials the run automatically: dispatch's
@@ -534,12 +552,7 @@ func (s *Server) resolveRunLLMAccess(ctx context.Context, req createRunRequest, 
 	// override is honored here too — a workspace can only narrow region/model, never
 	// supply credentials — matching what launch enforces.
 	if llmAccess == nil || !llmAccess.Provisioned {
-		// refresh=false: create is a dry run over a ONE-USE rotating token. An
-		// expired-but-renewable captured SSO session still reads READY here (the
-		// same renewable-or-live predicate the launch gate applies), because
-		// dispatch renews it — warning about it would advertise a failure that
-		// cannot happen, and redeeming it here would spend the token twice.
-		if ba := s.resolveBedrockAuth(ctx, req.Agent, subscriptionActive, true, false, bedrockRef); ba.ready {
+		if ba := lanes.bedrock; ba.ready {
 			llmAccess = &composeLLMAccess{
 				Provisioned: true,
 				Note:        "Amazon Bedrock is configured by the operator (region " + ba.region + ", model " + ba.model + "); this run uses it automatically — no per-run API key is needed.",

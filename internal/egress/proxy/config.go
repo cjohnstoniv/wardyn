@@ -154,6 +154,15 @@ type Config struct {
 	// (the default) => every brokered LLM route dials the vendor host,
 	// byte-identical to today.
 	LLMUpstreams map[string]string `json:"llm_upstreams,omitempty"`
+	// LLMUnavailableDetail is what the brokered-LLM 404 says about WHY no
+	// credential is behind this run's LLM route, composed by the control plane at
+	// dispatch (internal/api's llmUnavailableDetail) because only it knows the
+	// deployment's model-provider posture — the sidecar knows only that no
+	// injection rule matched. Control-plane-authored, same trust boundary as
+	// LLMUpstreams above; the sandbox cannot set it. Empty (the default) => the
+	// route's own generic detail, plus the below-policy clause either way
+	// (proxyLLMRequest).
+	LLMUnavailableDetail string `json:"llm_unavailable_detail,omitempty"`
 }
 
 const (

@@ -220,6 +220,14 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	riskItems := composer.Grade(runInput, gspec)
 	overallRisk := composer.OverallLevel(riskItems)
 
+	// Create/Review parity on the declared model-access mechanism: Review answers
+	// the SAME 422 launch would, from the same predicate — a checklist that said
+	// "ready" for a run create refuses is the worse of the two lies. Writes its
+	// own 422; see enforceCreateLLMMechanism.
+	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef) {
+		return
+	}
+
 	// LLM-access verdict on the resolved spec — the SAME computation the create path
 	// warns from (resolveRunLLMAccess), so this checklist row and the launch-time
 	// warning can never disagree. The helper clones internally: reconcileLLMAccess

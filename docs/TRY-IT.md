@@ -227,7 +227,17 @@ already brokers for `api.anthropic.com` is treated as an explicit operator
 opt-in and suppresses the managed-subscription fallback: `wardyn subscription
 connect` fills in only for a run that has neither a resident mount nor that
 grant, it never silently overrides a run you gave its own key
-(`resolveLLMTransport`, `internal/api/runs_dispatch_llm.go`). All three keep
+(`resolveLLMTransport`, `internal/api/runs_dispatch_llm.go`).
+
+That precedence is what fires when nobody has said otherwise. An admin who
+writes an **agent providers** row (`PUT /api/v1/agent-providers`, or the
+Agents tab) declares the ONE lane an agent's runs may use — and from then on
+Wardyn never substitutes: a run whose declared lane is not the lane that
+resolved is refused at create and at launch, naming the lane and its state,
+rather than quietly billed to whatever else happened to be configured
+(`enforceConfiguredLLMMechanism`). With no row for an agent, nothing changes —
+the precedence above is the whole story, and a run with no model credential at
+all still launches with only a warning. All three keep
 the real credential out of the sandbox *except* the Bedrock access-key path
 (see below):
 

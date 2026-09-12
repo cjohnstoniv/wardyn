@@ -87,6 +87,12 @@ func isModelRun(taskMode string, workspaceID, sourceID *uuid.UUID, interactive b
 // the managed fallback); the grant-authoring phases mutate it later. See the
 // inline comments for the full precedence rationale: host-staged mount >
 // managed > Bedrock > api-key.
+//
+// That order is unconditional — it knows nothing about what an admin declared —
+// so when an AgentProviders row names the mechanism for this run's agent, the
+// transport resolved here is COMPARED against that declaration and a mismatch
+// fails the run closed instead of being served by another provider's credential
+// (enforceConfiguredLLMMechanism).
 func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec, sandboxEnv map[string]string, injections []runner.InjectionGrant, interactive bool, taskMode string, proxyURL string, bedrockRef *types.WorkspaceBedrockRef) llmTransport {
 	var t llmTransport
 
@@ -520,6 +526,17 @@ func llmInspectMITMEnabled(policy *types.RunPolicySpec) bool {
 	return li != nil && li.InterceptTLS && li.Mode != "" && !strings.EqualFold(li.Mode, "off")
 }
 
+// inspectableLLMRefusal is require_inspectable_llm's refusal (F048). It
+// enumerates BOTH Bedrock sub-modes: the gate below fails the bearer lane closed
+// too, and a sentence that named only SigV4 told an operator their bearer run
+// was refused for a reason that did not apply to it. It is a run failure hint
+// AND the quoted `error` value on the run.create failure row.
+//
+// DRAFT (M2 canon pending)
+const inspectableLLMRefusal = "require_inspectable_llm: the resolved LLM transport is opaque (subscription " +
+	"without MITM, or Bedrock — both SigV4 and bearer, which Wardyn can decrypt but has no extractor " +
+	"for); enable intercept_tls or use an inspectable transport"
+
 // enforceInspectableLLM fails CLOSED at schedule time when inspection is
 // REQUIRED but the resolved LLM transport is OPAQUE. Opaque transports:
 // (a) a subscription/OAuth transport that is NOT being MITM'd (injectSub /
@@ -545,10 +562,9 @@ func (s *Server) enforceInspectableLLM(ctx context.Context, run types.AgentRun, 
 		return true
 	}
 	if (llm.subscription && !li.InterceptTLS && !llm.injectSub) || llm.bedrockReady {
-		s.failAndRevoke(ctx, run.ID, types.RunStarting,
-			"require_inspectable_llm: the resolved LLM transport is opaque (subscription without MITM, or SigV4 Bedrock); enable intercept_tls or use an inspectable transport")
+		s.failAndRevoke(ctx, run.ID, types.RunStarting, inspectableLLMRefusal)
 		s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-			run.ID.String(), "failure", mustJSON(map[string]any{"error": "require_inspectable_llm: the resolved LLM transport is opaque (subscription without MITM, or SigV4 Bedrock); enable intercept_tls or use an inspectable transport"})))
+			run.ID.String(), "failure", mustJSON(map[string]any{"error": inspectableLLMRefusal})))
 		return false
 	}
 	return true
@@ -568,6 +584,10 @@ type dispatchLLMPlan struct {
 	// bedrockMITMHosts is the Bedrock bearer's per-run MITM host, if any, as
 	// "host:port" (never a bare host — see authorBedrockBearerInjection, F037).
 	bedrockMITMHosts []string
+	// llmUnavailableDetail is the self-explaining detail the proxy's brokered-LLM
+	// 404 renders when this run reaches that route with no credential behind it
+	// (see llmUnavailableDetail). Empty => the route's own generic detail.
+	llmUnavailableDetail string
 	// mitmLLM is whether the BUILT-IN LLM hosts should be intercepted —
 	// subscription/managed injection or intercept_tls inspection, never a CA
 	// minted purely for artifact tokens. Computed here because every input to it
@@ -597,11 +617,21 @@ type dispatchLLMPlan struct {
 // authorSubscriptionInjection reslices it.
 func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p dispatchParams,
 	policy *types.RunPolicySpec, sandboxEnv map[string]string, injections []runner.InjectionGrant,
-	proxyURL string, artifactPlan artifactRedirectPlan, artifactInject bool,
+	proxyURL string, artifactPlan artifactRedirectPlan, artifactInject bool, siteCfg types.SiteConfig,
 ) (dispatchLLMPlan, bool) {
 	llm := s.resolveLLMTransport(ctx, run, policy, sandboxEnv, injections, p.Interactive, p.TaskMode, proxyURL, p.BedrockRef)
 	if p.ResolvedManaged != nil {
 		*p.ResolvedManaged = llm.injectManaged
+	}
+
+	// NO CROSS-MECHANISM FALLBACK: refuse before a single credential is authored
+	// when the org declared how this agent reaches its model and the transport
+	// just resolved is not that one. Placed here, ahead of the MITM CA and every
+	// grant author, so a refused run mints nothing — see
+	// enforceConfiguredLLMMechanism. A zero-value siteCfg (the read failed) is
+	// legacy open mode: nothing is refused.
+	if !s.enforceConfiguredLLMMechanism(ctx, run, siteCfg, llm, injections) {
+		return dispatchLLMPlan{}, false
 	}
 
 	// Optional TLS-MITM of opaque LLM CONNECT tunnels: provision a per-run CA
@@ -662,7 +692,8 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	return dispatchLLMPlan{
 		llm: llm, injections: injections,
 		mitmCACertPEM: mitmCACertPEM, mitmCAKeyPEM: mitmCAKeyPEM,
-		bedrockMITMHosts: bedrockMITMHosts,
-		mitmLLM:          llm.injectSub || llm.injectManaged || mitmForInspect,
+		bedrockMITMHosts:     bedrockMITMHosts,
+		llmUnavailableDetail: s.llmUnavailableDetail(ctx, llm),
+		mitmLLM:              llm.injectSub || llm.injectManaged || mitmForInspect,
 	}, true
 }

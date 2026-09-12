@@ -16,7 +16,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"maps"
@@ -234,6 +233,39 @@ func joinLLMPath(prefix, rest string) string {
 	return strings.TrimPrefix(prefix, "/") + "/" + rest
 }
 
+// ── DRAFT (M2 canon pending) ────────────────────────────────────────────────
+const (
+	// llmNoCredentialDetail is the brokered-LLM 404's detail when the control
+	// plane composed none: it says what the route IS, so the sandbox's own error
+	// output names the thing to go fix. It replaces "no LLM credential is
+	// brokered for <host>", which named a host the reader could do nothing with.
+	//
+	// DRAFT (M2 canon pending)
+	llmNoCredentialDetail = "no credential is configured for this brokered LLM route"
+
+	// llmBelowPolicyClause is appended to EVERY brokered-LLM 404 detail. A
+	// missing model credential is not a first-use approval and not a policy
+	// tightening a person can widen — an agent that retries, or a member who
+	// goes looking for an Approve button, is burning time on a door that does
+	// not exist. The two field reports this lane comes from both contained that
+	// loop.
+	//
+	// DRAFT (M2 canon pending)
+	llmBelowPolicyClause = "this is below policy: it cannot be approved, and no policy edit changes it."
+)
+
+// llm404Detail is the brokered-LLM 404's self-explaining detail: what the
+// control plane knows about this deployment's model posture (Config.
+// LLMUnavailableDetail, compiled at dispatch), else the generic route sentence —
+// and the below-policy clause either way.
+func llm404Detail(configured string) string {
+	detail := strings.TrimSpace(configured)
+	if detail == "" {
+		detail = llmNoCredentialDetail
+	}
+	return detail + " — " + llmBelowPolicyClause
+}
+
 // proxyLLMRequest is the shared reverse-proxy + inspection path for a brokered
 // LLM upstream. It applies the startup-minted credential, strips every sandbox-
 // supplied credential header, optionally inspects the body (blocking BEFORE the
@@ -248,7 +280,10 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 		p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceLLM, nil)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
-		_, _ = fmt.Fprintf(w, `{"wardyn":"no_llm_credential","detail":"no LLM credential is brokered for %s"}`, host)
+		body, _ := json.Marshal(map[string]string{
+			"wardyn": "no_llm_credential", "detail": llm404Detail(p.llmUnavailableDetail),
+		})
+		_, _ = w.Write(body)
 		return
 	}
 

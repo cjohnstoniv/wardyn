@@ -182,6 +182,11 @@ type Proxy struct {
 	// Empty == every brokered LLM route dials the vendor host, byte-identical
 	// to today. See llmUpstream.
 	llmUpstreams map[string]llmUpstream
+	// llmUnavailableDetail is the CONTROL-PLANE-composed reason the brokered-LLM
+	// 404 gives when no credential is behind the route (Options.
+	// LLMUnavailableDetail). Empty == the generic route sentence; the
+	// below-policy clause is appended either way. See llm404Detail.
+	llmUnavailableDetail string
 	// gatewayVendor is the REVERSE of llmUpstreams (gateway host -> vendor
 	// public host), feeding isLLMHost/channelForHost so gateway traffic is
 	// recognised as LLM traffic (coverage/classification only — the SSRF vet
@@ -274,6 +279,10 @@ type Options struct {
 	// gateway base URL (Config.LLMUpstreams, forwarded verbatim). Empty == every
 	// brokered LLM route dials the vendor host. See Proxy.llmUpstreams.
 	LLMUpstreams map[string]string
+	// LLMUnavailableDetail is the control-plane's reason the brokered-LLM 404
+	// gives when no credential is behind the route (Config.LLMUnavailableDetail,
+	// forwarded verbatim). Empty == the generic route sentence. See llm404Detail.
+	LLMUnavailableDetail string
 	// Dial overrides the connection dialer (tests). Production leaves it nil
 	// and a net.Dialer is used.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -421,34 +430,35 @@ func newProxy(opts Options) *Proxy {
 		gatewayVendor[host] = vendor
 	}
 	p := &Proxy{
-		runID:            opts.RunID,
-		policy:           opts.Policy,
-		evaluator:        evaluator,
-		approval:         opts.Approval,
-		inject:           opts.Injector,
-		sink:             opts.Sink,
-		res:              res,
-		scanner:          opts.Scanner,
-		ca:               opts.CA,
-		mitmHosts:        mitmHosts,
-		mitmPorts:        mitmPorts,
-		mitmLLM:          opts.MITMLLM,
-		gitGrants:        gitGrants,
-		patGrants:        patGrants,
-		gitTokens:        make(map[uuid.UUID]*gitTokEntry),
-		controlPlaneURL:  strings.TrimRight(opts.ControlPlaneURL, "/"),
-		runToken:         opts.RunToken,
-		upstream:         opts.Upstream,
-		topologyRe:       topologyPatterns(strings.TrimRight(opts.ControlPlaneURL, "/"), opts.Upstream),
-		noProxy:          compileNoProxy(opts.UpstreamNoProxy),
-		internalHosts:    internalHosts,
-		localSubnets:     opts.LocalSubnets,
-		controlPlaneIPs:  opts.ControlPlaneIPs,
-		exclusionUnknown: opts.ExclusionUnknown,
-		llmUpstreams:     llmUpstreams,
-		gatewayVendor:    gatewayVendor,
-		dial:             dial,
-		now:              now,
+		runID:                opts.RunID,
+		policy:               opts.Policy,
+		evaluator:            evaluator,
+		approval:             opts.Approval,
+		inject:               opts.Injector,
+		sink:                 opts.Sink,
+		res:                  res,
+		scanner:              opts.Scanner,
+		ca:                   opts.CA,
+		mitmHosts:            mitmHosts,
+		mitmPorts:            mitmPorts,
+		mitmLLM:              opts.MITMLLM,
+		gitGrants:            gitGrants,
+		patGrants:            patGrants,
+		gitTokens:            make(map[uuid.UUID]*gitTokEntry),
+		controlPlaneURL:      strings.TrimRight(opts.ControlPlaneURL, "/"),
+		runToken:             opts.RunToken,
+		upstream:             opts.Upstream,
+		topologyRe:           topologyPatterns(strings.TrimRight(opts.ControlPlaneURL, "/"), opts.Upstream),
+		noProxy:              compileNoProxy(opts.UpstreamNoProxy),
+		internalHosts:        internalHosts,
+		localSubnets:         opts.LocalSubnets,
+		controlPlaneIPs:      opts.ControlPlaneIPs,
+		exclusionUnknown:     opts.ExclusionUnknown,
+		llmUpstreams:         llmUpstreams,
+		llmUnavailableDetail: opts.LLMUnavailableDetail,
+		gatewayVendor:        gatewayVendor,
+		dial:                 dial,
+		now:                  now,
 	}
 
 	// directDial dials the vetted IP carried on the request context and never

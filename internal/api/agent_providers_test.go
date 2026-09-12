@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -411,7 +412,17 @@ func agentRosterFixture(t *testing.T, block *types.AgentProviders) *Server {
 	// before the roster is ever consulted, and the member arm below would pass
 	// for the wrong reason.
 	cfg.OIDC = &oidc.Authenticator{}
-	cfg.Secrets = &memSecrets{m: map[string][]byte{govCorpSecret: []byte("v")}}
+	cfg.Secrets = &memSecrets{m: map[string][]byte{
+		govCorpSecret: []byte("v"),
+		// C2's declared-mechanism gate refuses a MODEL run at create when the
+		// lane the row declares is not the one that would carry it, so a roster
+		// fixture has to configure the lane its rows name — otherwise every
+		// "an enabled row admits its agent" arm below would pass or fail on the
+		// model credential rather than on the roster.
+		bedrockAPIKeySecret: []byte("bedrock-bearer-test"),
+	}}
+	cfg.BedrockRegion, cfg.BedrockModel = "us-east-1", "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+	cfg.MaskRegistry = secretmask.NewRegistry()
 	cfg.DefaultPolicy = govDeployment()
 	return New(cfg)
 }
@@ -514,6 +525,14 @@ func TestAgentRosterRefusesRecordLaunch(t *testing.T) {
 		cfg := baseTestConfig(h, ceilingRecordStore{recordLLMModeStore: st})
 		cfg.Runner = fr
 		cfg.Broker = h.broker
+		// A record session is an INTERACTIVE MODEL run, so C2's declared-mechanism
+		// gate applies to it: a row naming a Bedrock lane with no Bedrock
+		// credential anywhere would refuse the launch on THAT ground and never
+		// exercise the roster check this test is about. Configure the lane the rows
+		// below declare, so the only refusal left to observe is the roster's.
+		cfg.BedrockRegion, cfg.BedrockModel = "us-east-1", "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+		cfg.Secrets = &memSecrets{m: map[string][]byte{bedrockAPIKeySecret: []byte("bedrock-bearer-test")}}
+		cfg.MaskRegistry = secretmask.NewRegistry()
 		return New(cfg), fr
 	}
 
