@@ -176,6 +176,7 @@ func TestClampAndComparatorAgreeOnEveryCeilingShape(t *testing.T) {
 				out, warns := composer.Clamp(
 					types.RunPolicySpec{EligibleGrants: []types.GrantSpec{tc.proposal}},
 					types.RunPolicySpec{EligibleGrants: ceiling},
+					0,
 				)
 				return out.EligibleGrants, warns
 			}

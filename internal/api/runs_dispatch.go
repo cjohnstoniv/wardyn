@@ -347,6 +347,13 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// create-time deny is defeated by those widenings — the artifact-redirect
 	// phase adds corp hosts AND authors token injections for them mid-dispatch.
 	// A no-op with no assigned profile. See reassertCeilingDenies.
+	//
+	// EPHEMERAL DISK — the ONE fill + clamp, immediately above the re-assertion so
+	// the row that phase writes carries the effective size. See applyEphemeralDisk:
+	// the policy's own disk_mib, else the org's default_disk_mib, clamped to
+	// min(provider maximum, this profile's maximum). Never a refusal, and a zero
+	// request with no org default stays unbounded.
+	diskFilled := applyEphemeralDisk(ctx, run, &policy, siteCfg, ceiling)
 	s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, &p, sandboxEnv)
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
@@ -375,6 +382,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// halves — after EVERY writer above, so the "already set" guards each of them
 	// runs saw the whole map. See splitSecretEnv (it moves, never copies).
 	secretEnv := splitSecretEnv(sandboxEnv, append(secretEnvKeys, llm.secretEnvKeys...))
+
+	resources := resourceLimitsToRunner(policy.Resources)
+	resources.DiskMiBFilled = diskFilled
 
 	spec := runner.SandboxSpec{
 		RunID:            run.ID,
@@ -455,8 +465,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		// driver's conservative platform default, so EVERY sandbox is CPU/memory/
 		// PID capped even when the policy sets nothing — a fleet of independent
 		// agents must not be able to OOM-kill, fork-bomb, or disk-fill the host or
-		// each other (C5).
-		Resources: resourceLimitsToRunner(policy.Resources),
+		// each other (C5). DiskMiB is whatever applyEphemeralDisk above settled on,
+		// and DiskMiBFilled is its provenance: a driver that cannot enforce a cap
+		// refuses a run that ASKED for one and degrades one that merely inherited
+		// the org default (runner.Resources.DiskMiBFilled).
+		Resources: resources,
 		Labels: map[string]string{
 			"wardyn.run":   run.ID.String(),
 			"wardyn.agent": run.Agent,
@@ -479,7 +492,9 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// Clone with the values replaced by a count; the live `policy` the ProxyConfig
 	// snapshot below references still carries the real values.
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.effective",
-		run.ID.String(), "success", mustJSON(auditablePolicy(policy))))
+		run.ID.String(), "success", mustJSON(effectivePolicyDatum{
+			RunPolicySpec: auditablePolicy(policy), DiskMiBFilled: diskFilled,
+		})))
 
 	// Stamped BEFORE CreateSandbox, not after (review round 2, L7): the row
 	// still carries the heartbeat it was born with, which any image

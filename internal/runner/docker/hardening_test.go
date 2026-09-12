@@ -866,6 +866,55 @@ func TestApplyDiskQuota_DriverWithoutSizeOptRunsUncapped(t *testing.T) {
 	}
 }
 
+// TestApplyDiskQuota_OrgDefaultOnUnenforceableHostRunsUncapped is S0's half of
+// the fail-closed asymmetry, and the reason runner.Resources carries a
+// provenance bit at all.
+//
+// SAME HOST, SAME NUMBER, two outcomes. A policy's own disk_mib on overlay2 over
+// ext4 must still fail the create closed (the sibling test above). The org's
+// storage.ephemeral.default_disk_mib must NOT: it reaches laptops by MDM and the
+// desktop tier IS overlay2 over ext4, so failing closed there would brick every
+// request-less desktop run the day an admin typed a number for the Kubernetes
+// half of the estate. Nobody asked this run for a cap.
+func TestApplyDiskQuota_OrgDefaultOnUnenforceableHostRunsUncapped(t *testing.T) {
+	info := system.Info{
+		Driver:       "overlay2",
+		DriverStatus: [][2]string{{"Backing Filesystem", "ext4"}},
+	}
+
+	var hc *container.HostConfig
+	logged := captureSlog(t, func() {
+		hc = hardenedHostConfig("none", "", runner.Resources{DiskMiB: 2048, DiskMiBFilled: true}, info)
+	})
+	// UNCAPPED: the size opt never reaches the daemon, so the daemon never
+	// refuses the create.
+	if _, ok := hc.StorageOpt["size"]; ok {
+		t.Errorf("StorageOpt = %v, want no size opt — a FILLED org default must degrade, not fail the run closed", hc.StorageOpt)
+	}
+	if !strings.Contains(logged, "org default not enforceable on this host") {
+		t.Errorf("the degrade is silent; want the org-default warning: %q", logged)
+	}
+	// The word the admin surface reads, in the line itself.
+	if !strings.Contains(logged, string(types.StorageEnforcementNone)) {
+		t.Errorf("the warning never names enforcement %q: %q", types.StorageEnforcementNone, logged)
+	}
+
+	// THE COUNTERFACTUAL, on the same host: without the bit this is a
+	// policy-authored cap and the fail-closed arm is unchanged.
+	hc = hardenedHostConfig("none", "", runner.Resources{DiskMiB: 2048}, info)
+	if got := hc.StorageOpt["size"]; got != "2048m" {
+		t.Errorf("StorageOpt[size] = %q, want 2048m — a POLICY-AUTHORED disk_mib still fails closed here", got)
+	}
+
+	// A host that CAN enforce ignores the bit entirely: a filled default is a
+	// real cap there, which is the whole point of setting one.
+	enforcing := system.Info{Driver: "overlay2", DriverStatus: [][2]string{{"Backing Filesystem", "xfs"}}}
+	hc = hardenedHostConfig("none", "", runner.Resources{DiskMiB: 2048, DiskMiBFilled: true}, enforcing)
+	if got := hc.StorageOpt["size"]; got != "2048m" {
+		t.Errorf("StorageOpt[size] = %q, want 2048m — a filled default is enforced where the host can enforce it", got)
+	}
+}
+
 // captureSlog runs fn with the default slog logger pointed at a buffer and
 // returns everything it wrote. The default logger is restored on cleanup.
 func captureSlog(t *testing.T, fn func()) string {

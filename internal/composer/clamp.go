@@ -101,7 +101,23 @@ func EffectiveConfinementFloor(policyMin, floor, cap types.ConfinementClass) typ
 //     requires_approval forced on when the ceiling requires it;
 //   - workspace_mounts dropped entirely — host mounts are operator-authored and a
 //     composer (fed untrusted input) must never be able to introduce one.
-func Clamp(proposed, ceiling types.RunPolicySpec) (types.RunPolicySpec, []string) {
+//
+// maxEphemeralDiskMiB is the acting principal's GovernanceLimits.
+// MaxEphemeralDiskMiB (0 = unlimited), and it is a separate argument rather than
+// a field of the ceiling SPEC because that is what it is: a limit beside the
+// ceiling, not inside it. It exists here for PREVIEW PARITY — dispatch is the one
+// site that binds the limit for every lane (runs_dispatch_ceiling.go's
+// applyEphemeralDisk), so without this argument POST /runs/preflight and the New
+// Run Review rail would show a size the run then silently does not get. The two
+// share one min() (CapDiskMiB) so they cannot drift.
+//
+// It CLAMPS A NON-ZERO REQUEST ONLY — deliberately not capField's zero-fill
+// idiom. A zero disk_mib means "unbounded scratch" and must stay that way: the
+// only thing that fills a zero is the org's own storage.ephemeral.
+// default_disk_mib, at dispatch, because filling from a MAXIMUM would hand every
+// request-less run the ceiling as its size and the docker driver fails a create
+// closed on overlay2-over-ext4 (every laptop) the moment DiskMiB is non-zero.
+func Clamp(proposed, ceiling types.RunPolicySpec, maxEphemeralDiskMiB int) (types.RunPolicySpec, []string) {
 	out := proposed
 	var warns []string
 
@@ -268,8 +284,12 @@ func Clamp(proposed, ceiling types.RunPolicySpec) (types.RunPolicySpec, []string
 		capField(&cr.MemoryMiB, effCeilingResources.MemoryMiB)
 		capField(&cr.PidsLimit, effCeilingResources.PidsLimit)
 		capField(&cr.DiskMiB, effCeilingResources.DiskMiB)
+		// The governance LIMIT, folded into the same warning: it bounds a size
+		// the caller (or the spec cap above) actually asked for and never fills
+		// a zero — see the argument's doc comment. Same min() dispatch applies.
+		cr.DiskMiB = CapDiskMiB(cr.DiskMiB, maxEphemeralDiskMiB)
 		if before == nil || cr != *before {
-			warns = append(warns, "resources capped to operator maximum")
+			warns = append(warns, WarnResourcesCapped)
 			out.Resources = &cr
 		}
 	}
@@ -365,6 +385,27 @@ func firstUseApprovalRank(m types.FirstUseMode) int {
 // a run that legitimately asked for a class STRONGER than the floor is left as-is —
 // and an empty/unknown run class ranks 0, so it too is raised to the floor. Returns
 // the (possibly raised) class and a non-empty warning when it tightened.
+// WarnResourcesCapped is what a caller is told when a resource field was bounded
+// by the operator's ceiling. It is a const because dispatch's own ephemeral-disk
+// clamp says the SAME thing about the SAME number (runs_dispatch_ceiling.go) —
+// two hand-typed copies of one sentence is how a preview stops matching the run.
+const WarnResourcesCapped = "resources capped to operator maximum"
+
+// CapDiskMiB bounds a NON-ZERO ephemeral-disk size by ONE operator ceiling, with
+// 0 on either side meaning "no bound". It is the whole min() expression, in one
+// place, because it has two call sites that must never disagree: Clamp above
+// (what POST /runs/preflight and the Review rail show) and dispatch's fill+clamp
+// (what the sandbox gets). Sharing the function is why there is no test pinning
+// that the two agree — they are the same code.
+//
+// A ZERO disk STAYS ZERO. A ceiling bounds a request; it does not invent one.
+func CapDiskMiB(disk, ceil int) int {
+	if disk > 0 && ceil > 0 && ceil < disk {
+		return ceil
+	}
+	return disk
+}
+
 func ClampRunConfinement(runClass string, floor types.ConfinementClass) (string, string) {
 	if fr := confinementRank(floor); fr > 0 && confinementRank(types.ConfinementClass(runClass)) < fr {
 		return string(floor), fmt.Sprintf("run confinement raised from %q to policy floor %q", runClass, floor)

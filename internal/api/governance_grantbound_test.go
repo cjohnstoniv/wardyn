@@ -332,6 +332,7 @@ func TestClampAndComparatorAreOneRule(t *testing.T) {
 	clamped, warns := composer.Clamp(
 		types.RunPolicySpec{EligibleGrants: []types.GrantSpec{proposal}},
 		types.RunPolicySpec{EligibleGrants: deployment},
+		0,
 	)
 	if len(clamped.EligibleGrants) != 1 {
 		t.Fatalf("clamp dropped the grant (warns=%q); it should bound it, not refuse it", warns)

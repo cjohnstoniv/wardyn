@@ -455,9 +455,21 @@ func kvmDeviceGID() string {
 	return ""
 }
 
+// orgDefaultDiskNotEnforceable is what a host says when the size it was handed
+// is the ORG's default rather than a policy's own request and this host cannot
+// keep it: the run goes UNCAPPED instead of failing closed. See
+// runner.Resources.DiskMiBFilled for why that asymmetry is the whole point of
+// the bit.
+//
+// DRAFT (M2 canon pending)
+const orgDefaultDiskNotEnforceable = "wardyn/docker: org default not enforceable on this host — " +
+	"storage.ephemeral.default_disk_mib was filled in for this run and overlay2 over non-xfs cannot carry the quota, " +
+	"so the run proceeds WITHOUT a disk cap rather than failing closed (a policy's own disk_mib still fails closed here); " +
+	"enforcement: none, matching /setup/status"
+
 // applyDiskQuota sets the per-container writable-storage cap (StorageOpt "size")
 // when the spec requests one (DiskMiB>0). A DiskMiB of 0 is the common case and
-// never warns. Above 0 there are exactly three outcomes, and which one a host
+// never warns. Above 0 there are exactly four outcomes, and which one a host
 // gets is decided here rather than left to a surprise at ContainerCreate:
 //
 //   - The driver can ENFORCE the cap (storageDriverSupportsQuota): the size opt
@@ -469,12 +481,23 @@ func kvmDeviceGID() string {
 //     never applied. Only the daemon can settle this (see
 //     storageDriverSupportsQuota), so we warn FIRST, naming xfs — otherwise the
 //     operator's only evidence is the daemon's own bare create error.
+//   - SAME HOST, but the size was FILLED IN from the org's
+//     storage.ephemeral.default_disk_mib (res.DiskMiBFilled): the run goes
+//     uncapped with a warning instead. Nobody asked this run for a cap; an
+//     org-wide default reaches laptops by MDM and the desktop tier IS overlay2
+//     over ext4, so fail-closed here would brick every request-less desktop run
+//     the day an admin typed a number for the cluster half of the estate.
 //   - The driver cannot take a size opt at all (vfs, fuse-overlayfs, ...): we do
 //     NOT hard-break the run. We log a clear, visible warning and proceed
 //     uncapped — the codebase's "visible blindness" posture (never silently
 //     claim a control we cannot enforce, but do not punish a run for an
 //     operator's storage-driver choice). docs/POLICIES.md's disk_mib row states
 //     this outcome, and the k8s substrate behaves the same way.
+//
+// ponytail: every outcome above is disclosed by slog alone, because a driver has
+// no run-warnings channel to write to (the same absence runs_dispatch_mounts.go
+// names at its own member-facing seam). The word the ADMIN reads is carried
+// separately, on Capabilities.EphemeralDiskEnforcement.
 func applyDiskQuota(hc *container.HostConfig, res runner.Resources, info system.Info) {
 	if res.DiskMiB <= 0 {
 		return
@@ -482,6 +505,14 @@ func applyDiskQuota(hc *container.HostConfig, res runner.Resources, info system.
 	switch {
 	case storageDriverSupportsQuota(info):
 		// Enforced.
+	case storageDriverTakesSizeOpt(info.Driver) && res.DiskMiBFilled:
+		slog.Warn(orgDefaultDiskNotEnforceable,
+			slog.Int64("disk_mib", res.DiskMiB),
+			slog.String("storage_driver", info.Driver),
+			slog.String("backing_filesystem", strings.ToLower(driverStatusValue(info, "Backing Filesystem"))),
+			slog.String("enforcement", string(types.StorageEnforcementNone)),
+		)
+		return
 	case storageDriverTakesSizeOpt(info.Driver):
 		// Reachable for overlay2 ONLY: btrfs and zfs take the opt AND always
 		// enforce it, so they are already answered by the case above. The message

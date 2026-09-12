@@ -296,7 +296,7 @@ func TestClampApprovalAxisThroughTheExportedClamp(t *testing.T) {
 		githubGrant(t, []string{"org/alpha", "org/beta"}, map[string]string{"contents": "read"}, false, 600),
 	}}
 
-	out, warns := Clamp(proposed, ceiling)
+	out, warns := Clamp(proposed, ceiling, 0)
 	if len(out.EligibleGrants) != 1 {
 		t.Fatalf("Clamp returned %d grants, want 1 (warns=%q)", len(out.EligibleGrants), warns)
 	}

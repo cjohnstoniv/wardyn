@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cjohnstoniv/wardyn/internal/composer"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -68,6 +69,16 @@ type dispatchCeiling struct {
 	// profile is the assigned profile's NAME, for the run.ceiling.reassert audit
 	// event. Nothing branches on it.
 	profile string
+	// maxEphemeralDiskMiB is GovernanceLimits.MaxEphemeralDiskMiB — the profile's
+	// ceiling on the writable scratch a run gets, 0 = unlimited. It rides here for
+	// the same reason deny does: applyEphemeralDisk is a dispatch phase, and the
+	// ceiling is already this function's argument.
+	//
+	// A CLAMP, NOT A DENY, so it shares nothing with the deny machinery below: no
+	// lane is withheld and no run is refused, which is forced by disk_mib being
+	// authored on POLICIES (a refusal would break every stored policy the day an
+	// admin first writes a limit — internal/types/governance.go says so).
+	maxEphemeralDiskMiB int
 }
 
 // ceilingForDispatch is the ONE translation from a resolved ceiling into the
@@ -86,7 +97,108 @@ func ceilingForDispatch(c governanceCeiling) dispatchCeiling {
 	if c.Profile == nil {
 		return dispatchCeiling{resolved: true}
 	}
-	return dispatchCeiling{resolved: true, deny: c.Spec.DeniedDomains, profile: c.Profile.Name}
+	return dispatchCeiling{
+		resolved: true, deny: c.Spec.DeniedDomains, profile: c.Profile.Name,
+		maxEphemeralDiskMiB: c.Limits.MaxEphemeralDiskMiB,
+	}
+}
+
+// effectivePolicyDatum is the run.policy.effective snapshot: the audited policy
+// plus one fact about it that is not a policy field.
+//
+// The spec is EMBEDDED, so the JSON object stays byte-for-byte the policy
+// snapshot every existing reader parses, plus at most one key. That matters —
+// docs/AUDIT-ACTIONS.md calls this datum "(full policy snapshot)" and the
+// run-detail Effective-policy widget reads it.
+//
+// disk_mib_filled rather than an enforcement WORD: the provenance of the size is
+// what dispatch actually holds. Whether a cap binds is the host's answer, decided
+// per driver inside applyDiskQuota from `docker info`, and the orchestrator
+// aggregates only the WEAKEST word across substrates — so naming one here would
+// disclose a guess. The bit says the thing that follows from it: this size was
+// filled in from the org default, so a host that cannot keep it runs UNCAPPED
+// instead of refusing the run.
+type effectivePolicyDatum struct {
+	types.RunPolicySpec
+	DiskMiBFilled bool `json:"disk_mib_filled,omitempty"`
+}
+
+// applyEphemeralDisk is THE site where a run's ephemeral scratch size is decided,
+// and it decides it for every dispatch lane there is. Returns whether the number
+// it left on the policy was FILLED IN rather than asked for (runner.Resources.
+// DiskMiBFilled — the bit a driver that cannot enforce a cap needs).
+//
+// Precedence, once: the request/policy's own resources.disk_mib → FILLED from the
+// org's storage.ephemeral.default_disk_mib when that is zero → CLAMPED to
+// min(storage.ephemeral.max_disk_mib, the profile's MaxEphemeralDiskMiB), zeros
+// meaning "no bound" on either side.
+//
+// A ZERO REQUEST WITH NO ORG DEFAULT STAYS ZERO — unbounded scratch, byte-for-byte
+// today. A maximum bounds a REQUEST; it never invents one, and this is not
+// composer.Clamp's capField idiom (which does fill a zero up to a SPEC cap):
+// filling from a maximum would give every request-less run a non-zero DiskMiB, and
+// the docker driver fails a create closed on overlay2-over-ext4 — Docker Desktop,
+// WSL2, stock Ubuntu — so a single admin number would have bricked every laptop
+// run in the estate. The FILL itself is bounded by the same asymmetry on the other
+// side: it degrades to uncapped there rather than failing the run closed, which is
+// what DiskMiBFilled buys (see applyDiskQuota).
+//
+// WHY HERE and not on the create path: resolvePolicy deliberately does not clamp
+// an admin-authored STORED policy, and resourceLimitsToRunner is a pure mapper
+// with neither the ceiling nor the site config in scope. Dispatch is the one seam
+// holding all three — after every widening phase, before resourceLimitsToRunner
+// and before the run.policy.effective envelope, which is what discloses the
+// effective number to every caller. A profile's own clamp is additionally
+// disclosed in run.ceiling.reassert below.
+//
+// SCOPE, which differs per ceiling on purpose: storage.ephemeral.max_disk_mib is
+// the ORG's number and binds EVERY caller, operators and unassigned members
+// included; MaxEphemeralDiskMiB binds ASSIGNED MEMBERS ONLY, because
+// ceilingForDispatch above returns no limits at all for Profile == nil (an
+// operator short-circuits earlier still, at effectiveCeiling's step 1).
+//
+// The min() is composer.CapDiskMiB, shared with composer.Clamp so a member's
+// POST /runs/preflight preview and this run cannot disagree about the number.
+func applyEphemeralDisk(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec,
+	siteCfg types.SiteConfig, c dispatchCeiling,
+) bool {
+	var eph types.EphemeralProvider
+	if wp := siteCfg.WorkspaceProviders; wp != nil && wp.Storage != nil && wp.Storage.Ephemeral != nil {
+		eph = *wp.Storage.Ephemeral
+	}
+	requested := 0
+	if policy.Resources != nil {
+		requested = policy.Resources.DiskMiB
+	}
+	disk, filled := requested, false
+	if disk == 0 && eph.DefaultDiskMiB > 0 {
+		disk, filled = eph.DefaultDiskMiB, true
+	}
+	disk = composer.CapDiskMiB(disk, eph.MaxDiskMiB)
+	disk = composer.CapDiskMiB(disk, c.maxEphemeralDiskMiB)
+	if disk == requested {
+		return false
+	}
+	// A FRESH block, never an in-place write: policy is a SHALLOW copy of the
+	// caller's spec (runs_dispatch.go), so its Resources pointer is still the
+	// caller's — and for a run that authored no policy that is the process-global
+	// default/ceiling spec. Same reason composer.Clamp rebuilds the struct.
+	rl := types.ResourceLimits{}
+	if policy.Resources != nil {
+		rl = *policy.Resources
+	}
+	rl.DiskMiB = disk
+	policy.Resources = &rl
+	if filled {
+		slog.InfoContext(ctx, "wardynd: ephemeral disk filled from the org default; a host that cannot enforce it runs uncapped rather than failing closed",
+			slog.String("run_id", run.ID.String()), slog.Int("disk_mib", disk))
+		return true
+	}
+	slog.InfoContext(ctx, "wardynd: "+composer.WarnResourcesCapped,
+		slog.String("run_id", run.ID.String()), slog.Int("requested_disk_mib", requested),
+		slog.Int("disk_mib", disk), slog.Int("provider_max_disk_mib", eph.MaxDiskMiB),
+		slog.Int("profile_max_disk_mib", c.maxEphemeralDiskMiB))
+	return false
 }
 
 // resolveDispatchCeiling is effectiveCeiling + ceilingForDispatch, for the lanes
@@ -273,16 +385,30 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 	// denied_domains is exactly where that question is hardest to answer any
 	// other way: nothing about the dispatch changes, so this row is the ONLY
 	// evidence of which walls the run stood inside.
-	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.ceiling.reassert",
-		run.ID.String(), "success", mustJSON(map[string]any{
-			"profile":                 c.profile,
-			"denied_added":            added,
-			"dropped_injection_hosts": droppedInjection,
-			"dropped_broker_lanes":    droppedLane,
-			"note": "the acting principal's governance profile denies these hosts; the denies are unioned into the run policy " +
+	data := map[string]any{
+		"profile":                 c.profile,
+		"denied_added":            added,
+		"dropped_injection_hosts": droppedInjection,
+		"dropped_broker_lanes":    droppedLane,
+		"note": "the acting principal's governance profile denies these hosts; the denies are unioned into the run policy " +
 				"(deny beats allow and allow_all_egress at the proxy) and every credential lane that reaches a denied host is withheld — " +
 				"the brokered git/PAT routes mint proxy-side and never consult denied_domains, so dropping the lane is the only thing that binds them",
-		})))
+	}
+	// The SIZE half of the profile, present only when the profile sets one — so a
+	// profile written before 0.7.2 produces a byte-identical row. applyEphemeralDisk
+	// ran just above this phase, so ephemeral_disk_mib is the effective number the
+	// sandbox gets; run.policy.effective discloses it to everyone, and this says
+	// whose ceiling shaped it.
+	if c.maxEphemeralDiskMiB > 0 {
+		data["max_ephemeral_disk_mib"] = c.maxEphemeralDiskMiB
+		effective := 0
+		if policy.Resources != nil {
+			effective = policy.Resources.DiskMiB
+		}
+		data["ephemeral_disk_mib"] = effective
+	}
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.ceiling.reassert",
+		run.ID.String(), "success", mustJSON(data)))
 }
 
 // dropBrokeredLanes withholds the git-broker and PAT-broker grants whose

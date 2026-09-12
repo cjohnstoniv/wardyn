@@ -50,8 +50,13 @@ import (
 // errPrefix is the ONLY thing the two callers differ on, and it stays theirs —
 // naming the wrong input back at the caller is a worse error message, not a
 // smaller one. Returns ok==false when the response is already written.
-func (s *Server) boundMemberSpec(ctx context.Context, w http.ResponseWriter, r *http.Request, spec, ceilingSpec types.RunPolicySpec, errPrefix string, dryRun bool) (types.RunPolicySpec, []string, bool) {
-	spec, warns := composer.Clamp(spec, ceilingSpec)
+//
+// It takes the WHOLE resolved ceiling rather than its spec: stage 1 needs the
+// request-shape limits beside the spec too (GovernanceLimits.MaxEphemeralDiskMiB,
+// which dispatch is the authority on — this call is what makes the member's
+// PREVIEW of it agree, see composer.Clamp).
+func (s *Server) boundMemberSpec(ctx context.Context, w http.ResponseWriter, r *http.Request, spec types.RunPolicySpec, ceiling governanceCeiling, errPrefix string, dryRun bool) (types.RunPolicySpec, []string, bool) {
+	spec, warns := composer.Clamp(spec, ceiling.Spec, ceiling.Limits.MaxEphemeralDiskMiB)
 	kept, grantWarns, code, gerr := s.filterMemberGrants(ctx, s.secretOwnerFromRequest(r), spec.AllowedDomains, spec.EligibleGrants)
 	if gerr != nil {
 		writeError(w, code, errPrefix+gerr.Error())
@@ -196,7 +201,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 			// by runs.go/preflight.go AFTER this function returns.
 			var warns []string
 			var bounded bool
-			spec, warns, bounded = s.boundMemberSpec(ctx, w, r, spec, ceiling.Spec, "invalid inline_policy: ", dryRun)
+			spec, warns, bounded = s.boundMemberSpec(ctx, w, r, spec, ceiling, "invalid inline_policy: ", dryRun)
 			if !bounded {
 				return types.RunPolicySpec{}, nil, nil, false
 			}
@@ -287,17 +292,58 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	if policyID != nil && ceiling.Profile != nil && !s.isOperator(r.Context()) {
 		var warns []string
 		var bounded bool
-		spec, warns, bounded = s.boundMemberSpec(ctx, w, r, spec, ceiling.Spec, "invalid policy: ", dryRun)
+		spec, warns, bounded = s.boundMemberSpec(ctx, w, r, spec, ceiling, "invalid policy: ", dryRun)
 		if !bounded {
 			return types.RunPolicySpec{}, nil, nil, false
 		}
 		storedWarns = append(storedWarns, warns...)
+	}
+	// THE SIZE HALF, for the arm composer.Clamp never reaches. The block above
+	// runs only for a member who SELECTED a stored row (policyID != nil), but the
+	// commonest member request there is carries no policy at all — and its spec is
+	// then the profile's OWN ceiling, which an admin may well have written wider
+	// than the limit standing beside it. That member previewed a scratch size
+	// their run does not get, and a dispatch-side log line is not a disclosure to
+	// them.
+	//
+	// SAFE ON BOTH ARMS: it is the same min() dispatch applies
+	// (composer.CapDiskMiB), so on the stored arm the value is already at the
+	// bound and this is a provable no-op that cannot double-warn.
+	//
+	// IT CLAMPS ONLY. The org's default_disk_mib FILL is dispatch's alone: a fill
+	// written into the spec here would reach the driver as a POLICY-AUTHORED size
+	// and be refused at create on every overlay2-over-ext4 host, which is the
+	// whole reason runner.Resources carries DiskMiBFilled.
+	if ceiling.Profile != nil && !s.isOperator(r.Context()) &&
+		capEphemeralDiskPreview(&spec, ceiling.Limits.MaxEphemeralDiskMiB) {
+		storedWarns = append(storedWarns, composer.WarnResourcesCapped)
 	}
 	if code, err := s.validateInlineSecretRefs(ctx, s.secretOwnerFromRequest(r), spec); err != nil {
 		writeError(w, code, "invalid policy: "+err.Error())
 		return types.RunPolicySpec{}, nil, nil, false
 	}
 	return spec, policyID, storedWarns, true
+}
+
+// capEphemeralDiskPreview bounds spec's disk_mib by the profile's
+// MaxEphemeralDiskMiB and reports whether it changed anything.
+//
+// A FRESH Resources block, never an in-place write: one shared *ResourceLimits
+// would re-size every later run that reads it — the same aliasing rule dispatch
+// obeys, and the reason composer.Clamp rebuilds the struct instead of editing
+// the caller's.
+func capEphemeralDiskPreview(spec *types.RunPolicySpec, maxEphemeralDiskMiB int) bool {
+	if spec.Resources == nil {
+		return false
+	}
+	capped := composer.CapDiskMiB(spec.Resources.DiskMiB, maxEphemeralDiskMiB)
+	if capped == spec.Resources.DiskMiB {
+		return false
+	}
+	rl := *spec.Resources
+	rl.DiskMiB = capped
+	spec.Resources = &rl
+	return true
 }
 
 // memberEnvSecretIsAdminOnly is THE env_secret posture rule, in one place: a

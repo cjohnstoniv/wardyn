@@ -334,6 +334,24 @@ type Resources struct {
 	// enforces it by EVICTING the pod (periodically measured; the write is never
 	// refused).
 	DiskMiB int64
+	// DiskMiBFilled says DiskMiB was FILLED IN for this run from the org's
+	// storage.ephemeral.default_disk_mib rather than authored on its policy —
+	// the one bit that tells a driver whose host cannot enforce a cap whether
+	// refusing the run is the honest answer or the destructive one.
+	//
+	// An org default arrives by MDM (site-config on every desktop boot), and the
+	// desktop tier is overlay2 over ext4, where the docker driver's disk quota
+	// FAILS THE CREATE CLOSED. Failing closed is right for a cap a policy asked
+	// for and this host cannot keep; applied to a fleet-wide default it would
+	// brick every request-less run on every laptop the moment an admin typed a
+	// number for the Kubernetes half of the estate. So a FILLED value degrades
+	// to uncapped-with-a-warning there (enforcement `none`), while a
+	// POLICY-AUTHORED DiskMiB keeps today's fail-closed arm exactly.
+	//
+	// The k8s substrate ignores the bit on purpose: an ephemeral-storage limit
+	// is set and the kubelet evicts either way, so there is no unenforceable
+	// case for it to degrade.
+	DiskMiBFilled bool
 }
 
 // AttachOptions configures an interactive attach. Cols/Rows are the initial PTY
