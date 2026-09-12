@@ -22,6 +22,7 @@ import {
 } from "./corp-network-step";
 import type { CorpNetworkState } from "./steps";
 import { baseStatus } from "../../../lib/test-fixtures";
+import { SITE } from "../../wardyn/copy";
 
 const testProxyMock = vi.fn();
 const testRedirectMock = vi.fn();
@@ -32,6 +33,10 @@ vi.mock("../../../lib/api/health", () => ({
   },
 }));
 
+const toastSuccessMock = vi.fn();
+vi.mock("sonner", () => ({
+  toast: { success: (...a: unknown[]) => toastSuccessMock(...a), error: vi.fn() },
+}));
 const setSecretMock = vi.fn();
 vi.mock("../../../lib/api/secrets", () => ({
   secrets: { setSecret: (...a: unknown[]) => setSecretMock(...a) },
@@ -85,6 +90,7 @@ beforeEach(() => {
   testProxyMock.mockReset();
   testRedirectMock.mockReset();
   setSecretMock.mockReset().mockResolvedValue(undefined);
+  toastSuccessMock.mockReset();
 });
 
 // F22: the trusted-CA count (WARDYN_TRUSTED_CA_FILE), a bare number with no
@@ -441,6 +447,47 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
         }),
       ),
     );
+  });
+
+  // B2 (VL-19): `egress_redirects` is compiled into the sidecar at dispatch,
+  // exactly like the upstream proxy — so every redirect save (add, edit,
+  // remove) carries the "applies to runs started from now" note. Before this
+  // pin only the proxy saves said so; a redirect added mid-run looked applied.
+  describe("every redirect save carries the applies-from-now note (B2)", () => {
+    it("add", async () => {
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      const { saveSiteConfig } = renderStep();
+      await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
+      await user.click(screen.getByRole("combobox"));
+      await user.click(await screen.findByText("https://registry.npmjs.org"));
+      await user.type(screen.getByPlaceholderText(/artifactory\.corp\.internal/i), "https://artifactory.corp.internal/api/npm/npm-remote");
+      await user.click(screen.getByRole("button", { name: /\+ add redirect/i }));
+      await waitFor(() => expect(saveSiteConfig).toHaveBeenCalled());
+      await waitFor(() => expect(toastSuccessMock).toHaveBeenCalledWith(expect.any(String), { description: SITE.SAVE_NOTE }));
+    });
+
+    it("remove", async () => {
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      const { saveSiteConfig } = renderEgress({
+        egress_redirects: [{ from: "https://registry.npmjs.org", to: "https://artifactory.corp.internal/api/npm/npm-remote" }],
+      });
+      await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
+      await user.click(screen.getByRole("button", { name: "Remove https://registry.npmjs.org redirect" }));
+      await waitFor(() => expect(saveSiteConfig).toHaveBeenCalledWith(expect.objectContaining({ egress_redirects: [] })));
+      await waitFor(() => expect(toastSuccessMock).toHaveBeenCalledWith(expect.any(String), { description: SITE.SAVE_NOTE }));
+    });
+
+    it("a failed save shows no note — the error toast is the only voice", async () => {
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      const { saveSiteConfig } = renderEgress({
+        egress_redirects: [{ from: "https://registry.npmjs.org", to: "https://artifactory.corp.internal/api/npm/npm-remote" }],
+      });
+      saveSiteConfig.mockRejectedValueOnce(new Error("boom"));
+      await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
+      await user.click(screen.getByRole("button", { name: "Remove https://registry.npmjs.org redirect" }));
+      await waitFor(() => expect(saveSiteConfig).toHaveBeenCalled());
+      expect(toastSuccessMock).not.toHaveBeenCalled();
+    });
   });
 
   // UI-SETUP-9: the fire-once guard used to be a ref INSIDE EgressTab, which

@@ -24,6 +24,7 @@ import { cn } from "../../ui/utils";
 import { Field } from "../../wardyn/form-primitives";
 import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
+import { SITE } from "../../wardyn/copy";
 
 // Display-compaction for a redirect endpoint: drop the scheme, never touch
 // the host, elide only the MIDDLE of a long path once the whole thing exceeds
@@ -421,7 +422,14 @@ export function EgressTab({
     return seeded;
   });
 
-  const setRedirects = (next: EgressRedirect[]) => mutate({ ...(siteConfig ?? {}), egress_redirects: next }, "Failed to save the egress redirect");
+  // B2: `egress_redirects` is compiled into the sidecar at dispatch, so every
+  // save here (add / edit / remove) says when it applies — the same note the
+  // upstream-proxy saves carry. One site, because every row action routes here.
+  const setRedirects = async (next: EgressRedirect[]) => {
+    if (await mutate({ ...(siteConfig ?? {}), egress_redirects: next }, "Failed to save the egress redirect")) {
+      toast.success("Egress redirects saved", { description: SITE.SAVE_NOTE });
+    }
+  };
 
   const runTest = async (r: EgressRedirect) => {
     setTestStates((s) => ({ ...s, [r.from]: { kind: "running", elapsedSec: 0 } }));
