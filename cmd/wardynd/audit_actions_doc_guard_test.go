@@ -13,11 +13,31 @@ import (
 )
 
 // auditActionCitationWindow is how many lines of slack a citation gets around
-// its cited line(s) before the guard calls it stale — generous enough that a
-// comment shifting a few lines above the real emit site doesn't false-
-// positive, tight enough that a genuine merge-shift (the drift class an
-// integration verify caught 22 instances of by hand) still fails.
-const auditActionCitationWindow = 6
+// its cited line(s) before the guard calls it stale. It is ZERO: a citation
+// must name the line that actually carries the action literal (or one of its
+// own cell's cited symbols), not a line near it.
+//
+// It was 6 for as long as the table had never been re-cited exactly. Six lines
+// of slack is enough to hold a citation that points at the comment or the
+// closing brace ABOVE an emit, which is what most of them did — and a stale
+// citation that has drifted four lines is indistinguishable from a
+// deliberately approximate one, so the window was also six lines of cover for
+// real rot. Flipping it to 0 named 60 such rows at once (the 0.7.2 insertions
+// plus ~45 inherited ones); all 60 were re-pointed at their exact emit line in
+// the same commit, so the slack has nothing left to protect.
+//
+// What zero costs, and why it is still the right setting: ANY edit above a
+// cited line now reds this guard. That is the point — the citation is a claim
+// about a line, and a claim about a line is either true or it is not. The
+// repair is mechanical (run this test; it names the row, the file and the
+// line) and the alternative is a table that is approximately right forever.
+//
+// The one shape zero forbids is a citation to an emit whose action arrives as a
+// named constant rather than a literal (`ruleSourceGit`,
+// `ruleSourcePATDenied`): nothing on that line spells the action. Those rows
+// name the constant in the same cell, which is the (`symbolName`,
+// `file.go:N`) shape the anchor rule below already exists for.
+const auditActionCitationWindow = 0
 
 // backtickSpan pulls every `...`-quoted token out of one table row, in order.
 var backtickSpan = regexp.MustCompile("`([^`]+)`")

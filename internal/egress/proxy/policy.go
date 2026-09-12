@@ -513,10 +513,13 @@ const (
 	egressRetryNever  = "never"
 )
 
-// DRAFT (M2 canon pending) — the four sentences a builtin:private-ip 403 tells
+// DRAFT (M2 canon pending) — the FIVE sentences a builtin:private-ip 403 can tell
 // a HOSTNAME's operator, each its own constant so the owner's canon sitting is a
-// one-line diff. literalIPDenialDetail joins them in exactly one place (its
-// hostname arm below) and nothing else concatenates them.
+// one-line diff. Four compose the LIFTABLE refusal (cause, remedy, the console's
+// second copy of the cidrs hint, lifetime); the fifth replaces the remedy and the
+// lifetime clause on the never-liftable arm, where neither is true.
+// literalIPDenialDetail joins the liftable four in exactly one place (its hostname
+// arm below) and nothing else concatenates them.
 //
 // The canon keys these carry on the M2 sheet are named beside each one. They are
 // server-composed, not console copy: this text reaches a human as an

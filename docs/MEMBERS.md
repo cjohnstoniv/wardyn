@@ -214,10 +214,23 @@ stay the admin's; only the value is yours.
 Bounds: this is API-key mode only — the resident Claude-subscription mount
 stays operator-only (see [DESKTOP.md § Model access on
 m′](DESKTOP.md#model-access-on-m)), and `bedrock-api-key`/AWS credential
-names are refused for a member's own `PUT /secrets` regardless (Bedrock
-stays the MDM-managed lane). Your own row is visible only to you and to your
-own runs — another member can never read or inject it, even by naming it in
+names are refused for a member's own `PUT /secrets` regardless: on THAT door
+Bedrock stays the MDM-managed lane. Your own row is visible only to you and to
+your own runs — another member can never read or inject it, even by naming it in
 their own inline policy.
+
+- **Signing in to AWS yourself.** The `PUT /secrets` bound above is about
+  STORING an AWS key. It is not the only route to Bedrock: if your admin's agent
+  roster marks your agent's row `per_user`, the AWS SSO session a run
+  authenticates with is YOURS, and you sign in for it — the "Sign in to AWS"
+  action beside your model-access chip launches a short-lived login sandbox
+  against the ADMIN'S access portal (never one you choose), and what it captures
+  is stored under your own principal. Nobody else's runs can use it, and you are
+  not served the admin's if you have none. You need the `agent` capability for
+  that row's agent; under a `shared` row, or with no roster written, the
+  credential stays the deployment's and there is nothing for you to sign in to.
+  Renewal is Wardyn's while the session lasts; once the refresh token is spent or
+  your identity provider revokes it, you sign in again.
 
 ## What to ask your admin for
 

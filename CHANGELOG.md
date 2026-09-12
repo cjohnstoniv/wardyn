@@ -80,7 +80,9 @@ deployment answers byte-for-byte what it answered before.
   is in neither that nor the new `agent_provider.write` audit row.
 - **Ephemeral disk is enforced on Kubernetes.** A run's `disk_mib` now becomes the
   agent container's `resources.limits[ephemeral-storage]` (with a small fixed
-  request, so scheduling is unchanged), so the kubelet bounds the writable layer
+  256Mi request, so scheduling is unchanged apart from a node genuinely short on
+  allocatable ephemeral storage newly rejecting the pod), so the kubelet bounds
+  the writable layer
   the clone, `$HOME` and every ephemeral workspace target live on — previously
   accepted, logged and ignored. Over the limit the pod is **evicted** and the run
   fails with `Evicted: Pod ephemeral local storage usage exceeds…`, naming the
@@ -130,6 +132,21 @@ deployment answers byte-for-byte what it answered before.
   over their own lapsed session. `harness.credential.captured` and `.refresh` carry
   the owner and the credential source, so "whose credential" is answerable from the
   trail.
+- **The console half of the roster: four surfaces and one widget.** Agents get
+  their own tab on `/providers` — enabled, the one model-access mechanism, and
+  whose credential it is, over the server's own roster rather than a row the
+  client invented. New Run's agent picker is drawn from that live roster instead
+  of a compiled-in list, so an agent this deployment does not offer is not
+  offerable; the launch response's warnings render INLINE on the New Run screen
+  and hold the navigation behind an explicit "Open run", because a warning that
+  scrolls past on the way to the run detail was never read. A member whose agent
+  row is `per_user` gets a **"Sign in to AWS"** CTA beside their model-access
+  chip, which is the whole point of the per-principal lane having a door a member
+  can reach. And the run detail gains an **Effective policy** widget over
+  `run.create`'s `clamp_warnings` — every way launch narrowed what the caller
+  asked for, read back on the run itself; its layout id is in the closed set
+  `internal/api/ui_layout.go` pins, so the widget cannot be renamed without the
+  server agreeing.
 - **An org switch for drives, and two drive ceilings.** `storage.user_drive` is the
   org's half of the drives feature and nothing read it until now. The switch is
   asked FIRST, ahead of the per-profile door, because the two answer different
@@ -170,7 +187,10 @@ deployment answers byte-for-byte what it answered before.
   indistinguishable from an authorization breach, and read as one. The sidebar is
   now gated on identity being RESOLVED rather than merely settled: settled-but-
   unknown draws neither nav, says it could not confirm who you are, and offers a
-  Retry that re-fires the call. The context's own defaults stay open, deliberately
+  Retry that re-fires the call. The gate is on the ROUTE SHELL, not the nav alone
+  — `/settings` and every admin route painted their operator controls to an
+  unresolved identity while the sidebar hid the links to them, so an unknown
+  identity now renders no route at all and the account menu drops Settings. The context's own defaults stay open, deliberately
   — the answer to a guess is not a different guess. Server authorization was never
   affected by any of this.
 - **A SiteConfig change now says it does not reach a run already going.**
@@ -178,8 +198,10 @@ deployment answers byte-for-byte what it answered before.
   redirects are compiled into the sidecar's config at dispatch and read once at
   startup, so an operator could fix the exact field a denial named and watch the
   same run fail nine more times with the identical message. `PUT /site-config` now
-  answers `applies_from: "next_dispatch"`, the console repeats it on the Network
-  step's save, and the egress denial itself carries the lifetime clause. Live
+  answers `applies_from: "next_dispatch"`, the console repeats it on BOTH halves
+  of the Network step's saves — the upstream proxy and the egress redirects, which
+  are compiled at dispatch the same way — and the egress denial itself carries the
+  lifetime clause. Live
   sidecar reload stays out of scope: a running sandbox's egress posture must not
   change under it with no audit row to show why.
 - **The egress "N held" badge counts what is actually held.** It counted
@@ -190,11 +212,19 @@ deployment answers byte-for-byte what it answered before.
 - **A run's end cancels the questions nobody can answer any more.** Migration
   `0062_approval_cancelled` adds the terminal state `CANCELLED` to the
   `approvals.state` CHECK — distinct from `DENIED` (a human refused) and `EXPIRED`
-  (a sweeper aged it out), because nobody decided this one. Both terminal writers
-  cascade, so it covers completion and failure and not only kill; the cascade rides
-  the same CAS a human decision uses, so a concurrent human decision wins and is
-  never overwritten; and it emits ONE `approval.cancelled` audit row per
-  transition, carrying the count. `approvals.state` joins `closedEnumChecks`, so
+  (a sweeper aged it out), because nobody decided this one. All THREE terminal
+  writers cascade — completion, failure/kill, and the idle reaper's `STOPPED`,
+  which is the one an idle run reaches precisely because its agent is parked on a
+  hold — and so does a run failed while already `RUNNING`, the arm three dispatch
+  call sites take with the sandbox and the sidecar up. A source-scanned census
+  freezes the three, so a fourth writer reds a test rather than stranding a queue.
+  The cascade rides the same CAS a human decision uses, so a concurrent human
+  decision wins and is never overwritten; it emits ONE `approval.cancelled` audit
+  row per transition, carrying the count; and because a best-effort cascade can
+  still lose a race, deciding a terminal run's approval now answers `409` and
+  CAS-cancels the row instead of replaying an `always` approve into the workspace
+  allowlist on behalf of a sandbox that is gone. `approvals.state` joins
+  `closedEnumChecks`, DERIVED from the Go constants rather than hand-listed, so
   the Go set and the database are compared from now on. Every reader that treated
   an unknown state as "keep waiting" — the toolgate and the git helper both did,
   which would have hung the agent until its timeout — learns the value.
@@ -233,7 +263,13 @@ deployment answers byte-for-byte what it answered before.
   — a new append, never an update, because `audit_events` is append-only and
   hash-chained. Bounded by a maximum GAP between identical rows
   (`WARDYN_AUDIT_COALESCE_WINDOW`, default `5m`, `0` = off) and a 1000-row streak
-  cap. On the deployment that prompted this, 999 of the last 1000 rows were one
+  cap. Every summary row pays the same rate limiter a first row pays, so the
+  instrument added to bound a flood cannot be turned into one by a caller
+  alternating two paths on one connection (a refused summary is dropped and
+  counted). The key holds the PEER IP rather than `host:port` — with the port in
+  it a client that opens a connection per request folded nothing, which is exactly
+  the ingress-fronted estate this bounds — and the open streak is flushed at
+  shutdown rather than lost with its count. On the deployment that prompted this, 999 of the last 1000 rows were one
   sidecar's `auth.failed`, and every real security event had aged out of the
   console's window mid-investigation.
 - **A private-IP denial is answered once, and says when it can change.** The ten
@@ -241,9 +277,21 @@ deployment answers byte-for-byte what it answered before.
   re-vetted and emitted another `egress.deny`. The private-address guard is the one
   refusal that cannot change its mind mid-run, so a bounded per-run memo answers an
   identical repeat with a byte-identical 403 and leaves ONE row carrying the repeat
-  count when it evicts or the run ends. `X-Wardyn-Egress-Retry: never` rides that
-  arm alone: a resolve failure may clear and an undecided approval is waiting for a
-  human, and telling either "never" would turn a transient fault into a dead run.
+  count when it evicts or the run ends. The memo is asked BEFORE the approval
+  flow, so a retry against an address no human could ever open stops spending a
+  human decision on it. `X-Wardyn-Egress-Retry: never` rides that arm alone: a
+  resolve failure may clear and an undecided approval is waiting for a human, and
+  telling either "never" would turn a transient fault into a dead run.
+- **A denial no site config can lift stops prescribing one.** Every
+  post-resolution guard refusal told the same story — declare it under
+  `internal_hosts`, then start a new run — but only the private/reserved-range
+  class is liftable. Loopback, link-local (including `169.254.169.254`),
+  multicast, NAT64- and IPv4-compatible-embedded and the other reserved ranges get
+  their OWN `403` body: the class that refused, the statement that nothing lifts
+  it, and NO site-config remedy and NO lifetime clause, because there is nothing
+  to change and a new run would change nothing. Both variants keep rule source
+  `builtin:private-ip` and `Retry: never`, and both bodies are now golden
+  literals, as are `builtin:resolve-failed`'s and `policy:require-tls`'s.
 - **The `cidrs` docs trap is inverted.** Scoping an `internal_hosts` entry with
   `cidrs` is intuitive and wrong from the operator's own machine: a laptop resolves
   private-endpoint names over the corporate resolver into CGNAT space while inside
@@ -310,6 +358,66 @@ deployment answers byte-for-byte what it answered before.
   the raised `requested_scope`, and it strips a port if one is ever present, so a
   caller passing `example.com:8443` gets the same grant rather than silently opening
   a second question for a host the operator already decided.
+- **The Docker "uncapped" warning stops firing on Kubernetes.** It was gated on
+  `enforcement !== "filesystem"`, so `eviction` read as unenforced and every
+  Kubernetes operator was told all three of its clauses on all three disk fields —
+  and on Kubernetes all three are false: the pod binds the size, a filled or
+  clamped number is not uncapped, and a policy-written one does not fail at
+  create. One shared predicate answers it for both surfaces now: `none` alone.
+- **Review previews the number the run will actually get.** The preview clamped
+  by the profile's `max_ephemeral_disk_mib` alone while dispatch also clamped by
+  the org's `max_disk_mib` — 100000 MiB previewed against 4096 MiB run, under two
+  comments each denying it could happen. Both ends call one expression now, from
+  the inline arm and the stored/default arm alike, and the parity one of those
+  comments argued away is the pin.
+- **The org drive switch answers launch, preview and `/me` alike.**
+  `storage.user_drive.disabled` was read in three places and asked at neither
+  surface a member's console draws from: `GET /me` shipped a fully populated
+  allocation beside an empty unavailable-reason list and `POST /drives/preview`
+  answered `200`, for a mount the create path refuses `422`. The deployment half
+  is now raised from the one read all three already pass through, so the preview
+  answers the same `422` with the same bytes and `/me` reports no allocation with
+  its existing `unavailable` token — still `422`-before-`403`, the deployment
+  switch ahead of the profile door. An unknown enforcement word also renders NO
+  gloss rather than the `none` one, and a governance write refuses a NEGATIVE
+  limit by name, the boundary the sibling org block already had.
+- **A member's model-access chip stops carrying the operator's deadline.** Under a
+  `shared` row the graded credential is the OPERATOR's, so a member was handed
+  `expiring` plus a "Sign in again before" deadline — one the body
+  redaction had just stripped, and an instruction the login route then refused
+  them. A non-`per_user` answer collapses to `live` while the shared credential
+  works and to a `shared_expired` admin sentence with no timestamp when it does
+  not; a deadline or a sign-in action is now reserved for the principal who owns
+  the credential. Around it: the credential scope is stamped at LAUNCH on
+  `harness.login.started` and read back at upload, so a roster flip inside a login
+  run's idle window can no longer re-point a member's capture at the operator-wide
+  credential; the once-only upload guard takes the refresher's own per-namespace
+  lock, so two concurrent PUTs from one login run land once (`204` and `409`, not
+  two `204`s); an operator's `DELETE /setup/harness-credential/aws` deletes
+  through the scope the capture was WRITTEN with, so Disconnect is no longer a
+  no-op on a `per_user` estate; and the stored region is validated against the AWS
+  region grammar before `oidc.<region>.amazonaws.com` is composed, so a region
+  carrying `/` or `@` fails visibly instead of POSTing a client secret and a
+  refresh token to a host of its choosing.
+- **The providers console tells the truth about what it will save.** A credential
+  lane no longer defaults its host to `github.com` when a row carries no
+  parseable address — an Azure DevOps row with no address was writing the admin's
+  PAT to the secret the GitHub clone helper reads — and with no host every lane
+  renders disabled, named, and unsaveable. A row with zero base URLs is marked
+  invalid and withholds Save, because the server refuses it outright. The base-URLs
+  textarea keeps its newlines (it split on every keystroke, so two addresses
+  concatenated and `Enter` could never survive a render); removing the LAST
+  provider row is saveable, while a form with nothing to save still withholds the
+  button; the client's base-URL mirror admits exactly what the server admits; a
+  fresh Azure DevOps row starts at `https://dev.azure.com/` and says its
+  organisation segment is missing rather than guaranteeing a `400`; every row
+  control — textarea, lane checkboxes, the SSO start-URL input — is reachable by
+  its name; the Agents tab's roster Retry re-fires the call the roster actually
+  comes from; an agent outside the roster, a `per_user` stored against a mechanism
+  that cannot carry it, and a `model_access` state outside the five are each
+  rendered honestly rather than as a confident wrong answer; the funnel's Providers
+  step shows non-operators the tier hint instead of an empty panel; and the
+  Settings card counts agents only once an agent policy exists.
 - **Tooling and mechanical pulls.** `check-file-size.sh` walks tracked files;
   `-coverpkg` closes the same-package blind spot; the sidecar's operator knobs now
   travel on BOTH container substrates from one list (a pod inherits nothing from
@@ -343,6 +451,26 @@ deployment answers byte-for-byte what it answered before.
   scope the operator issued, over forges whose push-ref conventions are not
   GitHub's. Off, the lane is byte-for-byte 0.7.1; the four texts and their two
   guards are re-derived to the new truth rather than deleted.
+- **A clone path cannot be walked out of the provider row that admitted it.**
+  Admission compared an org-scoped base URL against a path the server reads
+  DECODED while the sandbox's git squashes dot segments client-side, so
+  `https://github.com/acme/../evil/repo` and the percent-encoded `acme%2Fevil`
+  spelling were both admitted by an `https://github.com/acme` row — and the `pat`
+  lane then minted the acme organisation's credential for `evil/repo`. The
+  traversable SHAPES are refused at the one chokepoint every door resolves
+  through — any percent-escape, any backslash, any empty, `.` or `..` segment, in
+  the https, `ssh://` and scp forms alike — and the same rule is a `400` at both
+  write doors, because a locator no provider mode can ever clone is not storable.
+- **The SSH scoping ceiling is said out loud.** An SSH clone URL carries no path
+  to compare a base URL against (`git@github.com:acme/x.git` is not `/acme/x`), so
+  a row scoped to `https://github.com/acme` admits an SSH clone of ANY org on that
+  host. The ceiling STAYS — there is no path to bind — but it stops being silent:
+  the providers row says it under the lanes field when it carries a path and
+  permits `ssh`, `docs/OPERATIONS.md` states it with its remedy (drop `ssh` from
+  the row's lanes and the addresses bind again), and run create puts it on the
+  `201` with a new `run.provider.ssh_host_level` audit row. It is the only
+  admission outcome WIDER than the policy reads, which is why it is the one
+  recorded.
 - `threatmodel/THREAT-MODEL.md` gains four residuals for what this release does
   and does not bound: provider admission is URL-prefix matching over a clone URL
   and not a repository ACL (and is host-level only for an SSH clone URL); a

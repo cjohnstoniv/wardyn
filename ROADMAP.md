@@ -533,7 +533,9 @@ and `threatmodel/THREAT-MODEL.md`'s residual numbers).
   (`llm_inspection` scan-budget policy fields + their POLICIES rows) ·
   F074-hardening (re-deriving the docker/k8s hardening-cap rationale) · the console
   copy/state items F141-panes, F143-control, F132-followup, F004-followup, F027-a,
-  F069-a, F051-a/F092-a, F142-copy, F112-nit, F070 and F093 — one owner mock batch
+  F069-a, F051-a/F092-a, F142-copy, F112-nit, F070 and F093 — one owner mock batch,
+  which **F049-mock** (the drives-mock State 3b) joins: it was authored as a mock
+  STATE on the providers mock rather than built, so it is the same sitting's to rule
   · **R4-F009**: the `setup_items` preflight field is fetched on every Review and
   has no consumer, but deleting it also strips five `preflight_test.go` cases'
   real coverage of `deriveSetupItems`, so the disposition is to delete the field
@@ -549,7 +551,15 @@ and `threatmodel/THREAT-MODEL.md`'s residual numbers).
   keyhandler change, so it waits for the sitting that rules it.
 - **Verification debt.** R5's 137 and R6's 70 claim passes · R3/R4 round 2 · R7
   round 2 · R1's 62 fixed-but-unverified · the Low/Info residue · the TEST-GAPS
-  chronic backlog.
+  chronic backlog · **two 0.7.2 browser rows that this harness cannot deliver**:
+  "a member signs in to AWS SSO and launches" and "an expired shared credential
+  refuses the run with the named sentence". Both need a real OIDC session — the
+  capability resolver derives its subjects from the OIDC context alone, so the
+  admin bearer the Playwright harness holds has none and the refusal it reaches is
+  a different one. They are pinned in Go against the mechanism itself
+  (`runs_dispatch_llm_mechanism_test.go`, `awssso_refresh_test.go`) and walked in a
+  live browser against a real tenant before the tag, rather than left to a
+  Playwright row that would assert the harness instead of the product.
 - **Dev-box tooling** (a decision, not a product gap — none of it reaches a
   deployment). The `.wslconfig processors=24` bump for the build host · the
   verification harness's own two: the ledger's `init --resume-from` gap, and the

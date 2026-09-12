@@ -2412,16 +2412,16 @@ config at dispatch and read once at sidecar startup; a run already running
 keeps the config it started with for the rest of its life, however many times
 you fix the SiteConfig underneath it. `PUT /site-config`'s response says so
 (`applies_from: "next_dispatch"`), **and since 0.7.2 the console repeats it on
-save** — the upstream-proxy saves
-(`ui/src/app/components/screens/setup/corp-network-proxy.tsx:570,589,604`) carry
-it as the toast's description, so the operator who just changed a field reads the
-lifetime at the moment they change it rather than in this document afterwards.
-Those saves are the ONLY console write that repeats it, and the exception is
-worth knowing before you rely on the toast: the Network step's egress-redirect
-saves (`corp-network-egress.tsx:424`, called from `:468`, `:472`, `:484` and
-`:505`) go through the same `PUT /site-config` and carry no toast and no lifetime
-note — and the redirects are one of the compiled-at-dispatch fields listed above.
-That is a gap in the console, not in the response. A change made through
+save** — BOTH halves of the Network step. The upstream-proxy saves
+(`ui/src/app/components/screens/setup/corp-network-proxy.tsx:570,589,604`) and the
+egress-redirect saves (`corp-network-egress.tsx:430`, the one chokepoint every
+add, edit and remove passes through) carry it as the toast's description, so the
+operator who just changed a field reads the lifetime at the moment they change it
+rather than in this document afterwards. Both matter for the same reason: the
+redirects are one of the compiled-at-dispatch fields listed above, so a save that
+said nothing about its lifetime was the one most likely to be acted on twice.
+Every OTHER console write of site config still repeats nothing — the toast is not
+a general rule you can rely on elsewhere. A change made through
 `PUT /site-config` or `wardyn site-config apply` has the response field and
 nothing else. Live
 sidecar reload is deliberately out of scope: a running sandbox's egress

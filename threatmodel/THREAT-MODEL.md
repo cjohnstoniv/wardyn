@@ -422,7 +422,9 @@ spec and the legacy `repo` field, workspace create and EDIT, and the two
 server-side clones, Scan and Build). The last three request-level kinds are
 enforced at `denyMemberRequest`. `workspace_provider` is deliberately a bound on
 the PROVIDER ROW and not on the repository: admission here is URL-prefix
-matching, not a repo ACL, and the row is the unit an admin writes down. It keys
+matching, not a repo ACL, and the row is the unit an admin writes down (the
+traversable spellings a prefix comparison would otherwise admit are refused at the
+one parse every door resolves through — residual #40). It keys
 on which row CLAIMS the host, not on whether that row admitted — a row that
 claims and refuses anyway (disabled, or a base path that did not match) is still
 the row the grant would name. Its member refusal names the
@@ -1631,7 +1633,16 @@ hiding them would repeat the failure mode we are designed to avoid.
     admission says "this address is inside an allowed prefix", never "this
     principal may read this repository" — the forge's ACL is still the only
     thing that decides the latter, and a credential lane that reaches a repo the
-    prefix admits reaches it. **An SSH clone URL is matched at HOST level only**
+    prefix admits reaches it. A prefix comparison is worth exactly as much as the
+    agreement between the path the SERVER compares and the path the CLIENT clones,
+    and that agreement is now enforced rather than assumed: the traversable
+    spellings are refused at the one parse every door resolves through — any
+    percent-escape, any backslash, any empty, `.` or `..` segment, in all three URL
+    forms, and the same rule is a `400` at both write doors. Before that,
+    `/acme/../evil` and `/acme%2Fevil` both read as inside
+    `https://github.com/acme` (the server compares decoded, git squashes
+    client-side) and the `pat` lane then minted the acme organisation's credential
+    for the traversed repository. **An SSH clone URL is matched at HOST level only**
     — `git@ssh.dev.azure.com:v3/org/...` carries no path comparable to a base
     URL's, so org-path scoping is a documented v1 ceiling on that shape
     (`cloneTarget`, same file): a row narrowed to one org still admits every
@@ -1678,9 +1689,53 @@ hiding them would repeat the failure mode we are designed to avoid.
     `internal_hosts` — and a NEW run re-resolves from scratch. Nothing else is
     memoed, deliberately: `builtin:resolve-failed` is a DNS fault that may clear
     on the next attempt and an approval-pending hold is waiting for a human, so
-    both must keep asking. The evidence cost is one summary row carrying the
+    both must keep asking. (iii) The memo is asked BEFORE the approval flow, not
+    after it: a retry against an address no `internal_hosts` entry can ever open
+    used to raise, or re-raise, an egress approval first — spending a human
+    decision on a host that would be denied afterwards regardless, and then
+    denying it with no row. The ordering is the bound: an operator's approval
+    queue is a scarce resource, and a refusal that cannot change its mind must
+    never be able to fill it. The evidence cost is one summary row carrying the
     repeat count in place of N identical rows, which is the trade this residual
     buys.
+
+43. **Not every post-resolution address refusal can be lifted, and 0.7.2 stops
+    saying otherwise.** Only the private/reserved-range class (RFC1918/ULA/CGNAT)
+    is liftable, and only through `internal_hosts`. Loopback, link-local
+    (including the `169.254.169.254` metadata address), multicast, NAT64- and
+    IPv4-compatible-embedded and the other reserved ranges are refused
+    unconditionally, and until 0.7.2 they were told the liftable story: declare it
+    under `internal_hosts`, then start a new run. The residual that text CREATED
+    was a real one — an operator was instructed into a kill-and-redispatch cycle
+    that cannot succeed, and into widening an SSRF control that would not have
+    helped if it could be widened. The guard class now rides out of address
+    vetting into the denial body, and the never-liftable classes get their own
+    sentence with NO site-config remedy and NO lifetime clause, because there is
+    nothing to change and a new run would change nothing. Both variants keep rule
+    source `builtin:private-ip` and `X-Wardyn-Egress-Retry: never` — both are
+    final, which is the one thing the old text got right — and both bodies are now
+    golden literals, so the next widening of the guard cannot quietly re-merge
+    them. What is NOT bounded: the class names a RANGE FAMILY, not the address, by
+    the same disclosure rule the rest of these bodies follow.
+
+44. **A run's end cancels its pending approvals from all THREE terminal writers,
+    and the cascade is still best-effort.** An approval left `PENDING` by a run
+    that has ended is decidable, and an `always` approve on one replays into the
+    workspace allowlist on behalf of a sandbox that is gone — a widening with no
+    asker, which is what the `CANCELLED` state exists to stop. 0.7.2 audited the
+    writers rather than trusting the claim: `STOPPED` has exactly one writer (the
+    idle reaper), which ran the credential-revoke half of the terminal cascade and
+    none of the approval half — and an idle-stopped run is typically idle
+    *because* its agent is parked on a `wait_for_review` hold, so that was the
+    arm most likely to strand one. Completion, failure/kill and the idle reaper
+    all cascade now, as does a run failed while already `RUNNING` (three dispatch
+    call sites take that arm with the sandbox and the sidecar up), and a
+    source-scanned census freezes the writer set so a fourth reds a test rather
+    than a queue. The residual: the cascade is best-effort by design — a failed
+    `CancelForRun` is logged and audited, never retried — so the decision door
+    carries the same rule as a second bound, answering `409` and CAS-cancelling a
+    terminal run's approval rather than deciding it. Both together mean a stranded
+    row is decided by nobody; neither alone would.
 
 ### Operator overrides that boot past a fail-closed gate
 
@@ -1774,7 +1829,7 @@ proxy-injected, and what bounds it; where a bound does not exist, it says so.
 | `git_pat` grant (Azure DevOps / GitLab), **`WARDYN_GIT_PAT_BROKER=off` only** | Nothing, by default. Under the `off` escape hatch: the **PAT value**, streamed from `wardyn-git-helper` to the sandbox's `git` process | Nothing structural any more — this row is a MODE, not an impossibility. The default (`WARDYN_GIT_PAT_BROKER=on`, since 0.7) removes the opaque CONNECT tunnel instead of trying to inject into it: `agent-run` rewrites the granted hosts to a plain-HTTP broker path (`url.<broker>/git/<host>/.insteadOf`), the proxy terminates the request itself, mints server-side and sets Basic auth on the OUTBOUND leg (`internal/egress/proxy/pat_broker.go`), and the grant ids are withheld from the sandbox env so the in-sandbox helper could not mint anyway. Read the row below on the same pattern as `WARDYN_SUBSCRIPTION_INJECT=off` | **Only the `off` mode is resident, and only there do these bounds apply.** Helper emission is gated on a per-run `0400` caller-auth secret and the value is mask-registered at mint — but that gate binds only a caller going through `wardyn-git-helper`: the proxy's local mint route (`POST /wardyn/v1/credentials/mint`) is itself unauthenticated, so a caller that reads the grant id straight out of the sandbox env and POSTs the route directly is not bound at all. **No expiry, no down-scoping** — and that last limit survives the broker: a PAT carries whatever scope the operator issued it with, and there is no ADO/GitLab equivalent of a scoped installation token, so `on` makes the credential NON-RESIDENT, never least-privilege (the broker's allowlist is per-HOST for exactly that reason). `off` is an escape hatch for a forge that misbehaves under the rewrite, not a supported posture. See below. |
 | `env_secret` grant (arbitrary tool auth) | The stored secret's **value**, as a sandbox environment variable the operator names (`{"name":"MY_TOKEN","secret_name":"…"}`) | Nothing structural — a COVERAGE gap, not an impossibility. A PAT-authenticated CLI or REST tool reads a `*_TOKEN` env var; `git_pat` wires git's credential helper only and `api_key` injects one header at one host, so neither reaches it. A per-tool proxy shim could; none exists (`docs/adoption/corp-network-onboarding-findings.md` B1) | **The weakest bounds of any row here, and the kind is designed that way — read them before enabling it.** Resident for the WHOLE run; no mint, no TTL, no JTI, so nothing for the kill-switch to revoke; no expiry or down-scoping. See below. |
 | Bedrock **access-key** mode | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (+ optional `AWS_SESSION_TOKEN`) in the sandbox env | AWS SigV4 signs each request **in-process** — no static header for the proxy to strip and replace | Per-run output masking (PTY/recordings); withheld from non-model (verify/scan) runs; the three secret names are reserved at the broker sink, so no `git_pat`/`ssh_key` grant can resolve them into the sandbox. IAM least-privilege scoping — ideally short-TTL STS creds scoped to one inference profile — is the **operator's** responsibility; Wardyn neither enforces nor verifies it. |
-| Bedrock **captured-AWS-SSO** mode (containerized `aws sso login`) | **WHOSE session, first: `shared` (the default) is ONE credential an admin captured, which every run inherits — the blast radius of one compromised sandbox is every member's runs. A `per_user` roster row makes it one credential PER PRINCIPAL, captured by that person's own sign-in, stored in that person's own secret namespace and read with no fall-through to the operator's row or to any other Bedrock lane, so the radius per capture is ONE PERSON and their own account/role.** Then, in either case: a minimal synthetic `~/.aws`: a generated `config` plus the **SSO token cache** (`sso/cache/<sha1>.json`) carrying the SSO **access token** — and the refresh token / client id + secret when the login also registered a client. Delivered base64 in a sandbox env var, materialized by `agent-run`. | Nothing structural — a **not-yet-built** gap. `portal.sso.<region>` `GetRoleCredentials` is `authtype:none`, so a MITM could carry the token as the `x-amz-sso_bearer_token` **header** and keep it out of the sandbox entirely (the "Phase B" never-resident alternative). Until that ships, the token is written into the sandbox. | Files written `0600`; token values mask-registered **globally**, not per-run (one capture is reused across runs) — access + refresh at capture, access + refresh again at each control-plane renewal; the refresh token, client id and client secret are WITHHELD from the sandbox cache whenever a refresh token exists, because the CONTROL PLANE renews the session at dispatch (SSO-OIDC `CreateToken`) and is the only party that can persist the rotated pair — one refresher per token. A renewal that cannot be completed marks the captured-SSO lane NOT READY and carries its reason on the dispatch verdict; the refusal that reason is for arrives with the dispatch-time mechanism gate, which is what stops a lapsed credential from crossing to another auth mechanism — until then the remaining Bedrock lanes (host mount, static keys) are tried as before; withheld from non-model runs; the capture login run is never recorded. **Not bounded:** masking is verbatim-match only, so the base64-encoded copy in the env var is not matched, and Wardyn cannot revoke an SSO session. **Revocation ceiling (0.7.2), stated rather than implied:** Disconnect is admin-only and deletes the CALLER's own stored blob — under `per_user` that is the admin's own capture, never a named member's, and members have no self-service Disconnect (both are 0.8 items). A member's stored session is ended by their next sign-in superseding it, by revoking the session (or the account/permission-set assignment) at IAM Identity Center — the system of record, and the offboarding step — or by its own client-registration expiry. Deleting the Wardyn console account does not delete the blob. |
+| Bedrock **captured-AWS-SSO** mode (containerized `aws sso login`) | **WHOSE session, first: `shared` (the default) is ONE credential an admin captured, which every run inherits — the blast radius of one compromised sandbox is every member's runs. A `per_user` roster row makes it one credential PER PRINCIPAL, captured by that person's own sign-in, stored in that person's own secret namespace and read with no fall-through to the operator's row or to any other Bedrock lane, so the radius per capture is ONE PERSON and their own account/role.** Then, in either case: a minimal synthetic `~/.aws`: a generated `config` plus the **SSO token cache** (`sso/cache/<sha1>.json`) carrying the SSO **access token** — and the refresh token / client id + secret when the login also registered a client. Delivered base64 in a sandbox env var, materialized by `agent-run`. | Nothing structural — a **not-yet-built** gap. `portal.sso.<region>` `GetRoleCredentials` is `authtype:none`, so a MITM could carry the token as the `x-amz-sso_bearer_token` **header** and keep it out of the sandbox entirely (the "Phase B" never-resident alternative). Until that ships, the token is written into the sandbox. | Files written `0600`; token values mask-registered **globally**, not per-run (one capture is reused across runs) — access + refresh at capture, access + refresh again at each control-plane renewal; the refresh token, client id and client secret are WITHHELD from the sandbox cache whenever a refresh token exists, because the CONTROL PLANE renews the session at dispatch (SSO-OIDC `CreateToken`) and is the only party that can persist the rotated pair — one refresher per token. A renewal that cannot be completed marks the captured-SSO lane NOT READY and carries its reason on the dispatch verdict; the refusal that reason is for arrives with the dispatch-time mechanism gate, which is what stops a lapsed credential from crossing to another auth mechanism — until then the remaining Bedrock lanes (host mount, static keys) are tried as before; withheld from non-model runs; the capture login run is never recorded. **Not bounded:** masking is verbatim-match only, so the base64-encoded copy in the env var is not matched, and Wardyn cannot revoke an SSO session. **Whose credential a capture becomes is decided at LAUNCH, not at upload:** the login run's own `harness.login.started` row carries the `credential_source` + `owner` resolved when the sandbox was launched, and the upload reads that back instead of re-asking the live roster — a login sandbox lives to its idle cap, so re-resolving at upload time let an admin flipping a row from `per_user` to `shared` mid-run turn a member's PUT into a write of the operator-wide credential every run inherits. A run launched before that stamp existed falls back to the operator namespace only where the roster is not `per_user`, and is refused `409` otherwise; the residual is bounded to runs alive across the deploying restart. **Revocation ceiling (0.7.2), stated rather than implied:** Disconnect is admin-only and deletes the CALLER's own stored blob — under `per_user` that is the admin's own capture, never a named member's, and members have no self-service Disconnect (both are 0.8 items). A member's stored session is ended by their next sign-in superseding it, by revoking the session (or the account/permission-set assignment) at IAM Identity Center — the system of record, and the offboarding step — or by its own client-registration expiry. Deleting the Wardyn console account does not delete the blob. |
 | **Derived AWS role credentials** (every SigV4 Bedrock mode) | The short-lived role credentials the in-sandbox AWS SDK mints for itself from the SSO session (`portal.sso.<region>` `GetRoleCredentials`) | Same as access-key mode: SigV4 signs in-process, so these stay resident **regardless** of how the SSO session reached the sandbox — Phase B would end the SSO token's residency, not theirs | Bounded only by their own STS lifetime and the IAM role's scope, both set outside Wardyn. Wardyn never sees these values, so they are **not** mask-registered and cannot be masked. |
 | Bedrock **host `~/.aws` mount** (`WARDYN_BEDROCK_AWS_DIR`) | Whatever the operator's host `~/.aws` holds — the SSO token cache, and any static keys in it — readable at `/home/agent/.aws` | The AWS SDK resolves credentials from the file itself | Bind-mounted **read-only**, so the sandbox can never write the operator's host AWS state; nothing is stored by Wardyn and no keys go into env. Wardyn never reads the contents, so it cannot mask them. A single-user / self-hosted choice, not for a shared multi-tenant service. |
 | Subscription `~/.claude` mount, **`WARDYN_SUBSCRIPTION_INJECT=off` only** | A real, refreshable **copy** of the operator's Claude OAuth credentials | With injection off there is no proxy-side token provider to inject from (the distroless compose `wardynd` carries no `claude` binary of its own) | **Mode-dependent — read the defaults carefully.** With injection ON (the host-mode default) the staged `.credentials.json` is sanitized to an inert sentinel (refresh token blanked, access token replaced, expiry pinned), so nothing usable is resident. The **compose stack defaults this env var to `off`**, so on that stack the resident copy is the default. The mount is read-only, and lands only when the run's resolved `ai_provider` integration is a `resident_host` `anthropic_subscription` (a workspace pin or the operator's `DefaultFor: agent_runs` default) against an operator-blessed ceiling mount. |
