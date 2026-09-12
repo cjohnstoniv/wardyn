@@ -728,13 +728,14 @@ func (s *Server) auditAuthFailedAs(r *http.Request, actor, reason string) {
 	// Before the limiter, so the count is the true number of refusals rather than
 	// the number that happened to survive rate-limiting.
 	absorbed, summary := s.coalesceAuthFailed(actor, reason, r.URL.Path, r.RemoteAddr)
-	if summary != nil {
-		// The closing streak's summary goes out FIRST, so the row order in the
-		// trail matches the order the refusals happened in (and so a test reading
-		// "the last row" still reads this request's row, not the previous
-		// streak's summary).
-		s.recordAudit(s.cfg.BaseCtx, *summary)
-	}
+	// The closing streak's summary goes out FIRST, so the row order in the trail
+	// matches the order the refusals happened in (and so a test reading "the last
+	// row" still reads this request's row, not the previous streak's summary) —
+	// and it pays the limiter below exactly like a first row does, because a
+	// streak closes on every KEY CHANGE and a client that alternates two paths
+	// would otherwise mint one unmetered row per two requests
+	// (recordAuthFailedSummary).
+	s.recordAuthFailedSummary(s.cfg.BaseCtx, summary)
 	// The two are INDEPENDENT, and folding them into an if/else got the streak-cap
 	// close wrong: there, the capping refusal both closes the streak (summary
 	// non-nil) and is itself absorbed into that summary's count, so an else-arm

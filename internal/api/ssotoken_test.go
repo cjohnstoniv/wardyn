@@ -8,7 +8,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -327,4 +330,89 @@ func TestUploadSSOToken_RouteNotMountedWithoutSecrets(t *testing.T) {
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("route without secrets: code = %d, want 404; body=%s", w.Code, w.Body.String())
 	}
+}
+
+// TestUploadSSOToken_ConcurrentUploadsFromOneLoginRun is V1-r2-lensS #4: the
+// once-only guard is a read-then-put (read the stored blob, compare its
+// SourceRunID, then store), so two PUTs issued at once from the same login
+// sandbox both read "nothing captured yet" and both stored — last write wins, and
+// the guard the file's own comment calls "once only" held against a SEQUENTIAL
+// second capture only. Serialised per credential namespace (the refresher's own
+// lock), exactly one lands and the loser is told so with a 409.
+func TestUploadSSOToken_ConcurrentUploadsFromOneLoginRun(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New()
+	st := ssoLoginRunStore{
+		run:    types.AgentRun{ID: runID, Task: harnessLoginTask, Agent: awsSSOAgent},
+		events: ssoLoginStartedEvents(runID, "https://my-sso.awsapps.com/start"),
+	}
+	sec := &barrierSecrets{memSecrets: &memSecrets{m: map[string][]byte{}}, both: make(chan struct{})}
+	cfg := baseTestConfig(h, st)
+	cfg.Secrets = sec
+	cfg.BedrockRegion = "us-west-2"
+	cfg.Audit = &syncAudit{} // two goroutines recording at once
+	srv := New(cfg)
+	h.srv = srv
+	tok := h.mintRunToken(t, runID)
+
+	const uploads = 2
+	codes := make(chan int, uploads)
+	start := make(chan struct{})
+	for range uploads {
+		go func() {
+			<-start
+			w := httptest.NewRecorder()
+			r := httptest.NewRequest(http.MethodPut, "/api/v1/internal/sso-token/"+runID.String(),
+				strings.NewReader(validSSOBody))
+			r.Header.Set("Authorization", "Bearer "+tok)
+			srv.Handler().ServeHTTP(w, r)
+			codes <- w.Code
+		}()
+	}
+	close(start)
+
+	var stored, refused int
+	for range uploads {
+		switch code := <-codes; code {
+		case http.StatusNoContent:
+			stored++
+		case http.StatusConflict:
+			refused++
+		default:
+			t.Errorf("concurrent upload: code = %d, want 204 or 409", code)
+		}
+	}
+	if stored != 1 || refused != 1 {
+		t.Errorf("%d concurrent uploads from ONE login run: %d stored, %d refused — want exactly one of each; "+
+			"a read-then-put guard lets both land and the second overwrite the first", uploads, stored, refused)
+	}
+}
+
+// barrierSecrets makes the read-then-put window OBSERVABLE instead of hoping the
+// scheduler lands inside it: the first two reads of the stored credential wait for
+// each other (with a short grace so a SERIALISED pair does not deadlock). Two
+// uploads that are not serialised therefore both read "nothing captured yet" every
+// run, and the counterfactual for the fix is deterministic rather than lucky.
+type barrierSecrets struct {
+	*memSecrets
+	mu      sync.Mutex
+	arrived int
+	both    chan struct{}
+}
+
+func (b *barrierSecrets) Get(ctx context.Context, name string) ([]byte, error) {
+	b.mu.Lock()
+	b.arrived++
+	n := b.arrived
+	b.mu.Unlock()
+	switch {
+	case n == 2:
+		close(b.both) // the second reader is inside the window with the first
+	case n == 1:
+		select {
+		case <-b.both:
+		case <-time.After(500 * time.Millisecond): // serialised: nobody else is coming
+		}
+	}
+	return b.memSecrets.Get(ctx, name)
 }

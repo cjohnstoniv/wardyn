@@ -483,27 +483,36 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 		return
 	}
 	if applied {
-		// NO APPROVAL CASCADE HERE, deliberately (B4): this path fails a run
-		// BEFORE it ever reached RUNNING — every caller is on the create/dispatch
-		// side — and no approval can exist yet. The broker raises a credential
+		// THE CASCADE IS CONDITIONAL ON `from`, and the condition is load-bearing
+		// (V1-r2-lensS #2).
+		//
+		// from == RUNNING: CASCADE. This path is NOT only the create side, which
+		// is what the previous version of this comment claimed and what the census
+		// froze. runs_dispatch.go fails a run with from=RunRunning three times
+		// AFTER the STARTING->RUNNING CAS — the exec-less BYOI refusal, a failed
+		// `agent-run --selftest` (up to 2 minutes of a vendor image's own
+		// entrypoint), and a failed task Exec — and by then the sandbox and the
+		// proxy sidecar are UP, so an egress_domain approval can already be
+		// PENDING. Skipping the cascade there left the operator's queue holding a
+		// dead question for up to 24h, expiring as "nobody answered" rather than
+		// "the run failed".
+		//
+		// from != RUNNING: EXEMPT, and still pinned by a negative test. Before the
+		// run reaches RUNNING no approval can exist: the broker raises a credential
 		// approval only from a mint the sandbox asks for, and the egress/tool
 		// approvals come from the proxy sidecar and the toolgate, neither of which
-		// is running before dispatch completes. Calling CancelForRun here would be
-		// one list-all-PENDING read per failed dispatch that can only ever find
-		// nothing; a negative test pins that a fail at STARTING writes no
-		// approval.cancelled row.
+		// is running yet. Cascading there would be one list-all-PENDING read per
+		// failed dispatch that can only ever find nothing.
 		//
-		// THE CENSUS OF TRANSITIONS THAT CAN STRAND AN APPROVAL IS THREE, not the
-		// two this comment used to claim: finalizeRunTail's (the completion
-		// watcher, the boot reconciler and the probe reclaim all route through
-		// it), handleKillRun's, and — the one the first version missed —
-		// lifecycleStopper.StopRun's RUNNING->STOPPED in cmd/wardynd, the ONLY
+		// THE CENSUS OF TRANSITIONS THAT CAN STRAND AN APPROVAL IS FOUR:
+		// finalizeRunTail's (the completion watcher, the boot reconciler and the
+		// probe reclaim all route through it), handleKillRun's,
+		// lifecycleStopper.StopRun's RUNNING->STOPPED in cmd/wardynd (the ONLY
 		// writer of STOPPED, which reaches the cascade through
-		// CancelTerminalRunApprovals below. An idle-stopped run is typically idle
-		// BECAUSE its agent is parked on a wait_for_review hold, so that writer is
-		// the one most likely to have a PENDING approval to strand.
-		// TestTerminalRunStateWriterCensus (cmd/wardynd) freezes the three so a
-		// fourth writer reds instead of silently stranding.
+		// CancelTerminalRunApprovals below — an idle-stopped run is typically idle
+		// BECAUSE its agent is parked on a wait_for_review hold), and this one on
+		// its RUNNING arm. TestTerminalRunStateWriterCensus (cmd/wardynd) freezes
+		// them so a fifth writer reds instead of silently stranding.
 		if hint != "" {
 			// Optional-interface, not a core Store method (mirrors RunWatcherLeaser):
 			// the ~30 test doubles that embed store.Store never implement it, so a
@@ -518,6 +527,9 @@ func (s *Server) failAndRevoke(ctx context.Context, runID uuid.UUID, from types.
 			}
 		}
 		s.revokeRunCascade(ctx, runID)
+		if from == types.RunRunning {
+			s.cancelRunApprovals(ctx, runID)
+		}
 	}
 }
 

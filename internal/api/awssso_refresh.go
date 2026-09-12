@@ -220,6 +220,11 @@ func awsSSOTokenFingerprint(refreshToken string) string {
 // the operator-wide one (a `shared` credential), and under a per_user row it is
 // the principal's own — so two people renewing at once never serialise behind
 // each other, and two dispatches of the SAME person's runs always do.
+//
+// Also taken by the login-capture upload (handleUploadSSOToken), whose once-only
+// guard is a read-then-put over the same namespace: one lock per namespace, so
+// every read-modify-write of a stored AWS SSO credential is serialised, whichever
+// path makes it.
 func (s *Server) lockAWSSSOOwner(owner string) func() {
 	s.ssoRefreshMu.Lock()
 	if s.ssoRefreshLocks == nil {

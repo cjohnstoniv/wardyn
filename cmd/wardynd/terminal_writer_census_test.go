@@ -35,9 +35,9 @@ var terminalRunStates = map[string]bool{
 // decidable for 24h — long enough for an `always` approve to be replayed into
 // the workspace allowlist for a sandbox that no longer existed.
 //
-// A FOURTH writer added anywhere in internal/api or cmd/wardynd reds this test,
-// which is the point: the author must say which of the three treatments it gets
-// before the transition can ship.
+// A FIFTH writer added anywhere in internal/api or cmd/wardynd reds this test,
+// which is the point: the author must say which treatment it gets before the
+// transition can ship.
 var terminalWriterCensus = map[string]string{
 	// (1) Everything that routes through the shared terminal tail
 	// (finalizeRunTail, which calls cancelRunApprovals). Each wins its own CAS
@@ -52,10 +52,16 @@ var terminalWriterCensus = map[string]string{
 	// (3) The idle reaper, in this package. Reaches the same helper through
 	// api.Server.CancelTerminalRunApprovals, threaded in at boot.
 	"StopRun": "calls cancelApprovals (api.Server.CancelTerminalRunApprovals)",
-	// EXEMPT BY CONSTRUCTION, and pinned by a negative test in internal/api:
-	// every caller is on the create/dispatch side, before the run ever reached
-	// RUNNING, so no approval can exist yet.
-	"failAndRevoke": "exempt: fails a run that never reached RUNNING",
+	// (4) The create/dispatch compensator, which is BOTH: it cascades when it is
+	// handed from=RunRunning (runs_dispatch.go fails a run three times after the
+	// STARTING->RUNNING CAS — the exec-less BYOI refusal, a failed `agent-run
+	// --selftest`, a failed task Exec — with the sandbox and proxy sidecar up and
+	// an egress approval already raisable), and skips it below RUNNING, where no
+	// approval can exist yet. Both arms are pinned in internal/api. The frozen
+	// claim here USED to be "exempt: fails a run that never reached RUNNING" —
+	// which was false at three call sites and is what let a PENDING approval sit
+	// in the queue for 24h and expire as "nobody answered".
+	"failAndRevoke": "calls cancelRunApprovals when from==RunRunning; exempt below it",
 }
 
 // TestTerminalRunStateWriterCensus scans every non-test .go file in internal/api

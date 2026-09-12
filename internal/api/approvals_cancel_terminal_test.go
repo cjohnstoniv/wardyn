@@ -159,9 +159,67 @@ func TestFinalizeRunTail_CancelsPendingApprovalsOnCompletion(t *testing.T) {
 	}
 }
 
+// TestFailAndRevoke_FromRunningCancelsPendingApprovals is V1-r2-lensS #2. The
+// exemption below is correct only BELOW RunRunning, and runs_dispatch.go breaks
+// that in three places: the exec-less BYOI refusal, a failed `agent-run
+// --selftest` (up to two minutes of a vendor image's own entrypoint) and a failed
+// task Exec all call failAndRevoke with from=RunRunning, AFTER the
+// STARTING->RUNNING CAS. By then the sandbox and the proxy sidecar are up, so an
+// egress_domain approval can already be PENDING — and it was left PENDING: the
+// operator's queue held a dead question for up to 24h and then expired it as
+// "nobody answered" instead of "the run failed".
+func TestFailAndRevoke_FromRunningCancelsPendingApprovals(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New()
+	st := &dispatchTestStore{
+		run:   types.AgentRun{ID: runID, CreatedBy: "t@example.com", SandboxRef: "sbx-byoi"},
+		state: types.RunRunning,
+	}
+	fa := newFakeApprovals()
+	apID := seedPendingApproval(t, fa, runID)
+	audit := &syncAudit{}
+	cfg := baseTestConfig(h, st)
+	cfg.Approvals = fa
+	cfg.Audit = audit
+	cfg.Broker = h.broker
+	srv := New(cfg)
+
+	srv.failAndRevoke(context.Background(), runID, types.RunRunning,
+		"the BYOI image failed its agent-run --selftest")
+
+	if got := st.State(); got != types.RunFailed {
+		t.Fatalf("state = %q, want FAILED", got)
+	}
+	ap, err := fa.Get(context.Background(), apID)
+	if err != nil {
+		t.Fatalf("read the approval back: %v", err)
+	}
+	if ap.State != types.ApprovalCancelled {
+		t.Errorf("a PENDING approval on a RUNNING run is %q after failAndRevoke(RunRunning), want CANCELLED", ap.State)
+	}
+	if ap.Reason != "run_failed" {
+		t.Errorf("reason = %q, want run_failed (the transition that actually won)", ap.Reason)
+	}
+	// ONE cascade call, one row moved. The approval.cancelled audit row itself is
+	// emitted inside approval.CancelForRun (internal/approval), which this double
+	// stands in for — so the call is what this package can witness, exactly as the
+	// kill and completion cases above witness it.
+	calls := fa.cancelledCalls()
+	if len(calls) != 1 {
+		t.Fatalf("the cancel cascade moved rows %d times, want exactly 1 per run transition", len(calls))
+	}
+	if calls[0].Reason != "run_failed" || calls[0].Count != 1 || calls[0].RunID != runID {
+		t.Errorf("cascade call = %+v, want {run:%s reason:run_failed count:1}", calls[0], runID)
+	}
+	if !audit.has(runID, "run.fail", "success") && !audit.has(runID, "run.fail", "failure") {
+		t.Log("no run.fail row recorded; the cascade assertions above are what this test owns")
+	}
+}
+
 // TestFailAndRevoke_EmitsNoApprovalCancellation is the negative pin for the
-// documented exemption: failAndRevoke fails a run BEFORE it reached RUNNING (the
-// create/dispatch paths), where no broker/toolgate approval can exist yet. It
+// documented exemption, which survives the fix above: handed a `from` BELOW
+// RunRunning, failAndRevoke is failing a run on the create/dispatch side, where
+// no broker/toolgate approval can exist yet. It
 // must not call the cancel cascade at all — a list-all-PENDING read per failed
 // dispatch that can only ever find nothing, and an audit row that would claim a
 // cancellation that never happened.
@@ -190,7 +248,8 @@ func TestFailAndRevoke_EmitsNoApprovalCancellation(t *testing.T) {
 			"no approval to cancel", len(rows))
 	}
 	if len(fa.cancelledCalls()) != 0 {
-		t.Errorf("failAndRevoke called the cancel cascade %d times; it is exempt by construction", len(fa.cancelledCalls()))
+		t.Errorf("failAndRevoke called the cancel cascade %d times from STARTING; below RUNNING it is exempt by "+
+			"construction", len(fa.cancelledCalls()))
 	}
 	if !audit.has(runID, "run.fail", "success") && !audit.has(runID, "run.fail", "failure") {
 		t.Log("no run.fail row recorded; the exemption assertion above is what this test owns")

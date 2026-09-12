@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -51,9 +53,10 @@ func (c *coalesceHarness) flush() {
 	c.srv.authFailedStreakMu.Lock()
 	ev := c.srv.closeAuthFailedStreakLocked()
 	c.srv.authFailedStreakMu.Unlock()
-	if ev != nil {
-		c.srv.recordAudit(c.srv.cfg.BaseCtx, *ev)
-	}
+	// recordAuthFailedSummary, not recordAudit: the timer's own close charges the
+	// rate limiter (V1-r2-lensS #1), so a harness that bypassed it would be
+	// testing an emit path the daemon no longer has.
+	c.srv.recordAuthFailedSummary(c.srv.cfg.BaseCtx, ev)
 }
 
 // authFailedEvents returns the raw auth.failed events, so a test can read the
@@ -153,13 +156,18 @@ func TestAuthFailedCoalesce_OneRowPerMinuteStillFolds(t *testing.T) {
 // the fold from hiding an attack: a burst from many peers is many keys, so every
 // one of them keeps its own row. (SourceIP is in the key and does NOT separate
 // principals behind a Kubernetes ingress — THREAT-MODEL.md says so, and the
-// window+count bound is what covers that case.)
+// window+count bound is what covers that case, together with the rate limiter
+// every summary emit is charged to.)
 func TestAuthFailedCoalesce_DistinctPrincipalsAreNotFolded(t *testing.T) {
 	c := newCoalesceHarness(t, 5*time.Minute)
 	const principals = 500
 	for i := range principals {
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/internal/approvals", nil)
-		r.RemoteAddr = "198.51.100." + itoa3(i/256) + ":" + itoa3(10000+i%256)
+		// One address PER PRINCIPAL, and the address is what the key holds now:
+		// the port used to make these 500 requests 500 keys off two IPs, which
+		// meant this test passed while the fold was keyed on an ephemeral port
+		// (V1-r2-lensS #3).
+		r.RemoteAddr = "198.51." + itoa3(i/256) + "." + itoa3(i%256) + ":" + itoa3(10000+i%256)
 		// One second of clock per attempt so the ~1/sec limiter admits them all:
 		// this test is about the COALESCER, and a limiter drop would mask it.
 		c.advance(time.Second)
@@ -325,4 +333,117 @@ func TestAuthFailedCoalesce_ShutdownFlushesTheOpenStreak(t *testing.T) {
 	if got := len(authFailedEvents(c.harness)); got != 2 {
 		t.Errorf("a second flush wrote another row (%d total) — closing an already-closed streak must be a no-op", got)
 	}
+}
+
+// ─── V1-r2-lensS: the summary row is rate-bound, and the key is the peer IP ───
+
+// TestAuthFailedCoalesce_SummaryRowsPayTheRateLimiter is the HIGH of lens S round
+// 2, and it is the audit-flood vector the coalescer itself introduced: a streak
+// closes on every KEY CHANGE, a closed streak of two or more emits a summary, and
+// that summary went straight to recordAudit. So an unauthenticated client on ONE
+// keep-alive connection alternating two paths (A,A,B,B,…) minted one UNMETERED
+// row per two requests — measured on HEAD, 400 refusals at a single frozen
+// instant recorded 204 rows against the limiter's ceiling of 5. A structural
+// bound that adds an unbounded emit path is not a bound.
+func TestAuthFailedCoalesce_SummaryRowsPayTheRateLimiter(t *testing.T) {
+	c := newCoalesceHarness(t, 5*time.Minute) // frozen clock: the bucket never refills
+	const refusals = 400
+	for i := range refusals {
+		path := "/api/v1/runs/a"
+		if (i/2)%2 == 1 {
+			path = "/api/v1/runs/b" // flip the key every two requests
+		}
+		r := httptest.NewRequest(http.MethodGet, path, nil)
+		r.RemoteAddr = "10.0.0.9:5555"
+		c.srv.auditAuthFailedAs(r, adminAuthActor, "invalid_admin_token")
+	}
+	rows := authFailedEvents(c.harness)
+	if len(rows) > int(authFailedBurst) {
+		t.Fatalf("auth.failed rows = %d for %d refusals at one frozen instant; the limiter's ceiling is %v — "+
+			"a summary row must be charged to it exactly like a first row", len(rows), refusals, authFailedBurst)
+	}
+}
+
+// TestAuthFailedCoalesce_ARefusedSummaryIsDroppedAndCounted is the other half of
+// the same fix: a summary the limiter refuses is DROPPED, never recorded, and it
+// lands in the same suppressed series every other dropped auth.failed row does —
+// so the volume the summary would have carried is still visible to an operator
+// alerting on the series, which is what OPERATIONS.md tells them to do.
+func TestAuthFailedCoalesce_ARefusedSummaryIsDroppedAndCounted(t *testing.T) {
+	c := newCoalesceHarness(t, 5*time.Minute)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/internal/approvals", nil)
+	r.RemoteAddr = "10.0.0.9:5555"
+	for range 3 {
+		c.srv.auditAuthFailedAs(r, internalAuthActor, "invalid_run_token") // 1 row + 2 folded
+	}
+	// Drain the bucket at the frozen instant, so the streak's close has nothing
+	// left to spend.
+	for c.srv.authFailedLimiter.allow(*c.now) {
+	}
+	before := suppressedTotal(t, c.harness)
+
+	c.flush()
+
+	if rows := authFailedEvents(c.harness); len(rows) != 1 {
+		t.Fatalf("auth.failed rows = %d after a summary the limiter refused, want 1 (the opening row only) — "+
+			"a refused summary must be dropped, not recorded", len(rows))
+	}
+	if got := suppressedTotal(t, c.harness); got != before+1 {
+		t.Errorf("wardyn_auth_failed_suppressed_total = %d after a refused summary, want %d — a dropped row is a "+
+			"countable fact whichever mechanism dropped it", got, before+1)
+	}
+}
+
+// TestAuthFailedCoalesce_OneConnectionPerRequestStillFolds is lens S #3: the key
+// held r.RemoteAddr, PORT INCLUDED, and an ephemeral port is a fresh number on
+// every TCP connection — so a client without keep-alive (a scanner, curl in a
+// loop, an ingress opening a connection per request) landed every refusal under
+// its own key and the fold was a no-op on exactly the estates B5's own residual
+// paragraph names. Same peer, same everything else, N connections: still the
+// first row plus one summary.
+func TestAuthFailedCoalesce_OneConnectionPerRequestStillFolds(t *testing.T) {
+	c := newCoalesceHarness(t, 5*time.Minute)
+	const refusals = 20
+	for i := range refusals {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/internal/approvals", nil)
+		r.RemoteAddr = "203.0.113.7:" + itoa3(40000+i) // a new connection each time
+		c.advance(time.Second)                         // keep the limiter out of it
+		c.srv.auditAuthFailedAs(r, internalAuthActor, "invalid_run_token")
+	}
+	c.flush()
+
+	rows := authFailedEvents(c.harness)
+	if len(rows) != 2 {
+		t.Fatalf("auth.failed rows = %d for %d refusals from %d connections on ONE peer IP, want 2 "+
+			"(the first + one summary) — the ephemeral port must not be in the coalescing key",
+			len(rows), refusals, refusals)
+	}
+	if _, count, _, _ := coalesceData(t, rows[1]); count != refusals {
+		t.Errorf("summary count = %d, want %d", count, refusals)
+	}
+	// The ROW still carries host:port, like every other audit row in the package:
+	// only the KEY is port-less.
+	if rows[1].SourceIP != rows[0].SourceIP {
+		t.Errorf("summary source_ip = %q, the opening row's = %q; the summary must carry the streak's own "+
+			"peer address", rows[1].SourceIP, rows[0].SourceIP)
+	}
+}
+
+// suppressedTotal reads wardyn_auth_failed_suppressed_total off /metrics — the
+// only surface the counter has, and the one an operator alerts on.
+func suppressedTotal(t *testing.T, h *harness) int {
+	t.Helper()
+	w := do(t, h.srv, http.MethodGet, "/metrics", adminToken, "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("/metrics = %d, want 200", w.Code)
+	}
+	m := regexp.MustCompile(`wardyn_auth_failed_suppressed_total (\d+)`).FindStringSubmatch(w.Body.String())
+	if m == nil {
+		t.Fatalf("/metrics carries no wardyn_auth_failed_suppressed_total value:\n%s", w.Body.String())
+	}
+	n, err := strconv.Atoi(m[1])
+	if err != nil {
+		t.Fatalf("parse wardyn_auth_failed_suppressed_total %q: %v", m[1], err)
+	}
+	return n
 }

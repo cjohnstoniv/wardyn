@@ -13,22 +13,46 @@ package api
 
 import (
 	"context"
+	"net"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // authFailedKey is what makes two auth.failed rows "identical" for coalescing:
-// the boundary that refused, its bounded reason, the request path, and the TCP
-// peer. SourceIP is in the key because on a single-tenant or loopback deployment
-// it genuinely separates principals — but it is NOT the defence here and
+// the boundary that refused, its bounded reason, the request path, and the peer
+// IP.
+//
+// THE PEER IP, WITHOUT THE EPHEMERAL PORT (V1-r2-lensS #3). r.RemoteAddr is
+// host:port, and the port is a fresh number on every TCP connection — so keying
+// on it made the whole fold a no-op for exactly the clients that matter: a
+// scanner, an ingress, or any HTTP client without keep-alive opens a connection
+// per request, every request lands under its own key, and nothing coalesces. The
+// drip B5 was built for (one sidecar, one long-lived connection) folded; the
+// flood did not.
+//
+// sourceIP is in the key because on a single-tenant or loopback deployment it
+// genuinely separates principals — but it is NOT the defence here and
 // THREAT-MODEL.md says so: behind a Kubernetes ingress or load balancer every
 // client shares one peer address (RealIP is deliberately not installed, see
 // routes.go), so a credential-stuffing burst arrives under ONE key. What keeps
 // such a burst from collapsing into a single row is the pair of bounds below —
-// the window and the max count — not this field.
+// the window and the max count — plus the rate limiter every summary emit is
+// charged to (recordAuthFailedSummary) — not this field.
 type authFailedKey struct {
 	actor, reason, target, sourceIP string
+}
+
+// peerIP strips the ephemeral port off a net/http RemoteAddr, leaving the bare
+// peer address (IPv6 loses its brackets, which is what SplitHostPort does). A
+// RemoteAddr with no port — a test double, a non-TCP listener — is returned
+// unchanged; this is a coalescing key, so an unparseable value only has to be
+// consistent.
+func peerIP(remoteAddr string) string {
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return host
+	}
+	return remoteAddr
 }
 
 // maxAuthFailedStreak caps one summary row's count. Past it the streak closes and
@@ -40,11 +64,16 @@ const maxAuthFailedStreak = 1000
 // authFailedStreak is the ONE open run of identical consecutive refusals.
 // Consecutive, so there is at most one: any row with a different key closes it.
 type authFailedStreak struct {
-	key       authFailedKey
-	count     int
-	firstSeen time.Time
-	lastSeen  time.Time
-	timer     *time.Timer
+	key authFailedKey
+	// sourceAddr is the opening refusal's full RemoteAddr (host:port). The KEY
+	// holds the port-less peer IP; the summary ROW carries this, so source_ip
+	// keeps the host:port shape every other audit row in the package uses and a
+	// streak's summary stays readable next to the row that opened it.
+	sourceAddr string
+	count      int
+	firstSeen  time.Time
+	lastSeen   time.Time
+	timer      *time.Timer
 }
 
 // coalesceAuthFailed folds identical consecutive refusals together.
@@ -62,12 +91,12 @@ type authFailedStreak struct {
 // cap on a streak's total duration: the motivating flood was one row a minute
 // forever, and a 5m gap window folds exactly that while leaving a handful of
 // genuinely spaced-out failures individually visible.
-func (s *Server) coalesceAuthFailed(actor, reason, target, sourceIP string) (bool, *types.AuditEvent) {
+func (s *Server) coalesceAuthFailed(actor, reason, target, remoteAddr string) (bool, *types.AuditEvent) {
 	window := s.cfg.AuditCoalesceWindow
 	if window <= 0 {
 		return false, nil // disabled: every refusal is its own row, exactly as before
 	}
-	key := authFailedKey{actor: actor, reason: reason, target: target, sourceIP: sourceIP}
+	key := authFailedKey{actor: actor, reason: reason, target: target, sourceIP: peerIP(remoteAddr)}
 	now := s.cfg.Now()
 
 	s.authFailedStreakMu.Lock()
@@ -87,7 +116,7 @@ func (s *Server) coalesceAuthFailed(actor, reason, target, sourceIP string) (boo
 	// A different key (or none open): close what was open, then start a streak
 	// whose FIRST row the caller goes on to emit normally.
 	summary := s.closeAuthFailedStreakLocked()
-	fresh := &authFailedStreak{key: key, count: 1, firstSeen: now, lastSeen: now}
+	fresh := &authFailedStreak{key: key, sourceAddr: remoteAddr, count: 1, firstSeen: now, lastSeen: now}
 	// A streak closed by the timer has no request in flight, so its summary is
 	// recorded under BaseCtx (daemon lifetime) — a cancelled request context
 	// would drop the row on the floor.
@@ -95,9 +124,7 @@ func (s *Server) coalesceAuthFailed(actor, reason, target, sourceIP string) (boo
 		s.authFailedStreakMu.Lock()
 		ev := s.closeAuthFailedStreakLockedIf(key)
 		s.authFailedStreakMu.Unlock()
-		if ev != nil {
-			s.recordAudit(s.cfg.BaseCtx, *ev)
-		}
+		s.recordAuthFailedSummary(s.cfg.BaseCtx, ev)
 	})
 	s.authFailedStreak = fresh
 	return false, summary
@@ -120,7 +147,10 @@ func (s *Server) coalesceAuthFailed(actor, reason, target, sourceIP string) (boo
 // CEILING, stated rather than implied, same as the memo's: this is the ORDERLY
 // stop. A SIGKILL, an OOM kill or a pod deleted out from under the process drops
 // the open streak's count — never the refusals themselves, each of which opened
-// its streak with a row that is already recorded.
+// its streak with a row that is already recorded. So does a shutdown that lands
+// mid-flood with the rate limiter empty: this row pays the limiter like every
+// other summary (recordAuthFailedSummary), and a refused one is counted in the
+// suppressed series instead — the audit trail's bound outranks a count.
 func (s *Server) FlushAuthFailedStreak() {
 	s.authFailedStreakMu.Lock()
 	ev := s.closeAuthFailedStreakLocked()
@@ -132,7 +162,38 @@ func (s *Server) FlushAuthFailedStreak() {
 	if base == nil {
 		base = context.Background()
 	}
-	s.recordAudit(context.WithoutCancel(base), *ev)
+	s.recordAuthFailedSummary(context.WithoutCancel(base), ev)
+}
+
+// recordAuthFailedSummary is the ONE way a closing streak's summary row reaches
+// the trail, and it is CHARGED TO THE SAME RATE LIMITER a first row pays
+// (V1-r2-lensS #1). Before this the summary went straight to recordAudit: the
+// coalescer closes a streak on every KEY CHANGE and summarises any streak of 2 or
+// more, so an unauthenticated client alternating two paths on one connection
+// produced one unmetered row per two requests — 400 refusals at a single frozen
+// instant recorded 204 rows against the limiter's ceiling of 5. A structural
+// bound that ADDS an unbounded emit path is not a bound.
+//
+// A refused summary is DROPPED and counted in the same suppressed series every
+// other dropped auth.failed row is (the folded ones, the rate-limited ones): the
+// count it carried is lost, the refusals themselves are not — each one either
+// opened its own recorded row or was already counted as suppressed.
+//
+// Nothing changes for the drip this instrument exists for: a real streak is one
+// key, so it pays the limiter twice in total (its opening row and its summary)
+// however many refusals it folds.
+func (s *Server) recordAuthFailedSummary(ctx context.Context, ev *types.AuditEvent) {
+	if ev == nil {
+		return
+	}
+	if !s.authFailedLimiter.allow(s.cfg.Now()) {
+		s.metrics.authFailedSuppressedInc()
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	s.recordAudit(ctx, *ev)
 }
 
 // closeAuthFailedStreakLocked closes the open streak and returns the summary row
@@ -158,7 +219,7 @@ func (s *Server) closeAuthFailedStreakLocked() *types.AuditEvent {
 			"first_seen": open.firstSeen.UTC().Format(time.RFC3339),
 			"last_seen":  open.lastSeen.UTC().Format(time.RFC3339),
 		}))
-	ev.SourceIP = open.key.sourceIP
+	ev.SourceIP = open.sourceAddr
 	return &ev
 }
 

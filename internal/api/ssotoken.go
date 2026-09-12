@@ -176,6 +176,18 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// SERIALISED PER SCOPE, because the once-only guard below is a read-then-put
+	// (V1-r2-lensS #4): two concurrent PUTs from the same login sandbox both read
+	// "not captured yet" and both stored, last write winning, so the guard held
+	// only against a SEQUENTIAL second capture. This is the refresher's own
+	// per-owner single-flight lock (awssso_refresh.go), keyed the same way — the
+	// scope IS the secret-store namespace both paths read-modify-write, so an
+	// upload racing a dispatch-time renewal of the same credential is serialised
+	// too, and two different people's uploads still never wait on each other.
+	// Held through the store so the check and the write are one critical section.
+	unlock := s.lockAWSSSOOwner(scope.owner)
+	defer unlock()
+
 	// Once only. Even a correctly-bound blob must not be replaceable: the login
 	// run stays alive until its idle auto-stop, so without this the sandbox can
 	// overwrite the operator's genuine capture (same start_url/region, the
