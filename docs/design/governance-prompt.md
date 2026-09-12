@@ -121,8 +121,9 @@ server-side by `denyMemberRequest` (`internal/api/runs_create_validate.go:298`, 
 fields: `devcontainer_repo`, `image`, `workspace_id`); the two closed-enum refusals this round
 extends are the codex-cli hold refusal (`:153`) and `interactiveToolApprovalsError`
 (`:252`). Clamp/capability warnings ride the 201 as `warnings[]`
-(`internal/api/runs.go:205`) and surface as one sonner toast per message titled "Run launched
-with a warning" (`ui/src/app/components/screens/new-run/run-warnings.ts`) — **the server
+(`internal/api/runs.go:205`) and surface inline in the Review rail under "Run launched
+with a warning" (`ui/src/app/components/screens/new-run/new-run-rail.tsx`; a sonner toast
+until 0.7.2 — the screen now holds until "Open run") — **the server
 composes that text and the console never rewords it**, which is why §7.7's member strings are
 written as server messages, not console labels.
 
@@ -333,7 +334,7 @@ Colour, stated per rule:
    security admin gets the full nav for free; the Governance item is gated client-side by the
    security-operator predicate and server-side by the security-ops route group.
 5. **Every string a member is refused with is composed server-side** and rendered verbatim
-   (`run-warnings.ts`'s rule). §7.7 is therefore a table of *server* strings, in the in-tree
+   (the Review rail's rule, `new-run-rail.tsx`). §7.7 is therefore a table of *server* strings, in the in-tree
    refusal shape, not console labels.
 6. **The subject vocabulary is `permissions-copy.ts`'s**, not a second copy of it (§7.1). A
    governance assignment and a capability grant must never disagree about what "Everyone signed
@@ -440,7 +441,7 @@ Listed so that every product string rendered in the mock has a key somewhere.
 | `SafetyMeter` eyebrow + grades | `safety-meter.tsx` | Safety · Safest / Guarded / Elevated / Weakest |
 | `relativeTime(t)` | `lib/format.ts` | "3 days ago" — the shipped helper, not a second one |
 | `CC_META[…].label` | `wardyn/cc-meta.ts` | Fence / Wall / Vault |
-| Launch-warning toast title | `run-warnings.ts` | Run launched with a warning |
+| Launch-warning toast title | `workspace-providers-copy.ts` (`AGENTS.LAUNCH_WARNING_TITLE`, inline since 0.7.2) | Run launched with a warning |
 | codex-cli explicit-hold refusal | `runs_create_validate.go` | tool_approvals=hold is not supported for codex-cli (no external tool-approval contract) |
 
 **Shipped by the enforcement lane — rendered verbatim, never re-worded (§7.4).** These landed
