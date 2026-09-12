@@ -19,6 +19,12 @@ export default defineConfig({
     // Exclude Playwright e2e specs (they run under @playwright/test, not vitest).
     exclude: ["e2e/**", "node_modules/**"],
     reporters: ["default", ["junit", { outputFile: "../test/reports/ui/junit.xml" }]],
+    // Explicit, not a behavior change: 5000ms is vitest's own hard-coded
+    // default. Pinning it here documents the budget so a suite like
+    // setup-screen.test.tsx that genuinely needs more (its own per-describe
+    // { timeout: 20_000 }, which always overrides this) reads as a deliberate
+    // exception rather than an accident.
+    testTimeout: 5000,
     coverage: {
       provider: "v8",
       reportsDirectory: "../test/reports/ui/coverage",

@@ -28,8 +28,11 @@ OUT="$ROOT/test/reports/go/$SUITE"
 mkdir -p "$OUT"
 
 echo ">> running suite '$SUITE': go test -json ${PKGS[*]}"
-# -coverprofile with atomic mode; capture the JSON stream to a file.
-go test -json -covermode=atomic -coverprofile="$OUT/cover.out" "${PKGS[@]}" \
+# -coverprofile with atomic mode; -coverpkg=./... so coverage counts calls
+# from any package in the module, not just calls from within the same
+# package as the covered code (module-wide instrumentation regardless of
+# which PKGS are under test). Capture the JSON stream to a file.
+go test -json -covermode=atomic -coverprofile="$OUT/cover.out" -coverpkg=./... "${PKGS[@]}" \
   > "$OUT/test-output.json"
 GO_EXIT=$?
 

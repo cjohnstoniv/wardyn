@@ -47,8 +47,22 @@ declare -A ALLOWLIST=(
   ["./ui/src/app/components/screens/new-run/wizard-types.ts"]=1180 # 1092 at v0.5 merge
 )
 
+# The walk is git's, not find's: tracked files plus untracked-but-not-ignored
+# ones (-co --exclude-standard), so a gitignored local/ tree can never false-red
+# the gate (R3-ASM-2) while a brand-new file is still caught before `git add`.
+# Outside a checkout the walk would be EMPTY and the gate would pass vacuously,
+# so refuse to run there instead of printing OK over nothing.
+git rev-parse --git-dir >/dev/null 2>&1 || { echo "FAIL: check-file-size must run inside a git checkout (git ls-files is the walk)" >&2; exit 1; }
+
 fail=0
 while IFS= read -r f; do
+  case "$f" in
+    *_test.go) continue ;;
+    ui/*.go) continue ;;
+    *.go|ui/src/*.ts|ui/src/*.tsx|scripts/*.sh) ;;
+    *) continue ;;
+  esac
+  f="./$f"
   lines=$(wc -l <"$f")
   cap=${ALLOWLIST[$f]:-$THRESHOLD}
   if ((lines > cap)); then
@@ -59,10 +73,7 @@ while IFS= read -r f; do
     fi
     fail=1
   fi
-done < <(find . -path './.claude' -prune -o \
-              \( \( -name '*.go' ! -name '*_test.go' ! -path './.git/*' ! -path './ui/*' \) \
-                 -o \( -path './ui/src/*' \( -name '*.ts' -o -name '*.tsx' \) \) \
-                 -o \( -path './scripts/*' -name '*.sh' \) \) -print)
+done < <(git ls-files -co --exclude-standard)
 
 if ((fail)); then
   exit 1

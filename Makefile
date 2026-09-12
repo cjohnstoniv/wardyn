@@ -939,7 +939,7 @@ ui-typecheck: ## Typecheck the web UI (tsc --noEmit)
 
 ui-test: ## Web UI vitest unit/component tests + coverage
 	@echo "Running web UI unit/component tests (vitest + coverage)..."
-	cd ui && pnpm install --frozen-lockfile && pnpm test:coverage
+	cd ui && pnpm install --frozen-lockfile && pnpm test:coverage --maxWorkers=4
 
 # Playwright UI e2e against a seeded none-runner backend. Each spec runs against a
 # FRESHLY SEEDED backend (deterministic isolation). Requires Docker (Postgres) and

@@ -515,37 +515,49 @@ func TestAuditActionsDocEnumeratesEveryRuleSource(t *testing.T) {
 	)
 }
 
-// TestTestGapsDocMatchesTheCoverpkgBlindSpot (F092) pins docs/TEST-GAPS.md's
-// "Untested" bucket claim to test-report.sh's actual go test invocation.
+// TestTestGapsDocReflectsCoverpkgCoverage (F092, closed) pins docs/TEST-GAPS.md's
+// "Untested" bucket claim to test-report.sh's actual go test invocation, now
+// that -coverpkg=./... makes cross-package coverage count.
 //
-// The union profile the inventory is built from runs `go test` with no
-// -coverpkg, so Go instruments only each package's own code for its own
-// tests: a func exercised solely through a DIFFERENT package's tests reads
-// 0.0% and lands in "Untested" despite being covered. The doc (and its
-// generator template in scripts/test-gaps.sh) called that bucket "genuinely
-// no test reaches these" — stronger than the measurement supports.
-func TestTestGapsDocMatchesTheCoverpkgBlindSpot(t *testing.T) {
-	if strings.Contains(readSrc(t, "scripts", "test-report.sh"), "-coverpkg") {
-		t.Fatal("test-report.sh now passes -coverpkg — the blind spot this guard pins may be closed; re-derive the doc claim before trusting this skip")
+// The union profile the inventory is built from now runs `go test` with
+// -coverpkg=./..., so Go instruments the whole module for every test binary:
+// a func exercised solely through a DIFFERENT package's tests is counted
+// covered here too. The old "same-package-only" blind spot is closed — the
+// doc and its generator template in scripts/test-gaps.sh must say so, not
+// still warn that the bucket undercounts.
+func TestTestGapsDocReflectsCoverpkgCoverage(t *testing.T) {
+	// Pin the flag on the `go test -json` INVOCATION line, not anywhere in the
+	// file: the script's own comment block mentions -coverpkg too, and a
+	// file-wide Contains would stay green with the real flag stripped.
+	invoked := false
+	for _, line := range strings.Split(readSrc(t, "scripts", "test-report.sh"), "\n") {
+		if strings.Contains(line, "go test -json") && strings.Contains(line, "-coverpkg=./...") {
+			invoked = true
+			break
+		}
+	}
+	if !invoked {
+		t.Fatal("test-report.sh's `go test -json` line no longer passes -coverpkg=./... — the coverpkg blind spot this guard assumes closed may have reopened; re-derive the doc claim before trusting this guard")
 	}
 	gen := readSrc(t, "scripts", "test-gaps.sh")
-	for _, want := range []string{"no same-package test", "-coverpkg"} {
+	for _, want := range []string{"-coverpkg=./...", "no test in the tree"} {
 		if !strings.Contains(gen, want) {
 			t.Errorf("scripts/test-gaps.sh no longer mentions %q", want)
 		}
 	}
 	mustNotSay(t, gen, "scripts/test-gaps.sh (header comment)",
-		"Untested       — genuinely no test reaches it",
+		"no test in the SAME PACKAGE reaches",
 	)
 
 	doc := readDoc(t, "docs/TEST-GAPS.md")
 	mustNotSay(t, doc, "docs/TEST-GAPS.md",
-		"## Untested — genuinely no test reaches these",
+		"## Untested — no test in the SAME PACKAGE reaches these",
+		"WITHOUT `-coverpkg`",
 	)
 	mustSay(t, doc, "docs/TEST-GAPS.md",
-		"no same-package test",
-		"WITHOUT `-coverpkg`",
-		"## Untested — no test in the SAME PACKAGE reaches these",
+		"no test anywhere in the tree reaches it",
+		"WITH `-coverpkg=./...`",
+		"## Untested — no test in the tree reaches these",
 	)
 }
 
