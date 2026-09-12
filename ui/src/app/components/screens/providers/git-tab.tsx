@@ -35,7 +35,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "../../ui/alert-dialog";
-import { appLaneAvailable, invalidBaseURLLines, KIND_LABEL, LANE_META, laneUnavailableReason, sshLaneAvailable } from "./display";
+import { appLaneAvailable, invalidBaseURLLines, KIND_LABEL, LANE_META, laneUnavailableReason, sshLaneAvailable, sshScopedHostLevel } from "./display";
 
 const ALL_LANES: GitLane[] = ["app", "pat", "ssh"];
 const ALL_KINDS: GitProviderKind[] = ["github", "azure_devops"];
@@ -217,6 +217,13 @@ function Row({
                   );
                 })}
               </div>
+              {/* The ceiling, said where the policy is written: an SSH clone URL
+                  carries no org path, so a row scoped to one org admits SSH for
+                  the whole host (V1 lens A). The remedy is in the sentence —
+                  drop the ssh lane — which is the control right above it. */}
+              {sshScopedHostLevel(row.base_urls, permitted.has("ssh") && !laneUnavailableReason("ssh", kind, row.base_urls)) && (
+                <p className="text-xs leading-snug text-muted-foreground">{PROVIDERS.SSH_HOST_LEVEL_HINT}</p>
+              )}
             </Field>
           </div>
 

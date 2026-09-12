@@ -283,6 +283,11 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// ten doors, so the eight with no warnings channel are not silent either.
 	warnings = append(warnings, s.legacyHostAdmissionWarnings(ctx,
 		append(repoLocatorsOf(spec.WorkspaceRepos), req.Repo, req.DevcontainerRepo)...)...)
+	// …and the other outcome admission cannot state in a refusal: an SSH clone
+	// URL carries no path, so a row scoped to one org admitted it for the WHOLE
+	// host. Wider than the policy reads, and therefore never silent (V1 lens A).
+	warnings = append(warnings, s.sshHostLevelWarnings(ctx, runID,
+		append(repoLocatorsOf(spec.WorkspaceRepos), req.Repo, req.DevcontainerRepo)...)...)
 
 	// Record the model-access + requirements folds that ran ABOVE the confinement
 	// floor (SPINE-2). The spec was already mutated there — so the floor/grade saw

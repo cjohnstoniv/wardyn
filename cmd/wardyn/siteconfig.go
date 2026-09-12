@@ -28,6 +28,14 @@ var siteConfigFieldsAfter066 = []string{"upstream_proxy_no_proxy", "internal_hos
 // file's own bytes, not the decoded struct) never MENTIONS — an absent key,
 // not a present-but-empty one, since only absence triggers the server's
 // carry-forward.
+//
+// A JSON `null` COUNTS AS OMITTED here, and that is not a liberty: these fields
+// are pointers with `omitempty`, so `apply` strict-decodes `null` into a nil
+// pointer and re-marshals the document WITHOUT the key — the wire the server
+// sees is byte-identical to an absent key, and it carries the old block forward.
+// Reporting `null` as present printed nothing and let an operator believe they
+// had cleared a block they had in fact preserved. (`{}` is the clear form on
+// both doors — docs/OPERATIONS.md's provider-doors grid, DESKTOP.md's MDM row.)
 func omittedPostV066Fields(raw []byte) ([]string, error) {
 	var present map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &present); err != nil {
@@ -35,7 +43,8 @@ func omittedPostV066Fields(raw []byte) ([]string, error) {
 	}
 	var omitted []string
 	for _, f := range siteConfigFieldsAfter066 {
-		if _, ok := present[f]; !ok {
+		v, ok := present[f]
+		if !ok || string(bytes.TrimSpace(v)) == "null" {
 			omitted = append(omitted, f)
 		}
 	}

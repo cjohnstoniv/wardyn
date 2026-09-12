@@ -80,6 +80,21 @@ export function sshLaneAvailable(baseUrls: string[]): boolean {
   return baseUrls.some((u) => hostOf(u) === "github.com" || hostOf(u) === "dev.azure.com");
 }
 
+// The SSH scoping CEILING is visible exactly when both halves are true: this row
+// carries an ORG PATH (so it reads as bounded) and it PERMITS the ssh lane (so a
+// clone can actually take the host-level route). Either alone is honest already —
+// a bare host bounds nothing to widen, and a row with no ssh lane never widens.
+export function sshScopedHostLevel(baseUrls: string[], permitsSSH: boolean): boolean {
+  if (!permitsSSH) return false;
+  return baseUrls.some((raw) => {
+    try {
+      return new URL(raw.trim()).pathname.replace(/^\/+|\/+$/g, "") !== "";
+    } catch {
+      return false;
+    }
+  });
+}
+
 export function laneUnavailableReason(lane: GitLane, kind: GitProviderKind, baseUrls: string[]): string | null {
   if (lane === "app" && !appLaneAvailable(kind, baseUrls)) return PROVIDERS.LANE_APP_UNAVAILABLE;
   if (lane === "ssh" && !sshLaneAvailable(baseUrls)) return PROVIDERS.LANE_SSH_UNAVAILABLE;

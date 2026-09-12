@@ -187,6 +187,10 @@ func validateWorkspaceSource(src types.WorkspaceSource) string {
 		if !repoFieldSafe(src.Source) {
 			return "source must not contain control characters or whitespace"
 		}
+		// Write-door half of the traversal guard — see validateSourceWrite.
+		if !repoLocatorPathSafe(src.Source) {
+			return fmt.Sprintf(repo400LocatorShape, "source")
+		}
 		if repoCloneURL(src.Source) == "" {
 			return "source is not a recognized repo slug or http(s) clone URL"
 		}

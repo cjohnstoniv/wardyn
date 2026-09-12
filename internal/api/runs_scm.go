@@ -55,6 +55,57 @@ func repoFieldSafe(s string) bool {
 	})
 }
 
+// repo400LocatorShape — DRAFT (M2 canon pending). The write-door refusal for a
+// locator repoLocatorPathSafe rejects. It is a 400 ("you wrote this wrong"), not
+// an admission 422/403: a dot-segment or percent-encoded repository address is
+// never a legitimate one on any provider, in legacy open mode included, so the
+// door that AUTHORS it refuses it rather than leaving it to the clone.
+// %s is the field name — "locator" in the source library, "source" on a
+// workspace spec — so one sentence serves both doors.
+const repo400LocatorShape = "%s is not a repository address — a repository address carries " +
+	`no percent-escapes, no backslash, and no "", "." or ".." path segment`
+
+// repoLocatorPathSafe reports whether a repo locator's PATH is a plain
+// repository address. It is the CHOKEPOINT rule behind V1 lens A's blocker: git
+// squashes "." and ".." client-side and sends `%2F` raw, so
+// `https://github.com/acme/../evil/repo.git` is admitted by an
+// `https://github.com/acme` provider row's prefix match and then cloned — with
+// that row's org credential — as `evil/repo`. There is no spelling of the prefix
+// match that survives a path the server and the client read differently, so the
+// traversable SHAPES are refused instead, at parseCloneTarget (the one place
+// every admission door resolves a clone URL) and again at the write doors.
+//
+// Refused: any "%" (an address needs no escaping, and RawPath is exactly how
+// %2F sneaks a second segment past a decoded compare), any "\" (a segment
+// separator to some clients), and any empty, "." or ".." path segment.
+// A locator with no path at all is not this function's business — it is
+// unclonable for other reasons and nothing about it traverses.
+func repoLocatorPathSafe(raw string) bool {
+	s := strings.TrimSpace(raw)
+	if strings.ContainsAny(s, `%\`) {
+		return false
+	}
+	path := s
+	if i := strings.Index(s, "://"); i >= 0 {
+		path = ""
+		if j := strings.IndexByte(s[i+3:], '/'); j >= 0 {
+			path = s[i+3+j+1:]
+		}
+	} else if i := strings.IndexByte(s, ':'); i >= 0 {
+		path = s[i+1:] // scp-form [user@]host:path
+	}
+	path = strings.Trim(path, "/")
+	if path == "" {
+		return true
+	}
+	for _, seg := range strings.Split(path, "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			return false
+		}
+	}
+	return true
+}
+
 // repoCloneURL derives a git clone URL from a (already sanitized) repo slug.
 //   - If the slug is already a URL (contains "://"), it is passed through as-is.
 //   - Otherwise, if it matches a bare <org>/<name> GitHub slug, an https GitHub

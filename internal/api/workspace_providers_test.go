@@ -313,6 +313,35 @@ func TestProviderForMatchRule(t *testing.T) {
 		{"an unparseable clone URL is refused",
 			providersConfig([]types.GitProvider{githubRow("gh", false, "https://github.com/acme")}), "", false, ""},
 
+		// THE TRAVERSAL ROWS (V1 lens A). Every one of these was ADMITTED by the
+		// /acme row before the guard: the server compared the DECODED, unsquashed
+		// path against the base URL while the sandbox's git squashed the dot
+		// segments and sent %2F raw, so the proxy minted the acme PAT for
+		// evil/repo. There is no prefix match that survives two readers, so the
+		// SHAPE is refused — at parseCloneTarget, which every door resolves
+		// through. wantRow "" because nothing gets far enough to claim the host.
+		{"a parent dot segment is refused, not squashed into the base path",
+			providersConfig([]types.GitProvider{githubRow("gh", false, "https://github.com/acme")}),
+			"https://github.com/acme/../evil/repo.git", false, ""},
+		{"a mixed . / .. path is refused",
+			providersConfig([]types.GitProvider{githubRow("gh", false, "https://github.com/acme")}),
+			"https://github.com/acme/./x/../../evil/repo.git", false, ""},
+		{"a percent-encoded separator is refused (git sends %2F raw)",
+			providersConfig([]types.GitProvider{githubRow("gh", false, "https://github.com/acme")}),
+			"https://github.com/acme%2Fevil/repo.git", false, ""},
+		{"an empty segment is refused",
+			providersConfig([]types.GitProvider{githubRow("gh", false, "https://github.com/acme")}),
+			"https://github.com/acme//../evil/repo.git", false, ""},
+		{"a backslash in the path is refused",
+			providersConfig([]types.GitProvider{githubRow("gh", false, "https://github.com/acme")}),
+			`https://github.com/acme\..\evil/repo.git`, false, ""},
+		{"the scp form gets the SAME rule, host-level admission notwithstanding",
+			providersConfig([]types.GitProvider{githubRow("gh", false, "https://github.com/acme")}),
+			"git@github.com:acme/../evil/repo.git", false, ""},
+		{"an ssh:// URL gets the same rule",
+			providersConfig([]types.GitProvider{githubRow("gh", false, "https://github.com/acme")}),
+			"ssh://git@github.com/acme/%2e%2e/evil/repo.git", false, ""},
+
 		{"scp form matches host-level",
 			providersConfig([]types.GitProvider{githubRow("gh", false, "https://github.com/acme")}),
 			"git@github.com:acme/repo.git", true, "gh"},
@@ -598,6 +627,11 @@ func TestWorkspaceProvidersPutCountsSourcesItRefuses(t *testing.T) {
 		sources: []types.Source{
 			{ID: uuid.New(), Kind: types.SourceRepo, Locator: "https://gitlab.com/team/cut.git"},
 			{ID: uuid.New(), Kind: types.SourceLocalDir, Locator: "/srv/other"},
+			// The SAME repository the workspace above already carries, sitting in
+			// the library too — the ordinary state after an onboard. It is ONE
+			// repo the admin is about to cut off, and counting it twice
+			// overstated the blast radius of their own narrowing (V1 lens A).
+			{ID: uuid.New(), Kind: types.SourceRepo, Locator: "https://github.com/other/cut.git"},
 		},
 	}
 	srv, _ := newProvidersHarness(t, fake)
@@ -611,8 +645,9 @@ func TestWorkspaceProvidersPutCountsSourcesItRefuses(t *testing.T) {
 		t.Fatal(err)
 	}
 	if resp.SourcesNoLongerAdmitted != 2 {
-		t.Errorf("sources_no_longer_admitted = %d, want 2 (the other-org workspace source and the gitlab "+
-			"library source; the two local_dir rows are not repos)", resp.SourcesNoLongerAdmitted)
+		t.Errorf("sources_no_longer_admitted = %d, want 2 (the other-org repo — counted ONCE though it is "+
+			"both attached and in the library — and the gitlab library source; the two local_dir rows are "+
+			"not repos)", resp.SourcesNoLongerAdmitted)
 	}
 }
 

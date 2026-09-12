@@ -149,6 +149,12 @@ func validateSourceWrite(src types.Source) string {
 		if !repoFieldSafe(src.Locator) {
 			return "locator must not contain control characters or whitespace"
 		}
+		// The write-door half of the traversal guard (V1 lens A): refused here as
+		// a 400 regardless of provider mode, so a never-clonable locator cannot be
+		// AUTHORED and sit in the library waiting for a provider row to widen.
+		if !repoLocatorPathSafe(src.Locator) {
+			return fmt.Sprintf(repo400LocatorShape, "locator")
+		}
 		if repoCloneURL(src.Locator) == "" {
 			return "locator is not a recognized repo slug or http(s) clone URL"
 		}

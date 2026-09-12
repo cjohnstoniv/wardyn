@@ -52,6 +52,28 @@ describe("GitTab", () => {
     expect(screen.getByText(PROVIDERS.ROW_ABSENT_HINT)).toBeInTheDocument();
   });
 
+  // V1 lens A (medium): the SSH scoping CEILING, said where the policy is
+  // written. An SSH clone URL carries no path, so an org-scoped row admits SSH
+  // for the whole host — visible exactly when the row has a path AND permits ssh.
+  it("an org-scoped row that permits ssh shows the host-level ceiling hint", () => {
+    render(
+      <Harness initial={[{ id: "github", kind: "github", base_urls: ["https://github.com/acme"], lanes: ["ssh"] }]} />,
+    );
+    expect(screen.getByText(PROVIDERS.SSH_HOST_LEVEL_HINT)).toBeInTheDocument();
+  });
+
+  it("...and stays quiet when the row drops ssh, or bounds the whole host anyway", () => {
+    const { unmount } = render(
+      <Harness initial={[{ id: "github", kind: "github", base_urls: ["https://github.com/acme"], lanes: ["pat"] }]} />,
+    );
+    expect(screen.queryByText(PROVIDERS.SSH_HOST_LEVEL_HINT)).not.toBeInTheDocument();
+    unmount();
+    render(
+      <Harness initial={[{ id: "github", kind: "github", base_urls: ["https://github.com"], lanes: ["ssh"] }]} />,
+    );
+    expect(screen.queryByText(PROVIDERS.SSH_HOST_LEVEL_HINT)).not.toBeInTheDocument();
+  });
+
   it("a disabled row collapses to the ROW_DISABLED_HINT — never removed", () => {
     render(
       <Harness

@@ -814,6 +814,21 @@ below is what tells them apart.
 | **Audit row** | `workspace_provider.write` / `agent_provider.write` — the block's own shape, including `base_urls` in the clear (a provider address is topology, not a credential) and never the `sso_start_url` | `site_config.write`, whose datum carries `git_providers`, `storage_configured`, `agent_providers` and — when the body named `workspace_providers` — `sources_no_longer_admitted`, so an MDM-applied narrowing is reviewable with nobody watching a console |
 | **Narrowing is never silent** | the `PUT` response counts the already-onboarded repo sources and library sources the new block refuses; the console renders it on the save toast | the same count, on the response and in `site_config.write` |
 
+**`https://github.com/<org>` bounds HTTPS clones only — SSH is host-level.** An
+SSH clone URL carries no path a base URL can be compared against
+(`git@github.com:acme/x.git` is not `/acme/x`), so a row scoped to one org
+admits an SSH clone of ANY org on that host, with the deployment's
+`ssh-key-<host>` secret. That is a documented ceiling of 0.7.2, not an
+oversight, and it is never silent: the `/providers` screen says it under the
+row's lanes, and run create puts it on the 201 as a warning (with a
+`run.provider.ssh_host_level` audit row) whenever a path-scoped row admits an
+SSH repository. **The remedy is the row's own `lanes` list** — drop `ssh` from a
+path-scoped row and its addresses bind again, over the one transport that
+carries a path. Dot-segment and percent-encoded paths do NOT reach this
+question at all: `https://github.com/acme/../evil/repo.git` and
+`…/acme%2Fevil/…` are refused outright at every admission door and at both
+write doors, because git and the server would read such a path differently.
+
 **On the desktop tier this grid has a winner.** `wardyn-desktop.sh` re-applies
 `/etc/wardyn/site-config.json` on every converge tick, so on `a′` — where the
 developer IS the admin and can open `/providers` — an MDM file that NAMES a

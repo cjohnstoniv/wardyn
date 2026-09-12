@@ -393,6 +393,15 @@ func parseCloneTarget(cloneURL string) (cloneTarget, bool) {
 	if raw == "" {
 		return cloneTarget{}, false
 	}
+	// THE TRAVERSAL GUARD, before either form is read: a path the server and the
+	// sandbox's git read differently is not a target this function can reduce
+	// honestly, so it is UNREADABLE and therefore refused — with the same
+	// operator/member sentences every other unreadable target earns. See
+	// repoLocatorPathSafe (runs_scm.go) for why no spelling of pathAdmits
+	// survives one.
+	if !repoLocatorPathSafe(raw) {
+		return cloneTarget{}, false
+	}
 	// sshCloneHost answers only for ssh:// and scp-form strings (it refuses
 	// anything else carrying a scheme), so an https clone URL falls through.
 	if host, ok := sshCloneHost(raw); ok {
@@ -471,6 +480,28 @@ func rowAdmits(row types.GitProvider, t cloneTarget) bool {
 		}
 	}
 	return false
+}
+
+// sshAdmittedAbovePath reports whether a row admitted an SSH target ONLY because
+// SSH scoping is host-level: the target is SSH and every base URL of this row
+// that matches its host carries an org path. That is the documented ceiling
+// (see cloneTarget) and it is REAL — `https://github.com/acme` admits
+// `git@github.com:other-org/x.git` — so the callers say it out loud rather than
+// letting a path-scoped row look narrower than it is.
+func sshAdmittedAbovePath(row types.GitProvider, t cloneTarget) bool {
+	if !t.ssh {
+		return false
+	}
+	for _, raw := range row.BaseURLs {
+		u, err := url.Parse(raw)
+		if err != nil || u.Hostname() == "" {
+			continue
+		}
+		if hostsMatch(t, strings.ToLower(u.Hostname())) && strings.Trim(u.Path, "/") == "" {
+			return false // this row bounds the whole host anyway; nothing was widened
+		}
+	}
+	return rowAdmits(row, t)
 }
 
 // rowClaimsHost reports whether one row CLAIMS a host — the precedence question,
@@ -627,18 +658,27 @@ func effectiveScmHosts(sc types.SiteConfig) []string {
 // write rather than reporting a comforting 0 — a false "nothing was affected" is
 // the one answer this function must never give.
 func (s *Server) sourcesNoLongerAdmitted(ctx context.Context, candidate types.SiteConfig) (int, error) {
-	refused := 0
+	// DEDUPED BY CLONE URL: one repository attached to a workspace AND sitting in
+	// the source library is ONE repo the admin is about to cut off, and counting
+	// it twice overstates the blast radius of their own narrowing (V1 lens A).
+	refused := map[string]bool{}
+	count := func(locator string) {
+		cloneURL := repoCloneURL(locator)
+		if _, ok := providerFor(candidate, cloneURL); !ok {
+			if cloneURL == "" {
+				cloneURL = locator // no derivable URL: the locator is its own identity
+			}
+			refused[strings.ToLower(strings.TrimSuffix(cloneURL, ".git"))] = true
+		}
+	}
 	workspaces, err := s.cfg.Store.ListWorkspaces(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("list workspaces: %w", err)
 	}
 	for _, ws := range workspaces {
 		for _, src := range ws.Sources {
-			if src.Type != types.WorkspaceSourceTypeRepo {
-				continue
-			}
-			if _, ok := providerFor(candidate, repoCloneURL(src.Source)); !ok {
-				refused++
+			if src.Type == types.WorkspaceSourceTypeRepo {
+				count(src.Source)
 			}
 		}
 	}
@@ -647,14 +687,11 @@ func (s *Server) sourcesNoLongerAdmitted(ctx context.Context, candidate types.Si
 		return 0, fmt.Errorf("list sources: %w", err)
 	}
 	for _, src := range sources {
-		if src.Kind != types.SourceRepo {
-			continue
-		}
-		if _, ok := providerFor(candidate, repoCloneURL(src.Locator)); !ok {
-			refused++
+		if src.Kind == types.SourceRepo {
+			count(src.Locator)
 		}
 	}
-	return refused, nil
+	return len(refused), nil
 }
 
 // workspaceProvidersPutResponse is PUT /workspace-providers's body: the

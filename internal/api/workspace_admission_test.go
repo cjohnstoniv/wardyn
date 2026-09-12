@@ -1028,3 +1028,68 @@ func TestAdmittedIsNeverTakenFromAWriteBody(t *testing.T) {
 		t.Errorf("stored %d workspaces, want none", len(all))
 	}
 }
+
+// TestSSHHostLevelAdmissionIsNeverSilent pins the MEDIUM of V1 lens A. The
+// host-level SSH ceiling STAYS (an SSH clone URL carries no path to compare), so
+// what is pinned here is that it is said out loud rather than closed: a run whose
+// SSH repository slipped a path-scoped row's org bound earns the 201 warning and
+// the run.provider.ssh_host_level audit row — the one admission outcome that is
+// WIDER than the policy an admin wrote.
+func TestSSHHostLevelAdmissionIsNeverSilent(t *testing.T) {
+	runID := uuid.New()
+	fire := func(t *testing.T, sc types.SiteConfig, repo string) ([]string, *recRecorder) {
+		t.Helper()
+		srv, st, audit := govEscapeFixture(t, &capStore{})
+		st.siteConfig = sc
+		return srv.sshHostLevelWarnings(t.Context(), runID, repo), audit
+	}
+
+	t.Run("another org over SSH under a path-scoped row: warned and audited", func(t *testing.T) {
+		warnings, audit := fire(t, admitSite(), "git@github.com:other/app.git")
+		if len(warnings) != 1 || !strings.Contains(warnings[0], "SSH at the host level") {
+			t.Fatalf("warnings = %#v, want the ADMIT.SSH_HOST_LEVEL sentence", warnings)
+		}
+		// The disclosure rule: the KIND, never the row id (a member reads their
+		// own run's warnings and its audit rows alike).
+		if strings.Contains(warnings[0], admitRowID) {
+			t.Errorf("warning = %q, must not name the row id", warnings[0])
+		}
+		var found bool
+		for _, ev := range audit.events {
+			if ev.Action == "run.provider.ssh_host_level" {
+				found = true
+				if ev.Target != string(types.GitProviderGitHub) {
+					t.Errorf("audit target = %q, want the provider KIND", ev.Target)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("events = %#v, want a run.provider.ssh_host_level row", audit.events)
+		}
+	})
+
+	t.Run("an HTTPS clone of the same repo is refused, not warned", func(t *testing.T) {
+		// The ceiling is SSH-only: over https the org path binds, so this repo
+		// never reaches a warning — it is refused by admission upstream.
+		if _, ok := providerFor(admitSite(), repoCloneURL("other/app")); ok {
+			t.Fatal("an https clone outside the org path must not be admitted at all")
+		}
+		warnings, _ := fire(t, admitSite(), "other/app")
+		if len(warnings) != 0 {
+			t.Errorf("warnings = %#v, want none for an https target", warnings)
+		}
+	})
+
+	t.Run("a bare-host row widened nothing, so it says nothing", func(t *testing.T) {
+		sc := providersConfig([]types.GitProvider{githubRow(admitRowID, false, "https://github.com")})
+		if warnings, _ := fire(t, sc, "git@github.com:other/app.git"); len(warnings) != 0 {
+			t.Errorf("warnings = %#v, want none — the row bounds the whole host anyway", warnings)
+		}
+	})
+
+	t.Run("legacy open mode says nothing", func(t *testing.T) {
+		if warnings, _ := fire(t, types.SiteConfig{}, "git@github.com:other/app.git"); len(warnings) != 0 {
+			t.Errorf("warnings = %#v, want none with no provider rows", warnings)
+		}
+	})
+}

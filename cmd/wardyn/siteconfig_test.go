@@ -232,6 +232,37 @@ func TestSiteConfigApply_NotesOnlyFieldsTheFileOmits(t *testing.T) {
 	}
 }
 
+// TestSiteConfigApply_NotesANullBlockAsCarriedForward is V1 lens A's LOW: a
+// `null` block is not a clear, it is a CARRY-FORWARD. These fields are pointers
+// with `omitempty`, so `apply` strict-decodes `null` into nil and re-marshals the
+// document WITHOUT the key — the server sees an absent key and keeps the stored
+// block. Reporting `null` as "mentioned" printed nothing and let an operator
+// believe they had deleted a provider policy they had in fact preserved.
+// (`{}` is the clear form; the test above pins that it earns no note.)
+func TestSiteConfigApply_NotesANullBlockAsCarriedForward(t *testing.T) {
+	var got types.SiteConfig
+	srv := applyServer(t, &got)
+
+	_, stderr, err := runSiteConfigApply(t, srv.URL,
+		`{"scm_hosts":["gitlab.corp"],"workspace_providers":null,"agent_providers":null,"internal_hosts":[]}`)
+	if err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	for _, want := range []string{"workspace_providers", "agent_providers"} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr = %q, want it to name %q — a null block is carried forward, not cleared", stderr, want)
+		}
+	}
+	// …and the sibling written as [] is still a real mention, so it is still
+	// absent from the note: this change moved `null` only.
+	if strings.Contains(stderr, "internal_hosts") {
+		t.Errorf("stderr = %q, want it to NOT name a field the file mentions with a value", stderr)
+	}
+	if got.WorkspaceProviders != nil {
+		t.Errorf("wire carried workspace_providers = %#v, want it absent (omitempty on a nil pointer)", got.WorkspaceProviders)
+	}
+}
+
 // TestSiteConfigApply_NoOmittedFieldsNoteIsSilent: a file that mentions every
 // post-0.6.6 field gets no note at all — the same "silence is silence" rule
 // the onboarding-mark warning above follows.

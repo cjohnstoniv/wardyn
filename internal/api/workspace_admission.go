@@ -84,6 +84,13 @@ const (
 	// admitLegacyHost is the other 201 warning: admitted for one release because
 	// nothing claims its host, which is a state the admin should close.
 	admitLegacyHost = "host %s is admitted through the legacy scm_hosts list; enable a provider for it before 0.8"
+	// admitSSHHostLevel is the third 201 warning: the SSH scoping CEILING, said
+	// out loud at the one moment it actually matters. An SSH clone URL carries no
+	// path a base URL can be compared against, so a row scoped to one org admits
+	// SSH for the WHOLE host — which is a narrower policy than the admin wrote.
+	// Held to the disclosure rule like every other member-visible sentence: the
+	// kind, never the row id and never a base URL.
+	admitSSHHostLevel = "%s is admitted over SSH at the host level; the %s provider's org paths bound HTTPS clones only"
 )
 
 // errRepoNotAdmitted marks a launch refused by provider admission, so the
@@ -300,6 +307,44 @@ func (s *Server) legacyHostAdmissionWarnings(ctx context.Context, repos ...strin
 	var warnings []string
 	for _, host := range legacyHostAdmittedHosts(sc, repos) {
 		warnings = append(warnings, fmt.Sprintf(admitLegacyHost, host))
+	}
+	return warnings
+}
+
+// sshHostLevelWarnings is the ADMIT_SSH_HOST_LEVEL sentence — plus its audit row,
+// the run.provider.lane_dropped shape — for every SSH repository on this run that
+// a PATH-SCOPED row admitted host-level. Never silent: this is the one admission
+// outcome that is WIDER than the policy reads, and run create is the only door
+// with a warnings channel, so the audit half rides along here rather than at
+// every door (an SSH source onboarded elsewhere is re-asked at launch).
+//
+// One sentence per repository, not per host: which repository slipped the org
+// bound is the fact an admin acts on.
+func (s *Server) sshHostLevelWarnings(ctx context.Context, runID uuid.UUID, repos ...string) []string {
+	repos = presentRepos(repos)
+	if len(repos) == 0 || s.cfg.Store == nil {
+		return nil
+	}
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err != nil || !providersConfigured(sc) {
+		return nil
+	}
+	var warnings []string
+	for _, repo := range repos {
+		t, ok := parseCloneTarget(repoCloneURL(repo))
+		if !ok || !t.ssh {
+			continue
+		}
+		for _, row := range admittingRows(sc, repoCloneURL(repo)) {
+			if !sshAdmittedAbovePath(row, t) {
+				continue
+			}
+			s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.provider.ssh_host_level",
+				string(row.Kind), "failure", mustJSON(map[string]any{
+					"lane": string(types.GitLaneSSH), "kind": string(row.Kind), "host": t.host,
+				})))
+			warnings = append(warnings, fmt.Sprintf(admitSSHHostLevel, repo, row.Kind))
+		}
 	}
 	return warnings
 }
