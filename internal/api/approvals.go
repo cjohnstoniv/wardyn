@@ -357,7 +357,9 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// V1-D1 — DEFENCE IN DEPTH: the run may have ENDED while this approval sat in
 	// the queue (refuseIfRunEnded). Placed with the other pre-Decide() rules, and
 	// for their reason: PENDING -> decided is one-way.
-	if ap, run, haveAP, haveRun, ok = s.refuseIfRunEnded(w, r, id, ap, run, haveAP, haveRun); !ok {
+	// The run row it loads is only consulted for the terminal check itself;
+	// nothing below reads it, so only the approval is taken back.
+	if ap, _, haveAP, _, ok = s.refuseIfRunEnded(w, r, id, ap, run, haveAP, haveRun); !ok {
 		return
 	}
 

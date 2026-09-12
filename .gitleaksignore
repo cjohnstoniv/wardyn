@@ -131,3 +131,5 @@ f8a21684af4b6b1b4921f14437913efc8ab2aaaa:scripts/test-install-sh-trust.sh:generi
 f8a21684af4b6b1b4921f14437913efc8ab2aaaa:scripts/test-install-sh-trust.sh:generic-api-key:488
 # R3 fix wave: egress-b F123 mask test mints a FAKE GitLab PAT fixture (pat_broker_mask_test.go); commit-scoped (gitleaks scans every ref in the shared repo)
 7ea6a2783ac5bd8c680382cfc056ca6949e3db4b:internal/egress/proxy/pat_broker_mask_test.go:gitlab-pat:42
+# 0.7.2 U1 moved the SSH lane (and its PEM placeholder text) from connection-cards.tsx into the providers git tab — placeholder, not a key
+63100dccc48d4aa76e026a43180f9ddf487857bf:ui/src/app/components/screens/providers/git-tab.tsx:private-key:271
