@@ -249,6 +249,38 @@ services:
       # several adds a volume line per root by hand. See docs/OPERATIONS.md
       # "User drives on Docker".
       WARDYN_USER_DRIVE_HOST_ROOTS: "${WARDYN_USER_DRIVE_HOST_ROOTS:-}"
+      # MEMBER MODE (m'): the desktop tier's member envelope
+      # (deploy/desktop/wardyn.env.m-prime.example) sets all of these, and an MDM
+      # copies that file to every laptop — so a key this block does not forward
+      # is a governance posture the envelope CLAIMS and the daemon never sees.
+      # WARDYN_MEMBER_MODE unforwarded left every m' device booting as the
+      # ordinary admin-token tier; the roots unforwarded left every member host
+      # mount REFUSED (unset = "members may not mount host directories"), which
+      # is the one power m' exists to add. Defaults here are docs/ENV.md's own:
+      # member mode off, and every root list unset = fail closed.
+      #
+      # The roots are HOST paths and this wardynd resolves symlinks in its OWN
+      # process, so the tree has to be visible inside this container too — same
+      # constraint (and same CSV-can't-become-volume-lines limit) as
+      # WARDYN_USER_DRIVE_HOST_ROOTS above: the WARDYN_WORKSPACES_ROOT bind below
+      # is what makes the common case work (the m' envelope points it at the same
+      # tree as its first member root), and a deployment whose member roots live
+      # elsewhere adds a same-path volume line per root by hand. That bind is
+      # READ-ONLY, so WARDYN_MEMBER_WRITABLE_ROOTS needs an rw line of its own:
+      # the daemon would allow the writable mount and the bind would refuse it.
+      WARDYN_MEMBER_MODE: "${WARDYN_MEMBER_MODE:-false}"
+      WARDYN_MEMBER_WORKSPACE_ROOTS: "${WARDYN_MEMBER_WORKSPACE_ROOTS:-}"
+      WARDYN_MEMBER_WORKSPACE_ROOTS_MAP: "${WARDYN_MEMBER_WORKSPACE_ROOTS_MAP:-}"
+      WARDYN_MEMBER_WRITABLE_ROOTS: "${WARDYN_MEMBER_WRITABLE_ROOTS:-}"
+      WARDYN_MEMBER_WRITABLE_DENY: "${WARDYN_MEMBER_WRITABLE_DENY:-}"
+      # Four-eyes on egress approvals: the human who DECIDES an egress_domain
+      # approval must not be the human who created the run. Unforwarded, the m'
+      # envelope's WARDYN_EGRESS_SECOND_HUMAN=true read as ON in the file MDM
+      # ships and was OFF in the daemon — a governance control that is worse than
+      # absent, because the envelope is the thing an auditor reads. Default-unset
+      # keeps single-human approval; local mode REFUSES it (see docs/ENV.md), so
+      # the compose stack must set WARDYN_LOCAL_MODE=false to use it.
+      WARDYN_EGRESS_SECOND_HUMAN: "${WARDYN_EGRESS_SECOND_HUMAN:-}"
       WARDYN_PROXY_IMAGE: "${WARDYN_PROXY_IMAGE:-wardyn/wardyn-proxy:local}"
       WARDYN_CONTROL_PLANE_URL: "http://wardynd:8080"
       # Devcontainer image builds — ON by default on the compose stack: the

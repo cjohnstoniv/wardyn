@@ -588,6 +588,17 @@ node-level eviction as the only bound on a run that asked for nothing. It needs
 no new RBAC verb — the limit is a field on a pod spec the runner already
 creates, as the RBAC paragraph above says.
 
+An eviction is a kill path nothing in Wardyn is on, so the run's SIBLINGS — the
+proxy pod, still running with its resolved upstream credentials, and the per-run
+Secret holding the run token, the MITM CA key and any injected git token — are
+reclaimed by the control plane's orphan sweep rather than by the run's own
+teardown. That sweep now covers this substrate too (it previously existed only
+on the Docker driver, and was a silent no-op here); it reuses the same
+`pods: list` and `deletecollection` verbs the Role already grants, so again no
+new verb — see the comment block at the top of `templates/rbac.yaml`. It fires
+on boot and on its cadence after, once the run is past its dispatch grace, and
+never touches a user drive's claim.
+
 **Not a chart value: the org's provider policy.** `workspace_providers` and
 `agent_providers` — which git hosts a run may clone from, which agents this
 deployment offers, and the ephemeral/drive storage ceilings — live on

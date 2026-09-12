@@ -418,6 +418,34 @@ deployment answers byte-for-byte what it answered before.
   rendered honestly rather than as a confident wrong answer; the funnel's Providers
   step shows non-operators the tier hint instead of an empty panel; and the
   Settings card counts agents only once an agent policy exists.
+- **The Kubernetes substrate now reclaims an evicted run's orphans — it never
+  did.** The control plane's orphan sweep reaches its substrate by type
+  assertion, and only the Docker driver implemented it, so on Kubernetes the
+  sweep was a silent no-op: nothing ever revisited a run's objects once no
+  `sandbox_ref` pointed at them. This release is the one that makes that
+  routine rather than crash-only — `disk_mib` is now the agent container's
+  `ephemeral-storage` limit, so the kubelet EVICTS the pod on a path no Wardyn
+  code is on, leaving the run's proxy pod running with its resolved upstream
+  credentials and the per-run Secret (run token, MITM CA key, injected git
+  tokens) sitting in the namespace. The k8s driver implements the same sweep and
+  returns the same shape: it lists the agent and proxy pods by label — both, not
+  the agent alone, because the kubelet's terminated-pod GC may reap an evicted
+  pod while the proxy lives on — asks the control plane which run ids are
+  orphaned, and tears down every object of those by label. A user drive's claim
+  is never touched (it carries no run label, and the sweep deletes only pods,
+  NetworkPolicies and Secrets), and the chart needed no new RBAC verb.
+- **The Compose envelope forwards the member-mount and four-eyes keys.** The
+  desktop tier's member-mode envelope, the file an MDM copies to every laptop,
+  sets `WARDYN_MEMBER_MODE`, the four `WARDYN_MEMBER_*` root lists and
+  `WARDYN_EGRESS_SECOND_HUMAN` — and the Compose stack forwarded none of them, so
+  a variable could only be interpolated, never seen by the daemon. Every m′
+  device therefore booted as the ordinary admin-token tier with member host
+  mounts REFUSED (unset roots fail closed), and the four-eyes egress gate read
+  as ON in the envelope while being OFF in the daemon: a governance control worse
+  than absent, because the envelope is what an auditor reads. All six keys are
+  forwarded with their documented defaults, and `scripts/test-desktop-profile.sh`
+  now fails when any variable an envelope sets has no forward — the missing
+  mechanism, not just the two missing keys.
 - **Tooling and mechanical pulls.** `check-file-size.sh` walks tracked files;
   `-coverpkg` closes the same-package blind spot; the sidecar's operator knobs now
   travel on BOTH container substrates from one list (a pod inherits nothing from
@@ -426,7 +454,9 @@ deployment answers byte-for-byte what it answered before.
   tier table; `wardyn site-config apply` prints which post-0.6.6 fields it left as
   the server already had them; and `values.yaml` documents that
   `persistence.enabled=false` also leaves the audit spool on the ephemeral
-  `/tmp` emptyDir.
+  `/tmp` emptyDir. `make test-race` also races the `-tags k8s` tree, which no
+  pass compiled before — the whole L1 substrate, its drive provisioning, its
+  teardown poll and its new orphan sweep, had zero race coverage.
 
 ### Security
 

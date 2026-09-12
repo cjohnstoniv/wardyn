@@ -24,6 +24,13 @@ canary,driver}.go. In particular:
   - secrets: NO get/list. wardynd creates its own per-run proxy-config Secret
     and later deletes it (by name, then by label at teardown) — it never
     reads one back; the kubelet mounts it into the proxy pod, not wardynd.
+  - pods: list, and the three deletecollections, have a SECOND caller besides
+    teardown — lifecycle.go's SweepOrphanedSandboxes, the control plane's
+    crash/eviction orphan reclaim (internal/api/reconcile.go). It needs no new
+    verb: it lists the agent+proxy pods by label and then reuses
+    teardownByRunID. Named here so a later verb-trimming pass does not read
+    pods:list as "only waitPodsGone" and drop it — that would leave every
+    evicted run's proxy pod and credential Secret behind.
   - networkpolicies: NO get/list, same reasoning as secrets.
   - runtimeclasses: get ONLY (cluster-scoped, below) — driver.go's
     runtimeClassHandler resolves a RuntimeClass by NAME (Get); nothing in

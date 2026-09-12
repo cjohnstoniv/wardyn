@@ -7,6 +7,7 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -210,4 +211,76 @@ func (d *Driver) waitPodsGone(ctx context.Context, ns string, listOpts metav1.Li
 		}
 		return len(pods.Items) == 0, nil
 	})
+}
+
+// SweepOrphanedSandboxes tears down the sandbox objects of every run whose row
+// no longer owns them — this substrate's half of api.SandboxOrphanSweeper
+// (D13), the sibling of docker/driver.go's. Until it existed the control
+// plane's boot-and-cadence sweep (internal/api/reconcile.go) was a SILENT
+// NO-OP here: it reaches the capability by type assertion, and only the docker
+// driver satisfied it, so on k8s nothing ever revisited a run's objects once
+// no sandbox_ref pointed at them.
+//
+// 0.7.2 is what makes that reachable routinely rather than only after a
+// control-plane crash: a run's disk_mib is now the agent container's
+// ephemeral-storage LIMIT (naming.go's resourceRequirements), so the kubelet
+// EVICTS the agent pod — a kill path no Wardyn code is on, and one an operator
+// can trigger with an ordinary `dd`. Nothing then tears down the run's
+// siblings, and the credential-bearing ones are the point: the proxy pod stays
+// Running with its resolved upstream creds in memory, and the per-run Secret
+// (proxy config JSON + every SecretEnv value) stays in the namespace.
+//
+// Keyed on the agent AND proxy pods, where docker keys on its agent container
+// alone: an evicted pod is Failed, and the kubelet's terminated-pod GC may
+// reap it while the proxy pod lives on — keying on the agent alone would miss
+// exactly the shape this exists for. One list, deduped by run id, since
+// teardownByRunID already reaches every object of that run from the id.
+//
+// Canary pods are excluded BY that selector: their labelRun carries a
+// per-invocation uuid rather than a run id (canary.go's M2 note), and
+// runCanaryPhase cleans its own up on every path.
+//
+// A drive PVC is never touched, on two independent counts: it carries
+// labelDrive/labelDriveHome/labelDriveSubject and NEVER labelRun (drives.go's
+// ensureDrivePVC), and teardownByRunID only ever DeleteCollections pods,
+// NetworkPolicies and Secrets. A drive outlives every run that mounts it —
+// which is why the chart grants no claim delete verb at all.
+func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duration, isOrphan func(runID uuid.UUID) bool) (int, error) {
+	ns := d.cfg.Namespace
+	pods, err := d.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: labelComponent + " in (" + componentAgent + "," + componentProxy + ")",
+	})
+	if err != nil {
+		return 0, fmt.Errorf("k8s: list sandbox pods for orphan sweep: %w", err)
+	}
+	cutoff := time.Now().Add(-minAge)
+	// An orphan has no owner left to flush, so kill rather than wait out a
+	// 30s SIGTERM grace window per run — and waitPodsGone's bound shrinks with
+	// it, which matters when a sweep finds several.
+	zeroGrace := int64(0)
+	swept := 0
+	seen := make(map[uuid.UUID]bool, len(pods.Items))
+	var errs []error
+	for _, pod := range pods.Items {
+		runID, perr := uuid.Parse(pod.Labels[labelRun])
+		if perr != nil {
+			continue // not a pod whose run id we can key teardown on
+		}
+		if seen[runID] {
+			continue // its sibling already swept the whole run, or failed to
+		}
+		if pod.CreationTimestamp.Time.After(cutoff) {
+			continue // too young: a dispatch may still be about to SetSandboxRef
+		}
+		if !isOrphan(runID) {
+			continue // a live run legitimately owns it
+		}
+		seen[runID] = true
+		if terr := d.teardownByRunID(ctx, runID, &zeroGrace); terr != nil {
+			errs = append(errs, fmt.Errorf("k8s: teardown orphaned run %s: %w", runID, terr))
+			continue
+		}
+		swept++
+	}
+	return swept, errors.Join(errs...)
 }

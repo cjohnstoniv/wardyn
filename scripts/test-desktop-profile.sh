@@ -64,6 +64,35 @@ done <<<"${vars}"
 [ -z "${missing}" ] || fail "vars set in ${ENV_NAME} but not documented in docs/ENV.md:
 $(printf '%b' "${missing}")"
 
+# ── 2b. every var it SETS is actually FORWARDED to wardynd by compose ───────
+# Section 2 proves the var is DOCUMENTED. That is not the same as reaching the
+# daemon: the desktop stack is `docker compose --env-file wardyn.env ...` over
+# deploy/compose/docker-compose.yaml, and compose passes a variable into the
+# container ONLY if that file's `environment:` block lists it. An envelope key
+# with no forward is silently inert — the file MDM ships says the posture is on
+# and wardynd never sees it. That is how WARDYN_MEMBER_MODE (every m' laptop
+# booting as the plain admin-token tier, every member host mount refused) and
+# WARDYN_EGRESS_SECOND_HUMAN (the four-eyes egress gate OFF where the envelope
+# claims it on) both shipped: two High config-drift findings, one missing
+# mechanism. Sections 1-3 all passed on them, which is why this one exists.
+#
+# The exemptions are the vars compose consumes during INTERPOLATION rather than
+# forwarding — a host port mapping and the wardynd image tag. Neither has, or
+# wants, a reader inside the container (cmd/wardynd/envdoc_guard_test.go's
+# envDocShellOnly says the same thing from the Go side). Anything else added
+# here is a var that needs a forward, not an exemption.
+COMPOSE_YAML="${REPO_ROOT}/deploy/compose/docker-compose.yaml"
+[ -f "${COMPOSE_YAML}" ] || fail "${COMPOSE_YAML} not found"
+unforwarded=""
+while IFS= read -r v; do
+  case "${v}" in
+    WARDYN_UP_PORT|WARDYN_WARDYND_IMAGE) continue ;;  # compose-interpolation only, never forwarded
+  esac
+  grep -qE "^[[:space:]]+${v}:[[:space:]]" "${COMPOSE_YAML}" || unforwarded="${unforwarded}${v}\n"
+done <<<"${vars}"
+[ -z "${unforwarded}" ] || fail "vars set in ${ENV_NAME} that deploy/compose/docker-compose.yaml never forwards to wardynd — the envelope claims a posture the daemon never sees. Add each to the wardynd service's environment: block as \${VAR:-<docs/ENV.md default>}, or (only if compose itself consumes it during interpolation) to this check's exemption list:
+$(printf '%b' "${unforwarded}")"
+
 # ── 3. the policy path resolves per the MDM file table ──────────────────────
 policy_line="$(grep -E '^WARDYN_DEFAULT_POLICY=' "${ENV_EXAMPLE}" || true)"
 [ -n "${policy_line}" ] || fail "WARDYN_DEFAULT_POLICY not set in ${ENV_NAME}"

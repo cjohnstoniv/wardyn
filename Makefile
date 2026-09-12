@@ -135,15 +135,23 @@ test: ## Run all Go tests
 # Race-detector sweep. The kill/dispatch FSM has dedicated concurrent tests
 # (internal/api/kill_dispatch_race_test.go) that only mean something under -race;
 # the rest of the tree rides along. Required green before restructuring runs.go.
-# BOTH tag sets: the tagless pass alone never compiles the -tags docker runner
-# tree (internal/runner/docker, internal/envbuild) — the concurrency-heavy
+# ALL THREE tag sets: the tagless pass alone never compiles the -tags docker
+# runner tree (internal/runner/docker, internal/envbuild) — the concurrency-heavy
 # sandbox lifecycle — so it would get zero race coverage. The docker-tagged pass
 # needs no daemon (the real-Docker cases self-skip unless WARDYN_TEST_DOCKER=1).
-test-race: ## Race-detector sweep over BOTH tag sets (tagless + -tags docker)
+# The k8s pass is the same argument for the OTHER substrate, and it was missing:
+# internal/runner/k8s compiles under `-tags k8s` alone, so both passes above
+# skipped the whole L1 substrate — its drive provisioning, its teardown
+# wait-for-gone poll and its orphan sweep all run concurrently with a live
+# apiserver and none of it was ever under the detector. Daemon-free too: every
+# test there drives a fake clientset.
+test-race: ## Race-detector sweep over ALL tag sets (tagless + -tags docker + -tags k8s)
 	@echo "Running Go tests under the race detector (tagless)..."
 	WARDYN_TEST_PG= go test -race ./...
 	@echo "Running Go tests under the race detector (-tags docker)..."
 	WARDYN_TEST_PG= go test -race -tags docker ./...
+	@echo "Running Go tests under the race detector (-tags k8s)..."
+	WARDYN_TEST_PG= go test -race -tags k8s ./...
 
 # THE PG LANE UNDER -race. `test-race` above deliberately strips the DSN
 # (WARDYN_TEST_PG=), so every WARDYN_TEST_PG-gated test is SKIPPED there — and

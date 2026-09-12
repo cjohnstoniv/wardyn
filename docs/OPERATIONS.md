@@ -4347,7 +4347,16 @@ driver, not a guess:
   What remains a gap, precisely: (i) enforcement is by **eviction, not a
   quota** — the kubelet kills the POD once it exceeds the limit, in-flight work
   is lost, and the agent process never sees `ENOSPC`; it gets no chance to
-  flush or fail gracefully; (ii) the kubelet measures periodically (~10s
+  flush or fail gracefully. An eviction is a kill path no Wardyn code is on, so
+  what reclaims the evicted run's SIBLINGS — the proxy pod still running with
+  its resolved upstream credentials, and the per-run Secret holding the run
+  token, the MITM CA key and any injected git token — is the control plane's
+  orphan sweep (`internal/api/reconcile.go`, implemented on this substrate by
+  `internal/runner/k8s/lifecycle.go`'s `SweepOrphanedSandboxes`), on the next
+  boot and on its cadence after. It runs once the run is past
+  `undispatchedGrace`, so the window between the eviction and the sweep is real
+  and bounded by that grace, not by zero; a user drive's claim is never touched
+  by it; (ii) the kubelet measures periodically (~10s
   housekeeping), so a fast enough burst can overshoot the limit before the
   next tick catches it; (iii) with neither a policy-authored `disk_mib` nor a
   `default_disk_mib` on the deployment's storage provider, a run's `disk_mib`
