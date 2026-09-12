@@ -492,7 +492,10 @@ wardynd never reads one back); the cluster-scoped ClusterRole covers
 `runtimeclasses` get only (RuntimeClass is never namespaced, and the driver
 only ever resolves one by name). One rule is conditional:
 `persistentvolumeclaims` get+create, rendered only with `userDrives.enabled` —
-see [User drives](#user-drives-userdrivesenabled) below.
+see [User drives](#user-drives-userdrivesenabled) below. A run's `disk_mib`
+cap needs **no new verb**: `ephemeral-storage` is a field on the pod spec the
+runner already creates, and eviction is read back through the `pods: get` the
+Role already has.
 
 **Two releases on one cluster is supported.** The namespaced objects are named
 from the release, and the two cluster-scoped ones additionally carry the release
@@ -566,7 +569,11 @@ only a local-directory source is refused), and therefore **no `~/.aws` /
 credential injection instead — substrate-agnostic, works unchanged here).
 Accepted but not enforced, with a logged warning naming the run: **no per-pod
 PIDs limit** (set the node-level kubelet `podPidsLimit` as a cluster-wide
-backstop) and **`DiskMiB`** (no writable-storage quota wired up yet). Also:
+backstop). **`DiskMiB` is now enforced, by eviction**: it becomes the agent
+container's `resources.limits[ephemeral-storage]`, and the kubelet kills the
+pod once it exceeds that — a real cap, but not a quota (in-flight work is
+lost, and a burst between two periodic measurements can still overshoot).
+Also:
 **no in-sandbox DNS** (a fast-failing loopback-only resolver — only
 `wardyn-proxy` resolves hostnames, matching Compose's proxy-only egress),
 **no k8s ground-truth correlator** (the Tetragon host-sensor pipeline has no

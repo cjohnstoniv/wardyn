@@ -486,15 +486,17 @@ func applyDiskQuota(hc *container.HostConfig, res runner.Resources, info system.
 		// Reachable for overlay2 ONLY: btrfs and zfs take the opt AND always
 		// enforce it, so they are already answered by the case above. The message
 		// names overlay2 because nothing else can arrive here.
-		slog.Warn("wardyn/docker: disk cap requested on overlay2 over a backing filesystem that is not xfs; the overlay2 size storage-opt needs xfs mounted with the pquota option, so the daemon will REFUSE this create and the run fails closed (move the daemon's data-root to xfs+pquota, or drop disk_mib from the policy)",
+		slog.Warn("wardyn/docker: disk cap on overlay2 over non-xfs; needs xfs mounted with the pquota option, so the daemon will REFUSE this create and fail closed (move data-root to xfs+pquota, or drop disk_mib); enforcement: none, matching /setup/status",
 			slog.Int64("disk_mib", res.DiskMiB),
 			slog.String("storage_driver", info.Driver),
 			slog.String("backing_filesystem", strings.ToLower(driverStatusValue(info, "Backing Filesystem"))),
+			slog.String("enforcement", string(types.StorageEnforcementNone)),
 		)
 	default:
-		slog.Warn("wardyn/docker: disk cap requested but the storage driver does not support a per-container size quota (need overlay2 on xfs mounted with pquota, or btrfs/zfs); running WITHOUT a disk cap",
+		slog.Warn("wardyn/docker: disk cap requested but the storage driver does not support a per-container size quota (need overlay2 on xfs mounted with pquota, or btrfs/zfs); running WITHOUT a disk cap; reported enforcement is none, same as the daemon reports on /setup/status",
 			slog.Int64("disk_mib", res.DiskMiB),
 			slog.String("storage_driver", info.Driver),
+			slog.String("enforcement", string(types.StorageEnforcementNone)),
 		)
 		return
 	}

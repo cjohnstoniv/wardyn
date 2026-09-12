@@ -3926,10 +3926,22 @@ is the volume request and the storage class decides whether it binds — block
 disks do, network-share provisioners do not. On Docker a managed drive has no
 byte cap, the same gap disk_mib has. A share is bounded by its own quota. The
 size you see is the allocation, not a guarantee."* That is the `enforcement`
-vocabulary this feature introduces (`filesystem` / `request` / `external` /
-`none`): a managed claim is `request`, a share is `external`. It is the same
-honesty the `DiskMiB` gap below is written with, and the two will converge on one
-vocabulary.
+vocabulary this feature introduces — `filesystem` (the filesystem itself
+refuses the write, an XFS project quota), `request` (a scheduling request; a
+block storage class binds it, a network-share provisioner accepts it and
+enforces nothing), `external` (something outside Wardyn binds it, such as a
+NAS's own quota), `none` (nothing binds it), and, since 0.7.2, `eviction` (the
+kubelet measures the pod's usage periodically and evicts it once it exceeds
+the limit — the write itself is never refused): a managed claim is `request`,
+a share is `external`. It is the same honesty the `DiskMiB` gap below is
+written with, and the two vocabularies **have now converged on one**:
+`disk_mib` reports `filesystem` on Docker when the storage driver can enforce
+a per-container quota, `eviction` on Kubernetes, and `none` on Docker when the
+driver cannot enforce a quota at all — which covers two different outcomes
+under one word: a driver that takes no size option (`vfs`, `fuse-overlayfs`)
+runs the request UNCAPPED with a warning, while overlay2 over a non-xfs
+backing filesystem is handed the option anyway and the daemon REFUSES the
+create, so that run fails closed instead.
 
 ## One replica, by construction
 
@@ -4047,23 +4059,43 @@ driver, not a guess:
   kubelet `podPidsLimit` (or your distribution's
   `SystemReserved`/`KubeReserved` PID accounting) as a cluster-wide fork-bomb
   backstop — coarser but real, and the only lever this substrate has today.
-- 🟡 **`DiskMiB` is ignored, with a warning.** Same shape as the PIDs gap: no
-  per-container writable-storage quota is wired up yet, so a requested disk cap
-  is accepted, not enforced, and logged (`internal/runner/k8s/sandbox.go`). A
-  cluster-level `ephemeral-storage` request/limit is the closest mitigation.
-  **The honest wording for a size Wardyn does not enforce is now settled, and
-  `DiskMiB` should adopt it.** User drives introduced an `enforcement`
-  vocabulary — `types.StorageEnforcement`, one of `filesystem` (a quota binds
-  it), `request` (a volume request; the storage class decides), `external`
-  (somebody else's quota binds it) or `none` — and one frozen sentence the
-  console and the docs both render verbatim:
+- 🟡 **`DiskMiB` is enforced by EVICTION, and that leaves a real gap.** A run's
+  `disk_mib` is now the agent container's `resources.limits[ephemeral-storage]`
+  (`internal/runner/k8s/naming.go`) — the pod has no volumes unless a drive is
+  mounted, so the clone, `$HOME`, `/tmp` and every ephemeral workspace target
+  land on the writable layer + logs, which is exactly what the kubelet meters.
+  What remains a gap, precisely: (i) enforcement is by **eviction, not a
+  quota** — the kubelet kills the POD once it exceeds the limit, in-flight work
+  is lost, and the agent process never sees `ENOSPC`; it gets no chance to
+  flush or fail gracefully; (ii) the kubelet measures periodically (~10s
+  housekeeping), so a fast enough burst can overshoot the limit before the
+  next tick catches it; (iii) with neither a policy-authored `disk_mib` nor a
+  `default_disk_mib` on the deployment's storage provider, a run's `disk_mib`
+  is simply absent — BOTH `ephemeral-storage` keys stay off the pod — and
+  node-level eviction — a cluster-wide, not per-run, bound — is the only thing
+  holding the line, same shape as the PIDs gap above. Separately, whenever a
+  limit IS set, the agent container also carries an explicit `ephemeral-storage`
+  request — 256Mi, or the limit itself when the limit is smaller — so the
+  scheduler never inherits the org's whole ceiling as a request (Kubernetes
+  copies an unset request from the limit); on a node whose allocatable
+  ephemeral storage is already short of that request, a run that sets a cap
+  can now sit `Pending` on "Insufficient ephemeral-storage" where it could have
+  scheduled before; that joins this gap list too.
+
+  User drives introduced the same `enforcement` vocabulary —
+  `types.StorageEnforcement`, one of `filesystem` (a quota binds it),
+  `eviction` (the kubelet kills the pod), `request` (a volume request; the
+  storage class decides), `external` (somebody else's quota binds it) or
+  `none` (nothing binds it) — and one frozen sentence the console and the docs
+  both render verbatim:
 
   > Wardyn never enforces a drive's size itself. On Kubernetes the size is the volume request and the storage class decides whether it binds — block disks do, network-share provisioners do not. On Docker a managed drive has no byte cap, the same gap disk_mib has. A share is bounded by its own quota. The size you see is the allocation, not a guarantee.
 
-  That sentence names this gap by its policy field, on purpose. A drive is
-  `request` on a managed claim and `external` on a share; `disk_mib` is `none`
-  on both substrates today, and the two will converge on the one vocabulary
-  rather than on two ways of saying "accepted, not enforced".
+  A drive is `request` on a managed claim and `external` on a share;
+  `disk_mib` is `filesystem` on a Docker host whose storage driver can enforce
+  a per-container quota, `none` on a Docker host whose driver cannot, and
+  `eviction` here on Kubernetes. The two vocabularies **have now converged on
+  the one**, rather than staying two ways of saying "accepted, not enforced".
 - 🟡 **No k8s ground-truth correlator.** The Tetragon host-sensor → ground-truth
   pipeline (`cmd/wardynd/gt_rotator.go`, `wardyn-tetragon-ingest`, the
   `groundtruth` Compose profile) has no k8s-substrate equivalent — it is not
