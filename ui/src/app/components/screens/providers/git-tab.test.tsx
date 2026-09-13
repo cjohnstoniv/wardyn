@@ -414,6 +414,9 @@ describe("GitTab", () => {
       await userEvent.type(within(row).getByLabelText("Access token"), "ado-pat-value");
       await userEvent.click(within(row).getByRole("button", { name: "Save" }));
       expect(setSecretMock).toHaveBeenCalledWith("git-pat-dev-azure-com", "ado-pat-value");
+      // V2/F5: the field used to suggest GitHub's `ghp_…` on the ADO row — the
+      // cosmetic sibling of the very bug this screen exists to stop.
+      expect(within(row).getByLabelText("Access token")).toHaveAttribute("placeholder", "Paste the token");
     });
 
     it("a github row still saves the PAT under github.com — the host is the row's, not a default", async () => {
@@ -429,6 +432,8 @@ describe("GitTab", () => {
       await userEvent.type(within(row).getByLabelText("Access token"), "ghp_x");
       await userEvent.click(within(row).getByRole("button", { name: "Save" }));
       expect(setSecretMock).toHaveBeenCalledWith("git-pat-github-com", "ghp_x");
+      // …and github (including GHES, kind `github` on a corporate host) keeps it.
+      expect(within(row).getByLabelText("Access token")).toHaveAttribute("placeholder", "ghp_…");
     });
   });
 

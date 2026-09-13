@@ -275,11 +275,14 @@ func legacyHostAdmittedHosts(sc types.SiteConfig, repos []string) []string {
 // until 0.8 to close, and the only admission outcome that is neither a refusal
 // nor ordinary.
 //
-// AUDIT AT EVERY DOOR, warn where there is a channel: only run create's 201
-// carries warnings, so onboarding a GitLab workspace through the wizard would
-// otherwise succeed in complete silence and the admin would first hear about the
-// host when 0.8 stopped admitting it. Called from admitRepoSources and
-// admitLauncherRepo, so a door added later inherits it by construction.
+// AUDIT AT EVERY DOOR, warn wherever there is a channel: run create's 201 and
+// the three ONBOARDING doors that answer a body — POST/PUT /workspaces and POST
+// /sources — all carry the sentence now (V2/F1). Onboarding a GitLab workspace
+// through the wizard used to succeed in complete silence, so the admin who must
+// close the state first heard about the host when 0.8 stopped admitting it: the
+// wrong person, one release late. The two launchers have only this row. Called
+// from admitRepoSources and admitLauncherRepo, so a door added later inherits
+// the audit half by construction.
 //
 // Deliberately no run id: eight of the ten doors have none, and one action with
 // one shape reads better in the trail than two that differ by their target.
@@ -290,11 +293,11 @@ func (s *Server) auditLegacyHostAdmissions(ctx context.Context, sc types.SiteCon
 	}
 }
 
-// legacyHostAdmissionWarnings is the ADMIT_LEGACY_HOST sentence for every repo on
-// this run admitted that way — one per HOST, on the ONE response with a warnings
-// channel. The audit half is auditLegacyHostAdmissions', already emitted by the
-// admission call at each of run create's three doors, so this only says out loud
-// what the trail already recorded.
+// legacyHostAdmissionWarnings is the ADMIT_LEGACY_HOST sentence for every repo
+// admitted that way — one per HOST, on EVERY response that has a warnings
+// channel: run create's 201 and the three onboarding doors. The audit half is
+// auditLegacyHostAdmissions', already emitted by the admission call at each of
+// those doors, so this only says out loud what the trail already recorded.
 func (s *Server) legacyHostAdmissionWarnings(ctx context.Context, repos ...string) []string {
 	repos = presentRepos(repos)
 	if len(repos) == 0 || s.cfg.Store == nil {
@@ -641,4 +644,26 @@ func stampSourceAdmission(sc types.SiteConfig, ws types.Workspace) types.Workspa
 		ws.Sources[i].Admitted = &admitted
 	}
 	return ws
+}
+
+// ─── the onboarding doors' warning channels ───────────────────────────────────
+//
+// An admission WARNING needs a response that can carry one, and the three
+// onboarding doors answered a bare row. Both envelopes embed that row, so the
+// fields stay at the TOP LEVEL and every existing Workspace/Source decoder is
+// unaffected — createRunResponse's shape, for the reason it has it. They live
+// HERE, beside legacyHostAdmissionWarnings, rather than in the two handler files:
+// the channel exists for this file's warning, and the next door added sees both
+// halves at once. Today the legacy-host grace is the only sentence either
+// carries; a refusal is never a warning, and nothing else about onboarding is
+// advisory.
+
+type workspaceResponse struct {
+	types.Workspace
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+type sourceResponse struct {
+	types.Source
+	Warnings []string `json:"warnings,omitempty"`
 }

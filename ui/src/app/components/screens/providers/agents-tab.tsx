@@ -233,9 +233,19 @@ function Row({
 
           {!harness.no_managed_auth && (
             <Field label={AGENTS.FIELD_SOURCE}>
-              <div className="flex gap-2">
+              {/* role=radiogroup + role=radio, not two bare buttons (V2/F3): this is
+                  a one-of-two form choice exactly like the mechanism picker above
+                  it, and selection was conveyed by the `variant` styling alone —
+                  a screen-reader user could not tell which source was chosen.
+                  Buttons keep the mock's segmented look (Segmented itself is an
+                  aria-pressed control every other screen's suite asserts, so it
+                  is not the primitive to re-point here); role + aria-checked is
+                  what AT reads, and a button is keyboard-operable already. */}
+              <div role="radiogroup" aria-label={AGENTS.FIELD_SOURCE} className="flex gap-2">
                 <Button
                   type="button"
+                  role="radio"
+                  aria-checked={credentialSource === "shared"}
                   size="sm"
                   variant={credentialSource === "shared" ? "secondary" : "outline"}
                   disabled={!operator}
@@ -245,6 +255,8 @@ function Row({
                 </Button>
                 <Button
                   type="button"
+                  role="radio"
+                  aria-checked={credentialSource === "per_user"}
                   size="sm"
                   variant={credentialSource === "per_user" ? "secondary" : "outline"}
                   disabled={!operator || !perUserAvailable}

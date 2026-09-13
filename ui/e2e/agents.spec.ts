@@ -87,7 +87,7 @@ test.describe("agents — the admin authoring walk (real writes, real reload)", 
     await expect(row).toBeVisible();
 
     await row.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_SSO }).click();
-    await row.getByRole("button", { name: AGENTS.SOURCE_PER_USER }).click();
+    await row.getByRole("radio", { name: AGENTS.SOURCE_PER_USER }).click();
     // The Input under FIELD_SSO_START_URL carries no `id` (agents-tab.tsx),
     // so Field's label never associates with it — its accessible name falls
     // back to the placeholder. Located by that instead of getByLabel.

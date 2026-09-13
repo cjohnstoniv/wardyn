@@ -517,7 +517,14 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		"workspace.create", id.String(), "success", mustJSON(map[string]any{
 			"name": created.Name, "sources": len(created.Sources), "owned_by": created.OwnedBy,
 		})))
-	writeJSON(w, http.StatusCreated, created)
+	// The legacy-host grace, said out loud at the door the ADMIN uses (V2/F1).
+	// admitRepoSources already refused everything outside the enabled rows and
+	// audited what it admitted on sufferance; onboarding is where the person who
+	// can enable a provider row actually is, so this is the sentence that has to
+	// reach them here rather than waiting for whoever launches the first run.
+	// Over req.Sources — exactly the locators admission read.
+	writeJSON(w, http.StatusCreated, workspaceResponse{Workspace: created,
+		Warnings: s.legacyHostAdmissionWarnings(r.Context(), repoSourceLocators(req.Sources)...)})
 }
 
 // memberSourcesAllowed gates a MEMBER-owned workspace's local_dir sources
@@ -666,7 +673,10 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		"workspace.update", id.String(), "success", auditWorkspaceData(r, updated.OwnedBy, map[string]any{
 			"name": updated.Name, "sources": len(updated.Sources), "rescan_required": sourcesChanged, "image_changed": imageChanged,
 		})))
-	writeJSON(w, http.StatusOK, updated)
+	// Same door, same sentence: an edit is how a source MOVES onto a legacy host,
+	// so the warning belongs on this response too.
+	writeJSON(w, http.StatusOK, workspaceResponse{Workspace: updated,
+		Warnings: s.legacyHostAdmissionWarnings(r.Context(), repoSourceLocators(req.Sources)...)})
 }
 
 // workspaceSourceContentEqual compares everything about a WorkspaceSource

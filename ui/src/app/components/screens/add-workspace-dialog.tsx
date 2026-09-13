@@ -195,6 +195,11 @@ export function AddWorkspaceDialog({
         ...(base_image ? { base_image } : {}),
       });
       onClose();
+      // The server's advisory sentences, verbatim — today the legacy-scm_hosts
+      // grace (F1: this door admitted the host and said nothing). There is no
+      // persistent advisory slot in this dialog and it closes on success, so the
+      // warning toast is where it can still be read. One per host.
+      for (const warning of created.warnings ?? []) toast.warning(warning);
       onCreated(created);
     } catch (e) {
       toast.error("Failed to add workspace", { description: getErrorMessage(e) });

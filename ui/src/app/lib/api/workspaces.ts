@@ -14,6 +14,7 @@ import type {
   WorkspaceLLMCred,
   WorkspaceRequirementsMap,
   WorkspaceSourceInput,
+  WorkspaceWriteResult,
 } from "../types";
 import { asJson, errText, HttpError, unwrapList, wfetch, withLimit } from "./core";
 
@@ -73,9 +74,12 @@ export const workspaces = {
     llm_cred?: WorkspaceLLMCred;
     sources?: WorkspaceSourceInput[];
     base_image?: WorkspaceBaseImageInput;
-  }): Promise<Workspace> {
+    // The 201 carries the workspace PLUS any advisory `warnings` — the
+    // legacy-scm_hosts grace is the one that reaches this door (F1). Callers
+    // surface them; they never mean the create failed.
+  }): Promise<WorkspaceWriteResult> {
     const res = await wfetch("/workspaces", { method: "POST", body: JSON.stringify(input) });
-    return asJson<Workspace>(res);
+    return asJson<WorkspaceWriteResult>(res);
   },
 
   // PUT /api/v1/workspaces/{id}  same body shape -> updated workspace.
@@ -95,12 +99,12 @@ export const workspaces = {
       sources?: WorkspaceSourceInput[];
       base_image?: WorkspaceBaseImageInput;
     },
-  ): Promise<Workspace> {
+  ): Promise<WorkspaceWriteResult> {
     const res = await wfetch(`/workspaces/${encodeURIComponent(id)}`, {
       method: "PUT",
       body: JSON.stringify(input),
     });
-    return asJson<Workspace>(res);
+    return asJson<WorkspaceWriteResult>(res);
   },
 
   // The wizard's BUILD step. POST kicks the image build asynchronously

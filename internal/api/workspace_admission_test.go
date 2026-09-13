@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -892,6 +893,44 @@ func TestLegacyHostAdmissionIsAuditedAtEveryDoor(t *testing.T) {
 		if got := legacyHostRows(srv); len(got) != 1 || got[0] != admitLegacyHostName {
 			t.Errorf("legacy_host rows = %v, want one naming %q", got, admitLegacyHostName)
 		}
+		// …AND the 201 says it out loud (V2/F1). The audit row alone told the
+		// trail and nobody else: the admin who can enable a provider row before
+		// 0.8 is the person standing at THIS door, and until this the sentence
+		// reached only whoever launched the first run against the workspace.
+		assertLegacyHostWarned(t, w, `"name":"app"`)
+	})
+
+	t.Run("PUT /workspaces/{id} — an edit is how a source MOVES onto a legacy host", func(t *testing.T) {
+		srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+		st.siteConfig = admitLegacySite()
+		sess := admitAdminSession(t)
+		created := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", sess,
+			`{"name":"app","sources":[{"type":"repo","source":`+quote(admitOnRow)+`}]}`)
+		var row struct {
+			ID       string   `json:"id"`
+			Warnings []string `json:"warnings"`
+		}
+		if err := json.Unmarshal(created.Body.Bytes(), &row); err != nil || row.ID == "" {
+			t.Fatalf("create: err=%v body=%s", err, created.Body.String())
+		}
+		if len(row.Warnings) != 0 {
+			t.Errorf("a repo ON a provider row earned warnings %v, want none", row.Warnings)
+		}
+		w := doSSO(t, srv, http.MethodPut, "/api/v1/workspaces/"+row.ID, sess,
+			`{"name":"app","sources":[{"type":"repo","source":`+quote(admitUnclaimed)+`}]}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		assertLegacyHostWarned(t, w, `"name":"app"`)
+	})
+
+	t.Run("POST /sources", func(t *testing.T) {
+		srv, st, _ := ownerHarness(t, runner.MemberMountPolicy{})
+		st.siteConfig = admitLegacySite()
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/sources", admitAdminSession(t),
+			`{"kind":"repo","locator":`+quote(admitUnclaimed)+`}`)
+		assertNotAdmissionRefused(t, w, "the library door admits the legacy host too")
+		assertLegacyHostWarned(t, w, `"kind":"repo"`)
 	})
 
 	t.Run("the scan launcher", func(t *testing.T) {
@@ -919,6 +958,22 @@ func TestLegacyHostAdmissionIsAuditedAtEveryDoor(t *testing.T) {
 			t.Errorf("legacy_host rows = %v, want none", got)
 		}
 	})
+}
+
+// assertLegacyHostWarned is the F1 assertion: the frozen ADMIT_LEGACY_HOST
+// sentence rides this door's success body, and the row it wraps is still spelled
+// at the TOP LEVEL — the envelope embeds the row precisely so every existing
+// Workspace/Source decoder is unaffected, and a nested one would be a silent
+// wire break no warning assertion would catch.
+func assertLegacyHostWarned(t *testing.T, w *httptest.ResponseRecorder, wantFlattened string) {
+	t.Helper()
+	body := w.Body.String()
+	if want := fmt.Sprintf(admitLegacyHost, admitLegacyHostName); !strings.Contains(body, want) {
+		t.Errorf("body = %s, want the ADMIT_LEGACY_HOST warning %q", body, want)
+	}
+	if !strings.Contains(body, wantFlattened) {
+		t.Errorf("body = %s, want the row's own field %s still at the top level", body, wantFlattened)
+	}
 }
 
 // ─── the `admitted` projection ────────────────────────────────────────────────

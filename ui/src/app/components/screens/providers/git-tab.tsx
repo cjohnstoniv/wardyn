@@ -297,7 +297,13 @@ function Row({
             >
               <SecretLane
                 label="Access token"
-                placeholder="ghp_…"
+                // THIS row's placeholder, not GitHub's (V2/F5): an Azure DevOps
+                // PAT carries no `ghp_` prefix, and suggesting one here is the
+                // cosmetic sibling of the very bug this screen exists to stop —
+                // an ADO token typed into git-pat-github-com. The discriminator
+                // is the KIND, not the host: a GitHub Enterprise Server row is
+                // kind github on a corporate host and its PATs are ghp_ too.
+                placeholder={kind === "github" ? "ghp_…" : "Paste the token"}
                 secretName={patName}
                 stored={present.includes(patName)}
                 disabled={!operator}

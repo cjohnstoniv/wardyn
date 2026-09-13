@@ -48,7 +48,11 @@ deployment answers byte-for-byte what it answered before.
     drops its wiring at all five grant sites — and for `pat`, the ADO egress
     bundle that arm would have added with it — and says so on the `201`, with an
     audit row. A host admitted only through the legacy `scm_hosts` list keeps
-    working for one release and warns on the run that clones it.
+    working for one release and says so on EVERY response that can carry a
+    warning — the three onboarding doors (`POST`/`PUT /workspaces` and
+    `POST /sources`, so the console's Add-workspace dialog tells the admin who can
+    enable a provider row, at the moment they onboard the source) as well as the
+    run that clones it — with an audit row at all ten doors.
   - `scm_hosts` is never written and never folded: `GET /site-config` projects a
     read-only `effective_scm_hosts` union, so the console never re-implements the
     claim table. New audit action `workspace_provider.write`; `site_config.write`'s

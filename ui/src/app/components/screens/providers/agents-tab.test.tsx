@@ -74,9 +74,24 @@ describe("AgentsTab", () => {
     });
     render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
-    const perUser = within(row).getByRole("button", { name: AGENTS.SOURCE_PER_USER });
+    const perUser = within(row).getByRole("radio", { name: AGENTS.SOURCE_PER_USER });
     expect(perUser).toBeDisabled();
     expect(within(row).getByText(AGENTS.PER_USER_UNAVAILABLE)).toBeInTheDocument();
+  });
+
+  // V2/F3: the credential source was two bare <button type=button> — no group
+  // role, no checked state, selection conveyed by the `variant` styling alone —
+  // sitting directly under a mechanism control that IS a radiogroup.
+  it("the credential source is a radiogroup whose chosen option reads as checked", async () => {
+    getAgentProvidersMock.mockResolvedValue({
+      providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso", credential_source: "per_user" }] },
+      etag: '"e3"',
+    });
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    const row = await screen.findByTestId("agent-row-claude-code");
+    const group = within(row).getByRole("radiogroup", { name: AGENTS.FIELD_SOURCE });
+    expect(within(group).getByRole("radio", { name: AGENTS.SOURCE_PER_USER, checked: true })).toBeInTheDocument();
+    expect(within(group).getByRole("radio", { name: AGENTS.SOURCE_SHARED, checked: false })).toBeInTheDocument();
   });
 
   it("Per person is enabled once bedrock_sso is the selected mechanism", async () => {
@@ -86,7 +101,7 @@ describe("AgentsTab", () => {
     });
     render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
-    expect(within(row).getByRole("button", { name: AGENTS.SOURCE_PER_USER })).not.toBeDisabled();
+    expect(within(row).getByRole("radio", { name: AGENTS.SOURCE_PER_USER })).not.toBeDisabled();
   });
 
   // VL-23: the start-URL input is reachable by its Field label (htmlFor/id).
@@ -322,8 +337,8 @@ describe("AgentsTab — a stored per_user on a mechanism that can't carry it is 
     getAgentProvidersMock.mockResolvedValue({ providers: { agents: [STORED] }, etag: '"p1"' });
     render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
-    const shared = within(row).getByRole("button", { name: AGENTS.SOURCE_SHARED });
-    const perUser = within(row).getByRole("button", { name: AGENTS.SOURCE_PER_USER });
+    const shared = within(row).getByRole("radio", { name: AGENTS.SOURCE_SHARED });
+    const perUser = within(row).getByRole("radio", { name: AGENTS.SOURCE_PER_USER });
     // "Active" is the secondary variant the tab paints the chosen source with.
     expect(shared.className.split(/\s+/)).toContain("bg-secondary");
     expect(perUser.className.split(/\s+/)).not.toContain("bg-secondary");

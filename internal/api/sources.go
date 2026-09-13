@@ -293,7 +293,15 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 		"source.write", created.ID.String(), "success", mustJSON(map[string]any{
 			"kind": string(created.Kind), "locator": created.Locator, "ref": created.Ref,
 		})))
-	writeJSON(w, status, created)
+	// The legacy-host grace on the LIBRARY door too (V2/F1): admission admitted it
+	// on sufferance and audited that, and this is the other surface an admin
+	// onboards a repository through. Gated on the same kind the admission call is
+	// — a local_dir locator names no host to grace.
+	var warnings []string
+	if src.Kind == types.SourceRepo {
+		warnings = s.legacyHostAdmissionWarnings(r.Context(), created.Locator)
+	}
+	writeJSON(w, status, sourceResponse{Source: created, Warnings: warnings})
 }
 
 // handleGetSource returns one library source.

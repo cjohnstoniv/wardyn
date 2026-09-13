@@ -258,6 +258,14 @@ export interface Workspace {
   updated_at: string;
 }
 
+// POST /workspaces and PUT /workspaces/{id} response: the workspace's fields PLUS
+// an optional advisory `warnings` list — today the legacy-`scm_hosts` grace
+// (ADMIT.LEGACY_HOST), said at the door the admin who can close it actually uses.
+// The workspace WAS created; warnings never block. Structurally assignable to
+// Workspace, so every caller that expects one keeps working. CreateRunResult's
+// shape (lib/types/runs.ts) for the same reason.
+export type WorkspaceWriteResult = Workspace & { warnings?: string[] };
+
 // A run-creation-time selection of an onboarded workspace: WHICH workspace,
 // plus an optional per-run target/read-only override. The wizard resolves
 // workspaceId -> the onboarded Workspace's kind/source when composing the wire
