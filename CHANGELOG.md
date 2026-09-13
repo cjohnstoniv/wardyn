@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.7.2] — 2026-09-12
+
 0.7.2 carries ONE unplanned feature — an admin **Workspace Providers** surface —
 plus the follow-ups from two customer field reports on a private-endpoint
 Kubernetes estate. Carrying a feature onto `release/0.7` breaks one clause of
@@ -541,6 +543,67 @@ deployment answers byte-for-byte what it answered before.
   mid-run stays refused until the run ends. The drive object-name residual is
   corrected: 0.7.1's migration `0061` closed the slug-uniqueness half, not the
   separator collision, whose real fix re-homes existing storage and is 0.8.
+
+### Known gaps and deferrals
+
+What this release did NOT prove, stated here rather than left for the next
+person to rediscover. None of it is a regression; all of it is verification
+debt, owner-hardware debt, or a decision deliberately not taken.
+
+- **The 0.7 R2 review backlog is carried, not closed.** A whole second review
+  round was banked against a pre-0.7.0 tip and never ingested: 19 agent result
+  files, 75 candidate rows, none of which the 0.7.2 plan claimed. A quick pass
+  re-checked every row at v0.7.1 and again at this tip and triaged them —
+  **53 carried forward unchanged**, **10 already resolved somewhere in 0.7.x**
+  (all at or before v0.7.1 — 0.7.2 fixed none of them), **5 had WORSENED and
+  are fixed in this release** (the Kubernetes orphan sweep, `-race -tags k8s`,
+  and the Compose envelope forwards, all named above), and **7 needed a deeper
+  probe than a re-read**. The triage sheet is operator-local and untracked
+  (`local/v072/R2-quickpass.md`), so this list is the shipped record of it. The
+  53 carried rows are the honest number for "known, unreviewed at 0.7".
+- **Two browser rows could not be delivered by the harness.** The Playwright
+  agent-roster spec cannot drive "a member signs in to AWS SSO and launches" or
+  "an expired shared credential is refused with the named sentence": capability
+  subjects are derived from the OIDC human context alone, and the e2e harness
+  authenticates with a bare admin token that carries none. Both behaviours are
+  Go-pinned (`runs_dispatch_llm_mechanism_test.go`, `awssso_refresh_test.go`)
+  and are walked live against a real AWS Identity Center account when that
+  hardware is on hand. A harness limit, recorded as one.
+- **Four live walks need hardware this release was not cut on.** A member on
+  `kind` behind Entra ID (allowed-provider `201`, capability deny `403`,
+  unresolved `/me`); real kubelet eviction on `kind` with the conformance
+  `EphemeralDiskLimit` case; the Workstream C roster against a real AWS
+  Identity Center tenant; and the desktop a′/m′ envelope walk. Everything they
+  would exercise is covered by Go and conformance tests that compile and pass
+  where they can run; what is missing is the live confirmation, not the code.
+- **The blind-CSRF Origin guard still applies in LocalMode only.** The Origin
+  check that refuses a cross-site mutating request is inside the local-mode arm
+  of `internal/api/http.go`'s auth middleware (the `isLoopbackOrigin`
+  predicate); an SSO or token deployment relies on the session cookie's
+  `SameSite=Lax` alone, and 0.7.2 adds mutating run-plane routes behind that
+  same middleware. Widening the check to every cookie-authenticated mutating
+  request in every mode is a small, auth-adjacent change; it is deliberately
+  NOT in this release, and it is named here rather than closed quietly.
+- **A delivered AWS SSO credential blob is not floored at CC3.** Stated in full
+  under the per-user bullet above and repeated here because it is an open
+  posture decision, not a closed one: `composer.RequiredConfinementFloor` — one
+  caller, in `internal/api/runs_create.go`'s create-time validation — raises a
+  GRANT-delivered credential to CC3 and never sees the SSO cache blob, under
+  either `shared` or `per_user`. 0.7.2 narrows the blast radius to one person
+  under `per_user`; it does not floor the class. That is a 0.7.3/0.8 call.
+- **Two Compose residuals remain beside the envelope fix above.** The
+  `WARDYN_WORKSPACES_ROOT` bind is mounted `:ro`, so a member root that is
+  supposed to be writable needs its own read-write volume; and the m′ envelope's
+  `/srv/src` root has no bind at all. Both are written down in
+  `docker-compose.yaml` at the forwards that this release added.
+- **Every user-facing string this release adds ships as a frozen DRAFT.** Said
+  once at the top of this section and repeated here because it is the largest
+  single caveat: the `400`/`412`/`422` bodies and the new console copy are
+  constants awaiting the maintainer's canon sitting, tracked on an
+  operator-local sheet (`local/v072/M2-canon-sheet.md`). Four of them already
+  diverge from the design prompt's staging, including the terminal's `Ctrl+]`
+  exit chord. Tests assert through the constants, so adopting the canon is a
+  one-file diff that moves no behaviour.
 
 ## [0.7.1] — 2026-09-11
 
