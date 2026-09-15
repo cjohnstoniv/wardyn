@@ -87,6 +87,18 @@ export function ProvidersScreen() {
   }, []);
   React.useEffect(load, [load]);
 
+  // The Agents tab's OWN Save re-fires ONLY this — never `load` (A-01): a
+  // successful agent save needs `setupStatus` refreshed (modelAccess/
+  // harnesses can be stale the instant a per_user lane is declared), but
+  // `load` ALSO resets `draft` (the Git/Storage tabs' own unsaved edits),
+  // clears `savedElsewhere`, and a transient GET failure here would flip the
+  // whole screen to FETCH_FAILED right after a successful, unrelated save.
+  // Errors are swallowed on purpose: a stale chip is better than a dead
+  // screen for a refresh nothing on screen is waiting on.
+  const refreshSetupStatus = React.useCallback(() => {
+    setupApi.getSetupStatus().then(setSetupStatus).catch(() => {});
+  }, []);
+
   const save = async () => {
     setSaving(true);
     setSaveError(null);
@@ -231,6 +243,7 @@ export function ProvidersScreen() {
                      load() re-reads /agent-providers, which is not the read that
                      failed, and clicking it changed nothing. */
                   onRetryRoster={load}
+                  onStatusRefresh={refreshSetupStatus}
                 />
               )}
               {/* ONE teal button at a time (CONSOLE-RULES §6, prompt §4): in

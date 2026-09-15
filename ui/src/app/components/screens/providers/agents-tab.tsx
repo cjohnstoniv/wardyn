@@ -116,16 +116,19 @@ function rowEnabled(agents: AgentProvider[], harness: SetupHarnessTool): boolean
 
 // per_user is captured for an AWS SSO sign-in ONLY (validateAgentCredentialSource,
 // and PER_USER_UNAVAILABLE says so). A STORED row pairing it with any other
-// mechanism is a row the admin can neither see nor clear: "Per person" painted
-// active AND disabled, the start-URL field hidden, and both fields re-PUT
-// verbatim by the next unrelated Save.
+// mechanism — OR pairing bedrock_sso with a SHARED credential_source — is a
+// row the admin can neither see nor clear: "Per person" painted active AND
+// disabled (or simply not offered), the start-URL/pin fields hidden, and all
+// four re-PUT verbatim by the next unrelated Save.
 //
-// So the pair is dropped ON LOAD, exactly as the mechanism radio's own onChange
-// already does on an edit — the row renders `shared`, and the next Save writes
-// what the admin was shown. A row that carries neither field is returned
-// UNTOUCHED, which is what keeps a custom WARDYN_AGENT_IMAGES row byte-for-byte.
+// So all four are dropped ON LOAD whenever credential_source isn't actually
+// "per_user" on a bedrock_sso row — the SAME one clause the mechanism radio's
+// own onChange and the Shared button already clear on an edit — the row
+// renders `shared`, and the next Save writes what the admin was shown. A row
+// that carries none of the four is returned UNTOUCHED, which is what keeps a
+// custom WARDYN_AGENT_IMAGES row byte-for-byte.
 function normalizeAgentRow(a: AgentProvider): AgentProvider {
-  if (a.mechanism === "bedrock_sso") return a;
+  if (a.mechanism === "bedrock_sso" && a.credential_source === "per_user") return a;
   if (
     a.credential_source === undefined &&
     a.sso_start_url === undefined &&
@@ -275,9 +278,19 @@ function Row({
               moves to the TOP of the row, in a tinted panel that says WHY —
               the legacy Settings door stops being the one reached for. */}
           {modelAccessProminent && (
-            <div className="rounded-lg border border-warning/30 bg-warning-subtle p-3" role="status">
-              <p className="text-sm font-medium text-foreground">{AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE}</p>
-              <p className="mt-1 text-body text-muted-foreground">{AGENTS_DRAFT.PER_USER_SIGN_IN_BODY}</p>
+            <div
+              className="rounded-lg border border-warning/30 bg-warning-subtle p-3"
+              data-testid="per-user-sign-in-banner"
+            >
+              {/* role="status" covers ONLY the title/body pair — NOT
+                  ModelAccessSignIn below, which can open HarnessLoginPane's
+                  own multi-step device-code/poll flow. A live region around
+                  that whole flow would re-announce it wholesale on every
+                  poll tick. */}
+              <div role="status">
+                <p className="text-sm font-medium text-foreground">{AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE}</p>
+                <p className="mt-1 text-body text-muted-foreground">{AGENTS_DRAFT.PER_USER_SIGN_IN_BODY}</p>
+              </div>
               <div className="mt-2">
                 <ModelAccessSignIn
                   access={modelAccess!}
@@ -384,7 +397,7 @@ function Row({
                   id={`agent-${row.id}-sso-start-url`}
                   value={row.sso_start_url ?? ""}
                   disabled={!operator}
-                  onChange={(e) => onUpdate({ ...row, sso_start_url: e.target.value })}
+                  onChange={(e) => onUpdate({ ...row, sso_start_url: e.target.value.trim() })}
                   placeholder="https://my-org.awsapps.com/start"
                   className="font-mono"
                 />
@@ -401,7 +414,7 @@ function Row({
                   id={`agent-${row.id}-sso-account-id`}
                   value={row.sso_account_id ?? ""}
                   disabled={!operator}
-                  onChange={(e) => onUpdate({ ...row, sso_account_id: e.target.value })}
+                  onChange={(e) => onUpdate({ ...row, sso_account_id: e.target.value.trim() })}
                   placeholder="111111111111"
                   className="font-mono"
                 />
@@ -415,7 +428,7 @@ function Row({
                   id={`agent-${row.id}-sso-role-name`}
                   value={row.sso_role_name ?? ""}
                   disabled={!operator}
-                  onChange={(e) => onUpdate({ ...row, sso_role_name: e.target.value })}
+                  onChange={(e) => onUpdate({ ...row, sso_role_name: e.target.value.trim() })}
                   placeholder="BedrockRunner"
                   className="font-mono"
                 />
@@ -447,6 +460,7 @@ export function AgentsTab({
   modelAccess,
   operator,
   onRetryRoster,
+  onStatusRefresh,
 }: {
   /** The harness catalog off SetupStatus.harnesses. UNDEFINED is "unknown"
    *  (an older daemon omits the field, or the status read failed) — NEVER an
@@ -458,11 +472,20 @@ export function AgentsTab({
   /** The SIGNED-IN caller's own model-access state — claude-code only. */
   modelAccess?: SetupModelAccess;
   operator: boolean;
-  /** Re-fires the PARENT's /setup/status read — the one the roster comes from.
-   *  Required rather than optional: the roster-unknown Retry used to call this
-   *  tab's own load(), which re-reads /agent-providers, a read that had not
-   *  failed, so the control did nothing three clicks running. */
+  /** Re-fires the PARENT's WHOLE load() — /workspace-providers AND
+   *  /setup/status. For the roster-unknown Retry ONLY: there is no draft on
+   *  screen to lose there, since the roster came up empty in the first place.
+   *  NEVER call this from save() — see onStatusRefresh below. */
   onRetryRoster: () => void;
+  /** Re-fires ONLY the parent's /setup/status read (never /workspace-
+   *  providers), so a successful agents Save can refresh the stale
+   *  modelAccess/harnesses it just changed without touching the parent's Git/
+   *  Storage draft, its pending 412 banner, or its own error state. A plain
+   *  `onRetryRoster` there was the staleness fix's own regression: it is the
+   *  parent's full load(), which resets `draft` (the OTHER two tabs' unsaved
+   *  edits), clears `savedElsewhere`, and a transient GET failure flips the
+   *  whole screen to FETCH_FAILED right after a successful agent save. */
+  onStatusRefresh: () => void;
 }) {
   const [draft, setDraft] = React.useState<AgentProviders | null>(null);
   const [etag, setEtag] = React.useState<string | null>(null);
@@ -528,8 +551,11 @@ export function AgentsTab({
       // The staleness root cause (Appendix A finding 4): modelAccess is the
       // PARENT's /setup/status read, never this tab's own — right after
       // declaring per_user the admin's own door renders whatever that read
-      // last saw, which can predate this save. Re-fire it on every success.
-      onRetryRoster();
+      // last saw, which can predate this save. Re-fire it on every success —
+      // ONLY that read (onStatusRefresh), never the parent's whole
+      // onRetryRoster/load(), which would also reset the Git/Storage draft
+      // sitting on the OTHER two tabs (A-01).
+      onStatusRefresh();
     } catch (e) {
       if (e instanceof HttpError && e.status === 412) {
         setSavedElsewhere(true);
