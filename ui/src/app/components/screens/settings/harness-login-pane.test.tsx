@@ -13,6 +13,7 @@ import {
   extractSetupToken,
   extractAuthUrl,
   extractFailSentence,
+  SANDBOX_REFUSAL_LEAD_IN,
   isLikelyStartUrl,
   serverConfirmsCapture,
   HarnessLoginPane,
@@ -110,6 +111,20 @@ describe("extractFailSentence", () => {
 
   it("strips a trailing carriage return (PTY line endings)", () => {
     expect(extractFailSentence(`${MARKER} refused.\r\n`, MARKER)).toBe("refused.");
+  });
+
+  // U2-05 (blind round 2, lens-U2): the 300-rune cap, the ANSI strip and the
+  // marker defang all live in cmd/wardyn-aws-sso — i.e. in the binary a forged
+  // login image REPLACES, which is the threat model S-13 hardened the success
+  // path against. The client keeps a bound of its own so a sandbox cannot
+  // paint a screenful of its own prose into Wardyn's alert.
+  it("caps the sentence at 300 characters, whatever the sandbox printed", () => {
+    const long = "x".repeat(5000);
+    expect(extractFailSentence(`${MARKER} ${long}\n`, MARKER)).toHaveLength(300);
+  });
+
+  it("leaves a sentence within the bound untouched", () => {
+    expect(extractFailSentence(`${MARKER} refused.\n`, MARKER)).toBe("refused.");
   });
 });
 
@@ -275,6 +290,10 @@ describe("HarnessLoginPane — the consent gate", () => {
 
       const alertBox = await screen.findByRole("alert");
       expect(alertBox).toHaveTextContent("the pinned account is not entitled to this session.");
+      // U2-05: the sentence is the SANDBOX's prose rendered inside Wardyn's
+      // own warning box — a fixed Wardyn-authored lead-in names the speaker so
+      // it never reads as Wardyn's own finding.
+      expect(alertBox).toHaveTextContent(SANDBOX_REFUSAL_LEAD_IN);
       // The error phase's Try again / Cancel AND the terminal, not the
       // interactive attached-phase controls (paste boxes, its own Cancel).
       expect(screen.getByTestId("fake-terminal")).toBeInTheDocument();
@@ -464,8 +483,11 @@ describe("HarnessLoginPane — the consent gate", () => {
       // Still in flight — and the run is already gone.
       expect(runsApiMocked.killRun).toHaveBeenCalledWith("run-123");
       // R-8: the spinner covers the round trip rather than leaving the operator
-      // on a terminal that has quietly stopped scrolling.
+      // on a terminal that has quietly stopped scrolling. U2-07 (blind round
+      // 2): and a screen-reader user hears it — the whole point of narrating a
+      // silent round trip is lost in a note no live region announces.
       expect(screen.getByTestId("capture-verifying-note")).toBeInTheDocument();
+      expect(screen.getByTestId("capture-verifying-note")).toHaveAttribute("role", "status");
 
       await act(async () => {
         release({ harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }] } as unknown as SetupStatus);

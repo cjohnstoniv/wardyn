@@ -49,6 +49,17 @@ const CAPTURE_CHECK_UNREACHABLE = "Wardyn couldn't reach the server to verify th
 // operator otherwise experiences as a terminal that stopped scrolling. Says
 // what is happening WITHOUT claiming the capture the server has not confirmed.
 const CAPTURE_VERIFYING = "Checking with Wardyn that the session was stored…";
+// DRAFT (M2 canon pending) — U2-05 (blind round 2, lens-U2): the refusal
+// sentence below the lead-in is the SANDBOX's prose, printed by
+// cmd/wardyn-aws-sso — the very binary a forged login image replaces (the S-13
+// threat model, applied to the success path). Rendered bare inside Wardyn's
+// own warning box it read as Wardyn's finding. This fixed, Wardyn-authored
+// lead-in names the speaker; FAIL_SENTENCE_MAX bounds what the speaker gets to
+// say, client-side, rather than trusting the helper's own 300-rune cap.
+export const SANDBOX_REFUSAL_LEAD_IN = "The login sandbox reported:";
+// Same bound wardyn-aws-sso applies (main.go), re-applied where a replaced
+// image cannot reach it.
+const FAIL_SENTENCE_MAX = 300;
 
 // One retry of an unreachable corroboration read, then give up. Not a
 // propagation wait: the helper prints its marker only after the server has
@@ -222,15 +233,16 @@ export function extractSetupToken(s: string): string | null {
 // wrong-account pin, a portal error — never on success, where doneMarker
 // prints instead). Same trailing-boundary rule as the other extractors: only
 // returns once the line has actually finished printing (a trailing newline),
-// so a still-streaming prefix is never read as the whole refusal. Exported
-// for tests.
+// so a still-streaming prefix is never read as the whole refusal. U2-05: and
+// it is capped HERE, at FAIL_SENTENCE_MAX, so the bound survives a replaced
+// login image. Exported for tests.
 export function extractFailSentence(s: string, marker: string): string | null {
   const idx = s.indexOf(marker);
   if (idx === -1) return null;
   const rest = s.slice(idx + marker.length);
   const nl = rest.indexOf("\n");
   if (nl === -1) return null;
-  return rest.slice(0, nl).replace(/\r$/, "").trim();
+  return rest.slice(0, nl).replace(/\r$/, "").trim().slice(0, FAIL_SENTENCE_MAX);
 }
 
 // extractAuthUrl pulls the `claude setup-token` OAuth authorization URL out of a
@@ -475,7 +487,7 @@ export function HarnessLoginPane({
           const sentence = extractFailSentence(outBufRef.current, flow.failMarker);
           if (sentence) {
             failedRef.current = true;
-            setError(sentence);
+            setError(`${SANDBOX_REFUSAL_LEAD_IN} ${sentence}`);
             setPhase("error");
             if (runId) void runsApi.killRun(runId).catch(() => {});
             return;
@@ -638,7 +650,15 @@ export function HarnessLoginPane({
                FLOWS ONLY: a scrape flow's `saving` with no autoCapture is a
                MANUAL token paste, which keeps its own row (and its own Save
                spinner) and would be told about an AWS sign-in it never made. */
-            <p className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="capture-verifying-note">
+            /* U2-07: a live region, like the error path's role="alert" beside
+               it — a note that narrates a silent round trip is silence again
+               for a screen-reader user. role="status" (polite), not "alert":
+               this is one bounded fetch, not the Agents banner's poll loop. */
+            <p
+              role="status"
+              className="flex items-center gap-2 text-xs text-muted-foreground"
+              data-testid="capture-verifying-note"
+            >
               <Loader2 className="size-3.5 animate-spin" /> {CAPTURE_VERIFYING}
             </p>
           ) : autoCaptured ? (
