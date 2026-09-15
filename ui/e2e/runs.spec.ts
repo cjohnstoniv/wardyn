@@ -346,8 +346,14 @@ test.describe("Run detail (/runs/:id)", () => {
     // `lg`'s own floor (1024, where the bar wraps to two lines), this
     // suite's default (1280, the first single-line width), and `2xl` (1536,
     // where the decorative/secondary waterfall reveals everything it was
-    // hiding). Same five invariants at all three.
-    for (const width of [1024, 1280, 1536]) {
+    // hiding).
+    // U2-10 (blind round 2, lens-U2): plus 800 — BELOW `lg`. That width used
+    // to render no tier and no attachability anywhere on the run page: the
+    // Confinement+Interactive block was `hidden … lg:flex`, survivable only
+    // while app-shell's global BarrierChip covered narrower viewports, and
+    // 0.7.3 F6 removed that chip. The gate is gone, and 800 is here so it
+    // cannot come back unnoticed. Same five invariants at all four.
+    for (const width of [800, 1024, 1280, 1536]) {
       await page.setViewportSize({ width, height: 720 });
 
       const heading = page.getByRole("heading", { name: "e2e fixture 6", level: 1 });

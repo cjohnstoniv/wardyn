@@ -260,9 +260,15 @@ export function SummaryHeader({
           security-visible fact that a caller cannot open a PTY on someone
           else's run, and the run's own ConfinementChip is now the ONLY place
           a run's tier shows at all (0.7.3 F6 removed the header's global
-          chip). Restored to lg: (never hidden at >=1024, so never at this
-          suite's 1280 default). */}
-      <div className="hidden shrink-0 items-center gap-2 lg:flex">
+          chip).
+          U2-10 (blind round 2, lens-U2): so the width gate came off entirely.
+          The `hidden … lg:flex` here predates F6 and was survivable only while
+          the app-shell's global BarrierChip covered <1024; with that gone,
+          every width below 1024 showed NO tier and NO attachability anywhere
+          on the run page. The bar wraps (review R-16), so showing these costs
+          a line, not information — and runs.spec.ts's width loop now measures
+          800px alongside 1024/1280/1536. */}
+      <div className="flex shrink-0 items-center gap-2">
         <ConfinementChip value={run.confinement_class} />
         {run.interactive && (
           <Chip tone="info" className="gap-1">
