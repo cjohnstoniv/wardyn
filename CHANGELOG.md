@@ -168,25 +168,35 @@ answered before.
   navigation) on BOTH the run header and the Runs-list kebab rather than
   launch one silently degraded from either door.
 
-- **The setup screen's first paint could cost six seconds on a wedged Windows
-  interop.** `GET /setup/status` ran the host-proxy sweep
+- **The setup screen's first paint could cost six seconds, or more, on a wedged
+  Windows interop.** `GET /setup/status` ran the host-proxy sweep
   (`setup.DetectHostProxy`) on the request goroutine, and a 30s memo only ever
   helped the SECOND caller — so the first call after every daemon boot paid
   the sweep's full cost. On WSL that sweep shells out to `powershell.exe` and,
-  only if that answers nothing, `netsh.exe`, each bounded by its own 3-second
-  timeout: healthy interop cost ~0.5s, but a wedged one (a recurring WSL-interop
-  failure mode, unrelated to this release) cost 3s + 3s, and the console's own
-  first paint waited on that call. Latent since 0.4.2 — `internal/setup/` did
-  not change this release — and surfaced by 0.7.3's own end-to-end run, where
-  it read as "the first test of every spec file is slow" (17 of 26 spec files,
-  each on its opening page-render assertion) because every later poll in the
-  same run rode the warm memo. The sweep now runs BEHIND the request: `/setup/status`
-  always returns the last-known value immediately and starts at most one
-  background refresh when that value is stale or absent. The one honest cost:
-  a fresh boot may report no host proxy for the one sweep between boot and the
-  first answer — a `make setup`-seeded corporate install is pre-seeded and
-  never sees that window, and the setup screen's Re-check picks it up on any
-  other install.
+  only if that answers nothing, `netsh.exe`; each probe's own 3-second timeout
+  bounded the CHILD process but not the call itself — a grandchild process
+  that kept holding the output pipe open could stretch one probe from 3s to
+  30s — so a wedged interop cost anywhere from six seconds to unbounded, and
+  the console's own first paint waited on that call. Latent since 0.4.2 —
+  `internal/setup/` did not change this release — and surfaced by 0.7.3's own
+  end-to-end run, where it read as "the first test of every spec file is
+  slow" (17 of 26 spec files, each on its opening page-render assertion)
+  because every later poll in the same run rode the warm memo. The sweep now
+  runs BEHIND the request AND is bounded on both ends: each probe's pipe is
+  closed after its timeout (`cmd.WaitDelay`), so a grandchild can no longer
+  hold it open, and a background sweep still hanging past 10s is abandoned,
+  logged once (`WARN`, not once per poll), and retried on the next call rather
+  than left to block that memo forever. `/setup/status` always returns the
+  last-known value immediately. A `make setup`-seeded corporate install never
+  reads an empty "nothing detected" window at all — its host proxy is decoded
+  in-process from `WARDYN_HOST_PROXY_B64` with no subprocess, so the first
+  call answers synchronously and correctly. The setup screen's Re-check button
+  now sends `GET /setup/status?recheck=1` (operator-only), which drops the
+  memo's freshness and forces a real re-detect while still showing the
+  last-known value on screen until the new one lands — before, Re-check only
+  re-fetched whatever the 30-second-old memo already held, so a proxy just
+  configured could not be made to appear no matter how many times it was
+  pressed.
 
 ### Security
 
