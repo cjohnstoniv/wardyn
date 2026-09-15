@@ -1929,6 +1929,7 @@ Every member denial that isn't a plain foreign-resource 404 is audited under
 | `grant_pairing_not_eligible` | a member's `inline_policy` paired a stored secret with a host the operator never eligible-listed (`filterMemberGrants`) — dropped. Also covers the `env_secret` **admin-only** drop (`dropAdminOnlyEnvSecretGrants`), which fires for every non-operator on every route a run policy arrives by — inline body, selected stored row, or the deployment default — whatever the caller's governance assignment, since that rule is a role check plus `WARDYN_ALLOW_MEMBER_ENV_SECRET` rather than a ceiling check | 🟡 drop |
 | `groups_snapshot_stale` | the resolver cannot answer this caller's group tier — their login-time group snapshot is missing or was truncated at sign-in, and the deployment assigns governance profiles by group — so every ceiling-bounded seam refuses. Emitted ONCE per request at each site that decides it, and there are two: `ceilingWithUnusableGroups` (`internal/api/governance.go`) at target `governance.ceiling`, and `driveWithUnusableGroups` (`internal/api/user_drives_resolve.go`) at target `runs.drive`. The ceiling is memoized per request and the drive resolver is asked once, so the count still means denials rather than resolves. A deployment that assigns governance profiles by group emits the first; one that allocates user drives by group emits the second; one that does both emits both, for the same member, because they are two separate refusals the member meets at two separate doors. The remedy is the caller's own and is in the refusal body — sign in again, or re-mint the API token | ⛔ `403` |
 | `second_human_required` | `WARDYN_EGRESS_SECOND_HUMAN` is set and the caller deciding an `egress_domain` approval is the run's own `created_by` (`requireSecondHuman`) — a different human must decide it | ⛔ `403` |
+| `harness_login_mechanism_principal` | 0.7.3: `POST /setup/harness-login` under a `per_user` row, reached by the shared admin bearer token WITH OIDC CONFIGURED (`refuseHarnessLoginMechanismPrincipal`) — every capture made with that token would land in one namespace and overwrite the last person's session; a real console sign-in or `wdn_` token is reachable instead. Target `setup.harness_login`. Does not fire with no OIDC configured, where the admin token is the only working capture path — see "AWS SSO per person" | ⛔ `422` |
 
 The drop rows are why `POST /runs` mostly *narrows* rather than refuses: a member
 whose whole allowlist is ungranted gets a run with no member-authored egress, not
@@ -2895,19 +2896,29 @@ browser session. A sign-in that Wardyn cannot renew surfaces as "sign in again"
 on their own Getting Started, never as a run that silently borrows somebody
 else's credential — a credential never changes source.
 
-**The admin token is not a person.** `GET /setup/status`'s `model_access` is
-scoped to the CALLING principal — but the shared `WARDYN_ADMIN_TOKEN` bearer
-carries no session of its own and never will, so a bare-token call reads
-`model_access.state: "not_applicable"` rather than `"not_configured"` plus a
-"Sign in to AWS" action nobody holding that token could ever complete.
-`POST /setup/harness-login` draws the same line for the same reason: under a
-`per_user` row it refuses a capture attempted with the admin token (422) —
-every login made with it would land in the SAME namespace (`owner:
-"admin-token"`) and overwrite the last person's session — while a `shared` row
-still lets the admin token connect the one credential everyone inherits.
-Local host mode is unaffected either way: its operator seat is a real person
-(`local:operator` by default), not the admin-token mechanism, so it signs in
-and reads its own model access exactly like any other principal.
+**The admin token is not a person — where OIDC says a person is reachable
+instead.** `GET /setup/status`'s `model_access` is scoped to the CALLING
+principal, and the shared `WARDYN_ADMIN_TOKEN` bearer carries no session of
+its own, and from 0.7.3 cannot capture one (a session captured with it
+BEFORE 0.7.3 still exists and is still graded — see below). With OIDC
+configured, a real console sign-in (or a `wdn_` API token, which always
+carries its owner's own human identity) is reachable instead, so a bare-token
+call with NOTHING captured reads `model_access.state: "not_applicable"`
+rather than `"not_configured"` plus a "Sign in to AWS" action nobody holding
+that token could ever complete. `POST /setup/harness-login` draws the same
+line for the same reason: under a `per_user` row, WITH OIDC CONFIGURED, it
+refuses a capture attempted with the admin token (422) — every login made
+with it would land in the SAME namespace (`owner: "admin-token"`) and
+overwrite the last person's session. **Without OIDC configured, neither
+remedy exists, and the admin token stays the only working `per_user` capture
+path** — the refusal does not fire there, and a session already captured
+under the admin token is graded exactly like anyone else's (never hidden
+behind `not_applicable`). A `shared` row is unaffected either way: the admin
+token still connects the one credential everyone inherits. Local host mode
+is unaffected too — wardynd refuses to boot with `-local-operator` (`WARDYN_LOCAL_OPERATOR`)
+set to `admin-token`, so its operator seat is always a real, distinguishable
+person, never this mechanism, and it signs in and reads its own model access
+exactly like any other principal.
 
 **Blast radius.** A compromised sandbox reaches THAT person's SSO session and
 the role credentials it mints, not the organisation's. The `harness.credential.captured`
