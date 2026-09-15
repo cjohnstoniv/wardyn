@@ -94,9 +94,14 @@ export function ProvidersScreen() {
   // clears `savedElsewhere`, and a transient GET failure here would flip the
   // whole screen to FETCH_FAILED right after a successful, unrelated save.
   // Errors are swallowed on purpose: a stale chip is better than a dead
-  // screen for a refresh nothing on screen is waiting on.
+  // screen for a refresh nothing on screen is waiting on. R-02 (review): a
+  // rejection re-fires ONCE — the ordinary failure here is one transient
+  // request, not an outage — then gives up silently, same as before.
   const refreshSetupStatus = React.useCallback(() => {
-    setupApi.getSetupStatus().then(setSetupStatus).catch(() => {});
+    setupApi
+      .getSetupStatus()
+      .then(setSetupStatus)
+      .catch(() => setupApi.getSetupStatus().then(setSetupStatus).catch(() => {}));
   }, []);
 
   const save = async () => {

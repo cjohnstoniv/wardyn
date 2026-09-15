@@ -330,4 +330,48 @@ describe("ProvidersScreen", () => {
     expect(await screen.findByTestId("provider-row-github")).toBeInTheDocument();
     expect(screen.queryByText(PROVIDERS.LEGACY_OPEN_TITLE)).not.toBeInTheDocument();
   });
+
+  // R-02 (review): a rejected /setup/status refresh (Appendix A finding 2's
+  // shape — a stale `harnesses` read strands the per_user banner and its
+  // start-URL prompt) re-fires once instead of giving up on the first
+  // failure — the ordinary case is one transient request, not an outage.
+  it("refreshSetupStatus re-fires once after a rejection, then applies the retry's result", async () => {
+    getWorkspaceProvidersMock.mockResolvedValue({ providers: {}, etag: '"g0"' });
+    getSetupStatusMock
+      .mockResolvedValueOnce(
+        baseStatus({ harnesses: [{ id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true }] }),
+      )
+      .mockRejectedValueOnce(new Error("network blip"))
+      .mockResolvedValueOnce(
+        baseStatus({
+          harnesses: [
+            {
+              id: "claude-code",
+              display: "Claude Code",
+              has_gateway: true,
+              has_login: true,
+              mechanism: "bedrock_sso",
+              credential_source: "per_user",
+            },
+          ],
+          model_access: { state: "not_configured", action: "Sign in to AWS" },
+        }),
+      );
+    putAgentProvidersMock.mockResolvedValue({
+      providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso", credential_source: "per_user" }] },
+      etag: '"g2"',
+    });
+    renderScreen();
+    await screen.findByText(PROVIDERS.LEGACY_OPEN_TITLE);
+
+    await userEvent.click(screen.getByRole("button", { name: AGENTS.AGENTS_TITLE }));
+    await screen.findByTestId("agent-row-claude-code");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    await waitFor(() => expect(putAgentProvidersMock).toHaveBeenCalled());
+
+    // The retry's result (the saved per_user row) lands, proving the second
+    // /setup/status call was made and applied despite the first rejecting.
+    expect(await screen.findByTestId("per-user-sign-in-banner")).toBeInTheDocument();
+    expect(getSetupStatusMock.mock.calls.length).toBe(3);
+  });
 });
