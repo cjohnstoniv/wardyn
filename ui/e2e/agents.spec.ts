@@ -391,17 +391,23 @@ test.describe("agents — the per_user sign-in affordance renders before the mec
   // (claude-code), dropping codex-cli and none — real, against the shared
   // e2e daemon other spec FILES run against concurrently (fullyParallel).
   // Restore the roster this test found on arrival so it never leaks a
-  // narrowed roster to anything running alongside or after it.
+  // narrowed roster to anything running alongside or after it. R-05
+  // (review): snapshotted in beforeEach (not the test body) so a second
+  // test added to this describe restores its own arrival state too, and the
+  // restore PUT's status is asserted so a failed restore is never silent.
   let rosterBefore: { agents?: unknown[] } | null = null;
+  test.beforeEach(async ({ page }) => {
+    rosterBefore = (await getAgentProviders(page)).providers;
+  });
   test.afterEach(async ({ page }) => {
     if (rosterBefore) {
-      await page.request.put("/api/v1/agent-providers", { headers: auth, data: rosterBefore });
+      const restore = await page.request.put("/api/v1/agent-providers", { headers: auth, data: rosterBefore });
+      expect(restore.ok()).toBeTruthy();
       rosterBefore = null;
     }
   });
 
   test("the banner renders before the mechanism field under an actionable per_user row", async ({ page }) => {
-    rosterBefore = (await getAgentProviders(page)).providers;
     // Cache-and-serve (the same closure the not_applicable test above uses):
     // a per-request route.fetch()+refulfill raced Playwright disposing an
     // in-flight route's response under load (see that test's own comment).
