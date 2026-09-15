@@ -230,7 +230,13 @@ their own inline policy.
   that row's agent; under a `shared` row, or with no roster written, the
   credential stays the deployment's and there is nothing for you to sign in to.
   Renewal is Wardyn's while the session lasts; once the refresh token is spent or
-  your identity provider revokes it, you sign in again.
+  your identity provider revokes it, you sign in again. **If your SSO session
+  reaches several AWS accounts, the admin pins which account and role that row
+  may use** — so you are never asked to guess which of your entitlements the
+  agent's model lives in, and a sign-in that cannot reach the pinned pair is
+  refused on the login terminal (`wardyn: aws sso credential rejected: …`)
+  rather than quietly capturing the wrong one; if nothing is pinned and your
+  session reaches more than one, the sign-in asks you to choose.
 
 ## What to ask your admin for
 

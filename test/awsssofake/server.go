@@ -93,6 +93,12 @@ type Server struct {
 	// startURLSeen/regionSeen let a test assert the CLI actually round-tripped
 	// what the operator configured.
 	startURLSeen string
+
+	// roleCredsSeen is the account_id/role_name of the LAST GetRoleCredentials
+	// call. It is the only place a test can see WHICH identity real botocore
+	// actually asked AWS for, which is the whole question behind the account
+	// pin — everything upstream of it is Wardyn asserting about itself.
+	roleCredsSeen Account
 }
 
 // New starts a fake sso-oidc + sso portal server. The account/role and role
@@ -180,6 +186,14 @@ func (s *Server) accountsSnapshot() []Account {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.accounts
+}
+
+// RoleCredentialsSeen returns the account_id and role_name of the last
+// GetRoleCredentials call — what the SDK actually asked AWS to mint.
+func (s *Server) RoleCredentialsSeen() Account {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.roleCredsSeen
 }
 
 // StartURLSeen returns the sso_start_url the CLI sent to
@@ -334,6 +348,12 @@ func (s *Server) handleGetRoleCredentials(w http.ResponseWriter, r *http.Request
 	if !s.checkBearer(w, r) {
 		return
 	}
+	s.mu.Lock()
+	s.roleCredsSeen = Account{
+		AccountID: r.URL.Query().Get("account_id"),
+		Roles:     []string{r.URL.Query().Get("role_name")},
+	}
+	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"roleCredentials": map[string]any{
 			"accessKeyId":     s.roleCred.AccessKeyID,

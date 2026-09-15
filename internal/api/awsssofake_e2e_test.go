@@ -139,3 +139,60 @@ func parseRawSSOTime(v string) (time.Time, error) {
 	}
 	return time.Parse(time.RFC3339, v)
 }
+
+// TestAWSSSOConfigAcceptedByRealBotocore_MultiAccountPinned is the
+// multi-account half, and it REPLACES a live walk we cannot do on this
+// hardware: the login sandbox has no AWS_ENDPOINT_URL_SSO* passthrough and
+// adding one would be a production escape hatch, so a real two-entitlement
+// tenant is owner-hardware-only. What IS provable here is the part that
+// actually broke: that a blob carrying the PINNED account/role — the one at
+// index 1, never index 0 — generates an ~/.aws that real botocore resolves
+// AGAINST THAT ACCOUNT.
+//
+// The sibling test above proves the generator's SHAPE with one account. This
+// one proves its CONTENT: an identical-shaped config that named the wrong
+// account would pass that test and fail this one, because the assertion is on
+// what botocore asked the portal to mint, not on what Wardyn wrote down.
+//
+// Requires Docker (test/awsssofake.SkipUnlessDocker); skips cleanly without it.
+func TestAWSSSOConfigAcceptedByRealBotocore_MultiAccountPinned(t *testing.T) {
+	awsssofake.SkipUnlessDocker(t)
+
+	s := awsssofake.New()
+	defer s.Close()
+	// The operator's reported shape: index 0 is an unrelated dev account whose
+	// roles cannot invoke the configured model; index 1 is the account
+	// WARDYN_BEDROCK_MODEL names. Index 0 is always the wrong answer.
+	const pinnedAccount, pinnedRole = "111111111111", "BedrockRunner"
+	s.SetAccounts([]awsssofake.Account{
+		{AccountID: "222222222222", Roles: []string{"ReadOnly", "DevPower"}},
+		{AccountID: pinnedAccount, Roles: []string{pinnedRole, "AdministratorAccess"}},
+	})
+
+	login := awsssofake.RunDeviceCodeLogin(t, s, "src-session", "src-profile", "https://fake.awsapps.com/start", "us-east-1")
+	blob := blobFromRealCacheFile(t, login.RawCacheJSON)
+	blob.AccountID = pinnedAccount
+	blob.RoleName = pinnedRole
+
+	config := awsSSOConfigFileContents(blob)
+	cacheName := awsSSOCacheFileName(awsSSOProfileName)
+	t.Logf("generated ~/.aws/config:\n%s", config)
+
+	out, runErr := awsssofake.RunAWSCommand(t, s, map[string]string{
+		".aws/config":                           config,
+		".aws/sso/cache/" + cacheName + ".json": awsSSOCacheFileContents(blob),
+	}, "aws", "configure", "export-credentials", "--profile", awsSSOProfileName)
+	t.Logf("aws configure export-credentials output:\n%s", out)
+
+	if runErr != nil || !strings.Contains(out, "AccessKeyId") {
+		t.Fatalf("real botocore did not resolve the PINNED pair (runErr=%v)\nconfig:\n%s\noutput:\n%s", runErr, config, out)
+	}
+	asked := s.RoleCredentialsSeen()
+	if asked.AccountID != pinnedAccount {
+		t.Errorf("botocore asked the portal for account %q, want the PINNED %q — index 0 (222222222222) is the unrelated account the operator's cloud team granted", asked.AccountID, pinnedAccount)
+	}
+	if len(asked.Roles) != 1 || asked.Roles[0] != pinnedRole {
+		t.Errorf("botocore asked for role %v, want the PINNED %q", asked.Roles, pinnedRole)
+	}
+	t.Logf("VERDICT: real botocore minted credentials for the PINNED %s/%s, not for AccountList[0].", asked.AccountID, pinnedRole)
+}

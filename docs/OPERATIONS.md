@@ -2835,6 +2835,44 @@ their capture to an identity provider and account of their choosing and have
 Wardyn bake it into every later Bedrock run. It also takes an org URL off
 everybody's typing surface.
 
+**Which AWS account and role a sign-in may capture — pin it.** A person's SSO
+session commonly reaches more than one AWS account, and `ListAccounts` returns
+them in AWS's order, not yours. Before 0.7.3 the capture helper took the FIRST
+account and its FIRST role, so a cloud team granting an unrelated entitlement
+could insert an element at index 0 and silently re-point the identity every run
+in the deployment signed with — no configuration change, no diff, no warning.
+
+Set `sso_account_id` and `sso_role_name` on the `per_user` roster row, beside
+`sso_start_url` and owned the same way: **the sign-in proposes, the roster
+disposes.** Both together or neither (pinning the account alone still leaves the
+role picked for whoever signs in). A new entitlement cannot move a pin.
+
+The pin is enforced at three doors, and each one fails CLOSED:
+
+- **Roster save** — a `sso_account_id` that is not the account your configured
+  `WARDYN_BEDROCK_MODEL` ARN lives in is refused with 400, naming both accounts.
+  (A bare cross-region profile id such as `us.anthropic.claude-…` names no
+  account, so the check is SKIPPED, not failed — give the full ARN to get it.)
+- **Sign-in** — the in-sandbox helper verifies the pin against the SSO portal
+  (the account must be one this session reaches, and the role must exist IN THAT
+  ACCOUNT) and prints `wardyn: aws sso credential rejected: …` on the login
+  terminal rather than uploading. It never falls back to the first account.
+- **Capture** — the upload is bound to the pin AS IT READ AT LAUNCH (stamped on
+  the run's own `harness.login.started` row, never re-read from the live roster,
+  so a roster edit mid-sign-in cannot re-point a capture in flight). A blob that
+  disagrees, or that names an account the configured model does not live in, is
+  refused with 400 and a `harness.credential.refused` audit row carrying a
+  `reason` from a fixed vocabulary ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
+  Refused, never rewritten: the stored blob is baked verbatim into every later
+  run's `~/.aws/config`, so rewriting it would record a session nobody saw and
+  merely move the IAM 403 back to run time.
+
+**Leave it unset on a single-account tenant.** The pin is optional and a
+one-account deployment never had this problem. Where the session reaches several
+accounts and nothing is pinned, the sign-in asks the person on the login
+terminal; with no terminal to ask on it refuses and names the accounts it
+reaches, so an admin can pin one.
+
 **What the control plane holds.** One age-encrypted blob per person, in that
 person's own secret namespace — the SSO access token, its refresh token, the
 client registration, and the account/role the session mints role credentials
@@ -2853,7 +2891,8 @@ else's credential — a credential never changes source.
 **Blast radius.** A compromised sandbox reaches THAT person's SSO session and
 the role credentials it mints, not the organisation's. The `harness.credential.captured`
 and `harness.credential.refresh` audit rows carry `owner` and `credential_source`,
-so "whose credential" is answerable from the trail.
+so "whose credential" is answerable from the trail, and `harness.credential.refused`
+says which captures were turned away and why.
 
 **Revoking a session — what 0.7.2 actually gives you.** Disconnect
 (`DELETE /setup/harness-credential/aws`) is admin-only and deletes the
