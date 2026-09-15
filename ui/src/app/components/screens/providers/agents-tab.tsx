@@ -415,7 +415,7 @@ function Row({
                   className="font-mono"
                 />
               </Field>
-              {/* The roster pin (finding 4): optional, ADMIN-OWNED like the
+              {/* The roster pin (Appendix A finding 1, ask 1): optional, ADMIN-OWNED like the
                   start URL above it — set together, or left blank, never
                   independently (agent400SSOPinPair). */}
               <Field

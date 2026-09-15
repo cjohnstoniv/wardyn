@@ -313,7 +313,7 @@ export const AGENTS_DRAFT = {
   PER_USER_SIGN_IN_TITLE: "This lane is per person — including yours",
   PER_USER_SIGN_IN_BODY:
     "Saving declares the lane; it signs nobody in, you included. Sign in to AWS below. Every member does the same from their own Getting Started.",
-  // The roster pin (finding 4's other half) — mirrors FIELD_SSO_START_URL /
+  // The roster pin (Appendix A finding 1, ask 1) — mirrors FIELD_SSO_START_URL /
   // SSO_START_URL_HINT's shape, one Field each.
   FIELD_SSO_ACCOUNT_ID: "Pinned AWS account id",
   SSO_ACCOUNT_ID_HINT:

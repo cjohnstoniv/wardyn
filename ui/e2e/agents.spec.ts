@@ -352,6 +352,27 @@ test.describe("agents — member Getting Started's Model access chip (spliced st
 test.describe("agents — the roster pin (sso_account_id / sso_role_name)", () => {
   test.describe.configure({ mode: "serial" });
 
+  // U2-04 (blind round 2, lens-U2): the SAME snapshot/restore the sibling
+  // describe below carries, applied one describe earlier — where it was
+  // missing. Both tests here save real rosters against the shared e2e daemon
+  // (fullyParallel: every other spec FILE runs against it at the same time),
+  // and without this the file ended with claude-code left declared
+  // bedrock_sso + per_user + pinned. A persisted per_user claude-code row
+  // makes the admin token's model_access `not_applicable` and can make
+  // enforceCreateLLMMechanism refuse claude-code launches — i.e. it breaks
+  // new-run.spec.ts, runs.spec.ts and the recording specs, from here.
+  let rosterBefore: { agents?: unknown[] } | null = null;
+  test.beforeEach(async ({ page }) => {
+    rosterBefore = (await getAgentProviders(page)).providers;
+  });
+  test.afterEach(async ({ page }) => {
+    if (rosterBefore) {
+      const restore = await page.request.put("/api/v1/agent-providers", { headers: auth, data: rosterBefore });
+      expect(restore.ok()).toBeTruthy();
+      rosterBefore = null;
+    }
+  });
+
   test("a per_user row saves an account/role pin and re-renders it after a reload", async ({ page }) => {
     await gotoAgentsTab(page);
     const row = page.getByTestId("agent-row-claude-code");
@@ -384,6 +405,15 @@ test.describe("agents — the roster pin (sso_account_id / sso_role_name)", () =
 
     await gotoAgentsTab(page);
     const row = page.getByTestId("agent-row-claude-code");
+    // U2-04: the afterEach above restores the roster this describe found on
+    // arrival, so this test no longer inherits the previous one's SAVED
+    // per_user row — it declares its own draft (unsaved: the pin fields only
+    // render under a per_user credential source) and then asks the server to
+    // refuse it. The before/after equality below is unaffected: a draft that
+    // 400s writes nothing either way.
+    await row.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_SSO }).click();
+    await row.getByRole("radio", { name: AGENTS.SOURCE_PER_USER }).click();
+    await row.getByLabel(AGENTS.FIELD_SSO_START_URL).fill("https://acme.awsapps.com/start");
     await row.getByLabel(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID).fill("111111111111");
     await row.getByLabel(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME).fill("DevPower");
     await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
