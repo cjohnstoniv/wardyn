@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -241,13 +240,12 @@ func isMutatingMethod(m string) bool {
 
 // isLoopbackOrigin reports whether an Origin header value points at a loopback
 // host. A malformed or opaque origin (e.g. "null") is treated as NON-loopback so
-// a mutating request carrying it is rejected (fail closed).
+// a mutating request carrying it is rejected (fail closed) — originHost
+// (csrf.go) is the ONE parse both CSRF guards fail closed on, so "what counts
+// as an unreadable Origin" cannot diverge between the two modes.
 func isLoopbackOrigin(origin string) bool {
-	u, err := url.Parse(origin)
-	if err != nil || u.Host == "" {
-		return false
-	}
-	return isLoopbackHost(u.Host)
+	host, ok := originHost(origin)
+	return ok && isLoopbackHost(host)
 }
 
 // isLoopbackRemoteAddr reports whether the request's TCP peer (r.RemoteAddr, set
@@ -368,9 +366,18 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			// served from wardynd itself, so its Origin is loopback. On a mutating
 			// method, reject a PRESENT non-loopback Origin — closing the direct
 			// blind-CSRF the DNS-rebinding guard alone leaves open.
+			//
+			// The loopback ORIGIN rule stays local-mode-specific (the SSO branch's
+			// sameOriginOrRefuse compares against r.Host/OIDCRedirectURL instead,
+			// which is meaningless here). What the two modes DO share is the
+			// browser's own cross-site label: Sec-Fetch-Site is unwritable by page
+			// script, and a mode that ignored it would refuse the attack only when
+			// the attacker happened to send an Origin. Both modes answer the same
+			// sentence — csrfRefusedBody, csrf.go.
 			if isMutatingMethod(r.Method) {
-				if origin := r.Header.Get("Origin"); origin != "" && !isLoopbackOrigin(origin) {
-					writeError(w, http.StatusForbidden, "local mode: cross-origin state-changing request rejected (CSRF guard)")
+				origin := r.Header.Get("Origin")
+				if isCrossSiteFetch(r) || (origin != "" && !isLoopbackOrigin(origin)) {
+					writeError(w, http.StatusForbidden, "local mode: "+csrfRefusedBody)
 					return
 				}
 			}
@@ -393,6 +400,16 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 	// to the admin bearer path.
 	return s.cfg.OIDC.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if sub := oidc.PrincipalFromContext(r.Context()); sub != "" {
+			// CSRF: this is the COOKIE-authenticated lane — the browser attaches
+			// the session to any request a page can cause, so a cross-origin
+			// mutation must be refused BEFORE the handler runs (csrf.go states
+			// the rules and why the bearer lane below is exempt). Placed at the
+			// top of the branch so no handler, and no context the branch
+			// publishes, ever sees a forged request.
+			if err := s.sameOriginOrRefuse(r); err != nil {
+				writeError(w, http.StatusForbidden, err.Error())
+				return
+			}
 			// Publish the verified human on an api-owned context key so
 			// actorFromRequest attributes the action to the real SSO human
 			// (and IGNORES any X-Wardyn-Principal header — a real identity won).
