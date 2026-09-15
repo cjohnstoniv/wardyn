@@ -209,5 +209,41 @@ test.describe("setup gate — forced on access, never a prison", () => {
 
     await page.getByRole("button", { name: "Re-check" }).first().click();
     await expect(evidence.first()).toBeVisible();
+    // R-09: the payload MOVED, so the strip may say so.
+    await expect(page.getByText("Checked just now")).toBeVisible();
+  });
+
+  // R-09 (fix-s2 review): the other half. hostProxyRecheck waits only
+  // hostProxyRecheckWait (2s) for the sweep it started and then answers with
+  // LAST-KNOWN — so against a wedged host the forced read returns the very
+  // payload the poll would have returned, and nothing on the wire says which
+  // of the two happened (no checked_at, no stale flag). Pressing the button is
+  // therefore not proof the host was looked at, and the strip must not say it
+  // was. Same route, same press, payload held CONSTANT.
+  test("a forced Re-check that changes nothing claims no fresh check (the wedged host)", async ({
+    page,
+  }) => {
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.onboarding_complete = false;
+      json.host_proxy = { has_credentials: false }; // identical on every read, forced or not
+      await route.fulfill({ response, json });
+    });
+    await skipHero(page);
+    await page.goto("/setup?step=corp_network");
+
+    const recheck = page.getByRole("button", { name: "Re-check" }).first();
+    await expect(recheck).toBeVisible();
+    // Armed BEFORE the click — a waiter created afterwards misses the request
+    // it is waiting for and simply times out.
+    const pressed = page.waitForRequest((r) =>
+      r.url().includes("/api/v1/setup/status") && r.url().includes("recheck=1"),
+    );
+    await recheck.click();
+    await pressed; // the press landed — the daemon was asked, and answered
+    // …and the strip still claims nothing about when the host was last seen.
+    await expect(page.getByText(/^Checked /)).toHaveCount(0);
+    await expect(page.getByText(/^Last checked /)).toHaveCount(0);
   });
 });

@@ -364,6 +364,9 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
       .catch(() => setProviderCount(0));
   }, [operator]);
 
+  // R-09: the last host_proxy payload this screen has seen, serialized. The
+  // baseline is the mount read; every read (forced or not) updates it.
+  const hostProxySeenRef = React.useRef<string | null>(null);
   const recheck = React.useCallback((opts?: { force?: boolean }) => {
     setRechecking(true);
     // Resync SiteConfig too (F2): the rail's Integrations badge count is
@@ -390,7 +393,26 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         // operator the host had just been looked at when it had not, which is
         // precisely the complaint Re-check exists to answer. No stamp beats a
         // false one: lastCheckedLabel(null) is the empty string.
-        if (opts?.force) setLastCheckedAt(new Date());
+        //
+        // R-09: and the forced read is not proof on its own — hostProxyRecheck
+        // waits hostProxyRecheckWait (2s) for the sweep it started and then
+        // answers with LAST-KNOWN anyway, so a wedged host returns the same
+        // unchanged payload the poll would have returned. The response carries
+        // no freshness field (no checked_at, no stale flag) to tell the two
+        // apart, so the console uses the only evidence it has: the host_proxy
+        // payload MOVING. It moved ⇒ the sweep landed ⇒ stamp. It did not ⇒
+        // leave the previous stamp standing rather than refresh it.
+        //
+        // ponytail: this understates — a real sweep that re-finds the SAME
+        // proxy also leaves the stamp alone, which reads as "not checked
+        // recently" rather than as a lie. Understating is the safe direction
+        // here; the exact fix is one freshness field on HostProxyDetection
+        // (server-side, fix-s2's), and this whole branch collapses to
+        // `if (opts?.force && s.host_proxy?.checked_at !== seen)` when it lands.
+        const hostProxySeen = JSON.stringify(s.host_proxy ?? null);
+        const hostProxyMoved = hostProxySeenRef.current !== null && hostProxySeen !== hostProxySeenRef.current;
+        hostProxySeenRef.current = hostProxySeen;
+        if (opts?.force && hostProxyMoved) setLastCheckedAt(new Date());
         // A fresh probe landed — bump the token EnvironmentStep watches.
         setRecheckCount((n) => n + 1);
         // Gated on the FRESH status, not the stale one this closure closed
