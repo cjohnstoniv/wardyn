@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -347,6 +348,105 @@ func TestUploadSSOToken_RefusalIsAudited(t *testing.T) {
 	}
 }
 
+// TestUploadSSOToken_EveryRefusalPathIsAudited walks the refusal paths that are
+// reachable through the handler and asserts each one leaves a row with ITS OWN
+// reason. Two of them — a malformed body and a failed persist — were writing
+// nothing at all: the plan enumerated the sites to convert by pre-lane line
+// range and these fell outside it, so a malformed upload and a failed store
+// were the two refusals an operator could NOT group beside the rest.
+func TestUploadSSOToken_EveryRefusalPathIsAudited(t *testing.T) {
+	const model = "arn:aws:bedrock:us-west-2:111111111111:inference-profile/x"
+	for name, tc := range map[string]struct {
+		body       string
+		wantStatus int
+		wantReason string
+	}{
+		"a body that is not JSON at all": {
+			body: `{"access_token": `, wantStatus: http.StatusBadRequest, wantReason: refuseReasonBlobShape,
+		},
+		"a structurally incomplete blob": {
+			body:       `{"access_token":"tok","region":"` + operatorRegion + `","expires_at":"2100-01-01T00:00:00Z"}`,
+			wantStatus: http.StatusBadRequest, wantReason: refuseReasonBlobShape,
+		},
+		"a region that is not the one this run was launched with": {
+			body: `{"access_token":"tok","start_url":"` + operatorStartURL + `","region":"eu-central-1",` +
+				`"account_id":"111111111111","role_name":"BedrockRunner","expires_at":"2100-01-01T00:00:00Z"}`,
+			wantStatus: http.StatusBadRequest, wantReason: refuseReasonRegionMismatch,
+		},
+		"a start URL that is not the one this run was launched with": {
+			body: `{"access_token":"tok","start_url":"https://attacker.example.com/start","region":"` + operatorRegion + `",` +
+				`"account_id":"111111111111","role_name":"BedrockRunner","expires_at":"2100-01-01T00:00:00Z"}`,
+			wantStatus: http.StatusBadRequest, wantReason: refuseReasonStartURLMismatch,
+		},
+		"a control character in a field baked into ~/.aws/config": {
+			body: `{"access_token":"tok","start_url":"` + operatorStartURL + `","region":"` + operatorRegion + `",` +
+				`"account_id":"111111111111","role_name":"Bedrock\nRunner","expires_at":"2100-01-01T00:00:00Z"}`,
+			wantStatus: http.StatusBadRequest, wantReason: refuseReasonFieldUnsafe,
+		},
+		"an account the configured model does not live in": {
+			body: ssoBlobFor("222222222222", "BedrockRunner"), wantStatus: http.StatusBadRequest,
+			wantReason: refuseReasonModelAccount,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv, sec, h, tok, runID := newPinnedSSOSrv(t, "", "", model)
+			code, _ := putSSOToken(t, srv, runID, tok, tc.body)
+			if code != tc.wantStatus {
+				t.Fatalf("code = %d, want %d", code, tc.wantStatus)
+			}
+			if _, ok := sec.m[harnessCredSecretName(awsSSOProvider)]; ok {
+				t.Error("a refused capture was stored")
+			}
+			rows := 0
+			for _, ev := range h.audit.events {
+				if ev.Action != "harness.credential.refused" {
+					continue
+				}
+				rows++
+				if !strings.Contains(string(ev.Data), tc.wantReason) {
+					t.Errorf("refusal row data = %s, want reason %q", ev.Data, tc.wantReason)
+				}
+			}
+			if rows != 1 {
+				t.Errorf("harness.credential.refused rows = %d, want exactly 1", rows)
+			}
+		})
+	}
+}
+
+// TestUploadSSOToken_FailedPersistIsAudited is the other half of C-03: the
+// store WRITE failing left no row, even though the store READ failing beside it
+// did. The provenance is already stamped at that point but nothing is
+// persisted, so "the capture did not land" is the honest reading.
+func TestUploadSSOToken_FailedPersistIsAudited(t *testing.T) {
+	srv, _, h, tok, runID := newPinnedSSOSrv(t, "111111111111", "BedrockRunner", "")
+	srv.cfg.Secrets = &failingPutSecrets{memSecrets: &memSecrets{m: map[string][]byte{}}}
+
+	code, body := putSSOToken(t, srv, runID, tok, ssoBlobFor("111111111111", "BedrockRunner"))
+	if code != http.StatusInternalServerError {
+		t.Fatalf("code = %d, want 500; body=%s", code, body)
+	}
+	found := false
+	for _, ev := range h.audit.events {
+		if ev.Action == "harness.credential.refused" && strings.Contains(string(ev.Data), refuseReasonStoreError) {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("a failed persist left no harness.credential.refused row — an operator sees a 500 and nothing in the trail")
+	}
+}
+
+// failingPutSecrets stores nothing and fails every write, leaving reads intact
+// so the once-only guard ahead of the write still passes.
+type failingPutSecrets struct {
+	*memSecrets
+}
+
+func (f *failingPutSecrets) Put(context.Context, string, []byte) error {
+	return errors.New("secret store is unavailable")
+}
+
 // TestBedrockModelAccount is the tree's first ARN parser, and the only question
 // it answers is "which account does the configured model live in". Everything
 // that is not a full Bedrock ARN with a 12-digit account answers "" — which
@@ -369,9 +469,51 @@ func TestBedrockModelAccount(t *testing.T) {
 		{"arn:aws:bedrock", ""},
 		{"::::::", ""},
 		{"not an arn at all", ""},
+		// Case and whitespace: the scheme is lowercase in every real ARN, and
+		// a pasted value can carry padding. Whitespace is trimmed; an
+		// uppercase scheme is NOT accepted (it is not an ARN), so it answers
+		// "" like any other malformed value — and that is what
+		// BedrockModelARNNamesNoAccount exists to make audible at boot.
+		{"  arn:aws:bedrock:us-west-2:111111111111:inference-profile/x  ", "111111111111"},
+		{"\targn:aws:bedrock:us-west-2:111111111111:inference-profile/x\n", ""},
+		{"ARN:aws:bedrock:us-west-2:999999999999:inference-profile/x", ""},
+		{"arn:AWS:BEDROCK:us-west-2:999999999999:inference-profile/x", ""},
 	} {
 		if got := bedrockModelAccount(tc.model); got != tc.want {
 			t.Errorf("bedrockModelAccount(%q) = %q, want %q", tc.model, got, tc.want)
+		}
+	}
+}
+
+// TestBedrockModelARNNamesNoAccount is C-07's audible half: failing OPEN on a
+// malformed ARN is right (it keeps an upgrade from taking capture away from
+// every non-ARN deployment), but failing open on a TYPO is silent — the
+// account check is off at both doors with nothing to see. This is the
+// predicate wardynd warns on at boot.
+func TestBedrockModelARNNamesNoAccount(t *testing.T) {
+	for _, tc := range []struct {
+		model string
+		want  bool
+	}{
+		// Looks like an ARN, names no account: exactly what to warn about.
+		{"arn:aws:bedrock:us-west-2:11111111111:inference-profile/x", true},
+		{"arn:aws:bedrock:us-west-2:1111111111111:inference-profile/x", true},
+		{"arn:aws:bedrock:us-west-2::inference-profile/x", true},
+		{"arn:aws:bedrock", true},
+		{"ARN:aws:bedrock:us-west-2:999999999999:inference-profile/x", true},
+		{"  arn:aws:s3:::my-bucket  ", true},
+		// A well-formed ARN: the check is ON, nothing to say.
+		{"arn:aws:bedrock:us-west-2:111111111111:inference-profile/x", false},
+		{"arn:aws-us-gov:bedrock:us-gov-west-1:444444444444:inference-profile/x", false},
+		// Not an ARN at all: the SKIP is the documented, common case — warning
+		// here would cry wolf at every cross-region-profile deployment.
+		{"us.anthropic.claude-sonnet-4-20250514-v1:0", false},
+		{"anthropic.claude-3-5-sonnet-20241022-v2:0", false},
+		{"", false},
+		{"not an arn at all", false},
+	} {
+		if got := BedrockModelARNNamesNoAccount(tc.model); got != tc.want {
+			t.Errorf("BedrockModelARNNamesNoAccount(%q) = %v, want %v", tc.model, got, tc.want)
 		}
 	}
 }

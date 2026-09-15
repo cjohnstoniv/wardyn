@@ -862,3 +862,43 @@ func loginStartedStamp(t *testing.T, audit *memAudit) loginRunStamp {
 	}
 	return stamp
 }
+
+// TestLoginEnv_PinWithNoConfigEnvDoesNotPanic is C-02: the pin is merged into
+// the map loginConfigEnv returned, and that map is NIL for a non-AWS flow or a
+// half-known config — `maps.Copy` into a nil map panics.
+//
+// Unreachable through the HTTP door today only because handleHarnessLogin 400s
+// an empty start URL / region first and validateAgentSSOPin forbids a pin off a
+// bedrock_sso row: the safety was two validators away from the panic. This
+// calls the merge directly, past both, which is how a future caller reaches it.
+func TestLoginEnv_PinWithNoConfigEnvDoesNotPanic(t *testing.T) {
+	aws, _ := agentHarnessLogin(awsSSOAgent)
+	anthropic, _ := agentHarnessLogin("claude-code")
+	pin := awsSSOPin{AccountID: "111111111111", RoleName: "BedrockRunner"}
+
+	for name, env := range map[string]map[string]string{
+		// Each of these makes loginConfigEnv return nil.
+		"no region":      aws.loginEnv("https://acme.awsapps.com/start", "", pin),
+		"no start URL":   aws.loginEnv("", "us-east-1", pin),
+		"a non-AWS flow": anthropic.loginEnv("https://acme.awsapps.com/start", "us-east-1", pin),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if env[awsSSOPinAccountEnvVar] != "111111111111" || env[awsSSOPinRoleEnvVar] != "BedrockRunner" {
+				t.Errorf("env = %v, want the pin carried even with no ~/.aws/config beside it", env)
+			}
+		})
+	}
+
+	// The whole env, both halves, on the real path.
+	full := aws.loginEnv("https://acme.awsapps.com/start", "us-east-1", pin)
+	if full[awsSSOConfigEnvVar] == "" || full[awsSSOPinAccountEnvVar] == "" {
+		t.Errorf("env = %v, want the pre-login config AND the pin", full)
+	}
+	// And an unpinned launch is byte-identical to what it always was.
+	if got := aws.loginEnv("https://acme.awsapps.com/start", "us-east-1", awsSSOPin{}); len(got) != 1 {
+		t.Errorf("unpinned env = %v, want only the pre-login ~/.aws/config record", got)
+	}
+	if got := anthropic.loginEnv("", "", awsSSOPin{}); got != nil {
+		t.Errorf("an unpinned non-AWS login seeded %v, want nil", got)
+	}
+}

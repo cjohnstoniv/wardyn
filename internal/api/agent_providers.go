@@ -322,16 +322,15 @@ func validateAgentCredentialSource(row types.AgentProvider, bedrockModel string)
 	return validateAgentSSOPin(row, bedrockModel)
 }
 
-// awsAccountID / iamRoleName are the two pinned fields' real grammars. Both are
-// baked VERBATIM into every later Bedrock run's generated ~/.aws/config INI
-// (awsSSOConfigFileContents, runs_bedrock.go), so the write boundary holds them
-// to what AWS actually accepts rather than merely to "non-empty" — a newline in
-// either would otherwise smuggle extra keys into that file, and a
-// wrong-but-plausible value would be discovered as somebody's 403.
-var (
-	awsAccountID = regexp.MustCompile(`^\d{12}$`)
-	iamRoleName  = regexp.MustCompile(`^[A-Za-z0-9+=,.@_-]{1,64}$`)
-)
+// iamRoleName is the pinned role's real grammar; the account half reuses
+// awssso_pin.go's awsAccountID rather than compiling `^\d{12}$` a second time
+// for the same concept. Both fields are baked VERBATIM into every later Bedrock
+// run's generated ~/.aws/config INI (awsSSOConfigFileContents, runs_bedrock.go),
+// so the write boundary holds them to what AWS actually accepts rather than
+// merely to "non-empty" — a newline in either would otherwise smuggle extra
+// keys into that file, and a wrong-but-plausible value would be discovered as
+// somebody's 403.
+var iamRoleName = regexp.MustCompile(`^[A-Za-z0-9+=,.@_-]{1,64}$`)
 
 // validateAgentSSOPin is finding 1's SAVE-time door, and it is the EARLIEST of
 // the three places a wrong identity is refused (roster save, sign-in, capture).

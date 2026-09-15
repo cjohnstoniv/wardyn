@@ -72,7 +72,8 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	}
 	var blob awsSSOBlob
 	if jerr := json.Unmarshal(raw, &blob); jerr != nil {
-		writeError(w, http.StatusBadRequest, "invalid sso token: "+jerr.Error())
+		s.refuseCapture(w, r, claims, http.StatusBadRequest, refuseReasonBlobShape,
+			"invalid sso token: "+jerr.Error())
 		return
 	}
 	// The LAUNCH-TIME record of what this run was authorized to capture: the
@@ -155,7 +156,12 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	blob.SourceRunID = claims.RunID.String()
 
 	if err := s.storeAWSSSOBlob(r.Context(), scope, blob); err != nil {
-		writeError(w, http.StatusInternalServerError, "store aws sso credential: "+err.Error())
+		// Audited like every other refusal on this route: the provenance is
+		// already stamped but NOTHING is persisted, so "the capture did not
+		// land" is the honest reading, and a failed persist is exactly the
+		// event an operator wants beside the rest rather than only in a 500.
+		s.refuseCapture(w, r, claims, http.StatusInternalServerError, refuseReasonStoreError,
+			"store aws sso credential: "+err.Error())
 		return
 	}
 

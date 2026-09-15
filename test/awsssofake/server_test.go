@@ -196,9 +196,13 @@ func TestListAccountRoles_ScopedToRequestedAccount(t *testing.T) {
 		t.Fatalf("ListAccountRoles (unknown account): %v", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusOK {
+	// 403 specifically: the helper distinguishes a 4xx ("not entitled — the
+	// admin's pin is wrong") from a 0/5xx ("the portal could not be reached —
+	// retry"), so a fake that answered 5xx here would send a person chasing
+	// the wrong problem.
+	if resp.StatusCode != http.StatusForbidden {
 		raw, _ := io.ReadAll(resp.Body)
-		t.Errorf("ListAccountRoles for an unentitled account = 200 %s, want a non-2xx refusal", raw)
+		t.Errorf("ListAccountRoles for an unentitled account = %d %s, want 403 (the real portal's ForbiddenException)", resp.StatusCode, raw)
 	}
 
 	// ListAccounts must carry EVERY entitlement, in the order set — index 0 is

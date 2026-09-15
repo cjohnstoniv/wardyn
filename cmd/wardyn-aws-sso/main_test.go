@@ -627,3 +627,233 @@ func TestPrintFailure_IsPlainUnstyledOneLine(t *testing.T) {
 		t.Errorf("fail line = %q, leaks the payload of an escape sequence as visible text", line)
 	}
 }
+
+// TestChooser_SanitisesPortalSuppliedNames is C-01: the chooser prints account
+// ids, account NAMES and role names that came from the SSO portal, onto the
+// same PTY buffer the login pane scans with a plain includes(). An account
+// named after the SUCCESS marker would otherwise make the pane declare the
+// login finished — and tear the sandbox down — while the chooser is still
+// waiting for an answer, which is marker spoofing with extra steps.
+//
+// The lane reasoned this out for the fail line and then printed four new
+// unsanitised interpolations beside it; this pins all four.
+func TestChooser_SanitisesPortalSuppliedNames(t *testing.T) {
+	portal := awsssofake.New()
+	t.Cleanup(portal.Close)
+	portal.SetAccounts([]awsssofake.Account{
+		{AccountID: "222222222222", Roles: []string{"ReadOnly"}},
+		{AccountID: rightAccount, Roles: []string{rightRole, "\x1b[31mAdmin\x1b[0m"}},
+	})
+	prevBase := ssoPortalBase
+	ssoPortalBase = func(string) string { return portal.URL() }
+	t.Cleanup(func() { ssoPortalBase = prevBase })
+	withTerminal(t, "2\n1\n")
+
+	// The fake names accounts "fake-account-<id>"; drive the hostile name in
+	// through the id itself, which is the same interpolation site.
+	portal.SetAccounts([]awsssofake.Account{
+		{AccountID: successMarker, Roles: []string{"ReadOnly"}},
+		{AccountID: rightAccount, Roles: []string{rightRole, "second-role"}},
+	})
+
+	_, out := runHelper(t, portal)
+
+	// The marker must not appear as its own line anywhere before the helper
+	// genuinely finishes — and here the helper DID finish, so exactly one
+	// occurrence is legitimate. What must never happen is the chooser emitting
+	// it while still prompting.
+	promptIdx := strings.Index(out, "wardyn: account [1-2]:")
+	if promptIdx < 0 {
+		t.Fatalf("the chooser did not prompt: %q", out)
+	}
+	before := out[:promptIdx]
+	if strings.Contains(before, successMarker) {
+		t.Errorf("the chooser echoed the SUCCESS marker from a portal-supplied value BEFORE the prompt — the pane would end the login early:\n%q", before)
+	}
+	if strings.ContainsRune(out, 0x1b) {
+		t.Errorf("the chooser printed an ESC byte from a portal-supplied value: %q", out)
+	}
+}
+
+// TestChooser_RoleLinesHaveNoTrailingSpace is C-13: chooserOptionLine is reused
+// for roles with an empty third value, so every role line used to end in two
+// trailing spaces on the operator's terminal.
+func TestChooser_RoleLinesHaveNoTrailingSpace(t *testing.T) {
+	var buf bytes.Buffer
+	prev := stdout
+	stdout = &buf
+	t.Cleanup(func() { stdout = prev })
+	printOptionLine(1, "BedrockRunner", "")
+	got := strings.TrimSuffix(buf.String(), "\n")
+	if got != strings.TrimRight(got, " ") {
+		t.Errorf("role line = %q, want no trailing space", got)
+	}
+	if !strings.Contains(got, "BedrockRunner") {
+		t.Errorf("role line = %q, lost the role name", got)
+	}
+}
+
+// TestResolveAccountRole_PortalUnreachableUnderPin is C-04: a transient portal
+// failure between the account list and the role list must not tell the person
+// their admin's pin is wrong. It still fails CLOSED — nothing picked, nothing
+// uploaded, never a fallback to index 0 — but it names the real problem, so
+// they retry instead of opening a ticket against the roster.
+func TestResolveAccountRole_PortalUnreachableUnderPin(t *testing.T) {
+	for name, tc := range map[string]struct {
+		rolesStatus int
+		wantSubstr  string
+		notSubstr   string
+	}{
+		"a 5xx from the portal": {
+			rolesStatus: http.StatusBadGateway,
+			wantSubstr:  "could not be reached",
+			notSubstr:   "pins AWS sign-ins",
+		},
+		"a 4xx: genuinely not entitled": {
+			rolesStatus: http.StatusForbidden,
+			wantSubstr:  "pins AWS sign-ins",
+			notSubstr:   "could not be reached",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if strings.HasPrefix(r.URL.Path, "/assignment/roles") {
+					w.WriteHeader(tc.rolesStatus)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"accountList":[{"accountId":"` + rightAccount + `","accountName":"acct"}]}`))
+			}))
+			t.Cleanup(srv.Close)
+			prevBase := ssoPortalBase
+			ssoPortalBase = func(string) string { return srv.URL }
+			t.Cleanup(func() { ssoPortalBase = prevBase })
+
+			acct, role, refusal, ok := pickAccountRole("tok", "us-east-1",
+				ssoPin{accountID: rightAccount, roleName: rightRole})
+			if ok || acct != "" || role != "" {
+				t.Fatalf("pickAccountRole = (%q,%q,%q,%v), want a refusal and NOTHING picked", acct, role, refusal, ok)
+			}
+			if !strings.Contains(refusal, tc.wantSubstr) {
+				t.Errorf("refusal = %q, want it to say %q", refusal, tc.wantSubstr)
+			}
+			if strings.Contains(refusal, tc.notSubstr) {
+				t.Errorf("refusal = %q, must not say %q — that sends the person to the wrong colleague", refusal, tc.notSubstr)
+			}
+		})
+	}
+
+	// And a transport failure (no answer at all) reads as unreachable too.
+	prevBase := ssoPortalBase
+	ssoPortalBase = func(string) string { return "http://127.0.0.1:1" }
+	t.Cleanup(func() { ssoPortalBase = prevBase })
+	if _, _, refusal, ok := pickAccountRole("tok", "us-east-1", ssoPin{accountID: rightAccount, roleName: rightRole}); ok || refusal != "" {
+		// listAccounts fails first here, which is the pre-existing best-effort
+		// miss: blank pair, no refusal, and the control plane 400s it.
+		t.Errorf("an unreachable portal at the ACCOUNT list = (%q,%v), want the best-effort miss", refusal, ok)
+	}
+}
+
+// TestRun_ChooserPicksRoleInASingleAccount is C-05(a): one account, several
+// roles. RoleList[0] there is the same unordered pick the finding is about,
+// one level down, and this arm had no test.
+func TestRun_ChooserPicksRoleInASingleAccount(t *testing.T) {
+	portal := awsssofake.New()
+	t.Cleanup(portal.Close)
+	portal.SetAccounts([]awsssofake.Account{
+		{AccountID: rightAccount, Roles: []string{"ReadOnly", rightRole}},
+	})
+	prevBase := ssoPortalBase
+	ssoPortalBase = func(string) string { return portal.URL() }
+	t.Cleanup(func() { ssoPortalBase = prevBase })
+	withTerminal(t, "2\n") // the SECOND role; index 0 is the wrong answer here too
+
+	uploaded, out := runHelper(t, portal)
+	if uploaded == nil {
+		t.Fatal("the role chooser uploaded nothing")
+	}
+	var got struct {
+		AccountID string `json:"account_id"`
+		RoleName  string `json:"role_name"`
+	}
+	if err := json.Unmarshal(uploaded, &got); err != nil {
+		t.Fatalf("decode uploaded body: %v", err)
+	}
+	if got.AccountID != rightAccount || got.RoleName != rightRole {
+		t.Errorf("uploaded %q/%q, want the CHOSEN %q/%q", got.AccountID, got.RoleName, rightAccount, rightRole)
+	}
+	if strings.Contains(out, "wardyn: account [1-") {
+		t.Errorf("a single-account session was asked to choose an ACCOUNT: %q", out)
+	}
+	if !strings.Contains(out, "wardyn: role [1-2]:") {
+		t.Errorf("stdout = %q, want the role prompt", out)
+	}
+}
+
+// TestRun_ChooserGivesUpAfterThreeBadReads is C-05(b): the prompt is bounded.
+// Three bad answers must become the same refusal a terminal-less sandbox gets
+// — never a loop nobody can leave, and never a fallback to index 0.
+func TestRun_ChooserGivesUpAfterThreeBadReads(t *testing.T) {
+	portal := multiAccountPortal(t)
+	withTerminal(t, "x\n99\n\n4\n5\n")
+
+	uploaded, out := runHelper(t, portal)
+	if uploaded != nil {
+		t.Error("a sign-in that never chose an account uploaded one anyway")
+	}
+	line := assertFailLine(t, out)
+	if !strings.Contains(line, "after three tries") {
+		t.Errorf("fail line = %q, want the gave-up refusal", line)
+	}
+	if n := strings.Count(out, "wardyn: account [1-2]:"); n != maxChooserTries {
+		t.Errorf("prompted %d times, want exactly %d", n, maxChooserTries)
+	}
+}
+
+// TestPrintFailure_TruncatesALongSentence is C-10: the truncation branch was
+// asserted but never driven. A refusal body is control-plane text on somebody's
+// terminal; an untruncated one scrolls the device code off the screen.
+func TestPrintFailure_TruncatesALongSentence(t *testing.T) {
+	var buf bytes.Buffer
+	prev := stdout
+	stdout = &buf
+	t.Cleanup(func() { stdout = prev })
+
+	printFailure(strings.Repeat("x", 500))
+	line := strings.TrimSpace(buf.String())
+	if n := len([]rune(line)); n != maxFailLineRunes {
+		t.Errorf("line is %d runes, want exactly %d", n, maxFailLineRunes)
+	}
+	if !strings.HasSuffix(line, "…") {
+		t.Errorf("line = %q, want a trailing ellipsis marking the truncation", line)
+	}
+	if !strings.HasPrefix(line, failMarker+" ") {
+		t.Errorf("line = %q, lost the marker to truncation", line)
+	}
+}
+
+// TestPinEnvVarParity is C-06, and the same shape as TestFailMarker_UIParity:
+// the two pin env-var names are string literals in TWO packages with nothing
+// comparing them. A rename on one side alone fails closed (the daemon still
+// binds to the launch stamp, so a wrong account is still refused) but silently
+// stops delivering the pin — the person gets a chooser, or a refusal, instead
+// of the sign-in simply working.
+func TestPinEnvVarParity(t *testing.T) {
+	pinPath := filepath.Join("..", "..", "internal", "api", "awssso_pin.go")
+	src, err := os.ReadFile(pinPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", pinPath, err)
+	}
+	for _, want := range []struct{ constName, literal string }{
+		{"awsSSOPinAccountEnvVar", awsSSOPinAccountEnv},
+		{"awsSSOPinRoleEnvVar", awsSSOPinRoleEnv},
+	} {
+		m := regexp.MustCompile(want.constName + `\s*=\s*"([^"]+)"`).FindStringSubmatch(string(src))
+		if m == nil {
+			t.Fatalf("no %s in %s", want.constName, pinPath)
+		}
+		if m[1] != want.literal {
+			t.Errorf("pin env drift: daemon %s = %q != helper %q", want.constName, m[1], want.literal)
+		}
+	}
+}

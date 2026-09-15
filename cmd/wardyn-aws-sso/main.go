@@ -175,12 +175,31 @@ const maxFailLineRunes = 300
 // "[31m" and "0;title" on screen as text.
 var ansiEscape = regexp.MustCompile("\x1b\\][^\x07\x1b]*(?:\x07|\x1b\\\\)|\x1b\\[[0-9;?]*[ -/]*[@-~]|\x1b.")
 
-// plainOneLine makes an arbitrary sentence safe to print as a marker line:
-// escape sequences removed, every remaining control byte turned into a space,
-// whitespace collapsed. The sentence is UNTRUSTED for formatting — it comes
-// from the control plane's refusal body or from a transport error — and the
-// login pane matches the marker with a plain indexOf over the raw PTY buffer,
-// so styling bytes inside the line would hide it exactly as a typo would.
+// defangMarkers neutralises a MARKER SPELLED IN UNTRUSTED TEXT. The login pane
+// matches both markers by plain substring over the whole raw PTY buffer, so any
+// value this helper echoes — a refusal sentence from the control plane, an AWS
+// account name from the portal — that happens to contain the success marker
+// would make the pane declare the login finished and tear the sandbox down,
+// mid-chooser. Stripping control bytes does not help: the hazard is ordinary
+// printable text. Replacing it does.
+//
+// Applied LAST, after whitespace collapsing, because collapsing can itself
+// create a marker out of a value that did not literally contain one
+// ("wardyn:  aws sso credential captured").
+var defangMarkers = strings.NewReplacer(
+	successMarker, "[marker removed]",
+	failMarker, "[marker removed]",
+)
+
+// plainOneLine makes arbitrary text safe to print on the login terminal:
+// escape sequences removed with their payloads, every remaining control byte
+// turned into a space, whitespace collapsed, and either marker defanged.
+//
+// Everything it is applied to is UNTRUSTED FOR FORMATTING — a refusal body from
+// the control plane, a transport error, an account or role name from the SSO
+// portal — and the login pane matches the markers with a plain indexOf over the
+// raw PTY buffer, so styling bytes could hide a marker exactly as a typo would,
+// and a marker spelled inside a value could forge one.
 func plainOneLine(s string) string {
 	s = ansiEscape.ReplaceAllString(s, " ")
 	s = strings.Map(func(r rune) rune {
@@ -189,7 +208,7 @@ func plainOneLine(s string) string {
 		}
 		return r
 	}, s)
-	return strings.Join(strings.Fields(s), " ")
+	return defangMarkers.Replace(strings.Join(strings.Fields(s), " "))
 }
 
 // printFailure writes the fail marker and one sentence as a single PLAIN stdout
@@ -242,6 +261,8 @@ const (
 	// DRAFT (M2 canon pending)
 	chooserNoTerminalRefusal = "this sign-in reaches more than one AWS account or role and there is no terminal here to choose on — ask an admin to pin the account and role on the agent row; this session reaches %s"
 	// DRAFT (M2 canon pending)
+	portalUnreachableRefusal = "the AWS access portal could not be reached — try the sign-in again"
+	// DRAFT (M2 canon pending)
 	chooserGaveUpRefusal = "nothing was chosen after three tries — ask an admin to pin the account and role on the agent row so this sign-in has nothing to guess"
 )
 
@@ -267,10 +288,19 @@ type ssoPin struct{ accountID, roleName string }
 
 func (p ssoPin) set() bool { return p.accountID != "" && p.roleName != "" }
 
+// The env names the daemon delivers the pin in. Named constants rather than
+// inline literals so TestPinEnvVarParity can compare them against
+// internal/api/awssso_pin.go's own pair — nothing else ties the two packages
+// together, and a rename on one side silently stops delivering the pin.
+const (
+	awsSSOPinAccountEnv = "WARDYN_AWS_SSO_ACCOUNT_ID"
+	awsSSOPinRoleEnv    = "WARDYN_AWS_SSO_ROLE_NAME"
+)
+
 func pinFromEnv() ssoPin {
 	return ssoPin{
-		accountID: os.Getenv("WARDYN_AWS_SSO_ACCOUNT_ID"),
-		roleName:  os.Getenv("WARDYN_AWS_SSO_ROLE_NAME"),
+		accountID: os.Getenv(awsSSOPinAccountEnv),
+		roleName:  os.Getenv(awsSSOPinRoleEnv),
 	}
 }
 
@@ -465,7 +495,7 @@ func pickAccountRole(accessToken, region string, pin ssoPin) (accountID, roleNam
 		return verifyPin(ctx, client, base, accessToken, pin)
 	}
 	if len(accounts) == 1 {
-		roles, rgot := listAccountRoles(ctx, client, base, accessToken, accounts[0].AccountID)
+		roles, _, rgot := listAccountRoles(ctx, client, base, accessToken, accounts[0].AccountID)
 		if !rgot || len(roles) == 0 {
 			return "", "", "", false
 		}
@@ -484,10 +514,17 @@ func pickAccountRole(accessToken, region string, pin ssoPin) (accountID, roleNam
 // account_id it is asked about, so a role that exists in some other account
 // the person also reaches is not a match.
 func verifyPin(ctx context.Context, client *http.Client, base, accessToken string, pin ssoPin) (accountID, roleName, refusal string, ok bool) {
-	roles, got := listAccountRoles(ctx, client, base, accessToken, pin.accountID)
+	roles, status, got := listAccountRoles(ctx, client, base, accessToken, pin.accountID)
 	if !got {
-		// The portal refused the pinned account outright, which is how it
-		// answers an account this session is not entitled to.
+		// FAIL CLOSED EITHER WAY — nothing is uploaded and there is no [0]
+		// fallback — but say which failure it was. A 4xx is the portal
+		// refusing an account this session is not entitled to, which is the
+		// admin's pin to fix; a 0 (no answer at all) or a 5xx is AWS having a
+		// bad minute, and telling the person their pin is wrong would send
+		// them to the wrong colleague.
+		if status == 0 || status >= 500 {
+			return "", "", portalUnreachableRefusal, false
+		}
 		return "", "", fmt.Sprintf(pinAccountNotEntitledRefusal, pin.accountID), false
 	}
 	if !slices.Contains(roles, pin.roleName) {
@@ -503,14 +540,20 @@ func chooseAccountRole(ctx context.Context, client *http.Client, base, accessTok
 	}
 	fmt.Fprintf(stdout, chooserAccountsHeader+"\n", len(accounts))
 	for i, a := range accounts {
-		fmt.Fprintf(stdout, chooserOptionLine+"\n", i+1, a.AccountID, a.AccountName)
+		// SANITISED, for the same reason the fail line is: these values come
+		// from the SSO portal, and the login pane matches its markers with a
+		// plain indexOf over the raw PTY buffer. An account whose name
+		// contains the success marker would otherwise make the pane declare
+		// the login done — and kill the run — while the chooser is still
+		// waiting for an answer.
+		printOptionLine(i+1, a.AccountID, a.AccountName)
 	}
 	idx, chosen := promptIndex(fmt.Sprintf(chooserAccountPrompt, len(accounts)), len(accounts))
 	if !chosen {
 		return "", "", chooserGaveUpRefusal, false
 	}
 	acct := accounts[idx]
-	roles, got := listAccountRoles(ctx, client, base, accessToken, acct.AccountID)
+	roles, _, got := listAccountRoles(ctx, client, base, accessToken, acct.AccountID)
 	if !got || len(roles) == 0 {
 		return "", "", "", false
 	}
@@ -528,15 +571,24 @@ func chooseRole(accountID string, roles []string) (roleName, refusal string, ok 
 	if !stdinIsTerminal() {
 		return "", fmt.Sprintf(chooserNoTerminalRefusal, accountID+": "+strings.Join(roles, ", ")), false
 	}
-	fmt.Fprintf(stdout, chooserRolesHeader+"\n", accountID)
+	fmt.Fprintf(stdout, chooserRolesHeader+"\n", plainOneLine(accountID))
 	for i, role := range roles {
-		fmt.Fprintf(stdout, chooserOptionLine+"\n", i+1, role, "")
+		printOptionLine(i+1, role, "")
 	}
 	idx, chosen := promptIndex(fmt.Sprintf(chooserRolePrompt, len(roles)), len(roles))
 	if !chosen {
 		return "", chooserGaveUpRefusal, false
 	}
 	return roles[idx], "", true
+}
+
+// printOptionLine writes one numbered chooser option. Both interpolated values
+// are PORTAL-SUPPLIED, so both go through plainOneLine (see chooseAccountRole),
+// and the line is right-trimmed because the role list passes an empty second
+// value and two trailing spaces on every role line is just litter.
+func printOptionLine(n int, value, note string) {
+	line := fmt.Sprintf(chooserOptionLine, n, plainOneLine(value), plainOneLine(note))
+	fmt.Fprintln(stdout, strings.TrimRight(line, " "))
 }
 
 // maxChooserTries bounds the prompt. Three bad or empty reads (a fat finger, a
@@ -597,6 +649,9 @@ func accountList(accounts []portalAccount) string {
 	for _, a := range accounts {
 		out = append(out, a.AccountID+" ("+a.AccountName+")")
 	}
+	// printFailure sanitises the whole sentence, so these portal values are
+	// covered on this path too — stated here so it stays true if the caller
+	// ever changes.
 	return strings.Join(out, ", ")
 }
 
@@ -610,27 +665,30 @@ func listAccounts(ctx context.Context, client *http.Client, base, accessToken st
 	var out struct {
 		AccountList []portalAccount `json:"accountList"`
 	}
-	if !ssoPortalGET(ctx, client, base+"/assignment/accounts", accessToken, &out) {
+	if _, ok := ssoPortalGET(ctx, client, base+"/assignment/accounts", accessToken, &out); !ok {
 		return nil, false
 	}
 	return out.AccountList, true
 }
 
-func listAccountRoles(ctx context.Context, client *http.Client, base, accessToken, accountID string) ([]string, bool) {
+// listAccountRoles returns the roles of ONE account, plus the portal's status
+// so a caller can tell "not entitled" (4xx) from "could not ask" (0 / 5xx).
+func listAccountRoles(ctx context.Context, client *http.Client, base, accessToken, accountID string) ([]string, int, bool) {
 	var out struct {
 		RoleList []struct {
 			RoleName string `json:"roleName"`
 		} `json:"roleList"`
 	}
 	rolesURL := base + "/assignment/roles?account_id=" + url.QueryEscape(accountID)
-	if !ssoPortalGET(ctx, client, rolesURL, accessToken, &out) {
-		return nil, false
+	status, ok := ssoPortalGET(ctx, client, rolesURL, accessToken, &out)
+	if !ok {
+		return nil, status, false
 	}
 	names := make([]string, 0, len(out.RoleList))
 	for _, r := range out.RoleList {
 		names = append(names, r.RoleName)
 	}
-	return names, true
+	return names, status, true
 }
 
 // ssoPortalGET performs a GET against the SSO portal API with the SSO access
@@ -640,19 +698,27 @@ func listAccountRoles(ctx context.Context, client *http.Client, base, accessToke
 // Reports false on any failure (request build, transport, non-2xx status,
 // decode) — never panics, never exec's, never places accessToken anywhere
 // but this request's own header.
-func ssoPortalGET(ctx context.Context, client *http.Client, rawURL, accessToken string, dst any) bool {
+//
+// It also returns the HTTP STATUS, and 0 when the request never got an answer
+// at all (build failure, transport error, timeout). Callers need that
+// distinction to say the right thing: a 4xx on a pinned account means "this
+// session is not entitled to it", while a 0 or a 5xx means the portal could not
+// be reached — and telling a person their admin's pin is wrong because AWS had
+// a bad minute sends them to the wrong colleague. A decode failure on a 2xx
+// keeps its status, since the portal did answer.
+func ssoPortalGET(ctx context.Context, client *http.Client, rawURL, accessToken string, dst any) (status int, ok bool) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return false
+		return 0, false
 	}
 	req.Header.Set("x-amz-sso_bearer_token", accessToken)
 	resp, err := client.Do(req)
 	if err != nil {
-		return false
+		return 0, false
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return false
+		return resp.StatusCode, false
 	}
-	return json.NewDecoder(resp.Body).Decode(dst) == nil
+	return resp.StatusCode, json.NewDecoder(resp.Body).Decode(dst) == nil
 }

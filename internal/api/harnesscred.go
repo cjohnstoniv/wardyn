@@ -11,7 +11,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -509,10 +508,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// materialize_aws_sso_config in agent-run-lib.sh). Non-secret: an sso-session
 	// block with the start URL + region and NO token cache — the login sandbox
 	// must not receive a credential, it exists to produce one.
-	extraEnv := hl.loginConfigEnv(ssoStartURL, ssoRegion)
-	// The admin's account/role pin as NON-SECRET env; nil for an unpinned row,
-	// so an unpinned launch stays byte-identical. See awssso_pin.go.
-	maps.Copy(extraEnv, awsSSOPinEnv(pin))
+	extraEnv := hl.loginEnv(ssoStartURL, ssoRegion, pin)
 
 	// THE LAUNCH-TIME CREDENTIAL SCOPE, STAMPED. handleUploadSSOToken used to
 	// re-resolve it from the LIVE roster at upload time, so an admin who flipped
@@ -569,11 +565,10 @@ const maxLoginStartAuditScan = 100
 
 // loginRunStamp is the launch-time state launchHarnessLoginRun wrote onto THIS
 // login run's harness.login.started audit row (ActorSystem/"wardynd" —
-// server-set at launch from the operator's request and the roster as it then
-// read, never sandbox input): the operator-declared AWS access-portal URL, and
-// the credential scope this run may capture under. The audit log is the system
-// of record (Invariant 6), and the same read-back-your-own-run's-trail shape
-// already serves execSucceeded (site_config_probe.go).
+// server-set at launch, never sandbox input): the operator-declared AWS
+// access-portal URL, the credential scope this run may capture under, and the
+// account/role pin. The audit log is the system of record (Invariant 6), and
+// the same read-back-your-own-run's-trail shape already serves execSucceeded.
 //
 // This exists so handleUploadSSOToken can bind WHAT a login sandbox uploads to
 // WHAT THE OPERATOR ASKED FOR AT LAUNCH, without a new run column or a new
@@ -588,10 +583,9 @@ type loginRunStamp struct {
 	SSOStartURL      string `json:"sso_start_url"`
 	CredentialSource string `json:"credential_source"`
 	Owner            string `json:"owner"`
-	// SSOAccountID/SSORoleName are the roster row's pin AS IT READ AT LAUNCH,
-	// stamped for the same reason the scope is: a roster edit while a login
-	// sandbox is alive must not re-point a capture in flight. Empty means
-	// "launched unpinned", which the upload accepts.
+	// SSOAccountID/SSORoleName are the roster row's pin AS IT READ AT LAUNCH:
+	// a roster edit while a login sandbox is alive must not re-point a capture
+	// in flight. Empty means "launched unpinned", which the upload accepts.
 	SSOAccountID string `json:"sso_account_id,omitempty"`
 	SSORoleName  string `json:"sso_role_name,omitempty"`
 }

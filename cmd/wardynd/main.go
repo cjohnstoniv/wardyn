@@ -475,6 +475,16 @@ func validateModelEndpoints(f *bootFlags) (map[string]string, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	// A WARNING, never a refusal: the model is passed to the agent verbatim and
+	// Wardyn deliberately does not police its shape. But the AWS SSO account
+	// check (roster save and capture, see internal/api/awssso_pin.go) reads the
+	// account out of this ARN, and a malformed one turns that check off
+	// silently — so say it once, at boot, rather than never.
+	if api.BedrockModelARNNamesNoAccount(*f.bedrockModel) {
+		slog.Warn("wardynd: the configured Bedrock model looks like an ARN but names no 12-digit account, so the account check is off — an AWS SSO sign-in's account will not be compared against the model's. Check the account field of WARDYN_BEDROCK_MODEL.",
+			slog.String("bedrock_model", *f.bedrockModel),
+		)
+	}
 	return llmGateways, bedrockBaseURL, nil
 }
 

@@ -28,6 +28,7 @@ package api
 
 import (
 	"fmt"
+	"maps"
 	"net/http"
 	"regexp"
 	"strings"
@@ -66,6 +67,30 @@ func awsSSOPinEnv(pin awsSSOPin) map[string]string {
 	}
 }
 
+// loginEnv is the login sandbox's complete NON-SECRET env: the pre-login
+// ~/.aws/config (loginConfigEnv) plus the admin's account/role pin.
+//
+// It exists as its own function for one reason — loginConfigEnv returns a NIL
+// map for a non-AWS flow or a half-known config, and maps.Copy into a nil map
+// PANICS. Through the HTTP door that is unreachable (handleHarnessLogin 400s an
+// empty start URL or region, and validateAgentSSOPin forbids a pin off a
+// bedrock_sso row), but the safety was two validators away from the panic,
+// which is not where a panic should live. Here it is one line and one test.
+//
+// An UNPINNED row adds nothing, so its launch is byte-identical to what it was.
+func (hl harnessLogin) loginEnv(ssoStartURL, ssoRegion string, pin awsSSOPin) map[string]string {
+	env := hl.loginConfigEnv(ssoStartURL, ssoRegion)
+	pinEnv := awsSSOPinEnv(pin)
+	if len(pinEnv) == 0 {
+		return env
+	}
+	if env == nil {
+		env = map[string]string{}
+	}
+	maps.Copy(env, pinEnv)
+	return env
+}
+
 // The FIXED reason vocabulary on a harness.credential.refused row. A closed set
 // on purpose: the alternative is sandbox-chosen text in the audit trail, and an
 // incident review filtering "why were captures refused last Tuesday" needs to
@@ -101,15 +126,20 @@ const (
 	ssoTokenModelAccountRefusal = "this session is for account %s; the configured Bedrock model lives in account %s — a run using this session would be refused by IAM, so it was not stored"
 )
 
-// bedrockModelARNAccount matches a full Bedrock ARN's account field. This is the
-// tree's FIRST ARN parser and it is deliberately the smallest one that answers
-// the only question asked: which account does the configured model live in.
-// Partition-agnostic (aws, aws-us-gov, aws-cn) because the partition is field 1
-// and nothing here reads it.
-var bedrockModelARNAccount = regexp.MustCompile(`^\d{12}$`)
+// awsAccountID matches an AWS account id. ONE var for the package: the ARN
+// parser below and the roster's own pin validation (agent_providers.go) ask the
+// same question about the same kind of value, and two copies of `^\d{12}$` is
+// two places for it to drift.
+var awsAccountID = regexp.MustCompile(`^\d{12}$`)
 
 // bedrockModelAccount returns the AWS account id a Bedrock model ARN names, or
 // "" when the configured model names no account at all.
+//
+// It FAILS OPEN on a malformed ARN too (an 11- or 13-digit account field, an
+// uppercase `ARN:`): the account check simply does not run. That is deliberate
+// — see the paragraph below — but it is also silent, so wardynd logs once at
+// boot when the model LOOKS like an ARN and this still answers "" (see
+// cmd/wardynd's bedrockModelAccountWarning).
 //
 // "" IS A VALID, COMMON ANSWER, and everything downstream must treat it as SKIP
 // rather than as a failure: WARDYN_BEDROCK_MODEL is passed verbatim
@@ -122,10 +152,25 @@ func bedrockModelAccount(model string) string {
 	if len(fields) < 6 || fields[0] != "arn" || fields[2] != "bedrock" {
 		return ""
 	}
-	if !bedrockModelARNAccount.MatchString(fields[4]) {
+	if !awsAccountID.MatchString(fields[4]) {
 		return ""
 	}
 	return fields[4]
+}
+
+// BedrockModelARNNamesNoAccount reports whether the configured Bedrock model
+// LOOKS like an ARN and yet yields no account — an 11- or 13-digit account
+// field, an uppercase `ARN:`, a truncated paste.
+//
+// bedrockModelAccount fails OPEN on those, which is deliberate (it is the same
+// answer a bare cross-region profile id gets, and it is what keeps an upgrade
+// from taking capture away from every non-ARN deployment). But failing open on
+// a TYPO is silent: the account check is simply off, at both doors, with
+// nothing to see. wardynd logs this once at boot so "off" is a decision
+// somebody can read rather than a thing nobody notices.
+func BedrockModelARNNamesNoAccount(model string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "arn:") &&
+		bedrockModelAccount(model) == ""
 }
 
 // bindCaptureToPin is the upload's identity binding: does this blob name the

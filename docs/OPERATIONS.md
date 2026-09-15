@@ -2867,6 +2867,13 @@ The pin is enforced at three doors, and each one fails CLOSED:
   run's `~/.aws/config`, so rewriting it would record a session nobody saw and
   merely move the IAM 403 back to run time.
 
+**Changing the model's account later invalidates an existing pin.** The
+save-time check validates the WHOLE roster block, so after you re-point
+`WARDYN_BEDROCK_MODEL` at an ARN in a different account, *any* roster edit —
+even an unrelated one, like disabling another agent — is refused until the stale
+pin is cleared or re-pointed. The 400 names the row and both accounts, so it
+says what to do; do it before the next roster edit rather than during one.
+
 **Leave it unset on a single-account tenant.** The pin is optional and a
 one-account deployment never had this problem. Where the session reaches several
 accounts and nothing is pinned, the sign-in asks the person on the login

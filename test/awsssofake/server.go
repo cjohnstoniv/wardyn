@@ -399,6 +399,13 @@ func (s *Server) handleListAccountRoles(w http.ResponseWriter, r *http.Request) 
 	// unentitled arm is an error rather than an empty roleList for the same
 	// reason: "not entitled" and "entitled to nothing" are different answers,
 	// and only the first one means the pin is wrong.
+	//
+	// 403 ForbiddenException is the real portal's shape for an account the
+	// session is not entitled to. Wardyn's helper treats every non-2xx below
+	// 500 identically ("not entitled"), so this is documentation rather than
+	// behaviour here — but a fake that models the wrong status is a fake
+	// somebody will one day believe. Exercising a real two-entitlement tenant
+	// remains owner-hardware-only (see the release's Known gaps).
 	wanted := r.URL.Query().Get("account_id")
 	for _, a := range s.accountsSnapshot() {
 		if a.AccountID != wanted {
@@ -412,8 +419,8 @@ func (s *Server) handleListAccountRoles(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("x-amzn-errortype", "InvalidRequestException")
-	w.WriteHeader(http.StatusBadRequest)
+	w.Header().Set("x-amzn-errortype", "ForbiddenException")
+	w.WriteHeader(http.StatusForbidden)
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"message": "this session is not entitled to account " + wanted,
 	})
