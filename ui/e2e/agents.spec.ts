@@ -397,16 +397,12 @@ test.describe("agents — the roster pin (sso_account_id / sso_role_name)", () =
     expect(claude).toMatchObject({ sso_account_id: "222222222222", sso_role_name: "BedrockRunner" });
   });
 
-  test("a pin whose account differs from the model ARN renders the SERVER's 400 body, writing nothing", async ({
-    page,
-  }) => {
-    const before = await getAgentProviders(page);
-    // U2-04: the restore above can legitimately hand this test LEGACY OPEN
-    // MODE (no `agents` key at all) — that is the state the file started in,
-    // and the point of restoring it. `?? []` so the read is about the
-    // claude-code row, not about whether a roster exists.
-    const beforeClaude = ((before.providers.agents ?? []) as Array<Record<string, unknown>>).find((a) => a.id === "claude-code");
-
+  // S2-09: a pin that disagrees with the model ARN's account is the ADMIN'S
+  // DELIBERATE ANSWER — a resource-shared application inference profile
+  // legitimately lives in another account, and refusing left that deployment
+  // with no configuration that worked. It saves; the daemon warns once in its
+  // journal (one line per disagreeing save) and the bedrock_provider setup check raises a warn row naming both accounts.
+  test("a pin whose account differs from the model ARN saves as the deliberate pin", async ({ page }) => {
     await gotoAgentsTab(page);
     const row = page.getByTestId("agent-row-claude-code");
     // U2-04: the afterEach above restores the roster this describe found on
@@ -420,18 +416,12 @@ test.describe("agents — the roster pin (sso_account_id / sso_role_name)", () =
     await row.getByLabel(AGENTS.FIELD_SSO_START_URL).fill("https://acme.awsapps.com/start");
     await row.getByLabel(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID).fill("111111111111");
     await row.getByLabel(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME).fill("DevPower");
-    await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
-
-    // The SERVER's own agent400SSOPinModelAccount sentence, verbatim.
-    await expect(
-      page.getByText(
-        'agents: "claude-code": sso_account_id 111111111111 is not the account the configured Bedrock model lives in (222222222222) — a session for that account cannot invoke it',
-      ),
-    ).toBeVisible();
+    await saveAgents(page);
+    await expect(page.getByText(PROVIDERS.SAVE_REFUSED_TITLE)).toHaveCount(0);
 
     const after = await getAgentProviders(page);
     const afterClaude = ((after.providers.agents ?? []) as Array<Record<string, unknown>>).find((a) => a.id === "claude-code");
-    expect(afterClaude).toEqual(beforeClaude);
+    expect(afterClaude).toMatchObject({ sso_account_id: "111111111111", sso_role_name: "DevPower" });
   });
 });
 

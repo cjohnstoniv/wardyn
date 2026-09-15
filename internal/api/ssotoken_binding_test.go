@@ -535,3 +535,79 @@ func TestAWSSSOPinEnv(t *testing.T) {
 		t.Errorf("pin env = %v, want exactly the two pin vars", got)
 	}
 }
+
+// TestUploadSSOToken_WrongShapedAccountOrRoleRejected (V1-r2 lens-S2 S2-06).
+//
+// The capture door accepted an identity the ROSTER-SAVE door refuses: only
+// repoFieldSafe ran on account_id/role_name, so anything without a control
+// character or whitespace was stored and baked verbatim into every later run's
+// ~/.aws/config. On the unpinned/bare-model shape (no pin to compare against,
+// no account in the model) nothing else looks at them at all — so a 13-digit
+// account id, or a role name IAM cannot name, was discovered later as somebody's
+// 403. One rule, both doors: awsAccountID / iamRoleName, the same two the admin's
+// own pin takes (validateAgentSSOPin).
+func TestUploadSSOToken_WrongShapedAccountOrRoleRejected(t *testing.T) {
+	for name, blob := range map[string]string{
+		"a 13-digit account id":        ssoBlobFor("1234567890123", "BedrockRunner"),
+		"an account id that is a word": ssoBlobFor("my-dev-account", "BedrockRunner"),
+		"a role name with a path":      ssoBlobFor("111111111111", "admins/BedrockRunner"),
+		"a role name over 64 chars":    ssoBlobFor("111111111111", strings.Repeat("R", 65)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			// Unpinned, bare model: the shape rule is the ONLY door left.
+			srv, sec, h, tok, runID := newPinnedSSOSrv(t, "", "", "")
+			code, body := putSSOToken(t, srv, runID, tok, blob)
+			if code != http.StatusBadRequest {
+				t.Fatalf("code = %d, want 400; body=%s", code, body)
+			}
+			if _, ok := sec.m[harnessCredSecretName(awsSSOProvider)]; ok {
+				t.Error("a wrong-shaped identity was stored")
+			}
+			rows := 0
+			for _, ev := range h.audit.events {
+				if ev.Action != "harness.credential.refused" {
+					continue
+				}
+				rows++
+				if !strings.Contains(string(ev.Data), refuseReasonFieldShape) {
+					t.Errorf("refusal row data = %s, want reason %q", ev.Data, refuseReasonFieldShape)
+				}
+			}
+			if rows != 1 {
+				t.Errorf("harness.credential.refused rows = %d, want exactly 1", rows)
+			}
+		})
+	}
+}
+
+// TestUploadSSOToken_PinIsTheEscapeHatchForACrossAccountModel (V1-r2 lens-S2
+// S2-09).
+//
+// The model-account check had no override: a resource-shared inference profile
+// owned by ANOTHER account was refused at capture and at roster save, with
+// nothing an admin could do about it. An explicit pin IS the admin's deliberate
+// answer to "which account signs in", so when one is set it is the only rule the
+// capture is judged against — and the pin's own comparison still binds, so this
+// widens nothing a sandbox can choose.
+func TestUploadSSOToken_PinIsTheEscapeHatchForACrossAccountModel(t *testing.T) {
+	const model = "arn:aws:bedrock:us-west-2:222222222222:inference-profile/us.anthropic.claude-sonnet-4-20250514-v1:0"
+
+	srv, sec, _, tok, runID := newPinnedSSOSrv(t, "111111111111", "BedrockRunner", model)
+	code, body := putSSOToken(t, srv, runID, tok, ssoBlobFor("111111111111", "BedrockRunner"))
+	if code != http.StatusNoContent {
+		t.Fatalf("the PINNED account was refused because the model lives elsewhere: code = %d; body=%s", code, body)
+	}
+	if _, ok := sec.m[harnessCredSecretName(awsSSOProvider)]; !ok {
+		t.Error("the pinned capture was not stored")
+	}
+
+	// And the model's own account is now the WRONG one: the pin decides.
+	srv2, sec2, _, tok2, runID2 := newPinnedSSOSrv(t, "111111111111", "BedrockRunner", model)
+	code2, body2 := putSSOToken(t, srv2, runID2, tok2, ssoBlobFor("222222222222", "BedrockRunner"))
+	if code2 != http.StatusBadRequest {
+		t.Fatalf("a session for an account the PIN does not name was accepted: code = %d; body=%s", code2, body2)
+	}
+	if _, ok := sec2.m[harnessCredSecretName(awsSSOProvider)]; ok {
+		t.Error("a capture that disagrees with the pin was stored")
+	}
+}

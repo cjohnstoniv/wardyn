@@ -2851,9 +2851,11 @@ role picked for whoever signs in). A new entitlement cannot move a pin.
 The pin is enforced at three doors, and each one fails CLOSED:
 
 - **Roster save** — a `sso_account_id` that is not the account your configured
-  `WARDYN_BEDROCK_MODEL` ARN lives in is refused with 400, naming both accounts.
-  (A bare cross-region profile id such as `us.anthropic.claude-…` names no
-  account, so the check is SKIPPED, not failed — give the full ARN to get it.)
+  `WARDYN_BEDROCK_MODEL` ARN lives in SAVES, and the daemon warns once in its
+  journal naming both accounts: an explicit pin is your deliberate answer to
+  "which account signs in", and a resource-shared application inference profile
+  legitimately lives in another account. (A bare cross-region profile id such as
+  `us.anthropic.claude-…` names no account, so there is nothing to warn about.)
 - **Sign-in** — the in-sandbox helper verifies the pin against the SSO portal
   (the account must be one this session reaches, and the role must exist IN THAT
   ACCOUNT) and prints `wardyn: aws sso credential rejected: …` on the login
@@ -2861,19 +2863,18 @@ The pin is enforced at three doors, and each one fails CLOSED:
 - **Capture** — the upload is bound to the pin AS IT READ AT LAUNCH (stamped on
   the run's own `harness.login.started` row, never re-read from the live roster,
   so a roster edit mid-sign-in cannot re-point a capture in flight). A blob that
-  disagrees, or that names an account the configured model does not live in, is
-  refused with 400 and a `harness.credential.refused` audit row carrying a
+  disagrees — or, on an UNPINNED launch, that names an account the configured
+  model does not live in — is refused with 400 and a `harness.credential.refused` audit row carrying a
   `reason` from a fixed vocabulary ([AUDIT-ACTIONS.md](AUDIT-ACTIONS.md)).
   Refused, never rewritten: the stored blob is baked verbatim into every later
   run's `~/.aws/config`, so rewriting it would record a session nobody saw and
   merely move the IAM 403 back to run time.
 
-**Changing the model's account later invalidates an existing pin.** The
-save-time check validates the WHOLE roster block, so after you re-point
-`WARDYN_BEDROCK_MODEL` at an ARN in a different account, *any* roster edit —
-even an unrelated one, like disabling another agent — is refused until the stale
-pin is cleared or re-pointed. The 400 names the row and both accounts, so it
-says what to do; do it before the next roster edit rather than during one.
+**Changing the model's account later does not invalidate an existing pin.** Since
+0.7.3 the disagreement is a journal WARN rather than a refusal, so re-pointing
+`WARDYN_BEDROCK_MODEL` at an ARN in a different account leaves every later roster
+edit working — but a run only succeeds if that model is genuinely shared with the
+pinned account, so read the warning rather than living with it.
 
 **Leave it unset on a single-account tenant.** The pin is optional and a
 one-account deployment never had this problem. Where the session reaches several

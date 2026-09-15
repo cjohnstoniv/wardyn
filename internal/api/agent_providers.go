@@ -24,6 +24,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"regexp"
 	"slices"
@@ -48,17 +49,20 @@ const (
 
 	// The account/role PIN — finding 1, ask 1. Admin-owned beside the start URL
 	// and for the same reason: the sign-in proposes, the roster disposes.
-	agent400SSOPinUnused       = "agents: %q: sso_account_id and sso_role_name apply only when mechanism is bedrock_sso and credential_source is per_user"
-	agent400SSOPinPair         = "agents: %q: sso_account_id and sso_role_name are set together or not at all — pinning the account alone still leaves the role picked for whoever signs in"
-	agent400SSOAccountID       = "agents: %q: sso_account_id must be a 12-digit AWS account id"
-	agent400SSORoleName        = "agents: %q: sso_role_name must be an IAM role name — letters, digits and +=,.@_- , at most 64 characters"
-	agent400SSOPinModelAccount = "agents: %q: sso_account_id %s is not the account the configured Bedrock model lives in (%s) — a session for that account cannot invoke it"
-	agent400DupID              = "agents: id %q is not unique"
-	agent400Mechanism          = "agents[%d].mechanism: %q is not a model-access mechanism — want one of: %s"
-	agent400Source             = "agents[%d].credential_source: %q is not a credential source — want one of: %s"
-	agent400NoManagedAuth      = "agents: %q is the bring-your-own-agent row, which Wardyn wires no model credential for, so its mechanism must be none"
-	agent400NeedsLane          = "agents: %q is a catalog agent Wardyn can wire a model credential for, so mechanism none would leave every run of it without one — name the lane you configured"
-	agent412Stale              = "agents changed since you loaded them — reload and retry"
+	agent400SSOPinUnused = "agents: %q: sso_account_id and sso_role_name apply only when mechanism is bedrock_sso and credential_source is per_user"
+	agent400SSOPinPair   = "agents: %q: sso_account_id and sso_role_name are set together or not at all — pinning the account alone still leaves the role picked for whoever signs in"
+	agent400SSOAccountID = "agents: %q: sso_account_id must be a 12-digit AWS account id"
+	agent400SSORoleName  = "agents: %q: sso_role_name must be an IAM role name — letters, digits and +=,.@_- , at most 64 characters"
+	// agentWarnSSOPinModelAccount is a WARNING now, not a refusal body (S2-09):
+	// the pin outranks the model's account, and this is how the disagreement is
+	// spoken once rather than silently.
+	agentWarnSSOPinModelAccount = "agents: %q: sso_account_id %s is not the account the configured Bedrock model lives in (%s) — the pin is taken as written, so runs will only work if that model is shared with the pinned account"
+	agent400DupID               = "agents: id %q is not unique"
+	agent400Mechanism           = "agents[%d].mechanism: %q is not a model-access mechanism — want one of: %s"
+	agent400Source              = "agents[%d].credential_source: %q is not a credential source — want one of: %s"
+	agent400NoManagedAuth       = "agents: %q is the bring-your-own-agent row, which Wardyn wires no model credential for, so its mechanism must be none"
+	agent400NeedsLane           = "agents: %q is a catalog agent Wardyn can wire a model credential for, so mechanism none would leave every run of it without one — name the lane you configured"
+	agent412Stale               = "agents changed since you loaded them — reload and retry"
 
 	// AGENT_422 — the ONE launch-path refusal, and the one string in this file a
 	// MEMBER ever reads. It names the agent and nothing else: no base URL, no
@@ -340,12 +344,16 @@ var iamRoleName = regexp.MustCompile(`^[A-Za-z0-9+=,.@_-]{1,64}$`)
 // pinning the account alone leaves the role picked for whoever signs in, which
 // is the same defect one level down.
 //
-// The model check is the SAVE-time twin of the capture-time one
-// (bindCaptureToPin): Wardyn holds both halves already, so an admin pinning an
-// account the configured model does not live in is told here rather than by a
-// member three sign-ins later. It SKIPS when the configured model names no
-// account at all — a bare cross-region profile id is the common case, and there
-// is nothing to compare.
+// The model check is a WARNING, not a refusal (S2-09). Wardyn holds both halves
+// already, so an admin pinning an account the configured model does not live in
+// hears about it here rather than from a member three sign-ins later — but a
+// resource-shared application inference profile owned by another account is a
+// real, supported AWS shape, and refusing left that deployment with no
+// configuration that worked at all. The pin is the admin's deliberate answer to
+// "which account signs in", so it wins and the disagreement is spoken once, with
+// both accounts named. It is SILENT when the configured model names no account —
+// a bare cross-region profile id is the common case, and there is nothing to
+// compare.
 func validateAgentSSOPin(row types.AgentProvider, bedrockModel string) error {
 	if row.SSOAccountID == "" && row.SSORoleName == "" {
 		return nil
@@ -360,7 +368,9 @@ func validateAgentSSOPin(row types.AgentProvider, bedrockModel string) error {
 		return fmt.Errorf(agent400SSORoleName, row.ID)
 	}
 	if modelAccount := bedrockModelAccount(bedrockModel); modelAccount != "" && modelAccount != row.SSOAccountID {
-		return fmt.Errorf(agent400SSOPinModelAccount, row.ID, row.SSOAccountID, modelAccount)
+		slog.Warn("wardynd: "+fmt.Sprintf(agentWarnSSOPinModelAccount, row.ID, row.SSOAccountID, modelAccount),
+			slog.String("agent", row.ID), slog.String("sso_account_id", row.SSOAccountID),
+			slog.String("model_account_id", modelAccount))
 	}
 	return nil
 }

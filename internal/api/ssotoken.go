@@ -248,6 +248,18 @@ func (s *Server) bindSSOBlob(blob awsSSOBlob, stamp loginRunStamp) (msg, reason 
 			return "invalid sso token: " + field + " contains control characters or whitespace", refuseReasonFieldUnsafe
 		}
 	}
+	// SHAPE, not merely safety (S2-06). The ROSTER-SAVE door has always held the
+	// admin's pin to `^\d{12}$` and IAM's own role grammar (validateAgentSSOPin);
+	// this door took anything without a control character. On the unpinned/bare-id
+	// shape nothing else looks at these two at all, so a wrong-shaped identity was
+	// stored and baked into every later run's ~/.aws/config, to be discovered as
+	// somebody's 403. One rule, both doors — the file's own argument.
+	if !awsAccountID.MatchString(blob.AccountID) {
+		return ssoTokenAccountShapeRefusal, refuseReasonFieldShape
+	}
+	if !iamRoleName.MatchString(blob.RoleName) {
+		return ssoTokenRoleShapeRefusal, refuseReasonFieldShape
+	}
 	// F006 — the two operator values the server already HOLDS, so the binding
 	// needs no new trust source: the region is the same
 	// cmp.Or(BedrockAWSSSORegion, BedrockRegion) boot config this sandbox was

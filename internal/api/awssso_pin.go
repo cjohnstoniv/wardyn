@@ -98,6 +98,7 @@ func (hl harnessLogin) loginEnv(ssoStartURL, ssoRegion string, pin awsSSOPin) ma
 const (
 	refuseReasonBlobShape        = "blob_shape"
 	refuseReasonFieldUnsafe      = "field_unsafe"
+	refuseReasonFieldShape       = "field_shape"
 	refuseReasonRegionMismatch   = "region_mismatch"
 	refuseReasonStartURLMismatch = "start_url_mismatch"
 	refuseReasonAccountRolePin   = "account_role_pin_mismatch"
@@ -124,6 +125,17 @@ const (
 	//
 	// DRAFT (M2 canon pending)
 	ssoTokenModelAccountRefusal = "this session is for account %s; the configured Bedrock model lives in account %s — a run using this session would be refused by IAM, so it was not stored"
+	// ssoTokenAccountShapeRefusal / ssoTokenRoleShapeRefusal: the capture named
+	// an account or role that is not shaped like one. It names the SHAPE rather
+	// than echoing the value back: the person reading it on the login terminal
+	// picked from a portal list, so "that is not a 12-digit account" tells them
+	// the pick did not resolve — and the value itself is already in their
+	// terminal.
+	//
+	// DRAFT (M2 canon pending)
+	ssoTokenAccountShapeRefusal = "this sign-in did not resolve to a 12-digit AWS account id, so nothing was stored — sign in again and choose an account from the list"
+	// DRAFT (M2 canon pending)
+	ssoTokenRoleShapeRefusal = "this sign-in did not resolve to an IAM role name, so nothing was stored — sign in again and choose a role from the list"
 	// harnessLoginRosterUnavailable answers a LAUNCH whose roster read failed
 	// (authorizeHarnessLogin, harnesscred.go): the pin and the admin's access
 	// portal both come off that row, so there is nothing to bind a capture to.
@@ -221,10 +233,14 @@ func BedrockSSOPinUnenforced(sc types.SiteConfig, model string) bool {
 //     scope is stamped rather than re-resolved (see loginRunScope). An empty
 //     stamp pin means "launched unpinned", which is accepted: the run was
 //     authorized without one.
-//  2. THE CONFIGURED MODEL'S ACCOUNT, when the operator gave a full ARN. Wardyn
-//     holds both halves of this comparison already — the blob's account_id and
-//     the account in WARDYN_BEDROCK_MODEL — and saying so at capture is ask 3
-//     of the finding.
+//  2. THE CONFIGURED MODEL'S ACCOUNT, when the operator gave a full ARN and the
+//     run was launched UNPINNED. Wardyn holds both halves of this comparison
+//     already — the blob's account_id and the account in WARDYN_BEDROCK_MODEL —
+//     and saying so at capture is ask 3 of the finding. A PIN outranks it
+//     (S2-09): it is the admin's deliberate answer to the same question, and a
+//     resource-shared application inference profile legitimately lives in
+//     another account, so a deployment with one had no configuration that
+//     worked. Nothing widens — check 1 still binds the pair the sandbox sends.
 //
 // Returns ("", "") to accept; (sentence, reason) to refuse.
 func bindCaptureToPin(blob awsSSOBlob, stamp loginRunStamp, model string) (msg, reason string) {
@@ -233,7 +249,7 @@ func bindCaptureToPin(blob awsSSOBlob, stamp loginRunStamp, model string) (msg, 
 		return fmt.Sprintf(ssoTokenAccountPinRefusal,
 			blob.AccountID, blob.RoleName, pin.AccountID, pin.RoleName), refuseReasonAccountRolePin
 	}
-	if modelAccount := bedrockModelAccount(model); modelAccount != "" && blob.AccountID != modelAccount {
+	if modelAccount := bedrockModelAccount(model); !pin.set() && modelAccount != "" && blob.AccountID != modelAccount {
 		return fmt.Sprintf(ssoTokenModelAccountRefusal, blob.AccountID, modelAccount), refuseReasonModelAccount
 	}
 	return "", ""

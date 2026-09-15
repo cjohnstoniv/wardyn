@@ -708,20 +708,21 @@ func pinnedRow(account, role string) types.AgentProvider {
 	}
 }
 
-// TestAgentProviders_PinAccountMustMatchModelARNAccount: Wardyn holds both
-// halves at SAVE time too, so an admin pinning an account the configured model
-// does not live in is told immediately — not by a member, three sign-ins later,
-// through a 403 inside an agent terminal.
-func TestAgentProviders_PinAccountMustMatchModelARNAccount(t *testing.T) {
+// TestAgentProviders_PinOverridesTheModelsAccount (S2-09): an EXPLICIT pin is
+// the admin's deliberate answer to "which account signs in", so the save door
+// takes it even when the configured model lives in another account — a
+// resource-shared application inference profile legitimately does. It is not
+// silent: the save WARNs, naming both accounts.
+//
+// The check itself stays for the UNPINNED case, where there is no deliberate
+// answer to defer to (TestAgentProviders_UnpinnedRowStillTakesTheModelAccount
+// below has no pin to set, so the rule lives on at capture — bindCaptureToPin).
+func TestAgentProviders_PinOverridesTheModelsAccount(t *testing.T) {
 	const model = "arn:aws:bedrock:us-west-2:111111111111:inference-profile/us.anthropic.claude-sonnet-4-20250514-v1:0"
-	err := validateAgentProviders(agentBlock(pinnedRow("222222222222", "BedrockRunner")), testAgentImages, model)
-	if err == nil {
-		t.Fatal("a pin naming an account the configured model does not live in was accepted")
+	if err := validateAgentProviders(agentBlock(pinnedRow("222222222222", "BedrockRunner")), testAgentImages, model); err != nil {
+		t.Fatalf("an explicit cross-account pin was refused: %v — a resource-shared inference profile has no other way to be configured", err)
 	}
-	if !strings.Contains(err.Error(), "222222222222") || !strings.Contains(err.Error(), "111111111111") {
-		t.Errorf("refusal = %q, want it to name both the pinned account and the model's", err)
-	}
-	// The agreeing pin saves.
+	// The agreeing pin saves, unchanged.
 	if err := validateAgentProviders(agentBlock(pinnedRow("111111111111", "BedrockRunner")), testAgentImages, model); err != nil {
 		t.Errorf("an agreeing pin was refused: %v", err)
 	}
