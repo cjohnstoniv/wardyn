@@ -34,10 +34,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -96,28 +99,153 @@ func run() error {
 	// HTTP with the token in the x-amz-sso_bearer_token header instead, so it
 	// never leaves this process's own memory for anywhere but that header —
 	// no exec, no argv, ever.
-	if accountID, roleName, ok := resolveAccountRole(blob.AccessToken, blob.Region); ok {
+	accountID, roleName, refusal, ok := pickAccountRole(blob.AccessToken, blob.Region, pinFromEnv())
+	if refusal != "" {
+		// A REFUSAL IS NOT A FAILURE TO RESOLVE. ok=false with no refusal is the
+		// old best-effort miss (the upload goes out blank and the control plane
+		// 400s it); a refusal means this sign-in cannot reach the identity this
+		// deployment asked for, so nothing is uploaded at all — storing it would
+		// bake the wrong account into every later run's ~/.aws/config.
+		printFailure(refusal)
+		return nil
+	}
+	if ok {
 		blob.AccountID, blob.RoleName = accountID, roleName
 	}
 	body, err := json.Marshal(blob)
 	if err != nil {
-		return fmt.Errorf("marshal sso token: %w", err)
+		printFailure("the captured session could not be encoded for upload: " + err.Error())
+		return nil
 	}
 	if derr := sidecar.Upload(endpoint, body); derr != nil {
 		fmt.Fprintln(os.Stderr, "wardyn-aws-sso: sso-token upload failed (non-fatal):", derr)
+		printFailure(serverSentence(derr))
 		return nil
 	}
 	// SUCCESS-ONLY marker, and a byte-for-byte contract: the setup UI's login pane
 	// scrapes the attach PTY for exactly this line to end the login
 	// (ui/.../harness-login-pane.tsx doneMarker). Printing it on a failed upload
 	// would report a credential that was never stored.
-	fmt.Println(successMarker)
+	fmt.Fprintln(stdout, successMarker)
 	return nil
 }
 
 // successMarker is the PTY line the UI waits for. Keep it in sync with
 // harness-login-pane.tsx's LOGIN_FLOWS.aws doneMarker.
 const successMarker = "wardyn: aws sso credential captured"
+
+// stdout / stdin / stdinIsTerminal are the process's own streams, as VARIABLES
+// so a test can drive the chooser and read the markers without a pty. Same
+// seam shape as ssoPortalBase below; never reassigned outside tests.
+var (
+	stdout io.Writer = os.Stdout
+	stdin  io.Reader = os.Stdin
+	// stdinIsTerminal reports whether a person is actually watching this
+	// stream. `aws sso login` runs on the operator's attach PTY, so stdin IS a
+	// terminal in the real login sandbox; in CI, in a piped shell, and under
+	// `go test` it is not, and a prompt nobody can answer must become a
+	// refusal rather than a hang.
+	stdinIsTerminal = func() bool {
+		info, err := os.Stdin.Stat()
+		return err == nil && info.Mode()&os.ModeCharDevice != 0
+	}
+)
+
+// failMarker is the FAILURE counterpart of successMarker, and it exists because
+// its absence was a bug: a refused upload logged to stderr and printed nothing
+// on stdout, so the setup UI's login pane — which ends the login only on seeing
+// a marker — span forever on a credential that had already been refused. Keep
+// it in sync with harness-login-pane.tsx's LOGIN_FLOWS.aws failMarker
+// (TestFailMarker_UIParity, the sibling of TestSuccessMarker_UIParity).
+//
+// NO TRAILING SPACE: the pane matches the marker as a prefix, and the sentence
+// is joined to it with one space at print time.
+const failMarker = "wardyn: aws sso credential rejected:"
+
+// maxFailLineRunes caps the whole printed line. The sentence can come from the
+// control plane (a refusal body) and lands on a terminal the operator is
+// reading, so it is collapsed to ONE line and truncated rather than allowed to
+// scroll the device code off the screen.
+const maxFailLineRunes = 300
+
+// printFailure writes the fail marker and one sentence as a single stdout line.
+//
+// The LEADING newline is load-bearing: this can follow the chooser's prompt,
+// which deliberately ends without one so the answer types on the same line. The
+// pane matches the marker at the start of a line, so a refusal glued to
+// "wardyn: account [1-2]: " would be invisible to it — the pane spinning
+// forever, which is the exact bug this marker exists to fix.
+func printFailure(sentence string) {
+	line := failMarker + " " + strings.Join(strings.Fields(sentence), " ")
+	if r := []rune(line); len(r) > maxFailLineRunes {
+		line = string(r[:maxFailLineRunes-1]) + "\u2026"
+	}
+	fmt.Fprintln(stdout, "\n"+line)
+}
+
+// serverSentence pulls the human sentence out of an upload error. sidecar.Upload
+// wraps a non-2xx as `server returned <code>: <body>`, and the control plane's
+// body is writeError's {"error":"..."} — so the operator reads the refusal the
+// daemon actually wrote, not Go error plumbing around it. Anything that is not
+// that shape is passed through raw: a wrong guess is worse than a verbose line.
+func serverSentence(err error) string {
+	raw := err.Error()
+	brace := strings.Index(raw, "{")
+	if brace < 0 {
+		return raw
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if jerr := json.Unmarshal([]byte(raw[brace:]), &body); jerr != nil || body.Error == "" {
+		return raw
+	}
+	return body.Error
+}
+
+// ── DRAFT (M2 canon pending) ────────────────────────────────────────────────
+
+// The refusals this helper prints after the fail marker, and the chooser's own
+// prompt block. Every one of them is read by a person on the login terminal.
+const (
+	// DRAFT (M2 canon pending)
+	pinAccountNotEntitledRefusal = "this deployment pins AWS sign-ins for this agent to account %s, which this sign-in does not reach — ask an admin to change the pin, or ask your cloud team for access to that account"
+	// DRAFT (M2 canon pending)
+	pinRoleNotInAccountRefusal = "this deployment pins AWS sign-ins for this agent to role %s in account %s, which this sign-in cannot assume there — ask an admin to change the pin, or ask your cloud team to grant you that role"
+	// DRAFT (M2 canon pending)
+	chooserNoTerminalRefusal = "this sign-in reaches more than one AWS account or role and there is no terminal here to choose on — ask an admin to pin the account and role on the agent row; this session reaches %s"
+	// DRAFT (M2 canon pending)
+	chooserGaveUpRefusal = "nothing was chosen after three tries — ask an admin to pin the account and role on the agent row so this sign-in has nothing to guess"
+)
+
+// The chooser's prompt block, verbatim from the plan.
+const (
+	// DRAFT (M2 canon pending)
+	chooserAccountsHeader = "wardyn: this sign-in reaches %d AWS accounts; choose the one your Bedrock model lives in."
+	// DRAFT (M2 canon pending)
+	chooserOptionLine = "  %d) %s  %s"
+	// DRAFT (M2 canon pending)
+	chooserAccountPrompt = "wardyn: account [1-%d]:"
+	// DRAFT (M2 canon pending)
+	chooserRolesHeader = "wardyn: choose the role your runs should assume in account %s."
+	// DRAFT (M2 canon pending)
+	chooserRolePrompt = "wardyn: role [1-%d]:"
+)
+
+// ssoPin is the admin's roster pin, delivered to this sandbox as launch env by
+// launchHarnessLoginRun (internal/api/harnesscred.go). Both halves or neither:
+// pinning the account alone still leaves the role picked for whoever signs in,
+// which is the same defect one level down.
+type ssoPin struct{ accountID, roleName string }
+
+func (p ssoPin) set() bool { return p.accountID != "" && p.roleName != "" }
+
+func pinFromEnv() ssoPin {
+	return ssoPin{
+		accountID: os.Getenv("WARDYN_AWS_SSO_ACCOUNT_ID"),
+		roleName:  os.Getenv("WARDYN_AWS_SSO_ROLE_NAME"),
+	}
+}
 
 // proxyURL mirrors sidecar.ProxyRunURL's env validation, but targets the
 // plain-noun sso-token route (like /wardyn/v1/recordings/) rather than the
@@ -259,46 +387,223 @@ var ssoPortalBase = func(region string) string {
 	return "https://portal.sso." + region + ".amazonaws.com"
 }
 
-// resolveAccountRole best-effort calls the SSO portal API directly and picks
-// (first account, first role) — good enough for a single-account SSO setup; a
-// multi-account operator can leave this blank and resolve later. The access
-// token travels ONLY in the x-amz-sso_bearer_token header on an HTTP request
-// this process makes itself (through the sandbox's egress proxy, honored by
-// net/http's default transport) — never on a child process's argv (F160:
-// the retired `aws` CLI shellout put it there). Any failure (network, non-2xx,
-// decode, empty list) returns ok=false — callers must treat that as "leave it
-// empty", not a fatal error (see run()).
-func resolveAccountRole(accessToken, region string) (accountID, roleName string, ok bool) {
+// portalAccount is one entitlement ListAccounts returns.
+type portalAccount struct {
+	AccountID   string `json:"accountId"`
+	AccountName string `json:"accountName"`
+}
+
+// pickAccountRole decides WHICH AWS identity this sign-in captures. It used to
+// be `AccountList[0]` / `RoleList[0]` with the comment "good enough for a
+// single-account SSO setup" — and that is finding 1: [0] of an unordered,
+// externally-mutable list is not a way to choose an identity. A cloud team
+// granting an unrelated entitlement inserted an element at index 0 and silently
+// re-pointed the account every run in the deployment signed with, with no diff,
+// no audit row and no warning.
+//
+// Four arms, in the order they are decided:
+//
+//  1. A PIN (the admin set sso_account_id + sso_role_name on the roster row) is
+//     VERIFIED, never assumed: the account must be one this session reaches and
+//     the role must exist IN THAT ACCOUNT. A pin that does not hold is a
+//     refusal with nothing uploaded — falling back to [0] would be the original
+//     defect wearing a pin.
+//  2. Exactly one account with exactly one role is taken silently. This is the
+//     single-account operator's path and it is byte-for-byte what it was.
+//  3. Anything else, with a person on the other end of stdin, is CHOSEN. The
+//     login sandbox runs on the operator's attach PTY, so there is a terminal
+//     to ask on (ask 2 of the finding).
+//  4. Anything else with nobody watching is a refusal that names what it
+//     reaches and asks for a pin — never a guess.
+//
+// (accountID, roleName, "", true) picked; ("", "", refusal, false) refused —
+// the caller uploads NOTHING and prints the refusal after the fail marker;
+// ("", "", "", false) is the old best-effort miss (portal unreachable, empty
+// list), where the caller uploads a blank pair and the control plane answers
+// 400 as it always has.
+func pickAccountRole(accessToken, region string, pin ssoPin) (accountID, roleName, refusal string, ok bool) {
 	if accessToken == "" || region == "" {
-		return "", "", false
+		return "", "", "", false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), resolveTimeout)
 	defer cancel()
-
 	client := &http.Client{Timeout: resolveTimeout}
 	base := ssoPortalBase(region)
 
-	var accounts struct {
-		AccountList []struct {
-			AccountID string `json:"accountId"`
-		} `json:"accountList"`
+	accounts, got := listAccounts(ctx, client, base, accessToken)
+	if !got || len(accounts) == 0 {
+		return "", "", "", false
 	}
-	if !ssoPortalGET(ctx, client, base+"/assignment/accounts", accessToken, &accounts) ||
-		len(accounts.AccountList) == 0 {
-		return "", "", false
+	if pin.set() {
+		return verifyPin(ctx, client, base, accessToken, pin)
 	}
-	accountID = accounts.AccountList[0].AccountID
+	if len(accounts) == 1 {
+		roles, rgot := listAccountRoles(ctx, client, base, accessToken, accounts[0].AccountID)
+		if !rgot || len(roles) == 0 {
+			return "", "", "", false
+		}
+		if len(roles) == 1 {
+			return accounts[0].AccountID, roles[0], "", true
+		}
+		role, rrefusal, rok := chooseRole(accounts[0].AccountID, roles)
+		return accounts[0].AccountID, role, rrefusal, rok
+	}
+	return chooseAccountRole(ctx, client, base, accessToken, accounts)
+}
 
-	var roles struct {
+// verifyPin proves the admin's pin is reachable by THIS session before it is
+// used. Both halves are checked against the portal, and the role half is
+// checked inside the PINNED account — ListAccountRoles is scoped to the
+// account_id it is asked about, so a role that exists in some other account
+// the person also reaches is not a match.
+func verifyPin(ctx context.Context, client *http.Client, base, accessToken string, pin ssoPin) (accountID, roleName, refusal string, ok bool) {
+	roles, got := listAccountRoles(ctx, client, base, accessToken, pin.accountID)
+	if !got {
+		// The portal refused the pinned account outright, which is how it
+		// answers an account this session is not entitled to.
+		return "", "", fmt.Sprintf(pinAccountNotEntitledRefusal, pin.accountID), false
+	}
+	if !slices.Contains(roles, pin.roleName) {
+		return "", "", fmt.Sprintf(pinRoleNotInAccountRefusal, pin.roleName, pin.accountID), false
+	}
+	return pin.accountID, pin.roleName, "", true
+}
+
+// chooseAccountRole asks the person which account, then which role in it.
+func chooseAccountRole(ctx context.Context, client *http.Client, base, accessToken string, accounts []portalAccount) (accountID, roleName, refusal string, ok bool) {
+	if !stdinIsTerminal() {
+		return "", "", fmt.Sprintf(chooserNoTerminalRefusal, accountList(accounts)), false
+	}
+	fmt.Fprintf(stdout, chooserAccountsHeader+"\n", len(accounts))
+	for i, a := range accounts {
+		fmt.Fprintf(stdout, chooserOptionLine+"\n", i+1, a.AccountID, a.AccountName)
+	}
+	idx, chosen := promptIndex(fmt.Sprintf(chooserAccountPrompt, len(accounts)), len(accounts))
+	if !chosen {
+		return "", "", chooserGaveUpRefusal, false
+	}
+	acct := accounts[idx]
+	roles, got := listAccountRoles(ctx, client, base, accessToken, acct.AccountID)
+	if !got || len(roles) == 0 {
+		return "", "", "", false
+	}
+	if len(roles) == 1 {
+		return acct.AccountID, roles[0], "", true
+	}
+	role, rrefusal, rok := chooseRole(acct.AccountID, roles)
+	return acct.AccountID, role, rrefusal, rok
+}
+
+// chooseRole is the second half, also reachable directly when this session
+// reaches ONE account but several roles in it — RoleList[0] there is the same
+// unordered pick the finding is about, one level down.
+func chooseRole(accountID string, roles []string) (roleName, refusal string, ok bool) {
+	if !stdinIsTerminal() {
+		return "", fmt.Sprintf(chooserNoTerminalRefusal, accountID+": "+strings.Join(roles, ", ")), false
+	}
+	fmt.Fprintf(stdout, chooserRolesHeader+"\n", accountID)
+	for i, role := range roles {
+		fmt.Fprintf(stdout, chooserOptionLine+"\n", i+1, role, "")
+	}
+	idx, chosen := promptIndex(fmt.Sprintf(chooserRolePrompt, len(roles)), len(roles))
+	if !chosen {
+		return "", chooserGaveUpRefusal, false
+	}
+	return roles[idx], "", true
+}
+
+// maxChooserTries bounds the prompt. Three bad or empty reads (a fat finger, a
+// closed stream, a paste of the wrong thing) become the same refusal a
+// terminal-less sandbox gets, rather than a loop nobody can leave.
+const maxChooserTries = 3
+
+// promptIndex reads a 1-based choice and returns its 0-based index.
+func promptIndex(label string, n int) (int, bool) {
+	for try := 0; try < maxChooserTries; try++ {
+		fmt.Fprint(stdout, label+" ")
+		line, err := readLine(stdin)
+		if err != nil && line == "" {
+			return 0, false
+		}
+		choice, cerr := strconv.Atoi(strings.TrimSpace(line))
+		if cerr == nil && choice >= 1 && choice <= n {
+			return choice - 1, true
+		}
+		if err != nil {
+			return 0, false
+		}
+	}
+	return 0, false
+}
+
+// readLine reads one line UNBUFFERED. A bufio.Reader would be the obvious
+// choice and is the wrong one here: the account prompt and the role prompt are
+// two separate reads of the SAME stream, and a per-prompt bufio.Reader swallows
+// whatever the first one read ahead — so the role answer, already typed, was
+// gone by the time the role prompt asked for it. A prompt reads a handful of
+// bytes once, so one syscall per byte costs nothing.
+//
+// ponytail: byte-at-a-time; if this ever reads bulk input, hoist ONE shared
+// bufio.Reader over stdin rather than reintroducing a per-call one.
+func readLine(r io.Reader) (string, error) {
+	var line []byte
+	buf := make([]byte, 1)
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			if buf[0] == '\n' {
+				return string(line), nil
+			}
+			line = append(line, buf[0])
+		}
+		if err != nil {
+			return string(line), err
+		}
+	}
+}
+
+// accountList renders the entitlements for the no-terminal refusal, so the
+// person forwarding that line to an admin is forwarding the account ids the
+// admin has to choose between.
+func accountList(accounts []portalAccount) string {
+	out := make([]string, 0, len(accounts))
+	for _, a := range accounts {
+		out = append(out, a.AccountID+" ("+a.AccountName+")")
+	}
+	return strings.Join(out, ", ")
+}
+
+// listAccounts / listAccountRoles are the two portal reads. The access token
+// travels ONLY in the x-amz-sso_bearer_token header on a request this process
+// makes itself — never on a child process's argv (F160: the retired `aws` CLI
+// shellout put it there). Both report false on any failure; the CALLER decides
+// what a failure means, which differs between the pin arm (the portal refusing
+// a pinned account is the answer, not an outage) and the rest.
+func listAccounts(ctx context.Context, client *http.Client, base, accessToken string) ([]portalAccount, bool) {
+	var out struct {
+		AccountList []portalAccount `json:"accountList"`
+	}
+	if !ssoPortalGET(ctx, client, base+"/assignment/accounts", accessToken, &out) {
+		return nil, false
+	}
+	return out.AccountList, true
+}
+
+func listAccountRoles(ctx context.Context, client *http.Client, base, accessToken, accountID string) ([]string, bool) {
+	var out struct {
 		RoleList []struct {
 			RoleName string `json:"roleName"`
 		} `json:"roleList"`
 	}
 	rolesURL := base + "/assignment/roles?account_id=" + url.QueryEscape(accountID)
-	if !ssoPortalGET(ctx, client, rolesURL, accessToken, &roles) || len(roles.RoleList) == 0 {
-		return "", "", false
+	if !ssoPortalGET(ctx, client, rolesURL, accessToken, &out) {
+		return nil, false
 	}
-	return accountID, roles.RoleList[0].RoleName, true
+	names := make([]string, 0, len(out.RoleList))
+	for _, r := range out.RoleList {
+		names = append(names, r.RoleName)
+	}
+	return names, true
 }
 
 // ssoPortalGET performs a GET against the SSO portal API with the SSO access
