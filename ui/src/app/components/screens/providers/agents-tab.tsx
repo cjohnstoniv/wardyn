@@ -30,7 +30,7 @@ import { AI_TYPES, IMPOSSIBLE, type AiType } from "../../../lib/integrations";
 import type { SetupHarnessTool, SetupModelAccess } from "../../../lib/types";
 import { getErrorMessage } from "../../../lib/format";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
-import { AGENTS, MODEL_ACCESS_CHIP_LABEL, PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { AGENTS, AGENTS_DRAFT, MODEL_ACCESS_CHIP_LABEL, PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Field, Switch } from "../../wardyn/form-primitives";
@@ -126,8 +126,14 @@ function rowEnabled(agents: AgentProvider[], harness: SetupHarnessTool): boolean
 // UNTOUCHED, which is what keeps a custom WARDYN_AGENT_IMAGES row byte-for-byte.
 function normalizeAgentRow(a: AgentProvider): AgentProvider {
   if (a.mechanism === "bedrock_sso") return a;
-  if (a.credential_source === undefined && a.sso_start_url === undefined) return a;
-  return { ...a, credential_source: undefined, sso_start_url: undefined };
+  if (
+    a.credential_source === undefined &&
+    a.sso_start_url === undefined &&
+    a.sso_account_id === undefined &&
+    a.sso_role_name === undefined
+  )
+    return a;
+  return { ...a, credential_source: undefined, sso_start_url: undefined, sso_account_id: undefined, sso_role_name: undefined };
 }
 
 function normalizeAgentProviders(p: AgentProviders): AgentProviders {
@@ -152,6 +158,56 @@ function ModelAccessNote({ access }: { access: SetupModelAccess }) {
   );
 }
 
+// The three states the admin can actually DO something about by signing in —
+// shared by the bottom chip's button and the prominent per_user banner above.
+const MODEL_ACCESS_ACTIONABLE = new Set(["not_configured", "expired_signin", "expiring"]);
+
+// The SIGNED-IN ADMIN'S OWN block (C4.2): the chip, the server's action line,
+// the ADMIN_OWN_CHIP_NOTE, and (for the three actionable states) the sign-in
+// CTA or the open login pane. Shared between the ordinary bottom placement
+// and the prominent per_user banner at the top of the row (Appendix A finding
+// 4) — the content is identical, only the wrapper around it differs.
+function ModelAccessSignIn({
+  access,
+  loginOpen,
+  setLoginOpen,
+  startURLManaged,
+}: {
+  access: SetupModelAccess;
+  loginOpen: boolean;
+  setLoginOpen: (open: boolean) => void;
+  startURLManaged: boolean;
+}) {
+  return (
+    <>
+      <ModelAccessNote access={access} />
+      <p className="mt-1 text-meta text-muted-foreground">{AGENTS.ADMIN_OWN_CHIP_NOTE}</p>
+      {loginOpen ? (
+        <div className="mt-2">
+          {/* Under a per_user row the server signs in against THAT row's
+              stored sso_start_url and ignores a typed one, so the pane's
+              start-URL field is suppressed for a note (the member's CTA
+              does the same). A shared row has nothing stored, so the
+              ordinary flow still asks. */}
+          <HarnessLoginPane
+            provider="aws"
+            startURLManaged={startURLManaged}
+            onDone={() => setLoginOpen(false)}
+            onCancel={() => setLoginOpen(false)}
+          />
+        </div>
+      ) : (
+        MODEL_ACCESS_ACTIONABLE.has(access.state) && (
+          // outline, never a second teal — Save is the tab's one default.
+          <Button type="button" size="sm" variant="outline" className="mt-2" onClick={() => setLoginOpen(true)}>
+            {AGENTS.SIGN_IN_AWS}
+          </Button>
+        )
+      )}
+    </>
+  );
+}
+
 function Row({
   harness,
   row,
@@ -173,6 +229,18 @@ function Row({
   const choices = mechanismChoices(harness);
   const perUserAvailable = row.mechanism === "bedrock_sso";
   const credentialSource = row.credential_source || "shared";
+
+  // C4.2 is claude-code only (modelAccess is scoped server-side) and NEVER
+  // renders for not_applicable (finding 5 — the admin-token principal's own
+  // answer; an empty chip with ADMIN_OWN_CHIP_NOTE still under it would be a
+  // claim with nothing behind it).
+  const showModelAccess = harness.id === "claude-code" && !!modelAccess && modelAccess.state !== "not_applicable";
+  // Prominence (finding 4): a per_user row with something actionable to do
+  // moves this block to the TOP of the row instead of its usual spot at the
+  // bottom — the legacy Settings door stops being the one an admin reaches
+  // for right after declaring the lane.
+  const modelAccessProminent =
+    showModelAccess && credentialSource === "per_user" && MODEL_ACCESS_ACTIONABLE.has(modelAccess!.state);
 
   return (
     <div className="rounded-lg border border-border" data-testid={`agent-row-${harness.id}`}>
@@ -200,6 +268,27 @@ function Row({
         </div>
       ) : (
         <div className="space-y-4 p-3">
+          {/* Appendix A finding 4: declaring the lane (this tab) and
+              authenticating to it (Settings → Model provider) were on
+              different screens with no link between them. Under a per_user
+              row with something actionable to do, the admin's own sign-in
+              moves to the TOP of the row, in a tinted panel that says WHY —
+              the legacy Settings door stops being the one reached for. */}
+          {modelAccessProminent && (
+            <div className="rounded-lg border border-warning/30 bg-warning-subtle p-3" role="status">
+              <p className="text-sm font-medium text-foreground">{AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE}</p>
+              <p className="mt-1 text-body text-muted-foreground">{AGENTS_DRAFT.PER_USER_SIGN_IN_BODY}</p>
+              <div className="mt-2">
+                <ModelAccessSignIn
+                  access={modelAccess!}
+                  loginOpen={loginOpen}
+                  setLoginOpen={setLoginOpen}
+                  startURLManaged={perUserAvailable && credentialSource === "per_user"}
+                />
+              </div>
+            </div>
+          )}
+
           {choices.length > 1 ? (
             <Field label={AGENTS.FIELD_MECHANISM} hint={AGENTS.MECHANISM_HINT}>
               <div role="radiogroup" aria-label={AGENTS.FIELD_MECHANISM} className="space-y-1.5">
@@ -215,7 +304,14 @@ function Row({
                         onUpdate(
                           c.value === "bedrock_sso"
                             ? { ...row, mechanism: c.value }
-                            : { ...row, mechanism: c.value, credential_source: undefined, sso_start_url: undefined },
+                            : {
+                                ...row,
+                                mechanism: c.value,
+                                credential_source: undefined,
+                                sso_start_url: undefined,
+                                sso_account_id: undefined,
+                                sso_role_name: undefined,
+                              },
                         )
                       }
                     />
@@ -249,7 +345,15 @@ function Row({
                   size="sm"
                   variant={credentialSource === "shared" ? "secondary" : "outline"}
                   disabled={!operator}
-                  onClick={() => onUpdate({ ...row, credential_source: undefined, sso_start_url: undefined })}
+                  onClick={() =>
+                    onUpdate({
+                      ...row,
+                      credential_source: undefined,
+                      sso_start_url: undefined,
+                      sso_account_id: undefined,
+                      sso_role_name: undefined,
+                    })
+                  }
                 >
                   {AGENTS.SOURCE_SHARED}
                 </Button>
@@ -274,48 +378,62 @@ function Row({
           )}
 
           {perUserAvailable && credentialSource === "per_user" && (
-            <Field label={AGENTS.FIELD_SSO_START_URL} hint={AGENTS.SSO_START_URL_HINT} htmlFor={`agent-${row.id}-sso-start-url`}>
-              <Input
-                id={`agent-${row.id}-sso-start-url`}
-                value={row.sso_start_url ?? ""}
-                disabled={!operator}
-                onChange={(e) => onUpdate({ ...row, sso_start_url: e.target.value })}
-                placeholder="https://my-org.awsapps.com/start"
-                className="font-mono"
-              />
-            </Field>
+            <>
+              <Field label={AGENTS.FIELD_SSO_START_URL} hint={AGENTS.SSO_START_URL_HINT} htmlFor={`agent-${row.id}-sso-start-url`}>
+                <Input
+                  id={`agent-${row.id}-sso-start-url`}
+                  value={row.sso_start_url ?? ""}
+                  disabled={!operator}
+                  onChange={(e) => onUpdate({ ...row, sso_start_url: e.target.value })}
+                  placeholder="https://my-org.awsapps.com/start"
+                  className="font-mono"
+                />
+              </Field>
+              {/* The roster pin (finding 4): optional, ADMIN-OWNED like the
+                  start URL above it — set together, or left blank, never
+                  independently (agent400SSOPinPair). */}
+              <Field
+                label={AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID}
+                hint={AGENTS_DRAFT.SSO_ACCOUNT_ID_HINT}
+                htmlFor={`agent-${row.id}-sso-account-id`}
+              >
+                <Input
+                  id={`agent-${row.id}-sso-account-id`}
+                  value={row.sso_account_id ?? ""}
+                  disabled={!operator}
+                  onChange={(e) => onUpdate({ ...row, sso_account_id: e.target.value })}
+                  placeholder="111111111111"
+                  className="font-mono"
+                />
+              </Field>
+              <Field
+                label={AGENTS_DRAFT.FIELD_SSO_ROLE_NAME}
+                hint={AGENTS_DRAFT.SSO_ROLE_NAME_HINT}
+                htmlFor={`agent-${row.id}-sso-role-name`}
+              >
+                <Input
+                  id={`agent-${row.id}-sso-role-name`}
+                  value={row.sso_role_name ?? ""}
+                  disabled={!operator}
+                  onChange={(e) => onUpdate({ ...row, sso_role_name: e.target.value })}
+                  placeholder="BedrockRunner"
+                  className="font-mono"
+                />
+              </Field>
+            </>
           )}
 
-          {/* The SIGNED-IN ADMIN'S OWN chip (C4.2) — SetupStatus.model_access is
-              scoped to claude-code only (modelAccessAgent, internal/api). */}
-          {harness.id === "claude-code" && modelAccess && (
+          {/* The SIGNED-IN ADMIN'S OWN chip (C4.2), NOT prominent: an ordinary
+              claude-code row (shared credential, or per_user with nothing
+              actionable) keeps the block at the bottom, exactly as before. */}
+          {showModelAccess && !modelAccessProminent && (
             <div className="border-t border-border pt-3">
-              <ModelAccessNote access={modelAccess} />
-              <p className="mt-1 text-meta text-muted-foreground">{AGENTS.ADMIN_OWN_CHIP_NOTE}</p>
-              {loginOpen ? (
-                <div className="mt-2">
-                  {/* Under a per_user row the server signs in against THAT row's
-                      stored sso_start_url and ignores a typed one, so the pane's
-                      start-URL field is suppressed for a note (the member's CTA
-                      does the same). A shared row has nothing stored, so the
-                      ordinary flow still asks. */}
-                  <HarnessLoginPane
-                    provider="aws"
-                    startURLManaged={perUserAvailable && credentialSource === "per_user"}
-                    onDone={() => setLoginOpen(false)}
-                    onCancel={() => setLoginOpen(false)}
-                  />
-                </div>
-              ) : (
-                (modelAccess.state === "not_configured" ||
-                  modelAccess.state === "expired_signin" ||
-                  modelAccess.state === "expiring") && (
-                  // outline, never a second teal — Save is the tab's one default.
-                  <Button type="button" size="sm" variant="outline" className="mt-2" onClick={() => setLoginOpen(true)}>
-                    {AGENTS.SIGN_IN_AWS}
-                  </Button>
-                )
-              )}
+              <ModelAccessSignIn
+                access={modelAccess!}
+                loginOpen={loginOpen}
+                setLoginOpen={setLoginOpen}
+                startURLManaged={perUserAvailable && credentialSource === "per_user"}
+              />
             </div>
           )}
         </div>
@@ -407,6 +525,11 @@ export function AgentsTab({
       setDraft(normalizeAgentProviders(result.providers));
       setEtag(result.etag);
       toast.success(PROVIDERS.SAVED_TOAST);
+      // The staleness root cause (Appendix A finding 4): modelAccess is the
+      // PARENT's /setup/status read, never this tab's own — right after
+      // declaring per_user the admin's own door renders whatever that read
+      // last saw, which can predate this save. Re-fire it on every success.
+      onRetryRoster();
     } catch (e) {
       if (e instanceof HttpError && e.status === 412) {
         setSavedElsewhere(true);
