@@ -523,10 +523,10 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// made to appear no matter how many times they pressed the button. OPERATOR
 	// ONLY — the deployer funnel is the only surface that offers Re-check, and a
 	// member must not be able to make the daemon sweep the host on demand.
-	if r.URL.Query().Get(setupRecheckParam) != "" && s.isOperator(ctx) {
-		hostProxyForceRedetect()
-	}
 	hostProxy := cachedHostProxy()
+	if r.URL.Query().Get(setupRecheckParam) != "" && s.isOperator(ctx) {
+		hostProxy = hostProxyRecheck()
+	}
 	scmPosture := setup.DetectSCMPosture()
 
 	// ONE site-config read for the whole handler. It is hoisted above the Bedrock

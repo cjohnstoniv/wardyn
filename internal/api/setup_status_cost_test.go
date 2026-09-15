@@ -391,3 +391,132 @@ func TestSetupStatus_RecheckForcesAReDetectForOperatorsOnly(t *testing.T) {
 	do(t, srv, http.MethodGet, "/api/v1/setup/status?recheck=1", adminToken, "")
 	waitHostProxyCalls(t, &calls, 2, "an operator's ?recheck=1 must force a re-detect")
 }
+
+// hostProxyValue reads the http_proxy value a /setup/status response carries,
+// so a test can tell the FRESH answer from the last-known one.
+func hostProxyValue(t *testing.T, body string) string {
+	t.Helper()
+	var st struct {
+		HostProxy struct {
+			HTTPProxy *struct {
+				Value string `json:"value"`
+			} `json:"http_proxy"`
+		} `json:"host_proxy"`
+	}
+	if err := json.Unmarshal([]byte(body), &st); err != nil {
+		t.Fatalf("decode setup status: %v", err)
+	}
+	if st.HostProxy.HTTPProxy == nil {
+		return ""
+	}
+	return st.HostProxy.HTTPProxy.Value
+}
+
+func hostProxyDetection(value string) setup.HostProxyDetection {
+	return setup.HostProxyDetection{HTTPProxy: &setup.HostProxySetting{Value: value}}
+}
+
+// TestSetupStatus_RecheckAnswersWithTheFreshValue (V1-r2 lens-U2 U2-02).
+//
+// Re-check forced a re-detect and then answered from the memo it had just
+// invalidated, so the console's single forced read was always ONE PRESS BEHIND
+// — and stamped "checked just now" over the old value. The FORCED path (only)
+// waits a bounded moment for the sweep it started.
+func TestSetupStatus_RecheckAnswersWithTheFreshValue(t *testing.T) {
+	var calls atomic.Int64
+	real := hostProxyDetect
+	hostProxyDetect = func() setup.HostProxyDetection {
+		if calls.Add(1) == 1 {
+			return hostProxyDetection("http://old.proxy:3128")
+		}
+		time.Sleep(300 * time.Millisecond)
+		return hostProxyDetection("http://new.proxy:3128")
+	}
+	t.Cleanup(func() {
+		hostProxyDetect = real
+		hostProxyCacheReset()
+	})
+	hostProxyCacheReset()
+
+	srv := New(baseTestConfig(newHarness(t), &setupStatusCostStore{}))
+	do(t, srv, http.MethodGet, "/api/v1/setup/status", adminToken, "")
+	waitHostProxyMemo(t)
+
+	w := do(t, srv, http.MethodGet, "/api/v1/setup/status?recheck=1", adminToken, "")
+	if got := hostProxyValue(t, w.Body.String()); got != "http://new.proxy:3128" {
+		t.Errorf("Re-check answered %q, want the value the re-detect it forced found — the button is one press behind", got)
+	}
+}
+
+// TestSetupStatus_RecheckStillAnswersWhenTheSweepIsSlow: the bounded half of the
+// same wait. A host whose interop is wedged must not hold the console's Re-check
+// open — past the bound it answers with last-known, exactly as an unforced poll
+// does.
+func TestSetupStatus_RecheckStillAnswersWhenTheSweepIsSlow(t *testing.T) {
+	var calls atomic.Int64
+	gate := make(chan struct{})
+	real := hostProxyDetect
+	hostProxyDetect = func() setup.HostProxyDetection {
+		if calls.Add(1) == 1 {
+			return hostProxyDetection("http://old.proxy:3128")
+		}
+		<-gate
+		return hostProxyDetection("http://new.proxy:3128")
+	}
+	t.Cleanup(func() {
+		close(gate)
+		hostProxyDetect = real
+		hostProxyCacheReset()
+	})
+	hostProxyCacheReset()
+
+	srv := New(baseTestConfig(newHarness(t), &setupStatusCostStore{}))
+	do(t, srv, http.MethodGet, "/api/v1/setup/status", adminToken, "")
+	waitHostProxyMemo(t)
+
+	start := time.Now()
+	w := do(t, srv, http.MethodGet, "/api/v1/setup/status?recheck=1", adminToken, "")
+	elapsed := time.Since(start)
+	if elapsed > hostProxyRecheckWait+2*time.Second {
+		t.Errorf("Re-check took %s against a sweep that never answers, want ~%s", elapsed, hostProxyRecheckWait)
+	}
+	if got := hostProxyValue(t, w.Body.String()); got != "http://old.proxy:3128" {
+		t.Errorf("Re-check answered %q, want the last-known value rather than an empty detection", got)
+	}
+}
+
+// TestSetupStatus_RecheckIsBoundedToOnePerSweepDeadline (V1-r2 lens-S2 S2-07).
+//
+// hostProxyForceRedetect yields single-flight on purpose — the case Re-check
+// exists for is a WEDGED sweep — but nothing bounded it in aggregate, so N
+// presses inside one deadline started N overlapping sweeps, each with up to two
+// host subprocesses. One forced re-detect per hostProxySweepDeadline is enough
+// to unstick a wedged sweep and is a bound.
+func TestSetupStatus_RecheckIsBoundedToOnePerSweepDeadline(t *testing.T) {
+	var calls atomic.Int64
+	real := hostProxyDetect
+	hostProxyDetect = func() setup.HostProxyDetection {
+		calls.Add(1)
+		return setup.HostProxyDetection{}
+	}
+	t.Cleanup(func() {
+		hostProxyDetect = real
+		hostProxyCacheReset()
+	})
+	hostProxyCacheReset()
+
+	srv := New(baseTestConfig(newHarness(t), &setupStatusCostStore{}))
+	do(t, srv, http.MethodGet, "/api/v1/setup/status", adminToken, "")
+	waitHostProxyMemo(t)
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("warm-up left calls = %d, want 1", n)
+	}
+
+	for i := 0; i < 5; i++ {
+		do(t, srv, http.MethodGet, "/api/v1/setup/status?recheck=1", adminToken, "")
+	}
+	if n := calls.Load(); n != 2 {
+		t.Errorf("5 Re-check presses inside one %s deadline started %d sweeps, want 1 (calls = %d)",
+			hostProxySweepDeadline, n-1, n)
+	}
+}

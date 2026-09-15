@@ -65,6 +65,16 @@ const hostProxyTTL = 30 * time.Second
 // test's sweep goroutine was still waiting on it is a real data race.
 var hostProxySweepDeadline = 10 * time.Second
 
+// hostProxyRecheckWait is how long the FORCED Re-check door waits for the sweep
+// it started before answering with last-known. Only the forced path ever waits:
+// the unforced poll must never block on a subprocess (that is the whole point of
+// the memo), but a button whose one job is "look at the host again" and which
+// answers from the memo it just invalidated is always one press behind — and
+// stamps "checked just now" over the old value (U2-02). Two seconds covers the
+// env/shell/git/file tiers and a healthy OS tier; a wedged interop blows through
+// it and gets the same last-known answer a poll gets.
+const hostProxyRecheckWait = 2 * time.Second
+
 // setHostProxySweepDeadline swaps the deadline under the memo's own lock and
 // returns the previous value. Test-only seam; the production value never moves.
 func setHostProxySweepDeadline(d time.Duration) time.Duration {
@@ -94,7 +104,17 @@ var (
 	// a wedged host abandons every poll, and a journal full of the same sentence
 	// is how the sentence stops being read.
 	hostProxySweepWarned bool
-	hostProxyDetect      = setup.DetectHostProxy
+	// hostProxySettled is closed when the CURRENT sweep stops being in flight —
+	// answered, abandoned or panicked. Only the forced Re-check door waits on it
+	// (bounded), so a sweep nobody is waiting for costs nothing.
+	hostProxySettled chan struct{}
+	// hostProxyForcedAt is when Re-check last FORCED a re-detect. One forced
+	// re-detect per hostProxySweepDeadline is the aggregate bound single-flight
+	// deliberately yields (S2-07): the wedged sweep Re-check exists for is
+	// unstuck by one, and N presses inside one deadline otherwise started N
+	// overlapping sweeps with up to two host subprocesses each.
+	hostProxyForcedAt time.Time
+	hostProxyDetect   = setup.DetectHostProxy
 )
 
 // cachedHostProxy returns the last-known host-proxy sweep and NEVER runs a
@@ -134,6 +154,9 @@ func startHostProxySweepLocked() {
 	hostProxySeq++
 	detect, seq, deadline := hostProxyDetect, hostProxySeq, hostProxySweepDeadline
 
+	settled := make(chan struct{})
+	hostProxySettled = settled
+
 	done := make(chan setup.HostProxyDetection, 1) // buffered: an abandoned sweep must not block on the send
 	go func() {
 		// Contain a panic in the detached sweep so it cannot crash the daemon —
@@ -153,6 +176,10 @@ func startHostProxySweepLocked() {
 	}()
 
 	go func() {
+		// Closed on EVERY exit — stored, deadline, or a detector that panicked
+		// and left this waiter to time out — so a forced Re-check waiting on it
+		// is released by the sweep ending, whichever way it ends.
+		defer close(settled)
 		timer := time.NewTimer(deadline)
 		defer timer.Stop()
 		select {
@@ -220,6 +247,39 @@ func hostProxyForceRedetect() {
 	hostProxyAt = time.Time{}
 }
 
+// hostProxyRecheck is the whole Re-check door: force a re-detect (at most one
+// per hostProxySweepDeadline — S2-07), start the sweep, and wait a BOUNDED
+// moment for it so the answer this press returns is the one it asked for
+// (U2-02). A press inside the bound starts nothing, but still waits on the sweep
+// already in flight — which is what the operator is waiting for anyway.
+func hostProxyRecheck() setup.HostProxyDetection {
+	hostProxyMu.Lock()
+	if hostProxyForcedAt.IsZero() || time.Since(hostProxyForcedAt) >= hostProxySweepDeadline {
+		hostProxyForcedAt = time.Now()
+		hostProxySeq++
+		hostProxySweeping = false
+		hostProxyAt = time.Time{}
+	}
+	hostProxyMu.Unlock()
+
+	val := cachedHostProxy() // starts the sweep, or resolves a seeded install in line
+	hostProxyMu.Lock()
+	settled, sweeping := hostProxySettled, hostProxySweeping
+	hostProxyMu.Unlock()
+	if !sweeping || settled == nil {
+		return val
+	}
+	timer := time.NewTimer(hostProxyRecheckWait)
+	defer timer.Stop()
+	select {
+	case <-settled:
+	case <-timer.C: // a wedged host answers with last-known, exactly like a poll
+	}
+	hostProxyMu.Lock()
+	defer hostProxyMu.Unlock()
+	return hostProxyVal
+}
+
 // hostProxyCacheReset forgets the memo ENTIRELY — value included — so the next
 // caller re-detects from nothing. The test door; the Re-check door above
 // deliberately keeps the last-known answer.
@@ -234,5 +294,7 @@ func hostProxyCacheReset() {
 	hostProxySweeping = false
 	hostProxySweepWarned = false
 	hostProxyAt = time.Time{}
+	hostProxyForcedAt = time.Time{}
+	hostProxySettled = nil
 	hostProxyVal = setup.HostProxyDetection{}
 }

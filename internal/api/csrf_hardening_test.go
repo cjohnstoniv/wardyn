@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -233,4 +235,34 @@ func TestAttachWS_CrossOriginRefusalIsAudited(t *testing.T) {
 		return
 	}
 	t.Fatalf("the attach socket refused a cross-origin upgrade and recorded NOTHING; events = %+v", audit.snapshot())
+}
+
+// TestAttachWS_CrossOriginIsRefusedBeforeTheStoreRead (V1-r2 lens-S2 S2-10).
+//
+// The origin check sat AFTER getRunOr404, the ticket re-check and the run-state
+// checks, so a cross-origin upgrade still cost a store read and could emit
+// authz.denied on its way to being refused for a different reason entirely. It
+// is a decision about the CALLER, not about the run: it belongs beside the other
+// caller gates, above everything that reads state. An unknown run id proves the
+// ordering — 403, not 404.
+func TestAttachWS_CrossOriginIsRefusedBeforeTheStoreRead(t *testing.T) {
+	srv, _, _, audit, _ := holderTestServer(t)
+	srv.cfg.OIDCRedirectURL = csrfRedirectURL
+
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/runs/"+uuid.New().String()+"/attach", nil)
+	r.Host = csrfOIDCHost
+	r.RemoteAddr = "127.0.0.1:54321"
+	r.Header.Set("Origin", "https://evil.example")
+	r.Header.Set("Authorization", "Bearer "+adminToken)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("code = %d, want 403 — a cross-origin upgrade must be refused before the run is read\nbody: %s", w.Code, w.Body.String())
+	}
+	for _, ev := range audit.snapshot() {
+		if ev.Action == "authz.denied" {
+			t.Errorf("a cross-origin upgrade emitted %s before the origin was judged", ev.Action)
+		}
+	}
 }

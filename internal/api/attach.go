@@ -115,6 +115,38 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// SAME-ORIGIN, decided HERE rather than by the library. coder/websocket's
+	// own check authorises r.Host and then consults OriginPatterns — which are
+	// path.Match GLOBS, so the one extra name an ingress deployment needs could
+	// not be expressed as a literal (attachOriginRefused, csrf.go, carries the
+	// IPv6 case that made this wrong in both directions). attachOriginRefused
+	// makes exactly the comparison the console's CSRF guard makes: r.Host or the
+	// host of WARDYN_OIDC_REDIRECT_URL — operator-configured, attacker-
+	// unwritable — and nothing else, with an absent Origin allowed for
+	// non-browser clients exactly as the library allows it. This is the most
+	// dangerous cookie-authenticated capability in the product; it gets ONE
+	// extra name, from config, never a wildcard.
+	//
+	// InsecureSkipVerify on the Accept below says "the caller checked the
+	// origin", which is what this block is; leaving it false would re-refuse the
+	// ingress host this widening exists for.
+	//
+	// DECIDED HERE, beside the other CALLER gates and above every read of state
+	// (S2-10): it judges who is asking, not what they asked for, so running it
+	// after getRunOr404 and the ticket re-check spent a store read on a request
+	// that was never going to be served — and could answer a cross-origin
+	// upgrade with 404/409, or an authz.denied row, instead of the refusal.
+	if s.attachOriginRefused(r) {
+		// AUDITED like the REST guard's two arms (http.go), on the same
+		// auth.failed action, reason and actor — a control that refuses
+		// silently cannot answer either question an operator has at 3am
+		// (csrf.go), and that argument started applying to this socket the
+		// moment the decision moved out of the library and into our code.
+		s.auditAuthFailedAs(r, csrfActor, csrfAuditReason)
+		writeError(w, http.StatusForbidden, csrfRefusedBody)
+		return
+	}
+
 	id, ok := parseIDParam(w, r, "id", "run")
 	if !ok {
 		return
@@ -169,31 +201,6 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 
 	principalType, principal := actorFromRequest(r)
 
-	// SAME-ORIGIN, decided HERE rather than by the library. coder/websocket's
-	// own check authorises r.Host and then consults OriginPatterns — which are
-	// path.Match GLOBS, so the one extra name an ingress deployment needs could
-	// not be expressed as a literal (attachOriginRefused, csrf.go, carries the
-	// IPv6 case that made this wrong in both directions). attachOriginRefused
-	// makes exactly the comparison the console's CSRF guard makes: r.Host or the
-	// host of WARDYN_OIDC_REDIRECT_URL — operator-configured, attacker-
-	// unwritable — and nothing else, with an absent Origin allowed for
-	// non-browser clients exactly as the library allows it. This is the most
-	// dangerous cookie-authenticated capability in the product; it gets ONE
-	// extra name, from config, never a wildcard.
-	//
-	// InsecureSkipVerify says "the caller checked the origin", which is now
-	// true and is checked one line up; leaving it false would re-refuse the
-	// ingress host this widening exists for.
-	if s.attachOriginRefused(r) {
-		// AUDITED like the REST guard's two arms (http.go), on the same
-		// auth.failed action, reason and actor — a control that refuses
-		// silently cannot answer either question an operator has at 3am
-		// (csrf.go), and that argument started applying to this socket the
-		// moment the decision moved out of the library and into our code.
-		s.auditAuthFailedAs(r, csrfActor, csrfAuditReason)
-		writeError(w, http.StatusForbidden, csrfRefusedBody)
-		return
-	}
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
 	})
