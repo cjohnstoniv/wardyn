@@ -12,7 +12,7 @@ import { dirname, resolve } from "node:path";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { SetupHarnessTool, SetupModelAccess } from "../../../lib/types";
-import { AGENTS, PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { AGENTS, AGENTS_DRAFT, PROVIDERS } from "../../../lib/workspace-providers-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { HttpError } from "../../../lib/api/core";
 import { AgentsTab, agentCapabilityFor } from "./agents-tab";
@@ -493,6 +493,233 @@ describe("AgentsTab — the ETag / 412 / 400 contract", () => {
     expect(screen.getByText(refusal)).toBeInTheDocument();
     // Still saveable: a refused body is a fixable one, unlike a 412.
     expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeInTheDocument();
+  });
+});
+
+// V1 r2 HIGH (Appendix A finding 4, staleness root cause): modelAccess comes
+// from the PARENT's /setup/status, never re-read after a successful Save, so
+// right after declaring per_user the admin's own door can go on showing the
+// stale pre-save state until an unrelated navigation happens to re-fetch it.
+describe("AgentsTab — a successful Save re-fires the parent's roster/status read", () => {
+  it("calls onRetryRoster after a successful save, not just on the roster-unknown Retry", async () => {
+    putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"r2"' });
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    await screen.findByTestId("agent-row-claude-code");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    await waitFor(() => expect(putAgentProvidersMock).toHaveBeenCalled());
+    expect(retryRosterMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT call onRetryRoster when the save is refused (400)", async () => {
+    putAgentProvidersMock.mockRejectedValue(new HttpError(400, "refused"));
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    await screen.findByTestId("agent-row-claude-code");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    await screen.findByText(PROVIDERS.SAVE_REFUSED_TITLE);
+    expect(retryRosterMock).not.toHaveBeenCalled();
+  });
+});
+
+// Appendix A finding 4: the per_user sign-in affordance moves to the TOP of
+// the expanded claude-code row, in a tinted role="status" panel, when this
+// row is credential_source per_user AND the state is one of the three
+// actionable ones — the legacy Settings door stops being the one an admin
+// reaches for.
+describe("AgentsTab — the per_user sign-in banner", () => {
+  const PER_USER_ROW = { id: "claude-code", mechanism: "bedrock_sso", credential_source: "per_user" };
+
+  it("renders the prominent banner above the mechanism field for an actionable state", async () => {
+    getAgentProvidersMock.mockResolvedValue({ providers: { agents: [PER_USER_ROW] }, etag: '"b1"' });
+    const modelAccess: SetupModelAccess = { state: "not_configured", action: "Sign in to AWS" };
+    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} />);
+    const row = await screen.findByTestId("agent-row-claude-code");
+    const banner = within(row).getByRole("status");
+    expect(within(banner).getByText(AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE)).toBeInTheDocument();
+    expect(within(banner).getByText(AGENTS_DRAFT.PER_USER_SIGN_IN_BODY)).toBeInTheDocument();
+    expect(within(banner).getByText(AGENTS.ADMIN_OWN_CHIP_NOTE)).toBeInTheDocument();
+    expect(within(banner).getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeInTheDocument();
+    // It renders BEFORE the mechanism radiogroup — prominence, not an addition.
+    const mechanismField = within(row).getByRole("radiogroup", { name: AGENTS.FIELD_MECHANISM });
+    expect(banner.compareDocumentPosition(mechanismField) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("a shared row (negative control) never renders the banner", async () => {
+    getAgentProvidersMock.mockResolvedValue({
+      providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] },
+      etag: '"b2"',
+    });
+    const modelAccess: SetupModelAccess = { state: "not_configured", action: "Sign in to AWS" };
+    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} />);
+    const row = await screen.findByTestId("agent-row-claude-code");
+    expect(within(row).queryByText(AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE)).not.toBeInTheDocument();
+    expect(within(row).queryByRole("status")).not.toBeInTheDocument();
+    // The chip still renders, just in its ordinary spot at the bottom.
+    expect(within(row).getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeInTheDocument();
+  });
+
+  it("a per_user row that is already live never renders the banner", async () => {
+    getAgentProvidersMock.mockResolvedValue({ providers: { agents: [PER_USER_ROW] }, etag: '"b3"' });
+    const modelAccess: SetupModelAccess = { state: "live" };
+    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} />);
+    const row = await screen.findByTestId("agent-row-claude-code");
+    expect(within(row).queryByText(AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE)).not.toBeInTheDocument();
+  });
+});
+
+// Appendix A finding 5, agents-tab half: not_applicable is the admin-token
+// principal's own answer and carries no chip label — the whole claude-code
+// block (chip + ADMIN_OWN_CHIP_NOTE + sign-in CTA) must not render at all,
+// never an empty chip with the note still underneath it.
+describe("AgentsTab — not_applicable renders no model-access block at all", () => {
+  it("no chip, no ADMIN_OWN_CHIP_NOTE, no sign-in CTA", async () => {
+    getAgentProvidersMock.mockResolvedValue({
+      providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] },
+      etag: '"na1"',
+    });
+    const modelAccess: SetupModelAccess = { state: "not_applicable" };
+    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} />);
+    const row = await screen.findByTestId("agent-row-claude-code");
+    expect(within(row).queryByText(AGENTS.ADMIN_OWN_CHIP_NOTE)).not.toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
+    expect(within(row).queryByRole("status")).not.toBeInTheDocument();
+  });
+});
+
+// Finding 4's other half: the roster pin. Two labelled Inputs mirroring
+// sso_start_url — shown only under bedrock_sso + per_user, cleared exactly
+// when the start URL is (normalizeAgentRow, and the same onChange paths).
+describe("AgentsTab — the roster pin (sso_account_id / sso_role_name)", () => {
+  it("renders both pin inputs, reachable by label, only on a bedrock_sso per_user row", async () => {
+    getAgentProvidersMock.mockResolvedValue({
+      providers: {
+        agents: [
+          {
+            id: "claude-code",
+            mechanism: "bedrock_sso",
+            credential_source: "per_user",
+            sso_start_url: "https://acme.awsapps.com/start",
+            sso_account_id: "111111111111",
+            sso_role_name: "BedrockRunner",
+          },
+        ],
+      },
+      etag: '"pin1"',
+    });
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    await screen.findByTestId("agent-row-claude-code");
+    const accountInput = await screen.findByLabelText(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID);
+    const roleInput = screen.getByLabelText(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME);
+    expect(accountInput).toHaveValue("111111111111");
+    expect(roleInput).toHaveValue("BedrockRunner");
+  });
+
+  it("hides both pin inputs on a shared row", async () => {
+    getAgentProvidersMock.mockResolvedValue({
+      providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] },
+      etag: '"pin2"',
+    });
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    await screen.findByTestId("agent-row-claude-code");
+    expect(screen.queryByLabelText(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID)).toBeNull();
+    expect(screen.queryByLabelText(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME)).toBeNull();
+  });
+
+  it("saves typed pin values on the row", async () => {
+    getAgentProvidersMock.mockResolvedValue({
+      providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso", credential_source: "per_user" }] },
+      etag: '"pin3"',
+    });
+    putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"pin4"' });
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    await screen.findByTestId("agent-row-claude-code");
+    await userEvent.type(screen.getByLabelText(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID), "222222222222");
+    await userEvent.type(screen.getByLabelText(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME), "DevPower");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    const [body] = putAgentProvidersMock.mock.calls[0];
+    const claude = body.agents.find((a: { id: string }) => a.id === "claude-code");
+    expect(claude.sso_account_id).toBe("222222222222");
+    expect(claude.sso_role_name).toBe("DevPower");
+  });
+
+  it("switching the mechanism away from bedrock_sso clears a stored pin too", async () => {
+    getAgentProvidersMock.mockResolvedValue({
+      providers: {
+        agents: [
+          {
+            id: "claude-code",
+            mechanism: "bedrock_sso",
+            credential_source: "per_user",
+            sso_start_url: "https://acme.awsapps.com/start",
+            sso_account_id: "111111111111",
+            sso_role_name: "BedrockRunner",
+          },
+        ],
+      },
+      etag: '"pin5"',
+    });
+    putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"pin6"' });
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    const row = await screen.findByTestId("agent-row-claude-code");
+    await userEvent.click(within(row).getByRole("radio", { name: /Claude subscription/ }));
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    const [body] = putAgentProvidersMock.mock.calls[0];
+    const saved = body.agents.find((a: { id: string }) => a.id === "claude-code");
+    expect(saved.sso_account_id).toBeUndefined();
+    expect(saved.sso_role_name).toBeUndefined();
+  });
+
+  it("switching credential source back to Shared clears a stored pin too", async () => {
+    getAgentProvidersMock.mockResolvedValue({
+      providers: {
+        agents: [
+          {
+            id: "claude-code",
+            mechanism: "bedrock_sso",
+            credential_source: "per_user",
+            sso_start_url: "https://acme.awsapps.com/start",
+            sso_account_id: "111111111111",
+            sso_role_name: "BedrockRunner",
+          },
+        ],
+      },
+      etag: '"pin7"',
+    });
+    putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"pin8"' });
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    const row = await screen.findByTestId("agent-row-claude-code");
+    await userEvent.click(within(row).getByRole("radio", { name: AGENTS.SOURCE_SHARED }));
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    const [body] = putAgentProvidersMock.mock.calls[0];
+    const saved = body.agents.find((a: { id: string }) => a.id === "claude-code");
+    expect(saved.sso_account_id).toBeUndefined();
+    expect(saved.sso_role_name).toBeUndefined();
+  });
+
+  it("a load-time normalise (per_user paired with a non-bedrock_sso mechanism) drops the pin too", async () => {
+    getAgentProvidersMock.mockResolvedValue({
+      providers: {
+        agents: [
+          {
+            id: "claude-code",
+            mechanism: "anthropic_api_key",
+            credential_source: "per_user",
+            sso_start_url: "https://acme.awsapps.com/start",
+            sso_account_id: "111111111111",
+            sso_role_name: "BedrockRunner",
+          },
+        ],
+      },
+      etag: '"pin9"',
+    });
+    putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"pin10"' });
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    await screen.findByTestId("agent-row-claude-code");
+    expect(screen.queryByLabelText(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    const [body] = putAgentProvidersMock.mock.calls[0];
+    const saved = body.agents.find((a: { id: string }) => a.id === "claude-code");
+    expect(saved.sso_account_id).toBeUndefined();
+    expect(saved.sso_role_name).toBeUndefined();
   });
 });
 
