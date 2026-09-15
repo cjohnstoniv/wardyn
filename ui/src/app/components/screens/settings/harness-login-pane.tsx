@@ -24,10 +24,22 @@ import * as React from "react";
 import { Loader2, ShieldCheck, TriangleAlert, KeyRound, Square, ExternalLink, CornerDownLeft } from "lucide-react";
 import { harnessAuth as harnessAuthApi } from "../../../lib/api/harness-auth";
 import { runs as runsApi } from "../../../lib/api/runs";
+import { setup as setupApi } from "../../../lib/api/setup";
+import type { SetupStatus } from "../../../lib/types";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { AttachTerminal, type AttachTerminalHandle } from "../../attach-terminal";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
+
+// DRAFT (M2 canon pending) — S-13 (blind security review, lens-S.md): the PTY
+// success marker is sandbox-forgeable by construction (a replaced/malicious
+// login image can print it without ever completing a real capture), so the
+// pane no longer trusts the marker alone. On doneMarker it re-fetches
+// /setup/status and only claims a capture when the server independently
+// agrees (serverConfirmsCapture below) — the server is the one copy of the
+// truth the sandbox cannot write. This is the sentence shown when the two
+// disagree.
+const CAPTURE_NOT_CORROBORATED = "The sandbox reported a capture the server does not have — sign in again.";
 
 // "intro" is the consent gate: nothing launches until the operator has read
 // what is about to happen and clicked Start. The pane used to fire on mount —
@@ -241,6 +253,23 @@ function extractDeviceVerificationUrl(s: string): string | null {
   return best;
 }
 
+// serverConfirmsCapture corroborates a doneMarker sighting against the
+// server's own /setup/status (S-13): the marker is a PTY string a forged
+// sandbox binary can print unconditionally, so it is never sufficient on its
+// own. aws is confirmed either by its harness row (the upload the helper
+// makes on success) or by this caller's own model_access already reading
+// live/expiring (a per_user row's sign-in can land there first); anthropic
+// has no per-caller model_access shape here, so only its harness row counts.
+// Exported for tests.
+export function serverConfirmsCapture(status: SetupStatus, provider: string): boolean {
+  if (status.harness?.some((h) => h.provider === provider && h.captured)) return true;
+  if (provider === "aws") {
+    const state = status.model_access?.state;
+    return state === "live" || state === "expiring";
+  }
+  return false;
+}
+
 // The numbered "what happens next" — the consent gate's content. Each flow
 // states its own steps and what is required of the operator.
 function ExpectList({ items }: { items: React.ReactNode[] }) {
@@ -341,6 +370,32 @@ export function HarnessLoginPane({
     [provider, token, runId, onDone],
   );
 
+  // confirmCapture corroborates a helper doneMarker sighting against the
+  // server (S-13) before the pane claims a capture. `savedRef` is already
+  // latched by the caller so a repeat marker sighting can't re-enter this
+  // while the fetch is in flight. A status the server can't answer (network
+  // error, 401) is treated the same as a disagreement — fail closed, never
+  // assume the marker was honest because the check itself failed.
+  const confirmCapture = React.useCallback(async () => {
+    let confirmed = false;
+    try {
+      confirmed = serverConfirmsCapture(await setupApi.getSetupStatus(), provider);
+    } catch {
+      confirmed = false;
+    }
+    if (confirmed) {
+      setAutoCaptured(true);
+      setPhase("done");
+      if (runId) void runsApi.killRun(runId).catch(() => {});
+      onDone();
+    } else {
+      failedRef.current = true;
+      setError(CAPTURE_NOT_CORROBORATED);
+      setPhase("error");
+      if (runId) void runsApi.killRun(runId).catch(() => {});
+    }
+  }, [provider, runId, onDone]);
+
   // Watch the login terminal: open the OAuth URL in a new tab, then capture and
   // save the printed token — both automatically.
   const handleOutput = React.useCallback(
@@ -381,10 +436,7 @@ export function HarnessLoginPane({
         }
         if (flow.doneMarker && outBufRef.current.includes(flow.doneMarker)) {
           savedRef.current = true;
-          setAutoCaptured(true);
-          setPhase("done");
-          if (runId) void runsApi.killRun(runId).catch(() => {});
-          onDone();
+          void confirmCapture();
         }
         return;
       }
@@ -395,7 +447,7 @@ export function HarnessLoginPane({
         void saveToken(tok);
       }
     },
-    [saveToken, flow, runId, onDone],
+    [saveToken, confirmCapture, flow, runId, onDone],
   );
 
   // Bridge the pasted login code into the terminal's stdin, so the operator uses

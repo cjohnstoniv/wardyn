@@ -9,8 +9,17 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
-import { extractSetupToken, extractAuthUrl, extractFailSentence, isLikelyStartUrl, HarnessLoginPane, loginFlow } from "./harness-login-pane";
+import {
+  extractSetupToken,
+  extractAuthUrl,
+  extractFailSentence,
+  isLikelyStartUrl,
+  serverConfirmsCapture,
+  HarnessLoginPane,
+  loginFlow,
+} from "./harness-login-pane";
 import { runs as runsApiMocked } from "../../../lib/api/runs";
+import type { SetupStatus } from "../../../lib/types";
 
 // A realistic setup-token body: sk-ant-oat<2 digits>-<long url-safe blob>.
 const TOKEN = "sk-ant-oat01-" + "A".repeat(60) + "-_" + "b3".repeat(10);
@@ -156,12 +165,15 @@ vi.mock("../../../lib/api/harness-auth", () => ({
   },
 }));
 vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: vi.fn() } }));
+const getSetupStatusMock = vi.fn();
+vi.mock("../../../lib/api/setup", () => ({ setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) } }));
 
 describe("HarnessLoginPane — the consent gate", () => {
   beforeEach(() => {
     harnessLoginMock.mockReset().mockResolvedValue("run-123");
     lastAttachOutput = undefined;
     vi.mocked(runsApiMocked.killRun).mockReset().mockResolvedValue(undefined);
+    getSetupStatusMock.mockReset();
   });
 
   it("launches NOTHING on mount: the intro says what to expect and what's required", () => {
@@ -276,5 +288,128 @@ describe("HarnessLoginPane — the consent gate", () => {
       await screen.findByRole("alert");
       expect(screen.queryByText(/session captured/i)).not.toBeInTheDocument();
     });
+  });
+
+  // S-13 (blind security review, lens-S.md): the PTY doneMarker is
+  // sandbox-forgeable by construction — a replaced login image can print it
+  // with no real capture behind it. The pane must corroborate against the
+  // server's own /setup/status before it claims a capture or calls onDone.
+  describe("the helper's success marker is corroborated against the server (S-13)", () => {
+    async function attachAwsRun(onDone = vi.fn(), onCancel = vi.fn()) {
+      render(<HarnessLoginPane provider="aws" startURLManaged onDone={onDone} onCancel={onCancel} />);
+      await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+      await screen.findByTestId("fake-terminal");
+      return { onDone, onCancel };
+    }
+
+    // Red: a forged doneMarker with no server-side corroboration must NOT
+    // call onDone — it must land on the error phase with the mismatch
+    // sentence and kill the run, exactly like a real refusal would.
+    it("a forged marker with no server-side capture does not call onDone and shows the mismatch error", async () => {
+      getSetupStatusMock.mockResolvedValue({ harness: [], model_access: undefined } as unknown as SetupStatus);
+      const { onDone } = await attachAwsRun();
+
+      await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
+      await act(async () => {}); // flush the getSetupStatus microtask
+
+      const alertBox = await screen.findByRole("alert");
+      expect(alertBox).toHaveTextContent("The sandbox reported a capture the server does not have — sign in again.");
+      expect(runsApiMocked.killRun).toHaveBeenCalledWith("run-123");
+      expect(onDone).not.toHaveBeenCalled();
+      expect(screen.queryByText(/session captured/i)).not.toBeInTheDocument();
+    });
+
+    // Positive control: the same marker, but the server independently agrees
+    // (the harness row shows captured) — onDone fires and the pane reports done.
+    it("a marker the server corroborates via the harness row calls onDone", async () => {
+      getSetupStatusMock.mockResolvedValue({
+        harness: [{ provider: "aws", captured: true }],
+      } as unknown as SetupStatus);
+      const { onDone } = await attachAwsRun();
+
+      await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
+      await act(async () => {});
+
+      expect(onDone).toHaveBeenCalledTimes(1);
+      expect(runsApiMocked.killRun).toHaveBeenCalledWith("run-123");
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    // The aws flow also corroborates via this caller's own model_access
+    // (a per_user row's sign-in can land there before the harness row updates).
+    it("a marker the server corroborates via model_access.state=live also calls onDone", async () => {
+      getSetupStatusMock.mockResolvedValue({
+        harness: [],
+        model_access: { state: "live" },
+      } as unknown as SetupStatus);
+      const { onDone } = await attachAwsRun();
+
+      await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
+      await act(async () => {});
+
+      expect(onDone).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    // Fail-closed: a getSetupStatus rejection (network error, 401 propagated)
+    // is treated the same as a disagreement — never assume the marker was
+    // honest because the corroboration check itself failed.
+    it("fails closed when the status fetch itself rejects", async () => {
+      getSetupStatusMock.mockRejectedValue(new Error("network error"));
+      const { onDone } = await attachAwsRun();
+
+      await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
+      await act(async () => {});
+
+      const alertBox = await screen.findByRole("alert");
+      expect(alertBox).toHaveTextContent("The sandbox reported a capture the server does not have — sign in again.");
+      expect(onDone).not.toHaveBeenCalled();
+    });
+  });
+});
+
+// S-13: serverConfirmsCapture is the pure predicate the component's
+// confirmCapture wires to getSetupStatus — covered directly so every branch
+// (harness row, model_access state, and the anthropic flow's narrower rule)
+// is pinned without going through a rendered pane.
+describe("serverConfirmsCapture", () => {
+  function status(overrides: Partial<SetupStatus>): SetupStatus {
+    return {
+      ready: true,
+      checks: [],
+      auth: { mode: "local", local_loopback: true },
+      runner: { driver: "docker", confinement_classes: [] },
+      providers: [],
+      secrets: { present: [], github_app: false },
+      age_key: { durable: false },
+      has_runs: false,
+      platform: { os: "linux", wsl: false },
+      ...overrides,
+    };
+  }
+
+  it("aws: confirmed by the harness row alone", () => {
+    expect(serverConfirmsCapture(status({ harness: [{ provider: "aws", captured: true }] }), "aws")).toBe(true);
+  });
+
+  it("aws: confirmed by model_access state live or expiring alone", () => {
+    expect(serverConfirmsCapture(status({ model_access: { state: "live" } }), "aws")).toBe(true);
+    expect(serverConfirmsCapture(status({ model_access: { state: "expiring" } }), "aws")).toBe(true);
+  });
+
+  it("aws: not confirmed when neither the harness row nor model_access agrees", () => {
+    expect(
+      serverConfirmsCapture(status({ harness: [{ provider: "aws", captured: false }], model_access: { state: "expired_signin" } }), "aws"),
+    ).toBe(false);
+    expect(serverConfirmsCapture(status({}), "aws")).toBe(false);
+  });
+
+  it("anthropic: confirmed only by its own harness row — model_access never counts for it", () => {
+    expect(serverConfirmsCapture(status({ harness: [{ provider: "anthropic", captured: true }] }), "anthropic")).toBe(true);
+    expect(serverConfirmsCapture(status({ model_access: { state: "live" } }), "anthropic")).toBe(false);
+  });
+
+  it("a captured row for the OTHER provider does not confirm this one", () => {
+    expect(serverConfirmsCapture(status({ harness: [{ provider: "anthropic", captured: true }] }), "aws")).toBe(false);
   });
 });
