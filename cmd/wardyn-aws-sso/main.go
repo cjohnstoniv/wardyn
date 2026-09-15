@@ -706,6 +706,15 @@ func listAccountRoles(ctx context.Context, client *http.Client, base, accessToke
 // be reached — and telling a person their admin's pin is wrong because AWS had
 // a bad minute sends them to the wrong colleague. A decode failure on a 2xx
 // keeps its status, since the portal did answer.
+// maxPortalResponseBytes caps what a portal answer may cost us. The bodies here
+// are an account list and a role list — a few hundred entries of short JSON at
+// the very outside — so this is a ceiling against a hostile or wedged endpoint
+// streaming forever into json.Decode, not a sizing of the real payload. The
+// server side of the same lane has had maxSSOTokenUploadBytes since F006; this
+// is its in-sandbox twin. A truncated body simply fails to decode, which is
+// already the "portal did answer, but not with what we asked for" path.
+const maxPortalResponseBytes = 512 << 10 // 512 KiB
+
 func ssoPortalGET(ctx context.Context, client *http.Client, rawURL, accessToken string, dst any) (status int, ok bool) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
@@ -720,5 +729,5 @@ func ssoPortalGET(ctx context.Context, client *http.Client, rawURL, accessToken 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return resp.StatusCode, false
 	}
-	return resp.StatusCode, json.NewDecoder(resp.Body).Decode(dst) == nil
+	return resp.StatusCode, json.NewDecoder(io.LimitReader(resp.Body, maxPortalResponseBytes)).Decode(dst) == nil
 }

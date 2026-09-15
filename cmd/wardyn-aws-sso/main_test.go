@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -855,5 +856,36 @@ func TestPinEnvVarParity(t *testing.T) {
 		if m[1] != want.literal {
 			t.Errorf("pin env drift: daemon %s = %q != helper %q", want.constName, m[1], want.literal)
 		}
+	}
+}
+
+// TestSSOPortalGETIsBounded (lens-S S-14). The portal is a remote endpoint this
+// helper reads inside the login sandbox; decoding it unbounded let a hostile or
+// wedged one exhaust the sandbox's memory. The cap is the server side's
+// maxSSOTokenUploadBytes twin: a body past it simply fails to decode, which is
+// already the "the portal answered, but not with what we asked for" path.
+func TestSSOPortalGETIsBounded(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"accountList":[`))
+		// Stream well past the cap; a decoder with no limit reads all of it.
+		chunk := bytes.Repeat([]byte(`{"accountId":"123456789012","accountName":"x"},`), 4096)
+		for written := 0; written < 4*maxPortalResponseBytes; written += len(chunk) {
+			if _, err := w.Write(chunk); err != nil {
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	var dst struct {
+		AccountList []struct{ AccountID string } `json:"accountList"`
+	}
+	status, ok := ssoPortalGET(context.Background(), srv.Client(), srv.URL, "token", &dst)
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (the portal did answer)", status)
+	}
+	if ok {
+		t.Error("an unbounded portal body decoded successfully — the read is not capped")
 	}
 }
