@@ -40,7 +40,7 @@ import { repoLabel, rowHeadline, runAttention, shortId, signalsFor, type RunSign
 // review U-01: cloneFromAudit + CLONE_UNREADABLE moved to wizard-types.ts so
 // this door and the run header's (run-detail.tsx onClone) share ONE refusal
 // path and ONE string, rather than reimplementing the same guard twice.
-import { cloneFromAudit, CLONE_UNREADABLE } from "../new-run/wizard-types";
+import { cloneFromAudit, CLONE_LOAD_FAILED, CLONE_UNREADABLE } from "../new-run/wizard-types";
 
 export function CardGrid({ children }: { children: React.ReactNode }) {
   // auto-fill with a min(100%, floor) track: cards reflow and collapse to ONE
@@ -268,7 +268,7 @@ export function RunActions({
       }
       navigate("/runs/new", { state: { prefill } });
     } catch (err) {
-      toast.error("Could not load this run's details", { description: getErrorMessage(err) });
+      toast.error(CLONE_LOAD_FAILED, { description: getErrorMessage(err) });
     }
   };
   return (

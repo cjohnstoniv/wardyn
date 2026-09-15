@@ -12,6 +12,7 @@ import type { AgentRun, AuditEvent, RunState } from "../../../lib/types";
 import { RunCard } from "./run-card";
 import { approvalSignals, type RunSignals } from "./board-groups";
 import { RUN } from "../../wardyn/copy";
+import { CLONE_LOAD_FAILED } from "../new-run/wizard-types";
 
 // review C-01/C-06/C-07 — cloneRun's own behaviour, not just the menu item's
 // gating. listAudit is stubbed; createRequestFromAudit stays REAL so the
@@ -184,12 +185,17 @@ describe("RunCard — cloneRun behaviour (review C-01/C-06/C-07)", () => {
     expect(opts.state.prefill.state.toolApprovals).toBe("hold");
   });
 
-  it("a rejected fetch toasts and never navigates", async () => {
+  // U2-08 (blind round 2, lens-U2): the refusal sentence is a DRAFT constant
+  // beside CLONE_UNREADABLE, not a literal inline in this component — the two
+  // clone doors' OTHER string was hoisted for exactly that reason (U-01).
+  it("a rejected fetch toasts CLONE_LOAD_FAILED and never navigates", async () => {
     listAuditMock.mockRejectedValue(new Error("network down"));
     renderCard(run({ state: "COMPLETED" }));
     await clickClone();
 
-    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(CLONE_LOAD_FAILED, { description: "network down" }),
+    );
     expect(navigateMock).not.toHaveBeenCalled();
   });
 

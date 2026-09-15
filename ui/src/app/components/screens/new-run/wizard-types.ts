@@ -385,6 +385,14 @@ export function runPrefill(run: ClonableRun, created: RunCreateRequestFacts = {}
 export const CLONE_UNREADABLE =
   "This run's launch settings couldn't be read — its clone would start from defaults, so it was not opened.";
 
+// DRAFT (M2 canon pending) — U2-08 (blind round 2, lens-U2): the OTHER clone
+// refusal, the one where the audit read itself failed rather than came back
+// empty. It lived inline in runs/run-card.tsx, which is both the one new
+// user-facing literal outside a constants block in this delta and the one
+// clone-door string the two doors did not share. Beside CLONE_UNREADABLE for
+// the same reason CLONE_UNREADABLE is here.
+export const CLONE_LOAD_FAILED = "Could not load this run's details";
+
 /**
  * The ONE door both clone affordances open through. `null` when the run's
  * own run.create audit row is missing — an older run, a pruned trail, or a
