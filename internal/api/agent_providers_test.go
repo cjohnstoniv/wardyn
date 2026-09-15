@@ -4,9 +4,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -715,12 +717,26 @@ func pinnedRow(account, role string) types.AgentProvider {
 // silent: the save WARNs, naming both accounts.
 //
 // The check itself stays for the UNPINNED case, where there is no deliberate
-// answer to defer to (TestAgentProviders_UnpinnedRowStillTakesTheModelAccount
-// below has no pin to set, so the rule lives on at capture — bindCaptureToPin).
+// answer to defer to: with no pin there is nothing for the save door to take,
+// so the rule lives on at capture — bindCaptureToPin, pinned by
+// TestUploadSSOToken_AccountIDNotModelARNAccountRejected (ssotoken_binding_test.go).
 func TestAgentProviders_PinOverridesTheModelsAccount(t *testing.T) {
 	const model = "arn:aws:bedrock:us-west-2:111111111111:inference-profile/us.anthropic.claude-sonnet-4-20250514-v1:0"
-	if err := validateAgentProviders(agentBlock(pinnedRow("222222222222", "BedrockRunner")), testAgentImages, model); err != nil {
+	// The WARN is the only thing the save door has left to say, so it is asserted
+	// rather than described (R-05): a refactor that drops it would otherwise stay
+	// green in every gate.
+	var logged bytes.Buffer
+	restore := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	err := validateAgentProviders(agentBlock(pinnedRow("222222222222", "BedrockRunner")), testAgentImages, model)
+	slog.SetDefault(restore)
+	if err != nil {
 		t.Fatalf("an explicit cross-account pin was refused: %v — a resource-shared inference profile has no other way to be configured", err)
+	}
+	for _, want := range []string{"222222222222", "111111111111"} {
+		if !strings.Contains(logged.String(), want) {
+			t.Errorf("the save logged %q, want it to name account %s — the disagreement must be spoken, not silent", logged.String(), want)
+		}
 	}
 	// The agreeing pin saves, unchanged.
 	if err := validateAgentProviders(agentBlock(pinnedRow("111111111111", "BedrockRunner")), testAgentImages, model); err != nil {

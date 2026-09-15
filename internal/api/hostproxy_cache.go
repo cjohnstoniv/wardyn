@@ -146,6 +146,10 @@ func cachedHostProxy() setup.HostProxyDetection {
 // TWO goroutines, not one, and both are load-bearing: the detector may never
 // return (see the package comment's Output()-pipe note), so the waiter that owns
 // the deadline cannot be the same goroutine that calls it.
+//
+// "Nothing on a request path blocks behind it" holds for every POLL; the one
+// exception is the operator-only forced Re-check, which waits a bounded
+// hostProxyRecheckWait for the sweep it started (hostProxyRecheck).
 func startHostProxySweepLocked() {
 	if hostProxySweeping {
 		return
@@ -222,36 +226,20 @@ func abandonHostProxySweep(seq uint64) bool {
 	return true
 }
 
-// hostProxyForceRedetect is the Re-check door (handleSetupStatus's recheck
-// param): it invalidates the memo's FRESHNESS without forgetting its answer, so
-// the next read re-detects — starting a sweep, or, on a seeded install,
-// resolving in line — while still reporting the last-known value.
+// hostProxyRecheck is the whole Re-check door (handleSetupStatus's recheck
+// param): force a re-detect (at most one per hostProxySweepDeadline — S2-07),
+// start the sweep, and wait a BOUNDED moment for it so the answer this press
+// returns is the one it asked for (U2-02). A press inside the bound starts
+// nothing, but still waits on the sweep already in flight — which is what the
+// operator is waiting for anyway.
 //
-// Keeping the value is the difference between a re-check and a downgrade: a full
-// forget would answer the very press that asked with an empty detection, and the
-// operator would have to press again to see what they already had on screen.
-//
-// SINGLE-FLIGHT IS DELIBERATELY YIELDED HERE, so do not "fix" it back: clearing
-// hostProxySweeping without stopping the sweep it displaces means N presses
-// inside one deadline start N overlapping sweeps. That is the point — the case
-// Re-check exists for is a sweep that is WEDGED, and keeping the flag set would
-// make the button a no-op exactly then. The cost is bounded and operator-only:
-// isOperator gates the door, the button is disabled while a check is in flight,
-// each probe is capped at probeTimeout + probeWaitDelay and each waiter at
-// hostProxySweepDeadline.
-func hostProxyForceRedetect() {
-	hostProxyMu.Lock()
-	defer hostProxyMu.Unlock()
-	hostProxySeq++
-	hostProxySweeping = false
-	hostProxyAt = time.Time{}
-}
-
-// hostProxyRecheck is the whole Re-check door: force a re-detect (at most one
-// per hostProxySweepDeadline — S2-07), start the sweep, and wait a BOUNDED
-// moment for it so the answer this press returns is the one it asked for
-// (U2-02). A press inside the bound starts nothing, but still waits on the sweep
-// already in flight — which is what the operator is waiting for anyway.
+// It invalidates the memo's FRESHNESS without forgetting its answer, and that
+// is the difference between a re-check and a downgrade: a full forget would
+// answer the very press that asked with an empty detection, and the operator
+// would have to press again to see what they already had on screen. (The
+// aggregate bound REPLACED the old unbounded force, which yielded single-flight
+// outright so that N presses inside one deadline started N overlapping sweeps —
+// the wedged sweep that motivated it is still unstuck, once per deadline.)
 func hostProxyRecheck() setup.HostProxyDetection {
 	hostProxyMu.Lock()
 	if hostProxyForcedAt.IsZero() || time.Since(hostProxyForcedAt) >= hostProxySweepDeadline {

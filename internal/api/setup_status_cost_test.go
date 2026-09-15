@@ -487,7 +487,7 @@ func TestSetupStatus_RecheckStillAnswersWhenTheSweepIsSlow(t *testing.T) {
 
 // TestSetupStatus_RecheckIsBoundedToOnePerSweepDeadline (V1-r2 lens-S2 S2-07).
 //
-// hostProxyForceRedetect yields single-flight on purpose — the case Re-check
+// The forced re-detect yields single-flight on purpose — the case Re-check
 // exists for is a WEDGED sweep — but nothing bounded it in aggregate, so N
 // presses inside one deadline started N overlapping sweeps, each with up to two
 // host subprocesses. One forced re-detect per hostProxySweepDeadline is enough

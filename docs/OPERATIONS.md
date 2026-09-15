@@ -2851,8 +2851,9 @@ role picked for whoever signs in). A new entitlement cannot move a pin.
 The pin is enforced at three doors, and each one fails CLOSED:
 
 - **Roster save** — a `sso_account_id` that is not the account your configured
-  `WARDYN_BEDROCK_MODEL` ARN lives in SAVES, and the daemon warns once in its
-  journal naming both accounts: an explicit pin is your deliberate answer to
+  `WARDYN_BEDROCK_MODEL` ARN lives in SAVES; the console's `bedrock_provider`
+  row turns to a warning naming both accounts, and the daemon logs one line on
+  every save that disagrees: an explicit pin is your deliberate answer to
   "which account signs in", and a resource-shared application inference profile
   legitimately lives in another account. (A bare cross-region profile id such as
   `us.anthropic.claude-…` names no account, so there is nothing to warn about.)
@@ -2871,7 +2872,8 @@ The pin is enforced at three doors, and each one fails CLOSED:
   merely move the IAM 403 back to run time.
 
 **Changing the model's account later does not invalidate an existing pin.** Since
-0.7.3 the disagreement is a journal WARN rather than a refusal, so re-pointing
+0.7.3 the disagreement is a warning — the console's Bedrock row, plus a line in
+the journal on every save that disagrees — rather than a refusal, so re-pointing
 `WARDYN_BEDROCK_MODEL` at an ARN in a different account leaves every later roster
 edit working — but a run only succeeds if that model is genuinely shared with the
 pinned account, so read the warning rather than living with it.

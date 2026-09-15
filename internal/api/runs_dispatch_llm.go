@@ -652,8 +652,15 @@ type dispatchLLMPlan struct {
 // authorSubscriptionInjection reslices it.
 func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p dispatchParams,
 	policy *types.RunPolicySpec, sandboxEnv map[string]string, injections []runner.InjectionGrant,
-	proxyURL string, artifactPlan artifactRedirectPlan, artifactInject bool, siteCfg types.SiteConfig,
+	proxyURL string, artifactPlan artifactRedirectPlan, artifactInject bool, siteCfg types.SiteConfig, siteCfgOK bool,
 ) (dispatchLLMPlan, bool) {
+	// WHOSE credential, decided from a roster we could actually READ. A failed
+	// read yields a zero siteCfg — perUser=false, owner="" — which is the
+	// OPERATOR namespace, so a store blip credentialed a per_user member's run
+	// with the deployment-wide session (R-02).
+	if !s.enforceReadableRosterForCredential(ctx, run, p, policy, siteCfgOK) {
+		return dispatchLLMPlan{}, false
+	}
 	// WHOSE model credential this run may use, from the roster this phase was
 	// already handed. runIdentitySubject(run.CreatedBy) is the SUBJECT the run's
 	// identity was minted with — the same string every other credential-bearing

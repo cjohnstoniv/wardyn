@@ -587,10 +587,13 @@ func (s *Server) resolveRunLLMAccess(ctx context.Context, req createRunRequest, 
 	// create-time mechanism refusal uses (resolveRunLLMLanes), so the advisory
 	// below and that refusal can never disagree about what would credential this
 	// run.
-	// A READ door: ok is ignored on purpose. An unreadable roster resolves to the
-	// legacy operator namespace here exactly as it always has — refusing to
-	// dispatch on a store blip would be a bigger outage than serving the shared
-	// credential, and nothing is written. The WRITE/DELETE doors take ok.
+	// THE CREATE-PATH ADVISORY, not a credential door: this scope feeds
+	// resolveRunLLMAccess's reply Note and the preflight checklist row — what a
+	// run WOULD dispatch on. ok is ignored on purpose: an unreadable roster
+	// degrades the ADVICE to the legacy operator answer exactly as it always
+	// has, and nothing is written, served or deleted on it. The doors that
+	// decide where a credential is written, deleted or SERVED take ok
+	// (harnesscred.go, ssotoken.go, enforceReadableRosterForCredential).
 	ssoScope, _ := s.awsSSOScopeForAgent(ctx, req.Agent, subject)
 	lanes := s.resolveRunLLMLanes(ctx, req, &llmSpec, bedrockRef, ssoScope)
 	var llmAccess *composeLLMAccess

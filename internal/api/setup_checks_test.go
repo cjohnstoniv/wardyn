@@ -504,7 +504,7 @@ func bedrockRowVia(t *testing.T, scope awsSSOScope) SetupCheck {
 		Secrets: &memSecrets{m: map[string][]byte{}},
 	})
 	bedrock := srv.setupBedrock(context.Background(), map[string]bool{}, scope)
-	chk, ok := bedrockProviderCheck(bedrock, false)
+	chk, ok := bedrockProviderCheck(bedrock, types.SiteConfig{}, true)
 	if !ok {
 		t.Fatal("a region+model-configured Bedrock row must always surface a check")
 	}

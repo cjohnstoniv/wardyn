@@ -82,7 +82,7 @@ func TestBedrockProviderCheck_UnenforcedPinWarns(t *testing.T) {
 			bedrock := base
 			bedrock.SSOPresent, bedrock.Ready = ready, ready
 
-			chk, ok := bedrockProviderCheck(bedrock, true)
+			chk, ok := bedrockProviderCheck(bedrock, perUserSSORow(""), true)
 			if !ok {
 				t.Fatal("a region+model-configured Bedrock row must always surface a check")
 			}
@@ -101,7 +101,7 @@ func TestBedrockProviderCheck_UnenforcedPinWarns(t *testing.T) {
 			// APPENDED, not substituted: the row this deployment was already
 			// showing is still the only place the console names the live
 			// region/model (ready) or what is still missing (not ready).
-			plain, _ := bedrockProviderCheck(bedrock, false)
+			plain, _ := bedrockProviderCheck(bedrock, types.SiteConfig{}, true)
 			if !strings.HasPrefix(chk.Detail, plain.Detail) {
 				t.Errorf("detail = %q, want it to keep %q and append the residual", chk.Detail, plain.Detail)
 			}
@@ -113,5 +113,60 @@ func TestBedrockProviderCheck_UnenforcedPinWarns(t *testing.T) {
 				t.Errorf("a pinned deployment's row = %+v, want status %q", plain, want)
 			}
 		})
+	}
+}
+
+// TestBedrockProviderCheck_PinDisagreeingWithTheModelWarns (V1-r2 fix-s2 review
+// R-04).
+//
+// S2-09 made a pin that disagrees with the configured model's account LEGAL —
+// it is the admin's deliberate answer, and a resource-shared inference profile
+// legitimately lives elsewhere. What it must not be is INVISIBLE: with the save
+// door's refusal gone, the only remaining signal was a line in the daemon
+// journal, so an admin who pinned the wrong account saw a 200, a green row, and
+// found out at run time as an IAM 403 — the reporting operator's own complaint,
+// one level up.
+func TestBedrockProviderCheck_PinDisagreeingWithTheModelWarns(t *testing.T) {
+	const arnModel = "arn:aws:bedrock:us-east-1:222222222222:inference-profile/us.anthropic.claude-v1:0"
+	srv := New(Config{
+		BedrockRegion: "us-east-1", BedrockModel: arnModel,
+		Secrets: &memSecrets{m: map[string][]byte{}},
+	})
+	bedrock := srv.setupBedrock(context.Background(), map[string]bool{}, awsSSOScope{})
+	bedrock.SSOPresent, bedrock.Ready = true, true
+
+	// The disagreement the save door now accepts.
+	pin, modelAccount := bedrockPinDisagreement(perUserSSORow("111111111111"), arnModel)
+	if pin != "111111111111" || modelAccount != "222222222222" {
+		t.Fatalf("bedrockPinDisagreement = %q/%q, want 111111111111/222222222222", pin, modelAccount)
+	}
+	chk, ok := bedrockProviderCheck(bedrock, perUserSSORow("111111111111"), true)
+	if !ok {
+		t.Fatal("a region+model-configured Bedrock row must always surface a check")
+	}
+	if chk.Status != "warn" {
+		t.Errorf("status = %q, want warn — the pinned account is not the model's", chk.Status)
+	}
+	for _, want := range []string{"111111111111", "222222222222"} {
+		if !strings.Contains(chk.Detail, want) {
+			t.Errorf("detail = %q, want it to name account %s", chk.Detail, want)
+		}
+	}
+	if !strings.Contains(chk.Fix, "sso_account_id") || !strings.Contains(chk.Fix, "WARDYN_BEDROCK_MODEL") {
+		t.Errorf("fix = %q, want both remedies named", chk.Fix)
+	}
+	// APPENDED, never substituted — the row still names the live region/model.
+	plain, _ := bedrockProviderCheck(bedrock, types.SiteConfig{}, true)
+	if !strings.HasPrefix(chk.Detail, plain.Detail) || plain.Status != "ok" {
+		t.Errorf("agreeing deployment row = %+v; disagreeing detail = %q", plain, chk.Detail)
+	}
+
+	// The AGREEING pin says nothing at all.
+	if a, b := bedrockPinDisagreement(perUserSSORow("222222222222"), arnModel); a != "" || b != "" {
+		t.Errorf("an agreeing pin reported a disagreement (%q/%q)", a, b)
+	}
+	// Neither does a bare model id, which names no account to disagree with.
+	if a, b := bedrockPinDisagreement(perUserSSORow("111111111111"), "us.anthropic.claude-sonnet-4-5-20250929-v1:0"); a != "" || b != "" {
+		t.Errorf("a bare model id reported a disagreement (%q/%q)", a, b)
 	}
 }

@@ -400,8 +400,8 @@ test.describe("agents — the roster pin (sso_account_id / sso_role_name)", () =
   // S2-09: a pin that disagrees with the model ARN's account is the ADMIN'S
   // DELIBERATE ANSWER — a resource-shared application inference profile
   // legitimately lives in another account, and refusing left that deployment
-  // with no configuration that worked. It saves; the daemon warns once in its
-  // journal (one line per disagreeing save) and the bedrock_provider setup check raises a warn row naming both accounts.
+  // with no configuration that worked. It saves; the disagreement shows up as a
+  // warning on the Getting-started Bedrock row (and a journal line per save).
   test("a pin whose account differs from the model ARN saves as the deliberate pin", async ({ page }) => {
     await gotoAgentsTab(page);
     const row = page.getByTestId("agent-row-claude-code");

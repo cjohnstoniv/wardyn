@@ -595,3 +595,92 @@ func TestRecordLaunchRefusedMintsNothing(t *testing.T) {
 		}
 	}
 }
+
+// TestDispatch_UnreadableRosterRefusesTheCredential (V1-r2 fix-s2 review R-02).
+//
+// The scope that decides WHOSE captured AWS SSO session a run is served — and
+// whether the operator-wide Bedrock bearer key is reachable at all — is resolved
+// at dispatch from the site config (`awsSSOScopeFor(siteCfg, …)`,
+// runs_dispatch_llm.go). `runs_dispatch.go` reads that config with an error it
+// then never consults on this path, so a store blip yielded a ZERO SiteConfig:
+// perUser=false, owner="" — the OPERATOR namespace — and a per_user member's run
+// was credentialed with the deployment-wide session. That is S2-01/S2-08's
+// fail-open on the SERVING door.
+//
+// Refused, not degraded: a credential must never silently change source.
+func TestDispatch_UnreadableRosterRefusesTheCredential(t *testing.T) {
+	for name, tc := range map[string]struct {
+		cfg         Config
+		task        string
+		taskMode    string
+		agent       string
+		mounts      []types.WorkspaceMount
+		siteCfgOK   bool
+		wantRefused bool
+	}{
+		"a claude-code model run whose roster read failed": {
+			cfg: bedrockBearerCfg(), agent: "claude-code", wantRefused: true,
+		},
+		"the same run on a roster that read": {
+			cfg: bedrockBearerCfg(), agent: "claude-code", siteCfgOK: true,
+		},
+		"a login box has no credential to be given": {
+			cfg: bedrockBearerCfg(), agent: "claude-code", task: harnessLoginTask,
+		},
+		"an exec run signs no model request": {
+			cfg: bedrockBearerCfg(), agent: "claude-code", taskMode: "exec",
+		},
+		"a deployment with no Bedrock model configured": {
+			cfg:   Config{Secrets: &memSecrets{m: map[string][]byte{}}, MaskRegistry: secretmask.NewRegistry()},
+			agent: "claude-code",
+		},
+		"an agent this lane never credentials": {
+			cfg: bedrockBearerCfg(), agent: "codex-cli",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			st := &mechanismGateStore{}
+			cfg := tc.cfg
+			cfg.Identity, cfg.Audit, cfg.Store = h.idp, h.audit, st
+			srv := New(cfg)
+			run := types.AgentRun{ID: uuid.New(), Agent: tc.agent, Task: tc.task, State: types.RunStarting}
+			policy := &types.RunPolicySpec{WorkspaceMounts: tc.mounts}
+
+			admitted := srv.enforceReadableRosterForCredential(context.Background(), run,
+				dispatchParams{TaskMode: tc.taskMode}, policy, tc.siteCfgOK)
+			if admitted == tc.wantRefused {
+				t.Fatalf("admitted = %v, want refused = %v", admitted, tc.wantRefused)
+			}
+			if st.failed != tc.wantRefused {
+				t.Fatalf("run failed = %v, want %v — a refusal must leave the run terminal with its reason", st.failed, tc.wantRefused)
+			}
+		})
+	}
+}
+
+// TestResolveLLMInjections_RefusesBeforeResolvingAnySSOScope is the WIRING half:
+// the guard has to run inside the phase that resolves the scope, above every
+// credential read — not merely exist.
+func TestResolveLLMInjections_RefusesBeforeResolvingAnySSOScope(t *testing.T) {
+	h := newHarness(t)
+	st := &mechanismGateStore{}
+	cfg := bedrockBearerCfg()
+	cfg.Identity, cfg.Audit, cfg.Store = h.idp, h.audit, st
+	srv := New(cfg)
+	run := types.AgentRun{ID: uuid.New(), Agent: "claude-code", State: types.RunStarting}
+	policy := &types.RunPolicySpec{}
+	sandboxEnv := map[string]string{}
+
+	_, ok := srv.resolveLLMInjections(context.Background(), run, dispatchParams{}, policy, sandboxEnv,
+		nil, "http://wardyn-proxy:3128", artifactRedirectPlan{}, false, types.SiteConfig{}, false)
+	if ok {
+		t.Fatal("dispatch went ahead on an unreadable roster — the credential namespace was decided from a zero site config")
+	}
+	if !st.failed {
+		t.Error("the refused run was not marked FAILED")
+	}
+	if len(sandboxEnv) != 0 {
+		t.Errorf("the refused run had credential env staged anyway: %v", sandboxEnv)
+	}
+}

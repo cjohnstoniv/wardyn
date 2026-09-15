@@ -136,6 +136,14 @@ const (
 	ssoTokenAccountShapeRefusal = "this sign-in did not resolve to a 12-digit AWS account id, so nothing was stored — sign in again and choose an account from the list"
 	// DRAFT (M2 canon pending)
 	ssoTokenRoleShapeRefusal = "this sign-in did not resolve to an IAM role name, so nothing was stored — sign in again and choose a role from the list"
+	// dispatchRosterUnreadableRefusal answers a DISPATCH whose roster read failed
+	// (enforceReadableRosterForCredential, runs_dispatch_llm_mechanism.go): the
+	// roster is what says whose model credential this run may use, and serving
+	// one from a namespace the daemon could not resolve is the outage that cannot
+	// be taken back. Surfaces as the run's failure reason, not an HTTP body.
+	//
+	// DRAFT (M2 canon pending)
+	dispatchRosterUnreadableRefusal = "the agent roster could not be read, so Wardyn cannot tell whose model credential this run may use — nothing was started; try again in a moment"
 	// harnessLoginRosterUnavailable answers a LAUNCH whose roster read failed
 	// (authorizeHarnessLogin, harnesscred.go): the pin and the admin's access
 	// portal both come off that row, so there is nothing to bind a capture to.
@@ -220,6 +228,27 @@ func BedrockModelARNNamesNoAccount(model string) bool {
 func BedrockSSOPinUnenforced(sc types.SiteConfig, model string) bool {
 	row, ok := perUserLoginRow(sc, awsSSOProvider)
 	return ok && row.SSOAccountID == "" && bedrockModelAccount(model) == ""
+}
+
+// bedrockPinDisagreement names the roster's account PIN and the account the
+// configured Bedrock model lives in — but only when both are known AND they
+// DIFFER, which is the one case worth a console row. ("", "") otherwise,
+// including a roster that could not be read (a zero SiteConfig has no row).
+//
+// S2-09 made that disagreement legal: the pin is the admin's deliberate answer,
+// so the save door takes it and warns. A journal line is not where an admin
+// looks, and finding out at run time as an IAM 403 is the original complaint —
+// so the posture rides the bedrock_provider row beside its sibling
+// BedrockSSOPinUnenforced (R-04).
+func bedrockPinDisagreement(sc types.SiteConfig, model string) (pinAccount, modelAccount string) {
+	row, ok := perUserLoginRow(sc, awsSSOProvider)
+	if !ok || row.SSOAccountID == "" {
+		return "", ""
+	}
+	if ma := bedrockModelAccount(model); ma != "" && ma != row.SSOAccountID {
+		return row.SSOAccountID, ma
+	}
+	return "", ""
 }
 
 // bindCaptureToPin is the upload's identity binding: does this blob name the

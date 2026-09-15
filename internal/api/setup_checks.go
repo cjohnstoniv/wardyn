@@ -233,6 +233,20 @@ const (
 	bedrockUnenforcedPinDetail = "Nothing here says WHICH AWS account and role a sign-in may store, so whatever the sign-in names is what every later run uses."
 	// DRAFT (M2 canon pending)
 	bedrockUnenforcedPinFix = "Optional, and the fix if your people reach more than one account: set sso_account_id + sso_role_name on the agent's roster row (Settings → Agents), or give WARDYN_BEDROCK_MODEL the full model ARN so its account is checked."
+	// bedrockPinModelAccountDetail/Fix: the OTHER roster posture, and the one
+	// S2-09 created — a pin the save door now TAKES even though it names an
+	// account the configured model does not live in. Legal (a resource-shared
+	// application inference profile really does live elsewhere), and therefore
+	// exactly the kind of deliberate choice that has to be visible where an
+	// admin looks rather than only in the daemon journal.
+	//
+	// Appended like its sibling, for the same reason: it is a fact about the
+	// ROSTER, and the row it lands on still names the live region and model.
+	//
+	// DRAFT (M2 canon pending)
+	bedrockPinModelAccountDetail = "This agent's roster row pins AWS sign-ins to account %s, but the configured Bedrock model lives in account %s — runs will only work if that model is shared with the pinned account."
+	// DRAFT (M2 canon pending)
+	bedrockPinModelAccountFix = "Deliberate (a model shared across accounts)? Nothing to do — Wardyn takes the pin as written. Otherwise re-point sso_account_id on the agent's roster row (Settings → Agents), or WARDYN_BEDROCK_MODEL at a model in the pinned account."
 )
 
 // llmProviderCheck reports the WINNING model/harness signal (llmProvenance's
@@ -273,22 +287,35 @@ func llmProviderCheck(llmDetail string, bedrock SetupBedrock) SetupCheck {
 // Bedrock knob (ok=false otherwise), so the majority who never use AWS aren't
 // shown an irrelevant row.
 //
-// pinUnenforced is BedrockSSOPinUnenforced for this deployment's roster —
-// passed in rather than read here because the callsite already holds the site
-// config. It is a posture fact about the ROSTER, not about readiness, so it is
+// TWO roster postures ride this row, both derived HERE from the site config the
+// callsite already holds (scOK=false — an unreadable roster — asserts neither):
+// BedrockSSOPinUnenforced (nothing constrains the account/role at all) and
+// bedrockPinDisagreement (a pin the save door takes although the configured
+// model lives in another account, S2-09/R-04). It is a posture fact about the ROSTER, not about readiness, so it is
 // folded into WHATEVER row bedrockProviderRow produced rather than nested under
 // the ready arm: nested, the warning arrived only after the first unchecked
 // capture had already been stored, which is exactly the person and the moment
 // it is useless to. Appended, never substituted, so the row keeps naming the
 // live region, model and credential source (or what is still missing).
-func bedrockProviderCheck(bedrock SetupBedrock, pinUnenforced bool) (SetupCheck, bool) {
+func bedrockProviderCheck(bedrock SetupBedrock, sc types.SiteConfig, scOK bool) (SetupCheck, bool) {
 	chk, ok := bedrockProviderRow(bedrock)
-	if !ok || !pinUnenforced {
+	if !ok || !scOK {
 		return chk, ok
 	}
-	chk.Status = "warn"
-	chk.Detail = strings.TrimSpace(chk.Detail + " " + bedrockUnenforcedPinDetail)
-	chk.Fix = strings.TrimSpace(chk.Fix + " " + bedrockUnenforcedPinFix)
+	pinAccount, modelAccount := bedrockPinDisagreement(sc, bedrock.Model)
+	// The two postures are mutually exclusive by construction — one is "no pin
+	// at all", the other "a pin that disagrees" — so this reads as a chain, not
+	// as two independent appends that could both fire.
+	switch {
+	case BedrockSSOPinUnenforced(sc, bedrock.Model):
+		chk.Status = "warn"
+		chk.Detail = strings.TrimSpace(chk.Detail + " " + bedrockUnenforcedPinDetail)
+		chk.Fix = strings.TrimSpace(chk.Fix + " " + bedrockUnenforcedPinFix)
+	case pinAccount != "":
+		chk.Status = "warn"
+		chk.Detail = strings.TrimSpace(chk.Detail + " " + fmt.Sprintf(bedrockPinModelAccountDetail, pinAccount, modelAccount))
+		chk.Fix = strings.TrimSpace(chk.Fix + " " + bedrockPinModelAccountFix)
+	}
 	return chk, true
 }
 

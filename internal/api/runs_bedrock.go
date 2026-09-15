@@ -422,14 +422,31 @@ func awsSSOCacheFileContents(b awsSSOBlob) string {
 // DISPATCH sets it. Create and preflight pass false — a dry run must never spend
 // a one-use token, and it does not need to: an expired-but-renewable credential
 // reads READY there, because dispatch renews it (see the captured-SSO branch).
-func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscriptionActive, modelRun, refresh bool, ws *types.WorkspaceBedrockRef, sso awsSSOScope) bedrockAuth {
-	region, model, profile := s.cfg.BedrockRegion, s.cfg.BedrockModel, s.cfg.BedrockAWSProfile
+// bedrockRegionModel is the EFFECTIVE region and model for a run: the picked
+// workspace/container's per-run override where it names one, else the global
+// operator config.
+func (s *Server) bedrockRegionModel(ws *types.WorkspaceBedrockRef) (region, model string) {
+	region, model = s.cfg.BedrockRegion, s.cfg.BedrockModel
 	if ws != nil {
 		region = cmp.Or(strings.TrimSpace(ws.Region), region)
 		model = cmp.Or(strings.TrimSpace(ws.Model), model)
 	}
-	if !modelRun || subscriptionActive || runAgent != "claude-code" ||
-		region == "" || model == "" || s.cfg.Secrets == nil {
+	return region, model
+}
+
+// bedrockLaneSelectable is resolveBedrockAuth's own "is this lane in play at
+// all" predicate, lifted out so the dispatch-time roster guard
+// (enforceReadableRosterForCredential) asks EXACTLY the question this function
+// answers rather than a hand-copied echo of it that drifts.
+func bedrockLaneSelectable(runAgent string, modelRun, subscriptionActive, haveSecrets bool, region, model string) bool {
+	return modelRun && !subscriptionActive && runAgent == "claude-code" &&
+		region != "" && model != "" && haveSecrets
+}
+
+func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscriptionActive, modelRun, refresh bool, ws *types.WorkspaceBedrockRef, sso awsSSOScope) bedrockAuth {
+	region, model := s.bedrockRegionModel(ws)
+	profile := s.cfg.BedrockAWSProfile
+	if !bedrockLaneSelectable(runAgent, modelRun, subscriptionActive, s.cfg.Secrets != nil, region, model) {
 		return bedrockAuth{}
 	}
 	runtimeHost := s.bedrockDataPlaneHost(region)

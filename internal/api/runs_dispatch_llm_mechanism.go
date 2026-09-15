@@ -248,6 +248,46 @@ func (s *Server) enforceConfiguredLLMMechanism(ctx context.Context, run types.Ag
 	return false
 }
 
+// enforceReadableRosterForCredential refuses a dispatch whose ROSTER READ
+// FAILED, before the AWS SSO credential scope is resolved from a zero site
+// config.
+//
+// That scope decides WHOSE captured session credentials the run
+// (awsSSOScopeFor, resolveLLMInjections) and whether the operator-wide Bedrock
+// bearer key is reachable at all (resolveBedrockAuth's !sso.perUser guard). A
+// failed read yields perUser=false, owner="" — the OPERATOR namespace — so a
+// store blip credentialed a per_user MEMBER's run with the deployment-wide
+// session, unaudited. It is S2-01/S2-08's fail-open on the SERVING door, which
+// their words ("written or deleted") did not reach.
+//
+// REFUSED, not degraded to the caller's own namespace: a credential must never
+// silently change source — the law enforceConfiguredLLMMechanism above exists
+// for — and a run that fails to start carrying its reason is the smaller outage
+// than one served somebody else's credential. The next dispatch after the store
+// recovers is byte-identical to today's.
+//
+// SCOPED TO THE RUNS THAT WOULD ACTUALLY SELECT ONE, through the credential
+// code's own predicate (bedrockLaneSelectable, runs_bedrock.go): a deployment
+// with no Bedrock region/model, a non-model run, a login box, a subscription
+// run and every non-claude-code agent dispatch exactly as before, blip or no.
+func (s *Server) enforceReadableRosterForCredential(ctx context.Context, run types.AgentRun,
+	p dispatchParams, policy *types.RunPolicySpec, siteCfgOK bool,
+) bool {
+	if siteCfgOK || run.Task == harnessLoginTask {
+		return true
+	}
+	region, model := s.bedrockRegionModel(p.BedrockRef)
+	if !bedrockLaneSelectable(run.Agent,
+		isModelRun(p.TaskMode, run.WorkspaceID, run.SourceID, p.Interactive),
+		specHasMountTarget(policy, claudeCredTarget), s.cfg.Secrets != nil, region, model) {
+		return true
+	}
+	s.failAndRevoke(ctx, run.ID, types.RunStarting, dispatchRosterUnreadableRefusal)
+	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
+		run.ID.String(), "failure", mustJSON(map[string]any{"error": dispatchRosterUnreadableRefusal})))
+	return false
+}
+
 // llmMechanismGateApplies is enforceConfiguredLLMMechanism's three-term gate
 // asked of a run REQUEST instead of a resolved transport, so create and Review
 // refuse exactly the runs dispatch would. See that function for each term.

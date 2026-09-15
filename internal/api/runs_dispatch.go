@@ -324,7 +324,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// subscription sentinel, the Bedrock bearer and the artifact tokens are all
 	// consequences of that one decision, each failing the run closed on its own
 	// authoring failure. ok=false means the run is already marked FAILED.
-	plan, ok := s.resolveLLMInjections(ctx, run, p, &policy, sandboxEnv, injections, proxyURL, artifactPlan, artifactInject, siteCfg)
+	plan, ok := s.resolveLLMInjections(ctx, run, p, &policy, sandboxEnv, injections, proxyURL, artifactPlan, artifactInject, siteCfg, siteCfgErr == nil)
 	if !ok {
 		return
 	}
