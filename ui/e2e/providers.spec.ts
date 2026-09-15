@@ -12,7 +12,7 @@ import {
   mockSecurityAdminRole,
   navToRoute,
 } from "./fixtures";
-import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
+import { AGENTS, PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import { OPERATOR_ONLY_REASON } from "../src/app/components/wardyn/copy";
 import type { Page } from "@playwright/test";
 
@@ -270,5 +270,69 @@ test.describe("providers — the door is SUPER's alone", () => {
     await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
     await expect(page.getByText(OPERATOR_ONLY_REASON)).toBeVisible();
     await expect(page.getByTestId("provider-row-github")).toHaveCount(0);
+  });
+});
+
+// Appendix A findings 2 + 5 (console-login lane, 0.7.3) — the Settings Model
+// provider card's AWS Bedrock lane under a per_user roster row. Spliced onto
+// GET /setup/status (this harness has no real per-user AWS SSO session to
+// produce live/expired_signin for real — same reasoning as agents.spec.ts's
+// model_access CASES loop).
+async function splicePerUserBedrock(page: Page, modelAccessState: string | null): Promise<void> {
+  await page.route("**/api/v1/setup/status*", async (route) => {
+    const response = await route.fetch();
+    const json = await response.json();
+    const harnesses: Array<Record<string, unknown>> = Array.isArray(json.harnesses) ? json.harnesses : [];
+    const idx = harnesses.findIndex((h) => h.id === "claude-code");
+    const row = { ...(idx >= 0 ? harnesses[idx] : { id: "claude-code" }), mechanism: "bedrock_sso", credential_source: "per_user" };
+    if (idx >= 0) harnesses[idx] = row;
+    else harnesses.push(row);
+    json.harnesses = harnesses;
+    if (modelAccessState) json.model_access = { state: modelAccessState };
+    await route.fulfill({ response, json });
+  });
+}
+
+test.describe("providers — Settings Model provider card under a per_user Bedrock row", () => {
+  // F5: the badge follows the CALLER's own model_access, not merely whether
+  // the deployment has a Bedrock lane at all.
+  test("Connected for a live caller", async ({ page }) => {
+    await splicePerUserBedrock(page, "live");
+    await gotoConsole(page);
+    await navToRoute(page, "/settings");
+    await expect(page.locator("#lane-bedrock")).toContainText("Connected");
+  });
+
+  test("not-Connected + Sign in with SSO for an expired caller", async ({ page }) => {
+    await splicePerUserBedrock(page, "expired_signin");
+    await gotoConsole(page);
+    await navToRoute(page, "/settings");
+    const bedrockLane = page.locator("#lane-bedrock");
+    await expect(bedrockLane).not.toContainText("Connected");
+    await bedrockLane.click();
+    await expect(page.getByRole("button", { name: "Sign in with SSO" })).toBeVisible();
+  });
+
+  // F2: the server throws away a typed start URL under a per_user row
+  // (harnesscred.go:761) — the dialog must never ask for one here.
+  test("opening the dialog shows the managed-portal note, never the dead start-URL prompt", async ({ page }) => {
+    await splicePerUserBedrock(page, "live");
+    await gotoConsole(page);
+    await navToRoute(page, "/settings");
+    await page.locator("#lane-bedrock").click();
+    await page.getByRole("button", { name: "Sign in with SSO" }).click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByText(AGENTS.SSO_START_URL_MANAGED)).toBeVisible();
+    await expect(page.getByTestId("login-start-url-prompt")).toHaveCount(0);
+  });
+
+  // Unspliced negative control: the ordinary Settings sign-in (no per_user
+  // row) is UNCHANGED — it still asks for the org's access portal URL.
+  test("unspliced control: the ordinary Settings sign-in still prompts for the start URL", async ({ page }) => {
+    await gotoConsole(page);
+    await navToRoute(page, "/settings");
+    await page.locator("#lane-bedrock").click();
+    await page.getByRole("button", { name: "Sign in with SSO" }).click();
+    await expect(page.getByTestId("login-start-url-prompt")).toBeVisible();
   });
 });

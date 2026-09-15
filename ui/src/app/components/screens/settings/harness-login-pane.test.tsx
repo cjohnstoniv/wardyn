@@ -8,7 +8,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
-import { extractSetupToken, extractAuthUrl, isLikelyStartUrl, HarnessLoginPane, loginFlow } from "./harness-login-pane";
+import { extractSetupToken, extractAuthUrl, extractFailSentence, isLikelyStartUrl, HarnessLoginPane, loginFlow } from "./harness-login-pane";
+import { runs as runsApiMocked } from "../../../lib/api/runs";
 
 // A realistic setup-token body: sk-ant-oat<2 digits>-<long url-safe blob>.
 const TOKEN = "sk-ant-oat01-" + "A".repeat(60) + "-_" + "b3".repeat(10);
@@ -76,6 +77,32 @@ describe("extractAuthUrl", () => {
   });
 });
 
+// wardyn-aws-sso prints `<failMarker> <sentence>\n` on a refused capture — a
+// wrong-account pin, a portal error — and never prints the doneMarker in that
+// case, so without this the pane just spins on "waiting" forever (Appendix A
+// finding 1's fail-fast ask, pane half).
+describe("extractFailSentence", () => {
+  const MARKER = "wardyn: aws sso credential rejected:";
+
+  it("returns the sentence once the line has finished printing", () => {
+    expect(extractFailSentence(`${MARKER} the pinned account is not entitled to this session.\n`, MARKER)).toBe(
+      "the pinned account is not entitled to this session.",
+    );
+  });
+
+  it("does NOT return a still-streaming line (no trailing newline yet)", () => {
+    expect(extractFailSentence(`${MARKER} the pinned acco`, MARKER)).toBeNull();
+  });
+
+  it("returns null when the marker never printed", () => {
+    expect(extractFailSentence("some other terminal output\n", MARKER)).toBeNull();
+  });
+
+  it("strips a trailing carriage return (PTY line endings)", () => {
+    expect(extractFailSentence(`${MARKER} refused.\r\n`, MARKER)).toBe("refused.");
+  });
+});
+
 describe("isLikelyStartUrl", () => {
   it("accepts a real AWS access portal URL", () => {
     expect(isLikelyStartUrl("https://my-org.awsapps.com/start")).toBe(true);
@@ -109,8 +136,14 @@ describe("loginFlow doneLabel", () => {
 // this happens what to expect and what's required from them." The pane used to
 // launch the sandbox ON MOUNT; now nothing happens until Start login.
 
+// lastAttachOutput captures the onOutput callback the pane hands AttachTerminal
+// on its most recent render, so a test can feed it PTY chunks directly — the
+// only way to exercise handleOutput's marker-watching without a real xterm
+// (which does not render in jsdom).
+let lastAttachOutput: ((chunk: string) => void) | undefined;
 vi.mock("../../attach-terminal", () => ({
-  AttachTerminal: React.forwardRef(function FakeTerminal() {
+  AttachTerminal: React.forwardRef(function FakeTerminal(props: { onOutput?: (chunk: string) => void }) {
+    lastAttachOutput = props.onOutput;
     return <div data-testid="fake-terminal" />;
   }),
 }));
@@ -124,7 +157,11 @@ vi.mock("../../../lib/api/harness-auth", () => ({
 vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: vi.fn() } }));
 
 describe("HarnessLoginPane — the consent gate", () => {
-  beforeEach(() => harnessLoginMock.mockReset().mockResolvedValue("run-123"));
+  beforeEach(() => {
+    harnessLoginMock.mockReset().mockResolvedValue("run-123");
+    lastAttachOutput = undefined;
+    vi.mocked(runsApiMocked.killRun).mockReset().mockResolvedValue(undefined);
+  });
 
   it("launches NOTHING on mount: the intro says what to expect and what's required", () => {
     render(<HarnessLoginPane provider="anthropic" onDone={vi.fn()} onCancel={vi.fn()} />);
@@ -187,6 +224,47 @@ describe("HarnessLoginPane — the consent gate", () => {
       render(<HarnessLoginPane provider="anthropic" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
       expect(screen.getByTestId("login-intro")).toBeInTheDocument();
       expect(screen.queryByText(AGENTS.SSO_START_URL_MANAGED)).toBeNull();
+    });
+  });
+
+  // Appendix A finding 1's fail-fast ask, pane half: wardyn-aws-sso prints a
+  // fail marker on a refused capture (a wrong-account pin, a portal error) and
+  // NEVER prints doneMarker in that case — before this latch the pane just sat
+  // on "waiting" forever with no explanation, the operator's only signal a
+  // terminal that stopped scrolling.
+  describe("the helper's fail marker ends the wait with why", () => {
+    async function attachAwsRun(onDone = vi.fn(), onCancel = vi.fn()) {
+      render(<HarnessLoginPane provider="aws" startURLManaged onDone={onDone} onCancel={onCancel} />);
+      await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+      await screen.findByTestId("fake-terminal");
+      return { onDone, onCancel };
+    }
+
+    it("no marker keeps the terminal attached", async () => {
+      await attachAwsRun();
+      lastAttachOutput?.("some ordinary aws sso login chatter\n");
+      expect(screen.getByTestId("fake-terminal")).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("the fail marker moves to the error phase, names why, and kills the run", async () => {
+      const { onDone } = await attachAwsRun();
+      lastAttachOutput?.("wardyn: aws sso credential rejected: the pinned account is not entitled to this session.\n");
+
+      const alertBox = await screen.findByRole("alert");
+      expect(alertBox).toHaveTextContent("the pinned account is not entitled to this session.");
+      // The error phase's Try again / Cancel, not the attached terminal.
+      expect(screen.queryByTestId("fake-terminal")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
+      expect(runsApiMocked.killRun).toHaveBeenCalledWith("run-123");
+      expect(onDone).not.toHaveBeenCalled();
+    });
+
+    it("never mistakes the fail marker's own line for a success", async () => {
+      await attachAwsRun();
+      lastAttachOutput?.("wardyn: aws sso credential rejected: portal timeout.\n");
+      await screen.findByRole("alert");
+      expect(screen.queryByText(/session captured/i)).not.toBeInTheDocument();
     });
   });
 });

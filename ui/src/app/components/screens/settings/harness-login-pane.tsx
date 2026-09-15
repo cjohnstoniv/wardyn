@@ -190,6 +190,22 @@ export function extractSetupToken(s: string): string | null {
   return null;
 }
 
+// extractFailSentence pulls the sentence off wardyn-aws-sso's refusal line:
+// `<marker> <sentence>`, one line, printed on a REFUSED capture (a
+// wrong-account pin, a portal error — never on success, where doneMarker
+// prints instead). Same trailing-boundary rule as the other extractors: only
+// returns once the line has actually finished printing (a trailing newline),
+// so a still-streaming prefix is never read as the whole refusal. Exported
+// for tests.
+export function extractFailSentence(s: string, marker: string): string | null {
+  const idx = s.indexOf(marker);
+  if (idx === -1) return null;
+  const rest = s.slice(idx + marker.length);
+  const nl = rest.indexOf("\n");
+  if (nl === -1) return null;
+  return rest.slice(0, nl).replace(/\r$/, "").trim();
+}
+
 // extractAuthUrl pulls the `claude setup-token` OAuth authorization URL out of a
 // chunk of terminal output so we can open it in a new tab. Restricted to the known
 // Claude/Anthropic auth hosts (never api.anthropic.com — that's the token exchange,
@@ -281,6 +297,7 @@ export function HarnessLoginPane({
   // Rolling buffer of recent PTY output + latches so we act on each thing once.
   const outBufRef = React.useRef("");
   const savedRef = React.useRef(false);
+  const failedRef = React.useRef(false);
   const openedUrlRef = React.useRef(false);
 
   const launch = React.useCallback(async () => {
@@ -288,6 +305,7 @@ export function HarnessLoginPane({
     setError("");
     outBufRef.current = "";
     savedRef.current = false;
+    failedRef.current = false;
     openedUrlRef.current = false;
     setAutoCaptured(false);
     setAuthUrl("");
@@ -342,11 +360,25 @@ export function HarnessLoginPane({
           }
         }
       }
-      if (savedRef.current) return;
+      if (savedRef.current || failedRef.current) return;
       // Helper-capture providers (AWS SSO): the credential is uploaded by the
       // in-sandbox helper through the brokered endpoint — it is NEVER printed, so
       // there is nothing to scrape. Watch only for the helper's success marker.
       if (flow.capture === "helper") {
+        // Checked BEFORE doneMarker: a refused capture (wrong-account pin, a
+        // portal error) prints the fail marker and NEVER the done marker —
+        // without this the pane just sat on "waiting" forever, the only signal
+        // a terminal that had quietly stopped scrolling.
+        if (flow.failMarker) {
+          const sentence = extractFailSentence(outBufRef.current, flow.failMarker);
+          if (sentence) {
+            failedRef.current = true;
+            setError(sentence);
+            setPhase("error");
+            if (runId) void runsApi.killRun(runId).catch(() => {});
+            return;
+          }
+        }
         if (flow.doneMarker && outBufRef.current.includes(flow.doneMarker)) {
           savedRef.current = true;
           setAutoCaptured(true);
@@ -392,7 +424,10 @@ export function HarnessLoginPane({
       {phase !== "intro" && <p className="text-xs leading-relaxed text-muted-foreground">{flow.blurb}</p>}
 
       {error && (
-        <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">
+        <div
+          role="alert"
+          className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning"
+        >
           <TriangleAlert className="mt-0.5 size-4 shrink-0" />
           <p>{error}</p>
         </div>

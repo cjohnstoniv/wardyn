@@ -9,7 +9,7 @@
 // fields — a card that disagrees with the app-shell chip is the exact class of
 // bug the old two-model /integrations page kept producing.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const setSecretMock = vi.fn();
@@ -21,8 +21,16 @@ vi.mock("../../../lib/api/secrets", () => ({
   },
 }));
 // HarnessLoginPane drives a real PTY through AttachTerminal (xterm), which does
-// not render in jsdom — the cards only own the button that opens it.
-vi.mock("./harness-login-pane", () => ({ HarnessLoginPane: () => <div data-testid="login-pane" /> }));
+// not render in jsdom — the cards only own the button that opens it, and the
+// PROP the card hands it is what F2's test below pins (loginPaneMock records
+// every render's props).
+const loginPaneMock = vi.fn();
+vi.mock("./harness-login-pane", () => ({
+  HarnessLoginPane: (props: { startURLManaged?: boolean }) => {
+    loginPaneMock(props);
+    return <div data-testid="login-pane" />;
+  },
+}));
 
 import { HostSummary, Lane, ModelProviderCard, S, SecretLane } from "./connection-cards";
 import { baseStatus } from "../../../lib/test-fixtures";
@@ -37,7 +45,17 @@ function model(status: SetupStatus = baseStatus()) {
 beforeEach(() => {
   setSecretMock.mockReset().mockResolvedValue(undefined);
   deleteSecretMock.mockReset().mockResolvedValue(undefined);
+  loginPaneMock.mockReset();
 });
+
+// A per_user Bedrock row (harnesses[claude-code].mechanism="bedrock_sso",
+// credential_source="per_user") — the roster shape the Agents tab writes.
+function perUserStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
+  return baseStatus({
+    harnesses: [{ id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true, mechanism: "bedrock_sso", credential_source: "per_user" }],
+    ...overrides,
+  });
+}
 
 describe("ModelProviderCard", () => {
   it("offers exactly the three lanes the mock settled on — no Azure, no catalog", () => {
@@ -126,6 +144,85 @@ describe("ModelProviderCard", () => {
     expect(screen.getByText(new RegExp(S.BEDROCK_CONFIG_NOTE.slice(0, 40)))).toBeInTheDocument();
     expect(screen.queryByLabelText(/^region$/i)).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/^model$/i)).not.toBeInTheDocument();
+  });
+});
+
+// F2 (Appendix A #2): three call sites open HarnessLoginPane; two pass
+// startURLManaged, this card didn't — an admin signing in from Settings under
+// a per_user row was asked to retype the org's AWS access portal URL, and the
+// server (harnesscred.go:761) THROWS THE TYPED VALUE AWAY because the row's
+// own sso_start_url overrides it. Fix = pass the prop on the same condition
+// the Agents tab already uses.
+describe("ModelProviderCard — F2: the sign-in door under a per_user row", () => {
+  it("passes startURLManaged so the dead start-URL prompt never renders", async () => {
+    model(perUserStatus());
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    await user.click(screen.getByRole("button", { name: /sign in with sso/i }));
+    expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: true }));
+  });
+
+  it("the ordinary Settings flow (no per_user row) still asks — unspliced control", async () => {
+    model();
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    await user.click(screen.getByRole("button", { name: /sign in with sso/i }));
+    expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: false }));
+  });
+
+  // F4: the card says the lane is declared elsewhere and read per-person.
+  it("S.BEDROCK_PER_USER_NOTE renders under a per_user row", async () => {
+    model(perUserStatus());
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByText(S.BEDROCK_PER_USER_NOTE)).toBeInTheDocument();
+  });
+
+  it("S.BEDROCK_PER_USER_NOTE is absent for a shared (non-per_user) row", async () => {
+    model();
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.queryByText(S.BEDROCK_PER_USER_NOTE)).not.toBeInTheDocument();
+  });
+});
+
+// F5 (Appendix A #5): the Connected badge was keyed on the deployment having
+// A Bedrock lane at all (`!!bedrockRow`), never the CALLING principal's own
+// model_access — so an admin's browser badged "Connected" from a shared
+// admin-token read that can never itself hold an AWS session, and (the sharp
+// edge this pins) a member whose OWN sign-in has lapsed still saw green.
+describe("ModelProviderCard — F5: the badge follows the caller's own model_access", () => {
+  const bedrockConfigured = { bedrock: { region: "us-east-1", model: "anthropic.claude", creds_present: true } };
+
+  it("live: Connected", () => {
+    model(perUserStatus({ ...bedrockConfigured, model_access: { state: "live" } }));
+    expect(within(screen.getByRole("radio", { name: /AWS Bedrock/ })).getByText("Connected")).toBeInTheDocument();
+  });
+
+  it("expiring: still Connected (the session still signs)", () => {
+    model(perUserStatus({ ...bedrockConfigured, model_access: { state: "expiring" } }));
+    expect(within(screen.getByRole("radio", { name: /AWS Bedrock/ })).getByText("Connected")).toBeInTheDocument();
+  });
+
+  it("expired_signin: NOT Connected, even though the deployment has a Bedrock lane", () => {
+    model(perUserStatus({ ...bedrockConfigured, model_access: { state: "expired_signin" } }));
+    expect(within(screen.getByRole("radio", { name: /AWS Bedrock/ })).queryByText("Connected")).not.toBeInTheDocument();
+  });
+
+  it("not_configured: NOT Connected", () => {
+    model(perUserStatus({ ...bedrockConfigured, model_access: { state: "not_configured" } }));
+    expect(within(screen.getByRole("radio", { name: /AWS Bedrock/ })).queryByText("Connected")).not.toBeInTheDocument();
+  });
+
+  // not_applicable: the caller IS the shared admin token, which owns no
+  // per-person session to grade — falls back to the deployment-wide answer
+  // (there is no per-caller answer to substitute).
+  it("not_applicable: falls back to the deployment-wide badge", () => {
+    model(perUserStatus({ ...bedrockConfigured, model_access: { state: "not_applicable" } }));
+    expect(within(screen.getByRole("radio", { name: /AWS Bedrock/ })).getByText("Connected")).toBeInTheDocument();
+  });
+
+  // A shared (non-per_user) row is unaffected — the deployment-wide badge is
+  // still the right answer when there is no per-person credential to grade.
+  it("a shared row ignores model_access entirely", () => {
+    model(baseStatus({ ...bedrockConfigured, model_access: { state: "expired_signin" } }));
+    expect(within(screen.getByRole("radio", { name: /AWS Bedrock/ })).getByText("Connected")).toBeInTheDocument();
   });
 });
 

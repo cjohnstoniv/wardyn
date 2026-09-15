@@ -78,6 +78,13 @@ export const S = {
   BEDROCK_CONFIG_NOTE:
     "Region and model come from the daemon's own config (WARDYN_BEDROCK_REGION / WARDYN_BEDROCK_MODEL) — set them where wardynd starts, not here.",
   STORE_NOTE: "Wardyn stores this — it doesn't dial the provider to check it.",
+  // DRAFT (M2 canon pending) — F4 (Appendix A #4), console-login lane (0.7.3).
+  // A per_user Bedrock row is declared on the Agents tab, and its sign-in is
+  // per person (F5 below reads the CALLER's own model_access, not a
+  // deployment-wide fact) — this note says so rather than leaving the card
+  // silent about where the lane actually lives.
+  BEDROCK_PER_USER_NOTE:
+    "This lane is per person: it is declared on the Agents tab, and each person signs in to AWS themselves. What this card reads is your own sign-in, not the deployment's.",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -390,6 +397,19 @@ export function ModelProviderCard({
   // only decides whether to offer a lane that would fail.
   const sharedSubBlocked = status.auth.shared_subscription_allowed === false;
 
+  // F2/F4/F5 (Appendix A): the claude-code roster row is per_user Bedrock SSO
+  // — declared on the Agents tab, where each person signs in for themselves.
+  // Same derivation the Agents tab uses (agents-tab.tsx), read independently
+  // here on purpose: that screen reads the DRAFT being edited, this card
+  // reads the server's settled answer.
+  const perUserSso = !!status.harnesses?.some(
+    (h) => h.id === "claude-code" && h.mechanism === "bedrock_sso" && h.credential_source === "per_user",
+  );
+  const modelAccessState = status.model_access?.state;
+  // `expiring` still counts as Connected — the session still signs, and the
+  // warning rides the action line, not this badge.
+  const perUserLive = modelAccessState === "live" || modelAccessState === "expiring";
+
   return (
     <>
       <Card title={S.MODEL_TITLE} lede={S.MODEL_LEDE} footer={S.MODEL_FOOTER}>
@@ -477,7 +497,16 @@ export function ModelProviderCard({
             id="lane-bedrock"
             title="AWS Bedrock"
             hint="A bearer key, or an SSO device-code sign-in."
-            connected={!!bedrockRow}
+            // F5: under a per_user row, a caller WITH a per-person model_access
+            // reading reports its OWN state — not_applicable (the shared
+            // admin-token principal, which holds no session of its own) has no
+            // per-caller answer to substitute, so it falls back to the
+            // deployment-wide fact like every other row does.
+            connected={
+              perUserSso && status.model_access && modelAccessState !== "not_applicable"
+                ? perUserLive
+                : !!bedrockRow
+            }
             connectedDetail={
               bedrockConfigured ? `${status.bedrock?.region} · ${status.bedrock?.model}` : undefined
             }
@@ -495,6 +524,9 @@ export function ModelProviderCard({
                   S.BEDROCK_CONFIG_NOTE
                 )}
               </p>
+              {perUserSso && (
+                <p className="text-meta leading-snug text-muted-foreground">{S.BEDROCK_PER_USER_NOTE}</p>
+              )}
               <SecretLane
                 label="Bedrock bearer key"
                 placeholder="Bearer token"
@@ -563,6 +595,7 @@ export function ModelProviderCard({
             <div className="min-w-0">
               <HarnessLoginPane
                 provider={loginOpen}
+                startURLManaged={perUserSso}
                 onDone={() => {
                   setLoginOpen(null);
                   onChanged();
