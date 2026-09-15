@@ -413,25 +413,27 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   });
 
   // UI-SETUP-1: recheck() used to refresh status+site-config only — secret
-  // names were fetched once at mount and never again, so the Integrations
-  // rail badge (which derives from them) couldn't see a secret-backed
-  // integration added OR deleted inside the embedded step until a full page
-  // reload. loadSecrets is now folded into the SAME recheck every "Re-check"
-  // button on this screen already calls.
-  // …and the PRESS forces a host re-detect server-side (?recheck=1 drops the
-  // daemon's 30s host-proxy memo) while the MOUNT deliberately does not — one
-  // loader serves both, so a future edit that collapsed them would put a host
-  // sweep on every /setup navigation.
+  // names were fetched once at mount and never again, so the Integrations rail
+  // badge (which derives from them) couldn't see a secret-backed integration
+  // added OR deleted inside the embedded step until a full page reload.
+  // loadSecrets is now folded into the SAME recheck every "Re-check" button
+  // here already calls. …and the PRESS forces a host re-detect server-side
+  // (?recheck=1 drops the daemon's 30s host-proxy memo) while the MOUNT
+  // deliberately does not — one loader serves both, so a future edit
+  // collapsing them would put a host sweep on every /setup navigation.
   it("Re-check re-fetches secret names and forces a host re-detect; the mount fetch does neither", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence");
     expect(listSecretsMock).toHaveBeenCalledTimes(1); // the mount-time fetch
     expect(getSetupStatusMock.mock.calls[0][0]?.recheck).toBeFalsy();
-
+    // U2-02: and it stamps no "checked" time — "Checked just now" beside a
+    // memoized "none detected" claims a look at the host that never happened.
+    expect(screen.queryByText(/checked/i)).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^re-check$/i }));
     await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalledTimes(2));
     expect(listSecretsMock).toHaveBeenCalledTimes(2);
     expect(getSetupStatusMock.mock.calls[1][0]).toEqual({ recheck: true });
+    await waitFor(() => expect(screen.getByText(/checked just now/i)).toBeInTheDocument());
   });
 
   // Phase 5 — the People step: renders with its label/heading, its badge reads

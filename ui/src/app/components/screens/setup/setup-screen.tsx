@@ -382,7 +382,15 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
       .getSetupStatus({ recheck: opts?.force })
       .then((s) => {
         setStatus(s);
-        setLastCheckedAt(new Date());
+        // U2-02 (blind round 2, lens-U2): ONLY the forced read carries a fresh
+        // host sweep — the daemon answers every other /setup/status from its
+        // 30s host-proxy memo, and only the ?recheck=1 path waits on the
+        // re-detect it kicks off (internal/api/hostproxy_cache.go). Stamping
+        // "Checked just now" beside a memoized "none detected" told the
+        // operator the host had just been looked at when it had not, which is
+        // precisely the complaint Re-check exists to answer. No stamp beats a
+        // false one: lastCheckedLabel(null) is the empty string.
+        if (opts?.force) setLastCheckedAt(new Date());
         // A fresh probe landed — bump the token EnvironmentStep watches.
         setRecheckCount((n) => n + 1);
         // Gated on the FRESH status, not the stale one this closure closed

@@ -174,4 +174,40 @@ test.describe("setup gate — forced on access, never a prison", () => {
     await page.getByRole("button", { name: "Re-check" }).first().click();
     await pressed;
   });
+
+  // U2-06 (blind round 2, lens-U2): the test above pins a URL, and a URL is
+  // not the complaint. The complaint was that pressing Re-check did not change
+  // the ANSWER — hostProxyForceRedetect() zeroed the memo's timestamp but kept
+  // its VALUE, so the forcing request was still served the old detection and
+  // the operator had to press twice. This drives the answer itself: the
+  // daemon's reply to the forced read carries the newly-configured proxy, and
+  // the host-proxy evidence row must show it.
+  //
+  // Keyed on `recheck=1` rather than a request counter deliberately: the
+  // counter version passes vacuously if anything else on the screen happens to
+  // read /setup/status first, and "the forced read is the one that carries the
+  // fresh sweep" IS the server contract this asserts against.
+  test("Re-check changes the ANSWER: the host-proxy row shows the newly-configured proxy", async ({
+    page,
+  }) => {
+    const PROXY = "http://proxy.e2e.invalid:3128";
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.onboarding_complete = false;
+      json.host_proxy = route.request().url().includes("recheck=1")
+        ? { has_credentials: false, http_proxy: { value: PROXY, source: "env", has_credentials: false } }
+        : { has_credentials: false };
+      await route.fulfill({ response, json });
+    });
+    await skipHero(page);
+    await page.goto("/setup?step=corp_network");
+
+    const evidence = page.getByText(PROXY);
+    await expect(page.getByRole("button", { name: "Re-check" }).first()).toBeVisible();
+    await expect(evidence).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Re-check" }).first().click();
+    await expect(evidence.first()).toBeVisible();
+  });
 });
