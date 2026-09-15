@@ -158,10 +158,11 @@ vi.mock("../../attach-terminal", () => ({
   }),
 }));
 const harnessLoginMock = vi.fn();
+const harnessPasteMock = vi.fn();
 vi.mock("../../../lib/api/harness-auth", () => ({
   harnessAuth: {
     harnessLogin: (...a: unknown[]) => harnessLoginMock(...a),
-    harnessCredentialPaste: vi.fn(),
+    harnessCredentialPaste: (...a: unknown[]) => harnessPasteMock(...a),
   },
 }));
 vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: vi.fn() } }));
@@ -171,6 +172,7 @@ vi.mock("../../../lib/api/setup", () => ({ setup: { getSetupStatus: (...a: unkno
 describe("HarnessLoginPane — the consent gate", () => {
   beforeEach(() => {
     harnessLoginMock.mockReset().mockResolvedValue("run-123");
+    harnessPasteMock.mockReset().mockResolvedValue(undefined);
     lastAttachOutput = undefined;
     vi.mocked(runsApiMocked.killRun).mockReset().mockResolvedValue(undefined);
     getSetupStatusMock.mockReset();
@@ -287,6 +289,31 @@ describe("HarnessLoginPane — the consent gate", () => {
       await act(async () => lastAttachOutput?.("wardyn: aws sso credential rejected: portal timeout.\n"));
       await screen.findByRole("alert");
       expect(screen.queryByText(/session captured/i)).not.toBeInTheDocument();
+    });
+  });
+
+  // RR-2: `saving` with no autoCapture is TWO different states. On a helper
+  // flow it is the corroboration round trip (R-8's spinner). On the anthropic
+  // scrape flow it is a MANUAL token paste — which keeps its own row, its own
+  // Save spinner, and must never be handed a sentence about an AWS sign-in it
+  // never made.
+  it("a manual token paste keeps its paste row while saving — never the helper's verifying note", async () => {
+    let settle: () => void = () => {};
+    harnessPasteMock.mockImplementation(() => new Promise<void>((res) => (settle = () => res())));
+    render(<HarnessLoginPane provider="anthropic" onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    await screen.findByTestId("fake-terminal");
+
+    await userEvent.type(screen.getByLabelText("setup-token"), TOKEN);
+    await userEvent.click(screen.getByRole("button", { name: /save token/i }));
+
+    // Mid-save: the paste row is still the operator's surface.
+    expect(screen.queryByTestId("capture-verifying-note")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("setup-token")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /save token/i })).toBeDisabled();
+
+    await act(async () => {
+      settle();
     });
   });
 

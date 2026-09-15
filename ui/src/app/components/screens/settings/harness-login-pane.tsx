@@ -632,9 +632,12 @@ export function HarnessLoginPane({
             ptyCols={LOGIN_PTY_COLS}
             heightClass="h-96"
           />
-          {phase === "error" ? null : phase === "saving" && !autoCaptured ? (
+          {phase === "error" ? null : phase === "saving" && !autoCaptured && flow.capture === "helper" ? (
             /* R-8: the corroboration round trip, narrated. Deliberately NOT the
-               "captured" note below — the server has not agreed yet. */
+               "captured" note below — the server has not agreed yet. HELPER
+               FLOWS ONLY: a scrape flow's `saving` with no autoCapture is a
+               MANUAL token paste, which keeps its own row (and its own Save
+               spinner) and would be told about an AWS sign-in it never made. */
             <p className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="capture-verifying-note">
               <Loader2 className="size-3.5 animate-spin" /> {CAPTURE_VERIFYING}
             </p>

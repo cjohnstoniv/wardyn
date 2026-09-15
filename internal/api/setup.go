@@ -533,9 +533,8 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// and harness blocks because it is what says WHOSE model credential this
 	// caller has: an enabled per_user row scopes every AWS SSO read below to the
 	// caller's own namespace, so an admin sees their own capture and a member
-	// sees theirs — never each other's. A failed read reads as legacy open mode
-	// (the operator namespace), the same direction every other roster consumer
-	// takes on an outage.
+	// sees theirs — never each other's. A failed read fails CLOSED to this
+	// caller's own namespace — see setupStatusSSOScope.
 	siteCfg, siteCfgOK := s.siteConfigSnapshot(ctx)
 	ssoScope := setupStatusSSOScope(siteCfg, siteCfgOK, s.cfg.Store != nil, runIdentitySubject(ctx, principalFromRequest(r)))
 
