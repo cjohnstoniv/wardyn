@@ -676,7 +676,7 @@ func TestRedactSetupStatusKeepsTheRoster(t *testing.T) {
 			CredentialSource: types.CredentialSourcePerUser, SSOStartURL: "https://acme.awsapps.com/start",
 		}),
 	})}
-	got := redactSetupStatusForMember(st)
+	got := redactSetupStatusForMember(st, false)
 	if len(got.Harnesses) != len(harnessCatalog) {
 		t.Fatalf("a member sees %d harness rows, want all %d", len(got.Harnesses), len(harnessCatalog))
 	}

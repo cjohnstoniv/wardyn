@@ -537,7 +537,20 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// (the operator namespace), the same direction every other roster consumer
 	// takes on an outage.
 	siteCfg, siteCfgOK := s.siteConfigSnapshot(ctx)
-	ssoScope := awsSSOScopeFor(siteCfg, modelAccessAgent, runIdentitySubject(ctx, principalFromRequest(r)))
+	subject := runIdentitySubject(ctx, principalFromRequest(r))
+	ssoScope := awsSSOScopeFor(siteCfg, modelAccessAgent, subject)
+	// R-4: a roster read that FAILED must not resolve to the OPERATOR namespace
+	// here. awsSSOScopeFor's legacy-open fallback belongs at a WRITE door; this
+	// is a READ, and the zero document makes every caller — a member included —
+	// read the admin's harness row and model_access for the duration of a store
+	// blip, which is also the one window where a forged capture marker in a
+	// member's own login sandbox is corroborated by a session that is not theirs
+	// (S-13). Fail closed on the caller's own subject: readAWSSSOBlob answers a
+	// per-user scope it cannot name with "nothing". A NIL store is untouched —
+	// that is an install with no roster, not a blip.
+	if s.cfg.Store != nil && !siteCfgOK {
+		ssoScope = awsSSOScope{perUser: true, owner: subject}
+	}
 
 	// LLM access provenance: the detail of the WINNING signal (resident CLI
 	// login, or an api-key-ish secret), "" when none. The secret-name scan is a
@@ -728,7 +741,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// setup mutation, which stays super-only. A security admin sees the same
 	// summary a member does because there is nothing here they could act on.
 	if !s.isOperator(ctx) {
-		resp = redactSetupStatusForMember(resp)
+		resp = redactSetupStatusForMember(resp, ssoScope.perUser)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -772,7 +785,9 @@ func (s *Server) consoleRoleMappingsPresent(ctx context.Context, oidcConfigured 
 // (the SetupRunner below is rebuilt from ConfinementClasses alone, so a field
 // added later is dropped by default rather than by a line somebody remembered
 // to write); TestRedactSetupStatusForMember_DropsHostCredentialPosture pins it.
-func redactSetupStatusForMember(st SetupStatus) SetupStatus {
+// ownAWSRow says the aws harness row is the CALLER'S OWN capture (a per_user
+// row scoped the read to their namespace). It decides one field — see Harness.
+func redactSetupStatusForMember(st SetupStatus, ownAWSRow bool) SetupStatus {
 	st.Checks = []SetupCheck{}
 	st.Providers = []SetupProvider{}
 	st.Secrets = SetupSecrets{Present: []string{}}
@@ -791,9 +806,14 @@ func redactSetupStatusForMember(st SetupStatus) SetupStatus {
 	st.Deployment = SetupDeployment{}
 	// Harness is REDUCED, not dropped: ui/lib/api/integrations.ts reads
 	// provider/captured/expired to answer "is there a model path" for a
-	// member's own readiness. Capture time, source run id, aging and
-	// renewability are operator credential-lifecycle detail. Rebuilt into a new
-	// slice rather than edited in place — the input is the caller's value.
+	// member's own readiness. Capture time, aging and renewability are operator
+	// credential-lifecycle detail. Rebuilt into a new slice rather than edited
+	// in place — the input is the caller's value.
+	// source_run_id survives on ONE row, under ownAWSRow only: the caller's own
+	// per_user aws capture, where it is THEIR login run's id and the one fact
+	// separating "this sign-in captured something" from "a credential was
+	// already there" (S-13 / R-1, harness-login-pane.tsx). Any other row — a
+	// shared/legacy aws row, the unscoped anthropic blob — is the OPERATOR's.
 	// THE SAME ROWS /integrations publishes, and the same projection. Dropping
 	// SetupSecrets.Present as "secret NAMES" while shipping
 	// integrations[].secrets[].secret_name in the SAME response body was the
@@ -816,6 +836,9 @@ func redactSetupStatusForMember(st SetupStatus) SetupStatus {
 		reduced := make([]SetupHarness, len(st.Harness))
 		for i, h := range st.Harness {
 			reduced[i] = SetupHarness{Provider: h.Provider, Captured: h.Captured, Expired: h.Expired}
+			if ownAWSRow && h.Provider == awsSSOProvider {
+				reduced[i].SourceRunID = h.SourceRunID
+			}
 		}
 		st.Harness = reduced
 	}

@@ -61,7 +61,7 @@ func memberStatusFor(t *testing.T, ma SetupModelAccess, blob awsSSOBlob, now tim
 		Secrets: SetupSecrets{Present: []string{"bedrock-api-key"}},
 		Checks:  []SetupCheck{{ID: "harness_credential_aws", Detail: "operator detail"}},
 	}
-	out := redactSetupStatusForMember(full)
+	out := redactSetupStatusForMember(full, false)
 	raw, err := json.Marshal(out)
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +174,7 @@ func TestMemberModelAccess_PerUserKeepsItsOwnersDeadline(t *testing.T) {
 	if !ma.PerUser {
 		t.Fatal("a per_user grading must say so — memberModelAccess reads it")
 	}
-	out := redactSetupStatusForMember(SetupStatus{ModelAccess: ma})
+	out := redactSetupStatusForMember(SetupStatus{ModelAccess: ma}, false)
 	if out.ModelAccess != ma {
 		t.Fatalf("a per_user member's own answer = %+v, want it kept verbatim (%+v)", out.ModelAccess, ma)
 	}

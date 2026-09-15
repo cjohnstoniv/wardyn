@@ -713,7 +713,7 @@ func TestRedactSetupStatusForMember_DropsHostCredentialPosture(t *testing.T) {
 		}},
 		Integrations: []SetupIntegration{{}},
 	}
-	got := redactSetupStatusForMember(full)
+	got := redactSetupStatusForMember(full, false)
 
 	if got.SCM != (setup.SCMPosture{}) {
 		t.Errorf("scm = %+v, want zero — host git-credential posture is not a member's business", got.SCM)
@@ -737,6 +737,10 @@ func TestRedactSetupStatusForMember_DropsHostCredentialPosture(t *testing.T) {
 	if len(got.Harness) != 1 {
 		t.Fatalf("harness = %+v, want one reduced row", got.Harness)
 	}
+	// The anthropic managed blob is the OPERATOR's whoever asks, so its
+	// source_run_id goes with the rest of the lifecycle detail. The one row
+	// that keeps it is the caller's own per_user aws capture — pinned in
+	// setup_status_scope_failclosed_test.go, both arms.
 	wantHarness := SetupHarness{Provider: "anthropic", Captured: true}
 	if got.Harness[0] != wantHarness {
 		t.Errorf("harness[0] = %+v, want %+v (presence bits only)", got.Harness[0], wantHarness)
