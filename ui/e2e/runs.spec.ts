@@ -329,6 +329,19 @@ test.describe("Run detail (/runs/:id)", () => {
 
     const cloneBtn = page.getByRole("button", { name: RUN.CLONE_CTA });
     await expect(cloneBtn).toBeVisible();
+    // regression 1 (review round 2): the clone LABEL must not collapse to an
+    // icon at this suite's 1280px default — an icon-only door was the exact
+    // discoverability failure 0.7.3 F7 exists to fix, so its visible TEXT
+    // (not just its accessible name) has to equal RUN.CLONE_CTA here.
+    await expect(cloneBtn).toHaveText(RUN.CLONE_CTA);
+
+    // regression 1's own root cause: "Interactive" (this run isn't RUNNING,
+    // so never "— attachable") is the security-visible fact governance.spec
+    // ts:473 exists to pin, and the run's own ConfinementChip is now the
+    // ONLY place a run's tier shows anywhere (0.7.3 F6 removed the header's
+    // global chip) — neither may hide at this bar's ≥lg breakpoints.
+    await expect(page.getByText("Interactive", { exact: true })).toBeVisible();
+    await expect(page.getByText("Fence", { exact: true })).toBeVisible();
   });
 });
 

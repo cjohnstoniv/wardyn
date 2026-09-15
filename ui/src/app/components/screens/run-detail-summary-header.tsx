@@ -187,27 +187,30 @@ export function SummaryHeader({
           why. Independent of the exit chip above: a run can show one, the
           other, both, or neither. Bare server text, no prefix — the state
           badge already says "Failed".
-          0.7.3 F7 review (C-04): narrowed 280px -> 160px. The full title
-          attribute still carries the whole sentence — this cap only bounds
-          how much of the bar ONE unbounded server string can claim now that
-          Clone shares the row with it. */}
+          0.7.3 F7 review round 2 (regression 1): narrowed 160px -> 60px.
+          governance.spec.ts:473 needs the Interactive chip visible at 1280
+          — restoring that (below) cost back the budget this cap had freed,
+          and the h1 floor (runs.spec.ts's 160px pin) needed still more of it
+          than the first narrowing gave back. The full title attribute still
+          carries the whole sentence — this is the last, cheapest thing on
+          the bar to give up width, ahead of the task h1, the Confinement/
+          Interactive chips, or the clone label. */}
       {run.failure_hint && (
-        <Chip tone="danger" className="max-w-[160px] shrink-0 truncate" title={run.failure_hint}>
+        <Chip tone="danger" className="max-w-[60px] shrink-0 truncate" title={run.failure_hint}>
           {run.failure_hint}
         </Chip>
       )}
 
-      {/* Confinement/barrier + interactive-attach detail — genuinely
-          secondary next to state/repo/workspace/elapsed/pending/Kill.
-          0.7.3 F7 review (C-04): bumped lg -> 2xl, same reasoning as the
-          short-id span below — this is the OTHER block the file's own
-          hierarchy already called secondary, so it is the one that yields
-          before the task h1 (min-w-0 flex-1, the one thing this bar cannot
-          lose) or the new Clone label (must keep its full, discoverable
-          text — an icon-only door was the failure this finding is about). */}
-      <div className="hidden shrink-0 items-center gap-2 2xl:flex">
+      {/* Confinement + interactive-attach: NOT secondary — regression 1
+          (governance.spec.ts:473, security admin reaching a run they don't
+          own) reads "Interactive" vs "Interactive — attachable" as the
+          security-visible fact that a caller cannot open a PTY on someone
+          else's run, and the run's own ConfinementChip is now the ONLY place
+          a run's tier shows at all (0.7.3 F6 removed the header's global
+          chip). Restored to lg: (never hidden at >=1024, so never at this
+          suite's 1280 default). */}
+      <div className="hidden shrink-0 items-center gap-2 lg:flex">
         <ConfinementChip value={run.confinement_class} />
-        <BarrierStrengthStrip tier={run.confinement_class} />
         {run.interactive && (
           <Chip tone="info" className="gap-1">
             <TerminalSquare className="size-3" />
@@ -216,11 +219,22 @@ export function SummaryHeader({
         )}
       </div>
 
+      {/* BarrierStrengthStrip is DECORATIVE (ConfinementChip above already
+          names the tier in words) — this is what actually yields the width
+          Confinement+Interactive needed back: hidden below 2xl instead of
+          lg, one step later than it used to be. */}
+      <div className="hidden shrink-0 2xl:block">
+        <BarrierStrengthStrip tier={run.confinement_class} />
+      </div>
+
       {/* A bare "4m 22s" beside an unlabelled clock does not say WHAT it
           measures. The title/aria-label do, without spending command-bar
-          width on the word "elapsed". */}
+          width on the word "elapsed". Hidden below 2xl — same waterfall,
+          last to go: the clock is the least load-bearing fact on this bar
+          (SummaryHeader's OWN clock keeps ticking; nothing reads it off
+          this span). */}
       <span
-        className="flex shrink-0 items-center gap-1.5 font-mono text-xs text-muted-foreground"
+        className="hidden shrink-0 items-center gap-1.5 font-mono text-xs text-muted-foreground 2xl:flex"
         title={terminal ? "Total run time" : "Time since this run started"}
         aria-label={`${terminal ? "Total run time" : "Running for"} ${elapsed}`}
       >

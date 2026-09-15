@@ -36,6 +36,13 @@ import type {
   WorkspaceSourceInput,
 } from "../../../lib/types";
 import { effectiveWorkspaceRequirements } from "../../../lib/types";
+import type { AuditEvent } from "../../../lib/types";
+// review U-01: the ONE place both clone doors (run header, Runs-list kebab)
+// turn a run's audit trail into a prefill or a refusal — see cloneFromAudit
+// below. lib/api must not import from components/ (audit.ts's own comment),
+// so the dependency runs the allowed direction: this component-layer module
+// imports the lib helper, not the reverse.
+import { createRequestFromAudit } from "../../../lib/api/audit";
 
 export type { WorkspaceSelection };
 
@@ -372,6 +379,25 @@ export function runPrefill(run: ClonableRun, created: RunCreateRequestFacts = {}
       workspaces: (run.workspace_ids ?? []).map((id) => ({ workspaceId: id })),
     },
   };
+}
+
+// DRAFT (M2 canon pending) — review U-01: moved here from runs/run-card.tsx
+// so both clone doors (the run header's onClone, run-detail.tsx; the
+// Runs-list kebab, run-card.tsx) show ONE string, not two that could drift.
+export const CLONE_UNREADABLE =
+  "This run's launch settings couldn't be read — its clone would start from defaults, so it was not opened.";
+
+/**
+ * The ONE door both clone affordances open through. `null` when the run's
+ * own run.create audit row is missing — an older run, a pruned trail, or a
+ * non-owner's empty 200 (auditScope writes `[]` rather than an error) — so
+ * NEITHER door can silently launch a clone with wizard DEFAULTS standing in
+ * for task_mode/interactive_start/seed_auto_tools/tool_approvals. The caller
+ * toasts CLONE_UNREADABLE and does not navigate.
+ */
+export function cloneFromAudit(run: ClonableRun, events: AuditEvent[]): RunPrefill | null {
+  if (!events.some((e) => e.action === "run.create")) return null;
+  return runPrefill(run, createRequestFromAudit(events));
 }
 
 /**

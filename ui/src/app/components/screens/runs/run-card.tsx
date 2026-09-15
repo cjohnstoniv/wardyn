@@ -21,7 +21,7 @@ import { Eye, MoreHorizontal, GitBranch, RotateCcw, Skull, TerminalSquare } from
 import type { AgentRun } from "../../../lib/types";
 import { isTerminalRunState } from "../../../lib/types";
 import { relativeTime, getErrorMessage } from "../../../lib/format";
-import { audit as auditApi, createRequestFromAudit } from "../../../lib/api/audit";
+import { audit as auditApi } from "../../../lib/api/audit";
 import { Button } from "../../ui/button";
 import {
   DropdownMenu,
@@ -37,17 +37,10 @@ import { RUN, RUN_COCKPIT } from "../../wardyn/copy";
 import { Mono } from "../../wardyn/code-block";
 import { cn } from "../../ui/utils";
 import { repoLabel, rowHeadline, runAttention, shortId, signalsFor, type RunSignals } from "./board-groups";
-import { runPrefill } from "../new-run/wizard-types";
-
-// DRAFT (M2 canon pending) — 0.7.3 F7 fix-pass (review C-01/C-06/C-07):
-// cloneRun's own refusal. A run whose run.create audit row is gone (an older
-// run, a pruned trail, or a non-owner's empty 200 — auditScope writes an
-// empty list rather than an error) must not silently launch a clone with
-// wizard DEFAULTS in its place — that reads as a faithful clone when it is
-// not. Local to this file (not copy.ts's RUN block) on purpose: nothing else
-// renders it.
-const CLONE_UNREADABLE =
-  "This run's launch settings couldn't be read — its clone would start from defaults, so it was not opened.";
+// review U-01: cloneFromAudit + CLONE_UNREADABLE moved to wizard-types.ts so
+// this door and the run header's (run-detail.tsx onClone) share ONE refusal
+// path and ONE string, rather than reimplementing the same guard twice.
+import { cloneFromAudit, CLONE_UNREADABLE } from "../new-run/wizard-types";
 
 export function CardGrid({ children }: { children: React.ReactNode }) {
   // auto-fill with a min(100%, floor) track: cards reflow and collapse to ONE
@@ -263,16 +256,17 @@ export function RunActions({
   const cloneRun = async () => {
     try {
       const events = await auditApi.listAudit(run.id, "run.create");
-      // review C-01/C-06: an empty read (an older run, a pruned trail, or a
-      // non-owner's empty 200 — auditScope writes an empty list rather than
-      // an error) must not silently launch a clone with wizard DEFAULTS
-      // standing in for task_mode/interactive_start/seed_auto_tools/
-      // tool_approvals. Refuse instead of degrading.
-      if (events.length === 0) {
+      // review C-01/C-06/U-01: the SAME refusal the run header uses — an
+      // empty read (an older run, a pruned trail, or a non-owner's empty
+      // 200 — auditScope writes an empty list rather than an error) must
+      // not silently launch a clone with wizard DEFAULTS standing in for
+      // task_mode/interactive_start/seed_auto_tools/tool_approvals.
+      const prefill = cloneFromAudit(run, events);
+      if (!prefill) {
         toast.warning(CLONE_UNREADABLE);
         return;
       }
-      navigate("/runs/new", { state: { prefill: runPrefill(run, createRequestFromAudit(events)) } });
+      navigate("/runs/new", { state: { prefill } });
     } catch (err) {
       toast.error("Could not load this run's details", { description: getErrorMessage(err) });
     }

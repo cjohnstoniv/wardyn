@@ -84,7 +84,7 @@ import { SummaryHeader } from "./run-detail-summary-header";
 import { RunDetailCommandBar } from "./run-detail-command-bar";
 import { RunCanvas } from "./run-detail/canvas";
 import { RunFailureBlock } from "./run-detail/failure-block";
-import { runPrefill } from "./new-run/wizard-types";
+import { cloneFromAudit, CLONE_UNREADABLE } from "./new-run/wizard-types";
 import type { WidgetContext } from "./run-detail/widget-registry";
 
 // Live refresh cadence for a non-terminal run's detail.
@@ -268,12 +268,17 @@ export function RunDetailScreen() {
     }
   };
 
-  // 0.7.3 F7 — the header's clone door, for EVERY terminal run (see
-  // run-detail-summary-header.tsx for the rationale Cockpit's execMode below
-  // already relies on the same two sources for).
+  // 0.7.3 F7 / review U-01 — the header's clone door, same cloneFromAudit
+  // refusal as the Runs-list kebab (run-card.tsx): no run.create row, no
+  // navigation.
   const onClone = () => {
     if (!run) return;
-    navigate("/runs/new", { state: { prefill: runPrefill(run, createRequestFromAudit(audit)) } });
+    const prefill = cloneFromAudit(run, audit);
+    if (!prefill) {
+      toast.warning(CLONE_UNREADABLE);
+      return;
+    }
+    navigate("/runs/new", { state: { prefill } });
   };
 
   const submitDecision = async (reason: string, scope: ApprovalScope, until?: string): Promise<boolean> => {

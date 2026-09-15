@@ -72,9 +72,14 @@ vi.mock("../../lib/api/recordings", () => ({
 vi.mock("../../lib/api/health", () => ({
   health: { health: vi.fn().mockResolvedValue({}) },
 }));
+// review U-01: the header's clone door (onClone) must toast, not navigate,
+// when cloneFromAudit refuses — asserted against the real sonner mock below,
+// not a stub that swallows the call silently.
+vi.mock("sonner", () => ({ toast: { warning: vi.fn(), error: vi.fn(), success: vi.fn() } }));
 
 import { RunDetailScreen } from "./run-detail";
 import { RUN_COCKPIT } from "../wardyn/copy";
+import { toast } from "sonner";
 
 beforeEach(() => {
   getRunMock.mockReset();
@@ -287,6 +292,37 @@ describe("RunDetailScreen — D9 failure-hint chip", () => {
     renderRun({ ...RUN, state: "FAILED" });
     await screen.findByText("Failed");
     expect(screen.queryByText("image not found on daemon")).not.toBeInTheDocument();
+  });
+});
+
+// review U-01: onClone shares run-card.tsx's cloneRun refusal via
+// cloneFromAudit — an unreadable run.create row (here, listAuditMock's own
+// default: an empty trail) must toast and never navigate, exactly like the
+// Runs-list kebab. Red-first: before the hoist, onClone read
+// runPrefill(run, createRequestFromAudit(audit)) directly and always
+// navigated, audit or no audit.
+describe("RunDetailScreen — onClone refuses on an unreadable audit row (review U-01)", () => {
+  it("toasts CLONE_UNREADABLE and does not navigate when the audit trail carries no run.create row", async () => {
+    getRunMock.mockResolvedValue({ ...RUN, state: "COMPLETED" });
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <Routes>
+          <Route path="/runs/:id" element={<RunDetailScreen />} />
+          <Route path="/runs/new" element={<div>NEW RUN PAGE</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    const cloneBtn = await screen.findByRole("button", { name: "Start a run like this one" });
+    await user.click(cloneBtn);
+
+    await waitFor(() =>
+      expect(toast.warning).toHaveBeenCalledWith(
+        "This run's launch settings couldn't be read — its clone would start from defaults, so it was not opened.",
+      ),
+    );
+    expect(screen.queryByText("NEW RUN PAGE")).not.toBeInTheDocument();
   });
 });
 
