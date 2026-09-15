@@ -11,12 +11,22 @@ import (
 	"testing"
 )
 
-// The two emit shapes. Every auth.failed row in the product goes through one of
-// them (auditAuthFailed is the public-lane wrapper around auditAuthFailedAs), so
-// walking these two calls IS the enum.
+// The two emit shapes, PLUS the context override. auditAuthFailed is the
+// public-lane wrapper around auditAuthFailedAs, so walking those two calls
+// covers every call site — but not every reason that reaches the row:
+// auditAuthFailedAs REPLACES its argument with oidc.SessionRejectedFromContext
+// when the middleware set one, and those four values are declared in
+// internal/auth/oidc and appear at no call site at all. withSessionRejectedCall
+// walks them too, so a fifth rejection reason added upstream cannot land in
+// auth.failed with this fence green.
+//
+// `(?s)` and `[^)]` (rather than `[^),]`) so a call gofmt has wrapped across
+// lines is still read — a multi-line emit was invisible to the first version of
+// this guard, and the count floor below is too coarse to notice one.
 var (
-	authFailedCall   = regexp.MustCompile(`auditAuthFailed\(r,\s*([^),]+)\)`)
-	authFailedAsCall = regexp.MustCompile(`auditAuthFailedAs\(r,\s*([^,]+),\s*([^),]+)\)`)
+	authFailedCall          = regexp.MustCompile(`(?s)auditAuthFailed\(r,\s*([^),]+)\)`)
+	authFailedAsCall        = regexp.MustCompile(`(?s)auditAuthFailedAs\(r,\s*([^,)]+),\s*([^),]+)\)`)
+	withSessionRejectedCall = regexp.MustCompile(`withSessionRejected\([^,]+,\s*"([^"]+)"\)`)
 	// A CONST line of the shape `name = "value"` — how both the reasons and the
 	// *Actor names are declared. Scanned only inside a const declaration, so a
 	// local `reason = "..."` assignment in some handler cannot shadow one.
@@ -120,6 +130,32 @@ func TestAuthFailedReasonEnumIsDocumented(t *testing.T) {
 	// A regex that stopped matching would make this vacuously green.
 	if len(reasons) < 10 || len(actors) < 4 {
 		t.Fatalf("found %d reasons and %d actors; the emits number ~15 and 5 — the walk stopped enumerating", len(reasons), len(actors))
+	}
+
+	// The reasons that never appear at a call site: oidc.Middleware stamps them
+	// on the context and auditAuthFailedAs substitutes them for whatever the
+	// caller passed (http.go's session-rejection override).
+	oidcDir := filepath.Join(root, "internal", "auth", "oidc")
+	oidcFiles, err := os.ReadDir(oidcDir)
+	if err != nil {
+		t.Fatalf("read internal/auth/oidc: %v", err)
+	}
+	rejections := 0
+	for _, e := range oidcFiles {
+		if !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		b, rerr := os.ReadFile(filepath.Join(oidcDir, e.Name()))
+		if rerr != nil {
+			t.Fatalf("read internal/auth/oidc/%s: %v", e.Name(), rerr)
+		}
+		for _, m := range withSessionRejectedCall.FindAllStringSubmatch(string(b), -1) {
+			reasons[m[1]] = true
+			rejections++
+		}
+	}
+	if rejections < 4 {
+		t.Fatalf("found %d withSessionRejected reasons; oidc.Middleware stamps 4 — the walk stopped enumerating", rejections)
 	}
 
 	row := auditDocRowFor(t, root, "auth.failed")

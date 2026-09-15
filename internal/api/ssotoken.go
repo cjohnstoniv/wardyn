@@ -74,7 +74,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	var blob awsSSOBlob
 	if jerr := json.Unmarshal(raw, &blob); jerr != nil {
 		s.refuseCapture(w, r, claims, http.StatusBadRequest, refuseReasonBlobShape,
-			"invalid sso token: "+jerr.Error())
+			"invalid sso token: "+jerr.Error(), nil)
 		return
 	}
 	// The LAUNCH-TIME record of what this run was authorized to capture: the
@@ -84,11 +84,11 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	stamp, aerr := s.loginRunStamp(r.Context(), claims.RunID)
 	if aerr != nil {
 		s.refuseCapture(w, r, claims, http.StatusInternalServerError, refuseReasonStampUnreadable,
-			"verify sso token against login run: "+aerr.Error())
+			"verify sso token against login run: "+aerr.Error(), nil)
 		return
 	}
 	if msg, reason := s.bindSSOBlob(blob, stamp); msg != "" {
-		s.refuseCapture(w, r, claims, http.StatusBadRequest, reason, msg)
+		s.refuseCapture(w, r, claims, http.StatusBadRequest, reason, msg, nil)
 		return
 	}
 
@@ -113,7 +113,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		// No stamp, on a deployment whose row now reads `per_user`: unprovable, so
 		// refused. See ssoTokenUnstampedScopeRefusal.
-		s.refuseCapture(w, r, claims, http.StatusConflict, refuseReasonUnstampedScope, ssoTokenUnstampedScopeRefusal)
+		s.refuseCapture(w, r, claims, http.StatusConflict, refuseReasonUnstampedScope, ssoTokenUnstampedScopeRefusal, nil)
 		return
 	}
 
@@ -144,11 +144,11 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// reading the wrong namespace.
 	if prev, found, rerr := s.readAWSSSOBlob(r.Context(), scope); rerr != nil {
 		s.refuseCapture(w, r, claims, http.StatusInternalServerError, refuseReasonStoreError,
-			"read existing aws sso credential: "+rerr.Error(), scope)
+			"read existing aws sso credential: "+rerr.Error(), &scope)
 		return
 	} else if found && prev.SourceRunID == claims.RunID.String() {
 		s.refuseCapture(w, r, claims, http.StatusConflict, refuseReasonAlreadyCaptured,
-			"this login run has already captured an aws sso credential", scope)
+			"this login run has already captured an aws sso credential", &scope)
 		return
 	}
 
@@ -162,7 +162,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		// land" is the honest reading, and a failed persist is exactly the
 		// event an operator wants beside the rest rather than only in a 500.
 		s.refuseCapture(w, r, claims, http.StatusInternalServerError, refuseReasonStoreError,
-			"store aws sso credential: "+err.Error(), scope)
+			"store aws sso credential: "+err.Error(), &scope)
 		return
 	}
 

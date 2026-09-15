@@ -62,31 +62,56 @@ func TestBedrockSSOPinUnenforced(t *testing.T) {
 // when the model LOOKS like an ARN — the typo case, never the bare-id case the
 // code itself calls "most often" true. So the deployment where a sandbox-chosen
 // account AND role are stored unchecked was the one that said nothing at all.
+//
+// The residual is APPENDED to whichever row the deployment was already showing,
+// and it fires whether or not this caller's own sign-in has landed yet: it is a
+// fact about the ROSTER, and a warning that waits for readiness arrives only
+// after the first unchecked capture is already stored.
 func TestBedrockProviderCheck_UnenforcedPinWarns(t *testing.T) {
 	srv := New(Config{
 		BedrockRegion: "us-east-1", BedrockModel: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
 		Secrets: &memSecrets{m: map[string][]byte{}},
 	})
-	// A caller whose OWN sign-in is captured, so every other arm reads ok — the
-	// row that used to say "Bedrock is configured" and nothing else.
-	bedrock := srv.setupBedrock(context.Background(), map[string]bool{}, awsSSOScope{})
-	bedrock.SSOPresent, bedrock.Ready = true, true
+	base := srv.setupBedrock(context.Background(), map[string]bool{}, awsSSOScope{})
 
-	chk, ok := bedrockProviderCheck(bedrock, true)
-	if !ok {
-		t.Fatal("a region+model-configured Bedrock row must always surface a check")
-	}
-	if chk.Status != "warn" {
-		t.Errorf("status = %q, want warn — nothing constrains which account a sign-in stores", chk.Status)
-	}
-	if chk.Detail != bedrockUnenforcedPinDetail || chk.Fix != bedrockUnenforcedPinFix {
-		t.Errorf("row text drifted from the DRAFT sentences:\n got %+v", chk)
-	}
-	if !strings.Contains(chk.Fix, "sso_account_id") {
-		t.Errorf("Fix = %q, want it to name the pin", chk.Fix)
-	}
-	// And the same row with the pin enforced is untouched.
-	if chk, _ := bedrockProviderCheck(bedrock, false); chk.Status != "ok" {
-		t.Errorf("a pinned deployment's row = %+v, want the unchanged ok row", chk)
+	for name, ready := range map[string]bool{
+		"this caller has already captured": true,
+		"nobody has signed in yet":         false,
+	} {
+		t.Run(name, func(t *testing.T) {
+			bedrock := base
+			bedrock.SSOPresent, bedrock.Ready = ready, ready
+
+			chk, ok := bedrockProviderCheck(bedrock, true)
+			if !ok {
+				t.Fatal("a region+model-configured Bedrock row must always surface a check")
+			}
+			if chk.Status != "warn" {
+				t.Errorf("status = %q, want warn — nothing constrains which account a sign-in stores", chk.Status)
+			}
+			if !strings.Contains(chk.Detail, bedrockUnenforcedPinDetail) {
+				t.Errorf("detail = %q, want it to carry the DRAFT residual sentence", chk.Detail)
+			}
+			if !strings.Contains(chk.Fix, bedrockUnenforcedPinFix) {
+				t.Errorf("fix = %q, want it to carry the DRAFT pin remedy", chk.Fix)
+			}
+			if !strings.Contains(chk.Fix, "sso_account_id") {
+				t.Errorf("Fix = %q, want it to name the pin", chk.Fix)
+			}
+			// APPENDED, not substituted: the row this deployment was already
+			// showing is still the only place the console names the live
+			// region/model (ready) or what is still missing (not ready).
+			plain, _ := bedrockProviderCheck(bedrock, false)
+			if !strings.HasPrefix(chk.Detail, plain.Detail) {
+				t.Errorf("detail = %q, want it to keep %q and append the residual", chk.Detail, plain.Detail)
+			}
+			if ready && !strings.Contains(chk.Detail, "us-east-1") {
+				t.Errorf("detail = %q, lost the configured region/model sentence", chk.Detail)
+			}
+			// And with the pin enforced the row is untouched.
+			if want := map[bool]string{true: "ok", false: "warn"}[ready]; plain.Status != want {
+				t.Errorf("a pinned deployment's row = %+v, want status %q", plain, want)
+			}
+		})
 	}
 }

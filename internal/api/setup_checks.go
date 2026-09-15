@@ -224,8 +224,13 @@ const (
 	// a sign-in may store, so the in-sandbox chooser is the only thing deciding
 	// — and that is code the sandbox controls.
 	//
+	// APPENDED to whichever row this deployment was already showing, never a
+	// replacement for it: it is a fact about the ROSTER, and the row it lands on
+	// is still the only place the console names the live region, model and
+	// credential source.
+	//
 	// DRAFT (M2 canon pending)
-	bedrockUnenforcedPinDetail = "Bedrock is configured and each person signs in themselves, but nothing here says WHICH AWS account and role a sign-in may store — whatever the sign-in names is what every later run uses."
+	bedrockUnenforcedPinDetail = "Nothing here says WHICH AWS account and role a sign-in may store, so whatever the sign-in names is what every later run uses."
 	// DRAFT (M2 canon pending)
 	bedrockUnenforcedPinFix = "Optional, and the fix if your people reach more than one account: set sso_account_id + sso_role_name on the agent's roster row (Settings → Agents), or give WARDYN_BEDROCK_MODEL the full model ARN so its account is checked."
 )
@@ -266,7 +271,29 @@ func llmProviderCheck(llmDetail string, bedrock SetupBedrock) SetupCheck {
 
 // bedrockProviderCheck surfaces a row only once the operator has touched ANY
 // Bedrock knob (ok=false otherwise), so the majority who never use AWS aren't
-// shown an irrelevant row. warn = partially configured, a real gap worth
+// shown an irrelevant row.
+//
+// pinUnenforced is BedrockSSOPinUnenforced for this deployment's roster —
+// passed in rather than read here because the callsite already holds the site
+// config. It is a posture fact about the ROSTER, not about readiness, so it is
+// folded into WHATEVER row bedrockProviderRow produced rather than nested under
+// the ready arm: nested, the warning arrived only after the first unchecked
+// capture had already been stored, which is exactly the person and the moment
+// it is useless to. Appended, never substituted, so the row keeps naming the
+// live region, model and credential source (or what is still missing).
+func bedrockProviderCheck(bedrock SetupBedrock, pinUnenforced bool) (SetupCheck, bool) {
+	chk, ok := bedrockProviderRow(bedrock)
+	if !ok || !pinUnenforced {
+		return chk, ok
+	}
+	chk.Status = "warn"
+	chk.Detail = strings.TrimSpace(chk.Detail + " " + bedrockUnenforcedPinDetail)
+	chk.Fix = strings.TrimSpace(chk.Fix + " " + bedrockUnenforcedPinFix)
+	return chk, true
+}
+
+// bedrockProviderRow is the row as it reads on its own, before the roster
+// posture above is folded in. warn = partially configured, a real gap worth
 // fixing — EXCEPT for the mechanism principal (info: the shared admin token
 // has nothing it can fix here, so a warning would be a false alarm forever).
 //
@@ -275,22 +302,11 @@ func llmProviderCheck(llmDetail string, bedrock SetupBedrock) SetupCheck {
 // one thing per_user resolution actually changes (it "skips the bearer,
 // host-~/.aws-mount and static-key arms outright, because all three are
 // operator reads" — finding 3).
-// pinUnenforced is BedrockSSOPinUnenforced for this deployment's roster —
-// passed in rather than read here because the callsite already holds the site
-// config. It turns the ONE arm that otherwise says "all good" into a warning:
-// on that configuration a sandbox-chosen account AND role are stored unchecked,
-// and the row that said nothing about it was the row an operator reads.
-func bedrockProviderCheck(bedrock SetupBedrock, pinUnenforced bool) (SetupCheck, bool) {
+func bedrockProviderRow(bedrock SetupBedrock) (SetupCheck, bool) {
 	if !bedrock.configured() {
 		return SetupCheck{}, false
 	}
 	if bedrock.ready() {
-		if pinUnenforced {
-			return SetupCheck{
-				ID: "bedrock_provider", Label: "AWS Bedrock", Status: "warn",
-				Detail: bedrockUnenforcedPinDetail, Fix: bedrockUnenforcedPinFix,
-			}, true
-		}
 		return SetupCheck{
 			ID: "bedrock_provider", Label: "AWS Bedrock", Status: "ok",
 			Detail: fmt.Sprintf("Bedrock is configured (region %s, model %s) for Claude runs via %s.", bedrock.Region, bedrock.Model, bedrock.credSourceDesc()),

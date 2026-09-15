@@ -243,18 +243,19 @@ func bindCaptureToPin(blob awsSSOBlob, stamp loginRunStamp, model string) (msg, 
 // The DATA carries the reason from the fixed vocabulary above and nothing the
 // sandbox chose: the sentence goes to the caller, never into the log.
 //
-// scope is the caller's credential scope, and is passed by the refusals that
-// happen AFTER loginRunScope has decided one. Those rows then carry owner +
-// credential_source exactly like the captured row — the pair that makes a
-// per_user estate's refusal stream groupable by person instead of a join back
-// through each row's run_id to its harness.login.started. The EARLIER refusals
-// pass none: there is no decided scope yet, and their run's stamp already
-// carries the same pair.
-func (s *Server) refuseCapture(w http.ResponseWriter, r *http.Request, claims *identity.Claims, status int, reason, msg string, scope ...awsSSOScope) {
+// scope is the caller's credential scope, or NIL. It is non-nil for the
+// refusals that happen AFTER loginRunScope has decided one; those rows then
+// carry owner + credential_source exactly like the captured row — the pair that
+// makes a per_user estate's refusal stream groupable by person instead of a
+// join back through each row's run_id to its harness.login.started. The EARLIER
+// refusals pass nil: there is no decided scope yet, and their run's stamp
+// already carries the same pair. A POINTER rather than a variadic because the
+// answer is genuinely zero-or-one and the signature should say so.
+func (s *Server) refuseCapture(w http.ResponseWriter, r *http.Request, claims *identity.Claims, status int, reason, msg string, scope *awsSSOScope) {
 	data := map[string]any{"provider": awsSSOProvider, "reason": reason}
-	for _, sc := range scope {
-		data["owner"] = sc.owner
-		data["credential_source"] = awsSSOCredentialSourceLabel(sc)
+	if scope != nil {
+		data["owner"] = scope.owner
+		data["credential_source"] = awsSSOCredentialSourceLabel(*scope)
 	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"harness.credential.refused", harnessCredSecretName(awsSSOProvider), "failure",

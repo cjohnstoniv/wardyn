@@ -84,7 +84,8 @@ var errCrossOriginRefused = errors.New(csrfRefusedBody)
 //     the configured OIDC redirect URL. Anything else — including an Origin
 //     that is malformed, opaque ("null", what a sandboxed iframe or some
 //     cross-site redirects send), or carries no host at all — is REFUSED. Fail
-//     closed on every unparseable input, exactly like isLoopbackOrigin.
+//     closed on every unparseable input, exactly like originIsRequestHost (the
+//     LocalMode arm's own comparison, which reads the same parse).
 //
 // WHY TWO ACCEPTED HOSTS. Behind a TLS-terminating ingress the browser's Origin
 // is the public console name while r.Host is whatever the proxy forwards
@@ -199,7 +200,7 @@ func isCrossSiteFetch(r *http.Request) bool {
 // carrying USERINFO ("https://user@host", where the host is not where a reader
 // expects it). The last two are not browser-reachable — the Origin header is
 // always a serialised origin — but this function is now read by
-// attachOriginPatterns and by config, and a shape whose host is not obvious to
+// attachOriginRefused and by config, and a shape whose host is not obvious to
 // a human reader has no business being silently accepted on a security path.
 //
 // A port equal to the SCHEME'S DEFAULT is dropped (https:443, http:80), so
@@ -247,5 +248,18 @@ func OriginHostReadable(raw string) bool {
 // origin, including one originHost cannot read, is refused BEFORE the upgrade.
 func (s *Server) attachOriginRefused(r *http.Request) bool {
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
-	return origin != "" && !s.originNamesThisDeployment(r, origin)
+	if origin == "" {
+		return false
+	}
+	// ONE PREDICATE PER MODE, the same split the REST surface makes: LocalMode
+	// has no second name (there is no ingress and no IdP in front of a
+	// single-developer daemon), so it compares r.Host alone. Without this the
+	// two surfaces diverge on a deployment that runs LocalMode WITH OIDC
+	// configured — the attach socket would accept a redirect host the REST
+	// routes refuse, which is exactly what originNamesThisDeployment's doc
+	// promises cannot happen.
+	if s.cfg.LocalMode {
+		return !s.originIsRequestHost(r, origin)
+	}
+	return !s.originNamesThisDeployment(r, origin)
 }

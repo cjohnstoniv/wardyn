@@ -4,11 +4,15 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -111,6 +115,47 @@ func TestAttachOrigin_RedirectHostIsNotAGlob(t *testing.T) {
 	}
 }
 
+// TestAttachOrigin_LocalModeHasNoSecondName (review R-6). attachOriginRefused
+// and the LocalMode REST arm must make the SAME decision, which is what
+// originNamesThisDeployment's doc promises ("so 'which origins are us' cannot
+// diverge"). LocalMode has no ingress and no IdP in front of it, so the
+// redirect host is not a name it answers to — and a deployment running
+// LocalMode WITH OIDC configured would otherwise let the attach socket accept
+// an origin every REST route refuses.
+func TestAttachOrigin_LocalModeHasNoSecondName(t *testing.T) {
+	local := New(Config{
+		Identity:      mustIDP(t),
+		Approvals:     newFakeApprovals(),
+		Broker:        &fakeBroker{},
+		Audit:         &recRecorder{},
+		LocalMode:     true,
+		LocalOperator: "local:tester",
+		DefaultPolicy: types.RunPolicySpec{MinConfinementClass: types.CC2},
+	})
+	local.cfg.OIDCRedirectURL = csrfRedirectURL
+
+	attach := func(srv *Server, origin string) bool {
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/runs/x/attach", nil)
+		r.Host = csrfLocalHost
+		r.Header.Set("Origin", origin)
+		return srv.attachOriginRefused(r)
+	}
+	rest := func(srv *Server, origin string) bool {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil)
+		r.Host = csrfLocalHost
+		return !srv.originIsRequestHost(r, origin)
+	}
+	for _, origin := range []string{csrfRedirectHost, "http://127.0.0.1:9999", "https://evil.example"} {
+		if a, b := attach(local, origin), rest(local, origin); a != b || !a {
+			t.Errorf("Origin %q: attach refused=%v, REST refused=%v; want both true", origin, a, b)
+		}
+	}
+	// The listener's own origin still works on both.
+	if attach(local, "http://"+csrfLocalHost) {
+		t.Error("LocalMode attach refused its own origin")
+	}
+}
+
 // TestCSRFGuard_RefusalNamesTheCSRFBoundary (lens-S S-11). The auth.failed row's
 // Actor names WHICH boundary refused (AUDIT-ACTIONS.md). adminAuth did not
 // refuse this one — the session was VALID and the CSRF guard short-circuits
@@ -140,4 +185,52 @@ func TestCSRFGuard_RefusalNamesTheCSRFBoundary(t *testing.T) {
 		return
 	}
 	t.Fatal("no auth.failed row for a CSRF refusal")
+}
+
+// TestAttachWS_CrossOriginRefusalIsAudited (review R-3). The attach socket is
+// the most dangerous cookie-authenticated capability in the product, and its
+// cross-origin refusal used to be SILENT: 403 and nothing in the trail, while
+// the REST guard emitted auth.failed/cross_origin_refused/wardyn/csrf at both
+// of its arms. Driven through the real router on the ?ticket= lane, which is
+// the browser's own.
+func TestAttachWS_CrossOriginRefusalIsAudited(t *testing.T) {
+	srv, _, _, audit, run := holderTestServer(t)
+	srv.cfg.OIDCRedirectURL = csrfRedirectURL
+
+	tok, err := mintAttachTicket(context.Background(), srv.cfg.Store, run.ID,
+		types.ActorHuman, holderOwner, oidc.RoleAdmin, time.Now())
+	if err != nil {
+		t.Fatalf("mint ticket: %v", err)
+	}
+	r := httptest.NewRequest(http.MethodGet,
+		"/api/v1/runs/"+run.ID.String()+"/attach?ticket="+tok, nil)
+	r.Host = csrfOIDCHost
+	r.RemoteAddr = "127.0.0.1:54321"
+	r.Header.Set("Origin", "https://evil.example")
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("code = %d, want 403 (a cross-origin upgrade must not reach Accept)\nbody: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), csrfRefusedBody) {
+		t.Errorf("body = %q, want the CSRF guard's own sentence", w.Body.String())
+	}
+	for _, ev := range audit.snapshot() {
+		if ev.Action != "auth.failed" {
+			continue
+		}
+		if ev.Actor != csrfActor {
+			t.Errorf("auth.failed Actor = %q, want %q", ev.Actor, csrfActor)
+		}
+		var data map[string]any
+		if err := json.Unmarshal(ev.Data, &data); err != nil {
+			t.Fatalf("decode audit data: %v", err)
+		}
+		if data["reason"] != csrfAuditReason {
+			t.Errorf("reason = %v, want %q", data["reason"], csrfAuditReason)
+		}
+		return
+	}
+	t.Fatalf("the attach socket refused a cross-origin upgrade and recorded NOTHING; events = %+v", audit.snapshot())
 }

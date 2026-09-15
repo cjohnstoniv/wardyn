@@ -35,7 +35,7 @@ func TestValidateOIDCRedirectURL(t *testing.T) {
 		"://wardyn.example.com/auth/callback", // typo'd scheme
 		// USERINFO (S-7): api.originHost refuses it — the host is not where a
 		// reader looks — so a value carrying it boots clean and then silently
-		// kills BOTH the CSRF guard's second host and attachOriginPatterns.
+		// kills BOTH the CSRF guard's second host and the attach socket's.
 		// ONE parse has to decide both.
 		"https://u@wardyn.example.com/auth/callback",
 		"https://u:p@wardyn.example.com/auth/callback",

@@ -238,16 +238,6 @@ func isMutatingMethod(m string) bool {
 	return false
 }
 
-// isLoopbackOrigin reports whether an Origin header value points at a loopback
-// host. A malformed or opaque origin (e.g. "null") is treated as NON-loopback so
-// a mutating request carrying it is rejected (fail closed) — originHost
-// (csrf.go) is the ONE parse both CSRF guards fail closed on, so "what counts
-// as an unreadable Origin" cannot diverge between the two modes.
-func isLoopbackOrigin(origin string) bool {
-	host, ok := originHost(origin)
-	return ok && isLoopbackHost(host)
-}
-
 // isLoopbackRemoteAddr reports whether the request's TCP peer (r.RemoteAddr, set
 // by the server from the accepted connection) is a loopback address. Unlike the
 // Host header, a LAN/remote client CANNOT spoof this — it is the load-bearing gate

@@ -185,6 +185,12 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// true and is checked one line up; leaving it false would re-refuse the
 	// ingress host this widening exists for.
 	if s.attachOriginRefused(r) {
+		// AUDITED like the REST guard's two arms (http.go), on the same
+		// auth.failed action, reason and actor — a control that refuses
+		// silently cannot answer either question an operator has at 3am
+		// (csrf.go), and that argument started applying to this socket the
+		// moment the decision moved out of the library and into our code.
+		s.auditAuthFailedAs(r, csrfActor, csrfAuditReason)
 		writeError(w, http.StatusForbidden, csrfRefusedBody)
 		return
 	}
