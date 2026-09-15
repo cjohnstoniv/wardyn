@@ -335,6 +335,23 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
     await expect(page.getByRole("button", { name: "Sign in with SSO" })).toBeVisible();
   });
 
+  // U-02: not_applicable (the shared admin-token principal's own answer)
+  // must NOT borrow the deployment-wide "Connected" badge either — it gets
+  // its own honest, never-connected render with a neutral detail line.
+  // Verbatim string, not imported: connection-cards.tsx pulls in
+  // HarnessLoginPane -> AttachTerminal -> xterm's CSS, which Playwright's
+  // Node-side spec collection cannot import (unlike the pure-data copy
+  // modules other e2e specs import from).
+  test("not_applicable: NOT connected, no borrowed badge — neutral per-person detail instead", async ({ page }) => {
+    await splicePerUserBedrock(page, "not_applicable");
+    await gotoConsole(page);
+    await navToRoute(page, "/settings");
+    const bedrockLane = page.locator("#lane-bedrock");
+    await expect(bedrockLane).not.toContainText("Connected");
+    await bedrockLane.click();
+    await expect(page.getByText("Per person — sign in to see yours.")).toBeVisible();
+  });
+
   // F2: the server throws away a typed start URL under a per_user row
   // (harnesscred.go:761) — the dialog must never ask for one here.
   test("opening the dialog shows the managed-portal note, never the dead start-URL prompt", async ({ page }) => {

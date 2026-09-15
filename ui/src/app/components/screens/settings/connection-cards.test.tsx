@@ -306,12 +306,17 @@ describe("ModelProviderCard — F5: the badge follows the caller's own model_acc
     expect(within(screen.getByRole("radio", { name: /AWS Bedrock/ })).queryByText("Connected")).not.toBeInTheDocument();
   });
 
-  // not_applicable: the caller IS the shared admin token, which owns no
-  // per-person session to grade — falls back to the deployment-wide answer
-  // (there is no per-caller answer to substitute).
-  it("not_applicable: falls back to the deployment-wide badge", () => {
+  // U-02 (blind review lens-U, Appendix A #5's own closing paragraph):
+  // not_applicable is the shared admin-token principal's own answer — no
+  // per-caller session to grade, and no per-caller answer to substitute
+  // either. Borrowing the deployment-wide fact painted a green "Connected"
+  // badge over an absent credential for exactly the principal the finding
+  // was written about. This card now renders it honestly: NOT connected,
+  // with a neutral detail explaining where the lane actually lives.
+  it("not_applicable: NOT connected — never borrows the deployment-wide badge", () => {
     model(perUserStatus({ ...bedrockConfigured, model_access: { state: "not_applicable" } }));
-    expect(within(screen.getByRole("radio", { name: /AWS Bedrock/ })).getByText("Connected")).toBeInTheDocument();
+    expect(within(screen.getByRole("radio", { name: /AWS Bedrock/ })).queryByText("Connected")).not.toBeInTheDocument();
+    expect(screen.getByText(S.BEDROCK_PER_USER_NOT_SIGNED_IN)).toBeInTheDocument();
   });
 
   // R3: "shared" covers two distinct cases — absent `harnesses` and an

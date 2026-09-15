@@ -85,6 +85,13 @@ export const S = {
   // silent about where the lane actually lives.
   BEDROCK_PER_USER_NOTE:
     "This lane is per person: it is declared on the Agents tab, and each person signs in to AWS themselves. What this card reads is your own sign-in, not the deployment's.",
+  // DRAFT (M2 canon pending) — U-02 (blind review lens-U, Appendix A #5's own
+  // closing paragraph), canon row pending. not_applicable is the shared
+  // admin-token principal's own answer (no session of its own, ever) — it
+  // used to borrow the deployment-wide `!!bedrockRow` fact, painting a green
+  // "Connected" badge over an absent credential for exactly the principal
+  // the finding was about. This is the honest detail beside the badge.
+  BEDROCK_PER_USER_NOT_SIGNED_IN: "Per person — sign in to see yours.",
   // DRAFT (M2 canon pending) — R9 (fix-first review pass), console-login lane
   // (0.7.3). Under per_user, resolveBedrockAuth skips the bearer/host-mount/
   // static-key arms outright (Appendix A finding 3) — a stored bearer key
@@ -518,13 +525,15 @@ export function ModelProviderCard({
             title="AWS Bedrock"
             hint="A bearer key, or an SSO device-code sign-in."
             // F5: under a per_user row, a caller WITH a per-person model_access
-            // reading reports its OWN state — not_applicable (the shared
-            // admin-token principal, which holds no session of its own) has no
-            // per-caller answer to substitute, so it falls back to the
-            // deployment-wide fact like every other row does.
+            // reading reports its OWN state. not_applicable (U-02) is NOT
+            // folded into that reading and does NOT fall back to the
+            // deployment-wide fact either — both would paint a green
+            // "Connected" badge over a credential the shared admin token can
+            // never hold. It gets its own honest render: not connected, with
+            // BEDROCK_PER_USER_NOT_SIGNED_IN as the detail.
             connected={
-              perUserSso && status.model_access && modelAccessState !== "not_applicable"
-                ? perUserLive
+              perUserSso && status.model_access
+                ? modelAccessState !== "not_applicable" && perUserLive
                 : !!bedrockRow
             }
             connectedDetail={
@@ -546,6 +555,13 @@ export function ModelProviderCard({
               </p>
               {perUserSso && (
                 <p className="text-meta leading-snug text-muted-foreground">{S.BEDROCK_PER_USER_NOTE}</p>
+              )}
+              {/* U-02: not_applicable is the shared admin-token principal's
+                  own answer, connected={false} above — this is the neutral
+                  detail beside the note, never a claim the badge just made
+                  false. */}
+              {perUserSso && status.model_access && modelAccessState === "not_applicable" && (
+                <p className="text-meta leading-snug text-muted-foreground">{S.BEDROCK_PER_USER_NOT_SIGNED_IN}</p>
               )}
               <SecretLane
                 label="Bedrock bearer key"
