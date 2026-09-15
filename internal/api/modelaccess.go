@@ -106,6 +106,24 @@ func awsSSOScopeFor(sc types.SiteConfig, agentID, subject string) awsSSOScope {
 	return awsSSOScope{perUser: true, owner: subject}
 }
 
+// setupStatusSSOScope is the AWS SSO namespace a /setup/status READ answers
+// for: the roster's, except that a roster read which FAILED resolves FAIL-
+// CLOSED to the caller's own per-user namespace (R-4). awsSSOScopeFor's "no
+// row" fallback is the OPERATOR namespace — right at a WRITE door, where an
+// unreadable roster must not silently re-point a credential; on this read it
+// handed every caller, a member included, the admin's harness row and
+// model_access for the duration of a store blip, the one window in which a
+// forged capture marker in a member's own login sandbox is corroborated by a
+// session that is not theirs (S-13). readAWSSSOBlob answers a per-user scope
+// it cannot name with "nothing". storeConfigured keeps a NIL store on the old
+// path: that is an install with no roster, not a blip.
+func setupStatusSSOScope(sc types.SiteConfig, scOK, storeConfigured bool, subject string) awsSSOScope {
+	if storeConfigured && !scOK {
+		return awsSSOScope{perUser: true, owner: subject}
+	}
+	return awsSSOScopeFor(sc, modelAccessAgent, subject)
+}
+
 // awsSSOScopeForAgent is awsSSOScopeFor for a caller that does NOT already hold
 // a site config. A read failure resolves to the operator namespace — legacy open
 // mode, the same direction every other roster consumer takes on an outage: an

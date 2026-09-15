@@ -537,20 +537,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// (the operator namespace), the same direction every other roster consumer
 	// takes on an outage.
 	siteCfg, siteCfgOK := s.siteConfigSnapshot(ctx)
-	subject := runIdentitySubject(ctx, principalFromRequest(r))
-	ssoScope := awsSSOScopeFor(siteCfg, modelAccessAgent, subject)
-	// R-4: a roster read that FAILED must not resolve to the OPERATOR namespace
-	// here. awsSSOScopeFor's legacy-open fallback belongs at a WRITE door; this
-	// is a READ, and the zero document makes every caller — a member included —
-	// read the admin's harness row and model_access for the duration of a store
-	// blip, which is also the one window where a forged capture marker in a
-	// member's own login sandbox is corroborated by a session that is not theirs
-	// (S-13). Fail closed on the caller's own subject: readAWSSSOBlob answers a
-	// per-user scope it cannot name with "nothing". A NIL store is untouched —
-	// that is an install with no roster, not a blip.
-	if s.cfg.Store != nil && !siteCfgOK {
-		ssoScope = awsSSOScope{perUser: true, owner: subject}
-	}
+	ssoScope := setupStatusSSOScope(siteCfg, siteCfgOK, s.cfg.Store != nil, runIdentitySubject(ctx, principalFromRequest(r)))
 
 	// LLM access provenance: the detail of the WINNING signal (resident CLI
 	// login, or an api-key-ish secret), "" when none. The secret-name scan is a
