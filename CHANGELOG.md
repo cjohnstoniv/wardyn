@@ -31,11 +31,14 @@ roster's new `sso_account_id`/`sso_role_name` pin fields are optional,
 `not_applicable` is a new `model_access` state reachable only by the shared
 admin-bearer-token caller under a `per_user` row, and the widened CSRF guard
 refuses only a cross-origin cookie-authenticated mutation — something no
-legitimate CLI, API or console client sends. The one upgrade-visible change is
-a boot refusal: a deployment started with `-local-operator` /
-`WARDYN_LOCAL_OPERATOR` set to the reserved admin-token mechanism principal
-now refuses to start, where 0.7.2 booted it clean (see "Security" below). Any
-other deployment, with no `per_user` roster row, answers byte-for-byte what it
+legitimate CLI, API or console client sends. Two upgrade-visible boot refusals
+exist: a deployment started with `-local-operator` / `WARDYN_LOCAL_OPERATOR`
+set to the reserved admin-token mechanism principal now refuses to start; and,
+where OIDC is configured, `WARDYN_OIDC_REDIRECT_URL` must now parse to an
+absolute URL with a host and no userinfo — a bare hostname, a scheme-relative
+value, or a `user@host` value that booted clean on 0.7.2 now refuses. Both are
+new (see "Security" below). Any other deployment, with no `per_user` roster
+row and a redirect URL already shaped that way, answers byte-for-byte what it
 answered before.
 
 ### Added
@@ -218,10 +221,12 @@ answered before.
   neither header passes — that is not a browser, and it holds no ambient cookie
   to forge — and the admin/API-token lane is exempt by construction: a bearer
   token is not something a browser attaches on an attacker's behalf, and that
-  lane never enters the session branch. The local-mode arm keeps its own
-  loopback-`Origin` rule and now shares the Fetch-Metadata refusal and the
-  refusal sentence, so the two modes cannot drift; both are table-tested for the
-  first time (`internal/api/csrf_test.go`), and every registered mutating route
+  lane never enters the session branch. The local-mode arm now compares that
+  same parse against its own `r.Host` (host AND port, not merely loopback) in
+  place of its old loopback-only rule, and shares the Fetch-Metadata refusal
+  and the refusal sentence with the OIDC arm, so the two modes cannot drift;
+  both are table-tested for the first time (`internal/api/csrf_test.go`), and
+  every registered mutating route
   is fenced by the `chi.Walk` route matrix rather than one sample route. Every
   refusal is audited on the existing `auth.failed` action with `reason`
   `cross_origin_refused` — no new action. **One local-mode behaviour change:** a
@@ -229,22 +234,29 @@ answered before.
   refused, because browsers treat the two loopback aliases as two different
   sites; the console's own fetches are same-origin relative URLs, so nothing
   Wardyn serves is affected. **Two boot refusals:** `WARDYN_OIDC_REDIRECT_URL`
-  must now parse to an absolute URL with a host — its host is the second
-  same-origin name, and a host-less value used to surface as a console-wide
-  "CSRF guard" 403 instead of a boot error. And, separately, local mode's
-  `-local-operator` / `WARDYN_LOCAL_OPERATOR` may no longer be set to the
-  reserved admin-token mechanism principal — a deployment that did would boot
-  clean and then have `POST /setup/harness-login` refuse the very seat boot
-  just accepted, under a `per_user` roster row (see the harness-login refusal
-  below).
+  must now parse to an absolute URL with a host and carry no userinfo — its
+  host is the second same-origin name, and a host-less, scheme-relative or
+  `user@host` value used to surface as a console-wide "CSRF guard" 403 instead
+  of a boot error. And, separately, local mode's `-local-operator` /
+  `WARDYN_LOCAL_OPERATOR` may no longer be set to the reserved admin-token
+  mechanism principal — a deployment that did would boot clean and then have
+  `POST /setup/harness-login` refuse the very seat boot just accepted, under a
+  `per_user` roster row (see the harness-login refusal below).
 - **Browser PTY attach works behind a TLS-terminating ingress.** The attach
-  WebSocket (`internal/api/attach.go`) enforced same-origin with
-  `websocket.Accept`'s default, which authorises the request `Host` alone — so
-  in exactly the ingress shape above, where the browser's `Origin` is the public
-  console name and `Host` is the internal one, browser attach was already being
-  refused. `OriginPatterns` now carries the one extra name the CSRF guard
-  accepts (the host of `WARDYN_OIDC_REDIRECT_URL`) and nothing else; with SSO
-  unconfigured the list is empty and the behaviour is unchanged.
+  WebSocket (`internal/api/attach.go`) used to accept `websocket.Accept`'s
+  default same-origin check, which authorises the request `Host` alone — so in
+  exactly the ingress shape above, where the browser's `Origin` is the public
+  console name and `Host` is the internal one, browser attach was already
+  being refused. The origin decision now moves OUT of that library check and
+  into `attachOriginRefused` (`internal/api/csrf.go`), an explicit host
+  comparison against `r.Host` or the `WARDYN_OIDC_REDIRECT_URL` host — the
+  same two names the CSRF guard accepts — rather than the library's own
+  `OriginPatterns`, whose glob matching mangles an IPv6-literal host in both
+  directions at once. `websocket.Accept` is called with
+  `InsecureSkipVerify: true` because that origin check already happened one
+  line above it. A refused attach is audited on the same `auth.failed` /
+  `cross_origin_refused` reason as the REST guard. With SSO unconfigured the
+  second name is empty and only `r.Host` is accepted — behaviour unchanged.
 - **The shared admin bearer token can no longer capture an AWS SSO session under
   a `per_user` row.** `POST /setup/harness-login` refuses (`422`) when the
   caller is the admin-token mechanism principal, the row is `per_user`, **and**
