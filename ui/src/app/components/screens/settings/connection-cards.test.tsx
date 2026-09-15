@@ -9,7 +9,7 @@
 // fields — a card that disagrees with the app-shell chip is the exact class of
 // bug the old two-model /integrations page kept producing.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const setSecretMock = vi.fn();
@@ -316,7 +316,7 @@ describe("ModelProviderCard — F5: the badge follows the caller's own model_acc
   it("not_applicable: NOT connected — never borrows the deployment-wide badge", () => {
     model(perUserStatus({ ...bedrockConfigured, model_access: { state: "not_applicable" } }));
     expect(within(screen.getByRole("radio", { name: /AWS Bedrock/ })).queryByText("Connected")).not.toBeInTheDocument();
-    expect(screen.getByText(S.BEDROCK_PER_USER_NOT_SIGNED_IN)).toBeInTheDocument();
+    expect(screen.getByText(S.BEDROCK_PER_USER_MECHANISM)).toBeInTheDocument();
   });
 
   // R3: "shared" covers two distinct cases — absent `harnesses` and an
@@ -395,5 +395,109 @@ describe("Lane / SecretLane / HostSummary — exported for the Workspace Provide
     expect(typeof Lane).toBe("function");
     expect(typeof SecretLane).toBe("function");
     expect(typeof HostSummary).toBe("function");
+  });
+});
+
+// U2-01 (blind round 2, lens-U2): the NON-per_user arm of the same badge.
+// `!!bedrockRow` is true as soon as deriveIntegrations sees a Bedrock row at
+// all, and integrations.ts builds that row from `region || model ||
+// creds_present || aws_mount || bearer_present` — so region + model with NO
+// credential of any kind painted a green "Connected" over an absent
+// credential. That is not a hypothetical: scripts/e2e-backend.sh configures
+// exactly those two and nothing else. The honest signal is the row's
+// `bedrockLane`, which activeBedrockLane() leaves undefined until a
+// credential lane is actually active.
+describe("ModelProviderCard — U2-01: Connected needs an active credential lane, not region+model", () => {
+  const bedrockLane = () => within(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+
+  it("region + model with NO credential of any kind: NOT Connected", () => {
+    model(baseStatus({ bedrock: { region: "us-east-1", model: "anthropic.claude", creds_present: false } }));
+    expect(bedrockLane().queryByText("Connected")).not.toBeInTheDocument();
+  });
+
+  it("a stored bearer key: Connected", () => {
+    model(baseStatus({ bedrock: { region: "us-east-1", model: "anthropic.claude", creds_present: false, bearer_present: true } }));
+    expect(bedrockLane().getByText("Connected")).toBeInTheDocument();
+  });
+
+  it("a host ~/.aws mount: Connected", () => {
+    model(baseStatus({ bedrock: { region: "us-east-1", model: "anthropic.claude", creds_present: false, aws_mount: true } }));
+    expect(bedrockLane().getByText("Connected")).toBeInTheDocument();
+  });
+
+  it("static access keys: Connected", () => {
+    model(baseStatus({ bedrock: { region: "us-east-1", model: "anthropic.claude", creds_present: true } }));
+    expect(bedrockLane().getByText("Connected")).toBeInTheDocument();
+  });
+
+  it("an explicit shared row with region+model only is ALSO not Connected", () => {
+    model(sharedRowStatus({ bedrock: { region: "us-east-1", model: "anthropic.claude", creds_present: false } }));
+    expect(bedrockLane().queryByText("Connected")).not.toBeInTheDocument();
+  });
+
+  it("a DISABLED per_user row with region+model only is ALSO not Connected", () => {
+    model(disabledPerUserStatus({ bedrock: { region: "us-east-1", model: "anthropic.claude", creds_present: false } }));
+    expect(bedrockLane().queryByText("Connected")).not.toBeInTheDocument();
+  });
+});
+
+// U2-03 (blind round 2, lens-U2): `not_applicable` means the caller is a
+// MECHANISM, not a person — "no sign-in it could complete"
+// (internal/api/modelaccess.go). Leaving an enabled "Sign in with SSO" and an
+// imperative beside the honest badge offers a door that answers 422
+// (harnessLoginMechanismPrincipalRefusal). agents-tab.tsx:253 already drops
+// its whole model-access block for this state; the card keeps the sentence
+// (the badge needs a reason) but drops the imperative and the door.
+describe("ModelProviderCard — U2-03: not_applicable keeps no door it cannot open", () => {
+  const notApplicable = { bedrock: { region: "us-east-1", model: "anthropic.claude", creds_present: true }, model_access: { state: "not_applicable" } };
+
+  it("renders the mechanism sentence with no imperative", async () => {
+    model(perUserStatus(notApplicable));
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByText(S.BEDROCK_PER_USER_MECHANISM)).toBeInTheDocument();
+    expect(S.BEDROCK_PER_USER_MECHANISM).not.toMatch(/sign in to see/i);
+  });
+
+  it("drops the Sign in with SSO button entirely", async () => {
+    model(perUserStatus(notApplicable));
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.queryByRole("button", { name: "Sign in with SSO" })).not.toBeInTheDocument();
+  });
+
+  it("negative control: an actionable per_user state still offers the door", async () => {
+    model(perUserStatus({ ...notApplicable, model_access: { state: "expired_signin" } }));
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByRole("button", { name: "Sign in with SSO" })).toBeInTheDocument();
+  });
+});
+
+// U2-09 (blind round 2, lens-U2): CAPTURE_CHECK_UNREACHABLE leaves the pane
+// on the error phase with the capture possibly landed — onDone never fires,
+// so the parent never refreshes and the card keeps reading not-connected
+// until a manual reload. Cancel makes no claim about the capture either way;
+// it just costs one GET.
+describe("ModelProviderCard — U2-09: dismissing the login dialog re-reads status", () => {
+  async function openLogin(onChanged: () => void) {
+    render(<ModelProviderCard status={baseStatus()} siteConfig={null} onChanged={onChanged} />);
+    await user.click(screen.getByRole("button", { name: /^sign in$/i }));
+    await screen.findByRole("dialog");
+    expect(onChanged).not.toHaveBeenCalled();
+  }
+
+  it("the pane's own Cancel calls onChanged, like Done already does", async () => {
+    const onChanged = vi.fn();
+    await openLogin(onChanged);
+    const props = loginPaneMock.mock.calls.at(-1)![0] as { onCancel: () => void };
+    await act(async () => props.onCancel());
+    expect(onChanged).toHaveBeenCalled();
+  });
+
+  // Escape / overlay click is the SAME dismissal — one closer behind both, so
+  // neither door can drift back to leaving the card stale.
+  it("Escape does too", async () => {
+    const onChanged = vi.fn();
+    await openLogin(onChanged);
+    await user.keyboard("{Escape}");
+    expect(onChanged).toHaveBeenCalled();
   });
 });

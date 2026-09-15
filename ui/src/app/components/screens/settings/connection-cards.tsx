@@ -87,12 +87,17 @@ export const S = {
   BEDROCK_PER_USER_NOTE:
     "This lane is per person: it is declared on the Agents tab, and each person signs in to AWS themselves. What this card reads is your own sign-in, not the deployment's.",
   // DRAFT (M2 canon pending) — U-02 (blind review lens-U, Appendix A #5's own
-  // closing paragraph), canon row pending. not_applicable is the shared
-  // admin-token principal's own answer (no session of its own, ever) — it
-  // used to borrow the deployment-wide `!!bedrockRow` fact, painting a green
-  // "Connected" badge over an absent credential for exactly the principal
-  // the finding was about. This is the honest detail beside the badge.
-  BEDROCK_PER_USER_NOT_SIGNED_IN: "Per person — sign in to see yours.",
+  // closing paragraph), rewritten for U2-03 (blind round 2, lens-U2).
+  // not_applicable is the shared admin-token principal's own answer (no
+  // session of its own, ever) — it used to borrow the deployment-wide
+  // `!!bedrockRow` fact, painting a green "Connected" badge over an absent
+  // credential for exactly the principal the finding was about. This is the
+  // honest detail beside the badge, and it carries NO IMPERATIVE: the old
+  // "sign in to see yours" asked a MECHANISM to complete a sign-in the server
+  // refuses outright (harnessLoginMechanismPrincipalRefusal,
+  // internal/api/modelaccess.go) — an instruction with no door behind it.
+  BEDROCK_PER_USER_MECHANISM:
+    "Per person — this caller is a mechanism, not a person, so it has no sign-in of its own. Each person's own AWS session carries their runs.",
   // DRAFT (M2 canon pending) — R9 (fix-first review pass), console-login lane
   // (0.7.3). Under per_user, resolveBedrockAuth skips the bearer/host-mount/
   // static-key arms outright (Appendix A finding 3) — a stored bearer key
@@ -385,6 +390,15 @@ export function ModelProviderCard({
     subRow ? "subscription" : keyRow ? "api_key" : bedrockRow ? "bedrock" : "subscription",
   );
   const [loginOpen, setLoginOpen] = React.useState<"anthropic" | "aws" | null>(null);
+  // U2-09 (blind round 2): ONE closer behind every way out of the login
+  // dialog. CAPTURE_CHECK_UNREACHABLE leaves the pane on its error phase with
+  // the capture possibly LANDED — onDone never fires, so without this the card
+  // kept reading not-connected until a manual page reload. Cancel/Escape make
+  // no claim either way; they just cost one GET.
+  const closeLogin = React.useCallback(() => {
+    setLoginOpen(null);
+    onChanged();
+  }, [onChanged]);
   const [busy, setBusy] = React.useState(false);
   const { disabled: harnessBusy, showSpinner: harnessSpinning } = useDeferredBusy(busy);
 
@@ -426,6 +440,10 @@ export function ModelProviderCard({
   // `expiring` still counts as Connected — the session still signs, and the
   // warning rides the action line, not this badge.
   const perUserLive = modelAccessState === "live" || modelAccessState === "expiring";
+  // U2-03: "the caller is a MECHANISM, not a person … no sign-in it could
+  // complete" (internal/api/modelaccess.go). One predicate behind both the
+  // sentence and the missing door, so they can never drift apart.
+  const mechanismPrincipal = perUserSso && !!status.model_access && modelAccessState === "not_applicable";
 
   return (
     <>
@@ -520,11 +538,20 @@ export function ModelProviderCard({
             // deployment-wide fact either — both would paint a green
             // "Connected" badge over a credential the shared admin token can
             // never hold. It gets its own honest render: not connected, with
-            // BEDROCK_PER_USER_NOT_SIGNED_IN as the detail.
+            // BEDROCK_PER_USER_MECHANISM as the detail.
+            //
+            // U2-01 (blind round 2): the OTHER arm had the same disease. A
+            // Bedrock row exists as soon as region OR model is set
+            // (deriveAiRows, integrations.ts) — so `!!bedrockRow` painted
+            // Connected over a deployment with no credential of any kind,
+            // which is exactly what scripts/e2e-backend.sh configures. The
+            // row's `bedrockLane` is activeBedrockLane()'s answer and is
+            // undefined until a credential lane (bearer > SSO > ~/.aws mount >
+            // static keys) is genuinely active — that is the honest key.
             connected={
               perUserSso && status.model_access
                 ? modelAccessState !== "not_applicable" && perUserLive
-                : !!bedrockRow
+                : !!bedrockRow?.bedrockLane
             }
             connectedDetail={
               bedrockConfigured ? `${status.bedrock?.region} · ${status.bedrock?.model}` : undefined
@@ -550,8 +577,8 @@ export function ModelProviderCard({
                   own answer, connected={false} above — this is the neutral
                   detail beside the note, never a claim the badge just made
                   false. */}
-              {perUserSso && status.model_access && modelAccessState === "not_applicable" && (
-                <p className="text-meta leading-snug text-muted-foreground">{S.BEDROCK_PER_USER_NOT_SIGNED_IN}</p>
+              {mechanismPrincipal && (
+                <p className="text-meta leading-snug text-muted-foreground">{S.BEDROCK_PER_USER_MECHANISM}</p>
               )}
               <SecretLane
                 label="Bedrock bearer key"
@@ -568,14 +595,24 @@ export function ModelProviderCard({
                 // it shows whether or not a key happens to be stored.
                 <p className="text-meta leading-snug text-muted-foreground">{S.BEDROCK_BEARER_UNUSED_PER_USER}</p>
               )}
-              <div className="flex items-center gap-2">
-                <Button size="sm" variant="secondary" disabled={!operator} onClick={() => setLoginOpen("aws")}>
-                  Sign in with SSO
-                </Button>
-                <span className="text-meta text-muted-foreground">
-                  Device-code flow in a throwaway sandbox — exchanged per run for short-lived role credentials.
-                </span>
-              </div>
+              {/* U2-03 (blind round 2): NOT rendered for a mechanism
+                  principal. `disabled={!operator}` is no guard here — an
+                  admin token IS operator, so the button was live, and pressing
+                  it opens a pane whose POST /setup/harness-login is refused
+                  422 (harnessLoginMechanismPrincipalRefusal). agents-tab.tsx
+                  drops its whole model-access block for the same state and the
+                  same reason; this card keeps the sentence (the badge needs
+                  one) and drops the door. */}
+              {!mechanismPrincipal && (
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="secondary" disabled={!operator} onClick={() => setLoginOpen("aws")}>
+                    Sign in with SSO
+                  </Button>
+                  <span className="text-meta text-muted-foreground">
+                    Device-code flow in a throwaway sandbox — exchanged per run for short-lived role credentials.
+                  </span>
+                </div>
+              )}
             </div>
           </Lane>
         </div>
@@ -607,7 +644,7 @@ export function ModelProviderCard({
              columns (LOGIN_PTY_COLS — a wrapped OAuth URL breaks the login), so
              without this the terminal shoved the dialog past the viewport edge
              and painted over the page. */}
-      <Dialog open={loginOpen !== null} onOpenChange={(o) => !o && setLoginOpen(null)}>
+      <Dialog open={loginOpen !== null} onOpenChange={(o) => !o && closeLogin()}>
         <DialogContent
           className="scroll-thin inset-0 top-0 left-0 m-auto h-fit max-h-[92vh] overflow-y-auto"
           // `translate` and `transform` are SEPARATE CSS properties in Tailwind
@@ -629,11 +666,8 @@ export function ModelProviderCard({
               <HarnessLoginPane
                 provider={loginOpen}
                 startURLManaged={perUserSso}
-                onDone={() => {
-                  setLoginOpen(null);
-                  onChanged();
-                }}
-                onCancel={() => setLoginOpen(null)}
+                onDone={closeLogin}
+                onCancel={closeLogin}
               />
             </div>
           )}

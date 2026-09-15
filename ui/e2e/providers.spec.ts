@@ -374,7 +374,24 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
     const bedrockLane = page.locator("#lane-bedrock");
     await expect(bedrockLane).not.toContainText("Connected");
     await bedrockLane.click();
-    await expect(page.getByText("Per person — sign in to see yours.")).toBeVisible();
+    await expect(
+      page.getByText(
+        "Per person — this caller is a mechanism, not a person, so it has no sign-in of its own. Each person's own AWS session carries their runs.",
+      ),
+    ).toBeVisible();
+  });
+
+  // U2-03 (blind round 2, lens-U2): the badge was honest and the door beside
+  // it was not. `disabled={!operator}` gates nothing here — the admin token IS
+  // operator — so the button was live, and the POST behind it is refused 422
+  // (harnessLoginMechanismPrincipalRefusal). A door that cannot open must not
+  // be on screen.
+  test("not_applicable: the Sign in with SSO door is ABSENT, not merely disabled", async ({ page }) => {
+    await splicePerUserBedrock(page, "not_applicable");
+    await gotoConsole(page);
+    await navToRoute(page, "/settings");
+    await page.locator("#lane-bedrock").click();
+    await expect(page.getByRole("button", { name: "Sign in with SSO" })).toHaveCount(0);
   });
 
   // F2: the server throws away a typed start URL under a per_user row
@@ -395,6 +412,13 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
   test("unspliced control: the ordinary Settings sign-in still prompts for the start URL", async ({ page }) => {
     await gotoConsole(page);
     await navToRoute(page, "/settings");
+    // U2-01 (blind round 2, lens-U2): this daemon is the finding's own
+    // reproduction — scripts/e2e-backend.sh sets WARDYN_BEDROCK_REGION and
+    // WARDYN_BEDROCK_MODEL and NO credential of any kind (no bearer key, no
+    // SSO session, no host ~/.aws mount, no static keys). Region + model used
+    // to be enough to paint a green Connected chip over that, and this walk
+    // went straight past the badge without looking. It looks now.
+    await expect(page.locator("#lane-bedrock")).not.toContainText("Connected");
     await page.locator("#lane-bedrock").click();
     await page.getByRole("button", { name: "Sign in with SSO" }).click();
     await expect(page.getByTestId("login-start-url-prompt")).toBeVisible();
