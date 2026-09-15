@@ -23,20 +23,18 @@
 //     injectionRuleFromScope, which defaults Format to "Bearer %s").
 // ============================================================
 import type {
+  AuditEvent,
   ConfinementClass,
   CreateRunInput,
   FirstUseMode,
   Workspace,
   WorkspaceMount,
   WorkspaceRepo,
-  WorkspaceSelection,
-} from "../../../lib/types";
-import type {
   WorkspaceRequirementsMap,
+  WorkspaceSelection,
   WorkspaceSourceInput,
 } from "../../../lib/types";
 import { effectiveWorkspaceRequirements } from "../../../lib/types";
-import type { AuditEvent } from "../../../lib/types";
 // review U-01: the ONE place both clone doors (run header, Runs-list kebab)
 // turn a run's audit trail into a prefill or a refusal — see cloneFromAudit
 // below. lib/api must not import from components/ (audit.ts's own comment),

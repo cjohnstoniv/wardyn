@@ -296,12 +296,15 @@ test.describe("Run detail (/runs/:id)", () => {
     ).toHaveAttribute("aria-checked", "true");
   });
 
-  // review C-04: the new clone button must not come at the cost of the ONE
-  // thing the header's own comments call non-negotiable (the task h1) — and
-  // the fix must not hide the clone LABEL either (an icon-only door is the
-  // discoverability failure this whole finding is about). Worst realistic
-  // case: a FAILED interactive run carrying a failure_hint, which is the
-  // widest sibling content this bar can carry alongside Clone + Kill.
+  // review C-04/R-03: the new clone button must not come at the cost of the
+  // ONE thing the header's own comments call non-negotiable (the task h1) —
+  // and the fix must not hide the clone LABEL either (an icon-only door is
+  // the discoverability failure this whole finding is about). Worst REAL
+  // case, not a bare fixture: fixture 6 is seeded (scripts/e2e-backend.sh) as
+  // a FAILED run carrying a longer repo, a workspace_path, an exit code AND
+  // a pending/held approval — only `interactive` and `failure_hint` still
+  // need the route splice below (neither is a seed-script column). Every
+  // sibling fact a real failed run can carry now renders at once.
   test("a FAILED interactive run's task title is never squeezed to nothing, and the clone door keeps its label", async ({
     page,
   }) => {
@@ -320,6 +323,13 @@ test.describe("Run detail (/runs/:id)", () => {
     await page.getByText("e2e fixture 6").click();
     await expect(page).toHaveURL(/\/runs\/.+/);
     await expect(page.getByText("Failed", { exact: true })).toBeVisible();
+
+    const header = page.getByTestId("run-summary-header");
+    // Every sibling fact the seed now carries actually renders at 1280px —
+    // this is the "everything rendered" re-measure R-03 asked for, not just
+    // the floor assertion below.
+    await expect(header.getByText("exit 137")).toBeVisible();
+    await expect(header.getByText("1 waiting · sandbox held")).toBeVisible();
 
     const heading = page.getByRole("heading", { name: "e2e fixture 6", level: 1 });
     await expect(heading).toBeVisible();
@@ -340,8 +350,12 @@ test.describe("Run detail (/runs/:id)", () => {
     // ts:473 exists to pin, and the run's own ConfinementChip is now the
     // ONLY place a run's tier shows anywhere (0.7.3 F6 removed the header's
     // global chip) — neither may hide at this bar's ≥lg breakpoints.
-    await expect(page.getByText("Interactive", { exact: true })).toBeVisible();
-    await expect(page.getByText("Fence", { exact: true })).toBeVisible();
+    // review R-09: scoped to the header testid, not the whole page — plain
+    // text, so a future widget rendering either string elsewhere would
+    // otherwise turn this into a Playwright strict-mode failure rather than
+    // a clean miss.
+    await expect(header.getByText("Interactive", { exact: true })).toBeVisible();
+    await expect(header.getByText("Fence", { exact: true })).toBeVisible();
   });
 });
 

@@ -185,6 +185,29 @@ describe("RunFailureBlock", () => {
     expect(screen.getByRole("button", { name: /Open audit trail/ })).toBeInTheDocument();
   });
 
+  // review R-01: run.failure_hint (D9's pre-agent-start class — never reaches
+  // the audit trail at all, so `ending.kind` is "unknown" and ENDING_COPY has
+  // no entry) IS the prose for this ending, not silence. Red-first: before
+  // this fix, the block rendered {copy && (...)} — copy is undefined here —
+  // so neither "What happened" nor the hint appeared anywhere.
+  it("unknown WITH a run.failure_hint: the hint is the happened prose — no invented 'What to do'", () => {
+    render(
+      <RunFailureBlock
+        run={{ ...run("FAILED"), failure_hint: "mount refused: workspace directory does not exist" }}
+        audit={[ev("run.dispatch", "failure")]}
+        onGoAudit={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-ending", "unknown");
+    expect(screen.getByText("What happened")).toBeInTheDocument();
+    expect(
+      screen.getByText("mount refused: workspace directory does not exist"),
+    ).toBeInTheDocument();
+    // Still no invented advice — the honesty rule holds for an unrecognised
+    // cause even once it has a real reason attached.
+    expect(screen.queryByText("What to do")).not.toBeInTheDocument();
+  });
+
   it("Open audit trail hands off to the Audit tab", async () => {
     const onGoAudit = renderBlock("FAILED", [ev("run.build", "failure")]);
     await userEvent.click(screen.getByRole("button", { name: /Open audit trail/ }));

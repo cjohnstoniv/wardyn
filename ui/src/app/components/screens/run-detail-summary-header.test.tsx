@@ -116,6 +116,31 @@ describe("SummaryHeader — command bar", () => {
   });
 });
 
+// review R-02: `truncate` on an `inline-flex` Chip clips mid-word with NO
+// ellipsis — the anonymous flex child (the text node) gets min-content
+// sizing regardless of the parent's own overflow-hidden. Red-first: before
+// this fix the chip's className carried `truncate` directly and had no inner
+// span, so this test's selector found nothing with that class inside the
+// chip's text.
+describe("SummaryHeader — failure_hint chip actually ellipsizes (review R-02)", () => {
+  it("wraps the hint in a block span that carries truncate, not the inline-flex chip itself", () => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader
+          run={{ ...runningInteractive, state: "FAILED", failure_hint: "a very long server-side reason" }}
+          terminal={true}
+          onKill={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    const hint = screen.getByText("a very long server-side reason");
+    expect(hint.tagName).toBe("SPAN");
+    expect(hint.className).toContain("truncate");
+    expect(hint.className).toContain("block");
+    expect(hint.className).toContain("min-w-0");
+  });
+});
+
 // 0.7.3 F7 — "Start a run like this one" on the header, for every terminal
 // run (a strict superset of the failure block's 3 endings). Tab order clone
 // -> kill: outline, never the bar's one danger slot.

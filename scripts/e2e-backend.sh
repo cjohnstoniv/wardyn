@@ -331,6 +331,27 @@ SELECT gen_random_uuid(), now(), id, 'system', 'wardynd', 'run.policy.effective'
        '{"allowed_domains":[],"first_use_approval":"always_deny","min_confinement_class":"CC1","ui_apps":[{"name":"vscode","port":8080,"path":"/"}]}'::jsonb
 FROM agent_runs WHERE task = 'e2e fixture 2';
 SQL
+  # review R-03: fixture 6 (FAILED, rn=7 above) is runs.spec.ts's "worst
+  # realistic case" for the header's width trade — a bare seeded run under-
+  # represented every sibling fact a REAL failed run carries alongside
+  # failure_hint: no exit code, no workspace path, a short repo, nothing
+  # pending. Keyed by task text ('e2e fixture 6'), a standalone block (not
+  # the shared agents/titles loop above) so it cannot collide with another
+  # lane's own edit to that loop.
+  psql_e2e >/dev/null 2>&1 <<'SQL' || true
+UPDATE agent_runs
+   SET repo = 'github.com/acme-widgets/payments-platform-monorepo',
+       workspace_path = '/home/agent/work/payments-platform-monorepo/services/billing'
+ WHERE task = 'e2e fixture 6';
+INSERT INTO audit_events (id, time, run_id, actor_type, actor, action, target, outcome, data)
+SELECT gen_random_uuid(), now(), id, 'system', 'wardynd', 'run.complete', id::text, 'failure',
+       '{"exit_code":137}'::jsonb
+FROM agent_runs WHERE task = 'e2e fixture 6';
+INSERT INTO approvals (id, run_id, kind, requested_scope, state)
+SELECT gen_random_uuid(), id, 'tool_call',
+       '{"tool":"bash","cmd":"rm -rf /tmp/build"}'::jsonb, 'PENDING'
+FROM agent_runs WHERE task = 'e2e fixture 6';
+SQL
   log "Seed complete: $(psql_e2e -tAc 'SELECT count(*) FROM agent_runs') runs"
 }
 

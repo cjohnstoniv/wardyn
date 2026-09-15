@@ -17,9 +17,14 @@
 // and runEndingFromAudit (lib/api/audit.ts) reads the ending out of it.
 //
 // The honesty rule this block is built around: a cause this build does not
-// recognise renders the state and the audit link ALONE. No invented reason, and
-// the "What to do" list is dropped rather than filled with generic advice — a
-// wrong instruction costs an operator more than no instruction.
+// recognise renders the state and the audit link ALONE, unless the run ROW
+// itself carries a real reason (run.failure_hint, D9's pre-agent-start class
+// — a mount failure etc. that never reaches the audit trail at all). No
+// INVENTED reason either way, and the "What to do" list is dropped rather
+// than filled with generic advice — a wrong instruction costs an operator
+// more than no instruction. review R-01: failure_hint used to be
+// header-chip-only, clipped to a handful of characters at 1280px; this is
+// its other, unclipped home.
 import type { ReactNode } from "react";
 import { ScrollText } from "lucide-react";
 import type { AgentRun, AuditEvent, RunEndingKind } from "../../../lib/types";
@@ -87,7 +92,9 @@ const ENDING_COPY: Partial<Record<RunEndingKind, EndingCopy>> = {
       </>,
     ],
   },
-  // `unknown` is deliberately absent — see the file header.
+  // `unknown` is deliberately absent — see the file header. run.failure_hint
+  // (below, review R-01) covers it when the server sent one; there is still
+  // no INVENTED copy for an unknown cause with no hint at all.
 };
 
 // A kill whose cascade did NOT fully succeed. run.kill carries outcome
@@ -137,10 +144,19 @@ export function RunFailureBlock({
       data-testid="run-failure-block"
       data-ending={ending.kind}
     >
-      {copy && (
+      {(copy || run.failure_hint) && (
         <>
           <p className="label-eyebrow">{HAPPENED}</p>
-          <p className="mt-1 text-xs leading-relaxed text-foreground">{copy.happened(elapsed)}</p>
+          {copy && (
+            <p className="mt-1 text-xs leading-relaxed text-foreground">{copy.happened(elapsed)}</p>
+          )}
+          {/* review R-01: run.failure_hint's other home — the header chip is
+              clipped to ~120px at 1280px; here the full server sentence
+              always renders. For the `unknown` ending kind (D9's class) this
+              IS the prose: copy is undefined, so this is the only line. */}
+          {run.failure_hint && (
+            <p className="mt-1 text-xs leading-relaxed text-foreground">{run.failure_hint}</p>
+          )}
           {/* The failing step's OWN words, mono because it is a wire value
               (§3) — the same data.error the CLI's runFailureReason prints.
               Under an unrecognised ending there is no copy block at all, so
@@ -150,15 +166,19 @@ export function RunFailureBlock({
               <Mono>{ending.detail}</Mono>
             </p>
           )}
-          <p className="label-eyebrow mt-3">{TODO}</p>
-          <ul className="mt-1 space-y-0.5 text-xs leading-relaxed text-muted-foreground">
-            {copy.todo.map((line, i) => (
-              <li key={i} className="flex gap-2">
-                <span aria-hidden="true">·</span>
-                <span>{line}</span>
-              </li>
-            ))}
-          </ul>
+          {copy && (
+            <>
+              <p className="label-eyebrow mt-3">{TODO}</p>
+              <ul className="mt-1 space-y-0.5 text-xs leading-relaxed text-muted-foreground">
+                {copy.todo.map((line, i) => (
+                  <li key={i} className="flex gap-2">
+                    <span aria-hidden="true">·</span>
+                    <span>{line}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </>
       )}
 

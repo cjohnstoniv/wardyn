@@ -82,6 +82,11 @@ import { RUN_COCKPIT } from "../wardyn/copy";
 import { toast } from "sonner";
 
 beforeEach(() => {
+  // review R-07: clears toast.warning/error/success's call history too — the
+  // U-01 test asserts `toHaveBeenCalledWith`, not `…Times(1)`, so without
+  // this an earlier test toasting the same string would let it pass
+  // vacuously.
+  vi.clearAllMocks();
   getRunMock.mockReset();
   listApprovalsMock.mockReset();
   listApprovalsMock.mockResolvedValue([]);

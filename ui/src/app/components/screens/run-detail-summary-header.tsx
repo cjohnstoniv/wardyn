@@ -98,8 +98,15 @@ export function SummaryHeader({
   const elapsed = useElapsed(run.created_at, run.updated_at, terminal);
   const shortId = run.id.replace(/^run_/, "");
 
+  // review R-09: a stable e2e hook, scoping "Interactive"/"Fence" text
+  // assertions to this bar rather than the whole page (both strings are
+  // plain text, so a future widget rendering either one elsewhere would
+  // otherwise turn a passing check into a Playwright strict-mode failure).
   return (
-    <div className="flex h-[52px] min-w-0 shrink-0 items-center gap-3 border-b border-border bg-card px-4">
+    <div
+      data-testid="run-summary-header"
+      className="flex h-[52px] min-w-0 shrink-0 items-center gap-3 border-b border-border bg-card px-4"
+    >
       <Link to="/runs" className="shrink-0 text-sm text-muted-foreground hover:text-foreground">
         Runs
       </Link>
@@ -127,18 +134,28 @@ export function SummaryHeader({
 
       {/* Requirement: run.task stays an h1 (the board drops it, but for an
           autonomous run this is the only statement anywhere on the page of
-          what it's doing — and the page's only h1). */}
+          what it's doing — and the page's only h1). review R-04: `flex-1`
+          alone is `flex: 1 1 0%` — a ZERO base size, so under negative free
+          space this element gets none of the shrink and a sibling with real
+          content (the repo/workspace group) absorbs the whole deficit
+          instead. min-w-[160px] makes the floor the width trade is measured
+          against (runs.spec.ts) an enforced CSS invariant, not a fixture
+          that happens not to reach the squeeze. */}
       <h1
-        className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground"
+        className="min-w-[160px] flex-1 truncate text-sm font-semibold text-foreground"
         title={run.task || undefined}
       >
         {runHeadline(run)}
       </h1>
 
       {/* repo / workspace path — required to stay visible (not "genuinely
-          secondary"), so no `hidden lg:` gate; each truncates on its own. */}
+          secondary"), so no `hidden lg:` gate; each truncates on its own.
+          review R-01: repo's cap narrows 180->140 below 2xl — one of the two
+          things that actually pay for keeping the failure_hint chip legible
+          instead of clipped to ~5 characters (the copy-link button below is
+          the other). */}
       <div className="flex min-w-0 shrink items-baseline gap-2">
-        <span className="max-w-[180px] truncate font-mono text-xs text-foreground" title={run.repo}>
+        <span className="max-w-[140px] truncate font-mono text-xs text-foreground 2xl:max-w-[180px]" title={run.repo}>
           {run.repo}
         </span>
         {run.workspace_path && (
@@ -158,13 +175,16 @@ export function SummaryHeader({
         <span className="hidden shrink-0 font-mono text-xs text-muted-foreground 2xl:inline" title={run.id}>
           · {shortId}
         </span>
+        {/* review R-01: bumped lg -> 2xl, same waterfall step as the short
+            id right above it — this button's ~20px was part of what the
+            failure_hint chip's readability was costing. */}
         {onCopyLink && (
           <button
             type="button"
             onClick={onCopyLink}
             title="Copy link to this run"
             aria-label="Copy link to this run"
-            className="hidden shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground lg:inline-flex"
+            className="hidden shrink-0 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground 2xl:inline-flex"
           >
             {linkCopied ? <Check className="size-3 text-success" /> : <LinkIcon className="size-3" />}
           </button>
@@ -183,21 +203,21 @@ export function SummaryHeader({
       )}
 
       {/* D9: the pre-agent-start failure class (mount failure, etc.) never
-          gets an exit code at all — this is the only place THAT run says
-          why. Independent of the exit chip above: a run can show one, the
-          other, both, or neither. Bare server text, no prefix — the state
-          badge already says "Failed".
-          0.7.3 F7 review round 2 (regression 1): narrowed 160px -> 60px.
-          governance.spec.ts:473 needs the Interactive chip visible at 1280
-          — restoring that (below) cost back the budget this cap had freed,
-          and the h1 floor (runs.spec.ts's 160px pin) needed still more of it
-          than the first narrowing gave back. The full title attribute still
-          carries the whole sentence — this is the last, cheapest thing on
-          the bar to give up width, ahead of the task h1, the Confinement/
-          Interactive chips, or the clone label. */}
+          gets an exit code at all. Independent of the exit chip above: a run
+          can show one, the other, both, or neither. Bare server text, no
+          prefix — the state badge already says "Failed".
+          review R-01: this chip is NOT the only place THAT run says why any
+          more — run-detail/failure-block.tsx's What-happened body now
+          renders the full sentence for the `unknown` ending kind (D9's own
+          class), where width is free. This chip stays as the header's own
+          at-a-glance affordance, kept to ~120px rather than cut further.
+          review R-02: `truncate` on an inline-flex Chip clips mid-word with
+          NO ellipsis (min-content sizing on the anonymous flex child) — the
+          inner span below is a real block box, so text-overflow actually
+          paints one. */}
       {run.failure_hint && (
-        <Chip tone="danger" className="max-w-[60px] shrink-0 truncate" title={run.failure_hint}>
-          {run.failure_hint}
+        <Chip tone="danger" className="max-w-[120px] shrink-0" title={run.failure_hint}>
+          <span className="block min-w-0 truncate">{run.failure_hint}</span>
         </Chip>
       )}
 
