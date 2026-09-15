@@ -4,6 +4,7 @@
  */
 
 import { test, expect, gotoConsole, navTo, sidebarLink } from "./fixtures";
+import { RUN } from "../src/app/components/wardyn/copy";
 import type { Page, Locator } from "@playwright/test";
 
 // ============================================================================
@@ -241,6 +242,43 @@ test.describe("Run detail (/runs/:id)", () => {
     const killBtn = page.getByRole("button", { name: "Kill", exact: true });
     await expect(killBtn).toBeVisible();
     await expect(killBtn).toBeDisabled();
+  });
+
+  // 0.7.3 F7: the clone door used to live only inside the failure block (a run
+  // that ended BADLY) — it now sits on the header for every terminal state,
+  // COMPLETED included, beside the disabled Kill.
+  test("a COMPLETED run's header offers the clone door, and it lands on /runs/new prefilled", async ({
+    page,
+  }) => {
+    await openRuns(page);
+    await page.getByText("e2e fixture 4").click();
+    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page.getByText("Completed", { exact: true })).toBeVisible();
+
+    const cloneBtn = page.getByRole("button", { name: RUN.CLONE_CTA });
+    await expect(cloneBtn).toBeVisible();
+    await expect(page.getByRole("button", { name: "Kill", exact: true })).toBeDisabled();
+
+    await cloneBtn.click();
+    await expect(page).toHaveURL(/\/runs\/new$/);
+    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    await expect(page.getByLabel("Task")).toHaveValue("e2e fixture 4");
+  });
+
+  // 0.7.3 F7 "no deferrals": the Runs-list kebab clones byte-for-byte the same
+  // way the header does, without opening the run first.
+  test("the Runs list kebab clones a COMPLETED run into a prefilled wizard", async ({ page }) => {
+    await openRuns(page);
+
+    const card = page
+      .getByText("e2e fixture 4")
+      .locator("xpath=ancestor::div[contains(@class, 'cursor-pointer')]");
+    await card.getByRole("button", { name: "Run actions" }).click();
+    await page.getByRole("menuitem", { name: RUN.CLONE_CTA }).click();
+
+    await expect(page).toHaveURL(/\/runs\/new$/);
+    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+    await expect(page.getByLabel("Task")).toHaveValue("e2e fixture 4");
   });
 });
 

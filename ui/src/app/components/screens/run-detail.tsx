@@ -268,6 +268,14 @@ export function RunDetailScreen() {
     }
   };
 
+  // 0.7.3 F7 — the header's clone door, for EVERY terminal run (see
+  // run-detail-summary-header.tsx for the rationale Cockpit's execMode below
+  // already relies on the same two sources for).
+  const onClone = () => {
+    if (!run) return;
+    navigate("/runs/new", { state: { prefill: runPrefill(run, createRequestFromAudit(audit)) } });
+  };
+
   const submitDecision = async (reason: string, scope: ApprovalScope, until?: string): Promise<boolean> => {
     if (!decide) return false;
     try {
@@ -349,6 +357,7 @@ export function RunDetailScreen() {
             onCopyLink={copyLink}
             linkCopied={copied}
             onKill={kill}
+            onClone={onClone}
           />
 
           <RunDetailCommandBar
@@ -484,11 +493,10 @@ function Cockpit({
   onGoRecording: () => void;
 }) {
   const principal = usePrincipal();
-  const navigate = useNavigate();
   // The run's REQUEST-scoped facts, off its run.create audit row — the only
   // durable record of task_mode, interactive_start, seed_auto_tools and
   // tool_approvals, none of which lands on AgentRun. Read once here; the exec
-  // pane and B4b's clone both need it.
+  // pane reads it below.
   const createRequest = createRequestFromAudit(audit);
   // useSecurityOperator, not useOperator (0.7 §B): this banner says "you can't
   // decide any of these", and authorizeMemberDecision (approvals.go:392)
@@ -510,23 +518,17 @@ function Cockpit({
   // on AgentRun) — this page already holds the full trail, so the pane can
   // speak honestly about a no-harness run for free.
   const execMode = createRequest.task_mode === "exec";
-  // B4b — "Start a run like this one", built from the TWO durable sources this
-  // page already holds: the run row and its run.create audit event (the only
-  // record of task_mode, interactive_start, seed_auto_tools and
-  // tool_approvals). Nothing is re-fetched and no new read path opens, so a
-  // member still clones only runs the server already let them read
-  // (getRunAuthorized). Create re-clamps, so a clone of a run authored above
-  // the caller's ceiling is narrowed at launch with its reason, not here.
-  const onClone = () =>
-    navigate("/runs/new", { state: { prefill: runPrefill(run, createRequest) } });
   const terminalPane = (
     <>
       {/* M7(b): above the terminal, because on a run that ended badly the
           replay is not the news — why it ended is. Inside the terminal widget
           rather than beside it so the canvas keeps placing exactly one hero,
           and nothing on this page moves for a run that ended fine (the block
-          renders null unless the audit trail says otherwise). */}
-      <RunFailureBlock run={run} audit={audit} onGoAudit={onGoAudit} onClone={onClone} />
+          renders null unless the audit trail says otherwise). 0.7.3 F7 moved
+          the clone door off this block onto the run header (a strict
+          superset of the states this block explains), so it takes no onClone
+          any more. */}
+      <RunFailureBlock run={run} audit={audit} onGoAudit={onGoAudit} />
       <TerminalPane
         run={run}
         terminal={terminal}

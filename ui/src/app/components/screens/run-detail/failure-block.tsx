@@ -21,13 +21,12 @@
 // the "What to do" list is dropped rather than filled with generic advice — a
 // wrong instruction costs an operator more than no instruction.
 import type { ReactNode } from "react";
-import { RotateCcw, ScrollText } from "lucide-react";
+import { ScrollText } from "lucide-react";
 import type { AgentRun, AuditEvent, RunEndingKind } from "../../../lib/types";
 import { runEndingFromAudit } from "../../../lib/api/audit";
 import { absoluteTime } from "../../../lib/format";
 import { Button } from "../../ui/button";
 import { Mono } from "../../wardyn/code-block";
-import { RUN } from "../../wardyn/copy";
 import { formatElapsed } from "../run-detail-summary-header";
 
 // COPY CHANGE (M7): the two labels, the action, and the four reason bodies.
@@ -111,19 +110,12 @@ export function RunFailureBlock({
   run,
   audit,
   onGoAudit,
-  onClone,
 }: {
   run: AgentRun;
   /** The trail the run page already fetched. */
   audit: AuditEvent[];
   /** Switch to the Audit tab. */
   onGoAudit: () => void;
-  /** B4b: open /runs/new prefilled from this run. The killed panel's own advice
-   *  has read "Start a new run if the work still needs doing" since M7 and
-   *  never had an affordance behind it — an operator looking straight at the
-   *  run was left to retype it. Optional so the block stays renderable without
-   *  a parent that owns navigation. */
-  onClone?: () => void;
 }) {
   const ending = runEndingFromAudit(run.state, audit);
   if (!ending) return null;
@@ -174,14 +166,11 @@ export function RunFailureBlock({
         <Button variant="outline" size="sm" onClick={onGoAudit}>
           <ScrollText className="size-3.5" /> {OPEN_AUDIT}
         </Button>
-        {/* B4b. Outline, not the teal default: the page already spends its one
-            default button elsewhere (CONSOLE-RULES §6), and a killed run's
-            primary act is reading why, not relaunching. */}
-        {onClone && (
-          <Button variant="outline" size="sm" onClick={onClone}>
-            <RotateCcw className="size-3.5" /> {RUN.CLONE_CTA}
-          </Button>
-        )}
+        {/* 0.7.3 F7 removed this block's own clone door: the run HEADER now
+            carries "Start a run like this one" for every terminal state (a
+            strict superset of the 3 endings this block explains), so two
+            doors would be redundant — and a Playwright strict-mode violation
+            when both matched the same button name. */}
         {/* Wire values, so mono (CONSOLE-RULES §3): the action that carries the
             evidence, who the row names, and when. An unrecognised ending has
             no such row and states nothing here. */}

@@ -5,10 +5,12 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { AgentRun, RunState } from "../../../lib/types";
 import { RunCard } from "./run-card";
 import { approvalSignals, type RunSignals } from "./board-groups";
+import { RUN } from "../../wardyn/copy";
 
 const run = (over: Partial<AgentRun> = {}): AgentRun => ({
   id: "run_3b7f10c4aa99",
@@ -98,5 +100,26 @@ describe("RunCard — two-row anatomy", () => {
     // and its icon should carry the tier here now.
     expect(screen.getAllByText("Vault")).toHaveLength(1);
     expect(container.querySelectorAll(".bg-vault-fg")).toHaveLength(0);
+  });
+});
+
+// 0.7.3 F7 — the Runs-list door onto the same clone the run header offers.
+describe("RunCard — kebab clone door (0.7.3 F7)", () => {
+  async function openMenu() {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole("button", { name: "Run actions" }));
+    return user;
+  }
+
+  it("a terminal run's kebab offers the clone door", async () => {
+    renderCard(run({ state: "COMPLETED" }));
+    await openMenu();
+    expect(screen.getByRole("menuitem", { name: RUN.CLONE_CTA })).toBeInTheDocument();
+  });
+
+  it("a live run's kebab does not", async () => {
+    renderCard(run({ state: "RUNNING" }));
+    await openMenu();
+    expect(screen.queryByRole("menuitem", { name: RUN.CLONE_CTA })).toBeNull();
   });
 });

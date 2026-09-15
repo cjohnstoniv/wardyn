@@ -201,12 +201,16 @@ test.describe("New run — Preflight sends the body Launch sends", () => {
   });
 });
 
-// B4b — "Start a run like this one". A killed run's failure block carries a
-// clone button that hands the wizard a RunPrefill via react-router navigation
-// state (run-detail.tsx's onClone -> navigate("/runs/new", { state: { prefill
-// } })) — real navigation, real state, so this has to be driven through the
-// UI click rather than a bare page.goto (which would carry no location state
-// at all).
+// B4b — "Start a run like this one". 0.7.3 F7 moved this off the failure
+// block (which only rendered for a run that ended badly) onto the run
+// HEADER, which offers it for every terminal state — the header's onClone
+// hands the wizard a RunPrefill via react-router navigation state
+// (run-detail.tsx's onClone -> navigate("/runs/new", { state: { prefill } }))
+// — real navigation, real state, so this has to be driven through the UI
+// click rather than a bare page.goto (which would carry no location state at
+// all). The failure block no longer has its own clone button, so
+// `getByRole("button", { name: RUN.CLONE_CTA })` below resolves to exactly
+// one element (a second door would be a Playwright strict-mode violation).
 test.describe("New run — B4b clone from a killed run", () => {
   test("clones task/agent/barrier from the killed run, and Launch enables once titled", async ({ page }) => {
     const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };

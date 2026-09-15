@@ -15,10 +15,13 @@
 // STRIP that used to sit on row 2 moved out entirely — the chip already names
 // the tier, and the run detail page is where the ladder is worth drawing.
 import * as React from "react";
-import { Eye, MoreHorizontal, GitBranch, Skull, TerminalSquare } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
+import { Eye, MoreHorizontal, GitBranch, RotateCcw, Skull, TerminalSquare } from "lucide-react";
 import type { AgentRun } from "../../../lib/types";
 import { isTerminalRunState } from "../../../lib/types";
-import { relativeTime } from "../../../lib/format";
+import { relativeTime, getErrorMessage } from "../../../lib/format";
+import { audit as auditApi, createRequestFromAudit } from "../../../lib/api/audit";
 import { Button } from "../../ui/button";
 import {
   DropdownMenu,
@@ -30,10 +33,11 @@ import {
 import { AgentBadge, ConfinementChip, RunStateBadge } from "../../wardyn/primitives";
 import { RunStateGlyph } from "../../wardyn/run-state-glyph";
 import { KillRunDialog } from "../../wardyn/kill-run-dialog";
-import { RUN_COCKPIT } from "../../wardyn/copy";
+import { RUN, RUN_COCKPIT } from "../../wardyn/copy";
 import { Mono } from "../../wardyn/code-block";
 import { cn } from "../../ui/utils";
 import { repoLabel, rowHeadline, runAttention, shortId, signalsFor, type RunSignals } from "./board-groups";
+import { runPrefill } from "../new-run/wizard-types";
 
 export function CardGrid({ children }: { children: React.ReactNode }) {
   // auto-fill with a min(100%, floor) track: cards reflow and collapse to ONE
@@ -231,6 +235,20 @@ export function RunActions({
   // DropdownMenuContent (not nested inside it), controlled by its own state, so
   // it survives the menu's close/unmount.
   const [confirmId, setConfirmId] = React.useState<string | null>(null);
+  const navigate = useNavigate();
+  // 0.7.3 F7 — the Runs-list door onto the same clone the run header offers
+  // (byte-for-byte: task_mode / interactive_start / seed_auto_tools /
+  // tool_approvals all come from the run.create audit row). Fetched on CLICK,
+  // never per row render — the board can hold dozens of terminal runs and
+  // only one of them is ever cloned at a time.
+  const cloneRun = async () => {
+    try {
+      const events = await auditApi.listAudit(run.id);
+      navigate("/runs/new", { state: { prefill: runPrefill(run, createRequestFromAudit(events)) } });
+    } catch (err) {
+      toast.error("Could not load this run's details", { description: getErrorMessage(err) });
+    }
+  };
   return (
     // This guard is RunCard's only defense (the board is the default Mode —
     // RunCard has no TableCell of its own to also carry it, unlike the table
@@ -250,6 +268,11 @@ export function RunActions({
           {attachable && (
             <DropdownMenuItem onClick={() => onOpen(run.id)}>
               <TerminalSquare className="size-4" /> Attach
+            </DropdownMenuItem>
+          )}
+          {terminal && (
+            <DropdownMenuItem onClick={cloneRun}>
+              <RotateCcw className="size-4" /> {RUN.CLONE_CTA}
             </DropdownMenuItem>
           )}
           <DropdownMenuSeparator />

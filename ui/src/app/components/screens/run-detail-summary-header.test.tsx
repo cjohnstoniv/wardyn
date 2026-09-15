@@ -15,7 +15,9 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { SummaryHeader } from "./run-detail-summary-header";
 import { OperatorProvider } from "../wardyn/operator-context";
-import type { AgentRun } from "../../lib/types";
+import type { AgentRun, RunState } from "../../lib/types";
+import { TERMINAL_RUN_STATES } from "../../lib/types";
+import { RUN } from "../wardyn/copy";
 
 // SummaryHeader now renders a "Runs" breadcrumb <Link> (react-router-dom),
 // which throws outside a Router context — wrap every render the same way
@@ -111,6 +113,60 @@ describe("SummaryHeader — command bar", () => {
       </OperatorProvider>,
     );
     expect(screen.queryByText(/waiting/i)).toBeNull();
+  });
+});
+
+// 0.7.3 F7 — "Start a run like this one" on the header, for every terminal
+// run (a strict superset of the failure block's 3 endings). Tab order clone
+// -> kill: outline, never the bar's one danger slot.
+describe("SummaryHeader — clone door (0.7.3 F7)", () => {
+  it.each(TERMINAL_RUN_STATES)("a terminal run's header offers the clone door (%s)", (state) => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader
+          run={{ ...runningInteractive, state: state as RunState }}
+          terminal={true}
+          onKill={() => {}}
+          onClone={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    expect(screen.getByRole("button", { name: RUN.CLONE_CTA })).toBeInTheDocument();
+  });
+
+  it("a live run's header offers no clone door", () => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader run={runningInteractive} terminal={false} onKill={() => {}} onClone={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.queryByRole("button", { name: RUN.CLONE_CTA })).toBeNull();
+  });
+
+  it("renders no clone door when the page passes no onClone", () => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader run={{ ...runningInteractive, state: "COMPLETED" }} terminal={true} onKill={() => {}} />
+      </OperatorProvider>,
+    );
+    expect(screen.queryByRole("button", { name: RUN.CLONE_CTA })).toBeNull();
+  });
+
+  it("clone is outline — Kill keeps the bar's one danger slot", () => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader
+          run={{ ...runningInteractive, state: "COMPLETED" }}
+          terminal={true}
+          onKill={() => {}}
+          onClone={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    const clone = screen.getByRole("button", { name: RUN.CLONE_CTA });
+    expect(clone.className).not.toContain("text-danger");
+    const kill = screen.getByRole("button", { name: /kill/i });
+    expect(kill.className).toContain("text-danger");
   });
 });
 

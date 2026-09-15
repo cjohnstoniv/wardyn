@@ -190,4 +190,12 @@ describe("RunFailureBlock", () => {
     await userEvent.click(screen.getByRole("button", { name: /Open audit trail/ }));
     expect(onGoAudit).toHaveBeenCalledTimes(1);
   });
+
+  // 0.7.3 F7 moved "Start a run like this one" onto the run header (a strict
+  // superset of the 3 endings this block explains) — the block itself carries
+  // no clone door any more, on a killed run or otherwise.
+  it("carries no second clone door — the run header is the one door", () => {
+    renderBlock("KILLED", [ev("run.kill", "success", { actor: "alice", actor_type: "human" })]);
+    expect(screen.queryByRole("button", { name: /Start a run like this one/i })).toBeNull();
+  });
 });

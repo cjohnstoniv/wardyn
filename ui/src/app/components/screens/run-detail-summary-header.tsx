@@ -10,13 +10,13 @@
 // non-wrapping row so the terminal starts at the top of the viewport.
 import * as React from "react";
 import { Link } from "react-router-dom";
-import { Check, Clock, Link as LinkIcon, ShieldAlert, Skull, TerminalSquare } from "lucide-react";
+import { Check, Clock, Link as LinkIcon, RotateCcw, ShieldAlert, Skull, TerminalSquare } from "lucide-react";
 import type { AgentRun } from "../../lib/types";
 import { runHeadline } from "../../lib/types";
 import { Button } from "../ui/button";
 import { AgentBadge, Chip, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
 import { RunStateGlyph } from "../wardyn/run-state-glyph";
-import { RUN_COCKPIT } from "../wardyn/copy";
+import { RUN, RUN_COCKPIT } from "../wardyn/copy";
 import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { useOperator, usePrincipal } from "../wardyn/operator-context";
@@ -57,6 +57,7 @@ export function SummaryHeader({
   onCopyLink,
   linkCopied = false,
   onKill,
+  onClone,
 }: {
   run: AgentRun;
   terminal: boolean;
@@ -77,6 +78,11 @@ export function SummaryHeader({
   onCopyLink?: () => void;
   linkCopied?: boolean;
   onKill: () => void;
+  // 0.7.3 F7: "Start a run like this one", for EVERY terminal run — moved here
+  // from the failure block, which only rendered for a run that ended badly
+  // (3 of the 5 terminal states). Optional so the header stays renderable
+  // without a parent that owns navigation (the unit tests below).
+  onClone?: () => void;
 }) {
   const [confirmId, setConfirmId] = React.useState<string | null>(null);
   // W25-1: claim "attachable" only under the SAME owner-or-admin predicate
@@ -143,8 +149,13 @@ export function SummaryHeader({
             {run.workspace_path}
           </span>
         )}
-        {/* short run id — genuinely secondary (not in the "must carry" list). */}
-        <span className="hidden shrink-0 font-mono text-xs text-muted-foreground lg:inline" title={run.id}>
+        {/* short run id — genuinely secondary (not in the "must carry" list).
+            0.7.3 F7: bumped lg -> 2xl. The clone button now shares this bar
+            with an already-tight budget (a full run id is unbounded width,
+            unlike repo's own max-w-[180px] truncate) — at 1280px (this
+            suite's default viewport) showing both used to squeeze the task
+            h1's min-w-0 flex-1 all the way to zero. */}
+        <span className="hidden shrink-0 font-mono text-xs text-muted-foreground 2xl:inline" title={run.id}>
           · {shortId}
         </span>
         {onCopyLink && (
@@ -215,6 +226,14 @@ export function SummaryHeader({
               ? RUN_COCKPIT.waitingHeld(pendingApprovalCount)
               : RUN_COCKPIT.waiting(pendingApprovalCount)}
           </Chip>
+        )}
+        {/* 0.7.3 F7 — tab order clone -> kill: outline, never the header's one
+            danger slot, and Kill stays disabled (not hidden) rather than
+            hiding so the two sit side by side on a terminal run. */}
+        {terminal && onClone && (
+          <Button variant="outline" size="sm" className="h-7" onClick={onClone}>
+            <RotateCcw className="size-4" /> {RUN.CLONE_CTA}
+          </Button>
         )}
         <Button
           variant="outline"
