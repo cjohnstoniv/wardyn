@@ -60,6 +60,29 @@ async function getAgentProviders(page: Page): Promise<{ providers: { agents?: un
   return { providers: await res.json(), etag: res.headers()["etag"] ?? null };
 }
 
+// Press Save and WAIT FOR THE WRITE — the console's own success toast, raised
+// only once the PUT has resolved 200 (the handler writes inside the request, so
+// a 200 IS a committed roster).
+//
+// This is a write BARRIER, and every happy-path save below needs one.
+// `expect(...).toHaveCount(0)` on an error that has not happened yet is
+// satisfied on its FIRST poll: it proves nothing about the in-flight PUT. The
+// walk used it as if it did and then immediately POSTed /api/v1/runs — so when
+// the PUT had not landed the dispatch was refused against the PREVIOUS test's
+// roster, and the refusal named the AWS SSO lane instead of Amazon Bedrock
+// (bearer key). It reads as "shared-Postgres contention" because load widens
+// the window, but this file is serial: it is an ordering dependency plus a lost
+// await. Mirrors providers.spec.ts's saveProviders, for the same race one
+// screen over. NOT for the refusal tests — there is no success toast to wait
+// for when the save is meant to be rejected.
+async function saveAgents(page: Page): Promise<void> {
+  await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
+  await expect(page.getByText(PROVIDERS.SAVED_TOAST)).toBeVisible();
+  // Now meaningful — the save has SETTLED, so this says "it settled without a
+  // refusal", not merely "no refusal has rendered yet".
+  await expect(page.getByText(PROVIDERS.SAVE_ERROR)).toHaveCount(0);
+}
+
 test.describe.configure({ mode: "serial" });
 
 test.describe("agents — legacy open mode (no agent_providers row saved yet)", () => {
@@ -89,8 +112,7 @@ test.describe("agents — the admin authoring walk (real writes, real reload)", 
     await row.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_SSO }).click();
     await row.getByRole("radio", { name: AGENTS.SOURCE_PER_USER }).click();
     await row.getByLabel(AGENTS.FIELD_SSO_START_URL).fill("https://acme.awsapps.com/start");
-    await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
-    await expect(page.getByText(PROVIDERS.SAVE_ERROR)).toHaveCount(0);
+    await saveAgents(page);
 
     // Tab selection is local React state (providers-screen.tsx's `tab`), not
     // URL-carried — a reload always re-lands on the Git tab.
@@ -117,8 +139,7 @@ test.describe("agents — the admin authoring walk (real writes, real reload)", 
     await expect(row).toBeVisible();
     await row.getByRole("switch", { name: `${PROVIDERS.FIELD_ENABLED} — Codex CLI` }).click();
     await expect(row.getByText(AGENTS.AGENT_ROW_DISABLED_HINT)).toBeVisible();
-    await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
-    await expect(page.getByText(PROVIDERS.SAVE_ERROR)).toHaveCount(0);
+    await saveAgents(page);
 
     // The picker: disabled, WITH its reason (never hidden).
     await gotoConsole(page);
@@ -148,8 +169,7 @@ test.describe("agents — the admin authoring walk (real writes, real reload)", 
     // Switch off per_user/SSO back to a lane this harness genuinely has zero
     // credential for: bedrock_bearer, with no bearer-key secret ever stored.
     await row.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_BEARER }).click();
-    await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
-    await expect(page.getByText(PROVIDERS.SAVE_ERROR)).toHaveCount(0);
+    await saveAgents(page);
 
     const res = await page.request.post("/api/v1/runs", {
       headers: auth,
@@ -342,8 +362,7 @@ test.describe("agents — the roster pin (sso_account_id / sso_role_name)", () =
     await row.getByLabel(AGENTS.FIELD_SSO_START_URL).fill("https://acme.awsapps.com/start");
     await row.getByLabel(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID).fill("222222222222");
     await row.getByLabel(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME).fill("BedrockRunner");
-    await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
-    await expect(page.getByText(PROVIDERS.SAVE_ERROR)).toHaveCount(0);
+    await saveAgents(page);
     await expect(page.getByText(PROVIDERS.SAVE_REFUSED_TITLE)).toHaveCount(0);
 
     await page.reload();
