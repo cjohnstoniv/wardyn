@@ -403,6 +403,101 @@ func TestSetupModelAccess_SilentWithNothingToSay(t *testing.T) {
 	}
 }
 
+// TestSetupModelAccess_AdminTokenUnderPerUserIsNotApplicable is finding 5: a
+// per-principal state read through the admin bearer token must report the
+// TOKEN's own state (not_applicable), never "not_configured" + a "Sign in to
+// AWS" action the caller cannot take — the shared admin token owns no AWS SSO
+// session and never will.
+func TestSetupModelAccess_AdminTokenUnderPerUserIsNotApplicable(t *testing.T) {
+	row := types.AgentProvider{
+		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
+		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: perUserPortal,
+	}
+	scope := awsSSOScope{perUser: true, owner: adminTokenPrincipal}
+	got := setupModelAccess(agentRoster(row), awsSSOBlob{}, false, scope, awsSSOTestFixedNow)
+	if got.State != modelAccessNotApplicable {
+		t.Fatalf("state = %q, want not_applicable", got.State)
+	}
+	if got.Action != "" || got.Deadline != "" {
+		t.Errorf("the mechanism principal has no sign-in to complete, so Action/Deadline must be empty; got %+v", got)
+	}
+}
+
+// TestSetupModelAccess_LocalOperatorIsAPerson: LocalMode's own seat resolves
+// to a real person-shaped namespace, never adminTokenPrincipal — it must keep
+// reading not_configured (a real sign-in it can complete), not not_applicable.
+func TestSetupModelAccess_LocalOperatorIsAPerson(t *testing.T) {
+	row := types.AgentProvider{
+		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
+		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: perUserPortal,
+	}
+	scope := awsSSOScope{perUser: true, owner: "local:operator"}
+	got := setupModelAccess(agentRoster(row), awsSSOBlob{}, false, scope, awsSSOTestFixedNow)
+	if got.State == modelAccessNotApplicable {
+		t.Fatalf("local mode's own seat is a real person, not the mechanism principal, got %+v", got)
+	}
+	if got.State != modelAccessNotConfigured || got.Action == "" {
+		t.Errorf("state = %+v, want not_configured with a real sign-in action", got)
+	}
+}
+
+// TestMemberModelAccess_NotApplicablePassesThrough: not_applicable must survive
+// memberModelAccess unchanged. Fail-safe — the mechanism principal is never a
+// real human member today — but without an explicit early return the default
+// arm below rewrites any unrecognized state to `live`, which is a worse lie.
+func TestMemberModelAccess_NotApplicablePassesThrough(t *testing.T) {
+	in := SetupModelAccess{State: modelAccessNotApplicable, Mechanism: string(types.AgentMechanismBedrockSSO)}
+	if got := memberModelAccess(in); got != in {
+		t.Errorf("memberModelAccess(%+v) = %+v, want it passed through unchanged", in, got)
+	}
+}
+
+// TestHandleHarnessLogin_AdminTokenUnderPerUserRefused: under a per_user row,
+// the shared admin bearer token must be refused (422) rather than admitted as
+// an operator — every capture made with it would land in the SAME namespace
+// (owner == "admin-token") and overwrite the last person's session. A shared
+// row is unaffected: the admin token still may connect it.
+func TestHandleHarnessLogin_AdminTokenUnderPerUserRefused(t *testing.T) {
+	const path = "/api/v1/setup/harness-login"
+	srv, audit := perUserLoginSrv(t) // default: claude-code/bedrock_sso/per_user row
+	w := do(t, srv, http.MethodPost, path, adminToken, `{"provider":"aws"}`)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("admin-token under per_user: code = %d, want 422; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "shared credential") {
+		t.Errorf("body = %s, want the mechanism-principal refusal sentence", w.Body.String())
+	}
+	if len(audit.find("harness.login.started")) != 0 {
+		t.Error("a refused sign-in launched a sandbox anyway")
+	}
+	if len(audit.find("authz.denied")) != 0 {
+		t.Error("this refusal keeps parity with the function's other writeError paths — it must emit no audit row")
+	}
+
+	// Shared row: the admin token still may connect it.
+	shared := types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO}
+	srv2, _ := perUserLoginSrv(t, shared)
+	if w2 := do(t, srv2, http.MethodPost, path, adminToken, `{"provider":"anthropic"}`); w2.Code == http.StatusUnprocessableEntity {
+		t.Fatalf("admin-token under a shared row must still be admitted, got 422: %s", w2.Body.String())
+	}
+}
+
+// TestHandleHarnessLogin_LocalModeStillMayCapture: LocalMode's own seat is a
+// real person, not the mechanism principal — it must still pass under a
+// per_user row exactly as it does today.
+func TestHandleHarnessLogin_LocalModeStillMayCapture(t *testing.T) {
+	srv, _ := perUserLoginSrv(t)
+	cfg := srv.cfg
+	cfg.LocalMode = true
+	cfg.LocalOperator = "local:test"
+	cfg.LocalLoopback = true
+	local := New(cfg)
+	w := do(t, local, http.MethodPost, "/api/v1/setup/harness-login", "", `{"provider":"aws"}`)
+	if w.Code == http.StatusUnprocessableEntity {
+		t.Fatalf("local mode is a person, not the mechanism principal — must not be refused as one, got 422: %s", w.Body.String())
+	}
+}
+
 // TestRedactSetupStatusForMember_KeepsModelAccess: the member reduction drops
 // the operator's diagnostic detail and KEEPS this — dropping it would leave a
 // member reading llm_ready, the deployment fact that painted a green chip over

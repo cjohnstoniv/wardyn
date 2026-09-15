@@ -114,6 +114,36 @@ func TestSetupStatus_AnonymousNonLocal401(t *testing.T) {
 	}
 }
 
+// TestSetupStatus_AdminTokenReadsNotApplicableEndToEnd is finding 5 end to
+// end: GET /setup/status called with the shared admin bearer token, under a
+// per_user row, must report model_access as not_applicable — never
+// not_configured plus a "Sign in to AWS" action the caller cannot take.
+func TestSetupStatus_AdminTokenReadsNotApplicableEndToEnd(t *testing.T) {
+	h := newHarness(t)
+	row := types.AgentProvider{
+		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
+		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: perUserPortal,
+	}
+	// baseTestConfig leaves OIDC nil (unlike perUserLoginSrv), which is the
+	// exact shape finding 5 describes: a plain admin-bearer-token caller with
+	// no OIDC session at all — and keeps consoleRoleMappingsPresent from
+	// touching the Store double's unimplemented ListRoleMappings.
+	cfg := baseTestConfig(h, &integStore{govEscapeStore: newGovEscapeStore(&capStore{}), site: agentRoster(row)})
+	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+	cfg.BedrockRegion = "us-east-1"
+	srv := New(cfg)
+	code, st := decodeSetup(t, srv, adminToken)
+	if code != http.StatusOK {
+		t.Fatalf("code = %d, want 200", code)
+	}
+	if st.ModelAccess.State != modelAccessNotApplicable {
+		t.Fatalf("model_access.state = %q, want not_applicable", st.ModelAccess.State)
+	}
+	if st.ModelAccess.Action != "" {
+		t.Errorf("model_access.action = %q, want none — there is nothing this caller can do", st.ModelAccess.Action)
+	}
+}
+
 // LocalMode bypasses auth; the handler must report auth.mode == "local".
 func TestSetupStatus_LocalMode(t *testing.T) {
 	srv := New(Config{LocalMode: true, LocalOperator: "local:test", LocalLoopback: true})

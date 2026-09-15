@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -63,6 +64,15 @@ type awsSSOScope struct {
 // can actually be made in. False under perUser with no owner — the fail-closed
 // direction, since the alternative is reading the operator's row.
 func (sc awsSSOScope) namespaced() bool { return sc.perUser && sc.owner != "" }
+
+// awsSSOScopeIsMechanism reports whether sc names the shared admin bearer
+// token under a per_user row — a MECHANISM, not a person: no credential of
+// its own to grade, no sign-in it could complete. LocalMode's own seat
+// resolves to a real person-shaped namespace (runIdentitySubject prefers it
+// over adminTokenPrincipal, e.g. "local:operator") and is deliberately NOT
+// this — the whole reason per_user exists is that a real person signs in for
+// themselves, and LocalMode's operator is exactly that person.
+func awsSSOScopeIsMechanism(sc awsSSOScope) bool { return sc.perUser && sc.owner == adminTokenPrincipal }
 
 // awsSSOCredentialSourceLabel is the scope as the audit trail names it — the
 // same two wire values the admin wrote on the row, so a row and a log line are
@@ -158,6 +168,22 @@ const (
 	modelAccessSharedExpiredAction = "Your admin's model credential expired — ask them to reconnect it"
 )
 
+// harnessLoginMechanismPrincipalRefusal (M2 canon pending) — DRAFT
+// (docs/design/workspace-providers-prompt.md §7 shape: a lowercase-opening
+// clause naming what was refused, rendered verbatim by the console).
+const harnessLoginMechanismPrincipalRefusal = "this deployment gives each person their own AWS sign-in, and the admin token is a shared credential rather than a person — every capture made with it would land in one namespace and overwrite the last. Sign in to the console, or use your own wdn_ API token, and start the sign-in from there"
+
+// refuseHarnessLoginMechanismPrincipal writes the 422 refusal for a per_user
+// row reached by the shared admin-bearer-token principal and returns false,
+// so authorizeHarnessLogin can `return types.AgentProvider{}, s.refuse...(w)`
+// in one line. Bare writeError — handleAddSSHKey's admin-token refusal in
+// sshkeys.go is the same non-human-principal shape's precedent: no audit row,
+// keeping parity with every other writeError path already in that function.
+func (s *Server) refuseHarnessLoginMechanismPrincipal(w http.ResponseWriter) bool {
+	writeError(w, http.StatusUnprocessableEntity, harnessLoginMechanismPrincipalRefusal)
+	return false
+}
+
 // SetupModelAccess is THIS PRINCIPAL's model-access answer: which state their
 // own credential is in, the lane it is on, and the one thing to do about it.
 //
@@ -211,7 +237,11 @@ type SetupModelAccess struct {
 // principal who owns the credential: the operator, or a member under `per_user`
 // (PerUser, untouched here).
 func memberModelAccess(ma SetupModelAccess) SetupModelAccess {
-	if ma.State == "" || ma.PerUser {
+	// Fail-safe, not a reachable path today (a real human is never the
+	// mechanism principal): without this early return the default arm below
+	// would rewrite an unknown state to `live`, which is a worse lie than
+	// leaving it alone.
+	if ma.State == "" || ma.State == modelAccessNotApplicable || ma.PerUser {
 		return ma
 	}
 	out := SetupModelAccess{State: modelAccessLive, Mechanism: ma.Mechanism}
@@ -301,6 +331,14 @@ func modelAccessDeadline(blob awsSSOBlob, found bool, now time.Time) string {
 func setupModelAccess(sc types.SiteConfig, blob awsSSOBlob, found bool, scope awsSSOScope, now time.Time) SetupModelAccess {
 	row, declared := agentProviderFor(sc, modelAccessAgent)
 	ssoLane := declared && !row.Disabled && row.Mechanism == types.AgentMechanismBedrockSSO
+	// The caller is the shared admin bearer token, not a person: it owns no
+	// per-principal namespace to grade (readAWSSSOBlob already refused to read
+	// one for it), so there is no sign-in for it to complete and composing an
+	// Action/Deadline here would offer one anyway. not_applicable, never
+	// not_configured — that state means "a person hasn't signed in yet".
+	if awsSSOScopeIsMechanism(scope) {
+		return SetupModelAccess{State: modelAccessNotApplicable, Mechanism: string(types.AgentMechanismBedrockSSO)}
+	}
 	if !ssoLane && !found {
 		return SetupModelAccess{}
 	}

@@ -713,6 +713,9 @@ const (
 func (s *Server) authorizeHarnessLogin(w http.ResponseWriter, r *http.Request, provider string) (types.AgentProvider, bool) {
 	sc, _ := s.siteConfigSnapshot(r.Context())
 	row, perUser := perUserLoginRow(sc, provider)
+	if perUser && principalFromRequest(r) == adminTokenPrincipal {
+		return types.AgentProvider{}, s.refuseHarnessLoginMechanismPrincipal(w)
+	}
 	if s.isOperator(r.Context()) {
 		return row, true
 	}

@@ -667,6 +667,16 @@ type SetupBedrock struct {
 	// different ways — and nothing on the console reads a second copy of a fact
 	// SetupStatus.ModelAccess already carries per principal.
 	SSOExpired bool `json:"-"`
+	// PerUser/Mechanism: the CALLER's own awsSSOScope, echoed in-process (never
+	// on the wire — bedrockProviderCheck's callsite already has bedrock in
+	// hand, so no second SetupStatus consumer needs to re-derive it) so
+	// bedrockProviderCheck/llmProviderCheck can tell "a real person's own
+	// credential is missing" from "the shared admin token was asked a
+	// per-person question" without re-resolving scope themselves.
+	PerUser bool `json:"-"`
+	// Mechanism: this caller IS the shared admin bearer token under a per_user
+	// row — see awsSSOScopeIsMechanism. Always false when PerUser is false.
+	Mechanism bool `json:"-"`
 	// Ready is the server-computed readiness (region+model+any credential source),
 	// echoed so the UI doesn't re-derive — and drift from — this gate.
 	Ready bool `json:"ready"`
@@ -765,6 +775,8 @@ func (s *Server) setupBedrock(ctx context.Context, present map[string]bool, sso 
 	if sso.perUser {
 		b.CredsPresent, b.AWSMount, b.BearerPresent = false, false, false
 	}
+	b.PerUser = sso.perUser
+	b.Mechanism = awsSSOScopeIsMechanism(sso)
 	b.Ready = b.ready()
 	return b
 }

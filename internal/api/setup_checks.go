@@ -198,14 +198,54 @@ func k8sEgressContainmentCheck(driver, netpolProven string) (SetupCheck, bool) {
 	}
 }
 
+// Per-principal Bedrock/LLM-access copy — a per_user row reads a per-person
+// credential gap, and the shared admin token reads a mechanism that owns no
+// credential at all; neither is the deployment-wide "nothing configured"
+// story the generic text below tells. DRAFT (M2 canon pending) — verbatim
+// from the plan, byte-checked by TestBedrockProviderCheck_* /
+// TestLLMProviderCheck_*.
+const (
+	// DRAFT (M2 canon pending)
+	bedrockPerUserDetail = "Bedrock is configured for this deployment, but YOUR runs will not use it until you sign in to AWS yourself — this agent's roster row gives each person their own session."
+	// DRAFT (M2 canon pending)
+	bedrockPerUserMissingCredential = "a credential — your own AWS sign-in (Settings → Model provider → \"Sign in to AWS\"); this deployment gives each person their own, so a read-only ~/.aws mount, a bedrock-api-key bearer secret and aws-access-key-id + aws-secret-access-key cannot carry your runs"
+	// DRAFT (M2 canon pending)
+	bedrockMechanismDetail = "Bedrock is configured for this deployment and model access here is per person. This request arrived on the shared admin token, which is not a person, so this row cannot say whose sign-in is missing."
+	// DRAFT (M2 canon pending)
+	bedrockMechanismFix = "Sign in to the console (or use your own wdn_ API token) to see your own model access."
+	// DRAFT (M2 canon pending)
+	llmProviderPerUserDetail = "This deployment reaches models through AWS Bedrock with a sign-in per person, and yours is not connected yet — agent-harness runs will be refused until you sign in to AWS."
+	// DRAFT (M2 canon pending)
+	llmProviderPerUserFix = "Sign in to AWS on the provider step (Settings → Model provider)."
+	// DRAFT (M2 canon pending)
+	llmProviderMechanismDetail = "This deployment reaches models through AWS Bedrock with a sign-in per person. This request arrived on the shared admin token, which owns no sign-in — a person's own console session answers this row."
+)
+
 // llmProviderCheck reports the WINNING model/harness signal (llmProvenance's
 // detail, "" when there is none). INFO, never a warning, when there is none: a
 // model provider is OPTIONAL — needed only for agent-harness runs, so "no
 // model" is a deliberate non-blocking state, never a gap the operator must
 // clear.
-func llmProviderCheck(llmDetail string) SetupCheck {
+//
+// bedrock is read ONLY when llmDetail is "" — llmProvenance's own winning
+// signal always outranks it (unchanged), and the "no provider configured"
+// text below stays byte-for-byte for an install with no Bedrock row at all.
+// A configured-but-not-ready per_user/mechanism Bedrock row is a DIFFERENT
+// fact than "nothing is configured" (finding 3's cross-row contradiction:
+// bedrock_provider says Bedrock IS configured two rows down), so it gets its
+// own per-principal sentence instead of the generic optional-provider one.
+func llmProviderCheck(llmDetail string, bedrock SetupBedrock) SetupCheck {
 	if llmDetail != "" {
 		return SetupCheck{ID: "llm_provider", Label: "LLM access", Status: "ok", Detail: llmDetail}
+	}
+	if bedrock.configured() && bedrock.Mechanism {
+		return SetupCheck{ID: "llm_provider", Label: "LLM access", Status: "info", Detail: llmProviderMechanismDetail}
+	}
+	if bedrock.configured() && bedrock.PerUser {
+		return SetupCheck{
+			ID: "llm_provider", Label: "LLM access", Status: "warn",
+			Detail: llmProviderPerUserDetail, Fix: llmProviderPerUserFix,
+		}
 	}
 	return SetupCheck{
 		ID: "llm_provider", Label: "LLM access", Status: "info",
@@ -216,7 +256,15 @@ func llmProviderCheck(llmDetail string) SetupCheck {
 
 // bedrockProviderCheck surfaces a row only once the operator has touched ANY
 // Bedrock knob (ok=false otherwise), so the majority who never use AWS aren't
-// shown an irrelevant row. warn = partially configured, a real gap worth fixing.
+// shown an irrelevant row. warn = partially configured, a real gap worth
+// fixing — EXCEPT for the mechanism principal (info: the shared admin token
+// has nothing it can fix here, so a warning would be a false alarm forever).
+//
+// Region/Model missing-item detection is unchanged and shared by every arm
+// below; only the CREDENTIAL sentence differs per caller, because that is the
+// one thing per_user resolution actually changes (it "skips the bearer,
+// host-~/.aws-mount and static-key arms outright, because all three are
+// operator reads" — finding 3).
 func bedrockProviderCheck(bedrock SetupBedrock) (SetupCheck, bool) {
 	if !bedrock.configured() {
 		return SetupCheck{}, false
@@ -227,6 +275,12 @@ func bedrockProviderCheck(bedrock SetupBedrock) (SetupCheck, bool) {
 			Detail: fmt.Sprintf("Bedrock is configured (region %s, model %s) for Claude runs via %s.", bedrock.Region, bedrock.Model, bedrock.credSourceDesc()),
 		}, true
 	}
+	if bedrock.Mechanism {
+		return SetupCheck{
+			ID: "bedrock_provider", Label: "AWS Bedrock", Status: "info",
+			Detail: bedrockMechanismDetail, Fix: bedrockMechanismFix,
+		}, true
+	}
 	var missing []string
 	if bedrock.Region == "" {
 		missing = append(missing, "-bedrock-region")
@@ -234,7 +288,18 @@ func bedrockProviderCheck(bedrock SetupBedrock) (SetupCheck, bool) {
 	if bedrock.Model == "" {
 		missing = append(missing, "-bedrock-model")
 	}
-	if !bedrock.CredsPresent && !bedrock.AWSMount && !bedrock.BearerPresent && !bedrock.SSOPresent {
+	credentialMissing := !bedrock.CredsPresent && !bedrock.AWSMount && !bedrock.BearerPresent && !bedrock.SSOPresent
+	if bedrock.PerUser {
+		if credentialMissing {
+			missing = append(missing, bedrockPerUserMissingCredential)
+		}
+		return SetupCheck{
+			ID: "bedrock_provider", Label: "AWS Bedrock", Status: "warn",
+			Detail: bedrockPerUserDetail,
+			Fix:    "Still needed: " + strings.Join(missing, ", ") + ".",
+		}, true
+	}
+	if credentialMissing {
 		missing = append(missing, "a credential — a read-only ~/.aws mount (-bedrock-aws-dir), a bedrock-api-key bearer secret, a container AWS SSO login, or aws-access-key-id + aws-secret-access-key secrets")
 	}
 	return SetupCheck{

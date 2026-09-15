@@ -611,7 +611,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		runnerCheck(rnr),
 		agentImageCheck(s.cfg.AgentImages),
 		envBuilderCheck(s.cfg.ImageBuilder != nil),
-		llmProviderCheck(llmDetail),
+		llmProviderCheck(llmDetail, bedrock),
 	}
 	// confinement_floor: the operator's configured floor vs what this runner
 	// can actually enforce — see confinementFloorCheck.

@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"regexp"
 	"strings"
 	"testing"
@@ -487,5 +488,116 @@ func TestAgeKeyCheckFixSteersToASecretBackedKey(t *testing.T) {
 	// leak into, and -age-key / the env var is what compose and install.sh write.
 	if !strings.Contains(chk.Fix, "-age-key") {
 		t.Errorf("Fix dropped the host-side -age-key answer — Fix = %q", chk.Fix)
+	}
+}
+
+// ── finding 3: bedrock_provider / llm_provider under a per-principal caller ──
+
+// bedrockRowVia is bedrockProviderCheck fed the SAME setupBedrock a real
+// request would compute for scope — real per_user zeroing included — so
+// these tests pin the end-to-end behaviour, not a hand-built SetupBedrock the
+// production code path would never actually produce.
+func bedrockRowVia(t *testing.T, scope awsSSOScope) SetupCheck {
+	t.Helper()
+	srv := New(Config{
+		BedrockRegion: "us-east-1", BedrockModel: "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+		Secrets: &memSecrets{m: map[string][]byte{}},
+	})
+	bedrock := srv.setupBedrock(context.Background(), map[string]bool{}, scope)
+	chk, ok := bedrockProviderCheck(bedrock)
+	if !ok {
+		t.Fatal("a region+model-configured Bedrock row must always surface a check")
+	}
+	return chk
+}
+
+// TestBedrockProviderCheck_PerUserNamesOnlyTheSignIn is finding 3: a per_user
+// admin with no session of their own must be told to sign in, not offered the
+// three operator-only remedies per_user resolution skips outright (the bearer,
+// host-~/.aws-mount and static-key arms).
+func TestBedrockProviderCheck_PerUserNamesOnlyTheSignIn(t *testing.T) {
+	chk := bedrockRowVia(t, awsSSOScope{perUser: true, owner: "member-x"})
+	if chk.Status != "warn" {
+		t.Errorf("status = %q, want warn (a real person has something to do)", chk.Status)
+	}
+	if strings.Contains(chk.Fix, "-bedrock-aws-dir") {
+		t.Errorf("fix = %q, must not offer the operator-only ~/.aws mount flag to a per-user caller", chk.Fix)
+	}
+	if !strings.Contains(chk.Fix, "Sign in to AWS") {
+		t.Errorf("fix = %q, want it to name the sign-in", chk.Fix)
+	}
+	if chk.Detail != bedrockPerUserDetail {
+		t.Errorf("detail = %q, want the per_user DRAFT sentence verbatim", chk.Detail)
+	}
+}
+
+// TestBedrockProviderCheck_MechanismPrincipalIsInfoNotWarn is finding 5's
+// other half: the shared admin token under a per_user row cannot act on this
+// row, so it must never read as a warning the operator will chase forever.
+func TestBedrockProviderCheck_MechanismPrincipalIsInfoNotWarn(t *testing.T) {
+	chk := bedrockRowVia(t, awsSSOScope{perUser: true, owner: adminTokenPrincipal})
+	if chk.Status != "info" {
+		t.Errorf("status = %q, want info", chk.Status)
+	}
+	if chk.Detail != bedrockMechanismDetail || chk.Fix != bedrockMechanismFix {
+		t.Errorf("mechanism row text drifted: %+v", chk)
+	}
+}
+
+// TestBedrockProviderCheck_SharedRowUnchanged pins the load-bearing regression:
+// the ORIGINAL shared-row text, byte-for-byte, through the per_user/mechanism
+// refactor.
+func TestBedrockProviderCheck_SharedRowUnchanged(t *testing.T) {
+	chk := bedrockRowVia(t, awsSSOScope{})
+	want := SetupCheck{
+		ID: "bedrock_provider", Label: "AWS Bedrock", Status: "warn",
+		Detail: "Bedrock is partially configured; runs will NOT use it until this is complete.",
+		Fix:    "Still needed: a credential — a read-only ~/.aws mount (-bedrock-aws-dir), a bedrock-api-key bearer secret, a container AWS SSO login, or aws-access-key-id + aws-secret-access-key secrets.",
+	}
+	if chk != want {
+		t.Errorf("shared-row text drifted:\n got  %+v\n want %+v", chk, want)
+	}
+}
+
+// TestLLMProviderCheck_NoBedrockRowUnchanged pins the OTHER load-bearing
+// regression: an install with no Bedrock row at all keeps today's exact
+// optional-provider sentence.
+func TestLLMProviderCheck_NoBedrockRowUnchanged(t *testing.T) {
+	got := llmProviderCheck("", SetupBedrock{})
+	want := SetupCheck{
+		ID: "llm_provider", Label: "LLM access", Status: "info",
+		Detail: "No model/harness provider configured (optional): needed only for agent-harness runs. Bring-your-own-container and interactive runs work without one.",
+		Fix:    "Optional — connect a Claude subscription/API key or Bedrock (Settings → Model provider, or the \"Secrets\" setup step), or bind creds to a workspace/container.",
+	}
+	if got != want {
+		t.Errorf("no-bedrock-row text drifted:\n got  %+v\n want %+v", got, want)
+	}
+}
+
+// TestLLMProviderCheck_PerUserBedrockRowDoesNotSayNoProviderConfigured is
+// finding 3's second contradiction: llm_provider must not claim "no provider
+// configured" while bedrock_provider (fed the same bedrock value) says Bedrock
+// IS configured.
+func TestLLMProviderCheck_PerUserBedrockRowDoesNotSayNoProviderConfigured(t *testing.T) {
+	b := SetupBedrock{Region: "us-east-1", Model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0", PerUser: true}
+	got := llmProviderCheck("", b)
+	if strings.Contains(got.Detail, "No model/harness provider configured") {
+		t.Errorf("detail = %q, must not claim no provider when Bedrock IS configured per_user", got.Detail)
+	}
+	if got.Detail != llmProviderPerUserDetail || got.Fix != llmProviderPerUserFix {
+		t.Errorf("detail/fix = %+v, want the per_user DRAFT sentence verbatim", got)
+	}
+}
+
+// TestLLMProviderCheck_MechanismPrincipalIsInfo mirrors the Bedrock row's
+// info-not-warn rule for the same caller.
+func TestLLMProviderCheck_MechanismPrincipalIsInfo(t *testing.T) {
+	b := SetupBedrock{Region: "us-east-1", Model: "us.anthropic.claude-sonnet-4-5-20250929-v1:0", PerUser: true, Mechanism: true}
+	got := llmProviderCheck("", b)
+	if got.Status != "info" {
+		t.Errorf("status = %q, want info", got.Status)
+	}
+	if got.Detail != llmProviderMechanismDetail {
+		t.Errorf("detail = %q, want the mechanism DRAFT sentence verbatim", got.Detail)
 	}
 }
