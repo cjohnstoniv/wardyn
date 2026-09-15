@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
@@ -474,45 +473,6 @@ func isConventionLimitedToolchainImage(ref string) bool {
 		return true
 	}
 	return false
-}
-
-// Host-proxy sweep memo. setup.DetectHostProxy's OS tier shells out to the
-// platform's proxy configuration (registry/scutil/gsettings) and measured ~450ms
-// per call on a WSL host — 90%+ of handleSetupStatus's cost, on an endpoint the
-// console polls every 5s, so a single open Getting-started tab spent most of a
-// core on re-reading a host setting that changes about never.
-//
-// Memoized here rather than on Server (the way githubRefRulesetCheck's cache is)
-// on purpose: the answer is a property of the HOST, not of any one Server, so
-// two Servers in one process would only duplicate the sweep. hostProxyDetect is
-// the seam the memo test swaps; hostProxyCacheReset drops the memo (tests, and
-// the Re-check path if one is ever wired to force a re-detect).
-const hostProxyTTL = 30 * time.Second
-
-var (
-	hostProxyMu     sync.Mutex
-	hostProxyAt     time.Time
-	hostProxyVal    setup.HostProxyDetection
-	hostProxyDetect = setup.DetectHostProxy
-)
-
-func cachedHostProxy() setup.HostProxyDetection {
-	hostProxyMu.Lock()
-	defer hostProxyMu.Unlock()
-	if !hostProxyAt.IsZero() && time.Since(hostProxyAt) < hostProxyTTL {
-		return hostProxyVal
-	}
-	hostProxyVal = hostProxyDetect()
-	hostProxyAt = time.Now()
-	return hostProxyVal
-}
-
-// hostProxyCacheReset forgets the memo so the next caller re-detects.
-func hostProxyCacheReset() {
-	hostProxyMu.Lock()
-	defer hostProxyMu.Unlock()
-	hostProxyAt = time.Time{}
-	hostProxyVal = setup.HostProxyDetection{}
 }
 
 // handleSetupStatus assembles the first-run readiness snapshot. It sits behind

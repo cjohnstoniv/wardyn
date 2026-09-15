@@ -6,7 +6,9 @@ package api
 import (
 	"context"
 	"net/http"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/cjohnstoniv/wardyn/internal/store"
@@ -80,10 +82,12 @@ func TestSetupStatus_HasRunsReadsOneRow(t *testing.T) {
 // WSL host (registry/scutil/gsettings shell-outs) — 90%+ of this handler's
 // cost, repeated every 5s for a host setting that changes about never.
 func TestSetupStatus_HostSweepIsMemoized(t *testing.T) {
-	calls := 0
+	var calls atomic.Int64
+	swept := make(chan struct{}, 4)
 	realDetect := hostProxyDetect
 	hostProxyDetect = func() setup.HostProxyDetection {
-		calls++
+		calls.Add(1)
+		swept <- struct{}{}
 		return setup.HostProxyDetection{}
 	}
 	t.Cleanup(func() {
@@ -93,13 +97,78 @@ func TestSetupStatus_HostSweepIsMemoized(t *testing.T) {
 	hostProxyCacheReset()
 
 	srv := New(baseTestConfig(newHarness(t), &setupStatusCostStore{}))
-	for i := 0; i < 2; i++ {
-		if w := do(t, srv, http.MethodGet, "/api/v1/setup/status", adminToken, ""); w.Code != http.StatusOK {
-			t.Fatalf("poll %d: code = %d; body=%s", i, w.Code, w.Body.String())
-		}
+	// The sweep is now taken OFF the request goroutine (see the non-blocking
+	// pin below), so the first poll only STARTS it. Wait for it to land before
+	// polling again, or the second poll would find the memo still empty and
+	// legitimately start a second one — an async memo is still a memo.
+	if w := do(t, srv, http.MethodGet, "/api/v1/setup/status", adminToken, ""); w.Code != http.StatusOK {
+		t.Fatalf("poll 0: code = %d; body=%s", w.Code, w.Body.String())
 	}
+	select {
+	case <-swept:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first poll never started a host-proxy sweep")
+	}
+	waitHostProxyMemo(t)
 
-	if calls != 1 {
-		t.Errorf("host-proxy sweep ran %d times across 2 polls, want 1 (memoized for %s)", calls, hostProxyTTL)
+	if w := do(t, srv, http.MethodGet, "/api/v1/setup/status", adminToken, ""); w.Code != http.StatusOK {
+		t.Fatalf("poll 1: code = %d; body=%s", w.Code, w.Body.String())
+	}
+	if n := calls.Load(); n != 1 {
+		t.Errorf("host-proxy sweep ran %d times across 2 polls, want 1 (memoized for %s)", n, hostProxyTTL)
+	}
+}
+
+// waitHostProxyMemo blocks until a started sweep has STORED its answer — the
+// moment the memo turns fresh. Reading hostProxyAt under its own mutex is the
+// honest wait; sleeping a guessed interval is how this test would flake.
+func waitHostProxyMemo(t *testing.T) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		hostProxyMu.Lock()
+		fresh := !hostProxyAt.IsZero()
+		hostProxyMu.Unlock()
+		if fresh {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("host-proxy sweep never stored its answer")
+}
+
+// TestSetupStatus_HostSweepNeverBlocksThePoll is the THIRD cost pin, and the
+// one the other two implied: the sweep must not merely be rare, it must never
+// run on the request goroutine at all.
+//
+// It cost the 0.7.3 e2e suite 17 spec files. setup.DetectHostProxy's OS tier
+// shells out to WSL interop (powershell.exe, then netsh.exe), each bounded by
+// its own 3s probeTimeout — so a host whose interop is wedged turns the FIRST
+// GET /setup/status after every daemon boot into a 6-second call, the console's
+// first paint waits on it, and Playwright's 5s expect times out before any
+// heading renders. The memo above only ever helped the SECOND caller.
+//
+// The bound is generous on purpose (1s against a 2s sweep): this pins "the
+// handler does not wait for the sweep", not a latency budget.
+func TestSetupStatus_HostSweepNeverBlocksThePoll(t *testing.T) {
+	const sweep = 2 * time.Second
+	realDetect := hostProxyDetect
+	hostProxyDetect = func() setup.HostProxyDetection {
+		time.Sleep(sweep)
+		return setup.HostProxyDetection{}
+	}
+	t.Cleanup(func() {
+		hostProxyDetect = realDetect
+		hostProxyCacheReset()
+	})
+	hostProxyCacheReset()
+
+	srv := New(baseTestConfig(newHarness(t), &setupStatusCostStore{}))
+	start := time.Now()
+	if w := do(t, srv, http.MethodGet, "/api/v1/setup/status", adminToken, ""); w.Code != http.StatusOK {
+		t.Fatalf("setup/status: code = %d; body=%s", w.Code, w.Body.String())
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("GET /setup/status took %s with a %s host sweep in flight — the poll is waiting on a subprocess", elapsed, sweep)
 	}
 }
