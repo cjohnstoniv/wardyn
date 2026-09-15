@@ -139,7 +139,7 @@ test.describe("Docs screenshots", () => {
   // real single-host install shows. kvm:true keeps Vault at "Needs setup"
   // rather than "Incompatible here" (that split is a hardware fact).
   test("getting-started.png — barrier picker", async ({ page }) => {
-    await page.route("**/api/v1/setup/status", (route) =>
+    await page.route("**/api/v1/setup/status*", (route) =>
       route.fulfill({
         json: {
           ready: true,

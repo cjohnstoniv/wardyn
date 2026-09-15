@@ -20,7 +20,7 @@ import { ACCESS_ERROR, ACCESS_STATE, GUARD, PEOPLE, PREVIEW } from "../src/app/l
 // /setup/status is the one endpoint here that has one).
 
 async function mockSsoStatus(page: Page): Promise<void> {
-  await page.route("**/api/v1/setup/status", async (route) => {
+  await page.route("**/api/v1/setup/status*", async (route) => {
     const response = await route.fetch();
     const json = await response.json();
     // Only auth.mode changes — onboarding_complete stays whatever the real

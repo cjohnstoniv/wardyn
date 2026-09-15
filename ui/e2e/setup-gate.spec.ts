@@ -20,7 +20,7 @@ async function mockGatedStatus(
   page: Page,
   overrides: { onboarded?: boolean; sso?: boolean } = {},
 ): Promise<void> {
-  await page.route("**/api/v1/setup/status", async (route) => {
+  await page.route("**/api/v1/setup/status*", async (route) => {
     const response = await route.fetch();
     const json = await response.json();
     json.onboarding_complete = overrides.onboarded ?? false;
@@ -141,5 +141,37 @@ test.describe("setup gate — forced on access, never a prison", () => {
     await mockMemberRole(page);
     await page.goto("/runs");
     await expect(page).toHaveURL(/\/runs/);
+  });
+
+  // Re-check means "look at the HOST again", and only the daemon can do that:
+  // the host-proxy sweep it re-runs is memoized for 30s behind /setup/status
+  // (internal/api/hostproxy_cache.go), so a button that merely refetched
+  // returned a byte-identical answer and a proxy configured moments ago could
+  // not be made to appear. ?recheck=1 is how the press says so, and it is the
+  // ONLY request that carries it — the mount fetch and every background refresh
+  // must not make the daemon sweep the host on a timer.
+  test("Re-check asks the daemon to look again: the press carries recheck=1, the mount fetch does not", async ({
+    page,
+  }) => {
+    await mockGatedStatus(page, { sso: true });
+    await skipHero(page);
+
+    const seen: string[] = [];
+    page.on("request", (r) => {
+      if (r.url().includes("/api/v1/setup/status")) seen.push(r.url());
+    });
+
+    await page.goto("/setup");
+    await expect(page.getByText("Getting started").first()).toBeVisible();
+    expect(
+      seen.some((u) => u.includes("recheck=1")),
+      `the mount fetch must not force a host sweep; saw ${seen.join(", ")}`,
+    ).toBe(false);
+
+    const pressed = page.waitForRequest((r) =>
+      r.url().includes("/api/v1/setup/status") && r.url().includes("recheck=1"),
+    );
+    await page.getByRole("button", { name: "Re-check" }).first().click();
+    await pressed;
   });
 });

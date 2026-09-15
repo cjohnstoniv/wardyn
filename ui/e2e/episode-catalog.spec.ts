@@ -16,7 +16,7 @@ import { EPISODES } from "../src/app/lib/demo-videos";
 // behavior obligates the spec that covers it).
 
 async function mockFreshInstall(page: Page, opts: { sso?: boolean } = {}): Promise<void> {
-  await page.route("**/api/v1/setup/status", async (route) => {
+  await page.route("**/api/v1/setup/status*", async (route) => {
     const response = await route.fetch();
     const json = await response.json();
     json.onboarding_complete = false;

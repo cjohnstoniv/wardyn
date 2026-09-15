@@ -146,11 +146,13 @@ func waitHostProxyMemo(t *testing.T) {
 // run on the request goroutine at all.
 //
 // It cost the 0.7.3 e2e suite 17 spec files. setup.DetectHostProxy's OS tier
-// shells out to WSL interop (powershell.exe, then netsh.exe), each bounded by
-// its own 3s probeTimeout — so a host whose interop is wedged turns the FIRST
-// GET /setup/status after every daemon boot into a 6-second call, the console's
-// first paint waits on it, and Playwright's 5s expect times out before any
-// heading renders. The memo above only ever helped the SECOND caller.
+// shells out to WSL interop (powershell.exe, then netsh.exe) — and probeTimeout
+// bounds each CHILD, not the call (see the package comment on hostproxy_cache.go
+// and the setup package's own grandchild-pipe pin), so a host whose interop is
+// wedged turned the FIRST GET /setup/status after every daemon boot into a call
+// of six seconds at best and unbounded at worst. The console's first paint waits
+// on it, and Playwright's 5s expect times out before any heading renders. The
+// memo above only ever helped the SECOND caller.
 //
 // The bound is generous on purpose (1s against a 2s sweep): this pins "the
 // handler does not wait for the sweep", not a latency budget.

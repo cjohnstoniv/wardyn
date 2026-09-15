@@ -46,6 +46,30 @@ describe("setup.getSetupStatus()", () => {
     expect(res).toEqual(sample);
   });
 
+  // The Re-check press, spelled on the wire. ?recheck=1 makes the daemon drop
+  // its host-proxy memo before answering, so it must ride the PRESS and nothing
+  // else — the mount fetch and every background refresh share this same client,
+  // and a poll that forced a host sweep is the cost the memo exists to avoid.
+  it("forced: a Re-check press asks for ?recheck=1", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(sample), { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
+    await setup.getSetupStatus({ recheck: true });
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/setup/status?recheck=1");
+  });
+
+  it("unforced: an ordinary read asks for a bare /setup/status", async () => {
+    for (const opts of [undefined, {}, { recheck: false }]) {
+      fetchMock.mockResolvedValueOnce(
+        new Response(JSON.stringify(sample), { status: 200, headers: { "Content-Type": "application/json" } }),
+      );
+      await setup.getSetupStatus(opts);
+      const url = String(fetchMock.mock.calls.at(-1)?.[0]);
+      expect(url).toContain("/setup/status");
+      expect(url).not.toContain("recheck");
+    }
+  });
+
   it("returns a permissive ready:true fallback on a 404 (endpoint not built yet)", async () => {
     fetchMock.mockResolvedValueOnce(new Response(null, { status: 404 }));
     const res = await setup.getSetupStatus();

@@ -418,14 +418,20 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   // integration added OR deleted inside the embedded step until a full page
   // reload. loadSecrets is now folded into the SAME recheck every "Re-check"
   // button on this screen already calls.
-  it("Re-check also re-fetches secret names, not just status and site-config", async () => {
+  // …and the PRESS forces a host re-detect server-side (?recheck=1 drops the
+  // daemon's 30s host-proxy memo) while the MOUNT deliberately does not — one
+  // loader serves both, so a future edit that collapsed them would put a host
+  // sweep on every /setup navigation.
+  it("Re-check re-fetches secret names and forces a host re-detect; the mount fetch does neither", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence");
     expect(listSecretsMock).toHaveBeenCalledTimes(1); // the mount-time fetch
+    expect(getSetupStatusMock.mock.calls[0][0]?.recheck).toBeFalsy();
 
     await user.click(screen.getByRole("button", { name: /^re-check$/i }));
     await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalledTimes(2));
     expect(listSecretsMock).toHaveBeenCalledTimes(2);
+    expect(getSetupStatusMock.mock.calls[1][0]).toEqual({ recheck: true });
   });
 
   // Phase 5 — the People step: renders with its label/heading, its badge reads

@@ -203,6 +203,15 @@ func abandonHostProxySweep(seq uint64) bool {
 // Keeping the value is the difference between a re-check and a downgrade: a full
 // forget would answer the very press that asked with an empty detection, and the
 // operator would have to press again to see what they already had on screen.
+//
+// SINGLE-FLIGHT IS DELIBERATELY YIELDED HERE, so do not "fix" it back: clearing
+// hostProxySweeping without stopping the sweep it displaces means N presses
+// inside one deadline start N overlapping sweeps. That is the point — the case
+// Re-check exists for is a sweep that is WEDGED, and keeping the flag set would
+// make the button a no-op exactly then. The cost is bounded and operator-only:
+// isOperator gates the door, the button is disabled while a check is in flight,
+// each probe is capped at probeTimeout + probeWaitDelay and each waiter at
+// hostProxySweepDeadline.
 func hostProxyForceRedetect() {
 	hostProxyMu.Lock()
 	defer hostProxyMu.Unlock()
