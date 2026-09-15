@@ -191,4 +191,10 @@ type AgentProvider struct {
 	// their capture to a foreign IdP/account, and an org URL leaves the member's
 	// typing surface.
 	SSOStartURL string `json:"sso_start_url,omitempty"`
+	// SSOAccountID and SSORoleName pin WHICH AWS account and role a sign-in for
+	// this row may capture. Optional, set together, permitted only where
+	// SSOStartURL is (bedrock_sso + per_user). Admin-owned for the same reason
+	// the start URL is: the sign-in proposes, the roster disposes.
+	SSOAccountID string `json:"sso_account_id,omitempty"`
+	SSORoleName  string `json:"sso_role_name,omitempty"`
 }

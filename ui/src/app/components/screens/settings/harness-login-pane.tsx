@@ -57,6 +57,11 @@ type LoginFlow = {
   doneLabel: string;
   // Marker the in-sandbox helper prints on success (capture: "helper" only).
   doneMarker?: string;
+  // Marker the in-sandbox helper prints on a refused capture (capture: "helper"
+  // only). Unused for now — cmd/wardyn-aws-sso's TestFailMarker_UIParity reads
+  // this literal by source parse, the same way TestSuccessMarker_UIParity reads
+  // doneMarker above, so it stays byte-identical across the two languages.
+  failMarker?: string;
   // The flow cannot start until the operator supplies their AWS access-portal
   // start URL: `aws sso login` reads sso_start_url + sso_region from the
   // sandbox's ~/.aws/config, and Wardyn stores no start URL anywhere (the region
@@ -120,6 +125,7 @@ const LOGIN_FLOWS: Record<string, LoginFlow> = {
     doneLabel: "your AWS SSO session is connected",
     capture: "helper",
     doneMarker: "wardyn: aws sso credential captured",
+    failMarker: "wardyn: aws sso credential rejected:",
     needsStartUrl: true,
     expects: [
       <>

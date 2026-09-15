@@ -153,6 +153,11 @@ export interface AgentProvider {
   // mechanism is "bedrock_sso" and credential_source is "per_user", refused
   // otherwise. ADMIN-OWNED: a member's sign-in never chooses another.
   sso_start_url?: string;
+  // Pin WHICH AWS account and role a sign-in for this row may capture.
+  // Optional, set together, permitted only where sso_start_url is
+  // (bedrock_sso + per_user). ADMIN-OWNED for the same reason sso_start_url is.
+  sso_account_id?: string;
+  sso_role_name?: string;
 }
 
 // The org's workspace-provider policy. Hand-maintained mirror of Go's

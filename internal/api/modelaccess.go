@@ -103,7 +103,7 @@ func (s *Server) awsSSOScopeForAgent(ctx context.Context, agentID, subject strin
 	return awsSSOScopeFor(sc, agentID, subject)
 }
 
-// The five model-access states — ONE vocabulary, ordered REGISTRATION-first.
+// The six model-access states — ONE vocabulary, ordered REGISTRATION-first.
 //
 // The ordering is the whole design. The SSO access token lives one hour on the
 // estate this came from, so a probe keyed on it would make "expiring" the
@@ -132,6 +132,10 @@ const (
 	// dead (or was never captured). There is nothing the member can do, so the
 	// action names the admin rather than offering a button that would fail.
 	modelAccessSharedExpired = "shared_expired"
+	// modelAccessNotApplicable: the caller is a MECHANISM, not a person — the
+	// shared admin bearer token under a per_user row; no credential to grade, no
+	// sign-in it could complete, NO action.
+	modelAccessNotApplicable = "not_applicable"
 )
 
 // modelAccessExpiringWindow is how far ahead of a lapse "expiring" starts. A day

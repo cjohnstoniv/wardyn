@@ -244,6 +244,9 @@ export interface SetupHarnessTool {
 //   not_configured → AGENTS.MODEL_ACCESS_NOT_CONFIGURED, warning, SIGN_IN_AWS
 //   shared_expired → AGENTS.MODEL_ACCESS_SHARED_EXPIRED, warning, NO button —
 //                    there is nothing the member can do but ask their admin
+//   not_applicable → the caller is a mechanism, not a person (the shared admin
+//                    bearer token under a per_user row) — no credential to
+//                    grade, no sign-in it could complete, NO action
 export interface SetupModelAccess {
   state:
     | "live"
@@ -251,6 +254,7 @@ export interface SetupModelAccess {
     | "expired_signin"
     | "not_configured"
     | "shared_expired"
+    | "not_applicable"
     | (string & {});
   // The declared lane, as the roster's wire value ("bedrock_sso"). Member-safe:
   // a lane name, never a portal URL or a secret name.

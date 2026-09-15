@@ -371,6 +371,9 @@ func TestAWSSSOCredentialState_TheFiveStates(t *testing.T) {
 	if modelAccessAction(modelAccessLive, "") != "" {
 		t.Error("live must ask for nothing — that is what folding expired_renewable into it is for")
 	}
+	if modelAccessAction(modelAccessNotApplicable, "") != "" {
+		t.Error("not_applicable must ask for nothing — the caller is a mechanism, not a person")
+	}
 	// The deadline the expiring line names is the REGISTRATION's while the blob
 	// can be renewed: the access token's own expiry is not what runs out.
 	reg := live(func(b *awsSSOBlob) { b.RegistrationExpiresAt = now.Add(6 * time.Hour) })
