@@ -38,6 +38,9 @@ describe("Field — hint is wired to the control via aria-describedby", () => {
       </Field>,
     );
     const described = screen.getByLabelText("Name").getAttribute("aria-describedby") ?? "";
-    expect(described.split(" ")).toEqual(expect.arrayContaining(["other-note"]));
+    // R-06 (review): also assert the hint id joined it, not just that the
+    // caller's own id survived — this would stay green if the wiring itself
+    // were dropped.
+    expect(described.split(" ")).toEqual(expect.arrayContaining(["other-note", "name-input-hint"]));
   });
 });
