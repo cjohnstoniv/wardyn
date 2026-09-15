@@ -401,7 +401,11 @@ test.describe("agents — the roster pin (sso_account_id / sso_role_name)", () =
     page,
   }) => {
     const before = await getAgentProviders(page);
-    const beforeClaude = (before.providers.agents as Array<Record<string, unknown>>).find((a) => a.id === "claude-code");
+    // U2-04: the restore above can legitimately hand this test LEGACY OPEN
+    // MODE (no `agents` key at all) — that is the state the file started in,
+    // and the point of restoring it. `?? []` so the read is about the
+    // claude-code row, not about whether a roster exists.
+    const beforeClaude = ((before.providers.agents ?? []) as Array<Record<string, unknown>>).find((a) => a.id === "claude-code");
 
     await gotoAgentsTab(page);
     const row = page.getByTestId("agent-row-claude-code");
@@ -426,7 +430,7 @@ test.describe("agents — the roster pin (sso_account_id / sso_role_name)", () =
     ).toBeVisible();
 
     const after = await getAgentProviders(page);
-    const afterClaude = (after.providers.agents as Array<Record<string, unknown>>).find((a) => a.id === "claude-code");
+    const afterClaude = ((after.providers.agents ?? []) as Array<Record<string, unknown>>).find((a) => a.id === "claude-code");
     expect(afterClaude).toEqual(beforeClaude);
   });
 });
