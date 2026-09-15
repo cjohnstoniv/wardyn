@@ -288,7 +288,12 @@ cmd_seed() {
     # later patch.
     local extra=""
     [[ "${i}" == "4" ]] && extra=',"tool_approvals":"hold"'
-    api POST /api/v1/runs "{\"agent\":\"${agents[$i]}\",\"repo\":\"acme/widgets\",\"title\":\"${titles[$i]}\",\"task\":\"e2e fixture ${i}\"${extra}}" >/dev/null || true
+    # U-08: no `|| true` here — a refused create used to renumber every
+    # fixture after it (the row_number()->state map below is positional),
+    # which broke runs/recording/audit specs with an unrelated-looking
+    # failure instead of a loud seed error at the actual cause. `set -e`
+    # (top of file) does the rest.
+    api POST /api/v1/runs "{\"agent\":\"${agents[$i]}\",\"repo\":\"acme/widgets\",\"title\":\"${titles[$i]}\",\"task\":\"e2e fixture ${i}\"${extra}}" >/dev/null
   done
   # Diversify states deterministically by created order so specs can target them.
   psql_e2e >/dev/null <<'SQL' || true
