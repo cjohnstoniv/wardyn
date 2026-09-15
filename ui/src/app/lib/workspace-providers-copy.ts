@@ -271,3 +271,26 @@ export const MODEL_ACCESS_CHIP_LABEL: Record<string, string> = {
   not_configured: AGENTS.MODEL_ACCESS_NOT_CONFIGURED,
   shared_expired: AGENTS.MODEL_ACCESS_SHARED_EXPIRED,
 };
+
+// ==================== AGENTS_DRAFT — 0.7.3 field-report round ==============
+// DRAFT (M2 canon pending): new strings this round, NOT part of the frozen
+// §7.7 AGENTS table above — workspace-providers-copy.test.ts's byte-check
+// parses only PROVIDERS/PROVIDER_MEMBER/AGENTS out of the doc, so a NEW
+// export beside it (never inside it) is what keeps that gate meaningful.
+// Canon rows: local/v073/canon/console-agents.md.
+export const AGENTS_DRAFT = {
+  // The per_user sign-in banner (Appendix A finding 4): moves the
+  // claude-code model-access block to the TOP of an expanded per_user row so
+  // the legacy Settings door stops being the one an admin reaches for.
+  PER_USER_SIGN_IN_TITLE: "This lane is per person — including yours",
+  PER_USER_SIGN_IN_BODY:
+    "Saving declares the lane; it signs nobody in, you included. Sign in to AWS below. Every member does the same from their own Getting Started.",
+  // The roster pin (finding 4's other half) — mirrors FIELD_SSO_START_URL /
+  // SSO_START_URL_HINT's shape, one Field each.
+  FIELD_SSO_ACCOUNT_ID: "Pinned AWS account id",
+  SSO_ACCOUNT_ID_HINT:
+    "The 12-digit account a sign-in for this row must resolve to. Set together with the role below, or leave both blank — the sign-in proposes, the roster disposes.",
+  FIELD_SSO_ROLE_NAME: "Pinned IAM role name",
+  SSO_ROLE_NAME_HINT:
+    "The IAM role a sign-in for this row must resolve to. Set together with the account above, or leave both blank.",
+} as const;
