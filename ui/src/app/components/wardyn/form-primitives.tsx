@@ -34,6 +34,18 @@ export function Field({
   children: React.ReactNode;
   className?: string;
 }) {
+  // U-11: an auto hint id + aria-describedby on the control, wired here once
+  // so every Field caller benefits (was visual-only — a screen-reader user
+  // had no association between a hint and its control). Only when there is
+  // both an id to key it by and a hint to point at; only for a SINGLE
+  // element child, the shape every real caller passes.
+  const hintId = htmlFor && hint ? `${htmlFor}-hint` : undefined;
+  const control =
+    hintId && React.isValidElement<{ "aria-describedby"?: string }>(children)
+      ? React.cloneElement(children, {
+          "aria-describedby": [children.props["aria-describedby"], hintId].filter(Boolean).join(" "),
+        })
+      : children;
   return (
     <div className={cn("space-y-2", className)}>
       {/* The "*" is a sibling of Label, not inside it, so it never joins the
@@ -47,8 +59,12 @@ export function Field({
           </span>
         )}
       </div>
-      {children}
-      {hint && <p className="text-xs leading-snug text-muted-foreground">{hint}</p>}
+      {control}
+      {hint && (
+        <p id={hintId} className="text-xs leading-snug text-muted-foreground">
+          {hint}
+        </p>
+      )}
     </div>
   );
 }
