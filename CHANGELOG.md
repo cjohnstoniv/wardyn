@@ -162,11 +162,25 @@ what it answered before.
   navigation) on BOTH the run header and the Runs-list kebab rather than
   launch one silently degraded from either door.
 
-> **NOTE fix-perf**: a real ~5s regression in the setup funnel's / Getting
-> Started's first load is under root-cause investigation (lane `fix-perf`) —
-> this placeholder must be replaced with the real cause (and the fix, if one
-> ships in 0.7.3) before release; `make-notes.sh`/`release-commit.sh` refuse to
-> build notes while this block survives.
+- **The setup screen's first paint could cost six seconds on a wedged Windows
+  interop.** `GET /setup/status` ran the host-proxy sweep
+  (`setup.DetectHostProxy`) on the request goroutine, and a 30s memo only ever
+  helped the SECOND caller — so the first call after every daemon boot paid
+  the sweep's full cost. On WSL that sweep shells out to `powershell.exe` and,
+  only if that answers nothing, `netsh.exe`, each bounded by its own 3-second
+  timeout: healthy interop cost ~0.5s, but a wedged one (a recurring WSL-interop
+  failure mode, unrelated to this release) cost 3s + 3s, and the console's own
+  first paint waited on that call. Latent since 0.4.2 — `internal/setup/` did
+  not change this release — and surfaced by 0.7.3's own end-to-end run, where
+  it read as "the first test of every spec file is slow" (17 of 26 spec files,
+  each on its opening page-render assertion) because every later poll in the
+  same run rode the warm memo. The sweep now runs BEHIND the request: `/setup/status`
+  always returns the last-known value immediately and starts at most one
+  background refresh when that value is stale or absent. The one honest cost:
+  a fresh boot may report no host proxy for the one sweep between boot and the
+  first answer — a `make setup`-seeded corporate install is pre-seeded and
+  never sees that window, and the setup screen's Re-check picks it up on any
+  other install.
 
 ### Security
 
