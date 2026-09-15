@@ -104,8 +104,8 @@ func TestRun_NeverInvokesAWSCLIForAccountRoleLookup(t *testing.T) {
 		t.Fatalf("uploaded body has blank account_id/role_name (%+v) — the control plane's awsSSOBlob.valid rejects exactly this shape with 400", got)
 	}
 	fixture := portal.Account()
-	if got.AccountID != fixture.AccountID || got.RoleName != fixture.RoleName {
-		t.Errorf("uploaded account_id/role_name = %q/%q, want the fake portal's fixture %q/%q", got.AccountID, got.RoleName, fixture.AccountID, fixture.RoleName)
+	if got.AccountID != fixture.AccountID || got.RoleName != fixture.Roles[0] {
+		t.Errorf("uploaded account_id/role_name = %q/%q, want the fake portal's fixture %q/%q", got.AccountID, got.RoleName, fixture.AccountID, fixture.Roles[0])
 	}
 }
 

@@ -54,10 +54,13 @@ type RoleCredentials struct {
 	Expiration      time.Time
 }
 
-// Account is one entry ListAccounts / the resolved account for ListAccountRoles.
+// Account is one entitlement: an AWS account this SSO session reaches, and
+// the roles it may assume in THAT account. Roles is per-account because the
+// real portal's ListAccountRoles is scoped to the account_id it is asked
+// about — see handleListAccountRoles.
 type Account struct {
 	AccountID string
-	RoleName  string
+	Roles     []string
 }
 
 // Server is the fake sso-oidc + sso portal. Zero value is not usable; use New.
@@ -80,8 +83,11 @@ type Server struct {
 	accessToken  string
 	refreshToken string
 
-	// Fixtures for the account/role + role-credentials lookups.
-	account  Account
+	// Fixtures for the account/role + role-credentials lookups. accounts is a
+	// LIST because a real SSO session commonly reaches several accounts, and
+	// which element lands at index 0 is AWS's choice, not the operator's — the
+	// whole of finding 1. SetAccounts lets a test seed that shape.
+	accounts []Account
 	roleCred RoleCredentials
 
 	// startURLSeen/regionSeen let a test assert the CLI actually round-tripped
@@ -100,7 +106,7 @@ func New() *Server {
 		userCode:     "WXYZ-1234",
 		accessToken:  "fake-access-token-" + randHex(8),
 		refreshToken: "fake-refresh-token-" + randHex(8),
-		account:      Account{AccountID: "111111111111", RoleName: "AdministratorAccess"},
+		accounts:     []Account{{AccountID: "111111111111", Roles: []string{"AdministratorAccess"}}},
 		roleCred: RoleCredentials{
 			AccessKeyID:     "ASIAFAKEFAKEFAKEFAKE",
 			SecretAccessKey: "fakeSecretAccessKeyFakeSecretAccessKeyFake",
@@ -147,9 +153,34 @@ func (s *Server) AccessToken() string {
 	return s.accessToken
 }
 
-// Account returns the fixed account/role fixture ListAccounts /
-// ListAccountRoles resolve to.
-func (s *Server) Account() Account { return s.account }
+// Account returns the FIRST entitlement — what ListAccounts puts at index 0.
+// It is deliberately the same accessor it always was, so a single-account
+// caller reads the same fixture; a multi-account test seeds with SetAccounts
+// and names the element it means.
+func (s *Server) Account() Account {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.accounts[0]
+}
+
+// SetAccounts replaces the entitlement fixture. At least one account is
+// required: a session that reaches none is not a shape this fake models (the
+// helper's own empty-list arm is exercised against an unreachable portal).
+func (s *Server) SetAccounts(accounts []Account) {
+	if len(accounts) == 0 {
+		panic("awsssofake: SetAccounts needs at least one account")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.accounts = accounts
+}
+
+// accountsSnapshot is the locked read every handler below makes.
+func (s *Server) accountsSnapshot() []Account {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.accounts
+}
 
 // StartURLSeen returns the sso_start_url the CLI sent to
 // StartDeviceAuthorization, once the flow has run at least once (empty
@@ -321,11 +352,15 @@ func (s *Server) handleListAccounts(w http.ResponseWriter, r *http.Request) {
 	if !s.checkBearer(w, r) {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"accountList": []map[string]any{
-			{"accountId": s.account.AccountID, "accountName": "fake-account", "emailAddress": "fake@example.com"},
-		},
-	})
+	list := []map[string]any{}
+	for _, a := range s.accountsSnapshot() {
+		list = append(list, map[string]any{
+			"accountId":    a.AccountID,
+			"accountName":  "fake-account-" + a.AccountID,
+			"emailAddress": "fake@example.com",
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"accountList": list})
 }
 
 func (s *Server) handleListAccountRoles(w http.ResponseWriter, r *http.Request) {
@@ -336,10 +371,31 @@ func (s *Server) handleListAccountRoles(w http.ResponseWriter, r *http.Request) 
 	if !s.checkBearer(w, r) {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"roleList": []map[string]any{
-			{"roleName": s.account.RoleName, "accountId": s.account.AccountID},
-		},
+	// SCOPED TO THE REQUESTED ACCOUNT, and an error for one this session does
+	// not reach. The real portal answers per account_id (the parameter has been
+	// on the wire since 2019); a fake that ignored it answered account A's
+	// roles to a question about account B, so a caller VERIFYING that a pinned
+	// role exists in a pinned account would have been verifying nothing. The
+	// unentitled arm is an error rather than an empty roleList for the same
+	// reason: "not entitled" and "entitled to nothing" are different answers,
+	// and only the first one means the pin is wrong.
+	wanted := r.URL.Query().Get("account_id")
+	for _, a := range s.accountsSnapshot() {
+		if a.AccountID != wanted {
+			continue
+		}
+		list := []map[string]any{}
+		for _, role := range a.Roles {
+			list = append(list, map[string]any{"roleName": role, "accountId": a.AccountID})
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"roleList": list})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("x-amzn-errortype", "InvalidRequestException")
+	w.WriteHeader(http.StatusBadRequest)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"message": "this session is not entitled to account " + wanted,
 	})
 }
 

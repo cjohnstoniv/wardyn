@@ -52,7 +52,7 @@ func TestAWSSSOConfigAcceptedByRealBotocore(t *testing.T) {
 	blob := blobFromRealCacheFile(t, login.RawCacheJSON)
 	acct := s.Account()
 	blob.AccountID = acct.AccountID
-	blob.RoleName = acct.RoleName
+	blob.RoleName = acct.Roles[0]
 
 	// Phase 2: the REAL generator this test exists to validate.
 	config := awsSSOConfigFileContents(blob)

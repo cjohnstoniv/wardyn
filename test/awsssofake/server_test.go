@@ -146,3 +146,136 @@ func createToken(t *testing.T, s *Server, clientID, clientSecret, deviceCode str
 	}
 	return resp.StatusCode, out
 }
+
+// TestListAccountRoles_ScopedToRequestedAccount is the protocol pin under
+// finding 1's whole fix: the real portal's ListAccountRoles answers for the
+// account_id it was ASKED about, and returns an error for one the session is
+// not entitled to. The fake used to ignore the parameter and answer with its
+// single fixture's role whatever was asked — so a helper that pinned an
+// account would have "verified" its pin against a list that was never scoped
+// to it, and the pin would have looked right here while being meaningless
+// against AWS.
+//
+// Red-first: on the unfixed fixture handleListAccountRoles never reads
+// account_id, so asking for account B returns account A's roles and the
+// unknown-account arm answers 200.
+func TestListAccountRoles_ScopedToRequestedAccount(t *testing.T) {
+	s := New()
+	defer s.Close()
+	s.SetAccounts([]Account{
+		{AccountID: "222222222222", Roles: []string{"ReadOnly", "DevPower"}},
+		{AccountID: "111111111111", Roles: []string{"BedrockRunner", "AdministratorAccess"}},
+	})
+	token := s.AccessToken()
+
+	for _, tc := range []struct {
+		accountID string
+		want      []string
+	}{
+		{"222222222222", []string{"ReadOnly", "DevPower"}},
+		{"111111111111", []string{"BedrockRunner", "AdministratorAccess"}},
+	} {
+		got := listAccountRoles(t, s, token, tc.accountID)
+		if len(got) != len(tc.want) {
+			t.Fatalf("roles for %s = %v, want %v", tc.accountID, got, tc.want)
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Fatalf("roles for %s = %v, want %v", tc.accountID, got, tc.want)
+			}
+		}
+	}
+
+	// An account this session is not entitled to is an ERROR, not an empty
+	// list and never another account's roles: a helper verifying a pin has to
+	// be able to tell "not entitled" from "no roles".
+	req, _ := http.NewRequest(http.MethodGet, s.URL()+"/assignment/roles?account_id=999999999999", nil)
+	req.Header.Set(bearerHeader, token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("ListAccountRoles (unknown account): %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Errorf("ListAccountRoles for an unentitled account = 200 %s, want a non-2xx refusal", raw)
+	}
+
+	// ListAccounts must carry EVERY entitlement, in the order set — index 0 is
+	// deliberately the wrong answer in this fixture (finding 1's shape).
+	ids := listAccounts(t, s, token)
+	if len(ids) != 2 || ids[0] != "222222222222" || ids[1] != "111111111111" {
+		t.Errorf("ListAccounts = %v, want both entitlements in the order set", ids)
+	}
+}
+
+// TestNewSeedsOneAccount pins the default fixture every existing caller reads:
+// New() still seeds exactly one account with one role, so a test that never
+// calls SetAccounts sees byte-identical behaviour.
+func TestNewSeedsOneAccount(t *testing.T) {
+	s := New()
+	defer s.Close()
+	acct := s.Account()
+	if acct.AccountID != "111111111111" || len(acct.Roles) != 1 || acct.Roles[0] != "AdministratorAccess" {
+		t.Errorf("New() default fixture = %+v, want one account 111111111111 with one role AdministratorAccess", acct)
+	}
+	if got := listAccounts(t, s, s.AccessToken()); len(got) != 1 {
+		t.Errorf("ListAccounts on the default fixture = %v, want exactly one", got)
+	}
+}
+
+func listAccountRoles(t *testing.T, s *Server, token, accountID string) []string {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, s.URL()+"/assignment/roles?account_id="+accountID, nil)
+	req.Header.Set(bearerHeader, token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("ListAccountRoles(%s): %v", accountID, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("ListAccountRoles(%s) status = %d, body=%s", accountID, resp.StatusCode, raw)
+	}
+	var out struct {
+		RoleList []struct {
+			RoleName string `json:"roleName"`
+		} `json:"roleList"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode ListAccountRoles(%s): %v", accountID, err)
+	}
+	names := make([]string, 0, len(out.RoleList))
+	for _, r := range out.RoleList {
+		names = append(names, r.RoleName)
+	}
+	return names
+}
+
+func listAccounts(t *testing.T, s *Server, token string) []string {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, s.URL()+"/assignment/accounts", nil)
+	req.Header.Set(bearerHeader, token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("ListAccounts: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("ListAccounts status = %d, body=%s", resp.StatusCode, raw)
+	}
+	var out struct {
+		AccountList []struct {
+			AccountID string `json:"accountId"`
+		} `json:"accountList"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode ListAccounts: %v", err)
+	}
+	ids := make([]string, 0, len(out.AccountList))
+	for _, a := range out.AccountList {
+		ids = append(ids, a.AccountID)
+	}
+	return ids
+}
