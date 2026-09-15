@@ -279,8 +279,12 @@ test.describe("providers — the door is SUPER's alone", () => {
 // produce live/expired_signin for real — same reasoning as agents.spec.ts's
 // model_access CASES loop). R8 (fix-first review pass): model_access carries
 // `mechanism` + `action` alongside `state`, like the real payload always does
-// (modelAccessAction sets Action for every non-live state) — the badge does
-// not read either, but the fixture stays honest for whoever extends this.
+// for the states this helper is actually called with (live and the three
+// actionable ones — see MODEL_ACCESS_ACTIONABLE) — the badge does not read
+// either, but the fixture stays honest for whoever extends this. R-03
+// (review): `not_applicable` is the one OTHER state modelAccessAction's own
+// `default:` arm answers with "" (internal/api/modelaccess.go), matching
+// `live` — not the fixture's prior blanket "every non-live state".
 async function spliceBedrockRow(
   page: Page,
   credentialSource: "per_user" | "shared",
@@ -304,7 +308,7 @@ async function spliceBedrockRow(
       json.model_access = {
         state: modelAccessState,
         mechanism: "bedrock_sso",
-        action: modelAccessState === "live" ? "" : "Sign in to AWS",
+        action: modelAccessState === "live" || modelAccessState === "not_applicable" ? "" : "Sign in to AWS",
       };
     }
     await route.fulfill({ response, json });
