@@ -3,11 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// SummaryHeader — run-detail's 52px command bar (design board seg2a's
-// `h-[52px]` row, directly above run-detail-command-bar.tsx's `h-9` tabs
-// row). Used to be a fat identity card that pushed the live terminal below
-// the fold; this is the same identity/state/kill surface compressed into one
-// non-wrapping row so the terminal starts at the top of the viewport.
+// SummaryHeader — run-detail's command bar (design board seg2a's `h-[52px]`
+// row, directly above run-detail-command-bar.tsx's `h-9` tabs row). Used to
+// be a fat identity card that pushed the live terminal below the fold; this
+// is the same identity/state/kill surface compressed into one 52px row —
+// but only at `xl` (1280px) and up; review R-16 lets it wrap onto a second
+// line below that, since not every fact this bar carries fits in one row's
+// width down at `lg` (1024px).
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { Check, Clock, Link as LinkIcon, RotateCcw, ShieldAlert, Skull, TerminalSquare } from "lucide-react";
@@ -188,7 +190,7 @@ export function SummaryHeader({
             in the same shrinkable group. */}
         {run.workspace_path && (
           <span
-            className="hidden max-w-[220px] truncate font-mono text-xs text-muted-foreground 2xl:inline"
+            className="hidden min-w-0 max-w-[220px] truncate font-mono text-xs text-muted-foreground 2xl:inline"
             title={run.workspace_path}
           >
             {run.workspace_path}

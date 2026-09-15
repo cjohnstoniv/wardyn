@@ -63,8 +63,9 @@ describe("SummaryHeader — attachable chip predicate (W25-1)", () => {
 });
 
 // Command-bar reshape (design board seg2a): the fat identity card became a
-// 52px row. These pin the shape that survived the squeeze — task as the
-// page's h1, terminal-disabled Kill, and the pending-approvals chip.
+// 52px single row at xl and up (wraps below — review R-16). These pin the
+// shape that survived the squeeze — task as the page's h1, terminal-disabled
+// Kill, and the pending-approvals chip.
 describe("SummaryHeader — command bar", () => {
   const taskRun: AgentRun = { ...runningInteractive, task: "audit the egress proxy for missing hosts" };
 

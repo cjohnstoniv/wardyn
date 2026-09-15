@@ -193,10 +193,11 @@ describe("EgressWidget", () => {
   });
 });
 
-// The command bar's h1 is the run's TITLE now, and it truncates in a 52px
-// non-wrapping row — so the task (the prompt the agent was actually given) and
-// the description have nowhere else to live on the page. Overview is the canvas
-// cockpit; this widget is the only prose surface left.
+// The command bar's h1 is the run's TITLE now, and it truncates in the
+// bar's 52px single row at xl and up (wraps below — review R-16) — so the
+// task (the prompt the agent was actually given) and the description have
+// nowhere else to live on the page. Overview is the canvas cockpit; this
+// widget is the only prose surface left.
 describe("IdentityWidget", () => {
   const run: AgentRun = {
     id: "run-1",

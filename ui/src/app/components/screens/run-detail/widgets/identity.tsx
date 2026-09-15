@@ -24,9 +24,10 @@ export function IdentityWidget({ run }: { run: AgentRun }) {
   return (
     <WidgetCard title="Identity" Icon={Fingerprint} grow>
       {/* The command bar's h1 is the run's TITLE now, and it truncates to one
-          line in a 52px non-wrapping row — so the task (the actual prompt the
-          agent was given) and the description have no other home on the page.
-          Prose, above the dl, and only when there is something to say. */}
+          line in the bar's 52px single row at xl and up (wraps below —
+          review R-16) — so the task (the actual prompt the agent was given)
+          and the description have no other home on the page. Prose, above
+          the dl, and only when there is something to say. */}
       {(run.task || run.description) && (
         <div className="mb-3 space-y-2 border-b border-border pb-3">
           {run.task && (

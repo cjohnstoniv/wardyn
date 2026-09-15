@@ -196,8 +196,9 @@ test.describe("Run detail (/runs/:id)", () => {
     await expect(page.getByText("Running", { exact: true })).toBeVisible();
 
     // The run's real identity fields still render — but the cockpit split them:
-    // the repo moved UP into the 52px command bar (it is one of the facts that
-    // must be visible without scrolling), while the run id / SPIFFE id stayed in
+    // the repo moved UP into the command bar's 52px single row at xl and up
+    // (wraps below — review R-16), because it is one of the facts that must
+    // be visible without scrolling, while the run id / SPIFFE id stayed in
     // the Identity widget on the evidence rail. Same facts, two homes.
     await expect(page.getByRole("heading", { name: "Identity" })).toBeVisible();
     await expect(page.getByText("acme/widgets")).toBeVisible();
