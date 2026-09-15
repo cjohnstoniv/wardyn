@@ -514,7 +514,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// lowercase-host/no-trailing-slash form.
 	cfg.WorkspaceProviders = normalizeWorkspaceProviders(cfg.WorkspaceProviders)
 	cfg.AgentProviders = normalizeAgentProviders(cfg.AgentProviders)
-	if err := validateAgentProviders(cfg.AgentProviders, s.cfg.AgentImages); err != nil {
+	if err := validateAgentProviders(cfg.AgentProviders, s.cfg.AgentImages, s.cfg.BedrockModel); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
 		return
 	}

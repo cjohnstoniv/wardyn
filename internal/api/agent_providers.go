@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -44,12 +45,20 @@ const (
 	agent400PerUser           = "agents: %q: credential_source per_user is available for bedrock_sso only, not %s"
 	agent400SSOStartURL       = "agents: %q: sso_start_url is required when mechanism is bedrock_sso and credential_source is per_user"
 	agent400SSOStartURLUnused = "agents: %q: sso_start_url applies only when mechanism is bedrock_sso and credential_source is per_user"
-	agent400DupID             = "agents: id %q is not unique"
-	agent400Mechanism         = "agents[%d].mechanism: %q is not a model-access mechanism — want one of: %s"
-	agent400Source            = "agents[%d].credential_source: %q is not a credential source — want one of: %s"
-	agent400NoManagedAuth     = "agents: %q is the bring-your-own-agent row, which Wardyn wires no model credential for, so its mechanism must be none"
-	agent400NeedsLane         = "agents: %q is a catalog agent Wardyn can wire a model credential for, so mechanism none would leave every run of it without one — name the lane you configured"
-	agent412Stale             = "agents changed since you loaded them — reload and retry"
+
+	// The account/role PIN — finding 1, ask 1. Admin-owned beside the start URL
+	// and for the same reason: the sign-in proposes, the roster disposes.
+	agent400SSOPinUnused       = "agents: %q: sso_account_id and sso_role_name apply only when mechanism is bedrock_sso and credential_source is per_user"
+	agent400SSOPinPair         = "agents: %q: sso_account_id and sso_role_name are set together or not at all — pinning the account alone still leaves the role picked for whoever signs in"
+	agent400SSOAccountID       = "agents: %q: sso_account_id must be a 12-digit AWS account id"
+	agent400SSORoleName        = "agents: %q: sso_role_name must be an IAM role name — letters, digits and +=,.@_- , at most 64 characters"
+	agent400SSOPinModelAccount = "agents: %q: sso_account_id %s is not the account the configured Bedrock model lives in (%s) — a session for that account cannot invoke it"
+	agent400DupID              = "agents: id %q is not unique"
+	agent400Mechanism          = "agents[%d].mechanism: %q is not a model-access mechanism — want one of: %s"
+	agent400Source             = "agents[%d].credential_source: %q is not a credential source — want one of: %s"
+	agent400NoManagedAuth      = "agents: %q is the bring-your-own-agent row, which Wardyn wires no model credential for, so its mechanism must be none"
+	agent400NeedsLane          = "agents: %q is a catalog agent Wardyn can wire a model credential for, so mechanism none would leave every run of it without one — name the lane you configured"
+	agent412Stale              = "agents changed since you loaded them — reload and retry"
 
 	// AGENT_422 — the ONE launch-path refusal, and the one string in this file a
 	// MEMBER ever reads. It names the agent and nothing else: no base URL, no
@@ -190,6 +199,8 @@ func normalizeAgentProviders(p *types.AgentProviders) *types.AgentProviders {
 	for i := range p.Agents {
 		p.Agents[i].ID = strings.TrimSpace(p.Agents[i].ID)
 		p.Agents[i].SSOStartURL = strings.TrimSpace(p.Agents[i].SSOStartURL)
+		p.Agents[i].SSOAccountID = strings.TrimSpace(p.Agents[i].SSOAccountID)
+		p.Agents[i].SSORoleName = strings.TrimSpace(p.Agents[i].SSORoleName)
 	}
 	if p.Empty() {
 		return nil
@@ -201,11 +212,14 @@ func normalizeAgentProviders(p *types.AgentProviders) *types.AgentProviders {
 // (PUT /agent-providers and PUT /site-config) — a nil block is valid (legacy open
 // mode), so the common "not configured" case costs nothing.
 //
-// images is the boot agent-image map (Config.AgentImages): it is a parameter
-// rather than a package read because this is the one validation on this struct
-// that needs SERVER state, and passing it keeps the gate callable from a test
-// with a two-entry map.
-func validateAgentProviders(p *types.AgentProviders, images map[string]string) error {
+// images is the boot agent-image map (Config.AgentImages) and bedrockModel the
+// boot Bedrock model (Config.BedrockModel): they are parameters rather than
+// package reads because these are the validations on this struct that need
+// SERVER state, and passing them keeps the gate callable from a test with a
+// two-entry map and a one-line model string. BOTH doors pass the same values —
+// a rule that held on one door and not the other is a rule an admin can write
+// their way around.
+func validateAgentProviders(p *types.AgentProviders, images map[string]string, bedrockModel string) error {
 	if p == nil {
 		return nil
 	}
@@ -226,7 +240,7 @@ func validateAgentProviders(p *types.AgentProviders, images map[string]string) e
 		if err := validateAgentMechanism(row, images); err != nil {
 			return err
 		}
-		if err := validateAgentCredentialSource(row); err != nil {
+		if err := validateAgentCredentialSource(row, bedrockModel); err != nil {
 			return err
 		}
 	}
@@ -285,7 +299,7 @@ func validateAgentMechanism(row types.AgentProvider, images map[string]string) e
 // The start URL is forbidden on every other row rather than ignored: a value
 // accepted and never read is how an admin comes to believe they pinned a portal
 // they did not.
-func validateAgentCredentialSource(row types.AgentProvider) error {
+func validateAgentCredentialSource(row types.AgentProvider, bedrockModel string) error {
 	perUser := row.CredentialSource == types.CredentialSourcePerUser
 	if perUser && row.Mechanism != types.AgentMechanismBedrockSSO {
 		return fmt.Errorf(agent400PerUser, row.ID, string(row.Mechanism))
@@ -294,6 +308,9 @@ func validateAgentCredentialSource(row types.AgentProvider) error {
 		if row.SSOStartURL != "" {
 			return fmt.Errorf(agent400SSOStartURLUnused, row.ID)
 		}
+		if row.SSOAccountID != "" || row.SSORoleName != "" {
+			return fmt.Errorf(agent400SSOPinUnused, row.ID)
+		}
 		return nil
 	}
 	if row.SSOStartURL == "" {
@@ -301,6 +318,50 @@ func validateAgentCredentialSource(row types.AgentProvider) error {
 	}
 	if err := validateSSOStartURL(row.SSOStartURL); err != nil {
 		return fmt.Errorf("agents: %q: %w", row.ID, err)
+	}
+	return validateAgentSSOPin(row, bedrockModel)
+}
+
+// awsAccountID / iamRoleName are the two pinned fields' real grammars. Both are
+// baked VERBATIM into every later Bedrock run's generated ~/.aws/config INI
+// (awsSSOConfigFileContents, runs_bedrock.go), so the write boundary holds them
+// to what AWS actually accepts rather than merely to "non-empty" — a newline in
+// either would otherwise smuggle extra keys into that file, and a
+// wrong-but-plausible value would be discovered as somebody's 403.
+var (
+	awsAccountID = regexp.MustCompile(`^\d{12}$`)
+	iamRoleName  = regexp.MustCompile(`^[A-Za-z0-9+=,.@_-]{1,64}$`)
+)
+
+// validateAgentSSOPin is finding 1's SAVE-time door, and it is the EARLIEST of
+// the three places a wrong identity is refused (roster save, sign-in, capture).
+//
+// The pin is OPTIONAL — a single-account deployment never had this problem and
+// is not made to answer a question it does not have — but optional as a PAIR:
+// pinning the account alone leaves the role picked for whoever signs in, which
+// is the same defect one level down.
+//
+// The model check is the SAVE-time twin of the capture-time one
+// (bindCaptureToPin): Wardyn holds both halves already, so an admin pinning an
+// account the configured model does not live in is told here rather than by a
+// member three sign-ins later. It SKIPS when the configured model names no
+// account at all — a bare cross-region profile id is the common case, and there
+// is nothing to compare.
+func validateAgentSSOPin(row types.AgentProvider, bedrockModel string) error {
+	if row.SSOAccountID == "" && row.SSORoleName == "" {
+		return nil
+	}
+	if row.SSOAccountID == "" || row.SSORoleName == "" {
+		return fmt.Errorf(agent400SSOPinPair, row.ID)
+	}
+	if !awsAccountID.MatchString(row.SSOAccountID) {
+		return fmt.Errorf(agent400SSOAccountID, row.ID)
+	}
+	if !iamRoleName.MatchString(row.SSORoleName) {
+		return fmt.Errorf(agent400SSORoleName, row.ID)
+	}
+	if modelAccount := bedrockModelAccount(bedrockModel); modelAccount != "" && modelAccount != row.SSOAccountID {
+		return fmt.Errorf(agent400SSOPinModelAccount, row.ID, row.SSOAccountID, modelAccount)
 	}
 	return nil
 }
@@ -339,7 +400,7 @@ func (s *Server) handlePutAgentProviders(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	block := normalizeAgentProviders(&body)
-	if err := validateAgentProviders(block, s.cfg.AgentImages); err != nil {
+	if err := validateAgentProviders(block, s.cfg.AgentImages, s.cfg.BedrockModel); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid agent providers: "+err.Error())
 		return
 	}
@@ -386,10 +447,18 @@ func (s *Server) handlePutAgentProviders(w http.ResponseWriter, r *http.Request)
 // organisation's identity provider, the audit log is read by more people than the
 // providers page is, and no review question needs it: "which agents, on which
 // lane, whose credential" is answered without it.
+//
+// The account/role PIN is here, and the difference is deliberate: an AWS account
+// id and an IAM role name are the identity this deployment signs with, not the
+// directory it authenticates against — and a review of a refused capture
+// (harness.credential.refused) has no other way to learn what the pin was.
 func agentProviderAuditData(block types.AgentProviders) map[string]any {
-	ids, mechanisms, sources, disabled := []string{}, []string{}, []string{}, []string{}
+	ids, mechanisms, sources, disabled, pins := []string{}, []string{}, []string{}, []string{}, []string{}
 	for _, row := range block.Agents {
 		ids = append(ids, row.ID)
+		if row.SSOAccountID != "" {
+			pins = append(pins, row.SSOAccountID+"/"+row.SSORoleName)
+		}
 		if m := string(row.Mechanism); !slices.Contains(mechanisms, m) {
 			mechanisms = append(mechanisms, m)
 		}
@@ -408,9 +477,15 @@ func agentProviderAuditData(block types.AgentProviders) map[string]any {
 	slices.Sort(mechanisms)
 	slices.Sort(sources)
 	slices.Sort(disabled)
+	slices.Sort(pins)
 	return map[string]any{
 		"agent_count": len(block.Agents), "ids": ids,
 		"mechanisms": mechanisms, "credential_sources": sources, "disabled": disabled,
+		// UNLIKE the start URL: an account id and a role name are not an
+		// organisation's identity provider, and "which identity was this
+		// deployment pinned to when that capture was refused" has no other
+		// answer in the trail.
+		"pins": pins,
 	}
 }
 

@@ -45,6 +45,7 @@ func TestValidateAgentProviders(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		block *types.AgentProviders
+		model string // the boot Bedrock model this door validates against
 		want  string // "" = accepted; otherwise a substring the refusal must carry
 	}{
 		{name: "a nil block is legacy open mode", block: nil},
@@ -111,7 +112,7 @@ func TestValidateAgentProviders(t *testing.T) {
 		}), want: "sso_start_url applies only when"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateAgentProviders(tc.block, testAgentImages)
+			err := validateAgentProviders(tc.block, testAgentImages, tc.model)
 			if tc.want == "" {
 				if err != nil {
 					t.Fatalf("validateAgentProviders() = %v, want accepted", err)
@@ -688,3 +689,146 @@ func TestRedactSetupStatusKeepsTheRoster(t *testing.T) {
 		}
 	}
 }
+
+// ── finding 1: the roster's account/role pin ────────────────────────────────
+//
+// Ask 1 of the finding, and the one the operator asked for first: "let the
+// admin pin account + role on the roster row, beside sso_start_url, owned the
+// same way — a new entitlement cannot move it." These are the SAVE-time rules,
+// which is the earliest door a wrong identity can be refused at: the roster
+// refuses a pin that disagrees with the model's account, so the sign-in that
+// would have earned the IAM 403 never launches.
+
+func pinnedRow(account, role string) types.AgentProvider {
+	return types.AgentProvider{
+		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
+		CredentialSource: types.CredentialSourcePerUser,
+		SSOStartURL:      "https://acme.awsapps.com/start",
+		SSOAccountID:     account, SSORoleName: role,
+	}
+}
+
+// TestAgentProviders_PinAccountMustMatchModelARNAccount: Wardyn holds both
+// halves at SAVE time too, so an admin pinning an account the configured model
+// does not live in is told immediately — not by a member, three sign-ins later,
+// through a 403 inside an agent terminal.
+func TestAgentProviders_PinAccountMustMatchModelARNAccount(t *testing.T) {
+	const model = "arn:aws:bedrock:us-west-2:111111111111:inference-profile/us.anthropic.claude-sonnet-4-20250514-v1:0"
+	err := validateAgentProviders(agentBlock(pinnedRow("222222222222", "BedrockRunner")), testAgentImages, model)
+	if err == nil {
+		t.Fatal("a pin naming an account the configured model does not live in was accepted")
+	}
+	if !strings.Contains(err.Error(), "222222222222") || !strings.Contains(err.Error(), "111111111111") {
+		t.Errorf("refusal = %q, want it to name both the pinned account and the model's", err)
+	}
+	// The agreeing pin saves.
+	if err := validateAgentProviders(agentBlock(pinnedRow("111111111111", "BedrockRunner")), testAgentImages, model); err != nil {
+		t.Errorf("an agreeing pin was refused: %v", err)
+	}
+}
+
+// TestAgentProviders_PinFieldsRefusedOnSharedRow: accepted-and-never-read is
+// how an admin comes to believe they pinned an account they did not — the same
+// reasoning that already forbids sso_start_url on a non-per_user row.
+func TestAgentProviders_PinFieldsRefusedOnSharedRow(t *testing.T) {
+	for name, row := range map[string]types.AgentProvider{
+		"a shared bedrock_sso row": {
+			ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
+			SSOAccountID: "111111111111", SSORoleName: "BedrockRunner",
+		},
+		"a per_user row on another mechanism": {
+			ID: "claude-code", Mechanism: types.AgentMechanismBedrockBearer,
+			SSOAccountID: "111111111111", SSORoleName: "BedrockRunner",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := validateAgentProviders(agentBlock(row), testAgentImages, "")
+			if err == nil {
+				t.Fatal("pin fields on a row that can never read them were accepted")
+			}
+		})
+	}
+}
+
+// TestAgentProviders_PinFieldsControlCharsRejected: both halves are baked
+// VERBATIM into every later run's generated ~/.aws/config INI
+// (awsSSOConfigFileContents), so the write boundary holds them to their real
+// grammars — 12 digits, and the IAM role-name character set — rather than
+// merely to "non-empty". A newline here would smuggle extra keys into that file.
+func TestAgentProviders_PinFieldsControlCharsRejected(t *testing.T) {
+	for name, row := range map[string]types.AgentProvider{
+		"a newline in the account":         pinnedRow("111111111111\nsso_role_name = Admin", "BedrockRunner"),
+		"a newline in the role":            pinnedRow("111111111111", "BedrockRunner\nsso_account_id = 999999999999"),
+		"an account that is not 12 digits": pinnedRow("12345", "BedrockRunner"),
+		"an account with letters":          pinnedRow("11111111111a", "BedrockRunner"),
+		"a role with a space":              pinnedRow("111111111111", "Bedrock Runner"),
+		"a role with a slash":              pinnedRow("111111111111", "path/BedrockRunner"),
+		"a role over 64 characters":        pinnedRow("111111111111", strings.Repeat("a", 65)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateAgentProviders(agentBlock(row), testAgentImages, ""); err == nil {
+				t.Fatal("an unsafe pin value was accepted — it is baked verbatim into the generated ~/.aws/config")
+			}
+		})
+	}
+	// The legal shapes all save. `+=,.@_-` is the IAM role-name set.
+	for _, role := range []string{"BedrockRunner", "Wardyn+Bedrock=Role,v1.0@corp_x-y", strings.Repeat("a", 64)} {
+		if err := validateAgentProviders(agentBlock(pinnedRow("111111111111", role)), testAgentImages, ""); err != nil {
+			t.Errorf("a legal IAM role name %q was refused: %v", role, err)
+		}
+	}
+}
+
+// TestAgentProviders_PinOptionalWhenSingleAccount: the pin is OPTIONAL, because
+// a single-account deployment never had this problem and must not be made to
+// answer a question it does not have. But it is optional as a PAIR: pinning the
+// account alone still leaves the role picked for whoever signs in, which is the
+// same defect one level down.
+func TestAgentProviders_PinOptionalWhenSingleAccount(t *testing.T) {
+	unpinned := types.AgentProvider{
+		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
+		CredentialSource: types.CredentialSourcePerUser,
+		SSOStartURL:      "https://acme.awsapps.com/start",
+	}
+	if err := validateAgentProviders(agentBlock(unpinned), testAgentImages, ""); err != nil {
+		t.Errorf("an unpinned per_user row was refused: %v", err)
+	}
+	for name, row := range map[string]types.AgentProvider{
+		"account without role": pinnedRow("111111111111", ""),
+		"role without account": pinnedRow("", "BedrockRunner"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := validateAgentProviders(agentBlock(row), testAgentImages, "")
+			if err == nil {
+				t.Fatal("half a pin was accepted")
+			}
+			if !strings.Contains(err.Error(), "together") {
+				t.Errorf("refusal = %q, want it to say the two are set together or not at all", err)
+			}
+		})
+	}
+}
+
+// TestAgentProviderAuditData_CarriesPins: unlike sso_start_url (which names an
+// organisation's identity provider and is deliberately absent), an account id
+// and a role name are exactly what a refused-capture review needs — "which
+// identity was this deployment pinned to when that capture was refused" has no
+// other answer in the trail.
+func TestAgentProviderAuditData_CarriesPins(t *testing.T) {
+	data := agentProviderAuditData(types.AgentProviders{Agents: []types.AgentProvider{
+		pinnedRow("111111111111", "BedrockRunner"),
+		{ID: "codex-cli", Mechanism: types.AgentMechanismOpenAIAPIKey},
+	}})
+	pins, ok := data["pins"].([]string)
+	if !ok {
+		t.Fatalf("audit data has no pins: %v", data)
+	}
+	if len(pins) != 1 || pins[0] != "111111111111/BedrockRunner" {
+		t.Errorf("pins = %v, want the one pinned row's account/role", pins)
+	}
+	if strings.Contains(mustJSONString(data), "acme.awsapps.com") {
+		t.Error("the audit datum carries the start URL — it names an organisation's IdP and no review question needs it")
+	}
+}
+
+func mustJSONString(v any) string { return string(mustJSON(v)) }
