@@ -186,16 +186,26 @@ export function SummaryHeader({
           gets an exit code at all — this is the only place THAT run says
           why. Independent of the exit chip above: a run can show one, the
           other, both, or neither. Bare server text, no prefix — the state
-          badge already says "Failed". */}
+          badge already says "Failed".
+          0.7.3 F7 review (C-04): narrowed 280px -> 160px. The full title
+          attribute still carries the whole sentence — this cap only bounds
+          how much of the bar ONE unbounded server string can claim now that
+          Clone shares the row with it. */}
       {run.failure_hint && (
-        <Chip tone="danger" className="max-w-[280px] shrink-0 truncate" title={run.failure_hint}>
+        <Chip tone="danger" className="max-w-[160px] shrink-0 truncate" title={run.failure_hint}>
           {run.failure_hint}
         </Chip>
       )}
 
       {/* Confinement/barrier + interactive-attach detail — genuinely
-          secondary next to state/repo/workspace/elapsed/pending/Kill. */}
-      <div className="hidden shrink-0 items-center gap-2 lg:flex">
+          secondary next to state/repo/workspace/elapsed/pending/Kill.
+          0.7.3 F7 review (C-04): bumped lg -> 2xl, same reasoning as the
+          short-id span below — this is the OTHER block the file's own
+          hierarchy already called secondary, so it is the one that yields
+          before the task h1 (min-w-0 flex-1, the one thing this bar cannot
+          lose) or the new Clone label (must keep its full, discoverable
+          text — an icon-only door was the failure this finding is about). */}
+      <div className="hidden shrink-0 items-center gap-2 2xl:flex">
         <ConfinementChip value={run.confinement_class} />
         <BarrierStrengthStrip tier={run.confinement_class} />
         {run.interactive && (

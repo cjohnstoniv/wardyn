@@ -120,6 +120,13 @@ describe("SummaryHeader — command bar", () => {
 // run (a strict superset of the failure block's 3 endings). Tab order clone
 // -> kill: outline, never the bar's one danger slot.
 describe("SummaryHeader — clone door (0.7.3 F7)", () => {
+  // review C-14: the component itself gates on the `terminal` PROP, never on
+  // `run.state` directly (run-detail-summary-header.tsx:233) — this loop pins
+  // the CALLER's contract (every one of the 5 states in TERMINAL_RUN_STATES
+  // is passed in as terminal={true} by run-detail.tsx), not a branch inside
+  // SummaryHeader. That contract is worth 5 identical-looking cases: a state
+  // dropped from the caller's terminal check would pass this test suite
+  // silently if it were asserted only once.
   it.each(TERMINAL_RUN_STATES)("a terminal run's header offers the clone door (%s)", (state) => {
     renderHeader(
       <OperatorProvider operator={true}>

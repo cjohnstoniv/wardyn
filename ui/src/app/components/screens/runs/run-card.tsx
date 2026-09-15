@@ -39,6 +39,16 @@ import { cn } from "../../ui/utils";
 import { repoLabel, rowHeadline, runAttention, shortId, signalsFor, type RunSignals } from "./board-groups";
 import { runPrefill } from "../new-run/wizard-types";
 
+// DRAFT (M2 canon pending) — 0.7.3 F7 fix-pass (review C-01/C-06/C-07):
+// cloneRun's own refusal. A run whose run.create audit row is gone (an older
+// run, a pruned trail, or a non-owner's empty 200 — auditScope writes an
+// empty list rather than an error) must not silently launch a clone with
+// wizard DEFAULTS in its place — that reads as a faithful clone when it is
+// not. Local to this file (not copy.ts's RUN block) on purpose: nothing else
+// renders it.
+const CLONE_UNREADABLE =
+  "This run's launch settings couldn't be read — its clone would start from defaults, so it was not opened.";
+
 export function CardGrid({ children }: { children: React.ReactNode }) {
   // auto-fill with a min(100%, floor) track: cards reflow and collapse to ONE
   // column below the floor instead of clipping (min(100%, …) stops overflow on
@@ -123,6 +133,9 @@ export function RunCard({
   // detail" menu item), so no functionality is lost by dropping the role.
   return (
     <div
+      // review C-13: a stable e2e hook — the class-based xpath locator it
+      // replaced coupled the spec to a Tailwind utility name.
+      data-testid="run-card"
       onClick={() => onOpen(run.id)}
       className={cn(
         "group relative flex cursor-pointer flex-col gap-2 rounded-xl border bg-card p-3 text-left transition-colors hover:border-border-strong",
@@ -240,10 +253,25 @@ export function RunActions({
   // (byte-for-byte: task_mode / interactive_start / seed_auto_tools /
   // tool_approvals all come from the run.create audit row). Fetched on CLICK,
   // never per row render — the board can hold dozens of terminal runs and
-  // only one of them is ever cloned at a time.
+  // only one of them is ever cloned at a time. Narrowed to the one action
+  // createRequestFromAudit reads (review C-07) — no reason to spend the
+  // 1000-row budget on the whole trail for one row.
+  // ponytail: no pending/disabled state on the menu item while this fetches —
+  // it is one indexed Postgres read, typically faster than the menu's own
+  // close animation. Add a dismissed toast.loading if users ever report a
+  // dead-feeling click.
   const cloneRun = async () => {
     try {
-      const events = await auditApi.listAudit(run.id);
+      const events = await auditApi.listAudit(run.id, "run.create");
+      // review C-01/C-06: an empty read (an older run, a pruned trail, or a
+      // non-owner's empty 200 — auditScope writes an empty list rather than
+      // an error) must not silently launch a clone with wizard DEFAULTS
+      // standing in for task_mode/interactive_start/seed_auto_tools/
+      // tool_approvals. Refuse instead of degrading.
+      if (events.length === 0) {
+        toast.warning(CLONE_UNREADABLE);
+        return;
+      }
       navigate("/runs/new", { state: { prefill: runPrefill(run, createRequestFromAudit(events)) } });
     } catch (err) {
       toast.error("Could not load this run's details", { description: getErrorMessage(err) });

@@ -3,14 +3,33 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import type { AgentRun, RunState } from "../../../lib/types";
+import { toast } from "sonner";
+import type { AgentRun, AuditEvent, RunState } from "../../../lib/types";
 import { RunCard } from "./run-card";
 import { approvalSignals, type RunSignals } from "./board-groups";
 import { RUN } from "../../wardyn/copy";
+
+// review C-01/C-06/C-07 — cloneRun's own behaviour, not just the menu item's
+// gating. listAudit is stubbed; createRequestFromAudit stays REAL so the
+// happy-path test proves an audit-derived field (tool_approvals) actually
+// reaches the prefill, not just that SOME object was passed.
+const listAuditMock = vi.fn();
+vi.mock("../../../lib/api/audit", async () => {
+  const actual = await vi.importActual<typeof import("../../../lib/api/audit")>("../../../lib/api/audit");
+  return { ...actual, audit: { ...actual.audit, listAudit: (...a: unknown[]) => listAuditMock(...a) } };
+});
+
+const navigateMock = vi.fn();
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
+  return { ...actual, useNavigate: () => navigateMock };
+});
+
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), warning: vi.fn() } }));
 
 const run = (over: Partial<AgentRun> = {}): AgentRun => ({
   id: "run_3b7f10c4aa99",
@@ -121,5 +140,69 @@ describe("RunCard — kebab clone door (0.7.3 F7)", () => {
     renderCard(run({ state: "RUNNING" }));
     await openMenu();
     expect(screen.queryByRole("menuitem", { name: RUN.CLONE_CTA })).toBeNull();
+  });
+});
+
+// review C-01/C-06/C-07 — cloneRun's own behaviour: the happy path carries an
+// audit-derived field through to the prefill, a rejected fetch toasts and
+// never navigates, and an EMPTY read (an older run / pruned trail / a
+// non-owner's empty 200) refuses rather than launching a defaults-degraded
+// clone.
+describe("RunCard — cloneRun behaviour (review C-01/C-06/C-07)", () => {
+  afterEach(() => {
+    listAuditMock.mockReset();
+    navigateMock.mockReset();
+    vi.mocked(toast.error).mockClear();
+    vi.mocked(toast.warning).mockClear();
+  });
+
+  const createEvent = (data: Record<string, unknown>): AuditEvent => ({
+    id: "ev-create",
+    time: "2026-09-14T10:00:00Z",
+    actor_type: "human",
+    actor: "alice",
+    action: "run.create",
+    outcome: "success",
+    data,
+  });
+
+  async function clickClone() {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole("button", { name: "Run actions" }));
+    await user.click(await screen.findByRole("menuitem", { name: RUN.CLONE_CTA }));
+  }
+
+  it("happy path: navigates with an audit-derived field (tool_approvals) in the prefill", async () => {
+    listAuditMock.mockResolvedValue([createEvent({ tool_approvals: "hold" })]);
+    renderCard(run({ state: "COMPLETED" }));
+    await clickClone();
+
+    await waitFor(() => expect(navigateMock).toHaveBeenCalled());
+    expect(listAuditMock).toHaveBeenCalledWith("run_3b7f10c4aa99", "run.create");
+    const [path, opts] = navigateMock.mock.calls[0];
+    expect(path).toBe("/runs/new");
+    expect(opts.state.prefill.state.toolApprovals).toBe("hold");
+  });
+
+  it("a rejected fetch toasts and never navigates", async () => {
+    listAuditMock.mockRejectedValue(new Error("network down"));
+    renderCard(run({ state: "COMPLETED" }));
+    await clickClone();
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect(navigateMock).not.toHaveBeenCalled();
+  });
+
+  it("an empty read refuses instead of launching a defaults-degraded clone", async () => {
+    listAuditMock.mockResolvedValue([]);
+    renderCard(run({ state: "COMPLETED" }));
+    await clickClone();
+
+    await waitFor(() =>
+      expect(toast.warning).toHaveBeenCalledWith(
+        "This run's launch settings couldn't be read — its clone would start from defaults, so it was not opened.",
+      ),
+    );
+    expect(navigateMock).not.toHaveBeenCalled();
   });
 });

@@ -263,6 +263,14 @@ test.describe("Run detail (/runs/:id)", () => {
     await expect(page).toHaveURL(/\/runs\/new$/);
     await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
     await expect(page.getByLabel("Task")).toHaveValue("e2e fixture 4");
+    // review C-02: an AUDIT-derived field (never on the run row itself) —
+    // proves the clone actually reads fixture 4's run.create row, not just
+    // the row, which carries no tool_approvals at all.
+    await expect(
+      page
+        .getByRole("radiogroup", { name: "Tool approvals" })
+        .getByRole("radio", { name: /Hold in Wardyn/ }),
+    ).toHaveAttribute("aria-checked", "true");
   });
 
   // 0.7.3 F7 "no deferrals": the Runs-list kebab clones byte-for-byte the same
@@ -270,15 +278,57 @@ test.describe("Run detail (/runs/:id)", () => {
   test("the Runs list kebab clones a COMPLETED run into a prefilled wizard", async ({ page }) => {
     await openRuns(page);
 
-    const card = page
-      .getByText("e2e fixture 4")
-      .locator("xpath=ancestor::div[contains(@class, 'cursor-pointer')]");
+    // review C-13: data-testid, not a class-based xpath — the card no longer
+    // couples the spec to a Tailwind utility name.
+    const card = page.getByTestId("run-card").filter({ hasText: "e2e fixture 4" });
     await card.getByRole("button", { name: "Run actions" }).click();
     await page.getByRole("menuitem", { name: RUN.CLONE_CTA }).click();
 
     await expect(page).toHaveURL(/\/runs\/new$/);
     await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
     await expect(page.getByLabel("Task")).toHaveValue("e2e fixture 4");
+    // review C-02: same audit-derived field as the header test above — the
+    // kebab clone is byte-for-byte the same read, not a second path.
+    await expect(
+      page
+        .getByRole("radiogroup", { name: "Tool approvals" })
+        .getByRole("radio", { name: /Hold in Wardyn/ }),
+    ).toHaveAttribute("aria-checked", "true");
+  });
+
+  // review C-04: the new clone button must not come at the cost of the ONE
+  // thing the header's own comments call non-negotiable (the task h1) — and
+  // the fix must not hide the clone LABEL either (an icon-only door is the
+  // discoverability failure this whole finding is about). Worst realistic
+  // case: a FAILED interactive run carrying a failure_hint, which is the
+  // widest sibling content this bar can carry alongside Clone + Kill.
+  test("a FAILED interactive run's task title is never squeezed to nothing, and the clone door keeps its label", async ({
+    page,
+  }) => {
+    await openRuns(page);
+    await page.route("**/api/v1/runs/*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      if (json.task === "e2e fixture 6") {
+        json.interactive = true;
+        json.failure_hint = "container exited with code 137: OOMKilled while installing dependencies";
+      }
+      await route.fulfill({ response, json });
+    });
+
+    await page.getByText("e2e fixture 6").click();
+    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page.getByText("Failed", { exact: true })).toBeVisible();
+
+    const heading = page.getByRole("heading", { name: "e2e fixture 6", level: 1 });
+    await expect(heading).toBeVisible();
+    const box = await heading.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.width).toBeGreaterThanOrEqual(160);
+
+    const cloneBtn = page.getByRole("button", { name: RUN.CLONE_CTA });
+    await expect(cloneBtn).toBeVisible();
   });
 });
 

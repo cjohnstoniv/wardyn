@@ -256,7 +256,11 @@ cmd_seed() {
   # mark is the honest version of the same statement.
   api POST /api/v1/setup/onboarding-complete '' >/dev/null 2>&1 || true
   # A handful of runs (the none runner leaves them PENDING; we re-state below).
-  local agents=(claude-code codex-cli claude-code claude-code codex-cli claude-code claude-code claude-code claude-code)
+  # review C-02: index 4 (rn=5, fixed to COMPLETED below) is claude-code, not
+  # codex-cli — codex-cli disables the "hold" tool-approvals option in the
+  # wizard, which would clamp the audit-derived tool_approvals seeded below
+  # right back to "auto" and defeat the fidelity this fixture exists to pin.
+  local agents=(claude-code codex-cli claude-code claude-code claude-code claude-code claude-code claude-code claude-code)
   # Fixtures 0 and 1 deliberately SHARE a title so the Runs board actually has a
   # group to render — a title held by only one run is not a group (runs.tsx's
   # titleGroups), so without a repeat the grouping path would go unexercised.
@@ -264,7 +268,16 @@ cmd_seed() {
   # and it must keep rendering by task (runHeadline).
   local titles=("e2e group" "e2e group" "" "" "" "" "" "" "")
   for i in "${!agents[@]}"; do
-    api POST /api/v1/runs "{\"agent\":\"${agents[$i]}\",\"repo\":\"acme/widgets\",\"title\":\"${titles[$i]}\",\"task\":\"e2e fixture ${i}\"}" >/dev/null || true
+    # review C-02: fixture 4 (rn=5, fixed to COMPLETED below) carries a
+    # NON-DEFAULT audit-derived field (tool_approvals) on its own run.create
+    # row, so runs.spec.ts's clone tests can pin that a clone reads THAT row
+    # (createRequestFromAudit) rather than just the run row, which carries no
+    # tool_approvals at all. audit_events is append-only (a live trigger
+    # refuses UPDATE/DELETE), so this has to ride the create body, not a
+    # later patch.
+    local extra=""
+    [[ "${i}" == "4" ]] && extra=',"tool_approvals":"hold"'
+    api POST /api/v1/runs "{\"agent\":\"${agents[$i]}\",\"repo\":\"acme/widgets\",\"title\":\"${titles[$i]}\",\"task\":\"e2e fixture ${i}\"${extra}}" >/dev/null || true
   done
   # Diversify states deterministically by created order so specs can target them.
   psql_e2e >/dev/null <<'SQL' || true

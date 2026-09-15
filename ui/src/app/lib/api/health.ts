@@ -216,9 +216,11 @@ export const health = {
     confinement_classes?: string[];
     ebpf_groundtruth?: { state?: string; reason?: string };
     // k8sNetpolVerdict's three-value enum (internal/api/setup.go) — present on
-    // Kubernetes only (absent on Docker, and on an older daemon). F16: the
-    // shell's netpol indicator reads this instead of leaving the boot-time
-    // canary's verdict invisible to an operator who never opens /setup/status.
+    // Kubernetes only (absent on Docker, and on an older daemon). 0.7.3 F6
+    // removed the shell's own chip (which used to read this field directly);
+    // the console now surfaces the verdict via /setup/status's
+    // k8s_egress_containment check on the setup Environment step instead.
+    // Kept here as the wire mirror — review C-09.
     network_policy?: "enforced" | "unenforced" | "acknowledged";
     // OIDC is configured, so GET /auth/login exists — the sign-in screen only
     // offers the SSO link when the server says the flow is actually mounted.

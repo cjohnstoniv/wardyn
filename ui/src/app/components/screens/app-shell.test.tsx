@@ -534,9 +534,6 @@ function renderTopBar(role: Role) {
   );
 }
 
-// 0.7.3 F6: the header no longer carries any posture chip — the netpol
-// verdict moved to the setup Environment step. TopBar's own negative pin
-// lives in the "no posture" describe below, beside the barrier-chip removal.
 // 0.7.3 F6: the Fence/NetworkPolicy chips are gone outright — no degraded
 // chip, no replacement. Both were deployment-wide facts fixed at boot that
 // never changed while the console was open; posture now lives on the setup
