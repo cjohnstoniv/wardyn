@@ -38,9 +38,19 @@ export function HostStatusBar({
             Checking Wardyn's setup…
           </span>
         ) : (
+          /* RV-01: the separator belongs to the LABEL, not to the heading —
+             U2-02 stopped stamping a checked time on the mount fetch (the
+             daemon answers it from a memo), so an empty label here is now the
+             ordinary first render, and "Host status ·" with nothing after it
+             was the visible cost. Same guard step-bodies.tsx uses. */
           <span>
-            Host status ·{" "}
-            <span className="text-foreground">{lastCheckedLabel}</span>
+            Host status
+            {lastCheckedLabel && (
+              <>
+                {" · "}
+                <span className="text-foreground">{lastCheckedLabel}</span>
+              </>
+            )}
           </span>
         )}
       </div>

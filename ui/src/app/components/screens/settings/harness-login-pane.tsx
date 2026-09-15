@@ -60,6 +60,14 @@ export const SANDBOX_REFUSAL_LEAD_IN = "The login sandbox reported:";
 // Same bound wardyn-aws-sso applies (main.go), re-applied where a replaced
 // image cannot reach it.
 const FAIL_SENTENCE_MAX = 300;
+// RV-03: and the same ANSI strip, for the same reason — CSI (colour, cursor),
+// OSC (title/hyperlink, terminated by BEL or ST) and the bare Fe escapes. A
+// sandbox that can print its own sentence can print escape bytes around it;
+// stripping them here means the 300-char budget is spent on characters the
+// operator actually reads, and the alert renders text rather than control
+// codes. Runs BEFORE the cap.
+// eslint-disable-next-line no-control-regex
+const ANSI_ESCAPES = /\u001b(?:\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|\[[0-9;:?]*[ -/]*[@-~]|[@-Z\\-_])/g;
 
 // One retry of an unreachable corroboration read, then give up. Not a
 // propagation wait: the helper prints its marker only after the server has
@@ -234,15 +242,15 @@ export function extractSetupToken(s: string): string | null {
 // prints instead). Same trailing-boundary rule as the other extractors: only
 // returns once the line has actually finished printing (a trailing newline),
 // so a still-streaming prefix is never read as the whole refusal. U2-05: and
-// it is capped HERE, at FAIL_SENTENCE_MAX, so the bound survives a replaced
-// login image. Exported for tests.
+// it is stripped of ANSI escapes and capped HERE, at FAIL_SENTENCE_MAX, so
+// both survive a replaced login image (RV-03). Exported for tests.
 export function extractFailSentence(s: string, marker: string): string | null {
   const idx = s.indexOf(marker);
   if (idx === -1) return null;
   const rest = s.slice(idx + marker.length);
   const nl = rest.indexOf("\n");
   if (nl === -1) return null;
-  return rest.slice(0, nl).replace(/\r$/, "").trim().slice(0, FAIL_SENTENCE_MAX);
+  return rest.slice(0, nl).replace(/\r$/, "").replace(ANSI_ESCAPES, "").trim().slice(0, FAIL_SENTENCE_MAX);
 }
 
 // extractAuthUrl pulls the `claude setup-token` OAuth authorization URL out of a

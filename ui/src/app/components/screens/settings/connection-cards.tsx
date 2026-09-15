@@ -390,11 +390,17 @@ export function ModelProviderCard({
     subRow ? "subscription" : keyRow ? "api_key" : bedrockRow ? "bedrock" : "subscription",
   );
   const [loginOpen, setLoginOpen] = React.useState<"anthropic" | "aws" | null>(null);
-  // U2-09 (blind round 2): ONE closer behind every way out of the login
-  // dialog. CAPTURE_CHECK_UNREACHABLE leaves the pane on its error phase with
-  // the capture possibly LANDED — onDone never fires, so without this the card
-  // kept reading not-connected until a manual page reload. Cancel/Escape make
-  // no claim either way; they just cost one GET.
+  // U2-09 (blind round 2): one closer for the REFRESH, behind every way out of
+  // the login dialog. CAPTURE_CHECK_UNREACHABLE leaves the pane on its error
+  // phase with the capture possibly LANDED — onDone never fires, so without
+  // this the card kept reading not-connected until a manual page reload.
+  // Cancel/Escape make no claim either way; they just cost one GET.
+  //
+  // RV-04: the pane's own Cancel is the only path that KILLS the login sandbox
+  // run (HarnessLoginPane owns that; it holds the run id). Escape and an
+  // overlay click close the dialog and unmount the pane — deliberately NOT
+  // lifted here, because a kill issued from the card would race the pane's own
+  // and would claim knowledge of a run this component never had.
   const closeLogin = React.useCallback(() => {
     setLoginOpen(null);
     onChanged();

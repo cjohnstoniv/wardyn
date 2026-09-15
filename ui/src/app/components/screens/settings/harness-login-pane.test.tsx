@@ -126,6 +126,21 @@ describe("extractFailSentence", () => {
   it("leaves a sentence within the bound untouched", () => {
     expect(extractFailSentence(`${MARKER} refused.\n`, MARKER)).toBe("refused.");
   });
+
+  // RV-03 (review follow-up): the ANSI strip lived only in cmd/wardyn-aws-sso,
+  // beside the cap U2-05 already re-applied here — same argument, same place.
+  // Colour/cursor CSI and an OSC title-set are the shapes a PTY actually emits.
+  it("strips ANSI CSI and OSC sequences the sandbox printed", () => {
+    expect(extractFailSentence(`${MARKER} \u001b[1;31mrefused\u001b[0m.\n`, MARKER)).toBe("refused.");
+    expect(extractFailSentence(`${MARKER} \u001b]0;pwned title\u0007refused.\n`, MARKER)).toBe("refused.");
+  });
+
+  // The strip runs BEFORE the cap, so escape bytes cannot spend the 300-char
+  // budget on the operator's behalf.
+  it("caps on visible characters, not on escape bytes", () => {
+    const noisy = "\u001b[31mx\u001b[0m".repeat(400);
+    expect(extractFailSentence(`${MARKER} ${noisy}\n`, MARKER)).toBe("x".repeat(300));
+  });
 });
 
 describe("isLikelyStartUrl", () => {

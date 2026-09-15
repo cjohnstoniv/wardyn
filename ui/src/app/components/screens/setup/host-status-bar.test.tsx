@@ -28,6 +28,18 @@ describe("HostStatusBar", () => {
     expect(live).not.toHaveTextContent(/last checked/i);
   });
 
+  // RV-01 (review follow-up): U2-02 stopped stamping a checked time on the
+  // mount fetch, which is the honest answer — but it left this strip reading
+  // "Host status ·" with a dangling interpunct until the first Re-check. The
+  // separator belongs to the label, not to the heading (step-bodies.tsx renders
+  // its own label only when there is one).
+  it("an empty label drops the separator too — never a dangling interpunct", () => {
+    const { container } = render(<HostStatusBar checking={false} lastCheckedLabel="" onRecheck={vi.fn()} />);
+    const live = container.querySelector('[aria-live="polite"]');
+    expect(live).toHaveTextContent(/host status/i);
+    expect(live!.textContent).not.toContain("·");
+  });
+
   it("Re-check click calls onRecheck", async () => {
     const onRecheck = vi.fn();
     render(<HostStatusBar checking={false} lastCheckedLabel="Checked just now" onRecheck={onRecheck} />);
