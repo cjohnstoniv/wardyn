@@ -17,7 +17,7 @@ captured AWS SSO session is connected. Its access token lapsed at …, and Wardy
 renews it automatically" — same blob, nothing re-captured — and the `auth.failed`
 flood "stopped dead at the upgrade. Zero new rows since the rollout," though the
 underlying cause (the k8s substrate's new orphan sweep ending a retry loop, not
-the coalescing window) means the fold itself stays unexercised. Finding 8 is a
+the coalescing window) means the fold itself stays unexercised. One item is a
 confirmation only — the roster's refusals are clear and the closed-set behaviour
 ("Off: runs naming this agent are refused") is right — no action taken.
 
@@ -26,13 +26,17 @@ every new console string in this release ships as a frozen DRAFT constant pendin
 the maintainer's canon sitting. The tests assert through those constants, so
 adopting the canon wording is a one-file diff and no behaviour moves with it.
 
-Upgrading from 0.7.2 changes nothing on its own: the roster's new
-`sso_account_id`/`sso_role_name` pin fields are optional, `not_applicable` is a
-new `model_access` state reachable only by the shared admin-bearer-token caller
-under a `per_user` row, and the widened CSRF guard refuses only a cross-origin
-cookie-authenticated mutation — something no legitimate CLI, API or console
-client sends. A deployment with no `per_user` roster row answers byte-for-byte
-what it answered before.
+Upgrading from 0.7.2 changes nothing on its own, with one exception: the
+roster's new `sso_account_id`/`sso_role_name` pin fields are optional,
+`not_applicable` is a new `model_access` state reachable only by the shared
+admin-bearer-token caller under a `per_user` row, and the widened CSRF guard
+refuses only a cross-origin cookie-authenticated mutation — something no
+legitimate CLI, API or console client sends. The one upgrade-visible change is
+a boot refusal: a deployment started with `-local-operator` /
+`WARDYN_LOCAL_OPERATOR` set to the reserved admin-token mechanism principal
+now refuses to start, where 0.7.2 booted it clean (see "Security" below). Any
+other deployment, with no `per_user` roster row, answers byte-for-byte what it
+answered before.
 
 ### Added
 
@@ -42,11 +46,12 @@ what it answered before.
   roster disposes. Optional (a single-account tenant never had this problem) but
   set as a pair: pinning the account alone still leaves the role picked for
   whoever signs in. A new SSO entitlement granted by a cloud team cannot move a
-  pin. See [OPERATIONS.md](OPERATIONS.md) "AWS SSO per person".
+  pin. See [docs/OPERATIONS.md](docs/OPERATIONS.md) "AWS SSO per person".
 - **A chooser when nothing is pinned and the session reaches several accounts.**
   The login sandbox runs on the operator's own attach terminal, so the helper
   asks — numbered accounts, then roles in the chosen one. With no terminal to ask
-  on, it refuses and names the accounts it reaches, so an admin can pin one.
+  on, it refuses and names the accounts it reaches, so an admin can pin one. A
+  portal that cannot be reached says so, rather than reading as a wrong pin.
 - **A failure marker on the login terminal.** `wardyn: aws sso credential
   rejected: <reason>` — the counterpart of the existing success marker. A refused
   upload previously logged to stderr and printed nothing, so the console's login
@@ -58,7 +63,7 @@ what it answered before.
   `account_role_pin_mismatch`, `model_account_mismatch`, `unstamped_scope`,
   `already_captured`, `stamp_unreadable`, `store_error`) and never sandbox-chosen
   text. `agent_provider.write` gains `pins`; `harness.login.started` gains
-  `sso_account_id`/`sso_role_name`. See [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
+  `sso_account_id`/`sso_role_name`. See [docs/AUDIT-ACTIONS.md](docs/AUDIT-ACTIONS.md).
 
 ### Fixed
 
@@ -84,9 +89,10 @@ what it answered before.
 - **The admin's own AWS sign-in door stopped asking for a start URL it would
   throw away.** Of three call sites that open the harness-login dialog, only
   Settings → Model provider failed to pass `startURLManaged` under a `per_user`
-  row — so an admin signing in from the door muscle memory was asked to type the org's AWS access portal URL again, minutes after saving it
-  on the Agents tab, and `handleHarnessLogin` silently discarded it in favor
-  of the roster's own
+  row — so an admin signing in from the door muscle memory was asked to type
+  the org's AWS access portal URL again, minutes after saving it on the Agents
+  tab, and `handleHarnessLogin` silently discarded it in favor of the roster's
+  own
   stored, admin-owned `sso_start_url`. The card now derives `per_user` the same
   way the Agents tab does, including that a DISABLED `per_user` row is graded as
   not-per-user (`enabled !== false`) — before this, a disabled row hid the
@@ -99,8 +105,8 @@ what it answered before.
   caller's own AWS SSO session. The row now names the one action that can
   actually succeed: sign in to AWS yourself. `llm_provider` had the matching
   contradiction — "No model/harness provider configured (optional)" two rows
-  above a `bedrock_provider` row saying Bedrock IS configured — and now says the
-  same per-person sentence instead.
+  above a `bedrock_provider` row saying Bedrock IS configured — and now says a
+  matching per-person sentence instead.
 - **Declaring a per-person lane and signing in to it are linked now.** Nothing on
   the Agents tab used to say "now sign in" after a `per_user` row was saved, and
   nothing on Settings' Model provider card said the lane was declared elsewhere —
@@ -151,9 +157,9 @@ what it answered before.
   completed successfully — so a run that succeeded, or was auto-stopped, or
   failed to build its image, had no way to launch an identical one without
   retyping task, agent, barrier and policy by hand. The door **moved**: it is
-  now on the run header for any terminal run (the 0.7.2 entry above, which sent
-  the reader to the killed-run panel, describes where it launches FROM, not
-  where the button now lives), and a matching "Start a run like this one" item
+  now on the run header for any terminal run (the 0.7.2 entry below, which
+  sent the reader to the killed-run panel, describes where it launches FROM,
+  not where the button now lives), and a matching "Start a run like this one" item
   joined the Runs-list row kebab, on both the board and the table. The
   failure block keeps its own advice with no second door. Neither door trusts
   an empty audit read any more: an older run, a pruned trail, or a non-owner's
@@ -212,10 +218,15 @@ what it answered before.
   page at `http://localhost:<port>` posting to `http://127.0.0.1:<port>` is now
   refused, because browsers treat the two loopback aliases as two different
   sites; the console's own fetches are same-origin relative URLs, so nothing
-  Wardyn serves is affected. **One boot refusal:** `WARDYN_OIDC_REDIRECT_URL`
+  Wardyn serves is affected. **Two boot refusals:** `WARDYN_OIDC_REDIRECT_URL`
   must now parse to an absolute URL with a host — its host is the second
   same-origin name, and a host-less value used to surface as a console-wide
-  "CSRF guard" 403 instead of a boot error.
+  "CSRF guard" 403 instead of a boot error. And, separately, local mode's
+  `-local-operator` / `WARDYN_LOCAL_OPERATOR` may no longer be set to the
+  reserved admin-token mechanism principal — a deployment that did would boot
+  clean and then have `POST /setup/harness-login` refuse the very seat boot
+  just accepted, under a `per_user` roster row (see the harness-login refusal
+  below).
 - **Browser PTY attach works behind a TLS-terminating ingress.** The attach
   WebSocket (`internal/api/attach.go`) enforced same-origin with
   `websocket.Accept`'s default, which authorises the request `Host` alone — so
@@ -263,7 +274,9 @@ what it answered before.
   `WARDYN_BEDROCK_MODEL` is passed verbatim and is most often a cross-region
   inference profile id (`us.anthropic.claude-…`), which carries no account field.
   The account-vs-model comparison is SKIPPED there, not failed — give the full
-  `arn:aws:bedrock:<region>:<account>:…` ARN to get it.
+  `arn:aws:bedrock:<region>:<account>:…` ARN to get it. `wardynd` logs once at
+  boot when the value *looks* like an ARN and still names no account, so a
+  typo is a warning, not a silent skip.
 - **Not proven on this hardware: a real IAM Identity Center tenant with two
   account entitlements.** The account/role pin is proven against
   `test/awsssofake` (which enforces the real `x-amz-sso_bearer_token` contract

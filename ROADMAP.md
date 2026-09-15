@@ -442,8 +442,8 @@ private-endpoint Kubernetes estate.
 Built and awaiting release; [CHANGELOG.md](CHANGELOG.md)'s `[Unreleased]` section
 is the full list. A second field report from the same private-endpoint Kubernetes
 estate, written inside the first hour of running 0.7.2's `agent_providers` roster
-— 7 findings, all in the new surfaces, plus the CSRF Origin guard 0.7.2 itself
-named as an open gap.
+— 7 findings and 1 confirmation, all in the new surfaces, plus the CSRF Origin
+guard 0.7.2 itself named as an open gap.
 
 - **The per-user AWS SSO lane can no longer sign with the wrong identity.** An
   admin now pins which AWS account and role a `per_user` sign-in may capture,
