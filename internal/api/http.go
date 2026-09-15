@@ -373,7 +373,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			// Origin. Both answer the same sentence — csrfRefusedBody, csrf.go.
 			if isMutatingMethod(r.Method) {
 				origin := strings.TrimSpace(r.Header.Get("Origin"))
-				if isCrossSiteFetch(r) || (origin != "" && !s.originIsRequestHost(r, origin)) {
+				if isForeignSiteFetch(r) || (origin != "" && !s.originIsRequestHost(r, origin)) {
 					s.auditAuthFailedAs(r, csrfActor, csrfAuditReason)
 					writeError(w, http.StatusForbidden, "local mode: "+csrfRefusedBody)
 					return

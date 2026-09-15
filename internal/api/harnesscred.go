@@ -446,7 +446,7 @@ func (s *Server) storeAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob aw
 // There is no server-side start-URL config to read it from (deliberately: it is
 // per-organization and this is the only flow that needs it), so it arrives with
 // the login request and is validated by the caller.
-func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl harnessLogin, ssoStartURL string, pin awsSSOPin) (types.AgentRun, error) {
+func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl harnessLogin, ssoStartURL string, pin awsSSOPin, scope awsSSOScope) (types.AgentRun, error) {
 	if s.cfg.Runner == nil {
 		return types.AgentRun{}, fmt.Errorf("no runner configured")
 	}
@@ -507,23 +507,19 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// must not receive a credential, it exists to produce one.
 	extraEnv := hl.loginEnv(ssoStartURL, ssoRegion, pin)
 
-	// THE LAUNCH-TIME CREDENTIAL SCOPE, STAMPED. handleUploadSSOToken used to
-	// re-resolve it from the LIVE roster at upload time, so an admin who flipped
-	// the row from `per_user` to `shared` while a member's login run was still
-	// alive (it lives to harnessLoginIdleCap) turned that member's PUT into a
-	// write of the OPERATOR-WIDE credential every run inherits. Everything else
-	// that handler binds — region, start URL — is launch-time state; this is the
-	// third field, carried the same way the start URL already is (this run's own
-	// audit row, which survives a wardynd restart and needs no new run column).
-	loginScope := s.awsSSOScopeForAgent(ctx, modelAccessAgent, runIdentitySubject(ctx, actor))
+	// THE LAUNCH-TIME CREDENTIAL SCOPE, STAMPED — the one authorizeHarnessLogin's
+	// roster read PROVED, passed in, never re-resolved. Re-resolving it at upload
+	// time let a roster edit mid-run re-point a member's PUT at the OPERATOR-WIDE
+	// credential; re-resolving it HERE, through the fail-open resolver, let a mere
+	// store blip stamp the same `shared`/"" pair the stamp exists to prevent (S2-01).
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "harness.login.started",
 		runID.String(), "success", mustJSON(map[string]any{
 			"provider": hl.provider, "egress": egress,
 			"sso_start_url": ssoStartURL, // operator config, not a credential
 			// WHOSE credential this run may capture, decided HERE and read back by
 			// handleUploadSSOToken — never recomputed there.
-			"credential_source": awsSSOCredentialSourceLabel(loginScope),
-			"owner":             loginScope.owner,
+			"credential_source": awsSSOCredentialSourceLabel(scope),
+			"owner":             scope.owner,
 			// The pin AS IT READ AT LAUNCH — what the upload binds to.
 			"sso_account_id": pin.AccountID,
 			"sso_role_name":  pin.RoleName,
@@ -707,7 +703,7 @@ const (
 // workspace or integration in this request to narrow.
 //
 // Returns ok=false when it has already written the refusal.
-func (s *Server) authorizeHarnessLogin(w http.ResponseWriter, r *http.Request, provider string) (types.AgentProvider, bool) {
+func (s *Server) authorizeHarnessLogin(w http.ResponseWriter, r *http.Request, provider string) (types.AgentProvider, awsSSOScope, bool) {
 	// FAIL CLOSED on an unreadable roster: dropping ok read a store blip as "no
 	// per_user row", so the launch stamped an EMPTY pin ("launched unpinned" at
 	// capture) and the caller's own start URL became the bound portal. A NIL
@@ -716,25 +712,27 @@ func (s *Server) authorizeHarnessLogin(w http.ResponseWriter, r *http.Request, p
 	sc, ok := s.siteConfigSnapshot(r.Context())
 	if !ok && s.cfg.Store != nil {
 		writeError(w, http.StatusServiceUnavailable, harnessLoginRosterUnavailable)
-		return types.AgentProvider{}, false
+		return types.AgentProvider{}, awsSSOScope{}, false
 	}
+	// WHOSE credential this may capture, from THIS proved read (S2-01).
+	scope := awsSSOScopeFor(sc, modelAccessAgent, runIdentitySubject(r.Context(), principalFromRequest(r)))
 	row, perUser := perUserLoginRow(sc, provider)
 	mechanismCaller := s.cfg.OIDC != nil && runIdentitySubject(r.Context(), principalFromRequest(r)) == adminTokenPrincipal
 	if perUser && mechanismCaller {
-		return types.AgentProvider{}, s.refuseHarnessLoginMechanismPrincipal(w, r)
+		return types.AgentProvider{}, awsSSOScope{}, s.refuseHarnessLoginMechanismPrincipal(w, r)
 	}
 	if s.isOperator(r.Context()) {
-		return row, true
+		return row, scope, true
 	}
 	if !perUser {
-		return types.AgentProvider{}, !s.denyMemberField(w, r, "setup.harness_login",
+		return types.AgentProvider{}, awsSSOScope{}, !s.denyMemberField(w, r, "setup.harness_login",
 			"harness_login_not_per_user", harnessLoginNotPerUserRefusal)
 	}
 	if s.denyMemberCapability(w, r, capAgent, row.ID, "setup.harness_login",
 		fmt.Sprintf(harnessLoginAgentRefusal, row.ID)) {
-		return types.AgentProvider{}, false
+		return types.AgentProvider{}, awsSSOScope{}, false
 	}
-	return row, true
+	return row, scope, true
 }
 
 // handleHarnessLogin launches a container-login sandbox for a provider:
@@ -765,7 +763,7 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "provider does not support container login in this version: "+provider)
 		return
 	}
-	row, allowed := s.authorizeHarnessLogin(w, r, provider)
+	row, scope, allowed := s.authorizeHarnessLogin(w, r, provider)
 	if !allowed {
 		return
 	}
@@ -804,7 +802,7 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	_, actor := actorFromRequest(r)
 	run, err := s.launchHarnessLoginRun(r.Context(), actor, hl, startURL,
-		awsSSOPin{AccountID: row.SSOAccountID, RoleName: row.SSORoleName})
+		awsSSOPin{AccountID: row.SSOAccountID, RoleName: row.SSORoleName}, scope)
 	if err != nil {
 		// A governance limit is the acting principal's own profile refusing, not a
 		// daemon fault — answered the way launchRecordRun's caller answers it
@@ -915,8 +913,15 @@ func (s *Server) handleHarnessDisconnect(w http.ResponseWriter, r *http.Request)
 		// Only the AWS lane can be per-user (per_user is bedrock_sso-only,
 		// types.AgentProvider); every other provider keeps the operator-wide row
 		// this route has always deleted.
-		if scope := s.awsSSOScopeForAgent(r.Context(), modelAccessAgent,
-			runIdentitySubject(r.Context(), principalFromRequest(r))); scope.namespaced() {
+		// FAIL CLOSED on an unreadable roster: read as "not per-user", a store blip
+		// pointed this Delete at the OPERATOR-WIDE row, not the caller's own (S2-08).
+		scope, ok := s.awsSSOScopeForAgent(r.Context(), modelAccessAgent,
+			runIdentitySubject(r.Context(), principalFromRequest(r)))
+		if !ok {
+			writeError(w, http.StatusServiceUnavailable, harnessDisconnectRosterUnavailable)
+			return
+		}
+		if scope.namespaced() {
 			st = st.For(scope.owner)
 		}
 	}

@@ -68,13 +68,13 @@ var errCrossOriginRefused = errors.New(csrfRefusedBody)
 //
 //  1. A non-mutating method is never refused. GET/HEAD/OPTIONS change nothing,
 //     and refusing them would break the console's own reads.
-//  2. `Sec-Fetch-Site: cross-site` ⇒ refuse. Fetch Metadata is set by the
-//     BROWSER and cannot be written by page script, so when it says cross-site
-//     the request did not originate on our origin — whatever the Origin header
-//     says. Checked FIRST for that reason. Only "cross-site" refuses:
-//     "same-site" is a sibling host on the same registrable domain, which the
-//     Origin rule below judges on its own merits rather than on the browser's
-//     coarser label.
+//  2. A PRESENT `Sec-Fetch-Site` that is neither `same-origin` nor `none`
+//     ⇒ refuse. Fetch Metadata is set by the BROWSER and cannot be written by
+//     page script, so its label is trustworthy evidence about where the request
+//     came from — whatever the Origin header says. Checked FIRST for that
+//     reason. `same-site` refuses too (S2-02): it is a sibling host on a shared
+//     registrable domain, the exact case SameSite=Lax does not bind, and the
+//     Origin rule below cannot judge it when the browser sent no Origin at all.
 //  3. No Origin AND no Sec-Fetch-Site ⇒ allow. That is a CLI/API client (curl,
 //     the wardyn CLI, a CI job); browsers send one or the other on every
 //     mutating request, so this fallthrough is not reachable from a page. It is
@@ -117,7 +117,7 @@ func (s *Server) sameOriginOrRefuse(r *http.Request) error {
 	if !isMutatingMethod(r.Method) {
 		return nil
 	}
-	if isCrossSiteFetch(r) {
+	if isForeignSiteFetch(r) {
 		return errCrossOriginRefused
 	}
 	origin := strings.TrimSpace(r.Header.Get("Origin"))
@@ -182,13 +182,22 @@ func lowerASCII(c byte) byte {
 	return c
 }
 
-// isCrossSiteFetch reports whether the BROWSER labelled this request cross-site
-// (Fetch Metadata). Page script cannot set Sec-Fetch-Site — it is a forbidden
-// header name — so a present "cross-site" is trustworthy evidence. An absent
-// header proves nothing (a non-browser client, or an older browser) and is
-// never treated as a pass on its own; the Origin rule still runs.
-func isCrossSiteFetch(r *http.Request) bool {
-	return strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "cross-site")
+// isForeignSiteFetch reports whether the BROWSER labelled this request as
+// coming from anywhere but this very origin (Fetch Metadata). Page script
+// cannot set Sec-Fetch-Site — it is a forbidden header name — so a present
+// label is trustworthy evidence. An absent header proves nothing (a non-browser
+// client, or an older browser) and is never treated as a pass on its own; the
+// Origin rule still runs.
+//
+// ONLY "same-origin" and "none" (a user-initiated navigation) pass. It used to
+// refuse "cross-site" alone, which left "same-site" — a sibling host on a
+// shared registrable domain — to the Origin rule, and a browser that omits
+// Origin on a top-level form POST gave that rule nothing to judge: the request
+// fell through the CLI/API arm and mutated state (S2-02). An unknown future
+// label refuses for the same reason: this is the fail-closed half of the guard.
+func isForeignSiteFetch(r *http.Request) bool {
+	fs := strings.TrimSpace(r.Header.Get("Sec-Fetch-Site"))
+	return fs != "" && !strings.EqualFold(fs, "same-origin") && !strings.EqualFold(fs, "none")
 }
 
 // originHost returns the comparable host[:port] of a SERIALISED ORIGIN

@@ -125,18 +125,25 @@ func setupStatusSSOScope(sc types.SiteConfig, scOK, storeConfigured bool, subjec
 }
 
 // awsSSOScopeForAgent is awsSSOScopeFor for a caller that does NOT already hold
-// a site config. A read failure resolves to the operator namespace — legacy open
-// mode, the same direction every other roster consumer takes on an outage: an
-// unreadable roster must not silently re-point a credential.
-func (s *Server) awsSSOScopeForAgent(ctx context.Context, agentID, subject string) awsSSOScope {
+// a site config. ok=false means THE ROSTER COULD NOT BE READ, and the scope
+// returned with it is the old legacy-open answer (the operator namespace) —
+// never a scope a caller may write or delete under.
+//
+// The (scope, ok) pair, rather than the bare scope this used to return, because
+// dropping ok is a fail-OPEN at every door that decides WHERE a credential
+// lands: a store blip read as "no per_user row" sent a member's capture, and a
+// Disconnect's Delete, to the deployment-wide row every run inherits (S2-01,
+// S2-08). A read door may still ignore ok — dispatch does, deliberately — but
+// it now has to say so.
+func (s *Server) awsSSOScopeForAgent(ctx context.Context, agentID, subject string) (awsSSOScope, bool) {
 	if s.cfg.Store == nil {
-		return awsSSOScope{}
+		return awsSSOScope{}, true // no store, no roster: an install with no per-user estate, not a blip
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(ctx)
 	if err != nil {
-		return awsSSOScope{}
+		return awsSSOScope{}, false
 	}
-	return awsSSOScopeFor(sc, agentID, subject)
+	return awsSSOScopeFor(sc, agentID, subject), true
 }
 
 // The six model-access states — ONE vocabulary, ordered REGISTRATION-first.

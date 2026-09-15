@@ -314,6 +314,10 @@ func (s *Server) loginRunScope(ctx context.Context, stamp loginRunStamp, subject
 	case string(types.CredentialSourceShared):
 		return awsSSOScope{}, true
 	default:
-		return awsSSOScope{}, !s.awsSSOScopeForAgent(ctx, modelAccessAgent, subject).perUser
+		// A roster read that FAILED cannot prove the operator arm either, so it
+		// refuses rather than falling through to the unscoped write (S2-08's
+		// family: ok is the fail-closed half of awsSSOScopeForAgent).
+		scope, ok := s.awsSSOScopeForAgent(ctx, modelAccessAgent, subject)
+		return awsSSOScope{}, ok && !scope.perUser
 	}
 }

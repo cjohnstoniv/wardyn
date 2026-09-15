@@ -47,7 +47,7 @@ func TestLaunchHarnessLoginRun_CreateRunFailureRevokesIdentity(t *testing.T) {
 	if !ok {
 		t.Fatal("aws-sso harness login convention missing")
 	}
-	if _, err := s.launchHarnessLoginRun(context.Background(), "operator", hl, "", awsSSOPin{}); err == nil {
+	if _, err := s.launchHarnessLoginRun(context.Background(), "operator", hl, "", awsSSOPin{}, awsSSOScope{}); err == nil {
 		t.Fatal("expected CreateRun failure to surface")
 	}
 	if len(spy.revoked) != 1 {

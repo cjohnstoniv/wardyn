@@ -203,6 +203,27 @@ func TestCSRFGuard(t *testing.T) {
 			wantOIDCRefused:  true,
 		},
 		{
+			// RULE 3's OWN WORDS (S2-02): the CLI/API fallthrough is "no Origin
+			// AND no Sec-Fetch-Site". A browser that omits Origin on a same-site
+			// top-level form POST — the sibling host on a shared parent domain,
+			// again — used to land in it, because only "cross-site" refused.
+			name:             "Sec-Fetch-Site: same-site with no Origin",
+			secFetchSite:     "same-site",
+			wantLocalRefused: true,
+			wantOIDCRefused:  true,
+		},
+		{
+			// The same tightening from the other side: a label the BROWSER set
+			// to something other than same-origin/none is refused whatever the
+			// Origin says. Nothing the console does reaches this — its own
+			// fetches are same-origin — and no CLI sets the header at all.
+			name:             "Sec-Fetch-Site: same-site with our own Origin",
+			origin:           originSelf,
+			secFetchSite:     "same-site",
+			wantLocalRefused: true,
+			wantOIDCRefused:  true,
+		},
+		{
 			name:             "Sec-Fetch-Site: cross-site with no Origin",
 			secFetchSite:     "cross-site",
 			wantLocalRefused: true,

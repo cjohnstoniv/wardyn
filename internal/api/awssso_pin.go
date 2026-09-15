@@ -133,6 +133,13 @@ const (
 	//
 	// DRAFT (M2 canon pending)
 	harnessLoginRosterUnavailable = "the agent roster could not be read, so this sign-in cannot be bound to the account and access portal it was meant for — try again in a moment"
+	// harnessDisconnectRosterUnavailable answers a DISCONNECT whose roster read
+	// failed (handleHarnessDisconnect, harnesscred.go): the roster is what says
+	// whether captures live per-person or deployment-wide, so without it there is
+	// no way to tell which stored session this would remove.
+	//
+	// DRAFT (M2 canon pending)
+	harnessDisconnectRosterUnavailable = "the agent roster could not be read, so Wardyn cannot tell whose stored sign-in this would remove — try again in a moment"
 )
 
 // awsAccountID matches an AWS account id. ONE var for the package: the ARN
