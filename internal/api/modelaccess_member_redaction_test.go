@@ -83,7 +83,7 @@ func memberStatusFor(t *testing.T, ma SetupModelAccess, blob awsSSOBlob, now tim
 func TestMemberModelAccess_SharedNeverCarriesTheOperatorsDeadline(t *testing.T) {
 	now := awsSSOTestFixedNow
 	blob := sharedExpiringBlob(now)
-	ma := setupModelAccess(sharedRoster(), blob, true, awsSSOScope{}, now)
+	ma := setupModelAccess(sharedRoster(), blob, true, awsSSOScope{}, true, now)
 
 	// Precondition: this IS the grading that leaked — the operator's own row
 	// still says expiring, and still names the instant.
@@ -130,7 +130,7 @@ func TestMemberModelAccess_SharedAndDeadNamesTheAdmin(t *testing.T) {
 	blob.ExpiresAt = now.Add(-time.Minute)   // and it is already gone
 	blob.RegistrationExpiresAt = time.Time{} // a legacy sso_start_url profile carries none
 
-	ma := setupModelAccess(sharedRoster(), blob, true, awsSSOScope{}, now)
+	ma := setupModelAccess(sharedRoster(), blob, true, awsSSOScope{}, true, now)
 	if ma.State != modelAccessSharedExpired {
 		t.Fatalf("grading = %q, want %q", ma.State, modelAccessSharedExpired)
 	}
@@ -170,7 +170,7 @@ func TestMemberModelAccess_PerUserKeepsItsOwnersDeadline(t *testing.T) {
 	}
 	blob := sharedExpiringBlob(now)
 	scope := awsSSOScope{perUser: true, owner: "member@corp.example"}
-	ma := setupModelAccess(agentRoster(row), blob, true, scope, now)
+	ma := setupModelAccess(agentRoster(row), blob, true, scope, true, now)
 	if !ma.PerUser {
 		t.Fatal("a per_user grading must say so — memberModelAccess reads it")
 	}
@@ -183,7 +183,7 @@ func TestMemberModelAccess_PerUserKeepsItsOwnersDeadline(t *testing.T) {
 	}
 	// And with nothing captured they are still offered the sign-in they can
 	// actually complete.
-	none := setupModelAccess(agentRoster(row), awsSSOBlob{}, false, scope, now)
+	none := setupModelAccess(agentRoster(row), awsSSOBlob{}, false, scope, true, now)
 	if got := memberModelAccess(none); got.State != modelAccessNotConfigured || got.Action != modelAccessSignInAction {
 		t.Errorf("per_user first run = %+v, want not_configured + %q", got, modelAccessSignInAction)
 	}

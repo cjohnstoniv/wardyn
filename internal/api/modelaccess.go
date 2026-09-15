@@ -72,7 +72,15 @@ func (sc awsSSOScope) namespaced() bool { return sc.perUser && sc.owner != "" }
 // over adminTokenPrincipal, e.g. "local:operator") and is deliberately NOT
 // this — the whole reason per_user exists is that a real person signs in for
 // themselves, and LocalMode's operator is exactly that person.
-func awsSSOScopeIsMechanism(sc awsSSOScope) bool { return sc.perUser && sc.owner == adminTokenPrincipal }
+func awsSSOScopeIsMechanism(sc awsSSOScope) bool {
+	return sc.perUser && sc.owner == adminTokenPrincipal
+}
+
+// AdminTokenPrincipal exports adminTokenPrincipal for cmd/wardynd's boot-time
+// validation (S-06): a -local-operator value equal to it would collide with
+// this mechanism principal, refusing the SAME operator seat at harness-login
+// that boot just accepted.
+func AdminTokenPrincipal() string { return adminTokenPrincipal }
 
 // awsSSOCredentialSourceLabel is the scope as the audit trail names it — the
 // same two wire values the admin wrote on the row, so a row and a log line are
@@ -174,13 +182,16 @@ const (
 const harnessLoginMechanismPrincipalRefusal = "this deployment gives each person their own AWS sign-in, and the admin token is a shared credential rather than a person — every capture made with it would land in one namespace and overwrite the last. Sign in to the console, or use your own wdn_ API token, and start the sign-in from there"
 
 // refuseHarnessLoginMechanismPrincipal writes the 422 refusal for a per_user
-// row reached by the shared admin-bearer-token principal and returns false,
-// so authorizeHarnessLogin can `return types.AgentProvider{}, s.refuse...(w)`
-// in one line. Bare writeError — handleAddSSHKey's admin-token refusal in
-// sshkeys.go is the same non-human-principal shape's precedent: no audit row,
-// keeping parity with every other writeError path already in that function.
-func (s *Server) refuseHarnessLoginMechanismPrincipal(w http.ResponseWriter) bool {
+// row reached by the shared admin-bearer-token principal, audits it (S-07:
+// the SIBLING refusals in this same function, denyMemberField/
+// denyMemberCapability, both audit — this is the one refusal on the
+// credential-capture route an operator's own CI job hits with no error
+// budget, and a row is how they find out it stopped capturing), and returns
+// false so authorizeHarnessLogin can `return types.AgentProvider{}, s.refuse...(w, r)`.
+func (s *Server) refuseHarnessLoginMechanismPrincipal(w http.ResponseWriter, r *http.Request) bool {
 	writeError(w, http.StatusUnprocessableEntity, harnessLoginMechanismPrincipalRefusal)
+	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+		"authz.denied", "setup.harness_login", "denied", mustJSON(map[string]any{"reason": "harness_login_mechanism_principal"})))
 	return false
 }
 
@@ -326,17 +337,25 @@ func modelAccessDeadline(blob awsSSOBlob, found bool, now time.Time) string {
 // the caller's own namespace — passed in rather than re-read, so the probe and
 // the harness row can never be about two different credentials.
 //
+// oidcConfigured gates the mechanism arm below (S-01/S-02): with no OIDC, the
+// admin token IS the only working per_user capture path (there is no console
+// sign-in or wdn_ token to redirect to instead — see
+// harnessLoginMechanismPrincipalRefusal), so a no-OIDC deployment must keep
+// grading it exactly like any other per_user principal.
+//
 // Returns the zero value when there is nothing per-principal to report: no
 // bedrock_sso row and no captured session (see SetupModelAccess).
-func setupModelAccess(sc types.SiteConfig, blob awsSSOBlob, found bool, scope awsSSOScope, now time.Time) SetupModelAccess {
+func setupModelAccess(sc types.SiteConfig, blob awsSSOBlob, found bool, scope awsSSOScope, oidcConfigured bool, now time.Time) SetupModelAccess {
 	row, declared := agentProviderFor(sc, modelAccessAgent)
 	ssoLane := declared && !row.Disabled && row.Mechanism == types.AgentMechanismBedrockSSO
-	// The caller is the shared admin bearer token, not a person: it owns no
-	// per-principal namespace to grade (readAWSSSOBlob already refused to read
-	// one for it), so there is no sign-in for it to complete and composing an
-	// Action/Deadline here would offer one anyway. not_applicable, never
-	// not_configured — that state means "a person hasn't signed in yet".
-	if awsSSOScopeIsMechanism(scope) {
+	// The caller is the shared admin bearer token, not a person: no sign-in it
+	// could complete FOR A NEW SESSION. It is NOT an unreadable namespace —
+	// "admin-token" is a non-empty owner, read and written like any other
+	// (readAWSSSOBlob only refuses an EMPTY owner) — so a session already
+	// captured there is real and dispatch still serves it to admin-token-
+	// created runs; grade that like any other blob (!found below) rather than
+	// hiding it behind a state that claims there is nothing to grade.
+	if awsSSOScopeIsMechanism(scope) && !found && oidcConfigured {
 		return SetupModelAccess{State: modelAccessNotApplicable, Mechanism: string(types.AgentMechanismBedrockSSO)}
 	}
 	if !ssoLane && !found {

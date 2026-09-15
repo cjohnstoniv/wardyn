@@ -222,10 +222,11 @@ const (
 )
 
 // llmProviderCheck reports the WINNING model/harness signal (llmProvenance's
-// detail, "" when there is none). INFO, never a warning, when there is none: a
-// model provider is OPTIONAL — needed only for agent-harness runs, so "no
-// model" is a deliberate non-blocking state, never a gap the operator must
-// clear.
+// detail, "" when there is none). INFO when there is NO model provider at
+// all — it is OPTIONAL, needed only for agent-harness runs, so "no model" is
+// a deliberate non-blocking state, never a gap the operator must clear. WARN
+// is reserved for the per_user arm below: there a provider IS declared and
+// THIS person's half of it is missing, which is a real, actionable gap.
 //
 // bedrock is read ONLY when llmDetail is "" — llmProvenance's own winning
 // signal always outranks it (unchanged), and the "no provider configured"

@@ -341,6 +341,47 @@ func TestListenBindsSpecificRoutable(t *testing.T) {
 	}
 }
 
+// TestResolveLocalMode_RefusesAdminTokenAsLocalOperator is S-06: "admin-token"
+// is the reserved MECHANISM principal a per_user row's harness-login refuses
+// (internal/api.AdminTokenPrincipal) — a -local-operator seat named the same
+// string would collide with it, so it is refused at boot rather than silently
+// reading not_applicable / refused-as-a-mechanism at request time.
+func TestResolveLocalMode_RefusesAdminTokenAsLocalOperator(t *testing.T) {
+	tests := []struct {
+		operator string
+		wantErr  bool
+	}{
+		{"admin-token", true},
+		{"local:alice", false},
+		{"", false}, // defaulted later to defaultLocalOperator(), never this literal
+	}
+	for _, tt := range tests {
+		listen := "127.0.0.1:8080"
+		adminToken := ""
+		localMode := true
+		oidcIssuer := ""
+		localTrustFwd := false
+		empty := ""
+		f := &bootFlags{
+			listen:        &listen,
+			adminToken:    &adminToken,
+			localMode:     &localMode,
+			localOperator: &tt.operator,
+			oidcIssuer:    &oidcIssuer,
+			localTrustFwd: &localTrustFwd,
+			// Reached only past the refusal (the two non-erroring cases) — the
+			// Bedrock auto-detect tail dereferences these unconditionally.
+			bedrockRegion: &empty,
+			bedrockModel:  &empty,
+			bedrockAWSDir: &empty,
+		}
+		_, err := resolveLocalMode(f)
+		if (err != nil) != tt.wantErr {
+			t.Errorf("resolveLocalMode(local-operator=%q) error = %v, want error: %v", tt.operator, err, tt.wantErr)
+		}
+	}
+}
+
 // The demo admin token is published in this repo, so it authenticates nobody:
 // refuse to boot with it on a specific routable bind. The loopback and
 // unspecified (compose) binds must still boot — they get a warning log instead,

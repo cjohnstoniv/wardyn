@@ -458,6 +458,13 @@ func resolveLocalMode(f *bootFlags) (localModeState, error) {
 	}
 	lm.enabled = *f.localMode || (*f.adminToken == "" && *f.oidcIssuer == "" && lm.loopback)
 	lm.operator = strings.TrimSpace(*f.localOperator)
+	// S-06: "admin-token" is the reserved MECHANISM principal a per_user row's
+	// harness-login refuses (internal/api's adminTokenPrincipal) — naming the
+	// local operator seat that would collide it with a non-person, refusing
+	// the SAME seat boot just accepted.
+	if lm.operator == api.AdminTokenPrincipal() {
+		return lm, fmt.Errorf("refusing to start: -local-operator (WARDYN_LOCAL_OPERATOR) is %q, the reserved admin-token mechanism principal — local mode's operator seat must be a real, distinguishable person; pick a different name", lm.operator)
+	}
 	// The demo admin token is published in this repo (compose + docs) and nothing
 	// mints a random one, so "auth configured" with THAT value is a full-admin API
 	// anyone who read the README can drive. This check sits ABOVE the !lm.enabled

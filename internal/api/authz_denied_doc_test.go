@@ -31,6 +31,7 @@ var authzDeniedReasons = []string{
 	"governance_profile",
 	"grant_pairing_not_eligible",
 	"groups_snapshot_stale",
+	"harness_login_mechanism_principal",
 	"not_owner",
 	"second_human_required",
 	"security_admin_surface",

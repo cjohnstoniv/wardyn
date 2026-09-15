@@ -115,23 +115,15 @@ func TestSetupStatus_AnonymousNonLocal401(t *testing.T) {
 }
 
 // TestSetupStatus_AdminTokenReadsNotApplicableEndToEnd is finding 5 end to
-// end: GET /setup/status called with the shared admin bearer token, under a
-// per_user row, must report model_access as not_applicable — never
-// not_configured plus a "Sign in to AWS" action the caller cannot take.
+// end, narrowed by S-01/S-02: GET /setup/status called with the shared admin
+// bearer token, under a per_user row, WITH OIDC CONFIGURED (a real console
+// sign-in exists as the alternative), must report model_access as
+// not_applicable — never not_configured plus a "Sign in to AWS" action the
+// caller cannot take. perUserLoginSrv now works for this (reviewer item 12):
+// integStore's ListRoleMappings returns nil,nil so consoleRoleMappingsPresent
+// no longer panics on the double.
 func TestSetupStatus_AdminTokenReadsNotApplicableEndToEnd(t *testing.T) {
-	h := newHarness(t)
-	row := types.AgentProvider{
-		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
-		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: perUserPortal,
-	}
-	// baseTestConfig leaves OIDC nil (unlike perUserLoginSrv), which is the
-	// exact shape finding 5 describes: a plain admin-bearer-token caller with
-	// no OIDC session at all — and keeps consoleRoleMappingsPresent from
-	// touching the Store double's unimplemented ListRoleMappings.
-	cfg := baseTestConfig(h, &integStore{govEscapeStore: newGovEscapeStore(&capStore{}), site: agentRoster(row)})
-	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
-	cfg.BedrockRegion = "us-east-1"
-	srv := New(cfg)
+	srv, _ := perUserLoginSrv(t) // default: claude-code/bedrock_sso/per_user row, OIDC configured
 	code, st := decodeSetup(t, srv, adminToken)
 	if code != http.StatusOK {
 		t.Fatalf("code = %d, want 200", code)

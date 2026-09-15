@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -388,7 +389,7 @@ func TestAWSSSOCredentialState_TheFiveStates(t *testing.T) {
 // chip it always did rather than claiming a state nobody configured.
 func TestSetupModelAccess_SilentWithNothingToSay(t *testing.T) {
 	now := awsSSOTestFixedNow
-	if got := setupModelAccess(types.SiteConfig{}, awsSSOBlob{}, false, awsSSOScope{}, now); got.State != "" {
+	if got := setupModelAccess(types.SiteConfig{}, awsSSOBlob{}, false, awsSSOScope{}, true, now); got.State != "" {
 		t.Errorf("legacy open mode with no capture must say nothing, got %+v", got)
 	}
 	// A declared bedrock_sso lane speaks even with nothing captured — that IS
@@ -397,24 +398,30 @@ func TestSetupModelAccess_SilentWithNothingToSay(t *testing.T) {
 		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
 		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: "https://acme.awsapps.com/start",
 	}
-	got := setupModelAccess(agentRoster(row), awsSSOBlob{}, false, awsSSOScope{perUser: true, owner: "m"}, now)
+	got := setupModelAccess(agentRoster(row), awsSSOBlob{}, false, awsSSOScope{perUser: true, owner: "m"}, true, now)
 	if got.State != modelAccessNotConfigured || got.Mechanism != string(types.AgentMechanismBedrockSSO) || got.Action == "" {
 		t.Errorf("a declared per_user lane with no capture = %+v, want not_configured with a mechanism and an action", got)
 	}
 }
 
-// TestSetupModelAccess_AdminTokenUnderPerUserIsNotApplicable is finding 5: a
-// per-principal state read through the admin bearer token must report the
-// TOKEN's own state (not_applicable), never "not_configured" + a "Sign in to
-// AWS" action the caller cannot take — the shared admin token owns no AWS SSO
-// session and never will.
-func TestSetupModelAccess_AdminTokenUnderPerUserIsNotApplicable(t *testing.T) {
-	row := types.AgentProvider{
+// mechanismRow is the per_user claude-code/bedrock_sso roster row every
+// setupModelAccess mechanism test below grades against.
+func mechanismRow() types.AgentProvider {
+	return types.AgentProvider{
 		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
 		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: perUserPortal,
 	}
+}
+
+// TestSetupModelAccess_AdminTokenUnderPerUserIsNotApplicable is finding 5,
+// narrowed by S-01/S-02: an OIDC-configured deployment (a real console
+// sign-in / wdn_ token exists as the remedy) reading the admin bearer token's
+// state with NOTHING captured must report the TOKEN's own state
+// (not_applicable), never "not_configured" + a "Sign in to AWS" action the
+// caller cannot take.
+func TestSetupModelAccess_AdminTokenUnderPerUserIsNotApplicable(t *testing.T) {
 	scope := awsSSOScope{perUser: true, owner: adminTokenPrincipal}
-	got := setupModelAccess(agentRoster(row), awsSSOBlob{}, false, scope, awsSSOTestFixedNow)
+	got := setupModelAccess(agentRoster(mechanismRow()), awsSSOBlob{}, false, scope, true, awsSSOTestFixedNow)
 	if got.State != modelAccessNotApplicable {
 		t.Fatalf("state = %q, want not_applicable", got.State)
 	}
@@ -423,16 +430,47 @@ func TestSetupModelAccess_AdminTokenUnderPerUserIsNotApplicable(t *testing.T) {
 	}
 }
 
+// TestSetupModelAccess_AdminTokenWithACapturedSessionGradesItNormally is S-02:
+// "admin-token" is a non-empty owner, read and written like any other —
+// readAWSSSOBlob only refuses an EMPTY one. A session already captured there
+// is real and dispatch still serves it to admin-token-created runs, so it
+// must be graded like any other blob, not hidden behind not_applicable.
+func TestSetupModelAccess_AdminTokenWithACapturedSessionGradesItNormally(t *testing.T) {
+	now := awsSSOTestFixedNow
+	scope := awsSSOScope{perUser: true, owner: adminTokenPrincipal}
+	blob := sharedExpiringBlob(now)
+	blob.RegistrationExpiresAt = now.Add(30 * 24 * time.Hour) // far outside modelAccessExpiringWindow
+	got := setupModelAccess(agentRoster(mechanismRow()), blob, true, scope, true, now)
+	if got.State == modelAccessNotApplicable {
+		t.Fatalf("a REAL captured session must be graded, not hidden behind not_applicable: %+v", got)
+	}
+	if got.State != modelAccessLive {
+		t.Errorf("state = %q, want live (a renewable session with nothing near lapsing)", got.State)
+	}
+}
+
+// TestSetupModelAccess_AdminTokenNoOIDCKeepsTodaysStates is S-01/S-02: with no
+// OIDC configured, the admin token IS the only working per_user capture path
+// (there is no console sign-in or wdn_ token to redirect to instead), so a
+// no-OIDC deployment must keep grading it exactly like any other per_user
+// principal — not_configured with a real sign-in action, never not_applicable.
+func TestSetupModelAccess_AdminTokenNoOIDCKeepsTodaysStates(t *testing.T) {
+	scope := awsSSOScope{perUser: true, owner: adminTokenPrincipal}
+	got := setupModelAccess(agentRoster(mechanismRow()), awsSSOBlob{}, false, scope, false, awsSSOTestFixedNow)
+	if got.State == modelAccessNotApplicable {
+		t.Fatalf("no OIDC ⇒ the admin token is the only capture path here, got %+v", got)
+	}
+	if got.State != modelAccessNotConfigured || got.Action != modelAccessSignInAction {
+		t.Errorf("state = %+v, want not_configured + %q", got, modelAccessSignInAction)
+	}
+}
+
 // TestSetupModelAccess_LocalOperatorIsAPerson: LocalMode's own seat resolves
 // to a real person-shaped namespace, never adminTokenPrincipal — it must keep
 // reading not_configured (a real sign-in it can complete), not not_applicable.
 func TestSetupModelAccess_LocalOperatorIsAPerson(t *testing.T) {
-	row := types.AgentProvider{
-		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
-		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: perUserPortal,
-	}
 	scope := awsSSOScope{perUser: true, owner: "local:operator"}
-	got := setupModelAccess(agentRoster(row), awsSSOBlob{}, false, scope, awsSSOTestFixedNow)
+	got := setupModelAccess(agentRoster(mechanismRow()), awsSSOBlob{}, false, scope, true, awsSSOTestFixedNow)
 	if got.State == modelAccessNotApplicable {
 		t.Fatalf("local mode's own seat is a real person, not the mechanism principal, got %+v", got)
 	}
@@ -453,16 +491,21 @@ func TestMemberModelAccess_NotApplicablePassesThrough(t *testing.T) {
 }
 
 // TestHandleHarnessLogin_AdminTokenUnderPerUserRefused: under a per_user row,
-// the shared admin bearer token must be refused (422) rather than admitted as
-// an operator — every capture made with it would land in the SAME namespace
-// (owner == "admin-token") and overwrite the last person's session. A shared
-// row is unaffected: the admin token still may connect it.
+// with OIDC configured (a real console sign-in / wdn_ token exists as the
+// remedy the refusal names), the shared admin bearer token must be refused
+// (422) rather than admitted as an operator — every capture made with it
+// would land in the SAME namespace (owner == "admin-token") and overwrite the
+// last person's session. A shared row is unaffected: the admin token still
+// may connect it. S-07: the refusal is an authz.denied row — the sibling
+// refusals in authorizeHarnessLogin (denyMemberField/denyMemberCapability)
+// both audit, and this is the one refusal on the credential-capture route an
+// operator's own CI job hits with no error budget to notice it by otherwise.
 func TestHandleHarnessLogin_AdminTokenUnderPerUserRefused(t *testing.T) {
 	const path = "/api/v1/setup/harness-login"
-	srv, audit := perUserLoginSrv(t) // default: claude-code/bedrock_sso/per_user row
+	srv, audit := perUserLoginSrv(t) // default: claude-code/bedrock_sso/per_user row, OIDC configured
 	w := do(t, srv, http.MethodPost, path, adminToken, `{"provider":"aws"}`)
 	if w.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("admin-token under per_user: code = %d, want 422; body=%s", w.Code, w.Body.String())
+		t.Fatalf("admin-token under per_user (OIDC configured): code = %d, want 422; body=%s", w.Code, w.Body.String())
 	}
 	if !strings.Contains(w.Body.String(), "shared credential") {
 		t.Errorf("body = %s, want the mechanism-principal refusal sentence", w.Body.String())
@@ -470,8 +513,21 @@ func TestHandleHarnessLogin_AdminTokenUnderPerUserRefused(t *testing.T) {
 	if len(audit.find("harness.login.started")) != 0 {
 		t.Error("a refused sign-in launched a sandbox anyway")
 	}
-	if len(audit.find("authz.denied")) != 0 {
-		t.Error("this refusal keeps parity with the function's other writeError paths — it must emit no audit row")
+	rows := audit.find("authz.denied")
+	if len(rows) != 1 {
+		t.Fatalf("authz.denied rows = %d, want 1 — this refusal must audit like its siblings in the same function", len(rows))
+	}
+	var data struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(rows[0].Data, &data); err != nil {
+		t.Fatalf("decode authz.denied data: %v", err)
+	}
+	if data.Reason != "harness_login_mechanism_principal" {
+		t.Errorf("authz.denied reason = %q, want harness_login_mechanism_principal", data.Reason)
+	}
+	if rows[0].Target != "setup.harness_login" {
+		t.Errorf("authz.denied target = %q, want setup.harness_login", rows[0].Target)
 	}
 
 	// Shared row: the admin token still may connect it.
@@ -479,6 +535,26 @@ func TestHandleHarnessLogin_AdminTokenUnderPerUserRefused(t *testing.T) {
 	srv2, _ := perUserLoginSrv(t, shared)
 	if w2 := do(t, srv2, http.MethodPost, path, adminToken, `{"provider":"anthropic"}`); w2.Code == http.StatusUnprocessableEntity {
 		t.Fatalf("admin-token under a shared row must still be admitted, got 422: %s", w2.Body.String())
+	}
+}
+
+// TestHandleHarnessLogin_NoOIDCAdminTokenStillAdmitted is S-01 (HIGH), red on
+// 6a33a36e: with NO OIDC configured, neither remedy the refusal sentence
+// names ("Sign in to the console" — there is no console session without
+// OIDC; "use your own wdn_ API token" — handleCreateAPIToken refuses to mint
+// one without a verified human) can exist, and the admin-token lane is the
+// deployment's ONLY working per_user capture path. It must keep working
+// exactly as it did before this lane's first commit — sshkeys.go's
+// handleAddSSHKey guards its own identical admin-token refusal on
+// `s.cfg.OIDC != nil` for this exact reason.
+func TestHandleHarnessLogin_NoOIDCAdminTokenStillAdmitted(t *testing.T) {
+	srv, _ := perUserLoginSrv(t)
+	cfg := srv.cfg
+	cfg.OIDC = nil
+	noOIDC := New(cfg)
+	w := do(t, noOIDC, http.MethodPost, "/api/v1/setup/harness-login", adminToken, `{"provider":"aws"}`)
+	if w.Code == http.StatusUnprocessableEntity {
+		t.Fatalf("no OIDC ⇒ the admin token is the ONLY capture path here — must not be refused as the mechanism, got 422: %s", w.Body.String())
 	}
 }
 
@@ -495,6 +571,30 @@ func TestHandleHarnessLogin_LocalModeStillMayCapture(t *testing.T) {
 	w := do(t, local, http.MethodPost, "/api/v1/setup/harness-login", "", `{"provider":"aws"}`)
 	if w.Code == http.StatusUnprocessableEntity {
 		t.Fatalf("local mode is a person, not the mechanism principal — must not be refused as one, got 422: %s", w.Body.String())
+	}
+}
+
+// TestHandleHarnessLogin_LocalDevHeaderDoesNotTripTheRefusal is S-05: the
+// refusal predicate reads runIdentitySubject (S-01's guard), the SAME
+// function every other per_user decision uses to pick a namespace — not bare
+// principalFromRequest, which honours the DEV-ONLY X-Wardyn-Principal header
+// in LocalMode. A client sending that header set to "admin-token" must NOT be
+// refused by a predicate the namespace selector would never have reached.
+func TestHandleHarnessLogin_LocalDevHeaderDoesNotTripTheRefusal(t *testing.T) {
+	srv, _ := perUserLoginSrv(t)
+	cfg := srv.cfg
+	cfg.LocalMode = true
+	cfg.LocalOperator = "local:test"
+	cfg.LocalLoopback = true
+	local := New(cfg)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup/harness-login", strings.NewReader(`{"provider":"aws"}`))
+	req.Host = "127.0.0.1"
+	req.RemoteAddr = "127.0.0.1:54321"
+	req.Header.Set("X-Wardyn-Principal", adminTokenPrincipal)
+	w := httptest.NewRecorder()
+	local.Handler().ServeHTTP(w, req)
+	if w.Code == http.StatusUnprocessableEntity {
+		t.Fatalf("the dev header must not trip the refusal — runIdentitySubject ignores it in LocalMode, got 422: %s", w.Body.String())
 	}
 }
 
@@ -891,7 +991,7 @@ func TestAWSSSOCredentialRow_NamesTheGradedDeadline(t *testing.T) {
 	}
 	ma := setupModelAccess(agentRoster(types.AgentProvider{
 		ID: modelAccessAgent, Mechanism: types.AgentMechanismBedrockSSO,
-	}), blob, true, awsSSOScope{}, now)
+	}), blob, true, awsSSOScope{}, true, now)
 	if ma.State != modelAccessExpiring {
 		t.Fatalf("state = %q, want expiring", ma.State)
 	}

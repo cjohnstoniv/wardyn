@@ -743,6 +743,12 @@ type integStore struct {
 
 func (s *integStore) GetSiteConfig(context.Context) (types.SiteConfig, error) { return s.site, nil }
 
+// ListRoleMappings: no console role-mapping fixture in this double — an empty
+// answer is what an install with none configured actually reads, and lets
+// /setup/status tests that set cfg.OIDC use this double without panicking on
+// an unimplemented promoted method (reviewer item 12).
+func (s *integStore) ListRoleMappings(context.Context) ([]types.RoleMapping, error) { return nil, nil }
+
 func integFixture(t *testing.T, cs *capStore, rows []types.Integration, wss []types.Workspace) (*Server, *recRecorder) {
 	t.Helper()
 	h := newHarness(t)
