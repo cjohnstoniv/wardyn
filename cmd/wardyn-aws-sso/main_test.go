@@ -582,3 +582,48 @@ func TestFailMarker_UIParity(t *testing.T) {
 		t.Errorf("marker drift: UI failMarker %q != wardyn-aws-sso failMarker %q", m[1], failMarker)
 	}
 }
+
+// TestPrintFailure_IsPlainUnstyledOneLine pins the pane's parsing contract: it
+// matches the marker with a plain indexOf over the RAW PTY buffer, exactly as
+// it already does for the success marker. So the line must be plain text — no
+// ANSI/colour, no control bytes, no embedded newlines — whatever the sentence
+// carried. The sentence can come from the control plane or, on the upload-error
+// path, from a transport error, so it is untrusted for formatting purposes.
+func TestPrintFailure_IsPlainUnstyledOneLine(t *testing.T) {
+	var buf bytes.Buffer
+	prev := stdout
+	stdout = &buf
+	t.Cleanup(func() { stdout = prev })
+
+	printFailure("\x1b[31mthis session\x1b[0m is for account 222222222222;\r\n" +
+		"the configured\tmodel lives\x07 in \x1b]0;title\x07account 111111111111\x1b[K")
+
+	out := buf.String()
+	var line string
+	for _, l := range strings.Split(out, "\n") {
+		if strings.HasPrefix(l, failMarker) {
+			line = l
+		}
+	}
+	if line == "" {
+		t.Fatalf("no fail line on stdout: %q", out)
+	}
+	if strings.ContainsRune(line, 0x1b) {
+		t.Errorf("fail line carries an ESC byte, so the pane's indexOf sees styling bytes inside the marker region: %q", line)
+	}
+	for _, r := range line {
+		if r != ' ' && (r < 0x20 || r == 0x7f) {
+			t.Errorf("fail line carries control byte %q: %q", r, line)
+			break
+		}
+	}
+	// The words survive; only the styling is gone.
+	for _, want := range []string{"this session", "222222222222", "111111111111", "the configured model lives in"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("fail line = %q, lost %q — sanitising must strip styling, not content", line, want)
+		}
+	}
+	if strings.Contains(line, "31m") || strings.Contains(line, "title") || strings.Contains(line, "[K") {
+		t.Errorf("fail line = %q, leaks the payload of an escape sequence as visible text", line)
+	}
+}

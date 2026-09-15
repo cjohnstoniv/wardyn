@@ -39,6 +39,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -168,7 +169,33 @@ const failMarker = "wardyn: aws sso credential rejected:"
 // scroll the device code off the screen.
 const maxFailLineRunes = 300
 
-// printFailure writes the fail marker and one sentence as a single stdout line.
+// ansiEscape matches an ESC-initiated terminal sequence: CSI (`ESC [ … final`),
+// OSC (`ESC ] … BEL` or `ESC ] … ESC \`), and any other two-byte `ESC x`. The
+// WHOLE sequence goes, payload included — stripping the ESC alone would leave
+// "[31m" and "0;title" on screen as text.
+var ansiEscape = regexp.MustCompile("\x1b\\][^\x07\x1b]*(?:\x07|\x1b\\\\)|\x1b\\[[0-9;?]*[ -/]*[@-~]|\x1b.")
+
+// plainOneLine makes an arbitrary sentence safe to print as a marker line:
+// escape sequences removed, every remaining control byte turned into a space,
+// whitespace collapsed. The sentence is UNTRUSTED for formatting — it comes
+// from the control plane's refusal body or from a transport error — and the
+// login pane matches the marker with a plain indexOf over the raw PTY buffer,
+// so styling bytes inside the line would hide it exactly as a typo would.
+func plainOneLine(s string) string {
+	s = ansiEscape.ReplaceAllString(s, " ")
+	s = strings.Map(func(r rune) rune {
+		if r == 0x7f || (r < 0x20 && r != '\t' && r != '\n' && r != '\r') {
+			return ' '
+		}
+		return r
+	}, s)
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// printFailure writes the fail marker and one sentence as a single PLAIN stdout
+// line — no colour, no control bytes, no embedded newline — because the login
+// pane matches it with a plain indexOf over the raw PTY buffer, the same
+// guarantee the success marker already relies on.
 //
 // The LEADING newline is load-bearing: this can follow the chooser's prompt,
 // which deliberately ends without one so the answer types on the same line. The
@@ -176,7 +203,7 @@ const maxFailLineRunes = 300
 // "wardyn: account [1-2]: " would be invisible to it — the pane spinning
 // forever, which is the exact bug this marker exists to fix.
 func printFailure(sentence string) {
-	line := failMarker + " " + strings.Join(strings.Fields(sentence), " ")
+	line := failMarker + " " + plainOneLine(sentence)
 	if r := []rune(line); len(r) > maxFailLineRunes {
 		line = string(r[:maxFailLineRunes-1]) + "\u2026"
 	}
