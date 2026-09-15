@@ -33,6 +33,7 @@ import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import {
   AGENTS,
   AGENTS_DRAFT,
+  isPerUserSsoRow,
   MODEL_ACCESS_ACTIONABLE,
   MODEL_ACCESS_CHIP_LABEL,
   PROVIDERS,
@@ -240,7 +241,10 @@ function Row({
   // prompt) on a draft that hasn't been saved yet leads straight to
   // harnesscred.go's 400: it reads the STORED row's start URL, which is
   // still empty (or still someone else's) until Save + a status refresh.
-  const perUserSaved = harness.mechanism === "bedrock_sso" && harness.credential_source === "per_user";
+  // R-01 (review): shares isPerUserSsoRow with connection-cards.tsx's
+  // perUserSso — same three-part test (enabled/mechanism/credential_source),
+  // one predicate instead of two that can drift.
+  const perUserSaved = isPerUserSsoRow(harness);
 
   // C4.2 is claude-code only (modelAccess is scoped server-side) and NEVER
   // renders for not_applicable (finding 5 — the admin-token principal's own

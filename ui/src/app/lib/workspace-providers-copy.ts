@@ -42,6 +42,8 @@
 // DRIVE_MEMBER precedent in user-drives-copy.ts), so they are transcribed here
 // as the wording the Go side must emit.
 
+import type { SetupHarnessTool } from "./types";
+
 // ==================== §7.2-§7.5 — PROVIDERS, the admin screen ==============
 
 export const PROVIDERS = {
@@ -277,6 +279,23 @@ export const MODEL_ACCESS_CHIP_LABEL: Record<string, string> = {
 // Started (member) share ONE policy instead of two independently-typed
 // literal sets that could drift on a sixth state.
 export const MODEL_ACCESS_ACTIONABLE = new Set(["not_configured", "expired_signin", "expiring"]);
+
+// R-01 (fix-console-u review): the "is this harness row a per-person AWS SSO
+// lane" predicate — `h.enabled !== false` (not truthiness) is load-bearing,
+// not decorative: a DISABLED row still legally carries mechanism/
+// credential_source (validateAgentCredentialSource never looks at Disabled),
+// but the server's login predicate (perUserLoginRow) and its model_access
+// scoping (awsSSOScopeFor) both treat a disabled row as NOT per_user —
+// grading it in the operator's own namespace and rejecting an empty start
+// URL with a 400 a card would otherwise hide the field for. Absent `enabled`
+// reads as unknown, never false, so an older daemon that omits the field is
+// unaffected. ONE predicate, not two independently-typed copies (the U-03
+// recurrence this fixes): connection-cards.tsx's perUserSso reads the
+// server's settled row, agents-tab.tsx's perUserSaved reads the same
+// `harness` prop — same three-part test, same answer.
+export function isPerUserSsoRow(h: SetupHarnessTool): boolean {
+  return h.enabled !== false && h.mechanism === "bedrock_sso" && h.credential_source === "per_user";
+}
 
 // ==================== AGENTS_DRAFT — 0.7.3 field-report round ==============
 // DRAFT (M2 canon pending): new strings this round, NOT part of the frozen

@@ -681,6 +681,43 @@ describe("AgentsTab — the per_user sign-in banner", () => {
     // into, just not with prominence it has not earned by being saved.
     expect(within(row).getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeInTheDocument();
   });
+
+  // R-01 (review): the row is SAVED disabled + per_user, and the DRAFT
+  // switches it back on — perUserSaved must still read `false`. It is
+  // `isPerUserSsoRow`'s `enabled !== false` conjunct, not two of its three
+  // parts: the server's login predicate (perUserLoginRow) and its
+  // model_access scoping (awsSSOScopeFor) both treat a disabled row as NOT
+  // per_user, so neither prominence nor a suppressed start-URL prompt is
+  // earned by an unsaved switch-on alone.
+  it("a DISABLED saved per_user row switched back on in the draft gets no banner and no suppressed prompt", async () => {
+    const DISABLED_PER_USER_HARNESSES: SetupHarnessTool[] = [
+      harness({ mechanism: "bedrock_sso", credential_source: "per_user", enabled: false }),
+      harness({ id: "codex-cli", display: "Codex CLI" }),
+      harness({ id: "none", display: "Your own tools", no_managed_auth: true, has_gateway: false, has_login: false }),
+    ];
+    getAgentProvidersMock.mockResolvedValue({
+      providers: { agents: [{ ...PER_USER_ROW, disabled: false }] },
+      etag: '"b5"',
+    });
+    const modelAccess: SetupModelAccess = { state: "not_configured", action: "Sign in to AWS" };
+    render(
+      <AgentsTab
+        harnesses={DISABLED_PER_USER_HARNESSES}
+        operator
+        modelAccess={modelAccess}
+        onRetryRoster={retryRosterMock}
+        onStatusRefresh={statusRefreshMock}
+      />,
+    );
+    const row = await screen.findByTestId("agent-row-claude-code");
+    // The draft's disabled: false wins the Switch — the row body renders.
+    expect(within(row).queryByText(AGENTS.AGENT_ROW_DISABLED_HINT)).not.toBeInTheDocument();
+    expect(within(row).queryByTestId("per-user-sign-in-banner")).not.toBeInTheDocument();
+    await userEvent.click(within(row).getByRole("button", { name: AGENTS.SIGN_IN_AWS }));
+    await screen.findByTestId("login-start-url-prompt");
+    expect(document.getElementById("harness-login-start-url")).toBeInTheDocument();
+    expect(screen.queryByText(AGENTS.SSO_START_URL_MANAGED)).toBeNull();
+  });
 });
 
 // Appendix A finding 5, agents-tab half: not_applicable is the admin-token

@@ -37,6 +37,7 @@ import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { getErrorMessage } from "../../../lib/format";
 import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import type { SetupStatus, SiteConfig } from "../../../lib/types";
+import { isPerUserSsoRow } from "../../../lib/workspace-providers-copy";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Dialog, DialogContent, DialogTitle } from "../../ui/dialog";
@@ -413,25 +414,14 @@ export function ModelProviderCard({
 
   // F2/F4/F5 (Appendix A): the claude-code roster row is per_user Bedrock SSO
   // — declared on the Agents tab, where each person signs in for themselves.
-  // Same derivation the Agents tab uses (agents-tab.tsx), read independently
-  // here on purpose: that screen reads the DRAFT being edited, this card
-  // reads the server's settled answer.
-  //
-  // `h.enabled !== false` (not truthiness): a DISABLED row still legally
-  // carries mechanism/credential_source (validateAgentCredentialSource never
-  // looks at Disabled), but the server's login predicate (perUserLoginRow)
-  // and its model_access scoping (awsSSOScopeFor) both treat a disabled row
-  // as NOT per_user — grading it in the operator's own namespace and
-  // rejecting an empty start URL with a 400 the card would otherwise hide the
-  // field for. Absent `enabled` reads as unknown (setup.ts:221), never false,
-  // so an older daemon that omits the field is unaffected.
-  const perUserSso = !!status.harnesses?.some(
-    (h) =>
-      h.id === "claude-code" &&
-      h.enabled !== false &&
-      h.mechanism === "bedrock_sso" &&
-      h.credential_source === "per_user",
-  );
+  // Read independently here on purpose: this card reads the server's settled
+  // answer (status.harnesses), while the Agents tab reads the same `harness`
+  // prop for the DRAFT being edited — but both now share ONE predicate,
+  // isPerUserSsoRow (workspace-providers-copy.ts, R-01), so the three-part
+  // test (enabled/mechanism/credential_source) can't drift into two answers
+  // again. See that function's comment for why `enabled !== false` is
+  // load-bearing, not decorative.
+  const perUserSso = !!status.harnesses?.some((h) => h.id === "claude-code" && isPerUserSsoRow(h));
   const modelAccessState = status.model_access?.state;
   // `expiring` still counts as Connected — the session still signs, and the
   // warning rides the action line, not this badge.
