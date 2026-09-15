@@ -102,10 +102,24 @@ export function SummaryHeader({
   // assertions to this bar rather than the whole page (both strings are
   // plain text, so a future widget rendering either one elsewhere would
   // otherwise turn a passing check into a Playwright strict-mode failure).
+  //
+  // review R-16: the bar is a single non-wrapping row ONLY at xl (1280) and
+  // up — below that (lg, 1024, this suite's other tested width) it wraps
+  // onto a second line instead. This is the fix, not a fallback: at 1024
+  // every "must never yield" fact (h1 >= 160, repo >= 90, ConfinementChip +
+  // Interactive, the clone button's full label, Kill on-screen) together
+  // measure wider than the row has, and NOTHING left in the "may yield"
+  // waterfall (failure_hint/copy-link/short-id/BarrierStrengthStrip/elapsed,
+  // all already hidden below 2xl) is enough to close that gap without
+  // cutting something this file has called non-negotiable across three
+  // review rounds. Wrapping costs zero information and touches no floor —
+  // line 1 carries identity/task/repo/state, line 2 carries barrier/action —
+  // at the cost of a taller bar (min-h, not h, below xl) only on widths
+  // narrower than this console's primary target.
   return (
     <div
       data-testid="run-summary-header"
-      className="flex h-[52px] min-w-0 shrink-0 items-center gap-3 border-b border-border bg-card px-4"
+      className="flex h-auto min-h-[52px] min-w-0 shrink-0 flex-wrap items-center gap-3 border-b border-border bg-card px-4 py-1.5 xl:h-[52px] xl:flex-nowrap xl:py-0"
     >
       <Link to="/runs" className="shrink-0 text-sm text-muted-foreground hover:text-foreground">
         Runs
@@ -148,14 +162,19 @@ export function SummaryHeader({
         {runHeadline(run)}
       </h1>
 
-      {/* repo / workspace path — required to stay visible (not "genuinely
-          secondary"), so no `hidden lg:` gate; each truncates on its own.
-          review R-01: repo's cap narrows 180->140 below 2xl — one of the two
-          things that actually pay for keeping the failure_hint chip legible
-          instead of clipped to ~5 characters (the copy-link button below is
-          the other). */}
-      <div className="flex min-w-0 shrink items-baseline gap-2">
-        <span className="min-w-[50px] max-w-[140px] truncate font-mono text-xs text-foreground 2xl:max-w-[180px]" title={run.repo}>
+      {/* repo — required to stay visible (not "genuinely secondary"), so it
+          never hides at any width; only its cap narrows (180 -> 140 below
+          2xl). review R-15: min-w-[90px] on BOTH this span and its wrapping
+          div (≈11 mono chars, an org segment) is an enforced floor, not a
+          last-resort guess — a min-width on the SPAN alone let it overflow
+          its own flex parent once that parent had been shrunk to 0 by the
+          row (R-16's own live-browser measurement caught this: it rendered
+          repo overlapping the "Failed"/exit chips rather than pushing them
+          over). Putting the same floor on the wrapping div is what makes the
+          row actually RESERVE the space instead of just letting repo bleed
+          into it. */}
+      <div className="flex min-w-[90px] shrink items-baseline gap-2">
+        <span className="min-w-[90px] max-w-[140px] truncate font-mono text-xs text-foreground 2xl:max-w-[180px]" title={run.repo}>
           {run.repo}
         </span>
         {/* review R-14: hidden below 2xl, joining the short-id span right
@@ -175,12 +194,11 @@ export function SummaryHeader({
             {run.workspace_path}
           </span>
         )}
-        {/* short run id — genuinely secondary (not in the "must carry" list).
-            0.7.3 F7: bumped lg -> 2xl. The clone button now shares this bar
-            with an already-tight budget (a full run id is unbounded width,
-            unlike repo's own max-w-[180px] truncate) — at 1280px (this
-            suite's default viewport) showing both used to squeeze the task
-            h1's min-w-0 flex-1 all the way to zero. */}
+        {/* short run id — genuinely secondary (not in the "must carry" list),
+            hidden below 2xl. A full run id is unbounded width, unlike repo's
+            own capped-and-floored span — showing both below 2xl used to
+            squeeze the task h1 to zero (0.7.3 F7) before the h1 got its own
+            floor (review R-04) and this bar learned to wrap (review R-16). */}
         <span className="hidden shrink-0 font-mono text-xs text-muted-foreground 2xl:inline" title={run.id}>
           · {shortId}
         </span>
@@ -218,15 +236,18 @@ export function SummaryHeader({
           review R-01: this chip is NOT the only place THAT run says why any
           more — run-detail/failure-block.tsx's What-happened body now
           renders the full sentence for the `unknown` ending kind (D9's own
-          class), where width is free. This chip stays as the header's own
-          at-a-glance affordance, kept to ~100px rather than cut further
-          (review R-14: trimmed once more so Kill's right edge clears 1280).
+          class, review R-12 narrowed that rendering to exactly that kind),
+          where width is free. review R-16: hidden below 2xl (not just capped
+          to ~100px) — with a full-sentence home elsewhere, this chip is now
+          the cheapest thing on the bar to give up entirely at xl and below,
+          which is what actually closes the gap R-16's three-viewport
+          measurement found at 1280, not just at 1024.
           review R-02: `truncate` on an inline-flex Chip clips mid-word with
           NO ellipsis (min-content sizing on the anonymous flex child) — the
           inner span below is a real block box, so text-overflow actually
           paints one. */}
       {run.failure_hint && (
-        <Chip tone="danger" className="max-w-[100px] shrink-0" title={run.failure_hint}>
+        <Chip tone="danger" className="hidden max-w-[100px] shrink-0 2xl:inline-flex" title={run.failure_hint}>
           <span className="block min-w-0 truncate">{run.failure_hint}</span>
         </Chip>
       )}

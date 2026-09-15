@@ -151,8 +151,9 @@ export function RunFailureBlock({
             <p className="mt-1 text-xs leading-relaxed text-foreground">{copy.happened(elapsed)}</p>
           )}
           {/* review R-01/R-12: run.failure_hint's other home — the header
-              chip is clipped to ~120px at 1280px; here the full server
-              sentence always renders. Gated on `!copy`: for a RECOGNISED
+              chip (run-detail-summary-header.tsx) is hidden below 2xl
+              entirely (review R-16); here the full server sentence always
+              renders regardless of width. Gated on `!copy`: for a RECOGNISED
               ending (image/selftest/killed/auto_stop) `copy.happened` +
               `ending.detail` already say the same thing in the vocabulary
               that kind owns — printing failure_hint too would be the same
