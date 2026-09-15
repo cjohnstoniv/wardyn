@@ -40,6 +40,21 @@ import { Input } from "../../ui/input";
 // truth the sandbox cannot write. This is the sentence shown when the two
 // disagree.
 const CAPTURE_NOT_CORROBORATED = "The sandbox reported a capture the server does not have — sign in again.";
+// DRAFT (M2 canon pending) — R-3: getSetupStatus RESOLVES a synthetic
+// `unreachable` payload for a 5xx or a dropped socket, it does not throw. An
+// honest capture that DID land would then be accused of not existing. One
+// retry, then this: the check failed, not the sign-in.
+const CAPTURE_CHECK_UNREACHABLE = "Wardyn couldn't reach the server to verify this sign-in — try again.";
+// DRAFT (M2 canon pending) — R-8: the corroboration is a round trip the
+// operator otherwise experiences as a terminal that stopped scrolling. Says
+// what is happening WITHOUT claiming the capture the server has not confirmed.
+const CAPTURE_VERIFYING = "Checking with Wardyn that the session was stored…";
+
+// One retry of an unreachable corroboration read, then give up. Not a
+// propagation wait: the helper prints its marker only after the server has
+// answered 204, so the store write strictly precedes the marker byte. This
+// covers transport only.
+const CONFIRM_RETRY_MS = 500;
 
 // "intro" is the consent gate: nothing launches until the operator has read
 // what is about to happen and clicked Start. The pane used to fire on mount —
@@ -256,18 +271,36 @@ function extractDeviceVerificationUrl(s: string): string | null {
 // serverConfirmsCapture corroborates a doneMarker sighting against the
 // server's own /setup/status (S-13): the marker is a PTY string a forged
 // sandbox binary can print unconditionally, so it is never sufficient on its
-// own. aws is confirmed either by its harness row (the upload the helper
-// makes on success) or by this caller's own model_access already reading
-// live/expiring (a per_user row's sign-in can land there first); anthropic
-// has no per-caller model_access shape here, so only its harness row counts.
+// own.
+//
+// It has to prove THIS sign-in captured something, not that a credential
+// exists (R-1) — otherwise every re-login over an existing row, the case the
+// product's own "re-run the login" fix line creates, re-admits a forged
+// marker. `source_run_id` is the proof: the server stamps it from the login
+// run's own token claims (ssotoken.go), nothing in the sandbox can write it,
+// and an honest capture replaces the blob, so after one it always equals this
+// run's id. A row carrying SOMEONE ELSE'S run id is therefore a previous
+// sign-in, and refuses.
+//
+// The presence legs below are the FALLBACK, for a daemon old enough to omit
+// source_run_id entirely. For aws that is model_access reading live/expiring
+// — never the harness row, whose `captured` bit stays true for a dead
+// credential (R-2). anthropic has no per-caller model_access shape here, so
+// its own harness row is all it has.
+//
+// TODAY ONLY THE aws FLOW REACHES THIS (R-5): it is the only flow with a
+// doneMarker. anthropic ends through saveToken (capture: "scrape"). Its
+// branch is kept because it is the right rule for the next helper flow.
 // Exported for tests.
-export function serverConfirmsCapture(status: SetupStatus, provider: string): boolean {
-  if (status.harness?.some((h) => h.provider === provider && h.captured)) return true;
+export function serverConfirmsCapture(status: SetupStatus, provider: string, runId?: string | null): boolean {
+  const rows = (status.harness ?? []).filter((h) => h.provider === provider);
+  if (runId && rows.some((h) => h.captured && h.source_run_id === runId)) return true;
+  if (rows.some((h) => h.source_run_id)) return false; // someone else's sign-in
   if (provider === "aws") {
     const state = status.model_access?.state;
     return state === "live" || state === "expiring";
   }
-  return false;
+  return rows.some((h) => h.captured);
 }
 
 // The numbered "what happens next" — the consent gate's content. Each flow
@@ -373,27 +406,41 @@ export function HarnessLoginPane({
   // confirmCapture corroborates a helper doneMarker sighting against the
   // server (S-13) before the pane claims a capture. `savedRef` is already
   // latched by the caller so a repeat marker sighting can't re-enter this
-  // while the fetch is in flight. A status the server can't answer (network
-  // error, 401) is treated the same as a disagreement — fail closed, never
-  // assume the marker was honest because the check itself failed.
+  // while the fetch is in flight.
+  //
+  // The run is killed FIRST (R-7): the credential is already stored by the
+  // time the helper prints its marker, so the login sandbox has no reason to
+  // outlive it by a round trip, and ssotoken.go's already_captured latch
+  // covers a repeat. Then "saving", so the spinner covers the wait (R-8).
+  //
+  // Three outcomes, not two. A DISAGREEMENT is the forgery this exists for. A
+  // THROW (a propagated 401) is still fail-closed — never assume the marker
+  // was honest because the check failed. An UNREACHABLE payload is neither:
+  // it is the synthetic body getSetupStatus resolves for a 5xx or a dropped
+  // socket, and an honest capture that DID land must not be accused of not
+  // existing — retry once, then say the check failed (R-3).
   const confirmCapture = React.useCallback(async () => {
-    let confirmed = false;
+    if (runId) void runsApi.killRun(runId).catch(() => {});
+    setPhase("saving");
+    let status: SetupStatus | null = null;
     try {
-      confirmed = serverConfirmsCapture(await setupApi.getSetupStatus(), provider);
+      status = await setupApi.getSetupStatus();
+      if (status.unreachable) {
+        await new Promise((r) => setTimeout(r, CONFIRM_RETRY_MS));
+        status = await setupApi.getSetupStatus();
+      }
     } catch {
-      confirmed = false;
+      status = null;
     }
-    if (confirmed) {
+    if (status && !status.unreachable && serverConfirmsCapture(status, provider, runId)) {
       setAutoCaptured(true);
       setPhase("done");
-      if (runId) void runsApi.killRun(runId).catch(() => {});
       onDone();
-    } else {
-      failedRef.current = true;
-      setError(CAPTURE_NOT_CORROBORATED);
-      setPhase("error");
-      if (runId) void runsApi.killRun(runId).catch(() => {});
+      return;
     }
+    failedRef.current = true;
+    setError(status?.unreachable ? CAPTURE_CHECK_UNREACHABLE : CAPTURE_NOT_CORROBORATED);
+    setPhase("error");
   }, [provider, runId, onDone]);
 
   // Watch the login terminal: open the OAuth URL in a new tab, then capture and
@@ -585,7 +632,13 @@ export function HarnessLoginPane({
             ptyCols={LOGIN_PTY_COLS}
             heightClass="h-96"
           />
-          {phase === "error" ? null : autoCaptured ? (
+          {phase === "error" ? null : phase === "saving" && !autoCaptured ? (
+            /* R-8: the corroboration round trip, narrated. Deliberately NOT the
+               "captured" note below — the server has not agreed yet. */
+            <p className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="capture-verifying-note">
+              <Loader2 className="size-3.5 animate-spin" /> {CAPTURE_VERIFYING}
+            </p>
+          ) : autoCaptured ? (
             <p className="flex items-center gap-2 text-xs text-success" data-testid="auto-capture-note">
               {phase === "saving" ? <Loader2 className="size-3.5 animate-spin" /> : <ShieldCheck className="size-3.5" />}
               {flow.capture === "helper"

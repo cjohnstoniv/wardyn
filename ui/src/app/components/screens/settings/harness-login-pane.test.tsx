@@ -6,7 +6,7 @@
 import * as React from "react";
 import { act } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import {
@@ -320,10 +320,11 @@ describe("HarnessLoginPane — the consent gate", () => {
     });
 
     // Positive control: the same marker, but the server independently agrees
-    // (the harness row shows captured) — onDone fires and the pane reports done.
-    it("a marker the server corroborates via the harness row calls onDone", async () => {
+    // AND names THIS run as the source of the stored credential (R-1) — onDone
+    // fires and the pane reports done.
+    it("a marker the server corroborates via a harness row stamped with THIS run calls onDone", async () => {
       getSetupStatusMock.mockResolvedValue({
-        harness: [{ provider: "aws", captured: true }],
+        harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }],
       } as unknown as SetupStatus);
       const { onDone } = await attachAwsRun();
 
@@ -333,6 +334,25 @@ describe("HarnessLoginPane — the consent gate", () => {
       expect(onDone).toHaveBeenCalledTimes(1);
       expect(runsApiMocked.killRun).toHaveBeenCalledWith("run-123");
       expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    // R-1, the reconnect case the product's own "re-run the login" fix line
+    // creates: a PREVIOUS sign-in's credential is sitting there, so both
+    // presence legs agree — but it is not THIS run's capture, and a forged
+    // marker must not be re-admitted by it.
+    it("a forged marker over a PREVIOUS run's credential is refused", async () => {
+      getSetupStatusMock.mockResolvedValue({
+        harness: [{ provider: "aws", captured: true, source_run_id: "run-000-earlier" }],
+        model_access: { state: "live" },
+      } as unknown as SetupStatus);
+      const { onDone } = await attachAwsRun();
+
+      await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
+      await act(async () => {});
+
+      const alertBox = await screen.findByRole("alert");
+      expect(alertBox).toHaveTextContent("The sandbox reported a capture the server does not have — sign in again.");
+      expect(onDone).not.toHaveBeenCalled();
     });
 
     // The aws flow also corroborates via this caller's own model_access
@@ -365,6 +385,65 @@ describe("HarnessLoginPane — the consent gate", () => {
       expect(alertBox).toHaveTextContent("The sandbox reported a capture the server does not have — sign in again.");
       expect(onDone).not.toHaveBeenCalled();
     });
+
+    // R-9: this is how the real client behaves for a 5xx or a dropped socket —
+    // getSetupStatus RESOLVES the synthetic READY_FALLBACK (`unreachable:true`,
+    // no harness, no model_access), it does not throw. The rejection case above
+    // passes for the right reason only by accident, so the realistic transient
+    // path gets its own pin.
+    //
+    // R-3: an honest capture DID land; the check is what failed. The pane must
+    // not print the accusation — it retries once, then says it could not reach
+    // the server.
+    it("an unreachable status check retries once and then says SO — never that the server does not have it", async () => {
+      getSetupStatusMock.mockResolvedValue({ unreachable: true, ready: true } as unknown as SetupStatus);
+      const { onDone } = await attachAwsRun();
+
+      await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
+
+      const alertBox = await screen.findByRole("alert", {}, { timeout: 3000 });
+      expect(alertBox).toHaveTextContent("Wardyn couldn't reach the server to verify this sign-in — try again.");
+      expect(alertBox).not.toHaveTextContent("the server does not have");
+      expect(getSetupStatusMock).toHaveBeenCalledTimes(2);
+      expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
+      expect(onDone).not.toHaveBeenCalled();
+    });
+
+    // The retry is not decoration: a blip on the FIRST read must not cost an
+    // honest sign-in its run.
+    it("an unreachable first read followed by a corroborating retry still calls onDone", async () => {
+      getSetupStatusMock
+        .mockResolvedValueOnce({ unreachable: true, ready: true } as unknown as SetupStatus)
+        .mockResolvedValueOnce({
+          harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }],
+        } as unknown as SetupStatus);
+      const { onDone } = await attachAwsRun();
+
+      await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
+
+      await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1), { timeout: 3000 });
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    // R-7: the login sandbox must not outlive the marker by a round trip — the
+    // credential is already stored by the time the helper prints it, and
+    // ssotoken.go's already_captured latch covers a repeat.
+    it("kills the login run BEFORE it waits on the corroboration round trip", async () => {
+      let release: (v: SetupStatus) => void = () => {};
+      getSetupStatusMock.mockImplementation(() => new Promise<SetupStatus>((res) => (release = res)));
+      await attachAwsRun();
+
+      await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
+      // Still in flight — and the run is already gone.
+      expect(runsApiMocked.killRun).toHaveBeenCalledWith("run-123");
+      // R-8: the spinner covers the round trip rather than leaving the operator
+      // on a terminal that has quietly stopped scrolling.
+      expect(screen.getByTestId("capture-verifying-note")).toBeInTheDocument();
+
+      await act(async () => {
+        release({ harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }] } as unknown as SetupStatus);
+      });
+    });
   });
 });
 
@@ -388,28 +467,86 @@ describe("serverConfirmsCapture", () => {
     };
   }
 
-  it("aws: confirmed by the harness row alone", () => {
-    expect(serverConfirmsCapture(status({ harness: [{ provider: "aws", captured: true }] }), "aws")).toBe(true);
+  // R-1: the ONE fact that says "this sign-in captured something" rather than
+  // "a credential exists". source_run_id is stamped server-side from the login
+  // run's own token claims (ssotoken.go), so the sandbox cannot write it.
+  it("aws: confirmed by a harness row stamped with THIS run", () => {
+    expect(
+      serverConfirmsCapture(status({ harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }] }), "aws", "run-123"),
+    ).toBe(true);
+  });
+
+  // R-1, the reconnect: a PREVIOUS sign-in's credential satisfies every
+  // presence predicate, and is not this run's capture.
+  it("aws: a row from a PREVIOUS run is refused even when model_access is live", () => {
+    expect(
+      serverConfirmsCapture(
+        status({ harness: [{ provider: "aws", captured: true, source_run_id: "run-earlier" }], model_access: { state: "live" } }),
+        "aws",
+        "run-123",
+      ),
+    ).toBe(false);
+  });
+
+  // R-10: the MEMBER-REDACTED shape — {provider, captured, expired,
+  // source_run_id} and nothing else (setup.go's redactSetupStatusForMember).
+  it("aws: the member-redacted row shape confirms on its own", () => {
+    expect(
+      serverConfirmsCapture(
+        status({ harness: [{ provider: "aws", captured: true, expired: false, source_run_id: "run-123" }] }),
+        "aws",
+        "run-123",
+      ),
+    ).toBe(true);
+  });
+
+  // R-2: for aws the RULE is live/expiring on model_access. A harness row is a
+  // presence bit that stays true for a dead credential, so on its own it only
+  // widens what a forged marker can land on.
+  it("aws: a presence-only harness row is NOT enough — model_access decides", () => {
+    expect(serverConfirmsCapture(status({ harness: [{ provider: "aws", captured: true }] }), "aws", "run-123")).toBe(false);
+    expect(
+      serverConfirmsCapture(
+        status({ harness: [{ provider: "aws", captured: true }], model_access: { state: "live" } }),
+        "aws",
+        "run-123",
+      ),
+    ).toBe(true);
+  });
+
+  // R-10: an EXPIRED row is exactly the shape the dropped leg used to admit.
+  it("aws: an expired harness row confirms nothing", () => {
+    expect(
+      serverConfirmsCapture(
+        status({ harness: [{ provider: "aws", captured: true, expired: true }], model_access: { state: "expired_signin" } }),
+        "aws",
+        "run-123",
+      ),
+    ).toBe(false);
   });
 
   it("aws: confirmed by model_access state live or expiring alone", () => {
-    expect(serverConfirmsCapture(status({ model_access: { state: "live" } }), "aws")).toBe(true);
-    expect(serverConfirmsCapture(status({ model_access: { state: "expiring" } }), "aws")).toBe(true);
+    expect(serverConfirmsCapture(status({ model_access: { state: "live" } }), "aws", "run-123")).toBe(true);
+    expect(serverConfirmsCapture(status({ model_access: { state: "expiring" } }), "aws", "run-123")).toBe(true);
   });
 
   it("aws: not confirmed when neither the harness row nor model_access agrees", () => {
     expect(
-      serverConfirmsCapture(status({ harness: [{ provider: "aws", captured: false }], model_access: { state: "expired_signin" } }), "aws"),
+      serverConfirmsCapture(
+        status({ harness: [{ provider: "aws", captured: false }], model_access: { state: "expired_signin" } }),
+        "aws",
+        "run-123",
+      ),
     ).toBe(false);
-    expect(serverConfirmsCapture(status({}), "aws")).toBe(false);
+    expect(serverConfirmsCapture(status({}), "aws", "run-123")).toBe(false);
   });
 
   it("anthropic: confirmed only by its own harness row — model_access never counts for it", () => {
-    expect(serverConfirmsCapture(status({ harness: [{ provider: "anthropic", captured: true }] }), "anthropic")).toBe(true);
-    expect(serverConfirmsCapture(status({ model_access: { state: "live" } }), "anthropic")).toBe(false);
+    expect(serverConfirmsCapture(status({ harness: [{ provider: "anthropic", captured: true }] }), "anthropic", "run-123")).toBe(true);
+    expect(serverConfirmsCapture(status({ model_access: { state: "live" } }), "anthropic", "run-123")).toBe(false);
   });
 
   it("a captured row for the OTHER provider does not confirm this one", () => {
-    expect(serverConfirmsCapture(status({ harness: [{ provider: "anthropic", captured: true }] }), "aws")).toBe(false);
+    expect(serverConfirmsCapture(status({ harness: [{ provider: "anthropic", captured: true }] }), "aws", "run-123")).toBe(false);
   });
 });
