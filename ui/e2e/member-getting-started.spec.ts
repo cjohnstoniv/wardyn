@@ -82,6 +82,29 @@ test.describe("member Getting Started (mocked /me role)", () => {
     await watch.click();
     await expect.poll(() => mp4Requests, { timeout: 5000 }).toBeGreaterThanOrEqual(1);
   });
+
+  // Appendix A finding 5: not_applicable is the admin-token principal's own
+  // answer, not a member's — it must never dangle a "Sign in to AWS" button
+  // in front of a caller with no person to sign in as, whatever the
+  // deployment-wide llm_ready fallback renders instead (this harness's host
+  // has a resident `claude` CLI login, so llm_ready is genuinely true here
+  // and the fallback chip legitimately shows — the CTA is the thing that
+  // must never appear).
+  test("a member under not_applicable is not offered a sign-in they cannot complete", async ({ page }) => {
+    let cached: Record<string, unknown> | null = null;
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      if (!cached) {
+        const response = await route.fetch();
+        cached = await response.json();
+        cached.model_access = { state: "not_applicable" };
+      }
+      await route.fulfill({ json: cached });
+    });
+    await gotoConsole(page);
+    await navToRoute(page, "/setup");
+    await expect(page.getByRole("heading", { name: "What's set up for you" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Sign in to AWS" })).toHaveCount(0);
+  });
 });
 
 // Sibling negative control: the SAME route, unspliced (the harness's real

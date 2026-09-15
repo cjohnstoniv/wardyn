@@ -178,8 +178,19 @@ cmd_up() {
   # drive backend can name, so without it the API refuses EVERY drive with a 400
   # and the drives screen has nothing to exercise. Registration only — this
   # daemon still dispatches nothing.
+  #
+  # WARDYN_BEDROCK_MODEL/_REGION (console-agents, 0.7.3): a FULL ARN, not a bare
+  # cross-region profile id, so bedrockModelAccount() (awssso_pin.go) has an
+  # account to compare an agent roster pin against — agents.spec.ts's "pin
+  # whose account differs from the model ARN" 400 needs this daemon to actually
+  # HAVE a model account on file, or validateAgentSSOPin's account check always
+  # skips. The fake account (222222222222) never needs to be real: no bearer
+  # key/SSO session/host dir is configured either, so every OTHER Bedrock
+  # credential path here is still "not configured", unchanged.
   WARDYN_PG_DSN="${DSN}" WARDYN_ADMIN_TOKEN="${TOKEN}" WARDYN_AGE_KEY="${AGE_KEY}" \
     WARDYN_RUNNER_TARGET=docker \
+    WARDYN_BEDROCK_REGION="us-east-1" \
+    WARDYN_BEDROCK_MODEL="arn:aws:bedrock:us-east-1:222222222222:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0" \
     "${BIN_DIR}/wardynd" \
       -runner none \
       -listen "${ADDR}" \
