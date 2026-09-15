@@ -4,6 +4,7 @@
  */
 
 import * as React from "react";
+import { act } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -242,27 +243,36 @@ describe("HarnessLoginPane — the consent gate", () => {
 
     it("no marker keeps the terminal attached", async () => {
       await attachAwsRun();
-      lastAttachOutput?.("some ordinary aws sso login chatter\n");
+      await act(async () => lastAttachOutput?.("some ordinary aws sso login chatter\n"));
       expect(screen.getByTestId("fake-terminal")).toBeInTheDocument();
       expect(screen.queryByRole("alert")).toBeNull();
     });
 
-    it("the fail marker moves to the error phase, names why, and kills the run", async () => {
+    // R5 (fix-first review pass): the run is already killed by this point, so
+    // the terminal's socket just closes — but the SCROLLBACK (device-code
+    // chatter, the portal's reply, the helper's own preceding lines) stays on
+    // screen beside the alert rather than vanishing with it, since the one
+    // extracted sentence is otherwise the operator's only artifact.
+    it("the fail marker moves to the error phase, names why, kills the run, and keeps the scrollback", async () => {
       const { onDone } = await attachAwsRun();
-      lastAttachOutput?.("wardyn: aws sso credential rejected: the pinned account is not entitled to this session.\n");
+      await act(async () =>
+        lastAttachOutput?.("wardyn: aws sso credential rejected: the pinned account is not entitled to this session.\n"),
+      );
 
       const alertBox = await screen.findByRole("alert");
       expect(alertBox).toHaveTextContent("the pinned account is not entitled to this session.");
-      // The error phase's Try again / Cancel, not the attached terminal.
-      expect(screen.queryByTestId("fake-terminal")).not.toBeInTheDocument();
+      // The error phase's Try again / Cancel AND the terminal, not the
+      // interactive attached-phase controls (paste boxes, its own Cancel).
+      expect(screen.getByTestId("fake-terminal")).toBeInTheDocument();
       expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
+      expect(screen.queryByTestId("auth-url-link")).not.toBeInTheDocument();
       expect(runsApiMocked.killRun).toHaveBeenCalledWith("run-123");
       expect(onDone).not.toHaveBeenCalled();
     });
 
     it("never mistakes the fail marker's own line for a success", async () => {
       await attachAwsRun();
-      lastAttachOutput?.("wardyn: aws sso credential rejected: portal timeout.\n");
+      await act(async () => lastAttachOutput?.("wardyn: aws sso credential rejected: portal timeout.\n"));
       await screen.findByRole("alert");
       expect(screen.queryByText(/session captured/i)).not.toBeInTheDocument();
     });

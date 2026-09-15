@@ -85,6 +85,13 @@ export const S = {
   // silent about where the lane actually lives.
   BEDROCK_PER_USER_NOTE:
     "This lane is per person: it is declared on the Agents tab, and each person signs in to AWS themselves. What this card reads is your own sign-in, not the deployment's.",
+  // DRAFT (M2 canon pending) — R9 (fix-first review pass), console-login lane
+  // (0.7.3). Under per_user, resolveBedrockAuth skips the bearer/host-mount/
+  // static-key arms outright (Appendix A finding 3) — a stored bearer key
+  // still deletes fine (SecretLane stays visible), but it is never read while
+  // the row is per_user, so the card says so rather than implying it might be.
+  BEDROCK_BEARER_UNUSED_PER_USER:
+    "Not read while this lane is per person — each person's own AWS sign-in carries their runs.",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -402,8 +409,21 @@ export function ModelProviderCard({
   // Same derivation the Agents tab uses (agents-tab.tsx), read independently
   // here on purpose: that screen reads the DRAFT being edited, this card
   // reads the server's settled answer.
+  //
+  // `h.enabled !== false` (not truthiness): a DISABLED row still legally
+  // carries mechanism/credential_source (validateAgentCredentialSource never
+  // looks at Disabled), but the server's login predicate (perUserLoginRow)
+  // and its model_access scoping (awsSSOScopeFor) both treat a disabled row
+  // as NOT per_user — grading it in the operator's own namespace and
+  // rejecting an empty start URL with a 400 the card would otherwise hide the
+  // field for. Absent `enabled` reads as unknown (setup.ts:221), never false,
+  // so an older daemon that omits the field is unaffected.
   const perUserSso = !!status.harnesses?.some(
-    (h) => h.id === "claude-code" && h.mechanism === "bedrock_sso" && h.credential_source === "per_user",
+    (h) =>
+      h.id === "claude-code" &&
+      h.enabled !== false &&
+      h.mechanism === "bedrock_sso" &&
+      h.credential_source === "per_user",
   );
   const modelAccessState = status.model_access?.state;
   // `expiring` still counts as Connected — the session still signs, and the
@@ -535,6 +555,13 @@ export function ModelProviderCard({
                 disabled={!operator}
                 onChanged={onChanged}
               />
+              {perUserSso && (
+                // A stored bearer key still deletes fine (SecretLane above is
+                // unchanged) — this only says it is never READ while the row
+                // is per_user, beside the lane rather than inside the form so
+                // it shows whether or not a key happens to be stored.
+                <p className="text-meta leading-snug text-muted-foreground">{S.BEDROCK_BEARER_UNUSED_PER_USER}</p>
+              )}
               <div className="flex items-center gap-2">
                 <Button size="sm" variant="secondary" disabled={!operator} onClick={() => setLoginOpen("aws")}>
                   Sign in with SSO

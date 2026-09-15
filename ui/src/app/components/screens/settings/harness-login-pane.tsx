@@ -503,9 +503,17 @@ export function HarnessLoginPane({
         </div>
       )}
 
-      {(phase === "attached" || phase === "saving") && runId && (
+      {/* A refused helper capture keeps the terminal mounted, read-only in
+          effect: the run is already killed (the failMarker branch above), so
+          the socket just closes — but the scrollback (device-code chatter,
+          the portal's reply, the helper's own preceding lines) stays on
+          screen beside the alert instead of vanishing with it, since the
+          extracted sentence is the operator's only other artifact. The
+          interactive bits below (paste boxes, the helper's own Cancel) are
+          suppressed in error phase — Try again/Cancel above already cover it. */}
+      {(phase === "attached" || phase === "saving" || (phase === "error" && flow.capture === "helper")) && runId && (
         <div className="space-y-2">
-          {authUrl && (
+          {authUrl && phase !== "error" && (
             <a
               href={authUrl}
               target="_blank"
@@ -525,7 +533,7 @@ export function HarnessLoginPane({
             ptyCols={LOGIN_PTY_COLS}
             heightClass="h-96"
           />
-          {autoCaptured ? (
+          {phase === "error" ? null : autoCaptured ? (
             <p className="flex items-center gap-2 text-xs text-success" data-testid="auto-capture-note">
               {phase === "saving" ? <Loader2 className="size-3.5 animate-spin" /> : <ShieldCheck className="size-3.5" />}
               {flow.capture === "helper"

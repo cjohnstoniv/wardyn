@@ -277,20 +277,42 @@ test.describe("providers — the door is SUPER's alone", () => {
 // provider card's AWS Bedrock lane under a per_user roster row. Spliced onto
 // GET /setup/status (this harness has no real per-user AWS SSO session to
 // produce live/expired_signin for real — same reasoning as agents.spec.ts's
-// model_access CASES loop).
-async function splicePerUserBedrock(page: Page, modelAccessState: string | null): Promise<void> {
+// model_access CASES loop). R8 (fix-first review pass): model_access carries
+// `mechanism` + `action` alongside `state`, like the real payload always does
+// (modelAccessAction sets Action for every non-live state) — the badge does
+// not read either, but the fixture stays honest for whoever extends this.
+async function spliceBedrockRow(
+  page: Page,
+  credentialSource: "per_user" | "shared",
+  modelAccessState: string | null,
+): Promise<void> {
   await page.route("**/api/v1/setup/status*", async (route) => {
     const response = await route.fetch();
     const json = await response.json();
     const harnesses: Array<Record<string, unknown>> = Array.isArray(json.harnesses) ? json.harnesses : [];
     const idx = harnesses.findIndex((h) => h.id === "claude-code");
-    const row = { ...(idx >= 0 ? harnesses[idx] : { id: "claude-code" }), mechanism: "bedrock_sso", credential_source: "per_user" };
+    const row = {
+      ...(idx >= 0 ? harnesses[idx] : { id: "claude-code" }),
+      enabled: true,
+      mechanism: "bedrock_sso",
+      credential_source: credentialSource,
+    };
     if (idx >= 0) harnesses[idx] = row;
     else harnesses.push(row);
     json.harnesses = harnesses;
-    if (modelAccessState) json.model_access = { state: modelAccessState };
+    if (modelAccessState) {
+      json.model_access = {
+        state: modelAccessState,
+        mechanism: "bedrock_sso",
+        action: modelAccessState === "live" ? "" : "Sign in to AWS",
+      };
+    }
     await route.fulfill({ response, json });
   });
+}
+
+async function splicePerUserBedrock(page: Page, modelAccessState: string | null): Promise<void> {
+  await spliceBedrockRow(page, "per_user", modelAccessState);
 }
 
 test.describe("providers — Settings Model provider card under a per_user Bedrock row", () => {
@@ -329,6 +351,19 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
   // Unspliced negative control: the ordinary Settings sign-in (no per_user
   // row) is UNCHANGED — it still asks for the org's access portal URL.
   test("unspliced control: the ordinary Settings sign-in still prompts for the start URL", async ({ page }) => {
+    await gotoConsole(page);
+    await navToRoute(page, "/settings");
+    await page.locator("#lane-bedrock").click();
+    await page.getByRole("button", { name: "Sign in with SSO" }).click();
+    await expect(page.getByTestId("login-start-url-prompt")).toBeVisible();
+  });
+
+  // R3 (fix-first review pass): a spliced control BESIDE the unspliced one —
+  // an EXPLICIT shared row (credential_source: "shared") behaves exactly
+  // like no row at all, so the credential_source conjunct has a real e2e
+  // negative rather than only the absent-field case above.
+  test("spliced control: an explicit shared row also still prompts for the start URL", async ({ page }) => {
+    await spliceBedrockRow(page, "shared", null);
     await gotoConsole(page);
     await navToRoute(page, "/settings");
     await page.locator("#lane-bedrock").click();

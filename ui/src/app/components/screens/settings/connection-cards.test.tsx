@@ -57,6 +57,33 @@ function perUserStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
   });
 }
 
+// R1 (fix-first review pass): the SAME row, but DISABLED. Legal to store
+// (validateAgentCredentialSource never looks at Disabled) — but the server's
+// login predicate (perUserLoginRow) and model_access scoping (awsSSOScopeFor)
+// both treat a disabled row as NOT per_user, so the card must too.
+function disabledPerUserStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
+  return baseStatus({
+    harnesses: [
+      { id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true, enabled: false, mechanism: "bedrock_sso", credential_source: "per_user" },
+    ],
+    ...overrides,
+  });
+}
+
+// R3 (fix-first review pass): an EXPLICIT shared row — as opposed to no
+// `harnesses` field at all (an older daemon, or before any roster is saved).
+// Every "shared row" test below reads this fixture rather than baseStatus()
+// so the credential_source and mechanism conjuncts of perUserSso each have a
+// test that would fail if either were dropped.
+function sharedRowStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
+  return baseStatus({
+    harnesses: [
+      { id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true, enabled: true, mechanism: "bedrock_sso", credential_source: "shared" },
+    ],
+    ...overrides,
+  });
+}
+
 describe("ModelProviderCard", () => {
   it("offers exactly the three lanes the mock settled on — no Azure, no catalog", () => {
     model();
@@ -161,8 +188,41 @@ describe("ModelProviderCard — F2: the sign-in door under a per_user row", () =
     expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: true }));
   });
 
-  it("the ordinary Settings flow (no per_user row) still asks — unspliced control", async () => {
+  // R3: "no per_user row" covers two distinct cases — no `harnesses` field at
+  // all, and an EXPLICIT shared row — kept as separate, honestly-named tests
+  // rather than one that only ever exercises the absent-field case.
+  it("absent harnesses: the ordinary Settings flow still asks — unspliced control", async () => {
     model();
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    await user.click(screen.getByRole("button", { name: /sign in with sso/i }));
+    expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: false }));
+  });
+
+  it("an explicit shared row still asks", async () => {
+    model(sharedRowStatus());
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    await user.click(screen.getByRole("button", { name: /sign in with sso/i }));
+    expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: false }));
+  });
+
+  // R1: a disabled row prompts for the start URL again, exactly like a
+  // shared row — the server's own login predicate excludes it too.
+  it("a DISABLED per_user row still asks (falls back like a shared row)", async () => {
+    model(disabledPerUserStatus());
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    await user.click(screen.getByRole("button", { name: /sign in with sso/i }));
+    expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: false }));
+  });
+
+  // R3: the `mechanism` conjunct has its own failing case — bedrock_bearer
+  // is NOT bedrock_sso, so a per_user credential_source on THAT mechanism is
+  // not this lane's per_user SSO at all.
+  it("credential_source=per_user on a NON-bedrock_sso mechanism is not per_user SSO", async () => {
+    model(
+      baseStatus({
+        harnesses: [{ id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true, enabled: true, mechanism: "bedrock_bearer", credential_source: "per_user" }],
+      }),
+    );
     await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
     await user.click(screen.getByRole("button", { name: /sign in with sso/i }));
     expect(loginPaneMock).toHaveBeenCalledWith(expect.objectContaining({ startURLManaged: false }));
@@ -175,10 +235,46 @@ describe("ModelProviderCard — F2: the sign-in door under a per_user row", () =
     expect(screen.getByText(S.BEDROCK_PER_USER_NOTE)).toBeInTheDocument();
   });
 
-  it("S.BEDROCK_PER_USER_NOTE is absent for a shared (non-per_user) row", async () => {
+  it("S.BEDROCK_PER_USER_NOTE is absent when harnesses is absent", async () => {
     model();
     await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
     expect(screen.queryByText(S.BEDROCK_PER_USER_NOTE)).not.toBeInTheDocument();
+  });
+
+  it("S.BEDROCK_PER_USER_NOTE is absent for an explicit shared row", async () => {
+    model(sharedRowStatus());
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.queryByText(S.BEDROCK_PER_USER_NOTE)).not.toBeInTheDocument();
+  });
+
+  it("S.BEDROCK_PER_USER_NOTE is absent for a DISABLED per_user row", async () => {
+    model(disabledPerUserStatus());
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.queryByText(S.BEDROCK_PER_USER_NOTE)).not.toBeInTheDocument();
+  });
+});
+
+// R9 (fix-first review pass): under per_user, resolveBedrockAuth skips the
+// bearer arm outright (Appendix A finding 3) — a stored key still deletes
+// fine, but the card must say it is never READ while the row is per_user.
+describe("ModelProviderCard — R9: the bearer key is unused under per_user", () => {
+  it("renders S.BEDROCK_BEARER_UNUSED_PER_USER under a per_user row", async () => {
+    model(perUserStatus());
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByText(S.BEDROCK_BEARER_UNUSED_PER_USER)).toBeInTheDocument();
+  });
+
+  it("is absent for a shared row", async () => {
+    model(sharedRowStatus());
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.queryByText(S.BEDROCK_BEARER_UNUSED_PER_USER)).not.toBeInTheDocument();
+  });
+
+  it("the bearer SecretLane itself is unaffected — a stored key still shows Disconnect", async () => {
+    model(perUserStatus({ secrets: { present: ["bedrock-api-key"], github_app: false } }));
+    await user.click(screen.getByRole("radio", { name: /AWS Bedrock/ }));
+    expect(screen.getByText(S.BEDROCK_BEARER_UNUSED_PER_USER)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /disconnect/i })).toBeInTheDocument();
   });
 });
 
@@ -218,10 +314,24 @@ describe("ModelProviderCard — F5: the badge follows the caller's own model_acc
     expect(within(screen.getByRole("radio", { name: /AWS Bedrock/ })).getByText("Connected")).toBeInTheDocument();
   });
 
-  // A shared (non-per_user) row is unaffected — the deployment-wide badge is
-  // still the right answer when there is no per-person credential to grade.
-  it("a shared row ignores model_access entirely", () => {
+  // R3: "shared" covers two distinct cases — absent `harnesses` and an
+  // EXPLICIT shared row — both pinned rather than only the absent-field one.
+  it("absent harnesses ignores model_access entirely", () => {
     model(baseStatus({ ...bedrockConfigured, model_access: { state: "expired_signin" } }));
+    expect(within(screen.getByRole("radio", { name: /AWS Bedrock/ })).getByText("Connected")).toBeInTheDocument();
+  });
+
+  it("an explicit shared row also ignores model_access entirely", () => {
+    model(sharedRowStatus({ ...bedrockConfigured, model_access: { state: "expired_signin" } }));
+    expect(within(screen.getByRole("radio", { name: /AWS Bedrock/ })).getByText("Connected")).toBeInTheDocument();
+  });
+
+  // R1: a DISABLED per_user row must NOT read the caller's model_access — if
+  // the `enabled` conjunct were dropped, this would wrongly read NOT
+  // Connected (perUserLive is false for expired_signin) instead of falling
+  // back to the deployment-wide fact the way a shared row does.
+  it("a DISABLED per_user row falls back to the deployment-wide badge, not the caller's model_access", () => {
+    model(disabledPerUserStatus({ ...bedrockConfigured, model_access: { state: "expired_signin" } }));
     expect(within(screen.getByRole("radio", { name: /AWS Bedrock/ })).getByText("Connected")).toBeInTheDocument();
   });
 });
