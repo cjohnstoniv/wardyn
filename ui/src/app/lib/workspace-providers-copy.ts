@@ -272,6 +272,12 @@ export const MODEL_ACCESS_CHIP_LABEL: Record<string, string> = {
   shared_expired: AGENTS.MODEL_ACCESS_SHARED_EXPIRED,
 };
 
+// U-10: the per_user "something actionable to do" states — the member's own
+// sign-in. Exported once so the Agents tab (admin) and member Getting
+// Started (member) share ONE policy instead of two independently-typed
+// literal sets that could drift on a sixth state.
+export const MODEL_ACCESS_ACTIONABLE = new Set(["not_configured", "expired_signin", "expiring"]);
+
 // ==================== AGENTS_DRAFT — 0.7.3 field-report round ==============
 // DRAFT (M2 canon pending): new strings this round, NOT part of the frozen
 // §7.7 AGENTS table above — workspace-providers-copy.test.ts's byte-check

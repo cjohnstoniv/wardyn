@@ -30,7 +30,13 @@ import { AI_TYPES, IMPOSSIBLE, type AiType } from "../../../lib/integrations";
 import type { SetupHarnessTool, SetupModelAccess } from "../../../lib/types";
 import { getErrorMessage } from "../../../lib/format";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
-import { AGENTS, AGENTS_DRAFT, MODEL_ACCESS_CHIP_LABEL, PROVIDERS } from "../../../lib/workspace-providers-copy";
+import {
+  AGENTS,
+  AGENTS_DRAFT,
+  MODEL_ACCESS_ACTIONABLE,
+  MODEL_ACCESS_CHIP_LABEL,
+  PROVIDERS,
+} from "../../../lib/workspace-providers-copy";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Field, Switch } from "../../wardyn/form-primitives";
@@ -161,10 +167,6 @@ function ModelAccessNote({ access }: { access: SetupModelAccess }) {
   );
 }
 
-// The three states the admin can actually DO something about by signing in —
-// shared by the bottom chip's button and the prominent per_user banner above.
-const MODEL_ACCESS_ACTIONABLE = new Set(["not_configured", "expired_signin", "expiring"]);
-
 // The SIGNED-IN ADMIN'S OWN block (C4.2): the chip, the server's action line,
 // the ADMIN_OWN_CHIP_NOTE, and (for the three actionable states) the sign-in
 // CTA or the open login pane. Shared between the ordinary bottom placement
@@ -232,6 +234,13 @@ function Row({
   const choices = mechanismChoices(harness);
   const perUserAvailable = row.mechanism === "bedrock_sso";
   const credentialSource = row.credential_source || "shared";
+  // U-03 (blind review lens-U): the SERVER's settled row, never the unsaved
+  // draft — `harness` is this build's /setup/status read, `row` is the
+  // draft being edited. A live CTA (the banner, or a suppressed start-URL
+  // prompt) on a draft that hasn't been saved yet leads straight to
+  // harnesscred.go's 400: it reads the STORED row's start URL, which is
+  // still empty (or still someone else's) until Save + a status refresh.
+  const perUserSaved = harness.mechanism === "bedrock_sso" && harness.credential_source === "per_user";
 
   // C4.2 is claude-code only (modelAccess is scoped server-side) and NEVER
   // renders for not_applicable (finding 5 — the admin-token principal's own
@@ -241,9 +250,9 @@ function Row({
   // Prominence (finding 4): a per_user row with something actionable to do
   // moves this block to the TOP of the row instead of its usual spot at the
   // bottom — the legacy Settings door stops being the one an admin reaches
-  // for right after declaring the lane.
-  const modelAccessProminent =
-    showModelAccess && credentialSource === "per_user" && MODEL_ACCESS_ACTIONABLE.has(modelAccess!.state);
+  // for right after declaring the lane. Gated on perUserSaved (U-03), not
+  // the draft's credentialSource: prominence promises a working CTA.
+  const modelAccessProminent = showModelAccess && perUserSaved && MODEL_ACCESS_ACTIONABLE.has(modelAccess!.state);
 
   return (
     <div className="rounded-lg border border-border" data-testid={`agent-row-${harness.id}`}>
@@ -296,7 +305,7 @@ function Row({
                   access={modelAccess!}
                   loginOpen={loginOpen}
                   setLoginOpen={setLoginOpen}
-                  startURLManaged={perUserAvailable && credentialSource === "per_user"}
+                  startURLManaged={perUserSaved}
                 />
               </div>
             </div>
@@ -445,7 +454,7 @@ function Row({
                 access={modelAccess!}
                 loginOpen={loginOpen}
                 setLoginOpen={setLoginOpen}
-                startURLManaged={perUserAvailable && credentialSource === "per_user"}
+                startURLManaged={perUserSaved}
               />
             </div>
           )}

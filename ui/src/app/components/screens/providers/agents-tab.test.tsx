@@ -49,6 +49,16 @@ const HARNESSES: SetupHarnessTool[] = [
   harness({ id: "none", display: "Your own tools", no_managed_auth: true, has_gateway: false, has_login: false }),
 ];
 
+// U-03: the SERVER's settled row (mechanism/credential_source from
+// /setup/status) actually saved as bedrock_sso + per_user — as opposed to
+// HARNESSES above, whose claude-code row carries neither and stands in for
+// "nothing saved yet", however the DRAFT (getAgentProvidersMock) is set.
+const HARNESSES_PER_USER_SAVED: SetupHarnessTool[] = [
+  harness({ mechanism: "bedrock_sso", credential_source: "per_user" }),
+  harness({ id: "codex-cli", display: "Codex CLI" }),
+  harness({ id: "none", display: "Your own tools", no_managed_auth: true, has_gateway: false, has_login: false }),
+];
+
 // The PARENT's /setup/status re-read — what the roster-unknown Retry must fire
 // (the tab's own load() re-reads /agent-providers, which is not that read).
 const retryRosterMock = vi.fn();
@@ -449,7 +459,7 @@ describe("AgentsTab — the admin's per_user sign-in never asks for the portal",
       etag: '"s1"',
     });
     const modelAccess: SetupModelAccess = { state: "not_configured" };
-    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    render(<AgentsTab harnesses={HARNESSES_PER_USER_SAVED} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
     await userEvent.click(within(row).getByRole("button", { name: AGENTS.SIGN_IN_AWS }));
     expect(await screen.findByText(AGENTS.SSO_START_URL_MANAGED)).toBeInTheDocument();
@@ -462,6 +472,25 @@ describe("AgentsTab — the admin's per_user sign-in never asks for the portal",
     getAgentProvidersMock.mockResolvedValue({
       providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] },
       etag: '"s2"',
+    });
+    const modelAccess: SetupModelAccess = { state: "not_configured" };
+    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const row = await screen.findByTestId("agent-row-claude-code");
+    await userEvent.click(within(row).getByRole("button", { name: AGENTS.SIGN_IN_AWS }));
+    await screen.findByTestId("login-start-url-prompt");
+    expect(document.getElementById("harness-login-start-url")).toBeInTheDocument();
+    expect(screen.queryByText(AGENTS.SSO_START_URL_MANAGED)).toBeNull();
+  });
+
+  // U-03: per_user toggled in the DRAFT but not yet saved (the server's
+  // settled row, `harnesses`, still reads shared) — the pane must still ask
+  // for the start URL. Suppressing the prompt here is exactly the shape
+  // that leads to a 400 with no field to answer (harnesscred.go:761 reads
+  // the STORED row, which has no start URL of its own to fall back to).
+  it("a DRAFTED (unsaved) per_user row's sign-in still asks — the server hasn't saved a portal yet", async () => {
+    getAgentProvidersMock.mockResolvedValue({
+      providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso", credential_source: "per_user" }] },
+      etag: '"s3"',
     });
     const modelAccess: SetupModelAccess = { state: "not_configured" };
     render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
@@ -594,7 +623,7 @@ describe("AgentsTab — the per_user sign-in banner", () => {
   it("renders the prominent banner above the mechanism field for an actionable state", async () => {
     getAgentProvidersMock.mockResolvedValue({ providers: { agents: [PER_USER_ROW] }, etag: '"b1"' });
     const modelAccess: SetupModelAccess = { state: "not_configured", action: "Sign in to AWS" };
-    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    render(<AgentsTab harnesses={HARNESSES_PER_USER_SAVED} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
     const banner = within(row).getByTestId("per-user-sign-in-banner");
     expect(within(banner).getByText(AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE)).toBeInTheDocument();
@@ -630,9 +659,27 @@ describe("AgentsTab — the per_user sign-in banner", () => {
   it("a per_user row that is already live never renders the banner", async () => {
     getAgentProvidersMock.mockResolvedValue({ providers: { agents: [PER_USER_ROW] }, etag: '"b3"' });
     const modelAccess: SetupModelAccess = { state: "live" };
+    render(<AgentsTab harnesses={HARNESSES_PER_USER_SAVED} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const row = await screen.findByTestId("agent-row-claude-code");
+    expect(within(row).queryByText(AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE)).not.toBeInTheDocument();
+  });
+
+  // U-03 (blind review lens-U): a per_user row that is only DRAFTED — Per
+  // person toggled in the picker, not yet saved — must not surface the live
+  // CTA. Its only outcome would be a server 400 with no field to answer
+  // (harnesscred.go's 400 fires on the STORED row's start URL being empty,
+  // which is exactly the shared-server state here). `harnesses` (the server
+  // read) still says shared/unsaved even though the draft says per_user.
+  it("a per_user row that is only DRAFTED (not yet saved) never renders the banner", async () => {
+    getAgentProvidersMock.mockResolvedValue({ providers: { agents: [PER_USER_ROW] }, etag: '"b4"' });
+    const modelAccess: SetupModelAccess = { state: "not_configured", action: "Sign in to AWS" };
     render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
     expect(within(row).queryByText(AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE)).not.toBeInTheDocument();
+    expect(within(row).queryByTestId("per-user-sign-in-banner")).not.toBeInTheDocument();
+    // The ordinary bottom chip still renders — the row can still be signed
+    // into, just not with prominence it has not earned by being saved.
+    expect(within(row).getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeInTheDocument();
   });
 });
 

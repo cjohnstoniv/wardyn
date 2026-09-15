@@ -88,10 +88,7 @@ test.describe("agents — the admin authoring walk (real writes, real reload)", 
 
     await row.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_SSO }).click();
     await row.getByRole("radio", { name: AGENTS.SOURCE_PER_USER }).click();
-    // The Input under FIELD_SSO_START_URL carries no `id` (agents-tab.tsx),
-    // so Field's label never associates with it — its accessible name falls
-    // back to the placeholder. Located by that instead of getByLabel.
-    await row.getByPlaceholder("https://my-org.awsapps.com/start").fill("https://acme.awsapps.com/start");
+    await row.getByLabel(AGENTS.FIELD_SSO_START_URL).fill("https://acme.awsapps.com/start");
     await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
     await expect(page.getByText(PROVIDERS.SAVE_ERROR)).toHaveCount(0);
 
@@ -101,9 +98,7 @@ test.describe("agents — the admin authoring walk (real writes, real reload)", 
     await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
     const reloaded = page.getByTestId("agent-row-claude-code");
     await expect(reloaded.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_SSO })).toBeChecked();
-    await expect(reloaded.getByPlaceholder("https://my-org.awsapps.com/start")).toHaveValue(
-      "https://acme.awsapps.com/start",
-    );
+    await expect(reloaded.getByLabel(AGENTS.FIELD_SSO_START_URL)).toHaveValue("https://acme.awsapps.com/start");
 
     const snap = await getAgentProviders(page);
     const claude = (snap.providers.agents as Array<Record<string, unknown>>).find((a) => a.id === "claude-code");
@@ -392,7 +387,21 @@ test.describe("agents — the roster pin (sso_account_id / sso_role_name)", () =
 // the first thing an admin sees after declaring the lane — never scrolled
 // past on the way to the legacy Settings door.
 test.describe("agents — the per_user sign-in affordance renders before the mechanism field", () => {
+  // U-09: this test's own PUT below writes a roster of ONE row
+  // (claude-code), dropping codex-cli and none — real, against the shared
+  // e2e daemon other spec FILES run against concurrently (fullyParallel).
+  // Restore the roster this test found on arrival so it never leaks a
+  // narrowed roster to anything running alongside or after it.
+  let rosterBefore: { agents?: unknown[] } | null = null;
+  test.afterEach(async ({ page }) => {
+    if (rosterBefore) {
+      await page.request.put("/api/v1/agent-providers", { headers: auth, data: rosterBefore });
+      rosterBefore = null;
+    }
+  });
+
   test("the banner renders before the mechanism field under an actionable per_user row", async ({ page }) => {
+    rosterBefore = (await getAgentProviders(page)).providers;
     // Cache-and-serve (the same closure the not_applicable test above uses):
     // a per-request route.fetch()+refulfill raced Playwright disposing an
     // in-flight route's response under load (see that test's own comment).

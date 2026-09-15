@@ -36,7 +36,7 @@ import {
   SectionLabel,
 } from "../../wardyn/primitives";
 import { EPISODES_COPY as EP, MEMBER_GETTING_STARTED as T } from "../../wardyn/copy";
-import { AGENTS, MODEL_ACCESS_CHIP_LABEL } from "../../../lib/workspace-providers-copy";
+import { AGENTS, MODEL_ACCESS_ACTIONABLE, MODEL_ACCESS_CHIP_LABEL } from "../../../lib/workspace-providers-copy";
 import { HarnessLoginPane } from "../settings/harness-login-pane";
 import { CC_META } from "../../wardyn/cc-meta";
 import { strongestAvailable } from "../../wardyn/default-confinement";
@@ -296,7 +296,7 @@ export function MemberGettingStarted() {
                   either nothing to do, or nothing this member can do about it. */}
               {!hasOwnKey &&
                 status?.model_access &&
-                ["not_configured", "expired_signin", "expiring"].includes(status.model_access.state) &&
+                MODEL_ACCESS_ACTIONABLE.has(status.model_access.state) &&
                 (awsLoginOpen ? (
                   <div className="mt-3 max-w-md">
                     <HarnessLoginPane
