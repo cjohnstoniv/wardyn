@@ -261,7 +261,6 @@ describe("AppShell (roleResolved after a failed /me)", () => {
                   onSignOut={() => {}}
                   unreachable={true}
                   lastOkAt={null}
-                  confinementClasses={[]}
                 />
               }
             >
@@ -316,7 +315,6 @@ describe("AppShell (roleResolved after a failed /me)", () => {
                   onSignOut={() => {}}
                   unreachable={true}
                   lastOkAt={null}
-                  confinementClasses={[]}
                 />
               }
             >

@@ -35,10 +35,9 @@ import {
   Users,
 } from "lucide-react";
 import { WardynWordmark } from "../wardyn/logo";
-import { Chip, ConfinementChip } from "../wardyn/primitives";
-import { SHELL, SITE } from "../wardyn/copy";
+import { Chip } from "../wardyn/primitives";
+import { SHELL } from "../wardyn/copy";
 import { useTheme } from "../wardyn/theme-provider";
-import { strongestAvailable } from "../wardyn/default-confinement";
 import { lastCheckedLabel } from "../../lib/readiness";
 // GOVERNANCE.TITLE is ONE string for two places — this nav label and the
 // screen's own heading — the way every other nav entry already works. There is
@@ -62,7 +61,6 @@ import {
   type Role,
 } from "../wardyn/operator-context";
 import { health as api, type MeUserDrive } from "../../lib/api/health";
-import type { ConfinementClass } from "../../lib/types";
 // The run wizard reaches the workspaces + secrets screens and their dialogs, so
 // importing it eagerly pulled all of that into the entry chunk even though the
 // dialog only ever mounts on a "New run" click. Fetched on that click instead.
@@ -131,10 +129,6 @@ export interface ShellMeta {
   // default as the two above: an unresolved or failed /me reads as "" —
   // nothing is claimed about a drive that is also null.
   userDriveUnavailable: string;
-  // F16: k8sNetpolVerdict's three-value enum off /healthz — present on
-  // Kubernetes only (undefined on Docker, and on an older daemon, which the
-  // shell reads as "say nothing" rather than a guessed word).
-  networkPolicy?: "enforced" | "unenforced" | "acknowledged";
 }
 
 /** The shell's identity, plus the retry that re-fires /me (B1's banner action). */
@@ -160,7 +154,6 @@ function useMeta(): [ShellMeta, () => void] {
     userDrive: null,
     userDriveDeniedByProfile: "",
     userDriveUnavailable: "",
-    networkPolicy: undefined,
   });
   React.useEffect(() => {
     let alive = true;
@@ -190,7 +183,6 @@ function useMeta(): [ShellMeta, () => void] {
           userDrive: me?.user_drive ?? null,
           userDriveDeniedByProfile: me?.user_drive_denied_by_profile ?? "",
           userDriveUnavailable: me?.user_drive_unavailable ?? "",
-          networkPolicy: h.network_policy,
         });
       })
       .catch(() => {
@@ -463,7 +455,6 @@ export function AppShell({
   onSignOut,
   unreachable,
   lastOkAt,
-  confinementClasses: confinementClassesProp,
 }: {
   pendingApprovals: number;
   attentionCount: number;
@@ -473,12 +464,6 @@ export function AppShell({
   // this banner is the ONLY thing that tells a quiet board from a dead one.
   unreachable?: boolean;
   lastOkAt?: Date | null;
-  // The strongest confinement tier this host can actually run, from the SAME
-  // setup-status poll App.tsx already runs for the unreachable banner — not a
-  // second, disagreeing poll of the same expensive endpoint. undefined (no
-  // fetch yet, or the daemon was unreachable) keeps the last-known barrier
-  // instead of flashing "No barrier" for a merely quiet control plane.
-  confinementClasses?: ConfinementClass[];
 }) {
   const [meta, retryIdentity] = useMeta();
   // B1 — SETTLED and still unknown: /me answered nothing, so every tier the
@@ -488,17 +473,6 @@ export function AppShell({
   const sessionExpiringSoon = useSessionExpiringSoon(meta.sessionExpiresAt);
   const location = useLocation();
   const navigate = useNavigate();
-
-  // The top bar's permanent barrier chip. Empty (no confinement classes at
-  // all) reads "No barrier" — the one honest state a fresh/broken host can be
-  // in.
-  const [confinementClasses, setConfinementClasses] = React.useState<
-    ConfinementClass[]
-  >([]);
-  React.useEffect(() => {
-    if (confinementClassesProp !== undefined)
-      setConfinementClasses(confinementClassesProp);
-  }, [confinementClassesProp]);
 
   // See FocusContext above. Nothing here decides WHEN focus is on — the run
   // cockpit's canvas does, and it clears this on unmount.
@@ -545,7 +519,6 @@ export function AppShell({
                 meta={meta}
                 pendingApprovals={pendingApprovals}
                 attentionCount={attentionCount}
-                confinementClasses={confinementClasses}
                 onNewRun={() => navigate("/runs/new")}
               />
             )}
@@ -665,14 +638,12 @@ export function TopBar({
   meta,
   pendingApprovals,
   attentionCount,
-  confinementClasses,
   onNewRun,
 }: {
   onSignOut: () => void;
   meta: ShellMeta;
   pendingApprovals: number;
   attentionCount: number;
-  confinementClasses: ConfinementClass[];
   onNewRun: () => void;
 }) {
   // What the header calls "you": the IdP's display name, else the session
@@ -728,13 +699,6 @@ export function TopBar({
             <Moon className="size-4" />
           )}
         </Button>
-
-        <BarrierChip classes={confinementClasses} />
-        {/* F16: the boot-time netpol canary's verdict, otherwise invisible to
-            an operator who never opens /setup/status. Undefined off
-            Kubernetes (and on an older daemon) renders nothing rather than a
-            guessed word. */}
-        {meta.networkPolicy && <NetworkPolicyChip verdict={meta.networkPolicy} />}
 
         <Button onClick={onNewRun} size="sm">
           <Plus className="size-4" /> New run
@@ -895,55 +859,5 @@ function EnvIndicator({ trustDomain }: { trustDomain: string }) {
       <span className="size-1.5 rounded-full bg-success" />
       <span className="font-mono text-muted-foreground">{trustDomain}</span>
     </span>
-  );
-}
-
-// The permanent top-bar barrier chip (stage-1): the strongest confinement tier
-// this host can run right now, via the same Fence/Wall/Vault metal ramp every
-// other barrier chip uses (ConfinementChip) — never the teal accent, which
-// means "action" elsewhere in this console. An empty confinement-class list
-// (nothing installed, or the daemon hasn't answered yet) is the one state that
-// gets its own honest danger chip instead of guessing a tier. Clicking either
-// state opens Settings, where the barrier's own detail lives.
-function BarrierChip({ classes }: { classes: ConfinementClass[] }) {
-  const strongest = strongestAvailable(classes);
-  return (
-    <Link
-      to="/settings"
-      className="rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-      aria-label={
-        strongest
-          ? "Sandbox barrier — open Settings"
-          : "No sandbox barrier — open Settings"
-      }
-    >
-      {strongest ? (
-        <ConfinementChip value={strongest} />
-      ) : (
-        <Chip tone="danger" dot>
-          No barrier
-        </Chip>
-      )}
-    </Link>
-  );
-}
-
-// F16: the netpol canary's verdict (k8sNetpolVerdict, Kubernetes only) — a
-// silent boot-time fact otherwise buried on /setup/status. `acknowledged`
-// (WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY) is neutral, not success: it is an
-// operator's override, not proof — see setup.go's own comment on why the two
-// must never collapse into one reading.
-function NetworkPolicyChip({ verdict }: { verdict: "enforced" | "unenforced" | "acknowledged" }) {
-  const label =
-    verdict === "enforced"
-      ? SITE.CONFINEMENT_NETPOL_ENFORCING
-      : verdict === "unenforced"
-        ? SITE.CONFINEMENT_NETPOL_NOT_ENFORCING
-        : SITE.CONFINEMENT_NETPOL_INDETERMINATE;
-  const tone = verdict === "enforced" ? "success" : verdict === "unenforced" ? "danger" : "neutral";
-  return (
-    <Chip tone={tone} dot>
-      {label}
-    </Chip>
   );
 }

@@ -674,21 +674,20 @@ export const PEOPLE_STEP = {
 } as const;
 
 // DRAFT (M2 canon pending) — staged in workspace-providers-prompt.md §7.6
-// ("U1 → corp-network-step / wardyn/copy.ts (B2, F16, F22)"), parsed by
-// nothing today; each row moves into its lane's own frozen table at the M2
-// sitting. Rendered here ahead of that sitting because the states themselves
-// (the save note, the netpol chip, the trusted-CA count) already exist and
-// shipping words for them beats a blank control.
+// ("U1 → corp-network-step / wardyn/copy.ts (B2, F22)"), parsed by nothing
+// today; each row moves into its lane's own frozen table at the M2 sitting.
+// Rendered here ahead of that sitting because the states themselves (the save
+// note, the trusted-CA count) already exist and shipping words for them beats
+// a blank control.
+// 0.7.3 F6 removed the three CONFINEMENT_NETPOL_* rows this block used to
+// carry (app-shell.tsx's header chip was their only consumer) — the netpol
+// verdict now lives on the setup Environment step alone; see
+// local/v073/M2-canon-sheet.md for the orphaned rows.
 export const SITE = {
   // B2: the site-config save path's own note — a change here does not reach a
   // run already going (the egress sidecar compiles its config once at sandbox
   // start).
   SAVE_NOTE: "Saved. This applies to runs started from now — a run already going keeps the network settings it started with.",
-  // F16: the shell's netpol indicator, from /healthz.network_policy
-  // (k8sNetpolVerdict's three-value enum — absent off Kubernetes).
-  CONFINEMENT_NETPOL_ENFORCING: "NetworkPolicy: enforcing",
-  CONFINEMENT_NETPOL_NOT_ENFORCING: "NetworkPolicy: not enforcing",
-  CONFINEMENT_NETPOL_INDETERMINATE: "NetworkPolicy: indeterminate",
   // F22: the Network step's trusted-CA count, from /setup/status
   // (trusted_ca_certs) — the inline ternary (§5 #9), never a second helper.
   TRUSTED_CA_COUNT: (n: number) => `${n} trusted CA certificate${n === 1 ? "" : "s"}`,

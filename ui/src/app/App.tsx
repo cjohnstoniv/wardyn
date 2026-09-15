@@ -33,7 +33,6 @@ import { usePoll } from "./lib/use-poll";
 import type {
   AgentRun,
   ApprovalRequest,
-  ConfinementClass,
   SetupStatus,
 } from "./lib/types";
 import {
@@ -43,13 +42,13 @@ import {
 
 type AuthStatus = "checking" | "authed" | "unauthed";
 
-// How often the reachability heartbeat beats, so the top bar's barrier chip and
-// the "control plane unreachable" banner stay fresh. It hits /healthz, NOT
-// /setup/status: the latter is a full ListRuns plus a host sweep that shells
-// out (host-proxy detection, `git config` for SCM posture), and every authed
-// tab used to run it every 5s forever. /healthz already carries the only two
-// facts the shell needs — liveness and confinement_classes — so the expensive
-// snapshot is now fetched exactly once per session, for the landing decision.
+// How often the reachability heartbeat beats, so the "control plane
+// unreachable" banner stays fresh. It hits /healthz, NOT /setup/status: the
+// latter is a full ListRuns plus a host sweep that shells out (host-proxy
+// detection, `git config` for SCM posture), and every authed tab used to run
+// it every 5s forever. /healthz already carries the only fact the shell
+// needs — liveness — so the expensive snapshot is now fetched exactly once
+// per session, for the landing decision.
 const HEALTH_POLL_MS = 5000;
 
 // Route-level code-splitting. Runs is the landing route (every "/" redirects
@@ -347,20 +346,15 @@ export default function App() {
       });
   }, []);
 
-  // The console's ONE reachability signal, and the barrier chip's source.
-  // Every screen's background refresh swallows its own failures to keep the
-  // last-good data on screen, which without this reads exactly like a healthy
-  // quiet fleet (AppShell renders the banner). health() never rejects — it
-  // resolves {} on a network error or any non-2xx — so a missing status:"ok"
-  // IS the unreachable verdict. ponytail: a build whose /healthz doesn't answer
-  // also reads as unreachable — the same daemon serves this console, so that
-  // means a broken build. Classes are left at their last-known value while
-  // unreachable rather than repainted from a payload we didn't get.
+  // The console's ONE reachability signal. Every screen's background refresh
+  // swallows its own failures to keep the last-good data on screen, which
+  // without this reads exactly like a healthy quiet fleet (AppShell renders
+  // the banner). health() never rejects — it resolves {} on a network error
+  // or any non-2xx — so a missing status:"ok" IS the unreachable verdict.
+  // ponytail: a build whose /healthz doesn't answer also reads as unreachable
+  // — the same daemon serves this console, so that means a broken build.
   const [unreachable, setUnreachable] = React.useState(false);
   const [lastOkAt, setLastOkAt] = React.useState<Date | null>(null);
-  const [confinementClasses, setConfinementClasses] = React.useState<
-    ConfinementClass[] | undefined
-  >(undefined);
   // R4/F066: BOTH probes, because /healthz alone cannot see the outage this
   // banner exists for. handleHealthz writes `"status": "ok"` as a literal and
   // never touches the store (internal/api/healthz.go) — deliberately, since
@@ -387,9 +381,6 @@ export default function App() {
       // down: no data IS being received, which is the whole claim of the
       // sentence this timestamp completes.
       if (ready) setLastOkAt(new Date());
-      setConfinementClasses(
-        (h.confinement_classes ?? []) as ConfinementClass[],
-      );
     });
   }, []);
   React.useEffect(() => {
@@ -439,7 +430,6 @@ export default function App() {
               attentionCount={attentionCount}
               unreachable={unreachable}
               lastOkAt={lastOkAt}
-              confinementClasses={unreachable ? undefined : confinementClasses}
               onSignOut={async () => {
                 // HIGH fix (sign-out): tell the server to clear the OIDC session
                 // BEFORE dropping local state. Clearing only the local admin token

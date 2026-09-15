@@ -13,8 +13,10 @@ import { SHELL } from "../src/app/components/wardyn/copy";
 // Workspaces, Policies, Permissions, Secrets, Audit, Recordings — of react-router
 // <NavLink>s (role="link"), with no group headings. Settings, SSH keys and Demos
 // live in the account menu.
-// The top bar carries a "Toggle theme" button (aria-label) and a permanent
-// barrier chip. Each screen supplies its own <h1> via PageHeader.
+// The top bar carries a "Toggle theme" button (aria-label) and no posture
+// chips (0.7.3 F6 removed the Fence/NetworkPolicy chips — posture lives on
+// the setup Environment step). Each screen supplies its own <h1> via
+// PageHeader.
 //
 // There is no first-run gate and no /setup route: every destination below is
 // reachable immediately, which is the property this spec now pins. AppShell
@@ -251,6 +253,24 @@ test.describe("theme toggle", () => {
     // The toggle is still mounted on the new screen and remains operable.
     await page.getByRole("button", { name: "Toggle theme" }).click();
     await expect.poll(async () => (await readTheme(page)).hasDarkClass).toBe(true);
+  });
+});
+
+// 0.7.3 F6: the Fence tier and NetworkPolicy verdict were permanent, boot-time
+// facts that never changed while the console was open — occupying the header's
+// most valuable real estate for nothing an admin could act on. Both are gone
+// outright (no degraded chip, no replacement); posture now lives on the setup
+// Environment step alone.
+test.describe("the header carries no posture chips (0.7.3 F6)", () => {
+  test("no barrier or NetworkPolicy chip, on an admin session", async ({ page }) => {
+    await gotoConsole(page);
+    const header = page.getByRole("banner");
+    await expect(header.getByText(/NetworkPolicy:/)).toHaveCount(0);
+    await expect(
+      header.getByText(/^(Fence|Wall|Vault|No barrier)$/),
+    ).toHaveCount(0);
+    // Positive control: the header still renders — this isn't an empty banner.
+    await expect(header.getByRole("button", { name: "Toggle theme" })).toBeVisible();
   });
 });
 

@@ -13,7 +13,6 @@ import { AppShell, MobileNav, TopBar, useFocusMode } from "./app-shell";
 import { useUserDrive, type Role } from "../wardyn/operator-context";
 import { ThemeProvider } from "../wardyn/theme-provider";
 import { baseMeDrive } from "../../lib/test-fixtures";
-import type { ConfinementClass } from "../../lib/types";
 
 // below md the desktop aside is hidden, so this Sheet-based hamburger is
 // the ONLY navigation. These pins fail if the drawer stops opening, drops nav
@@ -53,17 +52,10 @@ function renderMobileNav(role: Role = "admin") {
 // Every background poll in the console keeps its last-good data on failure, so
 // this banner is the ONLY thing separating a quiet fleet from a dead daemon —
 // and the readiness chip must not report the outage as an unfinished setup.
-// AppShell no longer polls setup/status itself (that duplicated App.tsx's own
-// poll of the same expensive endpoint) — it takes confinementClasses as a
-// prop and keeps the last value it was given when a re-render passes
-// undefined (App.tsx's convention for "no fresh data this tick").
 describe("AppShell (control plane unreachable)", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  function renderShell(
-    unreachable: boolean,
-    confinementClasses?: ConfinementClass[],
-  ) {
+  function renderShell(unreachable: boolean) {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockRejectedValue(new Error("connection refused")),
@@ -77,7 +69,6 @@ describe("AppShell (control plane unreachable)", () => {
             onSignOut={() => {}}
             unreachable={unreachable}
             lastOkAt={null}
-            confinementClasses={confinementClasses}
           />
         </ThemeProvider>
       </MemoryRouter>,
@@ -89,33 +80,9 @@ describe("AppShell (control plane unreachable)", () => {
     expect(screen.queryByText(/Control plane unreachable/)).toBeNull();
   });
 
-  it("with nothing real to show yet, reads the same honest 'No barrier' a genuinely bare host would", () => {
+  it("banners the outage", () => {
     renderShell(true);
     expect(screen.getByText(/Control plane unreachable/)).toBeInTheDocument();
-    expect(screen.getByText("No barrier")).toBeInTheDocument();
-  });
-
-  it("banners the outage and leaves the barrier chip at its last-known state", () => {
-    const { rerender } = renderShell(false, ["CC1"]);
-    expect(screen.queryByText("No barrier")).toBeNull();
-    // App.tsx passes confinementClasses=undefined once its own probe reports
-    // unreachable — the chip must not repaint from that absence.
-    rerender(
-      <MemoryRouter>
-        <ThemeProvider>
-          <AppShell
-            pendingApprovals={0}
-            attentionCount={0}
-            onSignOut={() => {}}
-            unreachable={true}
-            lastOkAt={null}
-            confinementClasses={undefined}
-          />
-        </ThemeProvider>
-      </MemoryRouter>,
-    );
-    expect(screen.getByText(/Control plane unreachable/)).toBeInTheDocument();
-    expect(screen.queryByText("No barrier")).toBeNull();
   });
 });
 
@@ -179,13 +146,13 @@ describe("AppShell — session-expiry warning (W31-S1-7)", () => {
 
   it("stays silent while the session has plenty of time left", async () => {
     renderWithMe(new Date(Date.now() + 60 * 60 * 1000).toISOString());
-    await screen.findByText("No barrier"); // let /me resolve
+    await screen.findByText("cj"); // let /me resolve
     expect(screen.queryByText(/session is expiring soon/i)).toBeNull();
   });
 
   it("never warns for a session-less caller (admin token / local mode)", async () => {
     renderWithMe(undefined);
-    await screen.findByText("No barrier");
+    await screen.findByText("cj");
     expect(screen.queryByText(/session is expiring soon/i)).toBeNull();
   });
 });
@@ -223,38 +190,6 @@ describe("AppShell — account-menu role chip gating (L1)", () => {
     const menu = screen.getByRole("menu");
     expect(within(menu).queryByText("admin", { exact: true })).toBeNull();
     expect(within(menu).queryByText("member", { exact: true })).toBeNull();
-  });
-});
-
-// Stage-1: the top bar's permanent barrier chip reads the strongest tier off
-// the confinementClasses prop — App.tsx's OWN setup-status poll, never a
-// second, disagreeing poll of the same expensive endpoint. The
-// unreachable-daemon case (no confinement_classes to show) is covered above
-// ("leaves the barrier chip at its last-known state"); this pins the
-// positive case.
-describe("AppShell — top bar barrier chip (stage-1)", () => {
-  afterEach(() => vi.unstubAllGlobals());
-
-  it("shows the strongest available confinement tier once setup status resolves", () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockRejectedValue(new Error("network down")),
-    );
-    render(
-      <MemoryRouter>
-        <ThemeProvider>
-          <AppShell
-            pendingApprovals={0}
-            attentionCount={0}
-            onSignOut={() => {}}
-            confinementClasses={["CC1", "CC2"]}
-          />
-        </ThemeProvider>
-      </MemoryRouter>,
-    );
-    // CC1+CC2 available => the strongest is Wall (CC2), never the raw CC2 code.
-    expect(screen.getByText("Wall")).toBeInTheDocument();
-    expect(screen.queryByText("No barrier")).toBeNull();
   });
 });
 
@@ -566,10 +501,7 @@ describe("SidebarNav (member role — B3)", () => {
 // Phase 5: the account-menu Demos entry (TopBar, not SidebarNav — the
 // describe block above only drives the sidebar) is meaningless on a member's
 // own Getting Started, which has no /setup?step= deep link at all.
-function renderTopBar(
-  role: Role,
-  networkPolicy?: "enforced" | "unenforced" | "acknowledged",
-) {
+function renderTopBar(role: Role) {
   return render(
     <MemoryRouter>
       <ThemeProvider>
@@ -592,11 +524,9 @@ function renderTopBar(
             userDrive: null,
             userDriveDeniedByProfile: "",
             userDriveUnavailable: "",
-            networkPolicy,
           }}
           pendingApprovals={0}
           attentionCount={0}
-          confinementClasses={[]}
           onNewRun={() => {}}
         />
       </ThemeProvider>
@@ -604,32 +534,21 @@ function renderTopBar(
   );
 }
 
-// F16: the boot-time netpol canary's verdict, otherwise buried on
-// /setup/status — undefined off Kubernetes (and on an older daemon) renders
-// nothing rather than a guessed word.
-describe("TopBar — the netpol chip (F16)", () => {
-  it("renders nothing when the daemon sends no verdict (Docker, or an older build)", () => {
+// 0.7.3 F6: the header no longer carries any posture chip — the netpol
+// verdict moved to the setup Environment step. TopBar's own negative pin
+// lives in the "no posture" describe below, beside the barrier-chip removal.
+// 0.7.3 F6: the Fence/NetworkPolicy chips are gone outright — no degraded
+// chip, no replacement. Both were deployment-wide facts fixed at boot that
+// never changed while the console was open; posture now lives on the setup
+// Environment step alone (environment-step.tsx's k8sEgressRow/k8sClassesRow).
+describe("TopBar — the header states no posture (0.7.3 F6)", () => {
+  it("carries no NetworkPolicy or barrier chip", () => {
     renderTopBar("admin");
-    expect(screen.queryByText(/NetworkPolicy:/)).not.toBeInTheDocument();
-  });
-
-  it("enforced", () => {
-    renderTopBar("admin", "enforced");
-    expect(screen.getByText("NetworkPolicy: enforcing")).toBeInTheDocument();
-  });
-
-  it("unenforced", () => {
-    renderTopBar("admin", "unenforced");
+    const header = screen.getByRole("banner");
+    expect(within(header).queryByText(/NetworkPolicy:/)).not.toBeInTheDocument();
     expect(
-      screen.getByText("NetworkPolicy: not enforcing"),
-    ).toBeInTheDocument();
-  });
-
-  it("acknowledged reads as indeterminate, never as the stronger 'enforcing' claim", () => {
-    renderTopBar("admin", "acknowledged");
-    expect(
-      screen.getByText("NetworkPolicy: indeterminate"),
-    ).toBeInTheDocument();
+      within(header).queryByText(/^(Fence|Wall|Vault|No barrier)$/),
+    ).not.toBeInTheDocument();
   });
 });
 
@@ -768,7 +687,7 @@ describe("AppShell — /me's drive bits reach UserDriveContext", () => {
 
     // Let /me land before reading the probe, so this is the RESOLVED value and
     // not the seed it happens to equal.
-    await screen.findByText("No barrier");
+    await screen.findByText("alice");
     expect(screen.getByTestId("drive-probe")).toHaveTextContent(
       JSON.stringify({ drive: null, deniedByProfile: "" }),
     );
