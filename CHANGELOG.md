@@ -8,6 +8,278 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+0.7.3 carries the second field report from the same private-endpoint Kubernetes
+estate, written inside the first hour of running 0.7.2's new `agent_providers`
+roster: 7 findings and 1 confirmation, all in the new surfaces. The two 0.7.1
+fixes are confirmed on their deployment, with the same credential that broke
+each: the captured AWS SSO session whose access token had lapsed now reads "A
+captured AWS SSO session is connected. Its access token lapsed at …, and Wardyn
+renews it automatically" — same blob, nothing re-captured — and the `auth.failed`
+flood "stopped dead at the upgrade. Zero new rows since the rollout," though the
+underlying cause (the k8s substrate's new orphan sweep ending a retry loop, not
+the coalescing window) means the fold itself stays unexercised. Finding 8 is a
+confirmation only — the roster's refusals are clear and the closed-set behaviour
+("Off: runs naming this agent are refused") is right — no action taken.
+
+**Console and refusal copy is provisional**: every new `400`/`412`/`422` body and
+every new console string in this release ships as a frozen DRAFT constant pending
+the maintainer's canon sitting. The tests assert through those constants, so
+adopting the canon wording is a one-file diff and no behaviour moves with it.
+
+Upgrading from 0.7.2 changes nothing on its own: the roster's new
+`sso_account_id`/`sso_role_name` pin fields are optional, `not_applicable` is a
+new `model_access` state reachable only by the shared admin-bearer-token caller
+under a `per_user` row, and the widened CSRF guard refuses only a cross-origin
+cookie-authenticated mutation — something no legitimate CLI, API or console
+client sends. A deployment with no `per_user` roster row answers byte-for-byte
+what it answered before.
+
+### Added
+
+- **The agent roster pins which AWS account and role a sign-in may capture.**
+  `sso_account_id` and `sso_role_name` on a `bedrock_sso` + `per_user` row, beside
+  `sso_start_url` and admin-owned for the same reason — the sign-in proposes, the
+  roster disposes. Optional (a single-account tenant never had this problem) but
+  set as a pair: pinning the account alone still leaves the role picked for
+  whoever signs in. A new SSO entitlement granted by a cloud team cannot move a
+  pin. See [OPERATIONS.md](OPERATIONS.md) "AWS SSO per person".
+- **A chooser when nothing is pinned and the session reaches several accounts.**
+  The login sandbox runs on the operator's own attach terminal, so the helper
+  asks — numbered accounts, then roles in the chosen one. With no terminal to ask
+  on, it refuses and names the accounts it reaches, so an admin can pin one.
+- **A failure marker on the login terminal.** `wardyn: aws sso credential
+  rejected: <reason>` — the counterpart of the existing success marker. A refused
+  upload previously logged to stderr and printed nothing, so the console's login
+  pane waited out the sandbox's 30-minute idle cap on a credential already
+  refused.
+- **`harness.credential.refused` audit action.** Every refusal on the SSO-token
+  upload route now leaves a row, with a `reason` from a fixed vocabulary
+  (`blob_shape`, `field_unsafe`, `region_mismatch`, `start_url_mismatch`,
+  `account_role_pin_mismatch`, `model_account_mismatch`, `unstamped_scope`,
+  `already_captured`, `stamp_unreadable`, `store_error`) and never sandbox-chosen
+  text. `agent_provider.write` gains `pins`; `harness.login.started` gains
+  `sso_account_id`/`sso_role_name`. See [AUDIT-ACTIONS.md](AUDIT-ACTIONS.md).
+
+### Fixed
+
+- **The per-user AWS SSO lane no longer signs with `AccountList[0]`.** A cloud
+  team granting an unrelated SSO entitlement used to insert an element at index 0
+  and silently re-point the AWS identity every run in the deployment authenticated
+  as — with no Wardyn change, no configuration change, no diff, and no audit row
+  naming it. It surfaced as a `bedrock:InvokeModel` 403 retried ten times inside
+  an agent terminal, and blocked `credential_source: per_user` completely with no
+  workaround (the helper read no override, and the stored blob could not be
+  corrected by hand — the reserved harness secret name is sealed by pattern).
+  The pin above is enforced at three doors, each failing closed: at ROSTER SAVE a
+  pin that is not the account the configured `WARDYN_BEDROCK_MODEL` ARN lives in
+  is refused (400, naming both accounts); at SIGN-IN the helper verifies the pin
+  against the SSO portal and refuses rather than falling back to the first
+  entry; at CAPTURE the upload is bound to the pin as it read AT LAUNCH, stamped
+  on the run's own `harness.login.started` row, so a roster edit mid-sign-in
+  cannot re-point a capture already in flight. Capture-time account-vs-model
+  validation applies with or without a pin: an uploaded session for a different
+  account than a full-ARN `WARDYN_BEDROCK_MODEL` is refused and named; a bare
+  cross-region inference-profile id names no account, so that check is skipped
+  rather than failed.
+- **The admin's own AWS sign-in door stopped asking for a start URL it would
+  throw away.** Of three call sites that open the harness-login dialog, only
+  Settings → Model provider failed to pass `startURLManaged` under a `per_user`
+  row — so an admin signing in from the door muscle memory was asked to type the org's AWS access portal URL again, minutes after saving it
+  on the Agents tab, and `handleHarnessLogin` silently discarded it in favor
+  of the roster's own
+  stored, admin-owned `sso_start_url`. The card now derives `per_user` the same
+  way the Agents tab does, including that a DISABLED `per_user` row is graded as
+  not-per-user (`enabled !== false`) — before this, a disabled row hid the
+  start-URL field the server still required and graded `model_access` in the
+  wrong namespace.
+- **A `per_user` Bedrock admin was pointed at three dead ends.** `bedrock_provider`'s
+  remediation text offered a read-only `~/.aws` mount, a `bedrock-api-key` bearer
+  secret, or `aws-access-key-id`/`aws-secret-access-key` secrets — all three
+  skipped outright by `per_user` credential resolution, which reads only the
+  caller's own AWS SSO session. The row now names the one action that can
+  actually succeed: sign in to AWS yourself. `llm_provider` had the matching
+  contradiction — "No model/harness provider configured (optional)" two rows
+  above a `bedrock_provider` row saying Bedrock IS configured — and now says the
+  same per-person sentence instead.
+- **Declaring a per-person lane and signing in to it are linked now.** Nothing on
+  the Agents tab used to say "now sign in" after a `per_user` row was saved, and
+  nothing on Settings' Model provider card said the lane was declared elsewhere —
+  a member's Getting Started already got this right. A tinted panel at the top
+  of the Agents tab's claude-code row now says the lane is per person, including
+  the admin's own, and that saving only declares it; the Settings card gets the
+  mirror sentence, naming where the lane lives and whose sign-in its badge reads
+  (and, beside the Bedrock bearer-key field, that the key is stored but unused
+  while the lane is per person, rather than hiding a secret that is still a
+  secret). Saving the Agents tab also no longer waits for the next reload to
+  reflect a new pin or mechanism: it refreshes `model_access`/`harnesses`
+  directly instead of re-fetching the whole screen, which used to discard an
+  admin's unsaved Git/Storage edit on the same page. Both the banner and the
+  login pane's managed-start-URL mode follow the SAVED roster row rather than
+  whatever is sitting unsaved in the draft, so typing a mechanism/credential-
+  source change and opening sign-in before clicking Save cannot show a per-person
+  affordance for a lane the server does not yet know is per-person, or the
+  reverse.
+- **A per-principal state read through the admin bearer token reported the
+  TOKEN's own state, not a caller who could act on it.** Under `per_user`,
+  `GET /setup/status`'s `model_access` used to read `{"state": "not_configured",
+  "action": "Sign in to AWS"}` for the shared admin token — which owns no AWS SSO
+  session and never will — while the operator's own browser session was fully
+  signed in and the console badged the lane Connected. `model_access.state` now
+  reads `not_applicable` (no action, no deadline) for that caller, but only when
+  nothing is captured in that shared namespace: a session an earlier admin-token
+  capture already holds is graded normally, because dispatch still serves it to
+  admin-token-created runs. On Settings' Model provider card specifically,
+  `not_applicable` now renders NOT connected with its own per-person note
+  instead of borrowing the deployment-wide "Bedrock is configured" badge —
+  before, that fallback (`connected={!!bedrockRow}`) made the admin-token
+  caller's card read Connected for a lane it can never sign in to, the same
+  "green chip over an absent credential" shape the 0.7.1 report raised and
+  fixed for the member's Getting Started chip. See "Security" below for the
+  matching capture-side refusal.
+- **The `Fence` / `NetworkPolicy: enforcing` header chips are gone.** Both were
+  deployment-wide facts fixed at boot, occupying the header's most valuable real
+  estate on every screen for every user while conveying nothing after one read —
+  worse than redundant for a member, for whom `Fence` is internal vocabulary for
+  a tier they did not choose. This is a move, not a hide: the same NetworkPolicy
+  verdict and the Fence/Wall/Vault tier matrix already lived on the admin setup
+  page's Environment step, reviewed and screenshotted for auditors, with the
+  canary's own reasoning and the unenforced-CNI warning beside it — that page is
+  now the only place to read posture, and the header carries only what varies.
+- **"Start a run like this one" now reaches every terminal run, not only a
+  killed one.** 0.7.2 built the clone CTA but put its only door inside the
+  killed-run "What happened" panel, which renders nothing for a run that
+  completed successfully — so a run that succeeded, or was auto-stopped, or
+  failed to build its image, had no way to launch an identical one without
+  retyping task, agent, barrier and policy by hand. The door **moved**: it is
+  now on the run header for any terminal run (the 0.7.2 entry above, which sent
+  the reader to the killed-run panel, describes where it launches FROM, not
+  where the button now lives), and a matching "Start a run like this one" item
+  joined the Runs-list row kebab, on both the board and the table. The
+  failure block keeps its own advice with no second door. Neither door trusts
+  an empty audit read any more: an older run, a pruned trail, or a non-owner's
+  empty response used to fall through to wizard DEFAULTS indistinguishable
+  from a faithful clone — one shared helper now refuses (a toast, no
+  navigation) on BOTH the run header and the Runs-list kebab rather than
+  launch one silently degraded from either door.
+
+> **NOTE fix-perf**: a real ~5s regression in the setup funnel's / Getting
+> Started's first load is under root-cause investigation (lane `fix-perf`) —
+> this placeholder must be replaced with the real cause (and the fix, if one
+> ships in 0.7.3) before release; `make-notes.sh`/`release-commit.sh` refuse to
+> build notes while this block survives.
+
+### Security
+
+- **The cross-origin guard on a cookie-authenticated mutation now applies in
+  every mode, not just LocalMode.** 0.7.2 named this as an open gap: the
+  `Origin` check that refuses a cross-site state-changing request lived in the
+  local-mode arm of `internal/api/http.go`'s auth middleware, so an SSO
+  deployment relied on the session cookie's `SameSite=Lax` alone — a browser
+  rule rather than ours, and one that does not bind a same-site sibling on a
+  shared parent domain. `sameOriginOrRefuse` (`internal/api/csrf.go`) now runs
+  at the top of the OIDC session branch, before any handler: the browser's own
+  `Sec-Fetch-Site: cross-site` label refuses outright, a present `Origin` must
+  name either the request's `Host` or the host of `WARDYN_OIDC_REDIRECT_URL`
+  (the second name is what a TLS-terminating ingress needs — which is also why
+  the scheme is deliberately not compared), and a malformed, opaque (`null`) or
+  host-less `Origin` fails closed. Refused with `403` and
+  `cross-origin state-changing request rejected (CSRF guard)`.
+  **Nothing changes for a CLI, a CI job or the API.** A request that carries
+  neither header passes — that is not a browser, and it holds no ambient cookie
+  to forge — and the admin/API-token lane is exempt by construction: a bearer
+  token is not something a browser attaches on an attacker's behalf, and that
+  lane never enters the session branch. The local-mode arm keeps its own
+  loopback-`Origin` rule and now shares the Fetch-Metadata refusal and the
+  refusal sentence, so the two modes cannot drift; both are table-tested for the
+  first time (`internal/api/csrf_test.go`), and every registered mutating route
+  is fenced by the `chi.Walk` route matrix rather than one sample route. Every
+  refusal is audited on the existing `auth.failed` action with `reason`
+  `cross_origin_refused` — no new action. **One local-mode behaviour change:** a
+  page at `http://localhost:<port>` posting to `http://127.0.0.1:<port>` is now
+  refused, because browsers treat the two loopback aliases as two different
+  sites; the console's own fetches are same-origin relative URLs, so nothing
+  Wardyn serves is affected. **One boot refusal:** `WARDYN_OIDC_REDIRECT_URL`
+  must now parse to an absolute URL with a host — its host is the second
+  same-origin name, and a host-less value used to surface as a console-wide
+  "CSRF guard" 403 instead of a boot error.
+- **Browser PTY attach works behind a TLS-terminating ingress.** The attach
+  WebSocket (`internal/api/attach.go`) enforced same-origin with
+  `websocket.Accept`'s default, which authorises the request `Host` alone — so
+  in exactly the ingress shape above, where the browser's `Origin` is the public
+  console name and `Host` is the internal one, browser attach was already being
+  refused. `OriginPatterns` now carries the one extra name the CSRF guard
+  accepts (the host of `WARDYN_OIDC_REDIRECT_URL`) and nothing else; with SSO
+  unconfigured the list is empty and the behaviour is unchanged.
+- **The shared admin bearer token can no longer capture an AWS SSO session under
+  a `per_user` row.** `POST /setup/harness-login` refuses (`422`) when the
+  caller is the admin-token mechanism principal, the row is `per_user`, **and**
+  OIDC is configured: every login made with that token lands in one namespace
+  (`owner: "admin-token"`) and would overwrite the last person's capture. The
+  guard fires only with OIDC configured — with no OIDC there is no console
+  human or `wdn_` token to redirect to instead, so the admin token stays the
+  only working `per_user` capture path there, and its `model_access` correctly
+  reads `not_applicable` rather than a `not_configured` action it cannot take.
+  A LocalMode operator seat, a `shared` row, and a real per-user `wdn_` token
+  are all unaffected. The refusal is audited on `authz.denied` with reason
+  `harness_login_mechanism_principal`.
+
+### Known gaps and deferrals
+
+- **Wardyn cannot see a Bedrock 403 and turn it into a once-per-run memo, and
+  0.7.3 does not pretend to.** Under `per_user` AWS SSO the proxy MITMs only the
+  Anthropic/OpenAI hosts; `bedrock-runtime` joins the MITM set on the bearer lane
+  only, so an SSO-mode Bedrock call is an opaque CONNECT tunnel (SigV4, no CA). A
+  `builtin:bedrock-access-denied` memo would be inventing a verdict from bytes the
+  proxy cannot read, and a dispatch-time `GetRoleCredentials` preflight would
+  prove only that the role is assumable — it would have returned 200 for this
+  exact bug — while adding `portal.sso.<region>` to control-plane egress on a
+  private estate. So the fail-fast is UPSTREAM instead: the roster refuses a pin
+  that disagrees with the model's account at save, the helper refuses a sign-in
+  that cannot reach the pin, and the upload refuses a blob that disagrees with
+  either. The identity that would earn the 403 never starts a run. A Bedrock
+  extractor plus SigV4 MITM is a 0.8+ item.
+- **The pin binds at LAUNCH, so a sign-in already in flight keeps the old pin.**
+  An admin who changes `sso_account_id`/`sso_role_name` while somebody's login
+  sandbox is still alive does not re-point that capture; it is validated against
+  the pin as it read when the sandbox launched — the same rule the credential
+  scope already follows (re-reading the live roster at upload time is what let a
+  mid-run roster edit re-point a member's capture in 0.7.1). The person's next
+  sign-in picks up the new pin.
+- **A bare Bedrock model id names no account, so the model check cannot fire.**
+  `WARDYN_BEDROCK_MODEL` is passed verbatim and is most often a cross-region
+  inference profile id (`us.anthropic.claude-…`), which carries no account field.
+  The account-vs-model comparison is SKIPPED there, not failed — give the full
+  `arn:aws:bedrock:<region>:<account>:…` ARN to get it.
+- **Not proven on this hardware: a real IAM Identity Center tenant with two
+  account entitlements.** The account/role pin is proven against
+  `test/awsssofake` (which enforces the real `x-amz-sso_bearer_token` contract
+  and, from 0.7.3, scopes `ListAccountRoles` to the requested account) and
+  against real botocore. What remains owner-hardware-only is a live
+  `aws sso login` against a real tenant where the person is entitled to two
+  accounts — that AWS's `ListAccounts` ordering, its error shape for an
+  unentitled `account_id`, and its role pagination match the fake's. The pin
+  fails CLOSED in all three cases (a refusal with the fail marker, never a
+  silent wrong-account capture), so the residual is a false refusal, not a
+  wrong credential.
+- **The AWS SSO-blob credential is not raised to CC3.** `RequiredConfinementFloor`
+  raises a run to CC3 for a grant-delivered credential, but the SSO cache blob is
+  delivered at dispatch, after that floor is already computed, so a CC1/CC2 run
+  still receives it. 0.7.2 narrowed the blast radius to one person under
+  `per_user`; 0.7.3 does not raise the class. Deferred, on the owner's ruling
+  that it would fail closed on the reporting estate's CC1-only host: 0.8 ships
+  it warn-first instead of a hard floor.
+- **A visible chip for `not_applicable`.** The state exists so the admin-token
+  principal's own `model_access` can say what it is instead of guessing, but no
+  console surface renders a chip for it yet — the Agents tab and Getting Started
+  both correctly render NO chip (never a default label) rather than a wrong one.
+  Deferred to the canon sitting: a frozen `AGENTS` row is what a rendered chip
+  needs.
+- **The per-run UI-gateway cookie is outside the widened CSRF guard.**
+  `wardyn_ui_sess` (`internal/api/uigateway.go`) authenticates a relayed sandbox
+  app on a SEPARATE listener and origin (boundary B10) through its own
+  middleware, which never calls `sameOriginOrRefuse`. Widening to it is its own
+  change with its own threat model; it is named here rather than implied.
+
 ## [0.7.2] — 2026-09-12
 
 0.7.2 carries ONE unplanned feature — an admin **Workspace Providers** surface —

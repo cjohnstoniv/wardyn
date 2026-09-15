@@ -9,6 +9,16 @@ Status: **DESIGN ONLY** (the gate before any member-role code; the owner reads t
 before M1). No code in this milestone. Every boundary below is anchored to the real
 code it will change and carries the threat argument for why it exists.
 
+**0.7.3 citation note:** every `http.go:<line>` citation below had already rotted by
+the 0.7.2 base — `internal/api/http.go` grows a middleware roughly every release, and
+`docs/design/` carries **no citation guard at all** (`scripts/test-claims-match-code.sh`
+covers `ENV.md`/`VERIFY.md`/`OPERATIONS.md`/`RELEASING.md`/`README.md`/`SSH.md`/
+`POLICIES.md`/`DESKTOP.md`; `cmd/wardynd/audit_actions_doc_guard_test.go` covers only
+`docs/AUDIT-ACTIONS.md`), which is why the drift went unnoticed. Fixed here by
+re-pointing to the SYMBOL (`isOperator`, `requireOperator`, `resolveLocalMode`) rather
+than a line number — a symbol survives the next added middleware; a line number does
+not.
+
 The 0.6 permissioning pillar already ships the enforcement machinery: a
 `capability_grants` / `capability_enforcement` pair (migration `0042`), a resolver
 (`internal/api/capabilities.go`), and per-seam narrowing of a member's inline policy
@@ -23,10 +33,10 @@ operator-set root prefix that no member input can widen.
 ## Vocabulary, so the threat arguments are unambiguous
 
 - **Operator** — the admin authority. In code, `isOperator(ctx)` returns true
-  (`internal/api/http.go:391`): an admin-token / local-mode caller (a shared credential
+  (`isOperator`, `internal/api/http.go`): an admin-token / local-mode caller (a shared credential
   with no per-human role), or an OIDC session whose derived role is `oidc.RoleAdmin`.
 - **Member** — a signed-in OIDC human whose derived role is `oidc.RoleMember`. Gets
-  403 from `requireOperator` (`http.go:364`) on every admin-gated route; may read, may
+  403 from `requireOperator` (`requireOperator`, `internal/api/http.go`) on every admin-gated route; may read, may
   launch/own runs, may author a *clamped* inline policy.
 - **`operatorOnly`** — the chi sub-group in `routes.go:90` carrying the
   `requireOperator` gate. 34 registrations sit on it (the count is pinned in the
@@ -43,7 +53,7 @@ operator-set root prefix that no member input can widen.
 
 The sibling **W-DESK** design owns **topology a′**: the developer *is* the operator.
 That is today's default — local host mode, `WARDYN_LOCAL_MODE=true`,
-`humanOrAdminAuth` bypassed for a loopback peer (`http.go:248-296`), and every
+`humanOrAdminAuth` bypassed for a loopback peer (the RemoteAddr/Host loopback checks inside `humanOrAdminAuth`'s LocalMode branch, `internal/api/http.go`), and every
 admin-gated action attributed to `local:operator`. The single-dev machine trusts its
 own user; there is no member at all. **a′ applies whenever one human owns the box and
 its policy.**
@@ -58,7 +68,7 @@ The three authority anchors for m′, each contrasted with a′:
 | Authority | a′ (developer=operator, today) | m′ (member-mode desktop, this design) |
 |---|---|---|
 | **Config authority** | The developer's own env / flags to `cmd/wardynd`. | **MDM-managed config** is the operator authority. `WARDYN_LOCAL_MODE` MUST be `false`; `WARDYN_OIDC_*` and the new `WARDYN_MEMBER_WORKSPACE_ROOTS` (section c) are MDM-set and not developer-writable. |
-| **Identity → role** | Local mode: no identity, caller *is* admin (`isOperator` true, `http.go:392-394`). | The **org IdP** (an OIDC *variant profile*) authenticates the developer, and `deriveRole` (referenced in `http.go:348-359`) maps them to `oidc.RoleMember`. `WARDYN_OIDC_ROLE_MAP` / the operator-emails allowlist are MDM-set; the developer is on neither, so they derive `RoleMember`. |
+| **Identity → role** | Local mode: no identity, caller *is* admin (`isOperator` true — `internal/api/http.go`). | The **org IdP** (an OIDC *variant profile*) authenticates the developer, and `deriveRole` (referenced in `http.go:348-359`) maps them to `oidc.RoleMember`. `WARDYN_OIDC_ROLE_MAP` / the operator-emails allowlist are MDM-set; the developer is on neither, so they derive `RoleMember`. |
 | **Admin surface reach** | The developer holds the admin token / is the loopback operator, so the whole `operatorOnly` group is theirs. | The admin surface is reachable **only via an org-held credential** the developer does not possess: the admin bearer (`WARDYN_ADMIN_TOKEN`) is MDM-injected and not developer-readable, and no `RoleAdmin` OIDC session is available to the developer. The developer reaches `operatorOnly` routes only through the member-owned-scoped subset carved out in section (b). |
 
 **Threat argument for m′.** The whole point is that the human with physical/root access
@@ -71,13 +81,13 @@ for the developer's every request.** That already holds *if* three preconditions
 MDM-enforced, and M1 must fail-closed check them at boot:
 
 1. `LocalMode == false` — otherwise `humanOrAdminAuth` bypasses auth and makes the
-   loopback developer an admin (`http.go:248`, `isOperator` true at `http.go:392`).
+   loopback developer an admin (the LocalMode branch of `humanOrAdminAuth`; `isOperator` true — both `internal/api/http.go`).
 2. The admin token is not disclosed to the developer's session context — it is a
    process credential, never surfaced to the browser UI.
 3. OIDC is configured and the developer's derived role is `RoleMember`.
 
 **ponytail:** M1 adds ONE boot guard (a `cmd/wardynd` refuse-or-warn, mirroring the
-existing `LocalMode`-on-public-IP refusal noted at `http.go:243-247`) — a
+existing `LocalMode`-on-public-IP refusal noted at `resolveLocalMode`, `cmd/wardynd/boot_flags.go`) — a
 `WARDYN_MEMBER_MODE=true` that *refuses to start* if `LocalMode` is also true or OIDC
 is unconfigured. No new auth middleware: the role split in `http.go`/`routes.go` already
 does the enforcement; member-mode only asserts the preconditions under which it is real.
@@ -420,7 +430,7 @@ existing `mount_test.go` shows the pattern, including the remote-daemon note at
 - **O4.** Should M1's boot guard **refuse** to start member-mode when
   `WARDYN_MEMBER_WORKSPACE_ROOTS` contains `/` or `$HOME` (bounding the section-c residual at
   boot), or only warn (matching the `LocalMode`-on-unspecified-bind *warn* posture at
-  `http.go:243-247`)? Refuse is safer; warn matches precedent.
+  `resolveLocalMode`, `cmd/wardynd/boot_flags.go`)? Refuse is safer; warn matches precedent.
 - **O5.** When an admin later needs to act on a member's owned workspace (support,
   offboarding), `isOperator` already grants full access via `ownsWorkspaceOrAdmin` — but do
   we want an **audit distinction** for "admin acted on a member-owned workspace" beyond the
@@ -447,7 +457,7 @@ existing `mount_test.go` shows the pattern, including the remote-daemon note at
   that wins over allow. Default (both unset) = **no writable member mounts at all**.
   Operators keep the unrestricted `Writable` opt-in they have today.
 - **O4 = WARN** on `/` or `$HOME` roots at boot, matching the `LocalMode`
-  unspecified-bind precedent (`http.go:243-247`). No refuse.
+  unspecified-bind precedent (`resolveLocalMode`, `cmd/wardynd/boot_flags.go`). No refuse.
 - **O5 = YES, and no impersonation.** When an admin acts on a member-owned workspace the
   audit actor is the ADMIN's own identity (never the member's — this already falls out of
   `auditEvent` using the session principal; M2 adds a guard test pinning it), plus a

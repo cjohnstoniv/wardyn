@@ -437,6 +437,49 @@ private-endpoint Kubernetes estate.
   console string is a frozen DRAFT constant pending the maintainer's canon sitting;
   the tests assert through the constants, so the swap is a one-file diff per lane.
 
+### What v0.7.3 shipped
+
+Built and awaiting release; [CHANGELOG.md](CHANGELOG.md)'s `[Unreleased]` section
+is the full list. A second field report from the same private-endpoint Kubernetes
+estate, written inside the first hour of running 0.7.2's `agent_providers` roster
+— 7 findings, all in the new surfaces, plus the CSRF Origin guard 0.7.2 itself
+named as an open gap.
+
+- **The per-user AWS SSO lane can no longer sign with the wrong identity.** An
+  admin now pins which AWS account and role a `per_user` sign-in may capture,
+  the login sandbox asks when several accounts are reachable and nothing is
+  pinned, and the pin is enforced at three fail-closed doors — roster save,
+  sign-in, and capture — so a cloud team granting an unrelated SSO entitlement
+  can no longer silently re-point which identity a deployment authenticates as.
+  Wardyn still cannot see the resulting Bedrock 403 (the SSO-mode call is an
+  opaque SigV4 tunnel), so the fix is fail-fast upstream rather than a
+  once-per-run memo — the wrong identity never starts a run.
+- **The Bedrock check texts, the admin sign-in door, and the admin bearer
+  token's own `model_access` all stopped describing a deployment-wide fact for
+  a per-person credential gap.** A `per_user` admin now reads the one action
+  that can succeed instead of three dead ends; Settings → Model provider's
+  sign-in dialog stopped discarding the roster's stored portal URL; and the
+  shared admin token's own state reads `not_applicable` rather than a
+  "Sign in to AWS" action it cannot take — unless a session it already
+  captured is live, in which case it grades normally, because dispatch still
+  serves it. The token can no longer capture a NEW `per_user` session at all
+  (refused `422`, audited) wherever a console sign-in exists to redirect to.
+- **Declaring a per-person lane and signing in to it are linked.** The Agents
+  tab says, at save, that the lane is per person and the save only declares it;
+  Settings' Model provider card names where the lane lives and whose sign-in
+  its badge reads.
+- **The `Fence` / `NetworkPolicy: enforcing` header chips are gone.** Both were
+  fixed at boot and conveyed nothing after one read on every screen a member or
+  admin opened; the same verdict and tier matrix already lived on the admin
+  setup page's Environment step, which is now the only place to read posture.
+- **"Start a run like this one" reaches every terminal run.** The clone CTA
+  moved off the killed-run panel onto the run header for any terminal state,
+  and joined the Runs-list row kebab on both the board and the table.
+- **The cross-origin (CSRF) guard on a cookie-authenticated mutation now
+  applies in every mode**, closing the gap 0.7.2 left open outside LocalMode,
+  with the same widening reaching the browser PTY-attach WebSocket behind a
+  TLS-terminating ingress.
+
 ## Planned
 
 Everything below is **planned, unbuilt, and undated**. Where a seam exists but no

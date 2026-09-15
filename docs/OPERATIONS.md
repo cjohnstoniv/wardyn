@@ -4473,6 +4473,13 @@ driver, not a guess:
   referenced anywhere under `internal/runner/k8s`. A k8s deployment gets the
   NetworkPolicy-enforced boundary (proven live by the boot-time egress canary)
   but not the independent kernel-level corroboration Compose + Tetragon provides.
+  **Where to read the canary's verdict, 0.7.3 on:** the admin setup page's
+  Environment step (`GET /setup/status`, the `k8s_egress_containment` check
+  below) — not the console's global header, which carried a permanent
+  `NetworkPolicy: enforcing`/`Fence` chip through 0.7.2 and no longer does
+  (removed as deployment-wide, boot-fixed facts that conveyed nothing after one
+  read; see CHANGELOG.md). The Environment step is also where the Fence/Wall/
+  Vault tier matrix for every driver lives.
 - ⛔ **A pre-existing default-deny NetworkPolicy in `k8s.runsNamespace` refuses
   boot outright, with no override — unless the canary pod actually ran and could
   not connect.** The boot-time egress canary's phase A applies no NetworkPolicy of
