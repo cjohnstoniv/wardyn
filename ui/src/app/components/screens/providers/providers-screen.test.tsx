@@ -31,11 +31,16 @@ vi.mock("../../../lib/api/providers", async () => {
 });
 
 const getAgentProvidersMock = vi.fn();
+const putAgentProvidersMock = vi.fn();
 vi.mock("../../../lib/api/agent-providers", async () => {
   const actual = await vi.importActual<typeof import("../../../lib/api/agent-providers")>("../../../lib/api/agent-providers");
   return {
     ...actual,
-    agentProviders: { ...actual.agentProviders, getAgentProviders: (...a: unknown[]) => getAgentProvidersMock(...a) },
+    agentProviders: {
+      ...actual.agentProviders,
+      getAgentProviders: (...a: unknown[]) => getAgentProvidersMock(...a),
+      putAgentProviders: (...a: unknown[]) => putAgentProvidersMock(...a),
+    },
   };
 });
 
@@ -69,6 +74,7 @@ beforeEach(() => {
   getSetupStatusMock.mockResolvedValue(baseStatus());
   getAgentProvidersMock.mockReset();
   getAgentProvidersMock.mockResolvedValue({ providers: {}, etag: '"a0"' });
+  putAgentProvidersMock.mockReset();
 });
 
 describe("ProvidersScreen", () => {
@@ -288,5 +294,40 @@ describe("ProvidersScreen", () => {
     expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeInTheDocument();
     // The dead-end click used to spend a /agent-providers read instead.
     expect(getAgentProvidersMock.mock.calls.length).toBe(agentReads);
+  });
+
+  // A-01 (review fix-first): the Agents tab's own Save used to re-fire the
+  // PARENT's WHOLE `load()`, which resets `draft` (the shared document
+  // GitTab/StorageTab render) to whatever /workspace-providers last GET —
+  // silently discarding an admin's un-saved Git-tab edit made moments
+  // earlier on a different tab. Save on Agents must re-read /setup/status
+  // ONLY (`onStatusRefresh`), never /workspace-providers.
+  it("saving the Agents tab does not discard an unsaved Git-tab edit", async () => {
+    getWorkspaceProvidersMock.mockResolvedValue({ providers: {}, etag: '"f0"' });
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ harnesses: [{ id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true }] }),
+    );
+    putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"f2"' });
+    renderScreen();
+    await screen.findByText(PROVIDERS.LEGACY_OPEN_TITLE);
+
+    // An unsaved git row, typed but never Saved on this (Git) tab.
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.ADD_ROW_CTA }));
+    expect(await screen.findByTestId("provider-row-github")).toBeInTheDocument();
+
+    // Switch to Agents (its own GET/PUT resource) and Save there.
+    await userEvent.click(screen.getByRole("button", { name: AGENTS.AGENTS_TITLE }));
+    await screen.findByTestId("agent-row-claude-code");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    await waitFor(() => expect(putAgentProvidersMock).toHaveBeenCalled());
+    // /workspace-providers must NOT be re-read by this save — that would be
+    // the whole-screen `load()` this fix removes from the call path.
+    expect(getWorkspaceProvidersMock.mock.calls.length).toBe(1);
+
+    // Back on Git: the unsaved row must still be there, never reset to the
+    // server's last-loaded (empty) snapshot.
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.GIT_TITLE }));
+    expect(await screen.findByTestId("provider-row-github")).toBeInTheDocument();
+    expect(screen.queryByText(PROVIDERS.LEGACY_OPEN_TITLE)).not.toBeInTheDocument();
   });
 });

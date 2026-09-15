@@ -52,16 +52,21 @@ const HARNESSES: SetupHarnessTool[] = [
 // The PARENT's /setup/status re-read — what the roster-unknown Retry must fire
 // (the tab's own load() re-reads /agent-providers, which is not that read).
 const retryRosterMock = vi.fn();
+// A-01: the PARENT's status-only refresh — never `load()` (retryRosterMock
+// above stays reserved for the roster-unknown Retry, which has no draft to
+// lose). save() must call THIS on success, never retryRosterMock.
+const statusRefreshMock = vi.fn();
 
 beforeEach(() => {
   getAgentProvidersMock.mockReset().mockResolvedValue({ providers: {}, etag: '"e0"' });
   putAgentProvidersMock.mockReset();
   retryRosterMock.mockReset();
+  statusRefreshMock.mockReset();
 });
 
 describe("AgentsTab", () => {
   it("renders one row per harness from the roster", async () => {
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     expect(await screen.findByTestId("agent-row-claude-code")).toBeInTheDocument();
     expect(screen.getByTestId("agent-row-codex-cli")).toBeInTheDocument();
     expect(screen.getByTestId("agent-row-none")).toBeInTheDocument();
@@ -72,7 +77,7 @@ describe("AgentsTab", () => {
       providers: { agents: [{ id: "claude-code", mechanism: "anthropic_subscription" }] },
       etag: '"e1"',
     });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
     const perUser = within(row).getByRole("radio", { name: AGENTS.SOURCE_PER_USER });
     expect(perUser).toBeDisabled();
@@ -87,7 +92,7 @@ describe("AgentsTab", () => {
       providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso", credential_source: "per_user" }] },
       etag: '"e3"',
     });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
     const group = within(row).getByRole("radiogroup", { name: AGENTS.FIELD_SOURCE });
     expect(within(group).getByRole("radio", { name: AGENTS.SOURCE_PER_USER, checked: true })).toBeInTheDocument();
@@ -99,7 +104,7 @@ describe("AgentsTab", () => {
       providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] },
       etag: '"e2"',
     });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
     expect(within(row).getByRole("radio", { name: AGENTS.SOURCE_PER_USER })).not.toBeDisabled();
   });
@@ -112,7 +117,7 @@ describe("AgentsTab", () => {
       },
       etag: '"e-a11y"',
     });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const input = await screen.findByLabelText(AGENTS.FIELD_SSO_START_URL);
     expect(input.tagName).toBe("INPUT");
     expect(input).toHaveValue("https://acme.awsapps.com/start");
@@ -124,7 +129,7 @@ describe("AgentsTab", () => {
       etag: '"e2b"',
     });
     putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"e2c"' });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
     await userEvent.click(within(row).getByRole("radio", { name: /Claude subscription/ }));
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
@@ -139,7 +144,7 @@ describe("AgentsTab", () => {
       etag: '"e3"',
     });
     const modelAccess: SetupModelAccess = { state: "live" };
-    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const claudeRow = await screen.findByTestId("agent-row-claude-code");
     expect(within(claudeRow).getByText(AGENTS.MODEL_ACCESS_LIVE)).toBeInTheDocument();
     const codexRow = screen.getByTestId("agent-row-codex-cli");
@@ -148,7 +153,7 @@ describe("AgentsTab", () => {
 
   it("saves the whole roster, including untouched catalog rows seeded with a valid mechanism", async () => {
     putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"e5"' });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     await screen.findByTestId("agent-row-claude-code");
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
     expect(putAgentProvidersMock).toHaveBeenCalled();
@@ -166,7 +171,7 @@ describe("AgentsTab", () => {
       providers: { agents: [{ id: "codex-cli", mechanism: "openai_api_key", disabled: true }] },
       etag: '"e6"',
     });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-codex-cli");
     expect(within(row).getByText(AGENTS.AGENT_ROW_DISABLED_HINT)).toBeInTheDocument();
     // The chip is its OWN canon key, not the hint sliced at its colon.
@@ -179,7 +184,7 @@ describe("AgentsTab", () => {
       etag: '"e7"',
     });
     putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"e8"' });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     await screen.findByTestId("agent-row-claude-code");
     expect(screen.queryByTestId("agent-row-my-agent")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
@@ -209,7 +214,7 @@ describe("AgentsTab — the roster on screen is the server's, and Save writes it
       etag: '"n1"',
     });
     putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"n2"' });
-    render(<AgentsTab harnesses={NARROWED} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={NARROWED} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
 
     const codex = await screen.findByTestId("agent-row-codex-cli");
     expect(within(codex).getByRole("switch")).toHaveAttribute("aria-checked", "false");
@@ -236,7 +241,7 @@ describe("AgentsTab — the roster on screen is the server's, and Save writes it
       etag: '"n3"',
     });
     putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"n4"' });
-    render(<AgentsTab harnesses={NARROWED} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={NARROWED} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     await screen.findByTestId("agent-row-claude-code");
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
 
@@ -247,7 +252,7 @@ describe("AgentsTab — the roster on screen is the server's, and Save writes it
 
   it("legacy open mode (every harness enabled) still pre-fills all-on, in catalog order", async () => {
     putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"n5"' });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
     // An edit to the FIRST row must not move it to the end of the body.
     await userEvent.click(within(row).getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_SSO }));
@@ -264,7 +269,7 @@ describe("AgentsTab — the roster on screen is the server's, and Save writes it
       etag: '"n6"',
     });
     putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"n7"' });
-    render(<AgentsTab harnesses={NARROWED} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={NARROWED} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const codex = await screen.findByTestId("agent-row-codex-cli");
     await userEvent.click(within(codex).getByRole("switch"));
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
@@ -282,7 +287,7 @@ describe("AgentsTab — the roster on screen is the server's, and Save writes it
 // refused, from one click on a Save the admin had no reason to distrust.
 describe("AgentsTab — an unknown roster is never a saveable empty one", () => {
   it("renders the fetch-failed state, with no rows and no Save, when the roster is undefined", async () => {
-    render(<AgentsTab operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     expect(await screen.findByText(PROVIDERS.FETCH_FAILED_TITLE)).toBeInTheDocument();
     expect(screen.getByText(PROVIDERS.FETCH_FAILED_BODY)).toBeInTheDocument();
     // The CANON key, not a literal: providers-screen.tsx renders the same
@@ -300,7 +305,7 @@ describe("AgentsTab — an unknown roster is never a saveable empty one", () => 
   // Retry called the tab's own load() — a re-read of /agent-providers, which had
   // not failed. Three clicks, three getAgentProviders calls, nothing moved.
   it("its Retry re-fires the PARENT's roster read, never this tab's own fetch", async () => {
-    render(<AgentsTab operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     await screen.findByText(PROVIDERS.FETCH_FAILED_TITLE);
     const agentReads = getAgentProvidersMock.mock.calls.length;
     await userEvent.click(screen.getByRole("button", { name: ACCESS_STATE.FETCH_FAILED_RETRY }));
@@ -313,7 +318,7 @@ describe("AgentsTab — an unknown roster is never a saveable empty one", () => 
   // withheld because the only body it could write is `{agents: []}` — which is
   // the same wipe, just reached honestly.
   it("renders the lead with no rows and no Save when the roster is reported empty", async () => {
-    render(<AgentsTab harnesses={[]} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={[]} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     expect(await screen.findByText(AGENTS.AGENTS_LEAD)).toBeInTheDocument();
     expect(screen.queryByText(PROVIDERS.FETCH_FAILED_TITLE)).toBeNull();
     expect(screen.queryByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeNull();
@@ -335,7 +340,7 @@ describe("AgentsTab — a stored per_user on a mechanism that can't carry it is 
 
   it("renders Shared, with no start-URL field and no active-and-disabled Per person", async () => {
     getAgentProvidersMock.mockResolvedValue({ providers: { agents: [STORED] }, etag: '"p1"' });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
     const shared = within(row).getByRole("radio", { name: AGENTS.SOURCE_SHARED });
     const perUser = within(row).getByRole("radio", { name: AGENTS.SOURCE_PER_USER });
@@ -351,7 +356,7 @@ describe("AgentsTab — a stored per_user on a mechanism that can't carry it is 
   it("...and the next Save PUTs the normalised row, not the pair it loaded", async () => {
     getAgentProvidersMock.mockResolvedValue({ providers: { agents: [STORED] }, etag: '"p2"' });
     putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"p3"' });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     await screen.findByTestId("agent-row-claude-code");
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
 
@@ -369,9 +374,44 @@ describe("AgentsTab — a stored per_user on a mechanism that can't carry it is 
       },
       etag: '"p4"',
     });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
     expect(within(row).getByLabelText(AGENTS.FIELD_SSO_START_URL)).toHaveValue("https://acme.awsapps.com/start");
+  });
+
+  // A-09 (review fix-first): a bedrock_sso row with credential_source SHARED
+  // (or unset) is the same "the admin can neither see nor clear it" trap as
+  // the mechanism case above — the pin fields aren't shown (per_user gate),
+  // so a stale sso_account_id/sso_role_name/sso_start_url from another client
+  // survived load-normalise and rode the next unrelated Save straight into
+  // agent400SSOPinUnused. One clause (credential_source !== "per_user") now
+  // clears all four fields together, regardless of mechanism.
+  it("a stored bedrock_sso+SHARED row carrying a stale pin is normalised on LOAD too", async () => {
+    const STORED_SHARED_WITH_PIN = {
+      id: "claude-code",
+      mechanism: "bedrock_sso",
+      sso_start_url: "https://acme.awsapps.com/start",
+      sso_account_id: "111111111111",
+      sso_role_name: "BedrockRunner",
+    };
+    getAgentProvidersMock.mockResolvedValue({ providers: { agents: [STORED_SHARED_WITH_PIN] }, etag: '"p5"' });
+    putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"p6"' });
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const row = await screen.findByTestId("agent-row-claude-code");
+    // Hidden on load: the row renders Shared, so none of the three fields
+    // (per_user-gated) show, and the stale values are not readable anywhere.
+    expect(within(row).queryByLabelText(AGENTS.FIELD_SSO_START_URL)).toBeNull();
+    expect(within(row).queryByLabelText(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID)).toBeNull();
+    expect(within(row).queryByLabelText(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME)).toBeNull();
+    expect(screen.queryByDisplayValue("111111111111")).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    const [body] = putAgentProvidersMock.mock.calls[0];
+    const claude = body.agents.find((a: { id: string }) => a.id === "claude-code");
+    expect(claude.credential_source ?? "shared").toBe("shared");
+    expect(claude.sso_start_url).toBeUndefined();
+    expect(claude.sso_account_id).toBeUndefined();
+    expect(claude.sso_role_name).toBeUndefined();
   });
 });
 
@@ -382,7 +422,7 @@ describe("AgentsTab — a model-access state outside the five gets no chip", () 
   it("renders NO chip and no sign-in button for expired_renewable", async () => {
     getAgentProvidersMock.mockResolvedValue({ providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] }, etag: '"m1"' });
     const modelAccess = { state: "expired_renewable" } as SetupModelAccess;
-    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
     expect(within(row).queryByText(AGENTS.MODEL_ACCESS_NOT_CONFIGURED)).toBeNull();
     expect(within(row).queryByText(AGENTS.MODEL_ACCESS_LIVE)).toBeNull();
@@ -394,7 +434,7 @@ describe("AgentsTab — a model-access state outside the five gets no chip", () 
   it("the five known states still render their own chip", async () => {
     getAgentProvidersMock.mockResolvedValue({ providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] }, etag: '"m2"' });
     const modelAccess: SetupModelAccess = { state: "shared_expired" };
-    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
     expect(within(row).getByText(AGENTS.MODEL_ACCESS_SHARED_EXPIRED)).toBeInTheDocument();
   });
@@ -409,7 +449,7 @@ describe("AgentsTab — the admin's per_user sign-in never asks for the portal",
       etag: '"s1"',
     });
     const modelAccess: SetupModelAccess = { state: "not_configured" };
-    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
     await userEvent.click(within(row).getByRole("button", { name: AGENTS.SIGN_IN_AWS }));
     expect(await screen.findByText(AGENTS.SSO_START_URL_MANAGED)).toBeInTheDocument();
@@ -424,7 +464,7 @@ describe("AgentsTab — the admin's per_user sign-in never asks for the portal",
       etag: '"s2"',
     });
     const modelAccess: SetupModelAccess = { state: "not_configured" };
-    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
     await userEvent.click(within(row).getByRole("button", { name: AGENTS.SIGN_IN_AWS }));
     await screen.findByTestId("login-start-url-prompt");
@@ -441,7 +481,7 @@ describe("AgentsTab — the ETag / 412 / 400 contract", () => {
   it("hands the GET's ETag to the PUT, and the client sends it as If-Match", async () => {
     getAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"v7"' });
     putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"v8"' });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     await screen.findByTestId("agent-row-claude-code");
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
     await waitFor(() => expect(putAgentProvidersMock).toHaveBeenCalled());
@@ -472,7 +512,7 @@ describe("AgentsTab — the ETag / 412 / 400 contract", () => {
       etag: '"v1"',
     });
     putAgentProvidersMock.mockRejectedValue(new HttpError(412, "precondition failed"));
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     await screen.findByTestId("agent-row-claude-code");
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
     expect(await screen.findByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).toBeInTheDocument();
@@ -485,7 +525,7 @@ describe("AgentsTab — the ETag / 412 / 400 contract", () => {
   it("a 400 renders SAVE_REFUSED_TITLE over the server's verbatim body", async () => {
     const refusal = 'agents[0]: mechanism "bedrock_sso" requires an sso_start_url';
     putAgentProvidersMock.mockRejectedValue(new HttpError(400, refusal));
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     await screen.findByTestId("agent-row-claude-code");
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
     expect(await screen.findByText(PROVIDERS.SAVE_REFUSED_TITLE)).toBeInTheDocument();
@@ -500,22 +540,45 @@ describe("AgentsTab — the ETag / 412 / 400 contract", () => {
 // from the PARENT's /setup/status, never re-read after a successful Save, so
 // right after declaring per_user the admin's own door can go on showing the
 // stale pre-save state until an unrelated navigation happens to re-fetch it.
-describe("AgentsTab — a successful Save re-fires the parent's roster/status read", () => {
-  it("calls onRetryRoster after a successful save, not just on the roster-unknown Retry", async () => {
+//
+// A-01 (review fix-first): the re-fire is `onStatusRefresh` — /setup/status
+// ONLY — never `onRetryRoster`, which is the PARENT's whole load(): it also
+// resets the Git/Storage tabs' own unsaved `draft`, clears a pending 412
+// banner, and a transient GET failure there would flip the whole screen to
+// FETCH_FAILED right after a successful, unrelated agent save.
+describe("AgentsTab — a successful Save re-fires ONLY the parent's status read", () => {
+  it("calls onStatusRefresh after a successful save, never onRetryRoster", async () => {
     putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"r2"' });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     await screen.findByTestId("agent-row-claude-code");
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
     await waitFor(() => expect(putAgentProvidersMock).toHaveBeenCalled());
-    expect(retryRosterMock).toHaveBeenCalledTimes(1);
+    expect(statusRefreshMock).toHaveBeenCalledTimes(1);
+    expect(retryRosterMock).not.toHaveBeenCalled();
   });
 
-  it("does NOT call onRetryRoster when the save is refused (400)", async () => {
+  it("does NOT call onStatusRefresh when the save is refused (400)", async () => {
     putAgentProvidersMock.mockRejectedValue(new HttpError(400, "refused"));
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     await screen.findByTestId("agent-row-claude-code");
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
     await screen.findByText(PROVIDERS.SAVE_REFUSED_TITLE);
+    expect(statusRefreshMock).not.toHaveBeenCalled();
+    expect(retryRosterMock).not.toHaveBeenCalled();
+  });
+
+  // A-05: the 412 twin — no negative control existed for this call site.
+  it("does NOT call onStatusRefresh when someone else saved first (412)", async () => {
+    getAgentProvidersMock.mockResolvedValue({
+      providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] },
+      etag: '"r3"',
+    });
+    putAgentProvidersMock.mockRejectedValue(new HttpError(412, "precondition failed"));
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    await screen.findByTestId("agent-row-claude-code");
+    await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+    await screen.findByText(PROVIDERS.SAVED_ELSEWHERE_TITLE);
+    expect(statusRefreshMock).not.toHaveBeenCalled();
     expect(retryRosterMock).not.toHaveBeenCalled();
   });
 });
@@ -531,13 +594,20 @@ describe("AgentsTab — the per_user sign-in banner", () => {
   it("renders the prominent banner above the mechanism field for an actionable state", async () => {
     getAgentProvidersMock.mockResolvedValue({ providers: { agents: [PER_USER_ROW] }, etag: '"b1"' });
     const modelAccess: SetupModelAccess = { state: "not_configured", action: "Sign in to AWS" };
-    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
-    const banner = within(row).getByRole("status");
+    const banner = within(row).getByTestId("per-user-sign-in-banner");
     expect(within(banner).getByText(AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE)).toBeInTheDocument();
     expect(within(banner).getByText(AGENTS_DRAFT.PER_USER_SIGN_IN_BODY)).toBeInTheDocument();
     expect(within(banner).getByText(AGENTS.ADMIN_OWN_CHIP_NOTE)).toBeInTheDocument();
     expect(within(banner).getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeInTheDocument();
+    // A-07: role="status" covers ONLY the title/body pair — never
+    // ModelAccessSignIn (HarnessLoginPane's own multi-step device-code/poll
+    // flow would otherwise re-announce wholesale on every poll tick).
+    const statusRegion = within(banner).getByRole("status");
+    expect(within(statusRegion).getByText(AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE)).toBeInTheDocument();
+    expect(within(statusRegion).queryByText(AGENTS.ADMIN_OWN_CHIP_NOTE)).not.toBeInTheDocument();
+    expect(within(statusRegion).queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
     // It renders BEFORE the mechanism radiogroup — prominence, not an addition.
     const mechanismField = within(row).getByRole("radiogroup", { name: AGENTS.FIELD_MECHANISM });
     expect(banner.compareDocumentPosition(mechanismField) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -549,10 +619,10 @@ describe("AgentsTab — the per_user sign-in banner", () => {
       etag: '"b2"',
     });
     const modelAccess: SetupModelAccess = { state: "not_configured", action: "Sign in to AWS" };
-    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
     expect(within(row).queryByText(AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE)).not.toBeInTheDocument();
-    expect(within(row).queryByRole("status")).not.toBeInTheDocument();
+    expect(within(row).queryByTestId("per-user-sign-in-banner")).not.toBeInTheDocument();
     // The chip still renders, just in its ordinary spot at the bottom.
     expect(within(row).getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeInTheDocument();
   });
@@ -560,7 +630,7 @@ describe("AgentsTab — the per_user sign-in banner", () => {
   it("a per_user row that is already live never renders the banner", async () => {
     getAgentProvidersMock.mockResolvedValue({ providers: { agents: [PER_USER_ROW] }, etag: '"b3"' });
     const modelAccess: SetupModelAccess = { state: "live" };
-    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
     expect(within(row).queryByText(AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE)).not.toBeInTheDocument();
   });
@@ -577,11 +647,11 @@ describe("AgentsTab — not_applicable renders no model-access block at all", ()
       etag: '"na1"',
     });
     const modelAccess: SetupModelAccess = { state: "not_applicable" };
-    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator modelAccess={modelAccess} onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
     expect(within(row).queryByText(AGENTS.ADMIN_OWN_CHIP_NOTE)).not.toBeInTheDocument();
     expect(within(row).queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
-    expect(within(row).queryByRole("status")).not.toBeInTheDocument();
+    expect(within(row).queryByTestId("per-user-sign-in-banner")).not.toBeInTheDocument();
   });
 });
 
@@ -605,7 +675,7 @@ describe("AgentsTab — the roster pin (sso_account_id / sso_role_name)", () => 
       },
       etag: '"pin1"',
     });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     await screen.findByTestId("agent-row-claude-code");
     const accountInput = await screen.findByLabelText(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID);
     const roleInput = screen.getByLabelText(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME);
@@ -618,7 +688,7 @@ describe("AgentsTab — the roster pin (sso_account_id / sso_role_name)", () => 
       providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] },
       etag: '"pin2"',
     });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     await screen.findByTestId("agent-row-claude-code");
     expect(screen.queryByLabelText(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID)).toBeNull();
     expect(screen.queryByLabelText(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME)).toBeNull();
@@ -630,7 +700,7 @@ describe("AgentsTab — the roster pin (sso_account_id / sso_role_name)", () => 
       etag: '"pin3"',
     });
     putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"pin4"' });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     await screen.findByTestId("agent-row-claude-code");
     await userEvent.type(screen.getByLabelText(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID), "222222222222");
     await userEvent.type(screen.getByLabelText(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME), "DevPower");
@@ -658,7 +728,7 @@ describe("AgentsTab — the roster pin (sso_account_id / sso_role_name)", () => 
       etag: '"pin5"',
     });
     putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"pin6"' });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
     await userEvent.click(within(row).getByRole("radio", { name: /Claude subscription/ }));
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
@@ -685,7 +755,7 @@ describe("AgentsTab — the roster pin (sso_account_id / sso_role_name)", () => 
       etag: '"pin7"',
     });
     putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"pin8"' });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     const row = await screen.findByTestId("agent-row-claude-code");
     await userEvent.click(within(row).getByRole("radio", { name: AGENTS.SOURCE_SHARED }));
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
@@ -712,7 +782,7 @@ describe("AgentsTab — the roster pin (sso_account_id / sso_role_name)", () => 
       etag: '"pin9"',
     });
     putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"pin10"' });
-    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} />);
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     await screen.findByTestId("agent-row-claude-code");
     expect(screen.queryByLabelText(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID)).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
