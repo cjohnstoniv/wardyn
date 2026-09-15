@@ -62,11 +62,16 @@ answered before.
   refused.
 - **`harness.credential.refused` audit action.** Every refusal on the SSO-token
   upload route now leaves a row, with a `reason` from a fixed vocabulary
-  (`blob_shape`, `field_unsafe`, `region_mismatch`, `start_url_mismatch`,
-  `account_role_pin_mismatch`, `model_account_mismatch`, `unstamped_scope`,
-  `already_captured`, `stamp_unreadable`, `store_error`) and never sandbox-chosen
-  text. `agent_provider.write` gains `pins`; `harness.login.started` gains
-  `sso_account_id`/`sso_role_name`. See [docs/AUDIT-ACTIONS.md](docs/AUDIT-ACTIONS.md).
+  (`blob_shape`, `field_unsafe`, `field_shape`, `region_mismatch`,
+  `start_url_mismatch`, `account_role_pin_mismatch`, `model_account_mismatch`,
+  `unstamped_scope`, `already_captured`, `stamp_unreadable`, `store_error`) and
+  never sandbox-chosen text. `field_shape` is the capture door's own account-id/
+  role-name shape check — the same `^\d{12}$` / IAM role-name rule the roster's
+  save-time pin already enforced, now applied to whatever account/role a
+  sign-in actually captured, so a malformed value cannot reach one door
+  refused and the other accepting. `agent_provider.write` gains `pins`;
+  `harness.login.started` gains `sso_account_id`/`sso_role_name`. See
+  [docs/AUDIT-ACTIONS.md](docs/AUDIT-ACTIONS.md).
 
 ### Fixed
 
@@ -78,17 +83,20 @@ answered before.
   an agent terminal, and blocked `credential_source: per_user` completely with no
   workaround (the helper read no override, and the stored blob could not be
   corrected by hand — the reserved harness secret name is sealed by pattern).
-  The pin above is enforced at three doors, each failing closed: at ROSTER SAVE a
-  pin that is not the account the configured `WARDYN_BEDROCK_MODEL` ARN lives in
-  is refused (400, naming both accounts); at SIGN-IN the helper verifies the pin
-  against the SSO portal and refuses rather than falling back to the first
-  entry; at CAPTURE the upload is bound to the pin as it read AT LAUNCH, stamped
-  on the run's own `harness.login.started` row, so a roster edit mid-sign-in
-  cannot re-point a capture already in flight. Capture-time account-vs-model
-  validation applies with or without a pin: an uploaded session for a different
-  account than a full-ARN `WARDYN_BEDROCK_MODEL` is refused and named; a bare
-  cross-region inference-profile id names no account, so that check is skipped
-  rather than failed.
+  The pin above is refused at CAPTURE and at SIGN-IN, both failing closed: at
+  SIGN-IN the helper verifies the pin against the SSO portal and refuses
+  rather than falling back to the first entry; at CAPTURE the upload is bound
+  to the pin as it read AT LAUNCH, stamped on the run's own
+  `harness.login.started` row, so a roster edit mid-sign-in cannot re-point a
+  capture already in flight. At ROSTER SAVE, a pin that disagrees with the
+  account the configured `WARDYN_BEDROCK_MODEL` ARN lives in is ACCEPTED, with
+  a one-time warning logged rather than a 400 — the admin's explicit pin is
+  the deliberate answer, taken as written, and the row still saves. Model-
+  account validation applies only when nothing is pinned: an uploaded session
+  for a different account than a full-ARN `WARDYN_BEDROCK_MODEL`, with no pin
+  set, is refused and named; a pinned capture is bound to the pin alone, and a
+  bare cross-region inference-profile id names no account either way, so that
+  check is skipped rather than failed.
 - **The admin's own AWS sign-in door stopped asking for a start URL it would
   throw away.** Of three call sites that open the harness-login dialog, only
   Settings → Model provider failed to pass `startURLManaged` under a `per_user`
@@ -138,13 +146,19 @@ answered before.
   nothing is captured in that shared namespace: a session an earlier admin-token
   capture already holds is graded normally, because dispatch still serves it to
   admin-token-created runs. On Settings' Model provider card specifically,
-  `not_applicable` now renders NOT connected with its own per-person note
-  instead of borrowing the deployment-wide "Bedrock is configured" badge —
-  before, that fallback (`connected={!!bedrockRow}`) made the admin-token
-  caller's card read Connected for a lane it can never sign in to, the same
-  "green chip over an absent credential" shape the 0.7.1 report raised and
-  fixed for the member's Getting Started chip. See "Security" below for the
-  matching capture-side refusal.
+  `not_applicable` renders NOT connected with its own per-person note, offers
+  no sign-in button — the door `POST /setup/harness-login` already refuses
+  for this exact caller (see "Security" below) — and the note itself carries
+  no imperative: it says the caller is a mechanism with no sign-in of its own,
+  never "sign in" to a caller that cannot. That fallback — read by every
+  OTHER shape
+  (a `shared` row, a disabled row, no roster at all) — no longer badges
+  Connected merely because a Bedrock row exists (region or model set): it now
+  requires an ACTIVE credential lane (a bearer key, a captured SSO session, a
+  host `~/.aws` mount or static keys, in that order), the same "green chip
+  over an absent credential" fix the 0.7.1 report raised and the member's
+  Getting Started chip already had. See "Security" below for the matching
+  capture-side refusal.
 - **The `Fence` / `NetworkPolicy: enforcing` header chips are gone.** Both were
   deployment-wide facts fixed at boot, occupying the header's most valuable real
   estate on every screen for every user while conveying nothing after one read —
@@ -170,7 +184,6 @@ answered before.
   from a faithful clone — one shared helper now refuses (a toast, no
   navigation) on BOTH the run header and the Runs-list kebab rather than
   launch one silently degraded from either door.
-
 - **The setup screen's first paint could cost six seconds, or more, on a wedged
   Windows interop.** `GET /setup/status` ran the host-proxy sweep
   (`setup.DetectHostProxy`) on the request goroutine, and a 30s memo only ever
@@ -195,11 +208,16 @@ answered before.
   in-process from `WARDYN_HOST_PROXY_B64` with no subprocess, so the first
   call answers synchronously and correctly. The setup screen's Re-check button
   now sends `GET /setup/status?recheck=1` (operator-only), which drops the
-  memo's freshness and forces a real re-detect while still showing the
-  last-known value on screen until the new one lands — before, Re-check only
+  memo's freshness and forces a real re-detect — before, Re-check only
   re-fetched whatever the 30-second-old memo already held, so a proxy just
   configured could not be made to appear no matter how many times it was
-  pressed.
+  pressed. The forced call waits up to 2 seconds for that fresh sweep to land
+  before answering, so a single press now sees the new value rather than
+  needing a second press a moment later; a wedged host still answers within
+  the 2 seconds, with the last-known value, exactly like an ordinary poll.
+  Repeated presses cannot pile up sweeps: at most one forced re-detect is
+  honoured per `hostProxySweepDeadline` (10s), and a press inside that window
+  reads the sweep already in flight rather than starting another.
 
 ### Security
 
@@ -210,9 +228,14 @@ answered before.
   deployment relied on the session cookie's `SameSite=Lax` alone — a browser
   rule rather than ours, and one that does not bind a same-site sibling on a
   shared parent domain. `sameOriginOrRefuse` (`internal/api/csrf.go`) now runs
-  at the top of the OIDC session branch, before any handler: the browser's own
-  `Sec-Fetch-Site: cross-site` label refuses outright, a present `Origin` must
-  name either the request's `Host` or the host of `WARDYN_OIDC_REDIRECT_URL`
+  at the top of the OIDC session branch, before any handler: a present
+  `Sec-Fetch-Site` header refuses outright unless it reads `same-origin` or
+  `none` — so `cross-site` refuses as before, and so now does `same-site` (a
+  sibling host on a shared parent domain, the browser label a same-site
+  sibling actually sends, and the one this guard's own justification names),
+  which used to fall through to the Origin rule and pass on a request that
+  omitted `Origin` entirely. Otherwise, a PRESENT `Origin` must name either the
+  request's `Host` or the host of `WARDYN_OIDC_REDIRECT_URL`
   (the second name is what a TLS-terminating ingress needs — which is also why
   the scheme is deliberately not compared), and a malformed, opaque (`null`) or
   host-less `Origin` fails closed. Refused with `403` and
@@ -280,11 +303,13 @@ answered before.
   proxy cannot read, and a dispatch-time `GetRoleCredentials` preflight would
   prove only that the role is assumable — it would have returned 200 for this
   exact bug — while adding `portal.sso.<region>` to control-plane egress on a
-  private estate. So the fail-fast is UPSTREAM instead: the roster refuses a pin
-  that disagrees with the model's account at save, the helper refuses a sign-in
-  that cannot reach the pin, and the upload refuses a blob that disagrees with
-  either. The identity that would earn the 403 never starts a run. A Bedrock
-  extractor plus SigV4 MITM is a 0.8+ item.
+  private estate. So the fail-fast is UPSTREAM instead: the helper refuses a
+  sign-in that cannot reach the pin, and the upload refuses a blob that
+  disagrees with the pin, or — with nothing pinned — with the model's account.
+  A pin that disagrees with the model's account is the one shape the roster
+  now WARNS on rather than refuses, on the reasoning that an explicit pin is
+  the admin's deliberate override; every other wrong-identity shape still
+  never starts a run. A Bedrock extractor plus SigV4 MITM is a 0.8+ item.
 - **The pin binds at LAUNCH, so a sign-in already in flight keeps the old pin.**
   An admin who changes `sso_account_id`/`sso_role_name` while somebody's login
   sandbox is still alive does not re-point that capture; it is validated against
