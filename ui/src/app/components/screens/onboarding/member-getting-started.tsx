@@ -238,7 +238,7 @@ export function MemberGettingStarted() {
                 )}
                 {hasOwnKey ? (
                   <Chip tone="success">{T.MODEL_ACCESS_OWN_CHIP}</Chip>
-                ) : status?.model_access ? (
+                ) : status?.model_access && status.model_access.state !== "not_applicable" ? (
                   // C4.5/C3: the chip stops reading llm_ready (a DEPLOYMENT
                   // fact) and reads THIS caller's own model-access state —
                   // success ONLY for live; the action rides its own line
@@ -250,6 +250,15 @@ export function MemberGettingStarted() {
                   // false claim with no CTA to act on it. Unknown ≠ not
                   // configured, and the server's own action line (below) is the
                   // one thing still worth rendering.
+                  //
+                  // not_applicable (finding 5) is excluded from this branch
+                  // entirely, not merely from the label lookup: it is the
+                  // admin-token principal's own answer ("this is a shared
+                  // token, not a person"), so a TRUTHY model_access object
+                  // must still fall through to the llm_ready arm below —
+                  // otherwise the deployment-wide "Provided by your admin"
+                  // chip that arm exists to show is lost under exactly the
+                  // caller (automation, the shared token) most likely to hit it.
                   MODEL_ACCESS_CHIP_LABEL[status.model_access.state] ? (
                     <Chip tone={status.model_access.state === "live" ? "success" : "warning"}>
                       {MODEL_ACCESS_CHIP_LABEL[status.model_access.state]}
