@@ -25,6 +25,12 @@ const (
 	secretGitHubAppKey = "github-app-key"
 )
 
+// setupRecheckParam is the console's Re-check, spelled on the wire: any non-empty
+// value on GET /setup/status drops the host-proxy memo first, so the answer comes
+// from the host rather than from up to 30s ago. Additive and ignorable — an older
+// console omits it and gets exactly today's behaviour.
+const setupRecheckParam = "recheck"
+
 // First-run setup readiness surface.
 //
 // GET /api/v1/setup/status returns the aggregate a first-run "Getting started"
@@ -511,6 +517,15 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	plat := setup.DetectPlatform()
+	// Re-check (setup-screen.tsx) means "look at the host again", so it has to be
+	// able to say so: without this it was a client-side refetch of a memo up to
+	// 30s old, and a host proxy the operator had just configured could not be
+	// made to appear no matter how many times they pressed the button. OPERATOR
+	// ONLY — the deployer funnel is the only surface that offers Re-check, and a
+	// member must not be able to make the daemon sweep the host on demand.
+	if r.URL.Query().Get(setupRecheckParam) != "" && s.isOperator(ctx) {
+		hostProxyForceRedetect()
+	}
 	hostProxy := cachedHostProxy()
 	scmPosture := setup.DetectSCMPosture()
 

@@ -5,11 +5,15 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -168,7 +172,220 @@ func TestSetupStatus_HostSweepNeverBlocksThePoll(t *testing.T) {
 	if w := do(t, srv, http.MethodGet, "/api/v1/setup/status", adminToken, ""); w.Code != http.StatusOK {
 		t.Fatalf("setup/status: code = %d; body=%s", w.Code, w.Body.String())
 	}
-	if elapsed := time.Since(start); elapsed > time.Second {
+	// sweep/2 rather than a literal bound, so the two numbers cannot drift apart.
+	if elapsed := time.Since(start); elapsed > sweep/2 {
 		t.Errorf("GET /setup/status took %s with a %s host sweep in flight — the poll is waiting on a subprocess", elapsed, sweep)
 	}
+}
+
+// ── the sweep's failure modes ───────────────────────────────────────────────
+//
+// Everything below is about a sweep that does NOT simply answer: one abandoned
+// mid-flight by a reset, one that never returns, one that panics, and the one an
+// operator asked for on purpose. Each is a state the memo can be left in, and
+// each of them used to leave it blind for the life of the process.
+
+// blockingHostProxyDetect installs a detector that counts its calls and blocks
+// until the returned release func is called (or the test ends). It returns the
+// counter and the release.
+func blockingHostProxyDetect(t *testing.T) (*atomic.Int64, chan struct{}) {
+	t.Helper()
+	var calls atomic.Int64
+	gate := make(chan struct{})
+	real := hostProxyDetect
+	hostProxyDetect = func() setup.HostProxyDetection {
+		calls.Add(1)
+		<-gate
+		return setup.HostProxyDetection{}
+	}
+	t.Cleanup(func() {
+		hostProxyDetect = real
+		select {
+		case <-gate:
+		default:
+			close(gate)
+		}
+		hostProxyCacheReset()
+	})
+	hostProxyCacheReset()
+	return &calls, gate
+}
+
+// waitHostProxyCalls blocks until the detector has been called n times.
+func waitHostProxyCalls(t *testing.T, calls *atomic.Int64, n int64, why string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if calls.Load() >= n {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("host-proxy detector was called %d time(s), want %d — %s", calls.Load(), n, why)
+}
+
+// TestHostProxy_ResetWhileSweepingLetsTheNextPollReDetect is the pin for the one
+// thing hostProxyCacheReset promises: "the next caller re-detects".
+//
+// It did not, while a sweep was in flight — the reset dropped the memo but left
+// hostProxySweeping set, so startHostProxySweepLocked early-returned on a flag
+// whose goroutine belonged to a memo that no longer existed, and nothing ever
+// swept again. The lane's own memo test failed on exactly this whenever a
+// neighbouring test had left a real 6s WSL sweep running.
+func TestHostProxy_ResetWhileSweepingLetsTheNextPollReDetect(t *testing.T) {
+	calls, gate := blockingHostProxyDetect(t)
+	srv := New(baseTestConfig(newHarness(t), &setupStatusCostStore{}))
+
+	if w := do(t, srv, http.MethodGet, "/api/v1/setup/status", adminToken, ""); w.Code != http.StatusOK {
+		t.Fatalf("first poll: code = %d", w.Code)
+	}
+	waitHostProxyCalls(t, calls, 1, "the first poll must start a sweep")
+
+	hostProxyCacheReset() // taken WHILE the first sweep is still blocked in detect()
+
+	if w := do(t, srv, http.MethodGet, "/api/v1/setup/status", adminToken, ""); w.Code != http.StatusOK {
+		t.Fatalf("second poll: code = %d", w.Code)
+	}
+	waitHostProxyCalls(t, calls, 2, "a reset taken mid-sweep must not leave the in-flight flag set")
+	close(gate)
+}
+
+// TestHostProxy_HangingSweepIsAbandonedAndRetried pins the real ceiling.
+//
+// probeTimeout never bounded the CALL (exec's Output() waits on a pipe a killed
+// child's grandchild can still hold — see the setup package's own pin), so a
+// wedged host could hang a sweep indefinitely. With the flag held for the whole
+// hang, every later poll returned the zero value and started nothing: fast,
+// silent and confidently wrong, forever. The deadline must retire it and let the
+// next poll try again.
+func TestHostProxy_HangingSweepIsAbandonedAndRetried(t *testing.T) {
+	realDeadline := setHostProxySweepDeadline(50 * time.Millisecond)
+	t.Cleanup(func() { setHostProxySweepDeadline(realDeadline) })
+
+	calls, gate := blockingHostProxyDetect(t)
+	srv := New(baseTestConfig(newHarness(t), &setupStatusCostStore{}))
+
+	start := time.Now()
+	if w := do(t, srv, http.MethodGet, "/api/v1/setup/status", adminToken, ""); w.Code != http.StatusOK {
+		t.Fatalf("first poll: code = %d", w.Code)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("first poll took %s against a sweep that never returns — the handler is waiting on it", elapsed)
+	}
+	waitHostProxyCalls(t, calls, 1, "the first poll must start a sweep")
+
+	// Past the deadline the sweep is abandoned, so a later poll gets its own.
+	deadline := time.Now().Add(5 * time.Second)
+	for calls.Load() < 2 && time.Now().Before(deadline) {
+		do(t, srv, http.MethodGet, "/api/v1/setup/status", adminToken, "")
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := calls.Load(); n < 2 {
+		t.Errorf("after the deadline the detector had been called %d time(s), want >= 2 — a hung sweep still holds the memo blind forever", n)
+	}
+	close(gate)
+}
+
+// TestHostProxy_SweepPanicIsContainedAndReleasesTheFlag: the sweep is a DETACHED
+// goroutine now, so an unrecovered panic under it takes wardynd with it — where
+// before the fix the very same panic ran on the request goroutine and net/http
+// recovered it. DetectHostProxy parses whatever a host .exe printed, which is
+// exactly the shape sshGo's and the run watcher's recovers exist for. And the
+// release must be on the panic path too, or one panic strands the flag and the
+// memo is blind for the life of the process.
+func TestHostProxy_SweepPanicIsContainedAndReleasesTheFlag(t *testing.T) {
+	var calls atomic.Int64
+	real := hostProxyDetect
+	hostProxyDetect = func() setup.HostProxyDetection {
+		if calls.Add(1) == 1 {
+			panic("host proxy detector blew up")
+		}
+		return setup.HostProxyDetection{}
+	}
+	t.Cleanup(func() {
+		hostProxyDetect = real
+		hostProxyCacheReset()
+	})
+	hostProxyCacheReset()
+
+	srv := New(baseTestConfig(newHarness(t), &setupStatusCostStore{}))
+	if w := do(t, srv, http.MethodGet, "/api/v1/setup/status", adminToken, ""); w.Code != http.StatusOK {
+		t.Fatalf("poll over a panicking sweep: code = %d", w.Code)
+	}
+	waitHostProxyCalls(t, &calls, 1, "the first poll must start a sweep")
+
+	deadline := time.Now().Add(5 * time.Second)
+	for calls.Load() < 2 && time.Now().Before(deadline) {
+		do(t, srv, http.MethodGet, "/api/v1/setup/status", adminToken, "")
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := calls.Load(); n < 2 {
+		t.Errorf("after a contained panic the detector had been called %d time(s), want >= 2 — the in-flight flag was stranded", n)
+	}
+}
+
+// TestHostProxy_SeededInstallResolvesOnTheFirstRead pins the honesty escape
+// hatch. A compose/`make setup` install carries its host reading in
+// WARDYN_HOST_PROXY_B64 and DetectHostProxy decodes it in-process with no exec
+// at all — so there is nothing to be asynchronous ABOUT, and answering the first
+// poll with an empty detection would hand the operator hostProxyCheck's
+// CONFIDENT "nothing is there" copy (blind is false on a seeded install) for a
+// host whose proxy this process already knows.
+func TestHostProxy_SeededInstallResolvesOnTheFirstRead(t *testing.T) {
+	seed := setup.HostProxyDetection{
+		HTTPProxy: &setup.HostProxySetting{Value: "http://proxy.corp.example:3128", Source: setup.ProxySourceOS},
+	}
+	blob, err := json.Marshal(seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WARDYN_HOST_PROXY_B64", base64.StdEncoding.EncodeToString(blob))
+	if !setup.HostProxySeeded() {
+		t.Fatal("test setup: the seed env did not take")
+	}
+	hostProxyCacheReset()
+	t.Cleanup(hostProxyCacheReset)
+
+	got := cachedHostProxy()
+	if got.HTTPProxy == nil || got.HTTPProxy.Value != seed.HTTPProxy.Value {
+		t.Fatalf("first read of a SEEDED install = %+v, want the seeded proxy resolved in line", got.HTTPProxy)
+	}
+}
+
+// TestSetupStatus_RecheckForcesAReDetectForOperatorsOnly answers the question the
+// review asked outright: does Re-check re-check? It is a client-side refetch
+// unless the server is told, so ?recheck=1 is the telling — and it is
+// operator-only, because a member must not be able to make the daemon sweep the
+// host on demand.
+func TestSetupStatus_RecheckForcesAReDetectForOperatorsOnly(t *testing.T) {
+	var calls atomic.Int64
+	real := hostProxyDetect
+	hostProxyDetect = func() setup.HostProxyDetection {
+		calls.Add(1)
+		return setup.HostProxyDetection{}
+	}
+	t.Cleanup(func() {
+		hostProxyDetect = real
+		hostProxyCacheReset()
+	})
+	hostProxyCacheReset()
+
+	srv := New(baseTestConfig(newHarness(t), &setupStatusCostStore{}))
+	do(t, srv, http.MethodGet, "/api/v1/setup/status", adminToken, "")
+	waitHostProxyMemo(t)
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("warm-up left calls = %d, want 1", n)
+	}
+
+	// A MEMBER's recheck is ignored: inside the TTL a plain poll would not sweep
+	// either, so a second call here proves the param, not the clock.
+	memberReq := httptest.NewRequest(http.MethodGet, "/api/v1/setup/status?recheck=1", nil)
+	ctx := withOIDCRole(withOIDCHuman(memberReq.Context(), "sub-bob"), oidc.RoleMember)
+	srv.handleSetupStatus(httptest.NewRecorder(), memberReq.WithContext(ctx))
+	if n := calls.Load(); n != 1 {
+		t.Errorf("a member's ?recheck=1 swept the host (calls = %d, want 1)", n)
+	}
+
+	do(t, srv, http.MethodGet, "/api/v1/setup/status?recheck=1", adminToken, "")
+	waitHostProxyCalls(t, &calls, 2, "an operator's ?recheck=1 must force a re-detect")
 }

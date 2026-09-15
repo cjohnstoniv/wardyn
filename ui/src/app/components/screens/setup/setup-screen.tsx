@@ -364,7 +364,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
       .catch(() => setProviderCount(0));
   }, [operator]);
 
-  const recheck = React.useCallback(() => {
+  const recheck = React.useCallback((opts?: { force?: boolean }) => {
     setRechecking(true);
     // Resync SiteConfig too (F2): the rail's Integrations badge count is
     // derived from it (via deriveIntegrations), so mount (via this recheck)
@@ -379,7 +379,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     loadSecrets();
     loadProviderCount();
     return setupApi
-      .getSetupStatus()
+      .getSetupStatus({ recheck: opts?.force })
       .then((s) => {
         setStatus(s);
         setLastCheckedAt(new Date());
@@ -392,6 +392,15 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
       })
       .finally(() => setRechecking(false));
   }, [reloadSiteConfig, loadSecrets, loadProviderCount, loadAccess]);
+
+  // The operator PRESSED Re-check, as opposed to the mount fetch and the
+  // post-save refreshes that share the loader above: only a press asks the
+  // daemon to look at the host again (the host-proxy memo is 30s-lived, and a
+  // proxy configured ten seconds ago must be findable on the first press, not
+  // the second). Its own callback rather than an inline lambda so the button
+  // handlers stay referentially stable — and so no `onClick={recheck}` can ever
+  // hand a MouseEvent in where the force flag goes.
+  const forceRecheck = React.useCallback(() => recheck({ force: true }), [recheck]);
 
   React.useEffect(() => {
     recheck(); // also performs the initial SiteConfig + secrets GET (see recheck)
@@ -518,7 +527,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
           </p>
           <button
             className="mt-3 rounded-md border border-border px-3 py-1.5 text-sm text-foreground hover:bg-muted disabled:opacity-50"
-            onClick={recheck}
+            onClick={forceRecheck}
             disabled={rechecking}
           >
             {rechecking ? "Re-checking…" : "Re-check"}
@@ -668,7 +677,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         }
         checking={rechecking}
         lastCheckedLabel={lastCheckedLabel(lastCheckedAt)}
-        onRecheck={recheck}
+        onRecheck={forceRecheck}
         onSelect={selectStep}
         onFinish={finish}
         nextGate={nextGate}
@@ -699,7 +708,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             saveSiteConfig={saveSiteConfig}
             gate={corpGate}
             onGateChange={onCorpGateChange}
-            onRecheck={recheck}
+            onRecheck={forceRecheck}
             gateResult={corpGateResult ?? undefined}
             secretNames={secretNames}
             registerActions={(a) => {
@@ -749,7 +758,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
           <ReviewStep
             status={status}
             readiness={readiness}
-            onRecheck={recheck}
+            onRecheck={forceRecheck}
             rechecking={rechecking}
             lastCheckedAt={lastCheckedAt}
             onJump={selectStep}

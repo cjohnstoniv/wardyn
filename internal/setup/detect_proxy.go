@@ -55,19 +55,37 @@ const (
 // can point it at a temp dir instead of the real /etc/apt/apt.conf.d.
 var aptConfDir = "/etc/apt/apt.conf.d"
 
-// probeTimeout bounds each interop probe. DetectHostProxy runs synchronously on
-// every GET /setup/status, so a wedged WSL powershell.exe / netsh / scutil must
-// never hang the wizard poll — it fails fast to "not detected" instead.
+// probeTimeout bounds each interop probe. DetectHostProxy no longer runs on the
+// request goroutine — it is swept in the BACKGROUND behind GET /setup/status
+// (internal/api/hostproxy_cache.go), which is what keeps a wedged WSL
+// powershell.exe / netsh / scutil off the wizard poll. This timeout is still the
+// first line of defence: it stops one wedged probe from holding the sweep (and
+// so the memo's answer) hostage.
 const probeTimeout = 3 * time.Second
+
+// probeWaitDelay is how long after probeTimeout expires the probe's PIPES are
+// given before they are closed under it.
+//
+// It is not belt-and-braces: exec.CommandContext's kill reaches only the DIRECT
+// child, while Output() waits for EOF on the stdout pipe — so a grandchild that
+// inherited the pipe (the classic WSL interop wedge) holds the call open long
+// past the context. Measured before this: 30.0s against a 3s context, which is
+// also why the deadline in hostproxy_cache.go exists at all. WaitDelay is the
+// stdlib's own answer (Go 1.20+): after it, the pipes are closed and Wait
+// returns.
+const probeWaitDelay = time.Second
 
 // execCommandOutput runs an external command and returns its stdout. Used for
 // every interop probe below (git, powershell.exe, netsh.exe, scutil) — a
 // package var so tests can fake responses without touching the real host. The
-// call is bounded by probeTimeout (a hung host tool yields an error, not a hang).
+// call is bounded by probeTimeout + probeWaitDelay (a hung host tool yields an
+// error, not a hang).
 var execCommandOutput = func(name string, args ...string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
 	defer cancel()
-	return exec.CommandContext(ctx, name, args...).Output()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = probeWaitDelay
+	return cmd.Output()
 }
 
 // HostProxySource is where a detected proxy setting came from.

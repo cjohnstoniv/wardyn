@@ -34,9 +34,14 @@ export const setup = {
   // Getting-started wizard never auto-opens against a build that can't answer
   // it. A 401 is NOT swallowed here — it's already thrown by wfetch (which
   // routes it through onUnauthorized first), so it propagates as usual.
-  async getSetupStatus(): Promise<SetupStatus> {
+  // `recheck` is the operator's Re-check press, spelled on the wire: the daemon
+  // drops its host-proxy memo before answering, so the reply comes from the host
+  // rather than from up to 30s ago. Omitted on the mount fetch and on every
+  // background refresh — a poll must not make the daemon sweep the host.
+  async getSetupStatus(opts?: { recheck?: boolean }): Promise<SetupStatus> {
     try {
-      const res = await wfetch("/setup/status", { method: "GET" });
+      const path = opts?.recheck ? "/setup/status?recheck=1" : "/setup/status";
+      const res = await wfetch(path, { method: "GET" });
       if (!res.ok) return READY_FALLBACK;
       return (await res.json()) as SetupStatus;
     } catch (e) {
