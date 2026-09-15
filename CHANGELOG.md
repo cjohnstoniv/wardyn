@@ -8,9 +8,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.7.3] — 2026-09-15
+
 0.7.3 carries the second field report from the same private-endpoint Kubernetes
 estate, written inside the first hour of running 0.7.2's new `agent_providers`
-roster: 7 findings and 1 confirmation, all in the new surfaces. The two 0.7.1
+roster: 7 findings, 2 confirmed 0.7.1 fixes, and 1 finding that turned out to be a
+confirmation, all in the new surfaces — plus two items the campaign's own
+end-to-end run turned up. The two 0.7.1
 fixes are confirmed on their deployment, with the same credential that broke
 each: the captured AWS SSO session whose access token had lapsed now reads "A
 captured AWS SSO session is connected. Its access token lapsed at …, and Wardyn
@@ -26,7 +30,7 @@ every new console string in this release ships as a frozen DRAFT constant pendin
 the maintainer's canon sitting. The tests assert through those constants, so
 adopting the canon wording is a one-file diff and no behaviour moves with it.
 
-Upgrading from 0.7.2 changes nothing on its own, with one exception: the
+Upgrading from 0.7.2 changes nothing on its own, with the exceptions below: the
 roster's new `sso_account_id`/`sso_role_name` pin fields are optional,
 `not_applicable` is a new `model_access` state reachable only by the shared
 admin-bearer-token caller under a `per_user` row, and the widened CSRF guard
@@ -49,7 +53,7 @@ answered before.
   roster disposes. Optional (a single-account tenant never had this problem) but
   set as a pair: pinning the account alone still leaves the role picked for
   whoever signs in. A new SSO entitlement granted by a cloud team cannot move a
-  pin. See [docs/OPERATIONS.md](docs/OPERATIONS.md) "AWS SSO per person".
+  pin. See `docs/OPERATIONS.md`, "AWS SSO per person".
 - **A chooser when nothing is pinned and the session reaches several accounts.**
   The login sandbox runs on the operator's own attach terminal, so the helper
   asks — numbered accounts, then roles in the chosen one. With no terminal to ask
@@ -71,7 +75,7 @@ answered before.
   sign-in actually captured, so a malformed value cannot reach one door
   refused and the other accepting. `agent_provider.write` gains `pins`;
   `harness.login.started` gains `sso_account_id`/`sso_role_name`. See
-  [docs/AUDIT-ACTIONS.md](docs/AUDIT-ACTIONS.md).
+  `docs/AUDIT-ACTIONS.md`.
 
 ### Fixed
 
@@ -183,7 +187,7 @@ answered before.
   completed successfully — so a run that succeeded, or was auto-stopped, or
   failed to build its image, had no way to launch an identical one without
   retyping task, agent, barrier and policy by hand. The door **moved**: it is
-  now on the run header for any terminal run (the 0.7.2 entry below, which
+  now on the run header for any terminal run (the 0.7.2 CHANGELOG entry, which
   sent the reader to the killed-run panel, describes where it launches FROM,
   not where the button now lives), and a matching "Start a run like this one" item
   joined the Runs-list row kebab, on both the board and the table. The
