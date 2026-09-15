@@ -91,12 +91,21 @@ answered before.
   capture already in flight. At ROSTER SAVE, a pin that disagrees with the
   account the configured `WARDYN_BEDROCK_MODEL` ARN lives in is ACCEPTED, with
   a one-time warning logged rather than a 400 — the admin's explicit pin is
-  the deliberate answer, taken as written, and the row still saves. Model-
-  account validation applies only when nothing is pinned: an uploaded session
-  for a different account than a full-ARN `WARDYN_BEDROCK_MODEL`, with no pin
-  set, is refused and named; a pinned capture is bound to the pin alone, and a
-  bare cross-region inference-profile id names no account either way, so that
-  check is skipped rather than failed.
+  the deliberate answer, taken as written, and the row still saves. The same
+  disagreement also raises a `warn` on the `bedrock_provider` setup check,
+  naming both accounts and the two ways to resolve it (repoint the pin, or
+  confirm the model really is shared across accounts) — so the deliberate
+  override is visible on the setup page an admin actually looks at, not only
+  in the daemon's own journal. Model-account validation applies only when
+  nothing is pinned: an uploaded session for a different account than a
+  full-ARN `WARDYN_BEDROCK_MODEL`, with no pin set, is refused and named; a
+  pinned capture is bound to the pin alone, and a bare cross-region
+  inference-profile id names no account either way, so that check is skipped
+  rather than failed. And a run that would dispatch a Bedrock credential now
+  refuses to start — rather than being served the operator-wide credential —
+  when the roster cannot be read at all, with an audited `run.create` failure
+  row naming the cause; every non-Bedrock, non-model and login-box dispatch is
+  unaffected.
 - **The admin's own AWS sign-in door stopped asking for a start URL it would
   throw away.** Of three call sites that open the harness-login dialog, only
   Settings → Model provider failed to pass `startURLManaged` under a `per_user`
