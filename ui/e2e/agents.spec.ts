@@ -287,13 +287,15 @@ test.describe("agents — member Getting Started's Model access chip (spliced st
   // MODEL_ACCESS_CHIP_LABEL by design (the admin-token principal's own
   // answer — "this is a shared token, not a person") and NO action, so it is
   // outside the CASES table's shape above (every entry there has a real
-  // chip). This harness's real llm_ready is TRUE (the host running wardynd
-  // for this suite has a resident `claude` CLI login — the real
-  // `llm_provider` setup check reads "ok" here, independent of Bedrock/
-  // per_user entirely), so the correct render is the deployment-wide
-  // fallback chip ("Model access · Provided by your admin") — never one of
-  // the five server-driven AGENTS.MODEL_ACCESS_* labels, and never the CTA a
-  // shared token cannot use.
+  // chip). This harness's real llm_ready is TRUE deterministically, not
+  // environmentally: this e2e daemon now declares a Bedrock lane (the
+  // WARDYN_BEDROCK_REGION/_MODEL this file sets above), so `legacyIntegrations`
+  // reports an `ai_provider` integration of kind bedrock regardless of the
+  // host's own state — `computeLLMReady`'s AI-provider fallback returns true
+  // on that alone, on a bare CI box too. So the correct render is the
+  // deployment-wide fallback chip ("Model access · Provided by your admin")
+  // — never one of the five server-driven AGENTS.MODEL_ACCESS_* labels, and
+  // never the CTA a shared token cannot use.
   test("model_access.state=not_applicable falls back to the deployment chip, never the sign-in CTA", async ({
     page,
   }) => {
@@ -307,10 +309,13 @@ test.describe("agents — member Getting Started's Model access chip (spliced st
     await page.route("**/api/v1/setup/status*", async (route) => {
       if (!cached) {
         const response = await route.fetch();
-        cached = await response.json();
-        cached.model_access = { state: "not_applicable" };
+        const body = await response.json();
+        body.model_access = { state: "not_applicable" };
+        cached = body;
       }
-      await route.fulfill({ json: cached });
+      // TS can't narrow a `let` captured by this closure across the `await`
+      // above — the `if` guarantees it non-null by here.
+      await route.fulfill({ json: cached! });
     });
     await gotoConsole(page);
     await navToRoute(page, "/setup");
@@ -386,13 +391,22 @@ test.describe("agents — the roster pin (sso_account_id / sso_role_name)", () =
 // to the TOP of the expanded row, above the mechanism radio group, so it is
 // the first thing an admin sees after declaring the lane — never scrolled
 // past on the way to the legacy Settings door.
-test.describe("agents — the per_user sign-in affordance is above the fold", () => {
+test.describe("agents — the per_user sign-in affordance renders before the mechanism field", () => {
   test("the banner renders before the mechanism field under an actionable per_user row", async ({ page }) => {
+    // Cache-and-serve (the same closure the not_applicable test above uses):
+    // a per-request route.fetch()+refulfill raced Playwright disposing an
+    // in-flight route's response under load (see that test's own comment).
+    let cached: Record<string, unknown> | null = null;
     await page.route("**/api/v1/setup/status*", async (route) => {
-      const response = await route.fetch();
-      const json = await response.json();
-      json.model_access = { state: "not_configured", action: "Sign in to AWS" };
-      await route.fulfill({ response, json });
+      if (!cached) {
+        const response = await route.fetch();
+        const body = await response.json();
+        body.model_access = { state: "not_configured", action: "Sign in to AWS" };
+        cached = body;
+      }
+      // TS can't narrow a `let` captured by this closure across the `await`
+      // above — the `if` guarantees it non-null by here.
+      await route.fulfill({ json: cached! });
     });
     const put = await page.request.put("/api/v1/agent-providers", {
       headers: auth,
@@ -412,7 +426,7 @@ test.describe("agents — the per_user sign-in affordance is above the fold", ()
     await gotoAgentsTab(page);
     const row = page.getByTestId("agent-row-claude-code");
     await expect(row.getByText(AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE)).toBeVisible();
-    const banner = row.getByRole("status");
+    const banner = row.getByTestId("per-user-sign-in-banner");
     const mechanismField = row.getByRole("radiogroup", { name: AGENTS.FIELD_MECHANISM });
     const bannerBox = await banner.boundingBox();
     const mechanismBox = await mechanismField.boundingBox();

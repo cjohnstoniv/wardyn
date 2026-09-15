@@ -15,9 +15,10 @@
 // Notes on the seeded backend (scripts/e2e-backend.sh): wardynd runs with
 // -runner none, so /healthz advertises NO confinement_classes — unknown, not
 // confirmed-absent, so all three barrier tiers stay selectable and the runner
-// capability gate (runs_create.go) is skipped entirely. There is no ai_provider
-// integration at all, so an agent run honestly reports that no model provider
-// is connected.
+// capability gate (runs_create.go) is skipped entirely. There IS an
+// ai_provider integration now (console-agents, 0.7.3: a Bedrock region+model
+// are configured for the roster-pin e2e), so the model-provider warning
+// below is unconditionally absent, not merely an environment fact.
 import { test, expect, gotoConsole, ADMIN_TOKEN, launchRun } from "./fixtures";
 import { RUN } from "../src/app/components/wardyn/copy";
 import { CC_META } from "../src/app/components/wardyn/cc-meta";

@@ -86,19 +86,23 @@ test.describe("member Getting Started (mocked /me role)", () => {
   // Appendix A finding 5: not_applicable is the admin-token principal's own
   // answer, not a member's — it must never dangle a "Sign in to AWS" button
   // in front of a caller with no person to sign in as, whatever the
-  // deployment-wide llm_ready fallback renders instead (this harness's host
-  // has a resident `claude` CLI login, so llm_ready is genuinely true here
-  // and the fallback chip legitimately shows — the CTA is the thing that
-  // must never appear).
+  // deployment-wide llm_ready fallback renders instead (this e2e daemon
+  // declares a Bedrock lane via scripts/e2e-backend.sh's WARDYN_BEDROCK_*
+  // env, so llm_ready is deterministically true here, on any host — the
+  // fallback chip legitimately shows — the CTA is the thing that must never
+  // appear).
   test("a member under not_applicable is not offered a sign-in they cannot complete", async ({ page }) => {
     let cached: Record<string, unknown> | null = null;
     await page.route("**/api/v1/setup/status*", async (route) => {
       if (!cached) {
         const response = await route.fetch();
-        cached = await response.json();
-        cached.model_access = { state: "not_applicable" };
+        const body = await response.json();
+        body.model_access = { state: "not_applicable" };
+        cached = body;
       }
-      await route.fulfill({ json: cached });
+      // TS can't narrow a `let` captured by this closure across the `await`
+      // above — the `if` guarantees it non-null by here.
+      await route.fulfill({ json: cached! });
     });
     await gotoConsole(page);
     await navToRoute(page, "/setup");
