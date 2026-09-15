@@ -277,7 +277,10 @@ export const MODEL_ACCESS_CHIP_LABEL: Record<string, string> = {
 // §7.7 AGENTS table above — workspace-providers-copy.test.ts's byte-check
 // parses only PROVIDERS/PROVIDER_MEMBER/AGENTS out of the doc, so a NEW
 // export beside it (never inside it) is what keeps that gate meaningful.
-// Canon rows: local/v073/canon/console-agents.md.
+// Canon rows staged for the M2 sitting land in
+// docs/design/workspace-providers-prompt.md, the same doc §7.2-§7.5/§7.7
+// above were transcribed from (the working sheet itself is gitignored
+// campaign evidence, not a path this shipped file can point at).
 export const AGENTS_DRAFT = {
   // The per_user sign-in banner (Appendix A finding 4): moves the
   // claude-code model-access block to the TOP of an expanded per_user row so
