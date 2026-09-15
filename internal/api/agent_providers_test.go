@@ -727,6 +727,7 @@ func TestAgentProviders_PinOverridesTheModelsAccount(t *testing.T) {
 	// green in every gate.
 	var logged bytes.Buffer
 	restore := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(restore) }) // restored even if the call below panics or fails
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
 	err := validateAgentProviders(agentBlock(pinnedRow("222222222222", "BedrockRunner")), testAgentImages, model)
 	slog.SetDefault(restore)

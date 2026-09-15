@@ -637,6 +637,13 @@ func TestDispatch_UnreadableRosterRefusesTheCredential(t *testing.T) {
 		"an agent this lane never credentials": {
 			cfg: bedrockBearerCfg(), agent: "codex-cli",
 		},
+		// The host-staged subscription outranks Bedrock in resolveBedrockAuth's
+		// own precedence, so this run was never going to be served from the
+		// roster's namespace at all: it brings its own credential.
+		"a subscription run brings its own credential": {
+			cfg: bedrockBearerCfg(), agent: "claude-code",
+			mounts: []types.WorkspaceMount{{Target: claudeCredTarget}},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newHarness(t)

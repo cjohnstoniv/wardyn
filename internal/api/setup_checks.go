@@ -291,7 +291,8 @@ func llmProviderCheck(llmDetail string, bedrock SetupBedrock) SetupCheck {
 // callsite already holds (scOK=false — an unreadable roster — asserts neither):
 // BedrockSSOPinUnenforced (nothing constrains the account/role at all) and
 // bedrockPinDisagreement (a pin the save door takes although the configured
-// model lives in another account, S2-09/R-04). It is a posture fact about the ROSTER, not about readiness, so it is
+// model lives in another account, S2-09/R-04). Each is a posture fact about the
+// ROSTER, not about readiness, so it is
 // folded into WHATEVER row bedrockProviderRow produced rather than nested under
 // the ready arm: nested, the warning arrived only after the first unchecked
 // capture had already been stored, which is exactly the person and the moment
@@ -302,16 +303,18 @@ func bedrockProviderCheck(bedrock SetupBedrock, sc types.SiteConfig, scOK bool) 
 	if !ok || !scOK {
 		return chk, ok
 	}
-	pinAccount, modelAccount := bedrockPinDisagreement(sc, bedrock.Model)
-	// The two postures are mutually exclusive by construction — one is "no pin
-	// at all", the other "a pin that disagrees" — so this reads as a chain, not
-	// as two independent appends that could both fire.
-	switch {
-	case BedrockSSOPinUnenforced(sc, bedrock.Model):
+	// NOTHING PINNED AT ALL, and it returns: the second posture below is about a
+	// pin that disagrees, so the two can never both be true and neither may
+	// append over the other.
+	if BedrockSSOPinUnenforced(sc, bedrock.Model) {
 		chk.Status = "warn"
 		chk.Detail = strings.TrimSpace(chk.Detail + " " + bedrockUnenforcedPinDetail)
 		chk.Fix = strings.TrimSpace(chk.Fix + " " + bedrockUnenforcedPinFix)
-	case pinAccount != "":
+		return chk, true
+	}
+	// A PIN THE SAVE DOOR TOOK although the configured model lives in another
+	// account (S2-09/R-04) — asked only here, where something is pinned.
+	if pinAccount, modelAccount := bedrockPinDisagreement(sc, bedrock.Model); pinAccount != "" {
 		chk.Status = "warn"
 		chk.Detail = strings.TrimSpace(chk.Detail + " " + fmt.Sprintf(bedrockPinModelAccountDetail, pinAccount, modelAccount))
 		chk.Fix = strings.TrimSpace(chk.Fix + " " + bedrockPinModelAccountFix)
