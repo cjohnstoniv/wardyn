@@ -8,7 +8,6 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"log/slog"
-	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -782,13 +781,51 @@ func refreshLoginStamps(ctx context.Context, st loginStampStore, sub, role strin
 	}
 }
 
-// validateOIDCRedirectURL refuses a WARDYN_OIDC_REDIRECT_URL that is not an
-// absolute URL with a host. Fail CLOSED at boot: every alternative (warn and
+// bedrockPinRosterStore is the one read warnBedrockSSOPinPosture makes — an
+// interface so the posture is testable without a database.
+type bedrockPinRosterStore interface {
+	GetSiteConfig(context.Context) (types.SiteConfig, error)
+}
+
+// warnBedrockSSOPinPosture says, once at boot, that NOTHING server-side
+// constrains which AWS account and role a per-person sign-in may store: an
+// enabled `per_user` `bedrock_sso` roster row with no `sso_account_id`, and a
+// `WARDYN_BEDROCK_MODEL` that names no account (api.BedrockSSOPinUnenforced).
+//
+// WARN, never a refusal, for the same reason the pin is optional: a
+// single-account tenant never had this problem, and refusing would take model
+// access away from every unpinned deployment on upgrade. But the alternative to
+// warning is SILENCE on the configuration the capture code itself calls the
+// common case — the one where finding 1's original failure mode survives,
+// because the account check is skipped (no account in the model) and the pin
+// check is skipped (no pin), leaving the in-sandbox chooser as the only
+// defence. Its ARN-shaped sibling above (BedrockModelARNNamesNoAccount) fires
+// only for a typo'd ARN, i.e. never on this one.
+//
+// A roster read failure is SILENT here: this is a posture note, and a boot that
+// cannot reach the store has louder problems a line about pins would bury.
+func warnBedrockSSOPinPosture(ctx context.Context, st bedrockPinRosterStore, bedrockModel string) {
+	sc, err := st.GetSiteConfig(ctx)
+	if err != nil || !api.BedrockSSOPinUnenforced(sc, bedrockModel) {
+		return
+	}
+	slog.Warn("wardynd: this deployment gives each person their own AWS sign-in but pins no account/role, and WARDYN_BEDROCK_MODEL names no account either — whichever account and role a sign-in chooses is what every later Bedrock run uses. Set sso_account_id + sso_role_name on the agent's roster row, or give WARDYN_BEDROCK_MODEL the full model ARN.",
+		slog.String("bedrock_model", bedrockModel),
+	)
+}
+
+// validateOIDCRedirectURL refuses a WARDYN_OIDC_REDIRECT_URL whose host the
+// CSRF guard cannot read. Fail CLOSED at boot: every alternative (warn and
 // continue, or accept and discover it later) trades one loud line here for a
 // console-wide 403 whose message names no configuration at all.
+//
+// It asks internal/api's OWN parse (originHost), so ONE parse decides both.
+// They used to disagree: originHost additionally refuses USERINFO — the host is
+// not where a reader looks — so `https://u@console.example/cb` booted clean and
+// then silently killed both the CSRF guard's second host and the PTY-attach
+// socket's, which is the exact symptom this check was added to prevent.
 func validateOIDCRedirectURL(raw string) error {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || u.Scheme == "" || u.Host == "" {
+	if !api.OriginHostReadable(raw) {
 		return fmt.Errorf("invalid WARDYN_OIDC_REDIRECT_URL %q: want an absolute URL with a scheme and host, e.g. https://wardyn.example.com/auth/callback — its HOST is also the second origin the console's CSRF guard accepts as same-origin, so a value without one refuses every console write behind a TLS-terminating ingress", raw)
 	}
 	return nil

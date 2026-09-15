@@ -219,6 +219,15 @@ const (
 	llmProviderPerUserFix = "Sign in to AWS on the provider step (Settings → Model provider)."
 	// DRAFT (M2 canon pending)
 	llmProviderMechanismDetail = "This deployment reaches models through AWS Bedrock with a sign-in per person. This request arrived on the shared admin token, which owns no sign-in — a person's own console session answers this row."
+	// bedrockUnenforcedPinDetail/Fix: the residual of finding 1 made audible
+	// (BedrockSSOPinUnenforced). Nothing server-side says WHICH account and role
+	// a sign-in may store, so the in-sandbox chooser is the only thing deciding
+	// — and that is code the sandbox controls.
+	//
+	// DRAFT (M2 canon pending)
+	bedrockUnenforcedPinDetail = "Bedrock is configured and each person signs in themselves, but nothing here says WHICH AWS account and role a sign-in may store — whatever the sign-in names is what every later run uses."
+	// DRAFT (M2 canon pending)
+	bedrockUnenforcedPinFix = "Optional, and the fix if your people reach more than one account: set sso_account_id + sso_role_name on the agent's roster row (Settings → Agents), or give WARDYN_BEDROCK_MODEL the full model ARN so its account is checked."
 )
 
 // llmProviderCheck reports the WINNING model/harness signal (llmProvenance's
@@ -266,11 +275,22 @@ func llmProviderCheck(llmDetail string, bedrock SetupBedrock) SetupCheck {
 // one thing per_user resolution actually changes (it "skips the bearer,
 // host-~/.aws-mount and static-key arms outright, because all three are
 // operator reads" — finding 3).
-func bedrockProviderCheck(bedrock SetupBedrock) (SetupCheck, bool) {
+// pinUnenforced is BedrockSSOPinUnenforced for this deployment's roster —
+// passed in rather than read here because the callsite already holds the site
+// config. It turns the ONE arm that otherwise says "all good" into a warning:
+// on that configuration a sandbox-chosen account AND role are stored unchecked,
+// and the row that said nothing about it was the row an operator reads.
+func bedrockProviderCheck(bedrock SetupBedrock, pinUnenforced bool) (SetupCheck, bool) {
 	if !bedrock.configured() {
 		return SetupCheck{}, false
 	}
 	if bedrock.ready() {
+		if pinUnenforced {
+			return SetupCheck{
+				ID: "bedrock_provider", Label: "AWS Bedrock", Status: "warn",
+				Detail: bedrockUnenforcedPinDetail, Fix: bedrockUnenforcedPinFix,
+			}, true
+		}
 		return SetupCheck{
 			ID: "bedrock_provider", Label: "AWS Bedrock", Status: "ok",
 			Detail: fmt.Sprintf("Bedrock is configured (region %s, model %s) for Claude runs via %s.", bedrock.Region, bedrock.Model, bedrock.credSourceDesc()),

@@ -598,7 +598,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	if chk, ok := k8sEgressContainmentCheck(rnr.Driver, k8sNetpolProven); ok {
 		checks = append(checks, chk)
 	}
-	if chk, ok := bedrockProviderCheck(bedrock); ok {
+	if chk, ok := bedrockProviderCheck(bedrock, siteCfgOK && BedrockSSOPinUnenforced(siteCfg, bedrock.Model)); ok {
 		checks = append(checks, chk)
 	}
 

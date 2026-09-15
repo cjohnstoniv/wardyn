@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -143,11 +144,11 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// reading the wrong namespace.
 	if prev, found, rerr := s.readAWSSSOBlob(r.Context(), scope); rerr != nil {
 		s.refuseCapture(w, r, claims, http.StatusInternalServerError, refuseReasonStoreError,
-			"read existing aws sso credential: "+rerr.Error())
+			"read existing aws sso credential: "+rerr.Error(), scope)
 		return
 	} else if found && prev.SourceRunID == claims.RunID.String() {
 		s.refuseCapture(w, r, claims, http.StatusConflict, refuseReasonAlreadyCaptured,
-			"this login run has already captured an aws sso credential")
+			"this login run has already captured an aws sso credential", scope)
 		return
 	}
 
@@ -161,7 +162,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		// land" is the honest reading, and a failed persist is exactly the
 		// event an operator wants beside the rest rather than only in a 500.
 		s.refuseCapture(w, r, claims, http.StatusInternalServerError, refuseReasonStoreError,
-			"store aws sso credential: "+err.Error())
+			"store aws sso credential: "+err.Error(), scope)
 		return
 	}
 
@@ -223,8 +224,8 @@ func (s *Server) bindSSOBlob(blob awsSSOBlob, stamp loginRunStamp) (msg, reason 
 	// awsSSOBlob.valid doc). Checked on the CLIENT-supplied fields only, before
 	// the server stamps its own provenance, so a client can never satisfy this
 	// by omission.
-	if !blob.valid() {
-		return "sso token blob is missing required fields (access_token/start_url/region/expires_at)", refuseReasonBlobShape
+	if missing := blob.missingFields(); len(missing) > 0 {
+		return "sso token blob is missing required fields (" + strings.Join(missing, ", ") + ")", refuseReasonBlobShape
 	}
 	// Defense in depth (W15-d): this blob is persisted once and then baked
 	// VERBATIM, unescaped, into every later Bedrock run's ~/.aws/config INI
@@ -260,6 +261,33 @@ func (s *Server) bindSSOBlob(blob awsSSOBlob, stamp loginRunStamp) (msg, reason 
 	}
 	// Finding 1: WHICH account and role, not merely which portal.
 	return bindCaptureToPin(blob, stamp, s.cfg.BedrockModel)
+}
+
+// missingFields names the fields valid() requires and this blob does not carry.
+//
+// The refusal sentence names THEM rather than a fixed list, because the list
+// drifted: valid() also requires account_id and role_name, and since 0.7.3 the
+// commonest capture failure is pickAccountRole coming back blank on a portal
+// miss — so the person reading their login terminal was told four field names,
+// none of which was the missing one.
+func (b awsSSOBlob) missingFields() []string {
+	var missing []string
+	for _, f := range []struct {
+		name  string
+		empty bool
+	}{
+		{"access_token", b.AccessToken == ""},
+		{"start_url", b.StartURL == ""},
+		{"region", b.Region == ""},
+		{"expires_at", b.ExpiresAt.IsZero()},
+		{"account_id", b.AccountID == ""},
+		{"role_name", b.RoleName == ""},
+	} {
+		if f.empty {
+			missing = append(missing, f.name)
+		}
+	}
+	return missing
 }
 
 // loginRunScope turns a login run's launch-time stamp into the scope its upload

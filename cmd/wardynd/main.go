@@ -342,8 +342,13 @@ func run() error {
 		return err
 	}
 
+	st := store.NewPG(pool)
+	// The roster half of the model-identity posture, WARNED at boot beside the
+	// model-ARN one above (validateModelEndpoints). See warnBedrockSSOPinPosture.
+	warnBedrockSSOPinPosture(bootCtx, st, *f.bedrockModel)
+
 	srv := api.New(api.Config{
-		Store:     store.NewPG(pool),
+		Store:     st,
 		Identity:  idp,
 		Approvals: approvals,
 		Broker:    brk,

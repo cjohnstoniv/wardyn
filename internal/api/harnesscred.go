@@ -305,10 +305,7 @@ type awsSSOBlob struct {
 // Rejecting it here (before storage) means the operator sees the upload fail
 // and can re-run the login, rather than a stored-but-useless credential
 // quietly winning every later Bedrock run.
-func (b awsSSOBlob) valid() bool {
-	return b.AccessToken != "" && b.StartURL != "" && b.Region != "" && !b.ExpiresAt.IsZero() &&
-		b.AccountID != "" && b.RoleName != ""
-}
+func (b awsSSOBlob) valid() bool { return len(b.missingFields()) == 0 }
 
 // expired reports whether the SSO access token has lapsed. A blob with a refresh
 // token can still be renewed (sso-session profiles); one without must be
@@ -711,7 +708,16 @@ const (
 //
 // Returns ok=false when it has already written the refusal.
 func (s *Server) authorizeHarnessLogin(w http.ResponseWriter, r *http.Request, provider string) (types.AgentProvider, bool) {
-	sc, _ := s.siteConfigSnapshot(r.Context())
+	// FAIL CLOSED on an unreadable roster: dropping ok read a store blip as "no
+	// per_user row", so the launch stamped an EMPTY pin ("launched unpinned" at
+	// capture) and the caller's own start URL became the bound portal. A NIL
+	// store is not that blip — no store, no roster, operator-only door — and
+	// awsSSOScopeForAgent reads a missing store the same way.
+	sc, ok := s.siteConfigSnapshot(r.Context())
+	if !ok && s.cfg.Store != nil {
+		writeError(w, http.StatusServiceUnavailable, harnessLoginRosterUnavailable)
+		return types.AgentProvider{}, false
+	}
 	row, perUser := perUserLoginRow(sc, provider)
 	mechanismCaller := s.cfg.OIDC != nil && runIdentitySubject(r.Context(), principalFromRequest(r)) == adminTokenPrincipal
 	if perUser && mechanismCaller {

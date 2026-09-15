@@ -124,6 +124,15 @@ const (
 	//
 	// DRAFT (M2 canon pending)
 	ssoTokenModelAccountRefusal = "this session is for account %s; the configured Bedrock model lives in account %s — a run using this session would be refused by IAM, so it was not stored"
+	// harnessLoginRosterUnavailable answers a LAUNCH whose roster read failed
+	// (authorizeHarnessLogin, harnesscred.go): the pin and the admin's access
+	// portal both come off that row, so there is nothing to bind a capture to.
+	// It lives in THIS file, with the rest of the pin's vocabulary, because
+	// harnesscred.go sits against the 1000-line file-size gate — the same reason
+	// csrf.go was split out of http.go.
+	//
+	// DRAFT (M2 canon pending)
+	harnessLoginRosterUnavailable = "the agent roster could not be read, so this sign-in cannot be bound to the account and access portal it was meant for — try again in a moment"
 )
 
 // awsAccountID matches an AWS account id. ONE var for the package: the ARN
@@ -173,6 +182,27 @@ func BedrockModelARNNamesNoAccount(model string) bool {
 		bedrockModelAccount(model) == ""
 }
 
+// BedrockSSOPinUnenforced reports the configuration on which NOTHING
+// server-side constrains which AWS account and role a sign-in may store: an
+// enabled `per_user` `bedrock_sso` row with no `sso_account_id` pin, AND a
+// configured Bedrock model that names no account (a bare cross-region profile
+// id, or nothing at all).
+//
+// It is not a defect — the pin is optional on purpose, and a single-account
+// tenant never had this problem — it is the RESIDUAL of finding 1, and the
+// point is that it was inaudible. bindCaptureToPin skips both of its checks on
+// this shape, so the in-sandbox chooser is the only remaining defence and it is
+// code the sandbox controls; the one boot warning that existed
+// (BedrockModelARNNamesNoAccount) fires exclusively when the model LOOKS like
+// an ARN — the typo case, never the bare-id case this file calls "most often"
+// true. Exported for cmd/wardynd's boot warning; bedrockProviderCheck reads it
+// for the console's own row. Warn, never refuse: refusing would take capture
+// away from every unpinned deployment on upgrade.
+func BedrockSSOPinUnenforced(sc types.SiteConfig, model string) bool {
+	row, ok := perUserLoginRow(sc, awsSSOProvider)
+	return ok && row.SSOAccountID == "" && bedrockModelAccount(model) == ""
+}
+
 // bindCaptureToPin is the upload's identity binding: does this blob name the
 // account and role this capture was AUTHORIZED to produce?
 //
@@ -212,9 +242,22 @@ func bindCaptureToPin(blob awsSSOBlob, stamp loginRunStamp, model string) (msg, 
 //
 // The DATA carries the reason from the fixed vocabulary above and nothing the
 // sandbox chose: the sentence goes to the caller, never into the log.
-func (s *Server) refuseCapture(w http.ResponseWriter, r *http.Request, claims *identity.Claims, status int, reason, msg string) {
+//
+// scope is the caller's credential scope, and is passed by the refusals that
+// happen AFTER loginRunScope has decided one. Those rows then carry owner +
+// credential_source exactly like the captured row — the pair that makes a
+// per_user estate's refusal stream groupable by person instead of a join back
+// through each row's run_id to its harness.login.started. The EARLIER refusals
+// pass none: there is no decided scope yet, and their run's stamp already
+// carries the same pair.
+func (s *Server) refuseCapture(w http.ResponseWriter, r *http.Request, claims *identity.Claims, status int, reason, msg string, scope ...awsSSOScope) {
+	data := map[string]any{"provider": awsSSOProvider, "reason": reason}
+	for _, sc := range scope {
+		data["owner"] = sc.owner
+		data["credential_source"] = awsSSOCredentialSourceLabel(sc)
+	}
 	s.recordAudit(r.Context(), s.auditEvent(&claims.RunID, types.ActorAgent, claims.SPIFFEID,
 		"harness.credential.refused", harnessCredSecretName(awsSSOProvider), "failure",
-		mustJSON(map[string]any{"provider": awsSSOProvider, "reason": reason})))
+		mustJSON(data)))
 	writeError(w, status, msg)
 }

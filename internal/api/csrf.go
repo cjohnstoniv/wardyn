@@ -123,17 +123,62 @@ func (s *Server) sameOriginOrRefuse(r *http.Request) error {
 	if origin == "" {
 		return nil
 	}
-	host, ok := originHost(origin)
-	if !ok {
-		return errCrossOriginRefused
-	}
-	if strings.EqualFold(host, r.Host) {
-		return nil
-	}
-	if redirect, ok := originHost(s.cfg.OIDCRedirectURL); ok && strings.EqualFold(host, redirect) {
+	if s.originNamesThisDeployment(r, origin) {
 		return nil
 	}
 	return errCrossOriginRefused
+}
+
+// originNamesThisDeployment reports whether a PRESENT Origin names one of the
+// two hosts this deployment answers to: r.Host, or the host of the configured
+// OIDC redirect URL (the ingress case — see WHY TWO ACCEPTED HOSTS above). It
+// is the ONE predicate three callers share (the session guard above, the
+// PTY-attach socket below, and — for its r.Host half — http.go's LocalMode
+// arm), so "which origins are us" cannot diverge between them. Fails closed on
+// an Origin originHost could not read.
+func (s *Server) originNamesThisDeployment(r *http.Request, origin string) bool {
+	host, ok := originHost(origin)
+	if !ok {
+		return false
+	}
+	if asciiEqualFold(host, r.Host) {
+		return true
+	}
+	redirect, ok := originHost(s.cfg.OIDCRedirectURL)
+	return ok && asciiEqualFold(host, redirect)
+}
+
+// originIsRequestHost is the r.Host half on its own — what LocalMode compares,
+// where there is no second name and an Origin naming any OTHER loopback
+// listener is another process's page, not ours.
+func (s *Server) originIsRequestHost(r *http.Request, origin string) bool {
+	host, ok := originHost(origin)
+	return ok && asciiEqualFold(host, r.Host)
+}
+
+// asciiEqualFold is strings.EqualFold restricted to ASCII. A HOST comparison
+// must not do more than it says: strings.EqualFold applies Unicode simple case
+// folding, under which U+212A KELVIN SIGN folds equal to "k", so
+// `https://<KELVIN>.example` compared equal to the host `k.example`. An Origin
+// header is always ASCII/punycode, so nothing legitimate is lost — and nothing
+// a Unicode table decides is gained.
+func asciiEqualFold(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		if lowerASCII(a[i]) != lowerASCII(b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func lowerASCII(c byte) byte {
+	if c >= 'A' && c <= 'Z' {
+		return c + ('a' - 'A')
+	}
+	return c
 }
 
 // isCrossSiteFetch reports whether the BROWSER labelled this request cross-site
@@ -175,17 +220,32 @@ func originHost(origin string) (string, bool) {
 	return u.Host, true
 }
 
-// attachOriginPatterns is the PTY-attach WebSocket's extra allowed origin
-// (attach.go). coder/websocket always authorises an Origin whose host equals
-// r.Host and consults these patterns only after that, so this adds exactly the
-// one name the ingress case needs — the same second host sameOriginOrRefuse
-// accepts, for the same reason — and nothing else. Nil when SSO is not
-// configured or the value has no parseable host: no patterns means
-// same-origin-only, the library's conservative default.
-func (s *Server) attachOriginPatterns() []string {
-	host, ok := originHost(s.cfg.OIDCRedirectURL)
-	if !ok {
-		return nil
-	}
-	return []string{host}
+// OriginHostReadable reports whether raw is a serialised origin (or a URL)
+// whose host originHost can read — exported for cmd/wardynd's boot-time
+// WARDYN_OIDC_REDIRECT_URL check, so boot and the guard fail closed on exactly
+// the same shapes rather than on two hand-kept lists.
+func OriginHostReadable(raw string) bool {
+	_, ok := originHost(raw)
+	return ok
+}
+
+// attachOriginRefused decides the PTY-attach WebSocket's ORIGIN, in place of
+// coder/websocket's OriginPatterns.
+//
+// WHY NOT OriginPatterns. They are path.Match GLOBS, not literals
+// (authenticateOrigin: `path.Match(lower(pattern), lower(u.Host))`), so every
+// `*`, `?` and `[` in the configured redirect host is a metacharacter — and an
+// IPv6-literal redirect URL always carries `[…]`. `https://[2001:db8::1]:8443`
+// became the character class `[2001:db8::1]:8443`, which MATCHES the foreign,
+// browser-reachable origin host `0:8443` and does NOT match the ingress host it
+// was configured for: wrong in both directions at once.
+//
+// So the comparison is ours, and it is the same one the console's CSRF guard
+// makes — r.Host or the redirect host, ASCII-folded, no patterns. An ABSENT
+// Origin is allowed, which is the library's own behaviour for a non-browser
+// client (the CLI attaches with a bearer/ticket and no Origin); every other
+// origin, including one originHost cannot read, is refused BEFORE the upgrade.
+func (s *Server) attachOriginRefused(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	return origin != "" && !s.originNamesThisDeployment(r, origin)
 }

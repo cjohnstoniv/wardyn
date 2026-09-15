@@ -169,23 +169,27 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 
 	principalType, principal := actorFromRequest(r)
 
-	// Upgrade to WebSocket. SAME-ORIGIN is enforced: InsecureSkipVerify is left
-	// false (the zero value) so coder/websocket rejects cross-origin upgrades
-	// whose Origin host does not match the Host header. That default alone was
-	// the whole check until 0.7.3, and it made this socket UNREACHABLE in the
-	// one deployment shape the console's CSRF guard is built around: behind a
-	// TLS-terminating ingress the browser's Origin is the public console name
-	// while r.Host is the internal one, so browser attach 403'd. OriginPatterns
-	// now carries exactly the second name that guard accepts — the host of
-	// WARDYN_OIDC_REDIRECT_URL, operator-configured and attacker-unwritable
-	// (attachOriginPatterns, csrf.go) — and nothing else: the library still
-	// authorises r.Host itself first, the list is nil when SSO is not
-	// configured, and a hostile page on any other origin cannot drive the
-	// socket. This is the most dangerous cookie-authenticated capability in the
-	// product; it gets ONE extra name, from config, never a wildcard.
+	// SAME-ORIGIN, decided HERE rather than by the library. coder/websocket's
+	// own check authorises r.Host and then consults OriginPatterns — which are
+	// path.Match GLOBS, so the one extra name an ingress deployment needs could
+	// not be expressed as a literal (attachOriginRefused, csrf.go, carries the
+	// IPv6 case that made this wrong in both directions). attachOriginRefused
+	// makes exactly the comparison the console's CSRF guard makes: r.Host or the
+	// host of WARDYN_OIDC_REDIRECT_URL — operator-configured, attacker-
+	// unwritable — and nothing else, with an absent Origin allowed for
+	// non-browser clients exactly as the library allows it. This is the most
+	// dangerous cookie-authenticated capability in the product; it gets ONE
+	// extra name, from config, never a wildcard.
+	//
+	// InsecureSkipVerify says "the caller checked the origin", which is now
+	// true and is checked one line up; leaving it false would re-refuse the
+	// ingress host this widening exists for.
+	if s.attachOriginRefused(r) {
+		writeError(w, http.StatusForbidden, csrfRefusedBody)
+		return
+	}
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: false,
-		OriginPatterns:     s.attachOriginPatterns(),
+		InsecureSkipVerify: true,
 	})
 	if err != nil {
 		// Accept already wrote an HTTP error response on failure (e.g. a 403 for

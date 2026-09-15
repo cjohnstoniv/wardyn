@@ -2881,6 +2881,17 @@ accounts and nothing is pinned, the sign-in asks the person on the login
 terminal; with no terminal to ask on it refuses and names the accounts it
 reaches, so an admin can pin one.
 
+**What an unpinned row leaves open, stated plainly.** With no pin, the ROLE is
+whatever the sign-in chose — and so is the account, unless `WARDYN_BEDROCK_MODEL`
+is a full ARN, which constrains the account only. That choice is made by the
+helper running INSIDE the login sandbox, so it is bounded by the person's own
+entitlements but not by anything Wardyn can check, and the blob it produces is
+baked into every later Bedrock run's `~/.aws/config`. The pin is the fix; both
+halves of it, since pinning the account alone still leaves the role picked for
+whoever signs in. wardynd says so once at boot, and the setup checklist's
+**AWS Bedrock** row warns, when a `per_user` row carries no pin and the
+configured model names no account.
+
 **What the control plane holds.** One age-encrypted blob per person, in that
 person's own secret namespace — the SSO access token, its refresh token, the
 client registration, and the account/role the session mints role credentials

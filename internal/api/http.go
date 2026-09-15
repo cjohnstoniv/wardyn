@@ -363,21 +363,28 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			// state-changing POST straight at http://127.0.0.1:<port>. It arrives with
 			// Host: 127.0.0.1 (passing the loopback gate above) yet carries the
 			// attacker's Origin. CLI/API clients send NO Origin; the embedded UI is
-			// served from wardynd itself, so its Origin is loopback. On a mutating
-			// method, reject a PRESENT non-loopback Origin — closing the direct
-			// blind-CSRF the DNS-rebinding guard alone leaves open.
+			// served from wardynd itself, so its Origin is this listener's own. On a
+			// mutating method, reject a PRESENT Origin that is not THIS listener —
+			// closing the direct blind-CSRF the DNS-rebinding guard leaves open.
 			//
-			// The loopback ORIGIN rule stays local-mode-specific (the SSO branch's
-			// sameOriginOrRefuse compares against r.Host/OIDCRedirectURL instead,
-			// which is meaningless here). What the two modes DO share is the
-			// browser's own cross-site label: Sec-Fetch-Site is unwritable by page
-			// script, and a mode that ignored it would refuse the attack only when
-			// the attacker happened to send an Origin. Both modes answer the same
-			// sentence — csrfRefusedBody, csrf.go.
+			// HOST *AND* PORT, not merely "is it loopback": ports are not part of a
+			// SITE, so a page another process serves at http://127.0.0.1:<other-port>
+			// carries a loopback Origin AND is labelled same-site, and a
+			// loopback-only rule admitted it — unauthenticated, on every mutating
+			// route. The Host gate above already proved r.Host is loopback, so
+			// comparing against r.Host is strictly narrower.
+			//
+			// There is no SECOND accepted name here (sameOriginOrRefuse also accepts
+			// the OIDC redirect host, meaningless in local mode), so this arm takes
+			// the r.Host half alone — same parse, same ASCII fold, csrf.go. What the
+			// two modes DO share is the browser's own cross-site label:
+			// Sec-Fetch-Site is unwritable by page script, and a mode that ignored it
+			// would refuse the attack only when the attacker happened to send an
+			// Origin. Both answer the same sentence — csrfRefusedBody, csrf.go.
 			if isMutatingMethod(r.Method) {
-				origin := r.Header.Get("Origin")
-				if isCrossSiteFetch(r) || (origin != "" && !isLoopbackOrigin(origin)) {
-					s.auditAuthFailed(r, csrfAuditReason)
+				origin := strings.TrimSpace(r.Header.Get("Origin"))
+				if isCrossSiteFetch(r) || (origin != "" && !s.originIsRequestHost(r, origin)) {
+					s.auditAuthFailedAs(r, csrfActor, csrfAuditReason)
 					writeError(w, http.StatusForbidden, "local mode: "+csrfRefusedBody)
 					return
 				}
@@ -414,7 +421,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 				// threat-model-registered control would leave no trail at all.
 				// The session was VALID here, so no SessionRejectedFromContext
 				// reason overrides csrfAuditReason (auditAuthFailedAs).
-				s.auditAuthFailed(r, csrfAuditReason)
+				s.auditAuthFailedAs(r, csrfActor, csrfAuditReason)
 				writeError(w, http.StatusForbidden, err.Error())
 				return
 			}
@@ -702,6 +709,11 @@ const (
 	internalAuthActor     = "wardyn/internalAuth"
 	groundtruthAuthActor  = "wardyn/internalAuthGroundtruth"
 	internalApprovalActor = "wardyn/internalApproval"
+	// csrfActor is the CSRF guard's own boundary. NOT adminAuth: that boundary
+	// did not refuse this — the session was VALID and the guard short-circuits
+	// above it — and a row naming the wrong one sends an incident review to the
+	// credential-stuffing runbook for what is a cross-origin page.
+	csrfActor = "wardyn/csrf"
 )
 
 // auditAuthFailedAs is the ONE rate-bound emit every authentication refusal

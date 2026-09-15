@@ -514,19 +514,38 @@ func TestOriginHost(t *testing.T) {
 	}
 }
 
-// TestAttachOriginPatterns pins the PTY-attach socket's extra allowed origin:
-// exactly the CSRF guard's second host when SSO is configured, and NOTHING
-// (same-origin only, the library default) when it is not. coder/websocket
-// authorises r.Host on its own, so this list is the whole widening.
-func TestAttachOriginPatterns(t *testing.T) {
-	srv := csrfOIDCServer(t, csrfRedirectURL)
-	got := srv.attachOriginPatterns()
-	if len(got) != 1 || got[0] != "console.wardyn.example" {
-		t.Errorf("attachOriginPatterns() = %q, want exactly [console.wardyn.example]", got)
+// TestAttachOriginRefused pins the PTY-attach socket's origin decision: r.Host
+// always, the CSRF guard's second host when SSO is configured, an absent Origin
+// (a non-browser client, which is what the library itself allows), and nothing
+// else — including when the redirect URL has no readable host at all.
+func TestAttachOriginRefused(t *testing.T) {
+	attach := func(srv *Server, origin string) bool {
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/runs/x/attach", nil)
+		r.Host = csrfOIDCHost
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		return srv.attachOriginRefused(r)
 	}
+	srv := csrfOIDCServer(t, csrfRedirectURL)
+	for _, allowed := range []string{"", "http://" + csrfOIDCHost, csrfRedirectHost, "https://CONSOLE.wardyn.example:443"} {
+		if attach(srv, allowed) {
+			t.Errorf("Origin %q refused; want allowed", allowed)
+		}
+	}
+	for _, refused := range []string{"https://evil.example", "null", "http://[", "file:///x", "https://u@console.wardyn.example"} {
+		if !attach(srv, refused) {
+			t.Errorf("Origin %q allowed; want refused", refused)
+		}
+	}
+	// No readable redirect host ⇒ same-origin only, never fail-open.
 	for _, redirect := range []string{"", "console.wardyn.example/auth/callback"} {
-		if got := csrfOIDCServer(t, redirect).attachOriginPatterns(); len(got) != 0 {
-			t.Errorf("redirect URL %q: attachOriginPatterns() = %q, want empty (same-origin only)", redirect, got)
+		bare := csrfOIDCServer(t, redirect)
+		if !attach(bare, csrfRedirectHost) {
+			t.Errorf("redirect URL %q: the second host was accepted anyway", redirect)
+		}
+		if attach(bare, "http://"+csrfOIDCHost) {
+			t.Errorf("redirect URL %q: r.Host itself was refused", redirect)
 		}
 	}
 }
