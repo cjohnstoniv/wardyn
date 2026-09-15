@@ -443,5 +443,29 @@ describe("MemberGettingStarted", () => {
       expect(screen.queryByText(/^Model access · /)).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
     });
+
+    // Appendix A finding 5: not_applicable is the admin-token principal's own
+    // answer ("this is a shared token, not a person") — it carries NO chip
+    // label (MODEL_ACCESS_CHIP_LABEL has no entry for it) and NO action. A
+    // truthy `model_access` object must not short-circuit past the llm_ready
+    // fallback just because it exists: the caller still lost the deployment-
+    // wide "Provided by your admin" chip it is entitled to under llm_ready.
+    it("not_applicable falls back to the llm_ready chip instead of rendering nothing", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_applicable" }, llm_ready: true }));
+      renderPage();
+      expect(await screen.findByText(T.MODEL_ACCESS_PROVIDED_CHIP)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
+    });
+
+    // A member under not_applicable with no other model access must not be
+    // offered a sign-in they structurally cannot complete (a shared token has
+    // no person to sign in as).
+    it("not_applicable with llm_ready false offers no sign-in CTA", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_applicable" }, llm_ready: false }));
+      renderPage();
+      await screen.findByText(T.SETUP_SUMMARY_HELPER);
+      expect(screen.queryByText(T.MODEL_ACCESS_PROVIDED_CHIP)).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
+    });
   });
 });
