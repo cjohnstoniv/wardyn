@@ -768,10 +768,15 @@ blind — the sitting needs the current literal in hand.
 | Key | String |
 |---|---|
 | `SITE_SAVE_NOTE` | Saved. This applies to runs started from now — a run already going keeps the network settings it started with. |
-| `CONFINEMENT_NETPOL_ENFORCING` | NetworkPolicy: enforcing |
-| `CONFINEMENT_NETPOL_NOT_ENFORCING` | NetworkPolicy: not enforcing |
-| `CONFINEMENT_NETPOL_INDETERMINATE` | NetworkPolicy: indeterminate |
+| `CONFINEMENT_NETPOL_ENFORCING` | **RETIRED (U-06, 0.7.3 F6)** — NetworkPolicy: enforcing |
+| `CONFINEMENT_NETPOL_NOT_ENFORCING` | **RETIRED (U-06, 0.7.3 F6)** — NetworkPolicy: not enforcing |
+| `CONFINEMENT_NETPOL_INDETERMINATE` | **RETIRED (U-06, 0.7.3 F6)** — NetworkPolicy: indeterminate |
 | `TRUSTED_CA_COUNT(n)` | {n} trusted CA certificate / {n} trusted CA certificates |
+
+The three `CONFINEMENT_NETPOL_*` rows above lost their only consumer in 0.7.3
+F6 (the global header's `NetworkPolicy: enforcing` chip) — retired here so a
+canon table that still lists them doesn't invite the next lane to re-add the
+chip. The netpol verdict now lives on the setup Environment step alone.
 
 **B-β → `internal/egress/proxy/policy.go` (server-composed; B2/B6 suffix, B7 remedy — quoted
 verbatim by `docs/OPERATIONS.md` and asserted by the ops guard):**

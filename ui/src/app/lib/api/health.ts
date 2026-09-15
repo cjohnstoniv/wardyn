@@ -213,6 +213,9 @@ export const health = {
     trust_domain?: string;
     identity_provider?: string;
     runner?: string;
+    // 0.7.3 F6 removed the shell's only consumer (App.tsx's confinement/
+    // barrier chip) along with `ConfinementClass`. Kept here as the wire
+    // mirror — same treatment as `network_policy` below (U-07).
     confinement_classes?: string[];
     ebpf_groundtruth?: { state?: string; reason?: string };
     // k8sNetpolVerdict's three-value enum (internal/api/setup.go) — present on

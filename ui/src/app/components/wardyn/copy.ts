@@ -682,7 +682,9 @@ export const PEOPLE_STEP = {
 // 0.7.3 F6 removed the three CONFINEMENT_NETPOL_* rows this block used to
 // carry (app-shell.tsx's header chip was their only consumer) — the netpol
 // verdict now lives on the setup Environment step alone; see
-// local/v073/M2-canon-sheet.md for the orphaned rows.
+// docs/design/workspace-providers-prompt.md §7.6 for the retired rows
+// (local/ is gitignored campaign evidence, not a path a shipped file can
+// point at — U-05).
 export const SITE = {
   // B2: the site-config save path's own note — a change here does not reach a
   // run already going (the egress sidecar compiles its config once at sandbox
