@@ -59,6 +59,30 @@ async function gotoProviders(page: Page): Promise<void> {
   await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
 }
 
+// Press Save and WAIT FOR THE WRITE, the way the admin does: the console's own
+// success toast, which providers-screen.tsx raises only once the PUT has
+// resolved 200 (the server writes inside the request, so a 200 IS a committed
+// document).
+//
+// This is a write BARRIER, and the walk below needs one. `expect(...).
+// toHaveCount(0)` on an error that has not happened yet is satisfied on its
+// FIRST poll — it proves nothing about the in-flight PUT — so a wire read or a
+// reload placed straight after the click raced the save: the ADO test read the
+// PRE-save document in 4 of 20 repeats on an otherwise idle box (evidence:
+// local/v073/evidence/fix-providers-flake/probe-baseline-nodelay.log, where
+// the snapshot GET is logged ~26ms BEFORE the PUT's own 200). The reload in the
+// GitHub test is the same race with a worse failure mode — navigating away
+// ABORTS the in-flight PUT, and wardynd cancels the write with the request
+// context. The toast closes both.
+async function saveProviders(page: Page): Promise<void> {
+  await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
+  await expect(page.getByText(PROVIDERS.SAVED_TOAST)).toBeVisible();
+  // Now meaningful — the save has SETTLED, so these say "it settled without a
+  // refusal", not merely "no refusal has rendered yet".
+  await expect(page.getByText(PROVIDERS.SAVE_ERROR)).toHaveCount(0);
+  await expect(page.getByText(PROVIDERS.SAVE_REFUSED_TITLE)).toHaveCount(0);
+}
+
 // Reset the document to a known-empty state before the authoring walk, so
 // this file's own writes never depend on execution order or leftover state
 // from a prior run of the same suite against a not-quite-fresh backend.
@@ -106,8 +130,7 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     const row = page.getByTestId("provider-row-github");
     await expect(row).toBeVisible();
     await row.locator("textarea").fill("https://github.com/acme");
-    await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
-    await expect(page.getByText(PROVIDERS.SAVE_ERROR)).toHaveCount(0);
+    await saveProviders(page);
 
     await page.reload();
     await expect(page.getByRole("heading", { name: PROVIDERS.TITLE, level: 1 })).toBeVisible();
@@ -151,9 +174,7 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     // it supplies a real org path before saving — the way an admin who hit
     // the refusal above would.
     await row.locator("textarea").fill("https://dev.azure.com/acme");
-    await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
-    await expect(page.getByText(PROVIDERS.SAVE_ERROR)).toHaveCount(0);
-    await expect(page.getByText(PROVIDERS.SAVE_REFUSED_TITLE)).toHaveCount(0);
+    await saveProviders(page);
 
     const snap = await (await page.request.get("/api/v1/workspace-providers", { headers: auth })).json();
     expect(snap.git.map((g: { kind: string }) => g.kind).sort()).toEqual(["azure_devops", "github"]);
