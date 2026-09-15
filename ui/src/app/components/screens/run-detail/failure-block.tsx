@@ -150,11 +150,16 @@ export function RunFailureBlock({
           {copy && (
             <p className="mt-1 text-xs leading-relaxed text-foreground">{copy.happened(elapsed)}</p>
           )}
-          {/* review R-01: run.failure_hint's other home — the header chip is
-              clipped to ~120px at 1280px; here the full server sentence
-              always renders. For the `unknown` ending kind (D9's class) this
-              IS the prose: copy is undefined, so this is the only line. */}
-          {run.failure_hint && (
+          {/* review R-01/R-12: run.failure_hint's other home — the header
+              chip is clipped to ~120px at 1280px; here the full server
+              sentence always renders. Gated on `!copy`: for a RECOGNISED
+              ending (image/selftest/killed/auto_stop) `copy.happened` +
+              `ending.detail` already say the same thing in the vocabulary
+              that kind owns — printing failure_hint too would be the same
+              fact stated three times. For `unknown` (D9's class) copy is
+              undefined, so this is the ONLY line — still the real prose,
+              never invented. */}
+          {!copy && run.failure_hint && (
             <p className="mt-1 text-xs leading-relaxed text-foreground">{run.failure_hint}</p>
           )}
           {/* The failing step's OWN words, mono because it is a wire value

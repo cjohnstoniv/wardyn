@@ -208,6 +208,34 @@ describe("RunFailureBlock", () => {
     expect(screen.queryByText("What to do")).not.toBeInTheDocument();
   });
 
+  // review R-12: a RECOGNISED ending already states this exact fact in its
+  // own vocabulary (copy.happened + ending.detail) — printing run.failure_hint
+  // too would be the same sentence three times. Gated on `!copy`, so a
+  // failure_hint that happens to be set alongside a recognised cause is
+  // silently absorbed by the copy that already covers it.
+  it("image WITH a run.failure_hint: the hint paragraph does not also render — copy.happened already says it", () => {
+    render(
+      <RunFailureBlock
+        run={{
+          ...run("FAILED"),
+          failure_hint: "the sandbox image could not be built",
+        }}
+        audit={[ev("run.build", "failure", { data: { error: "step 4/9: npm ci exited 1" } })]}
+        onGoAudit={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-ending", "image");
+    expect(screen.getByText("What happened")).toBeInTheDocument();
+    expect(screen.getByText(/The sandbox image could not be built/)).toBeInTheDocument();
+    // The hint's own exact string does NOT appear as a second, separate
+    // paragraph (copy.happened's sentence differs only by capitalization —
+    // getByText would double-match on a case-insensitive lookup, so this
+    // asserts the paragraph count directly instead).
+    expect(
+      screen.queryAllByText("the sandbox image could not be built"),
+    ).toHaveLength(0);
+  });
+
   it("Open audit trail hands off to the Audit tab", async () => {
     const onGoAudit = renderBlock("FAILED", [ev("run.build", "failure")]);
     await userEvent.click(screen.getByRole("button", { name: /Open audit trail/ }));

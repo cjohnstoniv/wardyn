@@ -155,12 +155,21 @@ export function SummaryHeader({
           instead of clipped to ~5 characters (the copy-link button below is
           the other). */}
       <div className="flex min-w-0 shrink items-baseline gap-2">
-        <span className="max-w-[140px] truncate font-mono text-xs text-foreground 2xl:max-w-[180px]" title={run.repo}>
+        <span className="min-w-[50px] max-w-[140px] truncate font-mono text-xs text-foreground 2xl:max-w-[180px]" title={run.repo}>
           {run.repo}
         </span>
+        {/* review R-14: hidden below 2xl, joining the short-id span right
+            after it in the same waterfall step — an UNBOUNDED mount path is
+            the single biggest thing this bar can be asked to carry, and
+            unlike repo (this file's own long-standing "required to stay
+            visible" fact) workspace_path only started rendering here once
+            the width trade's worst-case fixture (R-03) began seeding one.
+            Hiding it, not just capping it, is what actually let repo keep a
+            real min-width floor instead of being crushed to 0 alongside it
+            in the same shrinkable group. */}
         {run.workspace_path && (
           <span
-            className="max-w-[220px] truncate font-mono text-xs text-muted-foreground"
+            className="hidden max-w-[220px] truncate font-mono text-xs text-muted-foreground 2xl:inline"
             title={run.workspace_path}
           >
             {run.workspace_path}
@@ -210,13 +219,14 @@ export function SummaryHeader({
           more — run-detail/failure-block.tsx's What-happened body now
           renders the full sentence for the `unknown` ending kind (D9's own
           class), where width is free. This chip stays as the header's own
-          at-a-glance affordance, kept to ~120px rather than cut further.
+          at-a-glance affordance, kept to ~100px rather than cut further
+          (review R-14: trimmed once more so Kill's right edge clears 1280).
           review R-02: `truncate` on an inline-flex Chip clips mid-word with
           NO ellipsis (min-content sizing on the anonymous flex child) — the
           inner span below is a real block box, so text-overflow actually
           paints one. */}
       {run.failure_hint && (
-        <Chip tone="danger" className="max-w-[120px] shrink-0" title={run.failure_hint}>
+        <Chip tone="danger" className="max-w-[100px] shrink-0" title={run.failure_hint}>
           <span className="block min-w-0 truncate">{run.failure_hint}</span>
         </Chip>
       )}
@@ -263,12 +273,22 @@ export function SummaryHeader({
       </span>
 
       <div className="ml-auto flex shrink-0 items-center gap-2">
+        {/* review R-14: capped the same way as failure_hint (truncate on an
+            inline-flex Chip clips with no ellipsis — see R-02 — so the text
+            goes in its own block span). A run with real pending approvals is
+            never terminal at the same time (the kill/fail cascade cancels
+            them — runs_lifecycle.go), so this chip and a disabled Kill never
+            actually share the bar; capped anyway, on the same reasoning as
+            repo/failure_hint, so a long "N waiting · sandbox held" can never
+            be the thing that pushes something ELSE off-screen. */}
         {pendingApprovalCount > 0 && (
-          <Chip tone="warning" className="h-7 gap-1">
-            <ShieldAlert className="size-3" />
-            {sandboxHeld
-              ? RUN_COCKPIT.waitingHeld(pendingApprovalCount)
-              : RUN_COCKPIT.waiting(pendingApprovalCount)}
+          <Chip tone="warning" className="h-7 max-w-[130px] gap-1">
+            <ShieldAlert className="size-3 shrink-0" />
+            <span className="block min-w-0 truncate">
+              {sandboxHeld
+                ? RUN_COCKPIT.waitingHeld(pendingApprovalCount)
+                : RUN_COCKPIT.waiting(pendingApprovalCount)}
+            </span>
           </Chip>
         )}
         {/* 0.7.3 F7 — tab order clone -> kill: outline, never the header's one

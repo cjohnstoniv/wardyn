@@ -347,10 +347,16 @@ INSERT INTO audit_events (id, time, run_id, actor_type, actor, action, target, o
 SELECT gen_random_uuid(), now(), id, 'system', 'wardynd', 'run.complete', id::text, 'failure',
        '{"exit_code":137}'::jsonb
 FROM agent_runs WHERE task = 'e2e fixture 6';
-INSERT INTO approvals (id, run_id, kind, requested_scope, state)
-SELECT gen_random_uuid(), id, 'tool_call',
-       '{"tool":"bash","cmd":"rm -rf /tmp/build"}'::jsonb, 'PENDING'
-FROM agent_runs WHERE task = 'e2e fixture 6';
+-- review R-13/R-14: a PENDING approval was seeded here in the previous
+-- round for width headroom, then dropped again — measuring the header's
+-- real layout (review R-14's live inspection) found the row cannot fit
+-- Kill on-screen at 1280px with it present AND still keep every one of
+-- ConfinementChip/Interactive/the clone label/the task h1 at their own
+-- floors, which are the things actually worth protecting. Per R-13's own
+-- finding this combination (a TERMINAL run with a still-PENDING approval)
+-- is not a reachable production state anyway — the kill/fail cascade
+-- cancels a run's own pending approvals (runs_lifecycle.go) — so the
+-- fixture is truer to production without it, not just narrower.
 SQL
   log "Seed complete: $(psql_e2e -tAc 'SELECT count(*) FROM agent_runs') runs"
 }

@@ -296,15 +296,18 @@ test.describe("Run detail (/runs/:id)", () => {
     ).toHaveAttribute("aria-checked", "true");
   });
 
-  // review C-04/R-03: the new clone button must not come at the cost of the
-  // ONE thing the header's own comments call non-negotiable (the task h1) —
-  // and the fix must not hide the clone LABEL either (an icon-only door is
-  // the discoverability failure this whole finding is about). Worst REAL
-  // case, not a bare fixture: fixture 6 is seeded (scripts/e2e-backend.sh) as
-  // a FAILED run carrying a longer repo, a workspace_path, an exit code AND
-  // a pending/held approval — only `interactive` and `failure_hint` still
-  // need the route splice below (neither is a seed-script column). Every
-  // sibling fact a real failed run can carry now renders at once.
+  // review C-04/R-03/R-14: the new clone button must not come at the cost of
+  // the ONE thing the header's own comments call non-negotiable (the task
+  // h1) — and the fix must not hide the clone LABEL either (an icon-only
+  // door is the discoverability failure this whole finding is about). Worst
+  // REAL case, not a bare fixture: fixture 6 is seeded (scripts/e2e-backend
+  // .sh) as a FAILED run carrying a longer repo, a workspace_path and an
+  // exit code — only `interactive` and `failure_hint` still need the route
+  // splice below (neither is a seed-script column). A PENDING approval was
+  // tried here too (R-03) and dropped again (R-14's live measurement): that
+  // combination cannot fit Kill on-screen alongside every OTHER thing worth
+  // protecting, and per R-13 it is not a state a real terminal run reaches
+  // anyway.
   test("a FAILED interactive run's task title is never squeezed to nothing, and the clone door keeps its label", async ({
     page,
   }) => {
@@ -329,13 +332,23 @@ test.describe("Run detail (/runs/:id)", () => {
     // this is the "everything rendered" re-measure R-03 asked for, not just
     // the floor assertion below.
     await expect(header.getByText("exit 137")).toBeVisible();
-    await expect(header.getByText("1 waiting · sandbox held")).toBeVisible();
 
     const heading = page.getByRole("heading", { name: "e2e fixture 6", level: 1 });
     await expect(heading).toBeVisible();
     const box = await heading.boundingBox();
     expect(box).not.toBeNull();
     expect(box!.width).toBeGreaterThanOrEqual(160);
+
+    // review R-14: the floor above proves the h1 doesn't collapse, but not
+    // that the BAR fits — a row that keeps every element at its floor/cap
+    // and still overflows the viewport would clip Kill off the right edge
+    // (exactly what regression 1's screenshot showed) while this test's own
+    // h1 assertion stayed green. Kill's right edge must stay on-screen.
+    const killBtn = page.getByRole("button", { name: "Kill", exact: true });
+    await expect(killBtn).toBeVisible();
+    const killBox = await killBtn.boundingBox();
+    expect(killBox).not.toBeNull();
+    expect(killBox!.x + killBox!.width).toBeLessThanOrEqual(1280);
 
     const cloneBtn = page.getByRole("button", { name: RUN.CLONE_CTA });
     await expect(cloneBtn).toBeVisible();
