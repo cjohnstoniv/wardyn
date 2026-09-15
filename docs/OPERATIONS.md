@@ -2895,6 +2895,20 @@ browser session. A sign-in that Wardyn cannot renew surfaces as "sign in again"
 on their own Getting Started, never as a run that silently borrows somebody
 else's credential — a credential never changes source.
 
+**The admin token is not a person.** `GET /setup/status`'s `model_access` is
+scoped to the CALLING principal — but the shared `WARDYN_ADMIN_TOKEN` bearer
+carries no session of its own and never will, so a bare-token call reads
+`model_access.state: "not_applicable"` rather than `"not_configured"` plus a
+"Sign in to AWS" action nobody holding that token could ever complete.
+`POST /setup/harness-login` draws the same line for the same reason: under a
+`per_user` row it refuses a capture attempted with the admin token (422) —
+every login made with it would land in the SAME namespace (`owner:
+"admin-token"`) and overwrite the last person's session — while a `shared` row
+still lets the admin token connect the one credential everyone inherits.
+Local host mode is unaffected either way: its operator seat is a real person
+(`local:operator` by default), not the admin-token mechanism, so it signs in
+and reads its own model access exactly like any other principal.
+
 **Blast radius.** A compromised sandbox reaches THAT person's SSO session and
 the role credentials it mints, not the organisation's. The `harness.credential.captured`
 and `harness.credential.refresh` audit rows carry `owner` and `credential_source`,

@@ -236,7 +236,9 @@ their own inline policy.
   agent's model lives in, and a sign-in that cannot reach the pinned pair is
   refused on the login terminal (`wardyn: aws sso credential rejected: …`)
   rather than quietly capturing the wrong one; if nothing is pinned and your
-  session reaches more than one, the sign-in asks you to choose.
+  session reaches more than one, the sign-in asks you to choose. This sign-in
+  is yours alone — your admin's own API calls, made with the shared admin
+  token, cannot sign in on your behalf or read your model access for you.
 
 ## What to ask your admin for
 
