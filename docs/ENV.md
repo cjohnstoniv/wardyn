@@ -311,6 +311,8 @@ the sidecar/sandbox environment and read there.
 | `WARDYN_ARTIFACT_CONFIG_B64` 🔒 | base64 | (unset) | artifact config blob |
 | `WARDYN_CLAUDE_MANAGED_B64` 🔒 | base64 | (unset) | managed Claude credential blob |
 | `WARDYN_AWS_SSO_CONFIG_B64` 🔒 | base64 | (unset) | captured AWS SSO session, delivered as a minimal synthetic `~/.aws` (config + SSO token cache) and materialized by `agent-run`; the sandbox SDK exchanges it for short-lived Bedrock role credentials |
+| `WARDYN_AWS_SSO_ACCOUNT_ID` | string | (unset) | the AWS account a sign-in in the **container-login** sandbox may capture, seeded from the agent roster row's `sso_account_id`. `wardyn-aws-sso` VERIFIES it against the SSO portal (the account must be one this session reaches, and the pinned role must exist in it) and refuses the sign-in rather than falling back — without it the helper would take `AccountList[0]`, which a cloud team granting an unrelated entitlement can silently change. Set together with the role below, or not at all; NOT a credential (an account id is configuration). Present only in an aws-sso login run, never in a workspace run |
+| `WARDYN_AWS_SSO_ROLE_NAME` | string | (unset) | the IAM role the same sign-in may capture, seeded from the roster row's `sso_role_name` and verified in the pinned account (`ListAccountRoles` is scoped to the account it is asked about, so a role that exists in some OTHER account the person reaches is not a match). Set together with the account above |
 
 ## Compose / scripts (shell-only — not read by Go)
 

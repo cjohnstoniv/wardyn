@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -449,7 +450,7 @@ func (s *Server) storeAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob aw
 // There is no server-side start-URL config to read it from (deliberately: it is
 // per-organization and this is the only flow that needs it), so it arrives with
 // the login request and is validated by the caller.
-func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl harnessLogin, ssoStartURL string) (types.AgentRun, error) {
+func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl harnessLogin, ssoStartURL string, pin awsSSOPin) (types.AgentRun, error) {
 	if s.cfg.Runner == nil {
 		return types.AgentRun{}, fmt.Errorf("no runner configured")
 	}
@@ -509,6 +510,9 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// block with the start URL + region and NO token cache — the login sandbox
 	// must not receive a credential, it exists to produce one.
 	extraEnv := hl.loginConfigEnv(ssoStartURL, ssoRegion)
+	// The admin's account/role pin as NON-SECRET env; nil for an unpinned row,
+	// so an unpinned launch stays byte-identical. See awssso_pin.go.
+	maps.Copy(extraEnv, awsSSOPinEnv(pin))
 
 	// THE LAUNCH-TIME CREDENTIAL SCOPE, STAMPED. handleUploadSSOToken used to
 	// re-resolve it from the LIVE roster at upload time, so an admin who flipped
@@ -527,6 +531,9 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 			// handleUploadSSOToken — never recomputed there.
 			"credential_source": awsSSOCredentialSourceLabel(loginScope),
 			"owner":             loginScope.owner,
+			// The pin AS IT READ AT LAUNCH — what the upload binds to.
+			"sso_account_id": pin.AccountID,
+			"sso_role_name":  pin.RoleName,
 		})))
 
 	image := agentImage(hl.agent, s.cfg.AgentImages)
@@ -581,6 +588,12 @@ type loginRunStamp struct {
 	SSOStartURL      string `json:"sso_start_url"`
 	CredentialSource string `json:"credential_source"`
 	Owner            string `json:"owner"`
+	// SSOAccountID/SSORoleName are the roster row's pin AS IT READ AT LAUNCH,
+	// stamped for the same reason the scope is: a roster edit while a login
+	// sandbox is alive must not re-point a capture in flight. Empty means
+	// "launched unpinned", which the upload accepts.
+	SSOAccountID string `json:"sso_account_id,omitempty"`
+	SSORoleName  string `json:"sso_role_name,omitempty"`
 }
 
 func (s *Server) loginRunStamp(ctx context.Context, runID uuid.UUID) (loginRunStamp, error) {
@@ -786,7 +799,8 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	_, actor := actorFromRequest(r)
-	run, err := s.launchHarnessLoginRun(r.Context(), actor, hl, startURL)
+	run, err := s.launchHarnessLoginRun(r.Context(), actor, hl, startURL,
+		awsSSOPin{AccountID: row.SSOAccountID, RoleName: row.SSORoleName})
 	if err != nil {
 		// A governance limit is the acting principal's own profile refusing, not a
 		// daemon fault — answered the way launchRecordRun's caller answers it

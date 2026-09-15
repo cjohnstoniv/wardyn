@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
@@ -781,4 +782,83 @@ func TestHandleHarnessLogin_AWSNeedsStartURLAndRegion(t *testing.T) {
 	if w := do(t, srv, http.MethodPost, path, adminToken, `{"provider":"anthropic"}`); w.Code != http.StatusInternalServerError {
 		t.Errorf("anthropic login: code = %d, want 500 (no runner configured); body=%s", w.Code, w.Body.String())
 	}
+}
+
+// TestLaunchHarnessLoginRun_SeedsPinEnv: the admin's account/role pin reaches
+// the login sandbox as launch ENV, and is stamped on the run's own
+// harness.login.started row.
+//
+// Both halves matter and they are different claims. The ENV is what lets the
+// in-sandbox helper verify the pin against the portal instead of taking
+// AccountList[0]; the STAMP is what lets the upload refuse a blob that
+// disagrees, and it is read back from the audit row rather than the live roster
+// so a roster edit mid-login cannot re-point a capture already in flight.
+func TestLaunchHarnessLoginRun_SeedsPinEnv(t *testing.T) {
+	runner := &fakeRunner{}
+	srv, audit := perUserLoginSrvWithRunner(t, runner, types.AgentProvider{
+		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
+		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: perUserPortal,
+		SSOAccountID: "111111111111", SSORoleName: "BedrockRunner",
+	})
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login",
+		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), `{"provider":"aws"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+
+	env := runner.lastSandboxEnv()
+	if env[awsSSOPinAccountEnvVar] != "111111111111" || env[awsSSOPinRoleEnvVar] != "BedrockRunner" {
+		t.Errorf("sandbox env = %v, want the pin in %s/%s — without it the helper is back to AccountList[0]",
+			env, awsSSOPinAccountEnvVar, awsSSOPinRoleEnvVar)
+	}
+	// The pre-login ~/.aws/config still rides the same channel; the pin is
+	// ADDITIONAL, never a replacement.
+	if env[awsSSOConfigEnvVar] == "" {
+		t.Errorf("sandbox env = %v, lost the pre-login ~/.aws/config", env)
+	}
+
+	stamp := loginStartedStamp(t, audit)
+	if stamp.SSOAccountID != "111111111111" || stamp.SSORoleName != "BedrockRunner" {
+		t.Errorf("harness.login.started stamp = %+v, want the launch-time pin — the upload binds to THIS, not to the live roster", stamp)
+	}
+}
+
+// TestLoginConfigEnv_NoPinNoEnv: an UNPINNED row seeds neither variable, so a
+// deployment that never pins launches byte-for-byte the sandbox it always did.
+func TestLoginConfigEnv_NoPinNoEnv(t *testing.T) {
+	runner := &fakeRunner{}
+	srv, audit := perUserLoginSrvWithRunner(t, runner, types.AgentProvider{
+		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
+		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: perUserPortal,
+	})
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login",
+		ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), `{"provider":"aws"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	env := runner.lastSandboxEnv()
+	if _, ok := env[awsSSOPinAccountEnvVar]; ok {
+		t.Errorf("an unpinned row seeded %s: %v", awsSSOPinAccountEnvVar, env)
+	}
+	if _, ok := env[awsSSOPinRoleEnvVar]; ok {
+		t.Errorf("an unpinned row seeded %s: %v", awsSSOPinRoleEnvVar, env)
+	}
+	if stamp := loginStartedStamp(t, audit); stamp.SSOAccountID != "" || stamp.SSORoleName != "" {
+		t.Errorf("an unpinned launch stamped %+v, want no pin — the upload reads an empty stamp pin as 'launched unpinned'", stamp)
+	}
+}
+
+// loginStartedStamp decodes the launch-time stamp off this run's own
+// harness.login.started row — the same read handleUploadSSOToken makes.
+func loginStartedStamp(t *testing.T, audit *memAudit) loginRunStamp {
+	t.Helper()
+	rows := audit.find("harness.login.started")
+	if len(rows) != 1 {
+		t.Fatalf("harness.login.started rows = %d, want 1", len(rows))
+	}
+	var stamp loginRunStamp
+	if err := json.Unmarshal(rows[0].Data, &stamp); err != nil {
+		t.Fatalf("decode harness.login.started data: %v", err)
+	}
+	return stamp
 }

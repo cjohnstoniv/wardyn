@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -445,13 +446,23 @@ const perUserPortal = "https://org-portal.awsapps.com/start"
 // person, with a member session ready to drive it.
 func perUserLoginSrv(t *testing.T, rows ...types.AgentProvider) (*Server, *memAudit) {
 	t.Helper()
-	return perUserLoginSrvUnder(t, &capStore{}, rows...)
+	return perUserLoginSrvUnder(t, &capStore{}, nil, rows...)
+}
+
+// perUserLoginSrvWithRunner is perUserLoginSrv with a runner the caller keeps a
+// handle on, so a test can read the SandboxSpec the launch actually composed.
+func perUserLoginSrvWithRunner(t *testing.T, runner runner.Runner, rows ...types.AgentProvider) (*Server, *memAudit) {
+	t.Helper()
+	return perUserLoginSrvUnder(t, &capStore{}, runner, rows...)
 }
 
 // perUserLoginSrvUnder is perUserLoginSrv with an explicit capability/governance
 // store, for the arm that assigns a profile to the member driving the door.
-func perUserLoginSrvUnder(t *testing.T, cs *capStore, rows ...types.AgentProvider) (*Server, *memAudit) {
+func perUserLoginSrvUnder(t *testing.T, cs *capStore, rnr runner.Runner, rows ...types.AgentProvider) (*Server, *memAudit) {
 	t.Helper()
+	if rnr == nil {
+		rnr = &fakeRunner{}
+	}
 	if len(rows) == 0 {
 		rows = []types.AgentProvider{{
 			ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
@@ -464,7 +475,7 @@ func perUserLoginSrvUnder(t *testing.T, cs *capStore, rows ...types.AgentProvide
 	cfg := baseTestConfig(h, st)
 	cfg.Audit = audit
 	cfg.OIDC = &oidc.Authenticator{}
-	cfg.Runner = &fakeRunner{}
+	cfg.Runner = rnr
 	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
 	cfg.MaskRegistry = secretmask.NewRegistry()
 	cfg.BedrockRegion = "us-east-1"
@@ -568,7 +579,7 @@ func TestHarnessLoginGovernance_ExemptsDenyInteractiveOnly(t *testing.T) {
 
 	// A member whose assigned profile denies interactive runs outright.
 	srv, audit := perUserLoginSrvUnder(t, assignedStore(limitsProfile("no-interactive",
-		types.GovernanceLimits{DenyInteractive: true})))
+		types.GovernanceLimits{DenyInteractive: true})), nil)
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login",
 		govSession(t, "sub-walled", []string{"eng"}, false), `{"provider":"aws"}`)
 	if w.Code != http.StatusOK {

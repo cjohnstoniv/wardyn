@@ -75,82 +75,21 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid sso token: "+jerr.Error())
 		return
 	}
-	// Structural guard — the replacement for the Anthropic prefix check (see
-	// awsSSOBlob.valid doc). Checked on the CLIENT-supplied fields only, before
-	// the server stamps its own provenance below, so a client can never satisfy
-	// this by omission.
-	if !blob.valid() {
-		writeError(w, http.StatusBadRequest, "sso token blob is missing required fields (access_token/start_url/region/expires_at)")
-		return
-	}
-	// Defense in depth (W15-d): this blob is persisted once and then baked
-	// VERBATIM, unescaped, into every later Bedrock run's ~/.aws/config INI
-	// (awsSSOConfigFileContents, runs_bedrock.go) — a single bad capture would
-	// poison every subsequent run that credential mode serves, not just this
-	// one. StartURL gets the same https-URL-no-whitespace guard the operator's
-	// own pre-login input takes (validateSSOStartURL, harnesscred.go); the INI
-	// template's other three interpolated fields (sso_account_id/sso_role_name/
-	// sso_region) get the same control-character guard run.Repo already takes for
-	// the identical reason (repoFieldSafe, runs_scm.go) — a newline in any could
-	// otherwise smuggle extra keys/sections into the generated file. Region is
-	// especially load-bearing: sso_region is written AFTER sso_start_url in the
-	// [sso-session] block, so an injected duplicate sso_start_url via Region would
-	// win under last-key-wins parsing and defeat the StartURL guard above.
-	if verr := validateSSOStartURL(blob.StartURL); verr != nil {
-		writeError(w, http.StatusBadRequest, "invalid sso token: "+verr.Error())
-		return
-	}
-	if !repoFieldSafe(blob.AccountID) {
-		writeError(w, http.StatusBadRequest, "invalid sso token: account_id contains control characters or whitespace")
-		return
-	}
-	if !repoFieldSafe(blob.RoleName) {
-		writeError(w, http.StatusBadRequest, "invalid sso token: role_name contains control characters or whitespace")
-		return
-	}
-	if !repoFieldSafe(blob.Region) {
-		writeError(w, http.StatusBadRequest, "invalid sso token: region contains control characters or whitespace")
-		return
-	}
-	// F006 — bind WHAT is uploaded to WHAT THE OPERATOR ASKED FOR, not merely
-	// to WHICH run may upload. Everything above authenticates the WRITER
-	// (claimsForRunUpload + run.Task/run.Agent) and shape-checks the CONTENT;
-	// none of it stops code running INSIDE the login sandbox (the vendor CLI
-	// image, a fetched dependency) from PUTting a structurally perfect blob that
-	// names an ATTACKER's IdP, region, account and role. That blob would land
-	// under the OPERATOR-WIDE reserved harness name (storeAWSSSOBlob) and
-	// resolveBedrockAuth selects it AHEAD of the host ~/.aws mount and the
-	// static-key lanes for every LATER Bedrock run — baking the attacker's
-	// start_url/account/role into that run's ~/.aws/config and appending the
-	// attacker region's oidc./portal.sso. hosts to its egress allowlist
-	// (ssoEgressHosts, runs_bedrock.go). The server already HOLDS both operator
-	// values that pin this down, so the binding check needs no new trust source:
-	//   region    — the same cmp.Or(BedrockAWSSSORegion, BedrockRegion) boot
-	//               config launchHarnessLoginRun seeded this sandbox with, which
-	//               handleHarnessLogin REQUIRES to be non-empty before an aws-sso
-	//               login run may launch at all;
-	//   start_url — the operator's own request value, read back from THIS run's
-	//               harness.login.started audit event (loginRunSSOStartURL).
-	// Both comparisons are exact and fail closed: an empty expectation (region
-	// unset after a restart, audit row unreadable) can never equal a blob field
-	// that valid() has already proven non-empty, so the upload is refused rather
-	// than silently unbound.
-	wantRegion := cmp.Or(s.cfg.BedrockAWSSSORegion, s.cfg.BedrockRegion)
-	if blob.Region != wantRegion {
-		writeError(w, http.StatusBadRequest,
-			"sso token region does not match the AWS SSO region this login run was launched with")
-		return
-	}
+	// The LAUNCH-TIME record of what this run was authorized to capture: the
+	// operator's access-portal URL, the credential scope, and (0.7.3) the
+	// roster's account/role pin. Read back off this run's OWN audit row rather
+	// than re-resolved from the live roster — see loginRunStamp.
 	stamp, aerr := s.loginRunStamp(r.Context(), claims.RunID)
 	if aerr != nil {
-		writeError(w, http.StatusInternalServerError, "verify sso token against login run: "+aerr.Error())
+		s.refuseCapture(w, r, claims, http.StatusInternalServerError, refuseReasonStampUnreadable,
+			"verify sso token against login run: "+aerr.Error())
 		return
 	}
-	if blob.StartURL != stamp.SSOStartURL {
-		writeError(w, http.StatusBadRequest,
-			"sso token start_url does not match the AWS access portal URL this login run was launched with")
+	if msg, reason := s.bindSSOBlob(blob, stamp); msg != "" {
+		s.refuseCapture(w, r, claims, http.StatusBadRequest, reason, msg)
 		return
 	}
+
 	// WHOSE credential this is — DECIDED AT LAUNCH, read back here, never
 	// recomputed from the live roster. The roster says whether this deployment
 	// keeps ONE model credential for everyone (`shared`, today) or one per person
@@ -172,7 +111,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		// No stamp, on a deployment whose row now reads `per_user`: unprovable, so
 		// refused. See ssoTokenUnstampedScopeRefusal.
-		writeError(w, http.StatusConflict, ssoTokenUnstampedScopeRefusal)
+		s.refuseCapture(w, r, claims, http.StatusConflict, refuseReasonUnstampedScope, ssoTokenUnstampedScopeRefusal)
 		return
 	}
 
@@ -202,10 +141,12 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// as it liked — the exact overwrite this guard exists to refuse, reopened by
 	// reading the wrong namespace.
 	if prev, found, rerr := s.readAWSSSOBlob(r.Context(), scope); rerr != nil {
-		writeError(w, http.StatusInternalServerError, "read existing aws sso credential: "+rerr.Error())
+		s.refuseCapture(w, r, claims, http.StatusInternalServerError, refuseReasonStoreError,
+			"read existing aws sso credential: "+rerr.Error())
 		return
 	} else if found && prev.SourceRunID == claims.RunID.String() {
-		writeError(w, http.StatusConflict, "this login run has already captured an aws sso credential")
+		s.refuseCapture(w, r, claims, http.StatusConflict, refuseReasonAlreadyCaptured,
+			"this login run has already captured an aws sso credential")
 		return
 	}
 
@@ -248,6 +189,71 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 			"owner": scope.owner, "credential_source": awsSSOCredentialSourceLabel(scope),
 		})))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// bindSSOBlob binds WHAT is uploaded to WHAT THE OPERATOR ASKED FOR, and is the
+// whole of this handler's content check. Extracted from the handler body so
+// handleUploadSSOToken stays a readable sequence of authorize / bind / store
+// (and under the cyclomatic cap as the bindings grew from three to five).
+//
+// Returns ("", "") to accept; (sentence, reason) to refuse, where reason is
+// from the fixed vocabulary in awssso_pin.go. Every check fails CLOSED: an
+// empty expectation (region unset after a restart, an unreadable audit row)
+// can never equal a blob field valid() has already proven non-empty, so the
+// upload is refused rather than silently unbound.
+//
+// Everything AHEAD of this call authenticates the WRITER (claimsForRunUpload +
+// run.Task/run.Agent against trusted server state); none of it stops code
+// running INSIDE the login sandbox — the vendor CLI image, a fetched
+// dependency, or simply a portal that listed somebody else's account first —
+// from PUTting a structurally perfect blob naming an IdP, region, account and
+// role nobody asked for. That blob would land under the reserved harness name
+// and resolveBedrockAuth would select it AHEAD of the host ~/.aws mount and the
+// static-key lanes for every LATER Bedrock run (runs_bedrock.go), baking its
+// start_url/account/role into that run's ~/.aws/config and appending its
+// region's oidc./portal.sso. hosts to the egress allowlist.
+func (s *Server) bindSSOBlob(blob awsSSOBlob, stamp loginRunStamp) (msg, reason string) {
+	// Structural guard — the replacement for the Anthropic prefix check (see
+	// awsSSOBlob.valid doc). Checked on the CLIENT-supplied fields only, before
+	// the server stamps its own provenance, so a client can never satisfy this
+	// by omission.
+	if !blob.valid() {
+		return "sso token blob is missing required fields (access_token/start_url/region/expires_at)", refuseReasonBlobShape
+	}
+	// Defense in depth (W15-d): this blob is persisted once and then baked
+	// VERBATIM, unescaped, into every later Bedrock run's ~/.aws/config INI
+	// (awsSSOConfigFileContents). StartURL gets the same https-URL-no-whitespace
+	// guard the operator's own pre-login input takes (validateSSOStartURL); the
+	// INI template's other three interpolated fields get the same
+	// control-character guard run.Repo already takes for the identical reason
+	// (repoFieldSafe, runs_scm.go) — a newline in any could otherwise smuggle
+	// extra keys/sections into the generated file. Region is especially
+	// load-bearing: sso_region is written AFTER sso_start_url in the
+	// [sso-session] block, so an injected duplicate sso_start_url via Region
+	// would win under last-key-wins parsing and defeat the StartURL guard.
+	if verr := validateSSOStartURL(blob.StartURL); verr != nil {
+		return "invalid sso token: " + verr.Error(), refuseReasonFieldUnsafe
+	}
+	for field, value := range map[string]string{
+		"account_id": blob.AccountID, "role_name": blob.RoleName, "region": blob.Region,
+	} {
+		if !repoFieldSafe(value) {
+			return "invalid sso token: " + field + " contains control characters or whitespace", refuseReasonFieldUnsafe
+		}
+	}
+	// F006 — the two operator values the server already HOLDS, so the binding
+	// needs no new trust source: the region is the same
+	// cmp.Or(BedrockAWSSSORegion, BedrockRegion) boot config this sandbox was
+	// launched with, and the start URL is the operator's own request value read
+	// back off THIS run's harness.login.started row.
+	if blob.Region != cmp.Or(s.cfg.BedrockAWSSSORegion, s.cfg.BedrockRegion) {
+		return "sso token region does not match the AWS SSO region this login run was launched with", refuseReasonRegionMismatch
+	}
+	if blob.StartURL != stamp.SSOStartURL {
+		return "sso token start_url does not match the AWS access portal URL this login run was launched with", refuseReasonStartURLMismatch
+	}
+	// Finding 1: WHICH account and role, not merely which portal.
+	return bindCaptureToPin(blob, stamp, s.cfg.BedrockModel)
 }
 
 // loginRunScope turns a login run's launch-time stamp into the scope its upload

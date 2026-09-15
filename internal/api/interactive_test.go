@@ -204,3 +204,11 @@ func TestCreateRun_NonInteractive_StillExecs(t *testing.T) {
 
 // compile-time assertion that fakeRunner satisfies the interface.
 var _ runner.Runner = (*fakeRunner)(nil)
+
+// lastSandboxEnv is the non-secret env of the most recent CreateSandbox spec —
+// what a launch actually composed, as the sandbox would read it.
+func (f *fakeRunner) lastSandboxEnv() map[string]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastSpec.Env
+}
