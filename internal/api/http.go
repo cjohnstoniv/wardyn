@@ -377,6 +377,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			if isMutatingMethod(r.Method) {
 				origin := r.Header.Get("Origin")
 				if isCrossSiteFetch(r) || (origin != "" && !isLoopbackOrigin(origin)) {
+					s.auditAuthFailed(r, csrfAuditReason)
 					writeError(w, http.StatusForbidden, "local mode: "+csrfRefusedBody)
 					return
 				}
@@ -407,6 +408,13 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			// top of the branch so no handler, and no context the branch
 			// publishes, ever sees a forged request.
 			if err := s.sameOriginOrRefuse(r); err != nil {
+				// Audited on the EXISTING auth.failed action: this refusal
+				// short-circuits ABOVE adminAuth, the chokepoint that emits for
+				// every other public-API refusal, so without this call a
+				// threat-model-registered control would leave no trail at all.
+				// The session was VALID here, so no SessionRejectedFromContext
+				// reason overrides csrfAuditReason (auditAuthFailedAs).
+				s.auditAuthFailed(r, csrfAuditReason)
 				writeError(w, http.StatusForbidden, err.Error())
 				return
 			}

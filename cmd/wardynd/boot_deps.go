@@ -8,6 +8,7 @@ import (
 	"crypto/ed25519"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -340,6 +341,17 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 		if defaultRole != "" && !validDefaultRole(defaultRole) {
 			return of, fmt.Errorf("invalid WARDYN_OIDC_DEFAULT_ROLE %q: want %q or %q (%q is a MAPPED tier only — name the App Role, group or email that should hold it in WARDYN_OIDC_ROLE_MAP; it is refused as a fallthrough default)",
 				defaultRole, oidc.RoleAdmin, oidc.RoleMember, oidc.RoleSecurityAdmin)
+		}
+		// The redirect URL is TWO things since 0.7.3, and only one of them was
+		// ever validated: the IdP callback target (oidc.New checks it is
+		// non-empty, nothing more) AND the second origin the console's CSRF
+		// guard accepts as same-origin (internal/api/csrf.go). A value that
+		// parses to no host silently kills that second arm, and the symptom
+		// lands on the operator as a 403 reading "CSRF guard" at their first
+		// console save — naming no config, on a deployment that boots clean.
+		// Refuse at boot instead, where the message can name the variable.
+		if err := validateOIDCRedirectURL(*f.oidcRedirectURL); err != nil {
+			return of, err
 		}
 		// bootCtx (30s), not rootCtx: the ctx is used ONLY for the discovery
 		// HTTP round trip (go-oidc's Provider.Verifier fetches JWKS on a
@@ -768,4 +780,16 @@ func refreshLoginStamps(ctx context.Context, st loginStampStore, sub, role strin
 	if err := st.RefreshAPITokenRoles(ctx, sub, role); err != nil {
 		slog.Warn("wardynd: api token role refresh at login failed", slog.String("err", err.Error()))
 	}
+}
+
+// validateOIDCRedirectURL refuses a WARDYN_OIDC_REDIRECT_URL that is not an
+// absolute URL with a host. Fail CLOSED at boot: every alternative (warn and
+// continue, or accept and discover it later) trades one loud line here for a
+// console-wide 403 whose message names no configuration at all.
+func validateOIDCRedirectURL(raw string) error {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("invalid WARDYN_OIDC_REDIRECT_URL %q: want an absolute URL with a scheme and host, e.g. https://wardyn.example.com/auth/callback — its HOST is also the second origin the console's CSRF guard accepts as same-origin, so a value without one refuses every console write behind a TLS-terminating ingress", raw)
+	}
+	return nil
 }

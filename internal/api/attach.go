@@ -171,15 +171,21 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 
 	// Upgrade to WebSocket. SAME-ORIGIN is enforced: InsecureSkipVerify is left
 	// false (the zero value) so coder/websocket rejects cross-origin upgrades
-	// whose Origin host does not match the Host header. We do NOT set
-	// OriginPatterns: the default (empty patterns + InsecureSkipVerify=false)
-	// means "only allow same-origin", which is exactly what we want — the UI is
-	// served from the SAME origin as this API (see mountUI), so browser attach
-	// works, while a hostile page on another origin cannot drive the socket.
-	// This is the conservative choice; a reverse-proxy deployment that serves the
-	// UI from a different host would add that host to OriginPatterns here.
+	// whose Origin host does not match the Host header. That default alone was
+	// the whole check until 0.7.3, and it made this socket UNREACHABLE in the
+	// one deployment shape the console's CSRF guard is built around: behind a
+	// TLS-terminating ingress the browser's Origin is the public console name
+	// while r.Host is the internal one, so browser attach 403'd. OriginPatterns
+	// now carries exactly the second name that guard accepts — the host of
+	// WARDYN_OIDC_REDIRECT_URL, operator-configured and attacker-unwritable
+	// (attachOriginPatterns, csrf.go) — and nothing else: the library still
+	// authorises r.Host itself first, the list is nil when SSO is not
+	// configured, and a hostile page on any other origin cannot drive the
+	// socket. This is the most dangerous cookie-authenticated capability in the
+	// product; it gets ONE extra name, from config, never a wildcard.
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: false,
+		OriginPatterns:     s.attachOriginPatterns(),
 	})
 	if err != nil {
 		// Accept already wrote an HTTP error response on failure (e.g. a 403 for

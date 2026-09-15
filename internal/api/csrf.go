@@ -44,6 +44,17 @@ const (
 	csrfRefusedBody = "cross-origin state-changing request rejected (CSRF guard)"
 )
 
+// csrfAuditReason is the `reason` both arms emit on the EXISTING auth.failed
+// action (docs/AUDIT-ACTIONS.md) — no new action, no new row shape, and the
+// same rate limiter and coalescer every other refusal in this middleware goes
+// through (auth_failed_coalesce.go keys on actor+reason+path+source IP, so a
+// page hammering one route folds into one row plus a summary). It is emitted
+// because a security control that refuses SILENTLY cannot answer either
+// question an operator has at 3am: "is someone attacking this?" and "why did
+// the console stop saving?". Not a closed enum member by accident — it joins
+// the enum the auth.failed row documents.
+const csrfAuditReason = "cross_origin_refused"
+
 // errCrossOriginRefused is the sentinel sameOriginOrRefuse returns. Its text IS
 // the 403 body, so the caller writes err.Error() and no second string exists to
 // drift.
@@ -93,10 +104,14 @@ var errCrossOriginRefused = errors.New(csrfRefusedBody)
 // attacker who can serve http:// on our own hostname already owns the origin.
 //
 // Hosts compare case-insensitively and INCLUDE the port — "host:port" is what
-// an origin is. ponytail: no default-port normalization ("https://x" vs
-// "x:443"); the redirect-URL rule already covers the deployment shape where
-// r.Host carries a port the browser does not, and a normalizer here would be
-// speculative parsing on a security path.
+// an origin is — after originHost drops a port that IS the scheme's default.
+// That normalization is not cosmetic: a browser omits :443 from an https
+// Origin, an operator writing WARDYN_OIDC_REDIRECT_URL is free to spell it, and
+// behind an ingress r.Host matches neither, so without it the second accepted
+// name evaporates and every console write 403s on a config that looks correct.
+// r.Host itself is NOT normalized — we cannot know the scheme the browser used
+// to reach the ingress in front of us — so a deployment whose r.Host carries an
+// explicit :443 is matched by the redirect-URL rule rather than the r.Host one.
 func (s *Server) sameOriginOrRefuse(r *http.Request) error {
 	if !isMutatingMethod(r.Method) {
 		return nil
@@ -130,14 +145,47 @@ func isCrossSiteFetch(r *http.Request) bool {
 	return strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "cross-site")
 }
 
-// originHost returns the host[:port] of an Origin (or any absolute URL). ok is
-// false for everything without a host — a parse error, an opaque origin
-// ("null"), a scheme with no authority ("file:///x") — so every caller FAILS
-// CLOSED on input it could not understand rather than guessing.
+// originHost returns the comparable host[:port] of a SERIALISED ORIGIN
+// (scheme://host[:port]) — what the Origin header carries, and the shape
+// WARDYN_OIDC_REDIRECT_URL must also have. ok is false for everything else, so
+// every caller FAILS CLOSED on input it could not understand rather than
+// guessing: a parse error, an opaque origin ("null"), a scheme with no
+// authority ("file:///x"), a scheme-relative reference ("//host") and a URL
+// carrying USERINFO ("https://user@host", where the host is not where a reader
+// expects it). The last two are not browser-reachable — the Origin header is
+// always a serialised origin — but this function is now read by
+// attachOriginPatterns and by config, and a shape whose host is not obvious to
+// a human reader has no business being silently accepted on a security path.
+//
+// A port equal to the SCHEME'S DEFAULT is dropped (https:443, http:80), so
+// "https://console.example" and "https://console.example:443" compare equal.
+// TrimSuffix, not net.SplitHostPort, because SplitHostPort strips the brackets
+// an IPv6 literal needs to compare against r.Host ("[::1]:8080").
 func originHost(origin string) (string, bool) {
-	u, err := url.Parse(origin)
-	if err != nil || u.Host == "" {
+	u, err := url.Parse(strings.TrimSpace(origin))
+	if err != nil || u.Host == "" || u.Scheme == "" || u.User != nil {
 		return "", false
 	}
+	switch u.Scheme {
+	case "https":
+		return strings.TrimSuffix(u.Host, ":443"), true
+	case "http":
+		return strings.TrimSuffix(u.Host, ":80"), true
+	}
 	return u.Host, true
+}
+
+// attachOriginPatterns is the PTY-attach WebSocket's extra allowed origin
+// (attach.go). coder/websocket always authorises an Origin whose host equals
+// r.Host and consults these patterns only after that, so this adds exactly the
+// one name the ingress case needs — the same second host sameOriginOrRefuse
+// accepts, for the same reason — and nothing else. Nil when SSO is not
+// configured or the value has no parseable host: no patterns means
+// same-origin-only, the library's conservative default.
+func (s *Server) attachOriginPatterns() []string {
+	host, ok := originHost(s.cfg.OIDCRedirectURL)
+	if !ok {
+		return nil
+	}
+	return []string{host}
 }
