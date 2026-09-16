@@ -249,7 +249,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			// is hand untrusted code a free enumeration of the operator's service
 			// topology. Off, for the same reason as the line above it.
 			EnableServiceLinks: boolPtr(false),
-			HostAliases:                  []corev1.HostAlias{{IP: proxyIP, Hostnames: []string{"wardyn-proxy"}}},
+			HostAliases:        []corev1.HostAlias{{IP: proxyIP, Hostnames: []string{"wardyn-proxy"}}},
 			// L3: the default ClusterFirst dnsPolicy points the agent at
 			// kube-dns/CoreDNS — which its own NetworkPolicy denies (no DNS
 			// egress at all; see the agent netpol above). A proxy-UNAWARE

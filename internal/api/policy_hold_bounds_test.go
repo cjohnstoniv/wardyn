@@ -38,7 +38,7 @@ func TestValidatePolicySpec_HoldBounds(t *testing.T) {
 		spec         types.RunPolicySpec
 		wantContains string
 	}{
-		{"max_holds above the cap", spec(0, maxHoldsPerSpec + 1), "max_holds"},
+		{"max_holds above the cap", spec(0, maxHoldsPerSpec+1), "max_holds"},
 		{"max_holds absurd (the member-inline case)", spec(0, 1000000), "max_holds"},
 		{"max_holds negative", spec(0, -1), "max_holds"},
 		{"hold seconds above the cap", spec(maxFirstUseHoldSeconds+1, 0), "first_use_hold_seconds"},
