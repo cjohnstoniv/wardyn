@@ -269,15 +269,30 @@ test("the member signs in to AWS from their own seat and the capture is theirs",
 
   // The helper's own success marker — the PTY contract cmd/wardyn-aws-sso and
   // the pane share (TestSuccessMarker_UIParity pins the two spellings equal).
+  // THE PANE TEARS THE TERMINAL DOWN THE MOMENT IT SEES THE MARKER, so polling
+  // for the marker alone is a race the test loses on a slow box.
+  // harness-login-pane.tsx's handleOutput → confirmCapture fires `killRun` and
+  // then `onDone`, and the parent closes the pane — all within milliseconds of
+  // the marker being printed. `screen.innerText()` then reads a detached node
+  // (or throws), so the poll can watch for its full five minutes while the
+  // capture has ALREADY succeeded server-side. That is exactly what happened:
+  // `harness.credential.captured` in the audit, `session.detach reason="client
+  // closed"` right after it, and a spec still waiting.
+  //
+  // So accept either witness — the marker if we catch it in flight, or the
+  // SERVER's own answer if the pane beat us to the teardown — and keep failing
+  // fast on the helper's refusal. The server fact is the stronger of the two:
+  // it is what every assertion after this one rests on.
   await expect
     .poll(
       async () => {
-        const text = await screen.innerText();
+        const text = await screen.innerText().catch(() => "");
         if (text.includes(FAIL_MARKER)) {
           const line = text.split("\n").find((l) => l.includes(FAIL_MARKER)) ?? FAIL_MARKER;
           throw new Error(`the login helper refused this capture: ${line.trim()}`);
         }
-        return text.includes(SUCCESS_MARKER);
+        if (text.includes(SUCCESS_MARKER)) return true;
+        return (await modelAccess(page)).state === "live";
       },
       { timeout: LOGIN_DONE },
     )
@@ -402,15 +417,30 @@ test("sso-pin-dispatch: a pin changed after capture warns, refuses the run, and 
       await screen.click();
       await page.keyboard.type(`${CHAINED_CMD}\n`, { delay: 20 });
     });
+  // THE PANE TEARS THE TERMINAL DOWN THE MOMENT IT SEES THE MARKER, so polling
+  // for the marker alone is a race the test loses on a slow box.
+  // harness-login-pane.tsx's handleOutput → confirmCapture fires `killRun` and
+  // then `onDone`, and the parent closes the pane — all within milliseconds of
+  // the marker being printed. `screen.innerText()` then reads a detached node
+  // (or throws), so the poll can watch for its full five minutes while the
+  // capture has ALREADY succeeded server-side. That is exactly what happened:
+  // `harness.credential.captured` in the audit, `session.detach reason="client
+  // closed"` right after it, and a spec still waiting.
+  //
+  // So accept either witness — the marker if we catch it in flight, or the
+  // SERVER's own answer if the pane beat us to the teardown — and keep failing
+  // fast on the helper's refusal. The server fact is the stronger of the two:
+  // it is what every assertion after this one rests on.
   await expect
     .poll(
       async () => {
-        const text = await screen.innerText();
+        const text = await screen.innerText().catch(() => "");
         if (text.includes(FAIL_MARKER)) {
           const line = text.split("\n").find((l) => l.includes(FAIL_MARKER)) ?? FAIL_MARKER;
           throw new Error(`the login helper refused this capture: ${line.trim()}`);
         }
-        return text.includes(SUCCESS_MARKER);
+        if (text.includes(SUCCESS_MARKER)) return true;
+        return (await modelAccess(page)).state === "live";
       },
       { timeout: LOGIN_DONE },
     )
