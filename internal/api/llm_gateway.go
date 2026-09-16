@@ -79,6 +79,21 @@ func ValidateLLMGateways(anthropicRaw, openaiRaw string) (map[string]string, err
 // deliberate acts, never one env var. With the acknowledgement unset — every
 // real deployment — this function is byte-identical to before the parameter
 // existed.
+// BedrockPlainHTTPWarn is the BOOT WARN every boot that actually TAKES the
+// plain-http relaxation logs (W6-S7). WARDYN_ALLOW_TEST_ENDPOINTS unlocks two
+// relaxations and only the AWS SSO one was audible; this one re-points the
+// BEARER-mode injection target, so the Bedrock API key rides
+// `Authorization: Bearer` in cleartext on every model call — and it said
+// nothing. It opens with the same greppable literal AWSSSOEndpointOverrideWarn
+// does, and it names the plaintext target, because the thing that must never
+// happen is this posture going unnoticed in an inherited values file.
+//
+// DRAFT (M2 canon pending)
+const BedrockPlainHTTPWarn = "wardynd: TEST HATCH ACTIVE — WARDYN_BEDROCK_BASE_URL is plain http://, " +
+	"so Bedrock inference traffic (and, in bearer mode, the API key riding it as Authorization: Bearer) " +
+	"crosses the network UNENCRYPTED to this target on every model call; it is accepted only because " +
+	"WARDYN_ALLOW_TEST_ENDPOINTS=true acknowledges this as a test deployment"
+
 func ValidateBedrockBaseURL(raw, region string, allowTestEndpoints bool) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {

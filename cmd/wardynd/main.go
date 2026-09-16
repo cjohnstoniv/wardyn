@@ -483,6 +483,15 @@ func validateModelEndpoints(f *bootFlags) (map[string]string, string, string, er
 	if err != nil {
 		return nil, "", "", err
 	}
+	// The OTHER relaxation WARDYN_ALLOW_TEST_ENDPOINTS unlocks, made audible
+	// (W6-S7). The AWS SSO override WARNs on every boot that carries it; this one
+	// — which re-points the bearer-mode credential-INJECTION target — logged
+	// nothing at all, so a deployment that inherited it served a real Bedrock API
+	// key over cleartext with only docs/ENV.md to say so. Read off the VALIDATED
+	// value, so it fires exactly when the relaxation was actually taken.
+	if strings.HasPrefix(strings.ToLower(bedrockBaseURL), "http://") {
+		slog.Warn(api.BedrockPlainHTTPWarn, slog.String("bedrock_base_url", bedrockBaseURL))
+	}
 	// The gated AWS SSO endpoint hatch (resolveAWSSSOEndpointOverride,
 	// boot_flags.go). Resolved here rather than in run() because it answers the
 	// same class of question — "where does this deployment's traffic actually
