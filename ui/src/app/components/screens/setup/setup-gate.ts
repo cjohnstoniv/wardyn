@@ -246,6 +246,21 @@ export function clearStaleVisitFlags(status: {
 // test harness unmount/render) must not re-run the wipe. Same "once per page
 // LOAD" shape as gateFiredThisLoad above, deliberately module state rather
 // than component state for the identical reason.
+//
+// KNOWN CEILING (L2, no fix available in this lane): "once per page load" can
+// only distinguish THIS load from the NEXT one — it cannot tell "a previous
+// install's mark" from "mine, from 30 seconds ago, before a reload". A fresh
+// install where the operator skips Integrations and then reloads (still
+// !onboarding_complete && !has_runs) sees the latch re-arm and wipe its OWN
+// skip. The correct fix is discriminating by INSTALL identity, not by page
+// load — comparing this flag against a stable per-install marker, the same
+// shape setupDismissed's own -v05 suffix uses — but SetupStatus (this file's
+// own import) and GET /healthz carry no such value today (checked both;
+// every field on each is a deliberate disclosure decision, and inventing one
+// is a backend change outside this lane). Traded a rare false-green (a
+// wiped-then-reinstalled browser showing a stale "Skipped") for this more
+// common false-neutral (a fresh install's reload forgetting its own skip) —
+// see local/v074/canon/ui-setup-shell-changelog.md's Known gaps.
 let staleFlagsCheckedThisLoad = false;
 
 export function clearStaleVisitFlagsOnce(status: {

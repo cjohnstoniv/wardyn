@@ -6,6 +6,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
   clearStaleVisitFlags,
+  clearStaleVisitFlagsOnce,
+  resetStaleFlagsCheckForTests,
   dismissSetup,
   setupDismissed,
   firstRunLanding,
@@ -98,6 +100,40 @@ describe("setup-gate — the funnel's own per-browser state (no hard gate any mo
     markIntegrationsSkipped();
     expect(clearStaleVisitFlags({ onboarding_complete: true, has_runs: false })).toBe(false);
     expect(integrationsSkipped()).toBe(true);
+  });
+});
+
+// L3: the PRODUCTION path (setup-screen.tsx calls clearStaleVisitFlagsOnce,
+// never the unlatched clearStaleVisitFlags above) — pinned separately so the
+// once-per-load semantics DEVIATION-1 relies on actually has coverage.
+describe("clearStaleVisitFlagsOnce — the module-level once-per-load latch (L3)", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    resetStaleFlagsCheckForTests();
+  });
+
+  it("clears on the first call within a load, and does nothing on the second", () => {
+    markIntegrationsSkipped();
+    const fresh = { onboarding_complete: false, has_runs: false };
+    expect(clearStaleVisitFlagsOnce(fresh)).toBe(true);
+    expect(integrationsSkipped()).toBe(false);
+
+    // A mark set AFTER the first call — the ordinary in-session case
+    // (DEVIATION-1's whole point) — must survive the second call within the
+    // same load, even though the condition (`fresh`) is unchanged.
+    markIntegrationsSkipped();
+    expect(clearStaleVisitFlagsOnce(fresh)).toBe(false);
+    expect(integrationsSkipped()).toBe(true);
+  });
+
+  it("resetStaleFlagsCheckForTests re-arms the latch, mirroring a real reload", () => {
+    const fresh = { onboarding_complete: false, has_runs: false };
+    expect(clearStaleVisitFlagsOnce(fresh)).toBe(true);
+    expect(clearStaleVisitFlagsOnce(fresh)).toBe(false);
+    resetStaleFlagsCheckForTests();
+    markIntegrationsSkipped();
+    expect(clearStaleVisitFlagsOnce(fresh)).toBe(true);
+    expect(integrationsSkipped()).toBe(false);
   });
 });
 
