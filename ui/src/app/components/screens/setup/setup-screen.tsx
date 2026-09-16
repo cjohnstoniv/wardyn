@@ -40,7 +40,7 @@ import {
   setDefaultCc,
 } from "../../wardyn/default-confinement";
 import { deploymentMode, deriveReadiness, lastCheckedLabel } from "../../../lib/readiness";
-import { useOperator } from "../../wardyn/operator-context";
+import { useOperator, useOperatorResolved } from "../../wardyn/operator-context";
 import { SetupLayout } from "./setup-layout";
 import { PhaseRail } from "./phase-rail";
 import { EnvironmentStep } from "./environment-step";
@@ -92,6 +92,13 @@ const DemoDetail = React.lazy(() => import("./demos-step"));
 // ------------------------------------------------------------
 export function SetupScreen({ onDone }: { onDone: () => void }) {
   const operator = useOperator();
+  // During the cold-load window `operator` reads the fail-open default, so
+  // `operatorResolved` is the half that closes it — a member landing on a
+  // cold `/setup` load must not fire the admin-only reads below at all
+  // (reloadSiteConfig / loadSecrets / loadProviderCount), not just swallow
+  // their 403s (see loadProviderCount's own precedent below).
+  const operatorResolved = useOperatorResolved();
+  const adminReads = operatorResolved && operator;
   // ?step=<id> deep-links a specific step — the Integrations page's
   // proxy-detected banner uses it to hand off to Corporate network, now the
   // only place a proxy is configured. Read once at mount (an unknown or
@@ -327,11 +334,12 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // embedded Integrations step's own "Add integration" dialog, which keeps
   // its own local copy (see integrations/add-integration-dialog.tsx).
   const reloadSiteConfig = React.useCallback(() => {
+    if (!adminReads) return Promise.resolve();
     return healthApi
       .getSiteConfig()
       .then(setSiteConfig)
       .catch(() => {});
-  }, []);
+  }, [adminReads]);
 
   // The one write path into SiteConfig from within Getting Started — today
   // only Corporate network uses it (Host proxy / Egress redirection saves).
@@ -346,23 +354,27 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   );
 
   const loadSecrets = React.useCallback(() => {
-    secretsApi
+    if (!adminReads) return Promise.resolve();
+    return secretsApi
       .listSecrets()
       .then(setSecretNames)
       .catch(() => setSecretNames([]));
-  }, []);
+  }, [adminReads]);
 
-  // GET /workspace-providers is operatorOnly — gated on `operator` so a
-  // security admin or a member does not take a swallowed 403 on every
-  // recheck (this funnel runs for every caller); the count just stays 0
-  // (Optional) for them either way.
+  // GET /workspace-providers is operatorOnly — gated on `operatorResolved &&
+  // operator` so a security admin or a member does not take a swallowed 403
+  // on every recheck (this funnel runs for every caller); the count just
+  // stays 0 (Optional) for them either way. Plain `!operator` alone used to
+  // be the guard, but during the cold-load window `operator` reads the
+  // fail-open default `true`, so it let the very first mount through before
+  // the real role landed — `operatorResolved` is the half that closes it.
   const loadProviderCount = React.useCallback(() => {
-    if (!operator) return;
-    providersApi
+    if (!adminReads) return Promise.resolve();
+    return providersApi
       .getWorkspaceProviders()
       .then(({ providers }) => setProviderCount((providers.git ?? []).filter((r) => !r.disabled).length))
       .catch(() => setProviderCount(0));
-  }, [operator]);
+  }, [adminReads]);
 
   // R-09: the last host_proxy payload this screen has seen, serialized. The
   // baseline is the mount read; every read (forced or not) updates it.

@@ -61,10 +61,10 @@ import { baseStatus } from "../../../lib/test-fixtures";
 import { DRIVES } from "../../../lib/user-drives-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
 
-function renderScreen(operator = true) {
+function renderScreen(operator = true, operatorResolved = true) {
   return render(
     <MemoryRouter>
-      <OperatorProvider operator={operator} securityOperator>
+      <OperatorProvider operator={operator} operatorResolved={operatorResolved} securityOperator>
         <SettingsScreen />
       </OperatorProvider>
     </MemoryRouter>,
@@ -120,6 +120,27 @@ describe("SettingsScreen", () => {
     ).toBeInTheDocument();
     expect(screen.queryByTestId("user-drives-card")).toBeNull();
     expect(getDrivesMock).not.toHaveBeenCalled();
+  });
+});
+
+// setup-screen.tsx's sibling guard (member-cold-load lane, plan P3): GET
+// /site-config is operatorOnly, and during the cold-load window `operator`
+// reads the fail-open default `true`, so `operatorResolved` is the half that
+// closes it — the mount `Promise.all` must not fire the read at ALL for a
+// member, not just swallow its 403 into `null`.
+describe("SettingsScreen — operatorResolved && operator guards the site-config read", () => {
+  it("a member's cold /setup load fires no admin-only reads", async () => {
+    renderScreen(/* operator */ false);
+    expect(
+      await screen.findByRole("heading", { name: "Host", level: 3 }),
+    ).toBeInTheDocument();
+    expect(getSiteConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("an admin's cold /setup load still fetches it", async () => {
+    renderScreen(/* operator */ true);
+    await screen.findByRole("heading", { name: "Host", level: 3 });
+    expect(getSiteConfigMock).toHaveBeenCalled();
   });
 });
 

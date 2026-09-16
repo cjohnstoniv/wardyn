@@ -39,7 +39,7 @@ import {
 } from "../../wardyn/default-confinement";
 import type { ConfinementClass } from "../../../lib/types";
 import { EnvironmentStep } from "../setup/environment-step";
-import { useOperator } from "../../wardyn/operator-context";
+import { useOperator, useOperatorResolved } from "../../wardyn/operator-context";
 import { isProxyConfigured } from "../setup/corp-network-proxy";
 import { SshKeysPane } from "../ssh-keys";
 import { ModelProviderCard } from "./connection-cards";
@@ -208,14 +208,24 @@ export function SettingsScreen() {
   // makes POSITIVE claims from it, so it is the one that is told.
   const [configFailed, setConfigFailed] = React.useState(false);
 
+  // GET /site-config is operatorOnly (HostCard's comment above has the full
+  // reasoning). During the cold-load window `operator` reads the fail-open
+  // default, so `operatorResolved` is the half that closes it — a member's
+  // mount must not fire the admin-only read at all, not just swallow its 403.
+  const operator = useOperator();
+  const operatorResolved = useOperatorResolved();
+  const adminReads = operatorResolved && operator;
+
   const load = React.useCallback(() => {
     let failed = false;
     Promise.all([
       setupApi.getSetupStatus(),
-      health.getSiteConfig().catch(() => {
-        failed = true;
-        return null;
-      }),
+      adminReads
+        ? health.getSiteConfig().catch(() => {
+            failed = true;
+            return null;
+          })
+        : Promise.resolve(null),
     ])
       .then(([s, cfg]) => {
         setStatus(s);
@@ -224,7 +234,7 @@ export function SettingsScreen() {
         setState("ready");
       })
       .catch(() => setState("error"));
-  }, []);
+  }, [adminReads]);
   React.useEffect(load, [load]);
 
   return (

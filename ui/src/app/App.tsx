@@ -166,6 +166,31 @@ function RouteFallback() {
   );
 }
 
+// `/setup` is a member's landing route too (setup-gate.ts's setupGateActive
+// redirects a gated install here regardless of role) — reached on a COLD
+// document load (bookmark, reload, the SSO callback's return) before the real
+// role is known. GettingStarted mounts SetupScreen unconditionally, whose
+// admin-only reads (reloadSiteConfig/loadSecrets/loadProviderCount) are gated
+// on `operatorResolved && operator`, but the FIRST paint under the role
+// context's fail-open "admin" default still happens before that closes — the
+// same idiom FirstRunLanding above uses to hold `/` open until the real role
+// answers holds the /setup route open here too.
+function SetupRoute({
+  status,
+  onDone,
+}: {
+  status: SetupStatus | null;
+  onDone: () => void;
+}) {
+  const roleResolved = useRoleResolved();
+  if (!roleResolved) return <RouteFallback />;
+  return (
+    <React.Suspense fallback={<RouteFallback />}>
+      <GettingStarted onDone={onDone} status={status} />
+    </React.Suspense>
+  );
+}
+
 // Where "/" lands. A fresh install opens on the guided tour rather than an
 // empty Runs board — a console whose very first screen is "No runs yet" makes
 // the operator hunt for where to begin.
@@ -471,12 +496,10 @@ export default function App() {
           <Route
             path="/setup"
             element={
-              <React.Suspense fallback={<RouteFallback />}>
-                <GettingStarted
-                  onDone={() => navigate("/runs")}
-                  status={setupStatus}
-                />
-              </React.Suspense>
+              <SetupRoute
+                onDone={() => navigate("/runs")}
+                status={setupStatus}
+              />
             }
           />
           <Route element={<RequireSetup status={setupStatus} />}>
