@@ -27,11 +27,20 @@
 // Still optional. Demos, governed commands and terminal recordings need nothing
 // connected; clicking Next past this step with nothing set marks it Skipped
 // (setup-screen.tsx's selectStep).
+import { Link } from "react-router-dom";
 import type { SetupStatus, SiteConfig } from "../../../lib/types";
 import { ModelProviderCard } from "../settings/connection-cards";
 
-export const STEP_LEDE =
-  "Optional. Wardyn runs governed commands, interactive runs and recordings with nothing connected. Most agent runs want a model credential — any other secret a run needs (including a git credential, set up under Providers) is added the same way, on the Secrets page, and handed to runs by name.";
+// X3-F8: the lede NAMED "the Secrets page" with no way to get there — smaller
+// than a rail/label/visited-set change (renaming this step is out: its id
+// must stay `integrations`, demo-videos.ts's episodesFor keys on it). Split
+// around the link so the sentence stays otherwise byte-identical.
+export const STEP_LEDE_PREFIX =
+  "Optional. Wardyn runs governed commands, interactive runs and recordings with nothing connected. Most agent runs want a model credential — any other secret a run needs (including a git credential, set up under Providers) is added the same way, on the ";
+export const STEP_LEDE_LINK = "Secrets page";
+export const STEP_LEDE_SUFFIX = ", and handed to runs by name.";
+// Preserved for any external byte-parity check against the old single string.
+export const STEP_LEDE = `${STEP_LEDE_PREFIX}${STEP_LEDE_LINK}${STEP_LEDE_SUFFIX}`;
 
 export function IntegrationsStep({
   status,
@@ -46,7 +55,13 @@ export function IntegrationsStep({
 }) {
   return (
     <div className="space-y-4">
-      <p className="text-sm leading-relaxed text-muted-foreground">{STEP_LEDE}</p>
+      <p className="text-sm leading-relaxed text-muted-foreground">
+        {STEP_LEDE_PREFIX}
+        <Link to="/secrets" className="font-medium text-primary hover:underline">
+          {STEP_LEDE_LINK}
+        </Link>
+        {STEP_LEDE_SUFFIX}
+      </p>
       <ModelProviderCard status={status} siteConfig={siteConfig} onChanged={onRecheck} />
     </div>
   );

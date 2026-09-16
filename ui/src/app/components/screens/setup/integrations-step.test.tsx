@@ -14,7 +14,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { IntegrationsStep, STEP_LEDE } from "./integrations-step";
+import { IntegrationsStep, STEP_LEDE_LINK, STEP_LEDE_PREFIX, STEP_LEDE_SUFFIX } from "./integrations-step";
 import { S } from "../settings/connection-cards";
 import { baseStatus } from "../../../lib/test-fixtures";
 
@@ -27,9 +27,20 @@ function renderStep() {
 }
 
 describe("IntegrationsStep", () => {
-  it("renders the step lede verbatim", () => {
+  it("renders the step lede verbatim, around a real link to /secrets", () => {
     renderStep();
-    expect(screen.getByText(STEP_LEDE)).toBeInTheDocument();
+    // Split by the link (react-router-dom's <Link>), so the surrounding text
+    // is asserted with a function matcher rather than a single exact node.
+    expect(
+      screen.getByText((_, node) => node?.textContent === STEP_LEDE_PREFIX + STEP_LEDE_LINK + STEP_LEDE_SUFFIX),
+    ).toBeInTheDocument();
+  });
+
+  // X3-F8: the lede named "the Secrets page" with no way to get there.
+  it("X3-F8: the lede's Secrets page mention is a real link to /secrets", () => {
+    renderStep();
+    const link = screen.getByRole("link", { name: STEP_LEDE_LINK });
+    expect(link).toHaveAttribute("href", "/secrets");
   });
 
   // GitHostCard retired in 0.7.2 — the step renders ModelProviderCard only now;
