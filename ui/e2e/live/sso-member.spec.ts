@@ -36,7 +36,6 @@
  * in place — never loosened to match both spellings.
  */
 
-import { execFileSync } from "node:child_process";
 import { expect, test, type Page, type APIRequestContext } from "@playwright/test";
 
 // ── the walk's inputs (scripts/kind-sso-walk.sh exports every one) ──────────
@@ -44,8 +43,8 @@ const ADMIN_TOKEN = process.env.WARDYN_LIVE_ADMIN_TOKEN || "";
 const PIN_ACCOUNT = process.env.WARDYN_LIVE_PIN_ACCOUNT || "222222222222";
 const PIN_ROLE = process.env.WARDYN_LIVE_PIN_ROLE || "WardynDev";
 const SSO_START_URL = process.env.WARDYN_LIVE_SSO_START_URL || "https://wardyn-dev.awsapps.com/start";
-const FAKE_URL = process.env.WARDYN_LIVE_FAKE_URL || "http://wardyn-awsssofake.wardyn.svc.cluster.local:8090";
-const KUBE_CONTEXT = `kind-${process.env.WARDYN_QUICKSTART_CLUSTER || "wardyn-quickstart"}`;
+/** The harness's read-only route to the fake's /_seen — see seen() below. */
+const SEEN_URL = process.env.WARDYN_LIVE_SEEN_URL || "http://127.0.0.1:8390/_seen";
 
 const ADMIN_EMAIL = "admin@wardyn.local";
 const MEMBER_EMAIL = "member@wardyn.local";
@@ -54,6 +53,15 @@ const DEX_PASSWORD = "password";
 
 /** harness-login-pane.tsx's aws.doneMarker — the helper's PTY success contract. */
 const SUCCESS_MARKER = "wardyn: aws sso credential captured";
+/**
+ * cmd/wardyn-aws-sso's failMarker (TestFailMarker_UIParity pins this spelling
+ * equal to the pane's). Watched ALONGSIDE the success marker, because a login
+ * the control plane has already REFUSED prints this and then exits — and a poll
+ * that only ever looks for success spends the whole LOGIN_DONE budget before
+ * saying "did not happen", with the reason sitting on the terminal the entire
+ * time. Five wasted minutes per red, and a red that names nothing.
+ */
+const FAIL_MARKER = "wardyn: aws sso credential rejected:";
 /** harness-login-pane.tsx's aws.cmd — chained so the upload needs no second command. */
 const CHAINED_CMD = "aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso";
 
@@ -102,8 +110,20 @@ async function dexSignOut(page: Page): Promise<void> {
   ).toBeVisible({ timeout: 60_000 });
 }
 
-/** The signed-in browser session's own view of who it is. */
-async function me(page: Page): Promise<{ principal?: string; operator?: boolean; member_mode?: boolean }> {
+/**
+ * The signed-in browser session's own view of who it is.
+ *
+ * `email` is the field that carries the ADDRESS. `principal` is the OIDC SUBJECT
+ * — for this Dex it is the opaque `Cg5nc3YtYWRtaW4tMDAwMRIFbG9jYWw`, not
+ * "admin@wardyn.local" — and internal/api/me.go says so in place: the principal
+ * is "the key every ownership check compares against", while the console header
+ * reads name, then email, then principal. An earlier version of this file
+ * asserted the address against `principal` and failed on the walk's very first
+ * assertion, with a real, correctly signed-in admin session behind it.
+ */
+async function me(
+  page: Page,
+): Promise<{ principal?: string; email?: string; operator?: boolean; member_mode?: boolean }> {
   return page.evaluate(async () => {
     const r = await fetch("/api/v1/me", { credentials: "include" });
     return (await r.json()) as Record<string, unknown>;
@@ -120,19 +140,29 @@ async function modelAccess(page: Page): Promise<{ state?: string; action?: strin
 }
 
 /**
- * The fake's `/_seen`, read from INSIDE the cluster.
+ * The fake's `/_seen`, read through the harness's own port-forward.
  *
- * There is deliberately no host-side route to the fake: the whole fourth
- * precondition is that it is addressed by its in-cluster Service. So the read
- * goes through the control-plane pod, the same way the walk script reads it.
+ * NOTHING UNDER TEST USES THIS ROUTE. The fourth precondition still holds:
+ * every sandbox, the login run and dispatch-time renewal all address the fake by
+ * its in-cluster Service name. scripts/kind-sso-walk.sh opens a read-only
+ * `kubectl port-forward` purely so the harness can read the counter the fake
+ * keeps, and hands the URL over in WARDYN_LIVE_SEEN_URL.
+ *
+ * It used to be `kubectl exec deployment/wardyn -- wget`, which CANNOT work on
+ * any deployment: the wardynd image is distroless — no wget, no curl, no shell —
+ * so that exec fails with "executable file not found in $PATH". This is the one
+ * observation in this file that is not Wardyn asserting about itself, so it
+ * failing silently-looking was the worst possible place for it.
  */
-function seen(): { account_id: string; role_name: string; bedrock_calls: number; bedrock_model: string } {
-  const out = execFileSync(
-    "kubectl",
-    ["--context", KUBE_CONTEXT, "-n", "wardyn", "exec", "deployment/wardyn", "--", "wget", "-qO-", `${FAKE_URL}/_seen`],
-    { encoding: "utf8" },
-  );
-  return JSON.parse(out);
+async function seen(): Promise<{
+  account_id: string;
+  role_name: string;
+  bedrock_calls: number;
+  bedrock_model: string;
+}> {
+  const res = await fetch(SEEN_URL);
+  if (!res.ok) throw new Error(`GET ${SEEN_URL}: ${res.status}`);
+  return (await res.json()) as Awaited<ReturnType<typeof seen>>;
 }
 
 /**
@@ -178,7 +208,7 @@ test("the admin declares the per-user Bedrock SSO lane and pins the account", as
 
   await dexSignIn(page, ADMIN_EMAIL);
   const who = await me(page);
-  expect(who.principal).toContain("admin@wardyn.local");
+  expect(who.email, "the session Dex handed back is not the admin's").toBe(ADMIN_EMAIL);
   expect(who.operator, "admin@wardyn.local must resolve as an operator (WARDYN_OIDC_ROLE_MAP)").toBe(true);
 
   await putRoster(request);
@@ -193,7 +223,7 @@ test("the admin declares the per-user Bedrock SSO lane and pins the account", as
 test("the member signs in to AWS from their own seat and the capture is theirs", async ({ page }) => {
   await dexSignIn(page, MEMBER_EMAIL);
   const who = await me(page);
-  expect(who.principal).toContain("member@wardyn.local");
+  expect(who.email, "the session Dex handed back is not the member's").toBe(MEMBER_EMAIL);
   expect(who.operator).toBe(false);
 
   // Before: the member has a real action to take, not a dead end.
@@ -240,7 +270,17 @@ test("the member signs in to AWS from their own seat and the capture is theirs",
   // The helper's own success marker — the PTY contract cmd/wardyn-aws-sso and
   // the pane share (TestSuccessMarker_UIParity pins the two spellings equal).
   await expect
-    .poll(async () => (await screen.innerText()).includes(SUCCESS_MARKER), { timeout: LOGIN_DONE })
+    .poll(
+      async () => {
+        const text = await screen.innerText();
+        if (text.includes(FAIL_MARKER)) {
+          const line = text.split("\n").find((l) => l.includes(FAIL_MARKER)) ?? FAIL_MARKER;
+          throw new Error(`the login helper refused this capture: ${line.trim()}`);
+        }
+        return text.includes(SUCCESS_MARKER);
+      },
+      { timeout: LOGIN_DONE },
+    )
     .toBe(true);
 
   // THE MEMBER'S OWN STATUS, from the member's own session.
@@ -284,14 +324,14 @@ test("the member's run gets the member's PINNED identity, and something spends i
   // what the AWS SDK actually asked the portal to mint. Index 0 of the fixture
   // is a DIFFERENT account, so naming the pin here is a real answer.
   await expect
-    .poll(() => seen().account_id, { timeout: 180_000 })
+    .poll(async () => (await seen()).account_id, { timeout: 180_000 })
     .toBe(PIN_ACCOUNT);
-  expect(seen().role_name).toBe(PIN_ROLE);
+  expect((await seen()).role_name).toBe(PIN_ROLE);
 
   // …and the minted credential was SPENT: the bedrock-runtime stub was hit, on
   // the model ARN this deployment configured.
-  await expect.poll(() => seen().bedrock_calls, { timeout: 180_000 }).toBeGreaterThan(0);
-  expect(seen().bedrock_model).toContain(PIN_ACCOUNT);
+  await expect.poll(async () => (await seen()).bedrock_calls, { timeout: 180_000 }).toBeGreaterThan(0);
+  expect((await seen()).bedrock_model).toContain(PIN_ACCOUNT);
 });
 
 test("sso-pin-dispatch: a pin changed after capture warns, refuses the run, and heals on re-sign-in", async ({
@@ -363,7 +403,17 @@ test("sso-pin-dispatch: a pin changed after capture warns, refuses the run, and 
       await page.keyboard.type(`${CHAINED_CMD}\n`, { delay: 20 });
     });
   await expect
-    .poll(async () => (await screen.innerText()).includes(SUCCESS_MARKER), { timeout: LOGIN_DONE })
+    .poll(
+      async () => {
+        const text = await screen.innerText();
+        if (text.includes(FAIL_MARKER)) {
+          const line = text.split("\n").find((l) => l.includes(FAIL_MARKER)) ?? FAIL_MARKER;
+          throw new Error(`the login helper refused this capture: ${line.trim()}`);
+        }
+        return text.includes(SUCCESS_MARKER);
+      },
+      { timeout: LOGIN_DONE },
+    )
     .toBe(true);
 
   await page.goto("/setup");
@@ -371,8 +421,9 @@ test("sso-pin-dispatch: a pin changed after capture warns, refuses the run, and 
 
   // …and the fake agrees the SECOND capture asked for the SECOND pin. Without
   // this, "live" alone could not tell a healed capture from a stale one.
-  expect(seen().account_id).toBe(CONTRA_ACCOUNT);
-  expect(seen().role_name).toBe(CONTRA_ROLE);
+  const healed = await seen();
+  expect(healed.account_id).toBe(CONTRA_ACCOUNT);
+  expect(healed.role_name).toBe(CONTRA_ROLE);
 });
 
 test("member-mode: an admin drops to member mode, is refused, and comes back", async ({ page }) => {

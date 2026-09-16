@@ -53,6 +53,14 @@ PF_PIDFILE="${TMPDIR:-/tmp}/wardyn-kind-sso-dex-${CLUSTER}.pid"
 WARDYND_IMAGE="wardyn/wardynd:quickstart"
 PROXY_IMAGE="wardyn/wardyn-proxy:quickstart"
 FAKE_IMAGE="wardyn/awsssofake:local"
+# The AWS SSO LOGIN sandbox's image. `make kind-quickstart` loads agent-base and
+# agent-claude-code; neither is what a "Sign in to AWS" run boots. Without this
+# the login pod resolves agentImage("aws-sso") to the PUBLISHED
+# ghcr.io/cjohnstoniv/agent-aws-sso:<version> ref and sits in ImagePullBackOff
+# on a cluster with no pull path — which the console shows as a login pane that
+# never reaches its terminal, i.e. exactly the P1 symptom this overlay exists to
+# let you disprove.
+AWS_SSO_IMAGE="wardyn/agent-aws-sso:local"
 
 step() { printf '\n\033[1;34m==>\033[0m %s\n' "$*"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -110,8 +118,8 @@ if [[ "${WARDYN_KIND_SSO_REBUILD:-}" == "1" ]]; then
 fi
 
 step "loading images into ${CLUSTER} (no registry pull)"
-for img in "${FAKE_IMAGE}" "${WARDYND_IMAGE}" "${PROXY_IMAGE}"; do
-  docker image inspect "${img}" >/dev/null 2>&1 || die "image ${img} not present locally (run \`make kind-quickstart\` first, or WARDYN_KIND_SSO_REBUILD=1)"
+for img in "${FAKE_IMAGE}" "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AWS_SSO_IMAGE}"; do
+  docker image inspect "${img}" >/dev/null 2>&1 || die "image ${img} not present locally (run \`make kind-quickstart\` first, \`make agent-images\` for ${AWS_SSO_IMAGE}, or WARDYN_KIND_SSO_REBUILD=1)"
   kind load docker-image "${img}" --name "${CLUSTER}"
 done
 
