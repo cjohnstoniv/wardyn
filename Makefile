@@ -233,15 +233,14 @@ test-report-k8s: ## -tags k8s suite with reports (fake clientset; no cluster nee
 # (docker union); the floor sits just under that with a small margin for
 # routine churn. Raise it as coverage climbs.
 # scripts/cover-union.sh documents exactly what is and is not counted.
-# RATCHET (X2-F11, v0.7.4 gate-hygiene lane): docs/TEST-GAPS.md's own union read
-# 76.0%, 11 points clear of the old 65 floor — slack wide enough that a real
-# coverage regression could land and still pass. This worktree's own
-# `make cover-check` measured 78.3% union (see gate-make-ci.log) — raised to
-# 75, a margin below that measurement rather than the measurement itself: six
-# console UI lanes are still landing on top of this base as of v0.7.4 W3, and
-# the coordinator's W5 final-tree `make ci` re-measures and may ratchet this
-# further. Never lower it without a coverage regression forcing the call.
-COVER_MIN ?= 75
+# RATCHET (W6-01, v0.7.4 blind-verify lane): the coordinator's W5 final-tree
+# `make ci` measured the union at 78.3% at tree 532ca5d4 (see
+# local/v074/evidence/w5-ci2/make-ci.log:199) — 3.3 points above the old 75
+# floor, slack wide enough that a real coverage regression could land and
+# still pass. Raised to 78, a margin below that measurement rather than the
+# measurement itself. Never lower it without a coverage regression forcing
+# the call; re-measure at the next release.
+COVER_MIN ?= 78
 cover-check: test-report test-report-docker test-report-k8s ## Enforce the COVER_MIN floor over ALL THREE shipped builds, unioned
 	@./scripts/cover-union.sh --self-test
 	@./scripts/cover-union.sh $(COVER_MIN) test/reports/go/union \

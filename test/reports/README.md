@@ -32,7 +32,7 @@ regenerable output and gitignored (see `.gitignore`).
 make test-report                 # Go unit suite  -> test/reports/go/unit/
 WARDYN_TEST_PG=postgres://...  make test-report-pg
 WARDYN_TEST_DOCKER=1           make test-report-docker
-make cover-check                 # enforce the coverage floor (COVER_MIN, default 75) over the
+make cover-check                 # enforce the coverage floor (COVER_MIN, default 78) over the
                                  # UNION of all three shipped builds (tagless + -tags docker + -tags k8s)
 make ui-test                     # vitest + coverage -> test/reports/ui/
 cd ui && pnpm e2e                # Playwright (seeded backend) -> test/reports/e2e/

@@ -39,7 +39,7 @@ All contributors and subagents MUST preserve the six security invariants documen
 Features are not done until they pass the conformance suite (`test/conformance`) on the Docker target and, for anything the Kubernetes runner supports, the `conformance-k8s` CI job (needs a local `kind` cluster to run outside CI — see RELEASING.md; a driver-agnostic honesty stub keeps the contract enforced everywhere else). Every pull request runs these CI checks. A **subset** of them is a server-side merge block on `main`; branch protection is the source of truth, not this list — read it back with `gh api repos/cjohnstoniv/wardyn/branches/main/protection --jq .required_status_checks.contexts`. The rest are the review bar, and a red one is still a red one:
 
 - `go build` and `go vet` — both plain and `-tags docker`
-- Go unit suites with a coverage floor: `make cover-check` (enforces COVER_MIN=75 over the
+- Go unit suites with a coverage floor: `make cover-check` (enforces COVER_MIN=78 over the
   UNION of all three shipped builds — tagless + `-tags docker` + `-tags k8s`),
   `make test-report-docker` (fakeDocker), `make test-report-k8s`,
   `make test-report-pg` (real Postgres), and `make test-race-pg` — the race
