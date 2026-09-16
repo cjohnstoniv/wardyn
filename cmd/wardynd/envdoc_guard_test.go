@@ -359,32 +359,27 @@ func readEnvDoc(t *testing.T, root string) string {
 // process env, and compose never inherits the operator's shell: unless
 // docker-compose.yaml's wardynd `environment:` block explicitly passes a key
 // through as `"${VAR:-}"`, setting it before `docker compose up` is silently
-// inert. This calls the real function (rather than a hand-copied name list)
-// so a future addition to ProxySidecarEnvKnobs fails this guard until the
-// compose block catches up, instead of drifting the way WARDYN_LLM_SCAN /
-// WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS / WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS
-// did.
+// inert.
+//
+// R-02: this reads runner.ProxySidecarEnvKnobNames — the exported name list
+// ProxySidecarEnvKnobs itself iterates — directly, rather than calling
+// ProxySidecarEnvKnobs() (which returns a key only when it is SET in this
+// test process's env, via t.Setenv). The earlier shape hardcoded its own
+// 3-name copy, t.Setenv'd exactly those, and asserted only
+// len(knobs)==len(names): a 4th name added to sandbox.go's list would not be
+// in this test's copy, so it would never be set, never appear in knobs, and
+// the length check would keep passing — the guard could not have caught the
+// very drift its own doc comment claimed to catch. Reading the exported
+// names directly needs no env at all and cannot drift from sandbox.go by
+// construction (there is only one list).
 func TestEnvDoc_ComposeForwardsProxySidecarEnvKnobs(t *testing.T) {
 	root := repoRoot(t)
-	names := []string{
-		"WARDYN_LLM_SCAN",
-		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS",
-		"WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS",
-	}
-	for _, k := range names {
-		t.Setenv(k, "envdoc-guard-probe")
-	}
-	knobs := runner.ProxySidecarEnvKnobs()
-	if len(knobs) != len(names) {
-		t.Fatalf("runner.ProxySidecarEnvKnobs returned %d keys with all %d known names set — this guard's name list is stale, update it to match sandbox.go", len(knobs), len(names))
-	}
 
 	compose, err := os.ReadFile(filepath.Join(root, "deploy", "compose", "docker-compose.yaml"))
 	if err != nil {
 		t.Fatalf("read docker-compose.yaml: %v", err)
 	}
-	for _, kv := range knobs {
-		key := kv[0]
+	for _, key := range runner.ProxySidecarEnvKnobNames {
 		re := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(key) + `:\s*"\$\{` + regexp.QuoteMeta(key) + `:-\}"\s*$`)
 		if !re.Match(compose) {
 			t.Errorf(`deploy/compose/docker-compose.yaml wardynd service does not forward %s as %s: "${%s:-}" — without it, setting the operator's shell env does nothing under compose (the sidecar knob is UNREACHABLE, not "off")`, key, key, key)

@@ -154,6 +154,19 @@ func RecorderArgv(castDir, outDir, uploadURL string, runID uuid.UUID, agentArgv 
 	return append(out, agentArgv...)
 }
 
+// ProxySidecarEnvKnobNames is the single source of truth for
+// ProxySidecarEnvKnobs' key list — exported (R-02) so a consumer that needs
+// the NAMES without a live env (cmd/wardynd/envdoc_guard_test.go's compose
+// forward guard, chiefly) reads the same list ProxySidecarEnvKnobs iterates,
+// instead of a hand-copied second list that can silently drift from it: a
+// name added here and forgotten there used to pass that guard anyway, because
+// it hardcoded its own 3 names and asserted only `len(knobs) == len(names)`.
+var ProxySidecarEnvKnobNames = []string{
+	"WARDYN_LLM_SCAN",
+	"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS",
+	"WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS",
+}
+
 // ProxySidecarEnvKnobs returns the operator knobs the wardyn-proxy sidecar reads
 // from ITS OWN environment — as name/value pairs, and only for the ones wardynd
 // actually has set — for a substrate to copy into the sidecar it creates.
@@ -172,11 +185,7 @@ func RecorderArgv(castDir, outDir, uploadURL string, runID uuid.UUID, agentArgv 
 // read their own env directly and need none of this.
 func ProxySidecarEnvKnobs() [][2]string {
 	var out [][2]string
-	for _, k := range []string{
-		"WARDYN_LLM_SCAN",
-		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS",
-		"WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS",
-	} {
+	for _, k := range ProxySidecarEnvKnobNames {
 		if v, ok := os.LookupEnv(k); ok {
 			out = append(out, [2]string{k, v})
 		}
