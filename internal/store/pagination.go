@@ -192,18 +192,24 @@ var _ ApprovalsByRunCreatorPager = PG{}
 // runs createdBy owns, via a JOIN on agent_runs (approvals has no created_by of
 // its own). Same state filter and ordering as ListApprovalsPage.
 func (s PG) ListApprovalsPageByRunCreator(ctx context.Context, createdBy string, stateFilter types.ApprovalState, p Page) ([]types.ApprovalRequest, error) {
+	// approvalCols SPLICED, not a thirteenth copy of the column list. This was
+	// the one approvals reader that hand-wrote its columns — because the JOIN
+	// form needed every one of them prefixed `a.` — and scanApproval is shared,
+	// so the next column APPENDED to approvalCols (the documented way to add
+	// one) would land in every admin path and not in this one: the MEMBER's
+	// unscoped GET /approvals alone 500s on scan arity, with every gate green.
+	// The semi-join reaches the same rows with no alias to prefix, so the const
+	// goes in verbatim and there is nothing left to keep in step by hand.
 	q := `
-		SELECT a.id, a.run_id, a.grant_id, a.kind, a.requested_scope, a.state, a.requested_at,
-			a.decided_at, a.decided_by, a.minted_jti, a.reason, a.decision_scope, a.decision_expires_at
-		FROM approvals a
-		JOIN agent_runs r ON r.id = a.run_id
-		WHERE r.created_by = $1`
+		SELECT ` + approvalCols + `
+		FROM approvals
+		WHERE run_id IN (SELECT id FROM agent_runs WHERE created_by = $1)`
 	args := []any{createdBy}
 	if stateFilter != "" {
-		q += ` AND a.state = $2`
+		q += ` AND state = $2`
 		args = append(args, string(stateFilter))
 	}
-	q += ` ORDER BY a.requested_at DESC`
+	q += ` ORDER BY requested_at DESC`
 	q, args = p.appendTo(q, args)
 	return collect(ctx, s.Pool, "list", "approvals by run creator", q, args, scanApproval)
 }

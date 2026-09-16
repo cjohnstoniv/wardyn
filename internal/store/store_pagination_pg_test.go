@@ -14,6 +14,7 @@ package store_test
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -365,5 +366,77 @@ func TestPG_ListApprovalsPageByRun(t *testing.T) {
 	}
 	if len(none) != 0 {
 		t.Errorf("an unknown run was served %v, want none", ids(none))
+	}
+}
+
+// TestPG_ListApprovalsPageByRunCreatorReadsTheWholeApprovalRow is the pin for
+// B8-F7: the member's unscoped GET /approvals is the ONE approvals reader that
+// hand-wrote its thirteen columns instead of splicing approvalCols, the const
+// every other reader shares. scanApproval is shared, so the next column appended
+// to approvalCols — the documented way to add one, "APPENDED to the const and to
+// the end of this Scan" — lands in every admin path and NOT here: the member's
+// queue 500s on scan arity while every gate stays green, which is exactly the
+// shape a column-list copy fails in.
+//
+// Asserted as "the same ROW, field for field, from both readers" rather than by
+// inspecting SQL text: the drift is only ever observable as a column the two
+// lists disagree about, and a decided row is seeded precisely so the two
+// decision columns (which a raise never sets) are non-zero and a transposition
+// or an omission has something to show.
+func TestPG_ListApprovalsPageByRunCreatorReadsTheWholeApprovalRow(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+
+	creator := "creator-" + uuid.NewString()
+	r := newRun(types.RunRunning)
+	r.CreatedBy = creator
+	persistRun(t, ctx, pool, r)
+
+	ap := types.ApprovalRequest{
+		ID: uuid.New(), RunID: r.ID, Kind: types.ApprovalEgressDomain,
+		RequestedScope: []byte(`{"host":"example.com"}`),
+		State:          types.ApprovalPending, RequestedAt: time.Now().UTC(),
+	}
+	if _, err := pg.CreateApproval(ctx, ap); err != nil {
+		t.Fatalf("create approval: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM approvals WHERE id=$1`, ap.ID) })
+	// DECIDED, with a scope and an expiry: the two columns approvalCols carries
+	// and approvalInsertCols does not are the ones a copied list forgets.
+	expires := time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond)
+	if _, err := pg.DecideApproval(ctx, ap.ID, types.ApprovalDecision{
+		State: types.ApprovalApproved, DecidedBy: creator, Reason: "b8-f7",
+		Scope: types.ScopeAlways, ExpiresAt: &expires,
+	}); err != nil {
+		t.Fatalf("decide approval: %v", err)
+	}
+
+	find := func(t *testing.T, rows []types.ApprovalRequest) types.ApprovalRequest {
+		t.Helper()
+		for _, got := range rows {
+			if got.ID == ap.ID {
+				return got
+			}
+		}
+		t.Fatalf("the seeded approval %s was not returned at all", ap.ID)
+		return types.ApprovalRequest{}
+	}
+
+	page, err := pg.ListApprovalsPage(ctx, "", store.Page{})
+	if err != nil {
+		t.Fatalf("ListApprovalsPage (the admin reader, which splices approvalCols): %v", err)
+	}
+	creatorPage, err := pg.ListApprovalsPageByRunCreator(ctx, creator, "", store.Page{})
+	if err != nil {
+		t.Fatalf("ListApprovalsPageByRunCreator: %v — a scan error here IS the finding: the member's unscoped "+
+			"GET /approvals reads a column list of its own, so a column appended to approvalCols leaves this "+
+			"reader's Scan short while every admin path stays green", err)
+	}
+	want, got := find(t, page), find(t, creatorPage)
+	if !reflect.DeepEqual(want, got) {
+		t.Errorf("the creator-scoped reader returned a DIFFERENT row than the shared page reader.\n got  = %+v\n want = %+v\n"+
+			"Both scan through scanApproval, so any difference is the hand-written column list disagreeing with "+
+			"approvalCols — the member's queue serving something other than the row every admin path serves", got, want)
 	}
 }
