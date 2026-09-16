@@ -47,15 +47,15 @@ var authzDeniedReasons = []string{
 // event, denyMemberCapability delegates to it, and a capDrop is what
 // inline_policy's per-reason authz.denied loop iterates.
 var (
-	reasonInWindow    = regexp.MustCompile(`"reason":\s*"([a-z_]+)"(\s*\+)?`)
+	reasonInWindow    = regexp.MustCompile(`"reason":\s*"([a-z0-9_]+)"(\s*\+)?`)
 	reasonCapInWindow = regexp.MustCompile(`"reason":\s*"capability_"\s*\+\s*(cap[A-Za-z]+)`)
 	reasonHelperKinds = []*regexp.Regexp{
 		regexp.MustCompile(`capDrop\{reason:\s*"capability_"\s*\+\s*(cap[A-Za-z]+)`),
 		regexp.MustCompile(`denyMemberCapability\(w, r, (cap[A-Za-z]+),`),
 	}
 	reasonHelperLiterals = []*regexp.Regexp{
-		regexp.MustCompile(`capDrop\{reason:\s*"([a-z_]+)"(\s*\+)?`),
-		regexp.MustCompile(`denyMemberField\(w, r, [^,]+, "([a-z_]+)"(\s*\+)?`),
+		regexp.MustCompile(`capDrop\{reason:\s*"([a-z0-9_]+)"(\s*\+)?`),
+		regexp.MustCompile(`denyMemberField\(w, r, [^,]+, "([a-z0-9_]+)"(\s*\+)?`),
 		// authzDeniedDatum (membermode.go) BUILDS the Data map, so at every
 		// site wired through it the reason arrives as an argument and there is
 		// no `"reason":` key on the emit line for the window scanner to find.
@@ -64,11 +64,11 @@ var (
 		// until then the enum's only sighting of that reason was that one
 		// hand-rolled map, so the scanner was already blind to the four sites
 		// the helper had been serving since it was introduced.
-		regexp.MustCompile(`authzDeniedDatum\([^,]+, "([a-z_]+)"(\s*\+)?`),
+		regexp.MustCompile(`authzDeniedDatum\([^,]+, "([a-z0-9_]+)"(\s*\+)?`),
 		// The RUN-TOKEN tier (0.7.4): internalAuth's liveness gate writes the
 		// event through its own helper, which takes the reason as its third
 		// argument — see auditInternalDenied, internal_live_run.go.
-		regexp.MustCompile(`auditInternalDenied\(r, claims, "([a-z_]+)"(\s*\+)?`),
+		regexp.MustCompile(`auditInternalDenied\(r, claims, "([a-z0-9_]+)"(\s*\+)?`),
 	}
 )
 
@@ -206,7 +206,7 @@ func documentedAuthzDeniedReasons(t *testing.T) []string {
 	if i < 0 {
 		t.Fatal(`docs/OPERATIONS.md has no "Every denial that isn't a 404" section`)
 	}
-	key := regexp.MustCompile("^\\| `([a-z_]+)` \\|")
+	key := regexp.MustCompile("^\\| `([a-z0-9_]+)` \\|")
 	var out []string
 	inTable, pastHeader := false, false
 	for _, line := range strings.Split(doc[i:], "\n") {
