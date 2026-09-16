@@ -233,7 +233,15 @@ test-report-k8s: ## -tags k8s suite with reports (fake clientset; no cluster nee
 # (docker union); the floor sits just under that with a small margin for
 # routine churn. Raise it as coverage climbs.
 # scripts/cover-union.sh documents exactly what is and is not counted.
-COVER_MIN ?= 65
+# RATCHET (X2-F11, v0.7.4 gate-hygiene lane): docs/TEST-GAPS.md's own union read
+# 76.0%, 11 points clear of the old 65 floor — slack wide enough that a real
+# coverage regression could land and still pass. This worktree's own
+# `make cover-check` measured 78.3% union (see gate-make-ci.log) — raised to
+# 75, a margin below that measurement rather than the measurement itself: six
+# console UI lanes are still landing on top of this base as of v0.7.4 W3, and
+# the coordinator's W5 final-tree `make ci` re-measures and may ratchet this
+# further. Never lower it without a coverage regression forcing the call.
+COVER_MIN ?= 75
 cover-check: test-report test-report-docker test-report-k8s ## Enforce the COVER_MIN floor over ALL THREE shipped builds, unioned
 	@./scripts/cover-union.sh --self-test
 	@./scripts/cover-union.sh $(COVER_MIN) test/reports/go/union \
@@ -246,8 +254,11 @@ cover-check: test-report test-report-docker test-report-k8s ## Enforce the COVER
 # job). Depending on `ci` means adding a gate to ci automatically strengthens
 # the release gate. It PUSHES NOTHING and TAGS NOTHING.
 #
-# WARDYN_TEST_PG adds the Postgres lane (CI always runs it; local runs say so
-# loudly when it is skipped). Still not a full CI replica: eight jobs need a
+# WARDYN_TEST_PG adds the Postgres lane, test-report-pg AND test-race-pg (CI
+# always runs both; local runs say so loudly when they are skipped — X2-F24:
+# this used to add only test-report-pg, so a local release-check never ran the
+# race detector over the concurrency proofs CI gates on). Still not a full CI
+# replica: eight jobs need a
 # live daemon or service — conformance, conformance-k8s, envbuild-integration,
 # helm-install-test, the Playwright ui-e2e, desktop-envelope, buildx-smoke,
 # and trivy — and are CI-only. See
@@ -256,8 +267,9 @@ release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 	@grep -q "## \[Unreleased\]" CHANGELOG.md || (echo "CHANGELOG missing [Unreleased]"; exit 1)
 	@if [ -n "$$WARDYN_TEST_PG" ]; then \
 	  echo "==> Postgres-gated suite"; $(MAKE) test-report-pg; \
+	  echo "==> Postgres-gated suite under the race detector"; $(MAKE) test-race-pg; \
 	else \
-	  echo ">> SKIPPED test-report-pg — set WARDYN_TEST_PG=postgres://... to run it (CI always does)"; \
+	  echo ">> SKIPPED test-report-pg + test-race-pg — set WARDYN_TEST_PG=postgres://... to run them (CI always does)"; \
 	fi
 	@echo ""
 	@echo "release-check PASSED. NOT covered here: conformance, conformance-k8s,"
