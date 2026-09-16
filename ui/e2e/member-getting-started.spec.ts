@@ -109,6 +109,52 @@ test.describe("member Getting Started (mocked /me role)", () => {
     await expect(page.getByRole("heading", { name: "What's set up for you" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Sign in to AWS" })).toHaveCount(0);
   });
+
+  // P1 (0.7.3 field report), the defect itself: a member's "Sign in to AWS"
+  // never reached its terminal. The pane mounts AttachTerminal on a run the
+  // member created one round trip earlier and passes no createdBy — there is no
+  // run object to read one from — so the client gate read that absence as "not
+  // yours" and refused before any POST. Unknown ownership now takes the ticket
+  // lane, which is owner-or-admin SERVER-side (mintAttachTicket ->
+  // getRunAuthorizedBy) and is the enforcement point.
+  //
+  // The launch itself is spliced: this daemon runs `-runner none`
+  // (scripts/e2e-backend.sh), so a real POST /setup/harness-login has no runner
+  // to answer with. What is REAL here is the console's own decision — whether it
+  // asks the server for a ticket or refuses on its own authority.
+  test("a member's own sign-in reaches the terminal by asking the server for a ticket", async ({ page }) => {
+    const loginRunId = "3f1b7c26-0000-4000-8000-00000000f001";
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      body.model_access = { state: "not_configured", mechanism: "bedrock_sso", action: "Sign in to AWS" };
+      await route.fulfill({ response, json: body });
+    });
+    await page.route("**/api/v1/setup/harness-login", async (route) =>
+      route.fulfill({ json: { run_id: loginRunId, state: "PENDING" } }),
+    );
+    await page.route(`**/api/v1/runs/${loginRunId}`, async (route) =>
+      route.fulfill({ json: { id: loginRunId, task: "harness login", state: "RUNNING", interactive: true } }),
+    );
+    // Registered LAST so it wins over the run read above (Playwright matches the
+    // most recently registered route first).
+    let ticketPosts = 0;
+    await page.route(`**/api/v1/runs/${loginRunId}/attach-ticket`, async (route) => {
+      ticketPosts++;
+      await route.fulfill({ json: { ticket: "e2e-ticket" } });
+    });
+
+    await gotoConsole(page);
+    await navToRoute(page, "/setup");
+    await page.getByRole("button", { name: "Sign in to AWS" }).click();
+    await expect(page.getByTestId("harness-login-pane")).toBeVisible();
+    await page.getByRole("button", { name: /start login/i }).click();
+
+    // THE assertion: a ticket POST happened. Before the fix there was none —
+    // no POST, no socket, no audit row, just the admin-role sentence.
+    await expect.poll(() => ticketPosts, { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
+    await expect(page.getByText(/requires the admin role/i)).toHaveCount(0);
+  });
 });
 
 // Sibling negative control: the SAME route, unspliced (the harness's real

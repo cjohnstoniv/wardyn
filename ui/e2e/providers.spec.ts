@@ -424,6 +424,42 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
     await expect(page.getByTestId("login-start-url-prompt")).toBeVisible();
   });
 
+  // P5 (0.7.3 field report): POST /setup/harness-login answers with the run id
+  // BEFORE the sandbox is up now, so "resolved" no longer means "attachable" —
+  // the pane holds a `starting` phase and keeps the id, which is what makes
+  // Cancel able to kill a sandbox still coming up. Before this, a launch that
+  // outran the console's 60s deadline left an orphan nobody could name.
+  //
+  // Spliced because this daemon runs `-runner none` (scripts/e2e-backend.sh)
+  // and can never reach RUNNING; what is real is the pane's own machine.
+  test("the sign-in pane narrates the wait, and Cancel kills a sandbox still coming up", async ({ page }) => {
+    const loginRunId = "3f1b7c26-0000-4000-8000-00000000f002";
+    await splicePerUserBedrock(page, "live");
+    await page.route("**/api/v1/setup/harness-login", async (route) =>
+      route.fulfill({ json: { run_id: loginRunId, state: "PENDING" } }),
+    );
+    await page.route(`**/api/v1/runs/${loginRunId}`, async (route) =>
+      route.fulfill({ json: { id: loginRunId, task: "harness login", state: "PENDING", interactive: true } }),
+    );
+    let kills = 0;
+    await page.route(`**/api/v1/runs/${loginRunId}/kill`, async (route) => {
+      kills++;
+      await route.fulfill({ status: 202, json: {} });
+    });
+
+    await gotoConsole(page);
+    await navToRoute(page, "/settings");
+    await page.locator("#lane-bedrock").click();
+    await page.getByRole("button", { name: "Sign in with SSO" }).click();
+    await page.getByRole("button", { name: /start login/i }).click();
+
+    const starting = page.getByTestId("login-sandbox-starting");
+    await expect(starting).toBeVisible();
+    await expect(starting).toContainText("Starting the sign-in sandbox");
+    await starting.getByRole("button", { name: /cancel/i }).click();
+    await expect.poll(() => kills, { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
+  });
+
   // R3 (fix-first review pass): a spliced control BESIDE the unspliced one —
   // an EXPLICIT shared row (credential_source: "shared") behaves exactly
   // like no row at all, so the credential_source conjunct has a real e2e

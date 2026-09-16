@@ -408,6 +408,40 @@ test.describe("Run detail (/runs/:id)", () => {
   });
 });
 
+// P1 (0.7.3 field report), the "say what the box is" half: `harness login` is a
+// server-side task discriminator — it gates the credential upload route, keeps
+// the session out of the recorder, and pins an image whose own Dockerfile header
+// says "NOT a coding agent" — and the console labelled it NOWHERE. Opened from
+// /runs it looked like any other interactive run: a bare shell, no agent, no
+// task. Browser-level because the note is a render decision made from the run
+// the page fetched.
+test.describe("Run detail — a login sandbox says what it is", () => {
+  test("the AWS sign-in note renders for a harness login run, and for no other run", async ({ page }) => {
+    await openRuns(page);
+    await page.route("**/api/v1/runs/*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      if (json.task === "e2e fixture 6") json.task = "harness login";
+      await route.fulfill({ response, json });
+    });
+
+    // A different fixture first: the note must not be a banner every run grew.
+    await page.getByText("e2e fixture 5").click();
+    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page.getByTestId("run-summary-header")).toBeVisible();
+    await expect(page.getByTestId("login-sandbox-note")).toHaveCount(0);
+
+    await openRuns(page);
+    await page.getByText("e2e fixture 6").click();
+    await expect(page).toHaveURL(/\/runs\/.+/);
+    const note = page.getByTestId("login-sandbox-note");
+    await expect(note).toBeVisible();
+    await expect(note).toContainText("AWS sign-in sandbox");
+    await expect(note).toContainText("the sandbox closes itself when it is done");
+  });
+});
+
 test.describe("Kill availability via the row dropdown (table)", () => {
   // Open a table row's "..." action menu and return the "Kill run" menuitem.
   async function killMenuItem(page: Page, task: string): Promise<Locator> {

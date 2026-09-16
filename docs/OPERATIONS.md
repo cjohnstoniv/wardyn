@@ -2926,6 +2926,33 @@ declared `per_user` AND they hold the `agent` capability for that row's agent �
 an admin always reaches it, and under a `per_user` row captures their own
 session exactly as anyone else does.
 
+**What the sign-in sandbox is, and what it is not.** It is the AWS CLI and
+nothing else: no LLM harness, no `claude` binary, no repo, no mounts. Its run is
+labelled `harness login` server-side, and the run page names it so opening it
+from `/runs` is not a mystery box. Wardyn's own sign-in pane types ONE chained
+command into it —
+`aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso`
+— and both halves matter: `aws sso login` alone leaves the session in
+`~/.aws/sso/cache`, where it dies with the container; `wardyn-aws-sso` is what
+uploads it through the brokered endpoint. Somebody who instead opens the run
+from `/runs` gets a bare shell, so the shell itself prints that same command on
+attach (one definition, `deploy/images/aws-sso/login-hint.sh`, pinned against
+the console's copy by a parity test). Signing in from Getting Started is still
+the path to prefer — it types the command, watches for the helper's success
+marker, and shuts the sandbox down when the capture lands.
+
+**The launch answers before the sandbox is up.** Since 0.7.4 `POST
+/setup/harness-login` returns `{run_id, state: "PENDING"}` as soon as the run
+row exists and the launch is stamped; the pane then polls the run and attaches
+once it is RUNNING. The reason is the first start after an upgrade: a cold image
+pull plus (on Kubernetes) the network-policy canary can exceed the console's own
+request deadline, and the synchronous version answered so late that the console
+reported the control plane unreachable over a launch that was working — and
+dropped the run id, leaving a sandbox alive to its 30-minute idle cap with
+nothing able to name it. Cancel now kills it from the first second. A launch
+that fails AFTER that answer fails the RUN (a `FAILED` state and a
+`failure_hint` the pane renders), never a silent PENDING.
+
 **The access portal is the admin's, not theirs.** The launch uses the row's
 `sso_start_url` and IGNORES whatever start URL arrives with the request. That is
 a security property, not a convenience: the capture is bound to the portal the
