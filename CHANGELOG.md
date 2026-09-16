@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.7.4] — 2026-09-16
+
 0.7.4 is the governance-hardening pass over the whole surface a member or an
 operator's identity touches: per-run credential residency and revocation, the
 Kubernetes runner substrate's own cleanup, the egress proxy's TLS-port and
