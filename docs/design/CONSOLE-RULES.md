@@ -49,11 +49,11 @@ Known violations, cited as what the rule forbids:
 
 | Site | What it does | Why it is out of budget |
 |---|---|---|
-| `setup/environment-step.tsx:548` | `<Chip tone="primary">Recommended</Chip>` | Decorative teal. A recommendation is not an action — `tone="neutral"`, or let the default selection carry it |
+| `setup/environment-step.tsx:558` | `<Chip tone="primary">Recommended</Chip>` | Decorative teal. A recommendation is not an action — `tone="neutral"`, or let the default selection carry it |
 | `run-context-row.tsx:86` | `text-primary` on "Open run" | Teal on a disclosure control. It is a link: `--info`, or a `ghost` Button |
 
 `runs.tsx`'s two former violations at this same class ("Show all N" and "Load N more")
-are fixed: both now render `text-info` (`runs.tsx:541`, `runs.tsx:663`).
+are fixed: both now render `text-info` (`runs.tsx:590`, `runs.tsx:726`).
 
 ## 3. Type scale
 
@@ -61,10 +61,10 @@ Four body rungs. Nothing between them.
 
 | Rung | Size | Weight | Use | Today |
 |---|---|---|---|---|
-| 11px | `0.6875rem` = `text-meta` | 600 uppercase for meta labels, 400 for captions | Section eyebrows, trailing metadata, captions, hints | `.label-eyebrow` (`theme.css:330–337`) — 600, `0.06em`, uppercase, `--muted-foreground` |
+| 11px | `0.6875rem` = `text-meta` | 600 uppercase for meta labels, 400 for captions | Section eyebrows, trailing metadata, captions, hints | `.label-eyebrow` (`theme.css:376`) — 600, `0.06em`, uppercase, `--muted-foreground` |
 | 12px | `0.75rem` = `text-xs` | 400 | Helper text, paths, secondary content, chips | `Chip` is `text-xs` (`primitives.tsx:90`) |
 | 13px | `0.8125rem` = `text-body` | 400–500 | Dense table rows, sidebar items | `--text-body` (`theme.css`, `@theme inline`) |
-| 14px | `0.875rem` = `text-sm` | 400 body, 500 row titles | Body copy, button text, labels | `button`/`label` are 500 by base rule (`theme.css:308–309`) |
+| 14px | `0.875rem` = `text-sm` | 400 body, 500 row titles | Body copy, button text, labels | `button`/`label` are 500 by base rule (`theme.css:334–335`) |
 
 Headings come from `@layer base`, used as-is: `h1` `1.5rem`/600/1.3/`-0.01em` · `h2`
 `1.125rem`/600/1.35/`-0.005em` · `h3` `1rem`/600/1.4 · `h4` `0.875rem`/500/1.4.
@@ -85,12 +85,12 @@ Headings come from `@layer base`, used as-is: `h1` `1.5rem`/600/1.3/`-0.01em` ·
   tile-size pill), which sits at the 11px rung today; give it its own token if it ever
   needs to be smaller than text.
 - Two 11px uppercase labels disagree on tracking: `.label-eyebrow` is `0.06em`,
-  `SectionCard`'s `h2` is `tracking-wider` (`primitives.tsx:426`). Use `.label-eyebrow`,
-  as `WidgetCard` does (`primitives.tsx:488`).
+  `SectionCard`'s `h2` is `tracking-wider` (`primitives.tsx:440`). Use `.label-eyebrow`,
+  as `WidgetCard` does (`primitives.tsx:502`).
 
 ## 4. Radius and elevation
 
-`--radius: 0.625rem` (10px) is the base; the rest derive from it (`theme.css:270–273`):
+`--radius: 0.625rem` (10px) is the base; the rest derive from it (`theme.css:129`, `theme.css:296–299`):
 `rounded-sm` (6px) chip dots · `rounded-md` (8px) inputs, chips, small buttons, menus ·
 `rounded-lg` (10px) buttons, option cards, widget cards · `rounded-xl` (14px) document
 cards, run cards, icon wells. Exactly three elevation levels:

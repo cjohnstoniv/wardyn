@@ -2224,7 +2224,7 @@ do for you:
 
    ```sh
    echo 'WARDYN_OIDC_ISSUER=http://localhost:5556'        >> deploy/compose/.env
-   echo 'WARDYN_OIDC_OPERATOR_EMAILS=you@wardyn.local'    >> deploy/compose/.env
+   echo 'WARDYN_OIDC_OPERATOR_EMAILS=demo@wardyn.local'   >> deploy/compose/.env   # one of the two Dex identities; your own email needs a staticPasswords entry in dex.yaml first
    docker compose -f deploy/compose/docker-compose.yaml --profile sso up -d dex wardynd
    ```
 
@@ -3188,7 +3188,9 @@ Everything above is unfalsifiable without an AWS tenant — which is why, before
 nowhere. It is testable now, on a throwaway kind cluster, with no AWS account
 and no real credential anywhere in the loop.
 
-**The cluster.** `WARDYN_QUICKSTART_HTTP_PORT=8280 WARDYN_QUICKSTART_SSH_PORT=2322
+**The cluster.** `make agent-images` (the overlay loads this tree's
+`wardyn/agent-aws-sso:local` login image and refuses to start without it), then
+`WARDYN_QUICKSTART_HTTP_PORT=8280 WARDYN_QUICKSTART_SSH_PORT=2322
 make kind-quickstart`, then `make kind-sso` (see `deploy/kind/sso/README.md`).
 The overlay adds Dex with two static principals —
 `admin@wardyn.local` and `member@wardyn.local`, password `password` — plus
@@ -3229,11 +3231,15 @@ subnet, so a pod IP can never be lifted however it is declared; a ClusterIP is
 on the Service CIDR, which can. Scope the rule to the Service CIDR your cluster
 actually uses (read it off the apiserver's `--service-cluster-ip-range`, do not
 assume `10.96.0.0/16`; `scripts/kind-sso-walk.sh` reads it off the apiserver
-itself and falls back to `WARDYN_KIND_SSO_SERVICE_CIDR` if that read fails).
+itself; a set `WARDYN_KIND_SSO_SERVICE_CIDR` wins over that read, which is also
+how you rescue a failed one).
 The same entry covers the Bedrock stub, because it is the same Service.
 
 **The walk.** `WARDYN_TEST_K8S=1 scripts/kind-sso-walk.sh` does all of the
-above and then drives `ui/e2e/live/sso-member.spec.ts`: both principals sign in
+above and then drives `ui/e2e/live/sso-member.spec.ts`. **It resets the cluster
+first**: it restarts the quickstart's Postgres, which has no volume, so every
+run, workspace, secret and captured session on that cluster is gone — this is a
+throwaway cluster by design, never one you keep state on. Then both principals sign in
 through Dex, the admin declares the `per_user` lane and pins the account/role,
 the member completes the containerized `aws sso login` from their own seat, and
 `/setup/status` reads `model_access.state: "live"` for the member and

@@ -15,6 +15,7 @@ sequence below plus a `kind load` of the locally built images, so the overlay
 runs THIS tree's wardynd rather than whatever the quickstart loaded earlier:
 
 ```sh
+make agent-images          # builds wardyn/agent-aws-sso:local, which the overlay loads
 WARDYN_QUICKSTART_HTTP_PORT=8280 WARDYN_QUICKSTART_SSH_PORT=2322 make kind-quickstart
 make kind-sso
 ```

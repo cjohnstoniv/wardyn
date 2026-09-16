@@ -568,7 +568,7 @@ A fresh install lands here on its own: no runs and no dismissed tour means
 
 Footer buttons: `Next: <step>` and, on the last step, **Finish setup**.
 
-### Act 3 — the guardrails (Egress demos phase)
+### Act 3 — the guardrails (five of the eight Egress demos; the Secrets demos phase that follows is not on camera)
 
 Each step's start button is `demo-start-<id>` (**Start demo**), its audit panel
 `demo-audit-panel`, and it ends with **End demo**. Approvals render as

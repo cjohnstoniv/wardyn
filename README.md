@@ -63,8 +63,10 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn \
   --set secrets.ageKeyFromSecret=true
 ```
 
-This installs the control plane only — add `k8s.enabled=true` and the SSO
-block from [the chart README](deploy/helm/wardyn/README.md) to get runs and
+This installs the control plane only — to run agents on the cluster, follow the
+`k8s.enabled=true` recipe in [the chart README](deploy/helm/wardyn/README.md)
+(it also needs `serviceAccount.automount`, `k8s.proxyImage` and
+`k8s.runsNamespace`, or the chart refuses to render), and its SSO block for
 roles.
 
 A persistent Postgres DSN needs an age identity riding in the SAME Secret
