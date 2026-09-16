@@ -2848,7 +2848,7 @@ Set `sso_account_id` and `sso_role_name` on the `per_user` roster row, beside
 disposes.** Both together or neither (pinning the account alone still leaves the
 role picked for whoever signs in). A new entitlement cannot move a pin.
 
-The pin is enforced at three doors, and each one fails CLOSED:
+The pin is enforced at four doors, and each one fails CLOSED:
 
 - **Roster save** — a `sso_account_id` that is not the account your configured
   `WARDYN_BEDROCK_MODEL` ARN lives in SAVES; the console's `bedrock_provider`
@@ -2870,6 +2870,27 @@ The pin is enforced at three doors, and each one fails CLOSED:
   Refused, never rewritten: the stored blob is baked verbatim into every later
   run's `~/.aws/config`, so rewriting it would record a session nobody saw and
   merely move the IAM 403 back to run time.
+- **Run** — a pin bound at capture time says nothing about a session captured
+  BEFORE the pin existed, so `POST /runs` (422) and dispatch (the run goes
+  FAILED, with no sandbox created and no credential authored) both compare the
+  stored session against the row's CURRENT pin and refuse when they disagree.
+  The refusal names both pairs: the account/role the stored session is for, and
+  the account/role this agent now allows. `shared` rows, unpinned rows, every
+  non-SSO Bedrock lane and a stored session that predates the fields entirely
+  are untouched — on all of them there is nothing to compare, and refusing
+  would take Bedrock away from a deployment that was working.
+
+**A capture that predates a pin: sign in again, and that replaces it.** Setting
+a pin does not reach back into a stored session — Wardyn never rewrites one (see
+above) and, under `per_user`, has no way to enumerate or delete another
+person's. It does not need to: the person clicks **Sign in to AWS** again, which
+launches a NEW login run stamped with the pin as it reads NOW, and that capture
+OVERWRITES the old one. The console says so without being asked — the row's
+`model_access` grades as "sign in again" (so the Getting Started chip and the
+button come back, which an expiry-only grading hid), and the setup checklist's
+**AWS Bedrock** row warns naming both pairs. What is still missing in 0.7.4:
+invalidate-on-write, and an admin "revoke this person's captured session" route
+— both need owner enumeration in the secret store (0.8).
 
 **Changing the model's account later does not invalidate an existing pin.** Since
 0.7.3 the disagreement is a warning — the console's Bedrock row, plus a line in

@@ -423,6 +423,44 @@ test.describe("agents — the roster pin (sso_account_id / sso_role_name)", () =
     const afterClaude = ((after.providers.agents ?? []) as Array<Record<string, unknown>>).find((a) => a.id === "claude-code");
     expect(afterClaude).toMatchObject({ sso_account_id: "111111111111", sso_role_name: "DevPower" });
   });
+
+  // P4 (0.7.4) — the Bedrock row is where a pin's POSTURE becomes audible, and
+  // this lane appends a THIRD posture to it (a stored capture the pin no longer
+  // allows) beside the two 0.7.3 shipped. Appended, never substituted: the
+  // regression this guards is a fold that drops a sibling posture, which no Go
+  // unit test of one posture would catch.
+  //
+  // The posture asserted REAL here is the pin-vs-model-account one, because it
+  // is the one this harness can actually produce: the daemon's
+  // WARDYN_BEDROCK_MODEL is a full ARN naming account 222222222222
+  // (scripts/e2e-backend.sh), so pinning 111111111111 makes the row warn naming
+  // both. The stored-capture posture needs a real per-user AWS SSO capture,
+  // which this harness cannot make at all (no IdP, and `-runner none` means no
+  // login sandbox to capture in — see the file header); it is pinned by
+  // TestSetupStatus_StoredBlobContradictingThePinGradesExpiredSignin and by the
+  // kind-sso walk instead.
+  test("a pin the model's account disagrees with → the Bedrock row warns, naming both accounts", async ({ page }) => {
+    await gotoAgentsTab(page);
+    const row = page.getByTestId("agent-row-claude-code");
+    await row.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_SSO }).click();
+    await row.getByRole("radio", { name: AGENTS.SOURCE_PER_USER }).click();
+    await row.getByLabel(AGENTS.FIELD_SSO_START_URL).fill("https://acme.awsapps.com/start");
+    await row.getByLabel(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID).fill("111111111111");
+    await row.getByLabel(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME).fill("BedrockRunner");
+    await saveAgents(page);
+
+    const status = await page.request.get("/api/v1/setup/status", { headers: auth });
+    expect(status.ok()).toBeTruthy();
+    const checks = ((await status.json()).checks ?? []) as Array<Record<string, string>>;
+    const bedrock = checks.find((c) => c.id === "bedrock_provider");
+    expect(bedrock, "the Bedrock row must be present once any Bedrock knob is set").toBeTruthy();
+    expect(bedrock!.status).toBe("warn");
+    // The row still names the live model (append-never-substitute), AND both
+    // accounts — a detail that named only one is the sentence that told the
+    // reporting operator nothing.
+    expect(bedrock!.detail).toContain("111111111111");
+    expect(bedrock!.detail).toContain("222222222222");
+  });
 });
 
 // Appendix A finding 4 (prominence): the per_user sign-in affordance moves
