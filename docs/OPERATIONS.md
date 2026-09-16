@@ -1912,6 +1912,14 @@ long-lived API token keeps the group snapshot it was minted with until re-minted
 Every member denial that isn't a plain foreign-resource 404 is audited under
 `authz.denied`, whose `reason` field is the whole vocabulary.
 
+One FIELD rides beside the reason since 0.7.4: `member_mode: true`, on the two
+`403`s below that `requireOperator` and `requireSecurityOperator` raise, when
+the refused caller is an admin exercising
+[view as member](#exercising-member-mode-as-an-admin). It is a marker, not a
+reason — the `reason`, the status code and the body are unchanged, and the key
+is absent entirely for an ordinary member. A burst of denials carrying it is an
+admin walking the member path, not an incident.
+
 | `reason` | Raised when | Shape |
 |---|---|---|
 | `admin_surface` | a member requested an admin-only route (`requireOperator`) | ⛔ `403` |
@@ -1996,6 +2004,80 @@ classified admin/member/owner/anonymous/internal before it can ship;
 `internal/api/rbac_test.go` then proves the widest admin-gated routes really do
 403 a member. What Wardyn gives up is *breadth* — a deliberate two-tier split, not
 per-user roles or multi-org depth — not the governance itself.
+
+## Exercising member mode as an admin
+
+You have an admin session and you want to see what a member sees. There are two
+ways, they answer different questions, and they compose.
+
+**1. The toggle — "view as member".** The account menu (top right) offers
+**View as member** to a signed-in SSO admin. It sets a flag on your EXISTING
+session cookie; your role is never rewritten, only the *effective* role your
+requests resolve to, and only downward. The console reloads and you land
+exactly where a member lands: the member nav, the member Getting Started, a
+`GET /me` answering `operator: false`, and every operator-only route 403-ing.
+A persistent banner says so on every screen and carries the way back out
+(**Exit member mode**). Every audit row the session writes still names **your
+own sub** — this is not impersonation, and there is no way to become anybody
+else. The transition itself is audited as `auth.member_mode`
+(`enabled`, `real_role`), and each refusal you meet while the mode is on carries
+`member_mode: true` on its `authz.denied` row, so a reviewer reads the burst as
+an admin walking the member path rather than as an incident.
+
+Two doors REFUSE instead of clamping, both with `409`: minting an API token
+(`POST /me/tokens`) and registering an SSH key (`POST /me/ssh-keys`). Both
+credentials carry a role stamp that is re-derived from your REAL role at your
+next sign-in, so one minted "as a member" would quietly become an admin
+credential that outlives the mode. Exit first.
+
+> **It shows you what a member SEES. It is not proof that a member is
+> REFUSED.** Three ceilings, all deliberate:
+>
+> 1. **Role only.** Runs, workspaces and secrets you created stay yours, so
+>    owner-legal paths still pass for you where they would 404 for someone else.
+>    `GET /me/capabilities` and every governance ceiling resolve against your
+>    real group snapshot — the mode clamps the role, never the group tier.
+> 2. **SSH is not clamped.** The SSH gateway reads the role stamped on the KEY
+>    in the database, refreshed only at login (`WARDYN_SSH_ROLE_TTL`), so an
+>    admin in member mode still holds the admin override on other people's runs
+>    over SSH. The console and the HTTP API are clamped; that lane is not.
+> 3. **Rolling upgrades.** The flag rides the existing session cookie with no
+>    codec bump (a bump would sign every live session out mid-rollout, which is
+>    worse). During a rolling Kubernetes upgrade a replica still running the
+>    previous version ignores the flag and answers your requests as an admin.
+>    Finish the rollout before you rely on what you see.
+>
+> For the question "would a member actually be refused this?", use a real second
+> identity — recipe below. The two compose: toggle for the fast look, second
+> identity for the proof.
+
+Note the name collision: the `WARDYN_MEMBER_MODE` environment variable
+([ENV.md](ENV.md)) is a different, unrelated thing — a boot-time assertion that
+the human running a single-workstation daemon is a member. It adds no
+middleware and has nothing to do with this toggle, which is per-session and
+needs no configuration at all.
+
+### The genuine second identity (the proof)
+
+Sign in as a second, real person. This is strictly more faithful than the
+toggle — it exercises the server's own role derivation, its own session, and
+its own ownership namespace.
+
+- **kind quickstart** — the bundled Dex already ships two logins:
+  `admin@wardyn.local` and `member@wardyn.local` (`deploy/kind/sso/dex.yaml`,
+  role map in `deploy/kind/sso/values.yaml`).
+- **Entra** — the walk provisions `wardyn-admin`, `wardyn-member` and
+  `wardyn-outsider` (`deploy/azure-entra-sso/03-people.sh`).
+- **compose demo** — see [Second user, same host](#second-user-same-host)
+  below, which adds a second `staticPasswords` entry to the bundled Dex.
+
+> **Use a fresh browser profile / incognito window — or sign out of the IdP
+> first.** A live session for the other account in the same tab is silently
+> reused instead of prompting for credentials, and the step then "passes"
+> without testing anything. This is the single most common way a member walk
+> proves nothing at all. (`deploy/azure-entra-sso/README.md` says the same for
+> its own walk, and for the same reason.)
+
 
 ## Second user, same host
 

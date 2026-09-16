@@ -22,6 +22,11 @@ The full matrix lives in
 this page does not restate it. `GET /me/capabilities` tells you which
 capability grants you personally hold.
 
+Your admin can see this page's world for themselves without a second login —
+[OPERATIONS.md § Exercising member mode as an admin](OPERATIONS.md#exercising-member-mode-as-an-admin)
+— which is worth knowing when you report something: they can usually look at
+exactly what you are looking at.
+
 Three things worth naming here, because they read as bugs otherwise:
 
 - A run id that isn't yours answers **404**, not 403 — Wardyn never confirms
