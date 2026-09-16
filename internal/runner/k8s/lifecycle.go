@@ -250,12 +250,11 @@ func (d *Driver) waitPodsGone(ctx context.Context, ns string, listOpts metav1.Li
 // Keyed on the agent AND proxy pods, where docker keys on its agent container
 // alone: an evicted pod is Failed, and the kubelet's terminated-pod GC may
 // reap it while the proxy pod lives on — keying on the agent alone would miss
-// exactly the shape this exists for. One list, deduped by run id, since
-// teardownByRunID already reaches every object of that run from the id.
-//
-// Canary pods are excluded BY that selector: their labelRun carries a
-// per-invocation uuid rather than a run id (canary.go's M2 note), and
-// runCanaryPhase cleans its own up on every path.
+// exactly the shape this exists for. And keyed on the per-run Secret and both
+// NetworkPolicies besides, for the case where neither pod is left to name the
+// run at all — see sweepCandidates, which also states what keeps a boot
+// canary's own objects out. Deduped by run id, since teardownByRunID already
+// reaches every object of that run from the id.
 //
 // A drive PVC is never touched, on two independent counts: it carries
 // labelDrive/labelDriveHome/labelDriveSubject and NEVER labelRun (drives.go's
