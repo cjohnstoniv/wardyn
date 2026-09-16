@@ -8,6 +8,642 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+0.7.4 is the governance-hardening pass over the whole surface a member or an
+operator's identity touches: per-run credential residency and revocation, the
+Kubernetes runner substrate's own cleanup, the egress proxy's TLS-port and
+policy-normalization edges, a real "view as member" tool for admins, and a
+kind-provable AWS SSO test path. The console side carries a large batch of
+member-visibility and UI-consistency fixes across Runs, Providers, Workspaces,
+Approvals and Setup, alongside accessibility and theming work.
+
+**Console and refusal copy is provisional**: new `400`/`412`/`422` bodies and
+new console strings in this release ship as frozen DRAFT constants pending the
+maintainer's canon sitting (`local/v074/M2-canon-sheet.md`); tests assert
+through the constants, so adopting final wording is a one-file diff.
+
+### Security
+
+- **A killed run's token can no longer open any `/internal/*` door.** The revoke
+  cascade that follows a run going terminal is best-effort, so a run whose
+  revocation write failed kept presenting a token that verified — every internal
+  door except token-renew went on minting credentials and resolving injections
+  (including the operator's own live model OAuth token) for up to the token's
+  TTL. Every door now re-checks the run is still alive; the three tail-upload
+  doors (session recording, scan results, the captured AWS SSO cache) keep a
+  five-minute grace for the watcher race that ends the run.
+- **A governance profile that walls off Amazon Bedrock now withholds the
+  resident credential too**, not only the never-resident bearer injection: the
+  static AWS SigV4 keys in the sandbox environment, their publication on the
+  sandbox spec, and the operator's whole host `~/.aws` bind mount are all
+  withheld now, inside a sandbox whose principal is denied that service.
+- **A pasted credential is refused for a provider captured by the containerized
+  login.** Pasting a free-text AWS token used to silently overwrite the
+  reserved, structured SSO session (after which Bedrock fell through to the
+  host `~/.aws` or static keys) and joined the daemon's process-global
+  secret-mask corpus for its whole life. Empty and over-long tokens are refused
+  on the same door.
+- **Dispatch resolves a run's secrets against the run's own subject**, not a
+  local-mode request header, for the `llm_inspection` detection corpus and
+  `env_secret` grants — unchanged for OIDC and admin-token callers.
+- **A captured AWS SSO session that a later roster pin no longer allows is
+  refused at run time, not discovered as an IAM 403.** `POST /runs` now answers
+  422 and dispatch fails the run closed — no sandbox created, no credential
+  authored — naming both the account/role the stored session is for and the
+  account/role the agent now allows. The person's own recovery needs no admin:
+  `model_access` grades "sign in again," the setup checklist's AWS Bedrock row
+  warns naming both pairs, and signing in again replaces the stored session.
+- **A corporate artifact mirror with a port-qualified allowlist entry no longer
+  crash-loops the proxy sidecar for every run.** `wardyn-proxy` failed closed on
+  any redirect whose paired injection rule read a port-qualified entry the
+  injector's port-less lookup could not match. Shipped in the same change:
+  cleartext credential injection is now refused on the TLS-conventional port
+  set `{443, 8443, 9443}` regardless of what the allowlist authored (previously
+  clamped at 443 only, so an authored `vendor.example:8443` handed a sandbox a
+  key over plaintext), and an `https://` redirect's injection scope now
+  declares `require_tls`, refusing a cleartext request to the mirror instead of
+  silently uncredentialing it. A plain `http://` redirect is unchanged.
+- **Control-plane traffic never rides the corporate proxy.** The decision sink,
+  the injector, the approval client and the run-token renewer built their
+  transport by cloning the caller's client, which preserves
+  `ProxyFromEnvironment` — with `HTTP(S)_PROXY` visible to the sidecar, the run
+  token, approvals, decisions and minted credential values transited the
+  corporate proxy and skipped the trusted-URL pin. The sidecar now owns that
+  transport unconditionally with `Proxy` cleared.
+- **A policy entry spelled with trailing dots, or in non-ASCII, is no longer
+  silently dead.** Request-side host normalization strips every trailing dot;
+  policy-entry normalization stripped only one. Fixing both together also fixes
+  an allow: an `allowed_domains` entry with a trailing dot now genuinely grants
+  the host it names, where it previously granted nothing — read this before
+  upgrading a policy authored that way. A non-ASCII entry is now refused at
+  write time, naming the punycode spelling to use instead.
+- **The git credential helper now emits a brokered credential over HTTPS
+  only.** A non-HTTPS clone of an allowlisted forge previously had the brokered
+  PAT emitted and sent as `Authorization: Basic` in cleartext; it now falls
+  through to the unbrokered path with nothing minted.
+- **A GitHub installation token the broker mints and then discards is now
+  handed back to GitHub**, best-effort, closing the window where the loser of
+  an exactly-once mint race (or a failed audit-insert/commit) left a live
+  `contents:write` token unreachable by any later revoke.
+- **A run's credential-bearing Kubernetes objects are reclaimed even when its
+  pods are already gone** — a kubelet eviction over the run's `disk_mib`
+  ephemeral-storage limit, or node deletion, took the agent pod with it and the
+  orphan sweep reported success without touching the proxy pod, the per-run
+  Secret (carrying the proxy config and every `secret_env` value) or either
+  NetworkPolicy. The sweep now also lists Secrets and NetworkPolicies, keyed on
+  the run id recovered from the sandbox ref itself. On the Docker substrate, a
+  caller-supplied label may no longer override the driver's own `wardyn.run-id`
+  / `wardyn.component` / `wardyn.managed` teardown selectors.
+- **A member's policy can no longer author unbounded approval holds.**
+  `first_use_hold_seconds` and `max_holds` were the last two `RunPolicySpec`
+  fields the composer clamp and `validatePolicySpec` both missed — under a
+  `wait_for_review` ceiling, an inline policy authoring a million-second hold
+  cap turned the documented 16-hold default into a million goroutines polling
+  the control plane for thirty days. Both are now bounded (`≤ 256`, `≤ 600`) at
+  every ingest point.
+- **The AI scan advisor's answer is validated before it reaches a profile.**
+  The advisor is fed untrusted repo content, and its suggested hosts bypassed
+  the deterministic scanner's own host validator while its languages, package
+  managers and tools landed verbatim in the generated `AGENTS.md` the next
+  agent reads — a prompt-injection re-entry path. All three now cross the same
+  validators, under a length and count cap.
+- **`git_push_any_branch` is graded** on the Review rail a human reads before
+  approving a run — it turns off branch-namespace confinement for brokered
+  pushes and previously scored nowhere. It now grades high, beside a
+  read-write host mount and a write-capable GitHub token.
+- **The secret-mask registry no longer holds a cached masker forever for a run
+  with no secrets of its own.** A scan or grantless run's derived masker
+  outlived the sweep, which listed only the per-run map its own secrets keyed.
+- **The audit row's `target` field is now capped** (512 bytes plus a
+  truncation marker) at every writer, closing an unbounded-write path into the
+  append-only audit table on the authenticated, rate-limit-free `authz.denied`
+  lane.
+- **5xx bodies no longer carry driver text.** A new chokepoint logs the
+  underlying error and writes only the operator-facing sentence on every
+  member-reachable read/write path; raw pgx text (DB host, port, user,
+  database, SQLSTATE, table and constraint names) previously reached any
+  member who could trigger a transient store failure. The operator-only tail
+  is deferred.
+- **The anonymous `/healthz` no longer publishes fleet-wide kernel-sensor
+  volumes.** Its ground-truth block is the verdict only; the cumulative counts
+  move to the operator-gated `/metrics`.
+- **Every response now carries `Cache-Control: no-store` by default**, closing
+  a shared-cache exposure window the cookie-authenticated OIDC lane opened
+  (hashed `/assets/` bundles and the SPA shell are unaffected).
+- **The dev/e2e Postgres container (`scripts/up.sh cmd_pg`) now publishes on
+  loopback only**, and a repo-wide guard now holds every `docker run … -p`
+  under `scripts/` to the same rule.
+- **`deploy/compose/.env` is now created with mode 600 from the first byte**,
+  instead of a world-readable `cp` briefly holding the freshly minted secret
+  store's age key before a later `chmod`.
+- **A UI-sandbox relay session now names its app, and is scoped to it.** A run
+  declaring more than one `ui_app` had entering the second app silently replace
+  the first app's session cookie in the browser, so the still-open first tab's
+  requests dialed the second app's port. The relay path now carries the app as
+  a segment and the cookie is scoped to it; a bookmarked pre-0.7.4 relay URL no
+  longer resolves and an open session across the upgrade must be re-entered
+  from the run page.
+- **The UI-sandbox relay session is bounded-stale instead of a frozen 8-hour
+  bearer.** Every new connection now re-asserts owner-or-admin against the
+  freshly loaded run and the same revocation cutoff `POST /sessions/revoke`
+  stamps, and a warm pooled connection re-checks on its own request path at
+  least every 30 seconds. A relay cookie minted before this release has no
+  issued-at and is refused once — re-enter the app once from the run page.
+- A UI-sandbox relay path must now spell its run id canonically; a
+  non-canonical spelling (upper-case, braced, unhyphenated) no longer forwards
+  the relay path prefix into the sandbox's own app.
+
+### Added
+
+- **An admin can now exercise the member path without a second identity.**
+  "View as member," from the account menu, clamps a signed-in SSO admin's
+  session role to `member` at the one place the role is read — the console,
+  `GET /me` and every operator-gated route answer exactly as a member's would,
+  with a persistent banner and a way back out. The stamped role is never
+  rewritten (so exiting restores it verbatim), `issued_at` freezes across the
+  toggle, every audit row still names the admin's own subject, and minting an
+  API token or registering an SSH key is refused in the mode (both carry a
+  role stamp that would otherwise outlive it). See `docs/OPERATIONS.md`,
+  "Exercising member mode as an admin," which also gives the genuine
+  second-identity recipe for proving what a member is *refused*, which the
+  mode alone cannot show.
+- **AWS SSO is testable without an AWS tenant.** `make kind-sso` adds Dex with
+  two principals and an on-cluster fake of AWS IAM Identity Center plus a
+  Bedrock-runtime stub to the kind quickstart cluster; `scripts/kind-sso-walk.sh`
+  walks a member signing in on their own seat and getting their own role
+  credentials, with the fake's own log confirming which account and role real
+  botocore asked it to mint. See `docs/OPERATIONS.md`, "Testing AWS SSO
+  without an AWS tenant."
+- **One gated test hatch moves every AWS SSO endpoint together**
+  (`WARDYN_AWS_SSO_ENDPOINT_OVERRIDE`, refused unless
+  `WARDYN_ALLOW_TEST_ENDPOINTS=true`, boot-time-only, warns loudly when
+  carried) — published as THREAT-MODEL residual #45. `ui/e2e/live/` is a new
+  Playwright project for specs that drive a real running Wardyn instead of the
+  hermetic e2e backend.
+- A docker-gated regression test pins that a sealed CC1 sandbox cannot resolve
+  an external DNS name — the per-run network is gatewayless, so the daemon's
+  embedded resolver has nowhere to forward a query it cannot answer.
+- Four new Playwright specs close coverage gaps the plan's field audit found:
+  Settings' Host card and Model-provider connect/replace/disconnect lane
+  (`settings-connections.spec.ts`), a seeded workspace's real, non-intercepted
+  detail page (`workspace-detail.spec.ts`), the SSH-keys add/reload/delete
+  round trip (`ssh-keys.spec.ts`), and "make a policy from this run"
+  (`run-policy.spec.ts`) — plus in-place hardening of the policies,
+  permissions, runs, recording, navigation and member-getting-started specs.
+
+### Fixed
+
+- A `POST /runs` that fails after the run row exists no longer leaves a ghost
+  run: every late failure now marks the run FAILED and revokes its minted
+  identity, instead of a 500 that left a PENDING run holding a live token
+  until the undispatched sweep reaped it up to an hour later.
+- Review (`POST /runs/preflight`) now reproduces the repository-provider
+  admission and agent-roster refusal, so it can no longer show a clean
+  checklist for a run that create then refuses.
+- The run-detail Files and Resources widgets no longer stall for five seconds
+  and answer 500 on a workspace with a lot of changed files; a capped read now
+  answers 200 with `truncated: true`.
+- A runner that returns no exec session is a 500 on both widgets rather than a
+  nil-pointer panic in the daemon.
+- Renaming a run policy onto a name that is already taken answers 409 naming
+  the clash, not a 500 carrying the raw Postgres constraint text.
+- `title`, `description`, `repo`, `devcontainer_repo`, `task` and `agent` are
+  all length-capped and control-character-checked at the door; a NUL in a
+  title was previously a Postgres 500, and `repo`/`task`/`agent` had no cap
+  beyond the 1 MiB request body.
+- A policy whose `git_pat` or `ssh_key` grant names a missing secret is now
+  refused with a message naming that grant, instead of always blaming
+  `api_key`.
+- A `devcontainer_repo` run on a deployment with no image builder now says so
+  on the 201, instead of only in a setup log line no client reads.
+- Review and the launch response no longer claim a scan or `task_mode=exec`
+  run — which gets no model credential — uses Amazon Bedrock automatically.
+- Several people launching runs at once no longer serialise behind an
+  unresponsive AWS SSO token endpoint when their own captured session still
+  has enough validity to carry the run.
+- A transient site-config read failure at dispatch is now retried once before
+  a run's model-credential scope is decided, so one dropped database
+  connection no longer costs an otherwise healthy run (an unreadable roster
+  still fails the run closed — an explicit owner decision, not a residual).
+- The `harness.credential.refresh` audit row omits `registration_expires_at`
+  when the captured session carries none, instead of recording a date in the
+  year 1.
+- **A custom `WARDYN_AGENT_IMAGES` agent can now be picked from a fresh run**,
+  not only cloned from an existing run of it.
+- **`site_config.write`'s audit row now names what changed, not just a
+  count.** Two saves that both flipped only the upstream proxy URL used to
+  audit an identical row; the datum now carries the changed fields and a
+  `from→to` pair per redirect (capped, with the honest unbounded total kept
+  beside it).
+- `ScmHosts`/`EgressRedirects[].{From,To}`/`UpstreamProxyURL` are now stored
+  canonical, not whatever case/whitespace was typed; interior whitespace is
+  still a 400.
+- A site config declaring only `internal_hosts` no longer reads as
+  unconfigured; a dedicated info row now surfaces the same warning the
+  deployment log already carries for that override.
+- The egress-redirection check no longer renders a bare, empty
+  `(ecosystems: ; …)` clause when every redirect is network-only.
+- A legacy `artifact_overrides` body naming an unknown ecosystem key now names
+  that key in its 400, instead of an opaque validation error two passes later.
+- `PUT /site-config` now refuses two `egress_redirects` rows sharing a `from`,
+  case-insensitively — the first duplicate silently shadowed the second.
+- **A workspace whose built image was invalidated can be rebuilt again.** The
+  in-memory build tracker used to outrank the workspace row for "done," so a
+  PUT that deleted the built image (or a rescan that moved the profile hash)
+  left the workspace unbuildable until wardynd restarted; the row decides now,
+  and every invalidator drops its tracker entry except mid-flight.
+- **Re-saving a workspace without changing it no longer wipes its reviewed
+  state.** A differently-cased repo slug, a `.git` suffix or a mixed-case
+  clone-URL host previously counted as a content change, silently clearing
+  approved egress, requirements and recorded evidence.
+- `DELETE /workspaces/{id}` now refuses while a session holds the workspace,
+  instead of stranding an `AllowAllEgress` sandbox and losing the capture
+  silently.
+- The observed-egress panel no longer offers hosts that cannot be approved
+  (git-broker- and control-plane-owned hosts, and hosts the operator has
+  explicitly denied) — one dead suggestion used to break promotion for every
+  real host beside it.
+- The GitHub App mint now carries an HTTP deadline scoped to the WHOLE mint,
+  not per round trip, so a blackholed `api.github.com` can no longer pin the
+  grant row's lock and queue every other mint for that grant.
+- `NO_PROXY` in the sandbox environment is now derived from the configured
+  proxy URL, not a hardcoded name — an operator-overridden proxy URL
+  previously left the sandbox's own `HTTP_PROXY` host out of its own bypass
+  list.
+- `wardyn-toolgate` and the in-sandbox result uploader now reach the run's own
+  proxy directly instead of through `$HTTP_PROXY`, so an overridden proxy URL
+  no longer denies every tool call and drops every result upload.
+- Concurrent callers of the subscription provider now share one delegated
+  `claude` credential refresh instead of each spawning their own.
+- Workspace git-remote detection now reads regular files only, never follows a
+  symlinked `.git/config`, and reads a large config whole — a FIFO named
+  `.gitmodules` previously blocked the scan's HTTP handler goroutine forever.
+- The remote-URL parser no longer reports a scheme, or half a split userinfo,
+  as a host, and now parses a bracketed IPv6 authority in both URL and
+  scp-like forms.
+- The git credential helper parses a bracketed IPv6 `host=` value instead of
+  truncating it at the first colon.
+- `wardyn attach` no longer leaves the real terminal stuck in raw mode when the
+  process is killed by a signal (SIGTERM, SIGHUP, a manual SIGINT) instead of
+  a local Ctrl-C.
+- `wardyn attach <run-id>` now validates the run id before dialing, the same
+  way `ssh` already does.
+- `wardyn run recording` gained a `--timeout` flag so a peer that sends
+  headers and never finishes the body no longer hangs the download forever.
+- `wardyn support-bundle` no longer reports success while writing a truncated
+  bundle — a flush failure is no longer silently swallowed, and the bundle is
+  written to a temp file and renamed on success only.
+- `wardyn ssh`'s exit code is clamped to a non-negative value when the child is
+  killed by a signal.
+- `wardyn proxy-relay`'s unauthenticated-exposure warning now prints to
+  stderr, not stdout.
+- The CLI's 401 auth hint now names both `WARDYN_ADMIN_TOKEN` and
+  `WARDYN_TOKEN`.
+- `setup wall` and `setup vault` now reject a stray extra argument.
+- The coverage floor no longer sits eleven-plus points below what the suite
+  actually proves (`COVER_MIN` 65 → 75).
+- A flaky Playwright test now fails the UI e2e gate instead of silently
+  passing.
+- `release-check` now runs the Postgres-gated concurrency proofs under the
+  race detector, matching CI.
+- `WARDYN_E2E_NO_UI_BUILD=1` now refuses a stale `ui/dist`.
+- The Go unit suite has its own falsifiable skip floor for the seven
+  redirect-probe tests that self-skip without `curl` on PATH.
+- A member can now attach to their own AWS SSO login sandbox — an "unknown
+  owner" mount previously read as "not your run" and was refused client-side
+  before the server (the actual enforcement point) was ever asked.
+- `POST /setup/harness-login` now answers before the sandbox is up, narrating
+  the wait and attaching once the run is RUNNING, instead of racing a cold
+  image pull (or the Kubernetes network-policy canary) against the console's
+  own request deadline.
+- The AWS sign-in sandbox names itself on `/runs/:id`, and its attach shell now
+  prints the chained sign-in command it needs, with one definition shared by
+  the image and pinned against the console's own copy.
+- A console call that launches a sandbox now carries a 5-minute launch
+  deadline instead of the 60-second bound meant for a hung daemon.
+- A member's own Getting Started no longer calls an admin-only endpoint on a
+  cold `/setup` load, and Settings no longer does the same on every visit —
+  both used to draw a 403 and an `authz.denied` audit row against the
+  legitimate member before their real role was known.
+- The console's mount-time auth probe (and every HTTP 401 response) now
+  discards the response body it does not read, closing a per-page-load and
+  per-rejected-request socket leak.
+- A failed audit-trigger restore no longer leaves the database running a
+  superseded hash-chain function; the boot-time replay is now one transaction.
+- Four clock-skew classes between wardynd and Postgres are closed: the boot
+  heal's newer-action guard, the idle reaper's staleness check, `/healthz`'s
+  "latest heartbeat" read, and a member's unscoped approvals page now all
+  compare against the database's own clock rather than the daemon's.
+- The admin drive doors (`GET /drives` and the drive write) now bound their
+  filesystem questions the same way the member doors have since 0.7.3, instead
+  of hanging on a stopped-answering mount for as long as it takes.
+- An admin preview of a drive is no longer recorded as a refused run.
+- A drive 409 now names the guard that actually fired, instead of always
+  falling through to the home-namespace sentence.
+- A confirmed drive re-home now records which identity fields moved and how
+  many allocations went with them.
+- A bulk credential revoke now names each credential it killed, instead of
+  only an aggregate count.
+- A secret written into a namespace nobody is known to own now says so on the
+  audit row.
+- A digest-pinned base image pre-pulled on the host is now recognised as
+  present instead of re-pulled.
+- The `make agent-images` hint is now attached only to a failed pull of the
+  images it actually builds.
+- Every devcontainer build now drops its own per-build base tag once wrapped
+  into the output image.
+- The git-repo build path now validates its output image tag for whitespace
+  and control characters, matching the generated-files path.
+- **The console no longer reads a member's redacted setup body as a fact
+  about the deployment.** Settings' Image-builder row and the barrier picker
+  both now distinguish "withheld for your role" from "actually off."
+- **A member can delete and rebuild the workspaces they own** — the server has
+  always admitted the owner; the console previously parked both on the admin
+  role.
+- Your model key is now named for the agent your org actually runs
+  (`anthropic-api-key` for Claude Code, `openai-api-key` for Codex CLI),
+  instead of always `anthropic-api-key`.
+- A member's empty Runs board is now a member's, not the operator first-run
+  funnel rendering a host barrier readout the member's redacted status leaves
+  blank.
+- Allowed hosts on a workspace's egress panel now only offers Remove where the
+  remove actually lands.
+- A 403 on Permissions or Governance is now reported as a role, not an
+  outage, and names a security admin too where the gate admits one.
+- New Run's saved-policy lane no longer leaks a redacted body into the Custom
+  textarea when switching modes.
+- The saved-policy rail sentence no longer claims the launch merges nothing,
+  when the create door still prepends the attached workspace's mounts.
+- A saved policy that stopped existing now says so on the rail instead of
+  silently going quiet.
+- Codex CLI's Tool-approvals segment no longer shows a checked-but-disabled
+  Hold option.
+- The Safety meter no longer shows a stale grade as current while a new one is
+  still resolving.
+- A multi-workspace clone's extra attachments now survive editing the primary
+  workspace selection.
+- The Workspace select gained its own accessible name.
+- The live-approvals Deny confirm button is now gated against a double click.
+- The New Run rail no longer accuses an unreachable daemon of having no model
+  provider configured.
+- An interactive run's own owner no longer hears "Requires the admin role."
+  before the run has even started; a starting/queued notice with no dead link
+  replaces it.
+- Switching between two attach sessions on the Recording tab can no longer
+  show the wrong cast.
+- Escape inside the Recording session picker's — and every held-approval
+  Deny confirm's — dialog no longer also exits focus mode and drops a live
+  attach socket.
+- A FAILED run's failure-hint chip — the only place on the page that says why
+  a run failed — never disappears again at a narrow viewport.
+- A run finishing mid-edit on the cockpit canvas no longer silently replaces
+  the in-progress arrangement.
+- A dock widget that stops being available no longer leaves an open glass
+  panel with nothing renderable inside it.
+- The Runs table's page cap can no longer end on an orphan group header, nor
+  render more rows than the stated cap.
+- "Refresh now" no longer blanks the whole toolbar into a loading skeleton for
+  a round trip the board already runs every three seconds in the background.
+- The dead `onerror` arm in the live-attach terminal is removed; the pinned
+  "[closed] after budget exhaustion" behaviour is unchanged.
+- An approval card's inlined run context no longer mislabels a nameless,
+  non-interactive run as "Interactive session."
+- A run's exit code and ending stay known past a chatty run's 1000-row audit
+  cap, via their own scoped reads.
+- The shell's own attention/approvals badge poll now pauses while parked on
+  the Runs board, which already runs an equivalent poll.
+- The phase rail can no longer be clicked past a gate it doesn't obey.
+- The Review step's readiness rollup no longer overstates two things: an
+  optional, fixable check no longer sits under green "Ready," and the badge no
+  longer reads "Ready to launch" under a standing confinement-floor warning.
+- A duplicate egress redirect `From` can no longer be added.
+- A fresh install no longer shows a false "Skipped" badge from a mark a
+  previous install left on the same browser (see Known gaps for the residual).
+- A mid-session sign-out now says why, and returns to where you were — only
+  when the identity that signs back in can actually reach it.
+- The session-expiry banner gained a third state (`none | soon | expired`)
+  instead of reading "expiring soon" forever, including past the real expiry.
+- The header no longer overflows sideways on a phone.
+- A rejected control-plane request no longer replays a dead admin token
+  forever, and the fix no longer races a fresh sign-in landing at the same
+  moment.
+- `readyz()` is now bounded against a transport that accepts a connection with
+  no ready backend behind it.
+- A non-JSON or oversized error body no longer renders raw in a toast.
+- A failed clipboard copy is no longer silent.
+- The TS wire mirror gains six fields the server already sent and fixes one it
+  read wrong (`scanWorkspace()`'s plural `scan_run_ids`).
+- A member can now be told apart from an admin for a shared destructive-delete
+  control (`useCanMutate`, a new `allowed?` prop on the shared delete-confirm
+  dialog) — the primitive ships here; wiring it into the Workspaces screen is
+  a separate item.
+- `--muted-foreground` and `--ring` now clear WCAG AA on the surfaces they
+  actually sit on, not only on white.
+- White badge/button text on a fill that failed AA is now a token, not a
+  guess, and the destructive button's hand-duplicated red (which had silently
+  drifted from the design token in dark mode) is unified with it.
+- The console no longer flashes light on load before React's dark-first theme
+  applies.
+- Motion now respects `prefers-reduced-motion` console-wide, not at one call
+  site out of 82.
+- Every floating or sticky container in the console is now bounded to the
+  viewport (dialogs, the mobile nav drawer's sheet, popovers, and both sticky
+  rails).
+- Three small accessibility/dead-code primitives: configurable heading levels
+  on empty/error states, a focus-visible ring on tab panels, a longer default
+  toast duration with a close button, and a first favicon.
+- A stale `dark:bg-destructive/60` dilution left over from the destructive-
+  button unification is removed; the delete-confirm dialog's reason text now
+  keys on the actual confirm-button gate, not the raw operator flag.
+- A member-reachable authz-denial reason at two `live-approvals.tsx` sites now
+  correctly names "the admin or security admin role" for a security-tier
+  gate, instead of always "the admin role."
+- The Add-workspace dialog no longer promises an edit path this console
+  doesn't have, no longer silently drops a Branch typed for a non-repo source,
+  and its two image-picker options that stored identical state collapse into
+  one honest "Auto."
+- A workspace's Recorded-sessions card no longer overclaims that the loop
+  writes a least-privilege policy — it writes egress requirement rows; the
+  policy hand-off is the separate "Save session profile" action.
+- A stale workspace-detail load can no longer paint over a newer one after
+  navigating between workspaces.
+- The workspace-detail model-provider warning no longer fires when the daemon
+  simply didn't answer.
+- Approvals now recovers on its own from a one-off failed load, and deciding
+  an approval no longer flashes the whole queue back to a loading skeleton.
+- Approvals' Decided tab is now a real, shareable, reloadable URL.
+- The audit trail's Event filter no longer strands itself on a kind a
+  drilled-into run doesn't have.
+- The policy editor can no longer be dismissed by accident once you've started
+  editing — Escape and click-outside are now blocked once the draft differs
+  from what the editor opened with.
+- Every front-door `helm install`/`helm upgrade --install wardyn` recipe
+  (README.md, docs/VERIFY.md, the wardyn-k8s-setup skill, and the chart's own
+  README) now actually renders — each was missing an age-key source, a
+  runs-namespace choice, or a CC2/CC3 RuntimeClass pin/default-policy override
+  the chart now requires.
+- Numerous stale symbol/line citations across OPERATIONS.md, AUDIT-ACTIONS.md,
+  POLICIES.md, ENVBUILD.md, AGENT-THREAT-MODEL.md, sdk.md, SECURITY.md,
+  DESKTOP.md and several code comments are corrected to match the code they
+  describe; sdk.md's "one non-stdlib dependency" claim is made true by inlining
+  a two-line helper instead of importing a whole package graph for it.
+- The demo catalog's episode-minutes summary no longer counts unrecorded
+  episodes that already carry a projected length, and the "See it work" demo
+  grid's subtitle no longer promises every demo needs no model or key.
+
+### Changed
+
+- **A workspace composition is bounded** at 64 sources, matching the door's
+  other list caps.
+- **A repo `ref` is validated where it is authored** (create/update, not only
+  at build), refusing control characters or whitespace instead of silently
+  dropping that source from the clone.
+- `GET /workspaces/{id}/observed-egress` now reads a bounded page of the
+  newest runs instead of the whole run history; the unused client-side
+  `workspaces.getObservedEgress` helper (its own doc claim was false) is
+  removed.
+- The `credential.revoke` audit row's note for a `github_token` now correctly
+  says `RevokeRun` does not call GitHub's revoke endpoint (Wardyn now does,
+  from two other doors, but neither can reach a token that was never returned
+  to the run).
+- Agent, proxy and egress-canary pods on the Kubernetes substrate now set
+  `enableServiceLinks: false`; nothing in a Wardyn image reads the
+  Service-derived env vars the kubelet would otherwise inject for every
+  Service in the namespace.
+- The compose Dex IdP now seeds a second identity, `member@wardyn.local`,
+  beside `demo@wardyn.local`, giving the compose stack a genuine second
+  identity to exercise member mode against with no hand-editing.
+- ROADMAP.md's Shipped table now carries rows for v0.7.0 through v0.7.3
+  (previously stuck on "Built, awaiting release" for all of them); the demo
+  episode catalog's front-door table (README.md) now lists all 23 catalogued
+  episodes instead of 14.
+- RELEASING.md's version-bump checklist gains DESKTOP.md's two image pins, a
+  reminder to add the release's ROADMAP Shipped row, and a reminder to
+  regenerate `docs/TEST-GAPS.md`.
+- `docs/DEMO-SCRIPT.md`'s and `scripts/demo.sh`'s `wardyn audit` examples are
+  updated to the current positional form (`--run` is deprecated); the funnel
+  walkthrough's Act 2 table now lists the People step `PHASES[0]` actually
+  has.
+- Reworded three storage/limit hints that told an operator to type `0` for
+  "no limit," where the field renders `0` as blank; a base-URL error message
+  no longer claims every git host needs an organization path; an allocation's
+  size override is now labelled prospective for an already-provisioned drive.
+- Saving Corporate-network settings now surfaces `PUT /site-config`'s four
+  advisory signals instead of discarding them.
+- The Agents tab now withholds Save over an invalid "Per person" AWS SSO row,
+  matching the Git tab's own behaviour.
+- Three hand-rolled radio-button groups (Model provider, Git-tab credential
+  lanes, Agents-tab credential-source toggle) now support arrow-key
+  navigation and a single Tab stop each.
+
+### Known gaps and deferrals
+
+- **A workspace create/update that fails at the store can leave library rows
+  and audit entries behind.** No transaction seam exists to put both writes in
+  one, and no orphan-source heal reconciles them at boot; the residue is
+  inert — such a row is never mounted, scanned or cloned.
+- **Concurrent MCP permission requests are still decided one at a time** by
+  `wardyn-toolgate`; there is no evidence the agent issues them concurrently.
+- **A scan that stops at the depth cap still reports high confidence.** A
+  distinct "depth capped" note without the confidence demotion needs a new
+  wire field.
+- **Clamping a member policy up to an operator's `always_deny` ceiling can
+  raise the reported Review-rail risk score.** The rationale is an explicit
+  availability statement, not a security regression; a reword or a separate
+  non-security axis is a later change.
+- **A UNIQUE index making the audit spool's replay idempotent is not
+  shipped**; the sanctioned path is an operator-run `CREATE UNIQUE INDEX
+  CONCURRENTLY` behind a flag, since it cannot run inside a migration
+  transaction.
+- **A revoke that names a human's email does not reach their UI-sandbox relay
+  session** — the session always carries the OIDC `sub`. Revoke by `sub`, or
+  use the global `all: true` cutoff; closing this needs a schema change.
+- **A role demotion is not caught until the relay session's TTL**, matching
+  the SSH gateway's own admin-override staleness bound.
+- **An already-established relayed WebSocket outlives a revoke** — killing the
+  run is what ends one, the same bound attach and both SSH lanes already
+  publish.
+- **The sign-in sandbox does not run its own AWS SSO login command
+  automatically.** The aws-sso image has no boot-seed/tmux path, and the
+  account/role chooser needs an interactive terminal anyway.
+- **`POST /runs` is still synchronous.** The console's own launch deadline
+  covers the symptom; making run creation itself asynchronous would move the
+  CLI's `run --wait` contract, the 201 body and several e2e suites — a 0.8
+  design item.
+- **Member mode clamps the role, not ownership, groups or SSH.** Runs,
+  workspaces and secrets an admin created stay theirs in the mode; the SSH
+  gateway's admin override (keyed on the key's own TTL-bound role) is
+  unaffected by it; a rolling upgrade's outgoing replica ignores the flag
+  entirely, since it rides the existing session cookie with no codec bump.
+- **No `role` parameter on `POST /me/tokens`.** A deliberately downgraded
+  `wdn_` token was the other way to reach a member lane; `RefreshAPITokenRoles`
+  re-stamps every token to the principal's freshly derived role at next
+  sign-in, so this needs a `role_pinned` column that does not exist yet.
+- **Setting an AWS SSO account/role pin does not invalidate an
+  already-stored capture, and there is no admin "revoke this person's
+  captured session" route.** Both need owner enumeration in the secret store,
+  which the per-user namespace does not have.
+- **Tracking the inner per-tunnel MITM `http.Server`s so shutdown actually
+  stops them is a design gap**, not closed this release (the drop is now
+  counted; the tunnels still outlive shutdown). `mitmHosts` remains keyed on
+  the bare host, latent since the only producer today dedupes by bare host —
+  two pinned tests turn red the moment either gap becomes reachable.
+- **`OPERATOR_ONLY_REASON` ("Requires the admin role.") still stands at five
+  security-tier sites** that admit a security admin as well as an admin, each
+  owned by a different, not-yet-landed lane (`live-approvals.tsx` ×2, a
+  workspace record-pane note pinned by an existing test, the Approvals decide
+  chip, and the run-detail cockpit's decide chip).
+- **`@mermaid-js/mermaid-cli` stays a console devDependency.** Moving it needs
+  a new install location `scripts/check-diagrams.sh` can find `mmdc` at — a
+  structural change out of scope for the lane that found it.
+- **The kind AWS-SSO walk is a manual proof.** No workflow runs it; a green
+  result is evidence only for the tip it was run on. Real SigV4 and real
+  Bedrock inference stay owner-hardware-only.
+- **The AWS SSO test hatch is production-forbidden, not production-
+  discouraged**: no AWS SSO operation Wardyn uses is signed, so Wardyn cannot
+  distinguish the fake endpoint from the real one — published as THREAT-MODEL
+  residual #45 rather than mitigated.
+- **A workspace `write:` requirement can still flip `read_only: true` on a
+  mount an admin authored read-only**, deferred: `*bool` carries no
+  authorship, so the fix needs mount provenance on the type, and the
+  proposed "never flip an explicit true" would break the pinned
+  "required defaults to read-write" behaviour.
+- **A site-config read failure at dispatch degrades per an explicit owner
+  decision, not a residual**: a transient failure is retried once; a
+  genuinely unreadable roster still fails the run closed rather than
+  guessing.
+- **Per-run branch-namespace confinement of the installation token itself is
+  not built** — Wardyn deliberately does not request repo-admin access to
+  create or hold a GitHub ruleset, so binding the token to a ref prefix stays
+  a manual operator step; opt-in verification that a ruleset exists already
+  ships.
+- **A daemon-side copy of a run's session cast before `StopSandbox` tears the
+  sandbox down** is a larger change than this release's residue justifies and
+  is not built.
+- **A HELD approval chip does not yet degrade past `hold_expires_at`** — the
+  field does not exist on the wire yet; the current degrade
+  (`waitingHeld(n)` → `waiting(n)`) is a known, pinned ceiling.
+- **A pinned "Checking…" state for a in-flight, not-yet-decided check is not
+  built this release.**
+- **`enforcementFor`'s degraded-read variant is the only one implemented**;
+  a fuller generalisation is deferred.
+- **A member's `/` landing always re-derives from the server on every load,
+  deliberately** — no per-browser flag, because a shared browser handing
+  member B member A's landing mark was a real failure mode the design
+  considered and rejected.
+- **A generic "leaving with unsaved changes" guard is not built**; today's
+  screens with a draft either dirty-guard individually or don't.
+- **The app-shell header's overflow fix took a label-dropping approach
+  instead of `flex-wrap`** — both close the same defect; `flex-wrap` remains
+  unexplored as an alternative shape.
+- **A deterministic-runner-only e2e case (the kill-request assertion
+  branching on run state, not a regex over either outcome) is deferred**
+  pending a runner whose kill path is reliably reproducible in the harness.
+- **`wardyn-rec`'s SIGTERM handling for the in-sandbox recorder wrapper is
+  unchanged** — a run stopped by the reaper or a kill signal in the exec-less
+  or Kubernetes dispatch paths can still lose its final upload window; a fix
+  needs signal forwarding to the wrapped process plus a bounded flush, judged
+  a bigger change than this release's residue.
+
 ## [0.7.3] — 2026-09-15
 
 0.7.3 carries the second field report from the same private-endpoint Kubernetes
