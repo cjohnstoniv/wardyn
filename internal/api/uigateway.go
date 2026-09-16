@@ -344,7 +344,7 @@ func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
 	// exactly like the decision-ingest and attach keepalives: a human reading
 	// code in an editor is not idle, and the reaper must not stop the run under
 	// them.
-	if s.cfg.Store != nil && s.shouldTouch(runID) {
+	if s.shouldTouch(runID) { // a relay needs a Store (uiGatewayEnabled); uiReassertRelay above already read it
 		_ = s.cfg.Store.TouchRun(r.Context(), runID)
 	}
 	ctx := context.WithValue(r.Context(), uiSessionCtxKey{}, sess)

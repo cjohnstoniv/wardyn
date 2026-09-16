@@ -645,6 +645,9 @@ func TestUIGateway_RefusedReassertIsAuditedWithItsReason(t *testing.T) {
 		{"revocation store down", func(h *uiHarness) {
 			h.srv.cfg.SessionRevocations = errUIRevocations{}
 		}, uiDeniedReasonRevocationUnavailable},
+		{"run unreadable", func(h *uiHarness) {
+			h.store.dropRun(h.run.ID)
+		}, uiDeniedReasonRunUnreadable},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newUIHarness(t, closingBackend("sandbox app"))

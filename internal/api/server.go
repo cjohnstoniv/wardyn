@@ -719,16 +719,16 @@ type Server struct {
 	// All process-local, like sshSessions and lastTouch above and correct for
 	// the same reason (replicas>1 is refused by construction). Zero values are
 	// ready to use.
-	uiConnsMu   sync.Mutex
-	uiConns     map[uuid.UUID]int
-	uiReadyMu   sync.Mutex
-	uiReady     map[string]time.Time
+	uiConnsMu sync.Mutex
+	uiConns   map[uuid.UUID]int
+	uiReadyMu sync.Mutex
+	uiReady   map[string]time.Time
 	// uiReassert debounces the relay's REQUEST-path authorization re-check, one
 	// entry per minted session (uiReassertKey) — see uiReassertRelay.
 	uiReassertMu sync.Mutex
 	uiReassert   map[string]time.Time
-	uiProxyOnce sync.Once
-	uiProxy     *httputil.ReverseProxy
+	uiProxyOnce  sync.Once
+	uiProxy      *httputil.ReverseProxy
 	// authFailedLimiter rate-bounds the auth.failed audit emit (see
 	// adminAuth/auditAuthFailed in http.go) so a scanner cannot flood the
 	// append-only log. Zero value is ready to use.

@@ -288,8 +288,15 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 // uiDenyReassert audits the refusal and returns it. One place, so an arm cannot
 // be added without its audit row.
 func (s *Server) uiDenyReassert(sess uiSession, reason string, status int, msg string) *uiDialError {
-	s.auditUI(&sess.Run, types.ActorHuman, sess.Principal, "ui.auth", sess.App, "denied",
-		map[string]any{"app": sess.App, "port": sess.Port, "reason": reason})
+	// The refusal itself is never bounded; only its audit emit is. A refused
+	// session that keeps retrying (an editor tab polling on a revoked cookie)
+	// would otherwise append one identical ui.auth/denied row per request —
+	// the same token bucket that bounds auth.failed keeps the append-only log
+	// honest here too.
+	if s.authFailedLimiter.allow(s.cfg.Now()) {
+		s.auditUI(&sess.Run, types.ActorHuman, sess.Principal, "ui.auth", sess.App, "denied",
+			map[string]any{"app": sess.App, "port": sess.Port, "reason": reason})
+	}
 	return &uiDialError{status: status, msg: msg}
 }
 
@@ -330,7 +337,7 @@ func (s *Server) uiReassertRelay(ctx context.Context, sess uiSession) *uiDialErr
 // the same enter. A re-enter mints a new issued-at, so it re-checks at once
 // instead of inheriting the old session's window.
 func uiReassertKey(sess uiSession) string {
-	return sess.Principal + "\x00" + sess.Run.String() + "\x00" + strconv.FormatInt(sess.IssuedAt, 10)
+	return sess.Principal + "\x00" + sess.Run.String() + "\x00" + sess.App + "\x00" + strconv.FormatInt(sess.IssuedAt, 10)
 }
 
 func (s *Server) uiReassertDue(sess uiSession, now time.Time) bool {
