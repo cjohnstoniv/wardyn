@@ -220,6 +220,18 @@ kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout status deployment/postg
   || die "postgres did not come back after the reset"
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout restart "deployment/${RELEASE}" >/dev/null \
   || die "could not restart the wardyn deployment"
+# THE FAKE TOO, and for a third reason beyond the two above: /_seen is a
+# CUMULATIVE observable (the role-credential pair last minted, the call count,
+# the set of models). Left running across walks it carries the PREVIOUS walk's
+# answers, so this walk's assertions can be satisfied by residue — the pin
+# assertion passing on a pair minted ten minutes ago, before this run has
+# dialled anything. Restarting it makes /_seen mean "this walk", which is the
+# only thing it is ever read as. It also picks up a rebuilt fake image, which a
+# `kubectl apply` of an unchanged manifest never does.
+kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout restart "deployment/${FAKE_SVC}" >/dev/null \
+  || die "could not restart the fake AWS endpoints"
+kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout status "deployment/${FAKE_SVC}" --timeout=180s \
+  || die "the fake AWS endpoints did not come back after the reset"
 
 if ! kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout status "deployment/${RELEASE}" --timeout=300s; then
   # TWO knobs can refuse this boot, not one, and the old message named only the
