@@ -472,6 +472,12 @@ func TestL0_NoDNSExfil(t *testing.T) {
 		t.Fatalf("the external-name probe never reached the embedded resolver, so its failure "+
 			"proves nothing:\n%s", ext)
 	}
+	// Both probes' raw output, so `go test -v` is an evidence record of WHAT the
+	// sandbox saw (the resolver naming itself, the SERVFAIL, the proxy's reply)
+	// and not merely of the exit code. This finding is settled by observation.
+	t.Logf("proxy probe (the agent's only egress path):\n%s", proxy)
+	t.Logf("external-name probe (%s):\n%s", exfilName, ext)
+
 	if strings.Contains(ext, "RC=0") {
 		t.Errorf("L0 DNS exfil: an external name resolved from inside a sealed CC1 sandbox — "+
 			"Docker's embedded resolver forwarded the query to the host's resolvers, so the query "+
