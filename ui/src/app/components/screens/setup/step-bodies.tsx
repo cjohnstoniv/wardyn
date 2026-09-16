@@ -79,6 +79,12 @@ export function CheckRow({ check }: { check: SetupCheck }) {
 // the permanent "About this host" facts. These used to be dumped onto the barrier
 // step even though they span steps 2–7; here they're a single honest go/no-go view.
 // ------------------------------------------------------------
+
+// DRAFT (M2 canon pending) — F3-F2: distinct from "Worth a look" (warnings):
+// nothing here is wrong, there's just a fix available for something that was
+// never required.
+const REVIEW_GROUP_OPTIONAL = "Optional — not blocking";
+
 export function ReviewStep({
   status,
   readiness,
@@ -147,10 +153,7 @@ export function ReviewStep({
 
       {group("Blocking", "warning", blockers)}
       {group("Worth a look", "neutral", warnings)}
-      {/* DRAFT (M2 canon pending) — F3-F2: distinct from "Worth a look"
-          (warnings): nothing here is wrong, there's just a fix available for
-          something that was never required. */}
-      {group("Optional — not blocking", "neutral", optionalNotBlocking)}
+      {group(REVIEW_GROUP_OPTIONAL, "neutral", optionalNotBlocking)}
       {group("Ready", "success", ready)}
 
       {infoNotes.length > 0 && (
