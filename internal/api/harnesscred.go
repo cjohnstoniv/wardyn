@@ -429,6 +429,12 @@ func (s *Server) storeAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob aw
 // credential — it is a blank, egress-pinned box whose only purpose is to host
 // the interactive OAuth. Modeled on launchRecordRun, minus workspace/claim.
 //
+// IT STOPS AT THE AUDIT STAMP (P5). Everything up to and including CreateRun +
+// harness.login.started is what the CALLER must have before it answers — the
+// run id, and the launch-time scope/pin the capture upload binds to. The rest
+// of the launch (the dispatch ceiling, dispatchRun's blocking CreateSandbox) is
+// finishHarnessLoginLaunch's, on a detached context, in harnesscred_launch.go.
+//
 // RECORDING GATE (harnessLoginTask is never recorded): this run's terminal exists
 // to PRINT a ~1yr credential, and because the run mints nothing its mask snapshot
 // is empty by construction — liveMaskWriter is a pass-through, and the paste-time
@@ -446,17 +452,17 @@ func (s *Server) storeAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob aw
 // There is no server-side start-URL config to read it from (deliberately: it is
 // per-organization and this is the only flow that needs it), so it arrives with
 // the login request and is validated by the caller.
-func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl harnessLogin, ssoStartURL string, pin awsSSOPin, scope awsSSOScope) (types.AgentRun, error) {
+func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl harnessLogin, ssoStartURL string, pin awsSSOPin, scope awsSSOScope) (types.AgentRun, harnessLoginDispatch, error) {
 	if s.cfg.Runner == nil {
-		return types.AgentRun{}, fmt.Errorf("no runner configured")
+		return types.AgentRun{}, harnessLoginDispatch{}, fmt.Errorf("no runner configured")
 	}
 	caps, cerr := s.cfg.Runner.Capabilities(ctx)
 	if cerr != nil {
-		return types.AgentRun{}, fmt.Errorf("runner capabilities unavailable: %w", cerr)
+		return types.AgentRun{}, harnessLoginDispatch{}, fmt.Errorf("runner capabilities unavailable: %w", cerr)
 	}
 	cc := bestClass(caps.ConfinementClasses)
 	if cc == "" {
-		return types.AgentRun{}, fmt.Errorf("runner declares no confinement class")
+		return types.AgentRun{}, harnessLoginDispatch{}, fmt.Errorf("runner declares no confinement class")
 	}
 
 	runID := uuid.New()
@@ -469,14 +475,14 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// this is byte-for-byte the old no-op.
 	ceiling, cerr := s.effectiveCeiling(ctx)
 	if cerr != nil {
-		return types.AgentRun{}, cerr
+		return types.AgentRun{}, harnessLoginDispatch{}, cerr
 	}
 	run, token, err := s.newStepRun(ctx, runID, actor, harnessLoginTask, cc, harnessLoginGovernance(ceiling), func(run *types.AgentRun) {
 		run.Agent = hl.agent // the vendor CLI being logged into, never the catalog default
 		run.Interactive = true
 	})
 	if err != nil {
-		return types.AgentRun{}, err
+		return types.AgentRun{}, harnessLoginDispatch{}, err
 	}
 	// Region-scoped SSO endpoints are resolved from the operator's boot config —
 	// the SSO region if set, else the Bedrock region (same precedence
@@ -498,7 +504,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	created, err := s.cfg.Store.CreateRun(ctx, run)
 	if err != nil {
 		s.cfg.Identity.RevokeRun(ctx, runID) //nolint:errcheck // best-effort cleanup of the minted-but-unused token
-		return types.AgentRun{}, fmt.Errorf("create harness login run: %w", err)
+		return types.AgentRun{}, harnessLoginDispatch{}, fmt.Errorf("create harness login run: %w", err)
 	}
 	// Pre-login ~/.aws/config for the AWS flow, delivered through the SAME
 	// WARDYN_AWS_SSO_CONFIG_B64 channel a Bedrock run uses (materialized by
@@ -532,21 +538,9 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// No injections, no repo, no verify plan: a blank interactive box (plus, for
 	// AWS, the non-secret ~/.aws/config above). The `--idle` path installs the MITM
 	// CA and attaches; the login pane auto-types the provider's command.
-	// The acting principal's ceiling, for the dispatch DENY axis. It was resolved
-	// rather than exempted precisely so that re-tiering this route would simply
-	// start binding instead of leaving a door open — which is what happened: the
-	// login lane is member-reachable under a per_user row now, and this reads the
-	// member's own ceiling with no change. The memo makes it the same resolution
-	// the Limits axis above already made.
-	dc, _, dcErr := s.resolveDispatchCeiling(ctx)
-	if dcErr != nil {
-		return types.AgentRun{}, dcErr
-	}
-	s.dispatchRun(ctx, created, dc, dispatchParams{
-		RunToken: token, Image: image, Policy: policy,
-		Interactive: true, ExtraEnv: extraEnv,
-	})
-	return s.refreshRun(ctx, runID, created), nil
+	return created, harnessLoginDispatch{
+		RunToken: token, Image: image, Policy: policy, ExtraEnv: extraEnv,
+	}, nil
 }
 
 // maxLoginStartAuditScan bounds the read-back below. harness.login.started is
@@ -632,6 +626,10 @@ func validateSSOStartURL(raw string) error {
 
 type harnessLoginResponse struct {
 	RunID string `json:"run_id"`
+	// State the run is in AS ANSWERED — PENDING, because the answer now
+	// precedes dispatch (P5). The pane polls GET /runs/{id} from here rather
+	// than mounting a terminal on a run the attach-ticket route would 409.
+	State string `json:"state"`
 }
 
 // harnessLoginMechanism is the agent mechanism a login provider's flow actually
@@ -733,88 +731,6 @@ func (s *Server) authorizeHarnessLogin(w http.ResponseWriter, r *http.Request, p
 		return types.AgentProvider{}, awsSSOScope{}, false
 	}
 	return row, scope, true
-}
-
-// handleHarnessLogin launches a container-login sandbox for a provider:
-//
-//	POST /api/v1/setup/harness-login  {provider}
-//
-// RBAC: the signed-in-human group, with the operator-or-per_user-row predicate
-// INSIDE the handler (authorizeHarnessLogin). It is not operatorOnly any more
-// because under a per_user roster row the whole point is that each person signs
-// in themselves — a member who cannot reach this route has no route to model
-// access at all.
-func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
-	if s.cfg.Secrets == nil {
-		writeError(w, http.StatusServiceUnavailable, "no secret store configured; managed harness login unavailable")
-		return
-	}
-	var req harnessLoginRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<10)).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	provider := strings.TrimSpace(req.Provider)
-	if provider == "" {
-		provider = "anthropic"
-	}
-	hl, ok := harnessLoginByProvider(provider)
-	if !ok {
-		writeError(w, http.StatusBadRequest, "provider does not support container login in this version: "+provider)
-		return
-	}
-	row, scope, allowed := s.authorizeHarnessLogin(w, r, provider)
-	if !allowed {
-		return
-	}
-	// AWS: `aws sso login` cannot run at all without an sso_start_url + sso_region
-	// in the sandbox's ~/.aws/config. The region is boot config; the start URL is
-	// the request's ONLY in legacy mode, where the operator is the sole caller and
-	// there is nowhere else to keep it. Refuse up front rather than launching a
-	// sandbox whose auto-typed command is guaranteed to fail.
-	startURL := strings.TrimSpace(req.SSOStartURL)
-	if row.SSOStartURL != "" {
-		// ADMIN-OWNED, and it OVERRIDES the request rather than merely defaulting
-		// it. A per_user row means many people sign in, and the capture is bound to
-		// whatever portal the launch was seeded with (ssotoken.go's F006 check
-		// compares the blob to THIS run's own audit record) — so honouring a
-		// caller-supplied start URL would let anyone bind their capture to an
-		// IdP/account of their choosing and have Wardyn bake it into every later
-		// Bedrock run's ~/.aws/config. It also takes an org URL off the member's
-		// typing surface entirely.
-		startURL = row.SSOStartURL
-	}
-	if hl.regionalSSOEgress {
-		if startURL == "" {
-			writeError(w, http.StatusBadRequest,
-				"aws sso login needs your organization's AWS access portal URL (e.g. https://my-org.awsapps.com/start); Wardyn has no stored copy of it")
-			return
-		}
-		if verr := validateSSOStartURL(startURL); verr != nil {
-			writeError(w, http.StatusBadRequest, verr.Error())
-			return
-		}
-		if cmp.Or(s.cfg.BedrockAWSSSORegion, s.cfg.BedrockRegion) == "" {
-			writeError(w, http.StatusBadRequest,
-				"no AWS SSO region is configured; set -bedrock-aws-sso-region (WARDYN_BEDROCK_AWS_SSO_REGION) or -bedrock-region and restart wardynd")
-			return
-		}
-	}
-	_, actor := actorFromRequest(r)
-	run, err := s.launchHarnessLoginRun(r.Context(), actor, hl, startURL,
-		awsSSOPin{AccountID: row.SSOAccountID, RoleName: row.SSORoleName}, scope)
-	if err != nil {
-		// A governance limit is the acting principal's own profile refusing, not a
-		// daemon fault — answered the way launchRecordRun's caller answers it
-		// (record.go), with the profile's own sentence and no 500.
-		if errors.Is(err, errRecordCeilingLimit) {
-			writeError(w, http.StatusForbidden, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "))
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "launch login sandbox: "+err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, harnessLoginResponse{RunID: run.ID.String()})
 }
 
 type harnessCredRequest struct {

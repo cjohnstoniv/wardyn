@@ -806,6 +806,10 @@ func TestLaunchHarnessLoginRun_SeedsPinEnv(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 
+	// The POST answers before dispatch now (P5), so the spec this reads is
+	// composed by the launch goroutine a beat later. Same assertion, one sync
+	// point: waitForSandbox returns when CreateSandbox has actually been called.
+	runner.waitForSandbox(t)
 	env := runner.lastSandboxEnv()
 	if env[awsSSOPinAccountEnvVar] != "111111111111" || env[awsSSOPinRoleEnvVar] != "BedrockRunner" {
 		t.Errorf("sandbox env = %v, want the pin in %s/%s — without it the helper is back to AccountList[0]",
@@ -836,6 +840,7 @@ func TestLoginConfigEnv_NoPinNoEnv(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
+	runner.waitForSandbox(t) // see TestLaunchHarnessLoginRun_SeedsPinEnv
 	env := runner.lastSandboxEnv()
 	if _, ok := env[awsSSOPinAccountEnvVar]; ok {
 		t.Errorf("an unpinned row seeded %s: %v", awsSSOPinAccountEnvVar, env)
