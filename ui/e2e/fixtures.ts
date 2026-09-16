@@ -153,6 +153,46 @@ export async function mockMemberRole(page: Page): Promise<void> {
     json.security_operator = false;
     await route.fulfill({ response, json });
   });
+  await mockMemberSetupStatus(page);
+}
+
+// The OTHER half of the member splice (W6 drift note). Splicing only /me left
+// every member-lensed spec reading an OPERATOR's GET /setup/status: the
+// redaction is server-side on !isOperator (internal/api/setup.go), and the
+// harness's bearer token IS an operator there, so `checks_redacted` was absent,
+// `checks` and `secrets.present` were populated and `runner.driver` was the real
+// driver. Four of this release's member fixes — the `checks_redacted` gate on
+// the Image-builder row, environment-step's narrowed `noDriver`, RunsMemberEmpty
+// and the demo grid's `secretNames` gate — are all keyed on fields that only
+// ever arrived UNREDACTED, so the member specs could not exercise any of them,
+// which is how W6-3's security-admin twin survived a green suite.
+//
+// A MIRROR of redactSetupStatusForMember's structural drops, not a re-derivation
+// of its value projections: `integrations`, `harness` and `model_access` are
+// reduced server-side by rules whose inputs (own-AWS-row scoping, the graded
+// blob's tier) this side cannot see, and inventing them here would prove a
+// render against a body no server produces. The drops below are the ones the
+// console branches on, and each is exactly what that function writes.
+export async function mockMemberSetupStatus(page: Page): Promise<void> {
+  await page.route("**/api/v1/setup/status", async (route) => {
+    const response = await route.fetch();
+    const json = await response.json();
+    json.checks = [];
+    json.checks_redacted = true;
+    json.providers = [];
+    json.secrets = { present: [] };
+    // Rebuilt from confinement_classes ALONE, exactly as the server rebuilds
+    // SetupRunner — so driver, confinement_substrates and
+    // ephemeral_disk_enforcement are dropped by construction rather than by a
+    // line somebody remembered to write. The classes survive redaction: they
+    // are the barrier signal deriveReadiness reads for every role.
+    json.runner = { confinement_classes: json.runner?.confinement_classes ?? [] };
+    json.bedrock = { ready: !!json.bedrock?.ready };
+    json.scm = {};
+    json.host_proxy = {};
+    json.deployment = {};
+    await route.fulfill({ response, json });
+  });
 }
 
 // Security-admin console (0.7's third tier) — the same splice technique and the
