@@ -72,7 +72,7 @@ export function PhaseRail({
                 className={cn(
                   "flex size-4 shrink-0 items-center justify-center rounded-full border",
                   isDone
-                    ? "border-success bg-success text-white"
+                    ? "border-success bg-success text-success-foreground"
                     : isVisited
                       ? "border-border-strong bg-muted-foreground/40 text-muted-foreground"
                       : cn("border-border-strong", TONE_DOT[badge.tone]),
@@ -137,7 +137,7 @@ export function PhaseRail({
                           className={cn(
                             "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border",
                             isDone
-                              ? "border-success bg-success text-white"
+                              ? "border-success bg-success text-success-foreground"
                               : isVisited
                                 ? "border-border-strong bg-muted-foreground/40 text-muted-foreground"
                                 : cn("border-border-strong", TONE_DOT[badge.tone]),

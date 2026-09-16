@@ -376,10 +376,16 @@ export function EgressDecisionChip({ decision }: { decision: "allow" | "deny" | 
 // Circular colored initials (CC / CX / CU) — one consistent agent representation
 // used on run cards, tables, and detail/recording headers alike.
 type AgentMeta = { label: string; initials: string; badge: string };
+// F7-F3/F7-F8: plain white badge text was 3.12:1 on --agent-claude in BOTH
+// themes and 2.54:1 on --success in dark only (light already passed at
+// 5.48:1) — the *-foreground tokens are the AA-proven answer for each fill,
+// not a raw palette guess. --info-foreground was already white in both
+// themes, so cursor's swap is a no-op contrast-wise but keeps the convention
+// uniform and clears the repo-wide white-badge-text grep gate.
 const agentMeta: Record<string, AgentMeta> = {
-  claude_code: { label: "Claude Code", initials: "CC", badge: "bg-agent-claude text-white" },
-  codex: { label: "Codex", initials: "CX", badge: "bg-success text-white" },
-  cursor: { label: "Cursor", initials: "CU", badge: "bg-info text-white" },
+  claude_code: { label: "Claude Code", initials: "CC", badge: "bg-agent-claude text-agent-claude-foreground" },
+  codex: { label: "Codex", initials: "CX", badge: "bg-success text-success-foreground" },
+  cursor: { label: "Cursor", initials: "CU", badge: "bg-info text-info-foreground" },
 };
 
 // Tolerate both dotted ("claude-code", "codex-cli") and underscore

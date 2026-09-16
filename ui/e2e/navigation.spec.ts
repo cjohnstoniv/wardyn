@@ -237,6 +237,40 @@ test.describe("theme toggle", () => {
     expect(dark.stored).toBe("dark");
   });
 
+  // F7-F4: before this fix, index.html shipped bare <html lang="en"> with no
+  // theme class — ThemeProvider's effect (theme-provider.tsx) only applies
+  // `dark` AFTER React mounts, so the PRE-JS paint used :root's light tokens
+  // until then, a visible flash on every load for the default (dark-first)
+  // console. This reads the raw served markup directly — no JS execution at
+  // all — so it proves the class ships in the HTML itself, not merely after
+  // hydration.
+  test("F7-F4: the served HTML carries class=dark and color-scheme=dark before any JS runs", async ({
+    page,
+  }) => {
+    const res = await page.request.get("/");
+    const html = await res.text();
+    expect(html).toMatch(/<html[^>]*\bclass="dark"/);
+    expect(html).toMatch(/<meta\s+name="color-scheme"\s+content="dark"/);
+  });
+
+  // neg: the static markup's default must not override a REAL stored
+  // preference once the app takes over — ThemeProvider's effect still runs
+  // `classList.toggle("dark", theme === "dark")` on mount and removes the
+  // class for a stored "light" value, exactly as before this fix.
+  test("F7-F4 neg: a stored light preference still renders light once the app mounts", async ({ page }) => {
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem("wardyn-theme", "light");
+      } catch {
+        /* private mode */
+      }
+    });
+    await gotoConsole(page);
+    const theme = await readTheme(page);
+    expect(theme.hasDarkClass).toBe(false);
+    expect(theme.colorScheme).toBe("light");
+  });
+
   test("theme choice persists across navigation", async ({ page }) => {
     await gotoConsole(page);
     const toggle = page.getByRole("button", { name: "Toggle theme" });

@@ -121,7 +121,10 @@ export class ErrorBoundary extends React.Component<Props, State> {
               </>
             )}
           </div>
-          <p className="mt-1 text-danger/80">
+          {/* F7-F3/F7-F15: was danger text at 80% opacity (~3.6:1, below AA) —
+              the dilution gate now forbids diluting any guarded semantic
+              token, not just muted-foreground. */}
+          <p className="mt-1 text-danger">
             {stale
               ? "This page is running an older build whose files are no longer on the server. Reloading picks up the new one; nothing you have configured is affected."
               : error.message}

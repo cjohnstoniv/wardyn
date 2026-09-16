@@ -37,7 +37,11 @@
   --secondary: #f4f4f5;
   --secondary-foreground: #171717;
   --muted: #f4f4f5;
-  --muted-foreground: #737373;
+  /* F7-F1: #737373 measured 4.7417:1 on white but only 4.3139:1 on --muted/
+     --surface-2 (#f4f4f5) — the ground the real sites (the neutral Chip, 93
+     call sites, + both Notes) actually sit on. #6b6b6b clears AA on both
+     (4.8484:1 white / 5.3292:1 on --muted). */
+  --muted-foreground: #6b6b6b;
   /* input/textarea ::placeholder ONLY — deliberately NOT --muted-foreground.
      A placeholder has to read as clearly NOT a filled value (>=3:1 from
      --foreground) while its own text still clears WCAG 1.4.3's 4.5:1, and both
@@ -73,12 +77,23 @@
   --cyan: #0e7490;
   --cyan-subtle: rgba(14, 116, 144, 0.1);
 
-  /* agent brand accent — Claude Code monogram avatar (same hue both modes) */
+  /* agent brand accent — Claude Code monogram avatar (same hue both modes).
+     #d97757 is only 3.12:1 with white text (BOTH themes — same hex), so the
+     foreground needs the near-black text every light-fill token uses, not
+     white. */
   --agent-claude: #d97757;
+  --agent-claude-foreground: #171717;
+  /* --success text is 5.48:1 with white here (light) but only 2.54:1 in dark
+     — AgentBadge's codex chip and PhaseRail's success step both put white on
+     this fill. White still clears AA in light; dark gets its own value below. */
+  --success-foreground: #ffffff;
 
-  /* same value as --danger: destructive buttons/dialogs put WHITE text on this
-     fill, and the red-500 the C004 pass left here is 3.76:1 — below AA. */
-  --destructive: #b91c1c;
+  /* F7-F15: var(--danger), never a second hand-typed hex — theme.css used to
+     duplicate --danger's literal value here with a comment claiming they were
+     "the same", which quietly drifted true in light and false in dark
+     (destructive stayed #dc2626 while danger moved to #f87171). Destructive
+     buttons/dialogs put WHITE text on this fill (text-danger-foreground). */
+  --destructive: var(--danger);
 
   /* barrier tiers — Fence/Wall/Vault metal ramp (bronze/silver/gold).
      Teal (--primary) is the action color (buttons, links, active nav,
@@ -100,9 +115,10 @@
   --input-background: #ffffff;
   --switch-background: #e5e5e5;
   /* focus ring: #a3a3a3 measured 2.52:1 on this background — below WCAG
-     1.4.11's 3:1 non-text minimum. Reuses --muted-foreground's value, already
-     proven at 4.74:1 here. */
-  --ring: #737373;
+     1.4.11's 3:1 non-text minimum. Reuses --muted-foreground's value, now
+     proven at 5.33:1 on white here (F7-F1: was a hand-copied #737373 with a
+     comment still citing the old 4.74:1). */
+  --ring: #6b6b6b;
 
   --font-weight-normal: 400;
   --font-weight-medium: 500;
@@ -169,10 +185,18 @@
   --cyan: #06b6d4;
   --cyan-subtle: rgba(6, 182, 212, 0.1);
 
-  /* agent brand accent — Claude Code monogram avatar (same hue both modes) */
+  /* agent brand accent — Claude Code monogram avatar (same hue both modes).
+     3.12:1 with white text here too — same near-black foreground as light. */
   --agent-claude: #d97757;
+  --agent-claude-foreground: #171717;
+  /* DARK-only failure: --success is 2.54:1 with white here (light passes at
+     5.48:1) — the fill inverts to dark text the same way --primary/--danger
+     already do in dark. */
+  --success-foreground: #0a0a0a;
 
-  --destructive: #dc2626;
+  /* F7-F15: var(--danger) — see the light theme's comment. This is the value
+     that had silently drifted (#dc2626 here vs --danger's #f87171). */
+  --destructive: var(--danger);
 
   /* barrier tiers — Fence/Wall/Vault metal ramp (bronze/silver/gold) */
   --fence-bg: rgba(176, 114, 58, 0.12);
@@ -233,6 +257,7 @@
   --color-accent-foreground: var(--accent-foreground);
 
   --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
   --color-success-subtle: var(--success-subtle);
   --color-warning: var(--warning);
   --color-warning-subtle: var(--warning-subtle);
@@ -246,6 +271,7 @@
   --color-cyan-subtle: var(--cyan-subtle);
 
   --color-agent-claude: var(--agent-claude);
+  --color-agent-claude-foreground: var(--agent-claude-foreground);
 
   --color-destructive: var(--destructive);
 
@@ -313,6 +339,26 @@
      otherwise leak onto monospace text and misalign the terminal's fixed
      character grid. */
   .font-mono, code, kbd, pre { font-family: var(--font-mono); letter-spacing: normal; }
+
+  /* F7-F5 — WCAG 2.3.3 / prefers-reduced-motion: 82 `animate-` lines ship in
+     src/app (57 spin, 14 pulse, 10 in, 10 out, 1 ping); before this only ONE
+     (run-state-glyph.tsx's monitoring spinner) carried a hand-rolled
+     motion-reduce:animate-none guard. Neither tw-animate-css 1.4.0 nor
+     Tailwind 4.3.3 ships a reduced-motion guard on its own, so every other
+     spinner/slide-in/slide-out kept animating for a reduced-motion user — a
+     real vestibular-symptom trigger, not a cosmetic nicety. One universal
+     selector here covers every current AND future animate- utility without
+     touching a single call site. `!important` because Tailwind's own
+     `duration-*`/`ease-*` utilities set animation-duration/timing-function
+     inline via the cascade layer and would otherwise win by source order. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 }
 
 /* thin, console-style scrollbars */

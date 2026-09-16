@@ -31,10 +31,22 @@ const css = readFileSync("src/styles/theme.css", "utf8");
 const rootStart = css.indexOf(":root");
 const root = css.slice(rootStart, css.indexOf("\n}", rootStart));
 
+// F7-F15: --destructive is now `var(--danger)` (never a hand-copied hex that
+// can drift from it again — theme.css:79's old comment claimed "same value
+// as --danger" while dark had quietly drifted to a different literal).
+// Resolves ONE level of var(--x) indirection; the theme has no deeper chain.
+function resolveVar(root: string, value: string): string {
+  const v = /^var\(--([a-zA-Z0-9-]+)\)$/.exec(value.trim());
+  if (!v) return value;
+  const m = root.match(new RegExp(`--${v[1]}:\\s*(#[0-9a-fA-F]{6}|var\\([^)]+\\))`));
+  if (!m) throw new Error(`--${v[1]} not found while resolving var(--${v[1]})`);
+  return resolveVar(root, m[1]);
+}
+
 function token(name: string): string {
-  const m = root.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`));
+  const m = root.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6}|var\\([^)]+\\))`));
   if (!m) throw new Error(`--${name} not found in :root`);
-  return m[1];
+  return resolveVar(root, m[1]);
 }
 // The -subtle tint composited over white — the actual background the text sits on.
 function subtleBg(name: string): string {
@@ -104,6 +116,27 @@ describe("light-theme WCAG AA contrast (C004)", () => {
     expect(ratio(WHITE, token("destructive"))).toBeGreaterThanOrEqual(4.5);
   });
 
+  // F7-F15: --destructive is `var(--danger)`, never a second hand-typed hex —
+  // theme.css's old comment claimed "same value as --danger" while dark had
+  // silently drifted to a different literal (#dc2626 vs #f87171). Structural,
+  // both themes: this can never drift again because there is only one value.
+  it("--destructive equals --danger by construction (light and dark)", () => {
+    expect(token("destructive")).toBe(token("danger"));
+  });
+
+  // F7-F3/F7-F8: AgentBadge's claude/success chips put white text on a fill
+  // that fails AA — claude 3.12:1 in BOTH themes, success 2.54:1 in dark only
+  // (light already passes at 5.48:1, kept white there). --agent-claude
+  // shares one hex across themes and needs a dark foreground in both;
+  // --success-foreground follows --danger/--info-foreground's existing
+  // per-theme pattern (white in light, near-black in dark).
+  it("--agent-claude-foreground clears AA on --agent-claude (both themes — same fill hue)", () => {
+    expect(ratio(token("agent-claude-foreground"), token("agent-claude"))).toBeGreaterThanOrEqual(4.5);
+  });
+  it("--success-foreground clears AA on --success (light theme)", () => {
+    expect(ratio(token("success-foreground"), token("success"))).toBeGreaterThanOrEqual(4.5);
+  });
+
   // info + cyan joined the guarded set when their 500-family values measured
   // 3.68:1 / 2.43:1 as 12px chip text (Starting badge, egress-domain chip).
   for (const t of ["success", "warning", "danger", "info", "cyan"]) {
@@ -113,8 +146,15 @@ describe("light-theme WCAG AA contrast (C004)", () => {
     });
   }
 
-  it("--muted-foreground text is >= 4.5:1 on white (the borderline body/caption token)", () => {
+  // F7-F1: the old #737373 measured 4.7417:1 on white — why this test alone
+  // stayed green — but 4.3139:1 on --muted/--surface-2 (#f4f4f5), the ground
+  // the real sites (the neutral Chip, 93 call sites, + both Notes) actually
+  // sit on. TabsList was REFUTED as a real site (its trigger overrides to
+  // text-foreground); CodeBlock's use is an icon (1.4.11's 3:1, passes at
+  // 4.11:1 either value). #6b6b6b clears AA on BOTH grounds.
+  it("--muted-foreground text is >= 4.5:1 on white AND on --muted/--surface-2 (the real Chip/Note ground)", () => {
     expect(ratio(token("muted-foreground"), WHITE)).toBeGreaterThanOrEqual(4.5);
+    expect(ratio(token("muted-foreground"), token("muted"))).toBeGreaterThanOrEqual(4.5);
   });
 
   // Placeholder text is still text (WCAG 1.4.3, 4.5:1) as well as needing to
@@ -148,9 +188,9 @@ describe("light-theme WCAG AA contrast (C004)", () => {
     const darkStart = css.indexOf(".dark {");
     const dark = css.slice(darkStart, css.indexOf("\n}", darkStart));
     const dtoken = (name: string): string => {
-      const m = dark.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`));
+      const m = dark.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6}|var\\([^)]+\\))`));
       if (!m) throw new Error(`--${name} not found in .dark`);
-      return m[1];
+      return resolveVar(dark, m[1]);
     };
     const dsubtleOverCard = (name: string): string => {
       const m = dark.match(
@@ -189,6 +229,17 @@ describe("light-theme WCAG AA contrast (C004)", () => {
       expect(ratio(dtoken("danger-foreground"), dtoken("danger"))).toBeGreaterThanOrEqual(4.5);
     });
 
+    it("dark --destructive equals --danger (F7-F15 — was #dc2626 vs #f87171, silently different)", () => {
+      expect(dtoken("destructive")).toBe(dtoken("danger"));
+    });
+
+    it("dark --agent-claude-foreground clears AA on --agent-claude (same fill hue as light)", () => {
+      expect(ratio(dtoken("agent-claude-foreground"), dtoken("agent-claude"))).toBeGreaterThanOrEqual(4.5);
+    });
+    it("dark --success-foreground clears AA on --success — the DARK-only failure (2.54:1 with white)", () => {
+      expect(ratio(dtoken("success-foreground"), dtoken("success"))).toBeGreaterThanOrEqual(4.5);
+    });
+
     it("dark --placeholder-foreground is >= 4.5:1 on the LIGHTEST real field and >= 3:1 separated from filled-value text", () => {
       expect(ratio(dtoken("placeholder-foreground"), dTightestField())).toBeGreaterThanOrEqual(4.5);
       expect(ratio(dtoken("placeholder-foreground"), dtoken("foreground"))).toBeGreaterThanOrEqual(3);
@@ -205,22 +256,46 @@ describe("light-theme WCAG AA contrast (C004)", () => {
   // --muted-foreground clears AA at full strength but NOT diluted — a
   // `text-muted-foreground/70` at 11px composites to ~2.7:1. Forbid the diluted
   // form on text tokens so a de-emphasis tweak can't silently drop below AA.
-  it("no opacity-diluted muted/foreground text anywhere in src/app", () => {
+  // F7-F3/F7-F15: widened to all FIVE semantic tokens (success/warning/danger/
+  // info/cyan) — the same class of bug as muted-foreground/NN (a real
+  // instance shipped as error-boundary.tsx's `text-danger/80`, ~4.5:1 * 0.8 ≈
+  // 3.6:1, below AA) — plus muted-foreground itself, six guarded tokens total.
+  it("no opacity-diluted semantic/muted-foreground text anywhere in src/app", () => {
     const offenders: string[] = [];
+    const tokens = ["muted-foreground", "success", "warning", "danger", "info", "cyan"];
+    const re = new RegExp(`\\btext-(?:${tokens.join("|")})\\/(\\d{1,3})\\b`);
     for (const f of walkTsx("src/app")) {
       readFileSync(f, "utf8")
         .split("\n")
         .forEach((ln, i) => {
-          // Any --muted-foreground dilution drops the borderline 4.74:1 token below
-          // AA. (text-foreground is near-black and safe even diluted, so not forbidden.)
           // TESTSPEC-5: numeric compare, not a multiples-of-ten regex — the old
           // /[0-9]0/ pattern matched /70 or /90 but missed /75, a standard
           // Tailwind step this comment already claimed was caught.
-          const m = ln.match(/text-muted-foreground\/(\d{1,3})\b/);
+          const m = ln.match(re);
           if (m && +m[1] < 100) offenders.push(`${f}:${i + 1}`);
         });
     }
-    expect(offenders, `diluted muted/foreground text — use the full token:\n${offenders.join("\n")}`).toHaveLength(0);
+    expect(offenders, `diluted semantic/muted-foreground text — use the full token:\n${offenders.join("\n")}`).toHaveLength(0);
+  });
+
+  // F7-F3/F7-F8: text-white bypasses every contrast guard above — it is
+  // neither the AA-proven semantic tokens nor a token this file can check at
+  // all. AgentBadge (claude 3.12:1 both themes) and PhaseRail's success step
+  // (2.54:1 dark) both shipped it. components/ui/ (vendored shadcn — uses its
+  // own *-foreground tokens once fixed there, exempted only because it is
+  // vendored) and terminal chrome (a fixed dark theatre regardless of theme —
+  // asciinema-style player text, not app UI) are the two legitimate uses.
+  it("no raw text-white outside components/ui/ and terminal chrome", () => {
+    const offenders: string[] = [];
+    for (const f of walkTsx("src/app")) {
+      if (f.includes("components/ui/") || /terminal/i.test(f)) continue;
+      readFileSync(f, "utf8")
+        .split("\n")
+        .forEach((ln, i) => {
+          if (/\btext-white\b/.test(ln)) offenders.push(`${f}:${i + 1}`);
+        });
+    }
+    expect(offenders, `raw text-white — use the matching *-foreground token:\n${offenders.join("\n")}`).toHaveLength(0);
   });
 
   // UI-LIB-2: placeholder:text-muted-foreground is the exact dark-theme defect
@@ -275,5 +350,36 @@ describe("light-theme WCAG AA contrast (C004)", () => {
       offenders,
       `raw palette text color — use the guarded semantic token:\n${offenders.join("\n")}`,
     ).toHaveLength(0);
+  });
+});
+
+// F7-F5 — vestibular-motion safety (WCAG 2.3.3 / prefers-reduced-motion): 82
+// `animate-` lines in src/app, only 1 (run-state-glyph.tsx's spinner)
+// hand-guarded with motion-reduce:animate-none. Neither tw-animate-css 1.4.0
+// nor Tailwind 4.3.3 ships a reduced-motion guard on its own — a spinning
+// Loader2 or a sliding dialog with no per-call-site opt-out is exactly what
+// triggers vestibular symptoms for a reduced-motion user, on every one of the
+// 81 unguarded sites at once. ONE global block in theme.css covers all of
+// them without touching a single call site (Playwright's suite re-run is the
+// regression control — nothing here changes non-reduced-motion behaviour).
+describe("prefers-reduced-motion — one global guard (F7-F5)", () => {
+  it("theme.css declares a global @layer base reduced-motion block that neutralizes animation/transition", () => {
+    const layerBaseStart = css.indexOf("@layer base");
+    expect(layerBaseStart, "@layer base not found in theme.css").toBeGreaterThanOrEqual(0);
+    const mediaStart = css.indexOf("@media (prefers-reduced-motion: reduce)");
+    expect(mediaStart, "prefers-reduced-motion block not found").toBeGreaterThanOrEqual(0);
+    expect(mediaStart, "the reduced-motion block must live inside @layer base").toBeGreaterThan(layerBaseStart);
+    const block = /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{([\s\S]*?)\n\s*\}\s*\n\s*\}/.exec(css);
+    expect(block, "prefers-reduced-motion block not found or not closed").not.toBeNull();
+    const body = block![1];
+    // Universal selector, not a per-utility list — a NEW animate- class added
+    // later (Tailwind or tw-animate-css) is covered automatically.
+    expect(body).toMatch(/\*/);
+    // animation-duration: 0.01ms (not `animation: none`) — Radix's
+    // animate-in/animate-out rely on the animationend event to unmount an
+    // exiting dialog/popover; `none` would never fire it and hang the exit.
+    // Near-zero duration still fires the event, just imperceptibly.
+    expect(body).toMatch(/animation-duration:\s*0\.01ms/);
+    expect(body).toMatch(/transition-duration:\s*0\.01ms/);
   });
 });

@@ -1,9 +1,21 @@
 <!doctype html>
-<html lang="en">
+<!-- F7-F4: `dark` matches ThemeProvider's own default ("dark-first security
+     console" — theme-provider.tsx) and its own :root/.dark CSS split
+     (theme.css). Without it, the pre-JS paint used the un-classed :root
+     (light) tokens until ThemeProvider's effect ran post-mount, a visible
+     flash on every load for the ~every operator on the default theme. The
+     provider still REMOVES this class for a stored "light" preference
+     (classList.toggle("dark", theme === "dark")), so that case is
+     unaffected — this only fixes the default-theme flash. -->
+<html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="color-scheme" content="light dark" />
+    <!-- "dark" not "light dark": the pre-CSS canvas (scrollbars, form
+         controls) must follow the actual default, not the OS preference —
+         a light-OS operator on the (default) dark console got a light
+         native scrollbar/canvas flash before. -->
+    <meta name="color-scheme" content="dark" />
     <title>Wardyn</title>
   </head>
   <body>

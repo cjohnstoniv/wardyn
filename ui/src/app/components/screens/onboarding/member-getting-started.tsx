@@ -216,7 +216,10 @@ export function MemberGettingStarted() {
                 <AlertTriangle className="mt-0.5 size-4 shrink-0" />
                 <div>
                   <p className="font-medium">{T.UNREACHABLE_TITLE}</p>
-                  <p className="mt-1 text-warning/90">{T.UNREACHABLE_BODY}</p>
+                  {/* F7-F3/F7-F15: was warning text at 90% opacity — the
+                      dilution gate now forbids diluting any guarded semantic
+                      token. */}
+                  <p className="mt-1 text-warning">{T.UNREACHABLE_BODY}</p>
                 </div>
               </div>
               <Button

@@ -111,7 +111,9 @@ export function RunStateGlyph({
     case "permission":
       return <CircleHelp {...common} className={cn(icon, "text-warning", className)} />;
     case "monitoring":
-      return <Radio {...common} className={cn(icon, "text-warning/70", className)} />;
+      // F7-F3/F7-F15: was warning text at 70% opacity — the dilution gate now
+      // forbids diluting any guarded semantic token.
+      return <Radio {...common} className={cn(icon, "text-warning", className)} />;
     case "interrupted":
       return state === "KILLED" ? (
         <ShieldX {...common} className={cn(icon, "text-danger", className)} />
