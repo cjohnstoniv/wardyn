@@ -234,17 +234,41 @@ func withheldIntegrationValues(in types.Integration) []string {
 	return out
 }
 
+// memberDropsIntegration reports whether a row must be dropped from a
+// member's view ENTIRELY, rather than merely projected by
+// memberSafeIntegration. A DERIVED git_host row's identity IS an internal
+// hostname (gitHostRows, integrations.go: id="git_host:"+host, name=host) —
+// memberSafeIntegration's Secrets/Egress/Config/Docs nulling never touches
+// id/name, so the host would still publish through them unchanged. The
+// launch card never lets a member pick a git_host row directly (source
+// control is chosen through the workspace's own repo field, not this list),
+// so dropping it costs nothing there — and dropping beats masking: an
+// opaque replacement label would itself become the id handlePutIntegration
+// silently adopts on the next PUT (integrationIDParam/handlePutIntegration
+// above).
+//
+// A STORED git_host row is left alone: an operator who explicitly PUTs one
+// (adopting a derived row, or authoring one from scratch) has deliberately
+// published that identity, same as any other stored row's id/name.
+func memberDropsIntegration(in SetupIntegration) bool {
+	return in.Source == "legacy" && in.Kind == types.IntegrationKindGitHost
+}
+
 // memberSafeIntegrations projects a whole list, leaving the caller's slice
 // untouched — both call sites share a value computed once per request
 // (integrationsWithCapabilitiesUsing), so editing in place would redact an
-// operator's own copy.
+// operator's own copy. Rows memberDropsIntegration names are omitted
+// entirely (B7-F1); every other row is projected by memberSafeIntegration.
 func memberSafeIntegrations(rows []SetupIntegration) []SetupIntegration {
 	if len(rows) == 0 {
 		return rows
 	}
-	out := make([]SetupIntegration, len(rows))
-	for i, in := range rows {
-		out[i] = memberSafeIntegration(in)
+	out := make([]SetupIntegration, 0, len(rows))
+	for _, in := range rows {
+		if memberDropsIntegration(in) {
+			continue
+		}
+		out = append(out, memberSafeIntegration(in))
 	}
 	return out
 }

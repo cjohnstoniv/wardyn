@@ -33,15 +33,24 @@ const (
 // gatedCap, which is why the first cut of this pin could not see the leak.
 type r3IntegStore struct{ r3PlainStore }
 
+// r3IntegGitHost is the internal host a bare ScmHosts entry derives a
+// git_host row for (gitHostRows, integrations.go): id="git_host:"+host,
+// name=host — the row's IDENTITY is the internal hostname, not a field
+// memberSafeIntegration's Secrets/Egress/Config/Docs nulling ever touches.
+const r3IntegGitHost = "git.corp.internal"
+
 func (r3IntegStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
-	return types.SiteConfig{Integrations: []types.Integration{{
-		ID: "corp-artifactory", Name: "Corp Artifactory", Kind: "artifactory",
-		Secrets: []types.IntegrationSecret{{Role: "token", SecretName: r3IntegSecretRef,
-			Delivery: &types.IntegrationDelivery{Mode: types.DeliveryProxyHeader, Header: "Authorization", Format: "Bearer %s"}}},
-		Egress: []string{r3IntegEgress},
-		Config: map[string]any{"base_url": r3IntegConfig},
-		Docs:   r3IntegDocs,
-	}}}, nil
+	return types.SiteConfig{
+		Integrations: []types.Integration{{
+			ID: "corp-artifactory", Name: "Corp Artifactory", Kind: "artifactory",
+			Secrets: []types.IntegrationSecret{{Role: "token", SecretName: r3IntegSecretRef,
+				Delivery: &types.IntegrationDelivery{Mode: types.DeliveryProxyHeader, Header: "Authorization", Format: "Bearer %s"}}},
+			Egress: []string{r3IntegEgress},
+			Config: map[string]any{"base_url": r3IntegConfig},
+			Docs:   r3IntegDocs,
+		}},
+		ScmHosts: []string{r3IntegGitHost},
+	}, nil
 }
 func (r3IntegStore) ListRoleMappings(context.Context) ([]types.RoleMapping, error) { return nil, nil }
 func (r3IntegStore) ListRuns(context.Context) ([]types.AgentRun, error)            { return nil, nil }
@@ -94,6 +103,15 @@ func TestIntegrationProjectionWithholdsCredentialRefs(t *testing.T) {
 						"or it is a tier move wearing a projection's clothes.\nbody=%s", path, want, body)
 				}
 			}
+			// B7-F1: a DERIVED git_host row's id/name IS the internal host —
+			// field-nulling alone never withholds it, so the row is dropped
+			// entirely from a member's body.
+			if strings.Contains(body, r3IntegGitHost) {
+				t.Errorf("GET %s leaked derived git_host row %q to a member (id=\"git_host:%s\", name=%q) — "+
+					"the row's own identity IS the internal host, which memberSafeIntegration's "+
+					"Secrets/Egress/Config/Docs nulling never touches; it must be dropped entirely.\nbody=%s",
+					path, r3IntegGitHost, r3IntegGitHost, r3IntegGitHost, body)
+			}
 		})
 
 		t.Run("an operator reading "+path+" still sees everything", func(t *testing.T) {
@@ -108,6 +126,12 @@ func TestIntegrationProjectionWithholdsCredentialRefs(t *testing.T) {
 					t.Errorf("GET %s withheld %q from an OPERATOR; this is a projection for non-operators, "+
 						"not a deletion.\nbody=%s", path, want, w.Body.String())
 				}
+			}
+			// The operator keeps the real id/name of the derived git_host row —
+			// this is a member-only drop, not a deletion of the row itself.
+			if !strings.Contains(w.Body.String(), r3IntegGitHost) {
+				t.Errorf("GET %s dropped the derived git_host row %q from an OPERATOR; "+
+					"this is a member-only projection.\nbody=%s", path, r3IntegGitHost, w.Body.String())
 			}
 		})
 	}
