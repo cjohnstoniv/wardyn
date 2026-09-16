@@ -87,6 +87,15 @@ type Phase = "intro" | "prompt" | "launching" | "starting" | "attached" | "savin
 // it is a human watching a pull, not a control loop.
 const RUN_POLL_MS = 2000;
 
+// How many CONSECUTIVE unreadable polls end the wait. A single failed read is a
+// blip and must not end a sign-in that is working; a PERSISTENT one (the daemon
+// restarted mid-pull, the run was pruned, a roster edit made the read a 403)
+// otherwise leaves "Starting the sign-in sandbox…" on screen forever with
+// nothing but Cancel to end it. 15 ticks ≈ 30s of silence — far longer than any
+// restart, far shorter than the sandbox's 30-minute idle cap. Reset by any
+// successful read, so a flaky link never accumulates its way to a false ending.
+const RUN_POLL_MAX_CONSECUTIVE_FAILURES = 15;
+
 // DRAFT (M2 canon pending) — P5: POST /setup/harness-login now answers with the
 // run id BEFORE the sandbox exists (internal/api/harnesscred_launch.go), so the
 // pane has a real wait to narrate. It used to have none: it set "attached" on
@@ -100,6 +109,13 @@ const LOGIN_SANDBOX_STARTING =
 // no failure_hint of its own (a kill, a stop). Says only what is known: the
 // sandbox is gone and nothing was captured.
 const LOGIN_SANDBOX_ENDED = "The sign-in sandbox stopped before it was ready — nothing was captured. Try again.";
+// DRAFT (M2 canon pending) — the wait ending because Wardyn can no longer READ
+// the run (a daemon restart mid-pull, a pruned run, a 403 after a roster edit).
+// Distinct from the sentence above on purpose: that one asserts the sandbox
+// stopped, which this pane has not established — all it knows is that it stopped
+// being able to ask.
+const LOGIN_SANDBOX_UNREADABLE =
+  "Wardyn stopped being able to read the sign-in sandbox, so it can't say whether it came up. Try again.";
 
 // Per-provider login conventions. Adding a provider is a new row here (mirrors
 // the server-side agentHarnessLogin table), not a forked component.
@@ -417,6 +433,7 @@ export function HarnessLoginPane({
     openedUrlRef.current = false;
     setAutoCaptured(false);
     setEverAttached(false);
+    pollFailuresRef.current = 0;
     setAuthUrl("");
     try {
       const id = await harnessAuthApi.harnessLogin(provider, startUrl.trim());
@@ -437,10 +454,26 @@ export function HarnessLoginPane({
   // run ends instead. Nothing here attaches — AttachTerminal's own mint is
   // owner-or-admin and one failed mint is terminal in that component, so the
   // pane must not mount it until the ticket route would actually answer.
+  // Consecutive unreadable polls, not a total: one blip must not end a sign-in
+  // that is working. A ref, not state — it drives no render and must not reset
+  // the poll's own callback identity.
+  const pollFailuresRef = React.useRef(0);
+
   const pollRun = React.useCallback(async () => {
     if (!runId) return;
     const run = await runsApi.getRun(runId).catch(() => undefined);
-    if (!run) return; // a transient read is not an outcome; the next tick asks again
+    if (!run) {
+      // A transient read is not an outcome; the next tick asks again — until
+      // enough of them fail in a row that "still starting" is a claim this pane
+      // can no longer make.
+      pollFailuresRef.current += 1;
+      if (pollFailuresRef.current >= RUN_POLL_MAX_CONSECUTIVE_FAILURES) {
+        setError(LOGIN_SANDBOX_UNREADABLE);
+        setPhase("error");
+      }
+      return;
+    }
+    pollFailuresRef.current = 0;
     if (run.state === "RUNNING") {
       setEverAttached(true);
       setPhase("attached");
@@ -692,7 +725,13 @@ export function HarnessLoginPane({
           <Button size="sm" onClick={() => void launch()}>
             <KeyRound className="size-3.5" /> Try again
           </Button>
-          <Button size="sm" variant="ghost" onClick={onCancel}>
+          {/* `cancel`, not a bare onCancel: an error can now arrive while the
+              sandbox is still ALIVE — the wait ended because Wardyn stopped
+              being able to read the run, not because the run stopped — and
+              backing out of that without a kill is the orphan P5 exists to end.
+              Harmless on the arms that already killed it (killRun on a dead run
+              is a caught no-op) and on a launch that never got an id. */}
+          <Button size="sm" variant="ghost" onClick={cancel}>
             Cancel
           </Button>
         </div>

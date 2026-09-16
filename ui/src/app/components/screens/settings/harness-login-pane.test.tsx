@@ -678,6 +678,48 @@ describe("HarnessLoginPane — the starting phase (P5)", () => {
     expect(lastAttachProps?.autoRun).toContain("&& wardyn-aws-sso");
   });
 
+  // R-07: `getRun` failures were swallowed unconditionally ("a blip is not an
+  // outcome"), which is right for ONE and wrong for all of them — a daemon
+  // restart mid-pull, a pruned run or a 403 after a roster edit left the
+  // starting copy on screen forever with nothing but Cancel to end it.
+  it("a persistently unreadable run ends the wait, and Cancel still works", async () => {
+    vi.mocked(runsApiMocked.getRun).mockRejectedValue(new Error("control plane unreachable"));
+    // Drive the poll's own clock rather than waiting out 15 real ticks — 30s of
+    // wall time in a unit suite is a cost every CI run pays to learn nothing
+    // extra. Installed BEFORE the render: usePoll's setInterval has to be the
+    // faked one, and userEvent gets the same clock so its own waits resolve.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    try {
+      render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+      await user.click(screen.getByRole("button", { name: /start login/i }));
+
+      // The first failures are blips: the pane keeps waiting.
+      expect(screen.getByTestId("login-sandbox-starting")).toBeInTheDocument();
+      expect(screen.queryByRole("alert")).toBeNull();
+
+      // advanceTimersByTimeAsync flushes the microtasks each rejected read
+      // queues, which is what usePoll's in-flight guard waits on.
+      for (let i = 0; i < 15; i++) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2000);
+        });
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const alertBox = screen.getByRole("alert");
+    expect(alertBox).toHaveTextContent("stopped being able to read the sign-in sandbox");
+    expect(screen.queryByTestId("fake-terminal")).not.toBeInTheDocument();
+
+    // The run id survives the ending, so the sandbox is still the operator's to
+    // kill — the wait ended because Wardyn could not READ the run, which is no
+    // evidence at all that the sandbox stopped.
+    await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    expect(runsApiMocked.killRun).toHaveBeenCalledWith("run-123");
+  });
+
   it("a FAILED run shows the run's own failure_hint instead of waiting forever", async () => {
     vi.mocked(runsApiMocked.getRun).mockResolvedValue({
       id: "run-123",
