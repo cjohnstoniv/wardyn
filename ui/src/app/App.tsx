@@ -30,6 +30,7 @@ import { useOperatorResolved, useRole, useRoleResolved } from "./components/ward
 import { approvals as approvalsApi } from "./lib/api/approvals";
 import { runs as runsApi } from "./lib/api/runs";
 import { usePoll } from "./lib/use-poll";
+import { AttentionPublisherProvider, type AttentionCounts } from "./lib/attention-context";
 import type {
   AgentRun,
   ApprovalRequest,
@@ -415,11 +416,22 @@ export default function App() {
   // operator is on the Runs/Approvals screen (a decision made in RunDetail must
   // still tick the pending badge down).
   // X3-F13: EXCEPT on /runs itself — the board already runs its own listRuns +
-  // listApprovals poll (runs.tsx, 3s) and publishes the same attention count,
-  // so this tick (the most expensive one in the shell — two unscoped
-  // LIST_LIMIT reads, see refreshBadges above) is pure duplication while
-  // parked there.
+  // listApprovals poll (runs.tsx, 3s) on the same two facts, so this tick (the
+  // most expensive one in the shell — two unscoped LIST_LIMIT reads, see
+  // refreshBadges above) would be pure duplication while parked there. R-1:
+  // that only holds because the board PUBLISHES its counts back up through
+  // publishAttention below — pausing this tick with nothing feeding the
+  // badges from the other side would freeze both of them for as long as the
+  // operator sat on /runs.
   usePoll(refreshBadges, ATTENTION_POLL_MS, auth !== "authed" || location.pathname === "/runs");
+  // R-1: the setter side of the publish — RunsScreen calls this (via
+  // usePublishAttention) every time its own fetch resolves, driving the SAME
+  // state the paused poll above would have updated. Stable identity so it is
+  // never itself a reason for the board to re-fetch.
+  const publishAttention = React.useCallback(({ pendingApprovals: p, attentionCount: a }: AttentionCounts) => {
+    setPendingApprovals(p);
+    setAttentionCount(a);
+  }, []);
 
   // Setup status feeds the first-run landing decision ("/" → tour or Runs).
   // Fetched ONCE per session: it is the expensive endpoint, and nothing in the
@@ -544,6 +556,7 @@ export default function App() {
 
   return (
     <ThemeProvider>
+      <AttentionPublisherProvider value={publishAttention}>
       <Routes>
         <Route
           element={
@@ -754,6 +767,7 @@ export default function App() {
           </Route>
         </Route>
       </Routes>
+      </AttentionPublisherProvider>
       <Toaster />
     </ThemeProvider>
   );

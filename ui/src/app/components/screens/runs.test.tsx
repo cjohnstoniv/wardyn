@@ -44,6 +44,7 @@ vi.mock("./new-run/new-run-dialog", () => ({
 
 import { RunsScreen } from "./runs";
 import { RoleProvider, type Role } from "../wardyn/operator-context";
+import { AttentionPublisherProvider } from "../../lib/attention-context";
 import { baseStatus } from "../../lib/test-fixtures";
 import { DEMOS } from "./demos/demo-catalog";
 
@@ -404,14 +405,49 @@ describe("RunsScreen — Refresh now stays on the background path (F1-F10)", () 
     renderScreen();
     const search = await screen.findByPlaceholderText(/search runs/i);
 
-    await user.click(screen.getByRole("button", { name: "Refresh now" }));
+    const refreshBtn = screen.getByRole("button", { name: "Refresh now" });
+    await user.click(refreshBtn);
     // Still in flight: the SAME search input node is still mounted — `load`
     // unmounting the ready branch (skeleton in its place) would hand back a
     // brand new element here instead.
     expect(screen.getByPlaceholderText(/search runs/i)).toBe(search);
+    // R-7: NOT disabled — a disabled element isn't focusable, so a real
+    // browser would blur the just-clicked button to <body> for the round
+    // trip, the exact focus loss this whole finding exists to fix.
+    expect(refreshBtn).not.toBeDisabled();
 
     resolveRefresh([run]);
     await waitFor(() => expect(listRunsMock).toHaveBeenCalledTimes(2));
+  });
+});
+
+// R-1: pausing App.tsx's own attention-badge poll on /runs (X3-F13) only
+// keeps both nav badges live if something else feeds them while parked there
+// — this is that something else. Off the SAME unfiltered fetch the paused
+// poll would have used, not the search/facet-filtered board state.
+describe("RunsScreen — publishes its counts up for the shell's paused badge poll (R-1)", () => {
+  it("calls the setter with the pending-approval count and the attention count, off the unfiltered fetch", async () => {
+    listRunsMock.mockResolvedValue([run]); // RUNNING
+    listApprovalsMock.mockResolvedValue([
+      {
+        id: "a1",
+        run_id: run.id,
+        kind: "tool_call", // unconditionally "held" — a real attention case, not a vacuous 0/0
+        state: "PENDING",
+        requested_at: new Date().toISOString(),
+        requested_scope: { tool: "r1.exec" },
+      },
+    ]);
+    const publish = vi.fn();
+    render(
+      <MemoryRouter>
+        <AttentionPublisherProvider value={publish}>
+          <RunsScreen />
+        </AttentionPublisherProvider>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(publish).toHaveBeenCalledWith({ pendingApprovals: 1, attentionCount: 1 }));
   });
 });
 

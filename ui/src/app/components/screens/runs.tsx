@@ -25,6 +25,7 @@ import { approvals as approvalsApi } from "../../lib/api/approvals";
 import { setup as setupApi } from "../../lib/api/setup";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { usePoll } from "../../lib/use-poll";
+import { usePublishAttention } from "../../lib/attention-context";
 import { getErrorMessage, relativeTime } from "../../lib/format";
 import { deriveReadiness } from "../../lib/readiness";
 import { NoBarrierBanner, RunsFirstRun } from "./runs-first-run";
@@ -73,6 +74,7 @@ type StateFacet = "all" | "attention" | "active" | "done";
 
 export function RunsScreen() {
   const navigate = useNavigate();
+  const publishAttention = usePublishAttention();
   const [runs, setRuns] = React.useState<AgentRun[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [mode, setMode] = React.useState<Mode>("board");
@@ -121,10 +123,19 @@ export function RunsScreen() {
       approvalsApi.listApprovals("PENDING").catch((): ApprovalRequest[] => []),
     ]).then(([r, pending]) => {
       setRuns(r);
-      setSignals(approvalSignals(pending));
+      const nextSignals = approvalSignals(pending);
+      setSignals(nextSignals);
       setStatus("ready");
+      // R-1: publish the two nav-badge counts up, off the SAME unfiltered
+      // fetch App.tsx's own (paused-while-here) refreshBadges would have
+      // used — a no-op when nothing is listening (usePublishAttention's
+      // default).
+      publishAttention({
+        pendingApprovals: pending.length,
+        attentionCount: r.filter((run) => needsAttention(run, nextSignals)).length,
+      });
     });
-  }, []);
+  }, [publishAttention]);
 
   // Foreground load: flips the skeleton / error state.
   const load = React.useCallback(() => {
@@ -364,9 +375,13 @@ export function RunsScreen() {
             variant="outline"
             size="icon"
             onClick={manualRefresh}
-            disabled={refreshing}
             aria-label="Refresh now"
           >
+            {/* R-7: NOT disabled={refreshing} — a disabled element isn't
+                focusable, so a real browser blurs the just-clicked button to
+                <body> for the round trip, the exact focus loss F1-F10 exists
+                to fix. A second click just re-enters the same background
+                path (refresh() has no in-flight guard of its own to race). */}
             <RotateCw className={cn("size-4", refreshing && "animate-spin")} />
           </Button>
         </div>
