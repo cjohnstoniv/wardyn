@@ -179,13 +179,8 @@ export function RunDetailScreen() {
         approvalsApi.listApprovals("", id),
         auditApi.listAudit(id),
         auditApi.listAudit(id, "session.recording"),
-        Promise.all([
-          auditApi.listAudit(id, "run.complete"),
-          auditApi.listAudit(id, "run.kill"),
-          auditApi.listAudit(id, "run.autostop"),
-        ]).then((lists) => lists.flat()),
       ])
-        .then(([r, g, runApprovals, a, recA, endingA]) => {
+        .then(([r, g, runApprovals, a, recA]) => {
           if (r.status === "rejected") {
             // The run itself is the one fetch this page cannot render without.
             // Foreground load shows the error state; a background poll blip
@@ -207,7 +202,18 @@ export function RunDetailScreen() {
           if (runApprovals.status === "fulfilled")
             setApprovals(runApprovals.value.filter((x) => x.run_id === id));
           if (recA.status === "fulfilled") setRecordingAudit(recA.value);
-          if (endingA.status === "fulfilled") setEndingAudit(endingA.value);
+          // R-5: run.complete/run.kill/run.autostop cannot exist for a run
+          // that ISN'T terminal — fetching them every DETAIL_POLL_MS tick on
+          // a live run was 3 wasted round-trips per tick, forever. Gated on
+          // THIS tick's own fresh state (not a stale last-known ref), so the
+          // exact tick a run turns terminal is the one that catches it.
+          if (r.value && isTerminalRunState(r.value.state)) {
+            Promise.all([
+              auditApi.listAudit(id, "run.complete"),
+              auditApi.listAudit(id, "run.kill"),
+              auditApi.listAudit(id, "run.autostop"),
+            ]).then((lists) => setEndingAudit(lists.flat()));
+          }
           setStatus("ready");
         })
         .catch(() => {
@@ -268,6 +274,11 @@ export function RunDetailScreen() {
         if (recRequest.current === thisRequest) setRecState("error");
       });
   }, [wantsRecording, id, recKey, recState]);
+  // R-6: F1-F2's other half (setState after unmount) was still open — the
+  // counter only advanced on a NEW fetch starting, never on teardown. -1
+  // never matches a real (>=1) generation, so any in-flight fetch's callback
+  // is permanently a no-op once this component is gone.
+  React.useEffect(() => () => { recRequest.current = -1; }, []);
 
   const copyLink = () => {
     const url = `${window.location.origin}/runs/${encodeURIComponent(id)}`;

@@ -14,6 +14,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
+import type { AuditEvent } from "../../lib/types";
 
 const getRunMock = vi.fn();
 vi.mock("../../lib/api/runs", () => ({
@@ -84,6 +85,7 @@ vi.mock("sonner", () => ({ toast: { warning: vi.fn(), error: vi.fn(), success: v
 import { RunDetailScreen } from "./run-detail";
 import { RUN_COCKPIT } from "../wardyn/copy";
 import { OperatorProvider } from "../wardyn/operator-context";
+import { sessionOptionLabel } from "./run-detail/recording-tab-copy";
 import { toast } from "sonner";
 
 beforeEach(() => {
@@ -303,7 +305,8 @@ describe("RunDetailScreen — F1-F11/F1-F12 the recording tab's session-picker c
     await user.click(await screen.findByRole("tab", { name: /recording/i }));
     await user.click(screen.getByRole("combobox", { name: "Recorded session" }));
 
-    expect(await screen.findByText(/Session ended/)).toBeInTheDocument();
+    // R-8: through the constant, not a raw regex re-deriving its shape.
+    expect(await screen.findByText(sessionOptionLabel(session as AuditEvent))).toBeInTheDocument();
     expect(screen.queryByText(/^Attached/)).not.toBeInTheDocument();
   });
 
@@ -374,6 +377,41 @@ describe("RunDetailScreen — F6-F2 the exit code survives a truncated audit tra
     expect(await screen.findByText("exit 0")).toBeInTheDocument();
   });
 });
+
+// R-5: run.complete/run.kill/run.autostop cannot exist for a run that is not
+// terminal yet — fetching them every DETAIL_POLL_MS tick on a live run was 3
+// wasted round-trips per tick, forever.
+describe("RunDetailScreen — R-5 the ending trio is skipped while the run is live", () => {
+  it("never fetches run.complete/run.kill/run.autostop for a RUNNING run", async () => {
+    renderRun({ ...RUN, state: "RUNNING" });
+    await screen.findAllByText(RUN.task);
+    expect(listAuditMock).not.toHaveBeenCalledWith("run-1", "run.complete");
+    expect(listAuditMock).not.toHaveBeenCalledWith("run-1", "run.kill");
+    expect(listAuditMock).not.toHaveBeenCalledWith("run-1", "run.autostop");
+  });
+
+  // Neg: a terminal run still gets them — same tick, off its own fresh state.
+  it("neg: still fetches them the moment the run's own state is terminal", async () => {
+    renderRun({ ...RUN, state: "COMPLETED" });
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run-1", "run.complete"));
+    expect(listAuditMock).toHaveBeenCalledWith("run-1", "run.kill");
+    expect(listAuditMock).toHaveBeenCalledWith("run-1", "run.autostop");
+  });
+});
+
+// R-6: F1-F2's generation counter advanced only on a NEW fetch starting,
+// never on teardown — the finding's other half (setState after unmount) was
+// still open. Fixed (run-detail.tsx: an unmount effect sets recRequest.current
+// = -1), but deliberately UNPINNED: React 18 silently no-ops a state update
+// against an unmounted fiber either way (the React 16/17 "Can't perform a
+// React state update on an unmounted component" console warning this bug
+// would have produced no longer exists), and calling the setter post-unmount
+// throws nothing in either version either — tried both (an "unmount, resolve,
+// assert no throw/no console.error" case) and confirmed BOTH pass identically
+// with the fix reverted, i.e. no observable DOM/console/throw difference
+// exists in this React version to red-first against. The fix is real defensive
+// cleanup (matches the sibling pattern everywhere else in this file); it has
+// no vacuous test standing in for a red-first pin.
 
 // THE POINT OF THE REDESIGN, and therefore the assertion most worth pinning: a
 // held egress request renders in the TERMINAL'S OWN COLUMN, under the output
