@@ -133,7 +133,8 @@ export async function navToRoute(page: Page, path: string): Promise<void> {
 // server-side; there is no way to reach a genuine member session through this
 // harness without standing up OIDC. GET /api/v1/me's `role`/`operator` fields
 // are spliced onto the REAL response (route.fetch() + patch + refulfill —
-// same technique corp-network.spec.ts already uses) so principal/method stay
+// same technique settings-connections.spec.ts and workspace-detail.spec.ts
+// already use) so principal/method stay
 // genuine while the client believes it is signed in as a member. Everything
 // else (runs list, secrets, approvals list) still comes from the real,
 // unmodified, admin-scoped backend — specs using this prove the RENDER
