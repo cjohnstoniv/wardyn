@@ -301,6 +301,42 @@ func TestRoleMappingDemotionRevokesTheStampedTokens(t *testing.T) {
 		if data["tokens_revoked"] != float64(2) {
 			t.Errorf("audit data = %v, want tokens_revoked 2 — the audit trail is the system of record for a demotion", data)
 		}
+
+		// AND THE COUNT IS NOT THE WHOLE RECORD (B5-F3 residual). The
+		// unanswerable-snapshot arm revokes EVERY elevated stamp it cannot
+		// re-derive — sub-dan's token names no group at all — so "2" alone
+		// cannot answer "whose credentials did that edit kill". Each revoked
+		// token now has its own token.revoke row naming its OWNER, the same
+		// action and keys the single-token door writes.
+		named := map[string]bool{}
+		for _, ev := range srv.cfg.Audit.(*recRecorder).events {
+			if ev.Action != "token.revoke" {
+				continue
+			}
+			var d map[string]any
+			if err := json.Unmarshal(ev.Data, &d); err != nil {
+				t.Fatalf("unmarshal token.revoke data: %v", err)
+			}
+			if d["scope"] != "sweep" {
+				t.Errorf("token.revoke from a demotion sweep carries scope %v, want \"sweep\" — one query has to "+
+					"separate a sweep's rows from an admin revoking one token", d["scope"])
+			}
+			if p, _ := d["principal"].(string); p != "" {
+				named[p] = true
+			}
+		}
+		for _, p := range []string{"sub-alice", "sub-dan"} {
+			if !named[p] {
+				t.Errorf("no token.revoke row names %s, whose credential this edit revoked. The aggregate count is "+
+					"the only trace, and on the unanswerable-snapshot arm that count covers every elevated stamp in "+
+					"the deployment — so the log cannot say which credentials were killed (audit = %v)", p, named)
+			}
+		}
+		for _, p := range []string{"sub-bob", "sub-carol"} {
+			if named[p] {
+				t.Errorf("a token.revoke row names %s, whose token this edit did NOT revoke", p)
+			}
+		}
 	})
 
 	t.Run("an upsert that lowers the role revokes them too", func(t *testing.T) {

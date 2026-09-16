@@ -571,7 +571,7 @@ func (s *Server) handleUpsertRoleMapping(w http.ResponseWriter, r *http.Request)
 	// value before the edit acted — so the audit row carries both numbers:
 	// what was outstanding, and what this write actually revoked.
 	stale := s.noteStaleRoleSnapshots(r.Context(), saved.Value, "upsert")
-	revoked := s.revokeDemotedRoleSnapshots(r.Context(), saved.Value, toOIDCRoleMappings(existing), candidate)
+	revoked := s.revokeDemotedRoleSnapshots(r, saved.Value, toOIDCRoleMappings(existing), candidate)
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		action, saved.ID.String(), "success", mustJSON(map[string]any{
 			"value": saved.Value, "role": saved.Role, "stale_token_snapshots": stale, "tokens_revoked": revoked,
@@ -653,7 +653,7 @@ func (s *Server) handleDeleteRoleMapping(w http.ResponseWriter, r *http.Request)
 	// the audit row and the WARN line rather than the wire — a body here would
 	// change this route's status shape for every existing client.
 	staleDeleted := s.noteStaleRoleSnapshots(r.Context(), matched.Value, "delete")
-	revokedDeleted := s.revokeDemotedRoleSnapshots(r.Context(), matched.Value, toOIDCRoleMappings(existing), candidate)
+	revokedDeleted := s.revokeDemotedRoleSnapshots(r, matched.Value, toOIDCRoleMappings(existing), candidate)
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"access.role_mapping.delete", id.String(), "success", mustJSON(map[string]any{
 			"value": matched.Value, "role": matched.Role, "stale_token_snapshots": staleDeleted, "tokens_revoked": revokedDeleted,

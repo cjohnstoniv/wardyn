@@ -4,7 +4,6 @@
 package api
 
 import (
-	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -111,7 +110,7 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "revoke all sessions: "+err.Error())
 			return
 		}
-		n, err := s.revokeAPITokensFor(r.Context(), "")
+		n, err := s.revokeAPITokensFor(r, "")
 		if err != nil {
 			// The sessions ARE revoked and 0..n tokens with them — a bare 500
 			// would hide a partially-applied security action from the
@@ -129,7 +128,7 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "revoke sessions: "+err.Error())
 			return
 		}
-		n, err := s.revokeAPITokensFor(r.Context(), body.Sub)
+		n, err := s.revokeAPITokensFor(r, body.Sub)
 		if err != nil {
 			// Same partial-application honesty as the all arm above.
 			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
@@ -183,7 +182,8 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 // unreachable by this sweep forever, since nothing ever re-listed — stops
 // authenticating anyway. The sweep is what makes GET /api/v1/tokens SHOW the
 // row revoked; the read-side check is what makes the lever true.
-func (s *Server) revokeAPITokensFor(ctx context.Context, principal string) (int, error) {
+func (s *Server) revokeAPITokensFor(r *http.Request, principal string) (int, error) {
+	ctx := r.Context()
 	var (
 		toks []types.APIToken
 		err  error
@@ -222,9 +222,23 @@ func (s *Server) revokeAPITokensFor(ctx context.Context, principal string) (int,
 		if t.RevokedAt != nil {
 			continue
 		}
-		if _, err := s.cfg.Store.RevokeAPIToken(ctx, t.ID, "", now); err != nil {
+		revoked, err := s.cfg.Store.RevokeAPIToken(ctx, t.ID, "", now)
+		if err != nil {
 			return n, err
 		}
+		// ONE ROW PER CREDENTIAL, naming its owner (B5-F3 residual). The sweep
+		// used to record only an aggregate `tokens_revoked` on the caller's own
+		// event — and on the role-mapping lane that aggregate covers an
+		// unanswerable-snapshot arm that revokes EVERY elevated-stamp token in
+		// the deployment, whoever holds it. "Which credentials did that edit
+		// kill" then had no answer in the log at all: the rows are marked revoked
+		// in the table, and a table is a state, not a record of who did it or
+		// when. Same action and same two keys as the single-token door
+		// (handleRevokeAPIToken), plus the scope that says this was a sweep, so
+		// one query answers the question across both doors.
+		s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
+			"token.revoke", revoked.ID.String(), "success", mustJSON(map[string]any{
+				"principal": revoked.Principal, "name": revoked.Name, "scope": "sweep"})))
 		n++
 	}
 	return n, nil

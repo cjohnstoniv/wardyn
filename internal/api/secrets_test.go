@@ -22,8 +22,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -556,5 +559,102 @@ func TestListSecrets_OwnNamespaceReadIsNotAudited(t *testing.T) {
 			t.Fatalf("a member's own-namespace list emitted secret.list (%+v) — the row is for the admin-only "+
 				"?owner= surface, not for every console poll", ev)
 		}
+	}
+}
+
+// secretOwnerDirectory is the identity directory ?owner= resolves against: the
+// (principal, email) pairing api_tokens holds, and nothing else.
+type secretOwnerDirectory struct {
+	store.Store
+	toks []types.APIToken
+}
+
+func (d secretOwnerDirectory) ListAPITokens(context.Context) ([]types.APIToken, error) {
+	return d.toks, nil
+}
+func (d secretOwnerDirectory) ListWorkspaces(context.Context) ([]types.Workspace, error) {
+	return nil, nil
+}
+
+// TestPutSecret_UnknownBareOwnerIsMarkedInTheAudit is the B5-F7 residual.
+//
+// An admin's `?owner=` value that matches no principal this deployment knows is
+// stored VERBATIM, and deliberately so: pre-provisioning a member who has not
+// signed in yet is the affordance, and refusing a subject merely because nobody
+// has seen it would break it. What made that indistinguishable from a typo is
+// that both answer 204 with an outcome=success row — and the typo's namespace is
+// one the owner's runs will never read, which is the silent no-op F341 is about
+// for the admitted population.
+//
+// So: the STATUS is unchanged (refusing is what the affordance rules out) and
+// the audit row says which of the two happened.
+func TestPutSecret_UnknownBareOwnerIsMarkedInTheAudit(t *testing.T) {
+	ownerKnownFlag := func(t *testing.T, ev types.AuditEvent) (bool, bool) {
+		t.Helper()
+		var data map[string]any
+		if err := json.Unmarshal(ev.Data, &data); err != nil {
+			t.Fatalf("unmarshal %s data: %v", ev.Action, err)
+		}
+		v, present := data["owner_known"]
+		known, _ := v.(bool)
+		return known, present
+	}
+
+	sec := &memSecrets{m: map[string][]byte{}}
+	h, srv := secretsRBACServer(t, sec)
+	h.srv.cfg.Store = secretOwnerDirectory{toks: []types.APIToken{
+		{ID: uuid.New(), Principal: "bob", Email: "bob@corp.example"},
+	}}
+	h.srv.router = h.srv.routes()
+	admin := ssoSession(t, "admin-1", "admin@corp.example", oidc.RoleAdmin)
+
+	// (1) THE UNSEEN NAMESPACE. 204, written, and marked.
+	w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/anthropic-api-key?owner=nosuchperson", admin,
+		`{"value":"sk-ant-preprovisioned-000000"}`)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("PUT ?owner=nosuchperson = %d, want 204 — pre-provisioning a member who has not signed in is the "+
+			"documented affordance, so the status must not change: %s", w.Code, w.Body.String())
+	}
+	ev := lastAuditEvent(t, h.audit.events, "secret.write")
+	if owner, ok := auditDataField(t, ev, "secret_owner"); !ok || owner != "nosuchperson" {
+		t.Fatalf("audit secret_owner = (%q, present=%v), want nosuchperson", owner, ok)
+	}
+	if known, present := ownerKnownFlag(t, ev); !present || known {
+		t.Errorf("audit owner_known = (%v, present=%v), want false.\n"+
+			"This write landed in a namespace no principal on this deployment is known by. That is either "+
+			"pre-provisioning or a typo, the two are byte-identical on the wire (204, outcome=success), and a "+
+			"typo's namespace is one nobody will ever read — the row is the only place they can be told apart",
+			known, present)
+	}
+
+	// (2) A KNOWN PRINCIPAL carries no marker at all — absent, not `true`, so an
+	// auditor filters on the key.
+	w = doSSO(t, srv, http.MethodPut, "/api/v1/secrets/anthropic-api-key?owner=bob", admin,
+		`{"value":"sk-ant-bobs-key-value-0000"}`)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("PUT ?owner=bob = %d, want 204: %s", w.Code, w.Body.String())
+	}
+	if _, present := ownerKnownFlag(t, lastAuditEvent(t, h.audit.events, "secret.write")); present {
+		t.Error("a resolved ?owner= carries owner_known; it must be absent, or every row has the key and the " +
+			"marker stops being a filter")
+	}
+
+	// (3) A MEMBER'S OWN WRITE is their own namespace by construction — never
+	// marked, whatever the directory happens to hold.
+	alice := ssoSession(t, "alice", "alice@corp.example", oidc.RoleMember)
+	if w := doSSO(t, srv, http.MethodPut, "/api/v1/secrets/anthropic-api-key", alice,
+		`{"value":"sk-ant-alice-own-value-000"}`); w.Code != http.StatusNoContent {
+		t.Fatalf("member PUT = %d, want 204: %s", w.Code, w.Body.String())
+	}
+	if _, present := ownerKnownFlag(t, lastAuditEvent(t, h.audit.events, "secret.write")); present {
+		t.Error("a member's own write carries owner_known; the namespace is the key their own writes stamp")
+	}
+
+	// (4) AND DELETE SAYS THE SAME THING, since it is the same resolution.
+	if w := doSSO(t, srv, http.MethodDelete, "/api/v1/secrets/anthropic-api-key?owner=nosuchperson", admin, ""); w.Code != http.StatusNoContent {
+		t.Fatalf("DELETE ?owner=nosuchperson = %d, want 204: %s", w.Code, w.Body.String())
+	}
+	if known, present := ownerKnownFlag(t, lastAuditEvent(t, h.audit.events, "secret.delete")); !present || known {
+		t.Errorf("secret.delete owner_known = (%v, present=%v), want false", known, present)
 	}
 }

@@ -163,7 +163,7 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 	// lands in the NAMED member's namespace. Silently ignoring it would put the
 	// value in the operator namespace — the Get fallback for EVERY member's
 	// runs — which is the one blast radius a per-principal write must not have.
-	owner, ok := s.secretOwnerParam(w, r)
+	owner, ownerKnown, ok := s.secretOwnerParam(w, r)
 	if !ok {
 		return
 	}
@@ -197,7 +197,7 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"secret.write", name, "success", secretOwnerAuditData(owner)))
+		"secret.write", name, "success", secretOwnerAuditData(owner, ownerKnown)))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -240,7 +240,7 @@ func (s *Server) admitSecretCount(w http.ResponseWriter, r *http.Request, owner,
 // row while the secret stayed live. So this arm reports the miss instead.
 func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
-	owner, ok := s.secretOwnerParam(w, r)
+	owner, ownerKnown, ok := s.secretOwnerParam(w, r)
 	if !ok {
 		return
 	}
@@ -255,7 +255,7 @@ func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"secret.delete", name, "success", secretOwnerAuditData(owner)))
+		"secret.delete", name, "success", secretOwnerAuditData(owner, ownerKnown)))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -275,10 +275,12 @@ func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 // is keyed by the principal that human's own writes stamp
 // (secretOwnerFromRequest), and resolveSecretOwner is what maps the one onto the
 // other.
-func (s *Server) secretOwnerParam(w http.ResponseWriter, r *http.Request) (owner string, ok bool) {
+func (s *Server) secretOwnerParam(w http.ResponseWriter, r *http.Request) (owner string, known, ok bool) {
 	q := strings.TrimSpace(r.URL.Query().Get("owner"))
 	if q == "" {
-		return s.secretOwnerFromRequest(r), true
+		// The caller's own namespace: known by construction — it is the key
+		// their own writes already stamp.
+		return s.secretOwnerFromRequest(r), true, true
 	}
 	if !s.isOperator(r.Context()) {
 		writeError(w, http.StatusForbidden, "?owner= is admin-only")
@@ -300,14 +302,14 @@ func (s *Server) secretOwnerParam(w http.ResponseWriter, r *http.Request) (owner
 		// principal ?owner= asked about exists.
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 			"authz.denied", r.URL.Path, "denied", mustJSON(authzDeniedDatum(r.Context(), "admin_surface", r.Method))))
-		return "", false
+		return "", false, false
 	}
-	resolved, refusal := s.resolveSecretOwner(r.Context(), q)
+	resolved, known, refusal := s.resolveSecretOwner(r.Context(), q)
 	if refusal != "" {
 		writeError(w, http.StatusUnprocessableEntity, refusal)
-		return "", false
+		return "", false, false
 	}
-	return resolved, true
+	return resolved, known, true
 }
 
 // secretOwnerUnresolvedMsg is the refusal for an ?owner= email form that pairs
@@ -388,26 +390,34 @@ func (s *Server) knownPrincipals(ctx context.Context) []principalIdentity {
 //     names. A bare value is taken verbatim: refusing a subject merely because
 //     this deployment has not seen it yet would break pre-provisioning for a
 //     member who has not signed in.
-func (s *Server) resolveSecretOwner(ctx context.Context, v string) (owner, refusal string) {
-	known := s.knownPrincipals(ctx)
-	for _, p := range known {
+//
+// The second return says whether the value RESOLVED against the directory or was
+// taken verbatim in case 4. Verbatim is a deliberate affordance — pre-provisioning
+// a member who has not signed in — but it is indistinguishable, from the outside,
+// from a typo: both answer 204 with an outcome=success row, and the typo's
+// namespace is one nobody will ever read. So the caller stamps owner_known:false
+// and the log can tell the two apart afterwards (B5-F7 residual). The STATUS is
+// unchanged: refusing here would break the affordance.
+func (s *Server) resolveSecretOwner(ctx context.Context, v string) (owner string, known bool, refusal string) {
+	directory := s.knownPrincipals(ctx)
+	for _, p := range directory {
 		if p.principal == v {
-			return v, ""
+			return v, true, ""
 		}
 	}
 	for _, byEmail := range []bool{false, true} {
-		switch hits := foldedPrincipals(known, v, byEmail); len(hits) {
+		switch hits := foldedPrincipals(directory, v, byEmail); len(hits) {
 		case 1:
-			return hits[0], ""
+			return hits[0], true, ""
 		case 0:
 		default:
-			return "", secretOwnerAmbiguousMsg
+			return "", false, secretOwnerAmbiguousMsg
 		}
 	}
 	if strings.Contains(v, "@") {
-		return "", secretOwnerUnresolvedMsg
+		return "", false, secretOwnerUnresolvedMsg
 	}
-	return v, ""
+	return v, false, ""
 }
 
 // foldedPrincipals returns the DISTINCT stored principals whose own subject
@@ -460,11 +470,22 @@ func (s *Server) crossOwnerDeleteHitsARow(w http.ResponseWriter, r *http.Request
 // differ), this stamps on EVERY non-"" owner: which namespace a secret write
 // landed in is the whole point of the marker, including a member's own
 // ordinary write.
-func secretOwnerAuditData(owner string) json.RawMessage {
+// owner_known:false is added when the namespace was taken VERBATIM from an
+// admin's ?owner= because it matched no principal this deployment knows. The
+// write still lands and still answers 204 — pre-provisioning a member who has
+// not signed in is the documented affordance — but that is byte-identical to a
+// typo, whose namespace nobody will ever read. The marker is what lets the log
+// tell the two apart afterwards; it is ABSENT (not `true`) for every resolved
+// owner, so an auditor filters on the key.
+func secretOwnerAuditData(owner string, known bool) json.RawMessage {
 	if owner == "" {
 		return nil
 	}
-	return mustJSON(map[string]any{"secret_owner": owner})
+	data := map[string]any{"secret_owner": owner}
+	if !known {
+		data["owner_known"] = false
+	}
+	return mustJSON(data)
 }
 
 // handleListSecrets returns {"names": [...], "mine": [...]} — never values.
@@ -491,7 +512,9 @@ func secretOwnerAuditData(owner string) json.RawMessage {
 // operator's secret read as missing.
 func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	owner, ok := s.secretOwnerParam(w, r)
+	// The list is a READ: an unresolved namespace simply has no rows, and the
+	// marker belongs on the writes that create one.
+	owner, _, ok := s.secretOwnerParam(w, r)
 	if !ok {
 		return
 	}

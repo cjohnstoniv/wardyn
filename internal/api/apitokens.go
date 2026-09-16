@@ -589,7 +589,8 @@ func (s *Server) roleSnapshotDrops(stamped, derived string) bool {
 // BEST EFFORT BY CONTRACT, like the counter: the mapping edit is already
 // durable when this runs, so a store failure is logged at WARN and reported as
 // zero — never turned into a 500 that would misdescribe what happened.
-func (s *Server) revokeDemotedRoleSnapshots(ctx context.Context, value string, before, after []oidc.RoleMapping) int {
+func (s *Server) revokeDemotedRoleSnapshots(r *http.Request, value string, before, after []oidc.RoleMapping) int {
+	ctx := r.Context()
 	if s.cfg.Store == nil || s.cfg.OIDC == nil || value == "" {
 		return 0
 	}
@@ -624,7 +625,7 @@ func (s *Server) revokeDemotedRoleSnapshots(ctx context.Context, value string, b
 	}
 	revoked := 0
 	for _, p := range principals {
-		n, rerr := s.revokeAPITokensFor(ctx, p)
+		n, rerr := s.revokeAPITokensFor(r, p)
 		revoked += n
 		if rerr != nil {
 			slog.WarnContext(ctx, "api: could not revoke every api token of a demoted principal",
