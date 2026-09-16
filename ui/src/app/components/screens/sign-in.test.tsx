@@ -39,6 +39,16 @@ describe("SignIn — SSO entry point", () => {
     expect(screen.getByText(/comes from your SSO role assignment/i)).toBeInTheDocument();
   });
 
+  // F3-F10: role is three-valued since 0.7 SSO Phase 3 — the sentence used to
+  // name only "admin or member", telling a security admin they'd get a role
+  // that isn't theirs.
+  it("F3-F10: the SSO caveat names all three roles, not just admin/member", async () => {
+    healthMock.mockResolvedValue({ sso: true });
+    renderSignIn();
+    await screen.findByRole("link", { name: /sign in with sso/i });
+    expect(screen.getByText(/admin, security admin or member/i)).toBeInTheDocument();
+  });
+
   it("stays disabled when OIDC is not configured", async () => {
     healthMock.mockResolvedValue({});
     renderSignIn();
@@ -256,6 +266,32 @@ describe("SignIn — renders the OIDC callback's ?auth_error=<code> inline (W31-
   });
 
   it("shows no error banner when the URL carries no auth_error", () => {
+    window.history.pushState({}, "", "/");
+    healthMock.mockResolvedValue({});
+    renderSignIn();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
+// X3-F7: App.tsx's onUnauthorized handler now hands SignIn a `reason` for a
+// mid-session expiry — rendered in the SAME alert slot submitToken's own
+// failures use, so the gate stops reading as a silent, unexplained teleport.
+describe("SignIn — a mid-session expiry's reason (X3-F7)", () => {
+  it("renders the reason prop in the alert slot on mount", async () => {
+    window.history.pushState({}, "", "/");
+    healthMock.mockResolvedValue({});
+    render(
+      <ThemeProvider>
+        <SignIn onSignIn={() => {}} reason="Your session ended. Sign in again to get back to where you were." />
+      </ThemeProvider>,
+    );
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/your session ended/i);
+  });
+
+  // Negative control: the ordinary mount-probe gate (never signed in this tab
+  // at all) passes no reason — must render exactly as it always did.
+  it("neg: no reason prop means no alert on mount", () => {
     window.history.pushState({}, "", "/");
     healthMock.mockResolvedValue({});
     renderSignIn();

@@ -300,6 +300,13 @@ export default function App() {
   const [pendingApprovals, setPendingApprovals] = React.useState(0);
   const [attentionCount, setAttentionCount] = React.useState(0);
   const navigate = useNavigate();
+  // X3-F7: why the gate reopened (rendered in SignIn's own alert slot) and
+  // where to return once re-authenticated. The path is captured by wfetch
+  // itself (lib/api/core.ts), not read here — by the time this component
+  // could ask, the routed tree the SignIn branch replaces (rendered OUTSIDE
+  // <Routes> below) is already gone.
+  const [authReason, setAuthReason] = React.useState<string | undefined>();
+  const returnPathRef = React.useRef<string | null>(null);
 
   // Both badges come off ONE tick, because the attention count is now a join:
   // a run is blocked when a held approval is parked on it, which lives in the
@@ -351,9 +358,16 @@ export default function App() {
     };
   }, []);
 
-  // An expired session / revoked token (any HTTP 401) returns to the gate.
+  // An expired session / revoked token (any HTTP 401) returns to the gate —
+  // X3-F7: carrying WHY (into SignIn's alert slot) and WHERE FROM (restored
+  // after re-auth below), so a mid-session expiry stops reading as a silent
+  // teleport back to the gate with everything unexplained and unrecoverable.
   React.useEffect(() => {
-    onUnauthorized(() => setAuth("unauthed"));
+    onUnauthorized((reason, path) => {
+      returnPathRef.current = path;
+      setAuthReason(reason);
+      setAuth("unauthed");
+    });
   }, []);
 
   React.useEffect(() => {
@@ -451,7 +465,22 @@ export default function App() {
   if (auth !== "authed") {
     return (
       <ThemeProvider>
-        <SignIn onSignIn={() => setAuth("authed")} />
+        <SignIn
+          reason={authReason}
+          onSignIn={() => {
+            setAuthReason(undefined);
+            setAuth("authed");
+            // X3-F7: restore the path the 401 interrupted — root/setup are
+            // landing decisions, not "somewhere to return to", so those (and
+            // "no path captured", the ordinary mount-probe gate) fall back to
+            // Runs like every other finished flow. A route this identity can
+            // no longer reach 403s there exactly as it would from a link —
+            // the same fallback a stale/forbidden deep link already gets.
+            const path = returnPathRef.current;
+            returnPathRef.current = null;
+            navigate(path && path !== "/" && path !== "/setup" ? path : "/runs", { replace: true });
+          }}
+        />
         <Toaster />
       </ThemeProvider>
     );

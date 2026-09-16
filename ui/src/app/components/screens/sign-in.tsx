@@ -81,14 +81,25 @@ function authErrorMessage(code: string): string {
   }
 }
 
-export function SignIn({ onSignIn }: { onSignIn: () => void }) {
+export function SignIn({
+  onSignIn,
+  // X3-F7: why the gate reopened — App.tsx's onUnauthorized handler, for a
+  // mid-session expiry (a revoked token, a dead SSO session). Undefined on
+  // the ordinary mount-probe gate (never signed in this tab at all), which is
+  // why this is the INITIAL error state, not a separate alert slot: the same
+  // box submitToken's own failures render below.
+  reason,
+}: {
+  onSignIn: () => void;
+  reason?: string;
+}) {
   const { theme, toggle } = useTheme();
   const [token, setTokenValue] = React.useState("");
   // Off by default: the token lives in sessionStorage (gone when the browser
   // closes). Opt in to persist it to localStorage across restarts.
   const [remember, setRemember] = React.useState(false);
   const [loading, setLoading] = React.useState<"token" | null>(null);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<string | null>(reason ?? null);
   // Whether this control plane has OIDC configured (so GET /auth/login exists).
   // Defaults false: without the flow mounted the link would 404, and an older
   // server simply omits the field.
@@ -317,9 +328,7 @@ export function SignIn({ onSignIn }: { onSignIn: () => void }) {
                 </a>
               </Button>
               <p className="mt-2 text-center text-xs text-muted-foreground">
-                Your role — admin or member — comes from your SSO role
-                assignment. Everyone is an admin only when neither a role map
-                nor the operator allowlist is set.
+                {SIGNIN.ROLE_SOURCE}
               </p>
             </>
           ) : (

@@ -342,6 +342,37 @@ test.describe("a session revoked mid-run (R4/F116)", () => {
     // to be used.
     await expect(useTokenButton(page)).toBeVisible();
   });
+
+  // X3-F7: the gate used to swap in a bare SignIn with no explanation and no
+  // way back — this pins both halves of the fix. reason renders in SignIn's
+  // own alert slot (the same box submitToken's own failures use), and
+  // re-authenticating returns to the SCREEN the 401 interrupted, not always
+  // to Runs.
+  test("a 401 while on another screen shows why, and re-auth returns to that screen (X3-F7)", async ({ page }) => {
+    await bootWithStoredToken(page, GOOD_TOKEN);
+    await expect(runsNav(page)).toBeVisible();
+
+    await page.getByRole("link", { name: /^Workspaces/ }).click();
+    await expect(page.getByRole("heading", { name: "Workspaces", level: 1 })).toBeVisible();
+
+    await page.route("**/api/v1/**", (route) =>
+      route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "unauthorized" }),
+      }),
+    );
+    await expect(signInToken(page)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole("alert")).toContainText(/session ended/i);
+
+    // The session works again — re-authenticate.
+    await page.unroute("**/api/v1/**");
+    await signInToken(page).fill(GOOD_TOKEN);
+    await useTokenButton(page).click();
+
+    // Back on Workspaces, not dumped on Runs.
+    await expect(page.getByRole("heading", { name: "Workspaces", level: 1 })).toBeVisible();
+  });
 });
 
 // B1 — the console fails CLOSED, never open, when /me never answers.

@@ -17,7 +17,20 @@ const TOKEN_KEY = "wardyn_admin_token";
 // ------------------------------------------------------------
 // Auth token + 401 handling
 // ------------------------------------------------------------
-let _unauthorized: (() => void) | null = null;
+// X3-F7: a REASON and the PATH the caller was on when the 401 arrived — a
+// mid-session expiry used to swap the whole tree for a bare <SignIn> with no
+// explanation and no way back, dropping in-progress form state on the floor
+// with nothing to show for it. `path` is captured HERE, at the module level,
+// not in a React hook: the SignIn branch (App.tsx) renders OUTSIDE <Routes>,
+// so by the time a component could ask "where am I", the routed tree is
+// already gone — window.location.pathname is still accurate at the moment
+// wfetch itself observes the 401.
+let _unauthorized: ((reason: string, path: string) => void) | null = null;
+
+// DRAFT (M2 canon pending) — X3-F7: the one reason wfetch's 401 branch can
+// honestly give (it cannot tell an expired SSO session from a revoked admin
+// token apart — both arrive as a bare 401).
+export const SESSION_ENDED_REASON = "Your session ended. Sign in again to get back to where you were.";
 
 // The admin bearer defaults to sessionStorage (cleared when the tab/browser
 // closes) so a full-admin token is not left at rest across restarts. It lands in
@@ -46,7 +59,7 @@ export function setToken(token: string | null, remember = false): void {
   }
 }
 
-export function onUnauthorized(fn: () => void): void {
+export function onUnauthorized(fn: (reason: string, path: string) => void): void {
   _unauthorized = fn;
 }
 
@@ -189,10 +202,10 @@ export async function wfetch(
     // from under the request that just set it. Only a 401 whose storage
     // STILL holds the exact token it was sent with is the real rejection.
     if (token && getToken() === token) setToken(null);
-    _unauthorized?.();
     // The 401 body is thrown over, never handed to a caller — drain it here or
     // the rejected request stays open on its connection (see drainBody).
     await drainBody(res);
+    _unauthorized?.(SESSION_ENDED_REASON, window.location.pathname);
     throw new HttpError(401, "Unauthorized");
   }
   return res;

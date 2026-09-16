@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { getToken, onUnauthorized, setToken, wfetch } from "./core";
+import { getToken, onUnauthorized, SESSION_ENDED_REASON, setToken, wfetch } from "./core";
 
 // F6-F8 — a REAL 401 means the bearer token wfetch just sent was rejected (an
 // expired/revoked admin token, or a stale one from another session). Today's
@@ -65,6 +65,22 @@ describe("wfetch — a real 401 clears the stored admin token", () => {
     fetchMock.mockResolvedValue(new Response("", { status: 401 }));
     await expect(wfetch("/runs")).rejects.toBeTruthy();
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  // X3-F7: the handler used to take no arguments at all — a mid-session 401
+  // swapped the whole tree for a bare SignIn with no explanation and no way
+  // back. wfetch now hands it a reason and the pathname it was called from —
+  // captured HERE, at the module level (window.location.pathname), because by
+  // the time a component could ask, the routed tree the SignIn branch
+  // replaces is already gone (App.tsx renders SignIn OUTSIDE <Routes>).
+  it("X3-F7: the handler receives a reason and window.location.pathname", async () => {
+    window.history.pushState({}, "", "/workspaces/ws-1");
+    const handler = vi.fn();
+    onUnauthorized(handler);
+    setToken("t-abc");
+    fetchMock.mockResolvedValue(new Response("", { status: 401 }));
+    await expect(wfetch("/runs")).rejects.toBeTruthy();
+    expect(handler).toHaveBeenCalledWith(SESSION_ENDED_REASON, "/workspaces/ws-1");
   });
 
   // Live repro (found via e2e auth.spec.ts, not this file): App.tsx's mount

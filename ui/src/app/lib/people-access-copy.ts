@@ -182,4 +182,9 @@ export const SIGNIN = {
   EMAIL_VERIFIED_ABSENT:
     "Your identity provider doesn't send an email_verified claim at all (common on Entra ID), so this console can't confirm the email on its own. Ask your Wardyn admin to map your role by App Role or group instead (WARDYN_OIDC_ROLE_MAP, or the People step).",
   ROLE_CHECK_UNAVAILABLE: "Couldn't check your access — try again, or contact your admin.",
+  // F3-F10 (DRAFT, M2 canon pending): role became three-valued (0.7 SSO Phase
+  // 3) — the SSO panel's own sentence still named only two, telling a security
+  // admin they'd sign in as one of "admin or member" when neither is true.
+  ROLE_SOURCE:
+    "Your role — admin, security admin or member — comes from your SSO role assignment. Everyone is an admin only when neither a role map nor the operator allowlist is set.",
 } as const;
