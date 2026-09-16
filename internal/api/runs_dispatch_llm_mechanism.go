@@ -45,6 +45,23 @@ const (
 	llmMechanismDeadSentence = "this run's model access is configured as %s, and that credential %s — " +
 		"sign in again under Settings → Model provider. Wardyn does not substitute a different model provider."
 
+	// llmMechanismPinContradictedSentence is the refusal for a STORED AWS SSO
+	// session whose account/role the roster no longer allows. It is its own
+	// sentence rather than a state of the one above because nothing here is
+	// missing or expired: the declared lane fired, the credential is live, and
+	// it is the wrong IDENTITY — a fact "is not configured" and "is not the lane
+	// this run resolved to" both get wrong.
+	//
+	// It names BOTH pairs for the same reason ssoTokenAccountPinRefusal does
+	// (awssso_pin.go): the person reading it is the one who has to sign in
+	// again, and a sign-in is genuinely all it takes — a new login run stamps
+	// the CURRENT pin and its capture replaces the stored blob. %s = the stored
+	// account, role; then the allowed account, role.
+	//
+	// DRAFT (M2 canon pending)
+	llmMechanismPinContradictedSentence = "this run's stored AWS sign-in is for account %s / role %s, but this agent now pins AWS sign-ins to account %s / role %s — " +
+		"nothing was started. Sign in to AWS again under Settings → Model provider to replace it. Wardyn does not rewrite a stored sign-in."
+
 	// llmMechanismStateNotConfigured is the state above when NOTHING credentials
 	// the run: the declared lane did not fire and no other one did either.
 	//
@@ -184,6 +201,21 @@ func llmMechanismRefusal(row types.AgentProvider, selected types.AgentMechanism,
 	return fmt.Sprintf(llmMechanismDeadSentence, llmMechanismWords[row.Mechanism], state)
 }
 
+// pinContradictionRefusal is the sentence for a resolved Bedrock auth whose
+// STORED AWS identity the roster no longer allows, "" when there is none.
+//
+// Shared by the dispatch gate and its create/Review twin for the file's own
+// reason: a fold that disagreed between them would refuse a run at launch that
+// create had just admitted.
+func pinContradictionRefusal(sc types.SiteConfig, b bedrockAuth) string {
+	stored, pinned, mismatch := bedrockBlobPinMismatch(sc, b)
+	if !mismatch {
+		return ""
+	}
+	return fmt.Sprintf(llmMechanismPinContradictedSentence,
+		stored.AccountID, stored.RoleName, pinned.AccountID, pinned.RoleName)
+}
+
 // enforceConfiguredLLMMechanism fails a run CLOSED when the org declared HOW this
 // agent reaches its model and the lane that actually fired is not that one.
 //
@@ -238,10 +270,21 @@ func (s *Server) enforceConfiguredLLMMechanism(ctx context.Context, run types.Ag
 	selected, ok := s.selectedMechanism(run.Agent,
 		llm.subscription, llm.bedrock, llm.injectManaged,
 		s.hasAnthropicAPIKeyInjection(run.Agent, injections))
-	if mechanismSatisfied(row, selected, ok) {
-		return true
+	// THE STORED IDENTITY, before the lane itself is judged. The declared lane
+	// IS the one that fired here, so mechanismSatisfied is about to admit a run
+	// carrying an account/role the roster no longer allows — the pin is checked
+	// at capture time and nowhere else, so a capture that predates a pin is the
+	// one identity nothing compares (P4). Refused rather than rewritten, for the
+	// reason awssso_pin.go opens with: the blob is baked verbatim into the
+	// sandbox's ~/.aws/config, so rewriting it would record a session nobody saw
+	// and merely move the IAM 403 back to run time.
+	msg := pinContradictionRefusal(sc, llm.bedrock)
+	if msg == "" {
+		if mechanismSatisfied(row, selected, ok) {
+			return true
+		}
+		msg = llmMechanismRefusal(row, selected, ok, llm.bedrock.ssoRefreshFailure)
 	}
-	msg := llmMechanismRefusal(row, selected, ok, llm.bedrock.ssoRefreshFailure)
 	s.failAndRevoke(ctx, run.ID, types.RunStarting, msg)
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
 		run.ID.String(), "failure", mustJSON(map[string]any{"error": msg})))
@@ -390,6 +433,13 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 	// while dispatch resolved it fine.
 	lanes := s.resolveRunLLMLanes(ctx, req, &spec, bedrockRef, awsSSOScopeFor(sc, req.Agent, subject))
 	selected, ok := s.selectedMechanism(req.Agent, lanes.subscription, lanes.bedrock, lanes.managed, lanes.apiKey)
+	// The stored-identity refusal first, exactly as dispatch orders it: this door
+	// exists so a run dispatch would refuse never boots at all, and a run whose
+	// stored AWS sign-in the roster no longer allows is one of them.
+	if msg := pinContradictionRefusal(sc, lanes.bedrock); msg != "" {
+		writeError(w, http.StatusUnprocessableEntity, msg)
+		return false
+	}
 	if mechanismSatisfied(row, selected, ok) {
 		return true
 	}
