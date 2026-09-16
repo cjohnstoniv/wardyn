@@ -66,11 +66,19 @@ REQUIRE_PASS="${WARDYN_TEST_REPORT_REQUIRE_PASS:-}"
 if [ -z "$REQUIRE_PASS" ] && [ "$SUITE" = "pg" ] && [ -n "${WARDYN_TEST_PG:-}" ]; then
   REQUIRE_PASS='^TestPG_ProbeF11_'
 fi
-# X2-F16: the unit suite has its own falsifiable floor — the site_config_probe*
-# cases whose whole job is proving a real curl round-trip (each otherwise
-# `t.Skip("curl not on PATH")`). Unlike the pg floor above, curl is assumed
-# present on every lane that can build the module at all, so this applies
-# unconditionally rather than gated on a declared substrate.
+# X2-F16: the unit suite has its own falsifiable floor. The regex is
+# deliberately broader than "the seven curl skips": it matches all 17
+# top-level TestF7_*/TestRedirectProbe* tests across internal/api and
+# internal/egress/proxy, not just the site_config_probe* cases that carry
+# `t.Skip("curl not on PATH")` — tightening it to exactly those would be
+# fragile (a rename slips through either way) for no safety gain: every
+# other test in the set either always passes or, for the one
+# environment-dependent skip inside site_config_redirect_probe2_test.go, is a
+# SUBTEST (`t.Run`), whose outcome the "[^\"/]*" bare-name filter in names()
+# below does not see, so the parent still reports pass. Unlike the pg floor
+# above, curl is assumed present on every lane that can build the module at
+# all, so this applies unconditionally rather than gated on a declared
+# substrate.
 if [ -z "$REQUIRE_PASS" ] && [ "$SUITE" = "unit" ]; then
   REQUIRE_PASS='^(TestF7_|TestRedirectProbe)'
 fi
@@ -98,7 +106,8 @@ if [ -n "$REQUIRE_PASS" ] && [ -s "$OUT/test-output.json" ]; then
       echo ">> role over a URL-form DSN, or set WARDYN_TEST_PG_SUPERUSER=1 to assert it." >&2
     else
       echo ">> A skip here reports \`ok\` and exit 0 while proving nothing. Put curl on PATH — these probes" >&2
-      echo ">> exist to prove a real curl round-trip and cannot do that skipped." >&2
+      echo ">> exist to prove a real curl round-trip and cannot do that skipped. A minimal dev container" >&2
+      echo ">> without curl can override this floor with WARDYN_TEST_REPORT_REQUIRE_PASS=<regex-or-empty>." >&2
     fi
     GO_EXIT=1
   else
