@@ -40,6 +40,27 @@ describe("MemberModeBanner", () => {
     expect(MEMBER_MODE.CEILINGS).toMatch(/ROLE only/);
     expect(MEMBER_MODE.CEILINGS).toMatch(/already hold.*SSH key.*API token/);
     expect(MEMBER_MODE.CEILINGS).toMatch(/rolling upgrade/);
+    // U-12: ceiling 1 in docs/OPERATIONS.md reads "Runs, workspaces and
+    // secrets you created stay yours", and the code scopes all three the same
+    // way — secretOwnerFromRequest hands a clamped admin their OWN namespace,
+    // exactly as run and workspace ownership survive the clamp. Omitting the
+    // third is the one of the three an admin is most likely to test blind.
+    expect(MEMBER_MODE.CEILINGS).toMatch(/secrets/);
+  });
+
+  // W6-5. The control is offered to BOTH admin tiers (`eligible = operator ||
+  // securityOperator`, and OPERATIONS.md says so), and both clamp to member —
+  // which is why MEMBER_MODE.EXIT already names the mode rather than a tier to
+  // go back to, and this file's own comment says that is why. The banner then
+  // named a tier: a security_admin read "your admin role is paused" about a
+  // role they do not hold, on the one surface that is unconditional and on
+  // every screen — the same wrong-tier-sentence class SECURITY_ONLY_REASON was
+  // added this release to close.
+  it("the banner names no tier — it is offered to both admin tiers and both clamp to member", () => {
+    expect(MEMBER_MODE.BANNER).not.toMatch(/\badmin\b/i);
+    expect(MEMBER_MODE.BANNER).not.toMatch(/\bsecurity[ _-]?admin\b/i);
+    // Still says WHAT is paused and for how long — tier-neutral, not vague.
+    expect(MEMBER_MODE.BANNER).toMatch(/paused for this session/);
   });
 
   it("Exit posts enabled:false and then reloads", async () => {

@@ -130,7 +130,7 @@ func GroupsTruncatedFromContext(ctx context.Context) bool {
 // RoleFromContext ALREADY answers member when this is true, so authorization
 // needs this predicate for nothing: every tier decision keeps reading the role.
 // It exists for the two things the clamped role cannot say on its own — the
-// console's banner ("your admin role is paused"), and the seams that must
+// console's banner ("your usual role is paused"), and the seams that must
 // refuse rather than clamp, namely the credential MINT doors, where a
 // member-stamped credential would be re-stamped admin at the next login and
 // outlive the mode (internal/api/membermode.go).

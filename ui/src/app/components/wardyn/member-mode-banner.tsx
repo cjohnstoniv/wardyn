@@ -26,16 +26,27 @@ export const MEMBER_MODE = {
   // nothing about the caller's identity changes, only what the server lets
   // them reach.
   MENU: "View as member",
-  // The banner. Present tense and "paused", because the admin role is coming
-  // back the moment they exit — it was not taken away.
-  BANNER: "Viewing as member — your admin role is paused for this session",
+  // The banner. Present tense and "paused", because the role is coming back the
+  // moment they exit — it was not taken away.
+  //
+  // "your usual role", never "your admin role" (W6-5): the control is offered
+  // to BOTH admin tiers (see `eligible` below, and OPERATIONS.md's "Both admin
+  // tiers get the control"), so the banner naming one of them tells a
+  // security_admin about a role they do not hold — on the one surface that is
+  // unconditional and on every screen. This is the same reason EXIT names the
+  // mode rather than a tier to go back to, two lines down.
+  BANNER: "Viewing as member — your usual role is paused for this session",
   EXIT: "Exit member mode",
   // The three CEILINGS, verbatim from the design, on the banner as a title
   // tooltip. They are here and not only in OPERATIONS.md because the one
   // mistake this mode invites is reading it as proof that a member is refused:
   // it shows you what a member SEES. A real second identity is the proof.
   CEILINGS:
-    "Member mode clamps your ROLE only. Runs and workspaces you created stay yours, " +
+    // "and secrets" (U-12): OPERATIONS.md's ceiling 1 names all three, and the
+    // code scopes them identically — secretOwnerFromRequest hands a clamped
+    // admin their OWN namespace, exactly as run and workspace ownership survive
+    // the clamp. Dropping the third made the tooltip narrower than the ceiling.
+    "Member mode clamps your ROLE only. Runs, workspaces and secrets you created stay yours, " +
     "and governance ceilings still resolve against your real group membership. " +
     "Credentials you already hold — your SSH key, any API token — keep their admin stamp until refreshed at your next sign-in. " +
     "During a rolling upgrade an older replica ignores the flag and answers as admin. " +
