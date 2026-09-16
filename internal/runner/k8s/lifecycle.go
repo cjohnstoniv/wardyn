@@ -9,10 +9,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 
@@ -320,28 +323,50 @@ type sweepCandidate struct {
 // NetworkPolicies. Any fix that leaves the Secret reachable only via a pod
 // label repeats the bug.
 //
-// All three lists use the SAME agent/proxy component selector as the pod list.
-// That is what keeps a boot canary out: its objects carry labelManaged and a
-// labelRun that IS a parseable uuid (canary.go's M2 per-invocation suffix), so
-// only labelComponent tells them apart from a run's — and runCanaryPhase
-// cleans its own up on every path. A drive PVC is excluded twice over: it is
-// not one of the three kinds listed here, and it never carries labelRun at all.
+// The Secret and NetworkPolicy lists are BEST-EFFORT, and that is the whole
+// difference between this working on a real cluster and not. They are a NEW
+// privilege this release asks for (the chart's Role grants it from 0.7.4; see
+// deploy/helm/wardyn/templates/rbac.yaml), and an operator running their own
+// Role under k8s.rbac.create=false has a pre-0.7.4 one that the chart cannot
+// upgrade for them. On upgrade day those two lists 403. Aborting here on that
+// 403 would take the WHOLE sweep down with them — including the evicted-agent
+// reclaim that worked in 0.7.3 — trading a partial credential leak for a total
+// one. So a Forbidden degrades to the pod-only candidate set, logged once per
+// process, and every other list error still fails the sweep honestly.
+//
+// Pods are listed LAST, deliberately: hasPod decides which Secret/NetworkPolicy
+// entries defer to a pod entry, so it has to be built from the LATEST snapshot.
+// A pod created in the window between the lists would otherwise be invisible,
+// and its run's older Secret would then decide the run's fate on its own age —
+// reclaiming a dispatch that had just come up.
+//
+// All three lists use the SAME agent/proxy component selector. That is what
+// keeps a boot canary out: its objects carry labelManaged and a labelRun that
+// IS a parseable uuid (canary.go's M2 per-invocation suffix), so only
+// labelComponent tells them apart from a run's — and runCanaryPhase cleans its
+// own up on every path. A drive PVC is excluded twice over: it is not one of the
+// three kinds listed here, and it never carries labelRun at all.
 func (d *Driver) sweepCandidates(ctx context.Context) ([]sweepCandidate, map[uuid.UUID]bool, error) {
 	ns := d.cfg.Namespace
 	listOpts := metav1.ListOptions{
 		LabelSelector: labelComponent + " in (" + componentAgent + "," + componentProxy + ")",
 	}
+	secrets, secretsErr := d.clientset.CoreV1().Secrets(ns).List(ctx, listOpts)
+	if secretsErr != nil && !apierrors.IsForbidden(secretsErr) {
+		return nil, nil, fmt.Errorf("k8s: list sandbox secrets for orphan sweep: %w", secretsErr)
+	}
+	netpols, netpolsErr := d.clientset.NetworkingV1().NetworkPolicies(ns).List(ctx, listOpts)
+	if netpolsErr != nil && !apierrors.IsForbidden(netpolsErr) {
+		return nil, nil, fmt.Errorf("k8s: list sandbox network policies for orphan sweep: %w", netpolsErr)
+	}
+	// Pods LAST (see above), and never best-effort: this verb has been granted
+	// since the substrate shipped, and without it there is no sweep at all.
 	pods, err := d.clientset.CoreV1().Pods(ns).List(ctx, listOpts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("k8s: list sandbox pods for orphan sweep: %w", err)
 	}
-	secrets, err := d.clientset.CoreV1().Secrets(ns).List(ctx, listOpts)
-	if err != nil {
-		return nil, nil, fmt.Errorf("k8s: list sandbox secrets for orphan sweep: %w", err)
-	}
-	netpols, err := d.clientset.NetworkingV1().NetworkPolicies(ns).List(ctx, listOpts)
-	if err != nil {
-		return nil, nil, fmt.Errorf("k8s: list sandbox network policies for orphan sweep: %w", err)
+	if secretsErr != nil || netpolsErr != nil {
+		warnSweepListForbidden(secretsErr, netpolsErr)
 	}
 
 	hasPod := make(map[uuid.UUID]bool, len(pods.Items))
@@ -356,15 +381,39 @@ func (d *Driver) sweepCandidates(ctx context.Context) ([]sweepCandidate, map[uui
 		}
 		candidates = append(candidates, sweepCandidate{runID: runID, createdAt: meta.CreationTimestamp.Time, fromPod: fromPod})
 	}
-	// Pods first: their entries hold the verdict for any run that still has one.
+	if secretsErr == nil {
+		for i := range secrets.Items {
+			add(secrets.Items[i].ObjectMeta, false)
+		}
+	}
+	if netpolsErr == nil {
+		for i := range netpols.Items {
+			add(netpols.Items[i].ObjectMeta, false)
+		}
+	}
 	for i := range pods.Items {
 		add(pods.Items[i].ObjectMeta, true)
 	}
-	for i := range secrets.Items {
-		add(secrets.Items[i].ObjectMeta, false)
-	}
-	for i := range netpols.Items {
-		add(netpols.Items[i].ObjectMeta, false)
-	}
 	return candidates, hasPod, nil
+}
+
+// sweepListForbiddenOnce keeps the degraded-sweep warning to ONE line per
+// process. The sweep runs on a cadence (internal/api/reconcile.go), so a Role
+// missing the verb would otherwise write the same line forever; the condition it
+// reports is static — an operator-managed Role — so saying it once is saying it.
+var sweepListForbiddenOnce sync.Once
+
+// warnSweepListForbidden names the reclaim that is degraded and the exact fix,
+// because the symptom (a run's Secret surviving until someone notices) has no
+// other place to surface: the sweep returns success, correctly, and the whole
+// point is that it keeps working.
+func warnSweepListForbidden(secretsErr, netpolsErr error) {
+	sweepListForbiddenOnce.Do(func() {
+		slog.Warn("wardynd: k8s orphan sweep is running DEGRADED: this ServiceAccount may not list Secrets/NetworkPolicies, "+
+			"so a run whose agent AND proxy pods are both gone (a deleted node takes them together) cannot be reached and its "+
+			"per-run Secret — proxy config plus every secret_env value — will not be reclaimed. Every other reclaim still runs. "+
+			"Fix: grant `list` on secrets and networkpolicies in the Role bound to this ServiceAccount (the chart's own Role does "+
+			"from 0.7.4; an operator-managed Role under k8s.rbac.create=false has to be updated by hand)",
+			slog.Any("secrets_error", secretsErr), slog.Any("networkpolicies_error", netpolsErr))
+	})
 }

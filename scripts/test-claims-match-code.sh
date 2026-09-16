@@ -468,4 +468,40 @@ printf '%s' "${desk_row}" | grep -qF "${podman_sock}" \
   || fail "docs/DESKTOP.md's Rootless Podman row does not name ${podman_sock}, the socket scripts/test-podman.sh defaults to and podman-system-service(1) documents (F054)"
 pass "C8g DESKTOP.md's Podman socket row matches this repo's own Podman default"
 
+# R-02 (v0.7.4) — the chart's Role and the substrate's API calls drifted apart
+# silently: the orphan sweep started LISTING Secrets and NetworkPolicies while
+# rbac.yaml still granted neither and its own comment block said "NO get/list".
+# Nothing caught it, because every k8s test runs against client-go's fake
+# clientset, which enforces no RBAC at all. This reads the verbs the substrate
+# actually issues out of the code and requires the rendered rule to carry them.
+#
+# Scope: the `list` verb on the namespaced Role, keyed on the RESOURCE each
+# `.List(` call is made on. Deliberately not a full verb audit — it pins the one
+# axis that has now drifted once, and the one a fake clientset can never see.
+k8s_src="${ROOT}/internal/runner/k8s"
+rbac="${ROOT}/deploy/helm/wardyn/templates/rbac.yaml"
+[ -d "${k8s_src}" ] && [ -f "${rbac}" ] || fail "internal/runner/k8s or the chart's rbac.yaml moved — this guard would check nothing (R-02)"
+# Map a client-go typed accessor to the RBAC resource name it needs a verb on.
+# Non-test sources only: a _test.go file lists PVCs through the FAKE clientset
+# to assert the driver never created one, which is a test's own bookkeeping and
+# not a verb wardynd ever issues (and granting pvc:list would be wrong).
+k8s_files="$(find "${k8s_src}" -maxdepth 1 -name '*.go' ! -name '*_test.go' | sort)"
+[ -n "${k8s_files}" ] || fail "no non-test .go files under internal/runner/k8s — this guard would check nothing (R-02)"
+# shellcheck disable=SC2086
+grep -hoE '(CoreV1|NetworkingV1|RbacV1)\(\)\.[A-Za-z]+\([^)]*\)\.List\(' ${k8s_files} \
+  | sed -E 's/.*\(\)\.([A-Za-z]+)\(.*/\1/' | sort -u > "${WORK}/k8s-list-kinds"
+[ -s "${WORK}/k8s-list-kinds" ] || fail "no .List( call found in internal/runner/k8s — this guard would check nothing (R-02)"
+# The Role's rules only (not the cluster-scoped ClusterRole): granting a verb
+# there instead would satisfy a whole-file grep while widening every namespace.
+awk '/^---/{r=0} /^kind: Role$/{r=1} r' "${rbac}" > "${WORK}/rbac-role"
+[ -s "${WORK}/rbac-role" ] || fail "rbac.yaml no longer contains a 'kind: Role' block — this guard would check nothing (R-02)"
+while read -r kind; do
+  [ -n "${kind}" ] || continue
+  # Pods -> pods, Secrets -> secrets, NetworkPolicies -> networkpolicies.
+  res="$(printf '%s' "${kind}" | tr 'A-Z' 'a-z')"
+  grep -A1 "resources: \[\"${res}\"\]" "${WORK}/rbac-role" | grep -q '"list"' \
+    || fail "internal/runner/k8s calls .${kind}(...).List(...) but deploy/helm/wardyn/templates/rbac.yaml's Role grants no \"list\" verb on \"${res}\" — on a real cluster that call 403s (every k8s test uses a fake clientset, which enforces no RBAC) (R-02)"
+done < "${WORK}/k8s-list-kinds"
+pass "C8h every resource internal/runner/k8s lists has a 'list' verb on the chart's Role"
+
 echo "test-claims-match-code: self-test PASS"

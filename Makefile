@@ -610,6 +610,20 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set replicas=5 2>&1 | grep -q "replicas > 1 is refused" || { echo "chart no longer refuses replicas > 1 — the secret-masking registry is process-local and fails open, so a second replica can persist a recording with live credentials in cleartext"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=false 2>&1 | grep -q "k8s.enabled requires serviceAccount.automount=true" || { echo "chart no longer refuses k8s.enabled with serviceAccount.automount=false — the k8s runner needs the API server"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set serviceAccount.automount=true 2>&1 | grep -q "k8s.enabled requires k8s.proxyImage" || { echo "chart no longer refuses k8s.enabled with an empty k8s.proxyImage — the k8s runner substrate refuses to construct (errProxyImageUnset), a BOOT-time crash-loop, not a per-run one"; exit 1; }
+	@# lane runner-k8s-docker (v0.7.4, B9-F5): the orphan sweep now LISTS the
+	@# per-run Secret and both NetworkPolicies, not just the pods — that is how it
+	@# reaches a run whose agent AND proxy pods are both gone. Without the verb on
+	@# the rendered Role the sweep degrades on a real cluster (best-effort by
+	@# design, so no test outside this one would go red), and the both-pods-gone
+	@# Secret — proxy config plus every secret_env value — is never reclaimed.
+	@# Asserted on the Role block specifically: granting it in the cluster-scoped
+	@# ClusterRole instead would satisfy a bare grep while widening every namespace.
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.allowRunsInReleaseNamespace=true); \
+	role=$$(echo "$$out" | awk '/^---/{r=0} /^kind: Role$$/{r=1} r'); \
+	echo "$$role" | grep -q 'resources: \["secrets"\]' || { echo "the k8s-runner Role has no secrets rule — the two verb assertions below would be vacuous"; exit 1; }; \
+	echo "$$role" | grep -A1 'resources: \["secrets"\]' | grep -q '"list"' || { echo "the k8s-runner Role does not grant secrets: list — SweepOrphanedSandboxes lists the per-run Secret by label to reach a run whose agent AND proxy pods are both gone; without it that run's Secret (proxy config + every secret_env value) is never reclaimed"; exit 1; }; \
+	echo "$$role" | grep -A1 'resources: \["networkpolicies"\]' | grep -q '"list"' || { echo "the k8s-runner Role does not grant networkpolicies: list — same sweep, same run: both of that run's NetworkPolicies outlive it"; exit 1; }; \
+	echo "$$role" | grep -A1 'resources: \["secrets"\]' | grep -q '"get"' && { echo "the k8s-runner Role grants secrets: get — wardynd never fetches a Secret by name, and get is the verb that reads one back"; exit 1; } || true
 	@# The absence check below needs a render that SUCCEEDED and a Role that
 	@# EXISTS, or it passes on nothing: `grep -q X && fail || true` is satisfied
 	@# just as well by empty input, so a render that started failing for any

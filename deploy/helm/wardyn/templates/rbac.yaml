@@ -21,17 +21,29 @@ canary,driver}.go. In particular:
     the SPDY/POST leg). Without "get" the websocket attempt 403s and every
     exec silently falls back to the deprecated SPDY path (still functional,
     but noisy: a 403 audit line per channel) — review round 2, M3.
-  - secrets: NO get/list. wardynd creates its own per-run proxy-config Secret
-    and later deletes it (by name, then by label at teardown) — it never
-    reads one back; the kubelet mounts it into the proxy pod, not wardynd.
+  - secrets: list, but NO get. wardynd never reads a Secret's CONTENT back —
+    it creates its own per-run proxy-config Secret and the kubelet mounts it
+    into the proxy pod, not wardynd. It does have to ENUMERATE them by label,
+    for the reason on the sweep below, and list returns the object bodies too,
+    so this rule is the one place the chart grants more than the substrate
+    strictly reads. get is still withheld: no code path fetches one by name.
   - pods: list, and the three deletecollections, have a SECOND caller besides
     teardown — lifecycle.go's SweepOrphanedSandboxes, the control plane's
-    crash/eviction orphan reclaim (internal/api/reconcile.go). It needs no new
-    verb: it lists the agent+proxy pods by label and then reuses
-    teardownByRunID. Named here so a later verb-trimming pass does not read
-    pods:list as "only waitPodsGone" and drop it — that would leave every
-    evicted run's proxy pod and credential Secret behind.
-  - networkpolicies: NO get/list, same reasoning as secrets.
+    crash/eviction orphan reclaim (internal/api/reconcile.go). Named here so a
+    later verb-trimming pass does not read pods:list as "only waitPodsGone" and
+    drop it — that would leave every evicted run's proxy pod and credential
+    Secret behind.
+  - secrets/networkpolicies: list, for that SAME sweep (0.7.4, B9-F5). Keying
+    it on pods alone left a run whose agent AND proxy pods are both gone — a
+    deleted node takes them together — unreachable by the only thing that ever
+    revisits a run no sandbox_ref points at, so its per-run Secret (proxy
+    config plus every secret_env value, verbatim) survived permanently. The
+    sweep lists all three kinds under one agent/proxy component selector.
+    The two new lists are BEST-EFFORT in the code (sweepCandidates degrades to
+    the pod-only set on a 403 and logs once), precisely so an operator-managed
+    Role under k8s.rbac.create=false that predates 0.7.4 keeps the 0.7.3
+    reclaim instead of losing the sweep outright on upgrade day.
+  - networkpolicies: NO get, same reasoning as secrets; list as above.
   - runtimeclasses: get ONLY (cluster-scoped, below) — driver.go's
     runtimeClassHandler resolves a RuntimeClass by NAME (Get); nothing in
     this substrate lists them.
@@ -125,10 +137,10 @@ rules:
     verbs: ["get", "create"]
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["create", "delete", "deletecollection"]
+    verbs: ["create", "list", "delete", "deletecollection"]
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
-    verbs: ["create", "delete", "deletecollection"]
+    verbs: ["create", "list", "delete", "deletecollection"]
 {{- if $userDrives.enabled }}
   # User drives (drives.go's ensureDrivePVC), each verb justified:
   #   get    — a drive's claim is looked up BY NAME before anything else, and a
