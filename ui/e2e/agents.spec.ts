@@ -422,33 +422,29 @@ test.describe("agents — the roster pin (sso_account_id / sso_role_name)", () =
     const after = await getAgentProviders(page);
     const afterClaude = ((after.providers.agents ?? []) as Array<Record<string, unknown>>).find((a) => a.id === "claude-code");
     expect(afterClaude).toMatchObject({ sso_account_id: "111111111111", sso_role_name: "DevPower" });
-  });
 
-  // P4 (0.7.4) — the Bedrock row is where a pin's POSTURE becomes audible, and
-  // this lane appends a THIRD posture to it (a stored capture the pin no longer
-  // allows) beside the two 0.7.3 shipped. Appended, never substituted: the
-  // regression this guards is a fold that drops a sibling posture, which no Go
-  // unit test of one posture would catch.
-  //
-  // The posture asserted REAL here is the pin-vs-model-account one, because it
-  // is the one this harness can actually produce: the daemon's
-  // WARDYN_BEDROCK_MODEL is a full ARN naming account 222222222222
-  // (scripts/e2e-backend.sh), so pinning 111111111111 makes the row warn naming
-  // both. The stored-capture posture needs a real per-user AWS SSO capture,
-  // which this harness cannot make at all (no IdP, and `-runner none` means no
-  // login sandbox to capture in — see the file header); it is pinned by
-  // TestSetupStatus_StoredBlobContradictingThePinGradesExpiredSignin and by the
-  // kind-sso walk instead.
-  test("a pin the model's account disagrees with → the Bedrock row warns, naming both accounts", async ({ page }) => {
-    await gotoAgentsTab(page);
-    const row = page.getByTestId("agent-row-claude-code");
-    await row.getByRole("radio", { name: AGENTS.MECHANISM_BEDROCK_SSO }).click();
-    await row.getByRole("radio", { name: AGENTS.SOURCE_PER_USER }).click();
-    await row.getByLabel(AGENTS.FIELD_SSO_START_URL).fill("https://acme.awsapps.com/start");
-    await row.getByLabel(AGENTS_DRAFT.FIELD_SSO_ACCOUNT_ID).fill("111111111111");
-    await row.getByLabel(AGENTS_DRAFT.FIELD_SSO_ROLE_NAME).fill("BedrockRunner");
-    await saveAgents(page);
-
+    // P4 (0.7.4) — AND the disagreement is AUDIBLE, on the row this describe's
+    // own comment above says it shows up on. The Bedrock row carries a roster
+    // POSTURE appended to whatever it already said, and 0.7.4 appends a THIRD
+    // one (a stored capture the pin no longer allows); the regression that
+    // guards against is a fold that SUBSTITUTES and drops a sibling, which no
+    // Go unit test of one posture would catch.
+    //
+    // This is the posture the harness can actually produce: the daemon's
+    // WARDYN_BEDROCK_MODEL is a full ARN naming account 222222222222
+    // (scripts/e2e-backend.sh), so the 111111111111 pin just saved makes the
+    // row warn naming both. The stored-capture posture needs a real per-user
+    // AWS SSO capture, which this harness cannot make at all (no IdP, and
+    // `-runner none` means no login sandbox to capture in — see the file
+    // header); it is pinned by TestBedrockProviderCheck_StoredCaptureContradicting
+    // ThePinWarns, TestSetupStatus_StoredBlobContradictingThePinGradesExpiredSignin
+    // and the kind-sso walk instead.
+    //
+    // Appended here rather than as a third test (blind review R-09): every test
+    // in this describe holds a per_user + pinned claude-code row against the
+    // shared e2e daemon for its duration, which U2-04 above names as the
+    // cross-file hazard — so the coverage rides a save that was happening
+    // anyway.
     const status = await page.request.get("/api/v1/setup/status", { headers: auth });
     expect(status.ok()).toBeTruthy();
     const checks = ((await status.json()).checks ?? []) as Array<Record<string, string>>;
@@ -461,6 +457,7 @@ test.describe("agents — the roster pin (sso_account_id / sso_role_name)", () =
     expect(bedrock!.detail).toContain("111111111111");
     expect(bedrock!.detail).toContain("222222222222");
   });
+
 });
 
 // Appendix A finding 4 (prominence): the per_user sign-in affordance moves
