@@ -5,6 +5,7 @@ package awsssofake
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -57,6 +58,16 @@ func (s *Server) handleBedrockRuntime(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.bedrockCalls++
 	s.bedrockModel = model
+	// …and the CUMULATIVE set, because bedrockModel is last-write-wins and a
+	// claude-code run is not one model call. The CLI also drives a small fast
+	// model of its own (observed: us.anthropic.claude-haiku-4-5), so whichever
+	// call happens to land last decides bedrockModel — and a walk asserting the
+	// operator's configured ARN reached the data plane was reading a coin flip.
+	// A set answers the question that was actually being asked: did the
+	// configured model arrive here AT ALL?
+	if !slices.Contains(s.bedrockModels, model) {
+		s.bedrockModels = append(s.bedrockModels, model)
+	}
 	s.mu.Unlock()
 
 	w.Header().Set("Content-Type", "application/json")

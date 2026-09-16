@@ -159,6 +159,7 @@ async function seen(): Promise<{
   role_name: string;
   bedrock_calls: number;
   bedrock_model: string;
+  bedrock_models: string[];
 }> {
   const res = await fetch(SEEN_URL);
   if (!res.ok) throw new Error(`GET ${SEEN_URL}: ${res.status}`);
@@ -367,7 +368,15 @@ test("the member's run gets the member's PINNED identity, and something spends i
   // …and the minted credential was SPENT: the bedrock-runtime stub was hit, on
   // the model ARN this deployment configured.
   await expect.poll(async () => (await seen()).bedrock_calls, { timeout: 180_000 }).toBeGreaterThan(0);
-  expect((await seen()).bedrock_model).toContain(PIN_ACCOUNT);
+  // THE SET, not the last one. A claude-code run is not a single model call:
+  // the CLI drives a small fast model of its own alongside the configured one
+  // (observed: us.anthropic.claude-haiku-4-5), so `bedrock_model` — which is
+  // last-write-wins — is whichever happened to land last, and asserting the
+  // operator's ARN against it was reading a coin flip. It passed, then failed
+  // on the very next run with the same code and the same cluster.
+  await expect
+    .poll(async () => (await seen()).bedrock_models.some((m) => m.includes(PIN_ACCOUNT)), { timeout: 180_000 })
+    .toBe(true);
 });
 
 test("sso-pin-dispatch: a pin changed after capture warns, refuses the run, and heals on re-sign-in", async ({

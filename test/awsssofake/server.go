@@ -107,6 +107,11 @@ type Server struct {
 	// round trip.
 	bedrockCalls int
 	bedrockModel string
+	// bedrockModels is every DISTINCT model id this stub has answered for, in
+	// arrival order. bedrockModel alone is last-write-wins, and one claude-code
+	// run makes calls for more than one model, so it cannot answer "did the
+	// configured ARN reach the data plane".
+	bedrockModels []string
 
 	// roleCredsSeen is the account_id/role_name of the LAST GetRoleCredentials
 	// call. It is the only place a test can see WHICH identity real botocore
@@ -429,11 +434,12 @@ func (s *Server) handleSeen(w http.ResponseWriter, r *http.Request) {
 		role = s.roleCredsSeen.Roles[0]
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"account_id":    s.roleCredsSeen.AccountID,
-		"role_name":     role,
-		"start_url":     s.startURLSeen,
-		"bedrock_calls": s.bedrockCalls,
-		"bedrock_model": s.bedrockModel,
+		"account_id":     s.roleCredsSeen.AccountID,
+		"role_name":      role,
+		"start_url":      s.startURLSeen,
+		"bedrock_calls":  s.bedrockCalls,
+		"bedrock_model":  s.bedrockModel,
+		"bedrock_models": append([]string{}, s.bedrockModels...),
 	})
 }
 
