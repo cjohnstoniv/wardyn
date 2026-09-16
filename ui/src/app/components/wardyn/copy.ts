@@ -370,6 +370,12 @@ export const RUN_COCKPIT = {
   // consequential action that deserves a stop, same as this one.
   takeOverConfirm: (principal: string) =>
     `${principal} is driving this session now. Taking over disconnects them and records you as the holder in the audit trail.`,
+  // DRAFT (M2 canon pending) — F1-F1: an interactive run canAttach may open
+  // once it reaches RUNNING (PENDING/STARTING/WAITING_FOR_CONFIRMATION so
+  // far) must not be told OPERATOR_ONLY_REASON, which is false for them —
+  // that sentence is for the caller who can never attach, not the one who
+  // merely has to wait. No link: there is no recording yet either.
+  starting: "This run hasn't started yet — the terminal opens once it's running.",
   // 3. No PTY to type into — the agent drives.
   autonomous: "autonomous — the agent drives",
   // 3b. Same pane, exec task mode: a shell command ran with NO agent harness

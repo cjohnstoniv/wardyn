@@ -68,14 +68,12 @@ import { AuditDecision, RuleSourceChip, toolRuleDecision } from "../wardyn/audit
 import { JsonBlock } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { TerminalPlayer } from "../wardyn/terminal-player";
-import { AttachTerminal } from "../attach-terminal";
 import { LiveApprovals, isHeld } from "../wardyn/live-approvals";
 import { ReasonDialog } from "../wardyn/reason-dialog";
 import { useOperator, usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import {
   OPERATOR_ONLY_REASON,
   RUN_COCKPIT,
-  RUN_MODE,
   VIEWER_APPROVAL_BLOCKS_NOTE,
   approvalScopeBadge,
 } from "../wardyn/copy";
@@ -85,6 +83,8 @@ import { RunDetailCommandBar } from "./run-detail-command-bar";
 import { RunCanvas } from "./run-detail/canvas";
 import { RunFailureBlock } from "./run-detail/failure-block";
 import { LoginSandboxNote } from "./run-detail/login-sandbox-note";
+import { TerminalPane } from "./run-detail/terminal-notice";
+import { sessionOptionLabel, RECORDING_MISSING_SESSION_TITLE, RECORDING_MISSING_SESSION_BODY } from "./run-detail/recording-tab-copy";
 import { cloneFromAudit, CLONE_UNREADABLE } from "./new-run/wizard-types";
 import type { WidgetContext } from "./run-detail/widget-registry";
 
@@ -109,6 +109,11 @@ export function RunDetailScreen() {
   // before the recording picker ever sees them. A tiny second, filtered
   // fetch spends its own 1000-row budget on just this action.
   const [recordingAudit, setRecordingAudit] = React.useState<AuditEvent[]>([]);
+  // F6-F2: run.complete/run.kill/run.autostop are the LATEST events on a run's
+  // trail — the first ones the 1000-row cap on `audit` above pushes off —
+  // scoped-fetched the same way session.recording is, so the exit code and
+  // ending derivation stay known past that cap.
+  const [endingAudit, setEndingAudit] = React.useState<AuditEvent[]>([]);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [tab, setTab] = React.useState<Tab>("overview");
   // "Make a policy from this run" — the honest home of "write the policy from
@@ -174,8 +179,13 @@ export function RunDetailScreen() {
         approvalsApi.listApprovals("", id),
         auditApi.listAudit(id),
         auditApi.listAudit(id, "session.recording"),
+        Promise.all([
+          auditApi.listAudit(id, "run.complete"),
+          auditApi.listAudit(id, "run.kill"),
+          auditApi.listAudit(id, "run.autostop"),
+        ]).then((lists) => lists.flat()),
       ])
-        .then(([r, g, runApprovals, a, recA]) => {
+        .then(([r, g, runApprovals, a, recA, endingA]) => {
           if (r.status === "rejected") {
             // The run itself is the one fetch this page cannot render without.
             // Foreground load shows the error state; a background poll blip
@@ -197,6 +207,7 @@ export function RunDetailScreen() {
           if (runApprovals.status === "fulfilled")
             setApprovals(runApprovals.value.filter((x) => x.run_id === id));
           if (recA.status === "fulfilled") setRecordingAudit(recA.value);
+          if (endingA.status === "fulfilled") setEndingAudit(endingA.value);
           setStatus("ready");
         })
         .catch(() => {
@@ -233,16 +244,29 @@ export function RunDetailScreen() {
   // be keyed on the Recording tab alone. Still lazy — a LIVE run on Overview
   // fetches nothing, which is the common case.
   const wantsRecording = tab === "recording" || (tab === "overview" && terminal && !!run);
+  // F1-F2: no ordering guard meant a slow fetch for an earlier-selected cast
+  // (recKey A) could resolve AFTER a later selection (recKey B) and overwrite
+  // it, or setState after unmount. NOT a plain `let alive` + cleanup (the
+  // sibling pattern in run-context-row.tsx/run-detail-ssh.tsx): this effect's
+  // own setRecState("loading") is itself a dependency-array member, so a
+  // cleanup tied to every re-run would invalidate the very request it just
+  // started. A generation counter only advances when a NEW fetch actually
+  // starts, so it survives the effect's own idle->loading->ready churn.
+  const recRequest = React.useRef(0);
   React.useEffect(() => {
     if (!wantsRecording || !id || recState !== "idle") return;
+    const thisRequest = ++recRequest.current;
     setRecState("loading");
     recordingsApi
       .getRecording(id, recKey || id)
       .then((rec) => {
+        if (recRequest.current !== thisRequest) return;
         setRecording(rec ?? null);
         setRecState("ready");
       })
-      .catch(() => setRecState("error"));
+      .catch(() => {
+        if (recRequest.current === thisRequest) setRecState("error");
+      });
   }, [wantsRecording, id, recKey, recState]);
 
   const copyLink = () => {
@@ -302,6 +326,10 @@ export function RunDetailScreen() {
 
   // ----- top-level states -----
   const pending = approvals.filter((a) => a.state === "PENDING");
+  // F6-F2: run.complete/run.kill/run.autostop rows land here even when the
+  // capped `audit` trail above dropped them — duplicates are harmless, both
+  // derivations below keep the last/first matching row regardless.
+  const endingEvents = [...audit, ...endingAudit];
 
   // THE PAGE DOES NOT SCROLL. `h-full min-h-0 flex flex-col` fills app-shell's
   // <main> exactly — main is flex-1 inside a h-screen column, so its height is
@@ -357,7 +385,7 @@ export function RunDetailScreen() {
           <SummaryHeader
             run={run}
             terminal={terminal}
-            exitCode={exitCodeFromAudit(audit)}
+            exitCode={exitCodeFromAudit(endingEvents)}
             pendingApprovalCount={pending.length}
             sandboxHeld={pending.some(isHeld)}
             onCopyLink={copyLink}
@@ -399,7 +427,7 @@ export function RunDetailScreen() {
               terminal={terminal}
               grants={grants}
               egress={egress}
-              audit={audit}
+              audit={endingEvents}
               pending={pending}
               recording={recording}
               recState={recState}
@@ -587,150 +615,6 @@ function Cockpit({
   };
 
   return <RunCanvas ctx={ctx} />;
-}
-
-// The Terminal widget's run situations (design board 2d). States 1 and 2
-// (driving / held by another client) live INSIDE AttachTerminal, which is the
-// only thing that knows the socket's attach mode. This picks between the three
-// situations the PARENT can tell apart, which is a question about the run, not
-// about the socket.
-function TerminalPane({
-  run,
-  terminal,
-  recording,
-  recState,
-  recordingDisabled,
-  onGoRecording,
-  execMode,
-}: {
-  run: AgentRun;
-  terminal: boolean;
-  recording: Recording | null;
-  recState: "idle" | "loading" | "error" | "ready";
-  recordingDisabled: boolean;
-  onGoRecording: () => void;
-  // run.create's task_mode said "exec" — a shell command ran, no agent harness.
-  execMode: boolean;
-}) {
-  const operator = useOperator();
-  const principal = usePrincipal();
-  // Same owner-or-admin predicate AttachTerminal gates its own connect on, and
-  // the same one the command bar's "attachable" chip claims — all three must
-  // agree or the page promises a terminal it then refuses to open.
-  const canAttach = operator || (!!run.created_by && run.created_by === principal);
-  const attachable = !!run.interactive && run.state === "RUNNING" && canAttach;
-
-  if (attachable) {
-    // fill: the pane owns the height. h-[70vh] was a guess that predates this
-    // layout and stays the default for every other mount site.
-    return <AttachTerminal fill runId={run.id} createdBy={run.created_by} />;
-  }
-
-  // Finished run: the pane becomes the replay surface in place rather than a
-  // dead box. The Recording TAB is unchanged and remains the full surface
-  // (session picker, disabled-store explanation, retry).
-  if (terminal) {
-    return (
-      <PaneFrame title="Recording" chip={RUN_COCKPIT.finishedReplay}>
-        {recState === "ready" && recording ? (
-          // The player sizes itself with fit:"width" and takes its height from
-          // the cast's rows, so it cannot flex — give it its own scroll box
-          // rather than letting it push the page.
-          <div className="scroll-thin min-h-0 flex-1 overflow-auto p-2">
-            <TerminalPlayer recording={recording} />
-          </div>
-        ) : (
-          <PaneNotice
-            // "error" is its OWN arm. Falling through to recordingMissing
-            // asserted a fact about the RUN ("this run has no captured terminal
-            // session") from a fetch that never established it — and on the
-            // DEFAULT tab, while the Recording tab, fed by the same recState,
-            // correctly admitted the failure. recordingDisabled cannot rescue
-            // it either: that is a /healthz boot fact, so on a deployment where
-            // recording IS enabled the false arm is the one that fires.
-            text={
-              recState === "loading" || recState === "idle"
-                ? RUN_COCKPIT.recordingLoading
-                : recState === "error"
-                  ? RUN_COCKPIT.recordingError
-                  : recordingDisabled
-                    ? RUN_COCKPIT.recordingDisabled
-                    : RUN_COCKPIT.recordingMissing
-            }
-            action={
-              <button onClick={onGoRecording} className="text-xs font-medium text-primary hover:underline">
-                Open the Recording tab →
-              </button>
-            }
-          />
-        )}
-      </PaneFrame>
-    );
-  }
-
-  // Live but not drivable: an autonomous run execs the agent directly, so there
-  // is no PTY to type into. (A live interactive run the caller may NOT attach to
-  // lands here too — the honest thing, since the alternative is a terminal that
-  // opens and immediately refuses.)
-  return (
-    // "Terminal" vs "Output" is not decoration — the board uses them for two
-    // different situations. An interactive run HAS a PTY (you just may not
-    // drive this one); an autonomous run has none to type into at all, which
-    // is why that tile tails output instead of offering a prompt.
-    <PaneFrame
-      title={run.interactive ? "Terminal" : "Output"}
-      chip={run.interactive ? undefined : execMode ? RUN_COCKPIT.execNoHarness : RUN_COCKPIT.autonomous}
-    >
-      <PaneNotice
-        text={
-          run.interactive
-            ? OPERATOR_ONLY_REASON
-            : RUN_MODE.autonomous.blurb
-        }
-        action={
-          <button onClick={onGoRecording} className="text-xs font-medium text-primary hover:underline">
-            Watch the captured session →
-          </button>
-        }
-      />
-    </PaneFrame>
-  );
-}
-
-// The non-attached pane, styled as the terminal frame it stands in for so the
-// hero keeps its shape across all four run situations.
-function PaneFrame({
-  title,
-  chip,
-  children,
-}: {
-  title: string;
-  chip?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-[#0d1117]">
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border bg-card/60 px-3">
-        <SquareTerminal className="size-3.5 text-muted-foreground" aria-hidden />
-        <span className="label-eyebrow">{title}</span>
-        {chip && (
-          <Chip tone="neutral" className="font-mono text-meta">
-            {chip}
-          </Chip>
-        )}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function PaneNotice({ text, action }: { text: string; action?: React.ReactNode }) {
-  return (
-    <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
-      <p className="max-w-md text-sm text-muted-foreground">{text}</p>
-      {action}
-    </div>
-  );
 }
 
 // Every human attach session is recorded and masked, but under a COMPOSITE cast
@@ -952,7 +836,7 @@ function RecordingTab({
               <SelectItem value={runId}>Agent session</SelectItem>
               {sessions.map((e) => (
                 <SelectItem key={e.id} value={e.target!}>
-                  Attached {clockTime(e.time)} · {e.actor}
+                  {sessionOptionLabel(e)}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -972,11 +856,22 @@ function RecordingTab({
         <div className="rounded-xl border border-border bg-card">
           <EmptyState
             icon={SquareTerminal}
-            title={recordingDisabled ? "Session recording is disabled on this deployment" : "No recording available"}
+            title={
+              recordingDisabled
+                ? "Session recording is disabled on this deployment"
+                // F1-F11: a SPECIFIC attach session's missing cast is not a
+                // fact about the whole run — the picker above is already
+                // looking at one session, so the empty state must say so too.
+                : selected !== runId
+                  ? RECORDING_MISSING_SESSION_TITLE
+                  : "No recording available"
+            }
             description={
               recordingDisabled
                 ? "No run on this server captures one — set persistence.enabled (Helm) or WARDYN_RECORDING_DIR to turn it on."
-                : "This run has no captured terminal session. A recording is produced once an agent process runs in the sandbox."
+                : selected !== runId
+                  ? RECORDING_MISSING_SESSION_BODY
+                  : "This run has no captured terminal session. A recording is produced once an agent process runs in the sandbox."
             }
           />
         </div>

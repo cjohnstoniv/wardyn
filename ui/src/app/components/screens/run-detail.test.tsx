@@ -45,10 +45,14 @@ const auditMocks = vi.hoisted(() => ({
   taskMode: undefined as string | undefined,
   ending: undefined as { kind: string; action: string } | undefined,
 }));
-vi.mock("../../lib/api/audit", () => ({
+vi.mock("../../lib/api/audit", async (importOriginal) => ({
   audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) },
   egressFromAudit: () => [],
-  exitCodeFromAudit: () => undefined,
+  // F6-F2: the REAL derivation, not a stub — every other test here leaves
+  // listAuditMock at its default `[]`, which the real function already reads
+  // as "no exit code" (identical to the old stub); only F6-F2's own test
+  // seeds a run.complete row and needs the real scan to see it.
+  exitCodeFromAudit: (await importOriginal<typeof import("../../lib/api/audit")>()).exitCodeFromAudit,
   // B4b: the request-scoped half of the run, off its run.create row —
   // task_mode included (it replaced taskModeFromAudit here), plus the fields a
   // clone needs that the run record never held.
@@ -79,6 +83,7 @@ vi.mock("sonner", () => ({ toast: { warning: vi.fn(), error: vi.fn(), success: v
 
 import { RunDetailScreen } from "./run-detail";
 import { RUN_COCKPIT } from "../wardyn/copy";
+import { OperatorProvider } from "../wardyn/operator-context";
 import { toast } from "sonner";
 
 beforeEach(() => {
@@ -187,6 +192,186 @@ describe("RunDetailScreen — the hero pane per run situation", () => {
     expect(
       await screen.findByRole("heading", { name: "audit the egress proxy", level: 1 }),
     ).toBeInTheDocument();
+  });
+});
+
+// F1-F1: `attachable` used to fold "can this caller ever attach?" and "has
+// the run reached RUNNING yet?" into one gate, so an interactive run still
+// STARTING told its own OWNER the operator-only refusal plus a dead "Watch
+// the captured session →" link to a recording that cannot exist yet.
+describe("RunDetailScreen — F1-F1 a not-yet-running interactive run tells its owner it's starting, not that they lack the role", () => {
+  it("an operator on a STARTING interactive run sees the starting notice, never the admin-role refusal", async () => {
+    renderRun({ ...RUN, state: "STARTING", interactive: true });
+    expect(await screen.findByText(RUN_COCKPIT.starting)).toBeInTheDocument();
+    expect(screen.queryByText("Requires the admin role.")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Watch the captured session/)).not.toBeInTheDocument();
+  });
+
+  // Neg: a member who does NOT own this run and isn't an operator still gets
+  // the real refusal — canAttach must stay false for them regardless of state.
+  it("a member who neither owns nor operates a RUNNING run still gets the admin-role refusal", async () => {
+    getRunMock.mockResolvedValue({ ...RUN, state: "RUNNING", interactive: true, created_by: "someone-else" });
+    render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <OperatorProvider operator={false} principal="me">
+          <Routes>
+            <Route path="/runs/:id" element={<RunDetailScreen />} />
+          </Routes>
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("Requires the admin role.")).toBeInTheDocument();
+    expect(screen.queryByText(RUN_COCKPIT.starting)).not.toBeInTheDocument();
+  });
+});
+
+// F1-F2: the recording fetch had no ordering guard — a slow fetch for an
+// earlier-selected session could resolve AFTER a later one and overwrite it.
+describe("RunDetailScreen — F1-F2 a stale recording fetch never overwrites a later selection", () => {
+  it("keeps the SECOND selection's cast when the first session's fetch resolves later", async () => {
+    let resolveFirst!: (v: unknown) => void;
+    // A's fetch stays pending; B's resolves to "missing" (null) immediately —
+    // if A's stale response later wins, its (truthy) Recording renders the
+    // player instead of B's session-scoped empty state.
+    getRecordingMock
+      .mockImplementationOnce(() => new Promise((res) => { resolveFirst = res; }))
+      .mockResolvedValueOnce(null);
+    listAuditMock.mockResolvedValue([
+      {
+        id: "e1",
+        time: new Date().toISOString(),
+        actor_type: "human",
+        actor: "alice",
+        action: "session.recording",
+        target: "run-1~session-a",
+        outcome: "success",
+      },
+      {
+        id: "e2",
+        time: new Date().toISOString(),
+        actor_type: "human",
+        actor: "bob",
+        action: "session.recording",
+        target: "run-1~session-b",
+        outcome: "success",
+      },
+    ]);
+    renderRun({ ...RUN, state: "COMPLETED", interactive: true });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /recording/i }));
+
+    // Select session A (first fetch starts, stays pending) then session B
+    // (second fetch resolves immediately).
+    await user.click(screen.getByRole("combobox", { name: "Recorded session" }));
+    await user.click(await screen.findByText(/alice/));
+    await user.click(screen.getByRole("combobox", { name: "Recorded session" }));
+    await user.click(await screen.findByText(/bob/));
+
+    // B's (missing) result should already be showing.
+    expect(await screen.findByText("No recording for this session")).toBeInTheDocument();
+
+    // The first (stale) fetch resolves now, with a REAL cast — it must not
+    // clobber B's already-settled "missing" state.
+    resolveFirst({
+      run_id: "run-1",
+      header: { version: 2, width: 80, height: 24 },
+      events: [],
+      cast: "",
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.getByText("No recording for this session")).toBeInTheDocument();
+    expect(getRecordingMock).toHaveBeenLastCalledWith("run-1", "run-1~session-b");
+  });
+});
+
+// F1-F11/F1-F12: the session picker's own copy.
+describe("RunDetailScreen — F1-F11/F1-F12 the recording tab's session-picker copy", () => {
+  const session = {
+    id: "e1",
+    time: "2026-01-01T00:04:00Z",
+    actor_type: "human",
+    actor: "alice",
+    action: "session.recording",
+    target: "run-1~session-a",
+    outcome: "success",
+  };
+
+  it("F1-F12: names the session's END, not its start — recordings are emitted at detach", async () => {
+    listAuditMock.mockResolvedValue([session]);
+    renderRun({ ...RUN, state: "COMPLETED", interactive: true });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /recording/i }));
+    await user.click(screen.getByRole("combobox", { name: "Recorded session" }));
+
+    expect(await screen.findByText(/Session ended/)).toBeInTheDocument();
+    expect(screen.queryByText(/^Attached/)).not.toBeInTheDocument();
+  });
+
+  it("F1-F11: a picked SESSION with a missing cast gets session-scoped copy, not the run-scoped sentence", async () => {
+    listAuditMock.mockResolvedValue([session]);
+    getRecordingMock.mockResolvedValue(null);
+    renderRun({ ...RUN, state: "COMPLETED", interactive: true });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /recording/i }));
+    await user.click(screen.getByRole("combobox", { name: "Recorded session" }));
+    await user.click(await screen.findByText(/alice/));
+
+    expect(await screen.findByText("No recording for this session")).toBeInTheDocument();
+    expect(screen.queryByText("No recording available")).not.toBeInTheDocument();
+  });
+
+  // Neg: the bare run id (no session picked) keeps the run-scoped sentence.
+  it("F1-F11 neg: the bare run id still gets the run-scoped sentence", async () => {
+    getRecordingMock.mockResolvedValue(null);
+    renderRun({ ...RUN, state: "COMPLETED", interactive: true });
+    await screen.findByTestId("run-terminal-pane");
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(screen.getByRole("tab", { name: /recording/i }));
+
+    expect(await screen.findByText("No recording available")).toBeInTheDocument();
+    expect(screen.queryByText("No recording for this session")).not.toBeInTheDocument();
+  });
+});
+
+// F6-F2: run.complete/run.kill/run.autostop are the LATEST events on a run's
+// trail — past the 1000-row cap on the general fetch, the exit code and
+// ending both silently went "unknown". Scoped fetches keep them known.
+describe("RunDetailScreen — F6-F2 the exit code survives a truncated audit trail", () => {
+  it("still knows the exit code past 1000 rows of unrelated audit history", async () => {
+    // The general (capped) fetch: 1000+ rows, none of them run.complete —
+    // exactly what a chatty run does to the oldest-first LIST_LIMIT window.
+    const noise = Array.from({ length: 1000 }, (_, i) => ({
+      id: `n${i}`,
+      time: new Date().toISOString(),
+      actor_type: "agent",
+      actor: "agent",
+      action: "egress.allow",
+      target: "example.com",
+      outcome: "success",
+    }));
+    listAuditMock.mockImplementation((_id: unknown, action?: string) => {
+      if (action === "run.complete") {
+        return Promise.resolve([
+          {
+            id: "complete-1",
+            time: new Date().toISOString(),
+            actor_type: "system",
+            actor: "wardynd",
+            action: "run.complete",
+            target: "run-1",
+            outcome: "success",
+            data: { exit_code: 0 },
+          },
+        ]);
+      }
+      if (action === "run.kill" || action === "run.autostop" || action === "session.recording") {
+        return Promise.resolve([]);
+      }
+      return Promise.resolve(noise);
+    });
+    renderRun({ ...RUN, state: "COMPLETED" });
+
+    expect(await screen.findByText("exit 0")).toBeInTheDocument();
   });
 });
 
