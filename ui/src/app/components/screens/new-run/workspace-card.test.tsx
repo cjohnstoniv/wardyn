@@ -13,7 +13,7 @@
 // has a paused allocation or a shut door cannot be arranged against a live
 // daemon without an admin fixture per case.
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { MeUserDrive } from "../../../lib/api/health";
 import { MEMBER } from "../../../lib/governance-copy";
@@ -286,5 +286,68 @@ describe("WorkspaceCard — a selected workspace's source is not an enabled prov
     const ws = repoWorkspace();
     renderCard({ workspaces: [ws] });
     expect(screen.queryByText(PROVIDERS.CARD_NOT_ADMITTED)).toBeNull();
+  });
+});
+
+// F2-F11: the Select had no id/name of its own before this — the field-list
+// treats it like every other labeled control on the screen.
+describe("WorkspaceCard — the Select's own identity", () => {
+  it("carries id=nr-workspace and aria-label=Workspace", () => {
+    renderCard();
+    const trigger = screen.getByRole("combobox", { name: "Workspace" });
+    expect(trigger).toHaveAttribute("id", "nr-workspace");
+  });
+});
+
+// F2-F8: a B4b clone (or an earlier Add-workspace act) can leave MORE than one
+// selection in state.workspaces[]. The primary (index 0) is what the Select
+// shows and drives; the rest used to have no representation on screen at all
+// and no way to survive a change to the primary.
+describe("WorkspaceCard — extra selections from a multi-workspace clone", () => {
+  const primary: Workspace = {
+    id: "ws-primary",
+    name: "payments",
+    kind: "repo",
+    source: "acme/payments",
+    status: "scanned",
+    created_at: "",
+    updated_at: "",
+  };
+  const extra: Workspace = { ...primary, id: "ws-extra", name: "shared-libs" };
+
+  it("renders every selection past index 0 as a removable chip", () => {
+    renderCard({
+      workspaces: [primary, extra],
+      state: { workspaces: [{ workspaceId: primary.id, enabledOptional: [] }, { workspaceId: extra.id, enabledOptional: [] }] },
+    });
+    const chips = screen.getByTestId("nr-workspace-extras");
+    expect(within(chips).getByText("shared-libs")).toBeInTheDocument();
+    // The primary never gets a chip of its own — it's what the Select shows.
+    expect(within(chips).queryByText("payments")).not.toBeInTheDocument();
+  });
+
+  it("a chip's Remove button drops only that selection", async () => {
+    const { patch } = renderCard({
+      workspaces: [primary, extra],
+      state: { workspaces: [{ workspaceId: primary.id, enabledOptional: [] }, { workspaceId: extra.id, enabledOptional: [] }] },
+    });
+    await user.click(screen.getByRole("button", { name: "Remove shared-libs" }));
+    expect(patch).toHaveBeenCalledWith({ workspaces: [{ workspaceId: primary.id, enabledOptional: [] }] });
+  });
+
+  it("changing the primary via the Select REPLACES index 0 only — the extra survives", async () => {
+    const other: Workspace = { ...primary, id: "ws-other", name: "other-repo" };
+    const { patch } = renderCard({
+      workspaces: [primary, extra, other],
+      state: { workspaces: [{ workspaceId: primary.id, enabledOptional: [] }, { workspaceId: extra.id, enabledOptional: [] }] },
+    });
+    await user.click(screen.getByRole("combobox", { name: "Workspace" }));
+    await user.click(await screen.findByRole("option", { name: "other-repo" }));
+    expect(patch).toHaveBeenCalledWith({
+      workspaces: [
+        { workspaceId: other.id, enabledOptional: [] },
+        { workspaceId: extra.id, enabledOptional: [] },
+      ],
+    });
   });
 });

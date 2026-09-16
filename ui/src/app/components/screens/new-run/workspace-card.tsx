@@ -51,7 +51,7 @@
 // failure) and BEFORE `!drive` (see unavailableReason below for which of the
 // four closed tokens gets which sentence).
 import * as React from "react";
-import { Plus } from "lucide-react";
+import { Plus, X } from "lucide-react";
 import type { MeCapabilities, Workspace } from "../../../lib/types";
 import type { MeUserDrive } from "../../../lib/api/health";
 import { capabilityAllowed } from "../../../lib/capabilities";
@@ -246,10 +246,19 @@ export function WorkspaceCard({
       <Select
         value={state.workspaces[0]?.workspaceId ?? "__none__"}
         onValueChange={(v) =>
-          patch({ workspaces: v === "__none__" ? [] : [{ workspaceId: v, enabledOptional: [] }] })
+          // F2-F8: this REPLACES INDEX 0 ONLY — a multi-workspace clone (B4b)
+          // or an extra attached via the chips below survives a change to the
+          // primary selection. The old form overwrote the whole array, so
+          // picking a different primary silently dropped every extra.
+          patch({
+            workspaces:
+              v === "__none__"
+                ? state.workspaces.slice(1)
+                : [{ workspaceId: v, enabledOptional: [] }, ...state.workspaces.slice(1)],
+          })
         }
       >
-        <SelectTrigger>
+        <SelectTrigger id="nr-workspace" aria-label="Workspace">
           <SelectValue placeholder="Ephemeral scratch — no repo" />
         </SelectTrigger>
         <SelectContent>
@@ -267,6 +276,31 @@ export function WorkspaceCard({
           ))}
         </SelectContent>
       </Select>
+      {/* F2-F8: extras a multi-workspace clone carried (or the primary select
+          demoted when it changed) — attached, but not the primary, so they get
+          no reason line of their own; just a way off. */}
+      {state.workspaces.length > 1 && (
+        <div className="mt-2 flex flex-wrap gap-1.5" data-testid="nr-workspace-extras">
+          {state.workspaces.slice(1).map((sel) => {
+            const name = workspaces.find((w) => w.id === sel.workspaceId)?.name ?? sel.workspaceId;
+            return (
+              <Chip key={sel.workspaceId} tone="neutral">
+                {name}
+                <button
+                  type="button"
+                  aria-label={`Remove ${name}`}
+                  onClick={() =>
+                    patch({ workspaces: state.workspaces.filter((s) => s.workspaceId !== sel.workspaceId) })
+                  }
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <X className="size-3" />
+                </button>
+              </Chip>
+            );
+          })}
+        </div>
+      )}
       {/* The reason rides the SELECTION, not each row: a Radix item's
           content is what the closed trigger renders, so a per-row
           paragraph would end up inside the trigger. The chip above
