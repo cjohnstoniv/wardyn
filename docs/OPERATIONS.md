@@ -3081,7 +3081,11 @@ launches a NEW login run stamped with the pin as it reads NOW, and that capture
 OVERWRITES the old one. The console says so without being asked — the row's
 `model_access` grades as "sign in again" (so the Getting Started chip and the
 button come back, which an expiry-only grading hid), and the setup checklist's
-**AWS Bedrock** row warns naming both pairs. What is still missing in 0.7.4:
+**AWS Bedrock** row warns naming both pairs. The member's own chip is less
+precise than the row it comes back with: it is keyed on state alone, so it
+reads "Model access · Signed out" for a session that is actually live and
+renewable — the Action line right beneath it is the one that names the pin
+and tells the truth. What is still missing in 0.7.4:
 invalidate-on-write, and an admin "revoke this person's captured session" route
 — both need owner enumeration in the secret store (0.8).
 
