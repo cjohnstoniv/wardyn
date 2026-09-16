@@ -15,7 +15,14 @@ import (
 )
 
 // revokeNote is the honest per-kind revocation story stamped on every
-// credential.revoke row. NOTHING is actually invalidated by this cascade — the
+// credential.revoke row.
+//
+// The github_token arm is scoped to RevokeRun ON PURPOSE (B11a-F1). Wardyn DOES
+// call DELETE /installation/token in two places now — VerifyRefRuleset's probe
+// hand-back and discardMinted, the mint's discard door — but neither can ever
+// reach the credential this row is about: both surrender a token that was never
+// returned to the run. A blanket "wardyn does not call it" would now be false,
+// and a note that overstates is the one thing an audit row must not do. NOTHING is actually invalidated by this cascade — the
 // note is the only place the audit trail says WHY, and one constant note lied
 // about two of the four kinds (F013): it claimed GitHub TTL semantics for an
 // operator-managed PAT that Wardyn cannot expire, down-scope, or deny (the
@@ -25,7 +32,7 @@ import (
 func revokeNote(kind string) string {
 	switch types.GrantKind(kind) {
 	case types.GrantGitHubToken:
-		return "github installation tokens expire (<=1h); wardyn does not call GitHub's DELETE /installation/token — it must be presented the token itself, and RevokeRun holds only the jti, no copy of the value addressed by it — relying on TTL expiry + identity denylist"
+		return "github installation tokens expire (<=1h); RevokeRun does not call GitHub's DELETE /installation/token — it must be presented the token itself, and RevokeRun holds only the jti, no copy of the value addressed by it — relying on TTL expiry + identity denylist"
 	case types.GrantGitPAT, types.GrantSSHKey:
 		return "operator must rotate this secret at the forge — wardyn cannot revoke, expire or down-scope it; the identity denylist only stops further mints"
 	case types.GrantAPIKey:

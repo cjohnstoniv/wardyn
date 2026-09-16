@@ -704,13 +704,19 @@ func TestAuditActionsDocCredentialRevokeRowMatchesRevokeRun(t *testing.T) {
 	}
 	note := funcBody(t, src, "revokeNote")
 	for _, want := range []string{
-		"wardyn does not call GitHub's DELETE /installation/token",
+		"RevokeRun does not call GitHub's DELETE /installation/token",
 		"operator must rotate this secret at the forge",
 		"api_key values stay proxy-side",
 	} {
 		if !strings.Contains(note, want) {
 			t.Fatalf("revokeNote no longer says %q — re-derive the doc row before trusting this guard", want)
 		}
+	}
+	// B11a-F1 gave the mint a discard door that DOES call GitHub's endpoint, so
+	// the blanket "wardyn does not call it" this row and this note used to carry
+	// became false. Neither may say it again while discardMinted exists.
+	if strings.Contains(note, "wardyn does not call") {
+		t.Fatal(`revokeNote carries the blanket "wardyn does not call" claim again — discardMinted and VerifyRefRuleset both make that call, so it must stay scoped to RevokeRun`)
 	}
 
 	// The cascade's approvals half must still select on kind='credential' with no
@@ -744,11 +750,26 @@ func TestAuditActionsDocCredentialRevokeRowMatchesRevokeRun(t *testing.T) {
 		"the cascade enumerates the run's successful `credential.mint` rows UNION the approvals whose `minted_jti` was burnt",
 		"`mintedCredentialsSQL`",
 		"`revokeNote`",
-		"wardyn does not call GitHub's `DELETE /installation/token`",
+		"`RevokeRun` does not call GitHub's `DELETE /installation/token`",
 		"`RevokeRun` holds only the `jti`",
 		"`api_key`", "`ssh_key`",
 		"TTL expiry",
 	)
+
+	// R-06. Once the mint HAS a discard door that calls GitHub's endpoint
+	// (B11a-F1), the row's revocation story is incomplete unless it names the
+	// carve-out — otherwise the scoping above reads as a typo rather than a
+	// deliberate limit. Gated on the door existing, so this guard is inert until
+	// the code it describes is there.
+	if strings.Contains(readSrc(t, "internal", "broker", "discard.go"), "func (b *Broker) discardMinted") {
+		mustSay(t, doc, "docs/AUDIT-ACTIONS.md",
+			"`discardMinted`",
+			"NEVER returned to the run",
+		)
+		mustNotSay(t, doc, "docs/AUDIT-ACTIONS.md",
+			"because wardyn does not call GitHub's `DELETE /installation/token`",
+		)
+	}
 }
 
 // TestAuditActionsDocNamesTheErrorScanAction (F041) pins AUDIT-ACTIONS.md's
