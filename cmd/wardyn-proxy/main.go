@@ -79,10 +79,13 @@ func main() {
 	// Per-proxy kill-switch: WARDYN_LLM_SCAN=off forces THIS proxy process's
 	// outbound content inspection OFF regardless of policy. It can only DISABLE
 	// (fail-safe direction), never enable beyond what the policy authorizes.
-	// NOTE: this is a per-proxy env read only — it is not wired into either
-	// deploy path (compose/Helm do not propagate it from a central config), so
-	// it is NOT a fleet-wide kill-switch today; an operator would need to set
-	// this env on every sidecar individually.
+	// NOTE: this is a per-proxy env read — the docker/k8s runner drivers copy
+	// it from wardynd's OWN process env into every sidecar they create
+	// (runner.ProxySidecarEnvKnobs), and compose now forwards it from the
+	// operator's shell into wardynd's env too (deploy/compose/docker-
+	// compose.yaml), so setting it once per wardynd instance now reaches
+	// every sidecar that instance creates; Helm still requires env.WARDYN_LLM_SCAN
+	// set explicitly in values (R-09).
 	switch v := strings.ToLower(strings.TrimSpace(os.Getenv("WARDYN_LLM_SCAN"))); v {
 	case "off", "0", "false", "no", "disable", "disabled", "none":
 		if cfg.Policy.LLMInspection != nil {
