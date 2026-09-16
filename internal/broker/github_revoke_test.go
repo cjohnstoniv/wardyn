@@ -189,16 +189,30 @@ func TestGitHubMinter_MintReturnsInsideClientBudget(t *testing.T) {
 //
 // The server here is the shape that separates the two: hop 1 answers just under
 // the budget, hop 2 never answers. Per-hop-only = ~1.8x; one ceiling = ~1x.
+//
+// W6-04: a raw hop-hit COUNT cannot discriminate the two shapes — hop 2's HTTP
+// request reaches this fake either way (measured both shapes directly,
+// reverting the ctx-sharing fix locally: hop1Hits/hop2Hits are 1/1 under BOTH
+// the fixed and the pre-fix code, since hop 1 succeeding at all means some of
+// its own per-hop budget is still left for hop 2 to dial, fixed or not). The
+// counters stay as an anti-vacuity floor — proving the fixture actually
+// exercised both hops, so the timing assertion below is proving something —
+// and the ceiling widens from 1.4x to 1.5x, comfortably between the two
+// measured shapes (~500ms fixed vs ~900ms reverted) with more headroom on
+// both sides than the old squeeze.
 func TestGitHubMinter_MintCeilingIsOneBudgetNotTwo(t *testing.T) {
 	const budget = 500 * time.Millisecond
 
+	var hop1Hits, hop2Hits atomic.Int32
 	block := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/installation"):
+			hop1Hits.Add(1)
 			time.Sleep(budget * 4 / 5) // slow, but inside the budget: hop 1 SUCCEEDS
 			_, _ = w.Write([]byte(`{"id": 42}`))
 		default:
+			hop2Hits.Add(1)
 			<-block // hop 2 never answers
 		}
 	}))
@@ -222,9 +236,17 @@ func TestGitHubMinter_MintCeilingIsOneBudgetNotTwo(t *testing.T) {
 
 	select {
 	case elapsed := <-done:
-		// 1.4x is the midpoint between the two behaviours (1.0x vs ~1.8x), so
-		// this fails on the old shape without being flaky on the new one.
-		if ceiling := budget * 7 / 5; elapsed > ceiling {
+		// Anti-vacuity: both hops must have actually been dialed, or the
+		// timing assertion below is proving nothing.
+		if got := hop1Hits.Load(); got != 1 {
+			t.Fatalf("hop1 (GetRepositoryInstallation) hits = %d, want 1", got)
+		}
+		if got := hop2Hits.Load(); got != 1 {
+			t.Fatalf("hop2 (CreateInstallationToken) hits = %d, want 1", got)
+		}
+		// 1.5x sits comfortably below the ~1.8x per-hop-only shape and
+		// comfortably above the ~1.0x one-ceiling shape.
+		if ceiling := budget * 3 / 2; elapsed > ceiling {
 			t.Fatalf("mint took %s, want under %s — the whole mint must share ONE ceiling, not one per round trip (two hops = 2x the lock hold)", elapsed, ceiling)
 		}
 	case <-time.After(10 * time.Second):
