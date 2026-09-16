@@ -12,8 +12,10 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
+	"golang.org/x/term"
 
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
@@ -32,6 +34,11 @@ func writeFile(t *testing.T, path, content string) {
 // --------------------------------------------------------------------------
 
 func TestBuildWSURL(t *testing.T) {
+	// B12a-F10: attachCmd now refuses a non-UUID run id via parseID before
+	// buildWSURL ever sees it (the attach endpoint only ever accepts a UUID),
+	// so these fixtures use UUID-shaped ids — the only ones production code
+	// still reaches this function with. buildWSURL itself stays a plain string
+	// function; it needs no validation of its own.
 	tests := []struct {
 		name    string
 		baseURL string
@@ -41,32 +48,32 @@ func TestBuildWSURL(t *testing.T) {
 		{
 			name:    "https becomes wss",
 			baseURL: "https://wardyn.example.com",
-			runID:   "abc",
-			want:    "wss://wardyn.example.com/api/v1/runs/abc/attach",
+			runID:   "8f14e45f-ceea-467e-adc5-f4b8e79f5f1c",
+			want:    "wss://wardyn.example.com/api/v1/runs/8f14e45f-ceea-467e-adc5-f4b8e79f5f1c/attach",
 		},
 		{
 			name:    "http becomes ws",
 			baseURL: "http://localhost:8080",
-			runID:   "run-1",
-			want:    "ws://localhost:8080/api/v1/runs/run-1/attach",
+			runID:   "5b6a5f1e-1c1f-4d3e-8b2a-2f5a6b7c8d9e",
+			want:    "ws://localhost:8080/api/v1/runs/5b6a5f1e-1c1f-4d3e-8b2a-2f5a6b7c8d9e/attach",
 		},
 		{
 			name:    "trailing slash on base is trimmed (no doubled slash)",
 			baseURL: "https://wardyn.example.com/",
-			runID:   "xyz",
-			want:    "wss://wardyn.example.com/api/v1/runs/xyz/attach",
+			runID:   "0b3e6a2c-9d4b-4a1f-8e6d-3c2b1a0f9e8d",
+			want:    "wss://wardyn.example.com/api/v1/runs/0b3e6a2c-9d4b-4a1f-8e6d-3c2b1a0f9e8d/attach",
 		},
 		{
 			name:    "non-default port preserved",
 			baseURL: "http://10.0.0.5:9443",
-			runID:   "id",
-			want:    "ws://10.0.0.5:9443/api/v1/runs/id/attach",
+			runID:   "1a2b3c4d-5e6f-4789-90ab-cdef01234567",
+			want:    "ws://10.0.0.5:9443/api/v1/runs/1a2b3c4d-5e6f-4789-90ab-cdef01234567/attach",
 		},
 		{
 			name:    "already-ws scheme left untouched",
 			baseURL: "ws://host",
-			runID:   "r",
-			want:    "ws://host/api/v1/runs/r/attach",
+			runID:   "d4c3b2a1-6f5e-4d3c-8b2a-1f0e9d8c7b6a",
+			want:    "ws://host/api/v1/runs/d4c3b2a1-6f5e-4d3c-8b2a-1f0e9d8c7b6a/attach",
 		},
 	}
 	for _, tc := range tests {
@@ -188,5 +195,96 @@ func TestRunAttach_RejectedHandshakeReturnsAPIError(t *testing.T) {
 	}
 	if code := exitCodeFor(err); code != 2 {
 		t.Errorf("exitCodeFor(403 attach rejection) = %d, want 2 (the universal auth exit code)", code)
+	}
+}
+
+// --------------------------------------------------------------------------
+// B12a-F1: TERM/HUP/INT are wired INSIDE runAttach (never a root
+// ExecuteContext) so a signal cancels the session through the SAME path a
+// clean pump end already takes: pumpCtx cancels, the pump halves end, and the
+// terminal is restored before the command returns. Signals aren't portable to
+// send-and-observe in a unit test, so this drives the identical mechanism
+// directly — cancelling the ctx runAttach was given reaches the restore call
+// exactly as signal.NotifyContext's cancellation would.
+// --------------------------------------------------------------------------
+
+func TestRunAttach_CtxCancelRestoresTerminal(t *testing.T) {
+	oldMakeRaw, oldRestore := makeRawFn, restoreTerminalFn
+	t.Cleanup(func() { makeRawFn, restoreTerminalFn = oldMakeRaw, oldRestore })
+
+	// A real tty is not available under `go test`; inject a fake pair so the
+	// restore path is exercised regardless.
+	makeRawFn = func(int) (*term.State, error) { return &term.State{}, nil }
+	restored := make(chan struct{}, 1)
+	restoreTerminalFn = func(int, *term.State) error {
+		select {
+		case restored <- struct{}{}:
+		default:
+		}
+		return nil
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		// Hold the session open; the test drives the end via ctx cancel, not
+		// a server-side close.
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- runAttach(ctx, &sdk.Client{BaseURL: srv.URL}, "run-1")
+	}()
+
+	// Let the dial complete and the pump goroutines start, then cancel — the
+	// same transition signal.NotifyContext drives on TERM/HUP/INT.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-restored:
+	case <-time.After(5 * time.Second):
+		t.Fatal("terminal was never restored after ctx cancellation")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("runAttach returned %v, want a clean detach (nil)", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("runAttach did not return after ctx cancellation")
+	}
+}
+
+// --------------------------------------------------------------------------
+// B12a-F10: attach validates the run id client-side, exactly like `ssh`
+// already does (ssh_test.go's TestRunSSH_RefusesANonUUIDRunID) — the id is
+// spliced straight into the WebSocket dial URL (buildWSURL) with no further
+// encoding, and the attach endpoint only ever accepts a UUID.
+// --------------------------------------------------------------------------
+
+func TestAttachCmd_RefusesANonUUIDRunID(t *testing.T) {
+	hostile := []string{
+		"run_x/../../evil",
+		"run_x?foo=bar",
+		"run_x#frag",
+		"",
+	}
+	for _, id := range hostile {
+		t.Run(id, func(t *testing.T) {
+			err := execCmd(t, "attach", "--", id)
+			if err == nil {
+				t.Fatalf("%q was accepted", id)
+			}
+			if !strings.Contains(err.Error(), "invalid run id") {
+				t.Errorf("error = %q, want it to name an invalid run id", err.Error())
+			}
+		})
 	}
 }

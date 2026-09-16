@@ -22,6 +22,14 @@ import (
 	sdk "github.com/cjohnstoniv/wardyn/pkg/client"
 )
 
+// makeRawFn / restoreTerminalFn are seams over term.MakeRaw / term.Restore so
+// tests can drive the signal/cancel -> terminal-restore path without a real
+// tty backing os.Stdin.
+var (
+	makeRawFn         = term.MakeRaw
+	restoreTerminalFn = term.Restore
+)
+
 // attachCmd returns the cobra command for `wardyn attach <run-id>`.
 //
 // It connects to the interactive attach WebSocket endpoint
@@ -48,6 +56,16 @@ Authentication: WARDYN_ADMIN_TOKEN (or --token).
 `,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// The run id is spliced straight into the WebSocket URL path
+			// (buildWSURL) with no further encoding — an unvalidated value
+			// could inject an extra path segment or query string into the
+			// dial target. The attach endpoint itself only ever accepts a
+			// UUID (internal/api routes /runs/{id}/attach through the same
+			// uuid-keyed lookup every other run door uses), so anything else
+			// could never have connected.
+			if _, err := parseID("run", args[0]); err != nil {
+				return err
+			}
 			return runAttach(cmd.Context(), client(), args[0])
 		},
 	}
@@ -60,6 +78,24 @@ Authentication: WARDYN_ADMIN_TOKEN (or --token).
 //  4. Sends an initial resize frame, wires SIGWINCH for subsequent resizes.
 //  5. Runs the bidirectional pump until disconnect/EOF/Ctrl-C.
 func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
+	// TERM/HUP/INT are wired HERE, local to the attach session — never at a
+	// root ExecuteContext. Raw mode clears ISIG, so an operator's Ctrl-C
+	// doesn't raise SIGINT at all; but a supervisor's SIGTERM, a hung-up
+	// controlling terminal (SIGHUP), or a manually sent SIGINT still hit the
+	// process under its default disposition, killing it without ever running
+	// the deferred term.Restore below and leaving the real terminal in raw
+	// mode. A root-level signal context would instead cancel every command's
+	// ctx uniformly, relabelling an interrupted `run --wait` (or any other
+	// in-flight command) as if the control plane were unreachable — docs/CI.md
+	// documents a specific exit-code taxonomy per command that a shared root
+	// cancellation would blur. Scoping the wiring to this one command's ctx
+	// means the signal drives EXACTLY the cancellation this function already
+	// handles cleanly: it cancels pumpCtx below, the pump halves end, and the
+	// existing restore-then-detach path runs — the same path a clean
+	// disconnect or an explicit ctx cancellation already takes.
+	ctx, stopSignals := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT)
+	defer stopSignals()
+
 	wsURL := buildWSURL(c.BaseURL, runID)
 
 	// Dial the WebSocket with the bearer token in the HTTP Upgrade header, when
@@ -96,14 +132,14 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 
 	// Put the terminal into raw mode. We operate on stdin's fd.
 	fd := int(os.Stdin.Fd())
-	oldState, err := term.MakeRaw(fd)
+	oldState, err := makeRawFn(fd)
 	if err != nil {
 		// If stdin is not a terminal (piped), continue without raw mode so the
 		// command still works for scripted use (no SIGWINCH either).
 		oldState = nil
 	}
 	if oldState != nil {
-		defer term.Restore(fd, oldState) //nolint:errcheck // best-effort restore
+		defer restoreTerminalFn(fd, oldState) //nolint:errcheck // best-effort restore
 	}
 
 	// Send an initial resize frame so the remote PTY matches our window from
@@ -201,7 +237,7 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 
 	// Restore terminal before printing anything so the message appears correctly.
 	if oldState != nil {
-		_ = term.Restore(fd, oldState)
+		_ = restoreTerminalFn(fd, oldState)
 	}
 
 	// Classify the exit: a context-cancelled / WebSocket normal-close is a clean
