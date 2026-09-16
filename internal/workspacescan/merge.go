@@ -127,9 +127,12 @@ func MergeProfiles(profiles []WorkspaceProfile, identities []string, primaryIden
 			lowest = p.Confidence
 		}
 	}
-	if len(leaks) > maxLeakFindings {
-		leaks = leaks[:maxLeakFindings]
-	}
+	// Riskiest-first, then capped, and a drop sets NeedsReview (B11b-F9). The
+	// old form took the first maxLeakFindings in ATTACHMENT order and said
+	// nothing, so a private key in the ninth source lost to the first source's
+	// sixty-fourth JWT and the merged profile still read as complete.
+	leaks, leaksTruncated := capLeakFindings(leaks)
+	needsReview = needsReview || leaksTruncated
 	requiredSecrets := make([]SecretNeed, 0, len(secretByName))
 	for _, n := range secretByName {
 		requiredSecrets = append(requiredSecrets, n)

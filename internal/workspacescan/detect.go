@@ -290,6 +290,64 @@ var leakRules = []leakRule{
 	{"git-credentials-url", regexp.MustCompile(`https?://[^/\s:@]+:[^/\s@]{8,}@[^/\s]+`)},
 }
 
+// leakSeverity ranks a leak kind by what an attacker can do with the value
+// behind it, highest first. It exists because BOTH leak doors cap their list
+// and something has to survive the cap: before B11b-F9 the survivors were
+// whichever findings happened to come first, so a committed private key in the
+// ninth attached source was dropped in favour of the first source's sixty-fourth
+// JWT. A cap is unavoidable (the list rides a profile into the console); which
+// findings it keeps is a choice, and keeping the reusable long-lived
+// credentials is the only defensible one.
+//
+// 3 = a long-lived credential that is usable as-is, from anywhere.
+// 2 = a credential that is usable as-is but is scoped, short-lived, or both.
+// 1 = secret-SHAPED, commonly a test fixture or an expired artifact.
+// Unknown kinds rank 0: they were already dropped by leakKinds, and anything
+// that reaches here unranked should sort last rather than displace a known one.
+var leakSeverity = map[string]int{
+	"private-key-block":   3,
+	"aws-access-key":      3,
+	"gcp-service-account": 3,
+	"git-credentials-url": 3,
+	"github-token":        3,
+	"gitlab-pat":          3,
+	"stripe-secret-key":   3,
+	"slack-token":         2,
+	"google-api-key":      2,
+	"jwt":                 1, // usually expired, often a fixture
+}
+
+// capLeakFindings sorts leak findings riskiest-first and applies the cap,
+// reporting whether anything was dropped. Ties fall back to the stable
+// path/kind/line/source ordering the two callers already produced, so equal
+// input still yields byte-identical output.
+//
+// truncated is the second half of B11b-F9: the drop used to be SILENT, on a
+// package whose documented promise is never to drop a suspected secret. The
+// callers stamp NeedsReview with it, so a profile missing findings stops
+// reading as the whole picture.
+func capLeakFindings(in []LeakFinding) (out []LeakFinding, truncated bool) {
+	slices.SortStableFunc(in, func(a, b LeakFinding) int {
+		if sa, sb := leakSeverity[a.Kind], leakSeverity[b.Kind]; sa != sb {
+			return sb - sa // higher severity first
+		}
+		if a.Path != b.Path {
+			return strings.Compare(a.Path, b.Path)
+		}
+		if a.Kind != b.Kind {
+			return strings.Compare(a.Kind, b.Kind)
+		}
+		if a.Line != b.Line {
+			return a.Line - b.Line
+		}
+		return strings.Compare(a.Source, b.Source)
+	})
+	if len(in) > maxLeakFindings {
+		return in[:maxLeakFindings], true
+	}
+	return in, false
+}
+
 var leakKinds = func() map[string]struct{} {
 	m := map[string]struct{}{}
 	for _, r := range leakRules {
@@ -1232,15 +1290,16 @@ func validateBuildMemoryMiB(v int) int {
 }
 
 // validateLeakFindings keeps only findings with a known rule kind and a safe
-// relative path, dedupes by (path, kind, line), sorts, and caps. Never carries
-// a value (LeakFinding has no value field by construction).
-func validateLeakFindings(raw []LeakFinding) []LeakFinding {
+// relative path, dedupes by (path, kind, line), then sorts riskiest-first and
+// caps (capLeakFindings). Never carries a value (LeakFinding has no value field
+// by construction). truncated reports that the cap DROPPED findings, which the
+// caller turns into NeedsReview — B11b-F9: the drop used to be silent.
+func validateLeakFindings(raw []LeakFinding) (out []LeakFinding, truncated bool) {
 	type key struct {
 		path, kind string
 		line       int
 	}
 	seen := map[key]struct{}{}
-	var out []LeakFinding
 	for _, f := range raw {
 		if _, ok := leakKinds[f.Kind]; !ok {
 			continue
@@ -1259,17 +1318,5 @@ func validateLeakFindings(raw []LeakFinding) []LeakFinding {
 		seen[k] = struct{}{}
 		out = append(out, LeakFinding{Path: f.Path, Kind: f.Kind, Line: line})
 	}
-	slices.SortFunc(out, func(a, b LeakFinding) int {
-		if a.Path != b.Path {
-			return strings.Compare(a.Path, b.Path)
-		}
-		if a.Kind != b.Kind {
-			return strings.Compare(a.Kind, b.Kind)
-		}
-		return a.Line - b.Line
-	})
-	if len(out) > maxLeakFindings {
-		out = out[:maxLeakFindings]
-	}
-	return out
+	return capLeakFindings(out)
 }

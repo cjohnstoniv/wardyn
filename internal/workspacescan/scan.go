@@ -119,7 +119,8 @@ func DeriveProfile(facts ScanFacts) WorkspaceProfile {
 	p.SuggestedEgress = validateSuggestedHosts(facts.SuggestedEgress, egress)
 	p.SecretFilesPresent = validateSecretFilePaths(facts.SecretFilesPresent)
 	p.BuildMemoryMiB = validateBuildMemoryMiB(facts.BuildMemoryMiB)
-	p.LeakFindings = validateLeakFindings(facts.LeakFindings)
+	leaks, leaksTruncated := validateLeakFindings(facts.LeakFindings)
+	p.LeakFindings = leaks
 	// Setup commands are synthesized from FIXED templates keyed on the (trusted,
 	// marker-derived) package managers + which conventional script/target keys
 	// exist — never copied from file content, so a hostile scripts.build can't
@@ -140,6 +141,13 @@ func DeriveProfile(facts ScanFacts) WorkspaceProfile {
 		p.NeedsReview = true
 	default:
 		p.Confidence = ConfidenceHigh
+	}
+	// B11b-F9: dropping suspected secrets is a review trigger on its own. It
+	// does NOT lower Confidence — the profile's build-system reading is exactly
+	// as good as it was; what is incomplete is the leak list, and NeedsReview is
+	// the field that says "a human has to look at this".
+	if leaksTruncated {
+		p.NeedsReview = true
 	}
 	return p
 }
