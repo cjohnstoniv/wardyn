@@ -190,6 +190,10 @@ export interface WireIntegration {
   // Kind-validated non-secret config (e.g. "lane", "region", "ecosystems").
   config?: Record<string, unknown>;
   docs?: string;
+  // F6-F12 — capability names this integration does NOT support (mirrors
+  // internal/types/workspace.go's Integration.DisabledCapabilities), so a
+  // caller doesn't need a hardcoded per-provider capability matrix.
+  disabled_capabilities?: string[];
   default_for?: string[];
   source?: "stored" | "legacy" | (string & {});
   // The server's live per-capability matrix for this row

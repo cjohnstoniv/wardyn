@@ -23,13 +23,19 @@ export interface ProfileDomainObservation {
 // The raw, deterministic observations the synthesis is derived from. anomalies is
 // the highlighted "something unexpected happened" channel (e.g. a denied host the
 // agent kept retrying, an exec the profile can't explain).
+// F4-F12b class — every field mirrors a Go `omitempty` slice
+// (internal/recordmode.Observations), so a real capture that never reached a
+// given signal (e.g. egress-only, no exec/writes/connects) omits the key
+// rather than sending `[]`. profile-review.tsx's Observations() already
+// destructures each with a `= []` default; marking these optional teaches
+// tsc the same omission class runs.wire.fields.test.ts pins for AgentRun.
 export interface ProfileObservations {
-  domains: ProfileDomainObservation[];
-  minted_grant_ids: string[];
-  exec_argv0s: string[];
-  file_writes: string[];
-  connects: string[];
-  anomalies: string[];
+  domains?: ProfileDomainObservation[];
+  minted_grant_ids?: string[];
+  exec_argv0s?: string[];
+  file_writes?: string[];
+  connects?: string[];
+  anomalies?: string[];
 }
 
 // POST /api/v1/runs/{id}/profile response (kind:"profile_proposal"). proposed.run

@@ -341,3 +341,73 @@ describe("source parity — Go wire tags vs the TS mirror (F8 probe)", () => {
     expect(tsKeys.filter((k) => !goTags.has(k))).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// D. F6-F14 — the same "documents the omissions" idiom (proven above for
+// AgentRun), extended to four more FLAT structs (the census's "34 mirrored
+// types, ~12 with drift"). Still flat-only: goJSONTags does not handle nested
+// braces, so an EMBEDDED response wrapper (grantView{types.CapabilityGrant;
+// Inert}, siteConfigPutResponse{types.SiteConfig;…}) is read off its own
+// nested type, never folded into the base struct's tag list — this batch's
+// drifts are mostly embedded, which is why CapabilityGrant/RunPolicySpec
+// below show full parity on the BASE struct even though the response bodies
+// carry more.
+// ---------------------------------------------------------------------------
+describe("source parity — four more flat structs (F6-F14)", () => {
+  const root = repoRoot();
+  const workspaceGo = readFileSync(join(root, "internal/types/workspace.go"), "utf8");
+  const typesGoFull = readFileSync(join(root, "internal/types/types.go"), "utf8");
+  const siteConfigGo = readFileSync(join(root, "internal/types/site_config.go"), "utf8");
+  const policyGo = readFileSync(join(root, "internal/types/policy.go"), "utf8");
+  const workspacesTs = readFileSync(join(root, "ui/src/app/lib/types/workspaces.ts"), "utf8");
+  const permissionsTs = readFileSync(join(root, "ui/src/app/lib/types/permissions.ts"), "utf8");
+  const siteTs = readFileSync(join(root, "ui/src/app/lib/types/site.ts"), "utf8");
+  const policyTs = readFileSync(join(root, "ui/src/app/lib/types/policy.ts"), "utf8");
+
+  it("documents (does not fail on) Go Workspace tags the TS mirror omits", () => {
+    const goTags = goJSONTags(workspaceGo, "Workspace");
+    const tsKeys = new Set(tsInterfaceKeys(workspacesTs, "Workspace"));
+    const omitted = goTags.filter((t) => !tsKeys.has(t));
+    // attachments: tier-3 attachment rows — the console reads the derived
+    // `sources`/`effective_requirements` projections instead, never the raw
+    // attachment table. built_profile_hash: the server's own build-cache key,
+    // never read client-side. egress_edited_at: an internal heal marker
+    // (ReconcileWorkspaceEgressDecisions) with no console consumer.
+    expect(omitted.sort()).toEqual(["attachments", "built_profile_hash", "egress_edited_at"].sort());
+  });
+
+  it("CapabilityGrant: full parity with the BASE Go struct — `inert` is a known response-wrapper key", () => {
+    const goTags = new Set(goJSONTags(typesGoFull, "CapabilityGrant"));
+    expect(goTags.size).toBeGreaterThanOrEqual(8);
+    // `inert` is NOT a types.CapabilityGrant field — it rides in on
+    // internal/api/permissions.go's grantView{types.CapabilityGrant; Inert},
+    // an EMBEDDED wrapper goJSONTags never sees (nested braces). Every other
+    // TS key must be a real Go tag.
+    const tsKeys = tsInterfaceKeys(permissionsTs, "CapabilityGrant");
+    const unknown = tsKeys.filter((k) => k !== "inert" && !goTags.has(k));
+    expect(unknown, "TS reads these off the grant payload but Go's base struct never writes them").toEqual([]);
+    // …and nothing on the base struct is missing from the mirror.
+    const omitted = [...goTags].filter((t) => !tsKeys.includes(t));
+    expect(omitted).toEqual([]);
+  });
+
+  it("documents (does not fail on) Go SiteConfig tags the TS mirror omits", () => {
+    const goTags = goJSONTags(siteConfigGo, "SiteConfig");
+    const tsKeys = new Set(tsInterfaceKeys(siteTs, "SiteConfig"));
+    const omitted = goTags.filter((t) => !tsKeys.has(t));
+    // These three ARE mirrored (site.ts declares `readonly integrations?`,
+    // `readonly effective_scm_hosts?`, `readonly onboarding_completed_at?`)
+    // — tsInterfaceKeys' regex does not match a `readonly` modifier, the same
+    // discipline gap goJSONTags documents for nested braces. Pinned here so a
+    // REAL new omission (a field with no `readonly` prefix at all) still
+    // shows up as a diff against this list.
+    expect(omitted.sort()).toEqual(["effective_scm_hosts", "integrations", "onboarding_completed_at"].sort());
+  });
+
+  it("RunPolicySpec: full parity, base struct — a future drift shows up as a diff either direction", () => {
+    const goTags = goJSONTags(policyGo, "RunPolicySpec");
+    expect(goTags.length).toBeGreaterThanOrEqual(17);
+    const tsKeys = tsInterfaceKeys(policyTs, "RunPolicySpec");
+    expect(new Set(goTags)).toEqual(new Set(tsKeys));
+  });
+});

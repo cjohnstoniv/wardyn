@@ -254,6 +254,14 @@ export interface Workspace {
   // The server-side fold of attached sources' contracts under the overlay —
   // read-only, recomputed at every read.
   effective_requirements?: WorkspaceRequirementsMap;
+  // F5-F1 — the MEMBER who created this workspace (their lowercased OIDC sub
+  // or email), or absent/"" for an OPERATOR-owned row: every workspace an
+  // admin creates, and every workspace that existed before migration 0048.
+  // Set only by the server at create time; never accepted on a write. Mirrors
+  // internal/types/workspace.go's Workspace.OwnedBy — the ownership relation
+  // useCanMutate(ws.owned_by) reads to decide whether a member may mutate
+  // this row.
+  owned_by?: string;
   created_at: string;
   updated_at: string;
 }

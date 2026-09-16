@@ -212,6 +212,14 @@ export interface RunPolicySpec {
   allowed_domains: string[];
   denied_domains?: string[];
   first_use_approval: FirstUseMode;
+  // How long a wait_for_review connection is HELD open awaiting a decision
+  // before the proxy refuses it. 0/absent keeps the built-in 30s default;
+  // only wait_for_review holds. Mirrors RunPolicySpec.FirstUseHoldSeconds.
+  first_use_hold_seconds?: number;
+  // Caps concurrent wait_for_review holds. 0/absent keeps the built-in 16
+  // default; the (N+1)th concurrent hold fails fast rather than consuming an
+  // unbounded goroutine. Mirrors RunPolicySpec.MaxHolds.
+  max_holds?: number;
   allowed_methods?: string[];
   min_confinement_class: ConfinementClass;
   eligible_grants?: GrantSpec[];

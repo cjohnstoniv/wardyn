@@ -25,6 +25,11 @@ export interface CapabilityGrant {
   effect: CapabilityEffect;
   created_at: string;
   created_by?: string;
+  // F4-F5/F6-F5 — RESPONSE-ONLY: this row names a capability kind this build
+  // doesn't know (internal/api/permissions.go's grantView embeds
+  // types.CapabilityGrant + this flag), so the stored row is inert rather
+  // than a parse error. Absent/false on a live capability.
+  inert?: boolean;
 }
 
 // GET /permissions — the admin screen's whole data need in one call.

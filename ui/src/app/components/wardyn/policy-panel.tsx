@@ -244,6 +244,18 @@ export const FIELD_HELP = {
     doc: "first_use_approval-modes",
     snippet: "deny_with_review",
   },
+  first_use_hold_seconds: {
+    what: "How long a wait_for_review connection is held open awaiting a decision before the proxy refuses it.",
+    values: "Seconds. 0 or omitted keeps the built-in 30s default. Only wait_for_review holds — the other first_use_approval modes never wait.",
+    doc: "top-level",
+    snippet: 30,
+  },
+  max_holds: {
+    what: "Caps concurrent wait_for_review holds (one held goroutine per held connection).",
+    values: "0 or omitted keeps the built-in 16 default. The (N+1)th concurrent hold fails fast rather than consuming an unbounded goroutine.",
+    doc: "top-level",
+    snippet: 16,
+  },
   allowed_methods: {
     what: "Optional HTTP method restriction.",
     values: "e.g. [\"GET\", \"POST\"]. Empty or omitted = every method.",
