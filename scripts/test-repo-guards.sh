@@ -212,7 +212,7 @@ EOF
 done
 if [ "$port_bind_fail" = 0 ]; then ok "every docker run/create publish in scripts/ binds loopback only"; fi
 
-# ── 7. deploy/kind/quickstart.sh's generated values carry a CC2/CC3-guard
+# ── 8. deploy/kind/quickstart.sh's generated values carry a CC2/CC3-guard
 #      escape — R-01: the B12b-F7 helm guard (k8s.enabled with no
 #      CC2/CC3 RuntimeClass pinned AND no default-policy override refuses to
 #      render) now refuses `make kind-quickstart`'s own generated values
@@ -226,7 +226,7 @@ else
     bad "deploy/kind/quickstart.sh's generated values.yaml heredoc names neither WARDYN_DEFAULT_POLICY nor a runtimeClasses pin — the B12b-F7 helm guard now refuses this exact render (R-01); see deploy/compose/docker-compose.yaml's WARDYN_DEFAULT_POLICY override for the byte-matching fix"
 fi
 
-# ── 8. compose WARDYN_OIDC_ROLE_MAP stays a plain passthrough, and
+# ── 9. compose WARDYN_OIDC_ROLE_MAP stays a plain passthrough, and
 #      .env.example still carries the seeded pair — R-03: a runtime `:-`
 #      default on docker-compose.yaml's WARDYN_OIDC_ROLE_MAP applies to every
 #      EXISTING deployment whose .env does not set it (":-" substitutes for
