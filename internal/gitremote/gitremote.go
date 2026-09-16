@@ -267,11 +267,28 @@ func parseRemoteURL(url string) (host, ownerRepo string) {
 		if at := strings.LastIndexByte(s, '@'); at >= 0 {
 			s = s[at+1:]
 		}
+		// The separating colon is the one AFTER the closing bracket when the
+		// host is a bracketed IPv6 literal — git's own scp-like syntax accepts
+		// `git@[2001:db8::1]:acme/web.git`. Taking the FIRST colon split that
+		// host into the bogus "[2001", which is precisely the string B11a-F8/F11
+		// exist to keep out of the operator's "other hosts" warning; the URL arm
+		// was fixed and this one was not.
 		colon := strings.IndexByte(s, ':')
+		if strings.HasPrefix(s, "[") {
+			end := strings.IndexByte(s, ']')
+			if end < 0 {
+				return "", "" // unterminated bracket: fail safe, as everything here does
+			}
+			rest := strings.IndexByte(s[end+1:], ':')
+			if rest < 0 {
+				return "", ""
+			}
+			colon = end + 1 + rest
+		}
 		if colon < 0 {
 			return "", ""
 		}
-		return strings.ToLower(s[:colon]), twoSegments(s[colon+1:])
+		return hostOnly(s[:colon]), twoSegments(s[colon+1:])
 	}
 }
 

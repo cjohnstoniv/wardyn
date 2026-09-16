@@ -47,6 +47,12 @@ func TestParseRemoteURL(t *testing.T) {
 		// would have read in the warning.
 		{"ipv6 with port", "ssh://git@[2001:db8::1]:2222/acme/web.git", "2001:db8::1", "acme/web"},
 		{"ipv6 no port", "https://[2001:db8::1]/acme/web.git", "2001:db8::1", "acme/web"},
+		// R-02: the scp-like arm took the FIRST colon, which is INSIDE the
+		// bracket — `git clone git@[::1]:repo.git` is valid git syntax, and it
+		// produced the same bogus "[2001" the URL arm had already been fixed of.
+		{"scp ipv6", "git@[2001:db8::1]:acme/web.git", "2001:db8::1", "acme/web"},
+		{"scp ipv6 no user", "[2001:db8::1]:acme/web.git", "2001:db8::1", "acme/web"},
+		{"scp ipv6 unterminated", "git@[2001:db8::1:acme/web.git", "", ""},
 		{"no path", "https://github.com", "", ""},
 	}
 	for _, c := range cases {
