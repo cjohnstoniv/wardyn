@@ -12,6 +12,8 @@
 import { clockTime } from "../../../lib/format";
 import type { AuditEvent } from "../../../lib/types";
 
+// DRAFT (M2 canon pending) — R-8: this was the one new string in the lane
+// that shipped untagged.
 export function sessionOptionLabel(e: AuditEvent): string {
   return `Session ended ${clockTime(e.time)} · ${e.actor}`;
 }
