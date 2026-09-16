@@ -345,7 +345,19 @@ function AddAllocationForm({ drives, onChanged }: { drives: UserDriveListItem[];
         ...(userTier && homeTouched ? { home_override: homeOverride.trim() } : {}),
         enabled,
       });
+      // F4-F7 (Appendix A V8): only `subject` was reset — sizeOverride/
+      // writable/homeOverride/homeTouched/enabled persisted across submits,
+      // so allocating alice with a home_override and then bob (no field
+      // touched) silently pinned bob to alice's directory. Reset every
+      // AUTHORED field; driveID/priority/subjectType stay (§ batch-shaped —
+      // allocating a run of people to the same drive/priority/tier is the
+      // form's own point).
       setSubject("");
+      setSizeOverride("");
+      setWritable("inherit");
+      setHomeOverride("");
+      setHomeTouched(false);
+      setEnabled(true);
       setReplaced(res.replaced);
       onChanged();
     } catch (e) {
@@ -516,7 +528,13 @@ function DrivePreview() {
           <Textarea
             id="drive-preview-claims"
             value={claims}
-            onChange={(e) => setClaims(e.target.value)}
+            // F4-F10 (Appendix A V8): `result` survived a claims edit, so the
+            // PREVIOUS group's resolved drive sat under new, unrun input as
+            // if it answered it.
+            onChange={(e) => {
+              setClaims(e.target.value);
+              setResult(null);
+            }}
             className="font-mono"
             rows={3}
           />

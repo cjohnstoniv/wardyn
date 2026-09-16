@@ -452,6 +452,41 @@ describe("DrivesScreen — the allocation form's wire shapes", () => {
       home_override: "bsmith",
     });
   });
+
+  // F4-F7 (Appendix A V8): submit() reset only `subject` — sizeOverride/
+  // writable/homeOverride/homeTouched/enabled persisted, so allocating alice
+  // with home_override:"alice" and then bob (no fields touched) pinned bob to
+  // alice's directory. Batch-shaped fields (driveID/priority/subjectType) stay
+  // — this is the second-submit test the finding names.
+  it("a second submit carries no leftover home/size/writable override from the first", async () => {
+    renderScreen();
+    await screen.findByText(DRIVES.ALLOC_TITLE);
+    await userEvent.click(screen.getByRole("button", { name: PERM.SUBJECT_USER }));
+    await fill("alice@corp.example");
+    await userEvent.type(screen.getByLabelText(DRIVES.FIELD_HOME_OVERRIDE), "asmith");
+    await userEvent.type(screen.getByLabelText(DRIVES.FIELD_SIZE_OVERRIDE), "4096");
+    await userEvent.click(screen.getByRole("button", { name: DRIVES.MODE_RW }));
+    await allocate();
+    expect(upsertGrantMock.mock.calls[0][0]).toMatchObject({
+      subject: "alice@corp.example",
+      home_override: "asmith",
+      size_mib_override: 4096,
+      writable_override: true,
+    });
+
+    // Bob — the Who field only, the drive stays selected (batch-shaped).
+    const who = screen.getByRole("textbox", { name: PERM.FIELD_WHO });
+    await userEvent.clear(who);
+    await userEvent.type(who, "bob@corp.example");
+    await allocate();
+
+    const second = upsertGrantMock.mock.calls[1][0];
+    expect(second.subject).toBe("bob@corp.example");
+    expect(second.drive_id).toBe(SCRATCH.id); // batch-shaped field: kept
+    expect(second).not.toHaveProperty("home_override");
+    expect(second.size_mib_override).toBe(0);
+    expect(second).not.toHaveProperty("writable_override");
+  });
 });
 
 describe("DrivesScreen — the preview's three answers and its refusals", () => {
@@ -489,6 +524,25 @@ describe("DrivesScreen — the preview's three answers and its refusals", () => 
     renderScreen();
     await ask("nobody");
     expect(await screen.findByText(DRIVES.PREVIEW_NONE)).toBeInTheDocument();
+  });
+
+  // F4-F10 (Appendix A V8): `result` was not cleared when `claims` changed —
+  // the previous group's resolved drive sat under new, unrun input as if it
+  // were the new group's answer.
+  it("typing new claims clears the previous group's stale preview result", async () => {
+    previewDriveMock.mockResolvedValue({
+      drive_name: SCRATCH.name,
+      matched_tier: "group",
+      writable: true,
+      enforcement: "request",
+      size_mib: 16384,
+    });
+    renderScreen();
+    await ask();
+    expect(await screen.findByText(DRIVES.PREVIEW_RESULT(SCRATCH.name, DRIVES.PREVIEW_TIER_GROUP))).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText(PREVIEW.FIELD_CLAIMS), "x");
+    expect(screen.queryByText(DRIVES.PREVIEW_RESULT(SCRATCH.name, DRIVES.PREVIEW_TIER_GROUP))).not.toBeInTheDocument();
   });
 
   it("paused: the drive and the tier, no directory and no storage object — nothing above a paused row is derived", async () => {

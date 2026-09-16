@@ -358,7 +358,13 @@ function ResolvedPreview({ snapshot }: { snapshot: GovernanceSnapshot }) {
           <Textarea
             id="governance-preview-claims"
             value={claims}
-            onChange={(e) => setClaims(e.target.value)}
+            // F4-F10 (Appendix A V8): `result` survived a claims edit, so the
+            // PREVIOUS group's resolved profile sat under new, unrun input as
+            // if it answered it.
+            onChange={(e) => {
+              setClaims(e.target.value);
+              setResult(null);
+            }}
             className="font-mono"
             rows={3}
           />
