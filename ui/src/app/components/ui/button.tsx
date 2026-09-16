@@ -11,9 +11,13 @@ const buttonVariants = cva(
       variant: {
         default: "bg-primary text-primary-foreground hover:bg-primary/90",
         // F7-F15: --destructive is var(--danger) — text-danger-foreground is
-        // its AA-proven text token, not a raw text-white guess.
+        // its AA-proven text token, not a raw text-white guess. R-01: no
+        // dark:bg-destructive/NN dilution — the unified token is already the
+        // AA-clear pair at full strength in both themes (dark:bg-destructive/60
+        // dropped it to 3.18:1, a stale leftover from when dark --destructive
+        // was a hand-copied hex needing a tone-down).
         destructive:
-          "bg-destructive text-danger-foreground hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
+          "bg-destructive text-danger-foreground hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40",
         outline:
           "border bg-background text-foreground hover:bg-accent hover:text-accent-foreground dark:bg-input/30 dark:border-input dark:hover:bg-input/50",
         secondary:

@@ -278,6 +278,48 @@ describe("light-theme WCAG AA contrast (C004)", () => {
     expect(offenders, `diluted semantic/muted-foreground text — use the full token:\n${offenders.join("\n")}`).toHaveLength(0);
   });
 
+  // R-01: the FILL-side twin of the text-side gate above. A diluted `bg-<token>/NN`
+  // composites the fill toward --background, which can drag whatever *-foreground
+  // text sits on it below AA even though the token itself is AA-clear at full
+  // strength (proven for danger/destructive above) — exactly what
+  // `dark:bg-destructive/60` did to `text-danger-foreground` on the destructive
+  // button (9.46:1 -> 3.18:1). The text-side gate above never matches a `bg-`
+  // class, so this slipped through it; scanned over ALL of src/app, INCLUDING
+  // components/ui/ (unlike the text-white/raw-palette gates below, a diluted
+  // fill under a vendored shadcn primitive is just as real a regression).
+  //
+  // Scoped to the actual failure mode — a BASE or `dark:`-only diluted fill
+  // sharing its className with a `*-foreground` text token — not every diluted
+  // fill in the app: `hover:`/`focus:`/`data-[...]:`-gated dilutions (e.g. the
+  // ~10 pre-existing `bg-danger text-danger-foreground hover:bg-danger/90`
+  // delete-button hovers, dropdown-menu's `data-[variant=destructive]:focus:
+  // bg-destructive/10`) are a different, pre-existing, interaction-state
+  // pattern where the dilution is minor (90%) and momentary, not this lane's
+  // regression class; and a diluted fill with no co-located `*-foreground`
+  // text (e.g. `bg-info/15` badges, `bg-danger/15` chips using `text-danger`
+  // directly) never had an opaque-fill-calibrated text token riding on it in
+  // the first place. Auditing those ~20 pre-existing sites is out of scope
+  // for R-01; this gate pins the class of bug R-01 actually is.
+  it("no BASE/dark: opacity-diluted fill sharing a *-foreground text token, anywhere in src/app, incl. components/ui/", () => {
+    const offenders: string[] = [];
+    const tokens = ["destructive", "success", "warning", "danger", "info", "cyan"];
+    const bgClassRe = new RegExp(`^(?:dark:)?bg-(?:${tokens.join("|")})\\/(\\d{1,3})$`);
+    const fgRe = /-foreground\b/;
+    for (const f of walkTsx("src/app")) {
+      readFileSync(f, "utf8")
+        .split("\n")
+        .forEach((ln, i) => {
+          if (!fgRe.test(ln)) return;
+          const diluted = ln.split(/\s+/).some((word) => {
+            const m = bgClassRe.exec(word.replace(/^["'`]+|["'`,]+$/g, ""));
+            return m !== null && +m[1] < 100;
+          });
+          if (diluted) offenders.push(`${f}:${i + 1}`);
+        });
+    }
+    expect(offenders, `diluted BASE/dark: fill under a *-foreground text token:\n${offenders.join("\n")}`).toHaveLength(0);
+  });
+
   // F7-F3/F7-F8: text-white bypasses every contrast guard above — it is
   // neither the AA-proven semantic tokens nor a token this file can check at
   // all. AgentBadge (claude 3.12:1 both themes) and PhaseRail's success step
