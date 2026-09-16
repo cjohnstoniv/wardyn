@@ -225,6 +225,33 @@ describe("SafetyMeter — a spec edit while a stale grade is on screen", () => {
     });
     expect(meter).toHaveTextContent("Safest");
   });
+
+  // R4 — gradePolicy(spec, interactive) reads the hint too (the never-reap
+  // rationale differs by it); a stale compare keyed on spec content ALONE
+  // missed the case where only `interactive` changes on an unchanged spec.
+  it("also says Grading… when only the interactive hint changes, same spec", async () => {
+    vi.useFakeTimers();
+    gradePolicyMock.mockResolvedValueOnce(GUARDED);
+    const { rerender } = render(<SafetyMeter spec={SPEC} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    const meter = screen.getByTestId("safety-meter");
+    expect(meter).toHaveTextContent("Guarded");
+
+    gradePolicyMock.mockResolvedValueOnce(SAFEST);
+    rerender(<SafetyMeter spec={SPEC} interactive />);
+    // specKey is byte-identical — only the hint flipped — but the grade IN
+    // HAND was never graded with `interactive: true`.
+    expect(meter).not.toHaveTextContent("Guarded");
+    expect(meter).toHaveTextContent("Grading…");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(gradePolicyMock).toHaveBeenLastCalledWith(SPEC, true);
+    expect(meter).toHaveTextContent("Safest");
+  });
 });
 
 describe("SafetyMeter — dimmed on parse failure", () => {

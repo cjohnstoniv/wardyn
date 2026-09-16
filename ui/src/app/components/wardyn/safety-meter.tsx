@@ -48,6 +48,15 @@ const META: Record<SafetyLabel, { segments: number; color: string }> = {
 const SEGMENTS = [0, 1, 2, 3];
 const DEBOUNCE_MS = 500;
 
+// R4 — the request the on-screen grade actually answers: spec CONTENT and the
+// `interactive` hint together, not content alone. gradePolicy(spec,
+// interactive) reads both (the never-reap rationale differs by it), so a
+// hint-only toggle on an unchanged spec must also read as stale until its own
+// re-grade lands — F2-F6's `specKey`-only compare missed exactly this edge.
+function requestKey(specKey: string, interactive: boolean): string {
+  return specKey + String(interactive);
+}
+
 // The rationales driving the grade are the items AT the overall (max) level —
 // the ones that set it. Capped at 3 so the tooltip stays a tooltip.
 // ponytail: fixed cap; a "+N more" affordance is the upgrade if operators ask.
@@ -95,7 +104,7 @@ export function SafetyMeter({
         .then((g) => {
           if (live) {
             setGrade(g);
-            setGradedKey(specKey);
+            setGradedKey(requestKey(specKey, !!interactive));
             setError(false);
           }
         })
@@ -120,7 +129,7 @@ export function SafetyMeter({
   // The grade IN HAND is for a different document than the one on screen right
   // now — the bar's fill is still the last real answer (never blanked), but the
   // caption must not claim it is CURRENT.
-  const stale = active && specKey !== gradedKey;
+  const stale = active && specKey != null && requestKey(specKey, !!interactive) !== gradedKey;
 
   const caption = active
     ? stale
