@@ -293,9 +293,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// exactly the path this closure exists for. Detaching here and again below
 	// is harmless (WithoutCancel of a detached ctx is a no-op in effect) and
 	// keeps the two concerns independent.
-	abort := func(hint string) {
-		s.failAndRevoke(context.WithoutCancel(ctx), runID, types.RunPending, hint)
-	}
+	abort := s.abortHalfBuiltRun(ctx, runID)
 
 	// resolveRunPolicy's own notes come FIRST: they are the ones that say the
 	// run is narrower than what the caller asked for. Launch used to drop them
@@ -325,19 +323,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	warnings = append(warnings, s.sshHostLevelWarnings(ctx, runID,
 		append(repoLocatorsOf(spec.WorkspaceRepos), req.Repo, req.DevcontainerRepo)...)...)
 
-	// Record the model-access + requirements folds that ran ABOVE the confinement
-	// floor (SPINE-2). The spec was already mutated there — so the floor/grade saw
-	// the full picture — and those same grants still reach persistRunGrants below
-	// (it snapshots this same spec.EligibleGrants into the persisted grants + proxy
-	// injections). foldRunIntegration is the audit-free fold; the audit is emitted
-	// here now that runID exists (kept split so preflight can call the same fold).
-	if foldKind != "" {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.creds",
-			runID.String(), "success", mustJSON(map[string]any{"integration_ref": foldInteg.ID, "type": foldKind})))
-	}
-	for _, ev := range reqEvents {
-		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", ev.action, ev.target, "success", mustJSON(ev.data)))
-	}
+	// The model-access + requirements folds that ran ABOVE the confinement floor,
+	// audited now that the run id exists. See recordCreateFolds.
+	s.recordCreateFolds(ctx, runID, foldInteg, foldKind, reqEvents)
 
 	// Persist the eligibility records + derive the non-secret sandbox wiring
 	// (github/git_pat/ssh grant ids, api_key proxy injections, SCM egress) —
@@ -420,9 +408,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// or API caller ever reads. Said on the 201 instead, which is the only
 	// channel this door has. Appended BEFORE the call so the warning is already
 	// on the list the build-failed arm answers 201 with.
-	if req.DevcontainerRepo != "" && s.cfg.ImageBuilder == nil {
-		warnings = append(warnings, devcontainerNoBuilderWarning)
-	}
+	warnings = s.appendDevcontainerNoBuilderWarning(warnings, req)
 	image, responded := s.resolveCreateRunImage(ctx, w, req, runID, created, warnings, wsRefs)
 	if responded {
 		return

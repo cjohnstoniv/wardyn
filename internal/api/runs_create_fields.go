@@ -4,11 +4,16 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/google/uuid"
+
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // Length ceilings for the create-run request's free-text fields. Every one of
@@ -102,4 +107,57 @@ func runFieldCharsAllowed(v string, multiline bool) bool {
 		})
 	}
 	return controlCharFree(v)
+}
+
+// recordCreateFolds emits the audit rows for the two folds handleCreateRun runs
+// ABOVE the confinement floor (SPINE-2): the run's model-access binding and each
+// referenced workspace's requirements contract.
+//
+// The folds themselves are audit-FREE by design — preflight calls the same ones
+// and persists nothing — so the rows are emitted here, at the one caller that
+// has a run id to bind them to. Extracted because handleCreateRun sits at the
+// funlen ratchet (.golangci.yml), which is what its neighbours' own comments ask
+// the next lane to do.
+func (s *Server) recordCreateFolds(ctx context.Context, runID uuid.UUID,
+	foldInteg types.Integration, foldKind string, reqEvents []requirementAuditEntry,
+) {
+	if foldKind != "" {
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.creds",
+			runID.String(), "success", mustJSON(map[string]any{"integration_ref": foldInteg.ID, "type": foldKind})))
+	}
+	for _, ev := range reqEvents {
+		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", ev.action, ev.target, "success", mustJSON(ev.data)))
+	}
+}
+
+// abortHalfBuiltRun is the compensator every post-CreateRun early return in
+// handleCreateRun goes through: it fails the persisted run PENDING->FAILED with
+// an operator-facing hint and runs the revoke cascade, so a 500 answered after
+// the run row exists cannot leave a ghost PENDING run holding a live run token
+// until the undispatched sweep reaps it (B1-F1).
+//
+// context.WithoutCancel is applied INSIDE the returned closure, not at the
+// client-disconnect detach further down handleCreateRun: the compensator runs on
+// the REQUEST's context, and a 500 is very often answered to a client that has
+// already gone — its cancelled context cannot write the FAILED state the
+// compensator exists to write, so the run would strand PENDING with un-revoked
+// credentials on exactly the path this exists for.
+func (s *Server) abortHalfBuiltRun(ctx context.Context, runID uuid.UUID) func(hint string) {
+	return func(hint string) {
+		s.failAndRevoke(context.WithoutCancel(ctx), runID, types.RunPending, hint)
+	}
+}
+
+// appendDevcontainerNoBuilderWarning says on the 201 what resolveCreateRunImage
+// does silently: with no ImageBuilder wired a devcontainer_repo run falls
+// through to the convention image, so the sandbox is not the one the caller
+// asked for (B1-F9). The fall-through itself stays — a hard refusal would break
+// every no-builder deployment that has been launching this way — and a workspace
+// base_image still fails CLOSED there (PARITY-4), which is the difference this
+// sentence exists to make visible.
+func (s *Server) appendDevcontainerNoBuilderWarning(warnings []string, req createRunRequest) []string {
+	if req.DevcontainerRepo != "" && s.cfg.ImageBuilder == nil {
+		return append(warnings, devcontainerNoBuilderWarning)
+	}
+	return warnings
 }
