@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -209,18 +208,15 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		return req, noCeiling, "", "", false
 	}
 
-	// Title/description are free text bound for a TEXT column and every run row
-	// in the console — cap them at the door rather than discovering a 40KB
-	// "title" in the list view. Generous enough that no real name is refused.
-	// Runes, not bytes: the message says "chars", and a CJK/emoji title well
-	// under the limit was refused with a byte count the operator couldn't
-	// reconcile with what they typed.
-	if utf8.RuneCountInString(req.Title) > maxRunTitleLen {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("title is too long (%d chars, max %d)", utf8.RuneCountInString(req.Title), maxRunTitleLen))
-		return req, noCeiling, "", "", false
-	}
-	if utf8.RuneCountInString(req.Description) > maxRunDescriptionLen {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("description is too long (%d chars, max %d)", utf8.RuneCountInString(req.Description), maxRunDescriptionLen))
+	// EVERY caller-supplied free-text field, in ONE loop: a rune cap and a
+	// control-character check (runs_create_fields.go). title/description have
+	// been capped since they were added; repo, devcontainer_repo, task and agent
+	// were bounded only by the 1 MiB body, so a megabyte "repo" reached the run
+	// row, every list payload and the hash-chained audit row — and a NUL in a
+	// title was a Postgres 500 instead of a 400 naming the field the caller can
+	// fix (B1-F6). Preflight calls the SAME helper, so Review cannot preview a
+	// request launch would refuse.
+	if !s.validateRunTextFields(w, req) {
 		return req, noCeiling, "", "", false
 	}
 

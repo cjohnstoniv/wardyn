@@ -842,13 +842,23 @@ func storedSecretPairingInCeiling(g types.GrantSpec, ceiling []types.GrantSpec) 
 	return composer.PairingInCeiling(g, ceiling)
 }
 
+// neededSecret is one secret name a spec references AND the grant kind that
+// references it. The kind is the whole point (B1-F7): `needed` was a []string
+// filled from all three arms, so every refusal on this path said "api_key" —
+// including for a git_pat or ssh_key grant, which sent the policy author
+// looking at a grant that was never the problem. Reachable from four doors.
+type neededSecret struct {
+	name string
+	kind types.GrantKind
+}
+
 func (s *Server) validateInlineSecretRefs(ctx context.Context, owner string, spec types.RunPolicySpec) (int, error) {
 	// Collect the secret names referenced by api_key, git_pat AND ssh_key
 	// grants (all three resolve a stored secret by name — api_key proxy-side,
 	// git_pat via the git helper, ssh_key as the resident key + optional
-	// known_hosts). If there are none, there is nothing to check and no secret
-	// store is required.
-	var needed []string
+	// known_hosts), each carrying the kind that referenced it. If there are
+	// none, there is nothing to check and no secret store is required.
+	var needed []neededSecret
 	for _, g := range spec.EligibleGrants {
 		switch g.Kind {
 		case types.GrantAPIKey:
@@ -882,7 +892,7 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, owner string, spe
 				}
 				continue
 			}
-			needed = append(needed, rule.SecretName)
+			needed = append(needed, neededSecret{rule.SecretName, types.GrantAPIKey})
 		case types.GrantGitPAT:
 			_, secretName, _, derr := gitPATScopeFields(g.Scope)
 			if derr != nil {
@@ -892,7 +902,7 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, owner string, spe
 				return http.StatusUnprocessableEntity, fmt.Errorf(
 					"git_pat grant references reserved secret name %q", secretName)
 			}
-			needed = append(needed, secretName)
+			needed = append(needed, neededSecret{secretName, types.GrantGitPAT})
 		case types.GrantSSHKey:
 			_, keyRef, _, khRef, derr := sshKeyScopeFields(g.Scope)
 			if derr != nil {
@@ -902,9 +912,9 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, owner string, spe
 				return http.StatusUnprocessableEntity, errors.New(
 					"ssh_key grant references a reserved secret name")
 			}
-			needed = append(needed, keyRef)
+			needed = append(needed, neededSecret{keyRef, types.GrantSSHKey})
 			if khRef != "" {
-				needed = append(needed, khRef)
+				needed = append(needed, neededSecret{khRef, types.GrantSSHKey})
 			}
 		default:
 			continue
@@ -914,11 +924,12 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, owner string, spe
 		return 0, nil
 	}
 
-	// At least one api_key grant needs a secret: a secret store MUST be wired or
-	// the injection can never resolve (fail closed).
+	// At least one grant needs a secret: a secret store MUST be wired or the
+	// injection can never resolve (fail closed). The message names the KIND that
+	// actually needs it, not whichever kind this check was written for first.
 	if s.cfg.Secrets == nil {
-		return http.StatusUnprocessableEntity, errors.New(
-			"an api_key grant requires a secret store, but none is configured")
+		return http.StatusUnprocessableEntity, fmt.Errorf(
+			"a %s grant requires a secret store, but none is configured", needed[0].kind)
 	}
 
 	// Names only — never Get a value here.
@@ -935,9 +946,9 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, owner string, spe
 		// accepted too — this is what lets a member's inline_policy name their
 		// own model key with no operator row of that name at all (6c). Never
 		// widens: an operator-only name still 422s below.
-		if !known[n] && !s.ownsSecretMemoized(ctx, owner, n) {
+		if !known[n.name] && !s.ownsSecretMemoized(ctx, owner, n.name) {
 			return http.StatusUnprocessableEntity, fmt.Errorf(
-				"api_key grant references unknown secret %q (set it first via the secrets API)", n)
+				"%s grant references unknown secret %q (set it first via the secrets API)", n.kind, n.name)
 		}
 	}
 	return 0, nil

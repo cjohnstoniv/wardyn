@@ -108,6 +108,12 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Same free-text field caps + control-character check launch runs over every
+	// caller-supplied string on this body (runs_create_fields.go): one loop, one
+	// 400 shape, shared so Review never previews a request the create door 400s.
+	if !s.validateRunTextFields(w, req) {
+		return
+	}
 	// Same PROVIDER ADMISSION launch runs over the two FREE-TEXT repository
 	// fields (decodeAndValidateCreateRun -> requestRepoProviderRefusals,
 	// workspace_admission.go). Neither `repo` nor `devcontainer_repo` is a spec
