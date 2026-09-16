@@ -181,6 +181,57 @@ func TestGitHubMinter_MintReturnsInsideClientBudget(t *testing.T) {
 	}
 }
 
+// R-03. The client Timeout bounds ONE round trip, and a cold installByOrg makes
+// TWO (GetRepositoryInstallation, then CreateInstallationToken) — so a slow
+// first hop followed by a blackholed second used to hold the grant row's FOR
+// UPDATE lock and a pooled connection for ~2x the budget. The mint now derives
+// ONE ctx deadline for the whole call, so the in-transaction ceiling is 1x.
+//
+// The server here is the shape that separates the two: hop 1 answers just under
+// the budget, hop 2 never answers. Per-hop-only = ~1.8x; one ceiling = ~1x.
+func TestGitHubMinter_MintCeilingIsOneBudgetNotTwo(t *testing.T) {
+	const budget = 500 * time.Millisecond
+
+	block := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/installation"):
+			time.Sleep(budget * 4 / 5) // slow, but inside the budget: hop 1 SUCCEEDS
+			_, _ = w.Write([]byte(`{"id": 42}`))
+		default:
+			<-block // hop 2 never answers
+		}
+	}))
+	// Defers run LIFO, so close(block) runs BEFORE srv.Close(): httptest's Close
+	// waits for outstanding handlers, and the blocked one only returns when the
+	// channel closes. The other order deadlocks until the package test timeout.
+	defer srv.Close()
+	defer close(block)
+
+	m := newTestGitHubMinter(t, srv.URL+"/", budget)
+
+	done := make(chan time.Duration, 1)
+	go func() {
+		start := time.Now()
+		_, _, err := m.MintInstallationToken(context.Background(), []string{"acme/widgets"}, map[string]string{"contents": "read"}, time.Hour)
+		if err == nil {
+			t.Error("mint whose second hop never answers must fail")
+		}
+		done <- time.Since(start)
+	}()
+
+	select {
+	case elapsed := <-done:
+		// 1.4x is the midpoint between the two behaviours (1.0x vs ~1.8x), so
+		// this fails on the old shape without being flaky on the new one.
+		if ceiling := budget * 7 / 5; elapsed > ceiling {
+			t.Fatalf("mint took %s, want under %s — the whole mint must share ONE ceiling, not one per round trip (two hops = 2x the lock hold)", elapsed, ceiling)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("mint never returned")
+	}
+}
+
 // NEGATIVE CONTROL for B11a-F2: a merely SLOW GitHub still mints. The deadline
 // is a ceiling on a hung server, not a latency budget that fails ordinary
 // round trips.

@@ -67,8 +67,25 @@ type githubMinter struct {
 // gitApprovalBudget, inject 10 s, CLI 30 s), so the residual is a caller with
 // none — and the cost of that residual is the grant row lock and a pool
 // connection pinned for as long as api.github.com stays blackholed, queueing
-// every other mint for that grant behind it. Sized as refRulesetProbeTimeout's
-// sibling: generous for a single round trip, well below every caller budget.
+// every other mint for that grant behind it.
+//
+// It is TWO bounds, and saying which is which matters to whoever sizes it next:
+//
+//   - PER ROUND TRIP, as the http.Client Timeout on the app-authenticated
+//     client. A mint makes up to TWO requests on a cold installByOrg
+//     (GetRepositoryInstallation, then CreateInstallationToken), and
+//     http.Client.Timeout is per request.
+//   - PER MINT, as the ctx MintInstallationToken derives from the caller's.
+//     Without it the in-transaction ceiling this finding actually cares about —
+//     how long the grant row's lock can be held — was 2x this value, not 1x.
+//
+// So 15 s is the whole mint, not each hop. It is NOT below every caller budget:
+// inject's is 10 s, and there the CALLER's deadline is the tighter one and wins
+// (WithTimeout takes the earlier of the two), which is the correct order. The
+// value is refRulesetProbeTimeout's sibling and sized the same way — generous
+// for a real round trip on a slow day, small against the lock it is protecting.
+// checkRefRuleset's own budget (refRulesetProbeTimeout x len(repos)) is a
+// SEPARATE ceiling on the same transaction; the two add.
 const githubClientTimeout = 15 * time.Second
 
 // timeout returns this minter's HTTP client budget: the test seam when set,
@@ -170,6 +187,17 @@ func (m *githubMinter) MintInstallationToken(ctx context.Context, repos []string
 	if err != nil {
 		return "", time.Time{}, err
 	}
+	// ONE ceiling for the WHOLE mint, not one per hop. The client Timeout below
+	// bounds a single round trip, and a cold installByOrg makes two
+	// (GetRepositoryInstallation then CreateInstallationToken) — so a slow first
+	// hop plus a blackholed second held the grant row's FOR UPDATE lock and a
+	// pooled connection for 2x the budget, which is not the bound B11a-F2 asked
+	// for. It lives here rather than at the broker's call site so that
+	// VerifyRefRuleset's probe mint — which also runs inside that transaction —
+	// is bounded by the same one ceiling. A caller whose own deadline is tighter
+	// still wins: WithTimeout takes the earlier of the two.
+	ctx, cancel := context.WithTimeout(ctx, m.timeout())
+	defer cancel()
 	// Lazily read the App credentials + build the client on first mint. This is
 	// where an absent secret fails closed (clear error, no panic).
 	client, err := m.client(ctx)
