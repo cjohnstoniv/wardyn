@@ -229,7 +229,42 @@ func awsSSOTokenFingerprint(refreshToken string) string {
 // every read-modify-write of a stored AWS SSO credential is serialised, whichever
 // path makes it.
 func (s *Server) lockAWSSSOOwner(owner string) func() {
+	mu := s.awsSSOOwnerMutex(owner)
+	mu.Lock()
+	return mu.Unlock
+}
+
+// tryLockAWSSSOOwner is lockAWSSSOOwner's NON-BLOCKING form: it returns
+// ok=false rather than queueing behind a renewal that is already in flight.
+//
+// WHY THAT IS A DIFFERENT QUESTION FROM "who renews" (B2-F6). Dispatch is
+// synchronous with POST /runs, and the renewal starts a whole skew window
+// (awsSSORefreshSkew, 10 min) AHEAD of expiry — so the common case is N people
+// launching runs against a token that still works perfectly well. When the
+// SSO-OIDC endpoint is unresponsive the in-flight renewal costs
+// 2 x awsSSORefreshTimeout + the retry delay before it gives up and serves the
+// token it holds; every OTHER create queued behind this lock used to pay that
+// same bill again, serially, inside its own create request. N creates, N times
+// the stall, for a credential none of them needed renewed.
+//
+// So: a caller whose token is still valid takes the lock only if it is free.
+// If someone else is already renewing, it serves the token in hand and lets
+// that flight finish — the next dispatch reads whatever the renewal persisted.
+// A caller whose token is EXPIRED still BLOCKS, because for that caller the
+// renewal is the difference between a working run and a dead one, and the
+// in-flight renewal is very likely about to produce exactly what it needs.
+func (s *Server) tryLockAWSSSOOwner(owner string) (func(), bool) {
+	mu := s.awsSSOOwnerMutex(owner)
+	if !mu.TryLock() {
+		return nil, false
+	}
+	return mu.Unlock, true
+}
+
+// awsSSOOwnerMutex returns the per-owner mutex, creating it on first use.
+func (s *Server) awsSSOOwnerMutex(owner string) *sync.Mutex {
 	s.ssoRefreshMu.Lock()
+	defer s.ssoRefreshMu.Unlock()
 	if s.ssoRefreshLocks == nil {
 		s.ssoRefreshLocks = map[string]*sync.Mutex{}
 	}
@@ -238,9 +273,7 @@ func (s *Server) lockAWSSSOOwner(owner string) func() {
 		mu = &sync.Mutex{}
 		s.ssoRefreshLocks[owner] = mu
 	}
-	s.ssoRefreshMu.Unlock()
-	mu.Lock()
-	return mu.Unlock
+	return mu
 }
 
 // awsSSOTokenSpent / markAWSSSOTokenSpent read and write the spent-marks map.
@@ -288,7 +321,20 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 		return blob, awsSSORefreshSpentSentence
 	}
 
-	unlock := s.lockAWSSSOOwner(scope.owner)
+	// SINGLE-FLIGHT, and non-blocking while the token in hand still works
+	// (B2-F6, tryLockAWSSSOOwner): every queued create used to pay the stalled
+	// renewal's full 2 x 10s budget again, serially, inside its own POST /runs —
+	// for a token that had minutes of validity left and needed nothing.
+	unlock := func() {}
+	if blob.expired(now) {
+		unlock = s.lockAWSSSOOwner(scope.owner)
+	} else if u, ok := s.tryLockAWSSSOOwner(scope.owner); ok {
+		unlock = u
+	} else {
+		slog.InfoContext(ctx, "wardynd: a renewal of this AWS SSO credential is already in flight; serving the still-valid token",
+			slog.String("credential_source", awsSSOCredentialSourceLabel(scope)))
+		return blob, ""
+	}
 	defer unlock()
 
 	// Re-read inside the lock; a store error here is not fatal (we still hold a
