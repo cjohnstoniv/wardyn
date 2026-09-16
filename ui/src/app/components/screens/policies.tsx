@@ -456,19 +456,26 @@ function PolicyEditor({
   const [specText, setSpecText] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
+  // F5-F9: what the editor opened WITH — the dirty check below compares
+  // against this, not against empty/starter values.
+  const initial = React.useRef({ name: "", specText: "" });
 
   React.useEffect(() => {
     if (!editor) return;
     setError(null);
     setSaving(false);
-    if (editor.mode === "edit" && editor.policy) {
-      setName(editor.policy.name);
-      setSpecText(JSON.stringify(editor.policy.spec, null, 2));
-    } else {
-      setName("");
-      setSpecText(JSON.stringify(STARTER_SPEC, null, 2));
-    }
+    const seedName = editor.mode === "edit" && editor.policy ? editor.policy.name : "";
+    const seedSpec = JSON.stringify(
+      editor.mode === "edit" && editor.policy ? editor.policy.spec : STARTER_SPEC,
+      null,
+      2,
+    );
+    setName(seedName);
+    setSpecText(seedSpec);
+    initial.current = { name: seedName, specText: seedSpec };
   }, [editor]);
+
+  const dirty = name !== initial.current.name || specText !== initial.current.specText;
 
   const save = async () => {
     setError(null);
@@ -505,7 +512,17 @@ function PolicyEditor({
       {/* F3-F8: the primitive (ui/dialog.tsx) now carries the max-height/
           overflow/scroll-thin floor itself — this local patch, narrower than
           the primitive's (85vh vs 100dvh-2rem), is deleted. */}
-      <DialogContent className="sm:max-w-2xl">
+      {/* F5-F9: a hand-written spec was discarded on Escape/overlay click,
+          no draft, no confirm. In-repo precedent (a91b3529, "the wizard is
+          now the one edit surface, and can't be dismissed by accident"):
+          block dismissal outright rather than confirming, scoped to THIS
+          dialog only. ponytail: block, don't confirm — same call as that
+          precedent. */}
+      <DialogContent
+        className="sm:max-w-2xl"
+        onPointerDownOutside={(e) => dirty && e.preventDefault()}
+        onEscapeKeyDown={(e) => dirty && e.preventDefault()}
+      >
         <DialogHeader>
           <DialogTitle>{isEdit ? "Edit policy" : "New policy"}</DialogTitle>
           <DialogDescription>

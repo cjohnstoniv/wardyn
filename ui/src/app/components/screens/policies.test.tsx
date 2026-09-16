@@ -140,3 +140,38 @@ describe("PoliciesScreen — required fields + error announcement (ui-secretsPol
     expect(saveBtn).toHaveAttribute("aria-describedby", alert.id);
   });
 });
+
+// F5-F9: the editor discarded a hand-written spec on Escape/overlay click,
+// no draft, no confirm — the in-repo precedent (commit a91b3529, "the wizard
+// is now the one edit surface, and can't be dismissed by accident") blocks
+// dismissal outright rather than confirming: onPointerDownOutside/
+// onEscapeKeyDown preventDefault while dirty, scoped to this dialog only.
+describe("PoliciesScreen — F5-F9: the policy editor can't be dismissed by accident once dirty", () => {
+  beforeEach(() => {
+    listPoliciesMock.mockReset();
+    listPoliciesMock.mockResolvedValue([]);
+    createPolicyMock.mockReset();
+  });
+
+  it("blocks Escape once the Name field has been edited", async () => {
+    render(<PoliciesScreen />);
+    await screen.findByText(/no policies yet/i);
+    await userEvent.click(screen.getByRole("button", { name: /new policy/i }));
+    await userEvent.type(screen.getByLabelText(/^name/i), "my-policy");
+
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape", code: "Escape" });
+
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByLabelText(/^name/i)).toHaveValue("my-policy");
+  });
+
+  it("neg: an untouched editor still closes on Escape", async () => {
+    render(<PoliciesScreen />);
+    await screen.findByText(/no policies yet/i);
+    await userEvent.click(screen.getByRole("button", { name: /new policy/i }));
+
+    fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape", code: "Escape" });
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+});
