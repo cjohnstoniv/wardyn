@@ -337,7 +337,23 @@ test("the member's run gets the member's PINNED identity, and something spends i
   // The initial prompt is what makes claude-code actually TALK at boot, in the
   // session we attach to. It is the whole point of the run: the credential has
   // to be SPENT, not merely minted.
-  await page.locator("#nr-seed").fill("Reply with the single word: ready.");
+  // AUTONOMOUS, NOT INTERACTIVE — and the reason is the vendor CLI, not Wardyn.
+  // An interactive run starts the Claude Code TUI, and on a FRESH sandbox that
+  // TUI opens on its own first-run onboarding ("Welcome to Claude Code v2.1.231
+  // … Choose the text style that looks best with your terminal"). It sits on
+  // that theme picker forever: the seed prompt is never reached, no model call
+  // is ever made, GetRoleCredentials is never called, and this case's /_seen
+  // assertion can only time out — which is exactly what it did, for three
+  // minutes, with a perfectly credentialled run (run.llm.bedrock
+  // mode=sso-inject) sitting behind the wizard.
+  //
+  // Autonomous is the shape that actually answers this case's question: agent-run
+  // execs claude NON-interactively, so there is no TUI and no onboarding, and the
+  // task below is what makes it talk to Bedrock. The terminal is case 2's
+  // subject (P1), already proven above; what this case is for is WHOSE identity
+  // the run spends.
+  await page.getByRole("radio", { name: /^Autonomous/ }).click();
+  await page.locator("#nr-task").fill("Reply with the single word: ready.");
   await page.getByRole("button", { name: /^Launch/ }).click();
 
   // LAUNCH NAVIGATES NOWHERE, deliberately. The 201's advisory `warnings[]`
@@ -352,7 +368,9 @@ test("the member's run gets the member's PINNED identity, and something spends i
   // failure: `api.anthropic.com` is dropped from egress because this deployment
   // is Bedrock, and the member's resources are capped to the operator maximum.
   await page.getByRole("button", { name: "Open run" }).click();
-  await expect(page.locator(".xterm-screen").first()).toBeVisible({ timeout: SANDBOX_UP });
+  // An autonomous run has no terminal to attach to, so the waypoint here is the
+  // run page reporting it is actually running rather than an .xterm-screen.
+  await expect(page.getByText("Running").first()).toBeVisible({ timeout: SANDBOX_UP });
 
   // /_seen is the observation that is not Wardyn asserting about itself: it is
   // what the AWS SDK actually asked the portal to mint. Index 0 of the fixture
