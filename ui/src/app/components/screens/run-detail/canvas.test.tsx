@@ -216,8 +216,12 @@ describe("RunCanvas — F1-F5 a situational flip mid-edit does not clobber the i
 
     // The run finishes mid-edit — situational flips to "finished".
     rerender(<RunCanvas ctx={ctx({ finished: true })} />);
-    // Still editing: the live preset's arrangement must not jump to the
-    // finished one out from under the operator.
+    // R-2: `Egress` is in BOTH presets, so its mere presence proves nothing —
+    // the preset itself must not have followed. useRunLayout's own fetch
+    // effect is keyed on `preset` and calls `getLayout` SYNCHRONOUSLY within
+    // the same effect flush the instant preset changes, so this is
+    // timing-safe (unlike asserting on the fetch's still-async RESULT).
+    expect(getLayout).not.toHaveBeenCalledWith("finished");
     expect(screen.getByRole("heading", { name: "Egress" })).toBeInTheDocument();
 
     // Neg (canvas.test.tsx:180): exiting edit re-syncs to the run's actual
