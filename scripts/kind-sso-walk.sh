@@ -251,17 +251,31 @@ fi
 # three seconds earlier, which sends the reader to the knob instead of the race.
 # Bounded retry, because the ready pod may still be flushing its first lines.
 step "asserting the test hatch is active on the serving pod"
+# ASK EVERY RUNNING POD, and keep asking. Two things make a single-shot read
+# wrong here. `kubectl logs deployment/wardyn` resolves the selector and picks
+# ONE arbitrary matching pod, and for the seconds around a rolling update that
+# set still holds the terminating old one, whose log stream errors out. And a
+# pod that has just been declared available may not have flushed its first lines
+# yet. Either way the assertion then fails with "the endpoint override did not
+# take effect" about a daemon that is running perfectly with the hatch on —
+# which sends the reader to the knob instead of to the race.
+#
+# So: every Running pod, every two seconds, for two minutes. A terminating pod
+# answering is not a wrong answer — it booted under the same env; the point of
+# the check is that SOME serving wardynd has the hatch on, and the rollout above
+# has already established which one is taking traffic.
 hatch_found=""
-for _ in $(seq 1 30); do
-  ready_pod="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get pods \
-    -l app.kubernetes.io/name=wardyn \
-    -o jsonpath='{range .items[?(@.status.phase=="Running")]}{.metadata.name}{"\t"}{.metadata.deletionTimestamp}{"\n"}{end}' 2>/dev/null \
-    | awk -F'\t' '$2 == "" {print $1; exit}')"
-  if [[ -n "${ready_pod}" ]] && kubectl --context "${CONTEXT}" -n "${NAMESPACE}" logs "${ready_pod}" --tail=500 2>/dev/null \
-       | grep -q "TEST HATCH ACTIVE"; then
-    hatch_found="${ready_pod}"
-    break
-  fi
+for _ in $(seq 1 60); do
+  for pod in $(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get pods \
+                 -l app.kubernetes.io/name=wardyn --field-selector=status.phase=Running \
+                 -o name 2>/dev/null | sed 's|^pod/||'); do
+    if kubectl --context "${CONTEXT}" -n "${NAMESPACE}" logs "${pod}" --tail=500 2>/dev/null \
+         | grep -q "TEST HATCH ACTIVE"; then
+      hatch_found="${pod}"
+      break
+    fi
+  done
+  [[ -n "${hatch_found}" ]] && break
   sleep 2
 done
 [[ -n "${hatch_found}" ]] \
