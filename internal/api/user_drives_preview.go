@@ -234,11 +234,26 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, userDrivePreviewResponse{})
 		return
 	}
-	// (3) And would it bind here. Skipped for a PAUSED row, where nothing above
-	// it was derived — there is no object name to stat and nothing would mount
-	// anyway, which is the answer the response already carries.
-	if !resolved.Paused && !s.driveIsMountableHere(r.Context(), w, *resolved) {
-		return
+	// (3) And would it bind here — driveIsMountableHere's own DECISION
+	// (driveBindFailureHere), written here WITHOUT its refusal writer. Skipped
+	// for a PAUSED row, where nothing above it was derived: there is no object
+	// name to stat and nothing would mount anyway, which is the answer the
+	// response already carries.
+	//
+	// THE DECISION, NOT THE REFUSAL, and this was the last unconverted caller of
+	// the F269 split. A preview is a DISPLAY READ by an admin about somebody
+	// else: routing it through refuseDrive counted wardyn_drive_refusals_total
+	// and logged "a run was refused its drive" for a run that never existed, so
+	// an operator reading either one saw members being turned away from their
+	// drives whenever an admin opened the drives screen. The BODY is unchanged —
+	// driveBindFailure.body() is the one spelling both audiences write — because
+	// an admin checking why a member cannot mount a drive must read the sentence
+	// that member reads.
+	if !resolved.Paused {
+		if f := s.driveBindFailureHere(r.Context(), *resolved); f != nil {
+			writeError(w, f.status, f.body())
+			return
+		}
 	}
 	// The SAME positional pick newResolvedDrive made, read back rather than
 	// re-derived — a second copy of driveHomeSubject's rule here would be the

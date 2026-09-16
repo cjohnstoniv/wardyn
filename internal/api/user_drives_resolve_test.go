@@ -4,9 +4,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1718,5 +1720,73 @@ func TestShareHashRowIsRefusedAtResolveToo(t *testing.T) {
 	okStore := &driveStore{drive: ok, grant: grantFixture(ok.ID, nil), tier: types.CapabilitySubjectUser}
 	if _, err := driveServer(okStore).resolveUserDriveFor(context.Background(), []string{"sub-drive-bob"}, nil, driveSizeCeiling{}); err != nil {
 		t.Errorf("a share templated on sub = %v, want it to resolve", err)
+	}
+}
+
+// TestPreviewUnmountableDriveCountsNoRefusal is B5-F4: POST /drives/preview is a
+// DISPLAY READ by an admin about somebody else, and it ran the LAUNCH DOOR's
+// refusal writer.
+//
+// driveIsMountableHere → refuseDrive increments wardyn_drive_refusals_total and
+// logs WARN "a run was refused its drive" — for a run that never existed. An
+// operator watching either signal saw members being turned away from their
+// drives every time an admin opened the drives screen; /me was converted to the
+// decision (driveBindFailureHere) by F269 and pinned by
+// r3_me_unbindable_drive_test.go, and the preview was the last caller left.
+//
+// The BODY must not move: an admin checking why a member cannot mount a drive
+// reads the sentence that member reads. So this asserts the metric and the log
+// are still, and the wire text is byte-identical to the launch door's.
+func TestPreviewUnmountableDriveCountsNoRefusal(t *testing.T) {
+	// A share whose per-person directory nobody created — allocated in Wardyn,
+	// absent on the NAS. That is the launch door's REFUSED_HOME_MISSING arm,
+	// reached through driveShareBindFailure, i.e. the decision the preview runs.
+	root := t.TempDir()
+	d := driveFixture(func(d *types.UserDrive) {
+		d.Name, d.Backend, d.HomeTemplate, d.HostRoot = "Corp NAS", types.DriveBackendHostPath, types.HomeTemplateSub, root
+		d.Writable = true
+	})
+	newStore := func() *driveStore {
+		return &driveStore{drive: d, grant: grantFixture(d.ID, func(g *types.UserDriveGrant) { g.Subject = "bob" }),
+			tier: types.CapabilitySubjectUser}
+	}
+	srv, _ := driveShareServer(newStore(), []string{root}) // AdminToken wired, so /metrics answers
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	before := driveRefusedMetric(t, srv)
+	w := previewDriveHTTP(t, srv, []string{"bob"}, nil)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("preview = %d, want 422 (the launch door's own answer for this drive): %s", w.Code, w.Body.String())
+	}
+	previewBody := refusalBody(t, w)
+	if after := driveRefusedMetric(t, srv); after != before {
+		t.Errorf("one admin preview moved wardyn_drive_refusals_total %d -> %d. The counter means \"this "+
+			"deployment refused somebody's drive at launch\"; a display read about a third party is not that, and "+
+			"an operator cannot tell the two apart once they are summed", before, after)
+	}
+	if strings.Contains(buf.String(), "a run was refused its drive") {
+		t.Errorf("an admin preview logged a RUN refusal for a run that never existed:\n%s", buf.String())
+	}
+
+	// THE NEGATIVE CONTROL, and it is two halves in one: the launch door still
+	// counts exactly once, and its body is byte-identical to the preview's.
+	srv2, _ := driveShareServer(newStore(), []string{root})
+	before2 := driveRefusedMetric(t, srv2)
+	ctx := withOIDCGroups(operatorCtx("bob", "bob@corp.example", oidc.RoleMember), nil)
+	mount, ok, lw := driveSeed(t, srv2, driveRunRequest(true, nil), governanceCeiling{}, ctx)
+	if ok || mount != nil {
+		t.Fatalf("the launch door mounted a drive whose home directory is not on the share: %+v", mount)
+	}
+	if after := driveRefusedMetric(t, srv2); after != before2+1 {
+		t.Errorf("the launch door moved the refusal metric %d -> %d, want exactly one: the counter is what an "+
+			"operator watches for \"nobody can mount their drive since the NAS moved\"", before2, after)
+	}
+	if got := refusalBody(t, lw); got != previewBody {
+		t.Errorf("the preview and the launch door disagree on the sentence:\n preview = %q\n launch  = %q\n"+
+			"an admin diagnosing a member's drive must read the sentence that member reads, not a paraphrase", previewBody, got)
 	}
 }

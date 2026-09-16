@@ -744,10 +744,14 @@ only — though less narrowly than that used to mean. Since 0.7 it runs the
 governance door (`drivePreviewDoorIsOpen`), the unusable/stale group-snapshot arm
 (`driveWithUnusableGroups`, reached through `previewResolveUserDrive` in
 `internal/api/user_drives_preview.go`) and the would-it-bind-here check
-(`driveIsMountableHere` in `internal/api/user_drives_run.go`), in the enforcement
-path's own order and with the enforcement path's own refusals — and for a
+(`driveBindFailureHere`, the DECISION behind `driveIsMountableHere` in
+`internal/api/user_drives_run.go`), in the enforcement path's own order and with
+the enforcement path's own refusal SENTENCE, byte for byte — and for a
 `host_path` share that last check does touch the substrate: `driveShareBindFailure`
 re-runs the deployment's host-root ceiling and `os.Stat`s the person's own home.
+What it does NOT run is the enforcement door's refusal WRITER: a preview counts
+no `wardyn_drive_refusals_total` and logs no "a run was refused its drive", both
+of which describe a run that a preview never creates.
 What the PREVIEW does not run is `driveMountFor`'s narrowing arm, which folds a
 run request's `read_only` and has no counterpart in a preview that holds no run
 request. **The member preflight is not narrower at all**: `POST /runs/preflight`

@@ -338,14 +338,33 @@ type driveBindFailure struct {
 	reason string
 	member string
 	attrs  []any
+	// silent suppresses the metric and the WARN while keeping the body byte-
+	// identical. It is set on ONE arm: the probe returned because the CALLER's
+	// context ended, not because the share failed to answer. driveShareProbe's
+	// cancel arm and its timeout arm are indistinguishable from their return
+	// values, so counting both inflated the one counter that is supposed to mean
+	// "this deployment's shares stopped answering" with clients that closed the
+	// tab (B5-F4).
+	silent bool
+}
+
+// body is the refusal's wire text, in ONE place: the frozen member sentence
+// wrapped by driveRefusal for a real drive refusal, and the bare operator
+// sentence for the runner-unavailable arm. The admin PREVIEW writes this without
+// the metric and the WARN, so the two audiences cannot drift in the string.
+func (f *driveBindFailure) body() string {
+	if f.reason == "" {
+		return f.member
+	}
+	return driveRefusal(f.member)
 }
 
 // write emits the failure the way the enforcement door always has: refuseDrive
 // (metric + WARN + the frozen member sentence) for a real refusal, and the plain
 // 503 for the runner-unavailable arm.
 func (f *driveBindFailure) write(s *Server, w http.ResponseWriter) {
-	if f.reason == "" {
-		writeError(w, f.status, f.member)
+	if f.reason == "" || f.silent {
+		writeError(w, f.status, f.body())
 		return
 	}
 	s.refuseDrive(w, f.status, f.reason, f.member, f.attrs...)
@@ -539,7 +558,13 @@ func (s *Server) driveShareBindFailure(ctx context.Context, resolved types.Resol
 			member: fmt.Sprintf("this deployment cannot mount your drive (drive %q did not answer in time — ask an admin)",
 				resolved.Drive.Name),
 			attrs: []any{slog.String("drive", resolved.Drive.Name), slog.String("host_root", resolved.Drive.HostRoot),
-				slog.Duration("timeout", driveShareProbeTimeout)}}
+				slog.Duration("timeout", driveShareProbeTimeout)},
+			// THE CALLER GAVE UP, not the share (B5-F4): driveShareProbe returns
+			// the same (nil, false) for its timeout and for ctx.Done, and only
+			// the caller can tell them apart. A member who closed the tab is not
+			// a share that stopped answering, and counting it as one is how the
+			// refusal metric stops meaning anything.
+			silent: ctx.Err() != nil}
 	}
 	if err := rootErr; err != nil {
 		return &driveBindFailure{status: http.StatusUnprocessableEntity, reason: driveRefusalCeilingMoved,
@@ -577,7 +602,8 @@ func (s *Server) driveShareBindFailure(ctx context.Context, resolved types.Resol
 			member: fmt.Sprintf("this deployment cannot mount your drive (drive %q did not answer in time — ask an admin)",
 				resolved.Drive.Name),
 			attrs: []any{slog.String("drive", resolved.Drive.Name), slog.String("home", resolved.HomeName),
-				slog.Duration("timeout", driveShareProbeTimeout)}}
+				slog.Duration("timeout", driveShareProbeTimeout)},
+			silent: ctx.Err() != nil} // the caller gave up, not the share — see the root arm above
 	}
 	if statErr != nil {
 		return &driveBindFailure{status: http.StatusUnprocessableEntity, reason: driveRefusalHomeMissing,

@@ -278,7 +278,12 @@ func TestThreatModelDrivePreviewResidualMatchesTheHandler(t *testing.T) {
 	// crossed the 1000-line ceiling; the resolver it calls into stayed behind.
 	resolve := readSrc(t, "internal", "api", "user_drives_preview.go")
 	preview := methodBody(t, resolve, "handlePreviewUserDrive")
-	for _, gate := range []string{"drivePreviewDoorIsOpen", "previewResolveUserDrive", "driveIsMountableHere"} {
+	// driveBindFailureHere rather than driveIsMountableHere since B5-F4: the
+	// preview runs the same DECISION and writes the same sentence, without the
+	// enforcement door's metric and WARN — which describe a run a preview never
+	// creates. §4.6 is re-worded to match, and the chain check below still pins
+	// the decision this guard inspects to the one the launch door uses.
+	for _, gate := range []string{"drivePreviewDoorIsOpen", "previewResolveUserDrive", "driveBindFailureHere"} {
 		if !strings.Contains(preview, gate) {
 			t.Errorf("handlePreviewUserDrive no longer runs %s — §4.6 publishes it as something the preview DOES run; re-widen the residual deliberately", gate)
 		}
