@@ -11,6 +11,7 @@
 // App's own auth/health polling has nothing to do with this decision.
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import App, { FirstRunLanding, roleCanReach } from "./App";
 import { RoleProvider, type Role } from "./components/wardyn/operator-context";
@@ -170,6 +171,86 @@ describe("App — a 401 only carries a reason when the console WAS authed (H1)",
   });
 });
 
+// L4: onSignIn resolves identity BEFORE flipping `auth`, so the routed tree
+// never mounts at the pre-401 URL for one commit before the bounce — proven
+// by ORDER, not by DOM absence: while onSignIn's own `health.whoami()` call
+// (the SECOND /me request, deferred here) is still pending, nothing that
+// only fires once `auth === "authed"` (the badge poll's `limit=1000` reads)
+// may have gone out yet.
+describe("App — identity resolves before auth flips on re-auth (L4)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    window.history.pushState({}, "", "/");
+    cleanup();
+  });
+
+  it("no post-auth fetch fires while the re-auth whoami() is still pending", async () => {
+    // window.location.pathname is what safeReturnPath actually reads at
+    // capture (core.ts) — MemoryRouter's own history never touches it, so
+    // without this the captured path folds to the bare "/" the app happens
+    // to boot at, safeReturnPath rewrites THAT to "/runs", and onSignIn's
+    // `path === "/runs"` short-circuit skips whoami() entirely (a real path
+    // is required to exercise the branch this pin is about).
+    window.history.pushState({}, "", "/drives");
+
+    const midSession401 = deferred<Response>();
+    const reAuthWhoami = deferred<Response>();
+    let meCalls = 0;
+    let badgeCalls = 0;
+    let reAuthClicked = false;
+    let badgeCallsAfterClick = 0;
+    const fetchMock = vi.fn((url: RequestInfo | URL) => {
+      const u = String(url);
+      if (u.includes("/api/v1/me")) {
+        meCalls++;
+        // Call 1: AppShell's own mount-time /me (admin). Call 2+: the
+        // onSignIn whoami() this test controls.
+        return meCalls === 1 ? Promise.resolve(jsonResponse(200, ME_ADMIN)) : reAuthWhoami.promise;
+      }
+      if (u.includes("limit=1000")) {
+        badgeCalls++;
+        if (reAuthClicked) badgeCallsAfterClick++;
+        // Call 1: the mid-session 401 this test drives on purpose. Every
+        // later call (the SECOND badge poll, once re-authed) just succeeds.
+        return badgeCalls === 1 ? midSession401.promise : Promise.resolve(jsonResponse(200, []));
+      }
+      if (u.includes("/runs?limit=1") && !u.includes("limit=1000")) return Promise.resolve(jsonResponse(200, []));
+      if (u.includes("/healthz")) return Promise.resolve(jsonResponse(200, { status: "ok", sso: false }));
+      if (u.includes("/readyz")) return Promise.resolve(jsonResponse(200, { status: "ok" }));
+      if (u.includes("/setup/status")) return Promise.resolve(jsonResponse(200, SETUP_STATUS_READY));
+      if (u.includes("/approvals")) return Promise.resolve(jsonResponse(200, []));
+      if (u.includes("/runs")) return Promise.resolve(jsonResponse(200, []));
+      return Promise.resolve(jsonResponse(200, {}));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderApp();
+    await screen.findByText("runs screen stub");
+
+    midSession401.resolve(jsonResponse(401, { error: "unauthorized" }));
+    await screen.findByText("Admin token", { exact: true });
+    await screen.findByRole("alert");
+
+    reAuthClicked = true;
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Admin token"), "any-token");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+
+    // onSignIn is suspended on `await health.whoami()` right now (its
+    // promise is still pending) — `setAuth("authed")` cannot have run yet,
+    // so the badge poll it gates must not have fired either.
+    expect(badgeCallsAfterClick).toBe(0);
+    expect(screen.getByLabelText("Admin token")).toBeInTheDocument(); // still on the gate
+
+    // Resolved as a MEMBER (fails roleCanReach("/drives", "member")) so the
+    // fallback lands on the stubbed Runs screen rather than a real,
+    // unmocked DrivesScreen — this test is about ORDER, not destination
+    // (M2/M3 already cover the destination).
+    reAuthWhoami.resolve(jsonResponse(200, { ...ME_ADMIN, role: "member", operator: false, security_operator: false }));
+    await screen.findByText("runs screen stub");
+    expect(badgeCallsAfterClick).toBeGreaterThan(0); // …and now it has.
+  });
+});
+
 // H2/M2's actual path-restore behavior is proven end to end in
 // e2e/auth.spec.ts (Playwright drives the REAL browser location — a
 // MemoryRouter-based vitest mount can't: `safeReturnPath` reads
@@ -192,6 +273,18 @@ describe("roleCanReach — pure (M2)", () => {
   it("a member reaches their own three-screen surface, including sub-routes", () => {
     expect(roleCanReach("/runs/abc-123", "member")).toBe(true);
     expect(roleCanReach("/workspaces", "member")).toBe(true);
+  });
+
+  // M3: MEMBER_REACHABLE_PREFIXES was the member NAV set, not the member
+  // REACHABLE set — /secrets (self-service WRITE/DELETE since migration
+  // 0050) and /settings + /ssh-keys (rendered in the account menu for every
+  // role) have no sidebar entry but ARE reachable, so a member's own
+  // mid-session 401 on any of the three used to bounce to /runs instead of
+  // restoring.
+  it("M3: a member reaches the three self-service routes with no sidebar entry", () => {
+    expect(roleCanReach("/secrets", "member")).toBe(true);
+    expect(roleCanReach("/settings", "member")).toBe(true);
+    expect(roleCanReach("/ssh-keys", "member")).toBe(true);
   });
 
   // Negative control: a route with no special tier (neither member-scoped

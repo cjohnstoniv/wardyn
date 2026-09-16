@@ -298,14 +298,16 @@ const ATTENTION_POLL_MS = 5000;
 // M2: can THIS role reach a captured return path? Scoped to the one place a
 // wrong answer is a dead end the plan named (restoring a mid-session-401
 // path after re-auth) — NOT a general client-side route guard (nav-hiding
-// elsewhere is deliberately cosmetic; the server is the real gate, and a
-// member's own self-service routes like /secrets are reachable with no nav
-// entry at all). Mirrors this file's own <Route> tree tiers below: member's
-// reachable surface is Runs/Approvals/Workspaces (RunsScreen + its
-// sub-routes); /drives and /providers are the two SUPER-only routes with no
-// nav entry for anyone, gated operatorOnly server-side — restorable only for
-// an actual admin, never a security admin either.
-const MEMBER_REACHABLE_PREFIXES = ["/runs", "/approvals", "/workspaces"];
+// elsewhere is deliberately cosmetic; the server is the real gate). Mirrors
+// this file's own <Route> tree tiers below: a member's REACHABLE surface is
+// wider than their NAV set — Runs/Approvals/Workspaces PLUS the three
+// self-service routes with no sidebar entry at all (/secrets: WRITE/DELETE
+// are self-service since migration 0050, routes.go; /settings and
+// /ssh-keys: the account menu renders both for every role,
+// app-shell.tsx:820-831). /drives and /providers are the two SUPER-only
+// routes with no nav entry for anyone, gated operatorOnly server-side —
+// restorable only for an actual admin, never a security admin either.
+const MEMBER_REACHABLE_PREFIXES = ["/runs", "/approvals", "/workspaces", "/secrets", "/settings", "/ssh-keys"];
 const OPERATOR_ONLY_PREFIXES = ["/drives", "/providers"];
 export function roleCanReach(path: string, role: string): boolean {
   const under = (prefixes: string[]) =>
@@ -502,8 +504,6 @@ export default function App() {
         <SignIn
           reason={authReason}
           onSignIn={async () => {
-            setAuthReason(undefined);
-            setAuth("authed");
             // X3-F7/H2: restore the path the 401 interrupted, same-origin
             // pathname only (safeReturnPath) — root/setup are landing
             // decisions, not "somewhere to return to", so those (and "no
@@ -517,14 +517,18 @@ export default function App() {
             // just signed back in on this tab — a member landing there
             // would hit a bare 403 instead of the plan's stated /runs
             // fallback, so ask who signed in before trusting it.
-            if (path === "/runs") {
-              navigate("/runs", { replace: true });
-              return;
-            }
-            const me = await health.whoami().catch(() => null);
-            navigate(me && !roleCanReach(path, me.role) ? "/runs" : path, {
-              replace: true,
-            });
+            //
+            // L4: resolved BEFORE flipping auth, not after — the routed tree
+            // only mounts once auth is "authed", so awaiting here first
+            // (rather than between setAuth and navigate) means it never
+            // mounts for one commit at the pre-401 URL, firing an
+            // operator-only screen's own GET (and a 403 audit row) a beat
+            // before the bounce.
+            const me = path === "/runs" ? null : await health.whoami().catch(() => null);
+            const target = me && !roleCanReach(path, me.role) ? "/runs" : path;
+            setAuthReason(undefined);
+            setAuth("authed");
+            navigate(target, { replace: true });
           }}
         />
         <Toaster />
