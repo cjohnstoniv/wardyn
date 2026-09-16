@@ -430,6 +430,16 @@ describe("ModelProviderCard — U2-01: Connected needs an active credential lane
     expect(bedrockLane().getByText("Connected")).toBeInTheDocument();
   });
 
+  it("a member's redacted status ({ready} only — region/model/lanes withheld): Connected (RIDER B7-F6)", () => {
+    model(baseStatus({ bedrock: { ready: true, creds_present: false } }));
+    expect(bedrockLane().getByText("Connected")).toBeInTheDocument();
+  });
+
+  it("ready:false with region+model and no lane stays NOT Connected (the U2-01 control, spelled out)", () => {
+    model(baseStatus({ bedrock: { ready: false, region: "us-east-1", model: "anthropic.claude", creds_present: false } }));
+    expect(bedrockLane().queryByText("Connected")).not.toBeInTheDocument();
+  });
+
   it("an explicit shared row with region+model only is ALSO not Connected", () => {
     model(sharedRowStatus({ bedrock: { region: "us-east-1", model: "anthropic.claude", creds_present: false } }));
     expect(bedrockLane().queryByText("Connected")).not.toBeInTheDocument();

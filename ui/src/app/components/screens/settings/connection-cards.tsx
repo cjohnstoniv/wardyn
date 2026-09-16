@@ -554,10 +554,18 @@ export function ModelProviderCard({
             // row's `bedrockLane` is activeBedrockLane()'s answer and is
             // undefined until a credential lane (bearer > SSO > ~/.aws mount >
             // static keys) is genuinely active — that is the honest key.
+            //
+            // RIDER B7-F6: a MEMBER's status carries bedrock as {ready} only —
+            // the four lane booleans activeBedrockLane() reads are the
+            // operator's host posture and are zeroed server-side, so
+            // `bedrockLane` is always undefined for them. `ready` is the
+            // server's own "region + model + one credential lane" fold and is
+            // the member-safe form of the same fact; it is false on the
+            // region-or-model-only deployment U2-01 guards against.
             connected={
               perUserSso && status.model_access
                 ? modelAccessState !== "not_applicable" && perUserLive
-                : !!bedrockRow?.bedrockLane
+                : !!bedrockRow?.bedrockLane || !!status.bedrock?.ready
             }
             connectedDetail={
               bedrockConfigured ? `${status.bedrock?.region} · ${status.bedrock?.model}` : undefined
