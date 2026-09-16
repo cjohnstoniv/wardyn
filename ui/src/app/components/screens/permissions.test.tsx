@@ -8,7 +8,7 @@
 // these tests fail the moment a rendered string stops coming from the canon —
 // which is the property the owner's mock approval actually bought.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -37,6 +37,8 @@ import { CAPABILITY_KINDS, KIND, PERM } from "../../lib/permissions-copy";
 import type { CapabilityGrant } from "../../lib/types";
 import { PermissionsScreen } from "./permissions";
 import { OperatorProvider } from "../wardyn/operator-context";
+import { SECURITY_ONLY_REASON } from "../wardyn/copy";
+import { HttpError } from "../../lib/api/core";
 
 function grant(over: Partial<CapabilityGrant> = {}): CapabilityGrant {
   return {
@@ -399,5 +401,32 @@ describe("PermissionsScreen — the group-snapshot ceiling", () => {
     renderScreen();
     await screen.findByText(PERM.SNAPSHOT_TITLE);
     expect(screen.getByText(PERM.SNAPSHOT_BODY)).toBeInTheDocument();
+  });
+});
+
+// X3-F5 — /permissions and /governance are securityOps routes hidden from a
+// member's nav, so the only way in is typing the URL. Both reported the 403
+// as "We couldn't reach the Wardyn control plane", over a Retry that 403s
+// forever. The daemon answered; it answered about the caller's tier.
+describe("PermissionsScreen — a 403 is a tier, not an outage", () => {
+  const renderMember = () =>
+    render(
+      <MemoryRouter>
+        <OperatorProvider operator={false} securityOperator={false}>
+          <PermissionsScreen />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+
+  it("renders the tier sentence with no Retry, and still offers Retry on a 500", async () => {
+    getPermissionsMock.mockRejectedValue(new HttpError(403, "forbidden"));
+    renderMember();
+    expect(await screen.findAllByText(SECURITY_ONLY_REASON)).not.toHaveLength(0);
+    expect(screen.queryByRole("button", { name: /retry/i })).toBeNull();
+
+    cleanup();
+    getPermissionsMock.mockRejectedValue(new HttpError(500, "boom"));
+    renderMember();
+    expect(await screen.findAllByRole("button", { name: /retry/i })).not.toHaveLength(0);
   });
 });

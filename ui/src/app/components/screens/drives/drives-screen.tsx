@@ -60,7 +60,7 @@ import { Mono } from "../../wardyn/code-block";
 import { useOperator } from "../../wardyn/operator-context";
 import { PageHeader } from "../../wardyn/page-header";
 import { Chip, OperatorOnlyHint } from "../../wardyn/primitives";
-import { EmptyState, TableSkeleton } from "../../wardyn/states";
+import { EmptyState, TableSkeleton, loadFailStatus } from "../../wardyn/states";
 import { AllocationsBlock } from "./allocations";
 import { DriveEditor } from "./drive-editor";
 import { Note, enforcementGloss, modeText, modeTone, noteClass, question, sizeText, withMono } from "./display";
@@ -101,7 +101,7 @@ export function DrivesScreen() {
       // security admin who typed this URL is refused the read itself. Rendering
       // FETCH_FAILED_* there would call an authorization answer a server
       // hiccup, and offer a Retry that returns the same 403 forever.
-      .catch((e) => setStatus(e instanceof HttpError && e.status === 403 ? "forbidden" : "error"));
+      .catch((e) => setStatus(loadFailStatus(e)));
   }, []);
   React.useEffect(load, [load]);
 

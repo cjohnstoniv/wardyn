@@ -37,7 +37,7 @@ import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { Button } from "../../ui/button";
 import { PageHeader } from "../../wardyn/page-header";
 import { OperatorOnlyHint } from "../../wardyn/primitives";
-import { EmptyState, TableSkeleton } from "../../wardyn/states";
+import { EmptyState, TableSkeleton, loadFailStatus } from "../../wardyn/states";
 import { useOperator } from "../../wardyn/operator-context";
 import { Segmented } from "../permissions";
 import { AgentsTab } from "./agents-tab";
@@ -83,7 +83,7 @@ export function ProvidersScreen() {
       })
       // GET /workspace-providers is operatorOnly, like GET /drives — a 403 is
       // the TIER, not the network (drives-screen.tsx's own comment).
-      .catch((e) => setStatus(e instanceof HttpError && e.status === 403 ? "forbidden" : "error"));
+      .catch((e) => setStatus(loadFailStatus(e)));
   }, []);
   React.useEffect(load, [load]);
 

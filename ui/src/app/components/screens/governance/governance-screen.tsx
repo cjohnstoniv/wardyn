@@ -54,7 +54,8 @@ import { useSecurityOperator } from "../../wardyn/operator-context";
 import { PageHeader } from "../../wardyn/page-header";
 import { Chip } from "../../wardyn/primitives";
 import { SafetyMeter } from "../../wardyn/safety-meter";
-import { EmptyState, TableSkeleton } from "../../wardyn/states";
+import { EmptyState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../../wardyn/states";
+import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 import { AssignmentsBlock } from "./assignments";
 import { Note, noteClass, question, withMono } from "./display";
 import { ProfileEditor } from "./profile-editor";
@@ -67,7 +68,10 @@ export function GovernanceScreen() {
   // exactly. UX only — the middleware is what refuses a write.
   const securityOperator = useSecurityOperator();
   const [snap, setSnap] = React.useState<GovernanceSnapshot>(EMPTY);
-  const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
+  // X3-F5: FORBIDDEN is its own arm — /governance is a securityOps route hidden
+  // from a member's nav, so the 403 that answers a URL-typed visit is a verdict
+  // on their tier, not a control plane to retry.
+  const [status, setStatus] = React.useState<ScreenStatus>("loading");
   // null = closed; {profile: null} = a new profile; {profile: p} = editing p.
   const [editing, setEditing] = React.useState<{ profile: GovernanceProfile | null } | null>(null);
   const [toDelete, setToDelete] = React.useState<GovernanceProfile | null>(null);
@@ -86,7 +90,7 @@ export function GovernanceScreen() {
         setSnap(s);
         setStatus("ready");
       })
-      .catch(() => setStatus("error"));
+      .catch((e) => setStatus(loadFailStatus(e)));
   }, []);
   React.useEffect(load, [load]);
 
@@ -137,7 +141,9 @@ export function GovernanceScreen() {
     <div className="mx-auto max-w-[1120px] px-6 py-6">
       <PageHeader title={GOV.TITLE} description={GOV.LEAD} />
 
-      {status === "error" ? (
+      {status === "forbidden" ? (
+        <p className="mt-6 text-sm text-muted-foreground">{SECURITY_ONLY_REASON}</p>
+      ) : status === "error" ? (
         <section className="mt-6 overflow-hidden rounded-xl border border-border bg-card">
           {/* Distinct from empty, and it says so: the profiles already assigned
               keep binding every run — this list just cannot show them. */}

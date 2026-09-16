@@ -7,6 +7,21 @@ import * as React from "react";
 import { AlertTriangle, RotateCw } from "lucide-react";
 import { Button } from "../ui/button";
 import { cn } from "../ui/utils";
+import { HttpError } from "../../lib/api/core";
+
+// X3-F5 — the third arm every gated screen needs. A 403 is not "we couldn't
+// reach the control plane": the daemon answered, and answered about this
+// caller's tier, so a Retry over it retries forever. Screens that already had
+// this three-way (drives, providers) re-derived the predicate inline; the two
+// that did not (permissions, governance) reported a tier as an outage. One
+// helper, so the arms cannot drift apart again. A screen still renders its own
+// forbidden branch — what the sentence says is the SCREEN's tier, not this
+// helper's business.
+export type ScreenStatus = "loading" | "forbidden" | "error" | "ready";
+
+export function loadFailStatus(e: unknown): "forbidden" | "error" {
+  return e instanceof HttpError && e.status === 403 ? "forbidden" : "error";
+}
 
 // F7-F10: both states used to hardcode <h3>, correct only when a caller
 // happens to sit under an h1+h2 — several don't (an EmptyState/ErrorState

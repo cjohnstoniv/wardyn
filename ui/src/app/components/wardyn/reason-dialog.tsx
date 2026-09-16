@@ -28,7 +28,7 @@ import {
   APPROVAL_SCOPE_ORDER,
   DENY_SCOPE_HINT,
   DENY_SCOPE_LABEL,
-  OPERATOR_ONLY_REASON,
+  SECURITY_ONLY_REASON,
   UNTIL_PRESETS,
 } from "./copy";
 
@@ -92,7 +92,7 @@ export function ReasonDialog({
   // once, rather than threading it through as a prop, keeps both callers'
   // code unchanged.
   const alwaysDisabled = !hasWorkspace || !securityOperator;
-  const alwaysReason = !securityOperator ? OPERATOR_ONLY_REASON : ALWAYS_NEEDS_WORKSPACE;
+  const alwaysReason = !securityOperator ? SECURITY_ONLY_REASON : ALWAYS_NEEDS_WORKSPACE;
   // Rule 2 (server-side): until demands an expiry. Mirrored here so the
   // confirm button can't submit a scope the server will 400.
   const untilMissing = scope === "until" && !until;

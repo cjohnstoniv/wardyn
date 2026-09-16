@@ -52,7 +52,8 @@ import { Field, Switch } from "../wardyn/form-primitives";
 import { Mono } from "../wardyn/code-block";
 import { PageHeader } from "../wardyn/page-header";
 import { Chip } from "../wardyn/primitives";
-import { EmptyState, ErrorState, TableSkeleton } from "../wardyn/states";
+import { EmptyState, ErrorState, TableSkeleton, loadFailStatus, type ScreenStatus } from "../wardyn/states";
+import { SECURITY_ONLY_REASON } from "../wardyn/copy";
 import { usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 
 // The audit actor a bare admin-bearer caller is recorded as (actorFromRequest,
@@ -181,7 +182,11 @@ export function PermissionsScreen() {
   // with its member-powers prose as fact. There is no seed; there is no snapshot
   // until one arrives.
   const [snap, setSnap] = React.useState<PermissionsSnapshot | null>(null);
-  const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
+  // X3-F5: FORBIDDEN is its own arm. /permissions is a securityOps route hidden
+  // from a member's nav, so a member only arrives by typing the URL — and the
+  // 403 that answers them is the daemon's verdict on their tier, not an outage
+  // to retry.
+  const [status, setStatus] = React.useState<ScreenStatus>("loading");
   const [confirm, setConfirm] = React.useState<{ kind: CapabilityKind; next: boolean } | null>(null);
   const [toRemove, setToRemove] = React.useState<CapabilityGrant | null>(null);
   const [busy, setBusy] = React.useState(false);
@@ -194,9 +199,9 @@ export function PermissionsScreen() {
         setSnap(s);
         setStatus("ready");
       })
-      .catch(() => {
+      .catch((e) => {
         setSnap(null);
-        setStatus("error");
+        setStatus(loadFailStatus(e));
       });
   }, []);
   React.useEffect(load, [load]);
@@ -265,6 +270,8 @@ export function PermissionsScreen() {
               from a snapshot that actually arrived. */}
           {status === "loading" ? (
             <TableSkeleton rows={CAPABILITY_KINDS.length} cols={2} />
+          ) : status === "forbidden" ? (
+            <p className="px-6 pb-6 text-sm text-muted-foreground">{SECURITY_ONLY_REASON}</p>
           ) : status === "error" || !snap ? (
             <ErrorState onRetry={load} />
           ) : (
@@ -291,6 +298,8 @@ export function PermissionsScreen() {
         <div className="mt-4">
           {status === "loading" ? (
             <TableSkeleton rows={4} cols={5} />
+          ) : status === "forbidden" ? (
+            <p className="px-6 pb-6 text-sm text-muted-foreground">{SECURITY_ONLY_REASON}</p>
           ) : status === "error" || !snap ? (
             <ErrorState onRetry={load} />
           ) : snap.grants.length === 0 ? (

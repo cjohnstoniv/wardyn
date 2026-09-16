@@ -17,7 +17,7 @@
 //      see, and a COUNT-FREE 409 for the race it cannot,
 //   4. no component in this directory renders a product string of its own.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { expectNoOwnCopy } from "../../../lib/test-fixtures";
 
@@ -74,6 +74,7 @@ import { PERM } from "../../../lib/permissions-copy";
 import { DRIVES } from "../../../lib/user-drives-copy";
 import type { RunPolicySpec } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
+import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 import { question } from "./display";
 import { GovernanceScreen } from "./governance-screen";
 
@@ -659,5 +660,22 @@ describe("GovernanceScreen — the third limit is the user-drive door", () => {
     renderScreen(snapshot({ profiles: [profile({ limits: { max_concurrent_runs: 1 } }), PLATFORM] }));
     await screen.findByText(GREENFIELD.name);
     expect(within(screen.getAllByRole("table")[0]).getByText(GOV.LIMIT_QUOTA_LABEL(1))).toBeInTheDocument();
+  });
+});
+
+// X3-F5 — the securityOps sibling of /permissions: hidden from a member's nav,
+// reachable by typing the URL, and its 403 was rendered as an unreachable
+// control plane with a Retry that 403s forever.
+describe("GovernanceScreen — a 403 is a tier, not an outage", () => {
+  it("renders the tier sentence with no Retry, and still offers Retry on a 500", async () => {
+    getGovernanceMock.mockRejectedValue(new HttpError(403, "forbidden"));
+    render(<GovernanceScreen />);
+    expect(await screen.findByText(SECURITY_ONLY_REASON)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: ACCESS_STATE.FETCH_FAILED_RETRY })).toBeNull();
+
+    cleanup();
+    getGovernanceMock.mockRejectedValue(new HttpError(500, "boom"));
+    render(<GovernanceScreen />);
+    expect(await screen.findByRole("button", { name: ACCESS_STATE.FETCH_FAILED_RETRY })).toBeInTheDocument();
   });
 });
