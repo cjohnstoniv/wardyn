@@ -97,6 +97,16 @@ const (
 	// leaves them unset.
 	defaultHoldTimeout = 30 * time.Second
 	defaultMaxHolds    = 16
+	// maxHoldTimeout / maxHoldsCeiling are the absolute ceilings configureHold
+	// clamps a policy's values to (B11b-F2), mirroring the control plane's own
+	// maxFirstUseHoldSeconds / maxHoldsPerSpec. The control plane bounds both
+	// knobs at every ingest point, but only at AUTHORING time: a policy stored
+	// before that bound existed is read from the store, frozen onto the run and
+	// handed to this sidecar without re-validating. This is the last door
+	// before max_holds becomes a channel capacity and the timeout becomes how
+	// long a goroutine sits polling the control plane.
+	maxHoldTimeout  = 600 * time.Second
+	maxHoldsCeiling = 256
 )
 
 // holdPollInterval is how often a held (wait_for_review) connection re-polls the
@@ -179,13 +189,21 @@ func newApprovalClient(base string, token *tokenSource, runID uuid.UUID, client 
 // NewServer before the proxy serves. timeout<=0 / maxHolds<=0 keep the defaults
 // — which is what production always passes; only tests set the limits, to hold
 // briefly and to saturate the cap without 16 sends.
+//
+// Both are CLAMPED to maxHoldTimeout / maxHoldsCeiling (B11b-F2). The control
+// plane refuses a hostile value at every authoring door, but validation runs at
+// authoring time only: a policy stored before that bound existed is frozen onto
+// a run and reaches this sidecar unvalidated. Clamping rather than refusing is
+// deliberate here — the sidecar's job at boot is to run the policy it was
+// handed under a bound it can honour, not to fail the run closed over a field
+// whose authoring door has since been fixed.
 func (a *approvalClient) configureHold(mode types.FirstUseMode, timeout time.Duration, maxHolds int) {
 	a.firstUseMode = mode
 	if timeout > 0 {
-		a.holdTimeout = timeout
+		a.holdTimeout = min(timeout, maxHoldTimeout)
 	}
 	if maxHolds > 0 {
-		a.holdSem = make(chan struct{}, maxHolds)
+		a.holdSem = make(chan struct{}, min(maxHolds, maxHoldsCeiling))
 	}
 }
 

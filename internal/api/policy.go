@@ -75,6 +75,18 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 	if err := validateAllowedDomainsCount(spec.AllowedDomains); err != nil {
 		return err
 	}
+	// The two wait_for_review knobs. Bounded HERE because every ingest point
+	// crosses this function — the stored-policy write, the inline run policy,
+	// the WARDYN_DEFAULT_POLICY file, and the composer/profile clamp — and
+	// because a member authors them directly (B11b-F2). The proxy clamps them
+	// a second time for a policy stored before this bound existed.
+	if spec.MaxHolds < 0 || spec.MaxHolds > maxHoldsPerSpec {
+		return fmt.Errorf("max_holds must be between 0 (the built-in default) and %d, got %d", maxHoldsPerSpec, spec.MaxHolds)
+	}
+	if spec.FirstUseHoldSeconds < 0 || spec.FirstUseHoldSeconds > maxFirstUseHoldSeconds {
+		return fmt.Errorf("first_use_hold_seconds must be between 0 (the built-in default) and %d, got %d",
+			maxFirstUseHoldSeconds, spec.FirstUseHoldSeconds)
+	}
 	// Every domain entry must be a shape the proxy's matcher can actually
 	// match. A dead entry (mid-label wildcard, URL, bad :port) reads as
 	// protection but allows/denies nothing — reject it at every ingest point
@@ -109,6 +121,25 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 	}
 	return nil
 }
+
+// maxHoldsPerSpec and maxFirstUseHoldSeconds bound the two wait_for_review
+// knobs (B11b-F2). They were the last policy fields NOTHING visited: the
+// composer clamp does not reach them and this validator did not read them, so
+// a member's inline_policy under a wait_for_review ceiling could author
+// {max_holds: 1000000, first_use_hold_seconds: 2592000} and turn the proxy's
+// documented 16-hold / 30-second default into a million goroutines polling the
+// control plane once a second for thirty days.
+//
+// These are hostile-input ceilings, not a sizing of any real policy. 256 holds
+// is an order of magnitude past the built-in 16 and still a channel a sidecar
+// can hold; 600 seconds is well past any human's answer time and far short of
+// a hold that outlives the run. 0 keeps the built-in default on both, which is
+// what production passes; negative is refused outright rather than silently
+// meaning "default", because a negative bound reads as a widening.
+const (
+	maxHoldsPerSpec        = 256
+	maxFirstUseHoldSeconds = 600
+)
 
 // maxUIAppsPerPolicy bounds the declared-app list. A UI app is an operator
 // declaration, not a workload knob — a handful covers "an editor and a dev
