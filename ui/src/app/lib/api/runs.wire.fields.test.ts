@@ -271,7 +271,10 @@ function tsInterfaceKeys(src: string, name: string): string[] {
   if (!m) throw new Error(`interface ${name} not found`);
   const keys: string[] = [];
   for (const line of m[1].split("\n")) {
-    const k = /^\s*([A-Za-z_][A-Za-z0-9_]*)\??\s*:/.exec(line);
+    // R-04: `(?:readonly\s+)?` — a `readonly` modifier used to fall through
+    // this match entirely, silently treating a mirrored `readonly foo?:`
+    // field as absent from the TS side (see the SiteConfig test below).
+    const k = /^\s*(?:readonly\s+)?([A-Za-z_][A-Za-z0-9_]*)\??\s*:/.exec(line);
     if (k) keys.push(k[1]);
   }
   return keys;
@@ -391,17 +394,11 @@ describe("source parity — four more flat structs (F6-F14)", () => {
     expect(omitted).toEqual([]);
   });
 
-  it("documents (does not fail on) Go SiteConfig tags the TS mirror omits", () => {
+  it("every Go SiteConfig tag is mirrored on the TS interface (R-04 — readonly fields now match)", () => {
     const goTags = goJSONTags(siteConfigGo, "SiteConfig");
     const tsKeys = new Set(tsInterfaceKeys(siteTs, "SiteConfig"));
     const omitted = goTags.filter((t) => !tsKeys.has(t));
-    // These three ARE mirrored (site.ts declares `readonly integrations?`,
-    // `readonly effective_scm_hosts?`, `readonly onboarding_completed_at?`)
-    // — tsInterfaceKeys' regex does not match a `readonly` modifier, the same
-    // discipline gap goJSONTags documents for nested braces. Pinned here so a
-    // REAL new omission (a field with no `readonly` prefix at all) still
-    // shows up as a diff against this list.
-    expect(omitted.sort()).toEqual(["effective_scm_hosts", "integrations", "onboarding_completed_at"].sort());
+    expect(omitted).toEqual([]);
   });
 
   it("RunPolicySpec: full parity, base struct — a future drift shows up as a diff either direction", () => {
