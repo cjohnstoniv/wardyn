@@ -136,5 +136,23 @@ done
 grep -q 'metadata_connects.txt' test/e2e/tasks/egress-boundary/solution.sh     || { bad "test/e2e/tasks/egress-boundary/solution.sh: the connect count must be written as evidence (metadata_connects.txt) — grade.sh reads only the workspace"; l0_evidence_fail=1; }
 if [ "$l0_evidence_fail" = 0 ]; then ok "the L0 metadata checks read %{num_connects}, and fail on a connection that was actually made"; fi
 
+# ── 6. the TEST endpoint knobs are never shippable deployment config ────────
+# WARDYN_AWS_SSO_ENDPOINT_OVERRIDE re-points AWS IAM Identity Center and
+# WARDYN_ALLOW_TEST_ENDPOINTS unlocks it (plus plain-http WARDYN_BEDROCK_BASE_URL).
+# They are boot-time TEST hatches — THREAT-MODEL residual #45 — and the kind SSO
+# walk sets them through the chart's GENERIC `env:` passthrough with --set, which
+# is deliberate: a named value, a documented example or a compose default would
+# put a one-line edit between any operator and a daemon that trusts an arbitrary
+# server as AWS. The plan's "helm/ci renders unchanged" requirement, as a gate.
+test_knob_fail=0
+for knob in WARDYN_AWS_SSO_ENDPOINT_OVERRIDE WARDYN_ALLOW_TEST_ENDPOINTS; do
+    hits=$(grep -rln "$knob" deploy/helm deploy/compose 2>/dev/null || true)
+    if [ -n "$hits" ]; then
+        bad "$knob appears in a SHIPPED deployment artifact:$(printf ' %s' $hits) — it is a test hatch (THREAT-MODEL residual #45); the kind SSO walk sets it with \`--set env.<name>\` through the chart's generic passthrough, never as chart/compose config"
+        test_knob_fail=1
+    fi
+done
+if [ "$test_knob_fail" = 0 ]; then ok "neither AWS SSO test-endpoint knob is renderable from deploy/helm or deploy/compose"; fi
+
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi
 exit "$fail"

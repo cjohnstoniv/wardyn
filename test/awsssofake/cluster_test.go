@@ -225,3 +225,44 @@ func postBedrock(t *testing.T, base, modelID, op string) ([]byte, int) {
 	raw, _ := io.ReadAll(resp.Body)
 	return raw, resp.StatusCode
 }
+
+// R-10: handleCreateToken validates clientId/clientSecret for BOTH grants, and
+// nothing exercised that on the refresh arm — a fake that answered 200 to an
+// unregistered client would let a broken credential store look healthy.
+func TestCreateToken_RefreshGrantChecksClientCredentials(t *testing.T) {
+	s := New()
+	defer s.Close()
+
+	clientID, clientSecret := registerClient(t, s)
+	devResp := startDeviceAuth(t, s, clientID, clientSecret, "https://fake.awsapps.com/start")
+	s.Approve()
+	_, tok := createToken(t, s, clientID, clientSecret, devResp["deviceCode"].(string))
+	refresh, _ := tok["refreshToken"].(string)
+
+	for _, tc := range []struct{ name, id, secret string }{
+		{"wrong secret", clientID, "not-the-registered-secret"},
+		{"wrong client id", "not-the-registered-client", clientSecret},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, body := postToken(t, s, map[string]string{
+				"clientId":     tc.id,
+				"clientSecret": tc.secret,
+				"grantType":    "refresh_token",
+				"refreshToken": refresh,
+			})
+			if status != http.StatusBadRequest || body["error"] != "invalid_client" {
+				t.Errorf("refresh with a %s = %d %v, want 400 invalid_client", tc.name, status, body)
+			}
+		})
+	}
+
+	// …and the valid pair still works afterwards: a refused attempt must not
+	// consume or rotate anything.
+	status, ok := postToken(t, s, map[string]string{
+		"clientId": clientID, "clientSecret": clientSecret,
+		"grantType": "refresh_token", "refreshToken": refresh,
+	})
+	if status != http.StatusOK {
+		t.Errorf("the valid refresh after two refusals = %d %v, want 200", status, ok)
+	}
+}

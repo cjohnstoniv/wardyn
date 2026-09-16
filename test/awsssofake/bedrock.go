@@ -64,10 +64,7 @@ func (s *Server) handleBedrockRuntime(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(bedrockStubBody))
 }
 
-// BedrockCalls is how many model calls the stub answered — the in-process
-// accessor beside RoleCredentialsSeen (a cluster walk reads /_seen instead).
-func (s *Server) BedrockCalls() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.bedrockCalls
-}
+// There is deliberately NO exported BedrockCalls() accessor beside
+// RoleCredentialsSeen: every caller — in-process and on-cluster alike — reads
+// the counter through /_seen, which is the one answer a test driving a POD can
+// get. A second spelling with no caller is a second thing to keep true.

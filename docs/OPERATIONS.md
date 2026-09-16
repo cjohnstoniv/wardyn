@@ -3124,7 +3124,7 @@ and no real credential anywhere in the loop.
 in-cluster Service. `make kind-sso-down` removes the overlay; the cluster itself
 belongs to `make kind-down`.
 
-**The knob.** `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE=<url>` re-points both SSO
+**The knobs.** `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE=<url>` re-points both SSO
 services at that Service, moving five things together: the containerized login
 sandbox's `AWS_ENDPOINT_URL_SSO`/`_SSO_OIDC`, the captured-credential sandbox's
 same pair, the SSO egress allow-list entries, the login flow's own
@@ -3137,6 +3137,14 @@ service, and a supported production posture), and it is not the global
 residual #45 before setting either var anywhere that holds a real credential:
 an operator who sets both has pointed a real sign-in at a server that can hand
 back credentials of its choosing, and Wardyn cannot tell that server from AWS.
+
+The same acknowledgement unlocks one more thing, and the walk needs it: a plain
+`http://` `WARDYN_BEDROCK_BASE_URL`. The Bedrock stub serves no TLS, and this is
+the SigV4 lane — no per-run TLS-MITM terminates for it — so without the
+acknowledgement wardynd refuses to boot on rule 1 (`must be https://`) before
+the SSO hatch is even reached. That relaxation is rule 1 and nothing else: an
+embedded credential, an empty host, a metadata literal, the public host itself,
+a query or a fragment all still refuse boot exactly as they do in production.
 
 **Reaching the fake from a sandbox — the step that fails first if you skip it.**
 The fake is addressed by its **Service** name, never a pod IP, and site-config

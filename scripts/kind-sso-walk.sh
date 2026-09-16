@@ -23,8 +23,11 @@
 #     WARDYN_ALLOW_TEST_ENDPOINTS) moves the login sandbox env, the ssoInject
 #     sandbox env, the SSO egress entries and the CreateToken URL together;
 #  3. a Bedrock lane to spend the minted credential on: WARDYN_BEDROCK_BASE_URL
-#     points the data plane at the same fake's bedrock-runtime stub, and
-#     WARDYN_BEDROCK_MODEL is an ARN naming the PINNED account, so the
+#     points the data plane at the same fake's bedrock-runtime stub — plain
+#     http://, which ValidateBedrockBaseURL accepts ONLY under the same
+#     WARDYN_ALLOW_TEST_ENDPOINTS acknowledgement as (2), because the stub serves
+#     no TLS and this is the SigV4 lane (no per-run TLS-MITM terminates for it) —
+#     and WARDYN_BEDROCK_MODEL is an ARN naming the PINNED account, so the
 #     account-pin check has both halves;
 #  4. site-config `internal_hosts` seeded with the fake's SERVICE host AND the
 #     Service CIDR, BEFORE the first sign-in.
@@ -149,8 +152,24 @@ helm --kube-context "${CONTEXT}" upgrade "${RELEASE}" deploy/helm/wardyn \
   --set "env.WARDYN_BEDROCK_MODEL=${BEDROCK_MODEL}" \
   >"${EVIDENCE_DIR}/helm-upgrade.log" 2>&1 \
   || { tail -30 "${EVIDENCE_DIR}/helm-upgrade.log" >&2; die "helm upgrade failed (see ${EVIDENCE_DIR}/helm-upgrade.log)"; }
-kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout status "deployment/${RELEASE}" --timeout=300s \
-  || die "wardynd did not become ready after the upgrade — check the boot log for the endpoint-override refusal (WARDYN_ALLOW_TEST_ENDPOINTS)"
+if ! kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout status "deployment/${RELEASE}" --timeout=300s; then
+  # TWO knobs can refuse this boot, not one, and the old message named only the
+  # second: WARDYN_BEDROCK_BASE_URL is plain http:// here (the stub serves no
+  # TLS), which wardynd refuses unless WARDYN_ALLOW_TEST_ENDPOINTS=true —
+  # the same acknowledgement WARDYN_AWS_SSO_ENDPOINT_OVERRIDE needs. Both
+  # refusals are one line on stderr of a pod that has already exited, so read
+  # the PREVIOUS container's log and print it rather than guessing.
+  echo "" >&2
+  echo "FAIL: wardynd did not become ready after the upgrade. Its own refusal, verbatim:" >&2
+  kubectl --context "${CONTEXT}" -n "${NAMESPACE}" logs "deployment/${RELEASE}" --previous --tail=50 2>/dev/null \
+    | grep -i "refusing to start" | tail -3 >&2 \
+    || kubectl --context "${CONTEXT}" -n "${NAMESPACE}" logs "deployment/${RELEASE}" --tail=50 >&2 || true
+  echo "" >&2
+  echo "Both of these are refused unless WARDYN_ALLOW_TEST_ENDPOINTS=true is ALSO set:" >&2
+  echo "  WARDYN_AWS_SSO_ENDPOINT_OVERRIDE=${FAKE_URL}" >&2
+  echo "  WARDYN_BEDROCK_BASE_URL=${FAKE_URL}          (plain http:// — the stub serves no TLS)" >&2
+  die "wardynd did not become ready after the upgrade"
+fi
 
 # The boot WARN is itself an assertion: if the hatch had been refused or ignored,
 # this line would be absent and every sandbox would dial the real AWS.
