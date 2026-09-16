@@ -45,18 +45,18 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// skew is how far ahead of Postgres this deployment's wardynd runs. Minutes,
+// twoClocksSkew is how far ahead of Postgres this deployment's wardynd runs. Minutes,
 // because that is the scale both findings describe and it is far past
 // TouchDebounce.
-const skew = 10 * time.Minute
+const twoClocksSkew = 10 * time.Minute
 
-// fastClock is wardynd's clock in these probes: every reading it takes — the
-// stamps it writes AND the ages it measures — is skew ahead of the database.
-func fastClock() time.Time { return time.Now().Add(skew) }
+// twoClocksFastClock is wardynd's clock in these probes: every reading it takes — the
+// stamps it writes AND the ages it measures — is twoClocksSkew ahead of the database.
+func twoClocksFastClock() time.Time { return time.Now().Add(twoClocksSkew) }
 
-// dbNow reads the DATABASE's clock, which is the one every column here is
+// twoClocksDBNow reads the DATABASE's clock, which is the one every column here is
 // compared against.
-func dbNow(t *testing.T, pool *pgxpool.Pool) time.Time {
+func twoClocksDBNow(t *testing.T, pool *pgxpool.Pool) time.Time {
 	t.Helper()
 	var now time.Time
 	if err := pool.QueryRow(context.Background(), `SELECT now()`).Scan(&now); err != nil {
@@ -71,7 +71,7 @@ func skewedRun(t *testing.T, pg store.PG, autoStopSec int) types.AgentRun {
 	t.Helper()
 	id := uuid.New()
 	run, err := pg.CreateRun(context.Background(), types.AgentRun{
-		ID: id, CreatedAt: fastClock(), UpdatedAt: fastClock(),
+		ID: id, CreatedAt: twoClocksFastClock(), UpdatedAt: twoClocksFastClock(),
 		CreatedBy: "op@example.com", Agent: "claude-code", Task: "two-clocks probe",
 		ConfinementClass: types.CC2, State: types.RunRunning,
 		SPIFFEID: "spiffe://wardyn.test/agent-run/" + id.String(), RunnerTarget: "docker",
@@ -95,7 +95,7 @@ func TestPG_AFastClockCannotResurrectAnUndoneAlwaysApproval(t *testing.T) {
 	pool := revocationPool(t)
 	ctx := context.Background()
 	// The store wardynd would run with: a fast app clock behind every stamp.
-	pg := store.PG{Pool: pool, Now: fastClock}
+	pg := store.PG{Pool: pool, Now: twoClocksFastClock}
 	srv := api.New(api.Config{
 		Store:     pg,
 		Approvals: &approvalService{st: approvalStore{PG: pg, rec: &fakeAuditRecorder{}}},
@@ -106,7 +106,7 @@ func TestPG_AFastClockCannotResurrectAnUndoneAlwaysApproval(t *testing.T) {
 
 	ws, err := pg.CreateWorkspace(ctx, types.Workspace{
 		ID: uuid.New(), Name: "two-clocks-" + uuid.NewString(),
-		Status: types.WorkspaceScanned, CreatedAt: fastClock(), UpdatedAt: fastClock(),
+		Status: types.WorkspaceScanned, CreatedAt: twoClocksFastClock(), UpdatedAt: twoClocksFastClock(),
 	})
 	if err != nil {
 		t.Fatalf("create workspace: %v", err)
@@ -122,7 +122,7 @@ func TestPG_AFastClockCannotResurrectAnUndoneAlwaysApproval(t *testing.T) {
 		ap, err := pg.CreateApproval(ctx, types.ApprovalRequest{
 			ID: uuid.New(), RunID: run.ID, Kind: types.ApprovalEgressDomain,
 			RequestedScope: []byte(`{"host":"` + host + `"}`),
-			State:          types.ApprovalPending, RequestedAt: fastClock(),
+			State:          types.ApprovalPending, RequestedAt: twoClocksFastClock(),
 		})
 		if err != nil {
 			t.Fatalf("create approval: %v", err)
@@ -142,7 +142,7 @@ func TestPG_AFastClockCannotResurrectAnUndoneAlwaysApproval(t *testing.T) {
 	if decided.DecidedAt == nil {
 		t.Fatal("a decided approval carries no decided_at")
 	}
-	if at := dbNow(t, pool); decided.DecidedAt.After(at) {
+	if at := twoClocksDBNow(t, pool); decided.DecidedAt.After(at) {
 		t.Errorf("decided_at = %s, which is AFTER the database's own clock (%s).\n"+
 			"It is compared against workspaces.egress_edited_at, which Postgres stamps, by the boot heal's only "+
 			"newer-action guard — so for the length of the skew every decision reads as newer than every operator "+
@@ -224,7 +224,7 @@ func (s *recordingStopper) StopRun(_ context.Context, runID uuid.UUID, _ time.Ti
 func TestPG_AFastClockDoesNotReapAnActiveRun(t *testing.T) {
 	pool := revocationPool(t)
 	ctx := context.Background()
-	pg := store.PG{Pool: pool, Now: fastClock}
+	pg := store.PG{Pool: pool, Now: twoClocksFastClock}
 
 	// A run whose auto-stop is a minute — an interactive attach session's own
 	// order of magnitude. Ten minutes of skew is far past it AND far past the
@@ -239,7 +239,7 @@ func TestPG_AFastClockDoesNotReapAnActiveRun(t *testing.T) {
 
 	stopper := &recordingStopper{}
 	reaper := lifecycle.New(lifecycleStore{pool: pool}, stopper, &fakeAuditRecorder{},
-		lifecycle.Config{Now: fastClock})
+		lifecycle.Config{Now: twoClocksFastClock})
 	reaper.Tick(ctx)
 
 	for _, id := range stopper.stopped {
@@ -247,7 +247,7 @@ func TestPG_AFastClockDoesNotReapAnActiveRun(t *testing.T) {
 			t.Fatalf("the reaper stopped a run touched moments ago.\n"+
 				"updated_at is stamped by Postgres and the age was measured against wardynd's clock, which is %s "+
 				"ahead — so every run in the deployment reads as %s idle and an actively-attached session is "+
-				"stopped and its credentials revoked", skew, skew)
+				"stopped and its credentials revoked", twoClocksSkew, twoClocksSkew)
 		}
 	}
 
@@ -276,18 +276,18 @@ func TestPG_AFastClockDoesNotReapAnActiveRun(t *testing.T) {
 // would read that as a negative age forever.
 func TestPG_AFastClockStampsARunsUpdatedAtOnTheDatabaseClock(t *testing.T) {
 	pool := revocationPool(t)
-	pg := store.PG{Pool: pool, Now: fastClock}
+	pg := store.PG{Pool: pool, Now: twoClocksFastClock}
 
 	run := skewedRun(t, pg, 0)
-	if at := dbNow(t, pool); run.UpdatedAt.After(at) {
+	if at := twoClocksDBNow(t, pool); run.UpdatedAt.After(at) {
 		t.Errorf("updated_at = %s, which is AFTER the database's own clock (%s).\n"+
 			"Every other writer of this column uses now(); this one bound wardynd's clock, so the row the idle "+
-			"reaper measures was born %s in the future of the clock it measures with", run.UpdatedAt, at, skew)
+			"reaper measures was born %s in the future of the clock it measures with", run.UpdatedAt, at, twoClocksSkew)
 	}
 	// AND IT IS NOT NOW() EITHER: a run whose struct was stamped earlier in the
 	// request keeps that instant, back-dated by its own age.
 	old := types.AgentRun{
-		ID: uuid.New(), CreatedAt: fastClock(), UpdatedAt: fastClock().Add(-90 * time.Second),
+		ID: uuid.New(), CreatedAt: twoClocksFastClock(), UpdatedAt: twoClocksFastClock().Add(-90 * time.Second),
 		CreatedBy: "op@example.com", Agent: "claude-code", Task: "aged stamp",
 		ConfinementClass: types.CC2, State: types.RunPending, RunnerTarget: "docker",
 		SPIFFEID: "spiffe://wardyn.test/agent-run/" + uuid.NewString(),
@@ -297,7 +297,7 @@ func TestPG_AFastClockStampsARunsUpdatedAtOnTheDatabaseClock(t *testing.T) {
 		t.Fatalf("create the aged run: %v", err)
 	}
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM agent_runs WHERE id=$1`, got.ID) })
-	if age := dbNow(t, pool).Sub(got.UpdatedAt); age < 60*time.Second || age > 3*time.Minute {
+	if age := twoClocksDBNow(t, pool).Sub(got.UpdatedAt); age < 60*time.Second || age > 3*time.Minute {
 		t.Errorf("a run stamped 90s before the insert landed with an age of %s; the back-dating is subtracting "+
 			"something other than the row's own age", age)
 	}

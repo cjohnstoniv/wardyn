@@ -515,10 +515,12 @@ func (s PG) DecideApproval(ctx context.Context, id uuid.UUID, decision types.App
 	// restart, and the host is back on the allowlist — the durable, fail-OPEN
 	// re-widening migration 0055 exists to prevent (B8-F3).
 	//
-	// The AGE rather than a plain now(): the decision instant is the one this
-	// call observed, so a statement that takes a while to reach the server does
-	// not move the decision forward past an edit made in the meantime. Both
-	// readings come from s.now(), so the duration carries no skew.
+	// The AGE rather than a plain now(), for store_apitokens.go's reason and with
+	// its spelling: one definition of the expression, shared with the readers that
+	// compare these stamps. Both readings come from s.now(), so the duration
+	// carries no skew — and here they are adjacent, so the age is ~0 and the
+	// column is effectively now(). The shape is what matters: an admission stamp
+	// would slot in unchanged.
 	decidedAt := s.now()
 	age := db.AppClockAgeMicros(decidedAt, s.now())
 	// q is built rather than const for store_apitokens.go's reason: the

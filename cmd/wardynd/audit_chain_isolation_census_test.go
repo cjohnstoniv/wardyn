@@ -82,14 +82,64 @@ var auditWriterPins = map[string]string{
 var declaredNonAuditTx = map[string]string{
 	"internal/db/db.go:applyMigration": "runs one migration's DDL and records it in schema_migrations; it never inserts " +
 		"into audit_events, and migration DDL is not chain-linked",
-	"internal/db/db.go:replayTriggerMigrations": "re-executes the DDL of the trigger-defining migrations (0047, 0056, " +
-		"0057, 0058) to restore a dropped or impostor audit trigger, in ONE transaction so a failure partway cannot " +
-		"commit a superseded function body (B8-F1). Those four files contain no DML at all — no INSERT, UPDATE or " +
-		"DELETE, on audit_events or anything else — so this transaction writes no chain-linked row and its isolation " +
-		"level decides nothing",
+	"internal/db/db.go:replayTriggerMigrations": "re-executes the DDL of the trigger-defining migrations to restore " +
+		"a dropped or impostor audit trigger, in ONE transaction so a failure partway cannot commit a superseded " +
+		"function body (B8-F1). The replay set contains no DML at all — no INSERT, UPDATE or DELETE, on audit_events " +
+		"or anything else — so this transaction writes no chain-linked row and its isolation level decides nothing. " +
+		"That is not taken on trust: the set is DISCOVERED by content (db.triggerMigrationFiles), so " +
+		"assertReplaySetIsPureDDL below re-derives it and checks, and a future migration that redefines the chain " +
+		"trigger AND carries DML reddens this test instead of joining the replay silently",
+}
+
+// auditChainTriggerName is the trigger whose migrations replayTriggerMigrations
+// replays. Spelled here rather than imported: internal/db keeps it unexported,
+// and a census that re-derived its subject from the package under scrutiny would
+// move with it.
+const auditChainTriggerName = "audit_events_chain"
+
+// assertReplaySetIsPureDDL re-derives replayTriggerMigrations' set the way
+// db.triggerMigrationFiles does — by CONTENT, not by a list — and fails if any
+// file in it carries DML. That is the whole claim declaredNonAuditTx makes about
+// that transaction, checked against the set the code recomputes rather than
+// asserted as a sentence about four filenames.
+func assertReplaySetIsPureDDL(t *testing.T) {
+	t.Helper()
+	dir := filepath.Join(repoRoot(t), "internal", "db", "migrations")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+	found := 0
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			t.Fatalf("read migration %s: %v", e.Name(), err)
+		}
+		if !strings.Contains(string(body), "TRIGGER "+auditChainTriggerName) {
+			continue
+		}
+		found++
+		upper := strings.ToUpper(string(body))
+		for _, dml := range []string{"INSERT INTO", "UPDATE ", "DELETE FROM"} {
+			if strings.Contains(upper, dml) {
+				t.Errorf("migration %s joins the boot-time replay set (it defines %s) and contains %q. "+
+					"replayTriggerMigrations is DECLARED in declaredNonAuditTx as a transaction that cannot write "+
+					"audit_events, and that declaration is now false: either pin the replay transaction to READ "+
+					"COMMITTED or keep the replayed migrations pure DDL.", e.Name(), auditChainTriggerName, dml)
+			}
+		}
+	}
+	if found == 0 {
+		t.Fatalf("no migration in %s defines %s; this guard is scanning the wrong thing and the declaration it "+
+			"backs is unchecked", dir, auditChainTriggerName)
+	}
 }
 
 func TestEveryAuditWritingTransactionPinsReadCommitted(t *testing.T) {
+	assertReplaySetIsPureDDL(t)
 	sites := collectTxSites(t)
 	if len(sites) == 0 {
 		t.Fatal("the census found no Begin/BeginTx call in the tree at all; this guard is scanning the wrong thing")
