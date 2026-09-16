@@ -9,7 +9,16 @@ import { asJson, wfetch } from "./core";
 
 export const harnessAuth = {
   // POST /api/v1/setup/harness-login — launch an interactive login sandbox for a
-  // provider (default "anthropic"); returns the run id to attach to.
+  // provider (default "anthropic"); returns the run id.
+  //
+  // THE RUN IS NOT UP YET when this resolves. The server answers as soon as the
+  // run row exists and the launch is stamped, then finishes the launch
+  // detached (internal/api/harnesscred_launch.go) — because the cold pull it
+  // used to block through outran this client's own deadline. The caller polls
+  // runs.getRun to RUNNING before attaching; the response's `state` is PENDING
+  // and is not read here (the poll is the authority, and one field would
+  // otherwise go stale the instant it arrived). That is also why this call
+  // needs no extended deadline: it is a fast call again.
   // ssoStartUrl is REQUIRED by the "aws" provider and ignored by the others: the
   // server seeds it (with its configured SSO region) as the sandbox's pre-login
   // ~/.aws/config, which is what `aws sso login --sso-session wardyn` reads.
