@@ -214,6 +214,14 @@ func (s *Server) execRunResourcesScript(ctx context.Context, run types.AgentRun)
 	if err != nil {
 		return nil, err
 	}
+	// The runner contract's worst LEGAL answer: no error AND no session. The
+	// sibling widget (run_files.go) has carried this guard since it was found
+	// there; this one dereferenced sess one line below, and the HTTP chain has
+	// no recover middleware — so a driver answering (nil, nil) took the daemon
+	// down rather than answering 500 (B1-F8).
+	if sess == nil {
+		return nil, errors.New("runner returned no exec session")
+	}
 	// STREAMING CONTRACT (runner.go ExecSession doc): Stdout and Stderr are
 	// unbuffered io.Pipes fed by ONE demux goroutine — a single undrained
 	// stderr byte blocks that goroutine, Stdout, AND Wait. The script's own
@@ -224,16 +232,19 @@ func (s *Server) execRunResourcesScript(ctx context.Context, run types.AgentRun)
 	if sess.Stderr != nil {
 		go func() { _, _ = io.Copy(io.Discard, sess.Stderr) }()
 	}
-	var out []byte
-	if sess.Stdout != nil {
-		out, err = io.ReadAll(io.LimitReader(sess.Stdout, runResourcesMaxOutput))
-	}
-	if sess.Wait != nil {
+	out, capped, err := readExecStdout(sess.Stdout, runResourcesMaxOutput)
+	if sess.Wait != nil && !capped {
 		// Exit code unexamined: every read in the script is individually
 		// presence-checked and guarded, so a partial sandbox (missing cgroup
 		// files) still exits 0 with a partial key set — there's no failure
 		// mode this script can signal via exit code that isn't already
 		// visible as an absent key in its own output.
+		//
+		// SKIPPED when the cap cut the stream short: the in-sandbox writer is
+		// then still blocked on an undrained unbuffered pipe, so Wait cannot
+		// return and Close below is what frees it. Same shape, same fix as the
+		// Files widget's own byte cap (B1-F4, run_exec_read.go). The key set is
+		// already parsed from what we did read.
 		_, _ = sess.Wait()
 	}
 	if sess.Close != nil {

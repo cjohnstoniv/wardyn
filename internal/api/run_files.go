@@ -21,6 +21,7 @@ package api
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -284,7 +285,31 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 		go func() { _, _ = io.Copy(io.Discard, sess.Stderr) }()
 	}
 
-	inspectedPath, files, truncated := parseRunFiles(io.LimitReader(sess.Stdout, runFilesMaxOutput))
+	// THE BYTE CAP, and the Wait that must not follow it. readExecStdout reports
+	// whether the stream had MORE to give; when it did, the in-sandbox writer is
+	// still blocked on an unbuffered pipe nobody is draining, so Wait cannot
+	// return and the deferred Close above is the only thing that frees it —
+	// which is what the 5 s stall + 500 + a run.files failure row per poll tick
+	// used to be (B1-F4).
+	out, capped, readErr := readExecStdout(sess.Stdout, runFilesMaxOutput)
+	inspectedPath, files, truncated := parseRunFiles(bytes.NewReader(out))
+	if capped {
+		// An ordinary outcome, not a failure of the read: git ran, produced more
+		// than this endpoint carries, and the response says so. No audit row (this
+		// file's "failures only" rule) and no exit code — the exit code is exactly
+		// what cannot be collected without draining the stream. vcs is git because
+		// only git produced this output.
+		writeJSON(w, http.StatusOK, runFilesResponse{
+			VCS: runFilesVCSGit, Files: files, Path: inspectedPath, Truncated: true,
+		})
+		return
+	}
+	// A genuine read failure (the exec deadline killing the stream mid-read) is
+	// NOT the cap: the stream is finished either way, so Wait below is reachable
+	// and reports the real reason. Rows were dropped, so admit it.
+	if readErr != nil {
+		truncated = true
+	}
 
 	if sess.Wait != nil {
 		code, werr := sess.Wait()
@@ -347,9 +372,12 @@ func (s *Server) auditRunFilesFailure(r *http.Request, runID uuid.UUID, err erro
 // separator, then the porcelain section — and joins the two on path, keeping
 // numstat's order and appending porcelain-only paths (untracked files) after it.
 //
-// It ALWAYS drains stdout to EOF, including after the cap is hit or the scanner
-// gives up on an over-long line: an undrained pipe blocks the demux goroutine
-// and therefore Wait, which is the same hang the stderr drain above avoids.
+// Its input is the ALREADY-BOUNDED buffer readExecStdout returned, not the raw
+// exec stream: the byte ceiling and the "did the stream have more" question
+// both belong to the caller, which is the only place that can decide whether
+// Wait is still reachable (run_exec_read.go). The drain below is therefore a
+// no-op on that buffer and is kept only so a caller handing this an unbounded
+// reader still cannot leave one undrained.
 func parseRunFiles(stdout io.Reader) (path string, files []runFileStat, truncated bool) {
 	files = []runFileStat{}
 	if stdout == nil {
