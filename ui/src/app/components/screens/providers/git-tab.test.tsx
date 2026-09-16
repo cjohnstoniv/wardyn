@@ -201,6 +201,7 @@ describe("GitTab", () => {
           githubApp={false}
           operator
           loadedEmpty={false}
+          onStatusRefresh={() => {}}
         />,
       );
       rerender(
@@ -211,6 +212,7 @@ describe("GitTab", () => {
           githubApp={false}
           operator
           loadedEmpty={false}
+          onStatusRefresh={() => {}}
         />,
       );
       expect((screen.getByLabelText(PROVIDERS.FIELD_BASE_URLS) as HTMLTextAreaElement).value).toBe(
