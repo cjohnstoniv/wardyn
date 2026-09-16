@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/cliutil"
@@ -35,6 +36,13 @@ const (
 	defaultRefreshMargin = 10 * time.Minute
 	// defaultRefreshTimeout bounds the delegated `claude` refresh invocation.
 	defaultRefreshTimeout = 120 * time.Second
+	// refreshNegativeTTL is how long a FAILED delegated refresh is remembered,
+	// so callers piling up behind it are told the same answer instead of each
+	// spending its own `claude` turn. Short on purpose: an operator who fixes
+	// their sign-in must not wait out a cache. It bounds only the FAILURE arm —
+	// a success needs no timer, because the refreshed token is on disk and the
+	// re-read under the lock sees it.
+	refreshNegativeTTL = 30 * time.Second
 )
 
 // Token is a live subscription access token and its expiry.
@@ -71,6 +79,12 @@ type provider struct {
 	margin    time.Duration
 	refreshTO time.Duration
 	now       func() time.Time
+
+	// refreshMu serializes delegateRefresh across concurrent Current() callers
+	// (B11a-F7), and guards the two fields below. See refreshOnce.
+	refreshMu      sync.Mutex
+	lastRefreshAt  time.Time
+	lastRefreshErr error
 }
 
 // New builds a resident-credentials Provider. It does NOT verify the file or the
@@ -109,7 +123,7 @@ func (p *provider) Current(ctx context.Context) (Token, error) {
 
 	// Near/at expiry (or unreadable): delegate the refresh to the resident
 	// claude, which rotates + writes back the token, then re-read.
-	if rerr := p.delegateRefresh(); rerr != nil {
+	if rerr := p.refreshOnce(); rerr != nil {
 		if err != nil {
 			return Token{}, fmt.Errorf("subscription token unavailable and refresh failed: read: %v; refresh: %w", err, rerr)
 		}
@@ -154,6 +168,44 @@ func (p *provider) read() (Token, error) {
 		return Token{}, errors.New("no claudeAiOauth.accessToken in credentials (not signed in to a subscription?)")
 	}
 	return Token{Value: o.AccessToken, ExpiresAt: time.UnixMilli(o.ExpiresAt)}, nil
+}
+
+// refreshOnce is the single-flight in front of delegateRefresh (B11a-F7).
+//
+// The egress proxy single-flights per HOST (inject.go's reMu), so the stampede
+// it does not cover is the CROSS-proxy one: N runs each POST /internal/injection
+// inside the 10-minute margin and arrive here as N concurrent refreshes. Each
+// used to spawn its own `claude -p ok`, and the sharp end of that is not the
+// wasted turns — it is N processes writing the ONE resident
+// ~/.claude/.credentials.json, whose atomic write-back `claude` owns and
+// coordinates only with itself.
+//
+// Two things make one refresh serve everyone. The mutex serializes them, and the
+// re-read UNDER the lock is what turns serialization into single-flight: by the
+// time a waiter gets in, the winner has already written the fresh token back, so
+// the waiter returns without spending a turn. The negative cache covers the
+// other arm — when the refresh FAILS nothing lands on disk, so every waiter's
+// re-read still sees a stale token and would go on to spend its own (failing,
+// and on the timeout arm 120-second) turn.
+//
+// ponytail: a mutex rather than golang.org/x/sync/singleflight — the waiters
+// here WANT to re-read the file the winner wrote rather than share its return
+// value, which is the part singleflight would not give us, and it is an
+// indirect dependency this package would be promoting to a direct one.
+func (p *provider) refreshOnce() error {
+	p.refreshMu.Lock()
+	defer p.refreshMu.Unlock()
+
+	// Someone else may have refreshed while we waited for the lock.
+	if tok, err := p.read(); err == nil && tok.Value != "" && tok.ExpiresAt.After(p.now().Add(p.margin)) {
+		return nil
+	}
+	if p.lastRefreshErr != nil && !p.lastRefreshAt.IsZero() && p.now().Sub(p.lastRefreshAt) < refreshNegativeTTL {
+		return p.lastRefreshErr
+	}
+	err := p.delegateRefresh()
+	p.lastRefreshAt, p.lastRefreshErr = p.now(), err
+	return err
 }
 
 // delegateRefresh runs a minimal read-only `claude` turn to force an
