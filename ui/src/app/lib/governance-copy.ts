@@ -146,13 +146,16 @@ export const GOVERNANCE = {
   // MaxEphemeralDiskMiB and MaxDriveSizeMiB (§5.6/§6.3-§6.4). One zero rule
   // across all three: 0 means no limit under this profile.
   LIMIT_CONCURRENT_LABEL: "Concurrent runs",
-  LIMIT_CONCURRENT_HINT: "How many runs a person under this profile may have going at once. 0 means no limit.",
+  // F4-F8 (Appendix A V8, reclassified Low copy): LimitNumberRow's numberField
+  // renders 0 as blank — 0 IS "no limit" on the wire, but "0 means..." named a
+  // value the field can't display. "Leave blank" is what the operator can do.
+  LIMIT_CONCURRENT_HINT: "How many runs a person under this profile may have going at once. Leave blank for no limit.",
   LIMIT_EPHEMERAL_LABEL: "Largest ephemeral scratch (MiB)",
   LIMIT_EPHEMERAL_HINT:
-    "Binds a run's requested scratch size, not a run that requests none. 0 means no limit under this profile.",
+    "Binds a run's requested scratch size, not a run that requests none. Leave blank for no limit under this profile.",
   LIMIT_DRIVE_SIZE_LABEL: "Largest drive (MiB)",
   LIMIT_DRIVE_SIZE_HINT:
-    "Clamps the drive size a person under this profile resolves to. On a share it bounds the number shown, not the share. 0 means no limit.",
+    "Clamps the drive size a person under this profile resolves to. On a share it bounds the number shown, not the share. Leave blank for no limit.",
   SAVE_ERROR: "Couldn't save this profile.",
 
   // ---- §7.3 assignments and the resolved preview ----

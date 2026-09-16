@@ -277,7 +277,7 @@
             <div class="f">
               <label>Allowed addresses</label>
               <div class="ctl ta mono invalid" aria-invalid="true"><span>https://git.corp.example/platform</span><span>http://github.com/acme:8443/*</span></div>
-              <div class="hint wide err">Must be an <span class="mono">https://</span> URL with a host and at least one path segment — no port, no credentials, no trailing wildcard.</div>
+              <div class="hint wide err">Must be an <span class="mono">https://</span> URL with a host; an organisation path where the host is shared (<span class="mono">github.com/&lt;org&gt;</span>, <span class="mono">dev.azure.com/&lt;org&gt;</span>) — no port, no credentials, no trailing wildcard.</div>
             </div>
             <div class="f">
               <label>Permitted lanes</label>
@@ -294,7 +294,7 @@
         </div>
       </div>
     </div>
-    <!-- Q12: the client mirror's "at least one path segment" vs the model's optional org path for github. -->
+    <!-- Q12 resolved (b), 0.7.4: BASE_URL_INVALID above reworded to the rule the mirror actually checks. -->
     <div class="varlabel"><b>Q3's losing variant</b> — `app` absent on the Azure DevOps row: two checkboxes, no reason</div>
     <div class="pad" style="padding-top:14px">
       <div class="lanes">
@@ -355,13 +355,13 @@
         <!-- The enforcement gloss is DRIVES.ENFORCEMENT_EVICTION (drives prompt §7.2, appended by U1),
              read from /setup/status's runner block. -->
         <span class="chip neutral" style="align-self:flex-start">Size limited by eviction — over it, the run is stopped, not the write</span>
-        <div class="hint wide">Fills a run that asks for no size. 0 leaves such a run unbounded — the maximum below binds requests, not silence.</div>
+        <div class="hint wide">Fills a run that asks for no size. Leave blank for such a run to run unbounded — the maximum below binds requests, not silence.</div>
       </div>
       <div class="f">
         <label>Maximum size (MiB)</label>
         <div class="ctl mono">16384</div>
         <span class="chip neutral" style="align-self:flex-start">Size limited by eviction — over it, the run is stopped, not the write</span>
-        <div class="hint wide">A run asking for more is clamped to this, not refused.</div>
+        <div class="hint wide">A run asking for more is clamped to this, not refused. Leave blank for no ceiling.</div>
       </div>
     </div>
     <hr class="rule">
@@ -377,7 +377,7 @@
       <div class="f">
         <label>Largest drive (MiB)</label>
         <div class="ctl mono">32768</div>
-        <div class="hint wide">An allocation or override above this is refused at write and clamped at resolve. 0 means no ceiling.</div>
+        <div class="hint wide">An allocation or override above this is refused at write and clamped at resolve. Leave blank for no ceiling.</div>
       </div>
     </div>
     <div class="pad" style="padding-top:0;padding-bottom:14px">
@@ -399,14 +399,14 @@
         <label>Default size (MiB)</label>
         <div class="ctl mono">4096</div>
         <span class="chip neutral" style="align-self:flex-start">Size shown, not enforced</span>
-        <div class="hint wide">Fills a run that asks for no size. 0 leaves such a run unbounded — the maximum below binds requests, not silence.</div>
+        <div class="hint wide">Fills a run that asks for no size. Leave blank for such a run to run unbounded — the maximum below binds requests, not silence.</div>
         <div class="note amber" style="max-width:none"><span>This host's storage driver cannot enforce a size. A number filled or clamped from here runs uncapped, with a warning on the run; a size a policy or a profile writes still fails the run at create on this host.</span></div>
       </div>
       <div class="f">
         <label>Maximum size (MiB)</label>
         <div class="ctl mono">0</div>
         <span class="chip neutral" style="align-self:flex-start">Size shown, not enforced</span>
-        <div class="hint wide">A run asking for more is clamped to this, not refused.</div>
+        <div class="hint wide">A run asking for more is clamped to this, not refused. Leave blank for no ceiling.</div>
         <div class="note amber" style="max-width:none"><span>This host's storage driver cannot enforce a size. A number filled or clamped from here runs uncapped, with a warning on the run; a size a policy or a profile writes still fails the run at create on this host.</span></div>
       </div>
     </div>

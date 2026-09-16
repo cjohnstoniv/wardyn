@@ -606,7 +606,7 @@ door, so they are keyed (§7.4, `PROVIDER_MEMBER`) the way `DRIVE_MEMBER`'s refu
 | `REMOVE_CONFIRM_BODY` | Its host goes back to the legacy list — admitted if listed there, with no address bound. Stored credentials stay. |
 | `FIELD_BASE_URLS` | Allowed addresses |
 | `BASE_URLS_HINT` | One per line, over HTTPS. A repository is admitted when its URL starts with one of these. |
-| `BASE_URL_INVALID` | Must be an `https://` URL with a host and at least one path segment — no port, no credentials, no trailing wildcard. |
+| `BASE_URL_INVALID` | Must be an `https://` URL with a host; an organisation path where the host is shared (`github.com/<org>`, `dev.azure.com/<org>`) — no port, no credentials, no trailing wildcard. |
 | `BASE_URLS_REQUIRED` | Name at least one address. A row with none admits nothing and is refused at save. |
 | `FIELD_LANES` | Permitted lanes |
 | `LANES_HINT` | Which credential a run may use for this provider. Turning one off does not delete its stored secret. |
@@ -625,6 +625,18 @@ door, so they are keyed (§7.4, `PROVIDER_MEMBER`) the way `DRIVE_MEMBER`'s refu
 | `SAVE_ERROR` | Couldn't save these providers. |
 | `SAVE_REFUSED_TITLE` | These providers can't be saved as written |
 | `ADD_WORKSPACE_REPO_HINT` | Cloned into the sandbox when a run starts. Private repos use the credential stored under Settings → Providers for their host. |
+
+**0.7.4 CORRECTION (Appendix A F4-F11, Q12 option (b), owner default):** `BASE_URL_INVALID` used to
+claim "at least one path segment" — `display.tsx`'s own `baseURLError` deliberately does NOT require
+one on a self-hosted host (a bare `https://git.corp.example` GHES-style host is valid, §5.1); only
+`dev.azure.com` requires the organisation segment. Reworded to the rule the mirror actually checks.
+
+**0.7.4 CORRECTION (Appendix A F4-F8, reclassified Low copy):** `DEFAULT_DISK_HINT` / `MAX_DISK_HINT`
+/ `MAX_DRIVE_HINT` (§7.3) used to say "0 means…" — `numberField` (`storage-tab.tsx`) renders 0 as an
+EMPTY field, so the control was correct (0 IS "unbounded"/"no ceiling" on the wire,
+`runs_dispatch_ceiling.go`/`workspace_providers.go`) but the hint named a value the field can't
+display. "Leave blank" is what an operator can actually do; the REJECTED alternative was a raw-text
+state rewrite of the number fields (out of scope for a copy fix).
 
 `TITLE` is one string for four places — the screen heading, the Settings card's title, the funnel
 step's summary card, and the tier row — the way `DRIVES.TITLE` serves its four. `BASE_URL_INVALID`
@@ -655,15 +667,15 @@ no name to store under — every lane is disabled with this reason rather than d
 | `EPHEMERAL_TITLE` | Ephemeral scratch |
 | `EPHEMERAL_LEAD` | The writable layer a run gets when it mounts no drive. It is wiped when the sandbox exits. |
 | `FIELD_DEFAULT_DISK` | Default size (MiB) |
-| `DEFAULT_DISK_HINT` | Fills a run that asks for no size. 0 leaves such a run unbounded — the maximum below binds requests, not silence. |
+| `DEFAULT_DISK_HINT` | Fills a run that asks for no size. Leave blank for such a run to run unbounded — the maximum below binds requests, not silence. |
 | `FIELD_MAX_DISK` | Maximum size (MiB) |
-| `MAX_DISK_HINT` | A run asking for more is clamped to this, not refused. |
+| `MAX_DISK_HINT` | A run asking for more is clamped to this, not refused. Leave blank for no ceiling. |
 | `DOCKER_UNCAPPED_WARN` | This host's storage driver cannot enforce a size. A number filled or clamped from here runs uncapped, with a warning on the run; a size a policy or a profile writes still fails the run at create on this host. |
 | `DRIVE_CEILING_TITLE` | Drive ceiling |
 | `FIELD_DRIVES_ENABLED` | User drives |
 | `DRIVES_ENABLED_HINT` | Off means this deployment offers no drives: nothing is mounted and every drive write is refused. Existing drives and allocations are kept. |
 | `FIELD_MAX_DRIVE` | Largest drive (MiB) |
-| `MAX_DRIVE_HINT` | An allocation or override above this is refused at write and clamped at resolve. 0 means no ceiling. |
+| `MAX_DRIVE_HINT` | An allocation or override above this is refused at write and clamped at resolve. Leave blank for no ceiling. |
 | `CEILING` | A ceiling bounds what an admin may allocate. It does not bound what the volume will hold. |
 
 The enforcement word under the two disk fields is `DRIVES.ENFORCEMENT_*` (§7.1) read from
@@ -952,7 +964,9 @@ under `per_user` the member's remedy is `SIGN_IN_AWS`. **(a) the sentence takes 
 `https://github.com` GHES-style host and makes the org path optional for `github` (plan §5.1).
 **(a) keep the sentence and require a path on `github.com` / `dev.azure.com` only; (b) reword** —
 "…with a host; an organisation path where the host is shared (`github.com/<org>`,
-`dev.azure.com/<org>`) — no port, no credentials, no trailing wildcard."
+`dev.azure.com/<org>`) — no port, no credentials, no trailing wildcard." **Resolved (b), 0.7.4** —
+landed in §7.2 by lane `ui-providers-people` (F4-F11), shipped together with F4-F8's storage-hint
+reword (same §7.2/§7.3 canon doc, one parity red).
 
 **Q13.** The managed-backend directory-name options (drives-mock State 3b): **(a) disabled with
 `HOME_HINT` saying why** (what `drive-editor.tsx` does today; F049's proposal); **(b) not offered**

@@ -64,7 +64,7 @@ describe("ProfileEditor — the three integer LimitNumberRows", () => {
     gradePolicyMock.mockResolvedValue({ overall_risk: "medium", risk_assessment: [] });
   });
 
-  it("renders all three rows with label, hint and the 0-means-unlimited wording", async () => {
+  it("renders all three rows with label, hint and the leave-blank-for-unlimited wording", async () => {
     renderEditor();
 
     expect(screen.getByText(GOV.LIMIT_CONCURRENT_LABEL)).toBeInTheDocument();
@@ -74,10 +74,12 @@ describe("ProfileEditor — the three integer LimitNumberRows", () => {
     expect(screen.getByText(GOV.LIMIT_DRIVE_SIZE_LABEL)).toBeInTheDocument();
     expect(screen.getByText(GOV.LIMIT_DRIVE_SIZE_HINT)).toBeInTheDocument();
 
-    // Every hint states the same zero rule — one across all three, not three
-    // different sentences a reader has to reconcile.
+    // F4-F8 (Appendix A V8, reclassified Low copy): numberField renders 0 as
+    // an EMPTY field, so "0 means…" named a value the control can't display.
+    // Every hint states the same corrected zero rule — one across all three,
+    // not three different sentences a reader has to reconcile.
     for (const hint of [GOV.LIMIT_CONCURRENT_HINT, GOV.LIMIT_EPHEMERAL_HINT, GOV.LIMIT_DRIVE_SIZE_HINT]) {
-      expect(hint).toMatch(/0 means no limit/);
+      expect(hint).toMatch(/leave blank for no limit/i);
     }
   });
 

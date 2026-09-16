@@ -508,11 +508,11 @@ time) and one must be able to change without the other.
 | `LIMIT_DRIVE_LABEL` | Deny mounting a user drive |
 | `LIMIT_DRIVE_HINT` | A run under this profile cannot mount the person's drive, even when one is allocated to them. |
 | `LIMIT_CONCURRENT_LABEL` | Concurrent runs |
-| `LIMIT_CONCURRENT_HINT` | How many runs a person under this profile may have going at once. 0 means no limit. |
+| `LIMIT_CONCURRENT_HINT` | How many runs a person under this profile may have going at once. Leave blank for no limit. |
 | `LIMIT_EPHEMERAL_LABEL` | Largest ephemeral scratch (MiB) |
-| `LIMIT_EPHEMERAL_HINT` | Binds a run's requested scratch size, not a run that requests none. 0 means no limit under this profile. |
+| `LIMIT_EPHEMERAL_HINT` | Binds a run's requested scratch size, not a run that requests none. Leave blank for no limit under this profile. |
 | `LIMIT_DRIVE_SIZE_LABEL` | Largest drive (MiB) |
-| `LIMIT_DRIVE_SIZE_HINT` | Clamps the drive size a person under this profile resolves to. On a share it bounds the number shown, not the share. 0 means no limit. |
+| `LIMIT_DRIVE_SIZE_HINT` | Clamps the drive size a person under this profile resolves to. On a share it bounds the number shown, not the share. Leave blank for no limit. |
 | `GRADE_NOTE` | Grades this ceiling as written — advisory, the same meter the policy editor shows. |
 | `SAVE` | Save profile |
 | `SAVE_ERROR` | Couldn't save this profile. |
@@ -534,10 +534,16 @@ re-frozen here.
 **0.7.2 ADDITION** (U2): `LimitRow` is a `Switch` over a boolean, so `max_concurrent_runs`
 (R4/F032's field, previously chip-only via `LIMIT_QUOTA_LABEL`), `MaxEphemeralDiskMiB` and
 `MaxDriveSizeMiB` (§5.6/§6.3-§6.4 of the 0.7.2 plan) get one new numeric row (`LimitNumberRow`) each
-instead. One zero rule across all three: 0 means no limit under this profile, stated in every hint
-rather than left for the reader to infer from the boolean rows above. The ephemeral row's hint does
-not repeat the Docker-uncapped warning — that sentence is `PROVIDERS.DOCKER_UNCAPPED_WARN`
-(workspace-providers-prompt.md §7.3), rendered under the same row, never re-frozen here.
+instead. One zero rule across all three: 0 IS no limit under this profile on the wire. The ephemeral
+row's hint does not repeat the Docker-uncapped warning — that sentence is
+`PROVIDERS.DOCKER_UNCAPPED_WARN` (workspace-providers-prompt.md §7.3), rendered under the same row,
+never re-frozen here.
+
+**0.7.4 CORRECTION (Appendix A F4-F8, reclassified Low copy, shipped together with the sibling
+correction in `workspace-providers-prompt.md` §7.2/§7.3):** the three hints used to say "0 means…",
+but `LimitNumberRow`'s `numberField` (`profile-editor.tsx`, the `storage-tab.tsx` precedent) renders
+0 as an EMPTY field — the control is correct, the hint named a value it can't display. "Leave blank"
+is what an operator can actually do.
 
 ### 7.3 `GOVERNANCE` — assignments and the resolved preview
 
