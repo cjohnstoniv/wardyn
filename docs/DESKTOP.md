@@ -421,7 +421,9 @@ and Ubuntu, which have no `wheel` group, under `set -euo pipefail`.
 **Two shapes the bundle arrives in.** Run in place from a checkout (a pilot),
 `install.sh` registers the converge job at that checkout's path. For a fleet,
 [`scripts/build-desktop-package.sh`](../scripts/build-desktop-package.sh) builds
-a `.deb`/`.rpm`/tarball from a **clean git tree** — never the working directory,
+a `.deb`/tarball (`--rpm` adds a `.rpm`, built inside a Fedora container — it
+costs a docker pull, so it is opt-in, not the default) from a **clean git
+tree** — never the working directory,
 because `deploy/compose/.env` on a maintainer's box carries a live
 `WARDYN_AGE_KEY` and packaging it would make every device's secret store
 decryptable by anyone holding the package. The payload lands at
@@ -730,8 +732,8 @@ sudo cp deploy/desktop/wardyn.env.example /etc/wardyn/wardyn.env
 # has. Substitute the current release's digests, or a published tag while you
 # are only smoke-testing.
 sudo sed -i '' -e 's/\$UPN/you@example.com/' \
-               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.6.4|' \
-               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.6.4|' \
+               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.7.3|' \
+               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.7.3|' \
                /etc/wardyn/wardyn.env
 sudo cp examples/policies/demo.json /etc/wardyn/policy.json
 

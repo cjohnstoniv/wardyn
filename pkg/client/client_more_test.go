@@ -481,9 +481,10 @@ func TestGetRecording_StreamsCastWithAuth(t *testing.T) {
 
 // W21-S1-6: an interactive run can carry MULTIPLE recordings, one per attach
 // session, each stored under the composite key "<run-id>~<session>"
-// (internal/recording.CastKey) — the server has always served that shape, but
-// GetRecording hardcoded the cast key to the bare run id, so nothing on the
-// CLI/SDK side could ever reach any recording but the run's own. The optional
+// (castKey, mirroring internal/recording.CastKey) — the server has always
+// served that shape, but GetRecording hardcoded the cast key to the bare run
+// id, so nothing on the CLI/SDK side could ever reach any recording but the
+// run's own. The optional
 // session argument composes the SAME key the server expects.
 func TestGetRecording_SessionArgUsesCompositeKey(t *testing.T) {
 	id := uuid.New()

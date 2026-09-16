@@ -114,7 +114,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/cjohnstoniv/wardyn/internal/recording"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -888,6 +887,22 @@ func (c *Client) streamClient() *http.Client {
 	return &cp
 }
 
+// castKeySep separates the run id from a session suffix in a composite cast
+// key — a deliberate copy of internal/recording's unexported castSep, not an
+// import of it: pkg/client is docs/sdk.md's "one non-stdlib dependency"
+// (uuid), and internal/recording (chi, pgx) is a whole-module-graph import
+// for two lines of string-joining logic no external consumer should pay for.
+const castKeySep = "~"
+
+// castKey mirrors internal/recording.CastKey (see its own doc comment) — same
+// rule, kept in sync by hand, not imported (see castKeySep above).
+func castKey(runID, suffix string) string {
+	if suffix == "" {
+		return runID
+	}
+	return runID + castKeySep + suffix
+}
+
 // GetRecording streams a run's terminal recording as raw asciicast bytes (the
 // .cast a player consumes). The caller MUST Close the returned reader.
 // GET /api/v1/runs/{id}/recording/{key} — the id really does appear twice: the
@@ -895,7 +910,7 @@ func (c *Client) streamClient() *http.Client {
 // which defaults to the bare run id (a batch run's single recording) when
 // session is omitted — existing zero-arg callers are unaffected. An
 // INTERACTIVE run can carry multiple recordings, one per attach session, each
-// keyed "<runID>~<session>" (recording.CastKey — see internal/recording's own
+// keyed "<runID>~<session>" (castKey above, mirroring internal/recording's own
 // doc comment); pass that session id as the optional session argument to fetch
 // one of those instead of the run's own bare-id cast. At most one value is
 // meaningful; variadic only to keep it optional without a second method name.
@@ -905,7 +920,7 @@ func (c *Client) GetRecording(ctx context.Context, runID uuid.UUID, session ...s
 	if len(session) > 0 {
 		suffix = session[0]
 	}
-	key := recording.CastKey(runID.String(), suffix)
+	key := castKey(runID.String(), suffix)
 	path := "/api/v1/runs/" + runID.String() + "/recording/" + url.PathEscape(key)
 	req, err := c.newRequest(ctx, http.MethodGet, path, nil, false)
 	if err != nil {

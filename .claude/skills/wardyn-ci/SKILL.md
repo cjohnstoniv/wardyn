@@ -12,8 +12,9 @@ Reuse the shipped machinery; never hand-roll what exists.
 
 ## Ground truth (read these, don't restate from memory)
 
-- Policy schema + field semantics: `internal/types/types.go` (`RunPolicySpec`,
-  `GrantSpec`) — the validator is `validatePolicySpec` in `internal/api/policy.go`.
+- Policy schema + field semantics: `RunPolicySpec` is in `internal/types/policy.go`,
+  `GrantSpec` is in `internal/types/types.go` — the validator is `validatePolicySpec`
+  in `internal/api/policy.go`.
 - Baseline policies: `examples/policies/` (`ci.json` = the unattended baseline;
   `claude-llm.json` = model-access grants; that dir's README explains each).
 - The one-shot wrapper + env table + exit codes: `scripts/ci-run.sh` and `docs/CI.md`.

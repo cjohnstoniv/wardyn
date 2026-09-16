@@ -32,8 +32,13 @@ this same JSON through this same validator — there is no separate UI schema.
 
 All three share one component, `policy-panel.tsx` — a mono JSON textarea plus
 template chips (Minimal, Model provider only, Package registries, CI baseline,
-Allow-all — observe first) seeded from
-[`examples/policies/`](../examples/policies/) — and one write path: `POST
+Allow-all — observe first), three of which (Model provider only, Package
+registries, CI baseline) are compiled-in copies of three
+[`examples/policies/`](../examples/policies/) files — **not** read from disk
+at runtime, so editing a file there does not change what the console offers;
+Minimal and Allow-all — observe first are authored directly in the panel with
+no example-file source (see [`examples/policies/README.md`](../examples/policies/README.md)) —
+and one write path: `POST
 /runs`, `POST /runs/preflight`, and `POST`/`PUT /policies` all decode with
 `DisallowUnknownFields` (an unrecognised field is a `400` everywhere, not just
 on `/policies`) and validate through the same `validatePolicySpec`.
@@ -42,7 +47,7 @@ on `/policies`) and validate through the same `validatePolicySpec`.
 
 | Field | Type | Default | What it does |
 |---|---|---|---|
-| `allowed_domains` | `[]string` | `[]` (deny all) | L2 egress allowlist: exact hosts or `*.` wildcards. Empty under default-deny means the sandbox reaches nothing. Each entry must be a shape the proxy's matcher can match — a mid-label wildcard, a URL, a bad `:port`, or a non-ASCII spelling is rejected at write time rather than shipped as a rule that silently matches nothing. (An internationalised host reaches the wire as punycode, so type the `xn--…` form.) |
+| `allowed_domains` | `[]string` | `[]` (deny all) | L2 egress allowlist: exact hosts or `*.` wildcards. Empty under default-deny means the sandbox reaches nothing. Each entry must be a shape the proxy's matcher can match — a mid-label wildcard, a URL, a bad `:port`, or a non-ASCII spelling is rejected at write time rather than shipped as a rule that silently matches nothing. (An internationalised host reaches the wire as punycode, so type the `xn--…` form.) Capped at **256 entries** — a hostile-input ceiling, not a sizing of any real policy — rejected (`400`) at write time. |
 | `denied_domains` | `[]string` | `[]` | Always wins over `allowed_domains`, in both egress modes. Same entry-shape validation. **Dispatch appends its own** (four GitHub HTTPS hosts plus the forge's SSH endpoint) for any run carrying a `github_token` grant with repos — see the note below the table. |
 | `allow_all_egress` | `bool` | `false` | Switches egress from allowlist-only to deny-list-only: any non-denied **public** host is allowed. The SSRF/private-IP guard is unaffected (metadata, loopback, link-local and private ranges stay denied unconditionally) **except an operator-declared internal host** (`SiteConfig.InternalHosts`, OPERATIONS.md's "Internal hosts") — that lift is per-hostname and admin-authored, independent of this flag, so `allow_all_egress` on its own still cannot reach private space. Credential injection still requires an exact `allowed_domains` entry — allow-all never widens where a secret may go. `first_use_approval` is inert under it. It does **not** re-open the GitHub hosts a brokered run loses — the four HTTPS names plus that forge's SSH endpoint — a deny beats allow-all too. |
 | `first_use_approval` | `string` | `always_deny` | How an unknown domain is handled. See the three modes below. A legacy boolean still decodes (`true`→`deny_with_review`, `false`→`always_deny`). |
@@ -56,7 +61,7 @@ on `/policies`) and validate through the same `validatePolicySpec`.
 | `workspace_repos` | `[]WorkspaceRepo` | `[]` | Additional git repos cloned into the run — the clone counterpart of `workspace_mounts`. |
 | `ui_apps` | `[]UIApp` | `[]` | In-sandbox loopback HTTP apps the UI gateway may relay to a browser. Operator-authored, never agent-chosen, and never a command string. |
 | `tool_rules` | `[]ToolRule` | `[]` | Per-tool effects for an autonomous run's own tool calls: `allow`, `hold` or `deny`. Narrows `tool_approvals=hold` from "ask about everything" to a policy. Operator-authored, evaluated proxy-side. |
-| `git_push_any_branch` | `bool` | `false` | Turns OFF branch-namespace confinement (default **ON**) for this run's brokered GitHub pushes — see ["`git_push_any_branch`: the per-run opt-out"](#git_push_any_branch-the-per-run-opt-out) below. Operator-authored; never agent-settable. |
+| `git_push_any_branch` | `bool` | `false` | Turns OFF branch-namespace confinement (default **ON**) for this run's brokered pushes — since 0.7.2, one field governs BOTH brokers: the GitHub-App lane and the `git_pat` lane — see ["`git_push_any_branch`: the per-run opt-out"](#git_push_any_branch-the-per-run-opt-out) below. Operator-authored; never agent-settable. |
 | `llm_inspection` | `LLMInspectionSpec` | omitted = **off** | Outbound content inspection on brokered LLM routes. |
 | `resources` | `ResourceLimits` | omitted = platform defaults | Sandbox CPU/memory/PID/disk caps. |
 
@@ -414,7 +419,12 @@ sandbox a human drives through an external tool ([docs/SSH.md](SSH.md) §6)
 that checks out and pushes its own branch name — not the
 `wardyn/<run-id>/*` one `agent-run` sets up — gets every push refused with no
 way to tell that tool why. Setting the field lets this run's brokered pushes
-land on any branch the granted token may write.
+land on any branch the granted token may write. **One field, both brokers**
+since 0.7.2: `git_push_any_branch` opts out the GitHub-App lane
+(`internal/egress/proxy/git_broker.go`) AND the never-resident `git_pat` lane
+(`internal/egress/proxy/pat_broker.go`), which the never-resident-`git_pat`
+row's own brokered-cleartext parsing (see `WARDYN_GIT_PAT_BROKER`,
+[ENV.md](ENV.md)) makes reachable the same way.
 
 Setting it on a run's policy also grades **high** on the Review rail
 (`composer.Grade`), which is where a human sees what a run may do before
@@ -754,6 +764,12 @@ wildcard is the literal `"*"`, which sets the default for unmatched tools; put
 
 **Empty is today's behaviour**, exactly: every gated call under `hold` goes to a
 human. A policy written before this field behaves identically.
+
+**Bounded at write time**, hostile-input ceilings rather than a real policy's
+sizing: at most **32 rules** (a harness exposes on the order of a dozen tools),
+each tool name at most **64 chars**, and a name with leading or trailing
+whitespace is refused outright — the match is exact, so it would never fire
+and would silently read as enforcement that is not.
 
 | Field | Type | Default | What it does |
 |---|---|---|---|

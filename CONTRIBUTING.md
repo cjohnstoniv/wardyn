@@ -120,10 +120,14 @@ compiles them out entirely. To actually run them:
 WARDYN_TEST_DOCKER=1 make test-docker   # go test -tags docker ./...
 ```
 
-For Postgres-dependent tests, set `WARDYN_TEST_PG` to a valid DSN:
+For Postgres-dependent tests, set `WARDYN_TEST_PG` to a valid DSN and use the
+PG-lane targets — `test`, `test-docker` and `test-race` all strip
+`WARDYN_TEST_PG` on their own recipe line, so passing it there runs the PG
+lane disabled and green rather than failing loudly:
 
 ```bash
-WARDYN_TEST_PG="postgres://user:pass@localhost/testdb" make test
+WARDYN_TEST_PG="postgres://user:pass@localhost/testdb" make test-report-pg
+WARDYN_TEST_PG="postgres://user:pass@localhost/testdb" make test-race-pg
 ```
 
 Cluster-dependent lanes need a real Kubernetes cluster and self-skip without
@@ -147,10 +151,11 @@ tests with coverage, build, and a Playwright e2e suite) — a PR that touches
 
 ```bash
 cd ui && pnpm install --frozen-lockfile     # Node 22 + pnpm 9 (package.json pins packageManager)
+npx playwright install chromium             # once; run-ui-e2e.sh also needs jq on PATH
 make ui-typecheck         # tsc --noEmit
 make ui-test              # vitest with coverage
 make ui                   # production build (vite)
-./scripts/run-ui-e2e.sh   # Playwright e2e (starts Postgres + wardynd, mocked model)
+./scripts/run-ui-e2e.sh   # Playwright e2e (starts Postgres + wardynd; seeds no model credential)
 ```
 
 UI visibly changed? Run `make screenshots` and commit the updated `docs/img` PNGs.

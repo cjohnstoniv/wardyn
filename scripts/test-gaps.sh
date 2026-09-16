@@ -15,6 +15,10 @@
 #                    (WARDYN_TEST_DOCKER=1); the fakeDocker tests self-skip the
 #                    real-daemon funcs, so they read 0.0% everywhere the daemon
 #                    is absent. Classified by package (no daemon here to prove it).
+#   K8S-gated      — in internal/runner/k8s, whose real coverage needs a real
+#                    Kubernetes cluster (WARDYN_TEST_K8S=1 / kind-sso-walk.sh /
+#                    make test-conformance-k8s). Same shape as Docker-gated,
+#                    classified by package, no cluster here to prove it.
 #   Untested       — no test anywhere in the tree reaches it (including
 #                    PG-package funcs the PG lane ALSO leaves at 0.0%).
 #
@@ -53,6 +57,11 @@ set -euo pipefail
 MODULE="github.com/cjohnstoniv/wardyn/"
 # Packages whose real coverage requires a live Docker daemon (WARDYN_TEST_DOCKER).
 DOCKER_RE='^(internal/runner/docker|internal/envbuild|cmd/wardyn-runner)(/|$)'
+# Packages whose real coverage requires a real Kubernetes cluster
+# (WARDYN_TEST_K8S=1 / make test-conformance-k8s / kind-sso-walk.sh) — X1c-F13:
+# these funcs used to fall into "Untested" with nothing distinguishing "nobody
+# has ever exercised this" from "this needs a cluster no per-PR run has".
+K8S_RE='^(internal/runner/k8s)(/|$)'
 
 # classify emits: <category>\t<pkg>\t<func>\t<file:line>
 # args: <union-func.txt> <pg-func.txt-or-empty>
@@ -64,7 +73,7 @@ classify() {
   # every classify() caller (including a future one) gets the same honest
   # downgrade instead of a crash.
   [ -n "$pg" ] && [ -f "$pg" ] || pg=/dev/null
-  awk -v mod="$MODULE" -v dockerre="$DOCKER_RE" -v pgfile="$pg" -v unionfile="$union" '
+  awk -v mod="$MODULE" -v dockerre="$DOCKER_RE" -v k8sre="$K8S_RE" -v pgfile="$pg" -v unionfile="$union" '
     # Phase 1: keys (file<TAB>func) COVERED (>0%) by the PG lane.
     #
     # FOUND LIVE (this script silently produced an all-zero report whenever
@@ -109,6 +118,7 @@ classify() {
       key=key "\t" ++uord[key]                    # k-th same-named func in this file
       if (key in pgcov && pgcov[key]) cat="PG"
       else if (pkg ~ dockerre)        cat="DOCKER"
+      else if (pkg ~ k8sre)           cat="K8S"
       else                            cat="UNTESTED"
       print cat "\t" pkg "\t" $2 "\t" loc
     }
@@ -122,6 +132,7 @@ self_test() {
   printf '%sinternal/store/store.go:43:\tCreateRun\t0.0%%\n' "$MODULE"  > "$d/u"
   printf '%sinternal/store/store.go:84:\tUpdateRunState\t0.0%%\n' "$MODULE" >> "$d/u"
   printf '%sinternal/runner/docker/driver.go:10:\tCreateSandbox\t0.0%%\n' "$MODULE" >> "$d/u"
+  printf '%sinternal/runner/k8s/exec.go:15:\tAttach\t0.0%%\n' "$MODULE" >> "$d/u"
   printf '%sinternal/api/runs.go:9:\tComposeRun\t0.0%%\n' "$MODULE" >> "$d/u"
   printf '%sinternal/api/runs.go:9:\thelperFn\t0.0%%\n' "$MODULE" >> "$d/u"
   printf '%sinternal/api/runs.go:9:\tAlreadyCovered\t80.0%%\n' "$MODULE" >> "$d/u"
@@ -145,6 +156,7 @@ self_test() {
   got="$(classify "$d/u" "$d/pg" | LC_ALL=C sort)"
   want="$(printf '%s\n' \
     "DOCKER	internal/runner/docker	CreateSandbox	internal/runner/docker/driver.go:10" \
+    "K8S	internal/runner/k8s	Attach	internal/runner/k8s/exec.go:15" \
     "PG	internal/egress/proxy	Close	internal/egress/proxy/conn.go:20" \
     "PG	internal/store	CreateRun	internal/store/store.go:43" \
     "UNTESTED	internal/api	ComposeRun	internal/api/runs.go:9" \
@@ -163,6 +175,7 @@ self_test() {
   got="$(classify "$d/u" "$d/does-not-exist" | LC_ALL=C sort)"
   want="$(printf '%s\n' \
     "DOCKER	internal/runner/docker	CreateSandbox	internal/runner/docker/driver.go:10" \
+    "K8S	internal/runner/k8s	Attach	internal/runner/k8s/exec.go:15" \
     "UNTESTED	internal/api	ComposeRun	internal/api/runs.go:9" \
     "UNTESTED	internal/egress/proxy	Close	internal/egress/proxy/conn.go:20" \
     "UNTESTED	internal/egress/proxy	Close	internal/egress/proxy/conn.go:71" \
@@ -197,8 +210,9 @@ UNION_TOTAL="$(awk '/^total:/ {print $NF}' "$UNION")"
 EXPORTED_TOTAL="$(awk '$2 ~ /^[A-Z]/ && $1 ~ /\.go:[0-9]+:$/ {n++} END{print n+0}' "$UNION")"
 n_pg="$(printf '%s\n' "$ROWS"   | grep -c '^PG'       || true)"
 n_dk="$(printf '%s\n' "$ROWS"   | grep -c '^DOCKER'   || true)"
+n_k8="$(printf '%s\n' "$ROWS"   | grep -c '^K8S'      || true)"
 n_ut="$(printf '%s\n' "$ROWS"   | grep -c '^UNTESTED' || true)"
-n_gap=$((n_pg + n_dk + n_ut))
+n_gap=$((n_pg + n_dk + n_k8 + n_ut))
 
 # Render one "- **pkg** (N): a, b, c" line per package for a category.
 render_cat() {
@@ -237,6 +251,7 @@ render_cat() {
   echo "|---|---:|"
   echo "| **PG-gated** (proven covered by \`ci test-pg\`) | ${n_pg} |"
   echo "| **Docker-gated** (needs \`WARDYN_TEST_DOCKER=1\`) | ${n_dk} |"
+  echo "| **Kubernetes-gated** (needs a real cluster) | ${n_k8} |"
   echo "| **Untested** (no test in the tree reaches it) | ${n_ut} |"
   echo "| Total 0.0% exported | ${n_gap} |"
   echo "| _(of ${EXPORTED_TOTAL} exported funcs in the union)_ | |"
@@ -264,19 +279,27 @@ render_cat() {
   echo
   render_cat DOCKER
   echo
-  # A STATIC section, not a computed bucket: these lanes need a cluster, nothing
-  # in CI runs them, and `-coverpkg` cannot observe them — so their funcs stay in
-  # "Untested" above and this section is what stops that reading as "nobody has
-  # ever exercised the k8s substrate".
+  echo "## Kubernetes-gated — need a real cluster (WARDYN_TEST_K8S=1)"
+  echo
+  echo "internal/runner/k8s's session funcs (Attach/Close/ExecStream/Read/Resize/Write)"
+  echo "— X1c-F13: these used to fall into \"Untested\" above with nothing distinguishing"
+  echo "\"nobody has ever exercised the k8s substrate\" from \"this needs a cluster no"
+  echo "per-PR run has.\" Classified by package (no cluster here to prove it)."
+  echo
+  render_cat K8S
+  echo
+  # A STATIC section, not a computed bucket: `-coverpkg` cannot observe these
+  # manual, whole-lane proofs at all (they exercise more than the one package
+  # above), so they get no numeric bucket of their own — listed here so the
+  # k8s surface is not read as touched only by the package above.
   cat <<'K8SGATED'
-## Kubernetes-gated — manual cluster lanes no coverage profile can see
+### Manual cluster lanes no coverage profile can see at all
 
-Not a coverage bucket: these lanes need a real cluster, no workflow runs them,
-and `-coverpkg` never observes them at all — so the funcs they exercise show up
-above under "Untested" no matter how often somebody runs them. Listed here so
-the k8s surface is not read as untouched. All three self-skip without
-`WARDYN_TEST_K8S=1`; a green result is evidence only for the tip somebody
-actually ran it on.
+No workflow runs these, and `-coverpkg` never observes them — not even as the
+K8S-gated bucket above, since they exercise code far beyond
+`internal/runner/k8s`. Listed here so the k8s surface is not read as
+untouched. All three self-skip without `WARDYN_TEST_K8S=1`; a green result is
+evidence only for the tip somebody actually ran it on.
 
 - `scripts/kind-sso-walk.sh` — **the AWS SSO walk** (0.7.4). Two Dex principals
   on a kind cluster, the containerized `aws sso login` against an on-cluster
@@ -285,14 +308,15 @@ actually ran it on.
   the per-user credential path end to end — `internal/api`'s `resolveBedrockAuth`
   ssoInject branch, `harnesscred.go`'s login run, `awssso_refresh.go`'s
   dispatch-time renewal — plus `internal/runner/k8s`'s Attach/ExecStream, which
-  read 0.0% above. Prereqs: `make kind-quickstart` + `make kind-sso`; recipe in
-  docs/OPERATIONS.md, "Testing AWS SSO without an AWS tenant".
+  read 0.0% in the K8S-gated bucket above. Prereqs: `make kind-quickstart` +
+  `make kind-sso`; recipe in docs/OPERATIONS.md, "Testing AWS SSO without an
+  AWS tenant".
 - `scripts/run-e2e-ssh-k8s.sh` (`make test-e2e-ssh-k8s`) — the SSH gateway over
   the k8s exec lane: `internal/runner/k8s`'s Attach/Close/ExecStream/Read/
-  Resize/Write, every one of them listed as untested above.
+  Resize/Write, every one of them listed in the K8S-gated bucket above.
 - `make test-conformance-k8s` — the containment conformance suite against a
   NetworkPolicy-enforcing CNI.
 K8SGATED
 } > "$OUT"
 
-echo "test-gaps: wrote $OUT — untested=${n_ut} pg-gated=${n_pg} docker-gated=${n_dk} (of ${EXPORTED_TOTAL} exported)"
+echo "test-gaps: wrote $OUT — untested=${n_ut} pg-gated=${n_pg} docker-gated=${n_dk} k8s-gated=${n_k8} (of ${EXPORTED_TOTAL} exported)"

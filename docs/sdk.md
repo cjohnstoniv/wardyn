@@ -110,7 +110,7 @@ var (
 )
 
 // Enums and their values are re-exported too:
-_ = client.ApprovalPending // also Approved / Denied / Expired (ApprovalState)
+_ = client.ApprovalPending // also Approved / Denied / Expired / Cancelled (ApprovalState)
 _ = client.RunRunning      // also Pending / Completed / Failed / Killed ... (RunState)
 _ = client.ScopeOnce       // also Run / Until / Always (ApprovalScope; DecisionOpts.Scope)
 

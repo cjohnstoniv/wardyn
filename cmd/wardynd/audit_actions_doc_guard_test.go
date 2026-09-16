@@ -302,6 +302,98 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 	t.Logf("checked %d citations across %d rows", citationsChecked, rowsChecked)
 }
 
+// dataFieldsCell returns docs/AUDIT-ACTIONS.md's Data-fields cell (the third
+// `|`-delimited column) for a table row starting with `action`, tokenized into
+// its backtick-quoted field names.
+func dataFieldsCell(t *testing.T, root, action string) []string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(root, "docs", "AUDIT-ACTIONS.md"))
+	if err != nil {
+		t.Fatalf("read docs/AUDIT-ACTIONS.md: %v", err)
+	}
+	prefix := "| `" + action + "`"
+	for _, line := range strings.Split(string(raw), "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), prefix) {
+			continue
+		}
+		cells := strings.Split(line, "|")
+		if len(cells) < 4 {
+			t.Fatalf("docs/AUDIT-ACTIONS.md row for %q has fewer than the expected 5 columns", action)
+		}
+		var fields []string
+		for _, m := range backtickSpan.FindAllStringSubmatch(cells[3], -1) {
+			fields = append(fields, m[1])
+		}
+		return fields
+	}
+	t.Fatalf("docs/AUDIT-ACTIONS.md has no row for %q — re-anchor this guard", action)
+	return nil
+}
+
+// TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit is the targeted
+// regression for X1c-F3: ui.open's Data-fields cell claimed `duration_sec`,
+// which is computed only at CLOSE (s.auditUI's caller at
+// internal/api/uigateway.go passes it in the ui.close call's map literal, not
+// ui.open's) — a doc cell that was never checked against what the emit call
+// actually passes, because TestAuditActionsDocCitationsAreLive only checks
+// citation PROXIMITY, never the Data-fields column's content.
+//
+// Scoped to these two rows rather than a general derived parity check: the
+// data argument arrives as a map literal at 223 emit call sites across four
+// different wrapper shapes ([]byte, map[string]any, a typed EventData struct,
+// one built by a helper), several behind indirection the existing forward
+// guard's fixed-point wrapper resolution does not (and does not need to)
+// follow for the ACTION argument. A general version would have to re-derive
+// that whole shape for the DATA argument too; this pins the actual regression
+// with the same "read it back out of the source" method instead of hand
+// re-typing a second copy of what the code passes.
+func TestAuditActionsDoc_UIOpenCloseDataFieldsMatchTheEmit(t *testing.T) {
+	root := repoRoot(t)
+	src, err := os.ReadFile(filepath.Join(root, "internal", "api", "uigateway.go"))
+	if err != nil {
+		t.Fatalf("read internal/api/uigateway.go: %v", err)
+	}
+	mapLit := regexp.MustCompile("`([a-z0-9_]+)`|\"([a-z0-9_]+)\":")
+	for _, tc := range []struct {
+		action string
+		call   *regexp.Regexp
+	}{
+		{"ui.open", regexp.MustCompile(`"ui\.open"[^\n]*\n\s*map\[string\]any\{([^}]*)\}`)},
+		{"ui.close", regexp.MustCompile(`"ui\.close"[^\n]*\n\s*map\[string\]any\{([^}]*)\}`)},
+	} {
+		m := tc.call.FindSubmatch(src)
+		if m == nil {
+			t.Fatalf("could not find the %s emit's map[string]any{...} literal in internal/api/uigateway.go — re-anchor this guard", tc.action)
+		}
+		emitted := map[string]bool{}
+		for _, kv := range mapLit.FindAllStringSubmatch(string(m[1]), -1) {
+			for _, k := range kv[1:] {
+				if k != "" {
+					emitted[k] = true
+				}
+			}
+		}
+		if len(emitted) == 0 {
+			t.Fatalf("parsed 0 keys out of the %s emit's map literal — re-anchor this guard", tc.action)
+		}
+		documented := dataFieldsCell(t, root, tc.action)
+		docSet := map[string]bool{}
+		for _, f := range documented {
+			docSet[f] = true
+		}
+		for k := range emitted {
+			if !docSet[k] {
+				t.Errorf("%s emits data field %q but docs/AUDIT-ACTIONS.md's row does not list it", tc.action, k)
+			}
+		}
+		for _, f := range documented {
+			if !emitted[f] {
+				t.Errorf("docs/AUDIT-ACTIONS.md's %s row lists data field %q but the emit call does not pass it", tc.action, f)
+			}
+		}
+	}
+}
+
 // TestAuditActionsForwardGuardCoversEveryEmitShape is the anchor under the
 // forward guard, and it exists because that guard passed for the wrong reason
 // twice: once when it did not exist at all, and once when it existed but could

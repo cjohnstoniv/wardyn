@@ -69,6 +69,12 @@ func TestShippedVersionStringsAgree(t *testing.T) {
 		// the empty image.tag resolves to — the number they compare their own pin
 		// against before deciding to override the probe path.
 		{"../../deploy/helm/wardyn/values.yaml", `(?m)^# image\.tag above resolves to \.Chart\.AppVersion, which is (\S+)`},
+		// DESKTOP.md's real-hardware smoke recipe pins both image tags by hand
+		// (the desktop tier's MDM config has no $WARDYN_VERSION to interpolate) —
+		// X1a-F10: this went stale for a whole release cycle with nothing to
+		// catch it.
+		{"../../docs/DESKTOP.md", `WARDYN_WARDYND_IMAGE=ghcr\.io/cjohnstoniv/wardynd:(\S+)\|`},
+		{"../../docs/DESKTOP.md", `WARDYN_PROXY_IMAGE=ghcr\.io/cjohnstoniv/wardyn-proxy:(\S+)\|`},
 	} {
 		raw, err := os.ReadFile(tc.file)
 		if err != nil {

@@ -35,6 +35,14 @@ slug-expansion (`repoCloneURL`); pass the full URL until it closes.
 server enforces with a 400. **With NO builder wired the run does not fail — it
 silently falls back to the convention image.** Check the `image:` line the CLI
 prints on create: a real build is tagged `wardyn-devcontainer/<run-id>:latest`.
+
+**A third refusal, since 0.7.2: provider admission.** `devcontainer_repo` runs
+through the same repository-provider admission gate as `repo` — every host
+must be on an enabled provider (or the legacy `scm_hosts` allowlist) before the
+launch reaches the image builder (`admitRepoSources`, `internal/api/workspace_admission.go`).
+An operator gets `422` (the request is well-formed and the policy refuses it);
+a member gets `403` (for them this is an authorization boundary, not a body to
+keep editing).
 `wardyn run --dry-run` checks the same body without launching.
 
 ## Two-stage build
