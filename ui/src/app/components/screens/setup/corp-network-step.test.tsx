@@ -423,6 +423,44 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     expect(screen.queryByText(/already exists for this from/i)).not.toBeInTheDocument();
   });
 
+  // M1: the client collision check must fold like the server's own
+  // normalizeRedirectEndpoint (TrimSpace + lowercase scheme+authority) — a
+  // different-CASE typed `from` is the SAME redirect once the server
+  // normalizes it, and a client check that misses that hole lets the
+  // operator create the exact silently-shadowed duplicate F3-F5 exists to
+  // prevent.
+  it("M1: a different-case `from` (same authority once folded) is still a collision", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderEgress();
+    await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
+    await user.click(screen.getByRole("combobox"));
+    // Existing redirect is "https://pypi.org/simple" (lowercase) — typed
+    // here with an upper-case authority, which is "novel" to the suggestion
+    // list (exact-string match), so it goes through "use as typed".
+    await user.type(screen.getByPlaceholderText(/https:\/\/…, host, or IP/i), "https://PyPI.org/simple");
+    await user.click(await screen.findByText("use as typed"));
+    await user.type(screen.getByPlaceholderText(/artifactory\.corp\.internal/i), "https://mirror.corp.internal/pypi");
+
+    expect(screen.getByRole("button", { name: /\+ add redirect/i })).toBeDisabled();
+    expect(screen.getByText(/already exists for this from/i)).toBeInTheDocument();
+  });
+
+  // Negative control: only the AUTHORITY folds — a path-case difference is a
+  // genuinely different redirect target (paths are case-sensitive on most
+  // servers), so it must NOT collide.
+  it("M1 negative control: a different-case PATH (same authority, different path case) does not collide", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderEgress();
+    await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
+    await user.click(screen.getByRole("combobox"));
+    await user.type(screen.getByPlaceholderText(/https:\/\/…, host, or IP/i), "https://pypi.org/Simple");
+    await user.click(await screen.findByText("use as typed"));
+    await user.type(screen.getByPlaceholderText(/artifactory\.corp\.internal/i), "https://mirror.corp.internal/pypi2");
+
+    expect(screen.getByRole("button", { name: /\+ add redirect/i })).toBeEnabled();
+    expect(screen.queryByText(/already exists for this from/i)).not.toBeInTheDocument();
+  });
+
   // UI-SETUP-14: the "From" <Field label> pointed htmlFor="eg-add-from" at an
   // id the combobox trigger never carried — every sibling field here (To,
   // Token secret name) is wired correctly, so a screen-reader user tabbing
