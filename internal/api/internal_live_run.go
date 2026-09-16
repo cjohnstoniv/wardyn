@@ -144,6 +144,14 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 // died, for a run whose revocation write failed, which is exactly the case this
 // gate exists for.
 //
+// What is NO LONGER an example is the activity keepalive (W6-S1). The UI relay,
+// both attach pumps and the SSH channel keepalives all called Store.TouchRun
+// before the door that refuses a non-RUNNING run, so an authenticated caller
+// could re-open this window on a cadence for as long as they liked — the one
+// re-opener that was driven by a request rather than by a rare internal write.
+// TouchRun now refuses a terminal run in SQL, so the remaining re-openers are
+// wardynd's own writes, on the paths named above.
+//
 // It is accepted rather than closed because the exposure is bounded on three
 // sides and closing it needs a schema column this lane does not own:
 //

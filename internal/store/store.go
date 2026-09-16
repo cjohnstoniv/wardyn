@@ -271,8 +271,29 @@ func (s PG) SetRunFailureHint(ctx context.Context, id uuid.UUID, hint string) er
 // It is the activity keepalive the interactive-attach handler calls so the idle
 // reaper (which measures idleness by agent_runs.updated_at) does not stop a run
 // that a human is actively attached to. Returns ErrNotFound when no row matched.
+//
+// A TERMINAL run is never touched (W6-S1), and the guard is HERE rather than at
+// the four callers (the UI relay, both attach pumps, the SSH channel keepalives)
+// because they share one reason and one bug. Each of them touches BEFORE the
+// door that refuses a non-RUNNING run, and updated_at is also the clock the
+// killed-run tail-upload grace is measured from (api/internal_live_run.go) — so
+// an authenticated caller could keep a killed run's row fresh on a cadence and
+// hold that door open indefinitely, which is precisely the bound the gate
+// claims. One WHERE clause closes every lane, and a caller added later inherits
+// it. A refusal is ErrNotFound, which every caller already discards: a
+// keepalive for a run that has ended is a no-op by definition.
+//
+// The predicate is the POSITIVE list (types.NonTerminalRunStates), never
+// `NOT IN (terminal)`, for the reason spelled out on CountActiveRunsBy: a state
+// added to the enum and forgotten there merely stops a keepalive, while the
+// negated form would keep touching a newly-added TERMINAL state.
 func (s PG) TouchRun(ctx context.Context, id uuid.UUID) error {
-	return s.execRun(ctx, "touch run", `UPDATE agent_runs SET updated_at=now() WHERE id=$1`, id)
+	states := make([]string, 0, len(types.NonTerminalRunStates))
+	for _, st := range types.NonTerminalRunStates {
+		states = append(states, string(st))
+	}
+	return s.execRun(ctx, "touch run",
+		`UPDATE agent_runs SET updated_at=now() WHERE id=$1 AND state = ANY($2)`, id, states)
 }
 
 // runInsertCols / runCols are THE agent_runs column lists, in scanRun's order,

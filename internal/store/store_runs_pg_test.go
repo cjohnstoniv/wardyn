@@ -455,6 +455,82 @@ func TestPG_TouchRun_Keepalive(t *testing.T) {
 	}
 }
 
+// TestPG_TouchRun_RefusesATerminalRun (W6-S1) pins the guard that bounds the
+// killed-run liveness gate's five-minute tail-upload grace.
+//
+// That grace is measured from agent_runs.updated_at, and TouchRun is called by
+// the UI relay, the attach pumps and the SSH channel keepalives BEFORE any of
+// them refuse a non-RUNNING run — so an authenticated caller could keep a
+// TERMINAL run's row fresh indefinitely and hold the /internal/* upload door
+// open for as long as they liked. The bound belongs in the shared writer, not
+// in each of those four callers: one WHERE clause closes every lane at once,
+// and a caller that appears later inherits it.
+//
+// A refused touch is ErrNotFound, which every caller already discards — a
+// keepalive for a run that has ended is a no-op by definition.
+func TestPG_TouchRun_RefusesATerminalRun(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+
+	for _, st := range []types.RunState{types.RunKilled, types.RunFailed, types.RunCompleted, types.RunStopped} {
+		t.Run(string(st), func(t *testing.T) {
+			r := persistRun(t, ctx, pool, newRun(st))
+			// The terminal transition is what starts the grace clock; backdate
+			// updated_at to stand in for one that happened a while ago.
+			at := time.Now().UTC().Add(-time.Hour)
+			if _, err := pool.Exec(ctx, `UPDATE agent_runs SET updated_at=$1 WHERE id=$2`, at, r.ID); err != nil {
+				t.Fatalf("backdate run: %v", err)
+			}
+			before, err := pg.GetRun(ctx, r.ID)
+			if err != nil {
+				t.Fatalf("get run before touch: %v", err)
+			}
+
+			if err := pg.TouchRun(ctx, r.ID); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("TouchRun on a %s run err = %v, want ErrNotFound", st, err)
+			}
+
+			after, err := pg.GetRun(ctx, r.ID)
+			if err != nil {
+				t.Fatalf("get run after touch: %v", err)
+			}
+			if !after.UpdatedAt.Equal(before.UpdatedAt) {
+				t.Errorf("a %s run's updated_at moved on a keepalive touch: before=%v after=%v — the tail-upload "+
+					"grace is measured from this column, so a caller could hold the /internal/* door open forever",
+					st, before.UpdatedAt, after.UpdatedAt)
+			}
+		})
+	}
+
+	// NEGATIVE CONTROL: every state a live run can be in still touches, so the
+	// idle reaper keeps seeing attach/relay/SSH activity.
+	for _, st := range types.NonTerminalRunStates {
+		t.Run("live "+string(st), func(t *testing.T) {
+			r := persistRun(t, ctx, pool, newRun(st))
+			if _, err := pool.Exec(ctx, `UPDATE agent_runs SET updated_at=$1 WHERE id=$2`,
+				time.Now().UTC().Add(-time.Hour), r.ID); err != nil {
+				t.Fatalf("backdate run: %v", err)
+			}
+			before, err := pg.GetRun(ctx, r.ID)
+			if err != nil {
+				t.Fatalf("get run before touch: %v", err)
+			}
+			if err := pg.TouchRun(ctx, r.ID); err != nil {
+				t.Fatalf("TouchRun on a %s run: %v", st, err)
+			}
+			after, err := pg.GetRun(ctx, r.ID)
+			if err != nil {
+				t.Fatalf("get run after touch: %v", err)
+			}
+			if !after.UpdatedAt.After(before.UpdatedAt) {
+				t.Errorf("a %s run's keepalive no longer advances updated_at — the idle reaper would stop an "+
+					"actively attached run", st)
+			}
+		})
+	}
+}
+
 // TestPG_GrantPersistence_RoundTrip covers the credential-grant store: a created
 // grant round-trips through ListGrantsByRun with its JSON spec intact, scoped to
 // its run (and not to a sibling run). Grants are the eligibility records the
