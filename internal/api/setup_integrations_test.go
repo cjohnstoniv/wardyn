@@ -88,7 +88,7 @@ func TestHandleListIntegrations_NoStoredRowsIsEmptyNot404(t *testing.T) {
 }
 
 func TestSetupHarnessTools(t *testing.T) {
-	tools := setupHarnessTools(types.SiteConfig{})
+	tools := setupHarnessTools(types.SiteConfig{}, nil)
 	if len(tools) != len(harnessCatalog) {
 		t.Fatalf("len = %d, want %d (one per catalog row)", len(tools), len(harnessCatalog))
 	}
@@ -111,5 +111,58 @@ func TestSetupHarnessTools(t *testing.T) {
 		if !tool.Enabled || tool.Mechanism != "" || tool.CredentialSource != "" {
 			t.Errorf("with no agent roster, %s = %+v; want enabled with no mechanism or source", tool.ID, tool)
 		}
+	}
+}
+
+// TestSetupHarnessTools_RosterCustomImageAgentAppended is B7-F3:
+// OPERATIONS.md:1481 documents a WARDYN_AGENT_IMAGES id as a supported
+// custom agent, but setupHarnessTools used to publish ONLY harnessCatalog
+// rows — a roster entry naming an image-map id the catalog does not know
+// never appeared in Harnesses at all, so a fresh pick of it was impossible
+// (only a clone of an existing custom-agent run worked, since that flow
+// never consulted this list). The invariant is now catalog ∪ roster: every
+// catalog row, PLUS any roster row whose id resolves through AgentImages and
+// is not already a catalog id.
+func TestSetupHarnessTools_RosterCustomImageAgentAppended(t *testing.T) {
+	const customID = "internal-refactor-bot"
+	sc := types.SiteConfig{AgentProviders: agentBlock(
+		agentRow("claude-code", types.AgentMechanismAnthropicAPIKey),
+		types.AgentProvider{ID: customID, Mechanism: types.AgentMechanismAnthropicAPIKey},
+	)}
+	images := map[string]string{customID: "registry.corp.internal/agents/refactor-bot:latest"}
+
+	tools := setupHarnessTools(sc, images)
+	if want := len(harnessCatalog) + 1; len(tools) != want {
+		t.Fatalf("len = %d, want %d (catalog %d + the one roster-only image-map id)",
+			len(tools), want, len(harnessCatalog))
+	}
+	var custom *SetupHarnessTool
+	for i := range tools {
+		if tools[i].ID == customID {
+			custom = &tools[i]
+		}
+	}
+	if custom == nil {
+		t.Fatalf("no %q row in Harnesses; body=%+v", customID, tools)
+	}
+	if !custom.Enabled {
+		t.Errorf("custom row = %+v, want enabled (the roster names it, undisabled)", custom)
+	}
+	if custom.Display != customID {
+		t.Errorf("custom row Display = %q, want the id itself (no catalog display name exists)", custom.Display)
+	}
+	if custom.HasGateway || custom.HasLogin {
+		t.Errorf("custom row = %+v, want no gateway/login — the image-map lane has neither", custom)
+	}
+	if !custom.NoManagedAuth {
+		t.Errorf("custom row = %+v, want no_managed_auth=true", custom)
+	}
+
+	// A roster id with no AgentImages entry at all is unresolvable and stays
+	// dropped — there is no image to run it with.
+	toolsNoImage := setupHarnessTools(sc, nil)
+	if want := len(harnessCatalog); len(toolsNoImage) != want {
+		t.Fatalf("with no AgentImages entry: len = %d, want %d (the unresolvable roster row is dropped)",
+			len(toolsNoImage), want)
 	}
 }

@@ -512,19 +512,36 @@ type SetupHarnessTool struct {
 // setupHarnessTools projects the static harness catalog for SetupStatus, folded
 // with the org's agent roster (agent_providers.go).
 //
-// THE ROW COUNT IS THE CATALOG'S, always: the server never filters this list by
-// the roster. An agent the admin did not enable is published as a row with
-// enabled=false so the console can say "not enabled by your admin" — the state
-// the field report asked for, and the reason setup_test.go's
-// len(Harnesses) == len(harnessCatalog) still holds.
+// THE ROW COUNT IS THE CATALOG'S PLUS ANY ROSTER ROW THE CATALOG DOES NOT
+// NAME (catalog ∪ roster), not the catalog's alone: an agent the admin did
+// not enable is published as a catalog row with enabled=false so the console
+// can say "not enabled by your admin" (setup_test.go's
+// len(Harnesses) == len(harnessCatalog) still holds when the roster names
+// only catalog ids), and — B7-F3 — a roster row naming a WARDYN_AGENT_IMAGES
+// id the catalog does NOT know is appended too: OPERATIONS.md:1481 documents
+// custom-image agents as supported, but before this a fresh pick of one was
+// impossible because it never appeared in this list at all (a clone of an
+// existing custom-agent run worked; the id was just never OFFERED). agentImages
+// is the boot-time WARDYN_AGENT_IMAGES map (Config.AgentImages) — a roster id
+// with neither a catalog entry nor an image mapping is dropped as
+// unresolvable rather than offered with no image to run.
+//
+// The appended row carries no gateway/login (the image-map lane has neither
+// — harnessByID documents it the same way agentImage's fallback does) and
+// Display = the id itself: there is no catalog display name for it, and the
+// id IS what the admin typed into their own WARDYN_AGENT_IMAGES/roster entry.
 //
 // A zero-value sc (no store, or a read that failed) is legacy open mode: every
-// row enabled, no mechanism claimed. That is the conservative direction here —
-// it claims nothing unavailable on a blip.
-func setupHarnessTools(sc types.SiteConfig) []SetupHarnessTool {
+// catalog row enabled, no mechanism claimed, no roster to fold in (an empty
+// AgentProviders block is never stored — agentProvidersConfigured's doc).
+// That is the conservative direction here — it claims nothing unavailable on
+// a blip.
+func setupHarnessTools(sc types.SiteConfig, agentImages map[string]string) []SetupHarnessTool {
 	configured := agentProvidersConfigured(sc)
 	out := make([]SetupHarnessTool, len(harnessCatalog))
+	inCatalog := make(map[string]bool, len(harnessCatalog))
 	for i, d := range harnessCatalog {
+		inCatalog[d.ID] = true
 		tool := SetupHarnessTool{
 			ID: d.ID, Display: d.Display,
 			HasGateway: d.Gateway != nil, HasLogin: d.Login != nil,
@@ -540,6 +557,19 @@ func setupHarnessTools(sc types.SiteConfig) []SetupHarnessTool {
 			}
 		}
 		out[i] = tool
+	}
+	if configured {
+		for _, row := range agentProviderRows(sc) {
+			if inCatalog[row.ID] || agentImages[row.ID] == "" {
+				continue
+			}
+			out = append(out, SetupHarnessTool{
+				ID: row.ID, Display: row.ID, NoManagedAuth: true,
+				Enabled:          !row.Disabled,
+				Mechanism:        string(row.Mechanism),
+				CredentialSource: string(row.CredentialSource),
+			})
+		}
 	}
 	return out
 }
