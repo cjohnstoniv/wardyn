@@ -44,7 +44,7 @@ import { Input } from "../../ui/input";
 import { Field, Switch } from "../../wardyn/form-primitives";
 import { Chip } from "../../wardyn/primitives";
 import { EmptyState, TableSkeleton } from "../../wardyn/states";
-import { HarnessLoginPane } from "../settings/harness-login-pane";
+import { HarnessLoginPane, isLikelyStartUrl } from "../settings/harness-login-pane";
 
 // The two catalog agents whose declared lane folds to a coarse ai-integration
 // type harness.go's ProviderTypes checks against (harnessCatalog); a
@@ -94,6 +94,17 @@ function mechanismChoices(harness: SetupHarnessTool): MechChoice[] {
 function defaultMechanism(harness: SetupHarnessTool): string {
   const choices = mechanismChoices(harness);
   return (choices.find((c) => !c.reason) ?? choices[0]).value;
+}
+
+// F4-F9 (Appendix A V8): a bedrock_sso row declared "Per person" with no
+// start URL is a guaranteed 400 (agent_providers.go's
+// validateAgentCredentialSource) — the Git tab already withholds Save for
+// its own invalid rows (invalidGitRow, providers-screen.tsx); this is the
+// same rule for this tab. NOT gated on `enabled`: the server validates every
+// stored row it is handed, on or off (the git-tab precedent, display.tsx's
+// own comment on gitRowInvalid).
+export function agentRowInvalid(row: AgentProvider): boolean {
+  return row.mechanism === "bedrock_sso" && row.credential_source === "per_user" && !isLikelyStartUrl(row.sso_start_url ?? "");
 }
 
 // The row to EDIT: the stored row if one exists, else a fresh one seeded with a
@@ -411,11 +422,15 @@ function Row({
                   id={`agent-${row.id}-sso-start-url`}
                   value={row.sso_start_url ?? ""}
                   disabled={!operator}
+                  aria-invalid={agentRowInvalid(row)}
                   onChange={(e) => onUpdate({ ...row, sso_start_url: e.target.value.trim() })}
                   placeholder="https://my-org.awsapps.com/start"
                   className="font-mono"
                 />
               </Field>
+              {agentRowInvalid(row) && (
+                <p className="-mt-2 text-xs leading-snug text-danger">{AGENTS_DRAFT.SSO_START_URL_REQUIRED}</p>
+              )}
               {/* The roster pin (Appendix A finding 1, ask 1): optional, ADMIN-OWNED like the
                   start URL above it — set together, or left blank, never
                   independently (agent400SSOPinPair). */}
@@ -523,6 +538,9 @@ export function AgentsTab({
   React.useEffect(load, [load]);
 
   const agents = draft?.agents ?? [];
+  // F4-F9: any stored row the server is guaranteed to 400 withholds Save —
+  // the Git tab's own invalidGitRow precedent.
+  const invalidAgentRow = agents.some(agentRowInvalid);
   const roster = harnesses ?? [];
   const catalogIds = new Set(roster.map((h) => h.id));
   // Any row not in this build's catalog (a custom WARDYN_AGENT_IMAGES id) is
@@ -672,7 +690,7 @@ export function AgentsTab({
           for. A control appears when there is something to save. */}
       {roster.length > 0 && (
         <div className="flex justify-end border-t border-border pt-4">
-          <Button disabled={!operator || saving} onClick={save}>
+          <Button disabled={!operator || saving || invalidAgentRow} onClick={save}>
             {PROVIDERS.SAVE_CTA}
           </Button>
         </div>

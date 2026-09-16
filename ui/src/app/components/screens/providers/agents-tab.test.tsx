@@ -119,6 +119,42 @@ describe("AgentsTab", () => {
     expect(within(row).getByRole("radio", { name: AGENTS.SOURCE_PER_USER })).not.toBeDisabled();
   });
 
+  // F4-F9 (Appendix A V8): "Per person" on a bedrock_sso row with an empty
+  // start URL is a guaranteed 400 (agent_providers.go's
+  // validateAgentCredentialSource) — Save must not stay enabled over it.
+  describe("Save is withheld over an invalid per_user start URL (F4-F9)", () => {
+    it("Save disables the moment Per person is picked with no start URL, and re-enables on a valid one", async () => {
+      getAgentProvidersMock.mockResolvedValue({ providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] }, etag: '"e9"' });
+      render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+      const row = await screen.findByTestId("agent-row-claude-code");
+      const save = screen.getByRole("button", { name: PROVIDERS.SAVE_CTA });
+      expect(save).toBeEnabled();
+
+      await userEvent.click(within(row).getByRole("radio", { name: AGENTS.SOURCE_PER_USER }));
+      expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeDisabled();
+      expect(within(row).getByText(AGENTS_DRAFT.SSO_START_URL_REQUIRED)).toBeInTheDocument();
+
+      await userEvent.type(within(row).getByLabelText(AGENTS.FIELD_SSO_START_URL), "https://acme.awsapps.com/start");
+      expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeEnabled();
+      expect(within(row).queryByText(AGENTS_DRAFT.SSO_START_URL_REQUIRED)).not.toBeInTheDocument();
+    });
+
+    // Negative control: a valid start URL typed straight away keeps Save
+    // enabled throughout — the gate never fires on a row that was never
+    // invalid.
+    it("a row loaded with a valid start URL keeps Save enabled", async () => {
+      getAgentProvidersMock.mockResolvedValue({
+        providers: {
+          agents: [{ id: "claude-code", mechanism: "bedrock_sso", credential_source: "per_user", sso_start_url: "https://acme.awsapps.com/start" }],
+        },
+        etag: '"e10"',
+      });
+      render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+      await screen.findByTestId("agent-row-claude-code");
+      expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeEnabled();
+    });
+  });
+
   // VL-23: the start-URL input is reachable by its Field label (htmlFor/id).
   it("the SSO start-URL input is reachable by its label on a per_user row", async () => {
     getAgentProvidersMock.mockResolvedValue({
@@ -789,7 +825,13 @@ describe("AgentsTab — the roster pin (sso_account_id / sso_role_name)", () => 
 
   it("saves typed pin values on the row", async () => {
     getAgentProvidersMock.mockResolvedValue({
-      providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso", credential_source: "per_user" }] },
+      // F4-F9: a per_user row needs a valid start URL or Save disables —
+      // this test is about the PIN fields, so the row is otherwise valid.
+      providers: {
+        agents: [
+          { id: "claude-code", mechanism: "bedrock_sso", credential_source: "per_user", sso_start_url: "https://acme.awsapps.com/start" },
+        ],
+      },
       etag: '"pin3"',
     });
     putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"pin4"' });

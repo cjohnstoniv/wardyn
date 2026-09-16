@@ -331,6 +331,11 @@ export const AGENTS_DRAFT = {
   FIELD_SSO_ROLE_NAME: "Pinned IAM role name",
   SSO_ROLE_NAME_HINT:
     "The IAM role a sign-in for this row must resolve to. Set together with the account above, or leave both blank.",
+  // F4-F9 (Appendix A V8): a per_user bedrock_sso row with no start URL is a
+  // guaranteed 400 (agent_providers.go's validateAgentCredentialSource) — the
+  // Git tab withholds Save for its own invalid rows; this is the same rule
+  // said where the field is authored.
+  SSO_START_URL_REQUIRED: "Required for a per-person lane — Save is disabled until this names a real https:// start URL.",
 } as const;
 
 // ==================== PROVIDERS_DRAFT — 0.7.4 field-report round ===========
