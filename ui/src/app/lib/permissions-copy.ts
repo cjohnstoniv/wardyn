@@ -251,10 +251,10 @@ export const PERM_DRAFT = {
   // Deny chip for a rule that has never fired, and never will until re-saved.
   // Neutral, not danger/warning: it names a state, not a live consequence.
   INERT_CHIP: "Inert",
-  // Reuses the substance of the server's own WARN-log remedy (permissions.go:83
-  // — "re-save each row through POST /api/v1/permissions/grants — the write
-  // boundary canonicalizes it into the form the resolver compares, or refuses
-  // it by name") rather than inventing a second diagnosis.
+  // Reuses the substance of the server's own WARN-log remedy (permissions.go's
+  // markInertGrants — "re-save each row through POST /api/v1/permissions/grants
+  // — the write boundary canonicalizes it into the form the resolver compares,
+  // or refuses it by name") rather than inventing a second diagnosis.
   INERT_REMEDY: "This row predates the value rule and can never match anything the resolver compares — re-save it to canonicalize it, or find out why it's refused.",
 } as const;
 
