@@ -43,6 +43,17 @@ func TestDomainEntryDotsAndCharset(t *testing.T) {
 		}
 	})
 
+	// The ALLOW mirror of the same normalisation, pinned because it is the half an
+	// operator FEELS on upgrade: a dotted allow entry granted nothing and now
+	// grants egress to the host it names. Same one-line root cause, opposite
+	// direction, and the changelog says so.
+	t.Run("an allow entry with trailing dots now grants egress", func(t *testing.T) {
+		p := CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"example.com..."}})
+		if got := p.evalHost("example.com", 443); got != hostAllow {
+			t.Errorf("evalHost(example.com) = %q, want %q", got, hostAllow)
+		}
+	})
+
 	// The end-to-end consequence, and the reason this is a policy-bypass and not a
 	// tidiness item: the deny entry now MATCHES.
 	t.Run("a deny entry with trailing dots now matches", func(t *testing.T) {

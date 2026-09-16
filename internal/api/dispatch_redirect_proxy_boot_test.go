@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -127,5 +128,55 @@ func TestDispatch_CleartextRedirect_LeavesRequireTLSUnset(t *testing.T) {
 	if spec.ProxyConfig.Injection[0].Rule.RequireTLS {
 		t.Error("an http:// redirect's injection rule set require_tls; that refuses the plaintext " +
 			"connector the operator asked for")
+	}
+}
+
+// TestDispatch_RedirectMITMHostsCarryNoDuplicateBareHost is the PRODUCER-side
+// guard the B10-F9 deferral rests on (R-02).
+//
+// The proxy keys mitmHosts/mitmPorts on the BARE host, so two entries for one
+// host collapse to the last authored port and the other port silently tunnels
+// opaque. Re-keying those maps on "host:port" is deferred — and the reason it is
+// SAFE to defer is a producer invariant, not a proxy one: planArtifactRedirect
+// dedupes by bare host (its seenHost map), so no dispatch can author the
+// colliding shape. That invariant belongs here, over a real dispatched
+// ProxyConfig, because a SECOND producer appending to plan.mitmHosts would break
+// it while every proxy-side test kept passing.
+func TestDispatch_RedirectMITMHostsCarryNoDuplicateBareHost(t *testing.T) {
+	fr := &fakeRunner{}
+	srv, _ := pgHarnessWithRunner(t, fr)
+	srv.cfg.Secrets = &memSecrets{m: map[string][]byte{"npm-artifactory-token": []byte("s3cr3t-npm-token")}}
+
+	// Two redirects whose `to` is the SAME host on DIFFERENT ports, in two
+	// ecosystems the run reaches — the exact shape that would author a colliding
+	// pair if the dedupe were ever dropped.
+	if _, err := srv.cfg.Store.PutSiteConfig(context.Background(), types.SiteConfig{
+		EgressRedirects: []types.EgressRedirect{
+			{From: "https://registry.npmjs.org/", To: "https://artifactory.corp/npm", TokenSecretRef: "npm-artifactory-token", Ecosystem: "npm"},
+			{From: "https://pypi.org/", To: "https://artifactory.corp:8443/pypi", TokenSecretRef: "npm-artifactory-token", Ecosystem: "pip"},
+		},
+	}); err != nil {
+		t.Fatalf("seed site config: %v", err)
+	}
+	t.Cleanup(func() { _, _ = srv.cfg.Store.PutSiteConfig(context.Background(), types.SiteConfig{}) })
+
+	spec := dispatchAndCaptureSpec(t, srv, fr)
+
+	seen := map[string]string{}
+	for _, entry := range spec.ProxyConfig.MITMHosts {
+		bare := entry
+		if h, _, err := net.SplitHostPort(entry); err == nil {
+			bare = h
+		}
+		if prev, dup := seen[bare]; dup {
+			t.Fatalf("ProxyConfig.MITMHosts carries %q and %q — two entries for one bare host. "+
+				"The proxy keys mitmHosts/mitmPorts on the bare host, so the LAST one wins and the "+
+				"other port tunnels opaque, never offered the operator's token. B10-F9's re-keying "+
+				"is no longer safe to defer.", prev, entry)
+		}
+		seen[bare] = entry
+	}
+	if len(seen) == 0 {
+		t.Fatal("no MITM host authored; the redirect never applied and this guard proved nothing")
 	}
 }
