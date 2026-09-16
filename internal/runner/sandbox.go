@@ -6,6 +6,7 @@ package runner
 import (
 	"encoding/json"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -161,11 +162,16 @@ func RecorderArgv(castDir, outDir, uploadURL string, runID uuid.UUID, agentArgv 
 // instead of a hand-copied second list that can silently drift from it: a
 // name added here and forgotten there used to pass that guard anyway, because
 // it hardcoded its own 3 names and asserted only `len(knobs) == len(names)`.
-var ProxySidecarEnvKnobNames = []string{
+var proxySidecarEnvKnobNames = []string{
 	"WARDYN_LLM_SCAN",
 	"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS",
 	"WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS",
 }
+
+// ProxySidecarEnvKnobNames returns a COPY of the knob-name list: exported for the
+// envdoc guard, cloned so no caller can append to or reorder the list that decides
+// what reaches every proxy sidecar (re-review R-12).
+func ProxySidecarEnvKnobNames() []string { return slices.Clone(proxySidecarEnvKnobNames) }
 
 // ProxySidecarEnvKnobs returns the operator knobs the wardyn-proxy sidecar reads
 // from ITS OWN environment — as name/value pairs, and only for the ones wardynd
@@ -185,7 +191,7 @@ var ProxySidecarEnvKnobNames = []string{
 // read their own env directly and need none of this.
 func ProxySidecarEnvKnobs() [][2]string {
 	var out [][2]string
-	for _, k := range ProxySidecarEnvKnobNames {
+	for _, k := range proxySidecarEnvKnobNames {
 		if v, ok := os.LookupEnv(k); ok {
 			out = append(out, [2]string{k, v})
 		}

@@ -361,7 +361,7 @@ func readEnvDoc(t *testing.T, root string) string {
 // through as `"${VAR:-}"`, setting it before `docker compose up` is silently
 // inert.
 //
-// R-02: this reads runner.ProxySidecarEnvKnobNames — the exported name list
+// R-02: this reads runner.ProxySidecarEnvKnobNames() — the exported (cloned) name list
 // ProxySidecarEnvKnobs itself iterates — directly, rather than calling
 // ProxySidecarEnvKnobs() (which returns a key only when it is SET in this
 // test process's env, via t.Setenv). The earlier shape hardcoded its own
@@ -379,7 +379,7 @@ func TestEnvDoc_ComposeForwardsProxySidecarEnvKnobs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read docker-compose.yaml: %v", err)
 	}
-	for _, key := range runner.ProxySidecarEnvKnobNames {
+	for _, key := range runner.ProxySidecarEnvKnobNames() {
 		re := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(key) + `:\s*"\$\{` + regexp.QuoteMeta(key) + `:-\}"\s*$`)
 		if !re.Match(compose) {
 			t.Errorf(`deploy/compose/docker-compose.yaml wardynd service does not forward %s as %s: "${%s:-}" — without it, setting the operator's shell env does nothing under compose (the sidecar knob is UNREACHABLE, not "off")`, key, key, key)

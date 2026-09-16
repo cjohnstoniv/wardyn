@@ -430,8 +430,7 @@ services:
       # — and a WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true deployment (today: every
       # human admin) would have EVERY login denied. The demo@wardyn.local=admin,
       # member@wardyn.local=member pair a FRESH stack wants lives in
-      # deploy/compose/.env.example instead (env_set never overwrites an
-      # existing key on `up`), so it seeds a new .env and never touches an
+      # deploy/compose/.env.example instead (ensure_env_file copies the example only when no .env exists, and nothing in scripts/ ever writes this key into an existing .env), so it seeds a new .env and never touches an
       # upgraded one.
       WARDYN_OIDC_ROLE_MAP: "${WARDYN_OIDC_ROLE_MAP:-}"
       WARDYN_OIDC_DEFAULT_ROLE: "${WARDYN_OIDC_DEFAULT_ROLE:-}"

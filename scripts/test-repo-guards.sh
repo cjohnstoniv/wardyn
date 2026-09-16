@@ -220,7 +220,7 @@ if [ "$port_bind_fail" = 0 ]; then ok "every docker run/create publish in script
 #      SOURCE (not a render) so a future edit that strips the line fails here,
 #      before CI ever spins up a cluster to discover it.
 quickstart_values_heredoc="$(awk '/values\.yaml" <<EOF/{f=1;next} f&&/^EOF$/{exit} f{print}' deploy/kind/quickstart.sh)"
-if printf '%s' "$quickstart_values_heredoc" | grep -qE 'WARDYN_DEFAULT_POLICY|runtimeClasses'; then
+if printf '%s' "$quickstart_values_heredoc" | grep -qE 'WARDYN_DEFAULT_POLICY|(CC2|CC3): *"?[A-Za-z0-9]' ; then
     ok "deploy/kind/quickstart.sh's generated values carry the CC2/CC3-guard escape"
 else
     bad "deploy/kind/quickstart.sh's generated values.yaml heredoc names neither WARDYN_DEFAULT_POLICY nor a runtimeClasses pin — the B12b-F7 helm guard now refuses this exact render (R-01); see deploy/compose/docker-compose.yaml's WARDYN_DEFAULT_POLICY override for the byte-matching fix"
