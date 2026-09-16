@@ -253,24 +253,47 @@ func (r *Registry) Evict(runID uuid.UUID) {
 		return
 	}
 	r.mu.Lock()
+	_, hadSecrets := r.perRun[runID]
 	delete(r.perRun, runID)
 	delete(r.cached, runID)
-	r.gen++
+	// The bump is CONDITIONAL (B11b-F8). gen is the cache key for every run, so
+	// an unconditional bump invalidates every OTHER run's cached Masker — and
+	// once RunIDs started listing cache-only ids below, one sweep could evict N
+	// of them and re-derive every live run's corpus (clone + sort) N times on
+	// the masking hot path. An eviction that deleted no per-run secrets changed
+	// nothing any other run's Masker was built from, so it is not a generation
+	// change; this run's own cached entry is dropped above either way.
+	if hadSecrets {
+		r.gen++
+	}
 	r.mu.Unlock()
 }
 
-// RunIDs returns the run ids currently holding per-run secrets. It is the
+// RunIDs returns the run ids the registry is holding anything for: a per-run
+// secret corpus, a cached Masker derived for that run, or both. It is the
 // eviction lane's input (see Evict): the only way to ask what the registry is
 // still holding without handing out the values themselves.
+//
+// The UNION, not just perRun (B11b-F8). Masker caches a derived Masker for
+// every run id that asks for one, including a run with no per-run secrets at
+// all — a scan run, a grantless run — whose corpus is the process globals.
+// Listing perRun alone made those ids invisible to the sweep, so their cached
+// clones lived for the process lifetime: the leak W12-S1-2 closed, one field
+// over. Evict already deletes from both maps, so nothing else had to change.
 func (r *Registry) RunIDs() []uuid.UUID {
 	if r == nil {
 		return nil
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make([]uuid.UUID, 0, len(r.perRun))
+	out := make([]uuid.UUID, 0, len(r.perRun)+len(r.cached))
 	for id := range r.perRun {
 		out = append(out, id)
+	}
+	for id := range r.cached {
+		if _, dup := r.perRun[id]; !dup {
+			out = append(out, id)
+		}
 	}
 	return out
 }
