@@ -15,6 +15,34 @@ restore, upgrade and key-persistence commands.
 substrates identically: authorization and the per-process constraints live in
 `internal/api`, above the runner seam.
 
+**New here?** Installing for the first time belongs in the front-door docs, not
+here — [README.md](../README.md) (single vs. multi-user) or
+[TRY-IT.md](TRY-IT.md) (a 10-minute walkthrough); this file starts from a stack
+that is already up. Adding the second person to an existing install: "[Second
+user, same host](#second-user-same-host)". Deciding who can do what:
+"[Multi-user: who can change what](#multi-user-who-can-change-what)".
+
+<details>
+<summary>Table of contents</summary>
+
+- [State stores](#state-stores)
+- [Monitoring](#monitoring)
+- [Multi-user: who can change what](#multi-user-who-can-change-what)
+- [Exercising member mode as an admin](#exercising-member-mode-as-an-admin)
+- [Second user, same host](#second-user-same-host)
+- [Workspaces: three tiers](#workspaces-three-tiers)
+- [Integrations](#integrations)
+- [Network: upstream proxy and egress redirects](#network-upstream-proxy-and-egress-redirects)
+- [Toolchain-fidelity environment](#toolchain-fidelity-environment)
+- [Recommended builds on compose](#recommended-builds-on-compose)
+- [Rotating the age key](#rotating-the-age-key)
+- [Upgrades](#upgrades)
+- [Kubernetes: day-2](#kubernetes-day-2)
+- [One replica, by construction](#one-replica-by-construction)
+- [Kubernetes: known gaps](#kubernetes-known-gaps)
+
+</details>
+
 ## State stores
 
 Three stores hold data that exists nowhere else on every deployment, and a fourth
@@ -380,7 +408,7 @@ session, so a role holding nothing but `INSERT` can append a row past all
 three guards above — unchained, unrewritten by the chain trigger — checked
 only on PostgreSQL 15 and later, where `has_parameter_privilege` exists and
 the `SET` privilege on the parameter is itself GRANTable to a non-superuser
-(`internal/db/db.go:295-333`); on an older server only a superuser can set the
+(`AuditDDLBypassRoutes`, `internal/db/db_audit_ddl.go`); on an older server only a superuser can set the
 GUC, so leg one already covers it. It is why `ENABLE ALWAYS`
 (`tgenabled='A'`, which fires regardless of replication role — see "A trigger
 you have hardened…" above) is the documented hardening rather than an edge
@@ -538,15 +566,15 @@ audit append until it commits or rolls back — so do not leave an interactive
 
 **The lever is `default_transaction_isolation`, a `user`-context GUC** —
 settable by any role, per role or per database, no superuser involved. wardynd
-checks it on every boot (`reportTransactionIsolation`, `internal/db/db.go:815-829`)
+checks it on every boot (`reportTransactionIsolation`, `internal/db/db.go`)
 and, when it reads anything other than `read committed`, logs an ERROR naming
 the value and the fix — `ALTER DATABASE <db> SET default_transaction_isolation
 = 'read committed'` (or the matching `ALTER ROLE`) — without refusing to
 start: Wardyn's own writers pin `READ COMMITTED` on their own transaction
-(`store.InsertAuditEvent`'s `Begin`, `internal/store/store.go:530`; a
+(`store.InsertAuditEvent`'s `Begin`, `internal/store/store.go`; a
 transaction-level isolation level overrides the GUC) and are unaffected
 either way, so this is a posture to report for an EXTERNAL writer this
-package cannot see, not a defect to boot-refuse over (`internal/db/db.go:803-814`).
+package cannot see, not a defect to boot-refuse over (`internal/db/db.go`).
 
 ### Retention, erasure and GDPR — a residual, not a solved problem
 
@@ -592,6 +620,17 @@ than the line count of the file on disk). Beside them, `wardyn_audit_spool_quara
 store permanently refused and the drain moved aside (see the spool paragraph
 above): non-zero means the trail is missing those events even though the spool
 drained.
+
+Three more counters cover loss the gauges above cannot see. `wardyn_audit_spool_torn_total`
+counts spool lines dropped as unparseable — a torn tail from an ENOSPC or a
+partial write, distinct from a store refusal: these never reach the quarantine
+count above because they never parsed far enough to be replayed at all.
+`wardyn_audit_sink_drops_total{sink}` counts events an off-box SIEM sink
+dropped (buffer overflow or retry exhaustion) even though Postgres — the
+primary — still got the row; non-zero means SIEM-side loss only, not a gap in
+the append-only trail itself. `wardyn_drive_refusals_total{reason}` counts
+runs refused their user drive, by reason — a signal for the drive-claim
+allocator, not the audit pipeline.
 
 The eBPF ground-truth sensor's cumulative counts scrape here too —
 `wardyn_groundtruth_observed_total`, `wardyn_groundtruth_dropped_total`,
@@ -696,7 +735,7 @@ restart.
 A few things that don't fit the grid:
 
 - **Boot posture is chart-only.** `validateOperatorPosture`
-  (`cmd/wardynd/boot_deps.go`) refuses to boot OIDC at all unless
+  (`cmd/wardynd/boot_posture.go`) refuses to boot OIDC at all unless
   `WARDYN_OIDC_OPERATOR_EMAILS` is set or `WARDYN_OIDC_ROLE_MAP` is non-empty
   (override: `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST`) — **console rows do not
   count toward this floor**: they live in the database, read once per login,
@@ -2121,7 +2160,7 @@ its own ownership namespace.
 > Under OIDC, `WARDYN_OIDC_OPERATOR_EMAILS` is the boot-required allowlist — an
 > empty one **refuses to boot** unless `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true`,
 > which, absent a role map, instead makes every signed-in human admin
-> (`cmd/wardynd/boot_deps.go`). The admin token is always an admin and cannot be
+> (`validateOperatorPosture`, `cmd/wardynd/boot_posture.go`). The admin token is always an admin and cannot be
 > demoted ([ROADMAP.md](../ROADMAP.md)).
 
 A **remote** second person is a dead end regardless: both the bundled Dex and
@@ -2162,7 +2201,9 @@ do for you:
    explicit `-local-mode` with `-oidc-issuer` also set is refused unless
    `WARDYN_ALLOW_LOCAL_MODE_WITH_OIDC=true` overrides it — and if you do override
    it, no login is ever required, for anyone, regardless of what you configure
-   below). A `make setup` re-run warns about this combination first. In
+   below). A `make setup` re-run refuses outright on this combination
+   (`refuse_local_mode_with_oidc`, `scripts/up.sh`), rather than proceeding into
+   a boot that would then fail. In
    `deploy/compose/.env`:
 
    ```sh
@@ -3396,8 +3437,10 @@ Both endpoints may also carry `warning` (below).
 | 🟡 `timed_out` | The probe sandbox started and the task launched, but the run never reported completion within the wait budget (90s) — provably **not** a network verdict, unlike `blocked`. `detail` names the sandbox agent's own observed status at the deadline and `WARDYN_CONTROL_PLANE_URL` to check. Usual cause: the run's recording upload hanging against an unreachable control plane — see "Recording upload path on Kubernetes" below. |
 
 The recorder's upload bound ships inside the agent images: an image pinned through
-`WARDYN_AGENT_IMAGES` must be rebuilt from 0.6.6 (or use the published
-`agent-base:0.6.6`), or its recorder keeps the pre-0.6.6 60s upload tail. A probe
+`WARDYN_AGENT_IMAGES` must be rebuilt from 0.6.6 or later (or use the published
+`agent-base:0.6.6` or a newer tag — prefer the current release's, since a
+pre-0.7 image also lacks `/home/agent/drive` and silently breaks writable
+drives), or its recorder keeps the pre-0.6.6 60s upload tail. A probe
 is bounded well under two minutes and reclaims (kills) its sandbox if the run
 doesn't finish in time, so a wedged probe can never hold one open.
 
@@ -3586,6 +3629,7 @@ docker compose -f deploy/compose/docker-compose.yaml stop wardynd
 
 # 2. Put the CURRENT key in a key file, if it is not already in one.
 #    (Compose keeps it as a WARDYN_AGE_KEY= line in deploy/compose/.env.)
+mkdir -p ~/.wardyn
 umask 077
 grep -E '^WARDYN_AGE_KEY=' deploy/compose/.env | cut -d= -f2- > ~/.wardyn/age.key
 
@@ -3718,7 +3762,8 @@ plan the window. `--wait` (below) is what keeps it short.
 **On Helm, a downgrade past 0.6 also stalls the rollout, before migrations ever
 matter.** The chart's readiness probe targets `/readyz`, which the 0.6 images
 introduced. The empty default `image.tag` resolves to `.Chart.AppVersion`
-(`0.6.0` from this release on), so a stock install is fine; an `image.tag`
+(the chart's own `Chart.yaml`, always the shipped release's version), so a
+stock install is fine; an `image.tag`
 explicitly **pinned** at or below `0.5.0`
 serves only `/healthz`, so the probe 404s forever, the pod never joins the
 Service's endpoints, and `helm upgrade`/`rollout status` hangs NotReady with
@@ -3741,7 +3786,7 @@ only when the existing one is empty or a placeholder. What it does **not** do is
 take the dump for you, and the forward-only rule is the same one:
 
 ```sh
-WARDYN_VERSION=0.6.6                                     # the release you are moving TO
+WARDYN_VERSION="${WARDYN_VERSION:?set this to the release you are moving TO}"
 cd ~/.wardyn                                             # or $WARDYN_HOME
 docker exec wardyn-postgres pg_dump -U wardyn wardyn > wardyn-$(date +%F).sql
 docker compose down                                      # keeps the Postgres volume
@@ -4600,7 +4645,7 @@ break under a second replica: single-use **attach tickets**, delete-on-read
 in-process goroutine blocked on `Runner.Wait`
 (`internal/api/runs_dispatch.go`), but it refreshes a Postgres lease every 30s and
 every replica sweeps for stale leases every 60s, so a run orphaned by a pod that
-never comes back is adopted by any live replica within roughly 65-150s instead of
+never comes back is adopted by any live replica within **90–150 s** instead of
 stranding forever — real latency, not instant, and slower than the same-pod
 restart case `ReconcileOnBoot` handles alone); **session recordings** (migration
 0028 — the process default is the Postgres-backed `pg` store, readable from any

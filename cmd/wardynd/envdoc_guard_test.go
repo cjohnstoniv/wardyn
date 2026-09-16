@@ -136,9 +136,18 @@ var wardynVarLit = regexp.MustCompile(`WARDYN_[A-Z0-9_]+`)
 
 // readVars returns every WARDYN_* string literal read in non-test .go under the
 // envDocRoots — the full read surface the docs must cover.
+//
+// Two forms: a plain Go string literal ("WARDYN_X"), and the shell
+// interpolation form (${WARDYN_X) a heredoc-emitting script embeds inside a Go
+// raw string — WARDYN_KATA_VERSION (cmd/wardyn/setup.go's Kata install
+// script) was invisible to the quoted-only form and undocumented in ENV.md
+// with nothing to catch it. Deliberately NOT the bare wardynVarLit: run
+// unscoped over these trees it also matches a var name split across a
+// wrapped comment line and a dynamic-prefix concatenation literal
+// ("WARDYN_ANTHROPIC_" + suffix), neither of which is a var to document.
 func readVars(t *testing.T, root string) map[string]bool {
 	t.Helper()
-	quoted := regexp.MustCompile(`"WARDYN_[A-Z0-9_]+"`)
+	lit := regexp.MustCompile(`"(WARDYN_[A-Z0-9_]+)"|\$\{(WARDYN_[A-Z0-9_]+)[:}]`)
 	seen := map[string]bool{}
 	for _, sub := range envDocRoots {
 		err := filepath.WalkDir(filepath.Join(root, sub), func(path string, d os.DirEntry, err error) error {
@@ -152,8 +161,12 @@ func readVars(t *testing.T, root string) map[string]bool {
 			if err != nil {
 				return err
 			}
-			for _, m := range quoted.FindAllString(string(b), -1) {
-				seen[strings.Trim(m, `"`)] = true
+			for _, m := range lit.FindAllStringSubmatch(string(b), -1) {
+				if m[1] != "" {
+					seen[m[1]] = true
+				} else {
+					seen[m[2]] = true
+				}
 			}
 			return nil
 		})
