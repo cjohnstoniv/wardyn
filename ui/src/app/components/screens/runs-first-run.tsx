@@ -141,7 +141,14 @@ export function RunsFirstRun({
             </div>
           </li>
           <li className="flex items-start gap-3 p-3.5">
-            <CircleDashed className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+            {/* X3-F12: this row hardcoded the untested dot while its own text
+                already branches on llmReady ("Connected — …") — the icon
+                never agreed with the sentence beside it. */}
+            {llmReady ? (
+              <CircleCheck className="mt-0.5 size-4 shrink-0 text-success" />
+            ) : (
+              <CircleDashed className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+            )}
             <div className="min-w-0">
               <div className="text-sm font-medium text-foreground">Model provider</div>
               <p className="mt-0.5 text-xs leading-snug text-muted-foreground">
