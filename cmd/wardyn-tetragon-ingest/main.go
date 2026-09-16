@@ -230,6 +230,36 @@ func tailExport(ctx context.Context, path string, mapper mapLiner, sink *eventSi
 		// otherwise a line straddling an EOF boundary is split into two dropped
 		// fragments (silent ground-truth loss on the tamper-proof stream).
 		pending []byte
+		// resyncing is true from the moment pending is dropped for being
+		// oversized (B12b-F9's cap) UNTIL the next real newline-terminated
+		// read — R-06: an oversized line that is still STREAMING (a writer
+		// mid-write, so its remaining bytes arrive over one or more further
+		// EOF cycles) would otherwise have its post-drop residue completed by
+		// a later real '\n' and fall into the ordinary processLine path —
+		// exactly the "split a line into two fragments" hazard pending itself
+		// exists to prevent — and it would cost one `dropped` increment per 1
+		// MiB of the line rather than one per line. While resyncing, every
+		// chunk is discarded (never appended to pending, never mapped) until
+		// a chunk arrives terminated by a real '\n' — that line's tail,
+		// discarded too, since it belongs to the dropped line rather than
+		// starting a new one — after which the NEXT ReadBytes starts a
+		// genuinely fresh line. Also cleared, without waiting for a newline,
+		// on rotation or a read error, since a reopen starts from a file with
+		// no resync owed to it.
+		//
+		// KNOWN LIMITATION (accepted, LOW severity, matches the cost B12b-F9
+		// already accepts for an ordinary torn write): tailExport cannot tell
+		// "more of the SAME dropped line, still arriving" from "a completely
+		// unrelated write that happens to land right after the drop and ends
+		// with its own real '\n'" — both look identical at the reader level.
+		// resyncing assumes the former (the common case for a line that
+		// legitimately outgrew the cap while genuinely still being written),
+		// so the first newline-terminated content after ANY drop is treated
+		// as that line's tail and discarded, even on the rarer occasion it
+		// was actually an unrelated event. TestTailExport_CapsPendingLineAt1MiB
+		// pins the resulting shape: ONE post-drop write is absorbed as the
+		// presumed tail; the write after THAT is read normally.
+		resyncing bool
 		// rotationPending is set when a rotation was detected but the new file
 		// was not yet visible to reopen: the NEXT successful open must then seek
 		// to START (the post-rotation file is entirely unread), closing the race
@@ -303,33 +333,52 @@ func tailExport(ctx context.Context, path string, mapper mapLiner, sink *eventSi
 			rotationPending = false
 		}
 		chunk, err := reader.ReadBytes('\n')
-		// Reassemble lines that straddle an EOF read boundary. ReadBytes returns a
-		// NON-newline-terminated partial together with io.EOF when the writer has
-		// not finished the line; those bytes are already consumed from the bufio
-		// buffer and can't be re-read. Processing the partial (it fails JSON parse
-		// -> dropped) and later processing its remainder as a second fragment
-		// silently splits and loses one kernel event on the tamper-proof stream.
-		// Hold the bytes in pending; only map once ReadBytes signals a real
-		// '\n'-terminated record (err == nil).
-		pending = append(pending, chunk...)
-		if len(pending) > maxPendingExportLine {
-			// Drop like any other lost ground-truth event: counted, logged,
-			// never silent — the same contract dropped_unmapped and the
-			// sink's own backpressure drops already carry. Reusing the
-			// sink's counter (rather than a new one) keeps "an event was
-			// lost" as one signal on the heartbeat; the log line is what
-			// distinguishes the reason.
-			slog.WarnContext(ctx, "wardyn-tetragon-ingest: dropped an oversized/unterminated export line",
-				slog.String("path", path),
-				slog.Int("bytes", len(pending)),
-				slog.Int("cap_bytes", maxPendingExportLine),
-			)
-			sink.dropped.Add(1)
-			pending = pending[:0]
-		} else if err == nil {
-			processLine(pending, mapper, sink)
-			pending = pending[:0]
-			continue
+		if resyncing {
+			// R-06: discard this chunk unconditionally — it is either more of
+			// the still-streaming oversized line (err != nil: not yet '\n'-
+			// terminated) or that line's final tail (err == nil), never a new
+			// record. Rotation/error handling below still runs on err != nil,
+			// so a rotation or read error mid-resync is still caught.
+			if err == nil {
+				resyncing = false // the oversized line has now ended; the next ReadBytes starts fresh
+				continue
+			}
+		} else {
+			// Reassemble lines that straddle an EOF read boundary. ReadBytes returns a
+			// NON-newline-terminated partial together with io.EOF when the writer has
+			// not finished the line; those bytes are already consumed from the bufio
+			// buffer and can't be re-read. Processing the partial (it fails JSON parse
+			// -> dropped) and later processing its remainder as a second fragment
+			// silently splits and loses one kernel event on the tamper-proof stream.
+			// Hold the bytes in pending; only map once ReadBytes signals a real
+			// '\n'-terminated record (err == nil).
+			pending = append(pending, chunk...)
+			if len(pending) > maxPendingExportLine {
+				// Drop like any other lost ground-truth event: counted, logged,
+				// never silent — the same contract dropped_unmapped and the
+				// sink's own backpressure drops already carry. Reusing the
+				// sink's counter (rather than a new one) keeps "an event was
+				// lost" as one signal on the heartbeat; the log line is what
+				// distinguishes the reason.
+				slog.WarnContext(ctx, "wardyn-tetragon-ingest: dropped an oversized/unterminated export line",
+					slog.String("path", path),
+					slog.Int("bytes", len(pending)),
+					slog.Int("cap_bytes", maxPendingExportLine),
+				)
+				sink.dropped.Add(1)
+				pending = pending[:0]
+				if err == nil {
+					// The dropped line was already '\n'-terminated in this
+					// very read — complete, nothing left streaming. No resync:
+					// the next ReadBytes starts a genuinely new line.
+					continue
+				}
+				resyncing = true // still streaming — discard the remainder until the next real '\n'
+			} else if err == nil {
+				processLine(pending, mapper, sink)
+				pending = pending[:0]
+				continue
+			}
 		}
 		if err == nil {
 			continue
@@ -343,6 +392,7 @@ func tailExport(ctx context.Context, path string, mapper mapLiner, sink *eventSi
 			if rotated(f, path) {
 				// The pending partial belongs to the old inode — genuinely gone.
 				pending = pending[:0]
+				resyncing = false // a genuinely new file; nothing left to resync past
 				_ = f.Close()
 				if !openFile(false) {
 					f = nil
@@ -355,17 +405,19 @@ func tailExport(ctx context.Context, path string, mapper mapLiner, sink *eventSi
 				}
 				continue
 			}
-			// Not rotated: keep pending across the sleep. The writer finishes the
-			// line and the next ReadBytes returns its remainder to append.
+			// Not rotated: keep pending (or resyncing) across the sleep. The
+			// writer finishes the line and the next ReadBytes returns its
+			// remainder to append (or, mid-resync, to discard).
 			if sleepCtx(ctx, 250*time.Millisecond) {
 				return
 			}
 			continue
 		}
 		if err != nil {
-			// Read error: the handle and any partial are suspect. Discard pending
-			// and reopen on next loop.
+			// Read error: the handle and any partial are suspect. Discard
+			// pending and reopen on next loop.
 			pending = pending[:0]
+			resyncing = false // reopening; nothing left to resync past
 			_ = f.Close()
 			f = nil
 			if sleepCtx(ctx, time.Second) {

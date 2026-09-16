@@ -339,9 +339,21 @@ func TestTailExport_CapsPendingLineAt1MiB(t *testing.T) {
 		t.Fatalf("droppedCount did not move after a 2 MiB no-newline feed (still %d) — pending grew past the cap with nothing counting it", got)
 	}
 
-	// The buffer must have RESET, not merely stopped growing: a well-formed
-	// line written afterward has to be read on its own, not appended onto —
-	// and lost behind — the dropped backlog.
+	// The buffer must have RESET, not merely stopped growing — a well-formed
+	// line written afterward has to be read eventually, not appended onto —
+	// and lost behind — the dropped backlog forever.
+	//
+	// R-06: this 2 MiB feed lands in ONE single io.EOF read (never returns
+	// mid-line), so tailExport cannot tell it apart from a line that is still
+	// STREAMING — the far more likely reason a real line would ever hit this
+	// cap — and resyncing (see main.go) treats the first newline-terminated
+	// content after ANY drop as that (possibly-imagined) line's remaining
+	// tail, discarding it rather than risk re-splicing a genuinely torn
+	// write's second half onto a fresh line. A sacrificial write absorbs
+	// that presumed tail; the SECOND write is the one actually proven read.
+	sacrificial := `{"sacrificial":"absorbs-the-presumed-resync-tail"}` + "\n"
+	appendLine(t, path, sacrificial)
+
 	const afterBin = "/x-after-cap-marker"
 	afterLine := `{"process_exec":{"process":{"binary":"` + afterBin + `"}}}` + "\n"
 	appendLine(t, path, afterLine)
@@ -351,6 +363,125 @@ func TestTailExport_CapsPendingLineAt1MiB(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if !bodyContains(afterBin) {
-		t.Fatal("a well-formed line written after the oversized feed was never read — pending did not reset after the drop")
+		t.Fatal("a well-formed line written two writes after the oversized feed was never read — pending did not reset after the drop")
+	}
+}
+
+// TestTailExport_ResyncsPastStillStreamingOversizedLine is the red-first
+// regression for R-06: TestTailExport_CapsPendingLineAt1MiB writes its whole
+// 2 MiB feed in ONE syscall, so tailExport sees it all in a single io.EOF
+// read and the drop's reset lands on a clean boundary — it cannot see the
+// hazard the surrounding code comment names. A line that is still
+// STREAMING when it trips the cap (a writer mid-write, so its remainder
+// arrives over a LATER read) behaves differently: without resyncing, that
+// remainder would be appended onto a fresh (post-drop) pending, and the
+// first real '\n' after it would hand processLine a garbage fragment — the
+// exact "split a line into two fragments" hazard pending itself exists to
+// prevent — while a multi-MiB line would also cost one `dropped` increment
+// per 1 MiB of itself instead of one per line.
+func TestTailExport_ResyncsPastStillStreamingOversizedLine(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tetragon.log")
+
+	var (
+		mu     sync.Mutex
+		bodies []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	sink := newEventSink(srv.URL, "tok", 64, 8, 20*time.Millisecond, srv.Client())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		sink.close(ctx)
+	})
+	mapper := groundtruth.NewMapper(nil)
+
+	bodyContains := func(want string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, b := range bodies {
+			if strings.Contains(b, want) {
+				return true
+			}
+		}
+		return false
+	}
+
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go tailExport(ctx, path, mapper, sink)
+
+	const primeBin = "/usr/bin/prime-marker"
+	primeLine := `{"process_exec":{"process":{"binary":"` + primeBin + `"}}}` + "\n"
+	deadline := time.Now().Add(3 * time.Second)
+	for !bodyContains(primeBin) && time.Now().Before(deadline) {
+		appendLine(t, path, primeLine)
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !bodyContains(primeBin) {
+		t.Fatal("prime event never read (tailer not attached)")
+	}
+
+	before := sink.droppedCount()
+
+	// 1.5 MiB, NO newline: past the 1 MiB cap. Written alone and waited on
+	// (below) so tailExport genuinely hits io.EOF on ITS OWN read call before
+	// the second half exists on disk — a real torn-write, separate-syscalls
+	// shape, not one lucky read that happens to swallow both halves at once
+	// (writing them back to back with no wait risks exactly that: a bufio
+	// Read loop that has not yet returned when the second write lands would
+	// fold both halves into ONE chunk, ending at the real '\n' inside the
+	// second half, and never exercise the multi-read resync path at all).
+	appendLine(t, path, strings.Repeat("x", 3*(1<<20)/2))
+
+	dropDeadline := time.Now().Add(3 * time.Second)
+	for sink.droppedCount() == before && time.Now().Before(dropDeadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := sink.droppedCount(); got == before {
+		t.Fatalf("droppedCount did not move after the 1.5 MiB no-newline feed (still %d)", got)
+	}
+	afterFirstDrop := sink.droppedCount()
+
+	// The line's REMAINDER arrives now, on a SEPARATE write (a later,
+	// independent read call): ANOTHER 1.5 MiB (itself over the cap on its
+	// own, the way a genuinely huge line's continuation would be), completing
+	// with a real '\n', immediately followed (same write — bufio already has
+	// these bytes buffered together, no further read needed) by a well-formed
+	// record. Without resyncing, this remainder is appended onto a fresh
+	// (post-first-drop) pending and trips the cap A SECOND TIME — one
+	// `dropped` increment per 1 MiB-sized chunk of what is really ONE
+	// oversized line, exactly the "⌈N⌉ dropped increments, not one" defect
+	// R-06 names. With resyncing (which — unlike a quiet-poll timeout — never
+	// auto-clears on its own; only a real '\n' clears it, so this wait is
+	// safe no matter how long it takes), the whole remainder is discarded
+	// without ever being appended to pending or re-checked against the cap —
+	// exactly one increment for the whole line — and only the well-formed
+	// line after it is read.
+	const interleaveBin = "/x-interleave-marker"
+	remainder := strings.Repeat("y", 3*(1<<20)/2) + "\n"
+	wellFormed := `{"process_exec":{"process":{"binary":"` + interleaveBin + `"}}}` + "\n"
+	appendLine(t, path, remainder+wellFormed)
+
+	waitDeadline := time.Now().Add(3 * time.Second)
+	for !bodyContains(interleaveBin) && time.Now().Before(waitDeadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !bodyContains(interleaveBin) {
+		t.Fatal("the well-formed line immediately after the streaming line's remainder was never read")
+	}
+	if got := sink.droppedCount(); got != afterFirstDrop {
+		t.Fatalf("droppedCount moved from %d to %d processing the SAME oversized line's still-streaming remainder — want exactly one drop for the whole line, not one per cap-sized chunk (R-06)", afterFirstDrop, got)
 	}
 }
