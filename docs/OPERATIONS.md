@@ -1967,8 +1967,9 @@ gate against a sandbox sidecar's own run token rather than against a person. The
 live in this table because the action, the shape and the `reason` field are the
 same one an operator greps; the `actor_type` (`agent`) is what tells them apart.
 
-One FIELD rides beside the reason since 0.7.4: `member_mode: true`, on the two
-`403`s below that `requireOperator` and `requireSecurityOperator` raise, when
+One FIELD rides beside the reason since 0.7.4: `member_mode: true`, on every
+ADMIN-TIER `403` below — the two `requireOperator` / `requireSecurityOperator`
+chokepoints and the in-handler refusals that raise the same two reasons — when
 the refused caller is an admin exercising
 [view as member](#exercising-member-mode-as-an-admin). It is a marker, not a
 reason — the `reason`, the status code and the body are unchanged, and the key
@@ -2079,9 +2080,9 @@ own sub** — this is not impersonation, and there is no way to become anybody
 else. The transition itself is audited as `auth.member_mode`
 (`enabled`, `real_role`), and each `403` an **admin-tier gate** raises while the
 mode is on carries `member_mode: true` on its `authz.denied` row — the two
-middleware chokepoints and the two in-handler twins that emit the same
-`admin_surface` refusal — so a reviewer reads the burst as an admin walking the
-member path rather than as an incident. (Denials with a *different* `reason` —
+middleware chokepoints and every in-handler refusal that raises the same two
+reasons — so a reviewer reads the burst as an admin walking the member path
+rather than as an incident. (Denials with a *different* `reason` —
 an ungranted capability, a foreign resource — are the ones a member would meet
 identically, and carry no marker.)
 

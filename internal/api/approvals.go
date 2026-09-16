@@ -853,10 +853,14 @@ func (s *Server) resolveAlwaysTarget(w http.ResponseWriter, r *http.Request, ap 
 		// rule 6 exists to close, and a closed door nobody records is a door
 		// nobody can prove was tried. security_admin_surface is the reason for
 		// this predicate — the same one requireSecurityOperator writes.
+		// authzDeniedDatum (membermode.go), never a hand-rolled map: the datum
+		// carries the member_mode MARKER, and a marker missing from one
+		// admin-tier refusal is a marker a denial-stream filter cannot rely on
+		// at any of them. An admin in member mode reaching for `always` on
+		// their OWN run is the walk the member Getting Started card invites.
 		s.recordAudit(r.Context(), s.auditEvent(&ap.RunID, actorTypeFromRequest(r), principalFromRequest(r),
-			"authz.denied", ap.ID.String(), "denied", mustJSON(map[string]any{
-				"reason": "security_admin_surface", "method": r.Method,
-			})))
+			"authz.denied", ap.ID.String(), "denied",
+			mustJSON(authzDeniedDatum(r.Context(), "security_admin_surface", r.Method))))
 		return uuid.Nil, false
 	}
 

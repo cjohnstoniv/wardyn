@@ -511,3 +511,93 @@ func sessionCookieFrom(t *testing.T, cookies []*http.Cookie) *http.Cookie {
 	t.Fatal("no wardyn_session cookie on the response")
 	return nil
 }
+
+// TestMemberMode_InHandlerAdminTierRefusalsCarryTheMarker is W6-1, the two
+// admin-tier refusals the marker was missing.
+//
+// TestMemberMode_AuditRowsNameTheAdmin above pins FOUR sites and the doc
+// comment on authzDeniedDatum names those four as "every admin-tier refusal".
+// Two more emitters hand-rolled their own Data map and so carried no marker at
+// all: resolveAlwaysTarget's rule 6 (`always` is security-admin-only) and
+// denyMemberField (the `workspaces.llm_cred` arm is `admin_surface`). Both are
+// reachable INSIDE the mode by an admin doing exactly what the member Getting
+// Started card invites — deciding their own run's held egress, creating a
+// workspace — so a reviewer filtering the denial stream read an admin's own
+// member walk as a member incident, the one outcome the field exists to prevent.
+//
+// `method` rides along for the same reason: a marker on a row whose shape
+// differs from the middleware's is still a row the same filter cannot group.
+func TestMemberMode_InHandlerAdminTierRefusalsCarryTheMarker(t *testing.T) {
+	// resolveAlwaysTarget's rule 6. The session's sub IS the fixture run's
+	// CreatedBy, so the ownership gate ahead of rule 6 passes and the refusal
+	// under test is the one that fires — an admin in member mode picking
+	// `always` on THEIR OWN run's approval, which is precisely the scope the
+	// member Getting Started's approvals hint advertises.
+	t.Run("decision_scope always", func(t *testing.T) {
+		f := newScopeFixture(t)
+		id := f.seedEgress(t, "registry.npmjs.org")
+		on := memberModeSSOSession(t, f.memberID, memberModeAdminEmail, oidc.RoleAdmin, true)
+		w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/approve", on,
+			decideBody(t, types.ScopeAlways, nil))
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("member-mode admin picking always = %d, want 403: %s", w.Code, w.Body.String())
+		}
+		rows := denialRows(f.rec.events)
+		if len(rows) != 1 {
+			t.Fatalf("authz.denied rows = %d, want 1", len(rows))
+		}
+		data := auditData(t, rows[0])
+		if data["reason"] != "security_admin_surface" {
+			t.Errorf("reason = %v, want security_admin_surface", data["reason"])
+		}
+		if data["member_mode"] != true {
+			t.Errorf("data = %#v, want member_mode:true — an admin walking the member path", data)
+		}
+		if data["method"] != http.MethodPost {
+			t.Errorf("method = %v, want POST — the row is shape-identical to the middleware's", data["method"])
+		}
+	})
+
+	// denyMemberField, reached from handleCreateWorkspace's llm_cred arm:
+	// secretOwnerFromRequest returns the caller's principal once the role is
+	// clamped, so the member arm fires for a member-mode admin.
+	t.Run("workspace create llm_cred", func(t *testing.T) {
+		srv, _, h := ownerHarness(t, runner.MemberMountPolicy{})
+		on := memberModeSSOSession(t, memberModeAdminSub, memberModeAdminEmail, oidc.RoleAdmin, true)
+		w := doSSO(t, srv, http.MethodPost, "/api/v1/workspaces", on,
+			`{"name":"mine","llm_cred":{"integration_ref":"corp-openai"}}`)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("member-mode admin create with llm_cred = %d, want 403: %s", w.Code, w.Body.String())
+		}
+		data := auditData(t, lastAuditEvent(t, h.audit.events, "authz.denied"))
+		if data["reason"] != "admin_surface" {
+			t.Errorf("reason = %v, want admin_surface", data["reason"])
+		}
+		if data["member_mode"] != true {
+			t.Errorf("data = %#v, want member_mode:true", data)
+		}
+		if data["method"] != http.MethodPost {
+			t.Errorf("method = %v, want POST", data["method"])
+		}
+	})
+
+	// THE CONTROL: a REAL member meeting the same two refusals carries no
+	// marker at all. The field is a marker, not one every row answers.
+	t.Run("a real member carries no marker", func(t *testing.T) {
+		f := newScopeFixture(t)
+		id := f.seedEgress(t, "registry.npmjs.org")
+		w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+id.String()+"/approve",
+			ssoSession(t, f.memberID, "member@corp.example", oidc.RoleMember),
+			decideBody(t, types.ScopeAlways, nil))
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("member picking always = %d, want 403: %s", w.Code, w.Body.String())
+		}
+		rows := denialRows(f.rec.events)
+		if len(rows) != 1 {
+			t.Fatalf("authz.denied rows = %d, want 1", len(rows))
+		}
+		if v, present := auditData(t, rows[0])["member_mode"]; present {
+			t.Errorf("a plain member's row carries member_mode=%v", v)
+		}
+	})
+}

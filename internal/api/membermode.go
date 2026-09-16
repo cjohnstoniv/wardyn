@@ -128,15 +128,24 @@ func (s *Server) handleSetMemberMode(w http.ResponseWriter, r *http.Request) {
 // is a marker, not a field every row has to answer.
 //
 // EVERY admin-tier refusal goes through this, not only the two middleware
-// chokepoints: requireOperator and requireSecurityOperator (http.go) plus the
-// two IN-HANDLER twins that emit the identical admin_surface datum —
-// getWorkspaceAuthorized's operator-owned-workspace refusal (helpers.go) and
-// secrets.go's ?owner= gate. Those two exist precisely so the audit trail does
-// not depend on WHERE a refusal happens to live, and secrets.go says so in a
-// shape-identity comment; a marker present at two of the four sites would make
+// chokepoints (requireOperator and requireSecurityOperator, http.go). The
+// IN-HANDLER refusals go through it too — getWorkspaceAuthorized's
+// operator-owned-workspace arm (helpers.go), secrets.go's ?owner= gate,
+// resolveAlwaysTarget's operator-only `always` scope (approvals.go) and
+// denyMemberField, which carries the workspaces.llm_cred admin-tier arm
+// (runs_create_validate.go). They exist precisely so the audit trail does not
+// depend on WHERE a refusal happens to live, and secrets.go says so in a
+// shape-identity comment; a marker present at only some of the sites would make
 // the field unreliable for the one reader it was added for — an operator
 // filtering the denial stream to tell an admin walking the member path from a
 // member incident.
+//
+// A HAND-ROLLED map at an admin-tier emit is the regression to look for: the
+// two refusals above were exactly that until 0.7.4, and each was reachable by
+// an admin in member mode doing what the member Getting Started card invites —
+// deciding their own run's held egress at scope `always`, creating a workspace.
+// authz_denied_doc_test.go's scanner reads this call, so a reason introduced
+// here is still held to the published enum.
 func authzDeniedDatum(ctx context.Context, reason, method string) map[string]any {
 	d := map[string]any{"reason": reason, "method": method}
 	if oidc.MemberModeFromContext(ctx) {

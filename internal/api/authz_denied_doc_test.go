@@ -56,6 +56,15 @@ var (
 	reasonHelperLiterals = []*regexp.Regexp{
 		regexp.MustCompile(`capDrop\{reason:\s*"([a-z_]+)"(\s*\+)?`),
 		regexp.MustCompile(`denyMemberField\(w, r, [^,]+, "([a-z_]+)"(\s*\+)?`),
+		// authzDeniedDatum (membermode.go) BUILDS the Data map, so at every
+		// site wired through it the reason arrives as an argument and there is
+		// no `"reason":` key on the emit line for the window scanner to find.
+		// It feeds authz.denied and nothing else. Added in 0.7.4 when the last
+		// hand-rolled security_admin_surface map was routed through the helper:
+		// until then the enum's only sighting of that reason was that one
+		// hand-rolled map, so the scanner was already blind to the four sites
+		// the helper had been serving since it was introduced.
+		regexp.MustCompile(`authzDeniedDatum\([^,]+, "([a-z_]+)"(\s*\+)?`),
 		// The RUN-TOKEN tier (0.7.4): internalAuth's liveness gate writes the
 		// event through its own helper, which takes the reason as its third
 		// argument — see auditInternalDenied, internal_live_run.go.

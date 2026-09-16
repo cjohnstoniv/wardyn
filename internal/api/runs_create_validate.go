@@ -634,10 +634,17 @@ func (s *Server) denyMemberSeededImage(w http.ResponseWriter, r *http.Request, s
 // denyMemberField writes one member refusal — the 403 and its audit row — and
 // returns true so a caller can `return s.denyMemberField(...)`. One helper so a
 // new gate cannot ship the error without the audit event.
+//
+// The datum comes from authzDeniedDatum (membermode.go) rather than a map
+// written here, which buys two things at once: the member_mode MARKER rides
+// every refusal this helper writes — including the `workspaces.llm_cred`
+// admin-tier arm, which an admin in member mode reaches by creating a workspace
+// — and the row carries `method`, so it is shape-identical to the middleware's
+// and a denial-stream filter can group the two without a special case.
 func (s *Server) denyMemberField(w http.ResponseWriter, r *http.Request, target, reason, msg string) bool {
 	writeError(w, http.StatusForbidden, msg)
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"authz.denied", target, "denied", mustJSON(map[string]any{"reason": reason})))
+		"authz.denied", target, "denied", mustJSON(authzDeniedDatum(r.Context(), reason, r.Method))))
 	return true
 }
 
