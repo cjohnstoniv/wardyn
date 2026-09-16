@@ -10,8 +10,18 @@ import { defineConfig, devices } from "@playwright/test";
 //   chromium (hermetic, the default): specs in ui/e2e/ drive the built UI against
 //   a seeded test backend (real wardynd + Postgres + the `none` runner, seeded
 //   with deterministic fixtures and a fixed admin token) — NOT the full docker
-//   stack, so PR runs are fast and hermetic. Run: `pnpm e2e` (or
-//   --project=chromium).
+//   stack, so PR runs are fast and hermetic.
+//
+// X2-F9: this file's own fullyParallel:true + multi-worker settings are safe
+// ONLY under the isolation scripts/run-ui-e2e.sh provides (a fresh re-seeded
+// backend per spec file, one spec at a time). They are NOT safe for a bare
+// `pnpm e2e` / `pnpm exec playwright test` against ONE already-running
+// backend — mutating specs (kill/approve/create/delete) would race each
+// other on the same fixtures. The canonical, supported entry point is:
+//   scripts/run-ui-e2e.sh              # all specs
+//   scripts/run-ui-e2e.sh runs secrets # only runs.spec.ts + secrets.spec.ts
+// `--project=chromium` selects this project when driving Playwright directly
+// against a backend YOU know is exclusively yours.
 //
 // The hermetic backend URL is provided via WARDYN_E2E_BASE_URL (default
 // localhost:8088). Start the seeded backend out-of-band (scripts/e2e-backend.sh)
