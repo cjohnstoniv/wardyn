@@ -416,18 +416,38 @@ test.describe("Run detail (/runs/:id)", () => {
 // task. Browser-level because the note is a render decision made from the run
 // the page fetched.
 test.describe("Run detail — a login sandbox says what it is", () => {
-  test("the AWS sign-in note renders for a harness login run, and for no other run", async ({ page }) => {
+  test("the AWS sign-in note renders for an AWS login run — not for an ordinary run, and not for the ANTHROPIC login", async ({
+    page,
+  }) => {
     await openRuns(page);
+    // The task is PROVIDER-AGNOSTIC (every container login carries it), so the
+    // splice sets the agent too: fixture 6 becomes the AWS box, fixture 4 the
+    // Anthropic one that carries the same task and must say nothing about AWS.
     await page.route("**/api/v1/runs/*", async (route) => {
       if (route.request().method() !== "GET") return route.fallback();
       const response = await route.fetch();
       const json = await response.json();
-      if (json.task === "e2e fixture 6") json.task = "harness login";
+      if (json.task === "e2e fixture 6") {
+        json.task = "harness login";
+        json.agent = "aws-sso";
+      }
+      if (json.task === "e2e fixture 4") {
+        json.task = "harness login";
+        json.agent = "claude-code";
+      }
       await route.fulfill({ response, json });
     });
 
     // A different fixture first: the note must not be a banner every run grew.
     await page.getByText("e2e fixture 5").click();
+    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page.getByTestId("run-summary-header")).toBeVisible();
+    await expect(page.getByTestId("login-sandbox-note")).toHaveCount(0);
+
+    // The Anthropic container login: same task, different box. An AWS sentence
+    // here is false on all three of its clauses.
+    await openRuns(page);
+    await page.getByText("e2e fixture 4").click();
     await expect(page).toHaveURL(/\/runs\/.+/);
     await expect(page.getByTestId("run-summary-header")).toBeVisible();
     await expect(page.getByTestId("login-sandbox-note")).toHaveCount(0);

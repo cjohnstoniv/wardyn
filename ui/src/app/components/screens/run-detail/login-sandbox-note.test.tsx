@@ -6,12 +6,18 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { AgentRun } from "../../../lib/types";
-import { HARNESS_LOGIN_TASK, LOGIN_SANDBOX_NOTE, LoginSandboxNote } from "./login-sandbox-note";
+import {
+  AWS_SSO_LOGIN_AGENT,
+  HARNESS_LOGIN_TASK,
+  LOGIN_SANDBOX_NOTE,
+  LoginSandboxNote,
+} from "./login-sandbox-note";
 
-const run = (task: string) => ({ id: "run-1", task, state: "RUNNING" }) as AgentRun;
+const run = (task: string, agent = AWS_SSO_LOGIN_AGENT) =>
+  ({ id: "run-1", task, agent, state: "RUNNING" }) as AgentRun;
 
 describe("LoginSandboxNote", () => {
-  it("names the box on a harness login run", () => {
+  it("names the box on an AWS harness login run", () => {
     render(<LoginSandboxNote run={run(HARNESS_LOGIN_TASK)} />);
     expect(screen.getByText(LOGIN_SANDBOX_NOTE)).toBeInTheDocument();
   });
@@ -23,9 +29,19 @@ describe("LoginSandboxNote", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("keys on the server-side task literal, not on the agent or the image", () => {
-    // harnessLoginTask (internal/api/harnesscred.go). A drift here is a note
-    // that silently stops rendering on the only run it exists for.
+  // `harness login` is PROVIDER-AGNOSTIC: the Anthropic lane is the login
+  // route's own default and runs `claude setup-token` in the claude-code image.
+  // An AWS sentence on that run is false on every clause it makes.
+  it("renders nothing for the ANTHROPIC container login, which carries the same task", () => {
+    const { container } = render(<LoginSandboxNote run={run(HARNESS_LOGIN_TASK, "claude-code")} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("keys on the server-side task AND agent literals", () => {
+    // harnessLoginTask / awsSSOAgent (internal/api/harnesscred.go). Held to the
+    // Go side by TestHarnessLoginTask_UIParity; these two assertions are the
+    // local half, so a drift reds here as well as there.
     expect(HARNESS_LOGIN_TASK).toBe("harness login");
+    expect(AWS_SSO_LOGIN_AGENT).toBe("aws-sso");
   });
 });
