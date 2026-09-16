@@ -6,7 +6,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import type { RecordResult, SetupStatus, Workspace } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { EGRESS, OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../../wardyn/copy";
@@ -574,5 +574,89 @@ describe("WorkspaceDetailScreen — Allowed hosts, removable means the remove pa
     const parked = await screen.findByRole("button", { name: "Remove evil.example.com" });
     expect(parked).toBeDisabled();
     expect(parked).toHaveAttribute("title", SECURITY_ONLY_REASON);
+  });
+});
+
+// F5-F10: the old subtitle claimed the record loop "writes the
+// least-privilege policy" — it writes `egress:` requirement rows; the policy
+// hand-off is the separate optional "Save session profile" action. The
+// retired sentence must appear nowhere.
+describe("WorkspaceDetailScreen — F5-F10: the Recorded-sessions subtitle stops overclaiming", () => {
+  it("never says the loop writes the least-privilege policy", async () => {
+    getWorkspaceMock.mockResolvedValue(ws());
+    renderDetail();
+    await screen.findByText("Recorded sessions");
+    expect(screen.queryByText(/writes the least-privilege policy/i)).not.toBeInTheDocument();
+  });
+});
+
+// F6-F3 (site 2): getSetupStatus() degrades to the synthetic READY_FALLBACK
+// (unreachable:true) on any non-401 failure — hasLlmPath(READY_FALLBACK) is
+// always false, so the old `.then((s) => setLlmReady(hasLlmPath(s)))` told an
+// operator "no model provider configured" for a daemon that simply never
+// answered. `unreachable` must read as unknown, not "no".
+describe("WorkspaceDetailScreen — F6-F3 site 2: an unreachable setup status never claims no model provider", () => {
+  it("shows no model-provider warning when the setup status is the synthetic unreachable fallback", async () => {
+    getSetupStatusMock.mockResolvedValue(setupStatus({ unreachable: true }));
+    getWorkspaceMock.mockResolvedValue(ws());
+    renderDetail();
+    await screen.findByText("Recorded sessions");
+    expect(screen.queryByText(/no model provider is configured/i)).not.toBeInTheDocument();
+  });
+
+  it("neg: a genuinely reachable, provider-less status still warns", async () => {
+    getSetupStatusMock.mockResolvedValue(setupStatus());
+    getWorkspaceMock.mockResolvedValue(ws());
+    renderDetail();
+    await screen.findByText("Recorded sessions");
+    expect(await screen.findByText(/no model provider is configured/i)).toBeInTheDocument();
+  });
+});
+
+// F5-F7: `load` had no request token across an `:id` change — the component
+// is REUSED across a workspace-to-workspace navigation (react-router keeps
+// the same element mounted, only the param changes), so a slow response for
+// the OLD id that resolves after the NEW id's own load can paint stale data
+// under the new URL. Copies audit.tsx's drillRequestId idiom.
+function NavButton({ to }: { to: string }) {
+  const navigate = useNavigate();
+  return (
+    <button type="button" onClick={() => navigate(to)}>
+      go to {to}
+    </button>
+  );
+}
+
+describe("WorkspaceDetailScreen — F5-F7: a stale load can't clobber a newer one", () => {
+  it("renders workspace B even when A's load resolves after B's", async () => {
+    let resolveA: (w: ReturnType<typeof ws>) => void = () => {};
+    const aPromise = new Promise<ReturnType<typeof ws>>((res) => {
+      resolveA = res;
+    });
+    getWorkspaceMock.mockImplementation((id: string) => {
+      if (id === "ws-a") return aPromise;
+      if (id === "ws-b") return Promise.resolve(ws({ id: "ws-b", name: "beta" }));
+      return Promise.resolve(undefined);
+    });
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    render(
+      <MemoryRouter initialEntries={["/workspaces/ws-a"]}>
+        <OperatorProvider operator securityOperator>
+          <NavButton to="/workspaces/ws-b" />
+          <Routes>
+            <Route path="/workspaces/:id" element={<WorkspaceDetailScreen />} />
+          </Routes>
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    // Navigate to B (same mounted component, new :id param) before A's fetch
+    // ever resolves.
+    await user.click(screen.getByRole("button", { name: /go to \/workspaces\/ws-b/i }));
+    expect(await screen.findByRole("heading", { name: "beta" })).toBeInTheDocument();
+    // A's stale response lands last — it must not clobber B's render.
+    resolveA(ws({ id: "ws-a", name: "alpha" }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.getByRole("heading", { name: "beta" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "alpha" })).not.toBeInTheDocument();
   });
 });

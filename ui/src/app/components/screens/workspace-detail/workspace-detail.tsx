@@ -21,6 +21,7 @@ import { runs as runsApi } from "../../../lib/api/runs";
 import { getErrorMessage } from "../../../lib/format";
 import { usePoll } from "../../../lib/use-poll";
 import { hasLlmPath } from "../../../lib/readiness";
+import { WORKSPACE_DETAIL_DRAFT as WORKSPACE_COPY_DRAFT } from "../../../lib/workspace-copy";
 import { Button } from "../../ui/button";
 import { CopyButton } from "../../wardyn/copy-button";
 import { ConfirmEgressDialog } from "../../wardyn/confirm-egress-dialog";
@@ -76,7 +77,9 @@ export function WorkspaceDetailScreen() {
   // OTHER control on this page keeps its own (security/operator) gate.
   const canMutate = useCanMutate(ws?.owned_by);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
-  const [llmReady, setLlmReady] = React.useState(false);
+  // F6-F3 (site 2): `null` means "don't know yet" (setup status unreachable),
+  // distinct from a REAL false — the member-getting-started.tsx idiom.
+  const [llmReady, setLlmReady] = React.useState<boolean | null>(null);
   // The runner's declared confinement classes — RecordPane keys its open-egress
   // banner's tier line off the STRONGEST of these (what a recording actually
   // launches under, workspace_run.go's bestClass) rather than the operator's
@@ -85,17 +88,25 @@ export function WorkspaceDetailScreen() {
   const [rebuilding, setRebuilding] = React.useState(false);
   const [confirmDelete, setConfirmDelete] = React.useState(false);
 
+  // F5-F7: this component is REUSED across a workspace-to-workspace
+  // navigation (react-router keeps the same element mounted, only `id`
+  // changes) — the audit.tsx `drillRequestId` idiom, so a slow response for
+  // the OLD id that resolves after the NEW id's own load can never clobber it.
+  const loadRequestId = React.useRef(0);
   const load = React.useCallback(
     (foreground: boolean) => {
       if (!id) return;
+      const requestId = ++loadRequestId.current;
       if (foreground) setStatus("loading");
       workspacesApi
         .getWorkspace(id)
         .then((w) => {
+          if (loadRequestId.current !== requestId) return;
           setWs(w ?? null);
           setStatus("ready");
         })
         .catch(() => {
+          if (loadRequestId.current !== requestId) return;
           if (foreground) setStatus("error");
         });
     },
@@ -112,10 +123,17 @@ export function WorkspaceDetailScreen() {
     setupApi
       .getSetupStatus()
       .then((s) => {
-        setLlmReady(hasLlmPath(s));
+        // F6-F3 (site 2): getSetupStatus() degrades to the synthetic
+        // READY_FALLBACK (unreachable:true) on any non-401 failure, and
+        // hasLlmPath(READY_FALLBACK) is always false — so this used to tell
+        // the operator "no model provider configured" for a daemon that
+        // simply never answered.
+        setLlmReady(s.unreachable ? null : hasLlmPath(s));
         setHostClasses(s.runner?.confinement_classes ?? null);
       })
-      .catch(() => setLlmReady(false));
+      .catch(() => {
+        /* unknown stays unknown — never claim a missing model path on a blip */
+      });
   }, []);
 
   // Poll while a session (open record / confined replay) is in-flight
@@ -369,16 +387,17 @@ export function WorkspaceDetailScreen() {
       </div>
 
       <div className="mt-4 flex flex-col gap-4">
-        <DetailSectionCard
-          title="Recorded sessions"
-          subtitle='Run a task once with everything open. Wardyn watches what it actually did and writes the least-privilege policy. Replay it confined to prove the policy is enough.'
-        >
+        <DetailSectionCard title="Recorded sessions" subtitle={WORKSPACE_COPY_DRAFT.SESSIONS_SUBTITLE}>
           <RecordPane
             ws={ws}
             notice={recordNotice}
             launch={recordLaunch}
             busyTask={recordBusyTask}
-            modelReady={llmReady}
+            // RecordPane's modelReady is a plain boolean (no "unknown" state
+            // of its own) — an unreachable/unknown setup status (llmReady ===
+            // null) must not read as a confirmed "no model provider", so only
+            // an EXPLICIT false trips the warning.
+            modelReady={llmReady !== false}
             hostClasses={hostClasses}
             onRecord={(name) => void doRecord(name, false)}
             onReplayConfined={(name) => void doRecord(name, true)}
