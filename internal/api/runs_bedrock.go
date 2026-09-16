@@ -672,6 +672,12 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 			// exchange for a workspace that moved the run to another region.
 			ssoRegion := cmp.Or(s.cfg.BedrockAWSSSORegion, region)
 			hosts = append(hosts, ssoEgressHosts(ssoRegion, s.cfg.AWSSSOEndpointOverride)...)
+			// The SAME pair the ssoInject branch merges above, for the same
+			// reason: this lane's SDK also exchanges an SSO token for role
+			// credentials, so moving its ALLOWLIST under the test hatch without
+			// moving the SDK left it dialling the real AWS hosts it had just
+			// stopped allowing. nil on every real deployment.
+			maps.Copy(env, ssoInjectEndpointEnv(s.cfg.AWSSSOEndpointOverride))
 			return ready(bedrockAuth{env: env, egressHosts: hosts,
 				awsMount: true, awsMountSource: s.cfg.BedrockAWSConfigDir})
 		}

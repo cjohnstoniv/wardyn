@@ -90,8 +90,9 @@ const (
 // proven against the real AWS CLI v2 in test/awsssofake/docker.go), and a
 // loopback/private address is not refused (an in-cluster Service ClusterIP is
 // private by construction). Everything a malformed value could hide — a missing
-// scheme, an embedded credential, a query, a fragment — is still refused, so a
-// typo fails at boot rather than by silently dialing the wrong place.
+// scheme, an embedded credential, a path, a query, a fragment — is still
+// refused, so a typo fails at boot rather than by silently dialing the wrong
+// place.
 func ValidateAWSSSOEndpointOverride(raw string, allowTestEndpoints bool) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -120,6 +121,15 @@ func ValidateAWSSSOEndpointOverride(raw string, allowTestEndpoints bool) (string
 		return "", fmt.Errorf("WARDYN_AWS_SSO_ENDPOINT_OVERRIDE: must not carry a fragment")
 	}
 	u.Path = strings.TrimSuffix(u.Path, "/")
+	// A PATH is refused rather than quietly carried (R-07). Both consumers treat
+	// this value as a base: awsSSOTokenEndpoint appends "/token", and
+	// AWS_ENDPOINT_URL_SSO* treat it as a prefix — plausibly compatible, but
+	// nothing exercises it, and a silently-carried "/sso" is exactly the typo
+	// this function's every other rule exists to fail closed on. The trailing
+	// slash is trimmed FIRST, so "http://host:8090/" is still just a base URL.
+	if u.Path != "" {
+		return "", fmt.Errorf("WARDYN_AWS_SSO_ENDPOINT_OVERRIDE: must not carry a path (got %q) — it is a base URL, and the two AWS endpoint variables plus the CreateToken URL are derived from it", raw)
+	}
 	return u.String(), nil
 }
 

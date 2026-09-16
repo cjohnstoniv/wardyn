@@ -441,17 +441,6 @@ type localModeState struct {
 	loopback bool
 }
 
-// resolveLocalMode decides the LOCAL HOST MODE posture (single-developer
-// localhost path): bypass public-API auth so the browser UI works with no
-// SSO/Dex and no token. Auto-enable when no auth is configured AND the bind is
-// loopback; otherwise honor the explicit flag. FAIL CLOSED: never serve a
-// no-auth public API on a publicly-routable IP. The sidecar/run-token path
-// (internalAuth) is unaffected either way.
-//
-// Side effect (host-mode Bedrock auto-detect): when Bedrock is configured with
-// NO credential source, *f.bedrockAWSDir is defaulted to the host ~/.aws so the
-// AWS SDK resolves the operator's creds (SSO auto-refreshes) — see the inline
-// comment. Extracted verbatim from run().
 // resolveAWSSSOEndpointOverride resolves the gated AWS SSO endpoint hatch:
 // refuse when it is set without the acknowledgement, otherwise normalize it and
 // WARN — loudly, every boot, naming it a test hatch. The warning is the point:
@@ -475,6 +464,17 @@ func resolveAWSSSOEndpointOverride(f *bootFlags) (string, error) {
 	return override, nil
 }
 
+// resolveLocalMode decides the LOCAL HOST MODE posture (single-developer
+// localhost path): bypass public-API auth so the browser UI works with no
+// SSO/Dex and no token. Auto-enable when no auth is configured AND the bind is
+// loopback; otherwise honor the explicit flag. FAIL CLOSED: never serve a
+// no-auth public API on a publicly-routable IP. The sidecar/run-token path
+// (internalAuth) is unaffected either way.
+//
+// Side effect (host-mode Bedrock auto-detect): when Bedrock is configured with
+// NO credential source, *f.bedrockAWSDir is defaulted to the host ~/.aws so the
+// AWS SDK resolves the operator's creds (SSO auto-refreshes) — see the inline
+// comment. Extracted verbatim from run().
 func resolveLocalMode(f *bootFlags) (localModeState, error) {
 	lm := localModeState{loopback: listenIsLoopback(*f.listen)}
 	// bug-rbac-1: an EXPLICIT -local-mode alongside a configured -oidc-issuer

@@ -4,6 +4,7 @@
 package api
 
 import (
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -176,6 +177,8 @@ func TestValidateAWSSSOEndpointOverride(t *testing.T) {
 		{name: "a non-http scheme is refused", raw: "ftp://host", allowTest: true, wantErrSubstr: "http:// or https://"},
 		{name: "embedded credentials are refused", raw: "http://u:p@host:8090", allowTest: true, wantErrSubstr: "credential"},
 		{name: "an empty host is refused", raw: "http:///path", allowTest: true, wantErrSubstr: "host is empty"},
+		{name: "a path is refused (R-07: fail closed on a typo)", raw: "http://host:8090/sso", allowTest: true, wantErrSubstr: "path"},
+		{name: "a bare trailing slash is still just a trailing slash", raw: "http://host:8090/", allowTest: true, want: "http://host:8090"},
 		{name: "a query string is refused", raw: "http://host:8090?a=b", allowTest: true, wantErrSubstr: "query"},
 		{name: "a fragment is refused", raw: "http://host:8090#f", allowTest: true, wantErrSubstr: "fragment"},
 	} {
@@ -240,5 +243,67 @@ func TestSSOEndpointOverride_IsNotASiteConfigField(t *testing.T) {
 		if strings.Contains(strings.ToLower(rt.Field(i).Name), "ssoendpoint") {
 			t.Errorf("SiteConfig grew a field %q — the SSO endpoint override is boot-time-only", rt.Field(i).Name)
 		}
+	}
+}
+
+// R-04: the HOST-MODE ~/.aws MOUNT lane moved its egress allowlist under the
+// hatch but not its SDK env, so under the override that lane's allowlist lost
+// oidc.<r>/portal.sso.<r> while the SDK still dialled them — denied, and it
+// reads exactly like the fake being down. The two halves must move together in
+// EVERY lane that reaches SSO, not just ssoInject.
+func TestSSOEndpointOverride_MountLaneMovesEnvAndEgressTogether(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		override  string
+		wantHosts []string
+		wantEnv   map[string]string
+	}{
+		{
+			name:      "unset: the regional AWS hosts, no endpoint env",
+			override:  "",
+			wantHosts: []string{"oidc.eu-west-2.amazonaws.com", "portal.sso.eu-west-2.amazonaws.com"},
+			wantEnv:   nil,
+		},
+		{
+			name:      "set: one fake host, and the SDK told to use it",
+			override:  theOverride,
+			wantHosts: []string{theOverrideHost},
+			wantEnv: map[string]string{
+				awsEndpointURLSSOEnv:     theOverride,
+				awsEndpointURLSSOOIDCEnv: theOverride,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hosts := ssoEgressHosts("eu-west-2", tc.override)
+			env := ssoInjectEndpointEnv(tc.override)
+			if !reflect.DeepEqual(hosts, tc.wantHosts) {
+				t.Errorf("egress = %v, want %v", hosts, tc.wantHosts)
+			}
+			if !reflect.DeepEqual(env, tc.wantEnv) {
+				t.Errorf("sdk env = %v, want %v", env, tc.wantEnv)
+			}
+			// The invariant the mount lane broke: a host in the allowlist that the
+			// SDK is never pointed at, or the reverse, is a lane that cannot work.
+			for k, v := range env {
+				if gatewayHost(v) != hosts[0] {
+					t.Errorf("env %s=%q does not resolve to the one allowed host %q", k, v, hosts[0])
+				}
+			}
+		})
+	}
+	// …and the caller that used to be asymmetric: resolveBedrockAuth's mount
+	// branch must merge the same pair its ssoInject sibling does. Source-level,
+	// because constructing a full mount-lane Server here would assert nothing
+	// about the line that was missing.
+	src, err := os.ReadFile("runs_bedrock.go")
+	if err != nil {
+		t.Fatalf("read runs_bedrock.go: %v", err)
+	}
+	if n := strings.Count(string(src), "ssoEgressHosts(ssoRegion, s.cfg.AWSSSOEndpointOverride)"); n != 1 {
+		t.Fatalf("expected exactly 1 mount-lane ssoEgressHosts call, found %d", n)
+	}
+	if got, want := strings.Count(string(src), "ssoInjectEndpointEnv(s.cfg.AWSSSOEndpointOverride)"), 2; got != want {
+		t.Errorf("ssoInjectEndpointEnv is merged into %d sandbox envs, want %d — every lane that appends ssoEgressHosts must also point the SDK at them", got, want)
 	}
 }
