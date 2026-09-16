@@ -169,7 +169,19 @@ func runSSH(cmd *cobra.Command, c *sdk.Client, runID string, doPrint, doConfig, 
 	if err := sub.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			return &exitError{code: exitErr.ExitCode(), err: fmt.Errorf("ssh: %w", err)}
+			// docs/CI.md documents ssh's exit status passing straight through
+			// as this command's own exit code. ExitCode() is documented to
+			// return -1 for a signal-killed child (a supervisor's SIGTERM, an
+			// operator's Ctrl-C reaching ssh directly) — that is not part of
+			// the documented taxonomy (every code there is >= 0), and
+			// os.Exit(-1) in main.go would not do what a negative "exit
+			// code" implies, so it is clamped to the generic local-failure
+			// code instead of leaking out unchanged.
+			code := exitErr.ExitCode()
+			if code < 0 {
+				code = 1
+			}
+			return &exitError{code: code, err: fmt.Errorf("ssh: %w", err)}
 		}
 		return fmt.Errorf("ssh: %w", err)
 	}

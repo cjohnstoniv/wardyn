@@ -7,8 +7,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -352,5 +355,73 @@ func TestRunSSH_AcceptsARealRunID(t *testing.T) {
 	}
 	if want := "ssh " + testRunID + "@gw.example.com -p 2222"; out != want {
 		t.Errorf("--print output = %q, want %q", out, want)
+	}
+}
+
+// --------------------------------------------------------------------------
+// B12a-F4: ssh(1)'s own exit status is docs/CI.md's documented taxonomy for
+// this command — it passes straight through as the process's exit code
+// (never re-labelled 1, the generic local-failure code) — EXCEPT a
+// signal-killed child, whose exec.ExitError.ExitCode() is -1: os.Exit with a
+// negative code is not the documented taxonomy, so that case is clamped to 1.
+// --------------------------------------------------------------------------
+
+// fakeBinOnPath writes an executable script named name to a fresh dir and
+// prepends it to PATH for the duration of the test, so exec.CommandContext's
+// PATH lookup resolves to it instead of the real binary.
+func fakeBinOnPath(t *testing.T, name, script string) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, name)
+	writeFile(t, path, script)
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatalf("chmod %s: %v", path, err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestRunSSH_PropagatesTheRemoteExitCode(t *testing.T) {
+	fakeBinOnPath(t, "ssh", "#!/bin/sh\nexit 4\n")
+	srv := fakeHealthzServer(t, `{"ssh":{"enabled":true,"advertise_addr":"gw.example.com:2222","host_key_fingerprint":"SHA256:x"}}`)
+	defer srv.Close()
+
+	cmd := sshCmd(func() *sdk.Client { return &sdk.Client{BaseURL: srv.URL} })
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetContext(context.Background())
+	cmd.SetArgs([]string{testRunID})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected an error propagating ssh's exit 4")
+	}
+	var ee *exitError
+	if !errors.As(err, &ee) {
+		t.Fatalf("error = %v (%T), want an *exitError carrying ssh's own exit code", err, err)
+	}
+	if ee.code != 4 {
+		t.Errorf("exitError.code = %d, want 4 (ssh's own exit code, passed through per docs/CI.md)", ee.code)
+	}
+	if code := exitCodeFor(err); code != 4 {
+		t.Errorf("exitCodeFor(err) = %d, want 4", code)
+	}
+}
+
+func TestRunSSH_SignalKilledChildNeverReturnsANegativeExitCode(t *testing.T) {
+	// exec.ExitError.ExitCode() is documented to return -1 for a
+	// signal-terminated child. os.Exit(-1) is not part of docs/CI.md's
+	// taxonomy (every documented code is >= 0), so runSSH must clamp it.
+	fakeBinOnPath(t, "ssh", "#!/bin/sh\nkill -TERM $$\n")
+	srv := fakeHealthzServer(t, `{"ssh":{"enabled":true,"advertise_addr":"gw.example.com:2222","host_key_fingerprint":"SHA256:x"}}`)
+	defer srv.Close()
+
+	cmd := sshCmd(func() *sdk.Client { return &sdk.Client{BaseURL: srv.URL} })
+	cmd.SetOut(&bytes.Buffer{})
+	cmd.SetContext(context.Background())
+	cmd.SetArgs([]string{testRunID})
+	err := cmd.Execute()
+	if err == nil {
+		t.Fatal("expected an error from the signal-killed child")
+	}
+	if code := exitCodeFor(err); code < 0 {
+		t.Errorf("exitCodeFor(signal-killed ssh) = %d, want >= 0 (never a negative process exit code)", code)
 	}
 }
