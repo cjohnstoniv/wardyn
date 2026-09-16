@@ -202,6 +202,34 @@ describe("RunCanvas — saving", () => {
   });
 });
 
+// F1-F5: when a run finishes DURING canvas editing, `situational` flips —
+// the unguarded effect used to setPreset(situational) on every flip, and
+// `dirty=false` + commit() replaced the in-progress arrangement on screen
+// (the server kept the edit; only the screen jumped).
+describe("RunCanvas — F1-F5 a situational flip mid-edit does not clobber the in-progress arrangement", () => {
+  it("freezes the preset while editing, and re-syncs the moment editing ends", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<RunCanvas ctx={ctx({ finished: false })} />);
+    await screen.findByRole("heading", { name: "Egress" });
+
+    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.editLayout }));
+
+    // The run finishes mid-edit — situational flips to "finished".
+    rerender(<RunCanvas ctx={ctx({ finished: true })} />);
+    // Still editing: the live preset's arrangement must not jump to the
+    // finished one out from under the operator.
+    expect(screen.getByRole("heading", { name: "Egress" })).toBeInTheDocument();
+
+    // Neg (canvas.test.tsx:180): exiting edit re-syncs to the run's actual
+    // situation — this must still hold.
+    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.doneEditing }));
+    await waitFor(() => expect(getLayout).toHaveBeenCalledWith("finished"));
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Sandbox" })).not.toBeInTheDocument(),
+    );
+  });
+});
+
 describe("RunCanvas — the catalog", () => {
   it("takes a widget off the canvas and puts it back", async () => {
     const user = userEvent.setup();

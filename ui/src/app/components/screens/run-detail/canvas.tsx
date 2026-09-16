@@ -99,9 +99,16 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   // widget's own state, not the arrangement.
   const situational: RunLayoutPreset = ctx.finished ? "finished" : "live";
   const [preset, setPreset] = React.useState<RunLayoutPreset>(situational);
-  React.useEffect(() => setPreset(situational), [situational]);
-
   const [editing, setEditing] = React.useState(false);
+  // F1-F5 (downgraded — cosmetic, the pending PUT under editing already
+  // commits the arrangement to the OLD preset, so the server never lost the
+  // edit): while editing, a situational flip (the run finishes mid-edit) must
+  // not silently replace the in-progress arrangement on screen. Re-syncs the
+  // moment editing ends.
+  React.useEffect(() => {
+    if (!editing) setPreset(situational);
+  }, [situational, editing]);
+
   const [catalogOpen, setCatalogOpen] = React.useState(false);
   // The tile under the cursor, for the size readout. Only updated when its
   // dimensions actually change, so a drag is not a re-render per frame.
