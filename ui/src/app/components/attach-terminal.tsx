@@ -574,15 +574,12 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
 
       ws.onerror = () => {
         clearConnectTimer();
-        // An error is always followed by a close event; let onclose drive the
-        // reconnect/backoff. Only surface a hard error banner once we've given
-        // up (no attempts left), so a transient blip doesn't flash an error.
-        if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-          setConnState("error");
-          setErrorMsg(
-            "WebSocket connection failed. The run may have already stopped, or you may need to refresh your session.",
-          );
-        }
+        // F1-F8: an error is always followed by a close event, and onclose's
+        // own "budget exhausted" arm unconditionally sets "closed" right
+        // after — so a setConnState("error") here was DEAD, never observable
+        // (attach-terminal.test.tsx pins the [closed] text that arm renders,
+        // R4-F143 — deliberate, untouched). connState "error" is reached
+        // elsewhere, from the caller's own refusal to attach at all.
       };
     };
 
