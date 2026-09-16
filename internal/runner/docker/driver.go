@@ -1167,21 +1167,9 @@ func (d *Driver) ensureImage(ctx context.Context, ref string) error {
 		return nil
 	}
 	// imagePresent said false, so a pull failure means the image is genuinely
-	// absent locally (not a stale tag). The demo agent tags (wardyn/agent-*)
-	// live in no registry, so for THOSE name the fix rather than leaking a bare
-	// "registry: denied".
-	//
-	// B9-F8: only for those. On an operator's own registry image or a
-	// workspace-built tag, `make agent-images` is advice that cannot work, and
-	// appending it buries the daemon's real answer — auth refused, registry
-	// unreachable, a typo in the ref — under a make target with nothing to do
-	// with it. PullImage's own wrap already names the ref and the daemon's
-	// reason, which is the whole message there.
+	// absent locally (not a stale tag) — see pullFailure for what that error says.
 	if err := dockerutil.PullImage(ctx, d.cli, ref, "docker"); err != nil {
-		if strings.HasPrefix(ref, demoAgentImagePrefix) {
-			return fmt.Errorf("%w (image %q not present locally and pull failed — for the demo images run: make agent-images)", err, ref)
-		}
-		return err
+		return pullFailure(ref, err)
 	}
 	return nil
 }

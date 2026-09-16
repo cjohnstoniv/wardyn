@@ -5,7 +5,11 @@
 
 package docker
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"strings"
+)
 
 // errRuntimeUnavailable is the fail-closed sentinel for Confinement-Class
 // gating: the policy demanded a class whose enforcing runtime is not
@@ -52,3 +56,21 @@ var errTeardownUnresolved = errors.New("teardown could not resolve run id; sibli
 // ValidateTarget alone accepts all three, because they are legal mount points —
 // which is the point: legal is not the same question as reserved.
 var errDriveTargetInvalid = errors.New("a user drive may bind only at the reserved drive path")
+
+// pullFailure is the error ensureImage returns when an image is absent locally
+// AND unpullable.
+//
+// The demo agent tags (demoAgentImagePrefix) live in no registry, so for those
+// the fix is a make target and saying so beats leaking a bare "registry:
+// denied". B9-F8: ONLY for those. On an operator's own registry image or a
+// workspace-built tag, `make agent-images` is advice that cannot work, and
+// appending it buries the daemon's real answer — auth refused, registry
+// unreachable, a typo in the ref — under a make target with nothing to do with
+// it. PullImage's own wrap already names the ref and the reason, which is the
+// whole message in that case.
+func pullFailure(ref string, err error) error {
+	if !strings.HasPrefix(ref, demoAgentImagePrefix) {
+		return err
+	}
+	return fmt.Errorf("%w (image %q not present locally and pull failed — for the demo images run: make agent-images)", err, ref)
+}
