@@ -68,8 +68,26 @@ func run(args []string, in io.Reader, out, errOut io.Writer) error {
 	}
 
 	g := &gate{base: strings.TrimRight(*base, "/"), poll: *poll, deadline: *deadline,
-		client: &http.Client{Timeout: 30 * time.Second}, stderr: errOut}
+		client: directClient(), stderr: errOut}
 	return g.serve(in, out)
+}
+
+// directClient builds the gate's control-plane HTTP client.
+//
+// Proxy: nil, not http.DefaultTransport (B11a-F13). -base defaults to
+// $HTTP_PROXY because the gate's control plane IS the run's own wardyn-proxy —
+// a known on-segment address — and DefaultTransport would send that request
+// BACK through whatever $HTTP_PROXY names. With the default proxy URL those are
+// the same address and nothing shows; when an operator sets
+// `--proxy-url http://<other-host>:3128` the sandbox's HTTP_PROXY names a
+// different host, every permission request was forwarded to it down the egress
+// lane, and every tool call denied. The git helper has set Proxy: nil for this
+// reason since it was written; this client and internal/sidecar's had not.
+func directClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{Proxy: nil},
+		Timeout:   30 * time.Second,
+	}
 }
 
 type gate struct {

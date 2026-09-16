@@ -5,7 +5,9 @@
 // in-sandbox result-uploader binaries (wardyn-scan, wardyn-aws-sso): validate
 // WARDYN_PROXY_URL/WARDYN_RUN_ID, build the brokered result URL, and PUT a
 // JSON body. No Authorization header is ever set here — the wardyn-proxy
-// holds and injects the run token, stripping any sandbox-supplied one.
+// holds and injects the run token, stripping any sandbox-supplied one. The PUT
+// goes DIRECT (Proxy: nil): the target is the run's own proxy, so it must never
+// be sent through the proxy named by the sandbox's HTTP_PROXY.
 package sidecar
 
 import (
@@ -36,7 +38,7 @@ func ProxyRunURL(kind string) (string, error) {
 // Upload PUTs body (JSON) to url. No Authorization header is set on purpose;
 // any non-2xx response is an error carrying a bounded snippet of the body.
 func Upload(url string, body []byte) error {
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := uploadClient()
 	req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
@@ -53,4 +55,22 @@ func Upload(url string, body []byte) error {
 		return fmt.Errorf("server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
 	}
 	return nil
+}
+
+// uploadClient builds the HTTP client every brokered PUT uses.
+//
+// Proxy: nil, not http.DefaultTransport (B11a-F13). The target is the run's own
+// wardyn-proxy — a known on-segment address — and every sandbox carries
+// HTTP_PROXY=$WARDYN_PROXY_URL, so DefaultTransport sent this control-plane PUT
+// back through whatever that names. On the default proxy URL that is the same
+// address and the bug is invisible; under `--proxy-url http://<other-host>:3128`
+// it named a different host, and the PUT that delivers a scan result or an SSO
+// token capture went down the egress lane to it instead of reaching the local
+// brokered route. This is also the wardyn-aws-sso half of the finding: that
+// binary's only control-plane call is Upload.
+func uploadClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{Proxy: nil},
+		Timeout:   30 * time.Second,
+	}
 }

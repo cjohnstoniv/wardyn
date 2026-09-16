@@ -484,7 +484,7 @@ func pickAccountRole(accessToken, region string, pin ssoPin) (accountID, roleNam
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), resolveTimeout)
 	defer cancel()
-	client := &http.Client{Timeout: resolveTimeout}
+	client := portalClient()
 	base := ssoPortalBase(region)
 
 	accounts, got := listAccounts(ctx, client, base, accessToken)
@@ -506,6 +506,21 @@ func pickAccountRole(accessToken, region string, pin ssoPin) (accountID, roleNam
 		return accounts[0].AccountID, role, rrefusal, rok
 	}
 	return chooseAccountRole(ctx, client, base, accessToken, accounts)
+}
+
+// portalClient builds the client for the AWS SSO PORTAL reads (ListAccounts /
+// ListAccountRoles). It keeps http.DefaultTransport — and therefore
+// $HTTP_PROXY — DELIBERATELY, and that is the opposite of what B11a-F13 asked
+// of the other in-sandbox clients.
+//
+// The split is by destination, not by binary. portal.sso.<region>.amazonaws.com
+// is an EXTERNAL endpoint: it must traverse the sandbox's one route out, so
+// governance sees it and the allow-list decides it. This binary's CONTROL-PLANE
+// call — the token-capture upload — is the one that must go direct, and it does
+// not live here: it is sidecar.Upload, whose client sets Proxy: nil. That is
+// where the wardyn-aws-sso half of B11a-F13 landed.
+func portalClient() *http.Client {
+	return &http.Client{Timeout: resolveTimeout}
 }
 
 // verifyPin proves the admin's pin is reachable by THIS session before it is

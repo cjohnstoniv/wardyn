@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"maps"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -192,6 +193,19 @@ func envEnabled(v string) bool {
 	}
 }
 
+// noProxyFor builds the sandbox's NO_PROXY: the CONFIGURED proxy host plus
+// loopback. An unparseable or host-less proxy URL falls back to the default
+// sidecar alias rather than emitting an empty first entry — a bypass list
+// starting with "," is one the sandbox's HTTP clients read differently from
+// each other, and dispatch has already accepted the URL by this point.
+func noProxyFor(proxyURL string) string {
+	host := "wardyn-proxy"
+	if u, err := url.Parse(proxyURL); err == nil && u.Hostname() != "" {
+		host = u.Hostname()
+	}
+	return host + ",localhost,127.0.0.1,::1"
+}
+
 // buildBaseSandboxEnv assembles dispatchRun's baseline non-secret sandbox
 // env (invariant 1: the run token never appears here): proxy routing, the
 // toolchain-fidelity env the run's workspaces actually need (needs — Go's
@@ -213,9 +227,17 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNe
 		"HTTPS_PROXY": proxyURL,
 		"http_proxy":  proxyURL,
 		"https_proxy": proxyURL,
-		// Exclude the proxy itself and loopback from proxy traversal.
-		"NO_PROXY": "wardyn-proxy,localhost,127.0.0.1,::1",
-		"no_proxy": "wardyn-proxy,localhost,127.0.0.1,::1",
+		// Exclude the proxy itself and loopback from proxy traversal. DERIVED
+		// from proxyURL, not the literal "wardyn-proxy" (B11a-F13): that name is
+		// only the default per-run sidecar alias, and -proxy-url /
+		// WARDYN_PROXY_URL_OVERRIDE moves it. With an override the sandbox's own
+		// HTTP_PROXY named a host that was NOT in its NO_PROXY, so a
+		// proxy-aware client reaching the proxy's local /wardyn/... routes tried
+		// to reach the proxy THROUGH the proxy — while a name that resolves to
+		// nothing sat in the bypass list. On the default URL the derived value
+		// is byte-identical to what shipped.
+		"NO_PROXY": noProxyFor(proxyURL),
+		"no_proxy": noProxyFor(proxyURL),
 		// Git commit attribution: carry the sub/act delegation chain into the commit
 		// graph so an agent's commits are traceable to the governed run — AUTHOR is
 		// the human who authorized the run (sub), COMMITTER is the agent run (act).
