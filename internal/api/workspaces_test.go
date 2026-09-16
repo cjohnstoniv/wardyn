@@ -232,10 +232,30 @@ func (s *workspaceStoreFake) GetSourcesByIDs(ctx context.Context, ids []uuid.UUI
 }
 
 func (s *workspaceStoreFake) GetWorkspace(context.Context, uuid.UUID) (types.Workspace, error) {
-	return s.ws, nil
+	return hydratedFakeWorkspace(s.ws), nil
 }
 func (s *workspaceStoreFake) ListWorkspaces(context.Context) ([]types.Workspace, error) {
-	return []types.Workspace{s.ws}, nil
+	return []types.Workspace{hydratedFakeWorkspace(s.ws)}, nil
+}
+
+// hydratedFakeWorkspace does the ONE thing store_sources.go's hydrateWorkspace
+// does that a bare echo did not, and that a handler can actually observe: every
+// source it serves back was read from a LIBRARY row, so its locator/ref carry
+// the CANONICAL spelling upsertAndAttach wrote (canonicalSourceIdentity) —
+// never the raw spelling a caller last typed. Without it, a test comparing a
+// request body against "what the store serves" was comparing against a shape
+// production never returns, which is how B4-F3's data loss stayed invisible to
+// this file's own update tests.
+func hydratedFakeWorkspace(ws types.Workspace) types.Workspace {
+	if ws.Sources == nil {
+		return ws
+	}
+	hydrated := make([]types.WorkspaceSource, len(ws.Sources))
+	for i, src := range ws.Sources {
+		hydrated[i] = canonicalWorkspaceSource(src)
+	}
+	ws.Sources = hydrated
+	return ws
 }
 func (s *workspaceStoreFake) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return types.SiteConfig{}, nil

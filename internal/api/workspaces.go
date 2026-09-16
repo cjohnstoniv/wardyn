@@ -40,7 +40,7 @@ func validateWorkspaceLLMCred(c *types.WorkspaceLLMCred) string {
 		return ""
 	}
 	if !repoFieldSafe(c.IntegrationRef) {
-		return "llm_cred.integration_ref must not contain control characters or whitespace"
+		return fmt.Sprintf(repoField400Charset, "llm_cred.integration_ref")
 	}
 	return ""
 }
@@ -97,6 +97,10 @@ func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request) (workspaceRe
 	// it on every response anyway.
 	for i := range req.Sources {
 		req.Sources[i].Admitted = nil
+	}
+
+	if len(req.Sources) > maxWorkspaceSources {
+		return workspaceRequest{}, fmt.Sprintf(workspaceSources400TooMany, maxWorkspaceSources)
 	}
 
 	seenTargets := make(map[string]int, len(req.Sources))
@@ -184,7 +188,15 @@ func validateWorkspaceSource(src types.WorkspaceSource) string {
 			return "source is required for a repo source"
 		}
 		if !repoFieldSafe(src.Source) {
-			return "source must not contain control characters or whitespace"
+			return fmt.Sprintf(repoField400Charset, "source")
+		}
+		// B4-F8: the REF was validated at neither authoring door, and
+		// buildRepoRecords (runs_scm.go) drops a repo whose ref is not
+		// repoFieldSafe by a bare return — the agent then starts in a workspace
+		// missing that clone, with no warning on the run and nothing in the
+		// audit trail. Refuse it where it is authored instead.
+		if src.Ref != "" && !repoFieldSafe(src.Ref) {
+			return fmt.Sprintf(repoField400Charset, "ref")
 		}
 		// Write-door half of the traversal guard — see validateSourceWrite.
 		if !repoLocatorPathSafe(src.Source) {
@@ -235,7 +247,7 @@ func validateWorkspaceBaseImage(b *types.WorkspaceBaseImage) string {
 			return "base_image.image is required for kind " + b.Kind
 		}
 		if !repoFieldSafe(b.Image) {
-			return "base_image.image must not contain control characters or whitespace"
+			return fmt.Sprintf(repoField400Charset, "base_image.image")
 		}
 	}
 	// D3: base_image.steps validation is GONE, because the thing it validated is
@@ -665,6 +677,12 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		s.removeStaleImage(r.Context(), ws.ImageRef, "")
 		ws.ImageRef = ""
 		ws.BuiltProfileHash = ""
+		// And forget what this process remembers about that build (B4-F2): the
+		// cleared row already stops the tracker claiming `done`, but its Error
+		// arm is consulted BEFORE the row, so an edit after a failed build
+		// otherwise reported that build's reason against a composition it never
+		// saw.
+		s.builds.drop(id)
 	}
 	updated, err := s.cfg.Store.UpdateWorkspace(r.Context(), id, ws, stampEgressEdit)
 	if notFoundIf(w, err, "workspace") {
@@ -682,19 +700,6 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// so the warning belongs on this response too.
 	writeJSON(w, http.StatusOK, workspaceResponse{Workspace: updated,
 		Warnings: s.legacyHostAdmissionWarnings(r.Context(), repoSourceLocators(req.Sources)...)})
-}
-
-// workspaceSourceContentEqual compares everything about a WorkspaceSource
-// EXCEPT Overrides: content — Type/Path/Source/Ref/Target/Writable — is what
-// "sourcesChanged" (handleUpdateWorkspace) means by "everything reviewed
-// against the old sources is stale". A plain Overrides edit changes which
-// requirement rows apply, never what's mounted, so it must not itself reset
-// ApprovedEgress/Requirements/RecordResults — and types.WorkspaceSource's
-// Overrides map makes the type non-comparable, so slices.Equal (which needs
-// `comparable`) can no longer compare a []WorkspaceSource directly.
-func workspaceSourceContentEqual(a, b types.WorkspaceSource) bool {
-	return a.Type == b.Type && a.Path == b.Path && a.Source == b.Source &&
-		a.Ref == b.Ref && a.Target == b.Target && a.Writable == b.Writable
 }
 
 // normalizeRecommended collapses an explicit {"kind":"recommended"} — what
@@ -743,25 +748,16 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 	}
 	// W19-W19b-3: a host the git broker (or the control plane itself) already
 	// owns is DEAD BY CONSTRUCTION as a direct ApprovedEgress entry — dispatch
-	// routes github.com/api.github.com/codeload.github.com/*.githubusercontent.com
-	// and every SSH-over-443 forge host through the broker/proxy specially
-	// (runs_dispatch_gitbroker.go), never as a plain allowlist host, so
-	// "approving" one here writes a row a real run's proxy will never consult.
-	// This is the SAME static skip-set promoteSkipHosts applies to the bulk
-	// promote-egress writer (record.go) plus the control-plane's own host
+	// routes it through the broker/proxy specially, never as a plain allowlist
+	// host, so "approving" one here writes a row a real run's proxy will never
+	// consult. This is the SAME static skip-set promoteSkipHosts applies to the
+	// bulk promote-egress writer (record.go) plus the control-plane's own host
 	// (handlePromoteRecordEgress's selfHost) — this is the LAST writer of
 	// ApprovedEgress that did not share it; reject with the same honest 4xx
 	// the shape validator already uses instead of a silent-toast no-op.
-	deadHosts := map[string]struct{}{}
-	for _, h := range gitBrokerManagedHosts {
-		deadHosts[strings.ToLower(h)] = struct{}{}
-	}
-	for _, h := range gitBrokerSSHHosts() {
-		deadHosts[strings.ToLower(h)] = struct{}{}
-	}
-	if selfHost := controlPlaneHost(s.cfg.ControlPlaneURL); selfHost != "" {
-		deadHosts[selfHost] = struct{}{}
-	}
+	// The set itself is deadApprovedEgressHosts (workspaces_canon.go), shared
+	// with the observed-egress panel that produces what gets promoted here.
+	deadHosts := s.deadApprovedEgressHosts()
 	scopedWorkspaceWrite(s, w, r, "workspace.egress.approve",
 		func(req body) ([]string, string) {
 			if len(req.Domains) > maxApprovedEgress {
@@ -866,107 +862,6 @@ func (s *Server) handleSetWorkspaceLLMCred(w http.ResponseWriter, r *http.Reques
 		})
 }
 
-// Observed-egress synthesis bounds: scan the most recent runs that reference
-// this workspace and, for each, at most this many audit events.
-const (
-	maxObservedRuns        = 50
-	maxObservedAuditPerRun = 500
-)
-
-// handleObservedEgress synthesizes least-privilege egress feedback from run
-// TELEMETRY (the pattern: run permissive, then tighten/expand from observed
-// evidence): it returns the egress hosts that runs using THIS workspace were
-// actually DENIED, minus what the workspace already allows or the operator
-// already approved. These are candidates an operator can promote into the
-// workspace's approved-egress list. Read-only and advisory — it never widens
-// anything itself.
-//
-// W25-S1-2: the route is member-reachable, so the run scan is filtered by
-// ownsRunOrAdmin — the same owner-or-admin predicate handleListRuns and
-// getRunAuthorized use. Every host returned comes from a RUN's audit trail;
-// unfiltered, a member learned which hosts a colleague's run on the shared
-// workspace dialled — exactly the run telemetry getRunAuthorized 404s them out
-// of on /runs/{id}. An admin still sees the whole workspace's telemetry, which
-// is what the operator-owned promote flow needs.
-func (s *Server) handleObservedEgress(w http.ResponseWriter, r *http.Request) {
-	id, ok := parseIDParam(w, r, "id", "workspace")
-	if !ok {
-		return
-	}
-	ws, ok := s.getWorkspaceReadable(w, r, id)
-	if !ok {
-		return
-	}
-
-	// Already-satisfied hosts to subtract: the scanned profile's auto-allowed
-	// egress plus the operator's approvals.
-	allowed := map[string]bool{}
-	for _, d := range ws.ApprovedEgress {
-		allowed[d] = true
-	}
-	if p, ok := workspaceProfile(ws); ok {
-		for _, d := range p.EgressDomains {
-			allowed[d] = true
-		}
-	}
-
-	runs, err := s.cfg.Store.ListRuns(r.Context())
-	if err != nil {
-		writeServerError(w, r, "list runs", err)
-		return
-	}
-	denied := map[string]struct{}{}
-	scanned := 0
-	for _, run := range runs {
-		if scanned >= maxObservedRuns {
-			break
-		}
-		if !runUsesWorkspace(run, ws) || !s.ownsRunOrAdmin(r, run) {
-			continue
-		}
-		scanned++
-		events, aerr := s.cfg.Store.QueryAuditEvents(r.Context(), run.ID, maxObservedAuditPerRun)
-		if aerr != nil {
-			continue // best-effort per run
-		}
-		for _, ev := range events {
-			if ev.Action != "egress.deny" {
-				continue
-			}
-			host := strings.ToLower(strings.TrimSpace(ev.Target))
-			if host == "" || allowed[host] || !hostrules.ValidApprovedHost(host) {
-				continue
-			}
-			denied[host] = struct{}{}
-		}
-	}
-	out := sortedKeys(denied)
-	writeJSON(w, http.StatusOK, map[string]any{"denied": out, "runs_examined": scanned})
-}
-
-// runUsesWorkspace reports whether a run referenced ws, using the denormalized
-// run fields (WorkspacePath = the primary local-dir source; Repo = the repo
-// slug/URL) against EVERY one of ws's sources — not just the single-source
-// Kind/Source mirror, which is empty for a multi-source workspace. Only the
-// PRIMARY workspace is linked on the run, so observed telemetry is scoped to
-// runs where ws was primary — a deliberate, honest limit (secondary
-// mounts/repos aren't denormalized onto the run).
-func runUsesWorkspace(run types.AgentRun, ws types.Workspace) bool {
-	for _, src := range ws.Sources {
-		switch src.Type {
-		case types.WorkspaceSourceTypeLocalDir:
-			if run.WorkspacePath != "" && run.WorkspacePath == src.Path {
-				return true
-			}
-		case types.WorkspaceSourceTypeRepo:
-			if run.Repo != "" && run.Repo == src.Source {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // handleDeleteWorkspace removes a workspace. Returns 404 when unknown, 204 on success.
 func (s *Server) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	id, ok := parseIDParam(w, r, "id", "workspace")
@@ -981,6 +876,24 @@ func (s *Server) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// B4-F7: agent_runs.workspace_id carries no foreign key (migration 0009), so
+	// nothing below refuses a delete while a session still holds this workspace
+	// — and deleting mid record-session strands an AllowAllEgress sandbox whose
+	// reconcileRecordRun then 404s before recordmode.Capture ever runs, losing
+	// the recording silently. Refuse with handleDeleteSource's own in-use shape.
+	//
+	// The repair-on-read runs FIRST, exactly as handleGetWorkspace does it: the
+	// common reason a row still points at a run is that the run already
+	// terminated down a path with no reconcile hook, and refusing on a pointer
+	// that is merely stale would make a workspace undeletable until someone
+	// happened to GET it. No ?force= escape: the operator's answer to a
+	// genuinely live session is to stop the run, which is the surface that
+	// already exists.
+	ws = s.repairStaleWorkspaceRuns(r.Context(), ws)
+	if ws.ActiveRunID != nil {
+		writeError(w, http.StatusConflict, fmt.Sprintf(workspaceDelete409ActiveRun, *ws.ActiveRunID))
+		return
+	}
 	staleImage := ws.ImageRef
 	err := s.cfg.Store.DeleteWorkspace(r.Context(), id)
 	if notFoundIf(w, err, "workspace") {
@@ -991,6 +904,7 @@ func (s *Server) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.removeStaleImage(r.Context(), staleImage, "")
+	s.builds.drop(id) // nothing can ask about this workspace's build again (B4-F2)
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"workspace.delete", id.String(), "success", auditWorkspaceData(r, ws.OwnedBy, nil)))
 	w.WriteHeader(http.StatusNoContent)

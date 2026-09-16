@@ -6,11 +6,13 @@ package api
 import (
 	"context"
 	"net"
+	"net/http"
 	neturl "net/url"
 	"strconv"
 	"strings"
 
 	"github.com/cjohnstoniv/wardyn/internal/hostrules"
+	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -21,6 +23,12 @@ import (
 // out of workspace_run.go when that file crossed its size cap; the grouping is
 // the real seam — every function here answers "which hosts, and why is that
 // honest", and none of them launch anything.
+//
+// The observed-egress synthesis at the bottom joined it from workspaces.go for
+// the same two reasons: that file reached the same size cap, and "which hosts
+// would an operator want to allow next, and why is offering them honest" is the
+// question this file already answers — read-only and advisory, launching
+// nothing.
 
 // unionWorkspaceEgress adds every referenced workspace's trusted egress to the
 // spec's AllowedDomains (deduped, in-place) AND its permanently-denied egress
@@ -434,4 +442,130 @@ func scanEgressDomains(cloneURL string) []string {
 // reads ssh://git@github.com/o/r as Hostname()=="github.com".
 func isHTTPScheme(scheme string) bool {
 	return scheme == "https" || scheme == "http"
+}
+
+// Observed-egress synthesis bounds: scan the most recent runs that reference
+// this workspace and, for each, at most this many audit events.
+const (
+	maxObservedRuns        = 50
+	maxObservedAuditPerRun = 500
+)
+
+// handleObservedEgress synthesizes least-privilege egress feedback from run
+// TELEMETRY (the pattern: run permissive, then tighten/expand from observed
+// evidence): it returns the egress hosts that runs using THIS workspace were
+// actually DENIED, minus what the workspace already allows or the operator
+// already approved. These are candidates an operator can promote into the
+// workspace's approved-egress list. Read-only and advisory — it never widens
+// anything itself.
+//
+// W25-S1-2: the route is member-reachable, so the run scan is filtered by
+// ownsRunOrAdmin — the same owner-or-admin predicate handleListRuns and
+// getRunAuthorized use. Every host returned comes from a RUN's audit trail;
+// unfiltered, a member learned which hosts a colleague's run on the shared
+// workspace dialled — exactly the run telemetry getRunAuthorized 404s them out
+// of on /runs/{id}. An admin still sees the whole workspace's telemetry, which
+// is what the operator-owned promote flow needs.
+func (s *Server) handleObservedEgress(w http.ResponseWriter, r *http.Request) {
+	id, ok := parseIDParam(w, r, "id", "workspace")
+	if !ok {
+		return
+	}
+	ws, ok := s.getWorkspaceReadable(w, r, id)
+	if !ok {
+		return
+	}
+
+	// Hosts to subtract, all three classes of "promoting this changes nothing":
+	// already satisfied (the scanned profile's auto-allowed egress, the
+	// operator's own approvals); already REFUSED by the promotion door itself
+	// (deadApprovedEgressHosts — one of these in the list 400s the whole PUT,
+	// so offering one broke promotion for every real host beside it); and
+	// explicitly DENIED by the operator, where deny beats allow at the proxy
+	// (policy.go), so the promotion answers 200 and the host stays blocked
+	// forever (B4-F6).
+	skip := map[string]bool{}
+	for _, d := range ws.ApprovedEgress {
+		skip[d] = true
+	}
+	for _, d := range ws.DeniedEgress {
+		skip[strings.ToLower(strings.TrimSpace(d))] = true
+	}
+	for d := range s.deadApprovedEgressHosts() {
+		skip[d] = true
+	}
+	if p, ok := workspaceProfile(ws); ok {
+		for _, d := range p.EgressDomains {
+			skip[d] = true
+		}
+	}
+
+	// The NEWEST maxObservedRuns, at the database, through the Pager seam
+	// firstBrokeredRepoFromRuns already uses (setup_checks.go) — this is a
+	// member-reachable route that read the WHOLE runs table and then windowed it
+	// in Go, so its cost grew with the deployment's entire run history (B4-F9).
+	// The bound is now the PAGE rather than the number of matching runs found
+	// while walking an unbounded list: an honest, stated ceiling on how far back
+	// the advisory panel looks.
+	var runs []types.AgentRun
+	var err error
+	if pg, ok := s.cfg.Store.(store.Pager); ok {
+		runs, err = pg.ListRunsPage(r.Context(), store.Page{Limit: maxObservedRuns})
+	} else {
+		runs, err = s.cfg.Store.ListRuns(r.Context()) // newest-first; only test doubles lack Pager
+	}
+	if err != nil {
+		writeServerError(w, r, "list runs", err)
+		return
+	}
+	denied := map[string]struct{}{}
+	scanned := 0
+	for _, run := range runs {
+		if scanned >= maxObservedRuns {
+			break
+		}
+		if !runUsesWorkspace(run, ws) || !s.ownsRunOrAdmin(r, run) {
+			continue
+		}
+		scanned++
+		events, aerr := s.cfg.Store.QueryAuditEvents(r.Context(), run.ID, maxObservedAuditPerRun)
+		if aerr != nil {
+			continue // best-effort per run
+		}
+		for _, ev := range events {
+			if ev.Action != "egress.deny" {
+				continue
+			}
+			host := strings.ToLower(strings.TrimSpace(ev.Target))
+			if host == "" || skip[host] || !hostrules.ValidApprovedHost(host) {
+				continue
+			}
+			denied[host] = struct{}{}
+		}
+	}
+	out := sortedKeys(denied)
+	writeJSON(w, http.StatusOK, map[string]any{"denied": out, "runs_examined": scanned})
+}
+
+// runUsesWorkspace reports whether a run referenced ws, using the denormalized
+// run fields (WorkspacePath = the primary local-dir source; Repo = the repo
+// slug/URL) against EVERY one of ws's sources — not just the single-source
+// Kind/Source mirror, which is empty for a multi-source workspace. Only the
+// PRIMARY workspace is linked on the run, so observed telemetry is scoped to
+// runs where ws was primary — a deliberate, honest limit (secondary
+// mounts/repos aren't denormalized onto the run).
+func runUsesWorkspace(run types.AgentRun, ws types.Workspace) bool {
+	for _, src := range ws.Sources {
+		switch src.Type {
+		case types.WorkspaceSourceTypeLocalDir:
+			if run.WorkspacePath != "" && run.WorkspacePath == src.Path {
+				return true
+			}
+		case types.WorkspaceSourceTypeRepo:
+			if run.Repo != "" && run.Repo == src.Source {
+				return true
+			}
+		}
+	}
+	return false
 }

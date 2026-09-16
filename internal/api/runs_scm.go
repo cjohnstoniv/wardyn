@@ -59,6 +59,16 @@ func repoFieldSafe(s string) bool {
 	return gitremote.FieldSafe(s)
 }
 
+// repoField400Charset — DRAFT (M2 canon pending). The write-door refusal for a
+// repo-shaped field carrying a control character or whitespace — the charset
+// repoFieldSafe guards, because every one of these values flows verbatim into
+// an in-sandbox `git clone`/`git checkout` argument. %s is the field name, so
+// the workspace door ("source", "ref", "base_image.image",
+// "llm_cred.integration_ref") and the library door ("locator", "ref") answer
+// the identical sentence about the identical rule instead of four spellings of
+// it.
+const repoField400Charset = "%s must not contain control characters or whitespace"
+
 // repo400LocatorShape — DRAFT (M2 canon pending). The write-door refusal for a
 // locator repoLocatorPathSafe rejects. It is a 400 ("you wrote this wrong"), not
 // an admission 422/403: a dot-segment or percent-encoded repository address is

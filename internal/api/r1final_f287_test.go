@@ -46,6 +46,12 @@ func TestF287_EveryReadableRouteProjectsTheAuthoredBaseImage(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			srv, st := newTopologyWorkspaceServer(t, "")
 			id := st.ws.ID.String()
+			// A FAILED build in the tracker (B4-F1): the builder's own error
+			// quotes the operator's authored coordinate verbatim in the pull
+			// line that failed, and /build shipped it as `detail` to every
+			// authenticated reader. This sweep never seeded one, so the route
+			// it already walked had a second, unwalked answer.
+			srv.builds.finish(st.ws.ID, "", "failed to pull "+r3TopologyImage+": unauthorized")
 			for _, path := range []string{
 				"/api/v1/workspaces",
 				"/api/v1/workspaces/" + id,

@@ -467,7 +467,8 @@ func TestResolveWorkspaceImage_RepoOwnDevcontainerWinsVerbatim(t *testing.T) {
 
 	t.Run("repo build wins, generator never runs", func(t *testing.T) {
 		builder := &capturingImageBuilder{}
-		cfg := baseTestConfig(h, &resolveImageStoreFake{})
+		st := &resolveImageStoreFake{}
+		cfg := baseTestConfig(h, st)
 		cfg.ImageBuilder = builder
 		srv := New(cfg)
 		ws := types.Workspace{
@@ -487,10 +488,20 @@ func TestResolveWorkspaceImage_RepoOwnDevcontainerWinsVerbatim(t *testing.T) {
 			t.Errorf("a repo-own-devcontainer build must never ALSO call the generator (that would bake claude-code into a DIFFERENT image nothing points at): got %d generator calls", len(builder.calls))
 		}
 
-		// resolveBuildView must report the repo-own-devcontainer image as done
-		// once the tracker knows about it (exactly what handleBuildWorkspace's
-		// goroutine does on success) — nothing about this lane's caveat-free
-		// build should confuse the ordinary "done" reporting.
+		// resolveBuildView must report the repo-own-devcontainer image as done —
+		// nothing about this lane's caveat-free build should confuse the
+		// ordinary "done" reporting.
+		//
+		// Both halves of what handleBuildWorkspace's success path leaves behind
+		// are replayed here, because the READER consults the row and not just
+		// the tracker (B4-F2): resolveWorkspaceImage's SetWorkspaceBuiltImage is
+		// what puts the ref and this lane's own cache key on the workspace, and
+		// the fake records rather than applies it — the same store-write replay
+		// TestResolveBuildView_AgreesWithBuiltHash already does. Asserting off
+		// the tracker alone pinned an artefact of the fake: a ref that lives
+		// only in this process's memory is exactly the stale "done" B4-F2 exists
+		// to stop.
+		ws.ImageRef, ws.BuiltProfileHash = built, st.builtHash
 		srv.builds.finish(ws.ID, built, "")
 		view := srv.resolveBuildView(ws, workspaceReadFull)
 		if view.State != "done" || view.Image != built {

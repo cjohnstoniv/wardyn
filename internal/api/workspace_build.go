@@ -78,6 +78,19 @@ func (t *buildTracker) begin(id uuid.UUID, now time.Time) bool {
 	return true
 }
 
+// drop forgets everything this process remembers about id's build. Called by
+// every invalidator of the built image (B4-F2): the tracker is a CACHE of a
+// build, so once the thing it was caching is gone — the workspace edited, the
+// row deleted — its memory is not a stale answer to be outranked later, it is
+// an answer to a question nobody can ask any more. Without it, a failed build's
+// Error also outlived the composition that produced it, so an edited workspace
+// reported `failed` with the old build's reason forever.
+func (t *buildTracker) drop(id uuid.UUID) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.by, id)
+}
+
 func (t *buildTracker) finish(id uuid.UUID, image, errMsg string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -229,6 +242,20 @@ func (s *Server) resolveBuildView(ws types.Workspace, tier workspaceReadTier) bu
 		}
 		return nil
 	}
+	// B4-F1: the builder's OWN error is the fourth Detail this function can
+	// answer, and the only one that is not fixed prose — it quotes the
+	// operator's authored base-image coordinate verbatim in the pull/FROM line
+	// that failed, which is exactly the datum redactWorkspaceForRead blanks on
+	// GET /workspaces{,/{id}} and the Log below is already blanked for. The
+	// three STATIC Details stay at every tier: a member launching against this
+	// workspace needs to know the host has no builder wired
+	// (TestF287_BuildKeepsWhatTheMemberNeeds pins that they do).
+	builderError := func(msg string) string {
+		if tier == workspaceReadFull {
+			return msg
+		}
+		return ""
+	}
 	// An explicit image CHOICE (registry/byo) boots verbatim ONLY once an image
 	// builder has wrapped it with the agent runtime — resolveWorkspaceImage's
 	// FinalizeBase call, the SAME wrap a devcontainer build needs. W7-S1-2: this
@@ -247,14 +274,24 @@ func (s *Server) resolveBuildView(ws types.Workspace, tier workspaceReadTier) bu
 	case st.Building:
 		return buildResponse{State: "building", StartedAt: &st.StartedAt, Log: buildLog(st.Log)}
 	case st.Error != "":
-		return buildResponse{State: "failed", Detail: st.Error, Log: buildLog(st.Log)}
-	case st.Image != "":
-		return buildResponse{State: "done", Image: st.Image, Log: buildLog(st.Log)}
+		return buildResponse{State: "failed", Detail: builderError(st.Error), Log: buildLog(st.Log)}
 	}
-	if prof, ok := workspaceProfile(ws); ok && ws.ImageRef != "" {
-		if ws.BuiltProfileHash == prof.CacheKey() {
-			return buildResponse{State: "done", Image: ws.ImageRef}
+	// THE ROW DECIDES WHETHER ANYTHING IS BUILT; THE TRACKER ONLY REMEMBERS HOW
+	// (B4-F2). The tracker used to answer `done` from its own st.Image before
+	// anything consulted the row, so an image invalidated underneath it — a PUT
+	// that removeStaleImage'd the ref and cleared the cache columns, a rescan
+	// that moved the profile hash — still read `done` with a ref no run would
+	// ever resolve, and POST /build short-circuited on that same view, leaving
+	// the workspace unbuildable until wardynd restarted. The row is what
+	// resolveWorkspaceImage actually consults, so it is what this reports; the
+	// tracker contributes only the LOG, and only while it is talking about the
+	// very ref the row names.
+	if key, ok := workspaceBuiltImageKey(ws); ok && ws.ImageRef != "" && ws.BuiltProfileHash == key {
+		done := buildResponse{State: "done", Image: ws.ImageRef}
+		if st.Image == ws.ImageRef {
+			done.Log = buildLog(st.Log)
 		}
+		return done
 	}
 	if s.cfg.ImageBuilder == nil {
 		if b := ws.BaseImage; b != nil && b.Kind != "recommended" && b.Image != "" {
@@ -269,6 +306,35 @@ func (s *Server) resolveBuildView(ws types.Workspace, tier workspaceReadTier) bu
 			Detail: "devcontainer builds are not enabled on this host — sessions boot the stock agent image"}
 	}
 	return buildResponse{State: "none"}
+}
+
+// workspaceBuiltImageKey is the cache key resolveWorkspaceImage
+// (workspace_run_image.go) would compare ws.BuiltProfileHash against on the
+// next launch — the one fact that decides whether the row's cached ImageRef is
+// still the image a run gets. ok=false when the workspace has no readable
+// profile, i.e. nothing that lane could have keyed on.
+//
+// It mirrors that function's lane SELECTION rather than restating its keys: a
+// repo primary source carrying its own devcontainer keys on (clone URL, ref),
+// everything else on the scanned profile's CacheKey. The byoi lane is
+// deliberately absent — resolveBuildView answers "nothing_to_build" for an
+// explicit base image before it ever reaches here when a builder is wired, and
+// reports the honest builder-less refusal when one is not (W7-S1-2), so a byoi
+// key here would only be a second, unreachable spelling of that decision.
+//
+// Reporting the repo-devcontainer lane from the ROW is also what lets that
+// lane's built image read `done` at all after a restart: its key is not the
+// profile's, so the old profile-only comparison could never match it and the
+// in-memory tracker was the only thing that ever said done for it.
+func workspaceBuiltImageKey(ws types.Workspace) (string, bool) {
+	p, ok := workspaceProfile(ws)
+	if !ok {
+		return "", false
+	}
+	if url := repoOwnDevcontainerURL(ws, p); url != "" {
+		return repoDevcontainerCacheKey(url, ws.Sources[0].Ref), true
+	}
+	return p.CacheKey(), true
 }
 
 // handleGetWorkspaceBuild reports the workspace's image-build state.

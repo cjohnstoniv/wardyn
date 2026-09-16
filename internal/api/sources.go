@@ -147,7 +147,11 @@ func validateSourceWrite(src types.Source) string {
 			return "locator (the repo slug or clone URL) is required"
 		}
 		if !repoFieldSafe(src.Locator) {
-			return "locator must not contain control characters or whitespace"
+			return fmt.Sprintf(repoField400Charset, "locator")
+		}
+		// B4-F8: the ref's half of the same rule — see validateWorkspaceSource.
+		if src.Ref != "" && !repoFieldSafe(src.Ref) {
+			return fmt.Sprintf(repoField400Charset, "ref")
 		}
 		// The write-door half of the traversal guard (V1 lens A): refused here as
 		// a 400 regardless of provider mode, so a never-clonable locator cannot be
