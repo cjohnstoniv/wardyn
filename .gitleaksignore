@@ -133,3 +133,14 @@ f8a21684af4b6b1b4921f14437913efc8ab2aaaa:scripts/test-install-sh-trust.sh:generi
 7ea6a2783ac5bd8c680382cfc056ca6949e3db4b:internal/egress/proxy/pat_broker_mask_test.go:gitlab-pat:42
 # 0.7.2 U1 moved the SSH lane (and its PEM placeholder text) from connection-cards.tsx into the providers git tab — placeholder, not a key
 63100dccc48d4aa76e026a43180f9ddf487857bf:ui/src/app/components/screens/providers/git-tab.tsx:private-key:271
+# scripts/test-up-policy.sh (lane deploy-scripts): ensure_env_file's UPGRADE-path fixture writes a
+# pre-existing .env carrying "AGE-SECRET-KEY-1PREEXISTING" so the test can assert the file is neither
+# re-copied nor re-moded. The word PREEXISTING is the whole payload — it is not bech32, not a keygen
+# output, and decodes to nothing; generic-api-key matches only its AGE-SECRET-KEY- shape.
+3fe6eb6e5c28ba456577427799dc04569f9e19ae:scripts/test-up-policy.sh:generic-api-key:145
+
+# 0.7.4 lane/v0.7.4-ui-providers-people shifted the Git tab's SSH lane again (a11y sweep), so the same
+# PEM PLACEHOLDER hint string — "-----BEGIN RSA PRIVATE KEY-----", an input's placeholder attribute,
+# no key material — lands on a new line under a new commit. Same class as the 63100dcc entry above;
+# gitleaks scans every ref in the shared repo, so a lane branch's copy needs its own fingerprint.
+7ad85946097fd6f2f1ae7683b44c38550f215c28:ui/src/app/components/screens/providers/git-tab.tsx:private-key:390
