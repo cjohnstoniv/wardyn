@@ -103,6 +103,18 @@ cmd_build() {
   # footgun when iterating on the composer). Set WARDYN_E2E_NO_UI_BUILD=1 to reuse
   # an existing dist deliberately.
   if [[ "${WARDYN_E2E_NO_UI_BUILD:-0}" == "1" && -d "${REPO_ROOT}/ui/dist" ]]; then
+    # Guard (X2-F17): WARDYN_E2E_NO_UI_BUILD=1 skips the rebuild unconditionally,
+    # so a dist built before the last ui/src edit is served silently — exactly
+    # the footgun the comment above names. Refuse when any ui/src file is newer
+    # than ui/dist itself: Vite's emptyOutDir (vite.config.ts) empties then
+    # repopulates the dist directory on every real build, so its own mtime is a
+    # build stamp.
+    # ponytail: whole-tree mtime, not a content hash — a touch with no content
+    # change false-positives; rebuild once (unset the knob) to clear it.
+    stale_src="$(find "${REPO_ROOT}/ui/src" -type f -newer "${REPO_ROOT}/ui/dist" -print -quit)"
+    if [[ -n "${stale_src}" ]]; then
+      die "ui/dist is stale: ${stale_src#${REPO_ROOT}/} was modified after the last ui/dist build, but WARDYN_E2E_NO_UI_BUILD=1 is reusing it — unset WARDYN_E2E_NO_UI_BUILD or rebuild with 'cd ui && pnpm build'"
+    fi
     log "Reusing existing ui/dist (WARDYN_E2E_NO_UI_BUILD=1)"
   else
     log "Building UI bundle (ui/dist)"
