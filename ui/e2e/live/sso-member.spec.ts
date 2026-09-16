@@ -508,7 +508,8 @@ test("member-mode: an admin drops to member mode, is refused, and comes back", a
   const EXIT = "Exit member mode";
 
   await dexSignIn(page, ADMIN_EMAIL);
-  expect((await me(page)).operator).toBe(true);
+  const adminWho = await me(page);
+  expect(adminWho.operator).toBe(true);
 
   // Entering reloads at the root (MemberModeMenuItem's default onEntered): the
   // session cookie changed and every screen's cached data was fetched as an
@@ -534,17 +535,31 @@ test("member-mode: an admin drops to member mode, is refused, and comes back", a
   // draft of this case sent a POST with `owner` in the body, which this
   // deployment would have answered 405 — a red that says nothing about the mode.
   // The value is ≥ secretmask.MinLen so a 400 can never be mistaken for the 403.
-  const probe = async () =>
-    page.evaluate(async () => {
-      const r = await fetch("/api/v1/secrets/member-mode-probe?owner=member%40wardyn.local", {
+  //
+  // ?owner= NAMES THE ADMIN'S OWN SUBJECT, not an email and not the member's.
+  // resolveSecretOwner maps the value onto a namespace and answers 422 ("names
+  // an email address that no principal on this deployment is known by … name the
+  // subject instead") for an email it cannot fold onto a known principal — the
+  // member is known by their Dex sub, so `member@wardyn.local` legitimately 422s
+  // for an ADMIN, which is product behaviour and not this case's subject.
+  // Using the caller's own sub takes owner-resolution out of the experiment
+  // entirely: the URL is identical on both probes, so the ONLY variable between
+  // the 403 and the success is the mode itself. A non-operator is refused for
+  // naming ?owner= AT ALL, whatever value it carries.
+  const probe = async (owner: string) =>
+    page.evaluate(async (o: string) => {
+      const r = await fetch(`/api/v1/secrets/member-mode-probe?owner=${encodeURIComponent(o)}`, {
         method: "PUT",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ value: "member-mode-probe-value" }),
       });
       return r.status;
-    });
-  expect(await probe(), "member mode did not bind server-side — the flag is decoration").toBe(403);
+    }, owner);
+  expect(
+    await probe(adminWho.principal ?? ""),
+    "member mode did not bind server-side — the flag is decoration",
+  ).toBe(403);
 
   // The way OUT is the banner's own button, on every screen — not the account
   // menu, which correctly stops offering the control once the mode is on
@@ -557,5 +572,8 @@ test("member-mode: an admin drops to member mode, is refused, and comes back", a
 
   // …and the authority genuinely came back: the same probe now succeeds. A mode
   // that could not be left would pass every assertion above.
-  expect(await probe(), "the admin did not get their operator authority back on exit").toBe(204);
+  expect(
+    await probe(adminWho.principal ?? ""),
+    "the admin did not get their operator authority back on exit",
+  ).toBe(204);
 });
