@@ -155,13 +155,22 @@ export async function wfetch(
   }
 
   if (res.status === 401) {
-    // F6-F8: a REAL 401 means the bearer this request just sent was
-    // rejected (expired/revoked/foreign admin token) — leaving it stored
-    // would replay the same rejected credential on every request from here
-    // to sign-in. Scoped to exactly this branch: a store-independent 5xx
-    // (adminAuth checks the bearer before the store is ever touched, so a
-    // Postgres blip never 401s a good token) never reaches here.
-    if (getToken()) setToken(null);
+    // F6-F8: a REAL 401 means the bearer THIS REQUEST sent was rejected
+    // (expired/revoked/foreign admin token) — leaving it stored would replay
+    // the same rejected credential on every request from here to sign-in.
+    // Scoped to exactly this branch: a store-independent 5xx (adminAuth
+    // checks the bearer before the store is ever touched, so a Postgres
+    // blip never 401s a good token) never reaches here.
+    //
+    // Compare against `token` (captured above, BEFORE this request went out)
+    // rather than re-reading storage here: a slow/stale request sent with NO
+    // token (or an OLD one) can resolve its 401 AFTER a newer token has
+    // already been stored — e.g. an unauthenticated mount probe still in
+    // flight when sign-in stores a fresh token a moment later. Clearing on
+    // the FRESH read would wipe that newer, perfectly valid credential out
+    // from under the request that just set it. Only a 401 whose storage
+    // STILL holds the exact token it was sent with is the real rejection.
+    if (token && getToken() === token) setToken(null);
     _unauthorized?.();
     throw new HttpError(401, "Unauthorized");
   }
