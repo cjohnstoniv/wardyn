@@ -304,12 +304,16 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
   }
 
   const bedrock = status.bedrock;
-  const bedrockConfigured = !!(bedrock && (bedrock.region || bedrock.model || bedrock.creds_present || bedrock.aws_mount || bedrock.bearer_present));
+  // RIDER B7-F6: a member's SetupStatus carries bedrock as {ready} ONLY (the
+  // region/model/lane booleans are the operator's host posture, redacted
+  // server-side) — `ready` keeps the row alive for them; it already implies
+  // region+model+a credential source, so it also settles the posture below.
+  const bedrockConfigured = !!(bedrock && (bedrock.ready || bedrock.region || bedrock.model || bedrock.creds_present || bedrock.aws_mount || bedrock.bearer_present));
   if (bedrockConfigured) {
     const lane = activeBedrockLane(status);
     const sso = status.harness?.find((h) => h.provider === "aws" && h.captured);
     let posture: Posture = { kind: "configured" };
-    if (!bedrock!.region || !bedrock!.model) posture = { kind: "region_model_unset" };
+    if (!bedrock!.ready && (!bedrock!.region || !bedrock!.model)) posture = { kind: "region_model_unset" };
     else if (lane === "sso" && sso) {
       posture =
         sso.expired || !sso.expires_at

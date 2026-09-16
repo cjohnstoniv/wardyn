@@ -128,6 +128,20 @@ describe("deriveIntegrations — AI providers", () => {
     expect(row.posture).toEqual({ kind: "region_model_unset" });
   });
 
+  it("Bedrock: a member's redacted status ({ready} only) still renders the row as configured (RIDER B7-F6)", () => {
+    const [row] = deriveIntegrations(baseStatus({ bedrock: { ready: true, creds_present: false } }), null, []).ai;
+    expect(row.id).toBe("ai:bedrock");
+    expect(row.posture).toEqual({ kind: "configured" });
+    // The member's OWN captured session still drives the SSO posture.
+    const sso = baseStatus({
+      bedrock: { ready: true, creds_present: false },
+      harness: [{ provider: "aws", captured: true, expires_at: "2026-01-01T14:20:00Z", expired: false }],
+    });
+    expect(deriveIntegrations(sso, null, []).ai[0].posture.kind).toBe("session_expires");
+    // Negative control: ready:false with region/model unset still reads region_model_unset.
+    expect(deriveIntegrations(baseStatus({ bedrock: { ready: false, creds_present: true } }), null, []).ai[0].posture).toEqual({ kind: "region_model_unset" });
+  });
+
   it("Bedrock: precedence picks bearer over static keys, and residency/secrets follow the active lane", () => {
     const status = baseStatus({ bedrock: { region: "us-east-1", model: "anthropic.claude-3", bearer_present: true, creds_present: true } });
     const [row] = deriveIntegrations(status, null, []).ai;
