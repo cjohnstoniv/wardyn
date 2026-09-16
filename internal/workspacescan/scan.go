@@ -6,10 +6,10 @@ package workspacescan
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"io/fs"
 	"maps"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -152,15 +152,24 @@ func DeriveProfile(facts ScanFacts) WorkspaceProfile {
 func CollectFacts(root string) ScanFacts {
 	var facts ScanFacts
 	st := &collectState{facts: &facts} // carries per-scan content-lane budgets
-	root = filepath.Clean(root)
+	// Canonicalise BEFORE the walk (B11b-F1). WalkDir lstats the root like any
+	// other entry, so a locator that is itself a symlink — ~/work -> /mnt/d/work,
+	// a macOS /tmp, a WSL drive shortcut — took the "never follow a symlink" arm
+	// on the FIRST callback and the whole scan ended there: zero manifests,
+	// nothing truncated, nothing unrecognized, therefore Confidence=high and
+	// NeedsReview=false. A directory full of code came back as a confident
+	// "nothing here", while dispatch went on to bind-mount the RESOLVED tree.
+	root = gitremote.ResolveRoot(root)
 	seen := map[string]struct{}{} // dedup guard for ManifestsFound
 
 	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d == nil {
 			return nil // skip unreadable entries; keep walking siblings
 		}
-		// Never descend or follow symlinks.
-		if d.Type()&fs.ModeSymlink != 0 {
+		// Never descend or follow symlinks — except the root itself, which
+		// ResolveRoot has already canonicalised (this arm is what still holds
+		// when that resolution failed).
+		if p != root && d.Type()&fs.ModeSymlink != 0 {
 			return nil
 		}
 		if d.IsDir() {
@@ -306,7 +315,7 @@ func isBuildInputFile(rel, name string) bool {
 
 // hashFileContent streams a hex sha256 of p's content (bounded), "" on error.
 func hashFileContent(p string) string {
-	f, err := os.Open(p)
+	f, err := gitremote.OpenRegular(p)
 	if err != nil {
 		return ""
 	}
@@ -335,14 +344,24 @@ func contextHashOf(m map[string]string) string {
 }
 
 // readCapped reads at most maxFileBytes from p, failing safe to nil.
+//
+// gitremote.OpenRegular, not os.Open (B11b-F1 cross-lane): this walk runs on an
+// HTTP handler goroutine with no ctx, over a tree whose contents the scanned
+// party controls, so a FIFO named after any file the scan reads blocked open(2)
+// forever and wedged the request. io.ReadFull, not a single Read: Read is
+// documented to return fewer bytes than the buffer holds, which truncated the
+// sample at an arbitrary boundary.
 func readCapped(p string) []byte {
-	f, err := os.Open(p)
+	f, err := gitremote.OpenRegular(p)
 	if err != nil {
 		return nil
 	}
 	defer f.Close()
 	buf := make([]byte, maxFileBytes)
-	n, _ := f.Read(buf)
+	n, rerr := io.ReadFull(io.LimitReader(f, maxFileBytes), buf)
+	if rerr != nil && !errors.Is(rerr, io.EOF) && !errors.Is(rerr, io.ErrUnexpectedEOF) {
+		return nil
+	}
 	if n > maxSampleBytes {
 		n = maxSampleBytes // only a short prefix is ever kept as a "sample"
 	}

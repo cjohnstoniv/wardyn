@@ -45,14 +45,20 @@ func DetectGitHubRepos(root string) (github []string, otherHosts []string) {
 	otherSet := map[string]struct{}{}
 	gitDirs := 0
 
-	root = filepath.Clean(root)
+	root = ResolveRoot(root)
 	_ = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d == nil {
 			return nil // skip unreadable entries; keep walking siblings
 		}
 		// Never descend or follow symlinks (a symlinked dir is reported as a
 		// non-dir by WalkDir's lstat, so this also prevents escaping `root`).
-		if d.Type()&fs.ModeSymlink != 0 {
+		// The ROOT is exempt: WalkDir lstats it like every other entry, so a
+		// root that is ITSELF a link (~/work -> /mnt/d/work) ended the walk on
+		// its very first callback and detection reported zero repos — which
+		// the caller cannot tell from a tree with no git remotes, and which
+		// costs the run its GitHub grant (B11b-F1). ResolveRoot has already
+		// canonicalised it; this arm is what still holds when that failed.
+		if p != root && d.Type()&fs.ModeSymlink != 0 {
 			return nil
 		}
 		if !d.IsDir() {
@@ -88,6 +94,26 @@ func DetectGitHubRepos(root string) (github []string, otherHosts []string) {
 	})
 
 	return ToSorted(ghSet), ToSorted(otherSet)
+}
+
+// ResolveRoot canonicalises a scan root before a walk: cleaned, and with every
+// symlink in it resolved. It is the ONE line that keeps a walk's own view of a
+// workspace and the sandbox's mount of it talking about the same directory —
+// dispatch bind-mounts the RESOLVED tree, so a scanner that stops at the link
+// describes a tree the run never sees.
+//
+// Resolution failure (a broken link, a directory the daemon cannot traverse)
+// falls back to the cleaned path: the walk then finds nothing, which is the
+// fail-safe answer both callers already treat as "no evidence", never a claim
+// about a tree nobody read. Shared with internal/workspacescan, whose
+// CollectFacts had the identical bug on the identical locator.
+func ResolveRoot(root string) string {
+	clean := filepath.Clean(root)
+	resolved, err := filepath.EvalSymlinks(clean)
+	if err != nil {
+		return clean
+	}
+	return resolved
 }
 
 // depthUnder returns how many path segments p is below root.
@@ -156,16 +182,15 @@ func within(root, p string) bool {
 //   - io.ReadFull over a LimitReader. A single Read is documented to return
 //     FEWER bytes than the buffer holds, which silently truncated a large
 //     config mid-line and dropped every remote after the break.
+//
+// The first two properties are OpenRegular's, which internal/workspacescan
+// shares — its own walk had four bare os.Open calls on the same handler path.
 func readCapped(p string) []byte {
-	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	f, err := OpenRegular(p)
 	if err != nil {
 		return nil
 	}
 	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil || !fi.Mode().IsRegular() {
-		return nil // FIFO, device, socket, directory: not a git config
-	}
 	buf := make([]byte, maxConfigBytes)
 	n, err := io.ReadFull(io.LimitReader(f, maxConfigBytes), buf)
 	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
@@ -173,6 +198,44 @@ func readCapped(p string) []byte {
 	}
 	return buf[:n]
 }
+
+// OpenRegular opens a file for reading that is PROVABLY an ordinary file and
+// is never reached through a symlink. It is the shared door for every read a
+// workspace walk performs, because every such walk runs on an HTTP handler
+// goroutine with no ctx and over a tree the scanned party controls.
+//
+// O_NOFOLLOW refuses a symlinked final component (the walk skips links
+// everywhere else, so this is the one remaining place a tree could point the
+// scanner at a file outside itself). O_NONBLOCK makes open(2) RETURN on a FIFO
+// instead of waiting forever for a writer — one such file wedged the request
+// permanently — and the fstat is what then decides nothing is read from it.
+// That order is also race-free: the flags pick what gets opened and the fstat
+// judges the thing actually opened, so there is no path-based window between
+// the two.
+//
+// The caller closes. The caller also bounds what it reads: this says WHAT may
+// be opened, never HOW MUCH comes back.
+func OpenRegular(p string) (*os.File, error) {
+	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		f.Close()
+		return nil, errNotRegular
+	}
+	return f, nil
+}
+
+// errNotRegular is what OpenRegular returns for a FIFO, device, socket or
+// directory. Callers here all fail safe on ANY error, so it is deliberately
+// not distinguishable from an unreadable file: neither one is evidence.
+var errNotRegular = errors.New("gitremote: not a regular file")
 
 // scanRemotes parses an INI-ish git config / .gitmodules body, collecting the
 // `url = ...` value of every [remote "..."] and [submodule "..."] section.

@@ -31,7 +31,6 @@ import (
 	"encoding/json"
 	"io"
 	"maps"
-	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -474,7 +473,7 @@ func isDockerfile(name string) bool {
 // and the package's 1 MiB read cap. Errors fail safe to "no lines". fn
 // returns false to stop early (per-file key cap hit).
 func eachLine(path string, facts *ScanFacts, fn func(line string) bool) {
-	f, err := os.Open(path)
+	f, err := gitremote.OpenRegular(path)
 	if err != nil {
 		return
 	}
@@ -862,7 +861,7 @@ var makeTargetRE = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9_-]*)\s*:`)
 // a package.json declares — never the script bodies. Parse failure is safe (no
 // keys recorded).
 func detectPackageJSON(path string, facts *ScanFacts) {
-	f, err := os.Open(path)
+	f, err := gitremote.OpenRegular(path)
 	if err != nil {
 		return
 	}
