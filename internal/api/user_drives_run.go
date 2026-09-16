@@ -163,7 +163,7 @@ func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 	// REFUSED_BACKEND family and never the door's 403 with its authz.denied row.
 	provider, perr := s.userDriveProvider(r.Context())
 	if perr != nil {
-		writeError(w, http.StatusInternalServerError, "get site config: "+perr.Error())
+		writeServerError(w, r, "get site config", perr)
 		return nil, false
 	}
 	if provider.Disabled {

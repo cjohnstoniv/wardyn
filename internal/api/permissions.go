@@ -91,7 +91,7 @@ func (s *Server) markInertGrants(r *http.Request, grants []types.CapabilityGrant
 func (s *Server) handleGetPermissions(w http.ResponseWriter, r *http.Request) {
 	grants, err := s.cfg.Store.ListCapabilityGrants(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list capability grants: "+err.Error())
+		writeServerError(w, r, "list capability grants", err)
 		return
 	}
 	enf, err := s.cfg.Store.GetCapabilityEnforcement(r.Context())
@@ -449,7 +449,7 @@ func (s *Server) handleMeCapabilities(w http.ResponseWriter, r *http.Request) {
 	users, groups, stale := capabilitySubjects(r.Context())
 	grants, err := s.cfg.Store.ListCapabilityGrantsFor(r.Context(), users, groups)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list capability grants: "+err.Error())
+		writeServerError(w, r, "list capability grants", err)
 		return
 	}
 	enf, err := s.cfg.Store.GetCapabilityEnforcement(r.Context())

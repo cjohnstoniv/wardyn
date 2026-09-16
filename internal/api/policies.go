@@ -82,7 +82,7 @@ func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get policy: "+err.Error())
+		writeServerError(w, r, "get policy", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, redactPolicyForRead(p, s.isSecurityOperator(r.Context())))

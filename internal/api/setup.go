@@ -515,7 +515,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// secrets: names only (reserved excluded); github_app iff both App secrets present.
 	secretNames, present, sec, err := s.setupSecretsSnapshot(ctx)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list secrets: "+err.Error())
+		writeServerError(w, r, "list secrets", err)
 		return
 	}
 

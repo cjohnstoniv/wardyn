@@ -177,7 +177,7 @@ func writeDriveError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnprocessableEntity,
 			strings.TrimPrefix(err.Error(), errDriveUnmountable.Error()+": "))
 	default:
-		writeError(w, http.StatusInternalServerError, "resolve user drive: "+err.Error())
+		writeError(w, http.StatusInternalServerError, loggedMsg(context.Background(), "resolve user drive", err))
 	}
 }
 

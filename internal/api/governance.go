@@ -656,7 +656,7 @@ func writeCeilingError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusForbidden, groupsSnapshotStaleMsg)
 		return
 	}
-	writeError(w, http.StatusInternalServerError, "resolve governance ceiling: "+err.Error())
+	writeError(w, http.StatusInternalServerError, loggedMsg(context.Background(), "resolve governance ceiling", err))
 }
 
 // writeCeilingErrorPrefixed is writeCeilingError for a seam that has its own
@@ -679,7 +679,7 @@ func writeCeilingErrorPrefixed(w http.ResponseWriter, prefix string, err error) 
 		writeError(w, http.StatusForbidden, groupsSnapshotStaleMsg)
 		return
 	}
-	writeError(w, http.StatusInternalServerError, prefix+err.Error())
+	writeError(w, http.StatusInternalServerError, loggedMsg(context.Background(), strings.TrimRight(prefix, ": "), err))
 }
 
 // ceilingErrorStatus is writeCeilingError's status half, for the two seams that
