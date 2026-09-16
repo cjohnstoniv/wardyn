@@ -176,6 +176,32 @@ describe("Focus mode — the edge dock", () => {
     await user.keyboard("{Meta>}\\{/Meta}");
     expect(screen.getByRole("heading", { name: "Egress" })).toBeInTheDocument();
   });
+
+  // F1-F6: the dock used to store the raw selection with no clamp — when the
+  // open widget stops being dockable (ssh, once the run it belongs to
+  // finishes), its rail button vanished but the panel kept the glass panel
+  // open over a widget that can no longer place a tile (ConnectSSHCard
+  // returns null).
+  it("F1-F6: clamps a stale dock selection once its widget stops being dockable", async () => {
+    const user = userEvent.setup();
+    const running = { ...RUN, state: "RUNNING" } as WidgetContext["run"];
+    const { rerender } = render(
+      <FocusMode ctx={ctx({ principal: "me", operator: true, run: running })} onExit={() => {}} />,
+    );
+
+    await user.click(screen.getByRole("button", { name: RUN_COCKPIT.showWidget("Attach from your terminal") }));
+    expect(screen.getByRole("region", { name: "Attach from your terminal" })).toBeInTheDocument();
+
+    // The run finishes — ssh's own gate (state === "RUNNING") drops it.
+    const finished = { ...RUN, state: "COMPLETED" } as WidgetContext["run"];
+    rerender(
+      <FocusMode
+        ctx={ctx({ principal: "me", operator: true, finished: true, run: finished })}
+        onExit={() => {}}
+      />,
+    );
+    expect(screen.queryByRole("region", { name: "Attach from your terminal" })).not.toBeInTheDocument();
+  });
 });
 
 describe("Focus mode — the bottom strip states the facts", () => {

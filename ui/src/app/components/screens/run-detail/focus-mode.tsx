@@ -50,7 +50,12 @@ export function FocusMode({ ctx, onExit }: { ctx: WidgetContext; onExit: () => v
   );
   const first = dockable[0] ?? null;
   // ONE piece of state, not an open flag plus a selection: null IS closed.
-  const [dock, setDock] = React.useState<WidgetId | null>(first);
+  const [dockSelection, setDockSelection] = React.useState<WidgetId | null>(first);
+  // F1-F6: a widget can stop being dockable out from under an open selection
+  // (ssh, once the run it belongs to finishes) — clamp rather than let the
+  // rail's glass panel keep rendering a widget that can no longer place a
+  // tile, the same clamp the canvas's own catalog already applies (R4-F020).
+  const dock = dockSelection && dockable.includes(dockSelection) ? dockSelection : null;
 
   React.useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -61,6 +66,15 @@ export function FocusMode({ ctx, onExit }: { ctx: WidgetContext; onExit: () => v
       // says so). In NATIVE fullscreen the browser exits first and this never
       // fires, so the two do not fight.
       if (e.key === "Escape" && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+        // F1-F3 (Playwright repro confirmed the bug live — verdict N was
+        // wrong to doubt it): a Radix dialog/alertdialog (the Deny confirm,
+        // the take-over confirm) registers its OWN Escape-dismiss as a
+        // capture-phase document listener too — stopPropagation on either
+        // side never suppresses a SIBLING listener on the same node, so both
+        // fired: the dialog closed AND focus mode exited, remounting the
+        // terminal pane (dropping a live attach socket). Yield when a modal
+        // layer is open; its own handler still closes it.
+        if (document.querySelector('[data-radix-dialog-content],[role="alertdialog"]')) return;
         e.preventDefault();
         e.stopPropagation();
         onExit();
@@ -72,12 +86,12 @@ export function FocusMode({ ctx, onExit }: { ctx: WidgetContext; onExit: () => v
       if ((e.metaKey || e.ctrlKey) && e.key === "\\") {
         e.preventDefault();
         e.stopPropagation();
-        setDock((cur) => (cur ? null : first));
+        setDockSelection(dock ? null : first);
       }
     };
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, [onExit, first]);
+  }, [onExit, first, dock]);
 
   return createPortal(
     // z-40: above the cockpit's own toolbars (z-30) and the shell, but BELOW
@@ -108,7 +122,7 @@ export function FocusMode({ ctx, onExit }: { ctx: WidgetContext; onExit: () => v
           <span className="font-mono text-xs text-muted-foreground">{ctx.run.id.slice(0, 8)}</span>
         </div>
 
-        <Dock ctx={ctx} ids={dockable} open={dock} onOpen={setDock} />
+        <Dock ctx={ctx} ids={dockable} open={dock} onOpen={setDockSelection} />
       </div>
 
       <Strip ctx={ctx} />
