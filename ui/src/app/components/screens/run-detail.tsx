@@ -84,6 +84,7 @@ import { SummaryHeader } from "./run-detail-summary-header";
 import { RunDetailCommandBar } from "./run-detail-command-bar";
 import { RunCanvas } from "./run-detail/canvas";
 import { RunFailureBlock } from "./run-detail/failure-block";
+import { LoginSandboxNote } from "./run-detail/login-sandbox-note";
 import { cloneFromAudit, CLONE_UNREADABLE } from "./new-run/wizard-types";
 import type { WidgetContext } from "./run-detail/widget-registry";
 
@@ -533,6 +534,7 @@ function Cockpit({
           the clone door off this block onto the run header (a strict
           superset of the states this block explains), so it takes no onClone
           any more. */}
+      <LoginSandboxNote run={run} />
       <RunFailureBlock run={run} audit={audit} onGoAudit={onGoAudit} />
       <TerminalPane
         run={run}

@@ -35,6 +35,12 @@ if [ -n "${WARDYN_REPOS:-}${WARDYN_REPO_URL:-}" ] || [ -f "$HOME/.wardyn/workdir
   unset _wd
 fi
 
+# Per-image attach hint, when the image ships one. An image whose box is not a
+# coding agent has something to say that no generic shell greeting can (the
+# aws-sso login image ships the chained login command here); every other image
+# has no such file and this line is a no-op.
+[ -r /usr/local/lib/wardyn-attach-hint.sh ] && . /usr/local/lib/wardyn-attach-hint.sh
+
 # Egress-refusal hint: a blocked request returns 403 with an X-Wardyn-Egress
 # response header — "approval-pending" means retry once a human approves,
 # "denied" means permanently blocked. `curl -sD- URL` shows it.

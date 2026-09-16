@@ -263,6 +263,10 @@ COPY --from=builder /out/wardyn-aws-sso    /usr/local/bin/wardyn-aws-sso
 # agent-run-lib.sh: functions shared with every other agent image's agent-run.
 COPY deploy/images/common/agent-run-lib.sh /usr/local/bin/agent-run-lib.sh
 COPY deploy/images/aws-sso/agent-run /usr/local/bin/agent-run
+# The chained login command, defined once: agent-run sources it for the variable
+# and the interactive attach shell sources it for the hint it prints (the common
+# attach-bashrc.sh picks up this path when an image ships it).
+COPY deploy/images/aws-sso/login-hint.sh /usr/local/lib/wardyn-attach-hint.sh
 # Interactive attach shell sources this: waits for workspace prep to finish
 # (mirrors claude-code/codex-cli) so `wardyn attach` never lands mid-setup.
 COPY --chown=agent:agent deploy/images/common/attach-bashrc.sh /home/agent/.bashrc

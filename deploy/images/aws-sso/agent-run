@@ -29,6 +29,11 @@ set -euo pipefail
 # resolve_workdir) — identical across every agent image's agent-run.
 source /usr/local/bin/agent-run-lib.sh
 
+# WARDYN_AWS_SSO_LOGIN_COMMAND — the chained login+upload command, defined once
+# (and printed by the attach shell that sources the same file). Sourcing it here
+# is silent: its hint is guarded on an interactive shell, and this is not one.
+source /usr/local/lib/wardyn-attach-hint.sh
+
 # ── selftest ─────────────────────────────────────────────────────────────────
 if [[ "${1:-}" == "--selftest" ]]; then
     echo "=== wardyn agent-run selftest (aws-sso) ==="
@@ -77,8 +82,8 @@ if [[ "${1:-}" == "--idle" ]]; then
     echo "agent-run: idle mode — workspace prepared ($workdir), holding open for attach" >&2
     # BOTH commands: the login alone leaves the token in ~/.aws/sso/cache, where it
     # dies with the container. wardyn-aws-sso uploads it (the setup UI types this
-    # same chained form into the attach PTY).
-    echo "agent-run: run 'aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso' in the attached shell" >&2
+    # same chained form into the attach PTY, and the attach shell prints it).
+    echo "agent-run: run '${WARDYN_AWS_SSO_LOGIN_COMMAND}' in the attached shell" >&2
     exec sleep infinity
 fi
 
