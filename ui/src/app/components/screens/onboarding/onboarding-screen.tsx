@@ -237,7 +237,7 @@ export function OnboardingScreen({
       <p className="mt-6 max-w-[560px] text-xs text-muted-foreground">
         A quick guided setup — the barrier is the only requirement; a model or
         agent is optional. You can revisit anytime under “Getting started” in
-        the sidebar.
+        the account menu.
       </p>
 
       <EpisodeList mode={status && deploymentMode(status) === "multi-user" ? "multi" : "single"} />

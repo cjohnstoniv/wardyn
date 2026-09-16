@@ -166,4 +166,13 @@ describe("GettingStarted (member direct navigation — B4 HIGH-4)", () => {
     expect(screen.getByText("Sandboxed. Governed. Self-hosted. Free.")).toBeInTheDocument();
     await screen.findByText(/Barrier:/);
   });
+
+  // X3-F11: "Getting started" lives in the account menu (app-shell.tsx), not
+  // the sidebar — NAV_ITEMS has nine entries, none of them this.
+  it('X3-F11: the "revisit anytime" note names the account menu, not the sidebar', async () => {
+    render(<GettingStarted onDone={() => {}} />);
+    await screen.findByText(/Barrier:/);
+    expect(screen.getByText(/in the account menu/i)).toBeInTheDocument();
+    expect(screen.queryByText(/in the sidebar/i)).not.toBeInTheDocument();
+  });
 });
