@@ -65,4 +65,10 @@ finish_unhealthy_launch "${pidfile}" "${dead_wpid}" "${logfile}" >/dev/null
 grep -q 'seq 1 330' "${SETUP_SH}" \
   || fail "launch_wardynd's wait loop is no longer 'seq 1 330' (330s = the fixed 30s connect + the default 300s WARDYN_MIGRATE_TIMEOUT) — a shorter wait hits finish_unhealthy_launch while wardynd is still working, not stuck"
 
+# 4) R-10: the 330s wait (up from a bare 45s) needs a progress line, or the
+# operator watches total silence for up to 5.5 minutes with no signal
+# anything is happening.
+grep -q 'still waiting on.*healthz' "${SETUP_SH}" \
+  || fail "launch_wardynd's wait loop no longer prints a 'still waiting' progress line — a 330s wait with zero output looks hung, not busy (R-10)"
+
 echo "test-setup-launch: self-test PASS"

@@ -570,11 +570,17 @@ launch_wardynd() {
   WPID=$!
   echo "$WPID" > "$PIDFILE"
   healthy=false
-  for _ in $(seq 1 330); do
+  for _lw_i in $(seq 1 330); do
     if [ "$(curl -s -m2 -o /dev/null -w '%{http_code}' "$URL/healthz" 2>/dev/null)" = "200" ]; then healthy=true; break; fi
     kill -0 "$WPID" 2>/dev/null || break
+    # R-10: the old 45s wait was short enough that the operator never needed a
+    # progress line — it was over before anyone would think to check. At 330s,
+    # total silence past the point a plain (non-migrating) boot would have
+    # answered reads as "hung", not "still starting". One line, once.
+    [ "${_lw_i}" = 45 ] && log "still waiting on wardynd's /healthz — a first migration can take up to WARDYN_MIGRATE_TIMEOUT (5m); watch $LOGFILE"
     sleep 1
   done
+  unset _lw_i
 }
 
 ensure_postgres
