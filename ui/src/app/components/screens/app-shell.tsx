@@ -837,8 +837,13 @@ export function TopBar({
                 Getting Started (member-getting-started.tsx) — a member never
                 reaches the admin welcome hero or its step query at all, and
                 its own episode catalog is a single flat "Watch" list at the
-                bottom of the page, not a step deep link. */}
-            {meta.role !== "member" && (
+                bottom of the page, not a step deep link.
+                W6-3: `!== "admin"`, never `=== "member"`. Only the SUPER admin's
+                SetupScreen honours ?step — a security admin's /setup/status is
+                redacted on the same !isOperator predicate (internal/api/setup.go)
+                and App.tsx hands them the same Getting Started, so the deep link
+                is exactly as dead for them. */}
+            {meta.role === "admin" && (
               <DropdownMenuItem asChild>
                 <Link to="/setup?step=sealed-box">
                   <FlaskConical className="size-4" /> Demos

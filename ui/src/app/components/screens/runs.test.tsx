@@ -713,6 +713,25 @@ describe("RunsScreen — the member's empty board", () => {
     expect(screen.getByRole("link", { name: /getting started/i })).toHaveAttribute("href", "/setup");
   });
 
+  // W6-3: the predicate is `role !== "admin"`, not `role === "member"`.
+  // /setup/status is redacted on !isOperator (internal/api/setup.go), and
+  // isOperator is SUPER-admin only — so a security admin's status arrives with
+  // checks [], secrets.present [] and the driver withheld, exactly like a
+  // member's. Through `role === "member"` this tier fell into the operator
+  // funnel and read every withheld field as a fact: "Needs the <name> secret"
+  // for secrets that may well exist, over two /setup deep links that land on a
+  // Getting Started which ignores ?step. Every sibling in this cluster
+  // (setupGateActive, GettingStarted) already uses the three-valued form.
+  it("a security admin with no runs gets the member empty state too — their /setup/status is redacted the same way", async () => {
+    listRunsMock.mockResolvedValue([]);
+    renderScreen("security_admin");
+
+    expect(await screen.findByText("Runs you launch appear here")).toBeInTheDocument();
+    expect(screen.queryByText("No runs yet")).not.toBeInTheDocument();
+    expect(screen.queryByText(/available on this host/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/needs the/i)).not.toBeInTheDocument();
+  });
+
   it("negative control: an admin's empty board is the unchanged first-run funnel", async () => {
     listRunsMock.mockResolvedValue([]);
     renderScreen("admin");

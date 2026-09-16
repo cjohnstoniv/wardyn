@@ -578,6 +578,20 @@ describe("TopBar — account-menu Demos entry (Phase 5)", () => {
     expect(within(menu).queryByText("Demos")).toBeNull();
   });
 
+  // W6-3: the item deep-links to /setup?step=sealed-box, which only the SUPER
+  // admin's SetupScreen honours. A security admin's /setup/status is redacted
+  // on the same !isOperator predicate a member's is (internal/api/setup.go), so
+  // they land where a member lands — a Getting Started that ignores ?step — and
+  // the item is a dead invitation for them too. `role !== "admin"`, matching
+  // setupGateActive and GettingStarted.
+  it("security admin: no Demos item — the deep link is as dead for them as for a member", async () => {
+    const user = userEvent.setup();
+    renderTopBar("security_admin");
+    await user.click(screen.getAllByRole("button").at(-1)!);
+    const menu = screen.getByRole("menu");
+    expect(within(menu).queryByText("Demos")).toBeNull();
+  });
+
   it("admin: Demos item present", async () => {
     const user = userEvent.setup();
     renderTopBar("admin");
