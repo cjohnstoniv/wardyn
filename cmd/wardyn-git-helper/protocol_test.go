@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -46,8 +47,11 @@ func TestGetPlainHTTPEmitsNothing(t *testing.T) {
 	if minted.Load() {
 		t.Fatal("plain-http credential request must not even mint — the credential is never created, not merely withheld")
 	}
-	if !strings.Contains(stderr.String(), "https only") {
-		t.Fatalf("stderr must say why nothing was emitted, got: %q", stderr.String())
+	// Asserted THROUGH the DRAFT constant, never against a literal: the wording
+	// is still pending canon, and a test pinning a copy of it would have to be
+	// edited by the canon pass instead of surviving it.
+	if want := fmt.Sprintf(helperRefusePlaintext, "http"); stderr.String() != want {
+		t.Fatalf("stderr = %q, want %q", stderr.String(), want)
 	}
 }
 
