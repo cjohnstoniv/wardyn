@@ -74,8 +74,9 @@ func (r *lockTimeoutRecorder) count() int {
 // on the same head line, then the first line to land behind it proved "the store
 // is up", and a perfectly replayable event was moved to <spool>.quarantine —
 // after which the spool gauge reads 0, fully recovered, over a permanently
-// incomplete trail. docs/OPERATIONS.md:210 says an outage must quarantine
-// nothing, and a chain-lock outage is an outage.
+// incomplete trail. docs/OPERATIONS.md's "The audit log can't quietly rot"
+// section says an outage must quarantine nothing, and a chain-lock outage is
+// an outage.
 func TestDrainChainLockTimeoutIsNotAPoisonStrike(t *testing.T) {
 	for _, tc := range []struct {
 		name, code string

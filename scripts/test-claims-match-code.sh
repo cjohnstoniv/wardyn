@@ -509,14 +509,16 @@ pass "C8h every resource internal/runner/k8s lists has a 'list' verb on the char
 # X1a-F1 / X1c-F1 (v0.7.4) — three front-door "helm install wardyn" recipes
 # rendered non-zero: values.yaml ships a non-empty postgres.dsn.secretRef.name
 # default, so templates/secret.yaml `fail`s any install that doesn't wire an
-# age identity; and a k8s.enabled=true install with no runs-namespace choice
-# `fail`s at templates/rbac.yaml. Nothing caught either, because a fenced
-# shell recipe is prose to every other guard here. Extracts every fenced
-# ```sh/```bash block across the front-door docs that pastes a
-# `helm install`/`helm upgrade --install wardyn` command and checks it against
-# the two render-time refusals. Ceiling: text-only (does not actually `helm
-# template` the block) — an elided `...` placeholder snippet is excluded, not
-# validated.
+# age identity; a k8s.enabled=true install with no runs-namespace choice
+# `fail`s at templates/rbac.yaml; and a k8s.enabled=true install with no
+# CC2/CC3 RuntimeClass pin and no default-policy override `fail`s at
+# templates/deployment.yaml (deploy-scripts' B12b-F7 guard — D-1, v0.7.4
+# review). Nothing caught any of this, because a fenced shell recipe is prose
+# to every other guard here. Extracts every fenced ```sh/```bash block across
+# the front-door docs that pastes a `helm install`/`helm upgrade --install
+# wardyn` command and checks it against all three render-time refusals.
+# Ceiling: text-only (does not actually `helm template` the block) — an
+# elided `...` placeholder snippet is excluded, not validated.
 helm_recipe_docs="README.md docs/VERIFY.md .claude/skills/wardyn-k8s-setup/SKILL.md deploy/helm/wardyn/README.md"
 n_blocks=0
 for relpath in ${helm_recipe_docs}; do
@@ -541,11 +543,19 @@ for relpath in ${helm_recipe_docs}; do
     if grep -qE 'k8s\.enabled=true' "${b}"; then
       grep -qE 'k8s\.(runsNamespace|allowRunsInReleaseNamespace)' "${b}" \
         || fail "${relpath} has a fenced k8s.enabled=true 'helm install wardyn' block with no runs-namespace choice (k8s.runsNamespace or k8s.allowRunsInReleaseNamespace) — templates/rbac.yaml fails this render (C9): $(head -1 "${b}")"
+      # D-1 (v0.7.4 review): deploy-scripts' B12b-F7 guard also fails a
+      # k8s.enabled=true render with no CC2/CC3 RuntimeClass pinned AND no
+      # default-policy override (templates/deployment.yaml) — the substrate
+      # then advertises only [CC1] while the image's baked-in default policy
+      # floors at CC2. C9 checked the runs-namespace refusal above but not
+      # this one, so a block failing only this arm still passed.
+      grep -qE 'k8s\.runtimeClasses\.CC[23]|defaultPolicy|WARDYN_DEFAULT_POLICY' "${b}" \
+        || fail "${relpath} has a fenced k8s.enabled=true 'helm install wardyn' block with no CC2/CC3 RuntimeClass pin and no defaultPolicy/WARDYN_DEFAULT_POLICY override — templates/deployment.yaml fails this render (C9): $(head -1 "${b}")"
     fi
   done
 done
 rm -f "${WORK}"/c9-block-*
 [ "${n_blocks}" -ge 3 ] || fail "found only ${n_blocks} fenced 'helm install wardyn' blocks across the front-door docs — this guard would check nothing (C9)"
-pass "C9 every fenced 'helm install wardyn' block carries an age-key source and, with k8s.enabled=true, a runs-namespace choice"
+pass "C9 every fenced 'helm install wardyn' block carries an age-key source and, with k8s.enabled=true, a runs-namespace choice and a CC2/CC3 pin or default-policy override"
 
 echo "test-claims-match-code: self-test PASS"

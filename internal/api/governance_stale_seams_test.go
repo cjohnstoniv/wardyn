@@ -23,8 +23,9 @@ import (
 // TestStaleSnapshotIsDecidedOnlyWhereItIsRecorded is F227's cross-cutting half.
 //
 // F227 is that a member-reachable groups_snapshot_stale 403 left no
-// authz.denied row, against docs/OPERATIONS.md:1508's categorical claim that
-// every member denial which is not a plain foreign-resource 404 is audited. The
+// authz.denied row, against docs/OPERATIONS.md's "Every denial that isn't a
+// 404" section's categorical claim that every member denial which is not a
+// plain foreign-resource 404 is audited. The
 // fix records at the site that DECIDES the refusal rather than at the six-odd
 // seams that write it, and the emit inside effectiveCeiling in governance.go argues that placement at length:
 // the three write helpers (writeCeilingError, writeCeilingErrorPrefixed,
@@ -61,8 +62,8 @@ func TestStaleSnapshotIsDecidedOnlyWhereItIsRecorded(t *testing.T) {
 			t.Errorf("%s raises errGroupsSnapshotStale, which is a member-reachable 403, but it is not one of "+
 				"the deciding sites that record it. Either resolve through effectiveCeiling / resolveUserDrive "+
 				"so an existing site decides, or emit authz.denied here — a refusal with no row is the whole "+
-				"of F227, and docs/OPERATIONS.md:1508 says every member denial that is not a foreign-resource "+
-				"404 is audited", name)
+				"of F227, and docs/OPERATIONS.md's \"Every denial that isn't a 404\" section says every member "+
+				"denial that is not a foreign-resource 404 is audited", name)
 		}
 	}
 	for _, name := range slices.Sorted(maps.Keys(want)) {

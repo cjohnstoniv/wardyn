@@ -240,7 +240,13 @@ error if there is none. A **retake wants a fresh run**: the audit trail is
 append-only, so the previous take's rows are still on the old one and beat 5
 would film them.
 
-### Re-take at the release cut
+### Re-take at the 0.6 release cut (historical)
+
+This table is the 0.6 cut's ledger, kept as a record of what that cut owed —
+its episode numbering, its "twelve episodes plus `V13`" framing and its
+per-episode re-take calls are all as of 0.6 and are **not** current. The
+current catalog is the 23 episodes named above (`ui/src/app/lib/demo-videos.ts`);
+a later cut scopes its own re-take from that manifest, not from this table.
 
 Recording is a **release-cut act**, not a branch act — nothing here is re-shot
 on `prep/v0.6`. What 0.6 changed about what the series *claims*, so the cut

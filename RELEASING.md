@@ -106,6 +106,12 @@ before step 3.
    "Shipped as `vX.Y.Z`", pointing at the CHANGELOG's now-dated entry instead
    of `[Unreleased]`.
 
+   **Also regenerate `docs/TEST-GAPS.md`: `make test-gaps`** (needs the union
+   coverage profile `make ci`/`cover-check` already produced this run) —
+   X1c-F13/D-7 found the generator gained a Kubernetes-gated bucket with
+   nothing that regenerates the checked-in, `DO NOT EDIT BY HAND` doc itself;
+   `make test-gaps` is a standalone target, not in `make ci`.
+
    **`docs/VERIFY.md` is deliberately NOT on that list.** Every command in it is
    parameterised on `$WARDYN_VERSION`, which its own step 0 resolves, so it needs
    no bump — and hard-coding this release's number into one of those commands is

@@ -22,9 +22,10 @@ package db
 // The probe migrates into its OWN schema, so nothing here touches the lane's
 // audit_events or its api_tokens.
 //
-// docs/OPERATIONS.md:164-175 is the promise under test: an operator's hardening
-// survives an upgrade "exactly as it is", and if it cannot be re-applied the boot
-// log says so at ERROR and names the statement to run.
+// docs/OPERATIONS.md's "The audit log can't quietly rot" is the promise under
+// test: an operator's hardening survives an upgrade "exactly as it is", and if
+// it cannot be re-applied the boot log says so at ERROR and names the
+// statement to run.
 
 import (
 	"context"

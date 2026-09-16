@@ -49,8 +49,9 @@ func TestVersionMatchesChangelog(t *testing.T) {
 //
 // Deliberately NOT here: README.md's Status paragraph and the demo-asset links
 // it pins. The Status line is prose about what a release ADDED, so bumping the
-// number alone would make it wronger, not righter; the asset links pin an older
-// tag on purpose ("Links pin v0.6.0"). Neither is a mechanical restatement of
+// number alone would make it wronger, not righter; each asset link pins the
+// release that first shipped (or last re-recorded) its episode on purpose, not
+// necessarily the current one. Neither is a mechanical restatement of
 // internal/version, which is what this guard is for.
 func TestShippedVersionStringsAgree(t *testing.T) {
 	for _, tc := range []struct {

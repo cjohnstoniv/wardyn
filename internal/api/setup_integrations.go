@@ -518,7 +518,8 @@ type SetupHarnessTool struct {
 // can say "not enabled by your admin" (setup_test.go's
 // len(Harnesses) == len(harnessCatalog) still holds when the roster names
 // only catalog ids), and — B7-F3 — a roster row naming a WARDYN_AGENT_IMAGES
-// id the catalog does NOT know is appended too: OPERATIONS.md:1481 documents
+// id the catalog does NOT know is appended too: OPERATIONS.md's
+// "Capabilities: what one member, or one group, may do" section documents
 // custom-image agents as supported, but before this a fresh pick of one was
 // impossible because it never appeared in this list at all (a clone of an
 // existing custom-agent run worked; the id was just never OFFERED). agentImages

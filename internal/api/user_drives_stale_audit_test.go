@@ -14,9 +14,10 @@ import (
 // groups_snapshot_stale has TWO deciding sites, not one. F227 audited the
 // governance resolver's; the drive resolver's mirror-image branch
 // (driveWithUnusableGroups) raised the identical member-reachable 403 and
-// recorded nothing — while docs/AUDIT-ACTIONS.md:208 and
-// docs/OPERATIONS.md:1695 both told operators the reason is emitted "at the ONE
-// site that decides it".
+// recorded nothing — while docs/AUDIT-ACTIONS.md and docs/OPERATIONS.md both
+// once told operators the reason is emitted "at the ONE site that decides
+// it" (since corrected — docs/OPERATIONS.md's "Every denial that isn't a
+// 404" section now names both).
 //
 // The shape that makes it total is a deployment with group-tier DRIVE grants and
 // NO group-tier governance assignment: the ceiling resolves fine, so the audited

@@ -193,14 +193,17 @@ Reuse the shipped chart and substrate; never hand-roll a manifest.
      --set k8s.enabled=true \
      --set k8s.runsNamespace=wardyn-runs \
      --set k8s.proxyImage="$REGISTRY/wardyn-proxy:$TAG" \
+     --set-file defaultPolicy=examples/policies/demo.json \
      -f my-k8s-values.yaml   # the SSO/SSH/runtimeClasses block from step 2-3
    ```
-   `my-k8s-values.yaml` must pin `k8s.runtimeClasses.CC2`/`.CC3` (step 2) or
-   set a `defaultPolicy`/`env.WARDYN_DEFAULT_POLICY` override floored at CC1
-   (`examples/policies/demo.json` is the safe reference) — the chart refuses
-   to render `k8s.enabled=true` with neither, since the substrate then
-   advertises only `[CC1]` while the image's baked-in default policy floors
-   at CC2. `postgres.dsn.secretRef` is a PERSISTENT DSN, so the age identity riding in
+   The pasted `--set-file defaultPolicy=examples/policies/demo.json` above is
+   what makes this render as pasted — the chart refuses `k8s.enabled=true`
+   with no `k8s.runtimeClasses.CC2`/`.CC3` pin AND no `defaultPolicy`/
+   `env.WARDYN_DEFAULT_POLICY` override, since the substrate then advertises
+   only `[CC1]` while the image's baked-in default policy floors at CC2. It is
+   a CC1-only stand-in: pin `k8s.runtimeClasses.CC2`/`.CC3` in
+   `my-k8s-values.yaml` (step 2) instead once a real RuntimeClass exists in
+   the cluster, and drop the `--set-file`. `postgres.dsn.secretRef` is a PERSISTENT DSN, so the age identity riding in
    the SAME Secret (`age-key`, via `-gen-age-key`) is required, not optional —
    without it wardynd generates a fresh identity every boot and cannot decrypt
    what the previous boot encrypted (crash-loops on the SECOND restart). Keep

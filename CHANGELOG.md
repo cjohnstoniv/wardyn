@@ -1092,7 +1092,7 @@ in that column is inferred. `CHANGELOG.md` line numbers are the pre-rename numbe
 | `0056_audit_chain_serialize` | CHANGELOG.md:91 (by consequence) | audit-chain serialization moved into the trigger |
 | `0057_audit_chain_security_definer` | CHANGELOG.md:91 | "the `0057` state `0058` repaired" |
 | `0058_audit_chain_schema_qualified` | CHANGELOG.md:91 | the repair for the `0057` state |
-| `0059_user_drive_grants_home_override_unique` | not named in `[Unreleased]` | one `home_override` per drive (`docs/OPERATIONS.md:212` names it) |
+| `0059_user_drive_grants_home_override_unique` | not named in `[Unreleased]` | one `home_override` per drive (`docs/OPERATIONS.md:240` names it) |
 | `0060_api_tokens_role_check` | not named | API-token role constraint |
 | `0061_user_drives_name_slug_unique` | CHANGELOG.md:105 | see the upgrade table above |
 

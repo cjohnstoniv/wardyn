@@ -20,6 +20,7 @@
 // runs-first-run.tsx.
 import { Link } from "react-router-dom";
 import { Button } from "../ui/button";
+import { FIRST_RUN_DEMOS_SUBTITLE } from "../wardyn/copy";
 import { DEMOS } from "./demos/demo-catalog";
 
 export default function FirstRunDemoGrid({
@@ -35,14 +36,7 @@ export default function FirstRunDemoGrid({
         <h3 className="text-meta font-semibold uppercase tracking-wider text-muted-foreground">
           See it work
         </h3>
-        {/* DRAFT (M2 canon pending) — X4-F3: the old sentence "No model, no
-            key, no repo" was contradicted ten lines below by needsModel/
-            needsSecret, which some cards genuinely require. */}
-        <p className="text-sm text-muted-foreground">
-          No repo needed. Most need no model or key either — a few show what a
-          connected model or a stored secret additionally protects. Each one runs a
-          real governed sandbox in about a minute.
-        </p>
+        <p className="text-sm text-muted-foreground">{FIRST_RUN_DEMOS_SUBTITLE}</p>
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {DEMOS.map((demo) => {

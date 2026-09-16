@@ -268,6 +268,61 @@ func TestEnvDoc_ForwardRejectsPrefixAbsorbedRow(t *testing.T) {
 	}
 }
 
+// flagVarRE matches boot_flags.go's flag-registration call sites: the CLI
+// flag name and the WARDYN_* env var it also reads, in that order — the
+// first two string-literal args every flagBool/flagEnv/flagDuration/
+// flagIntEnv call leads with (internal/cliutil's FlagBool/FlagEnv/
+// FlagDuration/FlagIntEnv all take (name, env, def, usage string)).
+var flagVarRE = regexp.MustCompile(`\bflag(?:Bool|Env|Duration|IntEnv)\(\s*"([a-z0-9-]+)",\s*"(WARDYN_[A-Z0-9_]+)"`)
+
+// envDocRowFor returns the docs/ENV.md table-row line for a given WARDYN_*
+// var, or "" if there is none. Matches on "| `WARDYN_X`" (closing backtick
+// immediately after the name), the same anchor documentedVars's tokenizer
+// relies on to avoid a prefix-absorbed false match (WARDYN_X vs WARDYN_X_FILE).
+func envDocRowFor(v string, docLines []string) string {
+	prefix := "| `" + v + "`"
+	for _, l := range docLines {
+		if strings.HasPrefix(strings.TrimSpace(l), prefix) {
+			return l
+		}
+	}
+	return ""
+}
+
+// TestEnvDoc_RowsNameTheirFlag is D-5 (v0.7.4 review): half of V13's guard
+// ask — "envdoc_guard_test.go uses wardynVarLit and asserts rows name their
+// flag" — was never implemented; the lane hand-fixed the two rows X1a found
+// missing their flag name (WARDYN_REQUIRE_OPERATOR_SET_EGRESS,
+// WARDYN_GIT_PAT_BROKER) with nothing to stop a third. Derives every (flag,
+// WARDYN_X) pair boot_flags.go actually registers and requires that var's
+// docs/ENV.md row to contain the flag literal — skipping a row that says
+// "No flag" (a var read once at boot with no CLI surface is a real shape,
+// not an omission) and a var with no row at all (TestEnvDoc_ForwardEveryReadIsDocumented's
+// job, not this test's).
+func TestEnvDoc_RowsNameTheirFlag(t *testing.T) {
+	root := repoRoot(t)
+	src, err := os.ReadFile(filepath.Join(root, "cmd", "wardynd", "boot_flags.go"))
+	if err != nil {
+		t.Fatalf("read cmd/wardynd/boot_flags.go: %v", err)
+	}
+	pairs := flagVarRE.FindAllStringSubmatch(string(src), -1)
+	if len(pairs) == 0 {
+		t.Fatal("parsed 0 (flag, WARDYN_*) pairs out of boot_flags.go — the parse regressed or the flag helpers were renamed")
+	}
+	docLines := strings.Split(readEnvDoc(t, root), "\n")
+	for _, p := range pairs {
+		flagName, envVar := p[1], p[2]
+		row := envDocRowFor(envVar, docLines)
+		if row == "" || strings.Contains(row, "No flag") {
+			continue
+		}
+		if !strings.Contains(row, "-"+flagName) {
+			t.Errorf("docs/ENV.md's %s row does not name its flag (`-%s`, cmd/wardynd/boot_flags.go) — add \"(flag `-%s`)\" or \"No flag\" if that citation is wrong",
+				envVar, flagName, flagName)
+		}
+	}
+}
+
 // TestEnvDoc_ReverseEveryRowHasReader ratchets the other direction: every
 // WARDYN_* row in docs/ENV.md must still have a live reader in the tree.
 // Deleting the last reader of a var but leaving its row → fail. Prevents doc rot

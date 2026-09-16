@@ -33,7 +33,7 @@ this same JSON through this same validator — there is no separate UI schema.
 All three share one component, `policy-panel.tsx` — a mono JSON textarea plus
 template chips (Minimal, Model provider only, Package registries, CI baseline,
 Allow-all — observe first), three of which (Model provider only, Package
-registries, CI baseline) are compiled-in copies of three
+registries, CI baseline) are compiled-in, derived from three
 [`examples/policies/`](../examples/policies/) files — **not** read from disk
 at runtime, so editing a file there does not change what the console offers;
 Minimal and Allow-all — observe first are authored directly in the panel with
