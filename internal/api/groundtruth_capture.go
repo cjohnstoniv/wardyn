@@ -98,10 +98,13 @@ func (s *Server) hostSensorCaveat(ctx context.Context) string {
 // captured — the one input Capture cannot derive from the run's own events
 // (B11b-F4).
 //
-// The window is [run.CreatedAt, run.UpdatedAt] for a run that has stopped
-// changing and [run.CreatedAt, now] for one still moving. A heartbeat outside
-// it is not evidence about this capture, however alarming its counter: that is
-// exactly the conflation B11b-F7 names, one field over.
+// The window is [run.CreatedAt, run.UpdatedAt] — the run's own row, which for
+// the production caller (reconcileRecordRun, at the terminal transition) is the
+// capture. `now` stands in for the end only when UpdatedAt is unusable: before
+// CreatedAt, or in the future. A still-recording run reviewed mid-flight
+// therefore gets the NARROWER window ending at its last row update, which fails
+// silent rather than false — the direction this whole pair of findings is about
+// (SR-3: the comment used to promise `now` for a live run; the code never did).
 //
 // Only the LATEST heartbeat is consulted, because that is the only one the
 // store can answer without a new query shape. So this is a conservative
@@ -109,9 +112,9 @@ func (s *Server) hostSensorCaveat(ctx context.Context) string {
 // and stays silent otherwise — it never invents an anomaly out of a beat that
 // says nothing about this run.
 //
-// ponytail: newest-beat-in-window, not a per-window counter delta. A delta
-// needs a heartbeats-between-two-times query; add one if a real deployment
-// shows this missing drops it should have caught.
+// Newest-beat-in-window, not a per-window counter delta. A delta needs a
+// heartbeats-between-two-times query; add one if a real deployment shows this
+// missing drops it should have caught.
 func (s *Server) kernelWindow(ctx context.Context, run types.AgentRun) recordmode.KernelWindow {
 	if s.cfg.Store == nil {
 		return recordmode.KernelWindow{}
@@ -132,6 +135,11 @@ func (s *Server) kernelWindow(ctx context.Context, run types.AgentRun) recordmod
 	if at.Before(run.CreatedAt.Add(-time.Second)) || at.After(end.Add(time.Second)) {
 		return recordmode.KernelWindow{}
 	}
+	// BOTH counters, because neither means anything alone (SR-1): drops are
+	// cumulative and count every host event outside a sandbox, so only "drops
+	// with nothing correlated" is a fact about correlation rather than about
+	// the host being busy. Capture applies that pairing.
 	dropped, _ := status["dropped_unmapped"].(uint64)
-	return recordmode.KernelWindow{Beat: true, DroppedUnmapped: dropped}
+	observed, _ := status["observed_total"].(uint64)
+	return recordmode.KernelWindow{Beat: true, DroppedUnmapped: dropped, ObservedTotal: observed}
 }

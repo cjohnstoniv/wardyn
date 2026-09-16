@@ -5,6 +5,7 @@ package recordmode
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"sort"
 	"strings"
@@ -277,15 +278,30 @@ func TestCapture(t *testing.T) {
 			},
 		},
 		{
-			// The signal that REPLACES it: the sensor's own dropped-unmapped
-			// count, scoped by the caller to a heartbeat inside this capture's
-			// window.
-			name:   "sensor unmapped drops during the capture are an anomaly",
+			// The signal that REPLACES it: the sensor correlated NOTHING while
+			// dropping events. Drops alone are not it — see the next case.
+			name:   "a sensor that correlated nothing while dropping is an anomaly",
 			events: []types.AuditEvent{egressEvent(egress.Allow, "pypi.org", "GET", "policy")},
-			kernel: KernelWindow{Beat: true, DroppedUnmapped: 7},
+			kernel: KernelWindow{Beat: true, DroppedUnmapped: 7, ObservedTotal: 0},
 			check: func(t *testing.T, obs Observations) {
-				if !containsSubstr(obs.Anomalies, "dropped 7 event(s) as unmapped") {
-					t.Errorf("missing sensor unmapped-drop anomaly: %v", obs.Anomalies)
+				want := fmt.Sprintf(sensorCorrelatedNothingAnomaly, 7)
+				if !containsSubstr(obs.Anomalies, want) {
+					t.Errorf("missing broken-correlation anomaly: %v", obs.Anomalies)
+				}
+			},
+		},
+		{
+			// SR-1: dropped_unmapped is CUMULATIVE and counts every host event
+			// outside a sandbox, so it is non-zero on any host that does
+			// anything. Firing on it alone stamped a proxy-bypass anomaly on
+			// every clean capture. A sensor correlating events is working.
+			name:   "drops on a sensor that IS correlating are ordinary host activity",
+			events: []types.AuditEvent{egressEvent(egress.Allow, "pypi.org", "GET", "policy")},
+			kernel: KernelWindow{Beat: true, DroppedUnmapped: 7, ObservedTotal: 12},
+			check: func(t *testing.T, obs Observations) {
+				if len(obs.Anomalies) != 0 {
+					t.Errorf("anomalies = %v, want none: the sensor mapped 12 events, so the 7 drops "+
+						"are host activity outside any sandbox", obs.Anomalies)
 				}
 			},
 		},
@@ -302,7 +318,7 @@ func TestCapture(t *testing.T) {
 		{
 			name:   "a count with no beat in the window says nothing",
 			events: []types.AuditEvent{egressEvent(egress.Allow, "pypi.org", "GET", "policy")},
-			kernel: KernelWindow{DroppedUnmapped: 7},
+			kernel: KernelWindow{DroppedUnmapped: 7, ObservedTotal: 0},
 			check: func(t *testing.T, obs Observations) {
 				if len(obs.Anomalies) != 0 {
 					t.Errorf("anomalies = %v, want none (no heartbeat inside the capture window)", obs.Anomalies)

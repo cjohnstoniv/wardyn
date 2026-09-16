@@ -117,19 +117,53 @@ func TestReconcileRecordRun_NoKernelEvidenceSaysSo(t *testing.T) {
 	}
 }
 
-// TestReconcileRecordRun_DroppedUnmappedInWindowIsAnAnomaly pins B11b-F4. The
-// "possible proxy bypass" anomaly could never fire: an unmapped kernel event
-// carries a nil run_id, the gated mapper drops it, and Capture reads only
-// events already scoped to this run. The signal has to come from the sensor's
-// own dropped_unmapped counter, and only from a heartbeat that beat DURING the
-// capture — a count reported days later says nothing about this run.
-func TestReconcileRecordRun_DroppedUnmappedInWindowIsAnAnomaly(t *testing.T) {
+// TestReconcileRecordRun_OrdinaryHostDropsAreNotAnAnomaly is the SR-1 pin, and
+// it is the one that matters most: dropped_unmapped is the sensor's CUMULATIVE,
+// process-lifetime count of every kernel event on the host that bound to no
+// Wardyn run — the daemon itself, sshd, cron. It is non-zero within seconds of
+// the sensor starting and never resets. Firing on the count alone therefore
+// stamped "a possible proxy bypass" on EVERY clean capture on a host that does
+// anything, and the window check cannot save it: at the terminal transition the
+// newest heartbeat is at most one interval old, so it is always inside.
+//
+// The only thing the counter actually proves is the case /healthz already names:
+// drops with observed_total == 0 means the sensor saw kernel events and bound
+// NONE of them to any run — correlation broken, not a busy host.
+func TestReconcileRecordRun_OrdinaryHostDropsAreNotAnAnomaly(t *testing.T) {
 	now := time.Now()
+	// A healthy sensor on a busy host: 12 events correlated, 7 host events
+	// dropped as unmapped. This is what every ordinary deployment looks like.
 	hb := groundtruth.HeartbeatEventWithDropped(0, 12, 7, map[string]uint64{
 		groundtruth.ActionProcessExec:    4,
 		groundtruth.ActionNetworkConnect: 4,
 		groundtruth.ActionFileWrite:      4,
 	})
+	hb.Time = now.Add(-30 * time.Second) // as fresh as the production path ever sees
+	fake, srv, runID := kernelEventsRun(t, &hb, now.Add(-time.Hour), now)
+
+	srv.reconcileRecordRun(context.Background(), runID)
+	res := fake.savedResult(t, "build")
+	if res.Observations == nil {
+		t.Fatal("no observations captured")
+	}
+	if a := caveatNaming(res.Observations.Anomalies, "unmapped"); a != "" {
+		t.Errorf("anomaly %q on a clean capture: the sensor is correlating fine (observed_total=12) "+
+			"and the drops are ordinary host activity outside any sandbox", a)
+	}
+}
+
+// TestReconcileRecordRun_DroppedUnmappedInWindowIsAnAnomaly pins B11b-F4. The
+// "possible proxy bypass" anomaly could never fire: an unmapped kernel event
+// carries a nil run_id, the gated mapper drops it, and Capture reads only
+// events already scoped to this run. The signal comes from the sensor's own
+// counters instead, on the broken-correlation shape (drops with NOTHING
+// correlated), and only from a heartbeat that beat DURING the capture — a count
+// reported days later says nothing about this run.
+func TestReconcileRecordRun_DroppedUnmappedInWindowIsAnAnomaly(t *testing.T) {
+	now := time.Now()
+	// SR-1 fixture: observed_total 0 with drops — the sensor saw kernel events
+	// and bound NONE of them. observed_by_kind is empty for the same reason.
+	hb := groundtruth.HeartbeatEventWithDropped(0, 0, 7, nil)
 	hb.Time = now.Add(-30 * time.Minute) // inside the capture window
 	fake, srv, runID := kernelEventsRun(t, &hb, now.Add(-time.Hour), now)
 

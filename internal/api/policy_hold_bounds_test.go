@@ -4,6 +4,7 @@
 package api
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -33,17 +34,24 @@ func TestValidatePolicySpec_HoldBounds(t *testing.T) {
 		}
 	}
 
+	// Asserted THROUGH the DRAFT constants, never against a literal: an M2
+	// rewording of either refusal must not need this file edited to stay true.
+	holdsRefusal := func(got int) string { return fmt.Sprintf(maxHoldsRefusal, maxHoldsPerSpec, got) }
+	secondsRefusal := func(got int) string {
+		return fmt.Sprintf(firstUseHoldSecondsRefusal, maxFirstUseHoldSeconds, got)
+	}
+
 	refused := []struct {
 		name         string
 		spec         types.RunPolicySpec
 		wantContains string
 	}{
-		{"max_holds above the cap", spec(0, maxHoldsPerSpec+1), "max_holds"},
-		{"max_holds absurd (the member-inline case)", spec(0, 1000000), "max_holds"},
-		{"max_holds negative", spec(0, -1), "max_holds"},
-		{"hold seconds above the cap", spec(maxFirstUseHoldSeconds+1, 0), "first_use_hold_seconds"},
-		{"hold seconds a month", spec(2592000, 0), "first_use_hold_seconds"},
-		{"hold seconds negative", spec(-1, 0), "first_use_hold_seconds"},
+		{"max_holds above the cap", spec(0, maxHoldsPerSpec+1), holdsRefusal(maxHoldsPerSpec + 1)},
+		{"max_holds absurd (the member-inline case)", spec(0, 1000000), holdsRefusal(1000000)},
+		{"max_holds negative", spec(0, -1), holdsRefusal(-1)},
+		{"hold seconds above the cap", spec(maxFirstUseHoldSeconds+1, 0), secondsRefusal(maxFirstUseHoldSeconds + 1)},
+		{"hold seconds a month", spec(2592000, 0), secondsRefusal(2592000)},
+		{"hold seconds negative", spec(-1, 0), secondsRefusal(-1)},
 	}
 	for _, tc := range refused {
 		t.Run(tc.name, func(t *testing.T) {

@@ -125,6 +125,23 @@ type Observations struct {
 	Anomalies []string `json:"anomalies,omitempty"`
 }
 
+// ── DRAFT (M2 canon pending) ────────────────────────────────────────────────
+
+// sensorCorrelatedNothingAnomaly is the one anomaly sourced from the sensor's
+// own counters rather than from this run's events. A reviewer reads it on the
+// capture and, through Synthesize, on the promote surface.
+//
+// It says what the counters PROVE and no more (SR-1). The count is cumulative
+// since the sensor started, so the sentence does not claim it happened during
+// this capture; what the capture's window buys is only that the sensor was in
+// this state while the capture ran.
+//
+// DRAFT (M2 canon pending)
+const sensorCorrelatedNothingAnomaly = "the kernel sensor was alive during this capture and correlated none " +
+	"of what it saw to any run (%d event(s) dropped as unmapped, cumulative since the sensor started): either " +
+	"the run-correlation is broken, or activity reached the kernel outside every sandbox — this capture has no " +
+	"kernel corroboration either way"
+
 // KernelWindow is what the host's eBPF sensor said about ITSELF while this
 // capture was running. It is the one fact a capture's own audit events cannot
 // carry, and it has to be scoped to the capture's window: the sensor is
@@ -142,6 +159,9 @@ type KernelWindow struct {
 	// DroppedUnmapped is that beat's cumulative count of kernel events the
 	// sensor refused to forward because they correlated to no run.
 	DroppedUnmapped uint64
+	// ObservedTotal is that beat's cumulative count of kernel events the sensor
+	// DID bind to a run.
+	ObservedTotal uint64
 }
 
 // domainAgg is the mutable per-host accumulator used while capturing.
@@ -214,12 +234,18 @@ func Capture(events []types.AuditEvent, confined bool, kernel KernelWindow) Obse
 	// sidecar's gate drops it, and what survives arrives with a nil run_id,
 	// which the caller's own WHERE run_id = $1 then excludes. The captureConnect
 	// branch that used to look for correlation=unmapped here was therefore dead
-	// code claiming a detection nothing could trigger. The sensor's own
-	// dropped_unmapped counter is where the signal actually lives.
-	if kernel.Beat && kernel.DroppedUnmapped > 0 {
-		anomalies[fmt.Sprintf("the kernel sensor dropped %d event(s) as unmapped while this capture was running "+
-			"(correlation=unmapped): activity on this host reached the kernel and bound to no run — a possible proxy bypass, "+
-			"or a correlation failure that makes this capture incomplete", kernel.DroppedUnmapped)] = true
+	// code claiming a detection nothing could trigger.
+	//
+	// The condition is drops AND NOTHING CORRELATED, not drops alone (SR-1).
+	// DroppedUnmapped is cumulative over the sensor's whole process lifetime and
+	// counts every kernel event on the HOST that bound to no Wardyn run — the
+	// daemon, sshd, cron — so it is non-zero within seconds on any box that does
+	// anything, and firing on it alone stamped a proxy-bypass anomaly on every
+	// clean capture. Paired with ObservedTotal == 0 it means the one thing the
+	// counters can actually prove, and the one /healthz already names by it: the
+	// sensor saw kernel events and bound NONE of them to any run.
+	if kernel.Beat && kernel.DroppedUnmapped > 0 && kernel.ObservedTotal == 0 {
+		anomalies[fmt.Sprintf(sensorCorrelatedNothingAnomaly, kernel.DroppedUnmapped)] = true
 	}
 
 	return Observations{

@@ -81,11 +81,10 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 	// because a member authors them directly (B11b-F2). The proxy clamps them
 	// a second time for a policy stored before this bound existed.
 	if spec.MaxHolds < 0 || spec.MaxHolds > maxHoldsPerSpec {
-		return fmt.Errorf("max_holds must be between 0 (the built-in default) and %d, got %d", maxHoldsPerSpec, spec.MaxHolds)
+		return fmt.Errorf(maxHoldsRefusal, maxHoldsPerSpec, spec.MaxHolds)
 	}
 	if spec.FirstUseHoldSeconds < 0 || spec.FirstUseHoldSeconds > maxFirstUseHoldSeconds {
-		return fmt.Errorf("first_use_hold_seconds must be between 0 (the built-in default) and %d, got %d",
-			maxFirstUseHoldSeconds, spec.FirstUseHoldSeconds)
+		return fmt.Errorf(firstUseHoldSecondsRefusal, maxFirstUseHoldSeconds, spec.FirstUseHoldSeconds)
 	}
 	// Every domain entry must be a shape the proxy's matcher can actually
 	// match. A dead entry (mid-label wildcard, URL, bad :port) reads as
@@ -139,6 +138,20 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 const (
 	maxHoldsPerSpec        = 256
 	maxFirstUseHoldSeconds = 600
+)
+
+// ── DRAFT (M2 canon pending) ────────────────────────────────────────────────
+
+// The two bound refusals a policy author reads in a 400 body. They name the
+// accepted RANGE rather than the ceiling alone, because 0 is a meaningful third
+// value on both fields (keep the built-in default) and "may not exceed N" reads
+// as "lower it", which for 0 is the wrong instruction. Each echoes the value so
+// someone editing a pasted policy can see which field they are being told about.
+const (
+	// DRAFT (M2 canon pending)
+	maxHoldsRefusal = "max_holds must be between 0 (the built-in default) and %d, got %d"
+	// DRAFT (M2 canon pending)
+	firstUseHoldSecondsRefusal = "first_use_hold_seconds must be between 0 (the built-in default) and %d, got %d"
 )
 
 // maxUIAppsPerPolicy bounds the declared-app list. A UI app is an operator
