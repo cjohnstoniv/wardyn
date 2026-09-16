@@ -4,6 +4,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -45,14 +46,52 @@ func TestRunRecording_InterruptedDownloadLeavesNoFile(t *testing.T) {
 	if err == nil {
 		t.Fatal("an interrupted download returned nil — the CLI reported success for a partial cast")
 	}
-	if !strings.Contains(err.Error(), "recording") {
-		t.Errorf("err = %q, want it to name the recording download that did not complete", err)
+	// Pins the exact wrapped shape (review R-05): finalizePartFile is shared
+	// with support-bundle's writer, and it is this wrap —
+	// "recording download for run %s did not complete: %w" — that a future
+	// refactor of the shared helper could silently drop.
+	want := fmt.Sprintf("recording download for run %s did not complete", runID)
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("err = %q, want it to contain %q", err, want)
 	}
 	if _, serr := os.Stat(out); serr == nil {
 		b, _ := os.ReadFile(out)
 		t.Fatalf("a truncated %d-byte cast was left at %s — a player opens it and fails there instead of here", len(b), out)
 	} else if !os.IsNotExist(serr) {
 		t.Fatalf("stat %s: %v", out, serr)
+	}
+}
+
+// B12a-F6 (review R-05): a RENAME failure is a distinct code path from the
+// copy/close failure above — pre-lane, run recording's own .part+rename
+// block returned the bare os.Rename error; it now flows through the shared
+// finalizePartFile and is wrapped the same way. Occupying the destination
+// with a directory makes the download itself succeed and only the rename
+// fail, isolating that path.
+func TestRunRecording_RenameFailureIsWrappedAndLeavesNoPartFile(t *testing.T) {
+	runID := uuid.New()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-asciicast")
+		_, _ = w.Write([]byte(`{"version":2,"width":80,"height":24}` + "\n"))
+	}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	out := filepath.Join(dir, "run.cast")
+	if err := os.Mkdir(out, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", out, err)
+	}
+
+	err := execCmd(t, "run", "recording", runID.String(), "-o", out, "--url", srv.URL, "--token", "tok")
+	if err == nil {
+		t.Fatal("a rename onto an occupied path returned nil")
+	}
+	want := fmt.Sprintf("recording download for run %s did not complete", runID)
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("err = %q, want it to contain %q (the shared finalizePartFile wrap)", err, want)
+	}
+	if _, serr := os.Stat(out + ".part"); !os.IsNotExist(serr) {
+		t.Errorf(".part file was left behind after a failed rename")
 	}
 }
 
