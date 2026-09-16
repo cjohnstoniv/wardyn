@@ -496,7 +496,7 @@ test("A4 — save, then reuse", async () => {
   await act(page, page.getByRole("option", { name: POLICY_NAME }));
 
   // The rail names the STORED policy, its own floor and host count, and says
-  // outright that nothing on this page is merged into it. Scoped to the rail
+  // the attached workspace (only) still merges into it. Scoped to the rail
   // (the sidebar is an <aside>) because the name also shows in the Select trigger.
   const rail = page.locator("aside").filter({ hasText: "What this run can do" });
   await expect(rail.getByText(POLICY_NAME, { exact: true })).toBeVisible();

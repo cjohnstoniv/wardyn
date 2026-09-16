@@ -364,9 +364,9 @@ test("V06 beat 2 — the envelope, by reference", async () => {
   await act(page, page.getByRole("combobox", { name: "Saved policy" }));
   await act(page, page.getByRole("option", { name: POLICY_NAME }));
 
-  // The rail names the STORED policy, its floor and host count, and says outright
-  // that nothing on this page is merged into it (new-run-screen.tsx). Scoped to
-  // the rail (an <aside>) because the name also shows in the Select trigger.
+  // The rail names the STORED policy, its floor and host count, and says the
+  // attached workspace (only) still merges into it (new-run-rail.tsx). Scoped
+  // to the rail (an <aside>) because the name also shows in the Select trigger.
   const rail = page.locator("aside").filter({ hasText: "What this run can do" });
   await expect(
     rail.getByText(POLICY_NAME, { exact: true }),
