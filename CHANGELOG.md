@@ -120,12 +120,14 @@ no logic change.
   truncation marker) at every writer, closing an unbounded-write path into the
   append-only audit table on the authenticated, rate-limit-free `authz.denied`
   lane.
-- **5xx bodies no longer carry driver text.** A new chokepoint logs the
-  underlying error and writes only the operator-facing sentence on every
-  member-reachable read/write path; raw pgx text (DB host, port, user,
-  database, SQLSTATE, table and constraint names) previously reached any
-  member who could trigger a transient store failure. The operator-only tail
-  is deferred.
+- **5xx bodies no longer carry driver text on any door a member can reach.**
+  A new chokepoint logs the underlying error and writes only the
+  operator-facing sentence; raw pgx text (DB host, port, user, database,
+  SQLSTATE, table and constraint names) previously reached any member who
+  could trigger a transient store failure. Every member-reachable door is
+  converted — run create, preflight, read, kill, files, grants, profile and
+  layout; approvals; workspaces; secrets; tokens; SSH keys; harness login. The
+  operator-only tail is deferred (below).
 - **The anonymous `/healthz` no longer publishes fleet-wide kernel-sensor
   volumes.** Its ground-truth block is the verdict, its last heartbeat and why
   it is not healthy; the cumulative counts move to the operator-gated
@@ -192,11 +194,11 @@ no logic change.
 - **Twenty-seven more member-reachable 5xx sites stopped carrying driver
   text** — `POST /runs` (plain tier, including its member validation path and
   the runner-capabilities 503), `/runs/{id}/{files,grants,profile}`,
-  `/me/tokens`, `/me/ssh-keys` and both inline-policy resolvers. This is the
-  claim above ("5xx bodies no longer carry driver text") becoming true of those
-  paths too: a Postgres blip no longer answers a member with the deployment's
-  database host, port, user and database name. The error still reaches the log
-  with its method and path.
+  `/me/tokens`, `/me/ssh-keys` and both inline-policy resolvers. This, with the
+  eight doors that followed it, is what makes the claim above true of *every*
+  member-reachable door: a Postgres blip no longer answers a member with the
+  deployment's database host, port, user and database name. The error still
+  reaches the log with its method and path.
 - **A policy entry that can never match is named at sidecar boot.** The
   non-ASCII/malformed-entry refusal is a write-time check, so a policy stored
   before it landed compiled silently — and on `denied_domains` that fails OPEN,
@@ -359,7 +361,7 @@ no logic change.
   `WARDYN_TOKEN`.
 - `setup wall` and `setup vault` now reject a stray extra argument.
 - The coverage floor no longer sits eleven-plus points below what the suite
-  actually proves (`COVER_MIN` 65 → 75).
+  actually proves (`COVER_MIN` 65 → 78).
 - A flaky Playwright test now fails the UI e2e gate instead of silently
   passing.
 - `release-check` now runs the Postgres-gated concurrency proofs under the
@@ -753,6 +755,11 @@ no logic change.
   needs signal forwarding to the wrapped process plus a bounded flush, judged
   a bigger change than this release's residue.
 
+- **Operator-only 5xx sites still carry driver text.** The member-reachable
+  doors are all converted (above) and the `writeServerError` chokepoint they
+  route through is the shape the rest will take, but roughly 120 admin-tier
+  sites still hand the caller raw pgx text. The reader is an operator who can
+  already read the DSN, so the sweep is scheduled rather than urgent: 0.7.5.
 - **The killed-run tail-upload grace is still measured from `updated_at`, not
   from a terminal timestamp.** With the keepalive closed (above), the remaining
   re-openers are wardynd's own writes — chiefly the boot reconciler clearing a
