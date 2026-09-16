@@ -23,6 +23,7 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
 | **v0.7.1** | Patch: the console header read the raw OIDC `sub` instead of the IdP's `name` claim for an SSO user; a stock `helm install` (persistence off) crash-looped on an empty recording dir hitting a read-only root filesystem | **Shipped (pre-alpha)** — `v0.7.1`, 2026-09-11 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.7.2** | **Workspace Providers** — one admin object for which git/model providers are enabled, for whom, inside what bounds — an agent roster with per-person model credentials, ephemeral disk enforcement on Kubernetes, and seven field-report fixes from a private-endpoint Kubernetes estate (below) | **Shipped (pre-alpha)** — `v0.7.2`, 2026-09-12 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.7.3** | A second field report from the same estate: the per-user AWS SSO lane can no longer sign with the wrong identity (account/role pinned, enforced at three doors), the Bedrock check texts and admin sign-in door stopped conflating a deployment-wide fact with a per-person credential gap, and the CSRF Origin guard now applies in every mode (below) | **Shipped (pre-alpha)** — `v0.7.3`, 2026-09-15 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.7.4** | **Governance hardening over the whole surface a member or an operator's identity touches.** The five findings of the 0.7.3 field report plus the owner's two testability asks, a kind-provable AWS SSO test path, an admin's own "view as member", and a repo-wide review campaign's fixes across the runner substrate, the egress proxy and the console (below) | **Shipped (pre-alpha)** — `v0.7.4`, 2026-09-16 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ### What v0.4 shipped
 
@@ -483,6 +484,57 @@ guard 0.7.2 itself named as an open gap.
   with the same widening reaching the browser PTY-attach WebSocket behind a
   TLS-terminating ingress.
 
+### What v0.7.4 shipped
+
+Shipped as `v0.7.4`; [CHANGELOG.md](CHANGELOG.md)'s `[0.7.4]` entry is the full
+list. Two bodies of work met in it: the five priority findings of the 0.7.3 field
+report (with the same estate's two testability asks), and a review campaign over
+the whole `feat/v0.7.4` delta.
+
+The field report and the asks:
+
+- **A member can attach to their own AWS SSO login sandbox** (P1), and
+  `POST /setup/harness-login` no longer blocks the caller through a cold image
+  pull (P5) — the login pane returns as soon as the run has an id and waits in
+  the browser instead.
+- **An admin can exercise the member path without a second identity** (P2, and
+  the owner's second ask): "view as member" clamps a signed-in admin — either
+  tier — to a member's ceilings for the session, marks every refusal it meets in
+  the audit trail, and is exited from the banner it paints on every screen.
+- **The member's own Getting Started no longer calls an admin-only endpoint**
+  (P3). A member's cold load renders from the member-projected `/setup/status`
+  the server redacts for them, rather than 403-ing its way to an empty page.
+- **Setting a roster pin invalidates a stored capture that contradicts it**
+  (P4). `POST /runs` answers 422 and dispatch fails closed, naming both the
+  account/role the stored session is for and the account/role the agent now
+  allows, instead of the run discovering it as an opaque IAM 403.
+- **AWS SSO in multi-user SSO mode is testable on `kind`** (the owner's first
+  ask): a scripted walk over a fake IAM Identity Center that a maintainer can
+  run start to finish, and that the member-mode, login-pane and pin-dispatch
+  work above is proven on.
+
+The review campaign, by class:
+
+- **Every front-door `helm install wardyn` recipe renders.** Three pasteable
+  blocks failed closed at the chart's own preflights (the age-key source, the
+  runs-namespace choice, the CC2/CC3 RuntimeClass pin); a guard now holds every
+  fenced block in the front-door docs to all three.
+- **A run's credential-bearing Kubernetes objects are reclaimed even when its
+  pods are already gone** — and the Role that does it still has no Secret-body
+  read capability in any configuration.
+- **The egress proxy's injection is port-aware end to end.** A port-qualified
+  allowlist entry no longer crash-loops the sidecar, cleartext injection is
+  refused on the TLS-conventional ports, a port-qualified wildcard deny cancels
+  the binding, and injection over plain port 80 needs a genuinely bare entry.
+- **The member console tells a member the truth.** Member-visibility fixes
+  across Runs, Providers, Workspaces, Approvals and Setup, and the same
+  treatment for the `security_admin` tier, which receives the same redacted
+  status body a member does.
+- **Accessibility and theming**, swept across the console's screens.
+- **Docs match code.** A blind docs↔code pass over the install, operate and
+  reference docs, with the drifts it found fixed at the doc or at the code,
+  whichever was wrong.
+
 ## Planned
 
 Everything below is **planned, unbuilt, and undated**. Where a seam exists but no
@@ -490,7 +542,7 @@ implementation does, [docs/PLUGGABILITY.md](docs/PLUGGABILITY.md) says so per ro
 
 v0.8 is the remaining path to alpha. The cloud base and permissioning 0.6 owed
 are shipped, and so is 0.7's governance and desktop work (above, through
-`v0.7.3`), so what is left below is the alpha RC and beyond.
+`v0.7.4`), so what is left below is the alpha RC and beyond.
 
 **New for 0.8: posture-gated autonomy** — an org-defined rubric mapping a
 sandbox's containment posture (egress reach, secrets present, confinement class)
