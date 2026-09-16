@@ -312,8 +312,20 @@ async function spliceBedrockRow(
   modelAccessState: string | null,
 ): Promise<void> {
   await page.route("**/api/v1/setup/status*", async (route) => {
-    const response = await route.fetch();
-    const json = await response.json();
+    // /setup/status is POLLED by this screen, so a handler can still be mid
+    // `route.fetch()` when the test ends and the context tears down — Playwright
+    // then disposes the response under it ("Response has been disposed") and the
+    // throw is reported as the test's own failure. A tear-down race is not a
+    // splice failure: let the request through and let the context close.
+    let response: Awaited<ReturnType<typeof route.fetch>>;
+    let json: Record<string, unknown>;
+    try {
+      response = await route.fetch();
+      json = (await response.json()) as Record<string, unknown>;
+    } catch {
+      await route.fallback().catch(() => {});
+      return;
+    }
     const harnesses: Array<Record<string, unknown>> = Array.isArray(json.harnesses) ? json.harnesses : [];
     const idx = harnesses.findIndex((h) => h.id === "claude-code");
     const row = {
@@ -332,7 +344,7 @@ async function spliceBedrockRow(
         action: modelAccessState === "live" || modelAccessState === "not_applicable" ? "" : "Sign in to AWS",
       };
     }
-    await route.fulfill({ response, json });
+    await route.fulfill({ response, json }).catch(() => {});
   });
 }
 
