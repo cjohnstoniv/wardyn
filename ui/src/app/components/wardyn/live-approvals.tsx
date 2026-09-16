@@ -39,7 +39,7 @@ import {
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { cn } from "../ui/utils";
 import { Mono } from "./code-block";
-import { Chip, OperatorOnlyHint, SectionLabel } from "./primitives";
+import { Chip, SectionLabel } from "./primitives";
 import { useSecurityOperator } from "./operator-context";
 import { attentionRank } from "./run-state-glyph";
 import {
@@ -48,7 +48,7 @@ import {
   APPROVAL_SCOPE_LABEL,
   DENY_SCOPE_HINT,
   DENY_SCOPE_LABEL,
-  OPERATOR_ONLY_REASON,
+  SECURITY_ONLY_REASON,
   TELEMETRY_TAG,
   UNTIL_PRESETS,
   credentialKind,
@@ -329,9 +329,13 @@ export function LiveApprovals({
             actually true: F-12 fixed the row-level gate below to follow
             canDecideApproval (a member CAN decide their own run's
             egress_domain rows), so this hint must not claim "admin only"
-            over a strip the viewer can, in fact, act on. */}
+            over a strip the viewer can, in fact, act on. Inlined rather than
+            OperatorOnlyHint (primitives.tsx): the gate here is
+            isSecurityOperator, not isOperator — X3-F6. */}
         {!securityOperator && pending.some((a) => !canDecideApproval(securityOperator, a.kind)) && (
-          <OperatorOnlyHint />
+          <span className="ml-auto text-meta font-normal normal-case text-muted-foreground">
+            {SECURITY_ONLY_REASON}
+          </span>
         )}
       </div>
       {shown.map((a) => {
@@ -518,7 +522,7 @@ function ScopeMenu({
   const labels = verb === "approve" ? APPROVAL_SCOPE_LABEL : DENY_SCOPE_LABEL;
   const hints = verb === "approve" ? APPROVAL_SCOPE_HINT : DENY_SCOPE_HINT;
   const alwaysDisabled = !hasWorkspace || !securityOperator;
-  const alwaysReason = !securityOperator ? OPERATOR_ONLY_REASON : ALWAYS_NEEDS_WORKSPACE;
+  const alwaysReason = !securityOperator ? SECURITY_ONLY_REASON : ALWAYS_NEEDS_WORKSPACE;
 
   const pick = (scope: ApprovalScope, until?: string) => {
     setOpen(false);

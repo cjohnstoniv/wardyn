@@ -6,7 +6,7 @@
 import { randomUUID } from "node:crypto";
 import type { Page } from "@playwright/test";
 import { test, expect, gotoConsole, mockMemberRole, sql } from "./fixtures";
-import { APPROVAL, RUN_COCKPIT } from "../src/app/components/wardyn/copy";
+import { APPROVAL, RUN_COCKPIT, SECURITY_ONLY_REASON } from "../src/app/components/wardyn/copy";
 
 // ---------------------------------------------------------------------------
 // Approvals screen e2e (lane: approvals, port 8088, db wardyn_e2e).
@@ -718,9 +718,11 @@ test.describe("F-12 — LiveApprovals row gate mirrors canDecideApproval, not a 
       await expect(row.getByRole("button", { name: "Deny" })).toBeDisabled();
       // credential/tool_call stay admin-only regardless of ownership — the
       // hint IS shown here, unlike the all-egress case above. Scoped to the
-      // strip itself (see the positive test's comment for why).
+      // strip itself (see the positive test's comment for why). X3-F6: the
+      // gate is !securityOperator (a security_admin passes it), so the hint
+      // reads SECURITY_ONLY_REASON, not the plainer admin-only string.
       const panel = page.getByTestId("live-approvals");
-      await expect(panel.getByText("Requires the admin role.", { exact: true })).toBeVisible();
+      await expect(panel.getByText(SECURITY_ONLY_REASON, { exact: true })).toBeVisible();
     } finally {
       deleteApproval(id);
     }

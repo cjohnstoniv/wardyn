@@ -8,6 +8,7 @@ import { render, screen, within, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ApprovalRequest } from "../../lib/types";
 import { OperatorProvider } from "./operator-context";
+import { OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "./copy";
 
 const listApprovalsMock = vi.fn((..._a: unknown[]): Promise<ApprovalRequest[]> => Promise.resolve([]));
 const approveMock = vi.fn((..._a: unknown[]): Promise<unknown> => Promise.resolve({}));
@@ -429,7 +430,9 @@ describe("LiveApprovals", () => {
       // A non-egress kind never renders the caret regardless of role (decide
       // rule 4 400s any explicit scope on it) — unaffected by this fix.
       expect(within(panel).queryAllByRole("button", { name: /more options/i })).toHaveLength(0);
-      expect(screen.getByText(/requires the admin role/i)).toBeInTheDocument();
+      // X3-F6: !securityOperator PASSES a security_admin, so the panel hint
+      // must read SECURITY_ONLY_REASON, not the plain admin-only string.
+      expect(screen.getByText(SECURITY_ONLY_REASON)).toBeInTheDocument();
     });
 
     it("a member CANNOT Approve/Deny a tool_call row — stays admin-only", async () => {
@@ -457,7 +460,9 @@ describe("LiveApprovals", () => {
         </OperatorProvider>,
       );
       const panel = await screen.findByTestId("live-approvals");
-      expect(screen.getByText(/requires the admin role/i)).toBeInTheDocument();
+      // X3-F6: !securityOperator PASSES a security_admin, so the mixed-strip
+      // hint must read SECURITY_ONLY_REASON, not the plain admin-only string.
+      expect(screen.getByText(SECURITY_ONLY_REASON)).toBeInTheDocument();
       const rows = within(panel).getAllByTestId("live-approval-row");
       const egressRow = rows.find((r) => r.textContent?.includes("unlisted.example"))!;
       expect(within(egressRow).getByRole("button", { name: /^Approve$/ })).not.toBeDisabled();
@@ -474,6 +479,43 @@ describe("LiveApprovals", () => {
         expect(btn).not.toBeDisabled();
       }
       expect(screen.queryByText(/requires the admin role/i)).not.toBeInTheDocument();
+    });
+  });
+
+  // X3-F6 (ui-member-cluster review residual): both admin-only reasons on this
+  // strip are gated on !securityOperator, a predicate a security_admin PASSES —
+  // so a refused member must read SECURITY_ONLY_REASON, never the plainer
+  // OPERATOR_ONLY_REASON that would send a security_admin looking for a role
+  // they already hold.
+  describe("X3-F6 — securityOperator gates read SECURITY_ONLY_REASON, not OPERATOR_ONLY_REASON", () => {
+    it("panel hint (undecidable row for a member): SECURITY_ONLY_REASON, not OPERATOR_ONLY_REASON", async () => {
+      listApprovalsMock.mockResolvedValue([
+        pending({ id: "t1", kind: "tool_call", requested_scope: { tool: "Bash", cmd: "ls" } }),
+      ]);
+      render(
+        <OperatorProvider operator={false} securityOperator={false}>
+          <LiveApprovals runId="r1" />
+        </OperatorProvider>,
+      );
+      await screen.findByTestId("live-approvals");
+      expect(screen.getByText(SECURITY_ONLY_REASON)).toBeInTheDocument();
+      expect(screen.queryByText(OPERATOR_ONLY_REASON)).not.toBeInTheDocument();
+    });
+
+    it("ScopeMenu's Always reason (member, hasWorkspace): SECURITY_ONLY_REASON, not OPERATOR_ONLY_REASON", async () => {
+      listApprovalsMock.mockResolvedValue([pending({ id: "held", requested_scope: { host: "held.example" } })]);
+      render(
+        <OperatorProvider operator={false} securityOperator={false}>
+          <LiveApprovals runId="r1" hasWorkspace />
+        </OperatorProvider>,
+      );
+      const panel = await screen.findByTestId("live-approvals");
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      await user.click(within(panel).getAllByRole("button", { name: /more options/i })[0]);
+      const always = await screen.findByRole("button", { name: /^Always/ });
+      expect(always).toBeDisabled(); // hasWorkspace is true, so only !securityOperator disables it
+      expect(screen.getByText(SECURITY_ONLY_REASON)).toBeInTheDocument();
+      expect(screen.queryByText(OPERATOR_ONLY_REASON)).not.toBeInTheDocument();
     });
   });
 
