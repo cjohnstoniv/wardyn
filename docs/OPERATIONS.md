@@ -3109,6 +3109,63 @@ Deprovisioning the person in the IdP is therefore the complete answer, and
 deleting the Wardyn console account does **not** by itself delete the stored
 blob.
 
+### Testing AWS SSO without an AWS tenant
+
+Everything above is unfalsifiable without an AWS tenant — which is why, before
+0.7.4, "a member signs in and their run gets THEIR OWN credentials" was tested
+nowhere. It is testable now, on a throwaway kind cluster, with no AWS account
+and no real credential anywhere in the loop.
+
+**The cluster.** `make kind-quickstart` then `make kind-sso` (see
+`deploy/kind/sso/README.md`). The overlay adds Dex with two static principals —
+`admin@wardyn.local` and `member@wardyn.local`, password `password` — plus
+`wardyn-awsssofake`: an unsigned fake of both AWS IAM Identity Center services
+(`sso-oidc` and the `sso` portal) and a bedrock-runtime stub, all on one
+in-cluster Service. `make kind-sso-down` removes the overlay; the cluster itself
+belongs to `make kind-down`.
+
+**The knob.** `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE=<url>` re-points both SSO
+services at that Service, moving five things together: the containerized login
+sandbox's `AWS_ENDPOINT_URL_SSO`/`_SSO_OIDC`, the captured-credential sandbox's
+same pair, the SSO egress allow-list entries, the login flow's own
+`device.sso.<region>` entry, and the dispatch-time `CreateToken` URL. It is
+**refused unless `WARDYN_ALLOW_TEST_ENDPOINTS=true`** is also set, and every
+boot carrying it logs a warning opening `TEST HATCH ACTIVE`. Unset — every real
+deployment — nothing changes. It is not `WARDYN_BEDROCK_BASE_URL` (a different
+service, and a supported production posture), and it is not the global
+`AWS_ENDPOINT_URL`. Read [THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md)
+residual #45 before setting either var anywhere that holds a real credential:
+an operator who sets both has pointed a real sign-in at a server that can hand
+back credentials of its choosing, and Wardyn cannot tell that server from AWS.
+
+**Reaching the fake from a sandbox — the step that fails first if you skip it.**
+The fake is addressed by its **Service** name, never a pod IP, and site-config
+`internal_hosts` must lift it **before the first sign-in**. The sandbox's egress
+goes through the proxy sidecar, which denies any host resolving to a private
+address unless an `internal_hosts` rule lifts it — and the lift refuses the
+proxy's own interface subnets. A pod IP is on the pod CIDR, which IS that
+subnet, so a pod IP can never be lifted however it is declared; a ClusterIP is
+on the Service CIDR, which can. Scope the rule to the Service CIDR your cluster
+actually uses (read it off the apiserver's `--service-cluster-ip-range`, do not
+assume `10.96.0.0/16`). The same entry covers the Bedrock stub, because it is
+the same Service.
+
+**The walk.** `WARDYN_TEST_K8S=1 scripts/kind-sso-walk.sh` does all of the
+above and then drives `ui/e2e/live/sso-member.spec.ts`: both principals sign in
+through Dex, the admin declares the `per_user` lane and pins the account/role,
+the member completes the containerized `aws sso login` from their own seat, and
+`/setup/status` reads `model_access.state: "live"` for the member and
+`not_configured` for the admin at the same moment. The closing assertion is the
+one that is not Wardyn asserting about itself: the fake's own `/_seen` reports
+which account and role real botocore asked it to mint, and that the Bedrock stub
+was hit. It is a manual proof, not a CI job — no workflow runs it, so a green
+result is evidence only for the tip somebody actually ran it on.
+
+**What it still does not prove.** A real two-entitlement AWS tenant, real
+SigV4, and real Bedrock inference remain owner-hardware-only. The fake proves
+the wire shape (a real `aws sso login` from the AWS CLI v2 completes against it
+— `test/awsssofake/docker_test.go`), not AWS's behaviour.
+
 ### Internal model gateway
 
 Point every run's model calls at an internal endpoint instead of

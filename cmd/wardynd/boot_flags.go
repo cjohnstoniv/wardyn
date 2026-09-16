@@ -468,7 +468,7 @@ func resolveAWSSSOEndpointOverride(f *bootFlags) (string, error) {
 		return "", err
 	}
 	if override != "" {
-		slog.Warn("wardynd: TEST HATCH ACTIVE — WARDYN_AWS_SSO_ENDPOINT_OVERRIDE re-points AWS IAM Identity Center (sso-oidc AND the sso portal) at this URL for the containerized login, for every Bedrock run's credential exchange and for dispatch-time token renewal. No AWS SSO endpoint is contacted. This is never a production posture; unset it and WARDYN_ALLOW_TEST_ENDPOINTS on any deployment holding a real credential.",
+		slog.Warn(api.AWSSSOEndpointOverrideWarn,
 			slog.String("aws_sso_endpoint_override", override),
 		)
 	}

@@ -75,3 +75,27 @@ Real-daemon driver funcs; the fakeDocker tests self-skip them, so they read
 
 - **internal/envbuild**: New
 - **internal/runner/docker**: ImagePresent, Read, SweepOrphanedSandboxes
+
+## Kubernetes-gated — manual cluster lanes no coverage profile can see
+
+Not a coverage bucket: these lanes need a real cluster, no workflow runs them,
+and `-coverpkg` never observes them at all — so the funcs they exercise show up
+above under "Untested" no matter how often somebody runs them. Listed here so
+the k8s surface is not read as untouched. All three self-skip without
+`WARDYN_TEST_K8S=1`; a green result is evidence only for the tip somebody
+actually ran it on.
+
+- `scripts/kind-sso-walk.sh` — **the AWS SSO walk** (0.7.4). Two Dex principals
+  on a kind cluster, the containerized `aws sso login` against an on-cluster
+  fake IAM Identity Center, and a member's Bedrock run whose role credentials
+  the fake confirms were minted for THAT member's pinned account/role. Covers
+  the per-user credential path end to end — `internal/api`'s `resolveBedrockAuth`
+  ssoInject branch, `harnesscred.go`'s login run, `awssso_refresh.go`'s
+  dispatch-time renewal — plus `internal/runner/k8s`'s Attach/ExecStream, which
+  read 0.0% above. Prereqs: `make kind-quickstart` + `make kind-sso`; recipe in
+  docs/OPERATIONS.md, "Testing AWS SSO without an AWS tenant".
+- `scripts/run-e2e-ssh-k8s.sh` (`make test-e2e-ssh-k8s`) — the SSH gateway over
+  the k8s exec lane: `internal/runner/k8s`'s Attach/Close/ExecStream/Read/
+  Resize/Write, every one of them listed as untested above.
+- `make test-conformance-k8s` — the containment conformance suite against a
+  NetworkPolicy-enforcing CNI.

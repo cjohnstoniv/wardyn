@@ -126,6 +126,19 @@ For Postgres-dependent tests, set `WARDYN_TEST_PG` to a valid DSN:
 WARDYN_TEST_PG="postgres://user:pass@localhost/testdb" make test
 ```
 
+Cluster-dependent lanes need a real Kubernetes cluster and self-skip without
+`WARDYN_TEST_K8S=1`; no workflow runs them, so they are manual proofs you run
+against `make kind-quickstart`. Among them is the **AWS SSO walk**,
+`scripts/kind-sso-walk.sh`: with `make kind-sso` it stands up Dex with two
+principals and an on-cluster fake of AWS IAM Identity Center, then proves that a
+MEMBER signing in from their own seat gets a credential that is theirs and not
+the admin's, and that their Bedrock run's role credentials were minted for their
+own pinned account and role. It needs no AWS account. The fake is reached
+through the gated `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` test hatch — read
+`threatmodel/THREAT-MODEL.md` residual #45 before setting it anywhere real, and
+see docs/OPERATIONS.md, "Testing AWS SSO without an AWS tenant", for the recipe
+and the one precondition (`internal_hosts`) that fails first if you skip it.
+
 ## Web UI (`ui/`)
 
 The UI is a React + Vite app with its own blocking CI jobs (typecheck, unit

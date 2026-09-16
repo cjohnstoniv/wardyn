@@ -42,6 +42,25 @@ import (
 // re-point the credential exchange. It is equally not the GLOBAL
 // AWS_ENDPOINT_URL (PF-45), which re-points every AWS service at once.
 
+// ── DRAFT (M2 canon pending) ────────────────────────────────────────────────
+
+const (
+	// AWSSSOEndpointOverrideRefusal is the BOOT REFUSAL when the override is set
+	// without the acknowledgement. It names both vars because the operator
+	// reading it on a crash-looping pod has to decide which one they meant. %q is
+	// the offending value.
+	//
+	// DRAFT (M2 canon pending)
+	AWSSSOEndpointOverrideRefusal = "refusing to start: WARDYN_AWS_SSO_ENDPOINT_OVERRIDE is set to %q — it re-points AWS IAM Identity Center at a server of your choosing for the containerized login AND for every Bedrock run's credential exchange, which is a TEST hatch and never a production posture; unset it, or explicitly set WARDYN_ALLOW_TEST_ENDPOINTS=true to acknowledge that this deployment is a test deployment"
+	// AWSSSOEndpointOverrideWarn is the BOOT WARN every boot carrying the hatch
+	// logs. It opens with a literal an operator (and scripts/kind-sso-walk.sh)
+	// can grep for, because the thing that must never happen is this posture
+	// going unnoticed in an inherited values file.
+	//
+	// DRAFT (M2 canon pending)
+	AWSSSOEndpointOverrideWarn = "wardynd: TEST HATCH ACTIVE — WARDYN_AWS_SSO_ENDPOINT_OVERRIDE re-points AWS IAM Identity Center (sso-oidc AND the sso portal) at this URL for the containerized login, for every Bedrock run's credential exchange and for dispatch-time token renewal. No AWS SSO endpoint is contacted. This is never a production posture; unset it and WARDYN_ALLOW_TEST_ENDPOINTS on any deployment holding a real credential."
+)
+
 // The two AWS SDK / CLI variables that re-point the SSO services — and ONLY
 // those two. Named constants because five call sites and three tests spell them.
 const (
@@ -72,7 +91,7 @@ func ValidateAWSSSOEndpointOverride(raw string, allowTestEndpoints bool) (string
 		return "", nil
 	}
 	if !allowTestEndpoints {
-		return "", fmt.Errorf("refusing to start: WARDYN_AWS_SSO_ENDPOINT_OVERRIDE is set to %q — it re-points AWS IAM Identity Center at a server of your choosing for the containerized login AND for every Bedrock run's credential exchange, which is a TEST hatch and never a production posture; unset it, or explicitly set WARDYN_ALLOW_TEST_ENDPOINTS=true to acknowledge that this deployment is a test deployment", raw)
+		return "", fmt.Errorf(AWSSSOEndpointOverrideRefusal, raw)
 	}
 	u, err := url.Parse(raw)
 	if err != nil {

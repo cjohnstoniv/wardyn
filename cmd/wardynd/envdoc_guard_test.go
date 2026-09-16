@@ -59,6 +59,11 @@ var envDocAllow = map[string]bool{
 	// F061: run-ui-e2e.sh's allowlist for a spec allowed to skip its whole
 	// file, and screenshots.sh's own self-set gate for docs.spec.ts.
 	"WARDYN_E2E_ALLOW_ALL_SKIPPED": true, "WARDYN_SCREENSHOTS": true,
+	// 0.7.4: run-ui-e2e.sh's LIVE mode — the external base URL that points the
+	// `live` Playwright project (ui/e2e/live/) at a real cluster instead of the
+	// hermetic backend. Shell-only, so the E2E-shell ratchet below is what keeps
+	// its ENV.md row honest.
+	"WARDYN_E2E_LIVE_BASE_URL": true,
 }
 
 // envDocShellOnly lists vars read ONLY by deploy/compose/docker-compose.yaml and
