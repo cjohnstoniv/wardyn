@@ -329,9 +329,12 @@ func TestHealthzEbpfIdleNamesBrokenCorrelation(t *testing.T) {
 	if gt["state"] != "idle" {
 		t.Fatalf("ebpf_groundtruth.state = %v, want idle", gt["state"])
 	}
-	if got, ok := gt["dropped_unmapped"].(float64); !ok || got != 4812 {
-		t.Errorf("dropped_unmapped = %v, want 4812", gt["dropped_unmapped"])
-	}
+	// The dropped_unmapped COUNTER moved to the operator-gated /metrics with
+	// B6-F6 (wardyn_groundtruth_dropped_unmapped_total): the anonymous /healthz
+	// must not publish fleet volumes. What this test exists for is unchanged and
+	// asserted below — the anonymous probe still distinguishes a BROKEN
+	// CORRELATION from a blind sensor, and the count still reaches an operator
+	// inside the reason sentence.
 	reason, _ := gt["reason"].(string)
 	if !strings.Contains(reason, "none correlated") || !strings.Contains(reason, "4812") {
 		t.Errorf("reason = %q, want it to name the correlation failure and the count", reason)

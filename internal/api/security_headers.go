@@ -62,6 +62,16 @@ func securityHeaders(next http.Handler) http.Handler {
 		h.Set("X-Frame-Options", "DENY")
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
+		// no-store by DEFAULT, overridden by the SPA/asset handler (ui.go), which
+		// Sets its own Cache-Control after this middleware has run.
+		//
+		// The API carried no Cache-Control and no validator at all, and the OIDC
+		// lane authenticates by COOKIE rather than Authorization — which is the
+		// combination RFC 9111 lets a shared cache store and reuse heuristically.
+		// One member's run list served to another out of an interposed proxy is
+		// not a risk worth carrying for a header. Defaulting here rather than
+		// listing API prefixes means a route added tomorrow inherits it.
+		h.Set("Cache-Control", "no-store")
 		next.ServeHTTP(w, r)
 	})
 }

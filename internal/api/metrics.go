@@ -223,8 +223,8 @@ func (m *metrics) write(w io.Writer) {
 		m.launchSum, m.launchCount)
 }
 
-// handleMetrics serves the scrape surface. It is mounted INSIDE the
-// humanOrAdminAuth group on purpose: wardynd fails the public API closed when no
+// handleMetrics serves the scrape surface. It is admin-only (mounted INSIDE the
+// humanOrAdminAuth group, behind requireOperator — routes.go), on purpose: wardynd fails the public API closed when no
 // admin token is configured (cmd/wardynd) and refuses capability disclosure on
 // the anonymous /healthz, so an open /metrics would contradict that posture. A
 // Prometheus scrape_config authenticates with two lines of `authorization:`.
@@ -265,6 +265,9 @@ func (s *Server) writeHealthGauges(r *http.Request, w io.Writer) {
 	fmt.Fprintf(w, "# HELP wardyn_audit_spool_quarantined_total Spool lines moved aside after the store rejected them repeatedly; each one is an event missing from the queryable trail until it is re-fed.\n"+
 		"# TYPE wardyn_audit_spool_quarantined_total counter\nwardyn_audit_spool_quarantined_total %d\n", s.cfg.AuditSpool.Quarantined())
 	s.writeSinkDrops(w)
+	// B6-F6: the eBPF sensor's cumulative counts, moved off the anonymous
+	// /healthz onto this gated scrape where every other volume series lives.
+	s.writeEbpfGroundtruthCounters(r.Context(), w)
 }
 
 // writeSinkDrops emits the per-SIEM-sink delivery-drop counter (D2): events a

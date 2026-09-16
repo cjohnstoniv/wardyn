@@ -70,8 +70,26 @@ func (s *Server) auditScope(w http.ResponseWriter, r *http.Request, writeEmpty f
 	return &runID, true
 }
 
-// handleQueryAudit returns audit events. The append-only audit log is the
-// system of record and is never gated. With no run_id it returns the global
+// Audit-feed default page sizes. Unlike the list endpoints (defaultListLimit),
+// an unparameterised /audit keeps the historical caps the store applied (per-run
+// 1000 / global 500) so the UI audit trail and the CLI exit-code lookup
+// (docs/sdk.md: run.complete -> .data.exit_code) see the same window they did
+// before pagination. A caller pages past the cap with ?limit=&offset=; a
+// truncated page sets X-Wardyn-Truncated (per-run stays ASC, so ?offset= walks
+// forward to the newest events).
+const (
+	auditPerRunDefaultLimit = 1000
+	auditGlobalDefaultLimit = 500
+)
+
+// handleQueryAudit returns audit events. The route is AUTHENTICATED (it sits
+// inside the humanOrAdminAuth group) and ROW-SCOPED: auditScope narrows a
+// member to their own runs, so member-reachable here means "reachable by a
+// member", not "readable by anyone". This comment used to claim the log was
+// ungated, which was wrong on both counts; what is free forever is the WRITE
+// side — no audit emit is gated or sampled.
+//
+// With no run_id it returns the global
 // SIEM-style feed (newest first across all runs) that the Audit view renders;
 // with ?run_id= it returns that run's chronological trail. Either can be
 // narrowed by ?since=&until=&action=&action_prefix=&actor_type=&outcome=
@@ -86,18 +104,6 @@ func (s *Server) auditScope(w http.ResponseWriter, r *http.Request, writeEmpty f
 // slow, the upgrade path is a store method (e.g. QueryAuditEventsBySession)
 // backed by a `(data->>'session_id')` expression index, not a new table — the
 // session id already lives in Data (JSONB), no migration to add the column.
-// Audit-feed default page sizes. Unlike the list endpoints (defaultListLimit),
-// an unparameterised /audit keeps the historical caps the store applied (per-run
-// 1000 / global 500) so the UI audit trail and the CLI exit-code lookup
-// (docs/sdk.md: run.complete -> .data.exit_code) see the same window they did
-// before pagination. A caller pages past the cap with ?limit=&offset=; a
-// truncated page sets X-Wardyn-Truncated (per-run stays ASC, so ?offset= walks
-// forward to the newest events).
-const (
-	auditPerRunDefaultLimit = 1000
-	auditGlobalDefaultLimit = 500
-)
-
 func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 	pager, _ := s.cfg.Store.(store.Pager)
 	filter, ok := parseAuditFilter(w, r)
@@ -206,10 +212,14 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleVerifyAuditChain runs the audit hash-chain sweep (migration 0047) and
-// reports what it found. Operator-only (registered on routes.go's operatorOnly
-// group): a member reading it would learn the deployment's total audit volume
-// across every other user's runs — the same disclosure that keeps /metrics
-// admin-gated.
+// reports what it found. Registered on routes.go's securityOps group, i.e.
+// admin OR security_admin — the tamper-evidence verdict over the audit chain is
+// the evidence the security tier's whole job rests on. (This comment used to
+// name the narrower admin tier, which the route has not been on since 0.7.)
+//
+// It is gated at all because a member reading it would learn the deployment's
+// total audit volume across every other user's runs — the same disclosure that
+// keeps the scrape surface gated.
 //
 // This is the ONLY surface that verifies the chain, and it is deliberately
 // PULL-based. wardynd does NOT verify at boot: the sweep re-hashes every chained

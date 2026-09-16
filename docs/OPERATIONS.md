@@ -593,6 +593,16 @@ store permanently refused and the drain moved aside (see the spool paragraph
 above): non-zero means the trail is missing those events even though the spool
 drained.
 
+The eBPF ground-truth sensor's cumulative counts scrape here too —
+`wardyn_groundtruth_observed_total`, `wardyn_groundtruth_dropped_total`,
+`wardyn_groundtruth_dropped_unmapped_total` and
+`wardyn_groundtruth_observed_by_kind_total{kind=…}` — and only here. They used
+to ride the anonymous `/healthz`, which handed the fleet's kernel-event volume
+to anyone who could reach the port; `/healthz` now publishes the VERDICT only
+(`state`, `last_heartbeat`, `reason`, `missing_kinds`), and the reason sentence
+still names the unmapped-drop count for an operator reading a broken
+correlation. The series are omitted entirely when no sensor has ever beaten.
+
 Two counters cover the authentication lane, where a failure otherwise leaves no
 trace at all. `wardyn_auth_failed_suppressed_total` counts `auth.failed` audit
 rows the rate limiter dropped — the trail is capped at roughly one row per

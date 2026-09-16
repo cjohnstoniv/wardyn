@@ -23,7 +23,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"maps"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -99,7 +102,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// sidecar is alive but blind (no events), degraded if the beat is stale,
 		// unavailable if no sensor has ever beaten. The overclaim ("we have eBPF
 		// ground truth") is structurally impossible — healthy reflects real events.
-		"ebpf_groundtruth": s.ebpfGroundtruthStatus(r.Context()),
+		"ebpf_groundtruth": ebpfGroundtruthPublic(s.ebpfGroundtruthStatus(r.Context())),
 		// llm_egress_inspection advertises that the OPTIONAL outbound content-
 		// inspection capability is built in. Whether a given run actually scans
 		// (and in which mode) is per-run policy (RunPolicySpec.LLMInspection),
@@ -219,6 +222,69 @@ func (s *Server) ebpfGroundtruthStatus(ctx context.Context) map[string]any {
 		}
 	}
 	return out
+}
+
+// ebpfGroundtruthPublicFields is what the ANONYMOUS /healthz may publish from
+// the ground-truth block: the verdict, when it was last beaten, why it is not
+// healthy, and which kernel event kinds are missing.
+//
+// The cumulative counters (observed_total, dropped_total, dropped_unmapped,
+// observed_by_kind) are deliberately NOT here. /metrics is operator-gated with
+// the reason "a member … would learn operational volumes", and this endpoint is
+// reachable with no credential at all — it was publishing the fleet's kernel
+// event volume to anyone who could open the port. The counters stay on the
+// gated scrape; the dropped_unmapped COUNT still reaches an operator here
+// inside the idle `reason` sentence, which is the form deploy/compose/README.md
+// points them at.
+var ebpfGroundtruthPublicFields = []string{"state", "last_heartbeat", "reason", "missing_kinds"}
+
+// ebpfGroundtruthPublic projects the full status down to the anonymous view.
+// It is a projection rather than a second computation on purpose: one function
+// decides what "healthy" means (ebpfGroundtruthStatus), and the two surfaces
+// can never disagree about the verdict — only about how much of it they show.
+func ebpfGroundtruthPublic(status map[string]any) map[string]any {
+	out := make(map[string]any, len(ebpfGroundtruthPublicFields))
+	for _, k := range ebpfGroundtruthPublicFields {
+		if v, ok := status[k]; ok {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// writeEbpfGroundtruthCounters emits the sensor's cumulative counts on the
+// OPERATOR-GATED scrape — the half of B6-F6 that keeps them reachable. They
+// used to live on the anonymous /healthz, which is the fleet-volume disclosure
+// /metrics is gated to prevent; moving them here loses nobody anything, it just
+// requires the credential every other volume series already requires.
+//
+// Read off the same heartbeat /healthz reads, so the two can never disagree.
+// Omitted entirely when no sensor has ever beaten (state "unavailable"): a
+// deployment with no eBPF sidecar carries no dead series.
+func (s *Server) writeEbpfGroundtruthCounters(ctx context.Context, w io.Writer) {
+	status := s.ebpfGroundtruthStatus(ctx)
+	if status["state"] == "unavailable" {
+		return
+	}
+	num := func(k string) uint64 {
+		v, _ := status[k].(uint64)
+		return v
+	}
+	fmt.Fprintf(w, "# HELP wardyn_groundtruth_observed_total Kernel events the eBPF sensor mapped to a run since it started.\n"+
+		"# TYPE wardyn_groundtruth_observed_total counter\nwardyn_groundtruth_observed_total %d\n", num("observed_total"))
+	fmt.Fprintf(w, "# HELP wardyn_groundtruth_dropped_total Kernel events the eBPF sensor dropped.\n"+
+		"# TYPE wardyn_groundtruth_dropped_total counter\nwardyn_groundtruth_dropped_total %d\n", num("dropped_total"))
+	fmt.Fprintf(w, "# HELP wardyn_groundtruth_dropped_unmapped_total Kernel events the sensor saw but could bind to no run — a broken correlation, not a blind sensor.\n"+
+		"# TYPE wardyn_groundtruth_dropped_unmapped_total counter\nwardyn_groundtruth_dropped_unmapped_total %d\n", num("dropped_unmapped"))
+	byKind, _ := status["observed_by_kind"].(map[string]uint64)
+	if len(byKind) == 0 {
+		return
+	}
+	fmt.Fprint(w, "# HELP wardyn_groundtruth_observed_by_kind_total Kernel events mapped to a run, by event kind.\n"+
+		"# TYPE wardyn_groundtruth_observed_by_kind_total counter\n")
+	for _, kind := range slices.Sorted(maps.Keys(byKind)) {
+		fmt.Fprintf(w, "wardyn_groundtruth_observed_by_kind_total{kind=%q} %d\n", kind, byKind[kind])
+	}
 }
 
 // ebpfGroundtruthCaveat is the one-line, human-readable note a Record Mode
