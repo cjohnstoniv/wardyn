@@ -147,8 +147,9 @@ describe("SettingsScreen — operatorResolved && operator guards the site-config
 // GET /api/v1/site-config became operatorOnly in R1: it carries the upstream
 // proxy secret ref, every integration's credential ref and the internal
 // proxy/SCM hostnames, and a plain member used to receive all of it on this
-// page load. A member now reaches this screen with siteConfig === null (the
-// fetch 403s and the screen already .catch()es into null).
+// page load. A member now reaches this screen with siteConfig === null —
+// since the member-cold-load lane, because the read is skipped outright
+// (adminReads above), not because it still fires and 403s into a caught null.
 //
 // Absence is fine; a false STATEMENT is not. With a null config `isProxyConfigured`
 // is false, so the two places that assert a proxy POSTURE would tell a member of

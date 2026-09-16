@@ -92,11 +92,15 @@ const DemoDetail = React.lazy(() => import("./demos-step"));
 // ------------------------------------------------------------
 export function SetupScreen({ onDone }: { onDone: () => void }) {
   const operator = useOperator();
-  // During the cold-load window `operator` reads the fail-open default, so
-  // `operatorResolved` is the half that closes it — a member landing on a
-  // cold `/setup` load must not fire the admin-only reads below at all
-  // (reloadSiteConfig / loadSecrets / loadProviderCount), not just swallow
-  // their 403s (see loadProviderCount's own precedent below).
+  // Defence in depth: this screen only ever mounts once App.tsx's SetupRoute
+  // has let roleResolved through AND role === "admin" (onboarding-screen.tsx),
+  // and app-shell.tsx already paints no route at all on a settled-but-unknown
+  // identity (pinned by app-shell-identity-routes.test.tsx) — so operator
+  // cannot actually be false on the path that reaches here. This holds if
+  // that ever changes: the admin-only reads below (reloadSiteConfig /
+  // loadSecrets / loadProviderCount) still gate on the caller being a
+  // RESOLVED admin, not just "not yet known to be a member" (see
+  // loadProviderCount's own precedent below).
   const operatorResolved = useOperatorResolved();
   const adminReads = operatorResolved && operator;
   // ?step=<id> deep-links a specific step — the Integrations page's
@@ -365,9 +369,11 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // operator` so a security admin or a member does not take a swallowed 403
   // on every recheck (this funnel runs for every caller); the count just
   // stays 0 (Optional) for them either way. Plain `!operator` alone used to
-  // be the guard, but during the cold-load window `operator` reads the
-  // fail-open default `true`, so it let the very first mount through before
-  // the real role landed — `operatorResolved` is the half that closes it.
+  // be the guard; widened to the shared `adminReads` for the same defence-in-
+  // depth reason `operator`'s own definition above explains — this screen
+  // cannot actually mount with operator false today (app-shell.tsx paints no
+  // route at all on a settled-but-unknown identity), but the guard holds if
+  // that ever changes.
   const loadProviderCount = React.useCallback(() => {
     if (!adminReads) return Promise.resolve();
     return providersApi
@@ -447,7 +453,13 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   React.useEffect(() => {
     recheck(); // also performs the initial SiteConfig + secrets GET (see recheck)
     loadWorkspaces();
-    // run once on mount — the loaders are stable (useCallback([]))
+    // run once on mount — recheck/loadWorkspaces are no longer identity-stable
+    // ([adminReads] now rides through recheck's own dep chain), but adminReads
+    // itself is invariant for the life of this mount: this screen only mounts
+    // once App.tsx's SetupRoute has let the real, RESOLVED role through
+    // (app-shell.tsx's OperatorProvider/RoleProvider both flip from the same
+    // settled /me read), so there is no later tick where a fresh recheck()
+    // would need to fire on adminReads' account.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

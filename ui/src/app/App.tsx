@@ -169,12 +169,16 @@ function RouteFallback() {
 // `/setup` is a member's landing route too (setup-gate.ts's setupGateActive
 // redirects a gated install here regardless of role) — reached on a COLD
 // document load (bookmark, reload, the SSO callback's return) before the real
-// role is known. GettingStarted mounts SetupScreen unconditionally, whose
-// admin-only reads (reloadSiteConfig/loadSecrets/loadProviderCount) are gated
-// on `operatorResolved && operator`, but the FIRST paint under the role
-// context's fail-open "admin" default still happens before that closes — the
-// same idiom FirstRunLanding above uses to hold `/` open until the real role
-// answers holds the /setup route open here too.
+// role is known. Held here until roleResolved, the same idiom FirstRunLanding
+// above uses to hold `/` open until the real role answers.
+//
+// Defence in depth, not the only thing standing between a cold load and the
+// admin funnel: the shell already paints NO route at all while identity is
+// settled-but-unknown (app-shell.tsx's `identityUnknown` arm, pinned by
+// app-shell-identity-routes.test.tsx) — a FAILED `/me` never reaches here in
+// the first place. This gate is what closes the remaining window: `/me`
+// still IN FLIGHT, where `role` reads its fail-open "admin" default and the
+// shell has not yet decided to paint nothing.
 function SetupRoute({
   status,
   onDone,
@@ -183,6 +187,14 @@ function SetupRoute({
   onDone: () => void;
 }) {
   const roleResolved = useRoleResolved();
+  // Warms the funnel's lazy chunk while the gate above holds, so the /me
+  // round trip and the dynamic import overlap instead of serializing — the
+  // gate would otherwise add its wait IN FRONT OF the chunk fetch that used
+  // to start immediately (both states paint the same RouteFallback, so nothing
+  // here is visible either way).
+  React.useEffect(() => {
+    void import("./components/screens/onboarding/onboarding-screen");
+  }, []);
   if (!roleResolved) return <RouteFallback />;
   return (
     <React.Suspense fallback={<RouteFallback />}>

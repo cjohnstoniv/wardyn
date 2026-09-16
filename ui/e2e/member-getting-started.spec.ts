@@ -174,8 +174,8 @@ test.describe("member Getting Started (mocked /me role)", () => {
   // request COUNT at exactly one: the leaked admin-orchestrator read this fix
   // removes would have shown up as a second, earlier GET before role resolved.
   test("a direct cold page.goto(\"/setup\") fires no admin-only reads", async ({ page }) => {
-    const requests: string[] = [];
-    page.on("request", (req) => requests.push(req.url()));
+    const requests: { method: string; url: string }[] = [];
+    page.on("request", (req) => requests.push({ method: req.method(), url: req.url() }));
 
     await page.goto("/setup");
     await expect(page.getByRole("heading", { name: "What's set up for you" })).toBeVisible();
@@ -185,16 +185,20 @@ test.describe("member Getting Started (mocked /me role)", () => {
     // admin-only read a beat to land before counting.
     await page.waitForLoadState("networkidle");
 
-    const isGet = (u: string, path: string) => {
+    // Named "isGet": every read this pins is a GET, and the method is part of
+    // the match — a future member flow that PUTs one of these same paths (a
+    // save, not a read) must not silently count against this pin.
+    const isGet = (r: { method: string; url: string }, path: string) => {
+      if (r.method !== "GET") return false;
       try {
-        return new URL(u).pathname === path;
+        return new URL(r.url).pathname === path;
       } catch {
         return false;
       }
     };
-    expect(requests.filter((u) => isGet(u, "/api/v1/site-config"))).toEqual([]);
-    expect(requests.filter((u) => isGet(u, "/api/v1/workspace-providers"))).toEqual([]);
-    expect(requests.filter((u) => isGet(u, "/api/v1/secrets"))).toHaveLength(1);
+    expect(requests.filter((r) => isGet(r, "/api/v1/site-config"))).toEqual([]);
+    expect(requests.filter((r) => isGet(r, "/api/v1/workspace-providers"))).toEqual([]);
+    expect(requests.filter((r) => isGet(r, "/api/v1/secrets"))).toHaveLength(1);
 
     // The admin welcome hero and the funnel's barrier-step heading — first
     // paint never shows either, whichever of the two an admin cold load would
