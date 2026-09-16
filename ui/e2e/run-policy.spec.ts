@@ -26,7 +26,9 @@ test.describe("Run detail — Make a policy from this run (X2-F6)", () => {
     const res = await request.get("/api/v1/policies", { headers: auth });
     const policies: Array<{ id: string; name: string }> = await res.json();
     const created = policies.find((p) => p.name === POLICY_NAME);
-    if (created) await request.delete(`/api/v1/policies/${created.id}`, { headers: auth });
+    // Review N2: the delete is asserted, not fire-and-forget — a 403/404 here
+    // would otherwise be the silent leak this hook exists to prevent.
+    if (created) expect((await request.delete(`/api/v1/policies/${created.id}`, { headers: auth })).ok()).toBe(true);
   });
 
   test("saves a real policy that appears on /policies", async ({ page }) => {
