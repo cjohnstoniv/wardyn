@@ -51,7 +51,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Field } from "../../wardyn/form-primitives";
 import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
-import { useOperator, useUserDrive } from "../../wardyn/operator-context";
+import { useOperator, useOperatorResolved, useSecurityOperator, useUserDrive } from "../../wardyn/operator-context";
 import { CC_META } from "../../wardyn/cc-meta";
 import { RUN, RUN_MODE } from "../../wardyn/copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
@@ -82,7 +82,7 @@ export function NewRunScreen() {
   // that refusal unexplainable and the grant undiscoverable). Ungranted rows
   // are annotated instead.
   const operator = useOperator();
-  const caps = useMyCapabilities(!operator);
+  const securityOperator = useSecurityOperator(), operatorResolved = useOperatorResolved(), caps = useMyCapabilities(!operator);
   // B4b — "Start a run like this one". The run cockpit hands the prefill over
   // in navigation state (navigate("/runs/new", { state: { prefill } })) rather
   // than through a query string or a second GET: it is already holding the run
@@ -818,8 +818,8 @@ export function NewRunScreen() {
                 interactive={isInteractive}
                 savedPolicy={{
                   active: useSaved,
-                  onActiveChange: (v: boolean) => {
-                    const c = clearedSpecOnCustomSwitch(v, operator, !!state.selectedPolicyId); // F2-F1
+                  onActiveChange: (v: boolean) => { // F2-F1, R1
+                    const c = clearedSpecOnCustomSwitch(v, securityOperator && operatorResolved, !!state.selectedPolicyId);
                     if (c) setSpecText(c);
                     setUseSaved(v);
                   },

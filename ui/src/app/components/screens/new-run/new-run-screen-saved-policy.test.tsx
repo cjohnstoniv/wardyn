@@ -120,6 +120,54 @@ describe("NewRunScreen — the saved-policy lane", () => {
     expect(JSON.stringify(createRunMock.mock.calls[0][0])).not.toContain("<redacted>");
   });
 
+  // R1 (post-ship review) — the clear must key on isSecurityOperator (admin OR
+  // security_admin, matching the server's redactPoliciesForRead gate), never
+  // the bare `operator`/`securityOperator` context booleans: BOTH default
+  // fail-OPEN (true) while /me is unresolved or the fetch failed
+  // (operator-context.tsx), which is the wrong direction for a clear that must
+  // still fire for a member in that state.
+  it("R1: a member whose /me hasn't resolved yet still gets a redacted body cleared", async () => {
+    listPoliciesMock.mockResolvedValue([REDACTED_POLICY]);
+    render(
+      <MemoryRouter>
+        {/* operator/securityOperator both at their fail-open TRUE default —
+            exactly what an unresolved /me looks like — operatorResolved is the
+            ONLY signal this is not a real admin/security_admin answer. */}
+        <OperatorProvider operator operatorResolved={false}>
+          <NewRunScreen />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    await pickSavedPolicy(REDACTED_POLICY.name);
+    await user.click(screen.getByRole("button", { name: /Custom policy/ }));
+    await user.type(screen.getByLabelText("Title"), "unresolved me");
+    await user.click(screen.getByRole("button", { name: "Launch run" }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalled());
+    expect(JSON.stringify(createRunMock.mock.calls[0][0])).not.toContain("<redacted>");
+  });
+
+  // R1 neg — a security_admin's saved-policy body is the REAL one (the server
+  // redacts on isSecurityOperator, which a security_admin passes); the clear
+  // must not fire and throw it away.
+  it("R1 neg: a resolved security_admin keeps the real body — no clear", async () => {
+    listPoliciesMock.mockResolvedValue([REDACTED_POLICY]);
+    render(
+      <MemoryRouter>
+        <OperatorProvider operator={false} securityOperator operatorResolved>
+          <NewRunScreen />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    await pickSavedPolicy(REDACTED_POLICY.name);
+    await user.click(screen.getByRole("button", { name: /Custom policy/ }));
+    await user.type(screen.getByLabelText("Title"), "security admin");
+    await user.click(screen.getByRole("button", { name: "Launch run" }));
+    await waitFor(() => expect(createRunMock).toHaveBeenCalled());
+    // Not cleared: whatever the fixture carried (here, the literal string a
+    // MEMBER would have seen redacted) reaches the wire byte-for-byte.
+    expect(JSON.stringify(createRunMock.mock.calls[0][0])).toContain("<redacted>");
+  });
+
   // F2-F2 — the reworded rail sentence: the saved lane does NOT merge nothing,
   // the create door still prepends the attached Workspace card's mounts.
   it("the rail names the attached workspace as what still merges, not 'nothing'", async () => {

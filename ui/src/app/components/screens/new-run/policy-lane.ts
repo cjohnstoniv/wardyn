@@ -21,19 +21,27 @@ export function defaultSpecText(cc: ConfinementClass | null): string {
   return JSON.stringify({ ...MINIMAL.spec, min_confinement_class: cc ?? "CC1" }, null, 2);
 }
 
-// F2-F1 — a member's saved-policy body comes back REDACTED
-// (redactPoliciesForRead: secret refs read as "<redacted>"). Picking one loads
-// that redacted JSON into the textarea; switching lanes to Custom used to leave
-// it sitting there, so launching inline shipped a policy with a dead credential
-// reference nobody authored. Operators see the real body — never redacted — so
-// only a non-operator switching AWAY from an actual selection gets cleared;
-// an operator's own edits, or a switch with nothing picked, are left alone.
+// F2-F1 — a saved-policy body comes back REDACTED for anyone who is NOT
+// security-tier (redactPoliciesForRead, gated server-side on isSecurityOperator
+// — admin OR security_admin, internal/api/http.go — not the narrower isOperator
+// admin-only predicate). Picking one loads that redacted JSON into the
+// textarea; switching lanes to Custom used to leave it sitting there, so
+// launching inline shipped a policy with a dead credential reference nobody
+// authored.
+//
+// R1 (post-ship review): the caller must pass `securityOperator && resolved`,
+// NEVER the bare `operator`/`securityOperator` context booleans — both default
+// fail-OPEN (true while /me is unresolved or the fetch failed,
+// operator-context.tsx), which is backwards for a clear that has to fire even
+// when a MEMBER's /me hasn't answered yet. A security_admin's own real body
+// (never redacted) is the other edge this gate must recognise, which is why it
+// is NOT the admin-only `operator` either.
 export function clearedSpecOnCustomSwitch(
   active: boolean,
-  operator: boolean,
+  keepsRealBody: boolean,
   hadSelection: boolean,
 ): string | undefined {
-  if (active || operator || !hadSelection) return undefined;
+  if (active || keepsRealBody || !hadSelection) return undefined;
   return defaultSpecText(getDefaultCc());
 }
 
