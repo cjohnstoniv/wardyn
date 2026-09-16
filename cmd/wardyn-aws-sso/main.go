@@ -436,13 +436,52 @@ func parseSSOTime(s string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("unrecognized timestamp %q", s)
 }
 
+// awsEndpointURLSSOEnv is the AWS SDK/CLI's OWN variable for re-pointing the
+// SSO portal service — not a Wardyn knob. The daemon puts it on this sandbox
+// only under the gated test hatch (internal/api's ssoInjectEndpointEnv, reached
+// through harnessLogin.loginEnv), and the SAME hatch replaces the regional
+// portal host in this run's egress allowlist (ssoEgressHosts). A name kept in
+// parity with the daemon's by TestEndpointOverrideEnvVarParity.
+const awsEndpointURLSSOEnv = "AWS_ENDPOINT_URL_SSO"
+
 // ssoPortalBase returns the AWS SSO portal API's base URL for region.
-// Overridable ONLY in tests (see TestRun_NeverInvokesAWSCLIForAccountRoleLookup
-// and TestResolveAccountRole_LeavesBlankOnPortalFailure), to point
-// resolveAccountRole at a fake SSO portal instead of the real one.
+//
+// It honours AWS_ENDPOINT_URL_SSO, which is how the device-code half of the
+// login already reaches a fake: `aws sso login` is the real AWS CLI and reads
+// that variable pair itself. This helper's portal reads are the only AWS calls
+// in the login sandbox the CLI does NOT make, so without this they went to the
+// real portal.sso host while the proxy's allowlist had been re-pointed at the
+// fake — denied, and the capture refused with an empty account/role pair. The
+// variable is absent on every real deployment, where this is the regional URL
+// it always was.
+//
+// A var, so tests can also replace it wholesale (see
+// TestRun_NeverInvokesAWSCLIForAccountRoleLookup and
+// TestResolveAccountRole_LeavesBlankOnPortalFailure).
 var ssoPortalBase = func(region string) string {
-	return "https://portal.sso." + region + ".amazonaws.com"
+	regional := "https://portal.sso." + region + ".amazonaws.com"
+	raw := strings.TrimRight(strings.TrimSpace(os.Getenv(awsEndpointURLSSOEnv)), "/")
+	if raw == "" {
+		return regional
+	}
+	// Fall back rather than dial whatever a mistyped value parses to: a bad
+	// hatch must fail as "the real AWS was denied by the proxy", which names
+	// the misconfiguration, and never as a request to nowhere.
+	if u, err := url.Parse(raw); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		fmt.Fprintf(os.Stderr, endpointOverrideIgnoredLine+"\n", awsEndpointURLSSOEnv, raw, regional)
+		return regional
+	}
+	return raw
 }
+
+// ── DRAFT (M2 canon pending) ────────────────────────────────────────────────
+
+// endpointOverrideIgnoredLine is the ONE stderr line an unparseable
+// AWS_ENDPOINT_URL_SSO gets. Args: the variable name, the offending value, the
+// regional URL used instead.
+//
+// DRAFT (M2 canon pending)
+const endpointOverrideIgnoredLine = "wardyn-aws-sso: ignoring %s=%q (not an absolute http(s) URL) — using %s"
 
 // portalAccount is one entitlement ListAccounts returns.
 type portalAccount struct {

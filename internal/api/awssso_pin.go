@@ -80,7 +80,10 @@ func awsSSOPinEnv(pin awsSSOPin) map[string]string {
 // An UNPINNED row adds nothing, so its launch is byte-identical to what it was.
 // endpointOverride is the TEST hatch (awssso_endpoint.go): `aws sso login`
 // inside the login box reads AWS_ENDPOINT_URL_SSO/_SSO_OIDC, so without them it
-// dials the real AWS no matter what the egress allowlist says. nil on every
+// dials the real AWS no matter what the egress allowlist says. BOTH consumers
+// in that sandbox honour the pair — the AWS CLI's device-code half, and
+// cmd/wardyn-aws-sso's own SSO PORTAL reads (ssoPortalBase), which the CLI does
+// not make and which went to the real portal until they did. nil on every
 // real deployment, leaving this map byte-identical to before the knob existed.
 func (hl harnessLogin) loginEnv(ssoStartURL, ssoRegion string, pin awsSSOPin, endpointOverride string) map[string]string {
 	env := hl.loginConfigEnv(ssoStartURL, ssoRegion)
