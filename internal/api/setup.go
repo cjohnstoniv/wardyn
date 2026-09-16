@@ -641,10 +641,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// model-access scope; a failed read leaves the zero value, which reads as
 	// legacy open mode in all three.
 	if siteCfgOK {
-		checks = append(checks, siteConfigCheck(siteCfg, present), artifactRepoCheck(siteCfg))
-		if chk, ok := internalHostsCheck(siteCfg); ok {
-			checks = append(checks, chk)
-		}
+		checks = siteConfigStatusChecks(checks, siteCfg, present)
 		onboardingComplete = siteCfg.OnboardingCompletedAt != nil
 	}
 	if s.cfg.Store != nil {

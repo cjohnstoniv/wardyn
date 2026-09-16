@@ -515,6 +515,19 @@ func internalHostsCheck(sc types.SiteConfig) (SetupCheck, bool) {
 	}, true
 }
 
+// siteConfigStatusChecks bundles the /setup/status rows derived from one
+// site-config read — siteConfigCheck, artifactRepoCheck, the conditional
+// internalHostsCheck — into a single call. Factored out of handleSetupStatus
+// (setup.go) to keep that function under the funlen gate as this list grows;
+// purely mechanical, no behavior beyond what three separate append calls had.
+func siteConfigStatusChecks(checks []SetupCheck, sc types.SiteConfig, present map[string]bool) []SetupCheck {
+	checks = append(checks, siteConfigCheck(sc, present), artifactRepoCheck(sc))
+	if chk, ok := internalHostsCheck(sc); ok {
+		checks = append(checks, chk)
+	}
+	return checks
+}
+
 // platformChecks are the platform rows — permanent and non-fixable, so always
 // "info" (and absent on a platform they do not apply to).
 func platformChecks(plat setup.Platform) []SetupCheck {
