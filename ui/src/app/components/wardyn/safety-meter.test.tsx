@@ -196,6 +196,37 @@ describe("SafetyMeter — debounce", () => {
   });
 });
 
+// F2-F6 — a `grade`-key compare so an edit never shows the PRIOR document's
+// verdict as if it were current.
+describe("SafetyMeter — a spec edit while a stale grade is on screen", () => {
+  it("says Grading… immediately, keeps the last fill, never the stale label", async () => {
+    vi.useFakeTimers();
+    gradePolicyMock.mockResolvedValueOnce(GUARDED);
+    const B: RunPolicySpec = { ...SPEC, min_confinement_class: "CC3" };
+    const { rerender } = render(<SafetyMeter spec={SPEC} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    const meter = screen.getByTestId("safety-meter");
+    expect(meter).toHaveTextContent("Guarded");
+
+    gradePolicyMock.mockResolvedValueOnce(SAFEST);
+    rerender(<SafetyMeter spec={B} />);
+    // The document that earned "Guarded" no longer exists — the caption must
+    // say so at once, not wait out the debounce still claiming it.
+    expect(meter).not.toHaveTextContent("Guarded");
+    expect(meter).toHaveTextContent("Grading…");
+    // The BAR (data-safety drives its fill/color) is untouched — a stale fill
+    // beats a blank one, and nothing here ever un-renders it mid-edit.
+    expect(meter).toHaveAttribute("data-safety", "Guarded");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+    expect(meter).toHaveTextContent("Safest");
+  });
+});
+
 describe("SafetyMeter — dimmed on parse failure", () => {
   it("dims and never calls the grader when the spec is null", () => {
     render(<SafetyMeter spec={null} />);

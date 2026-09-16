@@ -76,6 +76,12 @@ export function SafetyMeter({
 }) {
   const [grade, setGrade] = React.useState<PolicyGrade | null>(null);
   const [error, setError] = React.useState(false);
+  // F2-F6 — the key `grade` was actually graded FROM. A stale `grade` object
+  // otherwise renders its OLD label the instant the spec changes, ahead of the
+  // 500ms debounce even starting — a verdict about a document that no longer
+  // exists. Compared against specKey below; the bar's FILL stays put (still the
+  // last real grade), only the caption flips to "Grading…" while stale.
+  const [gradedKey, setGradedKey] = React.useState<string | null>(null);
 
   // Key the debounce on the spec's CONTENT, not its identity: the panel reparses
   // (a fresh object) every render, so an identity dep would refire endlessly.
@@ -89,6 +95,7 @@ export function SafetyMeter({
         .then((g) => {
           if (live) {
             setGrade(g);
+            setGradedKey(specKey);
             setError(false);
           }
         })
@@ -110,9 +117,15 @@ export function SafetyMeter({
   const active = !dimmed && label != null;
   const meta = active ? META[label] : null;
   const segments = meta?.segments ?? 0;
+  // The grade IN HAND is for a different document than the one on screen right
+  // now — the bar's fill is still the last real answer (never blanked), but the
+  // caption must not claim it is CURRENT.
+  const stale = active && specKey !== gradedKey;
 
   const caption = active
-    ? label
+    ? stale
+      ? "Grading…"
+      : label
     : specKey == null
       ? "Fix the JSON first"
       : error
