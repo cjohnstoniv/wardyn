@@ -102,7 +102,7 @@ fi
 results_json="${REPO_ROOT}/test/reports/e2e/results.json"
 allow_all_skipped=" ${WARDYN_E2E_ALLOW_ALL_SKIPPED:-} "
 
-pass=0; fail=0; failed_specs=(); skipped_total=0; zero_executed_specs=()
+pass=0; fail=0; failed_specs=(); skipped_total=0; zero_executed_specs=(); flaky_total=0
 for spec in "${specs[@]}"; do
   base="$(basename "${spec}")"
   # Playwright is run from ui/, so its argument is the spec path with the "ui/"
@@ -151,6 +151,15 @@ for spec in "${specs[@]}"; do
   executed=$((stats_expected + stats_unexpected + stats_flaky))
   total=$((executed + stats_skipped))
   skipped_total=$((skipped_total + stats_skipped))
+  # stats_flaky counts tests that only passed after Playwright retried them —
+  # folded into `executed` above (so a flaky run still counts as spec_ok=1 and
+  # never fails the gate), and until now never surfaced anywhere else. A flaky
+  # test IS a defect (X2-F10): print it per spec and fail the whole gate on any
+  # nonzero total, the same way a genuine failure does.
+  if [[ ${stats_flaky} -gt 0 ]]; then
+    log "${base}: ${stats_flaky} flaky test(s) (passed only after a Playwright retry)"
+  fi
+  flaky_total=$((flaky_total + stats_flaky))
 
   spec_name="${base%.spec.ts}"
   if [[ ${total} -gt 0 && ${executed} -eq 0 ]]; then
@@ -176,11 +185,15 @@ done
 
 [[ -n "${LIVE_BASE_URL}" ]] || ./scripts/e2e-backend.sh down >/dev/null 2>&1 || true
 echo
-log "UI e2e summary: ${pass} spec file(s) passed, ${fail} failed, ${skipped_total} test(s) skipped"
+log "UI e2e summary: ${pass} spec file(s) passed, ${fail} failed, ${skipped_total} test(s) skipped, ${flaky_total} test(s) flaky"
 if [[ ${#zero_executed_specs[@]} -gt 0 ]]; then
   log "zero executed (all skipped, not allowlisted): ${zero_executed_specs[*]}"
 fi
 if [[ ${fail} -gt 0 ]]; then
   log "failed: ${failed_specs[*]}"
+  exit 1
+fi
+if [[ ${flaky_total} -gt 0 ]]; then
+  log "flaky total is ${flaky_total}, not 0 — a flaky test is a defect, not a pass"
   exit 1
 fi
