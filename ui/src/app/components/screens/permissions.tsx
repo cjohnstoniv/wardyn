@@ -25,7 +25,7 @@ import { toast } from "sonner";
 import { permissions as api } from "../../lib/api/permissions";
 import { runs as runsApi } from "../../lib/api/runs";
 import { getErrorMessage, relativeTime } from "../../lib/format";
-import { CAPABILITY_KINDS, KIND, PERM, type CapabilityKind } from "../../lib/permissions-copy";
+import { CAPABILITY_KINDS, KIND, PERM, PERM_DRAFT, type CapabilityKind } from "../../lib/permissions-copy";
 import type {
   AgentRun,
   CapabilityEffect,
@@ -330,11 +330,24 @@ export function PermissionsScreen() {
                       <Mono>{g.value}</Mono>
                     </TableCell>
                     <TableCell>
-                      {/* Amber for allow — a widened blast radius, never a
-                          success tone. Red for deny, the strongest row here. */}
-                      <Chip tone={g.effect === "deny" ? "danger" : "warning"}>
-                        {g.effect === "deny" ? PERM.EFFECT_DENY : PERM.EFFECT_ALLOW}
-                      </Chip>
+                      {/* F4-F5/F6-F5: a row markInertGrants flagged can never
+                          match anything the resolver compares — a red Deny
+                          chip for a rule that has never fired, and never
+                          will until re-saved, is the misread this guards.
+                          Neutral, in place of the amber/red effect chip
+                          (never alongside it — the row's real effect is
+                          moot while the value can't canonicalize). */}
+                      {g.inert ? (
+                        <Chip tone="neutral" title={PERM_DRAFT.INERT_REMEDY}>
+                          {PERM_DRAFT.INERT_CHIP}
+                        </Chip>
+                      ) : (
+                        // Amber for allow — a widened blast radius, never a
+                        // success tone. Red for deny, the strongest row here.
+                        <Chip tone={g.effect === "deny" ? "danger" : "warning"}>
+                          {g.effect === "deny" ? PERM.EFFECT_DENY : PERM.EFFECT_ALLOW}
+                        </Chip>
+                      )}
                     </TableCell>
                     <TableCell className="whitespace-nowrap text-muted-foreground" title={g.created_at}>
                       {relativeTime(g.created_at)}

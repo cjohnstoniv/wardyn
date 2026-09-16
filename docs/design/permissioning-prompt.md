@@ -236,7 +236,7 @@ the member holds.
 | `TITLE` | Permissions |
 | `LEAD` | Grant members and groups specific Wardyn capabilities. Each capability is enforced on its own — until you enforce one, nothing about it changes. |
 | `DOCTRINE` | A capability bounds what a member chose, never what an admin pre-authorized. Egress a workspace, a stored policy, or a scan already carries is never narrowed by a grant. |
-| `EXEMPT` | Admins, the admin token, and local mode are never bounded by these rules. |
+| `EXEMPT` | Super admins, the admin token, and local mode are never bounded by these rules. A security admin is bounded like a member. *(0.7.4 CORRECTION — Appendix A F4-F6: the old sentence said "Admins" over a screen `useSecurityOperator()` also lets in, so a security admin read themselves as exempt and then hit their own grants at launch; `capAllowed` exempts `RoleAdmin` only.)* |
 | `ENFORCEMENT_TITLE` | Enforcement |
 | `ENFORCEMENT_LEAD` | Turn a capability on to start refusing what isn't granted. |
 | `CHIP_OFF` | Not enforced |

@@ -33,7 +33,7 @@ vi.mock("../../lib/api/permissions", () => ({
 const listRunsMock = vi.fn();
 vi.mock("../../lib/api/runs", () => ({ runs: { listRuns: () => listRunsMock() } }));
 
-import { CAPABILITY_KINDS, KIND, PERM } from "../../lib/permissions-copy";
+import { CAPABILITY_KINDS, KIND, PERM, PERM_DRAFT } from "../../lib/permissions-copy";
 import type { CapabilityGrant } from "../../lib/types";
 import { PermissionsScreen } from "./permissions";
 import { OperatorProvider } from "../wardyn/operator-context";
@@ -281,6 +281,34 @@ describe("PermissionsScreen — the grant table", () => {
     expect(allow.className).toContain("warning");
     expect(allow.className).not.toContain("success");
     expect(within(table).getByText(PERM.EFFECT_DENY).className).toContain("danger");
+  });
+
+  // F4-F5/F6-F5 (Appendix A V8): a grant markInertGrants flagged Inert on the
+  // wire (a pre-canonicalization value that can never match) used to render
+  // as an ordinary red Deny/amber Allow chip — a rule that has never fired,
+  // and never will until re-saved, read as an active one.
+  it("an inert grant renders a neutral Inert chip, never its effect's amber/red tone", async () => {
+    getPermissionsMock.mockResolvedValue({
+      grants: [grant({ value: "STRIPE_LIVE_KEY", inert: true })],
+      enforcement: {},
+    });
+    renderScreen();
+
+    const table = await screen.findByRole("table");
+    expect(within(table).getByText(PERM_DRAFT.INERT_CHIP)).toBeInTheDocument();
+    expect(within(table).queryByText(PERM.EFFECT_ALLOW)).not.toBeInTheDocument();
+    expect(within(table).queryByText(PERM.EFFECT_DENY)).not.toBeInTheDocument();
+  });
+
+  // Negative control: an ordinary (non-inert) grant is untouched by the F4-F5
+  // fix — same test as above, absent `inert`.
+  it("a grant without the inert marker renders as today", async () => {
+    getPermissionsMock.mockResolvedValue({ grants: [grant()], enforcement: {} });
+    renderScreen();
+
+    const table = await screen.findByRole("table");
+    expect(within(table).getByText(PERM.EFFECT_ALLOW)).toBeInTheDocument();
+    expect(within(table).queryByText(PERM_DRAFT.INERT_CHIP)).not.toBeInTheDocument();
   });
 
   it("removing a grant confirms with the subject named, then deletes it", async () => {

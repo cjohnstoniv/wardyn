@@ -149,7 +149,12 @@ export const PERM = {
   // a third?").
   DOCTRINE:
     "A capability bounds what a member chose, never what an admin pre-authorized. Egress a workspace, a stored policy, or a scan already carries is never narrowed by a grant.",
-  EXEMPT: "Admins, the admin token, and local mode are never bounded by these rules.",
+  // F4-F6 (Appendix A V8): capAllowed (internal/api/capabilities.go) exempts
+  // RoleAdmin only — a security admin (useSecurityOperator, gated to THIS
+  // screen) is bounded like anyone else. The old sentence said "Admins" over
+  // a screen a security admin also reaches, so they read themselves as
+  // exempt and then hit their own grants at launch.
+  EXEMPT: "Super admins, the admin token, and local mode are never bounded by these rules. A security admin is bounded like a member.",
 
   // ---- enforcement switch ----
   ENFORCEMENT_TITLE: "Enforcement",
@@ -230,6 +235,28 @@ export const PERM = {
   // one-liner the amber styling exists to carry.
   GRANT_IS_NOT_SUCCESS: "Every allow below is something a member can reach that they otherwise couldn't.",
 };
+
+// ==================== PERM_DRAFT — 0.7.4 field-report round ================
+// DRAFT (M2 canon pending): new strings this round. Kept OUT of PERM above —
+// permissions-copy.ts carries no byte-parity gate against
+// docs/design/permissioning-prompt.md (Appendix A V8's own note: "no
+// byte-parity suite on permissions-copy.ts"), so nothing PARSES this file
+// back out of the doc today, but a DRAFT string still gets its own export
+// (the AGENTS_DRAFT / workspace-providers-copy.ts precedent) rather than
+// landing inside PERM, which the doc's own §7 table transcribes verbatim.
+export const PERM_DRAFT = {
+  // F4-F5/F6-F5 (Appendix A V8): a stored grant whose value predates the
+  // per-kind canonicalization rule (grantView.Inert, permissions.go's
+  // markInertGrants) can never match anything the resolver compares — a red
+  // Deny chip for a rule that has never fired, and never will until re-saved.
+  // Neutral, not danger/warning: it names a state, not a live consequence.
+  INERT_CHIP: "Inert",
+  // Reuses the substance of the server's own WARN-log remedy (permissions.go:83
+  // — "re-save each row through POST /api/v1/permissions/grants — the write
+  // boundary canonicalizes it into the form the resolver compares, or refuses
+  // it by name") rather than inventing a second diagnosis.
+  INERT_REMEDY: "This row predates the value rule and can never match anything the resolver compares — re-save it to canonicalize it, or find out why it's refused.",
+} as const;
 
 // ============================ Member why-denied ============================
 
