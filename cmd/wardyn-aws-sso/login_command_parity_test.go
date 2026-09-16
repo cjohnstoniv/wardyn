@@ -83,4 +83,12 @@ func TestLoginCommand_NoFourthCopy(t *testing.T) {
 	if !strings.Contains(bashrc, "/usr/local/lib/wardyn-attach-hint.sh") {
 		t.Error("the interactive attach shell no longer sources a per-image hint, so the login box says nothing")
 	}
+	// And the Dockerfile is the ONLY thing that puts the file at that path,
+	// while agent-run hard-sources it under `set -euo pipefail`: drop the COPY
+	// and agent-run exits 1 at container start — the login sandbox never comes
+	// up at all — with every assertion above still green.
+	dockerfile := repoFile(t, "deploy", "images", "aws-sso", "Dockerfile")
+	if !strings.Contains(dockerfile, "login-hint.sh /usr/local/lib/wardyn-attach-hint.sh") {
+		t.Error("deploy/images/aws-sso/Dockerfile no longer installs login-hint.sh at /usr/local/lib/wardyn-attach-hint.sh; agent-run sources that path and would fail the container at start")
+	}
 }
