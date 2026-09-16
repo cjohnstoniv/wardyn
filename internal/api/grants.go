@@ -28,7 +28,7 @@ func (s *Server) handleListGrants(w http.ResponseWriter, r *http.Request) {
 	}
 	grants, err := s.cfg.Store.ListGrantsByRun(ctx, id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list grants: "+err.Error())
+		writeServerError(w, r, "list grants", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, grants)

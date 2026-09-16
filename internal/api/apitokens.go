@@ -267,7 +267,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 
 	existing, err := s.cfg.Store.ListAPITokensByPrincipal(ctx, sub)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list api tokens: "+err.Error())
+		writeServerError(w, r, "list api tokens", err)
 		return
 	}
 	live := 0
@@ -347,7 +347,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.SessionRevocations != nil {
 		revoked, rerr := s.cfg.SessionRevocations.IsSessionRevoked(ctx, sub, oidcEmailFromContext(ctx), authorizedAt)
 		if rerr != nil {
-			writeError(w, http.StatusInternalServerError, "create api token: "+rerr.Error())
+			writeServerError(w, r, "create api token", rerr)
 			return
 		}
 		if revoked {
@@ -366,7 +366,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:       authorizedAt,
 	}, plaintext)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "create api token: "+err.Error())
+		writeServerError(w, r, "create api token", err)
 		return
 	}
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
@@ -387,7 +387,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListAPITokens(w http.ResponseWriter, r *http.Request) {
 	tokens, err := s.cfg.Store.ListAPITokensByPrincipal(r.Context(), principalFromRequest(r))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list api tokens: "+err.Error())
+		writeServerError(w, r, "list api tokens", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, tokens)
@@ -400,7 +400,7 @@ func (s *Server) handleListAPITokens(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleListAllAPITokens(w http.ResponseWriter, r *http.Request) {
 	tokens, err := s.cfg.Store.ListAPITokens(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list api tokens: "+err.Error())
+		writeServerError(w, r, "list api tokens", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, tokens)
@@ -445,7 +445,7 @@ func (s *Server) revokeAPIToken(w http.ResponseWriter, r *http.Request, principa
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "revoke api token: "+err.Error())
+		writeServerError(w, r, "revoke api token", err)
 		return
 	}
 	// principal names the token's OWNER, which is the whole point of the row on

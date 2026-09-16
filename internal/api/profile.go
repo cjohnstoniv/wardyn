@@ -57,12 +57,12 @@ func (s *Server) handleSynthesizeProfile(w http.ResponseWriter, r *http.Request)
 
 	events, err := s.cfg.Store.QueryAuditEvents(ctx, id, maxCaptureAuditEvents)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "query audit events: "+err.Error())
+		writeServerError(w, r, "query audit events", err)
 		return
 	}
 	grants, err := s.cfg.Store.ListGrantsByRun(ctx, id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list grants: "+err.Error())
+		writeServerError(w, r, "list grants", err)
 		return
 	}
 

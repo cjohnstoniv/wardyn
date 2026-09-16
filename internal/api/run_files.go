@@ -257,7 +257,7 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotImplemented, runFilesUnsupportedMsg+" ("+err.Error()+")")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "read workspace files: "+err.Error())
+		writeServerError(w, r, "read workspace files", err)
 		return
 	}
 	if sess == nil {
@@ -317,7 +317,7 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 			// The exec itself broke (deadline, connection loss) — distinct from
 			// "git said no", and a genuine failure of the read.
 			s.auditRunFilesFailure(r, id, werr)
-			writeError(w, http.StatusInternalServerError, "read workspace files: "+werr.Error())
+			writeServerError(w, r, "read workspace files", werr)
 			return
 		}
 		// exit 3 is the script's OWN "there is no git work tree here" signal.

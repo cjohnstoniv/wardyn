@@ -337,9 +337,13 @@ type grantWiring struct {
 // are deliberately excluded from injections: an unmet approval would fail the
 // proxy's startup mint and brick the sandbox's egress (fail closed, but a
 // footgun as a default). A grant write failure is fatal (the run would be
-// ungovernable): the HTTP error is written here and ok=false returned.
+// ungovernable): the HTTP error is written here and ok=false returned — through
+// writeServerError, so the driver text behind it reaches the LOG and not the
+// member who called POST /runs (W6-S2). That chokepoint is why the request is a
+// parameter beside the writer: it is what names the method and path in the log
+// line an operator is already reading.
 // Extracted verbatim from handleCreateRun.
-func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, runID uuid.UUID, now time.Time, spec types.RunPolicySpec) (grantWiring, bool) {
+func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, r *http.Request, runID uuid.UUID, now time.Time, spec types.RunPolicySpec) (grantWiring, bool) {
 	gw := grantWiring{
 		gitPATGrants: map[string]string{},
 		sshGrants:    map[string]string{},
@@ -351,7 +355,7 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, ru
 	// no-op before it reads anything.
 	sc, scErr := s.siteConfigForLaneVeto(ctx, spec)
 	if scErr != nil {
-		writeError(w, http.StatusInternalServerError, "get site config: "+scErr.Error())
+		writeServerError(w, r, "get site config", scErr)
 		return gw, false
 	}
 	// This run's own repositories, so a grant whose scope names only a HOST is
@@ -368,7 +372,7 @@ func (s *Server) persistRunGrants(ctx context.Context, w http.ResponseWriter, ru
 			Spec:      g,
 		}); gerr != nil {
 			// A grant write failure is fatal: the run would be ungovernable.
-			writeError(w, http.StatusInternalServerError, "create grant: "+gerr.Error())
+			writeServerError(w, r, "create grant", gerr)
 			return gw, false
 		}
 		if g.Kind == types.GrantGitHubToken {

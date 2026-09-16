@@ -614,7 +614,7 @@ func TestProviderLaneVetoAtTheThreeGrantArms(t *testing.T) {
 			srv, st, _ := govEscapeFixture(t, &capStore{})
 			st.siteConfig = tc.sc
 			runID := uuid.New()
-			gw, ok := srv.persistRunGrants(context.Background(), httptest.NewRecorder(), runID, time.Now().UTC(),
+			gw, ok := srv.persistRunGrants(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), runID, time.Now().UTC(),
 				types.RunPolicySpec{EligibleGrants: []types.GrantSpec{tc.grant}})
 			if !ok {
 				t.Fatal("persistRunGrants failed")
@@ -661,7 +661,7 @@ func TestProviderLaneVetoPermitsWhatTheRowPermits(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, st, _ := govEscapeFixture(t, &capStore{})
 			st.siteConfig = tc.sc
-			gw, ok := srv.persistRunGrants(context.Background(), httptest.NewRecorder(), uuid.New(), time.Now().UTC(),
+			gw, ok := srv.persistRunGrants(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), uuid.New(), time.Now().UTC(),
 				types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT, Scope: scope}}})
 			if !ok {
 				t.Fatal("persistRunGrants failed")
@@ -751,7 +751,7 @@ func TestLaneVetoAsksTheROWThatAdmitted(t *testing.T) {
 			st.siteConfig = providersConfig(order)
 			// The git_pat scope names only the host, so the decider is the row that
 			// admitted THIS RUN's repository on it.
-			gw, ok := srv.persistRunGrants(context.Background(), httptest.NewRecorder(), uuid.New(), time.Now().UTC(),
+			gw, ok := srv.persistRunGrants(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), uuid.New(), time.Now().UTC(),
 				types.RunPolicySpec{
 					WorkspaceRepos: []types.WorkspaceRepo{{Repo: admitOnRow}},
 					EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT,
@@ -773,7 +773,7 @@ func TestLaneVetoAsksTheROWThatAdmitted(t *testing.T) {
 	t.Run("the admitting row's answer is the answer", func(t *testing.T) {
 		srv, st, _ := govEscapeFixture(t, &capStore{})
 		st.siteConfig = providersConfig([]types.GitProvider{open, strict})
-		gw, ok := srv.persistRunGrants(context.Background(), httptest.NewRecorder(), uuid.New(), time.Now().UTC(),
+		gw, ok := srv.persistRunGrants(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), uuid.New(), time.Now().UTC(),
 			types.RunPolicySpec{
 				WorkspaceRepos: []types.WorkspaceRepo{{Repo: admitOnRow}},
 				EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT,
@@ -814,7 +814,7 @@ func TestLaneVetoAsksTheROWThatAdmitted(t *testing.T) {
 		}
 		srv, st, _ := govEscapeFixture(t, &capStore{})
 		st.siteConfig = sc
-		gw, ok := srv.persistRunGrants(context.Background(), httptest.NewRecorder(), uuid.New(), time.Now().UTC(),
+		gw, ok := srv.persistRunGrants(context.Background(), httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/api/v1/runs", nil), uuid.New(), time.Now().UTC(),
 			types.RunPolicySpec{EligibleGrants: []types.GrantSpec{{Kind: types.GrantGitPAT,
 				Scope: mustJSON(map[string]any{"host": "github.com", "secret_name": "gh-pat"})}}})
 		if !ok {

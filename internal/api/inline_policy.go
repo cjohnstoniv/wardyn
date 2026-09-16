@@ -83,7 +83,7 @@ func (s *Server) boundMemberSpec(ctx context.Context, w http.ResponseWriter, r *
 	}
 	capWarns, capDrops, cerr := s.narrowMemberInlinePolicy(ctx, s.secretOwnerFromRequest(r), &spec)
 	if cerr != nil {
-		writeError(w, http.StatusInternalServerError, "resolve capability: "+cerr.Error())
+		writeServerError(w, r, "resolve capability", cerr)
 		return types.RunPolicySpec{}, nil, false
 	}
 	warns = append(warns, capWarns...)
@@ -259,7 +259,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 			writeError(w, http.StatusBadRequest, "policy_id not found")
 			return types.RunPolicySpec{}, nil, nil, false
 		}
-		writeError(w, http.StatusInternalServerError, "resolve policy: "+err.Error())
+		writeServerError(w, r, "resolve policy", err)
 		return types.RunPolicySpec{}, nil, nil, false
 	}
 	storedWarns := append([]string(nil), ceiling.Warnings...)
