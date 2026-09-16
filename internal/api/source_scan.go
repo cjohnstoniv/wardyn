@@ -337,7 +337,7 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 	}
 	sources, err := s.cfg.Store.GetSourcesByIDs(r.Context(), sourceIDs)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "load attached sources: "+err.Error())
+		writeServerError(w, r, "load attached sources", err)
 		return
 	}
 
@@ -401,7 +401,7 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 			}
 			if lerr != nil {
 				partialAudit(id, lerr.Error())
-				writeError(w, http.StatusInternalServerError, "launch scan run: "+lerr.Error())
+				writeServerError(w, r, "launch scan run", lerr)
 				return
 			}
 			launched = append(launched, run.ID)
@@ -423,7 +423,7 @@ func (s *Server) scanAttachedSources(w http.ResponseWriter, r *http.Request, ws 
 	// carries the freshly-merged profile the hydrate pass computes.
 	fresh, err := s.cfg.Store.GetWorkspace(r.Context(), ws.ID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "reload workspace: "+err.Error())
+		writeServerError(w, r, "reload workspace", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorType, actor,

@@ -131,7 +131,7 @@ func (s *Server) admitRepoSources(w http.ResponseWriter, r *http.Request, repos 
 	}
 	sc, err := s.cfg.Store.GetSiteConfig(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		writeServerError(w, r, "get site config", err)
 		return true
 	}
 	if !providersConfigured(sc) {

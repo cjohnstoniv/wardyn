@@ -454,7 +454,7 @@ func (s *Server) handleMeCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 	enf, err := s.cfg.Store.GetCapabilityEnforcement(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get capability enforcement: "+err.Error())
+		writeServerError(w, r, "get capability enforcement", err)
 		return
 	}
 	// CreatedBy names the ADMIN who wrote the row (principal or email). A member
