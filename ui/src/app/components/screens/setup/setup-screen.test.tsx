@@ -150,7 +150,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // The orchestrator's own SiteConfig read AND the embedded IntegrationsScreen's
     // independent one both GET on mount (unconfigured zero value by default).
     getSiteConfigMock.mockReset().mockResolvedValue({});
-    putSiteConfigMock.mockReset().mockResolvedValue(undefined);
+    putSiteConfigMock.mockReset().mockResolvedValue({ siteConfig: {}, danglingSecretRefs: [], onboardingCompletedAtIgnored: false, appliesFrom: "", sourcesNoLongerAdmitted: null }); // F6-F6: SiteConfigSaveResult, not void
     getDrivesMock
       .mockReset()
       .mockResolvedValue({ drives: [], grants: [], host_roots_configured: false, runner_target: "docker" });

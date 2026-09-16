@@ -107,7 +107,14 @@ describe("SetupScreen — operatorResolved && operator guard on admin-only reads
     healthMock.mockReset().mockResolvedValue({ confinement_classes: ["CC1", "CC2"] });
     listWorkspacesMock.mockReset().mockResolvedValue([]);
     getSiteConfigMock.mockReset().mockResolvedValue({});
-    putSiteConfigMock.mockReset().mockResolvedValue(undefined);
+    // F6-F6: putSiteConfig returns the four advisory signals now, not void.
+    putSiteConfigMock.mockReset().mockResolvedValue({
+      siteConfig: {},
+      danglingSecretRefs: [],
+      onboardingCompletedAtIgnored: false,
+      appliesFrom: "next_dispatch",
+      sourcesNoLongerAdmitted: null,
+    });
     getDrivesMock
       .mockReset()
       .mockResolvedValue({ drives: [], grants: [], host_roots_configured: false, runner_target: "docker" });

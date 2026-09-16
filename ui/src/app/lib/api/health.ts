@@ -133,6 +133,21 @@ export interface ProxyTestResult {
   custom?: boolean;
 }
 
+// PUT /api/v1/site-config's response (F6-F6, Appendix A V8): the persisted
+// document plus the write's four advisory signals (site_config.go's
+// siteConfigPutResponse) — none of which round-trip through GET, and none of
+// which were read anywhere until this fix. `sourcesNoLongerAdmitted` mirrors
+// the wire's POINTER: null means this body named no workspace_providers block
+// at all (nothing to report), never the same as 0 (named one, narrowed
+// nothing).
+export interface SiteConfigSaveResult {
+  siteConfig: SiteConfig;
+  danglingSecretRefs: string[];
+  onboardingCompletedAtIgnored: boolean;
+  appliesFrom: string;
+  sourcesNoLongerAdmitted: number | null;
+}
+
 export const health = {
   // GET /api/v1/site-config — the operator-wide baseline (upstream proxy secret
   // ref / per-ecosystem artifact-registry overrides / default SCM hosts). An
@@ -162,11 +177,34 @@ export const health = {
   // bug verbatim — every Corporate-network save 400'd once onboarding had
   // completed. The strip is now driven by SERVER_OWNED_SITE_CONFIG_KEYS
   // (lib/types/site.ts), the one list a third such field gets added to.
-  async putSiteConfig(cfg: SiteConfig): Promise<void> {
+  async putSiteConfig(cfg: SiteConfig): Promise<SiteConfigSaveResult> {
     const body: Record<string, unknown> = { ...cfg };
     for (const k of SERVER_OWNED_SITE_CONFIG_KEYS) delete body[k];
     const res = await wfetch("/site-config", { method: "PUT", body: JSON.stringify(body) });
-    await asJson<SiteConfig>(res);
+    const parsed = await asJson<
+      SiteConfig & {
+        dangling_secret_refs?: string[];
+        onboarding_completed_at_ignored?: boolean;
+        applies_from?: string;
+        sources_no_longer_admitted?: number | null;
+      }
+    >(res);
+    // F6-F6 (Appendix A V8): siteConfigPutResponse's four advisory signals —
+    // this used to discard all of them and return void, so an admin naming a
+    // missing secret ref was told their save landed cleanly.
+    const { dangling_secret_refs, onboarding_completed_at_ignored, applies_from, sources_no_longer_admitted, ...siteConfig } =
+      parsed;
+    return {
+      siteConfig,
+      danglingSecretRefs: dangling_secret_refs ?? [],
+      onboardingCompletedAtIgnored: onboarding_completed_at_ignored ?? false,
+      appliesFrom: applies_from ?? "",
+      // A POINTER on the wire: null/absent when this body named no
+      // workspace_providers block at all (nothing to report) — never
+      // coalesced to 0, which would claim "narrowed nothing" for a save that
+      // said nothing about providers.
+      sourcesNoLongerAdmitted: sources_no_longer_admitted ?? null,
+    };
   },
 
   // POST /api/v1/site-config/test-proxy — launches a throwaway confined probe

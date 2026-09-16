@@ -111,7 +111,14 @@ describe("step-bodies.tsx — smoke", () => {
     healthMock.mockReset().mockResolvedValue({ confinement_classes: ["CC1", "CC2"] });
     listWorkspacesMock.mockReset().mockResolvedValue([]);
     getSiteConfigMock.mockReset().mockResolvedValue({});
-    putSiteConfigMock.mockReset().mockResolvedValue(undefined);
+    // F6-F6: putSiteConfig returns the four advisory signals now, not void.
+    putSiteConfigMock.mockReset().mockResolvedValue({
+      siteConfig: {},
+      danglingSecretRefs: [],
+      onboardingCompletedAtIgnored: false,
+      appliesFrom: "next_dispatch",
+      sourcesNoLongerAdmitted: null,
+    });
     createWorkspaceMock.mockReset();
     getDrivesMock
       .mockReset()

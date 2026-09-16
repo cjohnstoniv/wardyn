@@ -332,3 +332,21 @@ export const AGENTS_DRAFT = {
   SSO_ROLE_NAME_HINT:
     "The IAM role a sign-in for this row must resolve to. Set together with the account above, or leave both blank.",
 } as const;
+
+// ==================== PROVIDERS_DRAFT — 0.7.4 field-report round ===========
+// DRAFT (M2 canon pending): new strings this round, NOT part of the frozen
+// §7.2 PROVIDERS table — kept in a separate export for the same reason
+// AGENTS_DRAFT is (the byte-check parses only PROVIDERS/PROVIDER_MEMBER/
+// AGENTS out of the doc).
+export const PROVIDERS_DRAFT = {
+  // F4-F3 (Appendix A V8, corrected verdict): the keep-draft-mounted 412
+  // banner's ONE control — discards the admin's own unsaved edits and reloads
+  // the server's version. NO "Save over theirs" arm: a security document is
+  // never last-writer-wins from this banner.
+  DISCARD_AND_RELOAD: "Discard mine and reload",
+  // F6-F6: PUT /site-config's dangling_secret_refs, surfaced in the
+  // Corporate-network save toast — an ADDITIONAL warning beside whatever
+  // success toast the saving step already shows, never a replacement for it.
+  SAVED_DANGLING_REFS: (refs: string[]) =>
+    `Saved, but ${refs.length === 1 ? "this secret isn't" : "these secrets aren't"} stored: ${refs.join(", ")}.`,
+} as const;

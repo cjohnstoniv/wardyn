@@ -137,6 +137,69 @@ describe("health — site-config integrations round-trip", () => {
   });
 });
 
+// F6-F6 (Appendix A V8): siteConfigPutResponse's four advisory signals used to
+// be discarded outright — putSiteConfig returned void — so an admin saving a
+// proxy config naming a missing secret was told it saved cleanly.
+describe("health.putSiteConfig() — the four advisory signals", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns all four signals off the wire, and the persisted document with them stripped", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          scm_hosts: ["github.com"],
+          dangling_secret_refs: ["upstream-proxy-secret"],
+          onboarding_completed_at_ignored: true,
+          applies_from: "next_dispatch",
+          sources_no_longer_admitted: 2,
+        }),
+        { status: 200 },
+      ),
+    );
+    const result = await health.putSiteConfig({ scm_hosts: ["github.com"] });
+
+    expect(result.danglingSecretRefs).toEqual(["upstream-proxy-secret"]);
+    expect(result.onboardingCompletedAtIgnored).toBe(true);
+    expect(result.appliesFrom).toBe("next_dispatch");
+    expect(result.sourcesNoLongerAdmitted).toBe(2);
+    expect(result.siteConfig).toEqual({ scm_hosts: ["github.com"] });
+    // The four signals must not leak into the persisted document a caller
+    // might GET-spread into its next save.
+    for (const k of ["dangling_secret_refs", "onboarding_completed_at_ignored", "applies_from", "sources_no_longer_admitted"]) {
+      expect(result.siteConfig).not.toHaveProperty(k);
+    }
+  });
+
+  // sources_no_longer_admitted is a POINTER on the wire: absent when this body
+  // named no workspace_providers block at all. Never coalesced to 0 — a
+  // Corporate-network save (which never carries workspace_providers) must
+  // read "nothing to report", not "narrowed zero sources".
+  it("sourcesNoLongerAdmitted is null, never 0, when the wire omits it", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200 }));
+    const result = await health.putSiteConfig({});
+    expect(result.sourcesNoLongerAdmitted).toBeNull();
+  });
+
+  // Negative control: a clean save (no dangling refs, no narrowed sources)
+  // reports empty/false/null for every signal — nothing to warn about.
+  it("a clean save reports no signals", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ scm_hosts: ["github.com"] }), { status: 200 }));
+    const result = await health.putSiteConfig({ scm_hosts: ["github.com"] });
+    expect(result.danglingSecretRefs).toEqual([]);
+    expect(result.onboardingCompletedAtIgnored).toBe(false);
+    expect(result.sourcesNoLongerAdmitted).toBeNull();
+  });
+});
+
 // testProxy's optional url — the escape for a host with no public internet
 // (see health.ts's doc comment). No url must keep sending a bare POST (the
 // default multi-target check); a url must be the ONLY thing in the body.

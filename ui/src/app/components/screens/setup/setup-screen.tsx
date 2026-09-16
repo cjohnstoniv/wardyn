@@ -20,6 +20,7 @@
 // is per-browser cosmetic state, not a lock on the rest of the console.
 import * as React from "react";
 import { useSearchParams } from "react-router-dom";
+import { toast } from "sonner";
 import type {
   ConfinementClass,
   SetupStatus,
@@ -53,6 +54,7 @@ import {
 import { IntegrationsStep } from "./integrations-step";
 import { ProvidersCard } from "./providers-card";
 import { providers as providersApi } from "../../../lib/api/providers";
+import { PROVIDERS, PROVIDERS_DRAFT } from "../../../lib/workspace-providers-copy";
 import { DeploymentStep, ReviewStep, WorkspacesStep } from "./step-bodies";
 import {
   DEMO_STEP_IDS,
@@ -350,10 +352,26 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // only Corporate network uses it (Host proxy / Egress redirection saves).
   // PUTs then re-GETs so this orchestrator's own copy — and the rail badges
   // derived from it — never goes stale after an in-step save.
+  //
+  // F6-F6 (Appendix A V8): the write's four advisory signals used to be
+  // discarded (putSiteConfig returned void), so an admin naming a secret ref
+  // nothing stores was told the save landed cleanly. These two warnings are
+  // ADDITIONAL toasts, stacked above whatever success toast the saving step
+  // itself already shows (corp-network-proxy.tsx / corp-network-egress.tsx) —
+  // never a replacement for it, so a clean save's plain success is untouched.
   const saveSiteConfig = React.useCallback(
     async (next: SiteConfig) => {
-      await healthApi.putSiteConfig(next);
+      const result = await healthApi.putSiteConfig(next);
       await reloadSiteConfig();
+      if (result.danglingSecretRefs.length > 0) {
+        toast.warning(PROVIDERS_DRAFT.SAVED_DANGLING_REFS(result.danglingSecretRefs));
+      }
+      // A POINTER on the wire: only a PRESENT positive number is a narrowed-
+      // sources warning — never `?? 0`, which would claim "narrowed nothing"
+      // for a save (this screen's own) that named no provider block at all.
+      if (typeof result.sourcesNoLongerAdmitted === "number" && result.sourcesNoLongerAdmitted > 0) {
+        toast.warning(PROVIDERS.SAVED_NARROWED(result.sourcesNoLongerAdmitted));
+      }
     },
     [reloadSiteConfig],
   );
