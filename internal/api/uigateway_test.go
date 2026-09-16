@@ -202,6 +202,31 @@ type uiHarness struct {
 	run      types.AgentRun
 	owner    string
 	launcher int // exit code the in-sandbox launcher probe reports
+	clock    *uiClock
+}
+
+// uiClock is the harness's movable clock, and it is LOCKED because the server
+// reads Config.Now off goroutines the test does not own: a pooled relay
+// connection's close writes the ui.close audit — whose duration_sec comes from
+// cfg.Now — from whichever of net/http's read or write loop closes first. A
+// test that moves time by reassigning cfg.Now, or by mutating a plain captured
+// variable, therefore races that close (uiDial's closeFn, in uigateway.go).
+// Set the clock once, at New, and move it through advance.
+type uiClock struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func (c *uiClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.at
+}
+
+func (c *uiClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.at = c.at.Add(d)
 }
 
 const uiTestPort = 8080
@@ -214,6 +239,7 @@ func newUIHarness(t *testing.T, backend http.Handler) *uiHarness {
 	h := &uiHarness{
 		t: t, store: newUIMemStore(), runner: &sshFakeRunner{}, audit: &safeRecorder{},
 		owner: "alice", backend: httptest.NewServer(backend),
+		clock: &uiClock{at: time.Now()},
 	}
 	t.Cleanup(h.backend.Close)
 
@@ -249,7 +275,7 @@ func newUIHarness(t *testing.T, backend http.Handler) *uiHarness {
 	h.srv = New(Config{
 		Store: h.store, Runner: h.runner, Audit: h.audit,
 		UIListenAddr: ":8081", UIAdvertiseURL: "https://ui.example.com", UISessionKey: key,
-		BaseCtx: context.Background(),
+		BaseCtx: context.Background(), Now: h.clock.now,
 	})
 	h.gateway = h.srv.UIGatewayHandler()
 	if h.gateway == nil {

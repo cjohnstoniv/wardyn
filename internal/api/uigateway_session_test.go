@@ -437,7 +437,7 @@ func TestUIGateway_SessionTTLIsAnOperatorBound(t *testing.T) {
 	// The operator shortens the bound; the cookie in the browser is unchanged,
 	// and its own signed Expires is still an hour away.
 	h.srv.cfg.UISessionTTL = time.Second
-	h.srv.cfg.Now = func() time.Time { return time.Now().Add(time.Minute) }
+	h.clock.advance(time.Minute)
 	if rec := uiGet(h, path, cookie); rec.Code != http.StatusForbidden {
 		t.Fatalf("a session older than the configured TTL was accepted: %d %s, want 403",
 			rec.Code, rec.Body.String())
@@ -516,8 +516,6 @@ func TestUIGateway_PooledConnectionIsReassertedOnAnInterval(t *testing.T) {
 	countingSocat(h, &dials)
 	rev := &uiRevocations{}
 	h.srv.cfg.SessionRevocations = rev
-	now := time.Now()
-	h.srv.cfg.Now = func() time.Time { return now }
 
 	cookie := h.openSession()
 	path := uiRelayPrefix(h.run.ID, "code") + "/ide"
@@ -542,7 +540,7 @@ func TestUIGateway_PooledConnectionIsReassertedOnAnInterval(t *testing.T) {
 	}
 
 	// Past the window, on that SAME pooled connection: refused.
-	now = now.Add(uiReassertInterval + time.Second)
+	h.clock.advance(uiReassertInterval + time.Second)
 	rec := uiGet(h, path, cookie)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("a revoked human kept being served on a warm pooled connection: %d %s, want 403",
@@ -563,8 +561,6 @@ func TestUIGateway_ReassertIsDebouncedPerSession(t *testing.T) {
 	h := newUIHarness(t, okBackend())
 	rev := &uiRevocations{}
 	h.srv.cfg.SessionRevocations = rev
-	now := time.Now()
-	h.srv.cfg.Now = func() time.Time { return now }
 	cookie := h.openSession()
 	path := uiRelayPrefix(h.run.ID, "code") + "/ide"
 
@@ -581,7 +577,7 @@ func TestUIGateway_ReassertIsDebouncedPerSession(t *testing.T) {
 	}
 
 	for i := range 9 {
-		now = now.Add(time.Millisecond)
+		h.clock.advance(time.Millisecond)
 		if rec := uiGet(h, path, cookie); rec.Code != http.StatusOK {
 			t.Fatalf("request %d: %d %s", i+2, rec.Code, rec.Body.String())
 		}
@@ -600,8 +596,6 @@ func TestUIGateway_ReassertIsDebouncedPerSession(t *testing.T) {
 // outcome this whole item exists to remove.
 func TestUIGateway_ReassertRefusesWhenTheRunCannotBeLoaded(t *testing.T) {
 	h := newUIHarness(t, okBackend())
-	now := time.Now()
-	h.srv.cfg.Now = func() time.Time { return now }
 	cookie := h.openSession()
 	path := uiRelayPrefix(h.run.ID, "code") + "/ide"
 	if rec := uiGet(h, path, cookie); rec.Code != http.StatusOK {
@@ -609,7 +603,7 @@ func TestUIGateway_ReassertRefusesWhenTheRunCannotBeLoaded(t *testing.T) {
 	}
 
 	h.store.dropRun(h.run.ID)
-	now = now.Add(uiReassertInterval + time.Second)
+	h.clock.advance(uiReassertInterval + time.Second)
 	rec := uiGet(h, path, cookie)
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("relay over a warm connection with the run unreadable: %d %s, want 503",
