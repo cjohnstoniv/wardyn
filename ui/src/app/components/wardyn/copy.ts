@@ -105,6 +105,23 @@ export const RISK_ATTRIBUTION = "Graded by Wardyn's rules, not the model.";
 // never drifts between screens.
 export const OPERATOR_ONLY_REASON = "Requires the admin role.";
 
+// DRAFT (M2 canon pending) — X3-F6 residual. The SECURITY tier is a DIFFERENT
+// gate: the server's isSecurityOperator admits an admin OR a security admin, so
+// a control refused by it must not tell the reader "requires the admin role"
+// when the role beside it would also do. Picked by the gate that fired, never
+// by a role comparison of the reader's own: a surface gated on isOperator keeps
+// OPERATOR_ONLY_REASON above.
+export const SECURITY_ONLY_REASON = "Requires the admin or security admin role.";
+
+// DRAFT (M2 canon pending) — F5-F3. Removing an allowed host is PUT
+// .../approved-egress plus, for an operator-authored requirements row, PUT
+// .../requirements. A row that is in NEITHER — a host the workspace's own scan
+// seeded — has no write to make: the pair fired, nothing changed, and the row
+// came back with its old provenance.
+export const EGRESS = {
+  SCAN_SEEDED_REASON: "Detected by this workspace's scan, not approved here — the next scan puts it back.",
+} as const;
+
 // Said once, where a viewer would actually feel the consequence (the run's
 // own pending-approval banner) — the read/launch/kill viewer tier still means
 // their run blocks on an approval exactly like an admin's does; only the

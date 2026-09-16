@@ -9,7 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import type { RecordResult, SetupStatus, Workspace } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
-import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
+import { EGRESS, OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../../wardyn/copy";
 
 const getWorkspaceMock = vi.fn();
 const deleteWorkspaceMock = vi.fn();
@@ -496,5 +496,48 @@ describe("WorkspaceDetailScreen — Delete and Rebuild follow the row's owner", 
     renderOwned("dana@corp.example", { owned_by: "dana@corp.example" }, false);
     expect(await screen.findByRole("button", { name: /delete this workspace/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Rebuild" })).toBeDisabled();
+  });
+});
+
+// F5-F3 — the card offered a live Remove over rows the remove path cannot
+// touch. Removing a host is PUT .../approved-egress plus, for an
+// operator-authored requirements row, PUT .../requirements — and that second
+// write reads the workspace's OWN overlay, while the row's provenance was read
+// off the EFFECTIVE fold. A scan_seeded row is in neither: the X fired two
+// no-op writes and the row came straight back.
+describe("WorkspaceDetailScreen — Allowed hosts, removable means the remove path can reach it", () => {
+  it("parks a scan_seeded-only row with a reason, and leaves an approved host live", async () => {
+    getWorkspaceMock.mockResolvedValue(
+      ws({
+        approved_egress: ["pypi.org"],
+        requirements: { "egress:proxy.golang.org": { level: "required", provenance: "scan_seeded" } },
+      }),
+    );
+    renderDetail();
+
+    const parked = await screen.findByRole("button", { name: "Remove proxy.golang.org" });
+    expect(parked).toBeDisabled();
+    expect(parked).toHaveAttribute("title", EGRESS.SCAN_SEEDED_REASON);
+    expect(screen.getByRole("button", { name: "Remove pypi.org" })).not.toBeDisabled();
+  });
+
+  it("negative control: the approved host still PUTs the narrowed allowlist", async () => {
+    getWorkspaceMock.mockResolvedValue(ws({ approved_egress: ["pypi.org", "registry.npmjs.org"] }));
+    setApprovedEgressMock.mockResolvedValue(ws({ approved_egress: ["registry.npmjs.org"] }));
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderDetail();
+
+    await user.click(await screen.findByRole("button", { name: "Remove pypi.org" }));
+    await waitFor(() =>
+      expect(setApprovedEgressMock).toHaveBeenCalledWith("ws-1", ["registry.npmjs.org"]),
+    );
+  });
+
+  it("a member (whose egress: keys the server drops) is told the tier, not handed a dead X", async () => {
+    getWorkspaceMock.mockResolvedValue(ws({ approved_egress: ["pypi.org"] }));
+    renderDetail("ws-1", false, false);
+    const parked = await screen.findByRole("button", { name: "Remove pypi.org" });
+    expect(parked).toBeDisabled();
+    expect(parked).toHaveAttribute("title", SECURITY_ONLY_REASON);
   });
 });

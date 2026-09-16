@@ -17,7 +17,7 @@ import { effectiveWorkspaceRequirements, type Workspace } from "../../../lib/typ
 import { DetailSectionCard } from "./section-card";
 import { HostList, type HostRow } from "./host-list";
 import { useOperator, useSecurityOperator } from "../../wardyn/operator-context";
-import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
+import { EGRESS, OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../../wardyn/copy";
 
 // Light, local parse — the same shape as the (retired) wizard's
 // parseRepoSource, kept here as the one place that still needs it: the host a
@@ -35,15 +35,25 @@ function cloneHostOf(ws: Workspace): string | null {
 }
 
 // `canClearRequired` is the SECOND tier this card needs. Removing a host is
-// one write (PUT .../approved-egress, securityOps — routes.go's securityOps
-// block) UNLESS the host also carries an operator-authored requirements row,
-// in which case it is TWO writes and the second (PUT .../requirements) is
-// registered on operatorOnly. A security admin holds the first tier and not
-// the second, so those rows are marked blocked here rather than offered as a
-// live button the server would refuse (F030).
-function hostRows(ws: Workspace, canClearRequired: boolean): HostRow[] {
+// one write (PUT .../approved-egress, on the securityOps tier) UNLESS the host
+// also carries an operator-authored requirements row, in which case it is TWO
+// writes and the second (PUT .../requirements) is registered on operatorOnly. A
+// security admin holds the first tier and not the second, so those rows are
+// marked blocked here rather than offered as a live button the server would
+// refuse (F030).
+//
+// F5-F3: `removable` is now derived from the SAME two maps `remove` below
+// writes — the approved-egress list, and the workspace's OWN requirements
+// overlay at operator_set. Two mismatches lived here. The provenance predicate
+// read the EFFECTIVE fold while the second PUT reads the overlay, so an
+// INHERITED operator_set row was marked blocked but silently skipped; and a
+// scan_seeded row (the closed provenance set's other value) is in neither map,
+// so its Remove fired two writes that changed nothing and the row came back
+// unaltered. Those rows keep their X and say why instead.
+function hostRows(ws: Workspace, canClearRequired: boolean, canRemove: boolean): HostRow[] {
   const clone = cloneHostOf(ws);
   const reqs = effectiveWorkspaceRequirements(ws);
+  const own = ws.requirements ?? {};
   const approved = new Set(ws.approved_egress ?? []);
   const requiredHosts = new Set(
     Object.entries(reqs)
@@ -62,8 +72,15 @@ function hostRows(ws: Workspace, canClearRequired: boolean): HostRow[] {
       // backs the host — a promoted-session host carries one just as a plain
       // "required by this workspace" one does (approveHosts writes
       // egress:<host> · required · operator_set).
-      const blocked =
-        reqs[`egress:${host}`]?.provenance === "operator_set" && !canClearRequired ? OPERATOR_ONLY_REASON : undefined;
+      // The one predicate: can the remove path actually take this host off?
+      const ownRequired = own[`egress:${host}`]?.provenance === "operator_set";
+      const blocked = !canRemove
+        ? SECURITY_ONLY_REASON
+        : !approved.has(host) && !ownRequired
+          ? EGRESS.SCAN_SEEDED_REASON
+          : ownRequired && !canClearRequired
+            ? OPERATOR_ONLY_REASON
+            : undefined;
       // Session attribution: a recorded session that promoted its observed
       // egress AND actually reached this host — the honest, derivable half of
       // "promoted from session X" (there is no per-host provenance field on
@@ -97,7 +114,7 @@ export function AllowedHostsCard({ ws, onWorkspaceUpdated }: { ws: Workspace; on
   // PUT /workspaces/{id}/requirements, which registers on operatorOnly — a
   // security admin is refused it. See hostRows' `canClearRequired`.
   const operator = useOperator();
-  const rows = hostRows(ws, operator);
+  const rows = hostRows(ws, operator, securityOperator);
   const [removing, setRemoving] = React.useState<string | null>(null);
 
   const remove = async (host: string) => {
