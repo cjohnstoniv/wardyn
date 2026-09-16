@@ -104,14 +104,19 @@ cmd_build() {
   # an existing dist deliberately.
   if [[ "${WARDYN_E2E_NO_UI_BUILD:-0}" == "1" && -d "${REPO_ROOT}/ui/dist" ]]; then
     # Guard (X2-F17): WARDYN_E2E_NO_UI_BUILD=1 skips the rebuild unconditionally,
-    # so a dist built before the last ui/src edit is served silently — exactly
-    # the footgun the comment above names. Refuse when any ui/src file is newer
-    # than ui/dist itself: Vite's emptyOutDir (vite.config.ts) empties then
-    # repopulates the dist directory on every real build, so its own mtime is a
-    # build stamp.
+    # so a dist built before the last edit to anything Vite actually reads is
+    # served silently — exactly the footgun the comment above names. Refuse
+    # when any file under ui/ (besides dist/, node_modules/, and Playwright's
+    # own test-results/) is newer than ui/dist itself: Vite's real inputs are
+    # not just ui/src — ui/index.html is the build ENTRY, and ui/public,
+    # ui/package.json + pnpm-lock.yaml, ui/vite.config.ts, ui/tsconfig*.json
+    # all change what a build produces. emptyOutDir (vite.config.ts) empties
+    # then repopulates the dist directory on every real build, so its own
+    # mtime is a build stamp.
     # ponytail: whole-tree mtime, not a content hash — a touch with no content
     # change false-positives; rebuild once (unset the knob) to clear it.
-    stale_src="$(find "${REPO_ROOT}/ui/src" -type f -newer "${REPO_ROOT}/ui/dist" -print -quit)"
+    stale_src="$(find "${REPO_ROOT}/ui" -path '*/node_modules' -prune -o -path '*/dist' -prune \
+      -o -path '*/test-results' -prune -o -type f -newer "${REPO_ROOT}/ui/dist" -print -quit)"
     if [[ -n "${stale_src}" ]]; then
       die "ui/dist is stale: ${stale_src#${REPO_ROOT}/} was modified after the last ui/dist build, but WARDYN_E2E_NO_UI_BUILD=1 is reusing it — unset WARDYN_E2E_NO_UI_BUILD or rebuild with 'cd ui && pnpm build'"
     fi
