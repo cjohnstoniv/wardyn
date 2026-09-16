@@ -391,3 +391,84 @@ func networkNames(insp container.InspectResponse) []string {
 	}
 	return names
 }
+
+// TestL0_NoDNSExfil is B9-F4's settling probe, and the only thing that can
+// settle it: whether a CC1 agent — sealed on a gatewayless Internal=true
+// network, with no default route and no path to any resolver of its own — can
+// still get an EXTERNAL name RESOLVED through Docker's embedded DNS at
+// 127.0.0.11, which forwards what it cannot answer to the HOST's resolvers. If
+// it can, the sandbox has a low-bandwidth channel off the box that L0's routing
+// story does not cover: the query label carries the payload, and no answer has
+// to come back for the data to have left.
+//
+// The proxy half is the constraint on any fix, and it is what makes this
+// testable rather than theoretical: the agent reaches wardyn-proxy through an
+// /etc/hosts entry the driver pins at create (driver.go's ExtraHosts, on EVERY
+// class, not only gVisor), so pointing the sandbox at a dead nameserver would
+// NOT cost it its egress path. Both halves are asserted together so a future
+// fix cannot silence the second by breaking the first.
+//
+// Scope: CC1 only. Under gVisor (CC2) and a microVM (CC3) the netstack does not
+// traverse Docker's embedded resolver at all.
+func TestL0_NoDNSExfil(t *testing.T) {
+	if os.Getenv("WARDYN_TEST_DOCKER") != "1" {
+		t.Skip("set WARDYN_TEST_DOCKER=1 to run the docker L0 network tests")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	// The sandbox's OWN proxy sidecar is the listener, under the alias and IP the
+	// driver pins into the agent's /etc/hosts — a second container aliased
+	// wardyn-proxy would collide with it rather than stand in for it.
+	d, err := New(Config{ProxyImage: "busybox:latest", ProxyCmd: []string{"httpd", "-f", "-p", "3128"}})
+	if err != nil {
+		t.Fatalf("docker.New: %v", err)
+	}
+	ensureNetwork(t, d, d.cfg.InternalNetwork)
+	spec := runner.SandboxSpec{
+		RunID:            uuid.New(),
+		Image:            "busybox:latest",
+		ConfinementClass: types.CC1,
+		ProxyConfig:      runner.ProxyConfig{RunToken: "dns-test", ControlPlaneURL: "http://127.0.0.1:0"},
+		Resources:        runner.Resources{CPUMillis: 500, MemoryMiB: 128},
+	}
+	sb, err := d.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	t.Cleanup(func() { _ = d.KillSandbox(context.Background(), sb.Ref) })
+	waitListening(ctx, t, d, sb.Ref, "wardyn-proxy", 3128)
+
+	// (1) The agent's one egress path resolves and connects.
+	proxy := execInSandbox(ctx, t, d, sb.Ref, []string{
+		"sh", "-c", "wget -q -T 5 -O - http://wardyn-proxy:3128/ 2>&1; echo RC=$?",
+	})
+	low := strings.ToLower(proxy)
+	if strings.Contains(low, "bad address") || strings.Contains(low, "unreachable") || strings.Contains(low, "refused") {
+		t.Fatalf("the agent must resolve and reach wardyn-proxy:3128 (its only egress path), got:\n%s", proxy)
+	}
+
+	// (2) An EXTERNAL name must not resolve. busybox nslookup exits non-zero when
+	// the resolver refuses or cannot answer; a resolved record means the query
+	// reached the host's resolvers and, with it, whatever the label carried.
+	const exfilName = "wardyn-l0-dns-exfil-probe.example.com"
+	ext := execInSandbox(ctx, t, d, sb.Ref, []string{
+		"sh", "-c", "nslookup -type=a " + exfilName + " 2>&1; echo RC=$?",
+	})
+	// Non-vacuous: the embedded resolver has to have ANSWERED for its refusal to
+	// mean anything. It names itself in the reply (Server: 127.0.0.11), so a
+	// sandbox where the query silently vanished — or where busybox nslookup
+	// simply never exits 0 — cannot pass the check below by accident. What the
+	// resolver answers with is SERVFAIL, not NXDOMAIN: it tried to forward
+	// upstream and had nowhere to send it, which is the L0 topology doing the
+	// work rather than a DNS policy.
+	if !strings.Contains(ext, "127.0.0.11") {
+		t.Fatalf("the external-name probe never reached the embedded resolver, so its failure "+
+			"proves nothing:\n%s", ext)
+	}
+	if strings.Contains(ext, "RC=0") {
+		t.Errorf("L0 DNS exfil: an external name resolved from inside a sealed CC1 sandbox — "+
+			"Docker's embedded resolver forwarded the query to the host's resolvers, so the query "+
+			"label is a channel off the box:\n%s", ext)
+	}
+}
