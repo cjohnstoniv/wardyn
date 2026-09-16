@@ -5,7 +5,7 @@
 
 import * as React from "react";
 import { Loader2 } from "lucide-react";
-import { Navigate, Route, Routes, useNavigate, Outlet } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation, useNavigate, Outlet } from "react-router-dom";
 import { toast } from "sonner";
 import { Toaster } from "./components/ui/sonner";
 import { SHELL } from "./components/wardyn/copy";
@@ -338,6 +338,7 @@ export default function App() {
   React.useEffect(() => {
     authRef.current = auth;
   }, [auth]);
+  const location = useLocation();
 
   // Both badges come off ONE tick, because the attention count is now a join:
   // a run is blocked when a held approval is parked on it, which lives in the
@@ -413,7 +414,12 @@ export default function App() {
   // Keep both nav badges live across the whole console, not just while the
   // operator is on the Runs/Approvals screen (a decision made in RunDetail must
   // still tick the pending badge down).
-  usePoll(refreshBadges, ATTENTION_POLL_MS, auth !== "authed");
+  // X3-F13: EXCEPT on /runs itself — the board already runs its own listRuns +
+  // listApprovals poll (runs.tsx, 3s) and publishes the same attention count,
+  // so this tick (the most expensive one in the shell — two unscoped
+  // LIST_LIMIT reads, see refreshBadges above) is pure duplication while
+  // parked there.
+  usePoll(refreshBadges, ATTENTION_POLL_MS, auth !== "authed" || location.pathname === "/runs");
 
   // Setup status feeds the first-run landing decision ("/" → tour or Runs).
   // Fetched ONCE per session: it is the expensive endpoint, and nothing in the
