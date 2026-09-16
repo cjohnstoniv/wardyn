@@ -82,6 +82,11 @@ var auditWriterPins = map[string]string{
 var declaredNonAuditTx = map[string]string{
 	"internal/db/db.go:applyMigration": "runs one migration's DDL and records it in schema_migrations; it never inserts " +
 		"into audit_events, and migration DDL is not chain-linked",
+	"internal/db/db.go:replayTriggerMigrations": "re-executes the DDL of the trigger-defining migrations (0047, 0056, " +
+		"0057, 0058) to restore a dropped or impostor audit trigger, in ONE transaction so a failure partway cannot " +
+		"commit a superseded function body (B8-F1). Those four files contain no DML at all — no INSERT, UPDATE or " +
+		"DELETE, on audit_events or anything else — so this transaction writes no chain-linked row and its isolation " +
+		"level decides nothing",
 }
 
 func TestEveryAuditWritingTransactionPinsReadCommitted(t *testing.T) {

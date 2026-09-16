@@ -800,16 +800,45 @@ func replayTriggerMigrations(ctx context.Context, db migrationExecutor, trigger 
 	if err != nil {
 		return err
 	}
+	// ONE TRANSACTION AROUND THE WHOLE SET, for the reason applyMigration wraps
+	// each forward file: a replay that stops partway leaves the database bound to
+	// a definition NOBODY SHIPPED AS FINAL. The set is ordered, and each file
+	// REPLACES the previous function body — 0047's chain function reads the head
+	// with no advisory lock, and 0056 replaced it precisely because of that — so
+	// a failure after the first file commits the superseded version.
+	//
+	// AND IT NEVER SELF-HEALS, which is what separates this from the forward
+	// path. The entry condition is "the trigger is missing or wears an impostor
+	// body", and 0047 alone satisfies neither: the next boot finds the shipped
+	// name executing the shipped function (auditImpostorTriggers cannot see a
+	// replaced BODY) and the single-threaded canary chains fine, so nothing
+	// replays and nothing reports. Two concurrent inserters then read one head,
+	// the chain forks, and GET /audit/chain/verify reports a tamper verdict no
+	// operator can clear.
+	//
+	// The exits are ordinary: migrateOn runs under wardynd's connect-and-migrate
+	// deadline and a context that expires mid-loop is a designed-for exit. None
+	// of the files in this set uses CREATE INDEX CONCURRENTLY (applyMigration
+	// already wraps them all, so none can), which is the one thing a transaction
+	// here would refuse.
+	tx, err := db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("db: begin tx to restore trigger %s: %w", trigger, err)
+	}
+	defer tx.Rollback(context.Background()) //nolint:errcheck // best-effort on the failure path; ctx may already be dead
 	for _, name := range names {
 		data, err := migrationFS.ReadFile("migrations/" + name)
 		if err != nil {
 			return fmt.Errorf("db: read migration %s: %w", name, err)
 		}
-		if _, err := db.Exec(ctx, string(data)); err != nil {
+		if _, err := tx.Exec(ctx, string(data)); err != nil {
 			return fmt.Errorf("db: replay %s to restore trigger %s: %w", name, trigger, err)
 		}
 		slog.InfoContext(ctx, "db: replayed migration to restore an audit trigger",
 			slog.String("file", name), slog.String("trigger", trigger))
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("db: commit the replay that restores trigger %s: %w", trigger, err)
 	}
 	return nil
 }
