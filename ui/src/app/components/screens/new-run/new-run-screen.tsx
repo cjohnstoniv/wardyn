@@ -56,9 +56,10 @@ import { CC_META } from "../../wardyn/cc-meta";
 import { RUN, RUN_MODE } from "../../wardyn/copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { getDefaultCc, resolveDefaultCc } from "../../wardyn/default-confinement";
-import { PolicyPanel, POLICY_TEMPLATES, parseSpec, toolRulesSummary, unparseableFloorClass } from "../../wardyn/policy-panel";
+import { PolicyPanel, parseSpec, toolRulesSummary, unparseableFloorClass } from "../../wardyn/policy-panel";
 import { AddWorkspaceDialog } from "../add-workspace-dialog";
 import { WorkspaceCard } from "./workspace-card";
+import { clearedSpecOnCustomSwitch, defaultSpecText, effectiveToolApprovals, savedPolicyGone } from "./policy-lane";
 import { buildSpec, mergeRunSelections } from "./wizard-spec";
 import {
   agentLabel,
@@ -69,10 +70,6 @@ import {
 } from "./wizard-types";
 
 const ORDERED_CLASSES: ConfinementClass[] = ["CC1", "CC2", "CC3"];
-
-// The body a fresh Custom policy opens with: a valid, editable floor rather
-// than a blank document nobody can start from.
-const MINIMAL = POLICY_TEMPLATES.find((t) => t.id === "minimal")!;
 
 // A tier is pickable only if the host can BUILD it and the policy allows it.
 const rank = (c: ConfinementClass) => ORDERED_CLASSES.indexOf(c);
@@ -114,13 +111,7 @@ export function NewRunScreen() {
   // host fail-closed, all tiers dead, before the operator authored anything.
   // Clicking the Minimal CHIP afterwards is an authored act and still floors
   // CC2 — that corner stays, with its reason line and preflight naming it.
-  const [specText, setSpecText] = React.useState(() =>
-    JSON.stringify(
-      { ...MINIMAL.spec, min_confinement_class: getDefaultCc() ?? "CC1" },
-      null,
-      2,
-    ),
-  );
+  const [specText, setSpecText] = React.useState(() => defaultSpecText(getDefaultCc()));
   // The floor the LAST SUCCESSFUL parse authored — deliberately sticky across a
   // broken edit: a half-typed document must not momentarily drop the floor and
   // re-open a barrier tier the operator's own policy forbids.
@@ -160,9 +151,8 @@ export function NewRunScreen() {
   // to launch and must not be shown. Held as state, not a ref, so an edit made
   // WHILE a preflight is in flight also invalidates the answer when it lands.
   const [preflightedBody, setPreflightedBody] = React.useState<string | null>(null);
-  const [savedPolicies, setSavedPolicies] = React.useState<
-    { id: string; name: string; spec: RunPolicySpec }[]
-  >([]);
+  const [savedPolicies, setSavedPolicies] = React.useState<{ id: string; name: string; spec: RunPolicySpec }[]>([]);
+  const [policiesLoaded, setPoliciesLoaded] = React.useState(false); // F2-F5: has listPolicies() answered?
   // Whether the barrier probe has SETTLED (null availableClasses after settle
   // means the check failed — unknown, never "confirmed absent").
   const [probeSettled, setProbeSettled] = React.useState(false);
@@ -214,7 +204,7 @@ export function NewRunScreen() {
     setupApi
       .getSetupStatus()
       .then((st) => {
-        setLlmReady(hasLlmPath(st));
+        setLlmReady(st.unreachable ? null : hasLlmPath(st));
         setHarnesses(st.harnesses);
       })
       .catch(() => {
@@ -225,7 +215,10 @@ export function NewRunScreen() {
   React.useEffect(() => {
     policiesApi
       .listPolicies()
-      .then((ps) => setSavedPolicies(ps.map((p) => ({ id: p.id, name: p.name, spec: p.spec }))))
+      .then((ps) => {
+        setSavedPolicies(ps.map((p) => ({ id: p.id, name: p.name, spec: p.spec })));
+        setPoliciesLoaded(true);
+      })
       .catch(() => {
         /* the Saved-policy lane simply offers nothing — never blocks a launch */
       });
@@ -340,9 +333,11 @@ export function NewRunScreen() {
         // lane launches by reference, so its body is never on the wire.
         !useSaved && !parsed.ok
         ? "The policy spec isn't valid JSON."
-        : useSaved && !state.selectedPolicyId
-          ? "Pick a saved policy, or write a custom one."
-          : null;
+        : savedPolicyGone(useSaved, state.selectedPolicyId, selectedPolicy, policiesLoaded) // F2-F5
+          ? RUN.POLICY_GONE
+          : useSaved && !state.selectedPolicyId
+            ? "Pick a saved policy, or write a custom one."
+            : null;
 
   // Every successful parse re-reads the floor the document authors; a FAILED
   // parse changes nothing (parsedFloor stays whatever last parsed).
@@ -470,6 +465,7 @@ export function NewRunScreen() {
       if (warnings.length > 0) {
         setLaunchWarnings(warnings);
         setLaunchedRunId(created.id);
+        setLaunching(false); // F2-F10 hygiene: nothing reads it once onOpenRun is set.
       } else {
         navigate(`/runs/${encodeURIComponent(created.id)}`);
       }
@@ -774,7 +770,7 @@ export function NewRunScreen() {
                   {isAgent && (
                     <Seg
                       label="Tool approvals"
-                      value={state.toolApprovals}
+                      value={effectiveToolApprovals(state.agent, state.toolApprovals)}
                       onChange={(id) => patch({ toolApprovals: id as WizardState["toolApprovals"] })}
                       hint={
                         state.agent === "codex-cli"
@@ -822,7 +818,11 @@ export function NewRunScreen() {
                 interactive={isInteractive}
                 savedPolicy={{
                   active: useSaved,
-                  onActiveChange: setUseSaved,
+                  onActiveChange: (v: boolean) => {
+                    const c = clearedSpecOnCustomSwitch(v, operator, !!state.selectedPolicyId); // F2-F1
+                    if (c) setSpecText(c);
+                    setUseSaved(v);
+                  },
                   picker: (
                     <div className="space-y-2">
                       <Select value={state.selectedPolicyId ?? ""} onValueChange={onPickPolicy}>

@@ -221,7 +221,22 @@ describe("NewRunScreen — the rail tells the truth about model access", () => {
     settle(baseStatus());
     await waitFor(() => expect(screen.getByText(/No model provider is connected/)).toBeInTheDocument());
   });
+
+  // F6-F3 (site 1) — lib/api/setup.ts's READY_FALLBACK resolves on ANY
+  // non-401 failure (endpoint missing, network error, …), not just "no model
+  // provider". `hasLlmPath` read it as a genuine empty answer, so a daemon that
+  // never answered got the SAME accusation as a truly bare host.
+  it("does not warn on a synthetic READY_FALLBACK (unreachable) answer", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus({ unreachable: true }));
+    renderScreen();
+    await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalled());
+    expect(screen.queryByText(/No model provider is connected/)).not.toBeInTheDocument();
+  });
 });
+
+// NewRunScreen — the saved-policy lane (F2-F1/F2-F2/F2-F4/F2-F5) lives in its
+// own file (new-run-screen-saved-policy.test.tsx): this file was already at
+// the check-file-size.sh ceiling.
 
 // The Policy panel authors the spec; the run's own SELECTIONS are unioned in
 // after the parse and named on screen. The governance claim the retired

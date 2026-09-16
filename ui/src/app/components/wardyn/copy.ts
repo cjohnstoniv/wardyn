@@ -741,6 +741,16 @@ export const RUN = {
   // and the banner has to say so before they press Launch rather than after.
   CLONE_CEILING_NOTE:
     "Your ceiling applies again at launch — anything this run had above it is narrowed, with the reason.",
+  // DRAFT (M2 canon pending) — F2-F5: a saved-policy reference that no longer
+  // resolves (deleted elsewhere) needs its own reason; "pick a saved policy,
+  // or write a custom one" is false once one WAS picked.
+  POLICY_GONE: "That saved policy no longer exists — pick another.",
+  // DRAFT (M2 canon pending) — F2-F2: the original sentence claimed the saved
+  // lane merges nothing; runs_create.go's create door prepends the attached
+  // Workspace card's mounts even when launching by policy_id. Named, not
+  // silently contradicted.
+  SAVED_POLICY_GOVERNS: (barrier: string, egress: string) =>
+    `The stored spec governs this run — barrier floor ${barrier}, ${egress}. Your attached workspace mounts into it; nothing else on this page is merged.`,
 } as const;
 
 // DRAFT (M2 canon pending) — R4-F144, WCAG 2.1.2: the cockpit terminal takes

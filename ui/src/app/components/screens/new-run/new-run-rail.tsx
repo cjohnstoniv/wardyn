@@ -23,6 +23,7 @@ import { Chip, ConfinementChip, RiskBadge } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
 import { GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
+import { RUN } from "../../wardyn/copy";
 import { RailSection } from "./new-run-primitives";
 
 interface RunRailProps {
@@ -109,12 +110,12 @@ export function RunRail({
           <RailSection title="Policy">
             <p className="text-body font-medium text-foreground">{savedPolicy.name}</p>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              The stored spec governs this run — barrier floor{" "}
-              {CC_META[savedPolicy.spec.min_confinement_class].label},{" "}
-              {savedPolicy.spec.allow_all_egress
-                ? "open egress"
-                : `${(savedPolicy.spec.allowed_domains ?? []).length} host${(savedPolicy.spec.allowed_domains ?? []).length === 1 ? "" : "s"} allowed`}
-              . It launches by reference, so nothing on this page is merged into it.
+              {RUN.SAVED_POLICY_GOVERNS(
+                CC_META[savedPolicy.spec.min_confinement_class].label,
+                savedPolicy.spec.allow_all_egress
+                  ? "open egress"
+                  : `${(savedPolicy.spec.allowed_domains ?? []).length} host${(savedPolicy.spec.allowed_domains ?? []).length === 1 ? "" : "s"} allowed`,
+              )}
             </p>
           </RailSection>
         )}
