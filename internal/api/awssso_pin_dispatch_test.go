@@ -719,7 +719,7 @@ func TestBedrockProviderCheck_StoredCaptureContradictingThePinWarns(t *testing.T
 			agreeing := bedrock
 			agreeing.SSOAccountID, agreeing.SSORoleName = "111111111111", "BedrockRunner"
 			quiet, _ := bedrockProviderCheck(agreeing, pinned, true)
-			if strings.Contains(quiet.Detail, bedrockPinContradictedFix) ||
+			if strings.Contains(quiet.Fix, bedrockPinContradictedFix) ||
 				strings.Contains(quiet.Detail, "no longer allows") {
 				t.Errorf("an agreeing capture raised the posture: %q", quiet.Detail)
 			}

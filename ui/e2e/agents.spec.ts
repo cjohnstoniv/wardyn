@@ -457,7 +457,6 @@ test.describe("agents — the roster pin (sso_account_id / sso_role_name)", () =
     expect(bedrock!.detail).toContain("111111111111");
     expect(bedrock!.detail).toContain("222222222222");
   });
-
 });
 
 // Appendix A finding 4 (prominence): the per_user sign-in affordance moves
