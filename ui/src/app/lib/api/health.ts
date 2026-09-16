@@ -70,6 +70,13 @@ export interface Me {
   // user_drive is null, the state where "ask an admin for an allocation" is
   // the wrong advice.
   user_drive_denied_by_profile?: string;
+  // "View as member" (0.7.4): this session is an ADMIN who asked to be treated
+  // as a member. Every tier field above is already clamped — role reads
+  // "member", operator and security_operator read false — so nothing gates on
+  // this; it exists so the shell can say which state you are in and keep the
+  // way OUT on screen. Absent on a pre-0.7.4 daemon, which reads the same as
+  // "off".
+  member_mode?: boolean;
   // WHY /me COULD NOT ANSWER for this caller's drive, or "" when it could.
   // Always present on a 0.7 daemon, so an absent key is an older server rather
   // than "nothing is wrong".
@@ -326,6 +333,22 @@ export const health = {
       console.error("logout: request failed; session may still be active", err);
       return false;
     }
+  },
+
+  // POST /api/v1/me/member-mode — turn "view as member" on or off for THIS
+  // session (0.7.4). The server re-signs the session cookie, so the caller must
+  // reload the whole console afterwards rather than re-rendering: every screen's
+  // cached admin-shaped data was fetched under the other role.
+  //
+  // Throws on a non-2xx (asJson), unlike logout above: a failed toggle must not
+  // be followed by a reload that lands the admin back where they started with no
+  // explanation. The caller shows the error.
+  async setMemberMode(enabled: boolean): Promise<void> {
+    const res = await wfetch("/me/member-mode", {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    });
+    await asJson<{ member_mode: boolean }>(res);
   },
 
   // GET /api/v1/me — the authenticated principal + auth method + role.
