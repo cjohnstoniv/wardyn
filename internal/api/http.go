@@ -924,8 +924,16 @@ func (s *Server) internalAuth(next http.Handler) http.Handler {
 			writeError(w, http.StatusUnauthorized, "invalid run token")
 			return
 		}
-		ctx := contextWithClaims(r.Context(), claims)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		// LIVENESS, not merely authenticity: a run that went terminal while its
+		// revocation write failed still presents a token Verify accepts, and
+		// exactly ONE door used to re-check for itself (B2-F3 — see
+		// refuseTerminalRun, internal_live_run.go). The claims go on the context
+		// first so the refusal can audit against the run it names.
+		r = r.WithContext(contextWithClaims(r.Context(), claims))
+		if !s.refuseTerminalRun(w, r, claims) {
+			return
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 

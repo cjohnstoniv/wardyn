@@ -14,13 +14,12 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/broker"
-	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // erroringGrantsStore fails ListGrantsByRun the way a transient store hiccup
 // does; every other method panics if reached (convention: grantsStore).
-type erroringGrantsStore struct{ store.Store }
+type erroringGrantsStore struct{ anyRunLive }
 
 func (erroringGrantsStore) ListGrantsByRun(context.Context, uuid.UUID) ([]types.CredentialGrant, error) {
 	return nil, errors.New("store: connection reset by peer")

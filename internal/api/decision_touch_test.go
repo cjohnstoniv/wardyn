@@ -9,14 +9,14 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-
-	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
 // touchStore records TouchRun calls. Every other store.Store method is nil, so
-// the handler panics if it reaches one — the decision path must not.
+// the handler panics if it reaches one — the decision path must not, beyond the
+// GetRun internalAuth's liveness gate asks of every /internal/* call
+// (refuseTerminalRun, B2-F3), which anyRunLive answers.
 type touchStore struct {
-	store.Store
+	anyRunLive
 	touched []uuid.UUID
 }
 

@@ -14,7 +14,6 @@ import (
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/egress/proxy"
-	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -363,7 +362,7 @@ func TestValidateInlineSecretRefs_SSHKey(t *testing.T) {
 // panics if reached, which is the point — the mint guard must read nothing else.
 // (Embedding convention: notFoundStore, scanRunStore.)
 type grantsStore struct {
-	store.Store
+	anyRunLive
 	grants []types.CredentialGrant
 }
 
