@@ -81,9 +81,6 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	// Corporate CA pool, built ONCE before any control-plane client exists:
 	// the forward transport (Options.TLSClientConfig below) AND the sidecar's
 	// own control-plane client must both trust a corp-issued wardynd cert.
-	// A caller-supplied client with no Transport rides http.DefaultTransport,
-	// which never sees the pool — so it is cloned onto a DefaultTransport
-	// clone (same proxy-from-env, timeouts, HTTP/2) carrying RootCAs.
 	var tlsCfg *tls.Config
 	if cfg.TrustedCAPEM != "" {
 		pool, perr := x509.SystemCertPool()
@@ -95,9 +92,27 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 		}
 		tlsCfg = &tls.Config{RootCAs: pool}
 	}
-	if tlsCfg != nil && client != nil && client.Transport == nil {
+	// The four control-plane clients below — the decision sink, the injector, the
+	// approval client and the token renewer — all ride THIS client. A caller-supplied
+	// client with no Transport rides http.DefaultTransport, so it saw neither the
+	// corp CA pool above nor, more importantly, the Proxy: nil the proxy's OWN
+	// transports set ("keeps the run token off the corp-proxy wire"): it rode
+	// ProxyFromEnvironment instead. With HTTP(S)_PROXY visible to the sidecar
+	// (dockerd-level proxy injection, a host-run or custom proxy image) the run
+	// token, approvals, decisions and MINTED CREDENTIAL VALUES transited the
+	// corporate proxy and skipped resolveTrustedURL's pin (B10-F3).
+	//
+	// So the transport is owned UNCONDITIONALLY, not only on the corp-CA branch,
+	// and Proxy is cleared explicitly: Transport.Clone() PRESERVES the proxy
+	// function, which is why the one branch that did build a transport carried the
+	// bug too. Everything else about DefaultTransport (timeouts, HTTP/2, keep-alives)
+	// is kept, and the CA pool rides along when there is one.
+	if client != nil && client.Transport == nil {
 		tr := http.DefaultTransport.(*http.Transport).Clone()
-		tr.TLSClientConfig = tlsCfg
+		tr.Proxy = nil
+		if tlsCfg != nil {
+			tr.TLSClientConfig = tlsCfg
+		}
 		c := *client
 		c.Transport = tr
 		client = &c
