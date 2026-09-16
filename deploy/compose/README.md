@@ -6,7 +6,7 @@ One of Wardyn's two CI-tested deployment paths (the other is
 | Service    | Role |
 |------------|------|
 | `postgres` | System of record (the only required dependency). |
-| `dex`      | OIDC IdP for human SSO. Two static demo users: `demo@wardyn.local` (admin) and `member@wardyn.local` (member) — a genuine second identity, the same shape the kind SSO overlay's `admin@wardyn.local`/`member@wardyn.local` pair already gives it. The console's SSO button lights up once `WARDYN_OIDC_*` is set (`--profile sso` + this service); without it, use the admin-token path or the CLI. `WARDYN_OIDC_ROLE_MAP` (the real **admin/member** RBAC) defaults to `demo@wardyn.local=admin,member@wardyn.local=member` on this stack, so the two Dex users land in the right role automatically; override it (or fall back to the legacy `WARDYN_OIDC_OPERATOR_EMAILS` allowlist) and an unlisted signer-in becomes a **member** (with a role map, an unmatched signer-in follows `WARDYN_OIDC_DEFAULT_ROLE` or is denied login): 403 on the harness-credential/policy/workspace/site-config writes, secret writes/deletes, admin-only approval decisions, and bringing a custom image — reading and launching/killing stay open, and a member is owner-scoped (sees only their own runs/approvals/audit; may decide `egress_domain` approvals on runs they own; their `inline_policy` is clamped to your ceiling). That admin/member model with owner scoping **shipped in v0.5**; a fully packaged **team mode** (SAML/SCIM) is not built yet — see [docs/OPERATIONS.md](../../docs/OPERATIONS.md#multi-user-who-can-change-what) and [ROADMAP.md](../../ROADMAP.md). Members of this stack: [`../../docs/MEMBERS.md`](../../docs/MEMBERS.md). |
+| `dex`      | OIDC IdP for human SSO. Two static demo users: `demo@wardyn.local` (admin) and `member@wardyn.local` (member) — a genuine second identity, the same shape the kind SSO overlay's `admin@wardyn.local`/`member@wardyn.local` pair already gives it. The console's SSO button lights up once `WARDYN_OIDC_*` is set (`--profile sso` + this service); without it, use the admin-token path or the CLI. `WARDYN_OIDC_ROLE_MAP` (the real **admin/member** RBAC) is a plain passthrough (empty unless you set it) — `deploy/compose/.env.example` pre-seeds `demo@wardyn.local=admin,member@wardyn.local=member` for a **fresh** `.env` only (never for an existing one — see the [Quick start](#quick-start) SSO section), so the two Dex users land in the right role automatically on a new stack; set your own map (or fall back to the legacy `WARDYN_OIDC_OPERATOR_EMAILS` allowlist) and an unlisted signer-in becomes a **member** (with a role map, an unmatched signer-in follows `WARDYN_OIDC_DEFAULT_ROLE` or is denied login): 403 on the harness-credential/policy/workspace/site-config writes, secret writes/deletes, admin-only approval decisions, and bringing a custom image — reading and launching/killing stay open, and a member is owner-scoped (sees only their own runs/approvals/audit; may decide `egress_domain` approvals on runs they own; their `inline_policy` is clamped to your ceiling). That admin/member model with owner scoping **shipped in v0.5**; a fully packaged **team mode** (SAML/SCIM) is not built yet — see [docs/OPERATIONS.md](../../docs/OPERATIONS.md#multi-user-who-can-change-what) and [ROADMAP.md](../../ROADMAP.md). Members of this stack: [`../../docs/MEMBERS.md`](../../docs/MEMBERS.md). |
 | `wardynd`  | Control plane, **built with `-tags docker`** so the docker runner can launch real governed sandboxes. |
 
 The `wardyn-proxy` image is built (the per-run L2 egress sidecar the runner
@@ -74,12 +74,18 @@ docker compose -f deploy/compose/docker-compose.yaml --profile sso up -d dex
 
 and set `WARDYN_OIDC_ISSUER=http://localhost:5556` in `deploy/compose/.env`
 before restarting `wardynd` — the issuer alone (with no operator allowlist, no
-role map, no override) now REFUSES TO BOOT, but `WARDYN_OIDC_ROLE_MAP`
-defaults to `demo@wardyn.local=admin,member@wardyn.local=member` on this
-stack, which already satisfies that guard: sign in as `demo@wardyn.local` for
-admin, `member@wardyn.local` for a real member-mode walk. To use your own
-email(s) as admin instead, override `WARDYN_OIDC_OPERATOR_EMAILS=you@example.com`
-(or `WARDYN_OIDC_ROLE_MAP`, or `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true`).
+role map, no override) REFUSES TO BOOT. A **fresh** `.env` (created from
+`deploy/compose/.env.example` by `scripts/up.sh`/`make setup`) already carries
+`WARDYN_OIDC_ROLE_MAP=demo@wardyn.local=admin,member@wardyn.local=member`,
+which satisfies that guard on its own: sign in as `demo@wardyn.local` for
+admin, `member@wardyn.local` for a real member-mode walk. An **existing**
+`.env` from before this pair was added does NOT gain it automatically — the
+installer never rewrites a `.env` that already exists, on purpose, so an
+upgrade never silently changes who is admin (see `.env.example`'s own
+comment). Add the row yourself, or set your own
+`WARDYN_OIDC_OPERATOR_EMAILS=you@example.com` (or
+`WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true`) to use your own login as admin
+instead.
 
 ## No-login local mode (`WARDYN_LOCAL_MODE`)
 

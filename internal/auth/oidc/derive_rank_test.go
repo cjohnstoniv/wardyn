@@ -169,6 +169,55 @@ func TestDeriveRoleDefaultRoleFallthroughUnchanged(t *testing.T) {
 	}
 }
 
+// TestDeriveRoleComposeDefaultDeniesUnlistedLoginR03 pins the exact hazard the
+// blind review (R-03) caught before it shipped: giving WARDYN_OIDC_ROLE_MAP a
+// RUNTIME `:-` default on the compose stack — demo@wardyn.local=admin,
+// member@wardyn.local=member — would have applied to every EXISTING deployment
+// whose .env does not set it (":-" substitutes for unset OR empty alike), not
+// only a fresh one. A non-empty chart map moves deriveRole from its no-map arm
+// (legacy allowlist alone still splits admin/member — mergeRoleMaps' own
+// comment names this "denying every login arm 1 would have allowed") to its
+// map-present arm, so anyone the map does not name and no allowlist covers,
+// with no DefaultRole configured, is denied outright — a silent login lockout
+// from a compose-file change, not an operator decision. This is why the pair
+// now lives in deploy/compose/.env.example (seeds a FRESH .env only) rather
+// than as a docker-compose.yaml runtime default; this test pins the underlying
+// deriveRole behavior directly against the literal string, so the hazard stays
+// provable even if the shape of the fix changes later.
+func TestDeriveRoleComposeDefaultDeniesUnlistedLoginR03(t *testing.T) {
+	const composeDefault = "demo@wardyn.local=admin,member@wardyn.local=member"
+	roleMap, err := oidc.ParseRoleMap(composeDefault)
+	if err != nil {
+		t.Fatalf("ParseRoleMap(%q): %v", composeDefault, err)
+	}
+
+	// (a) An allowlist-only deployment: today bob@corp.com is a MEMBER with a
+	// working login via arm 1's legacy-allowlist branch (alice is admin,
+	// everyone else who signs in is a member). Under the compose default, bob
+	// matches neither the chart map nor the allowlist, and no DefaultRole is
+	// set — the login that used to succeed is now denied.
+	if role, _, ok := oidc.DeriveRoleForTest(nil, nil, "bob@corp.com", roleMap, []string{"alice@corp.com"}, ""); ok {
+		t.Fatalf("bob@corp.com resolved to %q under the compose default role map — want deny (ok=false); this is the allowlist-only lockout R-03 exists to prevent", role)
+	}
+
+	// (b) WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true, no allowlist: today EVERY
+	// human is RoleAdmin via arm 1's empty-allowlist branch. Under the compose
+	// default, carol@corp.com (not in the map either) is denied outright —
+	// a total outage for anyone not named in the map.
+	if role, _, ok := oidc.DeriveRoleForTest(nil, nil, "carol@corp.com", roleMap, nil, ""); ok {
+		t.Fatalf("carol@corp.com resolved to %q under the compose default role map with an empty allowlist — want deny (ok=false); this is the total-lockout case R-03 exists to prevent", role)
+	}
+
+	// Negative control: the two identities the map DOES name still resolve —
+	// the map itself is not the problem, defaulting it at runtime is.
+	if role, _, ok := oidc.DeriveRoleForTest(nil, nil, "demo@wardyn.local", roleMap, nil, ""); !ok || role != oidc.RoleAdmin {
+		t.Fatalf("demo@wardyn.local = %q/%v, want admin/true", role, ok)
+	}
+	if role, _, ok := oidc.DeriveRoleForTest(nil, nil, "member@wardyn.local", roleMap, nil, ""); !ok || role != oidc.RoleMember {
+		t.Fatalf("member@wardyn.local = %q/%v, want member/true", role, ok)
+	}
+}
+
 // TestParseRoleMapAcceptsSecurityAdmin: the chart carries the third tier the
 // moment ValidRole accepts it — this is the ONLY boot knob that grants it, so
 // a refusal here would leave the tier unreachable. The error text for a real

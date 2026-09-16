@@ -17,9 +17,14 @@
 #   4. no file still names WARDYN_STAGE_CLAUDE, a knob with no reader anywhere.
 #   5. the L0 metadata block's own evidence is a connection fact, not a bare
 #      curl exit code (see guard 5 below for the full story).
-#   6. every `docker run … -p` under scripts/ publishes loopback-only —
-#      wardyn-test-pg (scripts/up.sh cmd_pg) was the one 0.0.0.0 publish in
-#      the repo (B12b-F5).
+#   6. every `docker run`/`docker create` publish under scripts/ (-p, -p=, or
+#      --publish) binds loopback-only — wardyn-test-pg (scripts/up.sh cmd_pg)
+#      was the one 0.0.0.0 publish in the repo (B12b-F5).
+#   7. deploy/kind/quickstart.sh's generated values carry the B12b-F7
+#      CC2/CC3-guard escape (R-01).
+#   8. docker-compose.yaml's WARDYN_OIDC_ROLE_MAP stays a plain passthrough,
+#      and deploy/compose/.env.example still seeds the demo/member pair for a
+#      fresh install (R-03).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -219,6 +224,28 @@ if printf '%s' "$quickstart_values_heredoc" | grep -qE 'WARDYN_DEFAULT_POLICY|ru
     ok "deploy/kind/quickstart.sh's generated values carry the CC2/CC3-guard escape"
 else
     bad "deploy/kind/quickstart.sh's generated values.yaml heredoc names neither WARDYN_DEFAULT_POLICY nor a runtimeClasses pin — the B12b-F7 helm guard now refuses this exact render (R-01); see deploy/compose/docker-compose.yaml's WARDYN_DEFAULT_POLICY override for the byte-matching fix"
+fi
+
+# ── 8. compose WARDYN_OIDC_ROLE_MAP stays a plain passthrough, and
+#      .env.example still carries the seeded pair — R-03: a runtime `:-`
+#      default on docker-compose.yaml's WARDYN_OIDC_ROLE_MAP applies to every
+#      EXISTING deployment whose .env does not set it (":-" substitutes for
+#      unset OR empty alike), silently moving deriveRole from its no-map arm
+#      to its map-present arm and denying logins arm 1 would have allowed —
+#      internal/auth/oidc's TestDeriveRoleComposeDefaultDeniesUnlistedLoginR03
+#      proves the mechanism; this guard proves neither half of the R-03 fix
+#      regresses: the compose file stays a bare passthrough, and a fresh
+#      install still gets the pair (from .env.example, which env_set/
+#      ensure_env_file only ever copies into a .env that does not exist yet).
+compose_role_map_line="$(grep -E '^\s*WARDYN_OIDC_ROLE_MAP:' deploy/compose/docker-compose.yaml || true)"
+case "$compose_role_map_line" in
+    *'${WARDYN_OIDC_ROLE_MAP:-}'*) ok "docker-compose.yaml's WARDYN_OIDC_ROLE_MAP is a plain passthrough (no runtime default)" ;;
+    *) bad "docker-compose.yaml's WARDYN_OIDC_ROLE_MAP is not the bare passthrough \"\${WARDYN_OIDC_ROLE_MAP:-}\" any more (got: ${compose_role_map_line:-<no row found>}) — a non-empty \`:-\` default here silently denies logins on every upgraded deployment (R-03); see TestDeriveRoleComposeDefaultDeniesUnlistedLoginR03" ;;
+esac
+if grep -qE '^WARDYN_OIDC_ROLE_MAP=demo@wardyn\.local=admin,member@wardyn\.local=member\s*$' deploy/compose/.env.example; then
+    ok "deploy/compose/.env.example still seeds the demo/member role-map pair for a fresh .env"
+else
+    bad "deploy/compose/.env.example no longer carries an UNCOMMENTED WARDYN_OIDC_ROLE_MAP=demo@wardyn.local=admin,member@wardyn.local=member row — a fresh compose stack would lose the second identity the member-mode rider added, and this is the ONLY safe place for it (R-03: a docker-compose.yaml runtime default would apply to upgrades too)"
 fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi

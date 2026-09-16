@@ -91,9 +91,11 @@ SSO button is disabled and the admin token below is the way in; bring up the
 and restart `wardynd` — see [deploy/compose/README.md](../deploy/compose/README.md))
 and the role split appears with two real identities already seeded in Dex:
 sign in as `demo@wardyn.local` for **admin**, `member@wardyn.local` for an
-owner-scoped **member** — `WARDYN_OIDC_ROLE_MAP` maps them that way by
-default. Point `WARDYN_OIDC_OPERATOR_EMAILS` at your own address instead to
-use your own login as admin. The split, the approval broker and the
+owner-scoped **member** — on a **fresh** stack, `deploy/compose/.env.example`
+already maps them that way (`WARDYN_OIDC_ROLE_MAP`); an existing `.env`
+predating this pair keeps whatever it already had, so add the row by hand if
+you're on one. Point `WARDYN_OIDC_OPERATOR_EMAILS` at your own address
+instead to use your own login as admin. The split, the approval broker and the
 append-only audit log all ship in the Apache-2.0 build with no paid tier; for
 the exact 403 boundary and how to give a second person their own login, see
 [OPERATIONS.md](OPERATIONS.md#second-user-same-host).
