@@ -42,7 +42,7 @@ Teal is the only loud color, and it means *"press this."* Everything else is gre
 - **Risk grade is semantic, not metal.** `SafetyMeter` grades a *policy*, so it uses
   `--success/--warning/--danger` (`safety-meter.tsx:41–45`). Metals say how separated
   the agent is; semantics say how it went.
-- **Text links are `--info`, not teal** (`button.tsx:21`'s `link` variant already says
+- **Text links are `--info`, not teal** (`button.tsx:27`'s `link` variant already says
   so). Teal underlined text reads as a button that failed.
 
 Known violations, cited as what the rule forbids:
@@ -50,7 +50,7 @@ Known violations, cited as what the rule forbids:
 | Site | What it does | Why it is out of budget |
 |---|---|---|
 | `setup/environment-step.tsx:548` | `<Chip tone="primary">Recommended</Chip>` | Decorative teal. A recommendation is not an action — `tone="neutral"`, or let the default selection carry it |
-| `run-context-row.tsx:57` | `text-primary` on "Open run" | Teal on a disclosure control. It is a link: `--info`, or a `ghost` Button |
+| `run-context-row.tsx:86` | `text-primary` on "Open run" | Teal on a disclosure control. It is a link: `--info`, or a `ghost` Button |
 
 `runs.tsx`'s two former violations at this same class ("Show all N" and "Load N more")
 are fixed: both now render `text-info` (`runs.tsx:541`, `runs.tsx:663`).
@@ -104,7 +104,7 @@ cards, run cards, icon wells. Exactly three elevation levels:
 `--shadow-floating` is ONE shared value in `theme.css` (`@theme inline`), deliberately not
 per-theme — a floating surface reads the same way in light and dark. It replaced the two
 spellings that shipped one idea: `shadow-md` (`dropdown-menu.tsx:45`, `select.tsx:68`,
-`popover.tsx:33`) and `shadow-lg` (`dialog.tsx:60`, `alert-dialog.tsx:57`,
+`popover.tsx:37`) and `shadow-lg` (`dialog.tsx:66`, `alert-dialog.tsx:61`,
 `sheet.tsx:61`, L233). A floating surface is one thing; it gets one shadow. Anything
 wanting a fourth level wants the focus ring.
 
@@ -156,7 +156,7 @@ is a request, a failure is a report.
   destruction pushes operators toward Approve.
 - **The irreversible action wears the weight.** A quiet dangerous choice beside a teal
   safe one is a surface lying about its stakes.
-- Sizes: `default` h-9, `sm` h-8, `lg` h-10, `icon` size-9 (`button.tsx:25–28`) — picked
+- Sizes: `default` h-9, `sm` h-8, `lg` h-10, `icon` size-9 (`button.tsx:31–34`) — picked
   by density, never by emphasis.
 
 ## 7. In-flight feedback

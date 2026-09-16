@@ -28,18 +28,29 @@ const doc = readFileSync(DOC_PATH, "utf8");
 const WARDYN_DIR = resolve(process.cwd(), "src/app/components/wardyn");
 const SCREENS_DIR = resolve(process.cwd(), "src/app/components/screens");
 const STYLES_DIR = resolve(process.cwd(), "src/styles");
+const UI_DIR = resolve(process.cwd(), "src/app/components/ui");
 
 // F040/R4-E2E-B2: every basename this guard knows how to resolve, and the
 // directory it lives in. Started as primitives.tsx/form-primitives.tsx only
 // (the wardyn/ pattern layer, where F040 found ten stale citations); widened
 // to states.tsx, app-shell.tsx and theme.css once R4-E2E-B2 found the same
-// stale-anchor failure mode sitting outside that filter, uncaught.
+// stale-anchor failure mode sitting outside that filter, uncaught. U-02
+// widened it again: six citations into the `ui/` primitives layer and
+// run-context-row.tsx sat outside every filter above (5 of 20 basenames
+// cited in the doc were covered) and staled silently across this same
+// release's own F7-F15/R-01/F3-F8 comment-block insertions.
 const FILE_DIRS: Record<string, string> = {
   "primitives.tsx": WARDYN_DIR,
   "form-primitives.tsx": WARDYN_DIR,
   "states.tsx": WARDYN_DIR,
   "app-shell.tsx": SCREENS_DIR,
   "theme.css": STYLES_DIR,
+  "button.tsx": UI_DIR,
+  "dialog.tsx": UI_DIR,
+  "alert-dialog.tsx": UI_DIR,
+  "popover.tsx": UI_DIR,
+  "sheet.tsx": UI_DIR,
+  "run-context-row.tsx": WARDYN_DIR,
 };
 
 /** file basename (as cited in the doc, e.g. "primitives.tsx") -> its lines. */
