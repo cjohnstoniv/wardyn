@@ -290,12 +290,6 @@ func (s *Server) routes() chi.Router {
 			r.Get("/me/ssh-keys", s.handleListSSHKeys)
 			r.Post("/me/ssh-keys", s.handleAddSSHKey)
 			r.Delete("/me/ssh-keys/{fingerprint}", s.handleDeleteSSHKey)
-			// "View as member" (0.7.4, P2) — beside the SSH-key registry and for
-			// the same reason it sits on r rather than operatorOnly: the toggle
-			// acts on the CALLER's own session and nobody else's, and inside the
-			// mode the caller's effective role is member, so an operator-gated
-			// exit would be a door that locks from the inside.
-			r.Post("/me/member-mode", s.handleSetMemberMode)
 			s.mountAccountRoutes(r, securityOps)
 			// FIX #6: sign-out. The UI POSTs /api/v1/auth/logout, but the OIDC
 			// logout was mounted ONLY as a root GET /auth/logout, so the POST hit
@@ -776,6 +770,16 @@ func (s *Server) mountAccountRoutes(r chi.Router, securityOps chi.Router) {
 	// block above — never a principal taken from the body.
 	r.Get("/me/run-layout", s.handleGetRunLayout)
 	r.Put("/me/run-layout", s.handlePutRunLayout)
+	// "View as member" (0.7.4, P2, membermode.go). Registered HERE rather than
+	// beside the ssh-keys block in routes() only because routes() sits exactly
+	// on the funlen ratchet — this is the /me self-service family either way.
+	//
+	// On r and never operatorOnly: the toggle acts on the CALLER's own session
+	// and nobody else's, and inside the mode the caller's effective role IS
+	// member, so an operator-gated exit would be a door that locks from the
+	// inside. The no-per-human-role lane (admin token, local mode, no IdP) is
+	// refused inside the handler — a 400, not a tier.
+	r.Post("/me/member-mode", s.handleSetMemberMode)
 }
 
 // mountPermissionRoutes registers the capability-grant family: which of the
