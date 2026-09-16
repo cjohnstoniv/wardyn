@@ -33,6 +33,11 @@ const LAUNCH_CALLS: ReadonlyArray<{ file: string; fn: string; path: string }> = 
   { file: "runs.ts", fn: "async createRun(", path: '"/runs"' },
   { file: "runs.ts", fn: "async preflightRun(", path: '"/runs/preflight"' },
   { file: "workspaces.ts", fn: "async recordTask(", path: "/record`" },
+  // A repo scan is a sandbox launch too, and the least obvious one: handleScanWorkspace
+  // -> scanAttachedSources -> dispatchAndSettle (internal/api/source_scan.go,
+  // workspace_run_launch.go) launches each repo source as its own governed run and
+  // blocks on dispatchRun -> CreateSandbox BEFORE the 202 is written.
+  { file: "workspaces.ts", fn: "async scanWorkspace(", path: "/scan`" },
 ];
 
 describe("every console call that launches a sandbox passes an explicit deadline", () => {

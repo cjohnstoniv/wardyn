@@ -317,7 +317,14 @@ export const workspaces = {
   // Workspace; re-fetch the list for the authoritative status. Returns only the
   // async signal + the scan-run id (repo) so the UI can message accordingly.
   async scanWorkspace(id: string): Promise<{ async: boolean; scanRunId?: string }> {
-    const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/scan`, { method: "POST" });
+    // LAUNCH_DEADLINE_MS: a repo scan launches a governed run per source and
+    // blocks on its CreateSandbox before the 202 (scanAttachedSources ->
+    // dispatchAndSettle) — the same cold-pull exposure as recordTask above.
+    const res = await wfetch(
+      `/workspaces/${encodeURIComponent(id)}/scan`,
+      { method: "POST" },
+      LAUNCH_DEADLINE_MS,
+    );
     const body = await asJson<{ scan_run_id?: string }>(res);
     return { async: res.status === 202, scanRunId: body?.scan_run_id };
   },
