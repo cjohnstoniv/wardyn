@@ -130,6 +130,56 @@ func validSiteURLOrHost(raw string) bool {
 	return hostrules.HostOf(raw) != "" // tolerates a trailing /path or :port
 }
 
+// normalizeSiteConfigTopology canonicalizes PUT /site-config's plain-string
+// topology fields IN THE HANDLER, beside normalizeWorkspaceProviders, before
+// validateSiteConfig runs — B7-F8. Without this, a field validated only
+// because HostOf/validSiteHost trim+lowercase a THROWAWAY copy before
+// checking it (hostrules.go) still PERSISTED whatever case/whitespace the
+// operator typed: findEgressRedirect's read-time EqualFold masked the effect
+// for that one lookup, but the stored document, `wardyn site-config get`, and
+// this handler's own audit datum all echoed the uncanonicalized string back.
+//
+// Interior whitespace is left ALONE, not collapsed: TrimSpace only trims the
+// ends, so "git .corp.example" survives as two tokens rather than folding
+// into "git.corp.example" — the existing host/URL validators below (no
+// character outside the DNS label set) already 400 it, and normalization
+// must never launder a string past the validator that runs after it (the
+// same rule normalizeProviderBaseURL documents for base URLs).
+func normalizeSiteConfigTopology(cfg *types.SiteConfig) {
+	for i, h := range cfg.ScmHosts {
+		cfg.ScmHosts[i] = strings.ToLower(strings.TrimSpace(h))
+	}
+	if norm, ok := normalizedHTTPProxyURL(cfg.UpstreamProxyURL); ok {
+		cfg.UpstreamProxyURL = normalizeRedirectEndpoint(norm)
+	} else {
+		cfg.UpstreamProxyURL = strings.TrimSpace(cfg.UpstreamProxyURL)
+	}
+	for i := range cfg.EgressRedirects {
+		cfg.EgressRedirects[i].From = normalizeRedirectEndpoint(cfg.EgressRedirects[i].From)
+		cfg.EgressRedirects[i].To = normalizeRedirectEndpoint(cfg.EgressRedirects[i].To)
+	}
+}
+
+// normalizeRedirectEndpoint canonicalizes one EgressRedirect From/To: trim
+// outer whitespace and lowercase the scheme+host (authority) portion only —
+// DNS names and URL schemes are case-insensitive (RFC 3986 §3.1/§3.2.2), so
+// this can never change what the string MEANS. Any path/query past the
+// authority is left exactly as typed: a redirect's To can carry a
+// case-sensitive repository path, the same reason normalizeProviderBaseURL
+// (workspace_providers.go) folds every host's path but github.com's.
+func normalizeRedirectEndpoint(raw string) string {
+	s := strings.TrimSpace(raw)
+	start := 0
+	if i := strings.Index(s, "://"); i >= 0 {
+		start = i + 3
+	}
+	authorityEnd := len(s)
+	if j := strings.IndexByte(s[start:], '/'); j >= 0 {
+		authorityEnd = start + j
+	}
+	return strings.ToLower(s[:authorityEnd]) + s[authorityEnd:]
+}
+
 // validateSiteConfig enforces the structural + security invariants of an
 // admin-authored SiteConfig before it is persisted: secret refs must be a real,
 // non-reserved secret name; URLs must be well-formed http(s) with a safe host;
@@ -310,6 +360,46 @@ func logWarnInternalHostsDeclared(hosts []types.InternalHost) {
 		"NAT64-embedded addresses stay denied regardless of what is declared here, and a policy's allowed_domains must still allow the host separately — "+
 		"this lifts the built-in guard only. Remove the entry to restore the unconditional deny.",
 		slog.Int("internal_hosts_count", len(hosts)))
+}
+
+// maxAuditEgressRedirectPairs bounds how many from→to pairs site_config.write's
+// datum embeds (B7-F4) — egress_redirects_count stays the honest, UNBOUNDED
+// total, so truncation costs review detail only, mirroring maxAuditFindings'
+// own append-only-audit-log-size reasoning (internal.go): one operator
+// declaring hundreds of redirects must not turn this row into the biggest
+// thing in the log.
+const maxAuditEgressRedirectPairs = 50
+
+// auditEgressRedirectPairs renders saved.EgressRedirects as sorted "from→to"
+// strings for site_config.write's datum, capped at maxAuditEgressRedirectPairs
+// (second return reports whether it truncated). From/To are topology, not a
+// credential — TokenSecretRef/TokenIntegrationRef are deliberately excluded,
+// same restraint integration.write's own egress[] disclosure already takes.
+func auditEgressRedirectPairs(redirects []types.EgressRedirect) ([]string, bool) {
+	pairs := make([]string, 0, len(redirects))
+	for _, red := range redirects {
+		pairs = append(pairs, red.From+"→"+red.To)
+	}
+	slices.Sort(pairs)
+	if len(pairs) > maxAuditEgressRedirectPairs {
+		return pairs[:maxAuditEgressRedirectPairs], true
+	}
+	return pairs, false
+}
+
+// auditInternalHostSuffixes renders saved.InternalHosts as sorted host
+// suffixes for site_config.write's datum (B7-F4) — a suffix is exactly what
+// logWarnInternalHostsDeclared already puts in the deployment's own log, so
+// this adds nothing an operator couldn't already read there, just makes it
+// reviewable from the audit trail too. CIDRs are left out: the scoping detail
+// belongs to the log line above, not a row every SIEM sink fans out to.
+func auditInternalHostSuffixes(hosts []types.InternalHost) []string {
+	suffixes := make([]string, 0, len(hosts))
+	for _, h := range hosts {
+		suffixes = append(suffixes, h.HostSuffix)
+	}
+	slices.Sort(suffixes)
+	return suffixes
 }
 
 // foldLegacyArtifactOverrides folds a legacy request body's ArtifactOverrides
@@ -514,6 +604,9 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	// lowercase-host/no-trailing-slash form.
 	cfg.WorkspaceProviders = normalizeWorkspaceProviders(cfg.WorkspaceProviders)
 	cfg.AgentProviders = normalizeAgentProviders(cfg.AgentProviders)
+	// B7-F8: ScmHosts / EgressRedirects[].{From,To} / UpstreamProxyURL on the
+	// same terms — see normalizeSiteConfigTopology's doc.
+	normalizeSiteConfigTopology(&cfg)
 	if err := validateAgentProviders(cfg.AgentProviders, s.cfg.AgentImages, s.cfg.BedrockModel); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid site config: "+err.Error())
 		return
@@ -590,11 +683,24 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	logWarnInternalHostsDeclared(saved.InternalHosts)
+	redirectPairs, redirectsTruncated := auditEgressRedirectPairs(saved.EgressRedirects)
+	hostSuffixes := auditInternalHostSuffixes(saved.InternalHosts)
 	datum := map[string]any{
+		// B7-F4: upstream_proxy_url/upstream_proxy_secret_ref, the egress_redirects
+		// from→to pairs and internal_hosts[].host_suffix are IN THE CLEAR on
+		// purpose — same precedent as workspace_provider.write's base_urls:
+		// topology, not a credential (a secret ref is a NAME, never the value it
+		// names). Without them, an MDM-applied narrowing or opening of the
+		// upstream proxy / redirect table / internal-host allowlist left nothing
+		// but a count behind it, unreviewable from the audit log alone.
 		"upstream_proxy_configured": saved.UpstreamProxySecretRef != "" || saved.UpstreamProxyURL != "",
+		"upstream_proxy_url":        saved.UpstreamProxyURL,
+		"upstream_proxy_secret_ref": saved.UpstreamProxySecretRef,
 		"egress_redirects_count":    len(saved.EgressRedirects),
+		"egress_redirects":          redirectPairs,
 		"scm_hosts_count":           len(saved.ScmHosts),
 		"internal_hosts_count":      len(saved.InternalHosts),
+		"internal_hosts":            hostSuffixes,
 		// The provider policy this door can also write (CLI/MDM): without these
 		// two, an MDM-applied narrowing or opening left nothing but a count of
 		// the legacy lists behind it.
@@ -604,6 +710,9 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 		// ENABLED rows, so a roster narrowed by an MDM push is reviewable
 		// from the audit log alone.
 		"agent_providers": enabledAgentProviderCount(saved),
+	}
+	if redirectsTruncated {
+		datum["egress_redirects_truncated"] = true
 	}
 	// Only when the body NAMED the block — see the count above.
 	if narrowed != nil {

@@ -742,3 +742,135 @@ func TestValidateSiteConfig_RedirectEndpointPort(t *testing.T) {
 		}
 	}
 }
+
+// TestHandlePutSiteConfig_NormalizesTopologyToCanonicalForm is B7-F8:
+// ScmHosts/EgressRedirects[].{From,To}/UpstreamProxyURL used to save whatever
+// case/whitespace the operator typed — validSiteHost/HostOf only trim+lower a
+// THROWAWAY copy to check it, never the stored string — so findEgressRedirect's
+// read-time EqualFold masked the effect for that one lookup while the document
+// itself, and everything that echoes it (GET, `wardyn site-config get`, the
+// audit datum), stayed uncanonicalized. Interior whitespace is a 400, not a
+// silent collapse — see normalizeSiteConfigTopology's doc.
+func TestHandlePutSiteConfig_NormalizesTopologyToCanonicalForm(t *testing.T) {
+	fake := &fakeSiteConfigStore{}
+	srv, _ := newSiteConfigHarness(t, fake)
+
+	body := `{
+		"upstream_proxy_url": "  HTTP://Proxy.Corp.Example:3128  ",
+		"scm_hosts": ["  Dev.Azure.COM  "],
+		"egress_redirects": [
+			{"from": "  Registry.NPMJS.org  ", "to": "Artifactory.Corp.Internal/NPM-Remote"}
+		]
+	}`
+	w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var got types.SiteConfig
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.UpstreamProxyURL != "http://proxy.corp.example:3128" {
+		t.Errorf("UpstreamProxyURL = %q, want the canonical lowercase form", got.UpstreamProxyURL)
+	}
+	if len(got.ScmHosts) != 1 || got.ScmHosts[0] != "dev.azure.com" {
+		t.Errorf("ScmHosts = %v, want [dev.azure.com]", got.ScmHosts)
+	}
+	if len(got.EgressRedirects) != 1 {
+		t.Fatalf("EgressRedirects = %v, want one row", got.EgressRedirects)
+	}
+	red := got.EgressRedirects[0]
+	if red.From != "registry.npmjs.org" {
+		t.Errorf("From = %q, want the canonical lowercase host (no outer whitespace)", red.From)
+	}
+	// The path segment ("/NPM-Remote") is left exactly as typed — only the
+	// authority folds, per normalizeRedirectEndpoint's doc.
+	if red.To != "artifactory.corp.internal/NPM-Remote" {
+		t.Errorf("To = %q, want the authority lowered and the path untouched", red.To)
+	}
+	// findEgressRedirect must still resolve the row from a DIFFERENT case than
+	// either the operator typed or the server stored — the read-time EqualFold
+	// this pins never depended on the stored casing in the first place.
+	if _, ok := findEgressRedirect(got, "REGISTRY.NPMJS.ORG"); !ok {
+		t.Errorf("findEgressRedirect could not resolve the stored row by a third casing")
+	}
+
+	// Interior whitespace is refused, not silently collapsed into one token.
+	w2 := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken,
+		`{"scm_hosts": ["git .corp.example"]}`)
+	if w2.Code != http.StatusBadRequest {
+		t.Errorf("scm_hosts with interior whitespace = %d, want 400; body=%s", w2.Code, w2.Body.String())
+	}
+}
+
+// TestHandlePutSiteConfig_AuditDatumCarriesTopologyNotSecrets is B7-F4: the
+// datum used to answer ONLY upstream_proxy_configured (a bool) — two PUTs
+// naming two DIFFERENT proxy URLs produced the IDENTICAL audit row, so a
+// review could tell THAT the proxy changed but never TO WHAT, nor what the
+// org's egress redirects or internal-host allowlist actually route (an
+// MDM-applied narrowing/opening was unreviewable from the log alone, the
+// same gap workspace_provider.write's base_urls already closed for git
+// providers). Fixed by recording the topology in the clear — precedent:
+// workspace_provider.write's own base_urls doc, "topology, not a
+// credential" — while keeping every actual secret VALUE out of the row:
+// only ref NAMES (upstream_proxy_secret_ref) ever appear.
+func TestHandlePutSiteConfig_AuditDatumCarriesTopologyNotSecrets(t *testing.T) {
+	const secretValue = "corp-proxy-basic-auth-password-must-never-leak"
+	fake := &fakeSiteConfigStore{}
+	h := newHarness(t)
+	cfg := baseTestConfig(h, fake)
+	cfg.Secrets = &memSecrets{m: map[string][]byte{"corp-proxy-url": []byte(secretValue)}}
+	srv := New(cfg)
+
+	put := func(body string) map[string]any {
+		t.Helper()
+		w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body)
+		if w.Code != http.StatusOK {
+			t.Fatalf("PUT = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		var last *types.AuditEvent
+		for i, ev := range h.audit.events {
+			if ev.Action == "site_config.write" {
+				last = &h.audit.events[i]
+			}
+		}
+		if last == nil {
+			t.Fatalf("no site_config.write audit event; events=%+v", h.audit.events)
+		}
+		if strings.Contains(string(last.Data), secretValue) {
+			t.Fatalf("audit datum leaked the secret VALUE: %s", last.Data)
+		}
+		var datum map[string]any
+		if err := json.Unmarshal(last.Data, &datum); err != nil {
+			t.Fatalf("decode datum: %v; raw=%s", err, last.Data)
+		}
+		return datum
+	}
+
+	d1 := put(`{"upstream_proxy_url": "http://proxy-one.corp.example:3128"}`)
+	d2 := put(`{"upstream_proxy_url": "http://proxy-two.corp.example:3128"}`)
+	if d1["upstream_proxy_url"] == d2["upstream_proxy_url"] {
+		t.Errorf("two PUTs naming different proxy URLs produced the SAME datum value: %v", d1["upstream_proxy_url"])
+	}
+	if d2["upstream_proxy_url"] != "http://proxy-two.corp.example:3128" {
+		t.Errorf("datum upstream_proxy_url = %v, want the URL just written", d2["upstream_proxy_url"])
+	}
+
+	d3 := put(`{"upstream_proxy_secret_ref": "corp-proxy-url"}`)
+	if d3["upstream_proxy_secret_ref"] != "corp-proxy-url" {
+		t.Errorf("datum upstream_proxy_secret_ref = %v, want the ref NAME", d3["upstream_proxy_secret_ref"])
+	}
+
+	d4 := put(`{
+		"egress_redirects": [{"from": "Registry.NPMJS.org", "to": "artifactory.corp.internal/npm"}],
+		"internal_hosts": [{"host_suffix": "svc.cluster.local"}]
+	}`)
+	redirects, _ := d4["egress_redirects"].([]any)
+	if len(redirects) != 1 || redirects[0] != "registry.npmjs.org→artifactory.corp.internal/npm" {
+		t.Errorf("datum egress_redirects = %v, want one canonical from→to pair", redirects)
+	}
+	hosts, _ := d4["internal_hosts"].([]any)
+	if len(hosts) != 1 || hosts[0] != "svc.cluster.local" {
+		t.Errorf("datum internal_hosts = %v, want [svc.cluster.local]", hosts)
+	}
+}
