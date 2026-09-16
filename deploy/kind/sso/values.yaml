@@ -26,3 +26,16 @@ networkPolicy:
         ports:
           - port: 5556
             protocol: TCP
+      # wardynd's OWN egress to the fake AWS endpoints (awsssofake.yaml). The
+      # SANDBOX reaches them through its proxy sidecar, whose netpol already
+      # permits the Service CIDR — this entry is for the control plane itself,
+      # which dials sso-oidc CreateToken directly when it renews a captured SSO
+      # credential at dispatch (internal/api/awssso_refresh.go). Without it that
+      # renewal is denied by this very policy and the walk's refresh arm dies
+      # with a transport error instead of a credential.
+      - to:
+          - podSelector:
+              matchLabels: {app: wardyn-awsssofake}
+        ports:
+          - port: 8090
+            protocol: TCP

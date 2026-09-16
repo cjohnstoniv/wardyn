@@ -44,6 +44,12 @@ const bearerHeader = "x-amz-sso_bearer_token"
 // `aws sso login --use-device-code`.
 const deviceGrantType = "urn:ietf:params:oauth:grant-type:device_code"
 
+// refreshGrantType is the grant a DISPATCH-TIME renewal uses: wardynd's
+// createAWSSSOToken (internal/api/awssso_refresh.go) POSTs it with the stored
+// refreshToken, never the device code. Modelled here so that renewal is
+// exercised against the same server the login wrote the token on.
+const refreshGrantType = "refresh_token"
+
 // RoleCredentials is the fixture GetRoleCredentials returns, matching the
 // sso service's RoleCredentials shape (expiration is epoch millis, per the
 // ExpirationTimestampType `long` model).
@@ -94,6 +100,14 @@ type Server struct {
 	// what the operator configured.
 	startURLSeen string
 
+	// bedrockCalls/bedrockModel are the bedrock-runtime stub's observations
+	// (bedrock.go): how many model calls landed, and the model id of the last
+	// one. Held here rather than in a second struct so /_seen answers the whole
+	// walk's question — "was the credential minted, AND was it spent?" — in one
+	// round trip.
+	bedrockCalls int
+	bedrockModel string
+
 	// roleCredsSeen is the account_id/role_name of the LAST GetRoleCredentials
 	// call. It is the only place a test can see WHICH identity real botocore
 	// actually asked AWS for, which is the whole question behind the account
@@ -105,6 +119,17 @@ type Server struct {
 // credentials it returns are fixed test fixtures; call AccessToken/Approve to
 // drive the device-code flow from a test.
 func New() *Server {
+	s, h := NewHandler()
+	s.httpSrv = httptest.NewServer(h)
+	return s
+}
+
+// NewHandler returns an UNSTARTED fake plus the handler that serves both
+// services, for test/awsssofake/cmd — the on-cluster build, which binds a fixed
+// port instead of httptest's ephemeral one. A second constructor rather than an
+// exported field: New() must keep starting its own server for every in-process
+// caller that already exists, and an unstarted Server's URL() is "".
+func NewHandler() (*Server, http.Handler) {
 	s := &Server{
 		clientID:     randHex(8),
 		clientSecret: randHex(16),
@@ -128,17 +153,31 @@ func New() *Server {
 	mux.HandleFunc("/federation/credentials", s.handleGetRoleCredentials)
 	mux.HandleFunc("/assignment/accounts", s.handleListAccounts)
 	mux.HandleFunc("/assignment/roles", s.handleListAccountRoles)
-	s.httpSrv = httptest.NewServer(mux)
-	return s
+	// The two arms the ON-CLUSTER fake adds (test/awsssofake/cmd): an
+	// observation endpoint, because a test driving a POD cannot call
+	// RoleCredentialsSeen() in-process, and a bedrock-runtime stub, because
+	// nothing else ever SPENDS the role credentials this portal mints.
+	mux.HandleFunc("/_seen", s.handleSeen)
+	mux.HandleFunc("/model/", s.handleBedrockRuntime)
+	return s, mux
 }
 
 // URL is the base URL for BOTH AWS_ENDPOINT_URL_SSO_OIDC and
 // AWS_ENDPOINT_URL_SSO — the two services' paths never collide (see package
 // doc), so one fake backs both endpoint overrides.
-func (s *Server) URL() string { return s.httpSrv.URL }
+func (s *Server) URL() string {
+	if s.httpSrv == nil {
+		return "" // NewHandler: the caller owns the listener
+	}
+	return s.httpSrv.URL
+}
 
 // Close shuts down the underlying httptest server.
-func (s *Server) Close() { s.httpSrv.Close() }
+func (s *Server) Close() {
+	if s.httpSrv != nil {
+		s.httpSrv.Close()
+	}
+}
 
 // Approve simulates the human completing the device-code approval (normally
 // done by visiting verificationUriComplete in a browser). Until called,
@@ -298,6 +337,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		ClientSecret string `json:"clientSecret"`
 		GrantType    string `json:"grantType"`
 		DeviceCode   string `json:"deviceCode"`
+		RefreshToken string `json:"refreshToken"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeOIDCError(w, "InvalidRequestException", "invalid_request", err.Error())
@@ -335,9 +375,66 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 
+	case refreshGrantType:
+		s.mu.Lock()
+		if req.RefreshToken == "" || req.RefreshToken != s.refreshToken {
+			s.mu.Unlock()
+			// invalid_grant, which is exactly what a CONSUMED or unknown refresh
+			// token gets from the real service — and the code Wardyn classifies as
+			// "spent" (awsSSOErrorIsSpent), stopping a fleet from re-trying a dead
+			// grant. A fake that answered 200 here would let a replay look healthy.
+			writeOIDCError(w, "InvalidGrantException", "invalid_grant", "unknown or already-consumed refresh token")
+			return
+		}
+		// BOTH tokens rotate. The real service rotates the refresh token on every
+		// redemption, and refreshAWSSSOBlob's `rotated` audit arm + its
+		// store-the-new-pair path are only exercised when the token actually
+		// moves — a fake that returned the same refreshToken would leave the half
+		// that persists the rotation untested.
+		s.accessToken = "fake-access-token-" + randHex(8)
+		s.refreshToken = "fake-refresh-token-" + randHex(8)
+		access, refresh := s.accessToken, s.refreshToken
+		s.mu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"accessToken":  access,
+			"tokenType":    "Bearer",
+			"expiresIn":    3600,
+			"refreshToken": refresh,
+		})
+		return
+
 	default:
 		writeOIDCError(w, "UnsupportedGrantTypeException", "unsupported_grant_type", "grantType "+req.GrantType+" not supported by this fake")
 	}
+}
+
+// handleSeen is the fake's observation endpoint — NOT an AWS operation. It
+// exposes RoleCredentialsSeen() (and the bedrock stub's counters) as JSON so a
+// walk driving the fake as a POD can read the one fact that matters: WHICH
+// identity real botocore asked the portal to mint. In-process callers keep
+// using the accessors; this is the same answer across a process boundary.
+//
+// Deliberately unauthenticated: the fake holds no real credential, it runs only
+// on a throwaway cluster, and a bearer check here would make the walk carry a
+// token it has no other reason to know.
+func (s *Server) handleSeen(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.NotFound(w, r)
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	role := ""
+	if len(s.roleCredsSeen.Roles) > 0 {
+		role = s.roleCredsSeen.Roles[0]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"account_id":    s.roleCredsSeen.AccountID,
+		"role_name":     role,
+		"start_url":     s.startURLSeen,
+		"bedrock_calls": s.bedrockCalls,
+		"bedrock_model": s.bedrockModel,
+	})
 }
 
 func (s *Server) handleGetRoleCredentials(w http.ResponseWriter, r *http.Request) {

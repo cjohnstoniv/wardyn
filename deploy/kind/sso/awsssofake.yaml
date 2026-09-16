@@ -1,0 +1,76 @@
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The fake AWS endpoints for the kind SSO walk, on-cluster — test/awsssofake
+# (sso-oidc + the sso portal) plus its bedrock-runtime stub, served by
+# test/awsssofake/cmd. Shaped exactly like dex.yaml beside it: a ConfigMap for
+# the one thing an operator tunes, a single-replica Deployment, a Service.
+#
+# Demo-grade and public by design, like everything else in this directory: it
+# impersonates AWS with NO signing and NO authentication beyond the bearer
+# contract the real portal enforces, and every credential it mints is a fixture
+# string. It belongs only on a throwaway cluster. The image is built and
+# `kind load`ed by deploy/kind/sso/overlay.sh and exists on no registry.
+#
+# ADDRESSED BY ITS SERVICE NAME, NEVER A POD IP — this is the fourth
+# precondition of the walk, and it fails first if forgotten. The sandbox's
+# egress goes through the proxy sidecar, whose vetHostLift
+# (internal/egress/proxy/policy.go) DENIES any host resolving to a private
+# address unless a site-config `internal_hosts` rule lifts it, and
+# liftInternalHost refuses to lift the proxy's own interface subnets or the
+# control-plane's addresses. A pod IP is on the POD CIDR — the proxy's own
+# subnet — so it can never be lifted; a ClusterIP is on the SERVICE CIDR, which
+# can. scripts/kind-sso-walk.sh seeds internal_hosts with this Service's host
+# and the Service CIDR before the first sign-in.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wardyn-awsssofake
+  namespace: wardyn
+data:
+  # The entitlement fixture, in the shape `awsssofake -accounts` documents. The
+  # walk pins the agent roster to 222222222222 / WardynDev, so index 0 is a
+  # DIFFERENT account on purpose: it reproduces the shape the account pin
+  # exists for (index 0 is always the wrong answer — see
+  # internal/api/awsssofake_e2e_test.go's multi-account test).
+  accounts: |
+    [{"account_id":"111111111111","roles":["ReadOnly","DevPower"]},
+     {"account_id":"222222222222","roles":["WardynDev","AdministratorAccess"]}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wardyn-awsssofake
+  namespace: wardyn
+  labels: {app: wardyn-awsssofake}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: wardyn-awsssofake}
+  template:
+    metadata:
+      labels: {app: wardyn-awsssofake}
+    spec:
+      containers:
+        - name: awsssofake
+          # Built locally and `kind load`ed — never pulled. imagePullPolicy
+          # Never so a cluster with no route to a registry fails LOUDLY on a
+          # missing local image instead of sitting in ImagePullBackOff.
+          image: wardyn/awsssofake:local
+          imagePullPolicy: Never
+          args: ["-addr", ":8090"]
+          env:
+            - name: AWSSSOFAKE_ACCOUNTS
+              valueFrom:
+                configMapKeyRef: {name: wardyn-awsssofake, key: accounts}
+          ports: [{containerPort: 8090}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wardyn-awsssofake
+  namespace: wardyn
+  labels: {app: wardyn-awsssofake}
+spec:
+  selector: {app: wardyn-awsssofake}
+  ports: [{port: 8090, targetPort: 8090}]
