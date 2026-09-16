@@ -64,6 +64,14 @@ readinessProbe:
 
 service:
   type: ClusterIP
+  # port is the ONE exception to ".Values.env renders inline, verbatim" (this
+  # file's own top-of-file doc): templates/deployment.yaml passes
+  # `-listen=:{{ .Values.service.port }}` as an explicit container ARG, and a
+  # command-line flag always wins over the env-derived default FlagEnv sets
+  # (cmd/wardynd/main.go parses the flag AFTER reading the env). So an
+  # env.WARDYN_LISTEN (or extraEnv WARDYN_LISTEN) override renders onto the
+  # pod but is INERT — wardynd still binds whatever service.port says. Change
+  # the listen port here, not through env.WARDYN_LISTEN (B12b-F10).
   port: 8080
 
 # Optional Ingress fronting the console's HTTP port only (never `ui` or
