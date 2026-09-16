@@ -82,13 +82,18 @@ func pageWindow[T any](items []T, offset, limit int) ([]T, bool) {
 // falls back to allFn (fetch-all) + in-Go windowing for test doubles and the
 // approvals lister, which is not a store.Pager. X-Wardyn-Truncated is set when a
 // further page exists.
-func servePage[T any](w http.ResponseWriter, page store.Page, pageFn func(store.Page) ([]T, error), allFn func() ([]T, error)) {
+// r is carried for ONE reason: the 5xx path writes through writeServerError, so
+// the driver text an unreachable store puts in err goes to the log (with the
+// method and path an operator needs) instead of into the body of a read a
+// MEMBER can reach — this one helper is the paged chokepoint for /runs,
+// /approvals, /audit, /policies and /workspaces alike.
+func servePage[T any](w http.ResponseWriter, r *http.Request, page store.Page, pageFn func(store.Page) ([]T, error), allFn func() ([]T, error)) {
 	var items []T
 	var truncated bool
 	if pageFn != nil {
 		got, err := pageFn(store.Page{Limit: page.Limit + 1, Offset: page.Offset})
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "list: "+err.Error())
+			writeServerError(w, r, "list runs", err)
 			return
 		}
 		items = got
@@ -98,7 +103,7 @@ func servePage[T any](w http.ResponseWriter, page store.Page, pageFn func(store.
 	} else {
 		got, err := allFn()
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "list: "+err.Error())
+			writeServerError(w, r, "list runs", err)
 			return
 		}
 		items, truncated = pageWindow(got, page.Offset, page.Limit)
@@ -133,7 +138,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		principal := principalFromRequest(r)
-		servePage(w, page, func(p store.Page) ([]types.AgentRun, error) {
+		servePage(w, r, page, func(p store.Page) ([]types.AgentRun, error) {
 			runs, err := creatorPager.ListRunsPageByCreator(r.Context(), principal, p)
 			if err != nil {
 				return nil, err
@@ -154,7 +159,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 			return runs, nil
 		}
 	}
-	servePage(w, page, pageFn, func() ([]types.AgentRun, error) {
+	servePage(w, r, page, pageFn, func() ([]types.AgentRun, error) {
 		runs, err := s.cfg.Store.ListRuns(r.Context())
 		if err != nil {
 			return nil, err

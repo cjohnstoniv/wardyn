@@ -321,7 +321,7 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 				return redact(pg.ListWorkspacesPageForOwner(r.Context(), principal, p))
 			}
 		}
-		servePage(w, page, ownerPageFn, func() ([]types.Workspace, error) {
+		servePage(w, r, page, ownerPageFn, func() ([]types.Workspace, error) {
 			all, err := s.cfg.Store.ListWorkspaces(r.Context())
 			if err != nil {
 				return nil, err
@@ -340,7 +340,7 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	if pg, ok := s.cfg.Store.(store.Pager); ok {
 		pageFn = func(p store.Page) ([]types.Workspace, error) { return redact(pg.ListWorkspacesPage(r.Context(), p)) }
 	}
-	servePage(w, page, pageFn, func() ([]types.Workspace, error) {
+	servePage(w, r, page, pageFn, func() ([]types.Workspace, error) {
 		return redact(s.cfg.Store.ListWorkspaces(r.Context()))
 	})
 }
@@ -503,13 +503,13 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// Overrides forward from — this is a brand-new workspace.
 	atts, baseImageID, aerr := s.upsertAndAttach(r, req.Sources, req.BaseImage, nil)
 	if aerr != nil {
-		writeError(w, http.StatusInternalServerError, "attach sources: "+aerr.Error())
+		writeServerError(w, r, "attach sources", aerr)
 		return
 	}
 	ws.Attachments, ws.BaseImageID = atts, baseImageID
 	created, err := s.cfg.Store.CreateWorkspace(r.Context(), ws)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "create workspace: "+err.Error())
+		writeServerError(w, r, "create workspace", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
@@ -618,7 +618,7 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// ws.Attachments.
 	atts, baseImageID, aerr := s.upsertAndAttach(r, req.Sources, req.BaseImage, ws.Attachments)
 	if aerr != nil {
-		writeError(w, http.StatusInternalServerError, "attach sources: "+aerr.Error())
+		writeServerError(w, r, "attach sources", aerr)
 		return
 	}
 	ws.Attachments, ws.BaseImageID = atts, baseImageID
@@ -671,7 +671,7 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "update workspace: "+err.Error())
+		writeServerError(w, r, "update workspace", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
@@ -912,7 +912,7 @@ func (s *Server) handleObservedEgress(w http.ResponseWriter, r *http.Request) {
 
 	runs, err := s.cfg.Store.ListRuns(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list runs: "+err.Error())
+		writeServerError(w, r, "list runs", err)
 		return
 	}
 	denied := map[string]struct{}{}
@@ -987,7 +987,7 @@ func (s *Server) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "delete workspace: "+err.Error())
+		writeServerError(w, r, "delete workspace", err)
 		return
 	}
 	s.removeStaleImage(r.Context(), staleImage, "")

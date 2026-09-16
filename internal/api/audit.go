@@ -135,7 +135,7 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 	}
 	// The fetch-all fallback MUST apply the same predicate: filtering only on
 	// the pager path would answer a filtered request with unfiltered events.
-	servePage(w, page, pageFn, func() ([]types.AuditEvent, error) {
+	servePage(w, r, page, pageFn, func() ([]types.AuditEvent, error) {
 		if scope == nil {
 			all, err := s.cfg.Store.QueryRecentAuditEvents(r.Context(), 0)
 			return filter.Keep(all), err

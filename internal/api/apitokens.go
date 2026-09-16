@@ -124,7 +124,7 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 			slog.ErrorContext(r.Context(), "api: api-token lookup failed; this request could not be authenticated",
 				"error", err, "path", r.URL.Path)
 			s.metrics.authStoreErrorInc()
-			writeError(w, http.StatusInternalServerError, "api token lookup failed")
+			writeError(w, http.StatusServiceUnavailable, "api token lookup failed")
 			return
 		}
 		// THE SAME CUTOFF THE SESSION LANE OBEYS, applied to the token's
@@ -145,16 +145,18 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 		// arm above does: unknown, revoked and cut-off collapse into one 401
 		// from one place, and no branch here becomes an existence oracle.
 		//
-		// A store FAILURE fails closed with the same 500 the lookup failure
+		// A store FAILURE fails closed with the same 503 the lookup failure
 		// gives, and for the same reason — an unanswerable revocation check must
-		// never read as "not revoked".
+		// never read as "not revoked". 503 rather than 500 (B6-F2): the token may
+		// be perfectly good, this deployment simply cannot decide, and the SSO
+		// lane now answers the identical condition the identical way.
 		if s.cfg.SessionRevocations != nil {
 			revoked, rerr := s.cfg.SessionRevocations.IsSessionRevoked(r.Context(), t.Principal, t.Email, t.CreatedAt)
 			if rerr != nil {
 				slog.ErrorContext(r.Context(), "api: session-revocation lookup failed; this api token could not be authenticated",
 					"error", rerr, "path", r.URL.Path)
 				s.metrics.authStoreErrorInc()
-				writeError(w, http.StatusInternalServerError, "api token lookup failed")
+				writeError(w, http.StatusServiceUnavailable, "api token lookup failed")
 				return
 			}
 			if revoked {

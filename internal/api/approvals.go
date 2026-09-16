@@ -106,7 +106,7 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			principal := principalFromRequest(r)
-			servePage(w, page, func(p store.Page) ([]types.ApprovalRequest, error) {
+			servePage(w, r, page, func(p store.Page) ([]types.ApprovalRequest, error) {
 				return pager.ListApprovalsPageByRunCreator(r.Context(), principal, state, p)
 			}, nil)
 			return
@@ -137,7 +137,7 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	servePage(w, page, pageFn, func() ([]types.ApprovalRequest, error) {
+	servePage(w, r, page, pageFn, func() ([]types.ApprovalRequest, error) {
 		all, err := s.cfg.Approvals.List(r.Context(), state)
 		if err != nil || runID == uuid.Nil {
 			return all, err
@@ -410,7 +410,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		case errors.Is(err, store.ErrNotFound):
 			writeError(w, http.StatusNotFound, "approval not found")
 		default:
-			writeError(w, http.StatusInternalServerError, "decide approval: "+err.Error())
+			writeServerError(w, r, "decide approval", err)
 		}
 		return
 	}
@@ -565,7 +565,7 @@ func (s *Server) authorizeMemberDecision(w http.ResponseWriter, r *http.Request,
 	host := approvalHost(ap)
 	allowed, cerr := s.capSeamAllowed(r.Context(), capEgressHost, host)
 	if cerr != nil {
-		writeError(w, http.StatusInternalServerError, "resolve capability: "+cerr.Error())
+		writeServerError(w, r, "resolve capability", cerr)
 		return ap, run, false, false
 	}
 	if !allowed {
@@ -874,7 +874,7 @@ func (s *Server) resolveAlwaysTarget(w http.ResponseWriter, r *http.Request, ap 
 			// REJECT, never fall through: falling through would persist `always`
 			// on the approval row with no workspace resolved and no durable
 			// write — a permanent grant that exists only in the UI.
-			writeError(w, http.StatusInternalServerError, "resolve run for always: "+err.Error())
+			writeServerError(w, r, "resolve run for always", err)
 			return uuid.Nil, false
 		}
 	}
@@ -913,7 +913,7 @@ func (s *Server) resolveAlwaysTarget(w http.ResponseWriter, r *http.Request, ap 
 			writeError(w, http.StatusBadRequest, "always needs a workspace: this run's workspace no longer exists")
 			return uuid.Nil, false
 		}
-		writeError(w, http.StatusInternalServerError, "resolve workspace for always: "+err.Error())
+		writeServerError(w, r, "resolve workspace for always", err)
 		return uuid.Nil, false
 	}
 	if approve {

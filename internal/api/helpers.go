@@ -181,7 +181,7 @@ func (s *Server) getWorkspaceOr404(w http.ResponseWriter, r *http.Request, id uu
 		return types.Workspace{}, false
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get workspace: "+err.Error())
+		writeServerError(w, r, "get workspace", err)
 		return types.Workspace{}, false
 	}
 	return ws, true
@@ -379,7 +379,7 @@ func (s *Server) getRunOr404(w http.ResponseWriter, r *http.Request, id uuid.UUI
 		return types.AgentRun{}, false
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get run: "+err.Error())
+		writeServerError(w, r, "get run", err)
 		return types.AgentRun{}, false
 	}
 	return run, true
@@ -502,7 +502,7 @@ func scopedWorkspaceWrite[T, V any](s *Server, w http.ResponseWriter, r *http.Re
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, action+": "+err.Error())
+		writeServerError(w, r, action, err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),

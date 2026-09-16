@@ -65,7 +65,7 @@ func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 			return redactPoliciesForRead(ps, s.isSecurityOperator(r.Context())), err
 		}
 	}
-	servePage(w, page, pageFn, func() ([]types.RunPolicy, error) {
+	servePage(w, r, page, pageFn, func() ([]types.RunPolicy, error) {
 		ps, err := s.cfg.Store.ListPolicies(r.Context())
 		return redactPoliciesForRead(ps, s.isSecurityOperator(r.Context())), err
 	})

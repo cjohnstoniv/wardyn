@@ -175,8 +175,10 @@ func TestAPITokenHonorsSessionRevocationCutoff(t *testing.T) {
 		srv, st, rev := build(t)
 		mint(t, st, "wdn_x", "sub-alice", "alice@corp.example", time.Now().UTC())
 		rev.err = context.DeadlineExceeded
-		if w := do(t, srv, http.MethodGet, "/api/v1/me", "wdn_x", ""); w.Code != http.StatusInternalServerError {
-			t.Errorf("revocation-store outage = %d, want 500 — an unanswerable check must not authenticate; body=%s",
+		// 503 since B6-F2 (was 500) — see TestAPITokenStoreErrorIsCounted: the
+		// fail-closed rule is unchanged, only the status word is.
+		if w := do(t, srv, http.MethodGet, "/api/v1/me", "wdn_x", ""); w.Code != http.StatusServiceUnavailable {
+			t.Errorf("revocation-store outage = %d, want 503 — an unanswerable check must not authenticate; body=%s",
 				w.Code, w.Body.String())
 		}
 	})
