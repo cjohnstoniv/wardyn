@@ -9,17 +9,23 @@ package api
 // walk driven by an ADMIN cookie carrying the flag.
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretstore"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 const (
@@ -113,6 +119,42 @@ func TestMemberMode_RefusesAdminTokenAndLocalMode(t *testing.T) {
 			t.Fatalf("status = %d, want 400 (never a nil-OIDC panic): %s", w.Code, w.Body.String())
 		}
 	})
+
+	// R-01. The `wdn_` token lane publishes a human identity through the SAME
+	// withHumanIdentity the SSO branch uses, and http.go mounts that lane
+	// REGARDLESS of OIDC — deliberately, so an operator who never configured SSO
+	// can still hold a personal token. So `oidcHumanFromContext(ctx) != ""` with
+	// a nil *Authenticator is reachable, and a token caller who also attaches
+	// ANY wardyn_session cookie reached sessionHMAC on it: a nil deref, caught by
+	// chi's Recoverer as a 500 plus a stack dump per request, on a door any
+	// token holder can knock on. The guard is TWO conditions for this reason.
+	t.Run("a wdn_ token on an OIDC-less deployment, with a forged cookie", func(t *testing.T) {
+		h := newHarness(t)
+		st := newTokenMemStore()
+		srv := New(baseTestConfig(h, st)) // cfg.OIDC == nil, but the token lane is mounted
+		const raw = "wdn_membermode_probe"
+		if _, err := st.CreateAPIToken(context.Background(), types.APIToken{
+			ID: uuid.New(), Principal: "sub-token-holder", Email: "holder@corp.example",
+			Role: oidc.RoleAdmin, Name: raw, CreatedAt: time.Now().UTC().Add(-time.Hour),
+		}, raw); err != nil {
+			t.Fatal(err)
+		}
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/me/member-mode", strings.NewReader(`{"enabled":true}`))
+		r.Header.Set("Authorization", "Bearer "+raw)
+		// The trivially-forged cookie: decodeSession gets PAST its absent-cookie
+		// early return and reaches the HMAC.
+		r.AddCookie(&http.Cookie{Name: "wardyn_session", Value: "AA.AA"})
+		r.Host = "127.0.0.1"
+		r.RemoteAddr = "127.0.0.1:54321"
+		w := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(w, r)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400 — a 500 here is the nil-Authenticator deref: %s", w.Code, w.Body.String())
+		}
+		if !strings.Contains(w.Body.String(), "signed-in SSO human") {
+			t.Errorf("body = %q, want the no-human refusal", w.Body.String())
+		}
+	})
 }
 
 // TestMemberMode_Toggle: the ordinary round trip. On clamps /me, off restores
@@ -166,33 +208,119 @@ func TestMemberMode_Toggle(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("a real member toggling on = %d, want 200: %s", w.Code, w.Body.String())
 	}
+
+	// R-03. A CHUNKED body reports ContentLength == -1, so a `> 0` optional-body
+	// guard skips the decode entirely and answers 200 {"member_mode":false} to a
+	// request that asked to ENTER the mode — the admin stays admin and the only
+	// hint is the absent banner.
+	t.Run("a chunked body is decoded, not discarded", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/me/member-mode", strings.NewReader(`{"enabled":true}`))
+		r.ContentLength = -1
+		r.AddCookie(admin)
+		cw := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(cw, r)
+		if cw.Code != http.StatusOK {
+			t.Fatalf("chunked POST = %d, want 200: %s", cw.Code, cw.Body.String())
+		}
+		if b := meBody(t, srv, sessionCookieFrom(t, cw.Result().Cookies())); b["member_mode"] != true {
+			t.Errorf("member_mode = %v after a chunked {\"enabled\":true}, want true", b["member_mode"])
+		}
+	})
 }
 
 // TestMemberMode_DeniedOnEveryOperatorOnlyRoute is the test that proves the
-// mode is REAL and not cosmetic: rbac_test.go's gatedRoutes walk, driven by an
-// ADMIN session carrying the flag, must refuse exactly as it refuses a member —
-// same 403, same body, same "the allowlist is never named" rule.
+// mode is REAL and not cosmetic: every admin-tier route, driven by an ADMIN
+// session carrying the flag, must refuse exactly as it refuses a member.
+//
+// It walks authz_test.go's routeMatrix — BOTH admin classes — rather than only
+// rbac_test.go's gatedRoutes table, and the difference is the point (R-06).
+// gatedRoutes is a hand-maintained list of the ~22 widest operatorOnly routes;
+// routeMatrix is the COMPLETENESS-CHECKED table (TestAuthzMatrix walks chi and
+// fails the build on an unclassified route), and it is the only one of the two
+// that covers classSecurity — so a future securityOps route mounted on the wrong
+// group, or a new admin route, is caught here without anybody remembering to add
+// it. The gatedRoutes walk is kept as a subtest because it costs one loop and it
+// probes with the seeded fixtures that table's server was built for.
+//
+// The 403 body is asserted BYTE-IDENTICAL to what a real member session gets for
+// the same route, not merely as "contains the admin-role sentence": "a member
+// mode admin is refused the way a member is" is the claim, and a string match
+// against a literal both requireOperator and requireSecurityOperator write
+// cannot tell the two tiers' answers apart at all.
 func TestMemberMode_DeniedOnEveryOperatorOnlyRoute(t *testing.T) {
-	srv, _ := memberModeServer(t)
-	admin := memberModeSSOSession(t, memberModeAdminSub, memberModeAdminEmail, oidc.RoleAdmin, true)
-	for _, rt := range gatedRoutes {
-		t.Run(rt.method+" "+rt.path, func(t *testing.T) {
-			w := doSSO(t, srv, rt.method, rt.path, admin, "{}")
-			if w.Code != http.StatusForbidden {
-				t.Fatalf("status = %d, want 403 (member mode must refuse every gated route): %s", w.Code, w.Body.String())
+	// The MAXIMALLY-CONFIGURED server the matrix itself is built from (Secrets,
+	// RecordingStore, SessionRevocations all wired) — anything less 404s the
+	// conditionally-mounted admin routes and the walk would read those as
+	// "refused" when they were merely absent. Same reason csrf_test.go's fence
+	// uses it.
+	matrixSrv, _, _, _ := newAuthzMatrixServer(t)
+	mmAdmin := memberModeSSOSession(t, memberModeAdminSub, memberModeAdminEmail, oidc.RoleAdmin, true)
+	realMember := ssoSession(t, "sub-control-member", "control@corp.example", oidc.RoleMember)
+
+	adminTierRoutes := 0
+	for key, rc := range routeMatrix {
+		if rc.class != classAdmin && rc.class != classSecurity {
+			continue
+		}
+		method, pattern, ok := strings.Cut(key, " ")
+		if !ok {
+			t.Fatalf("malformed routeMatrix key %q", key)
+		}
+		// GET /metrics is classAdmin but lives on the TOP-LEVEL router outside
+		// /api/v1 with its own gate; every other admin-tier row is an API route.
+		if !strings.HasPrefix(pattern, "/api/v1/") {
+			continue
+		}
+		adminTierRoutes++
+		t.Run(key, func(t *testing.T) {
+			path := buildPath(pattern, "x1")
+			body := bodyFor(method, rc)
+			got := doSSO(t, matrixSrv, method, path, mmAdmin, body)
+			want := doSSO(t, matrixSrv, method, path, realMember, body)
+			if got.Code != http.StatusForbidden {
+				t.Fatalf("member-mode admin: status = %d, want 403: %s", got.Code, got.Body.String())
 			}
-			if !strings.Contains(w.Body.String(), "requires admin role") {
-				t.Errorf("body = %q, want the admin-role message", w.Body.String())
+			if want.Code != http.StatusForbidden {
+				t.Fatalf("control: a real member got %d on this route, so it is not admin-tier here: %s", want.Code, want.Body.String())
+			}
+			if got.Body.String() != want.Body.String() {
+				t.Errorf("body = %q, want byte-identical to a real member's %q", got.Body.String(), want.Body.String())
 			}
 		})
 	}
+	// A matrix that stopped yielding admin-tier rows would make this test
+	// vacuously green — the exact failure the walk exists to prevent
+	// (csrf_test.go's own fence guards itself the same way).
+	if adminTierRoutes < 40 {
+		t.Fatalf("walked only %d admin-tier API routes; routeMatrix carries ~50 — something stopped enumerating", adminTierRoutes)
+	}
+
+	t.Run("gatedRoutes", func(t *testing.T) {
+		srv, _ := memberModeServer(t) // the fixtures that table's own server is built for
+		for _, rt := range gatedRoutes {
+			t.Run(rt.method+" "+rt.path, func(t *testing.T) {
+				w := doSSO(t, srv, rt.method, rt.path, mmAdmin, "{}")
+				if w.Code != http.StatusForbidden {
+					t.Fatalf("status = %d, want 403 (member mode must refuse every gated route): %s", w.Code, w.Body.String())
+				}
+				if !strings.Contains(w.Body.String(), "requires admin role") {
+					t.Errorf("body = %q, want the admin-role message", w.Body.String())
+				}
+			})
+		}
+	})
 }
 
 // TestMemberMode_AuditRowsNameTheAdmin: both rows the mode writes are
 // attributed to the admin's OWN sub. An impersonation feature whose audit trail
 // said "member" would be the thing the product spent six guards not building.
 func TestMemberMode_AuditRowsNameTheAdmin(t *testing.T) {
-	srv, h := memberModeServer(t)
+	// ownerHarness rather than memberModeServer: the two IN-HANDLER
+	// admin_surface twins asserted below need a real operator-owned workspace
+	// row and the secret store mounted, and this is the harness the ownership
+	// tests already build for exactly that.
+	srv, st, h := ownerHarness(t, runner.MemberMountPolicy{})
+	memberModeOperatorWS := st.put(types.Workspace{}).String() // owned_by == "" — operator-owned
 	admin := ssoSession(t, memberModeAdminSub, memberModeAdminEmail, oidc.RoleAdmin)
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/member-mode", admin, `{"enabled":true}`)
@@ -236,6 +364,42 @@ func TestMemberMode_AuditRowsNameTheAdmin(t *testing.T) {
 	}
 	if ddata["reason"] != "admin_surface" {
 		t.Errorf("authz.denied reason = %v, want admin_surface", ddata["reason"])
+	}
+
+	// R-02. The marker must ride EVERY admin-tier refusal, not only the two
+	// middleware chokepoints: two in-handler twins emit the identical
+	// admin_surface datum, and secrets.go says so in a shape-identity comment.
+	// A marker present at two of four sites is unreliable for the one reader it
+	// was added for — an operator filtering the denial stream.
+	for _, tc := range []struct {
+		name, method, path string
+	}{
+		// DELETE /workspaces/{id} is classOwner, so it passes the middleware and
+		// the refusal is raised INSIDE the handler by getWorkspaceAuthorized —
+		// which is the point. (PUT /requirements would 403 at requireOperator
+		// and prove nothing about the twin.)
+		{"getWorkspaceAuthorized (operator-owned workspace)", http.MethodDelete, "/api/v1/workspaces/" + memberModeOperatorWS},
+		{"secrets ?owner= gate", http.MethodGet, "/api/v1/secrets?owner=somebody-else"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if d := doSSO(t, srv, tc.method, tc.path, on, "{}"); d.Code != http.StatusForbidden {
+				t.Fatalf("%s in member mode = %d, want 403: %s", tc.name, d.Code, d.Body.String())
+			}
+			ev := lastAuditEvent(t, h.audit.events, "authz.denied")
+			var data map[string]any
+			if err := json.Unmarshal(ev.Data, &data); err != nil {
+				t.Fatalf("decode authz.denied data: %v", err)
+			}
+			if data["reason"] != "admin_surface" {
+				t.Fatalf("reason = %v, want admin_surface (wrong row matched)", data["reason"])
+			}
+			if data["member_mode"] != true {
+				t.Errorf("authz.denied data = %#v, want member_mode:true", data)
+			}
+			if ev.Actor != memberModeAdminSub {
+				t.Errorf("actor = %q, want %q", ev.Actor, memberModeAdminSub)
+			}
+		})
 	}
 
 	// An ORDINARY member's denial carries no member_mode key at all — the flag
@@ -297,6 +461,42 @@ func TestMemberMode_RefusesTokenAndKeyMint(t *testing.T) {
 				t.Errorf("body = %q, want the exit-member-mode refusal", w.Body.String())
 			}
 		})
+	}
+}
+
+// TestMemberMode_ExistingAPITokenKeepsItsOwnRole is ceiling 4, made executable
+// (R-05). The mode is per-SESSION: a `wdn_` token the human already holds
+// replays its own DB-stamped role (apitokens.go), so it still reaches
+// operator-only routes while the very same human's browser cookie is clamped.
+// The 409 mint doors stop NEW credentials; they cannot reach into old ones.
+//
+// This is a REGRESSION PIN as much as a ceiling: it is the shape of the bug
+// where somebody "fixes" the ceiling by teaching the token lane to read the
+// session, which would clamp a CLI caller by the state of an unrelated browser.
+func TestMemberMode_ExistingAPITokenKeepsItsOwnRole(t *testing.T) {
+	h := newHarness(t)
+	st := newTokenMemStore()
+	cfg := baseTestConfig(h, st)
+	cfg.OIDC = &oidc.Authenticator{}
+	srv := New(cfg)
+
+	const raw = "wdn_minted_before_the_mode"
+	if _, err := st.CreateAPIToken(context.Background(), types.APIToken{
+		ID: uuid.New(), Principal: memberModeAdminSub, Email: memberModeAdminEmail,
+		Role: oidc.RoleAdmin, Name: raw, CreatedAt: time.Now().UTC().Add(-time.Hour),
+	}, raw); err != nil {
+		t.Fatal(err)
+	}
+
+	// The same human's COOKIE is in the mode and is refused.
+	on := memberModeSSOSession(t, memberModeAdminSub, memberModeAdminEmail, oidc.RoleAdmin, true)
+	if w := doSSO(t, srv, http.MethodPost, "/api/v1/policies", on, "{}"); w.Code != http.StatusForbidden {
+		t.Fatalf("the cookie lane = %d, want 403 (the mode is on): %s", w.Code, w.Body.String())
+	}
+	// Their TOKEN is not.
+	w := do(t, srv, http.MethodPost, "/api/v1/policies", raw, "{}")
+	if w.Code == http.StatusForbidden || w.Code == http.StatusUnauthorized {
+		t.Fatalf("the token lane = %d, want the handler to run — a wdn_ token keeps its own stamped role: %s", w.Code, w.Body.String())
 	}
 }
 

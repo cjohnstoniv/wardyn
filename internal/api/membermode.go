@@ -63,21 +63,36 @@ type memberModeRequest struct {
 // they asked to be, and a 4xx would only teach them the control exists for
 // someone else.
 //
-// GUARD ORDER IS LOAD-BEARING. The no-human arm runs FIRST and covers three
-// cases at once — admin token, local mode, and s.cfg.OIDC == nil (the ordinary
-// shape of a token/local deployment, server.go) — so s.cfg.OIDC is never
-// dereferenced on a deployment that has none.
+// GUARD ORDER IS LOAD-BEARING, and it is TWO conditions, not one. The obvious
+// arm is "no per-human identity": the admin token and local mode are one shared
+// credential that isOperator answers true for with no session role to demote.
+//
+// `s.cfg.OIDC == nil` is a SEPARATE condition and cannot be folded into the
+// first, which is what an earlier version of this comment claimed. The `wdn_`
+// API-token lane publishes a human identity through the same withHumanIdentity
+// the SSO branch uses (apitokens.go), and http.go mounts that lane REGARDLESS of
+// OIDC — deliberately, so an operator who never configured SSO can still hold a
+// personal token. So `oidcHumanFromContext(ctx) != ""` is reachable with a nil
+// *Authenticator, and a token caller who also attaches any `wardyn_session`
+// cookie at all would reach sessionHMAC on it: a nil deref, caught by chi's
+// Recoverer as a 500 plus a stack dump per request. Both conditions, one arm,
+// one sentence — there is nothing to pause in either case.
 func (s *Server) handleSetMemberMode(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	sub := oidcHumanFromContext(ctx)
-	if sub == "" {
+	if sub == "" || s.cfg.OIDC == nil {
 		writeError(w, http.StatusBadRequest, memberModeNoHumanRefusal)
 		return
 	}
 	var req memberModeRequest
 	// An empty body is not an error here: http.NoBody decodes to the zero
 	// struct, which is "off".
-	if r.ContentLength > 0 && !decodeStrict(w, r, &req) {
+	//
+	// `!= 0`, never `> 0` (record.go's optional-body handler is the precedent):
+	// a chunked or otherwise unknown-length body reports ContentLength == -1, and
+	// `> 0` would skip the decode and silently answer 200 {"member_mode":false}
+	// to a request that asked to ENTER the mode.
+	if r.ContentLength != 0 && !decodeStrict(w, r, &req) {
 		return
 	}
 	realRole, err := s.cfg.OIDC.SetMemberMode(w, r, req.Enabled)
@@ -86,6 +101,12 @@ func (s *Server) handleSetMemberMode(w http.ResponseWriter, r *http.Request) {
 		// verifying between the middleware and here. Not a 500 — there is
 		// nothing wrong with the server, the caller simply has no session left
 		// to re-sign.
+		//
+		// DEFENCE IN DEPTH rather than a live lane: Middleware publishes no
+		// principal for an expired, revoked or tampered cookie, so those
+		// requests land on the no-human 400 above and never get here. Kept
+		// because the guard above proves the caller HAS a human identity, not
+		// that it came from a cookie this Authenticator can re-sign.
 		writeError(w, http.StatusUnauthorized, "no session to change: sign in again")
 		return
 	}
@@ -105,6 +126,17 @@ func (s *Server) handleSetMemberMode(w http.ResponseWriter, r *http.Request) {
 // INSIDE member mode so a denial stream reads as "an admin exercising the member
 // path" rather than as an incident. The key is OMITTED when the mode is off — it
 // is a marker, not a field every row has to answer.
+//
+// EVERY admin-tier refusal goes through this, not only the two middleware
+// chokepoints: requireOperator and requireSecurityOperator (http.go) plus the
+// two IN-HANDLER twins that emit the identical admin_surface datum —
+// getWorkspaceAuthorized's operator-owned-workspace refusal (helpers.go) and
+// secrets.go's ?owner= gate. Those two exist precisely so the audit trail does
+// not depend on WHERE a refusal happens to live, and secrets.go says so in a
+// shape-identity comment; a marker present at two of the four sites would make
+// the field unreliable for the one reader it was added for — an operator
+// filtering the denial stream to tell an admin walking the member path from a
+// member incident.
 func authzDeniedDatum(ctx context.Context, reason, method string) map[string]any {
 	d := map[string]any{"reason": reason, "method": method}
 	if oidc.MemberModeFromContext(ctx) {

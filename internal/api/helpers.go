@@ -291,7 +291,7 @@ func (s *Server) getWorkspaceAuthorized(w http.ResponseWriter, r *http.Request, 
 	if ws.OwnedBy == "" {
 		writeError(w, http.StatusForbidden, "requires admin role")
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-			"authz.denied", r.URL.Path, "denied", mustJSON(map[string]any{"reason": "admin_surface", "method": r.Method})))
+			"authz.denied", r.URL.Path, "denied", mustJSON(authzDeniedDatum(r.Context(), "admin_surface", r.Method))))
 		return types.Workspace{}, false
 	}
 	s.denyForeignWorkspace(w, r, ws)

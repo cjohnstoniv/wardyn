@@ -800,7 +800,7 @@ export function TopBar({
                 </Link>
               </DropdownMenuItem>
             )}
-            <MemberModeMenuItem operator={meta.operator} method={meta.method} />
+            <MemberModeMenuItem meta={meta} />
             <DropdownMenuItem asChild>
               <Link to="/ssh-keys">
                 <KeyRound className="size-4" /> SSH keys

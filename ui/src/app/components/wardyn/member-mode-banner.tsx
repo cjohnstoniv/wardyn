@@ -47,27 +47,36 @@ export const MEMBER_MODE = {
 } as const;
 
 /**
- * MemberModeMenuItem — the account-menu way IN. Operator-only and SSO-only:
- * the server refuses the admin-token / local-mode / no-IdP lane with a 400
- * (there is no per-person role to pause there), so offering the control would
+ * MemberModeMenuItem — the account-menu way IN.
+ *
+ * Offered to EITHER admin tier (`operator` is super-admin-only, so a
+ * `security_admin` needs the second predicate) and only over SSO: the server
+ * refuses the admin-token / local-mode / no-IdP lane with a 400, there being no
+ * per-person role to pause there, so offering the control on those lanes would
  * be offering a refusal.
  *
- * It disappears once the mode is on, because `operator` is then false — which is
- * correct and not a gap: the way out is the banner, which is on every screen.
+ * Both tiers clamp to `member` — the server's clamp knows only "down to member"
+ * — and both are restored to their own STAMPED tier on exit, which is why the
+ * exit copy names the mode rather than a tier to go back to.
+ *
+ * It disappears once the mode is on, because both predicates are then false —
+ * which is correct and not a gap: the way out is the banner, on every screen.
  */
 export function MemberModeMenuItem({
-  operator,
-  method,
+  meta,
   onEntered = () => window.location.assign("/"),
 }: {
-  operator: boolean;
-  method: string;
+  /** The three /me fields the predicate reads. Taken as ONE object so the whole
+   *  rule lives in this module and app-shell.tsx (at the file-size gate) spends
+   *  one line on the control — its ShellMeta satisfies this structurally. */
+  meta: { operator: boolean; securityOperator: boolean; method: string };
   /** Injected in tests; the default reloads at the root because the session
    *  cookie changed and every screen's cached data was fetched as an admin. */
   onEntered?: () => void;
 }) {
   const [failed, setFailed] = React.useState(false);
-  if (!operator || method !== "sso") return null;
+  const eligible = meta.operator || meta.securityOperator;
+  if (!eligible || meta.method !== "sso") return null;
   return (
     <DropdownMenuItem
       onSelect={(e) => {

@@ -2020,9 +2020,20 @@ A persistent banner says so on every screen and carries the way back out
 (**Exit member mode**). Every audit row the session writes still names **your
 own sub** — this is not impersonation, and there is no way to become anybody
 else. The transition itself is audited as `auth.member_mode`
-(`enabled`, `real_role`), and each refusal you meet while the mode is on carries
-`member_mode: true` on its `authz.denied` row, so a reviewer reads the burst as
-an admin walking the member path rather than as an incident.
+(`enabled`, `real_role`), and each `403` an **admin-tier gate** raises while the
+mode is on carries `member_mode: true` on its `authz.denied` row — the two
+middleware chokepoints and the two in-handler twins that emit the same
+`admin_surface` refusal — so a reviewer reads the burst as an admin walking the
+member path rather than as an incident. (Denials with a *different* `reason` —
+an ungranted capability, a foreign resource — are the ones a member would meet
+identically, and carry no marker.)
+
+**Both admin tiers get the control** — a `security_admin` as well as a super
+admin — and both clamp to `member`, because the clamp knows only one direction;
+exiting restores whichever tier you were actually signed in as. It is offered
+over SSO only: the admin token, local mode and a deployment with no identity
+provider are one shared credential with no per-person role to pause, so there is
+nothing to pause and the route answers those callers `400`.
 
 Two doors REFUSE instead of clamping, both with `409`: minting an API token
 (`POST /me/tokens`) and registering an SSH key (`POST /me/ssh-keys`). Both
@@ -2037,10 +2048,15 @@ credential that outlives the mode. Exit first.
 >    owner-legal paths still pass for you where they would 404 for someone else.
 >    `GET /me/capabilities` and every governance ceiling resolve against your
 >    real group snapshot — the mode clamps the role, never the group tier.
-> 2. **SSH is not clamped.** The SSH gateway reads the role stamped on the KEY
->    in the database, refreshed only at login (`WARDYN_SSH_ROLE_TTL`), so an
->    admin in member mode still holds the admin override on other people's runs
->    over SSH. The console and the HTTP API are clamped; that lane is not.
+> 2. **Credentials you already hold are not clamped — the mode is
+>    per-SESSION.** The SSH gateway reads the role stamped on the KEY in the
+>    database, refreshed only at login (`WARDYN_SSH_ROLE_TTL`), so an admin in
+>    member mode still holds the admin override on other people's runs over SSH.
+>    By the identical argument, any `wdn_` API token you already hold keeps its
+>    own stamped role (the token lane replays the DB row, never the session), as
+>    does the deployment admin bearer token. The `409` mint doors stop NEW
+>    credentials; they cannot reach into old ones. Your browser session is
+>    clamped; another credential of yours is a different session.
 > 3. **Rolling upgrades.** The flag rides the existing session cookie with no
 >    codec bump (a bump would sign every live session out mid-rollout, which is
 >    worse). During a rolling Kubernetes upgrade a replica still running the

@@ -61,7 +61,10 @@ describe("MemberModeBanner", () => {
 });
 
 describe("MemberModeMenuItem", () => {
-  function renderItem(props: { operator: boolean; method: string; onEntered?: () => void }) {
+  function renderItem(props: {
+    meta: { operator: boolean; securityOperator: boolean; method: string };
+    onEntered?: () => void;
+  }) {
     return render(
       <DropdownMenu open>
         <DropdownMenuContent>
@@ -71,13 +74,27 @@ describe("MemberModeMenuItem", () => {
     );
   }
 
+  // The /me tier shapes, verbatim: "admin" is both predicates, "security_admin"
+  // is only the second, "member" is neither (me.go's two predicates).
+  const admin = { operator: true, securityOperator: true, method: "sso" };
+  const securityAdmin = { operator: false, securityOperator: true, method: "sso" };
+  const member = { operator: false, securityOperator: false, method: "sso" };
+
   it("is offered to an SSO operator", () => {
-    renderItem({ operator: true, method: "sso" });
+    renderItem({ meta: admin });
+    expect(screen.getByText(MEMBER_MODE.MENU)).toBeInTheDocument();
+  });
+
+  // R-04: `operator` is super-admin-only (isOperator), so a security admin needs
+  // the second predicate or the console never offers them a control the server
+  // route (classMember, SSO human only) would happily serve over curl.
+  it("is offered to an SSO security_admin too", () => {
+    renderItem({ meta: securityAdmin });
     expect(screen.getByText(MEMBER_MODE.MENU)).toBeInTheDocument();
   });
 
   it("is hidden for a member", () => {
-    renderItem({ operator: false, method: "sso" });
+    renderItem({ meta: member });
     expect(screen.queryByText(MEMBER_MODE.MENU)).not.toBeInTheDocument();
   });
 
@@ -85,13 +102,13 @@ describe("MemberModeMenuItem", () => {
   // there is no per-person role to pause — so offering the control there would
   // be offering a refusal.
   it.each(["token", "local", ""])("is hidden for method=%s", (method) => {
-    renderItem({ operator: true, method });
+    renderItem({ meta: { ...admin, method } });
     expect(screen.queryByText(MEMBER_MODE.MENU)).not.toBeInTheDocument();
   });
 
   it("posts enabled:true and then lands at the root", async () => {
     const onEntered = vi.fn();
-    renderItem({ operator: true, method: "sso", onEntered });
+    renderItem({ meta: admin, onEntered });
     await userEvent.click(screen.getByText(MEMBER_MODE.MENU));
     await waitFor(() => expect(setMemberMode).toHaveBeenCalledWith(true));
     await waitFor(() => expect(onEntered).toHaveBeenCalled());

@@ -292,11 +292,14 @@ func (s *Server) secretOwnerParam(w http.ResponseWriter, r *http.Request) (owner
 		//
 		// SHAPE-IDENTICAL to the middleware's and to getWorkspaceAuthorized's
 		// in-handler twin: reason from the closed vocabulary, target the path,
-		// method in the data. It names no namespace: the refusal is constant and
-		// runs before any lookup, so neither the response nor the row can say
-		// whether the principal ?owner= asked about exists.
+		// method in the data — and, since 0.7.4, the member-mode marker, which
+		// is why all four sites build the datum through the one
+		// authzDeniedDatum (membermode.go) rather than hand-rolling the map.
+		// It names no namespace: the refusal is constant and runs before any
+		// lookup, so neither the response nor the row can say whether the
+		// principal ?owner= asked about exists.
 		s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-			"authz.denied", r.URL.Path, "denied", mustJSON(map[string]any{"reason": "admin_surface", "method": r.Method})))
+			"authz.denied", r.URL.Path, "denied", mustJSON(authzDeniedDatum(r.Context(), "admin_surface", r.Method))))
 		return "", false
 	}
 	resolved, refusal := s.resolveSecretOwner(r.Context(), q)
