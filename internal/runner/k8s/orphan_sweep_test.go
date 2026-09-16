@@ -408,6 +408,42 @@ func TestSweepOrphanedSandboxes_StillReclaimsWhenSecretListIsForbidden(t *testin
 	assertRunObjectsGone(t, cs, spec.RunID)
 }
 
+// TestSweepOrphanedSandboxes_ListErrorsByResourceAndKind is the table R-08
+// (runner-k8s-docker's re-review) asked for: sweepCandidates treats Secrets
+// and NetworkPolicies identically (Forbidden degrades to the pod-only
+// candidate set, err == nil; any other list error still fails the sweep,
+// err != nil) but only the secrets/Forbidden cell had a test before this —
+// the netpol degrade arm was unpinned.
+func TestSweepOrphanedSandboxes_ListErrorsByResourceAndKind(t *testing.T) {
+	cases := []struct {
+		name     string
+		resource string
+		err      error
+		wantErr  bool
+	}{
+		{"secrets forbidden degrades", "secrets", apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", errors.New("nope")), false},
+		{"secrets internal error fails", "secrets", apierrors.NewInternalError(errors.New("etcd down")), true},
+		{"networkpolicies forbidden degrades", "networkpolicies", apierrors.NewForbidden(schema.GroupResource{Resource: "networkpolicies"}, "", errors.New("nope")), false},
+		{"networkpolicies internal error fails", "networkpolicies", apierrors.NewInternalError(errors.New("etcd down")), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d, cs := newTestDriver(t, Config{})
+			spec := createdSandbox(t, d, cs)
+			agePodsOfRun(t, cs, spec.RunID, time.Hour)
+			listErr := tc.err
+			cs.PrependReactor("list", tc.resource, func(clienttesting.Action) (bool, runtime.Object, error) {
+				return true, nil, listErr
+			})
+
+			_, err := d.SweepOrphanedSandboxes(context.Background(), time.Minute, alwaysOrphan)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("SweepOrphanedSandboxes with %s listing failing (%v): err = %v, wantErr %v", tc.resource, listErr, err, tc.wantErr)
+			}
+		})
+	}
+}
+
 // TestSweepOrphanedSandboxes_SeesAPodCreatedAfterTheSecretList is the ordering
 // guard: hasPod decides which Secret/NetworkPolicy entries defer to a pod
 // entry, so it must be built from the LATEST snapshot of the three lists, not

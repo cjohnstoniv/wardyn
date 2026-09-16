@@ -42,7 +42,9 @@
 #                             always quoted, used as-is, routed through the proxy)
 #   WARDYN_REPO_SLUG        = owner/repo (audit metadata; not used for the clone)
 #   HTTP_PROXY / HTTPS_PROXY = http://wardyn-proxy:3128
-#   NO_PROXY               = wardyn-proxy,localhost,127.0.0.1
+#   NO_PROXY               = derived from the configured proxy URL (noProxyFor,
+#                             runs_dispatch_mounts.go), not a literal — always
+#                             includes wardyn-proxy, localhost, 127.0.0.1, ::1
 #   ANTHROPIC_BASE_URL     = http://wardyn-proxy:3128/wardyn/llm/anthropic
 #     (set in the image as the API-KEY default; agent-run overrides it per the
 #      detected auth mode below)

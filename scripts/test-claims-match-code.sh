@@ -478,6 +478,8 @@ pass "C8g DESKTOP.md's Podman socket row matches this repo's own Podman default"
 # Scope: the `list` verb on the namespaced Role, keyed on the RESOURCE each
 # `.List(` call is made on. Deliberately not a full verb audit — it pins the one
 # axis that has now drifted once, and the one a fake clientset can never see.
+# Ceiling: the extractor below requires the accessor and `.List(` on the SAME
+# line; a call split across lines is invisible to it.
 k8s_src="${ROOT}/internal/runner/k8s"
 rbac="${ROOT}/deploy/helm/wardyn/templates/rbac.yaml"
 [ -d "${k8s_src}" ] && [ -f "${rbac}" ] || fail "internal/runner/k8s or the chart's rbac.yaml moved — this guard would check nothing (R-02)"

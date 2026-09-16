@@ -21,7 +21,7 @@
 // — CPU, file writes, a long local build. Such a run is stopped once updated_at
 // ages past its policy threshold even while busy. The remaining upgrade is
 // runner-reported liveness; until then, operators who need an unbounded session
-// should use the never-reap escape hatch (policy AutoStopAfterSec < 0). This
+// should use the never-reap escape hatch (policy AutoStopAfterSec <= 0). This
 // residual risk is documented here and should be mirrored in threatmodel/ if
 // appropriate.
 //
