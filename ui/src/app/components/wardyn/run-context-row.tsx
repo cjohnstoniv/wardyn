@@ -8,6 +8,7 @@ import { Link } from "react-router-dom";
 import { ArrowRight } from "lucide-react";
 import type { AgentRun } from "../../lib/types";
 import { runs as api } from "../../lib/api/runs";
+import { rowHeadline } from "../screens/runs/board-groups";
 import { AgentBadge, ConfinementChip } from "./primitives";
 
 // The run an approval gates, inlined on the pending card (finding A3): the
@@ -65,8 +66,13 @@ export function RunContextRow({
       ) : run ? (
         <>
           <AgentBadge agent={run.agent} withLabel={false} />
+          {/* F1-F9: a local third copy of the headline chain that ignored
+              run.interactive (a nameless non-interactive run read as
+              "Interactive session") — the canonical helper board-groups.ts's
+              rowHeadline already gets this right. false = show the title
+              here, this row is not inside a titled group. */}
           <span className="min-w-0 max-w-full truncate text-sm font-medium text-foreground">
-            {(run.title ?? "").trim() || run.task || "Interactive session"}
+            {rowHeadline(run, false)}
           </span>
           <span className="font-mono text-xs text-muted-foreground">{run.repo}</span>
           <ConfinementChip value={run.confinement_class} />
