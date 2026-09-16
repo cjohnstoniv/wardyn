@@ -38,7 +38,7 @@ describe("MemberModeBanner", () => {
     // The ceilings the doc and the banner must agree on — read as three claims,
     // not as one paragraph nobody checks.
     expect(MEMBER_MODE.CEILINGS).toMatch(/ROLE only/);
-    expect(MEMBER_MODE.CEILINGS).toMatch(/SSH key/);
+    expect(MEMBER_MODE.CEILINGS).toMatch(/already hold.*SSH key.*API token/);
     expect(MEMBER_MODE.CEILINGS).toMatch(/rolling upgrade/);
   });
 

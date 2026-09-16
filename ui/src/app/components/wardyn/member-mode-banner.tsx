@@ -37,7 +37,7 @@ export const MEMBER_MODE = {
   CEILINGS:
     "Member mode clamps your ROLE only. Runs and workspaces you created stay yours, " +
     "and governance ceilings still resolve against your real group membership. " +
-    "Your SSH key keeps its admin stamp until it is refreshed at your next sign-in. " +
+    "Credentials you already hold — your SSH key, any API token — keep their admin stamp until refreshed at your next sign-in. " +
     "During a rolling upgrade an older replica ignores the flag and answers as admin. " +
     "It shows you what a member sees — sign in as a real member to prove what a member is refused.",
   // Shown in place of a reload when the toggle itself failed. The console must
