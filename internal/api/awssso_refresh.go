@@ -352,10 +352,17 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 	s.cfg.MaskRegistry.AddGlobal([]byte(next.RefreshToken))
 
 	data := map[string]any{
-		"provider":                awsSSOProvider,
-		"expires_at":              next.ExpiresAt.Format(time.RFC3339),
-		"registration_expires_at": next.RegistrationExpiresAt.UTC().Format(time.RFC3339),
-		"rotated":                 rotated,
+		"provider":   awsSSOProvider,
+		"expires_at": next.ExpiresAt.Format(time.RFC3339),
+		"rotated":    rotated,
+	}
+	// OMITTED WHEN ZERO (B2-F8), as awsSSOCacheFileContents already does for the
+	// same field: a zero RegistrationExpiresAt means the capturing helper saw no
+	// registration expiry, which registrationLapsed reads as LIVE. Formatting it
+	// rendered 0001-01-01T00:00:00Z into the trail — a date that reads as
+	// "lapsed long ago", i.e. the exact opposite of what it means.
+	if !next.RegistrationExpiresAt.IsZero() {
+		data["registration_expires_at"] = next.RegistrationExpiresAt.UTC().Format(time.RFC3339)
 	}
 	outcome := "success"
 	if perr := s.storeAWSSSOBlob(ctx, scope, next); perr != nil {

@@ -384,14 +384,24 @@ func (s *Server) resolveRunLLMLanes(ctx context.Context, req createRunRequest, s
 	// expired-but-renewable captured SSO session still reads READY here (dispatch
 	// renews it), so create never warns about — or refuses — a failure that
 	// cannot happen.
-	l.bedrock = s.resolveBedrockAuth(ctx, req.Agent, l.subscription, true, false, bedrockRef, sso)
+	//
+	// modelRun is THIS RUN's own answer, hoisted so the Bedrock probe and the
+	// managed lane below cannot disagree (B2-F7). It used to be hard-coded true
+	// here, so a scan run (workspace_id + non-interactive) or a task_mode=exec
+	// run — the two shapes isModelRun exists to exclude — read as a ready Bedrock
+	// lane at create and at Review, and the 201 said "Amazon Bedrock … this run
+	// uses it automatically" about a run dispatch hands no model credential at
+	// all. Source id is nil by construction on this door (a source-bound run is
+	// launched by newStepRun, never decoded from a create body) — the same term
+	// llmMechanismGateApplies passes.
+	modelRun := isModelRun(req.TaskMode, req.WorkspaceID, nil, req.Interactive)
+	l.bedrock = s.resolveBedrockAuth(ctx, req.Agent, l.subscription, modelRun, false, bedrockRef, sso)
 	// The SAME predicate dispatch applies, with the same terms — including the
 	// posture term, whose absence here made every SSO deployment's managed run
 	// read as "subscription" at create and dispatch as something else.
 	// modelRun/harnessLogin are this request's own: a run that makes no model call
 	// has no lane at all, which is what dispatch decides for it too.
-	l.managed = s.managedSubscriptionLane(req.Agent,
-		isModelRun(req.TaskMode, req.WorkspaceID, nil, req.Interactive), req.Task == harnessLoginTask,
+	l.managed = s.managedSubscriptionLane(req.Agent, modelRun, req.Task == harnessLoginTask,
 		l.subscription, l.bedrock.ready, l.apiKey, spec)
 	return l
 }

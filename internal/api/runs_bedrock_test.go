@@ -36,6 +36,14 @@ func putAWSSSOBlob(t *testing.T, s *Server, expiresAt time.Time) awsSSOBlob {
 		RoleName:     "WardynBedrockRole",
 		ExpiresAt:    expiresAt,
 		CapturedAt:   awsSSOTestFixedNow.Add(-time.Hour),
+		// A REAL capture records the OIDC client registration's expiry
+		// (wardyn-aws-sso writes it), and it is far enough out that
+		// registrationLapsed answers exactly what the ZERO value here answered
+		// before: live. Carrying it makes this fixture the ORDINARY shape, so a
+		// test asserting the refresh row NAMES the registration expiry asserts
+		// the ordinary case rather than the zero-value one B2-F8 omits the key
+		// for. The cases that want a zero value still set it explicitly.
+		RegistrationExpiresAt: awsSSOTestFixedNow.Add(90 * 24 * time.Hour),
 	}
 	storeSSOBlob(t, s, blob)
 	return blob
