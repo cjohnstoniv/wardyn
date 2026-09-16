@@ -261,7 +261,13 @@ func canonHost(h string) string {
 // returns port==0 and matches ANY port.
 func classifyDomain(d string) (exact, wild string, port int) {
 	d = strings.ToLower(strings.TrimSpace(d))
-	d = strings.TrimSuffix(d, ".")
+	// TrimRight, not TrimSuffix (B10-F7): the REQUEST side normalises every
+	// FQDN-root spelling with TrimRight (splitHostPort), so an entry that trimmed
+	// only one dot compiled to a key no request host can equal —
+	// `denied_domains: ["example.com..."]` became "example.com." and protected
+	// nothing. Entry and request must land in the same space or the policy lies.
+	// Root cause for allow and deny at once, since both compile through here.
+	d = strings.TrimRight(d, ".")
 	if d == "" {
 		return "", "", 0
 	}
@@ -324,6 +330,9 @@ func ValidDomainEntry(d string) error {
 	// to reject, and it was slipping through the branch the exact case guards.
 	case strings.Contains(wild, ":"):
 		return bad(`the ":port" qualifier must be a number in 1..65535`)
+	// CHARSET (B10-F7). See domain_charset.go.
+	case deadCharsetEntry(exact, wild):
+		return bad(charsetWhy)
 	}
 	return nil
 }
