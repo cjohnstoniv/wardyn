@@ -308,7 +308,7 @@ test.describe("New run — workspace-card 'not an enabled provider' state", () =
 // member-clamped for real) rather than a genuine member session — this pins
 // the RAIL'S rendering of the combination, not the server-side clamping
 // itself (Go-tested). ui/new-run-rail.tsx's primitive-level
-// lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto (this lane) is what keeps
+// lg:max-h-[calc(100vh-5rem)] lg:overflow-y-auto (this lane) is what keeps
 // Launch/Open run reachable here.
 test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F2-F7/F3-F1)", () => {
   test("Launch, then Open run, stay in viewport with every rail section showing at once", async ({ page }) => {
