@@ -324,14 +324,29 @@ replacement for the first.
 
 **Bounded staleness, not a frozen bearer.** The cookie carries its own
 issued-at, so `WARDYN_UI_SANDBOX_SESSION_TTL` applies to sessions already in
-browsers — shortening it takes effect at once — and every **new** connection
+browsers — shortening it takes effect at once. On top of that, the relay
 re-asserts owner-or-admin against the freshly-loaded run and consults the
-revoke cutoff `POST /sessions/revoke` stamps. A demoted, off-boarded or revoked
-human therefore stops being able to open connections on their very next one.
-The bound, stated: a connection already established (a relayed WebSocket) keeps
-working until it closes — killing the run is what ends an in-flight session,
-the same bound attach and [SSH](SSH.md#bounds) publish. This is
-the relay's sibling of `WARDYN_SSH_ROLE_TTL`.
+revoke cutoff `POST /sessions/revoke` stamps **on every new connection, and at
+least every 30 seconds on a reused one** — relay connections are pooled, so a
+busy tab can ride one warm connection for a long time and the request-path
+check is what bounds it. An off-boarded or revoked human therefore stops being
+able to use the app within 30 seconds. `WARDYN_UI_SANDBOX_SESSION_TTL` is the
+hard ceiling behind both.
+
+Two things that check does **not** catch, by design:
+
+- a **role demotion**. `role` is the cookie's login-time snapshot and is never
+  re-derived, exactly as the console session's own role is not; the TTL is the
+  bound on it, the same way `WARDYN_SSH_ROLE_TTL` bounds the SSH admin
+  override.
+- a **revoke that names the human's email**. A relay session carries the OIDC
+  `sub` (that is what the attach ticket stamps), so revoke by `sub` — or
+  `all: true`, which always reaches it — is what stops one.
+
+And a connection already established (a relayed WebSocket) keeps working until
+it closes: killing the run is what ends an in-flight session, the same bound
+attach and [SSH](SSH.md#bounds) publish. Every refusal writes a
+`ui.auth` / `denied` row naming the reason.
 
 **Header hygiene, both directions.** Cookies are not port-scoped, so a shared
 hostname would otherwise hand console cookies to sandbox code: every forwarded

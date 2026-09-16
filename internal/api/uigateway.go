@@ -333,6 +333,13 @@ func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "no valid UI session for this run — open the app again from its run page")
 		return
 	}
+	// Re-assert the human here as well as in uiDial, debounced: net/http dials
+	// only when its pool has nothing reusable, so most requests of a busy
+	// session never reach uiDial at all (uiReassertRelay).
+	if de := s.uiReassertRelay(r.Context(), sess); de != nil {
+		writeError(w, de.status, de.msg)
+		return
+	}
 	// Keep the run's idle clock alive for the life of the session, debounced
 	// exactly like the decision-ingest and attach keepalives: a human reading
 	// code in an editor is not idle, and the reaper must not stop the run under
@@ -559,9 +566,10 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	// …and the human, re-asserted against that same freshly-loaded run and
 	// against the revoke cutoff. The cookie is a long-lived credential; this is
 	// what keeps it bounded-stale rather than final (uiSessionStillAuthorized).
-	if err := s.uiSessionStillAuthorized(ctx, sess, run); err != nil {
-		return nil, err
+	if de := s.uiSessionStillAuthorized(ctx, sess, run); de != nil {
+		return nil, uiFail(ctx, de.status, de.msg)
 	}
+	s.markUIReasserted(sess, s.cfg.Now())
 
 	release, ok := s.acquireUIConn(sess.Run)
 	if !ok {

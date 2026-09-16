@@ -83,6 +83,14 @@ func (s *uiMemStore) TouchRun(context.Context, uuid.UUID) error {
 	return nil
 }
 
+// dropRun makes the run unreadable — a store that cannot answer, which the
+// relay must treat as "cannot verify" rather than "carry on".
+func (s *uiMemStore) dropRun(id uuid.UUID) {
+	s.sshMemStore.mu.Lock()
+	defer s.sshMemStore.mu.Unlock()
+	delete(s.sshMemStore.runs, id)
+}
+
 func (s *uiMemStore) wasTouched() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -135,6 +143,40 @@ func (r *safeRecorder) Record(_ context.Context, ev types.AuditEvent) error {
 	defer r.mu.Unlock()
 	r.events = append(r.events, ev)
 	return nil
+}
+
+// hasDataValue reports whether any recorded event's Data carries key=want, and
+// dataReasons lists the reasons it did carry — enough to say which arm wrote
+// the row without decoding the whole event in every assertion.
+func (r *safeRecorder) hasDataValue(key, want string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, ev := range r.events {
+		var data map[string]any
+		if json.Unmarshal(ev.Data, &data) != nil {
+			continue
+		}
+		if s, ok := data[key].(string); ok && s == want {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *safeRecorder) dataReasons() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, 0, len(r.events))
+	for _, ev := range r.events {
+		var data map[string]any
+		if json.Unmarshal(ev.Data, &data) != nil {
+			continue
+		}
+		if s, ok := data["reason"].(string); ok {
+			out = append(out, ev.Action+"/"+ev.Outcome+":"+s)
+		}
+	}
+	return strings.Join(out, " ")
 }
 
 func (r *safeRecorder) actions() []string {

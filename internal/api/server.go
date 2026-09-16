@@ -723,6 +723,10 @@ type Server struct {
 	uiConns     map[uuid.UUID]int
 	uiReadyMu   sync.Mutex
 	uiReady     map[string]time.Time
+	// uiReassert debounces the relay's REQUEST-path authorization re-check, one
+	// entry per minted session (uiReassertKey) — see uiReassertRelay.
+	uiReassertMu sync.Mutex
+	uiReassert   map[string]time.Time
 	uiProxyOnce sync.Once
 	uiProxy     *httputil.ReverseProxy
 	// authFailedLimiter rate-bounds the auth.failed audit emit (see

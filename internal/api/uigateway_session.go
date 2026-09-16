@@ -33,6 +33,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -47,17 +48,38 @@ import (
 // The two refusals a re-checked session can hit. Both are deliberately the
 // SAME sentence a stale cookie already gets ("open the app again from its run
 // page"), because the human's next action is identical and the difference —
-// demoted, off-boarded, revoked, or simply expired — is the audit log's to
-// record, not the refused browser's to learn.
+// off-boarded, revoked, or simply expired — is the audit log's to record (the
+// ui.auth/denied `reason`), not the refused browser's to learn.
 const (
 	// uiSessionNoLongerAuthorizedMsg is the 403 body when role/ownership or the
 	// revoke cutoff turns a still-valid cookie down at connect time.
 	uiSessionNoLongerAuthorizedMsg = "this UI session is no longer authorized for this run — open the app again from its run page"
-	// uiSessionUnverifiableMsg is the 503 body when the revocation store cannot
-	// answer. A retryable condition, said as one: the relay fails CLOSED rather
-	// than serving a credential an admin may have just cancelled.
+	// uiSessionUnverifiableMsg is the 503 body when the store cannot answer —
+	// the revocation cutoff, or the run the session is re-checked against. A
+	// retryable condition, said as one: the relay fails CLOSED rather than
+	// serving a credential an admin may have just cancelled.
 	uiSessionUnverifiableMsg = "could not verify this UI session; try again"
 )
+
+// The ui.auth/denied `reason` values a refused re-check writes. Not DRAFT
+// strings: they are audit DATA, read by a SIEM rule, never rendered to a human
+// — so they are stable identifiers rather than copy.
+const (
+	uiDeniedReasonNotAuthorized         = "not_authorized"
+	uiDeniedReasonRevoked               = "revoked"
+	uiDeniedReasonRevocationUnavailable = "revocation_unavailable"
+	uiDeniedReasonRunUnreadable         = "run_unreadable"
+)
+
+// uiReassertInterval is how often a relay session riding an ALREADY-OPEN
+// connection is re-checked. uiDial re-checks per new connection, but net/http
+// only dials when its pool has nothing reusable — and IdleConnTimeout resets on
+// every reuse, so an editor polling faster than that rode one warm connection
+// with no re-check at all until the session TTL. 30s mirrors the attach
+// keepalive's own cadence: short enough that "revoked" means minutes at worst,
+// long enough that the check is a handful of store reads per session rather
+// than one per relayed request.
+const uiReassertInterval = 30 * time.Second
 
 // defaultUISessionTTL bounds a relay session when the operator sets no knob.
 // Long enough for a working session in an editor (re-entering means minting
@@ -201,38 +223,51 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 	return sess, true
 }
 
-// uiSessionStillAuthorized is the per-CONNECTION re-check uiDial runs against
-// freshly-loaded state, and the reason the cookie carries a principal, a role
-// and an issued-at at all.
+// uiSessionStillAuthorized is the re-check run against freshly-loaded state,
+// and the reason the cookie carries a principal, a role and an issued-at at
+// all. It returns the typed refusal so both callers — uiDial, which needs it as
+// a transport error, and handleUIRelay, which writes it straight to the
+// browser — refuse identically.
 //
 // The cookie is valid for up to the session TTL, which is long enough for a
-// human to be demoted, to lose the run, or to be revoked outright inside one
-// session. The console session stops on its very next request when an admin
-// revokes it (D16), attach re-checks per connect behind a 30s ticket, and SSH
-// bounds a stale admin override with WARDYN_SSH_ROLE_TTL — the relay was the
-// one lane where "authorized at enter" meant "authorized until the cookie
-// expires", while holding an editor with an in-sandbox terminal.
+// human to lose the run or be revoked outright inside one session. The console
+// session stops on its very next request when an admin revokes it (D16), attach
+// re-checks per connect behind a 30s ticket, and SSH bounds a stale admin
+// override with WARDYN_SSH_ROLE_TTL — the relay was the one lane where
+// "authorized at enter" meant "authorized until the cookie expires", while
+// holding an editor with an in-sandbox terminal.
 //
-// Both halves are needed: the ownership re-assert catches a demotion or a
-// handed-over run but NOT an off-boarded owner (they still equal
-// run.CreatedBy), and the revoke cutoff is what catches that one.
+// Both halves are needed: the ownership re-assert catches a handed-over run but
+// NOT an off-boarded owner (they still equal run.CreatedBy), and the revoke
+// cutoff is what catches that one.
 //
-// The bound, stated plainly: this runs per NEW connection, so a relayed
-// WebSocket a human already holds keeps working until it closes. Killing the
-// run is what ends an in-flight session — the same bound attach and both SSH
-// lanes publish.
-func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, run types.AgentRun) error {
+// NOT covered, deliberately: a ROLE demotion. sess.Role is the cookie's
+// login-time snapshot and is never re-derived, exactly as the console session's
+// own role is not — WARDYN_UI_SANDBOX_SESSION_TTL is the bound on it, the same
+// bound WARDYN_SSH_ROLE_TTL is for the SSH admin override.
+//
+// Every refusal writes one ui.auth/denied naming which arm refused: "someone is
+// driving a revoked relay credential" is exactly the thing an operator must be
+// able to see in the trail, and it is otherwise invisible between that
+// session's last ui.open and its ui.close.
+func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, run types.AgentRun) *uiDialError {
 	if sess.Role != oidc.RoleAdmin && run.CreatedBy != sess.Principal {
-		return uiFail(ctx, http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
+		return s.uiDenyReassert(sess, uiDeniedReasonNotAuthorized,
+			http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
 	}
 	if s.cfg.SessionRevocations == nil {
 		return nil
 	}
-	// The relay knows the minting principal and nothing else, so it offers that
-	// one string as BOTH identities. IsSessionRevoked matches either the sub or
-	// the email, which is exactly the "don't make an admin guess which the IdP
-	// made authoritative" rule handleRevokeSessions writes cutoffs under — and
-	// the principal is whichever of the two this deployment's auth published.
+	// The principal a relay session carries is ALWAYS the OIDC sub: it comes
+	// from the attach ticket, which stamps actorFromRequest's principal, which
+	// on the OIDC lane is the sub — the email rides a separate context key the
+	// ticket has no column for. IsSessionRevoked takes both identities, so the
+	// sub goes in both slots and its two arms collapse into one. CONSEQUENCE,
+	// stated because it is a real gap: a revoke that NAMES THE EMAIL does not
+	// reach an open relay session, though it does stop the same human's console
+	// session. Name the sub, or use all:true — the reserved global cutoff
+	// always reaches this. Closing it properly means carrying the email on
+	// store.AttachTicket, a schema change.
 	revoked, err := s.cfg.SessionRevocations.IsSessionRevoked(ctx, sess.Principal, sess.Principal,
 		time.Unix(sess.IssuedAt, 0).UTC())
 	if err != nil {
@@ -240,10 +275,81 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 		// where continuing would serve the credential the admin just cancelled,
 		// and a relay connection is cheap to retry.
 		slog.ErrorContext(ctx, "wardynd: ui gateway revocation lookup failed", "run_id", sess.Run, "err", err)
-		return uiFail(ctx, http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
+		return s.uiDenyReassert(sess, uiDeniedReasonRevocationUnavailable,
+			http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
 	}
 	if revoked {
-		return uiFail(ctx, http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
+		return s.uiDenyReassert(sess, uiDeniedReasonRevoked,
+			http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
 	}
 	return nil
+}
+
+// uiDenyReassert audits the refusal and returns it. One place, so an arm cannot
+// be added without its audit row.
+func (s *Server) uiDenyReassert(sess uiSession, reason string, status int, msg string) *uiDialError {
+	s.auditUI(&sess.Run, types.ActorHuman, sess.Principal, "ui.auth", sess.App, "denied",
+		map[string]any{"app": sess.App, "port": sess.Port, "reason": reason})
+	return &uiDialError{status: status, msg: msg}
+}
+
+// uiReassertRelay is the REQUEST-path half of the re-check, and it exists
+// because the connection-path half cannot see most requests: net/http dials
+// only when its idle pool has nothing reusable, and IdleConnTimeout restarts on
+// every reuse, so an editor polling faster than the idle window rode ONE warm
+// connection for the life of the session with uiDial never called again.
+//
+// Debounced per session to uiReassertInterval so this stays a couple of store
+// reads per session rather than a pair per relayed request — and so it never
+// turns a pooled request into a dial, which would undo the per-run connection
+// bound the pool exists to hold.
+//
+// ponytail: the debounce map is pruned wholesale past a bound, like
+// shouldTouch's. Worst case is one extra re-check per live session.
+func (s *Server) uiReassertRelay(ctx context.Context, sess uiSession) *uiDialError {
+	now := s.cfg.Now()
+	if !s.uiReassertDue(sess, now) {
+		return nil
+	}
+	run, err := s.cfg.Store.GetRun(ctx, sess.Run)
+	if err != nil {
+		// Fail CLOSED, for the same reason the revocation arm does: "the check
+		// could not run" must never resolve to "carry on". Retryable, so 503.
+		slog.ErrorContext(ctx, "wardynd: ui gateway re-assert could not load the run", "run_id", sess.Run, "err", err)
+		return s.uiDenyReassert(sess, uiDeniedReasonRunUnreadable,
+			http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
+	}
+	if de := s.uiSessionStillAuthorized(ctx, sess, run); de != nil {
+		return de
+	}
+	s.markUIReasserted(sess, now)
+	return nil
+}
+
+// uiReassertKey identifies ONE minted session: the same human, the same run and
+// the same enter. A re-enter mints a new issued-at, so it re-checks at once
+// instead of inheriting the old session's window.
+func uiReassertKey(sess uiSession) string {
+	return sess.Principal + "\x00" + sess.Run.String() + "\x00" + strconv.FormatInt(sess.IssuedAt, 10)
+}
+
+func (s *Server) uiReassertDue(sess uiSession, now time.Time) bool {
+	s.uiReassertMu.Lock()
+	defer s.uiReassertMu.Unlock()
+	at, ok := s.uiReassert[uiReassertKey(sess)]
+	return !ok || now.Sub(at) >= uiReassertInterval
+}
+
+// markUIReasserted records a CLEAN pass only. A refused or unverifiable check
+// leaves the window open, so the next request re-checks instead of being waved
+// through for the rest of the interval.
+func (s *Server) markUIReasserted(sess uiSession, now time.Time) {
+	s.uiReassertMu.Lock()
+	defer s.uiReassertMu.Unlock()
+	if s.uiReassert == nil {
+		s.uiReassert = map[string]time.Time{}
+	} else if len(s.uiReassert) > 1024 {
+		clear(s.uiReassert)
+	}
+	s.uiReassert[uiReassertKey(sess)] = now
 }

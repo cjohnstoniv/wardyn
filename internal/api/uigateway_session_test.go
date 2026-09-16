@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -60,6 +61,11 @@ func (r *uiRevocations) consulted() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return len(r.asked) > 0
+}
+func (r *uiRevocations) askedCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.asked)
 }
 
 var _ oidc.SessionRevocations = (*uiRevocations)(nil)
@@ -352,11 +358,12 @@ func TestUIGateway_OffboardedOwnerIsRefusedOnTheNextConnection(t *testing.T) {
 }
 
 // TestUIGateway_EstablishedConnectionOutlivesTheRevoke is the bound, stated as a
-// test: the re-checks run per CONNECTION, so a relayed WebSocket a human already
-// holds keeps working until it closes (bounded by uiIdleConnTimeout for pooled
-// connections, and by the run's own life for a hijacked one). Killing the run is
-// what ends an in-flight session — the same bound attach and both SSH lanes
-// publish.
+// test: an ALREADY-ESTABLISHED relayed WebSocket is one hijacked connection with
+// no further requests to check, so it keeps working until it closes or the run
+// ends. Ordinary pooled connections are not in this hole — uiReassertRelay
+// re-checks those on the request path (TestUIGateway_PooledConnectionIsReassertedOnAnInterval);
+// a hijacked upgrade has no request path left. Killing the run is what ends an
+// in-flight session — the same bound attach and both SSH lanes publish.
 func TestUIGateway_EstablishedConnectionOutlivesTheRevoke(t *testing.T) {
 	held := make(chan struct{})
 	defer close(held)
@@ -473,5 +480,185 @@ func TestParseUIRunPath(t *testing.T) {
 			t.Fatalf("parseUIRunPath(%q) = %v, %q, %v; want app %q, ok %v",
 				tc.path, gotID, gotApp, ok, tc.app, tc.ok)
 		}
+	}
+}
+
+// ─── UG-1: a reused pooled connection is re-checked too ─────────────────────
+
+// countingSocat wraps the harness's fake runner so a test can see how many
+// relay DIALS actually happened. net/http pools the relay connection, so the
+// dial count is exactly "how many times uiDial ran" — which is the difference
+// between a per-connection check and a per-request one.
+func countingSocat(h *uiHarness, n *int32) {
+	inner := h.runner.execFn
+	h.runner.execFn = func(spec runner.ExecSpec) (*runner.ExecSession, error) {
+		if spec.Argv[0] == "socat" {
+			atomic.AddInt32(n, 1)
+		}
+		return inner(spec)
+	}
+}
+
+// TestUIGateway_PooledConnectionIsReassertedOnAnInterval pins UG-1. The
+// re-assert lived only in uiDial, and net/http calls that ONLY when the pool
+// has no reusable connection — and uiIdleConnTimeout resets on every reuse. A
+// revoked human whose editor polls faster than the idle window therefore rode
+// one warm connection, was never re-checked, and kept working until the session
+// TTL: the lane's own live gate measured 20 relayed requests over 2 connections,
+// i.e. 18 requests with no check at all.
+//
+// The relay now re-asserts on the REQUEST path too, debounced to
+// uiReassertInterval so it stays a bounded number of store reads and does NOT
+// turn the pooled connection back into a dial per request.
+func TestUIGateway_PooledConnectionIsReassertedOnAnInterval(t *testing.T) {
+	h := newUIHarness(t, okBackend()) // keep-alive: the relay connection is POOLED
+	var dials int32
+	countingSocat(h, &dials)
+	rev := &uiRevocations{}
+	h.srv.cfg.SessionRevocations = rev
+	now := time.Now()
+	h.srv.cfg.Now = func() time.Time { return now }
+
+	cookie := h.openSession()
+	path := uiRelayPrefix(h.run.ID, "code") + "/ide"
+	if rec := uiGet(h, path, cookie); rec.Code != http.StatusOK {
+		t.Fatalf("first request: %d %s", rec.Code, rec.Body.String())
+	}
+	opened := atomic.LoadInt32(&dials)
+	if opened != 1 {
+		t.Fatalf("first request made %d dial(s), want exactly 1", opened)
+	}
+
+	// Revoked, but still inside the debounce window: served on the warm
+	// connection, and — the property that must not regress — WITHOUT dialing
+	// again. Bounded staleness is the design; unbounded staleness was the bug.
+	rev.revoke()
+	if rec := uiGet(h, path, cookie); rec.Code != http.StatusOK {
+		t.Fatalf("request inside the re-assert window: %d %s, want 200", rec.Code, rec.Body.String())
+	}
+	if got := atomic.LoadInt32(&dials); got != opened {
+		t.Fatalf("the re-assert turned a pooled request into a dial (%d → %d) — "+
+			"the connection pool is a resource bound, not an optimisation", opened, got)
+	}
+
+	// Past the window, on that SAME pooled connection: refused.
+	now = now.Add(uiReassertInterval + time.Second)
+	rec := uiGet(h, path, cookie)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("a revoked human kept being served on a warm pooled connection: %d %s, want 403",
+			rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), uiSessionNoLongerAuthorizedMsg) {
+		t.Fatalf("refusal body %q does not carry the DRAFT string", rec.Body.String())
+	}
+	if got := atomic.LoadInt32(&dials); got != opened {
+		t.Fatalf("a refused request still dialed the sandbox (%d → %d)", opened, got)
+	}
+}
+
+// TestUIGateway_ReassertIsDebouncedPerSession: the re-assert costs one GetRun
+// plus one revocation lookup, so it must not run per request. One request per
+// millisecond over a window must ask the revocation store once, not once each.
+func TestUIGateway_ReassertIsDebouncedPerSession(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	rev := &uiRevocations{}
+	h.srv.cfg.SessionRevocations = rev
+	now := time.Now()
+	h.srv.cfg.Now = func() time.Time { return now }
+	cookie := h.openSession()
+	path := uiRelayPrefix(h.run.ID, "code") + "/ide"
+
+	if rec := uiGet(h, path, cookie); rec.Code != http.StatusOK {
+		t.Fatalf("first request: %d %s", rec.Code, rec.Body.String())
+	}
+	// Two on the FIRST request, by design: the request path checks, and the
+	// dial that request triggers checks again. A new connection is always
+	// re-checked — that guarantee is not debounced away.
+	opening := rev.askedCount()
+	if opening != 2 {
+		t.Fatalf("the first relayed request asked the revocation store %d time(s), want 2 "+
+			"(once on the request path, once on the connection it opened)", opening)
+	}
+
+	for i := range 9 {
+		now = now.Add(time.Millisecond)
+		if rec := uiGet(h, path, cookie); rec.Code != http.StatusOK {
+			t.Fatalf("request %d: %d %s", i+2, rec.Code, rec.Body.String())
+		}
+	}
+	if got := rev.askedCount(); got != opening {
+		t.Fatalf("9 further relayed requests inside the window added %d revocation lookup(s), want 0 — "+
+			"the re-assert is not debounced, and a pair of store reads per relayed request is not a check, "+
+			"it is a load generator", got-opening)
+	}
+}
+
+// TestUIGateway_ReassertRefusesWhenTheRunCannotBeLoaded: the request-path
+// re-assert needs the run to check ownership against, so a store that cannot
+// hand it over fails CLOSED with the same retryable 503 an unreadable
+// revocation store gets. Serving on because the check could not run is the one
+// outcome this whole item exists to remove.
+func TestUIGateway_ReassertRefusesWhenTheRunCannotBeLoaded(t *testing.T) {
+	h := newUIHarness(t, okBackend())
+	now := time.Now()
+	h.srv.cfg.Now = func() time.Time { return now }
+	cookie := h.openSession()
+	path := uiRelayPrefix(h.run.ID, "code") + "/ide"
+	if rec := uiGet(h, path, cookie); rec.Code != http.StatusOK {
+		t.Fatalf("control: %d %s", rec.Code, rec.Body.String())
+	}
+
+	h.store.dropRun(h.run.ID)
+	now = now.Add(uiReassertInterval + time.Second)
+	rec := uiGet(h, path, cookie)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("relay over a warm connection with the run unreadable: %d %s, want 503",
+			rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), uiSessionUnverifiableMsg) {
+		t.Fatalf("refusal body %q does not carry the DRAFT string", rec.Body.String())
+	}
+}
+
+// ─── UG-2: a refused re-check is in the audit trail ──────────────────────────
+
+// TestUIGateway_RefusedReassertIsAuditedWithItsReason: "someone is driving a
+// revoked relay credential" has to be visible. Each refusal arm writes one
+// ui.auth/denied naming which arm it was — the same shape every other refusal
+// on this listener already uses.
+func TestUIGateway_RefusedReassertIsAuditedWithItsReason(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		arm    func(*uiHarness)
+		reason string
+	}{
+		{"revoked", func(h *uiHarness) {
+			rev := &uiRevocations{}
+			rev.revoke()
+			h.srv.cfg.SessionRevocations = rev
+		}, uiDeniedReasonRevoked},
+		{"lost the run", func(h *uiHarness) {
+			handed := h.run
+			handed.CreatedBy = "bob"
+			h.store.putRun(handed)
+		}, uiDeniedReasonNotAuthorized},
+		{"revocation store down", func(h *uiHarness) {
+			h.srv.cfg.SessionRevocations = errUIRevocations{}
+		}, uiDeniedReasonRevocationUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newUIHarness(t, closingBackend("sandbox app"))
+			cookie := h.openSession()
+			tc.arm(h)
+			if rec := uiGet(h, uiRelayPrefix(h.run.ID, "code")+"/ide", cookie); rec.Code == http.StatusOK {
+				t.Fatalf("the refusal arm did not refuse: %d", rec.Code)
+			}
+			if got := strings.Join(h.audit.actions(), " "); !strings.Contains(got, "ui.auth/denied") {
+				t.Fatalf("audit %q has no ui.auth/denied row for a refused relay connection", got)
+			}
+			if !h.audit.hasDataValue("reason", tc.reason) {
+				t.Fatalf("no audit row carries reason=%q; rows: %s", tc.reason, h.audit.dataReasons())
+			}
+		})
 	}
 }
