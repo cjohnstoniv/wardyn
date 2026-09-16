@@ -51,14 +51,21 @@ const (
 	// the offending value.
 	//
 	// DRAFT (M2 canon pending)
-	AWSSSOEndpointOverrideRefusal = "refusing to start: WARDYN_AWS_SSO_ENDPOINT_OVERRIDE is set to %q — it re-points AWS IAM Identity Center at a server of your choosing for the containerized login AND for every Bedrock run's credential exchange, which is a TEST hatch and never a production posture; unset it, or explicitly set WARDYN_ALLOW_TEST_ENDPOINTS=true to acknowledge that this deployment is a test deployment"
+	AWSSSOEndpointOverrideRefusal = "refusing to start: WARDYN_AWS_SSO_ENDPOINT_OVERRIDE is set to %q — " +
+		"it re-points AWS IAM Identity Center at a server of your choosing for the containerized login " +
+		"AND for every Bedrock run's credential exchange, which is a TEST hatch and never a production posture; " +
+		"unset it, or explicitly set WARDYN_ALLOW_TEST_ENDPOINTS=true to acknowledge that this deployment is a test deployment"
 	// AWSSSOEndpointOverrideWarn is the BOOT WARN every boot carrying the hatch
 	// logs. It opens with a literal an operator (and scripts/kind-sso-walk.sh)
 	// can grep for, because the thing that must never happen is this posture
 	// going unnoticed in an inherited values file.
 	//
 	// DRAFT (M2 canon pending)
-	AWSSSOEndpointOverrideWarn = "wardynd: TEST HATCH ACTIVE — WARDYN_AWS_SSO_ENDPOINT_OVERRIDE re-points AWS IAM Identity Center (sso-oidc AND the sso portal) at this URL for the containerized login, for every Bedrock run's credential exchange and for dispatch-time token renewal. No AWS SSO endpoint is contacted. This is never a production posture; unset it and WARDYN_ALLOW_TEST_ENDPOINTS on any deployment holding a real credential."
+	AWSSSOEndpointOverrideWarn = "wardynd: TEST HATCH ACTIVE — WARDYN_AWS_SSO_ENDPOINT_OVERRIDE re-points " +
+		"AWS IAM Identity Center (sso-oidc AND the sso portal) at this URL for the containerized login, " +
+		"for every Bedrock run's credential exchange and for dispatch-time token renewal. " +
+		"No AWS SSO endpoint is contacted. This is never a production posture; unset it and " +
+		"WARDYN_ALLOW_TEST_ENDPOINTS on any deployment holding a real credential."
 )
 
 // The two AWS SDK / CLI variables that re-point the SSO services — and ONLY

@@ -295,19 +295,11 @@ func run() error {
 	// policy's allowed_domains does not list a configured gateway's host — the
 	// operator must add it, or every run under that policy 404s on its first
 	// model call once ensureLLMGrant/reconcileLLMAccess point at the gateway.
-	llmGateways, bedrockBaseURL, err := validateModelEndpoints(f)
+	llmGateways, bedrockBaseURL, awsSSOEndpointOverride, err := validateModelEndpoints(f)
 	if err != nil {
 		return err
 	}
 	warnMissingGatewayHosts(defaultPolicy, llmGateways)
-
-	// The gated AWS SSO endpoint hatch (boot_flags.go). Resolved here, beside
-	// the model-endpoint knobs it is deliberately NOT one of: it re-points a
-	// CREDENTIAL exchange, not a model call.
-	awsSSOEndpointOverride, err := resolveAWSSSOEndpointOverride(f)
-	if err != nil {
-		return err
-	}
 
 	if *f.adminToken == "" && !lm.enabled {
 		slog.Warn("wardynd: admin token unset; the public API is DISABLED (only /healthz responds). Set WARDYN_ADMIN_TOKEN, enable OIDC, or use -local-mode for single-developer localhost use.")
@@ -469,8 +461,9 @@ func run() error {
 }
 
 // validateModelEndpoints resolves and fail-closed-validates every operator knob
-// that moves where a model call actually goes: the two brokered api-key gateways
-// and the Bedrock data-plane override.
+// that moves where a model call — or the credential exchange behind one —
+// actually goes: the two brokered api-key gateways, the Bedrock data-plane
+// override, and the gated AWS SSO endpoint test hatch.
 //
 // Bedrock is deliberately NOT a member of ValidateLLMGateways' map. That map
 // means "broker this vendor's api-key lane through a reverse proxy" — its
@@ -479,15 +472,26 @@ func run() error {
 // would have the proxy try to serve it over a route it does not speak. They are
 // validated together here because they answer one question, not because they
 // share a mechanism.
-func validateModelEndpoints(f *bootFlags) (map[string]string, string, error) {
+func validateModelEndpoints(f *bootFlags) (map[string]string, string, string, error) {
 	llmGateways, err := api.ValidateLLMGateways(*f.anthropicBaseURL, *f.openaiBaseURL)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	// *f.bedrockRegion is already resolved (parseBootFlags folds in AWS_REGION).
 	bedrockBaseURL, err := api.ValidateBedrockBaseURL(*f.bedrockBaseURL, *f.bedrockRegion)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
+	}
+	// The gated AWS SSO endpoint hatch (resolveAWSSSOEndpointOverride,
+	// boot_flags.go). Resolved here rather than in run() because it answers the
+	// same class of question — "where does this deployment's traffic actually
+	// go, and does the value parse" — and because run()'s cyclomatic budget is
+	// full. It is NOT a model endpoint: it re-points a CREDENTIAL exchange, and
+	// it is a TEST hatch rather than a supported posture, which is why it
+	// refuses boot without WARDYN_ALLOW_TEST_ENDPOINTS.
+	awsSSOEndpointOverride, err := resolveAWSSSOEndpointOverride(f)
+	if err != nil {
+		return nil, "", "", err
 	}
 	// A WARNING, never a refusal: the model is passed to the agent verbatim and
 	// Wardyn deliberately does not police its shape. But the AWS SSO account
@@ -499,7 +503,7 @@ func validateModelEndpoints(f *bootFlags) (map[string]string, string, error) {
 			slog.String("bedrock_model", *f.bedrockModel),
 		)
 	}
-	return llmGateways, bedrockBaseURL, nil
+	return llmGateways, bedrockBaseURL, awsSSOEndpointOverride, nil
 }
 
 // tlsPosture is the validated TLS/cookie posture derived from the resolved
