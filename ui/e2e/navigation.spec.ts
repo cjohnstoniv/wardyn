@@ -6,6 +6,7 @@
 import { test, expect, gotoConsole, mockMemberRole, navTo, sidebarLink, type NavLabel } from "./fixtures";
 import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import { SHELL } from "../src/app/components/wardyn/copy";
+import { HEALTH_POLL_MS } from "../src/app/App";
 
 // Navigation + theme + error-boundary coverage for the Wardyn admin console.
 //
@@ -449,9 +450,29 @@ test.describe("the unreachable banner sees a store outage (R4/F066)", () => {
   });
 
   test("a healthy deployment shows no banner — the negative control", async ({ page }) => {
+    // X2-F15: the old wait was a blind waitForTimeout(6_000) hardcoded
+    // against App.tsx's HEALTH_POLL_MS (5000) with no import tying the two
+    // together — a future change to the poll interval could silently make
+    // this too short (flaky-green) with nothing here to notice. Count real
+    // /healthz polls instead of guessing a duration, and poll for a positive
+    // signal (at least two ticks observed) rather than sleeping a fixed span.
+    let healthPolls = 0;
+    await page.route("**/healthz", (route) => {
+      healthPolls++;
+      return route.continue();
+    });
     await gotoConsole(page);
-    // Give the health poll a couple of ticks to be wrong in, then assert.
-    await page.waitForTimeout(6_000);
+    await expect.poll(() => healthPolls, { timeout: HEALTH_POLL_MS * 3 }).toBeGreaterThanOrEqual(2);
     await expect(page.getByRole("status").filter({ hasText: BANNER })).toHaveCount(0);
+  });
+});
+
+// X2-F23: /integrations died with the Settings consolidation (App.tsx
+// redirects it) but nothing walked the redirect itself — same gap /demos had
+// before demos.spec.ts's own one-line pin (X2-F21's sibling).
+test.describe("dead routes redirect", () => {
+  test("/integrations redirects to Settings", async ({ page }) => {
+    await page.goto("/integrations");
+    await expect(page).toHaveURL(/\/settings$/);
   });
 });

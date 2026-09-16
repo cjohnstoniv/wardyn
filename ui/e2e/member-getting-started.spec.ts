@@ -77,6 +77,13 @@ test.describe("member Getting Started (mocked /me role)", () => {
     // Rows finish rendering before any network activity — no prefetch.
     const watch = page.getByRole("button", { name: "Watch" }).first();
     await expect(watch).toBeVisible();
+    // X2-F14: a bare toBe(0) here is a point-in-time check — it passes just
+    // as well when a prefetch is merely still in flight as when one never
+    // fires at all. Give the page a real beat to go idle first (the cold
+    // `/setup` load test above already relies on this same wait to settle
+    // its own network-count pin), so the zero below is an actual claim about
+    // "never", not "not yet".
+    await page.waitForLoadState("networkidle");
     expect(mp4Requests).toBe(0);
 
     await watch.click();

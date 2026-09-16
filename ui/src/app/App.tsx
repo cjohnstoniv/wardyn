@@ -50,7 +50,10 @@ type AuthStatus = "checking" | "authed" | "unauthed";
 // it every 5s forever. /healthz already carries the only fact the shell
 // needs — liveness — so the expensive snapshot is now fetched exactly once
 // per session, for the landing decision.
-const HEALTH_POLL_MS = 5000;
+// Exported (X2-F15): navigation.spec.ts derives its own wait from this exact
+// constant instead of a second, independently-hardcoded copy of "5000" that
+// could drift from it.
+export const HEALTH_POLL_MS = 5000;
 
 // Route-level code-splitting. Runs is the landing route (every "/" redirects
 // there) so it stays eager — lazying it would only add a load waterfall to the

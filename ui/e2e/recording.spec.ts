@@ -257,9 +257,14 @@ test.describe("Recordings library", () => {
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
 
-    // Give the player a beat to mount and attempt WASM instantiation, then assert
-    // the console stayed clean of any CSP/WASM violation.
-    await page.waitForTimeout(500);
+    // X2-F8: a blind waitForTimeout(500) was the whole detection window —
+    // too short on a loaded runner is a silent false-green, and it proves
+    // nothing about WHEN the player is actually ready. Poll for a POSITIVE
+    // readiness signal instead: `.ap-term` is the VT core's own terminal
+    // element (asciinema-player-ui.js), created only once the WASM module
+    // instantiates and the core renders its first frame — a CompileError
+    // never gets this far.
+    await expect(dialog.locator(".ap-term")).toBeVisible({ timeout: 5_000 });
     expect(
       cspWasmErrors,
       `recording player logged CSP/WASM errors (CSP missing 'wasm-unsafe-eval'?):\n${cspWasmErrors.join("\n")}`,

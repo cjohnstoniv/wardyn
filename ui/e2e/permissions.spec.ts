@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, mockMemberRole, navTo, navToRoute } from "./fixtures";
+import { test, expect, gotoConsole, mockMemberRole, mockSecurityAdminRole, navTo, navToRoute } from "./fixtures";
 import { CAPABILITY_KINDS, KIND, PERM, PERM_DRAFT } from "../src/app/lib/permissions-copy";
 import { SECURITY_ONLY_REASON } from "../src/app/components/wardyn/copy";
 
@@ -316,5 +316,53 @@ test.describe("Permissions — a member by URL is told the tier, not an outage",
     );
     await page.goto("/permissions");
     await expect(page.getByRole("button", { name: /retry/i }).first()).toBeVisible();
+  });
+});
+
+// X2-F13 — the four write routes behind this screen (grant/enforcement) are
+// gated on useSecurityOperator, not useOperator: a security admin is meant to
+// actually USE them, unlike everywhere else in the console (SECURITY_ONLY_REASON
+// above is that tier's OWN reason, distinct from OPERATOR_ONLY_REASON —
+// policies.spec.ts's X2-F12 addition pins the contrast: /policies gives a
+// security admin the same parked OPERATOR_ONLY_REASON a member gets, while
+// THIS screen hands them the real form). governance.spec.ts:401 only ever
+// asserted the nav LINK is visible to this tier — nothing exercised the form
+// itself. Real writes, cleaned up at the end so the file's empty-table
+// invariant survives a re-run.
+test.describe("Permissions — a security admin actually uses the write surface, not just sees the link (X2-F13)", () => {
+  test.describe.configure({ mode: "serial" });
+  const SEC_WHO = "carol@corp.example";
+  const SEC_HOST = "*.security-admin-e2e.example";
+
+  test("adds a grant and enforces the kind as security_admin, then cleans up", async ({ page }) => {
+    await mockSecurityAdminRole(page);
+    await gotoConsole(page);
+    await navTo(page, "Permissions");
+    await expect(page.getByRole("heading", { name: PERM.TITLE, level: 1 })).toBeVisible();
+
+    await page.getByRole("textbox", { name: PERM.FIELD_WHO, exact: true }).fill(SEC_WHO);
+    await page.getByRole("textbox", { name: KIND.egress_host.valueLabel, exact: true }).fill(SEC_HOST);
+    const addBtn = page.getByRole("button", { name: PERM.ADD_CTA });
+    await expect(addBtn).toBeEnabled();
+    await addBtn.click();
+
+    const table = page.getByRole("table");
+    await expect(table.getByRole("cell", { name: SEC_HOST, exact: true })).toBeVisible();
+
+    const kindSwitch = page.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.egress_host.label}` });
+    await expect(kindSwitch).toBeEnabled();
+    await kindSwitch.click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog.getByText(PERM.ENFORCE_ON_TITLE(KIND.egress_host.label))).toBeVisible();
+    await dialog.getByRole("button", { name: PERM.ENFORCE_CONFIRM, exact: true }).click();
+    await expect(page.getByText(KIND.egress_host.enforced)).toBeVisible();
+
+    // Clean up: stop enforcing (the lockout guard requires it before a
+    // grantless removal), then remove the grant.
+    await kindSwitch.click();
+    await page.getByRole("alertdialog").getByRole("button", { name: PERM.ENFORCE_STOP, exact: true }).click();
+    await page.getByRole("button", { name: `${PERM.REMOVE} ${KIND.egress_host.label} ${SEC_HOST}` }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: PERM.REMOVE, exact: true }).click();
+    await expect(page.getByText(PERM.EMPTY_TITLE)).toBeVisible();
   });
 });

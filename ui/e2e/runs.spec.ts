@@ -677,8 +677,10 @@ test.describe("Run cockpit — the layout catalog offers no dead controls", () =
     // The entries that CAN render are still offered.
     await expect(catalog.getByRole("button", { name: "Sandbox" })).toBeVisible();
     // Opening the catalog wrote nothing, and no phantom widget can have been
-    // stored because none was offered.
-    expect(layoutWrites.every((b) => !b.includes('"ssh"'))).toBe(true);
+    // stored because none was offered. X2-F7: the old assertion
+    // (`.every(...)` over an always-empty array) was vacuous — it passed
+    // whether or not the catalog ever fired a write at all.
+    expect(layoutWrites).toEqual([]);
   });
 });
 
