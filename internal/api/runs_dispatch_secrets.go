@@ -57,10 +57,20 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 	}
 	var resolved, missing int
 	var reserved []string
-	// run.CreatedBy: the run's own owner's row wins, falling back to the
-	// operator's (secretOwnerFromRequest.stamped rows never collide with an
-	// operator's own run identity string — see injection.go's Get for the
-	// same reasoning).
+	// runIdentitySubject(run.CreatedBy): the run's own owner's row wins, falling
+	// back to the operator's (secretOwnerFromRequest.stamped rows never collide
+	// with an operator's own run identity string — see injection.go's Get for
+	// the same reasoning).
+	//
+	// THE SUBJECT, NOT THE ATTRIBUTION (B2-F2, F099's chokepoint). run.CreatedBy
+	// is what the run row records as its actor, and in LocalMode that is whatever
+	// the DEV-ONLY X-Wardyn-Principal header said (actorFromRequest's case 1) —
+	// so this resolver and its env_secret sibling below were the two credential
+	// lanes on the dispatch path still keying a secret NAMESPACE off a string a
+	// caller can write, while the mint, the broker and the injection sink all
+	// key off runIdentitySubject. Off LocalMode the two expressions are equal, so
+	// every OIDC and admin-token caller is byte-identical; inside it a run is now
+	// served the namespace its own identity was minted for and nothing else.
 	for _, name := range li.WorkspaceSecretNames {
 		// F126: the reserved-name guard every credential SINK takes
 		// (sinkReservedSecret, secrets.go — "reject it at every sink"), which
@@ -79,7 +89,7 @@ func (s *Server) resolveLLMInspectionSecrets(ctx context.Context, run types.Agen
 			reserved = append(reserved, name)
 			continue
 		}
-		val, err := s.cfg.Secrets.For(run.CreatedBy).Get(ctx, name)
+		val, err := s.cfg.Secrets.For(runIdentitySubject(ctx, run.CreatedBy)).Get(ctx, name)
 		if err != nil || len(val) == 0 {
 			missing++
 			continue
@@ -164,9 +174,10 @@ func (s *Server) resolveEnvSecretGrants(ctx context.Context, run types.AgentRun,
 			skip = "the sandbox env already sets this variable; a grant may not override platform-authored env"
 		}
 		if skip == "" {
-			// run.CreatedBy: same owner-then-operator-fallback rule as
-			// resolveLLMInspectionSecrets above.
-			val, gerr := s.cfg.Secrets.For(run.CreatedBy).Get(ctx, secretName)
+			// runIdentitySubject(run.CreatedBy): same owner-then-operator-fallback
+			// rule as resolveLLMInspectionSecrets above, through the same F099
+			// chokepoint.
+			val, gerr := s.cfg.Secrets.For(runIdentitySubject(ctx, run.CreatedBy)).Get(ctx, secretName)
 			if gerr != nil || len(val) == 0 {
 				skip = "secret could not be resolved"
 			} else {
