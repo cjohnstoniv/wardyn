@@ -465,7 +465,13 @@ function SessionCard({
       {stage === "recording" && openRR && (
         <div className="mt-3 space-y-2">
           <DetectedHints commands={detected} />
-          <AttachTerminal runId={openRR.run_id} />
+          {/* OPERATOR-ONLY, like every control in this pane. The session itself
+              is an operator's (the launch routes are operatorOnly, routes.go),
+              so a member VIEWING this workspace never owns the run — mounting
+              the terminal for them only produces a failed ticket mint and one
+              authz.denied{not_owner} row per mount. Nothing is hidden that they
+              could otherwise have used. */}
+          {operator && <AttachTerminal runId={openRR.run_id} />}
           <Button size="sm" variant="outline" onClick={() => onDoneRecording(openRR.run_id)}>
             <Square className="size-3.5" /> Done recording
           </Button>
@@ -498,7 +504,7 @@ function SessionCard({
         <div className="mt-3 space-y-2">
           <AuthModeLine rr={confinedRR} />
           <DetectedHints commands={detected} />
-          <AttachTerminal runId={confinedRR.run_id} />
+          {operator && <AttachTerminal runId={confinedRR.run_id} />}
           {/* Off-policy egress escalates to a pending approval held live — decide it
               here without leaving the page. */}
           <LiveApprovals
@@ -588,6 +594,9 @@ function OrphanedSessionCard({
   onApproveHosts: (hosts: string[], replayName?: string) => void;
   onOpenProfile: (runId: string, suggestedName?: string) => void;
 }) {
+  // Same operator gate as the sessions above: a live replay's run belongs to
+  // the operator who launched it.
+  const operator = useOperator();
   const rr = recordResult(ws, sessionKey);
   if (!rr) return null;
   const live = rr.status === "recording";
@@ -601,7 +610,7 @@ function OrphanedSessionCard({
       {live ? (
         <div className="mt-3 space-y-2">
           <AuthModeLine rr={rr} />
-          <AttachTerminal runId={rr.run_id} />
+          {operator && <AttachTerminal runId={rr.run_id} />}
           <LiveApprovals
             runId={rr.run_id}
             reasonApprove="approved in replay"

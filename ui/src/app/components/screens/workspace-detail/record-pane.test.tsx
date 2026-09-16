@@ -215,6 +215,23 @@ describe("RecordPane — open-record session lifecycle", () => {
     expect(onDoneRecording).toHaveBeenCalledWith("run-42");
   });
 
+  // The attach chokepoint stopped refusing a run whose creator it cannot see
+  // (P1), which is right for the login pane — but this pane's sessions belong to
+  // the OPERATOR who launched them (record/replay are operatorOnly, routes.go),
+  // so a member merely VIEWING this workspace never owns the run. Mounting a
+  // terminal for them now buys a failed ticket mint, a raw "could not mint an
+  // attach ticket" error where they used to get the role sentence, and one
+  // authz.denied{not_owner} row per mount. The pane's controls were already
+  // operator-gated; the terminal simply was not.
+  it("a non-operator sees no terminal for a recording session — only the operator gets one", () => {
+    const rr: RecordResult = { run_id: "run-42", label: "build & test", mode: "interactive", status: "recording" };
+    renderPane({ record_results: { "build-test": rr } }, {}, true, false);
+    expect(screen.queryByTestId("attach-terminal")).not.toBeInTheDocument();
+    // The session itself is still visible — this hides a control they never had,
+    // not the fact that a recording is running.
+    expect(screen.getByTestId("session-build-test")).toBeInTheDocument();
+  });
+
   it("survives an unmount — no kill-on-unmount call for an in-flight session", () => {
     const onDoneRecording = vi.fn();
     const rr: RecordResult = { run_id: "run-42", label: "build & test", mode: "interactive", status: "recording" };

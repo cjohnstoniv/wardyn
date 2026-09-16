@@ -190,10 +190,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // see the lane choice in connect() below.
   const operatorResolved = useOperatorResolved();
   const principal = usePrincipal();
-  // UNKNOWN ownership asks the server (P1, 0.7.3 field report); a STATED owner
-  // who is not the principal is still refused below, before any POST. A foreign
-  // run costs one POST + one authz.denied{reason:"not_owner"} row — cheaper
-  // than a client gate inventing a refusal it cannot justify.
+  // Unknown ownership asks the server (P1) — see createdBy's doc above.
   const owned = createdBy === undefined || createdBy === principal;
   const containerRef = React.useRef<HTMLDivElement>(null);
   // The whole panel (title bar + grid) — the element handed to the native
