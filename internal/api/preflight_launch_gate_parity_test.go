@@ -33,13 +33,31 @@ import (
 // dispatches nothing" is preflight's contract, so everything after the mint is
 // launch-only by construction and out of scope. A missing marker fails loudly
 // rather than silently widening the scan to the whole handler.
+
+// preflightInlinedWrappers are the launch-side helpers preflight deliberately
+// does not call AS A UNIT because it reproduces their gates individually. The
+// guard scans THROUGH them: every Server gate they call counts as a launch gate
+// in its own right, so each one is either previewed by preflight or named in
+// preflightGateExceptions with its own reason.
+//
+// This is B1-F3's NARROWING. `decodeAndValidateCreateRun` used to be one blanket
+// entry in the exception map, which licensed the WHOLE wrapper — and so licensed
+// exactly the gap B1-F3 turned out to be: requestRepoProviderRefusals lives
+// inside it, preflight never called it, and this guard was structurally unable
+// to say so. One exception per real gap, never one per wrapper.
+//
+// The value is the file the wrapper is declared in, so a move reds here naming
+// the file rather than as a bare parse failure.
+var preflightInlinedWrappers = map[string]string{
+	"decodeAndValidateCreateRun": "runs_create_validate.go",
+}
+
 var preflightGateExceptions = map[string]string{
-	// Preflight decodes the same createRunRequest but reproduces this wrapper's
-	// gates individually (decodeStrict + denyMemberRequest + the eager
-	// integration_id check); the rest of it — the agent-required 400, the BYOI
-	// image/devcontainer 400s — is unreachable via the wizard body this endpoint
-	// serves, per handlePreflightRun's doc comment.
-	"decodeAndValidateCreateRun": "preflight reproduces its reachable gates inline (decodeStrict + denyMemberRequest + the integration_id 400)",
+	// Inside decodeAndValidateCreateRun. Preflight reaches the identical check
+	// through seedAndAdmitWorkspace, which re-runs it on the POST-SEED request —
+	// a workspace's base_image can set req.Image after the wrapper ran, so that
+	// is the stricter of the two calls and the one Review must make.
+	"validateImageBuildRequest": "preflight runs the same check post-seed inside seedAndAdmitWorkspace (runs.go), which is the stricter call",
 	// Preflight calls the shared enforcedConfinement math directly and
 	// deliberately skips this wrapper's TAIL gates (runner capability, the
 	// cloud_sts grantChecker): deriveSetupItems' backend row reports an
@@ -60,6 +78,20 @@ func TestPreflightMirrorsLaunchGates(t *testing.T) {
 	}
 
 	launchGates := serverCalls(create, mint)
+	// Scan THROUGH the wrappers preflight reproduces gate-by-gate rather than
+	// calling: their own gates join the launch set, and the wrapper name itself
+	// leaves it (preflight will never call it, and nothing is learned by saying
+	// so every release). See preflightInlinedWrappers.
+	for name, file := range preflightInlinedWrappers {
+		if !launchGates[name] {
+			t.Errorf("preflightInlinedWrappers names %q, which handleCreateRun no longer calls before the mint — drop the entry", name)
+			continue
+		}
+		delete(launchGates, name)
+		for inner := range serverCalls(parseHandler(t, fset, file, name), token.NoPos) {
+			launchGates[inner] = true
+		}
+	}
 	previewed := serverCalls(preflight, token.NoPos)
 
 	var missing []string

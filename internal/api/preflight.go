@@ -69,14 +69,19 @@ type preflightResponse struct {
 // here: deriveSetupItems' backend row reports that honestly instead, so a host
 // that can't yet enforce the class shows a fixable checklist row on Review
 // rather than a fatal error that blanks the panel. Reproduced launch gates:
-// the run-explicit integration_id AI-provider check below, resolveRunPolicy's
-// 4xx set, the workspace_id seed's 400/422s (unknown workspace, an
+// the run-explicit integration_id AI-provider check below, the provider
+// admission + member capability over `repo`/`devcontainer_repo`
+// (requestRepoProviderRefusals), the agent-roster 422 (agentRosterRefusal),
+// resolveRunPolicy's 4xx set, the workspace_id seed's 400/422s (unknown workspace, an
 // image/devcontainer_repo XOR violation surfaced by a workspace's base_image,
 // target collision), the onboarded-workspace gate, the workspace
 // credential-binding fold, and the confinement floor check below. Not
 // reproduced (unreachable via the wizard body this endpoint serves): the
 // agent-required 400, the BYOI image/devcontainer 400s, and the cloud_sts
 // identity-provider 422 — launch still enforces all of them.
+// TestPreflightMirrorsLaunchGates now scans THROUGH decodeAndValidateCreateRun
+// rather than excepting the whole wrapper, so this inventory is executable gate
+// by gate instead of wrapper by wrapper (B1-F3).
 func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var req createRunRequest
@@ -102,6 +107,40 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("integration_id %q does not name an AI provider integration", req.IntegrationID))
 			return
 		}
+	}
+	// Same PROVIDER ADMISSION launch runs over the two FREE-TEXT repository
+	// fields (decodeAndValidateCreateRun -> requestRepoProviderRefusals,
+	// workspace_admission.go). Neither `repo` nor `devcontainer_repo` is a spec
+	// entry, so the resolved-spec gate below never sees them — Review showed a
+	// clean checklist for a repository POST /runs then refused, 422 for an
+	// operator and 403 for a member (B1-F3).
+	//
+	// The SAME function, not a copy, so the two doors cannot answer different
+	// refusals; and sited HERE, immediately after the eager integration_id
+	// check, because that is where launch asks it: after the member request
+	// denial, before anything resolves a policy.
+	//
+	// It can write one audit row on the grace lane
+	// (workspace.provider.legacy_host, from admitRepoSources) — the same "a
+	// refused dry run leaves the record of the refusal" rule this handler's doc
+	// comment already states for denyMemberField. In legacy open mode (no
+	// provider rows) it reads the site config and returns having refused,
+	// audited and warned nothing.
+	if s.requestRepoProviderRefusals(w, r, req) {
+		return
+	}
+	// …and the ORG ROSTER refusal that sits beside it in the same wrapper: an
+	// agent this deployment does not offer 422s at launch, so previewing it as a
+	// clean checklist is the same lie one line up. Surfaced by narrowing this
+	// pair's parity exception (B1-F3) rather than by a second field report. With
+	// no AgentProviders block agentRosterRefusal short-circuits to "" and Review
+	// is byte-for-byte what it was.
+	if msg, rerr := s.agentRosterRefusal(ctx, req.Agent); rerr != nil {
+		writeError(w, http.StatusInternalServerError, "get site config: "+rerr.Error())
+		return
+	} else if msg != "" {
+		writeError(w, http.StatusUnprocessableEntity, msg)
+		return
 	}
 
 	// Resolve the policy through the SAME chokepoint launch uses. resolveRunPolicy
