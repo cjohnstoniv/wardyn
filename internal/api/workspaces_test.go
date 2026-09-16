@@ -216,6 +216,9 @@ type workspaceStoreFake struct {
 	lib     sourceLibraryFake // named, not embedded: embedding beside the interface makes every shared method ambiguous
 	ws      types.Workspace
 	updated types.Workspace
+	// stampedEgressEdit is what the handler ASKED for: the clear's stamp is
+	// written by the database now, not handed down from the handler's clock.
+	stampedEgressEdit bool
 }
 
 func (s *workspaceStoreFake) UpsertSource(ctx context.Context, src types.Source) (types.Source, error) {
@@ -237,8 +240,16 @@ func (s *workspaceStoreFake) ListWorkspaces(context.Context) ([]types.Workspace,
 func (s *workspaceStoreFake) GetSiteConfig(context.Context) (types.SiteConfig, error) {
 	return types.SiteConfig{}, nil
 }
-func (s *workspaceStoreFake) UpdateWorkspace(_ context.Context, _ uuid.UUID, ws types.Workspace) (types.Workspace, error) {
+func (s *workspaceStoreFake) UpdateWorkspace(_ context.Context, _ uuid.UUID, ws types.Workspace, stampEgressEdit bool) (types.Workspace, error) {
 	s.updated = ws
+	s.stampedEgressEdit = stampEgressEdit
+	// The real store writes now() when asked to stamp; the echo has to do the
+	// same, or a handler test could not tell a carried stamp from a fresh one.
+	if stampEgressEdit {
+		now := time.Now().UTC()
+		ws.EgressEditedAt = &now
+		s.updated = ws
+	}
 	return ws, nil
 }
 func (s *workspaceStoreFake) DeleteWorkspace(context.Context, uuid.UUID) error {
@@ -328,6 +339,14 @@ func TestUpdateWorkspace_ContentChangeStampsTheEgressEdit(t *testing.T) {
 	}
 	if got.EgressEditedAt == nil || !got.EgressEditedAt.After(before) {
 		t.Errorf("EgressEditedAt = %v, want a stamp newer than the pre-edit %v — without it the boot heal re-applies every `always` approval onto the list this edit just cleared", got.EgressEditedAt, before)
+	}
+	// AND THE STAMP IS THE STORE'S, not this handler's clock (B8-F3). The value
+	// is compared against approvals.decided_at, which Postgres stamps, so a
+	// handler-side time.Now() put the daemon/DB skew inside the boot heal's only
+	// newer-action guard — fail-OPEN when wardynd runs behind. The handler asks;
+	// UpdateWorkspace writes now().
+	if !fake.stampedEgressEdit {
+		t.Error("the handler did not ask the store to stamp egress_edited_at; a stamp it writes itself is on wardynd's clock, and the guard it feeds compares against a Postgres-stamped column")
 	}
 }
 

@@ -359,7 +359,7 @@ func TestPG_EgressEditedAtMarksOnlyTheOperatorsListEdits(t *testing.T) {
 	// re-applied every `always` approval onto the emptied list. It must not
 	// STAMP it either (0055) — an unrelated edit restates what it read.
 	got.EgressEditedAt = nil
-	cleared, err := pg.UpdateWorkspace(ctx, ws.ID, got)
+	cleared, err := pg.UpdateWorkspace(ctx, ws.ID, got, false)
 	if err != nil {
 		t.Fatalf("UpdateWorkspace (clearing the stamp): %v", err)
 	}
@@ -368,7 +368,7 @@ func TestPG_EgressEditedAtMarksOnlyTheOperatorsListEdits(t *testing.T) {
 	}
 	stamp := time.Now().UTC().Truncate(time.Microsecond)
 	cleared.EgressEditedAt = &stamp
-	stamped, err := pg.UpdateWorkspace(ctx, ws.ID, cleared)
+	stamped, err := pg.UpdateWorkspace(ctx, ws.ID, cleared, false)
 	if err != nil {
 		t.Fatalf("UpdateWorkspace (stamping the composition edit): %v", err)
 	}

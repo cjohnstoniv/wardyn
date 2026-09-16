@@ -23,18 +23,24 @@ import (
 type fakeStore struct {
 	mu   sync.Mutex
 	rows []lifecycle.RunSummary
-	err  error // if non-nil, ListRunningWithPolicy returns this
+	err  error     // if non-nil, ListRunningWithPolicy returns this
+	now  time.Time // the STORE's clock; zero means "no clock of my own"
 }
 
-func (f *fakeStore) ListRunningWithPolicy(_ context.Context) ([]lifecycle.RunSummary, error) {
+// now is the STORE's clock, which the reaper measures ages against. The zero
+// value means "this double has no clock of its own", which is what every test in
+// this file relies on: their rows are stamped from the same clock the Reaper is
+// given, so the reaper falls back to it and the existing expectations hold. The
+// skew probe sets it.
+func (f *fakeStore) ListRunningWithPolicy(_ context.Context) ([]lifecycle.RunSummary, time.Time, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
-		return nil, f.err
+		return nil, time.Time{}, f.err
 	}
 	out := make([]lifecycle.RunSummary, len(f.rows))
 	copy(out, f.rows)
-	return out, nil
+	return out, f.now, nil
 }
 
 // fakeStopper records which run IDs were stopped; satisfies lifecycle.Stopper.

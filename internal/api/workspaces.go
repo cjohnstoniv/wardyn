@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -608,6 +607,7 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// write back a stale profile; identity edits are rare and the remedy is a
 	// re-scan — add an optimistic updated_at guard if it ever bites for real.
 	sourcesChanged := !slices.EqualFunc(ws.Sources, req.Sources, workspaceSourceContentEqual)
+	stampEgressEdit := false
 	imageChanged := !baseImageEqual(ws.BaseImage, req.BaseImage)
 	ws.Name, ws.Sources, ws.BaseImage = req.Name, req.Sources, normalizeRecommended(req.BaseImage)
 	// Three-tier: the edited composition upserts+attaches through the library
@@ -635,16 +635,21 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		ws.ApprovedEgress = nil
 		ws.Requirements = nil
 		ws.RecordResults = nil
-		// STAMP THE CLEAR (0055). This handler is the THIRD durable writer of
-		// approved_egress, beside the two scoped setters migration 0055 named.
-		// The boot heal (ReconcileWorkspaceEgressDecisions) re-applies every
-		// decided `always` approval and its ONLY newer-action guard is
-		// egress_edited_at — so a clear that leaves the stamp untouched is
-		// re-widened on the next restart, silently and fail-OPEN, exactly the
-		// D28 loss the column exists to prevent. The operator changing the
-		// composition IS the newer action; record that it happened.
-		now := time.Now().UTC()
-		ws.EgressEditedAt = &now
+		// STAMP THE CLEAR (0055) — asked for here, WRITTEN BY THE DATABASE. This
+		// handler is the THIRD durable writer of approved_egress, beside the two
+		// scoped setters migration 0055 named. The boot heal
+		// (ReconcileWorkspaceEgressDecisions) re-applies every decided `always`
+		// approval and its ONLY newer-action guard is egress_edited_at — so a
+		// clear that leaves the stamp untouched is re-widened on the next
+		// restart, silently and fail-OPEN, exactly the D28 loss the column exists
+		// to prevent. The operator changing the composition IS the newer action;
+		// record that it happened.
+		//
+		// The stamp was taken from wardynd's clock here and compared against
+		// approvals.decided_at; both are now the database's own now(), because a
+		// guard that is an inequality between two clocks fails open by exactly
+		// the skew (B8-F3). UpdateWorkspace writes it when told to.
+		stampEgressEdit = true
 	}
 	if sourcesChanged || imageChanged {
 		// The build cache keys on the old profile/base — a different base
@@ -661,7 +666,7 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		ws.ImageRef = ""
 		ws.BuiltProfileHash = ""
 	}
-	updated, err := s.cfg.Store.UpdateWorkspace(r.Context(), id, ws)
+	updated, err := s.cfg.Store.UpdateWorkspace(r.Context(), id, ws, stampEgressEdit)
 	if notFoundIf(w, err, "workspace") {
 		return
 	}

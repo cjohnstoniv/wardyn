@@ -40,7 +40,7 @@ func (s *scanReconcileStore) GetWorkspace(context.Context, uuid.UUID) (types.Wor
 func (s *scanReconcileStore) SetWorkspaceImportState(ctx context.Context, id uuid.UUID, status types.WorkspaceStatus, active *uuid.UUID, expectedActive *uuid.UUID) (types.Workspace, bool, error) {
 	return s.importStateFake.SetWorkspaceImportState(ctx, id, status, active, expectedActive)
 }
-func (s *scanReconcileStore) UpdateWorkspace(_ context.Context, _ uuid.UUID, ws types.Workspace) (types.Workspace, error) {
+func (s *scanReconcileStore) UpdateWorkspace(_ context.Context, _ uuid.UUID, ws types.Workspace, _ bool) (types.Workspace, error) {
 	s.fullRowWrite = true
 	return ws, nil
 }

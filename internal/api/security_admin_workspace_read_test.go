@@ -50,7 +50,7 @@ func (s *wsReadStore) SetWorkspaceApprovedEgress(_ context.Context, id uuid.UUID
 	s.ws.ApprovedEgress = d
 	return s.ws, nil
 }
-func (s *wsReadStore) UpdateWorkspace(_ context.Context, id uuid.UUID, ws types.Workspace) (types.Workspace, error) {
+func (s *wsReadStore) UpdateWorkspace(_ context.Context, id uuid.UUID, ws types.Workspace, _ bool) (types.Workspace, error) {
 	if id != s.ws.ID {
 		return types.Workspace{}, store.ErrNotFound
 	}

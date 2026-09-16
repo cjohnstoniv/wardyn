@@ -110,13 +110,24 @@ func (s PG) Ping(ctx context.Context) error {
 
 // CreateRun inserts a new run and returns the persisted row.
 func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, error) {
-	const q = `
+	// updated_at ON THE DATABASE'S CLOCK, like every other writer of the column
+	// (TouchRun and the six scoped SET ... updated_at=now() writers). It is the
+	// idle reaper's measurand, and the reaper now measures against the database's
+	// own now(), so the one app-clock writer was the one row whose age carried
+	// the daemon/DB skew — 30s of TouchDebounce is the entire margin (B8-F2).
+	// Back-dated by the row's own age rather than set to now(), so a caller that
+	// stamped the struct earlier in the request keeps that instant.
+	updatedAge := int64(0)
+	if !r.UpdatedAt.IsZero() {
+		updatedAge = db.AppClockAgeMicros(r.UpdatedAt, s.now())
+	}
+	q := `
 		INSERT INTO agent_runs (` + runInsertCols + `)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+		VALUES ($1,$2,` + db.AppClockAgeSQL("$3") + `,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
 		RETURNING ` + runCols
 
 	row := s.Pool.QueryRow(ctx, q,
-		r.ID, r.CreatedAt, r.UpdatedAt, r.CreatedBy, r.Agent, r.Repo, r.Task,
+		r.ID, r.CreatedAt, updatedAge, r.CreatedBy, r.Agent, r.Repo, r.Task,
 		r.PolicyID, string(r.ConfinementClass), string(r.State),
 		r.SPIFFEID, r.RunnerTarget, r.SandboxRef, r.Interactive, r.WorkspacePath, r.WorkspaceID, r.SourceID, r.Image, r.AutoStopAfterSec,
 		r.AgentExecID, r.Title, r.Description, r.WorkspaceIDs,
@@ -493,14 +504,32 @@ func (s PG) CountApprovalsForRun(ctx context.Context, runID uuid.UUID) (int, err
 // the RETURNING happily echoes the un-updated row back, a green result over a
 // silent no-op. Both lists must carry decision_scope/decision_expires_at.
 func (s PG) DecideApproval(ctx context.Context, id uuid.UUID, decision types.ApprovalDecision) (types.ApprovalRequest, error) {
-	now := time.Now().UTC()
-	const q = `
+	// decided_at ON THE DATABASE'S CLOCK, back-dated by this call's own age —
+	// the CreateAPIToken pattern (db.AppClockAgeSQL), and for the same reason.
+	// The value is compared against workspaces.egress_edited_at, which Postgres
+	// stamps, by the boot heal's ONLY newer-action guard
+	// (ReconcileWorkspaceEgressDecisions). Bound from wardynd's clock it carried
+	// the daemon/DB skew straight into that inequality: with the daemon running
+	// ahead, an operator who approves `always` and then undoes it through the
+	// documented PUT seconds later gets the decision RE-APPLIED at the next
+	// restart, and the host is back on the allowlist — the durable, fail-OPEN
+	// re-widening migration 0055 exists to prevent (B8-F3).
+	//
+	// The AGE rather than a plain now(): the decision instant is the one this
+	// call observed, so a statement that takes a while to reach the server does
+	// not move the decision forward past an edit made in the meantime. Both
+	// readings come from s.now(), so the duration carries no skew.
+	decidedAt := s.now()
+	age := db.AppClockAgeMicros(decidedAt, s.now())
+	// q is built rather than const for store_apitokens.go's reason: the
+	// expression has ONE definition and a const cannot call it.
+	q := `
 		UPDATE approvals
-		SET state=$1, decided_at=$2, decided_by=$3, reason=$4, decision_scope=$5, decision_expires_at=$6
+		SET state=$1, decided_at=` + db.AppClockAgeSQL("$2") + `, decided_by=$3, reason=$4, decision_scope=$5, decision_expires_at=$6
 		WHERE id=$7 AND state='PENDING'
 		RETURNING ` + approvalCols
 	a, err := scanApproval(s.Pool.QueryRow(ctx, q,
-		string(decision.State), now, decision.DecidedBy, decision.Reason,
+		string(decision.State), age, decision.DecidedBy, decision.Reason,
 		string(decision.Scope), decision.ExpiresAt, id,
 	))
 	if errors.Is(err, ErrNotFound) {

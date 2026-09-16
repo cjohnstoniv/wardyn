@@ -60,7 +60,13 @@ type Store interface {
 	// ReconcileWorkspaceEgressDecisions re-widen a list the operator just
 	// cleared. Callers round-trip a fetched row, so leaving the field alone
 	// rewrites what was read.
-	UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types.Workspace) (types.Workspace, error)
+	//
+	// stampEgressEdit is how the ONE caller that clears the list says so: the
+	// stamp is then written by the DATABASE, like every other writer of that
+	// column, rather than from the caller's own clock. It has to be a flag and
+	// not a value, because carrying and stamping are different acts — the
+	// carried value is an EARLIER database stamp that must survive verbatim.
+	UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types.Workspace, stampEgressEdit bool) (types.Workspace, error)
 	// SetWorkspaceApprovedEgress replaces the operator-owned approved-egress
 	// list and stamps Workspace.EgressEditedAt: this PUT is the documented undo
 	// for an `always` decision, and that stamp is what stops
@@ -408,6 +414,28 @@ type Store interface {
 // query bodies directly, so there is exactly one implementation of each query.
 type PG struct {
 	Pool *pgxpool.Pool
+
+	// Now is THE APP CLOCK, and it exists so a test can run one that disagrees
+	// with the database's. Nil means time.Now, which is what production wires.
+	//
+	// Every stamp this store writes belongs on the DATABASE's clock (the column
+	// it will be compared against is stamped by now()), so what the app clock is
+	// used for is measuring an ELAPSED TIME — a difference of two readings of
+	// this one clock, which carries no skew — that the statement then subtracts
+	// from the database's own now(). See db.AppClockAgeSQL. A fast clock is
+	// therefore only observable through a seam like this one, exactly as
+	// pgSessionRevocations.now is in wardynd.
+	Now func() time.Time
+}
+
+// now reads the app clock. BOTH readings that make an age must come from here:
+// that is what makes the difference a duration rather than two clocks subtracted
+// from each other.
+func (s PG) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
 }
 
 // NewPG returns a PG Store over pool.

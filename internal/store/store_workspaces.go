@@ -184,30 +184,41 @@ func (s PG) ListWorkspaces(ctx context.Context) ([]types.Workspace, error) {
 // ApprovedEgress itself when the composition changed — the persisted profile
 // and egress approvals were reviewed against the OLD sources.
 //
-// egress_edited_at is CARRIED, not stamped. Migration 0055 rules out stamping
-// here (a full-column write on an unrelated composition edit would suppress the
-// boot heal for a decision nobody undid), and a pass-through is not a stamp: an
-// edit that leaves the field alone rewrites the value it read. What it fixes is
-// the opposite failure — omitting the column meant this, the THIRD durable
-// writer of approved_egress, could CLEAR the allowlist while the stamp stayed
-// where the last scoped setter left it, so ReconcileWorkspaceEgressDecisions
-// re-widened the list on the next restart. handleUpdateWorkspace now sets the
-// field when it clears; this is what persists it.
-func (s PG) UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types.Workspace) (types.Workspace, error) {
+// egress_edited_at is CARRIED, not stamped — UNLESS stampEgressEdit says this
+// write is itself the operator action the column records. Migration 0055 rules
+// out stamping unconditionally (a full-column write on an unrelated composition
+// edit would suppress the boot heal for a decision nobody undid), and a
+// pass-through is not a stamp: an edit that leaves the field alone rewrites the
+// value it read. What the pass-through fixes is the opposite failure — omitting
+// the column meant this, the THIRD durable writer of approved_egress, could
+// CLEAR the allowlist while the stamp stayed where the last scoped setter left
+// it, so ReconcileWorkspaceEgressDecisions re-widened the list on the next
+// restart.
+//
+// THE STAMP IS now(), FROM THE DATABASE, for the reason the two scoped setters
+// stamp that way: the value's whole job is to be compared against
+// approvals.decided_at in ReconcileWorkspaceEgressDecisions, and a value from
+// wardynd's clock puts a skew straight into that inequality — in the fail-OPEN
+// direction when the daemon runs behind, which re-applies a decision the
+// operator had already undone. handleUpdateWorkspace used to stamp it in Go;
+// it now passes the flag and the column is written here, on one clock (B8-F3).
+func (s PG) UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types.Workspace, stampEgressEdit bool) (types.Workspace, error) {
 	q := `
 		UPDATE workspaces
 		SET name=$1, sources=$2, base_image=$3, requirements=$4,
 			profile=$5, image_ref=$6, built_profile_hash=$7, approved_egress=$8,
 			active_run_id=$9, status=$10, record_results=$11, llm_cred=$12,
-			attachments=$13, base_image_id=$14, egress_edited_at=$15, updated_at=now()
-		WHERE id=$16
+			attachments=$13, base_image_id=$14,
+			egress_edited_at=CASE WHEN $15::bool THEN now() ELSE $16::timestamptz END,
+			updated_at=now()
+		WHERE id=$17
 		RETURNING ` + wsCols
 	return s.hydratedScan(ctx, s.Pool.QueryRow(ctx, q,
 		ws.Name, workspaceSourcesParam(ws.Sources), workspaceBaseImageParam(ws.BaseImage),
 		workspaceRequirementsParam(ws.Requirements), workspaceProfileParam(ws.Profile), ws.ImageRef,
 		ws.BuiltProfileHash, workspaceApprovedParam(ws.ApprovedEgress), ws.ActiveRunID,
 		string(ws.Status), workspaceProfileParam(ws.RecordResults), workspaceLLMCredParam(ws.LLMCred),
-		workspaceAttachmentsParam(ws.Attachments), ws.BaseImageID, ws.EgressEditedAt, id,
+		workspaceAttachmentsParam(ws.Attachments), ws.BaseImageID, stampEgressEdit, ws.EgressEditedAt, id,
 	))
 }
 

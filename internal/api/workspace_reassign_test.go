@@ -26,7 +26,7 @@ import (
 // UpdateWorkspace is a stub on authzStore (the ownership matrix never needs it);
 // the no-impersonation sweep below does, because workspace.update is one of the
 // events that has to carry the marker.
-func (s *ownerStore) UpdateWorkspace(_ context.Context, id uuid.UUID, ws types.Workspace) (types.Workspace, error) {
+func (s *ownerStore) UpdateWorkspace(_ context.Context, id uuid.UUID, ws types.Workspace, _ bool) (types.Workspace, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cur, ok := s.workspaces[id]

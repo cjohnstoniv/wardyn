@@ -1309,7 +1309,7 @@ func (s *authzStore) GetWorkspace(_ context.Context, id uuid.UUID) (types.Worksp
 	return ws, nil
 }
 func (s *authzStore) ListWorkspaces(context.Context) ([]types.Workspace, error) { return nil, nil }
-func (s *authzStore) UpdateWorkspace(context.Context, uuid.UUID, types.Workspace) (types.Workspace, error) {
+func (s *authzStore) UpdateWorkspace(context.Context, uuid.UUID, types.Workspace, bool) (types.Workspace, error) {
 	return types.Workspace{}, store.ErrNotFound
 }
 

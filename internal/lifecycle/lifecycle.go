@@ -91,7 +91,19 @@ type Store interface {
 	// ListRunningWithPolicy returns all runs currently in state RUNNING
 	// together with the auto_stop_after_sec value from their attached policy
 	// (0 when no policy is attached or the policy field is unset).
-	ListRunningWithPolicy(ctx context.Context) ([]RunSummary, error)
+	//
+	// It ALSO returns the store's own clock, read once for the whole scan, and
+	// the reaper measures idleness against that rather than against its own.
+	// RunSummary.UpdatedAt is a Postgres-stamped column, so a wardynd clock
+	// running ahead of the database added its skew directly to every measured
+	// age — and TouchDebounce's 30 seconds is the entire margin, so a few
+	// minutes of skew stops an actively-attached run and revokes its
+	// credentials, while skew the other way never reaps at all (B8-F2).
+	//
+	// A ZERO time means "this store has no clock of its own" — every in-memory
+	// double — and the reaper falls back to its own, which is what those doubles
+	// were always measuring against.
+	ListRunningWithPolicy(ctx context.Context) ([]RunSummary, time.Time, error)
 }
 
 // StopOutcome is what StopRun reports back to the Reaper beyond the raw error.
@@ -245,13 +257,20 @@ func (r *Reaper) Tick(ctx context.Context) {
 
 // reap is the tick body — the scan itself, with no locking of its own.
 func (r *Reaper) reap(ctx context.Context) {
-	runs, err := r.store.ListRunningWithPolicy(ctx)
+	runs, storeNow, err := r.store.ListRunningWithPolicy(ctx)
 	if err != nil {
 		r.logger.ErrorContext(ctx, "lifecycle: list running runs failed", "err", err)
 		return
 	}
 
-	now := r.now()
+	// ONE CLOCK FOR THE AGE: the store's, because UpdatedAt came from it. A zero
+	// answer is a store with no clock (the in-memory doubles), not a store that
+	// failed — those rows were stamped from r.now() too, so r.now() is the
+	// comparable reading for them.
+	now := storeNow
+	if now.IsZero() {
+		now = r.now()
+	}
 
 	for _, run := range runs {
 		// Auto-stop disabled / never-reap opt-out (finding #2): a policy

@@ -534,29 +534,39 @@ type lifecycleStore struct {
 
 var _ lifecycle.Store = lifecycleStore{}
 
-func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.RunSummary, error) {
+func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.RunSummary, time.Time, error) {
+	// now() COMES BACK WITH THE ROWS, and it is the same instant on every one of
+	// them: now() is the transaction's start time, so a single statement reads
+	// one clock for the whole scan. updated_at is stamped by that same clock, so
+	// the reaper's subtraction is finally two readings of ONE clock — wardynd's
+	// own was the skew that stopped actively-attached runs (B8-F2).
+	//
+	// An EMPTY scan returns the zero time, which the reaper reads as "no clock":
+	// there are no rows to measure, so there is nothing for it to be wrong about,
+	// and a second round trip to fetch a clock nobody would use is not worth it.
 	const q = `
-		SELECT id, updated_at, auto_stop_after_sec
+		SELECT id, updated_at, auto_stop_after_sec, now()
 		FROM agent_runs
 		WHERE state = $1`
 	rows, err := l.pool.Query(ctx, q, string(types.RunRunning))
 	if err != nil {
-		return nil, fmt.Errorf("wardynd: list running with policy: %w", err)
+		return nil, time.Time{}, fmt.Errorf("wardynd: list running with policy: %w", err)
 	}
 	defer rows.Close()
 
 	var out []lifecycle.RunSummary
+	var dbNow time.Time
 	for rows.Next() {
 		var s lifecycle.RunSummary
-		if err := rows.Scan(&s.ID, &s.UpdatedAt, &s.PolicyAutoStopAfterSec); err != nil {
-			return nil, fmt.Errorf("wardynd: scan run summary: %w", err)
+		if err := rows.Scan(&s.ID, &s.UpdatedAt, &s.PolicyAutoStopAfterSec, &dbNow); err != nil {
+			return nil, time.Time{}, fmt.Errorf("wardynd: scan run summary: %w", err)
 		}
 		out = append(out, s)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("wardynd: iterate run summaries: %w", err)
+		return nil, time.Time{}, fmt.Errorf("wardynd: iterate run summaries: %w", err)
 	}
-	return out, nil
+	return out, dbNow, nil
 }
 
 // reapTickLock is the reaper's single-flight gate: a Postgres try-advisory-lock
