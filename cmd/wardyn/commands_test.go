@@ -457,7 +457,7 @@ func TestRunCmd_WaitInteractiveConflict(t *testing.T) {
 
 // B12a-help-text: --interactive's own usage string said "auto_stop_after_sec
 // < 0" for the never-reap escape hatch, but the reaper's actual predicate
-// (internal/lifecycle/lifecycle.go:263, `run.PolicyAutoStopAfterSec <= 0`)
+// (the reaper's `run.PolicyAutoStopAfterSec <= 0` predicate in internal/lifecycle)
 // and docs/TRY-IT.md both use `<= 0` — `0` is ALSO never-reaped, not just a
 // negative value.
 func TestRunCmd_InteractiveHelpMatchesTheReaperPredicate(t *testing.T) {
@@ -466,7 +466,7 @@ func TestRunCmd_InteractiveHelpMatchesTheReaperPredicate(t *testing.T) {
 		t.Fatal("run has no --interactive flag")
 	}
 	if !strings.Contains(f.Usage, "auto_stop_after_sec <= 0") {
-		t.Errorf("--interactive usage = %q, want it to say auto_stop_after_sec <= 0 (matching lifecycle.go:263)", f.Usage)
+		t.Errorf("--interactive usage = %q, want it to say auto_stop_after_sec <= 0 (matching the reaper's `run.PolicyAutoStopAfterSec <= 0` predicate in internal/lifecycle)", f.Usage)
 	}
 }
 
