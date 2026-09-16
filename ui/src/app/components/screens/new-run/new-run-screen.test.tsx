@@ -314,6 +314,24 @@ describe("NewRunScreen — the form matches the run mode", () => {
     expect(screen.queryByLabelText("Task")).not.toBeInTheDocument();
   });
 
+  // …and the DEFAULT of that radiogroup is the AGENT, not the shell. Pinned
+  // because a live walk now depends on it: ui/e2e/live/sso-member.spec.ts
+  // launches a run expecting claude-code to make a model call at boot, and it
+  // does not touch this control. If the default ever flips to "Terminal" that
+  // run comes up as an idle shell, calls nothing, and the walk fails 180
+  // seconds later as a timeout on an assertion about AWS — which is the most
+  // expensive possible place to discover a default changed.
+  it("defaults an interactive run to launching the agent, not a bare shell", async () => {
+    renderScreen();
+    const group = await screen.findByRole("radiogroup", { name: "Start with" });
+    const agent = within(group).getByRole("radio", { name: /launch it in the workspace$/ });
+    expect(agent).toBeChecked();
+    expect(within(group).getByRole("radio", { name: /^Terminal/ })).not.toBeChecked();
+    // The agent arm is the one carrying the boot prompt (id nr-seed), which is
+    // what the walk fills.
+    expect(screen.getByLabelText(/^Initial prompt/)).toBeInTheDocument();
+  });
+
   it("asks an autonomous run for a task, and drops the startup choice", async () => {
     renderScreen();
     await user.click(await screen.findByRole("radio", { name: /^Autonomous/ }));

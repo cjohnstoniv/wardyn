@@ -137,16 +137,22 @@ function seen(): { account_id: string; role_name: string; bedrock_calls: number;
 async function putRoster(request: APIRequestContext): Promise<void> {
   const res = await request.put("/api/v1/agent-providers", {
     headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, "Content-Type": "application/json" },
+    // `agents` is a LIST whose elements carry `id` (types.AgentProviders), and
+    // handlePutAgentProviders decodes STRICTLY — an object keyed by agent id is
+    // a 400, which on the walk's first assertion means nothing after it runs.
+    // internal/api/agent_providers_walk_shape_test.go pins this body's shape
+    // from the Go side so the next change reds there, not on a cluster.
     data: {
-      agents: {
-        "claude-code": {
+      agents: [
+        {
+          id: "claude-code",
           mechanism: "bedrock_sso",
           credential_source: "per_user",
           sso_start_url: SSO_START_URL,
           sso_account_id: PIN_ACCOUNT,
           sso_role_name: PIN_ROLE,
         },
-      },
+      ],
     },
   });
   expect(res.status(), `PUT /agent-providers: ${await res.text()}`).toBe(200);
@@ -244,7 +250,20 @@ test("the member's run gets the member's PINNED identity, and something spends i
 
   await page.goto("/runs/new");
   await page.getByRole("combobox", { name: "Title" }).fill("bedrock via my own AWS SSO session");
-  await page.getByRole("radio", { name: /^Terminal/ }).click();
+
+  // LEAVE "Start with" ALONE. Its default is already the AGENT option
+  // (wizard-types.ts's interactiveStart: "agent"; pinned hermetically by
+  // new-run-screen.test.tsx), and the earlier version of this spec clicked the
+  // "Terminal — a shell in the workspace dir" radio, which switched the run to
+  // an IDLE SHELL. An idle shell calls no model: materialize_aws_sso_config
+  // writes ~/.aws and stops, so GetRoleCredentials never fires and the Bedrock
+  // stub is never hit — and the two assertions below could only ever time out,
+  // 180 seconds each, looking like the fake being down.
+  //
+  // The initial prompt is what makes claude-code actually TALK at boot, in the
+  // session we attach to. It is the whole point of the run: the credential has
+  // to be SPENT, not merely minted.
+  await page.locator("#nr-seed").fill("Reply with the single word: ready.");
   await page.getByRole("button", { name: /^Launch/ }).click();
   await expect(page.locator(".xterm-screen").first()).toBeVisible({ timeout: SANDBOX_UP });
 
@@ -274,15 +293,16 @@ test.fixme("sso-pin-dispatch: a pin changed after capture warns, refuses the run
   const res = await request.put("/api/v1/agent-providers", {
     headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, "Content-Type": "application/json" },
     data: {
-      agents: {
-        "claude-code": {
+      agents: [
+        {
+          id: "claude-code",
           mechanism: "bedrock_sso",
           credential_source: "per_user",
           sso_start_url: SSO_START_URL,
           sso_account_id: "333333333333",
           sso_role_name: "SomeOtherRole",
         },
-      },
+      ],
     },
   });
   expect(res.status()).toBe(200);
