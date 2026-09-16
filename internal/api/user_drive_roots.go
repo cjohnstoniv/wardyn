@@ -35,33 +35,6 @@ func (s *Server) userDriveHostRootCheck() types.UserDriveHostRootCheck {
 	return runner.UserDriveHostRootCheck(s.cfg.UserDriveHostRoots)
 }
 
-// userDriveHostRootsUsable reports whether ANY configured root could actually
-// hold a host_path drive — the honest form of "is host_path available here".
-//
-// IT ASKS THE WRITE BOUNDARY'S OWN CHECK, once per configured root, rather than
-// re-deriving what makes a root dead. That is the whole point: the three dead
-// shapes (a root of "/", a root under a denied bind prefix, a root that does not
-// resolve on this host) are UserDriveHostRootCheck's rules, and a second copy
-// here would be a second place for them to drift — the same argument the ceiling
-// hook itself makes about living in one place. A root is usable exactly when the
-// deployment would accept a drive rooted AT it, which is the ordinary shape (the
-// ceiling names the share's mount point and so does the drive).
-//
-// EMPTY ROOTS ANSWER false, unchanged: the loop does not run.
-//
-// The cost is one ValidateMountSource plus one EvalSymlinks per configured root
-// — a handful of stat calls on the admin screen's own read, bounded by the
-// operator's env var and not by anything in the database.
-func (s *Server) userDriveHostRootsUsable() bool {
-	check := s.userDriveHostRootCheck()
-	for _, root := range s.cfg.UserDriveHostRoots {
-		if check(root) == nil {
-			return true
-		}
-	}
-	return false
-}
-
 // driveHostRootNesting is the FOURTH gate, and the only one that has to look at
 // the other ROWS: a host_path drive whose host_root sits inside — or contains —
 // another host_path drive's host_root is refused, 422, naming the other drive.
@@ -128,14 +101,14 @@ func (s *Server) driveHostRootNesting(r *http.Request, d types.UserDrive) (int, 
 		// on exactly the deployment whose database is unhappy.
 		return http.StatusInternalServerError, "list user drives: " + err.Error()
 	}
-	mineReal := driveRootReal(d.HostRoot)
+	mineReal := s.driveRootRealWithin(r.Context(), d.HostRoot)
 	for _, other := range drives {
 		// A row is not its own ancestor: a PUT that re-saves a drive unchanged
 		// must not start refusing itself.
 		if other.ID == d.ID || other.Backend != types.DriveBackendHostPath || other.HostRoot == "" {
 			continue
 		}
-		otherReal := driveRootReal(other.HostRoot)
+		otherReal := s.driveRootRealWithin(r.Context(), other.HostRoot)
 		switch {
 		case driveRootInside(d.HostRoot, mineReal, other.HostRoot, otherReal):
 			return http.StatusUnprocessableEntity, fmt.Sprintf(

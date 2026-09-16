@@ -97,7 +97,7 @@ func (s *Server) mountUserDriveRoutes(operatorOnly chi.Router) {
 //     the first two at boot, and every one of them still counted as
 //     "configured": the console then OFFERED host_path and the save 422'd,
 //     which is the exact outcome this field exists to prevent. Asked instead
-//     through userDriveHostRootsUsable, which is the write boundary's OWN
+//     through userDriveHostRootsUsableWithin, which is the write boundary's OWN
 //     predicate rather than a second copy of the dead-root rules.
 //
 //   - RunnerTarget is which substrate this deployment dispatches to, so the
@@ -202,7 +202,7 @@ func (s *Server) handleGetUserDrives(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, userDrivesResponse{
 		Drives:              drives,
 		Grants:              grants,
-		HostRootsConfigured: s.userDriveHostRootsUsable(),
+		HostRootsConfigured: s.userDriveHostRootsUsableWithin(r.Context()),
 		RunnerTarget:        s.cfg.RunnerTarget,
 		Disabled:            provider.Disabled,
 		GrantTotal:          total,
@@ -355,8 +355,12 @@ func (s *Server) decodeUserDriveRequest(w http.ResponseWriter, r *http.Request, 
 		return types.UserDrive{}, code, msg
 	}
 	if d.Backend == types.DriveBackendHostPath {
-		if err := s.userDriveHostRootCheck()(d.HostRoot); err != nil {
-			return types.UserDrive{}, http.StatusUnprocessableEntity, "invalid drive: " + err.Error()
+		// BOUNDED (B5-F1): the same ceiling rules, asked inside driveShareProbe,
+		// so a blackholed share answers with a decided 503 instead of holding
+		// the request — and a kernel thread — for as long as the mount takes.
+		if err := s.userDriveHostRootCheckBounded(r.Context())(d.HostRoot); err != nil {
+			code, msg := driveRootCeilingRefusal(d.HostRoot, err)
+			return types.UserDrive{}, code, msg
 		}
 		if code, msg := s.driveHostRootNesting(r, d); msg != "" {
 			return types.UserDrive{}, code, msg

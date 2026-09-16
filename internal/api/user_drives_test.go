@@ -1139,7 +1139,7 @@ func TestGetUserDrivesIsTheWholePicture(t *testing.T) {
 
 	// A REAL root, not a spelled one. The field promises "a host_path drive can
 	// be authored here", which is why it is asked through the write boundary's
-	// own ceiling check (userDriveHostRootsUsable) rather than through
+	// own ceiling check (userDriveHostRootsUsableWithin) rather than through
 	// len(roots): "/srv/homes" is not on this host, so a deployment configured
 	// that way OFFERS host_path in the console and 422s every save. Asserting
 	// the old len(roots) answer here would be asserting that offer-and-refuse.

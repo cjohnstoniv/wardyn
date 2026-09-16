@@ -5,8 +5,11 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -234,5 +237,82 @@ func TestMeAnswersFromMemoryWhileAShareProbeIsStranded(t *testing.T) {
 	}
 	if w.Code != 422 {
 		t.Errorf("launch = %d, want 422", w.Code)
+	}
+}
+
+// TestDriveAdminDoorsAnswerFromMemoryWhileARootProbeIsStranded is B5-F1: the
+// member doors have been bounded since F295, and the ADMIN doors over the same
+// shares were not.
+//
+// GET /drives asks whether any configured host root could hold a drive, and the
+// drive WRITE asks the ceiling about the root it was handed. Both questions are
+// EvalSymlinks/stat on a path the operator mounted, both ran unbounded, and the
+// server sets no WriteTimeout — so a hard-mounted NAS that stops answering hung
+// every admin read and every drive write for as long as the mount took, leaking
+// a kernel thread per attempt. The member path bounds exactly these syscalls,
+// under the key this test plants ("root:"+root), so one hung share is one strand
+// whoever asks about it.
+func TestDriveAdminDoorsAnswerFromMemoryWhileARootProbeIsStranded(t *testing.T) {
+	root := t.TempDir()
+	body := `{"name":"Shares","backend":"host_path","home_template":"sub","host_root":"` + root + `"}`
+
+	// THE CONTROL FIRST: a live root is usable and a drive rooted at it is
+	// created. A test that only asserted the withheld case would pass on doors
+	// that withhold everything.
+	srv, _ := driveAdminServer(newDriveCRUDStore(), []string{root})
+	w := driveCall(t, srv.handleGetUserDrives, http.MethodGet, "/api/v1/drives", "", nil)
+	var got struct {
+		HostRootsConfigured bool `json:"host_roots_configured"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !got.HostRootsConfigured {
+		t.Fatalf("control: host_roots_configured = false for a live root")
+	}
+	if w := driveCall(t, srv.handleCreateUserDrive, http.MethodPost, "/api/v1/drives", body, nil); w.Code != http.StatusCreated {
+		t.Fatalf("control: create = %d, want 201: %s", w.Code, w.Body.String())
+	}
+
+	// The state a hung mount leaves behind: one probe on this subject, started
+	// longer ago than the bound, still not back.
+	key := "root:" + root
+	driveShareProbes.Store(key, time.Now().Add(-time.Minute))
+	t.Cleanup(func() { driveShareProbes.Delete(key) })
+
+	srv, _ = driveAdminServer(newDriveCRUDStore(), []string{root})
+
+	start := time.Now()
+	w = driveCall(t, srv.handleGetUserDrives, http.MethodGet, "/api/v1/drives", "", nil)
+	if elapsed := time.Since(start); elapsed >= driveShareProbeTimeout {
+		t.Errorf("GET /drives took %v against a root with an outstanding probe — the admin screen's own read must "+
+			"degrade rather than block on a mount that is not answering, on a server with no WriteTimeout", elapsed)
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /drives = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got.HostRootsConfigured {
+		t.Errorf("host_roots_configured = true for a root whose probe is outstanding: the console enables the " +
+			"host_path option on this bit, and the write door answers 503 for that same root — the offer-and-refuse " +
+			"this field exists to prevent")
+	}
+
+	// AND THE WRITE DOOR DECIDES, rather than hanging: 503, because nothing is
+	// wrong with the request and the remedy is the operator's mount.
+	start = time.Now()
+	w = driveCall(t, srv.handleCreateUserDrive, http.MethodPost, "/api/v1/drives", body, nil)
+	if elapsed := time.Since(start); elapsed >= driveShareProbeTimeout {
+		t.Errorf("POST /drives took %v behind an already-overdue probe, want an immediate decided answer", elapsed)
+	}
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("POST /drives = %d, want 503 — a ceiling that could not be evaluated is a fact about the "+
+			"deployment, not a refusal of this drive: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), root) {
+		t.Errorf("the 503 body does not name the root that did not answer (%s); every /drives route is "+
+			"operator-only, and the admin's remedy is that mount: %s", root, w.Body.String())
 	}
 }
