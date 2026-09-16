@@ -72,8 +72,8 @@ import { LiveApprovals, isHeld } from "../wardyn/live-approvals";
 import { ReasonDialog } from "../wardyn/reason-dialog";
 import { useOperator, usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import {
-  OPERATOR_ONLY_REASON,
   RUN_COCKPIT,
+  SECURITY_ONLY_REASON,
   VIEWER_APPROVAL_BLOCKS_NOTE,
   approvalScopeBadge,
 } from "../wardyn/copy";
@@ -669,7 +669,7 @@ function ApprovalsTab({
         const pending = a.state === "PENDING";
         // Owner-scoped page (getRunAuthorized) — canDecideApproval only needs
         // the KIND question: egress_domain is a member act on an owned run,
-        // credential/tool_call stay admin-only regardless (see its doc).
+        // credential/tool_call stay admin-OR-security-admin-only (see its doc).
         const canDecide = canDecideApproval(securityOperator, a.kind);
         const scopeBadge = approvalScopeBadge(a);
         return (
@@ -700,7 +700,12 @@ function ApprovalsTab({
             )}
             {pending && (
               <div className="mt-3 flex items-center justify-end gap-2 border-t border-border pt-3">
-                {!canDecide && <Chip tone="neutral">{OPERATOR_ONLY_REASON}</Chip>}
+                {/* Gated on the SECURITY tier (canDecideApproval reads
+                    securityOperator, admin-OR-security-admin), not plain
+                    isOperator — SECURITY_ONLY_REASON says so; OPERATOR_ONLY_
+                    REASON here would undersell who this control actually
+                    admits. */}
+                {!canDecide && <Chip tone="neutral">{SECURITY_ONLY_REASON}</Chip>}
                 <Button
                   variant="outline"
                   size="sm"

@@ -83,7 +83,7 @@ vi.mock("../../lib/api/health", () => ({
 vi.mock("sonner", () => ({ toast: { warning: vi.fn(), error: vi.fn(), success: vi.fn() } }));
 
 import { RunDetailScreen } from "./run-detail";
-import { RUN_COCKPIT } from "../wardyn/copy";
+import { RUN_COCKPIT, SECURITY_ONLY_REASON } from "../wardyn/copy";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { sessionOptionLabel } from "./run-detail/recording-tab-copy";
 import { toast } from "sonner";
@@ -679,6 +679,62 @@ describe("RunDetailScreen — its approvals are scoped server-side", () => {
     const tab = await screen.findByRole("tab", { name: /approvals/i });
     expect(tab).toHaveTextContent("1");
     expect(listApprovalsMock).toHaveBeenCalledWith("", "run-1");
+  });
+});
+
+// ui-member-cluster review sweep: canDecideApproval on this tab reads
+// securityOperator (the SECURITY tier — admin OR security admin,
+// authorizeMemberDecision's early return), not plain isOperator — so the
+// refusal chip must name SECURITY_ONLY_REASON, not OPERATOR_ONLY_REASON,
+// which undersells who the gate actually admits.
+describe("RunDetailScreen — the Approvals tab's decision gate names the security tier, not plain admin", () => {
+  const toolCallApproval = {
+    id: "a1",
+    run_id: "run-1",
+    kind: "tool_call",
+    state: "PENDING",
+    requested_at: new Date().toISOString(),
+    requested_scope: { tool: "x" },
+  };
+
+  it("a security_admin (non-operator) decides a tool_call — no refusal chip at all", async () => {
+    getRunMock.mockResolvedValue(RUN);
+    listApprovalsMock.mockResolvedValue([toolCallApproval]);
+    render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <OperatorProvider operator={false} securityOperator={true} principal="sec-admin">
+          <Routes>
+            <Route path="/runs/:id" element={<RunDetailScreen />} />
+          </Routes>
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /approvals/i }));
+
+    expect(await screen.findByRole("button", { name: "Deny" })).not.toBeDisabled();
+    expect(screen.queryByText(SECURITY_ONLY_REASON)).not.toBeInTheDocument();
+  });
+
+  // Neg: a plain member (neither operator nor security_admin) on the same
+  // tool_call kind still gets refused — now naming BOTH roles that would work.
+  it("neg: a plain member still gets refused, with the tier's own reason", async () => {
+    getRunMock.mockResolvedValue(RUN);
+    listApprovalsMock.mockResolvedValue([toolCallApproval]);
+    render(
+      <MemoryRouter initialEntries={["/runs/run-1"]}>
+        <OperatorProvider operator={false} securityOperator={false} principal="someone-else">
+          <Routes>
+            <Route path="/runs/:id" element={<RunDetailScreen />} />
+          </Routes>
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    await user.click(await screen.findByRole("tab", { name: /approvals/i }));
+
+    expect(await screen.findByText(SECURITY_ONLY_REASON)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Deny" })).toBeDisabled();
   });
 });
 
