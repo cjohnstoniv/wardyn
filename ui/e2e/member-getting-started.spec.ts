@@ -155,6 +155,53 @@ test.describe("member Getting Started (mocked /me role)", () => {
     await expect.poll(() => ticketPosts, { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
     await expect(page.getByText(/requires the admin role/i)).toHaveCount(0);
   });
+
+  // member-cold-load lane (plan P3, absorbs F3-F7): a COLD document load of
+  // /setup (bookmark, reload, the SSO callback's return) used to mount
+  // SetupScreen — the ADMIN orchestrator — under the role context's fail-open
+  // "admin" default before /me answered, firing reloadSiteConfig/loadSecrets/
+  // loadProviderCount against admin-only endpoints. A DIRECT page.goto (not
+  // navToRoute's client-side pushState, which never re-triggers the race) is
+  // required to reproduce the cold-load window at all.
+  //
+  // GET /api/v1/site-config and GET /api/v1/workspace-providers are
+  // unambiguous — no member surface ever calls either. GET /api/v1/secrets is
+  // NOT: secrets.ts's listSecrets() (the admin orchestrator's operator-wide
+  // read) and listSecretsMine() (MemberGettingStarted's own "Your model key"
+  // read) hit the IDENTICAL URL — the server tells the two apart by caller
+  // identity, not the request. So instead of a zero-count on that path (which
+  // would false-fail on the member's OWN legitimate read), this pins the
+  // request COUNT at exactly one: the leaked admin-orchestrator read this fix
+  // removes would have shown up as a second, earlier GET before role resolved.
+  test("a direct cold page.goto(\"/setup\") fires no admin-only reads", async ({ page }) => {
+    const requests: string[] = [];
+    page.on("request", (req) => requests.push(req.url()));
+
+    await page.goto("/setup");
+    await expect(page.getByRole("heading", { name: "What's set up for you" })).toBeVisible();
+    // Nothing else is still in flight from the mount race this pins — the
+    // settled member section heading above is itself proof the role resolved
+    // and GettingStarted committed to the member branch, but give any stray
+    // admin-only read a beat to land before counting.
+    await page.waitForLoadState("networkidle");
+
+    const isGet = (u: string, path: string) => {
+      try {
+        return new URL(u).pathname === path;
+      } catch {
+        return false;
+      }
+    };
+    expect(requests.filter((u) => isGet(u, "/api/v1/site-config"))).toEqual([]);
+    expect(requests.filter((u) => isGet(u, "/api/v1/workspace-providers"))).toEqual([]);
+    expect(requests.filter((u) => isGet(u, "/api/v1/secrets"))).toHaveLength(1);
+
+    // The admin welcome hero and the funnel's barrier-step heading — first
+    // paint never shows either, whichever of the two an admin cold load would
+    // have landed on.
+    await expect(page.getByText("Sandboxed. Governed. Self-hosted. Free.")).toHaveCount(0);
+    await expect(page.getByText("Pick your barrier")).toHaveCount(0);
+  });
 });
 
 // Sibling negative control: the SAME route, unspliced (the harness's real
@@ -190,6 +237,20 @@ test.describe("admin session at /setup (unmocked — negative control)", () => {
     for (const title of MEMBER_SECTION_TITLES) {
       await expect(page.getByRole("heading", { name: title })).toHaveCount(0);
     }
+  });
+
+  // Negative control for the member-cold-load fix above: an admin's cold
+  // /setup load is UNCHANGED — it still fires the admin-only site-config read
+  // (this suite's beforeEach seeds wardyn-onboarding-seen so the load lands
+  // straight on the funnel's barrier step, same as the sibling test above).
+  test("a plain admin cold page.goto(\"/setup\") still requests /api/v1/site-config", async ({ page }) => {
+    const requests: string[] = [];
+    page.on("request", (req) => requests.push(req.url()));
+
+    await page.goto("/setup");
+    await expect(page.getByRole("heading", { name: "Pick your barrier" })).toBeVisible();
+
+    expect(requests.some((u) => new URL(u).pathname === "/api/v1/site-config")).toBe(true);
   });
 });
 
