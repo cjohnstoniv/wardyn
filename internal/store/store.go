@@ -652,10 +652,28 @@ func (s PG) QueryRecentAuditEvents(ctx context.Context, limit int) ([]types.Audi
 // equals the given action, or ErrNotFound when none exists. Used by /healthz to
 // find the latest kernel.sensor.heartbeat that drives the eBPF ground-truth
 // health state (so the stream reports healthy only while beats are arriving).
+//
+// MOST RECENT BY `time`, PICKED OUT OF A seq-ORDERED WINDOW, and both halves are
+// deliberate:
+//
+//   - `seq DESC` is INSERTION order, and the audit spool replays at-least-once
+//     while keeping each event's original ev.Time. A beat spooled through a
+//     database blip therefore returns with the HIGHEST seq and an hours-old
+//     time, and /healthz — unauthenticated — publishes the eBPF sensor as
+//     degraded with a stale last_heartbeat while beats arrive normally (B8-F5).
+//
+//   - The window stays on `ORDER BY seq DESC`, which is the purpose-built
+//     (action, seq DESC) index from 0017, on a hot anonymous path. A plain
+//     `ORDER BY time DESC` would abandon it and sort the whole action's history
+//     on every probe. Twenty rows bound the disorder a spool pass can introduce
+//     (a drain rewrites the file after the pass, so a replay is a burst, not an
+//     unbounded tail) and cost one extra index-scan row per probe.
 func (s PG) LatestAuditEventByAction(ctx context.Context, action string) (types.AuditEvent, error) {
 	const q = `
-		SELECT ` + auditCols + `
-		FROM audit_events WHERE action=$1 ORDER BY seq DESC LIMIT 1`
+		SELECT ` + auditCols + ` FROM (
+			SELECT ` + auditCols + `, seq
+			FROM audit_events WHERE action=$1 ORDER BY seq DESC LIMIT 20
+		) recent ORDER BY time DESC, seq DESC LIMIT 1`
 	ev, err := scanAuditEvent(s.Pool.QueryRow(ctx, q, action))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.AuditEvent{}, ErrNotFound
