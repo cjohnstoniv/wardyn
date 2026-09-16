@@ -47,6 +47,10 @@ type Server struct {
 // injection credentials once (fail-closed on error) before returning.
 func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.Writer) (*Server, error) {
 	pol := CompilePolicy(cfg.Policy)
+	// Beside the compile, not inside it: CompilePolicy is a pure function with
+	// several callers (including one per evaluator construction), and this is a
+	// once-per-boot report about the policy this sidecar was actually dispatched.
+	warnDeadDomainEntries(ctx, cfg.Policy)
 
 	// Captured ONCE here (never per-request): the internal-host lift's
 	// own-subnet/control-plane exclusion (Proxy.onOwnSubnetOrControlPlane) needs
