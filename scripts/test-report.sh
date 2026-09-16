@@ -66,6 +66,14 @@ REQUIRE_PASS="${WARDYN_TEST_REPORT_REQUIRE_PASS:-}"
 if [ -z "$REQUIRE_PASS" ] && [ "$SUITE" = "pg" ] && [ -n "${WARDYN_TEST_PG:-}" ]; then
   REQUIRE_PASS='^TestPG_ProbeF11_'
 fi
+# X2-F16: the unit suite has its own falsifiable floor — the site_config_probe*
+# cases whose whole job is proving a real curl round-trip (each otherwise
+# `t.Skip("curl not on PATH")`). Unlike the pg floor above, curl is assumed
+# present on every lane that can build the module at all, so this applies
+# unconditionally rather than gated on a declared substrate.
+if [ -z "$REQUIRE_PASS" ] && [ "$SUITE" = "unit" ]; then
+  REQUIRE_PASS='^(TestF7_|TestRedirectProbe)'
+fi
 if [ -n "$REQUIRE_PASS" ] && [ -s "$OUT/test-output.json" ]; then
   # go test -json emits one event per line; a top-level test's outcome is the
   # event whose Test is the bare name (subtests carry a "/"). Extracted with
@@ -83,10 +91,15 @@ if [ -n "$REQUIRE_PASS" ] && [ -s "$OUT/test-output.json" ]; then
     echo ">> is a rename that silently removed the floor, not a suite with nothing to check." >&2
     GO_EXIT=1
   elif [ -n "$SKIPPED" ]; then
-    echo ">> SKIP FLOOR: these probes SKIPPED on a lane that declared its substrate:" >&2
+    echo ">> SKIP FLOOR: these probes SKIPPED:" >&2
     echo "$SKIPPED" | sed 's/^/>>   /' >&2
-    echo ">> A skip here reports \`ok\` and exit 0 while proving nothing. Give the lane a CREATE ROLE-capable" >&2
-    echo ">> role over a URL-form DSN, or set WARDYN_TEST_PG_SUPERUSER=1 to assert it." >&2
+    if [ "$SUITE" = "pg" ]; then
+      echo ">> A skip here reports \`ok\` and exit 0 while proving nothing. Give the lane a CREATE ROLE-capable" >&2
+      echo ">> role over a URL-form DSN, or set WARDYN_TEST_PG_SUPERUSER=1 to assert it." >&2
+    else
+      echo ">> A skip here reports \`ok\` and exit 0 while proving nothing. Put curl on PATH — these probes" >&2
+      echo ">> exist to prove a real curl round-trip and cannot do that skipped." >&2
+    fi
     GO_EXIT=1
   else
     echo ">> skip floor: $(echo "$PASSED" | wc -l | tr -d ' ') probe(s) matching /$REQUIRE_PASS/ passed"
