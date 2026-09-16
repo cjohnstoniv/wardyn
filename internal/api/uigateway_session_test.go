@@ -13,6 +13,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -62,6 +63,18 @@ func (r *uiRevocations) consulted() bool {
 }
 
 var _ oidc.SessionRevocations = (*uiRevocations)(nil)
+
+// errUIRevocations is the store that cannot answer — a Postgres outage, from
+// the gateway's point of view.
+type errUIRevocations struct{}
+
+func (errUIRevocations) IsSessionRevoked(context.Context, string, string, time.Time) (bool, error) {
+	return false, errors.New("revocation store unavailable")
+}
+func (errUIRevocations) RevokeSub(context.Context, string) error { return nil }
+func (errUIRevocations) RevokeAll(context.Context) error         { return nil }
+
+var _ oidc.SessionRevocations = errUIRevocations{}
 
 // closingBackend answers with Connection: close so net/http never pools the
 // relay connection — every request therefore reaches uiDial, which is where the
@@ -287,9 +300,30 @@ func TestUIGateway_RevokedSessionIsRefusedOnTheNextConnection(t *testing.T) {
 		t.Fatal("the relay opened a connection without consulting SessionRevocations")
 	}
 	rev.revoke()
-	if rec := uiGet(h, path, cookie); rec.Code != http.StatusForbidden {
+	rec := uiGet(h, path, cookie)
+	if rec.Code != http.StatusForbidden {
 		t.Fatalf("a revoked human's relay session still opened a connection: %d %s, want 403",
 			rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), uiSessionNoLongerAuthorizedMsg) {
+		t.Fatalf("refusal body %q does not carry the DRAFT string", rec.Body.String())
+	}
+}
+
+// TestUIGateway_UnverifiableRevocationFailsClosed: a revocation store that
+// cannot answer is the one case where continuing would serve the credential an
+// admin may have just cancelled. It is a retryable 503, not a 403 — the human
+// did nothing wrong — and never a quiet success.
+func TestUIGateway_UnverifiableRevocationFailsClosed(t *testing.T) {
+	h := newUIHarness(t, closingBackend("sandbox app"))
+	h.srv.cfg.SessionRevocations = errUIRevocations{}
+	cookie := h.openSession()
+	rec := uiGet(h, uiRelayPrefix(h.run.ID, "code")+"/ide", cookie)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unreadable revocation store: %d %s, want 503", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), uiSessionUnverifiableMsg) {
+		t.Fatalf("refusal body %q does not carry the DRAFT string", rec.Body.String())
 	}
 }
 
@@ -307,9 +341,13 @@ func TestUIGateway_OffboardedOwnerIsRefusedOnTheNextConnection(t *testing.T) {
 	handed := h.run
 	handed.CreatedBy = "bob"
 	h.store.putRun(handed)
-	if rec := uiGet(h, path, cookie); rec.Code != http.StatusForbidden {
+	rec := uiGet(h, path, cookie)
+	if rec.Code != http.StatusForbidden {
 		t.Fatalf("a member's relay session survived losing the run: %d %s, want 403",
 			rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), uiSessionNoLongerAuthorizedMsg) {
+		t.Fatalf("refusal body %q does not carry the DRAFT string", rec.Body.String())
 	}
 }
 

@@ -42,6 +42,23 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// ── DRAFT (M2 canon pending) ────────────────────────────────────────────────
+//
+// The two refusals a re-checked session can hit. Both are deliberately the
+// SAME sentence a stale cookie already gets ("open the app again from its run
+// page"), because the human's next action is identical and the difference —
+// demoted, off-boarded, revoked, or simply expired — is the audit log's to
+// record, not the refused browser's to learn.
+const (
+	// uiSessionNoLongerAuthorizedMsg is the 403 body when role/ownership or the
+	// revoke cutoff turns a still-valid cookie down at connect time.
+	uiSessionNoLongerAuthorizedMsg = "this UI session is no longer authorized for this run — open the app again from its run page"
+	// uiSessionUnverifiableMsg is the 503 body when the revocation store cannot
+	// answer. A retryable condition, said as one: the relay fails CLOSED rather
+	// than serving a credential an admin may have just cancelled.
+	uiSessionUnverifiableMsg = "could not verify this UI session; try again"
+)
+
 // defaultUISessionTTL bounds a relay session when the operator sets no knob.
 // Long enough for a working session in an editor (re-entering means minting
 // another ticket from the console), short enough that a cookie captured from a
@@ -206,8 +223,7 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 // lanes publish.
 func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, run types.AgentRun) error {
 	if sess.Role != oidc.RoleAdmin && run.CreatedBy != sess.Principal {
-		return uiFail(ctx, http.StatusForbidden,
-			"this UI session is no longer authorized for this run — open the app again from its run page")
+		return uiFail(ctx, http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
 	}
 	if s.cfg.SessionRevocations == nil {
 		return nil
@@ -224,11 +240,10 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 		// where continuing would serve the credential the admin just cancelled,
 		// and a relay connection is cheap to retry.
 		slog.ErrorContext(ctx, "wardynd: ui gateway revocation lookup failed", "run_id", sess.Run, "err", err)
-		return uiFail(ctx, http.StatusServiceUnavailable, "could not verify this UI session; try again")
+		return uiFail(ctx, http.StatusServiceUnavailable, uiSessionUnverifiableMsg)
 	}
 	if revoked {
-		return uiFail(ctx, http.StatusForbidden,
-			"this UI session is no longer authorized for this run — open the app again from its run page")
+		return uiFail(ctx, http.StatusForbidden, uiSessionNoLongerAuthorizedMsg)
 	}
 	return nil
 }
