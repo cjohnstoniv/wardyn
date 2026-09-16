@@ -36,6 +36,18 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT}"
 
+# ONE DAEMON EVERYWHERE, and BEFORE --down is parsed. `kind create/delete/get
+# clusters`, `kind load` and every `docker build` below read DOCKER_HOST, and so
+# does deploy/kind/sso/overlay.sh, which picks the daemon with this same helper.
+# Without it, on a dual-daemon box this script built the cluster on the default
+# daemon while `make kind-sso` looked for it on the wardyn daemon — and, worse,
+# `make kind-down` exited 0 having deleted NOTHING, leaving a stale node
+# container holding this quickstart's host ports so the next `kind create` died
+# with "ports are not available". On a single-daemon box the picker exports
+# nothing and this is a no-op.
+. "${ROOT}/scripts/lib/common.sh"
+wardyn_pick_docker_host
+
 # ── identity (single source of truth; `make kind-down` calls this script) ────
 CLUSTER="${WARDYN_QUICKSTART_CLUSTER:-wardyn-quickstart}"
 CONTEXT="kind-${CLUSTER}"
