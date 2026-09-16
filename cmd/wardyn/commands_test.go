@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -451,6 +452,21 @@ func TestRunCmd_WaitInteractiveConflict(t *testing.T) {
 	srv.mu.Unlock()
 	if n != 0 {
 		t.Errorf("server saw %d requests, want 0 (conflict must short-circuit)", n)
+	}
+}
+
+// B12a-help-text: --interactive's own usage string said "auto_stop_after_sec
+// < 0" for the never-reap escape hatch, but the reaper's actual predicate
+// (internal/lifecycle/lifecycle.go:263, `run.PolicyAutoStopAfterSec <= 0`)
+// and docs/TRY-IT.md both use `<= 0` — `0` is ALSO never-reaped, not just a
+// negative value.
+func TestRunCmd_InteractiveHelpMatchesTheReaperPredicate(t *testing.T) {
+	f := runCmd(nil).Flags().Lookup("interactive")
+	if f == nil {
+		t.Fatal("run has no --interactive flag")
+	}
+	if !strings.Contains(f.Usage, "auto_stop_after_sec <= 0") {
+		t.Errorf("--interactive usage = %q, want it to say auto_stop_after_sec <= 0 (matching lifecycle.go:263)", f.Usage)
 	}
 }
 
@@ -2099,6 +2115,55 @@ func TestBareGroupStillPrintsHelpAndSucceeds(t *testing.T) {
 			}
 			if !strings.Contains(out.String(), "Available Commands:") {
 				t.Errorf("`wardyn %s` printed no help block on stdout: %q", group, out.String())
+			}
+		})
+	}
+}
+
+// TestNoArgsLeavesRejectAnExtraArg is B12a-F8's tree-walk extension: it
+// covers LEAF commands (Runnable, no subcommands of their own) that declare
+// `Args: cobra.NoArgs` — e.g. `setup wall`/`setup vault` (previously
+// undeclared: a stray positional was silently accepted and ignored). Unlike
+// TestUnknownSubcommandUnderEveryGroupIsAnError's grouping commands, a leaf's
+// Args validator is NOT dead code (it IS Runnable, so cobra's execute()
+// reaches ValidateArgs before RunE) — this proves the declared contract
+// actually holds, tree-wide, so a future leaf that declares cobra.NoArgs
+// inherits the check for free.
+func TestNoArgsLeavesRejectAnExtraArg(t *testing.T) {
+	noArgsPtr := reflect.ValueOf(cobra.NoArgs).Pointer()
+
+	var leaves [][]string
+	var walk func(c *cobra.Command, path []string)
+	walk = func(c *cobra.Command, path []string) {
+		if !c.HasSubCommands() && c.Runnable() && c.Args != nil &&
+			reflect.ValueOf(c.Args).Pointer() == noArgsPtr {
+			leaves = append(leaves, path)
+		}
+		for _, sub := range c.Commands() {
+			if sub.Name() == "help" || sub.Name() == "completion" {
+				continue // cobra's own, not Wardyn's contract to hold
+			}
+			walk(sub, append(append([]string{}, path...), sub.Name()))
+		}
+	}
+	walk(rootCmd(), nil)
+
+	if len(leaves) < 10 {
+		t.Fatalf("walked %d cobra.NoArgs leaf commands (%v) — this guard is grading almost nothing", len(leaves), leaves)
+	}
+
+	for _, path := range leaves {
+		name := strings.Join(append([]string{"wardyn"}, path...), " ")
+		t.Run(name, func(t *testing.T) {
+			root := rootCmd()
+			root.SetArgs(append(append([]string{}, path...), "unexpected-arg"))
+			root.SetIn(strings.NewReader(""))
+			root.SetOut(&strings.Builder{})
+			root.SetErr(&strings.Builder{})
+
+			err := root.Execute()
+			if err == nil {
+				t.Fatalf("%s unexpected-arg exited 0 — cobra.NoArgs is declared but not enforced", name)
 			}
 		})
 	}

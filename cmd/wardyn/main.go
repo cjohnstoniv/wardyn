@@ -63,7 +63,7 @@ func dialHint(err error) string {
 	// (which boots with an admin token set) is recoverable without docs.
 	var ae *sdk.APIError
 	if errors.As(err, &ae) && ae.Status == http.StatusUnauthorized {
-		return "authenticate with --token or WARDYN_ADMIN_TOKEN (the compose quick-start prints its token in `wardyn setup`/deploy/compose/README.md)"
+		return "authenticate with --token or WARDYN_ADMIN_TOKEN/WARDYN_TOKEN (the compose quick-start prints its token in `wardyn setup`/deploy/compose/README.md)"
 	}
 	return ""
 }

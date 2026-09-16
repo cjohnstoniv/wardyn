@@ -118,6 +118,12 @@ func TestDialHint_RefusedVsAPI(t *testing.T) {
 	if hint := dialHint(fmt.Errorf("list: %w", &sdk.APIError{Status: 401})); !strings.Contains(hint, "WARDYN_ADMIN_TOKEN") {
 		t.Errorf("dialHint(wrapped 401) = %q, want the token hint via errors.As", hint)
 	}
+	// B12a-F7: PersistentPreRun resolves --token's default from
+	// WARDYN_ADMIN_TOKEN OR WARDYN_TOKEN (rootCmd below) — the 401 hint must
+	// name BOTH ways to supply one, not just the first.
+	if hint := dialHint(&sdk.APIError{Status: 401}); !strings.Contains(hint, "WARDYN_TOKEN") {
+		t.Errorf("dialHint(APIError 401) = %q, want it to also name WARDYN_TOKEN (the fallback env var)", hint)
+	}
 	// Wrapped transport errors must still resolve through errors.As.
 	if hint := dialHint(fmt.Errorf("poll: %w", err)); !strings.Contains(hint, "is wardynd running?") {
 		t.Errorf("dialHint(wrapped refused) = %q, want the recovery hint", hint)

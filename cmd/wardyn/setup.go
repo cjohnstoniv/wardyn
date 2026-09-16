@@ -145,6 +145,7 @@ func setupTierCmd(use string) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   use,
 		Short: fmt.Sprintf("Set up the %s tier", label),
+		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			e := detectDocker()
 			p := planWall(e)

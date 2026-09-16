@@ -7,11 +7,30 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/cjohnstoniv/wardyn/internal/setup"
 )
+
+// B12a-F8: `setup wall`/`setup vault` declared no Args validator, so cobra
+// defaulted to ArbitraryArgs — a stray positional (a typo'd flag value that
+// missed its `--`, e.g. `setup wall -y run`) was silently accepted and
+// ignored rather than refused, the same F009 shape the grouping commands
+// already hold (commands.go's subcommandGroup) but leaf commands need their
+// own Args, not subcommandGroup (which also disables Runnable).
+func TestSetupTierCmd_DeclaresNoArgs(t *testing.T) {
+	noArgsPtr := reflect.ValueOf(cobra.NoArgs).Pointer()
+	for _, use := range []string{"wall", "vault"} {
+		c := setupTierCmd(use)
+		if c.Args == nil || reflect.ValueOf(c.Args).Pointer() != noArgsPtr {
+			t.Errorf("setup %s has no cobra.NoArgs — a stray positional is silently ignored instead of refused", use)
+		}
+	}
+}
 
 func TestParseOSFamily(t *testing.T) {
 	cases := []struct{ id, idLike, want string }{

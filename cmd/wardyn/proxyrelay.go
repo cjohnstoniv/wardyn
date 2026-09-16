@@ -89,11 +89,14 @@ func setupProxyRelayCmd() *cobra.Command {
 			go func() { <-ctx.Done(); _ = ln.Close() }()
 
 			fmt.Fprintf(cmd.OutOrStdout(), "relaying %s -> %s (Ctrl-C to stop)\n", ln.Addr(), target)
-			// Printed next to the address it describes: an operator who started
-			// this from a script never reads --help, and the exposure the
-			// default carries used to live only in a source comment.
+			// On stderr, not stdout: a script piping stdout (to a log, to
+			// `tee`) otherwise captures a security WARNING as if it were routine
+			// informational output. Printed next to the address it describes: an
+			// operator who started this from a script never reads --help, and
+			// the exposure the default carries used to live only in a source
+			// comment.
 			if warn := relayExposureWarning(listenAddr); warn != "" {
-				fmt.Fprintln(cmd.OutOrStdout(), warn)
+				fmt.Fprintln(cmd.ErrOrStderr(), warn)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(),
 				"store this as the upstream-proxy secret, replacing <host-gateway> with the address your sandbox reaches this host on:\n"+

@@ -4,8 +4,11 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"io"
 	"net"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -162,5 +165,69 @@ func TestProxyRelay_WarnsOnANonLoopbackBind(t *testing.T) {
 		if tc.warn && !strings.Contains(got, "unauthenticated") {
 			t.Errorf("relayExposureWarning(%q) = %q, want it to name the relay as unauthenticated", tc.addr, got)
 		}
+	}
+}
+
+// B12a-F5: the running relay's exposure warning was printed to stdout, next
+// to informational lines a script piping stdout (to a log, to `tee`) would
+// otherwise capture cleanly — a WARNING has no business there. The listen
+// bind default (0.0.0.0) is untouched; only where this one line goes moves.
+func TestProxyRelay_WarningGoesToStderrNotStdout(t *testing.T) {
+	// Stand in for the corp proxy so the readiness probe succeeds.
+	upstream, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer upstream.Close()
+	go func() {
+		for {
+			c, err := upstream.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+	_, proxyPort, err := net.SplitHostPort(upstream.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Grab a free listen port up front (the command itself doesn't accept 0).
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listenPort := strconv.Itoa(probe.Addr().(*net.TCPAddr).Port)
+	probe.Close()
+
+	cmd := setupProxyRelayCmd()
+	var out, errOut bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetErr(&errOut)
+	ctx, cancel := context.WithCancel(context.Background())
+	cmd.SetContext(ctx)
+	cmd.SetArgs([]string{listenPort, proxyPort})
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Execute() }()
+	// Let the listener bind and print before stopping it.
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Execute: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("proxy-relay did not stop after ctx cancellation")
+	}
+
+	if strings.Contains(out.String(), "WARNING") {
+		t.Errorf("the exposure warning is on stdout:\n%s", out.String())
+	}
+	if !strings.Contains(errOut.String(), "WARNING") {
+		t.Errorf("the exposure warning never reached stderr:\nstdout:\n%s\nstderr:\n%s", out.String(), errOut.String())
 	}
 }
