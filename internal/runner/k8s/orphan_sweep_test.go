@@ -359,10 +359,6 @@ func TestSweepOrphanedSandboxes_NeverTouchesACanarysNetPol(t *testing.T) {
 	}
 }
 
-// secretsGVR reaches the fake's backing tracker directly, the lock-safe way to
-// read Secrets back while a "list secrets" reactor is refusing the clientset.
-var secretsGVR = schema.GroupVersionResource{Version: "v1", Resource: "secrets"}
-
 // forbidSecretList installs a reactor that answers every clientset "list
 // secrets" with the 403 a Role without the `list` verb produces — what an
 // operator running their own pre-0.7.4 Role (k8s.rbac.create=false) gets on
