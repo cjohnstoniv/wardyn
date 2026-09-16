@@ -12,7 +12,7 @@ import {
   mockSecurityAdminRole,
   navToRoute,
 } from "./fixtures";
-import { AGENTS, PROVIDERS } from "../src/app/lib/workspace-providers-copy";
+import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../src/app/lib/workspace-providers-copy";
 import { OPERATOR_ONLY_REASON } from "../src/app/components/wardyn/copy";
 import type { Page } from "@playwright/test";
 
@@ -226,6 +226,45 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     // Nothing was written: the stored document is byte-identical to before.
     const after = await (await page.request.get("/api/v1/workspace-providers", { headers: auth })).json();
     expect(after.git).toEqual(before.git);
+  });
+
+  // R-2 (blind review, LOW): F4-F3 keeps the draft MOUNTED on a 412 — the
+  // banner sits ABOVE the tabs rather than replacing them, with ONE control
+  // ("Discard mine and reload", never "Save over theirs"). No spec pinned
+  // this in a real browser before this pass.
+  test("a 412 keeps the edited textarea on screen, with exactly one banner control", async ({ page }) => {
+    await gotoProviders(page);
+    const row = page.getByTestId("provider-row-github");
+    await expect(row).toBeVisible();
+    await row.locator("textarea").fill("https://github.com/acme\nhttps://git.corp.example/team");
+
+    await page.route("**/api/v1/workspace-providers", async (route) => {
+      if (route.request().method() !== "PUT") return route.fallback();
+      await route.fulfill({
+        status: 412,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "providers changed since you loaded them — reload and retry" }),
+      });
+    });
+    await page.getByRole("button", { name: PROVIDERS.SAVE_CTA }).click();
+
+    await expect(page.getByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).toBeVisible();
+    // The draft is still mounted and readable — the edited line survives.
+    await expect(row.locator("textarea")).toHaveValue("https://github.com/acme\nhttps://git.corp.example/team");
+    // ONE control on the banner: Discard mine and reload. No "Save over
+    // theirs" — the corrected verdict refuses a second re-PUT arm.
+    await expect(page.getByRole("button", { name: PROVIDERS_DRAFT.DISCARD_AND_RELOAD })).toBeVisible();
+    await expect(page.getByText(/save over theirs/i)).toHaveCount(0);
+    // Save providers is STILL on screen — the draft is still there to save.
+    await expect(page.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeVisible();
+
+    // Clean up the route intercept and the in-memory draft edit before the
+    // next serial test reads the real, unmodified stored document.
+    await page.unroute("**/api/v1/workspace-providers");
+    await page.reload();
+    const reloaded = page.getByTestId("provider-row-github");
+    await expect(reloaded).toBeVisible();
+    await expect(reloaded.locator("textarea")).toHaveValue("https://github.com/acme");
   });
 
   test("the funnel step badge and Settings card both read the real enabled-provider count", async ({ page }) => {

@@ -4,7 +4,7 @@
  */
 
 import { test, expect, gotoConsole, mockMemberRole, navTo, navToRoute } from "./fixtures";
-import { CAPABILITY_KINDS, KIND, PERM } from "../src/app/lib/permissions-copy";
+import { CAPABILITY_KINDS, KIND, PERM, PERM_DRAFT } from "../src/app/lib/permissions-copy";
 import { SECURITY_ONLY_REASON } from "../src/app/components/wardyn/copy";
 
 // ---------------------------------------------------------------------------
@@ -246,6 +246,45 @@ test.describe("permissions — a snapshot, and a count, that never arrived", () 
     await expect(dialog.getByText(PERM.ENFORCE_ON_BODY_UNKNOWN)).toBeVisible();
     await expect(dialog.getByText(/\b0 members\b/)).toHaveCount(0);
     await dialog.getByRole("button", { name: "Cancel" }).click();
+  });
+});
+
+// R-2 (blind review, LOW): F4-F5's inert chip had no Playwright pin. A grant
+// markInertGrants flags Inert can't be produced through the write boundary
+// (canonicalGrantValue refuses or rewrites it on the way in), so this
+// route-intercepts GET /permissions — the same idiom the block above uses —
+// rather than writing one for real.
+test.describe("permissions — an inert grant renders neutral, never live (F4-F5)", () => {
+  test("a grant flagged inert renders the neutral Inert chip, never Allow/Deny", async ({ page }) => {
+    await page.route("**/api/v1/permissions", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          grants: [
+            {
+              id: "11111111-1111-1111-1111-111111111111",
+              subject_type: "user",
+              subject: "alice@corp.example",
+              capability: "secret",
+              value: "STRIPE_LIVE_KEY",
+              effect: "allow",
+              created_at: "2026-08-01T00:00:00Z",
+              created_by: "admin",
+              inert: true,
+            },
+          ],
+          enforcement: {},
+        }),
+      }),
+    );
+    await gotoConsole(page);
+    await navTo(page, "Permissions");
+
+    const table = page.getByRole("table");
+    await expect(table.getByText(PERM_DRAFT.INERT_CHIP)).toBeVisible();
+    await expect(table.getByText(PERM.EFFECT_ALLOW, { exact: true })).toHaveCount(0);
+    await expect(table.getByText(PERM.EFFECT_DENY, { exact: true })).toHaveCount(0);
   });
 });
 
