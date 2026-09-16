@@ -139,8 +139,9 @@ got="$(stat -c '%a' "${fresh_env}")"
 [ "${got}" = "600" ] || fail "ensure_env_file bore ${fresh_env} at mode ${got} under umask 022, want 600"
 grep -q '^WARDYN_ADMIN_TOKEN=demo-admin-token$' "${fresh_env}" || fail "ensure_env_file did not copy the example's content"
 
-# neg: an existing .env (the upgrade path) is left untouched — same mode,
-# same content — never re-copied over, never re-chmod'd.
+# neg: an existing .env (the upgrade path) keeps its content and its mode —
+# never re-copied over. Already 600, so an idempotent repair chmod (R-04, see
+# the next case) is a no-op here.
 upgrade_env="${dir}/.env-upgrade"
 printf 'WARDYN_AGE_KEY=AGE-SECRET-KEY-1PREEXISTING\n' > "${upgrade_env}"
 chmod 600 "${upgrade_env}"
@@ -149,6 +150,24 @@ got="$(stat -c '%a' "${upgrade_env}")"
 [ "${got}" = "600" ] || fail "ensure_env_file changed an existing .env's mode to ${got} on the upgrade path, want unchanged 600"
 grep -q '^WARDYN_AGE_KEY=AGE-SECRET-KEY-1PREEXISTING$' "${upgrade_env}" \
   || fail "ensure_env_file overwrote an existing .env's content on the upgrade path"
+
+# R-04: a PRE-EXISTING .env that is world-readable for some reason OTHER than
+# this script's own writes — hand-created, restored from a backup, written by
+# a tool that does not preserve mode, or left behind by a run that died mid-
+# creation before this fix existed — must still be REPAIRED to 600, not left
+# alone. The four `chmod 600` calls B12b-F2 removed from cmd_up ran
+# unconditionally on every `up` for exactly this reason; ensure_env_file's
+# `else` branch is what replaces them. ensure_age_key_or_die runs right after
+# this in cmd_up and writes WARDYN_AGE_KEY into the file, so a strict no-op on
+# the existing-file branch would leave that write landing in a 644 file.
+repair_env="${dir}/.env-repair"
+printf 'WARDYN_AGE_KEY=AGE-SECRET-KEY-1WORLDREADABLE\n' > "${repair_env}"
+chmod 644 "${repair_env}"
+( umask 022; ensure_env_file "${example_env}" "${repair_env}" )
+got="$(stat -c '%a' "${repair_env}")"
+[ "${got}" = "600" ] || fail "ensure_env_file left a pre-existing 644 .env at mode ${got}, want repaired to 600 (R-04 — the removed chmods were also a repair, not only a creation-time step)"
+grep -q '^WARDYN_AGE_KEY=AGE-SECRET-KEY-1WORLDREADABLE$' "${repair_env}" \
+  || fail "ensure_env_file's mode repair changed the existing .env's content"
 
 # 4) An explicit operator override wins outright and clears the auto marker.
 got="$(resolve_default_policy "${env_file}" "/my/custom.json" '{}' "1")"

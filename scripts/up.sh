@@ -332,14 +332,27 @@ wardynd_probe() {
 # that way until cmd_up's first `chmod 600`, well after ensure_age_key_or_die
 # had already written the secret into it. env_set (scripts/lib/common.sh) is
 # mode-preserving on its rewrite path, so once FILE is born 600 nothing later
-# in cmd_up needs to chmod it again — those calls are gone with this. A no-op
-# when FILE already exists (the upgrade path): existing mode and content are
-# left exactly alone.
+# in cmd_up's OWN writes needs to chmod it again — those four calls are gone
+# with this.
+#
+# R-04: when FILE already exists, this still REPAIRS its mode (idempotent
+# `chmod 600 … || true`) rather than leaving it alone. The four removed calls
+# ran unconditionally on every `up`, healing a FILE that was world-readable
+# for a reason that has nothing to do with this script's own writes — hand-
+# created, restored from a backup/archive, written by an editor or sync tool
+# that does not preserve mode, or left behind by a prior run that died between
+# an old `cp` and its `chmod`. ensure_age_key_or_die runs right after this and
+# writes WARDYN_AGE_KEY — the secret-store master key — into FILE, so a
+# strict no-op here would leave that write landing in a world-readable file
+# whenever FILE was already in that state for any of those reasons. Content is
+# still left exactly alone either way — only the mode is repaired.
 ensure_env_file() {
   _ef_example=$1 _ef_file=$2
   if [ ! -f "${_ef_file}" ]; then
     log "Creating ${_ef_file} from .env.example"
     install -m 600 "${_ef_example}" "${_ef_file}"
+  else
+    chmod 600 "${_ef_file}" 2>/dev/null || true
   fi
   unset _ef_example _ef_file
 }
