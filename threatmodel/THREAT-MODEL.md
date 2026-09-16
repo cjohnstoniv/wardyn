@@ -1757,8 +1757,12 @@ hiding them would repeat the failure mode we are designed to avoid.
     at a server that can record the device flow and hand back credentials of its
     choosing. Wardyn cannot distinguish that server from AWS — no SSO operation
     Wardyn uses is signed (all four are `authtype: none`), which is exactly why
-    the fake works. Treat both vars as production-forbidden, not
-    production-discouraged. See `internal/api/awssso_endpoint.go` and
+    the fake works. The same acknowledgement unlocks a second thing:
+    `WARDYN_BEDROCK_BASE_URL` may be plain `http://` (`ValidateBedrockBaseURL`,
+    `internal/api/llm_gateway.go`), so model-plane traffic — and, in bearer mode,
+    the credential riding it — travels in cleartext to whatever that URL names.
+    Treat both vars as production-forbidden, not production-discouraged. See
+    `internal/api/awssso_endpoint.go`, `internal/api/llm_gateway.go` and
     docs/ENV.md.
 
 ### Operator overrides that boot past a fail-closed gate
