@@ -90,37 +90,17 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return runner.Sandbox{}, err
 	}
 
-	// (2) Per-run Secret holding the proxy config JSON: pod specs are
-	// API-readable, secretKeyRef values are not.
-	proxyJSON, err := runner.BuildProxyConfig(spec.RunID, spec.ProxyConfig, runner.ProxyListenPort)
-	if err != nil {
-		return runner.Sandbox{}, fmt.Errorf("k8s: build proxy config: %w", err)
-	}
-	secretData := map[string][]byte{proxyConfigSecretKey: proxyJSON}
-	// The AGENT's credential-bearing environment rides the SAME per-run Secret,
-	// one entry per variable, for the reason stated above and on
-	// runner.SandboxSpec.SecretEnv; secretEnvVars gives the agent container a
-	// secretKeyRef to each of these instead of an inline EnvVar.Value. One
-	// Secret, not a second one: teardown already sweeps it by the run-id label,
-	// and a separate object would be one more thing the rollback path has to
-	// get right.
-	for k, v := range spec.SecretEnv {
-		secretData[secretEnvDataKey(k)] = []byte(v)
-	}
-	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      secretName(spec.RunID),
-			Namespace: ns,
-			Labels:    wardynLabels(spec.RunID, componentProxy, spec.Labels),
-		},
-		Type: corev1.SecretTypeOpaque,
-		Data: secretData,
-	}
-	if _, err := d.clientset.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
-		return runner.Sandbox{}, fmt.Errorf("k8s: create proxy config secret: %w", err)
-	}
-
-	// (3) BOTH NetworkPolicies BEFORE any pod exists.
+	// (2) BOTH NetworkPolicies, BEFORE any pod exists AND before the Secret.
+	//
+	// Before the SECRET is W6-S4: these two objects carry no credential, so the
+	// orphan sweep may list THEM (0.7.3's Role already withheld every Secret-body
+	// read verb, and `list` is one — RBAC cannot scope a list by label, so it
+	// returns every Secret in the namespace, which with an unset k8s.runsNamespace
+	// is the control plane's own). Creating them first, and deleting them LAST at
+	// teardown, makes the pair strictly outlive the Secret: any Secret that still
+	// exists has both of its NetworkPolicies still there to be found by. A Secret
+	// written first would survive a crash in the window before the first
+	// NetworkPolicy Create with nothing left to key on.
 	agentLabels := wardynLabels(spec.RunID, componentAgent, nil)
 	proxyLabels := wardynLabels(spec.RunID, componentProxy, nil)
 
@@ -169,6 +149,36 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 	if _, err := d.clientset.NetworkingV1().NetworkPolicies(ns).Create(ctx, proxyNetPol, metav1.CreateOptions{}); err != nil {
 		return fail(fmt.Errorf("k8s: create proxy NetworkPolicy: %w", err))
+	}
+
+	// (3) Per-run Secret holding the proxy config JSON: pod specs are
+	// API-readable, secretKeyRef values are not.
+	proxyJSON, err := runner.BuildProxyConfig(spec.RunID, spec.ProxyConfig, runner.ProxyListenPort)
+	if err != nil {
+		return fail(fmt.Errorf("k8s: build proxy config: %w", err))
+	}
+	secretData := map[string][]byte{proxyConfigSecretKey: proxyJSON}
+	// The AGENT's credential-bearing environment rides the SAME per-run Secret,
+	// one entry per variable, for the reason stated above and on
+	// runner.SandboxSpec.SecretEnv; secretEnvVars gives the agent container a
+	// secretKeyRef to each of these instead of an inline EnvVar.Value. One
+	// Secret, not a second one: teardown already sweeps it by the run-id label,
+	// and a separate object would be one more thing the rollback path has to
+	// get right.
+	for k, v := range spec.SecretEnv {
+		secretData[secretEnvDataKey(k)] = []byte(v)
+	}
+	sec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName(spec.RunID),
+			Namespace: ns,
+			Labels:    wardynLabels(spec.RunID, componentProxy, spec.Labels),
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: secretData,
+	}
+	if _, err := d.clientset.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
+		return fail(fmt.Errorf("k8s: create proxy config secret: %w", err))
 	}
 
 	// (4) Proxy pod, then poll for its CNI-assigned IP.

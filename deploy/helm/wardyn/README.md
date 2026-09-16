@@ -508,11 +508,13 @@ RBAC ships least-privilege: the namespaced Role covers exactly the verbs the
 substrate issues (pods create/get/list/delete/deletecollection;
 `pods/ephemeralcontainers` update; `pods/exec` get+create — the exec
 subresource's websocket transport issues GET, SPDY issues POST, and the
-driver tries websocket first; secrets and networkpolicies
-create/list/delete/deletecollection — deliberately **no** `get` on either,
-wardynd never fetches one by name; `list` is what the orphan sweep needs to
-reach a run whose pods are both gone, and it is asked for best-effort — a
-Role without it degrades the sweep rather than killing it); the cluster-scoped ClusterRole covers
+driver tries websocket first; secrets create/delete/deletecollection and
+networkpolicies create/list/delete/deletecollection — deliberately **no**
+`get`, `list` or `watch` on `secrets`: every one of those returns the object's
+body, RBAC cannot scope a list by label, and wardynd never reads a Secret back.
+`list` on `networkpolicies` alone is what the orphan sweep needs to reach a run
+whose pods are both gone, and it is asked for best-effort — a Role without it
+degrades the sweep rather than killing it); the cluster-scoped ClusterRole covers
 `runtimeclasses` get only (RuntimeClass is never namespaced, and the driver
 only ever resolves one by name). One rule is conditional:
 `persistentvolumeclaims` get+create, rendered only with `userDrives.enabled` —
@@ -621,12 +623,19 @@ on the Docker driver, and was a silent no-op here). It fires on boot and on its
 cadence after, once the run is past its dispatch grace, and never touches a user
 drive's claim.
 
-**0.7.4 adds one verb to that Role: `list` on `secrets` and on
-`networkpolicies`.** Keying the sweep on pods alone left a run whose agent AND
-proxy pods are BOTH gone — a deleted node takes them together — unreachable, so
-its per-run Secret survived permanently. **If you write the Role yourself
-(`k8s.rbac.create=false`), add those two verbs on upgrade.** You are not
-required to: the two lists are best-effort, so a Role without them logs one
+**0.7.4 adds exactly one verb to that Role: `list` on `networkpolicies`.**
+Keying the sweep on pods alone left a run whose agent AND proxy pods are BOTH
+gone — a deleted node takes them together — unreachable, so its per-run Secret
+survived permanently. The Secret is found WITHOUT being listed: a NetworkPolicy
+carries no credential, and the substrate orders the objects so both policies
+strictly outlive the Secret (created before it, deleted after it), which makes
+the run-id label on a surviving policy a complete key for a surviving Secret.
+The reclaim itself is the label-scoped `deletecollection` the Role has always
+had. **No Secret-body read verb is granted in any configuration** — `list` on
+`secrets` would be namespace-wide plaintext read of every Secret, the control
+plane's own included when `k8s.runsNamespace` is unset. **If you write the Role
+yourself (`k8s.rbac.create=false`), add `networkpolicies: list` on upgrade.**
+You are not required to: that list is best-effort, so a Role without it logs one
 warning and keeps doing everything it did in 0.7.3 — you simply do not get the
 both-pods-gone reclaim. See the comment block at the top of
 `templates/rbac.yaml`.

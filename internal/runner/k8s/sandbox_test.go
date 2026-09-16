@@ -226,7 +226,10 @@ func TestCreateSandbox_OrderAndRef(t *testing.T) {
 		}
 		createOrder = append(createOrder, a.GetResource().Resource)
 	}
-	want := []string{"secrets", "networkpolicies", "networkpolicies", "pods", "pods"}
+	// NetworkPolicies FIRST, then the Secret (W6-S4: the policies must strictly
+	// outlive the Secret so the orphan sweep can find it by their labels without
+	// holding `secrets: list`), then proxy pod, then agent pod.
+	want := []string{"networkpolicies", "networkpolicies", "secrets", "pods", "pods"}
 	if !equalStrings(createOrder, want) {
 		t.Fatalf("create order = %v, want %v", createOrder, want)
 	}

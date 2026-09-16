@@ -622,21 +622,24 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set replicas=5 2>&1 | grep -q "replicas > 1 is refused" || { echo "chart no longer refuses replicas > 1 — the secret-masking registry is process-local and fails open, so a second replica can persist a recording with live credentials in cleartext"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=false 2>&1 | grep -q "k8s.enabled requires serviceAccount.automount=true" || { echo "chart no longer refuses k8s.enabled with serviceAccount.automount=false — the k8s runner needs the API server"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set serviceAccount.automount=true 2>&1 | grep -q "k8s.enabled requires k8s.proxyImage" || { echo "chart no longer refuses k8s.enabled with an empty k8s.proxyImage — the k8s runner substrate refuses to construct (errProxyImageUnset), a BOOT-time crash-loop, not a per-run one"; exit 1; }
-	@# lane runner-k8s-docker (v0.7.4, B9-F5): the orphan sweep now LISTS the
-	@# per-run Secret and both NetworkPolicies, not just the pods — that is how it
-	@# reaches a run whose agent AND proxy pods are both gone. Without the verb on
-	@# the rendered Role the sweep degrades on a real cluster (best-effort by
-	@# design, so no test outside this one would go red), and the both-pods-gone
-	@# Secret — proxy config plus every secret_env value — is never reclaimed.
-	@# Asserted on the Role block specifically: granting it in the cluster-scoped
+	@# lane w6-security (v0.7.4, W6-S4): the orphan sweep reaches a run whose agent
+	@# AND proxy pods are both gone through its NETWORKPOLICY labels — never by
+	@# listing Secrets. `list` on secrets returns every Secret's BODY and RBAC
+	@# cannot scope a list by label, so in the default (release-namespace)
+	@# configuration this render exercises, that one verb is plaintext read of the
+	@# DB DSN, the OIDC client secret and the ingress TLS key. 0.7.3 granted it to
+	@# nothing and neither may 0.7.4. A NetworkPolicy carries no credential, and
+	@# CreateSandbox/teardown order the two so a Secret never outlives its
+	@# NetworkPolicies (internal/runner/k8s/secret_lifetime_test.go) — which is
+	@# what makes the netpol label a complete key for the Secret.
+	@# Asserted on the Role block specifically: granting these in the cluster-scoped
 	@# ClusterRole instead would satisfy a bare grep while widening every namespace.
 	@# (k8s.runtimeClasses.CC2 pinned only to satisfy the B12b-F7 guard — this gate inspects the Role's verbs, not the class)
 	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.runtimeClasses.CC2=gvisor --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.allowRunsInReleaseNamespace=true); \
 	role=$$(echo "$$out" | awk '/^---/{r=0} /^kind: Role$$/{r=1} r'); \
-	echo "$$role" | grep -q 'resources: \["secrets"\]' || { echo "the k8s-runner Role has no secrets rule — the two verb assertions below would be vacuous"; exit 1; }; \
-	echo "$$role" | grep -A1 'resources: \["secrets"\]' | grep -q '"list"' || { echo "the k8s-runner Role does not grant secrets: list — SweepOrphanedSandboxes lists the per-run Secret by label to reach a run whose agent AND proxy pods are both gone; without it that run's Secret (proxy config + every secret_env value) is never reclaimed"; exit 1; }; \
-	echo "$$role" | grep -A1 'resources: \["networkpolicies"\]' | grep -q '"list"' || { echo "the k8s-runner Role does not grant networkpolicies: list — same sweep, same run: both of that run's NetworkPolicies outlive it"; exit 1; }; \
-	echo "$$role" | grep -A1 'resources: \["secrets"\]' | grep -q '"get"' && { echo "the k8s-runner Role grants secrets: get — wardynd never fetches a Secret by name, and get is the verb that reads one back"; exit 1; } || true
+	echo "$$role" | grep -q 'resources: \["secrets"\]' || { echo "the k8s-runner Role has no secrets rule — the verb assertions below would be vacuous"; exit 1; }; \
+	echo "$$role" | grep -A1 'resources: \["networkpolicies"\]' | grep -q '"list"' || { echo "the k8s-runner Role does not grant networkpolicies: list — SweepOrphanedSandboxes keys the both-pods-gone reclaim on the run's NetworkPolicy labels, so without it that run's Secret (proxy config + every secret_env value) is never reclaimed"; exit 1; }; \
+	echo "$$role" | grep -A1 'resources: \["secrets"\]' | grep -qE '"(get|list|watch)"' && { echo "the k8s-runner Role grants a Secret-BODY read verb (get/list/watch) on secrets — every one of them returns the object's data, RBAC cannot scope them by label, and with runsNamespace unset that is namespace-wide plaintext read of the control plane's own Secrets. wardynd never reads a Secret back: the kubelet mounts the per-run one into the proxy pod, and the sweep finds it by its NetworkPolicy labels (W6-S4)"; exit 1; } || true
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.allowRunsInReleaseNamespace=true 2>&1 | grep -q "cannot enforce confinement_class CC2" || { echo "chart no longer refuses k8s.enabled with no CC2/CC3 RuntimeClass pinned and no default-policy override (defaultPolicy/env.WARDYN_DEFAULT_POLICY) — the image bakes a CC2-floor default policy but the k8s driver advertises only [CC1] until a RuntimeClass is pinned, so a stock install fails closed on every run instead of at render time (B12b-F7)"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.allowRunsInReleaseNamespace=true --set-file defaultPolicy=examples/policies/demo.json >/dev/null 2>&1 || { echo "a CC1-floor defaultPolicy (examples/policies/demo.json) no longer satisfies the CC2/CC3-or-policy refusal — the escape hatch for a plain runc/CC1 cluster with no gVisor/Kata RuntimeClass is gone"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.allowRunsInReleaseNamespace=true --set k8s.runtimeClasses.CC3=kata-qemu >/dev/null 2>&1 || { echo "a CC3-only RuntimeClass pin no longer satisfies the CC2/CC3-or-policy refusal — CC3 alone must clear it, not only CC2"; exit 1; }

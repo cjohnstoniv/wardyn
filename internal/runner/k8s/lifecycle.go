@@ -199,11 +199,17 @@ func (d *Driver) teardownByRunID(ctx context.Context, runID uuid.UUID, gracePeri
 		return fmt.Errorf("k8s: teardown: waiting for pods to terminate before dropping NetworkPolicies: %w", err)
 	}
 
-	if err := d.clientset.NetworkingV1().NetworkPolicies(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, listOpts); err != nil && !isNotFound(err) {
-		return fmt.Errorf("k8s: teardown: delete network policies: %w", err)
-	}
+	// Secret FIRST, NetworkPolicies after (W6-S4, the mirror of CreateSandbox's
+	// order): the netpols are what the orphan sweep keys the Secret on, since
+	// listing Secrets needs a verb that returns their bodies. Dropping them
+	// before the Secret would leave a crash window whose survivor is exactly the
+	// object that carries every secret_env value, with nothing left to find it
+	// by. Both are label-scoped deletecollections, so neither reads anything back.
 	if err := d.clientset.CoreV1().Secrets(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, listOpts); err != nil && !isNotFound(err) {
 		return fmt.Errorf("k8s: teardown: delete secrets: %w", err)
+	}
+	if err := d.clientset.NetworkingV1().NetworkPolicies(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, listOpts); err != nil && !isNotFound(err) {
+		return fmt.Errorf("k8s: teardown: delete network policies: %w", err)
 	}
 	return nil
 }
@@ -302,9 +308,9 @@ func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duratio
 
 // sweepCandidate is one object that names a run the sweep might have to
 // reclaim, with the creation time the minAge gate reads. fromPod marks the ones
-// the pod list produced, so a Secret or NetworkPolicy of a run whose pods ARE
-// listed defers to those entries rather than re-deciding with its own (older)
-// timestamp — CreateSandbox writes the Secret before either pod exists.
+// the pod list produced, so a NetworkPolicy of a run whose pods ARE listed
+// defers to those entries rather than re-deciding with its own (older)
+// timestamp — CreateSandbox writes both NetworkPolicies before either pod exists.
 type sweepCandidate struct {
 	runID     uuid.UUID
 	createdAt time.Time
@@ -312,7 +318,7 @@ type sweepCandidate struct {
 }
 
 // sweepCandidates lists every object that can name an orphaned run: the agent
-// and proxy pods, AND the per-run Secret and both NetworkPolicies.
+// and proxy pods, AND both NetworkPolicies.
 //
 // B9-F5: listing pods alone left a run whose pods are BOTH gone unreachable —
 // permanently, since the sweep is the only thing that revisits a run no
@@ -323,22 +329,32 @@ type sweepCandidate struct {
 // NetworkPolicies. Any fix that leaves the Secret reachable only via a pod
 // label repeats the bug.
 //
-// The Secret and NetworkPolicy lists are BEST-EFFORT, and that is the whole
-// difference between this working on a real cluster and not. They are a NEW
-// privilege this release asks for (the chart's Role grants it from 0.7.4; see
+// The Secret is reached WITHOUT being listed (W6-S4). `list` on secrets returns
+// every Secret's body and RBAC cannot scope a list by label, so granting it
+// would hand this ServiceAccount plaintext read of every Secret in the
+// namespace — the control plane's own, with k8s.runsNamespace unset. 0.7.3
+// granted no Secret-body read verb and neither does 0.7.4. Instead the
+// NetworkPolicies, which carry no credential, are ordered to strictly outlive
+// the Secret (created before it in CreateSandbox, deleted after it in
+// teardownByRunID), so a surviving Secret always has a surviving NetworkPolicy
+// to be found by — and teardownByRunID reclaims it with the label-scoped
+// deletecollection that has been granted since the substrate shipped.
+//
+// The NetworkPolicy list is BEST-EFFORT. It is a NEW privilege this release
+// asks for (the chart's Role grants it from 0.7.4; see
 // deploy/helm/wardyn/templates/rbac.yaml), and an operator running their own
 // Role under k8s.rbac.create=false has a pre-0.7.4 one that the chart cannot
-// upgrade for them. On upgrade day those two lists 403. Aborting here on that
-// 403 would take the WHOLE sweep down with them — including the evicted-agent
-// reclaim that worked in 0.7.3 — trading a partial credential leak for a total
-// one. So a Forbidden degrades to the pod-only candidate set, logged once per
-// process, and every other list error still fails the sweep honestly.
+// upgrade for them. On upgrade day that list 403s. Aborting here on that 403
+// would take the WHOLE sweep down with it — including the evicted-agent reclaim
+// that worked in 0.7.3 — trading a partial credential leak for a total one. So
+// a Forbidden degrades to the pod-only candidate set, logged once per process,
+// and every other list error still fails the sweep honestly.
 //
-// Pods are listed LAST, deliberately: hasPod decides which Secret/NetworkPolicy
+// Pods are listed LAST, deliberately: hasPod decides which NetworkPolicy
 // entries defer to a pod entry, so it has to be built from the LATEST snapshot.
 // A pod created in the window between the lists would otherwise be invisible,
-// and its run's older Secret would then decide the run's fate on its own age —
-// reclaiming a dispatch that had just come up.
+// and its run's older NetworkPolicy would then decide the run's fate on its own
+// age — reclaiming a dispatch that had just come up.
 //
 // All three lists use the SAME agent/proxy component selector. That is what
 // keeps a boot canary out: its objects carry labelManaged and a labelRun that
@@ -351,10 +367,6 @@ func (d *Driver) sweepCandidates(ctx context.Context) ([]sweepCandidate, map[uui
 	listOpts := metav1.ListOptions{
 		LabelSelector: labelComponent + " in (" + componentAgent + "," + componentProxy + ")",
 	}
-	secrets, secretsErr := d.clientset.CoreV1().Secrets(ns).List(ctx, listOpts)
-	if secretsErr != nil && !apierrors.IsForbidden(secretsErr) {
-		return nil, nil, fmt.Errorf("k8s: list sandbox secrets for orphan sweep: %w", secretsErr)
-	}
 	netpols, netpolsErr := d.clientset.NetworkingV1().NetworkPolicies(ns).List(ctx, listOpts)
 	if netpolsErr != nil && !apierrors.IsForbidden(netpolsErr) {
 		return nil, nil, fmt.Errorf("k8s: list sandbox network policies for orphan sweep: %w", netpolsErr)
@@ -365,12 +377,12 @@ func (d *Driver) sweepCandidates(ctx context.Context) ([]sweepCandidate, map[uui
 	if err != nil {
 		return nil, nil, fmt.Errorf("k8s: list sandbox pods for orphan sweep: %w", err)
 	}
-	if secretsErr != nil || netpolsErr != nil {
-		warnSweepListForbidden(secretsErr, netpolsErr)
+	if netpolsErr != nil {
+		warnSweepListForbidden(netpolsErr)
 	}
 
 	hasPod := make(map[uuid.UUID]bool, len(pods.Items))
-	candidates := make([]sweepCandidate, 0, len(pods.Items)+len(secrets.Items)+len(netpols.Items))
+	candidates := make([]sweepCandidate, 0, len(pods.Items)+len(netpols.Items))
 	add := func(meta metav1.ObjectMeta, fromPod bool) {
 		runID, perr := uuid.Parse(meta.Labels[labelRun])
 		if perr != nil {
@@ -380,11 +392,6 @@ func (d *Driver) sweepCandidates(ctx context.Context) ([]sweepCandidate, map[uui
 			hasPod[runID] = true
 		}
 		candidates = append(candidates, sweepCandidate{runID: runID, createdAt: meta.CreationTimestamp.Time, fromPod: fromPod})
-	}
-	if secretsErr == nil {
-		for i := range secrets.Items {
-			add(secrets.Items[i].ObjectMeta, false)
-		}
 	}
 	if netpolsErr == nil {
 		for i := range netpols.Items {
@@ -407,13 +414,14 @@ var sweepListForbiddenOnce sync.Once
 // because the symptom (a run's Secret surviving until someone notices) has no
 // other place to surface: the sweep returns success, correctly, and the whole
 // point is that it keeps working.
-func warnSweepListForbidden(secretsErr, netpolsErr error) {
+func warnSweepListForbidden(netpolsErr error) {
 	sweepListForbiddenOnce.Do(func() {
-		slog.Warn("wardynd: k8s orphan sweep is running DEGRADED: this ServiceAccount may not list Secrets/NetworkPolicies, "+
+		slog.Warn("wardynd: k8s orphan sweep is running DEGRADED: this ServiceAccount may not list NetworkPolicies, "+
 			"so a run whose agent AND proxy pods are both gone (a deleted node takes them together) cannot be reached and its "+
 			"per-run Secret — proxy config plus every secret_env value — will not be reclaimed. Every other reclaim still runs. "+
-			"Fix: grant `list` on secrets and networkpolicies in the Role bound to this ServiceAccount (the chart's own Role does "+
-			"from 0.7.4; an operator-managed Role under k8s.rbac.create=false has to be updated by hand)",
-			slog.Any("secrets_error", secretsErr), slog.Any("networkpolicies_error", netpolsErr))
+			"Fix: grant `list` on networkpolicies in the Role bound to this ServiceAccount (the chart's own Role does from 0.7.4; "+
+			"an operator-managed Role under k8s.rbac.create=false has to be updated by hand). `list` on SECRETS is deliberately "+
+			"NOT the fix and must not be granted: it returns every Secret's body",
+			slog.Any("networkpolicies_error", netpolsErr))
 	})
 }

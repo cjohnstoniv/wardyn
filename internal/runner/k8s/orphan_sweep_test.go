@@ -359,61 +359,68 @@ func TestSweepOrphanedSandboxes_NeverTouchesACanarysNetPol(t *testing.T) {
 	}
 }
 
-// forbidSecretList installs a reactor that answers every clientset "list
-// secrets" with the 403 a Role without the `list` verb produces — what an
-// operator running their own pre-0.7.4 Role (k8s.rbac.create=false) gets on
+// forbidNetPolList installs a reactor that answers every clientset "list
+// networkpolicies" with the 403 a Role without the `list` verb produces — what
+// an operator running their own pre-0.7.4 Role (k8s.rbac.create=false) gets on
 // upgrade day. Returns a function that lifts it, so the test's own assertions
-// can read Secrets back afterwards.
-func forbidSecretList(cs *fake.Clientset) (lift func()) {
+// can read the policies back afterwards.
+//
+// NetworkPolicies, not Secrets: the sweep never lists a Secret (W6-S4 — `list`
+// returns its body, so no configuration of the chart grants it).
+func forbidNetPolList(cs *fake.Clientset) (lift func()) {
 	forbidden := true
-	cs.PrependReactor("list", "secrets", func(clienttesting.Action) (bool, runtime.Object, error) {
+	cs.PrependReactor("list", "networkpolicies", func(clienttesting.Action) (bool, runtime.Object, error) {
 		if !forbidden {
 			return false, nil, nil
 		}
 		return true, nil, apierrors.NewForbidden(
-			schema.GroupResource{Resource: "secrets"}, "",
-			errors.New(`secrets is forbidden: User "system:serviceaccount:wardyn:wardyn" cannot list resource "secrets"`))
+			schema.GroupResource{Resource: "networkpolicies"}, "",
+			errors.New(`networkpolicies.networking.k8s.io is forbidden: User "system:serviceaccount:wardyn:wardyn" cannot list resource "networkpolicies"`))
 	})
 	return func() { forbidden = false }
 }
 
-// TestSweepOrphanedSandboxes_StillReclaimsWhenSecretListIsForbidden is the
+// TestSweepOrphanedSandboxes_StillReclaimsWhenNetPolListIsForbidden is the
 // half of the widened sweep that has to survive contact with a real cluster.
 //
-// Listing Secrets and NetworkPolicies is a NEW privilege this release asks for.
-// An operator who writes their own Role (k8s.rbac.create=false) has a pre-0.7.4
-// one, and the chart cannot upgrade it for them — so on upgrade day those two
-// lists 403. If a 403 aborts sweepCandidates, the whole sweep dies with it,
-// including the evicted-agent reclaim that worked BEFORE this branch: a partial
-// credential leak would be traded for a total one. The new lists are therefore
-// best-effort — a 403 degrades to the pod-only candidate set and the sweep still
-// reclaims everything it could reclaim in 0.7.3.
-func TestSweepOrphanedSandboxes_StillReclaimsWhenSecretListIsForbidden(t *testing.T) {
+// Listing NetworkPolicies is the ONE new privilege this release asks for
+// (W6-S4: `list` on secrets is not granted in any configuration — it returns
+// the body). An operator who writes their own Role (k8s.rbac.create=false) has
+// a pre-0.7.4 one, and the chart cannot upgrade it for them, so on upgrade day
+// that list 403s. If a 403 aborts sweepCandidates, the whole sweep dies with
+// it, including the evicted-agent reclaim that worked BEFORE this branch: a
+// partial credential leak would be traded for a total one. The list is
+// therefore best-effort — a 403 degrades to the pod-only candidate set and the
+// sweep still reclaims everything it could reclaim in 0.7.3.
+func TestSweepOrphanedSandboxes_StillReclaimsWhenNetPolListIsForbidden(t *testing.T) {
 	d, cs := newTestDriver(t, Config{})
 	spec := createdSandbox(t, d, cs)
-	lift := forbidSecretList(cs)
+	lift := forbidNetPolList(cs)
 	agePodsOfRun(t, cs, spec.RunID, time.Hour)
 
 	swept, err := d.SweepOrphanedSandboxes(context.Background(), time.Minute, alwaysOrphan)
 	if err != nil {
-		t.Fatalf("SweepOrphanedSandboxes with no `list` on secrets: %v, want nil (best-effort)", err)
+		t.Fatalf("SweepOrphanedSandboxes with no `list` on networkpolicies: %v, want nil (best-effort)", err)
 	}
 	if swept != 1 {
 		t.Errorf("swept = %d, want 1 — a Role without the new verb must still get the 0.7.3 reclaim", swept)
 	}
 
 	// The DELETE side is a different verb and is still granted, so the run's
-	// objects must be gone even though the sweep could not LIST the Secret.
+	// objects must be gone even though the sweep could not LIST the policies.
 	lift()
 	assertRunObjectsGone(t, cs, spec.RunID)
 }
 
 // TestSweepOrphanedSandboxes_ListErrorsByResourceAndKind is the table R-08
-// (runner-k8s-docker's re-review) asked for: sweepCandidates treats Secrets
-// and NetworkPolicies identically (Forbidden degrades to the pod-only
-// candidate set, err == nil; any other list error still fails the sweep,
-// err != nil) but only the secrets/Forbidden cell had a test before this —
-// the netpol degrade arm was unpinned.
+// (runner-k8s-docker's re-review) asked for: a Forbidden on the NetworkPolicy
+// list degrades to the pod-only candidate set (err == nil) while any other list
+// error still fails the sweep honestly (err != nil).
+//
+// The two `secrets` rows are the W6-S4 pin in table form: the sweep does not
+// list Secrets AT ALL, so neither a 403 nor an etcd outage on that call can
+// reach it. They are wantErr=false for the reason the netpol rows are not —
+// the call is never made.
 func TestSweepOrphanedSandboxes_ListErrorsByResourceAndKind(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -421,8 +428,8 @@ func TestSweepOrphanedSandboxes_ListErrorsByResourceAndKind(t *testing.T) {
 		err      error
 		wantErr  bool
 	}{
-		{"secrets forbidden degrades", "secrets", apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", errors.New("nope")), false},
-		{"secrets internal error fails", "secrets", apierrors.NewInternalError(errors.New("etcd down")), true},
+		{"a forbidden secrets list is inert (never called)", "secrets", apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", errors.New("nope")), false},
+		{"an erroring secrets list is inert (never called)", "secrets", apierrors.NewInternalError(errors.New("etcd down")), false},
 		{"networkpolicies forbidden degrades", "networkpolicies", apierrors.NewForbidden(schema.GroupResource{Resource: "networkpolicies"}, "", errors.New("nope")), false},
 		{"networkpolicies internal error fails", "networkpolicies", apierrors.NewInternalError(errors.New("etcd down")), true},
 	}
@@ -444,24 +451,24 @@ func TestSweepOrphanedSandboxes_ListErrorsByResourceAndKind(t *testing.T) {
 	}
 }
 
-// TestSweepOrphanedSandboxes_SeesAPodCreatedAfterTheSecretList is the ordering
-// guard: hasPod decides which Secret/NetworkPolicy entries defer to a pod
-// entry, so it must be built from the LATEST snapshot of the three lists, not
-// the earliest. A pod created in the window between the lists is otherwise
-// invisible, and its run's (older) Secret then decides the run's fate on its own
-// age — reclaiming a dispatch that had just come up.
+// TestSweepOrphanedSandboxes_SeesAPodCreatedAfterTheNetPolList is the ordering
+// guard: hasPod decides which NetworkPolicy entries defer to a pod entry, so it
+// must be built from the LATEST snapshot of the two lists, not the earliest. A
+// pod created in the window between the lists is otherwise invisible, and its
+// run's (older) NetworkPolicy then decides the run's fate on its own age —
+// reclaiming a dispatch that had just come up.
 //
-// The reactor is the window: it fires on the "list secrets" call and creates the
-// agent pod as a side effect, through the TRACKER (never the typed clientset,
-// which would re-enter Fake's non-reentrant lock and deadlock — see
+// The reactor is the window: it fires on the "list networkpolicies" call and
+// creates the agent pod as a side effect, through the TRACKER (never the typed
+// clientset, which would re-enter Fake's non-reentrant lock and deadlock — see
 // installCanaryReactor's doc). The pod is stamped young, so listing pods LAST
 // makes the run defer to a pod entry that the age gate then skips: swept == 0.
-func TestSweepOrphanedSandboxes_SeesAPodCreatedAfterTheSecretList(t *testing.T) {
+func TestSweepOrphanedSandboxes_SeesAPodCreatedAfterTheNetPolList(t *testing.T) {
 	d, cs := newTestDriver(t, Config{})
 	spec := createdSandbox(t, d, cs)
 
-	// Start from "both pods gone", the shape the Secret entry exists for, with
-	// the Secret and netpols old enough to be swept on their own.
+	// Start from "both pods gone", the shape the NetworkPolicy entry exists for,
+	// with the Secret and netpols old enough to be swept on their own.
 	for _, name := range []string{agentPodName(spec.RunID), proxyPodName(spec.RunID)} {
 		if err := cs.CoreV1().Pods(testNamespace).Delete(context.Background(), name, metav1.DeleteOptions{}); err != nil {
 			t.Fatalf("delete %q: %v", name, err)
@@ -469,7 +476,7 @@ func TestSweepOrphanedSandboxes_SeesAPodCreatedAfterTheSecretList(t *testing.T) 
 	}
 	ageRunSecretsAndNetPols(t, cs, spec.RunID, time.Hour)
 
-	cs.PrependReactor("list", "secrets", func(clienttesting.Action) (bool, runtime.Object, error) {
+	cs.PrependReactor("list", "networkpolicies", func(clienttesting.Action) (bool, runtime.Object, error) {
 		// Re-create the agent pod, freshly stamped, as the dispatch would.
 		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
 			Name:              agentPodName(spec.RunID),

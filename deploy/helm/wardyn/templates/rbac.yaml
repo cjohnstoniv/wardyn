@@ -21,29 +21,36 @@ canary,driver}.go. In particular:
     the SPDY/POST leg). Without "get" the websocket attempt 403s and every
     exec silently falls back to the deprecated SPDY path (still functional,
     but noisy: a 403 audit line per channel) — review round 2, M3.
-  - secrets: list, but NO get. wardynd never reads a Secret's CONTENT back —
-    it creates its own per-run proxy-config Secret and the kubelet mounts it
-    into the proxy pod, not wardynd. It does have to ENUMERATE them by label,
-    for the reason on the sweep below, and list returns the object bodies too,
-    so this rule is the one place the chart grants more than the substrate
-    strictly reads. get is still withheld: no code path fetches one by name.
+  - secrets: NO get, NO list, NO watch — as in 0.7.3, and deliberately unchanged
+    by the 0.7.4 sweep work (W6-S4). wardynd never reads a Secret's CONTENT
+    back: it creates its own per-run proxy-config Secret and the kubelet mounts
+    it into the proxy pod, not wardynd. Every one of those three verbs returns
+    the object BODY, and RBAC cannot scope a list by label — a run's object
+    names are derived from its UUID — so granting `list` here would be
+    namespace-wide plaintext read of every Secret, which with an empty
+    k8s.runsNamespace means the DB DSN, the OIDC client secret, the ingress TLS
+    key and any co-tenant's. The sweep that needs to FIND a run's Secret does it
+    through the NetworkPolicy labels instead; see below.
   - pods: list, and the three deletecollections, have a SECOND caller besides
     teardown — lifecycle.go's SweepOrphanedSandboxes, the control plane's
     crash/eviction orphan reclaim (internal/api/reconcile.go). Named here so a
     later verb-trimming pass does not read pods:list as "only waitPodsGone" and
     drop it — that would leave every evicted run's proxy pod and credential
     Secret behind.
-  - secrets/networkpolicies: list, for that SAME sweep (0.7.4, B9-F5). Keying
-    it on pods alone left a run whose agent AND proxy pods are both gone — a
-    deleted node takes them together — unreachable by the only thing that ever
-    revisits a run no sandbox_ref points at, so its per-run Secret (proxy
-    config plus every secret_env value, verbatim) survived permanently. The
-    sweep lists all three kinds under one agent/proxy component selector.
-    The two new lists are BEST-EFFORT in the code (sweepCandidates degrades to
+  - networkpolicies: list, for that SAME sweep (0.7.4, B9-F5) — and NO get.
+    Keying it on pods alone left a run whose agent AND proxy pods are both gone
+    — a deleted node takes them together — unreachable by the only thing that
+    ever revisits a run no sandbox_ref points at, so its per-run Secret (proxy
+    config plus every secret_env value, verbatim) survived permanently. A
+    NetworkPolicy carries no credential, so listing one costs nothing, and the
+    substrate orders the two objects so the pair strictly OUTLIVES the Secret
+    (created before it, torn down after it) — which makes the netpol label a
+    complete key for a Secret that nothing here may enumerate. The reclaim
+    itself is the label-scoped deletecollection already granted below.
+    That one new list is BEST-EFFORT in the code (sweepCandidates degrades to
     the pod-only set on a 403 and logs once), precisely so an operator-managed
     Role under k8s.rbac.create=false that predates 0.7.4 keeps the 0.7.3
     reclaim instead of losing the sweep outright on upgrade day.
-  - networkpolicies: NO get, same reasoning as secrets; list as above.
   - runtimeclasses: get ONLY (cluster-scoped, below) — driver.go's
     runtimeClassHandler resolves a RuntimeClass by NAME (Get); nothing in
     this substrate lists them.
@@ -137,7 +144,7 @@ rules:
     verbs: ["get", "create"]
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["create", "list", "delete", "deletecollection"]
+    verbs: ["create", "delete", "deletecollection"]
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
     verbs: ["create", "list", "delete", "deletecollection"]
