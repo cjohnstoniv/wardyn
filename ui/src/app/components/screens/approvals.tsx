@@ -279,8 +279,18 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // ?tab=decided lands on the Decided tab — the audit trail's "Released by
   // approval" chip links here for an approval that has, by construction,
   // already been decided; the default stays the pending queue.
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [filter, setFilter] = React.useState<Filter>(searchParams.get("tab") === "decided" ? "decided" : "PENDING");
+  // X3-F14: ?tab= is read at mount but was never written back — the Decided
+  // view couldn't be reloaded/shared/reached by Back. Mirrors audit.tsx's
+  // run_id filter, the setSearchParams-on-every-change idiom.
+  const setFilterParam = React.useCallback(
+    (f: Filter) => {
+      setFilter(f);
+      setSearchParams(f === "decided" ? { tab: "decided" } : {}, { replace: true });
+    },
+    [setSearchParams],
+  );
   const [prompt, setPrompt] = React.useState<{ id: string; action: "approve" | "deny"; kind: ApprovalRequest["kind"] } | null>(null);
 
   // MEDIUM fix: EXPIRED approvals were never fetched, so a request that timed
@@ -323,14 +333,24 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // stale. Poll on an interval. We refresh silently (no loading flicker) by
   // re-fetching directly rather than calling load(), and notify the shell so the
   // pending-count badge updates.
+  //
+  // F5-F4: a single transient failure on mount left status="error" forever —
+  // the poll kept silently filling pendingItems (and the nav badge) while the
+  // main view stayed stuck on "Something went wrong". A successful tick now
+  // HEALS status back to "ready" (audit.tsx's tick precedent); paused only
+  // while the foreground load is in flight, so a tick during the error state
+  // can still recover it.
   const POLL_MS = 10_000;
   usePoll(() => {
     fetchAll()
-      .then(() => onChanged?.())
+      .then(() => {
+        setStatus("ready");
+        onChanged?.();
+      })
       .catch(() => {
         /* transient poll failure — keep the last good view, retry next tick */
       });
-  }, POLL_MS, false);
+  }, POLL_MS, status === "loading");
 
   // HIGH fix (error handling): approve/deny can reject — a 409 (already decided
   // / expired), a 403, or a network drop. We surface the failure as a toast and
@@ -345,7 +365,14 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       else await api.deny(prompt.id, reason, ...args);
       toast.success(prompt.action === "approve" ? "Request approved" : "Request denied");
       setPrompt(null);
-      load();
+      // F5-F11: load() flips status back to "loading" first — the whole
+      // queue flashed to a skeleton after every single decision, losing
+      // scroll position. fetchAll() is the same silent refresh the poll
+      // uses; a refresh failure here is not fatal — the decide itself
+      // already succeeded, and the next poll tick will catch the view up.
+      fetchAll().catch(() => {
+        /* transient refresh failure — decide() itself already succeeded */
+      });
       onChanged?.();
       return true;
     } catch (err) {
@@ -374,7 +401,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
 
       <TruncatedNote count={longestList} cap={LIST_LIMIT} />
 
-      <Tabs value={filter} onValueChange={(v) => setFilter(v as Filter)} className="mb-4">
+      <Tabs value={filter} onValueChange={(v) => setFilterParam(v as Filter)} className="mb-4">
         <TabsList>
           <TabsTrigger value="PENDING" className="gap-2">
             Pending
@@ -408,7 +435,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
                   : "New credential, egress, and tool-call requests appear here the moment an agent needs you."
               }
               action={
-                <Button variant="outline" size="sm" onClick={() => setFilter("decided")}>
+                <Button variant="outline" size="sm" onClick={() => setFilterParam("decided")}>
                   See decided
                 </Button>
               }
@@ -433,7 +460,7 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
             title="No decisions yet"
             description="Approved, denied, and expired requests are archived here."
             action={
-              <Button variant="outline" size="sm" onClick={() => setFilter("PENDING")}>
+              <Button variant="outline" size="sm" onClick={() => setFilterParam("PENDING")}>
                 Back to pending
               </Button>
             }

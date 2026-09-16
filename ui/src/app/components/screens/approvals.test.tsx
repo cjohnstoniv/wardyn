@@ -4,8 +4,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { act, render, screen, waitFor, fireEvent, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import type { ApprovalRequest, MeCapabilities } from "../../lib/types";
 
 // HIGH fix (error handling): approve/deny were unguarded awaits. A rejected
@@ -28,12 +29,22 @@ vi.mock("sonner", () => ({
 let mockPendingKind: ApprovalRequest["kind"] = "credential";
 let mockPendingEmpty = false;
 let mockCancelledRow = false;
+// F5-F4: every listApprovals call rejects while true — simulates a transient
+// fetchAll() failure (Promise.all over the 5 states) without having to race
+// individual calls within one Promise.all.
+let mockFailAllLists = false;
+// F5-F11: freezes every listApprovals call until resolved, so a test can
+// inspect the DOM DURING an in-flight refresh (decide()'s silent fetchAll()
+// vs. the old load()'s loading-skeleton flash).
+let mockListDeferred: Promise<void> | null = null;
 const denyMock = vi.fn();
 const approveMock = vi.fn();
 vi.mock("../../lib/api/approvals", () => {
   return {
     approvals: {
-      listApprovals: (state: string) => {
+      listApprovals: async (state: string) => {
+        if (mockListDeferred) await mockListDeferred;
+        if (mockFailAllLists) return Promise.reject(new Error("503"));
         if (state === "PENDING" && !mockPendingEmpty) {
           return Promise.resolve([
             {
@@ -111,6 +122,8 @@ import { APPROVAL } from "../wardyn/copy";
 beforeEach(() => {
   mockRunState = "RUNNING";
   mockCancelledRow = false;
+  mockFailAllLists = false;
+  mockListDeferred = null;
 });
 
 describe("ApprovalsScreen — deny error handling", () => {
@@ -371,6 +384,131 @@ describe("ApprovalsScreen ?tab=", () => {
     );
     const decided = await screen.findByRole("tab", { name: /decided/i });
     expect(decided).toHaveAttribute("aria-selected", "false");
+  });
+
+  // X3-F14: ?tab=decided is read at mount but was never written back
+  // (setSearchParams never called) — the Decided view couldn't be
+  // reloaded/shared/reached by Back. audit.tsx's run_id filter does this
+  // correctly (setSearchParams on every change); mirror it here.
+  function LocationProbe() {
+    const location = useLocation();
+    return <div data-testid="location-search">{location.search}</div>;
+  }
+
+  it("clicking the Decided tab writes ?tab=decided back into the URL", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/approvals"]}>
+        <LocationProbe />
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("button", { name: /^approve$/i });
+    // Radix's Tabs.Trigger activates off the full pointer-event sequence —
+    // a bare fireEvent.click never fires onValueChange (run-detail.test.tsx
+    // precedent uses userEvent for the same reason).
+    await user.click(screen.getByRole("tab", { name: /decided/i }));
+    await waitFor(() => expect(screen.getByTestId("location-search")).toHaveTextContent("tab=decided"));
+  });
+
+  it("switching back to Pending clears the tab param", async () => {
+    const user = userEvent.setup();
+    render(
+      <MemoryRouter initialEntries={["/approvals?tab=decided"]}>
+        <LocationProbe />
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    await screen.findByRole("tab", { name: /decided/i, selected: true });
+    await user.click(screen.getByRole("tab", { name: /pending/i }));
+    await waitFor(() => expect(screen.getByTestId("location-search")).toHaveTextContent(""));
+  });
+});
+
+// F5-F4 + F5-F11: one transient failure on mount used to leave status="error"
+// forever while the 10s poll kept silently filling pendingItems and the nav
+// badge — the queue looked stuck on "Something went wrong" while the badge
+// claimed "1 pending". The tick now heals status back to "ready", and is
+// paused only while the FOREGROUND load is in flight (audit.tsx precedent) so
+// a poll tick during the error state can still recover it.
+describe("ApprovalsScreen — F5-F4: a poll tick heals a stuck error state", () => {
+  beforeEach(() => {
+    mockPendingKind = "credential";
+  });
+
+  it("mount fails, then a poll tick succeeds — the queue recovers from the error view", async () => {
+    // Fake timers BEFORE render: usePoll's setInterval has to be the fake
+    // one, or advancing time never reaches a tick (audit.test.tsx precedent).
+    vi.useFakeTimers();
+    try {
+      mockFailAllLists = true;
+      render(
+        <MemoryRouter>
+          <ApprovalsScreen />
+        </MemoryRouter>,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.getByRole("button", { name: /retry/i })).toBeInTheDocument();
+
+      mockFailAllLists = false;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(screen.getByRole("button", { name: /^approve$/i })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("neg: the loading skeleton still shows on first mount, not the error view", async () => {
+    render(
+      <MemoryRouter>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    // Before the initial fetch settles, neither the error view nor the queue
+    // has rendered yet.
+    expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
+    await screen.findByRole("button", { name: /^approve$/i });
+  });
+});
+
+describe("ApprovalsScreen — F5-F11: deciding refreshes silently, no skeleton flash", () => {
+  beforeEach(() => {
+    mockPendingKind = "credential";
+  });
+
+  it("decide() does not flip back to the loading skeleton mid-refresh", async () => {
+    approveMock.mockResolvedValue(undefined);
+    render(
+      <MemoryRouter>
+        <ApprovalsScreen />
+      </MemoryRouter>,
+    );
+    const approveBtn = await screen.findByRole("button", { name: /^approve$/i });
+    fireEvent.click(approveBtn);
+    // The trigger ("Approve") and the dialog's confirm button share the same
+    // label — scope to the open dialog.
+    const dialog = await screen.findByRole("dialog");
+    // Freeze the refresh fetchAll() decide() kicks off, so the DOM mid-flight
+    // is inspectable.
+    let release: () => void = () => {};
+    mockListDeferred = new Promise<void>((res) => {
+      release = res;
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: /^approve$/i }));
+    await waitFor(() => expect(approveMock).toHaveBeenCalled());
+    // decide() itself has resolved; its silent refresh is frozen in flight.
+    // load() would have flipped status to "loading" BEFORE even calling
+    // fetchAll — the skeleton would already be showing. fetchAll() never
+    // touches status on the way in, so it must not be.
+    expect(document.querySelector(".animate-pulse")).toBeNull();
+    release();
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
+    expect(document.querySelector(".animate-pulse")).toBeNull();
   });
 });
 
