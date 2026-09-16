@@ -88,7 +88,10 @@ func ValidateBedrockBaseURL(raw, region string, allowTestEndpoints bool) (string
 	// rule 1 so the refusal can name both knobs; rule 1's own message is shared
 	// with the vendor gateways, where WARDYN_ALLOW_TEST_ENDPOINTS means nothing.
 	if !allowTestEndpoints && strings.HasPrefix(strings.ToLower(raw), "http://") {
-		return "", fmt.Errorf("WARDYN_BEDROCK_BASE_URL: %q is plain http:// — inference traffic (and, in bearer mode, the credential riding it) would cross the network unencrypted, so it is refused as a production posture; use https://, or explicitly set WARDYN_ALLOW_TEST_ENDPOINTS=true to acknowledge that this deployment is a test deployment pointed at a local stub", raw)
+		return "", fmt.Errorf("WARDYN_BEDROCK_BASE_URL: %q is plain http:// — inference traffic "+
+			"(and, in bearer mode, the credential riding it) would cross the network unencrypted, so it is "+
+			"refused as a production posture; use https://, or explicitly set WARDYN_ALLOW_TEST_ENDPOINTS=true "+
+			"to acknowledge that this deployment is a test deployment pointed at a local stub", raw)
 	}
 	norm, err := validateOneLLMGateway(bedrockRuntimeHost(region), raw, allowTestEndpoints)
 	if err != nil {
