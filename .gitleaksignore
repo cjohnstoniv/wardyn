@@ -143,4 +143,6 @@ f8a21684af4b6b1b4921f14437913efc8ab2aaaa:scripts/test-install-sh-trust.sh:generi
 # PEM PLACEHOLDER hint string — "-----BEGIN RSA PRIVATE KEY-----", an input's placeholder attribute,
 # no key material — lands on a new line under a new commit. Same class as the 63100dcc entry above;
 # gitleaks scans every ref in the shared repo, so a lane branch's copy needs its own fingerprint.
+# EXPIRES: valid only while lane/v0.7.4-ui-providers-people keeps this SHA — that lane adds an inline
+# `gitleaks:allow` on the placeholder line at its rebase, after which this entry is dead and can go.
 7ad85946097fd6f2f1ae7683b44c38550f215c28:ui/src/app/components/screens/providers/git-tab.tsx:private-key:390
