@@ -32,6 +32,12 @@
 //     invariant 1). It is never logged.
 //   - Requests to the proxy use a direct transport (Proxy: nil) — the proxy URL
 //     is a known on-segment address, not subject to HTTP_PROXY env.
+//   - HTTPS only. A credential request whose protocol is not https emits
+//     NOTHING (and mints nothing): git would send the credential as
+//     `Authorization: Basic` in cleartext, and a non-GitHub forge rides the
+//     plain lane, which refuses cleartext only for injection rules. The refusal
+//     takes the same silent-exit-0 path as an unbrokered host, with a note on
+//     stderr.
 //   - If no grant is configured for the host (a github host absent from
 //     WARDYN_GIT_PAT_GRANTS, or any other host absent from it) the helper exits 0
 //     with no output so git falls through to its normal prompting. This is
@@ -115,6 +121,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -148,6 +155,15 @@ const (
 	// /wardyn/gh/ route exists and the broker-managed GitHub hosts are denied —
 	// see resolveGrantForHost.
 	envGitBrokerRepos = "WARDYN_GIT_BROKER_REPOS"
+)
+
+// DRAFT (M2 canon pending)
+const (
+	// helperRefusePlaintext is the stderr note for a credential request whose
+	// transport is not https (B11a-F3). It goes to STDERR, never stdout: git
+	// reads stdout as the credential block, and the whole point of this arm is
+	// that nothing lands there. %s is the protocol git asked with.
+	helperRefusePlaintext = "wardyn-git-helper: refusing to emit a brokered credential over %s — a brokered credential is emitted over https only\n"
 )
 
 func main() {
@@ -227,11 +243,32 @@ func parseInput(r io.Reader) credInput {
 		case "protocol":
 			ci.Protocol = v
 		case "host":
-			// The host may include port (e.g. "github.com:443"); strip it.
-			ci.Host, _, _ = strings.Cut(v, ":")
+			ci.Host = hostOnly(v)
 		}
 	}
 	return ci
+}
+
+// hostOnly strips an optional port from git's `host=` value (B11a-F11).
+//
+// net.SplitHostPort, not strings.Cut(v, ":"): Cut splits at the FIRST colon, so
+// a bracketed IPv6 literal ("[2001:db8::1]:443") was truncated to "[2001". That
+// failed SAFE — no grant key matches "[2001", so the request was simply
+// unbrokered — but silently, and an operator who wired a git_pat grant for an
+// IPv6 forge got no credential and no explanation. SplitHostPort errors on a
+// value carrying NO port, which is the common case ("github.com"), so that arm
+// falls back to the value as written.
+func hostOnly(v string) string {
+	if h, _, err := net.SplitHostPort(v); err == nil {
+		return h
+	}
+	// No port, or unparseable. A bracketed literal with no port still loses its
+	// brackets, because the grant map and the GitHub-host predicate are both
+	// keyed on a BARE host.
+	if strings.HasPrefix(v, "[") && strings.HasSuffix(v, "]") {
+		return v[1 : len(v)-1]
+	}
+	return v
 }
 
 // isGitHubHost returns true for github.com and *.github.com.
@@ -255,6 +292,25 @@ func runGet(secretFile string, stdin io.Reader, stdout, stderr io.Writer) error 
 	if grantID == "" {
 		// Not a host we broker for (and, for github.com, no grant configured):
 		// output nothing, let git fall through. PRESERVES the legacy fall-through.
+		return nil
+	}
+
+	// HTTPS ONLY (B11a-F3). credInput.Protocol was parsed and never used, so a
+	// `git clone http://<allowlisted-host>/…` got the brokered PAT emitted and
+	// git sent it as `Authorization: Basic` IN CLEARTEXT. Nothing downstream
+	// catches that: a non-GitHub forge is not on the git-broker route, so it
+	// rides handlePlain, and plain_lane.go refuses cleartext only for INJECTION
+	// rules — a bare allow entry matches any port. Refuse HERE, at the one door
+	// that hands the credential out, and refuse the same way an unmatched host
+	// is refused: nothing on stdout, exit 0, so git falls through to its normal
+	// prompting instead of breaking. The note goes to stderr because a silent
+	// refusal on a URL the operator believes is brokered is unexplainable.
+	//
+	// Checked AFTER the grant lookup on purpose: this helper is configured
+	// GLOBALLY, so every unrelated plain-http git operation would otherwise
+	// collect a warning about a credential that was never going to be emitted.
+	if !strings.EqualFold(ci.Protocol, "https") {
+		fmt.Fprintf(stderr, helperRefusePlaintext, ci.Protocol)
 		return nil
 	}
 
