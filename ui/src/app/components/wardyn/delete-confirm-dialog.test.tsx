@@ -9,6 +9,7 @@ import userEvent from "@testing-library/user-event";
 
 import { DeleteConfirmDialog } from "./delete-confirm-dialog";
 import { OperatorProvider } from "./operator-context";
+import { OPERATOR_ONLY_REASON } from "./copy";
 
 // This one dialog is the confirm step for every delete in the console
 // (secret/policy/workspace/SCM host/credential) — gating it here is the
@@ -78,6 +79,12 @@ describe("DeleteConfirmDialog — role-aware confirm", () => {
       );
       const confirm = screen.getByRole("button", { name: /delete workspace/i });
       expect(confirm).not.toBeDisabled();
+      // R-02: canConfirm (allowed ?? operator), not the raw operator flag,
+      // must gate the "admin only" reason paragraph and its aria-describedby
+      // link — a member deleting a row they own (allowed=true, operator=false)
+      // must not see/announce a reason that contradicts the enabled button.
+      expect(screen.queryByText(OPERATOR_ONLY_REASON)).toBeNull();
+      expect(confirm).not.toHaveAttribute("aria-describedby");
       await user.click(confirm);
       expect(onDelete).toHaveBeenCalled();
     });

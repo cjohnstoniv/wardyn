@@ -81,7 +81,7 @@ export function DeleteConfirmDialog({
           <AlertDialogDescription>{description}</AlertDialogDescription>
           {/* Visible, not hover-only — a viewer sees why before they even reach
               the (disabled) confirm button, not after a failed click. */}
-          {!operator && (
+          {!canConfirm && (
             <p id="delete-confirm-operator-reason" className="text-xs font-medium text-warning">
               {OPERATOR_ONLY_REASON}
             </p>
@@ -95,7 +95,7 @@ export function DeleteConfirmDialog({
               confirmDelete();
             }}
             disabled={!canConfirm}
-            aria-describedby={operator ? undefined : "delete-confirm-operator-reason"}
+            aria-describedby={canConfirm ? undefined : "delete-confirm-operator-reason"}
             className="bg-danger text-danger-foreground hover:bg-danger/90"
           >
             {deleting ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
