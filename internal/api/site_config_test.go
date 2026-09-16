@@ -13,6 +13,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -139,6 +140,18 @@ func TestValidateSiteConfig(t *testing.T) {
 				t.Fatal("expected an error, got nil")
 			}
 		})
+	}
+}
+
+// TestValidateSiteConfig_DuplicateFromMessage asserts THROUGH the
+// egressRedirectDuplicateFromRefusal DRAFT constant (F3-F5, server half).
+func TestValidateSiteConfig_DuplicateFromMessage(t *testing.T) {
+	err := validateSiteConfig(types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+		{From: "ghcr.io", To: "registry.corp.internal/ghcr-remote"},
+		{From: "ghcr.io", To: "registry.corp.internal/ghcr-mirror-2"},
+	}})
+	if want := fmt.Sprintf(egressRedirectDuplicateFromRefusal, 1, "ghcr.io", 0); err == nil || err.Error() != want {
+		t.Errorf("err = %v, want %q", err, want)
 	}
 }
 
@@ -534,8 +547,8 @@ func TestHandlePutSiteConfig_LegacyArtifactOverridesUnknownEcosystem(t *testing.
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("code = %d, want 400; body=%s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "artifact_overrides.rubygems") {
-		t.Errorf("body = %s, want it to name artifact_overrides.rubygems", w.Body.String())
+	if want := fmt.Sprintf(legacyArtifactOverridesUnknownEcosystemRefusal, "rubygems"); !strings.Contains(w.Body.String(), want) {
+		t.Errorf("body = %s, want it to contain the DRAFT constant %q", w.Body.String(), want)
 	}
 	// Not the empty-From message the same unknown key used to 400 as instead.
 	if strings.Contains(w.Body.String(), `invalid from ""`) {

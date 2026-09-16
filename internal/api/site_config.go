@@ -49,6 +49,24 @@ var ecosystemPublicURL = map[string]string{
 	"nuget": "https://api.nuget.org/v3/index.json",
 }
 
+// PUT /site-config refusal bodies new in 0.7.4 — B7-F9, F3-F5 (server half).
+//
+// DRAFT (M2 canon pending)
+const (
+	// legacyArtifactOverridesUnknownEcosystemRefusal: B7-F9. An unknown key
+	// used to resolve ecosystemPublicURL[eco] to "" and 400 two guards later as
+	// an opaque "invalid from \"\"", never naming the actual offending key.
+	//
+	// DRAFT (M2 canon pending)
+	legacyArtifactOverridesUnknownEcosystemRefusal = "artifact_overrides.%s: unknown ecosystem"
+	// egressRedirectDuplicateFromRefusal: F3-F5 (server half). A duplicate
+	// From was producible with no guard; findEgressRedirect resolves the
+	// first match only, so a second row sharing a From silently never fires.
+	//
+	// DRAFT (M2 canon pending)
+	egressRedirectDuplicateFromRefusal = "egress_redirects[%d]: duplicate from %q — egress_redirects[%d] already uses it, and a lookup resolves the first match only"
+)
+
 // shellSafeSiteString is the injection-safety half every persisted site-config
 // string reaches this file through — with one documented exception, the bare
 // host, which validSiteHost short-circuits ahead of this gate and which
@@ -244,8 +262,7 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 			return fmt.Errorf("egress_redirects[%d]: invalid from %q", i, red.From)
 		}
 		if prev, dup := seenFrom[strings.ToLower(strings.TrimSpace(red.From))]; dup {
-			return fmt.Errorf("egress_redirects[%d]: duplicate from %q — egress_redirects[%d] already uses it, "+
-				"and a lookup resolves the first match only", i, red.From, prev)
+			return fmt.Errorf(egressRedirectDuplicateFromRefusal, i, red.From, prev)
 		}
 		seenFrom[strings.ToLower(strings.TrimSpace(red.From))] = i
 		if red.Ecosystem != "" {
@@ -460,7 +477,7 @@ func foldLegacyArtifactOverrides(cfg *types.SiteConfig) error {
 		// that "unknown ecosystem" (the check that exists for exactly this,
 		// two guards down) was unreachable behind it.
 		if !validArtifactEcosystems[eco] {
-			return fmt.Errorf("artifact_overrides.%s: unknown ecosystem", eco)
+			return fmt.Errorf(legacyArtifactOverridesUnknownEcosystemRefusal, eco)
 		}
 		ov := cfg.ArtifactOverrides[eco]
 		cfg.EgressRedirects = append(cfg.EgressRedirects, types.EgressRedirect{

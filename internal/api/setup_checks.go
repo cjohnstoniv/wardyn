@@ -264,6 +264,13 @@ const (
 	bedrockPinContradictedDetail = "Your captured AWS SSO session is for account %s / role %s, which this agent's roster row no longer allows (it pins %s / %s) — runs on that session are refused before they start."
 	// DRAFT (M2 canon pending)
 	bedrockPinContradictedFix = "Sign in to AWS again (Settings → Model provider) and choose the pinned account and role; the new sign-in replaces the stored one. Wardyn never rewrites a stored session."
+	// internalHostsCheckLabel names internalHostsCheck's dedicated row
+	// (B7-F5) — new in 0.7.4. Detail is internalHostsDeclaredSentence
+	// (site_config.go), reused verbatim from the write-time log, so it is
+	// not repeated here.
+	//
+	// DRAFT (M2 canon pending)
+	internalHostsCheckLabel = "Internal hosts (SSRF guard override)"
 )
 
 // llmProviderCheck reports the WINNING model/harness signal (llmProvenance's
@@ -510,7 +517,7 @@ func internalHostsCheck(sc types.SiteConfig) (SetupCheck, bool) {
 		return SetupCheck{}, false
 	}
 	return SetupCheck{
-		ID: "internal_hosts", Label: "Internal hosts (SSRF guard override)", Status: "info",
+		ID: "internal_hosts", Label: internalHostsCheckLabel, Status: "info",
 		Detail: internalHostsDeclaredSentence(sc.InternalHosts),
 	}, true
 }
