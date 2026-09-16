@@ -174,24 +174,36 @@ export async function mockMemberRole(page: Page): Promise<void> {
 // render against a body no server produces. The drops below are the ones the
 // console branches on, and each is exactly what that function writes.
 export async function mockMemberSetupStatus(page: Page): Promise<void> {
-  await page.route("**/api/v1/setup/status", async (route) => {
-    const response = await route.fetch();
-    const json = await response.json();
-    json.checks = [];
-    json.checks_redacted = true;
-    json.providers = [];
-    json.secrets = { present: [] };
-    // Rebuilt from confinement_classes ALONE, exactly as the server rebuilds
-    // SetupRunner — so driver, confinement_substrates and
-    // ephemeral_disk_enforcement are dropped by construction rather than by a
-    // line somebody remembered to write. The classes survive redaction: they
-    // are the barrier signal deriveReadiness reads for every role.
-    json.runner = { confinement_classes: json.runner?.confinement_classes ?? [] };
-    json.bedrock = { ready: !!json.bedrock?.ready };
-    json.scm = {};
-    json.host_proxy = {};
-    json.deployment = {};
-    await route.fulfill({ response, json });
+  // CACHE-AND-SERVE, not route.fetch()+refulfill per match — the same reason
+  // agents.spec.ts's own /setup/status splice does it: the landing redirect,
+  // the shell's poll and a screen's own mount all hit this endpoint, and a real
+  // round trip PER match races Playwright disposing an in-flight route's
+  // response ("apiResponse.json: Response has been disposed"). One real fetch,
+  // then every match is fulfilled from the cached body. The glob keeps the
+  // trailing `*`: the console re-reads with `?recheck=1`.
+  let cached: Record<string, unknown> | null = null;
+  await page.route("**/api/v1/setup/status*", async (route) => {
+    if (!cached) {
+      const body = (await (await route.fetch()).json()) as Record<string, unknown>;
+      body.checks = [];
+      body.checks_redacted = true;
+      body.providers = [];
+      body.secrets = { present: [] };
+      // Rebuilt from confinement_classes ALONE, exactly as the server rebuilds
+      // SetupRunner — so driver, confinement_substrates and
+      // ephemeral_disk_enforcement are dropped by construction rather than by a
+      // line somebody remembered to write. The classes survive redaction: they
+      // are the barrier signal deriveReadiness reads for every role.
+      const runner = (body.runner ?? {}) as { confinement_classes?: string[] };
+      body.runner = { confinement_classes: runner.confinement_classes ?? [] };
+      body.bedrock = { ready: !!(body.bedrock as { ready?: boolean } | undefined)?.ready };
+      body.scm = {};
+      body.host_proxy = {};
+      body.deployment = {};
+      cached = body;
+    }
+    // TS cannot narrow a `let` captured across the await above; the `if` does.
+    await route.fulfill({ json: cached! });
   });
 }
 

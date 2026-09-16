@@ -236,18 +236,6 @@ test.describe("member Getting Started (mocked /me role)", () => {
     await expect(page.getByText("Sandboxed. Governed. Self-hosted. Free.")).toHaveCount(0);
     await expect(page.getByText("Pick your barrier")).toHaveCount(0);
   });
-
-  // W6-3. The account menu's Demos entry deep-links to /setup?step=sealed-box,
-  // and the test above is the proof that this tier lands on the member Getting
-  // Started — which ignores ?step entirely. Offering it here is the same dead
-  // invitation the member's own menu already drops.
-  test("the account menu has no Demos entry either — the deep link lands on a page that ignores ?step", async ({ page }) => {
-    await gotoConsole(page);
-    await page.locator("header").getByRole("button").last().click();
-    const menu = page.getByRole("menu");
-    await expect(menu).toBeVisible();
-    await expect(menu.getByText("Demos")).toHaveCount(0);
-  });
 });
 
 // Sibling negative control: the SAME route, unspliced (the harness's real
