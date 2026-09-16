@@ -256,10 +256,12 @@ func (h *uiHarness) openSession() *http.Cookie {
 	return nil
 }
 
-// relay issues one request through the gateway on the run's relay path.
+// relay issues one request through the gateway on the run's relay path for the
+// harness's one declared app. The app segment is part of every relay path
+// (uigateway_session.go) — tests that are ABOUT the path build their own.
 func (h *uiHarness) relay(path string, cookie *http.Cookie, mutate func(*http.Request)) *httptest.ResponseRecorder {
 	h.t.Helper()
-	req := httptest.NewRequest(http.MethodGet, uiRunPrefix+h.run.ID.String()+path, nil)
+	req := httptest.NewRequest(http.MethodGet, uiRelayPrefix(h.run.ID, "code")+path, nil)
 	if cookie != nil {
 		req.AddCookie(cookie)
 	}
@@ -432,8 +434,10 @@ func TestUIGateway_EnterRequiresRunningRun(t *testing.T) {
 
 // TestUIGateway_EnterSetsRunScopedCookie pins the cookie's attributes. Path
 // scoping is the control that stops one run's page from making the browser
-// attach another run's session on a shared origin; HttpOnly stops relayed
-// script from reading it at all.
+// attach another run's session on a shared origin — and, since the path names
+// the APP too, what lets a run's two declared apps hold a session each instead
+// of the second one replacing the first; HttpOnly stops relayed script from
+// reading it at all.
 func TestUIGateway_EnterSetsRunScopedCookie(t *testing.T) {
 	h := newUIHarness(t, okBackend())
 	rec := h.enter(url.Values{
@@ -443,7 +447,7 @@ func TestUIGateway_EnterSetsRunScopedCookie(t *testing.T) {
 	if rec.Code != http.StatusFound {
 		t.Fatalf("enter: %d %s", rec.Code, rec.Body.String())
 	}
-	if got, want := rec.Header().Get("Location"), uiRunPrefix+h.run.ID.String()+"/ide"; got != want {
+	if got, want := rec.Header().Get("Location"), uiRunPrefix+h.run.ID.String()+"/code/ide"; got != want {
 		t.Fatalf("Location %q, want %q (the app's declared path)", got, want)
 	}
 	if rec.Header().Get("Referrer-Policy") != "no-referrer" {
@@ -458,8 +462,8 @@ func TestUIGateway_EnterSetsRunScopedCookie(t *testing.T) {
 	if c == nil {
 		t.Fatal("no relay cookie")
 	}
-	if c.Path != uiRunPrefix+h.run.ID.String()+"/" {
-		t.Fatalf("cookie path %q is not scoped to the run", c.Path)
+	if c.Path != uiRunPrefix+h.run.ID.String()+"/code/" {
+		t.Fatalf("cookie path %q is not scoped to this run's app", c.Path)
 	}
 	if !c.HttpOnly || c.SameSite != http.SameSiteLaxMode {
 		t.Fatalf("cookie flags: HttpOnly=%v SameSite=%v", c.HttpOnly, c.SameSite)
@@ -584,7 +588,7 @@ func TestUIGateway_RelayStripsWardynCredentialsInbound(t *testing.T) {
 		t.Fatalf("the app's own query was mangled: %s", got.URL.RawQuery)
 	}
 	if got.URL.Path != "/ide" {
-		t.Fatalf("upstream path %q, want the /r/<run> prefix removed", got.URL.Path)
+		t.Fatalf("upstream path %q, want the /r/<run>/<app> prefix removed", got.URL.Path)
 	}
 	if got.Header.Get("X-Forwarded-For") != "" {
 		t.Fatal("the operator's address was forwarded into the sandbox")
@@ -796,7 +800,8 @@ func TestUIGateway_AuditsAuthAndSessionWithoutContent(t *testing.T) {
 func TestUIGateway_SessionCookieIsSignedAndBounded(t *testing.T) {
 	h := newUIHarness(t, okBackend())
 	now := time.Now()
-	sess := uiSession{Run: h.run.ID, App: "code", Port: uiTestPort, Principal: "alice", Expires: now.Add(time.Hour).Unix()}
+	sess := uiSession{Run: h.run.ID, App: "code", Port: uiTestPort, Principal: "alice",
+		Expires: now.Add(time.Hour).Unix(), IssuedAt: now.Unix()}
 	value := h.srv.encodeUISession(sess)
 
 	req := func(v string) *http.Request {

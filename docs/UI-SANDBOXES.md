@@ -192,9 +192,16 @@ The enter endpoint consumes the ticket and then **re-checks everything the
 ticket cannot prove on its own** against freshly-loaded state: owner-or-admin
 for this run, the run still `RUNNING` with a sandbox, and the app actually
 declared in the run's **effective** policy. Only then does it set the relay
-cookie — `wardyn_ui_sess`, `HttpOnly`, `SameSite=Lax`, `Path=/r/<run-id>/`, 8h
-— and `302` to `/r/<run-id><path>`. Every later request rides that cookie, and
+cookie — `wardyn_ui_sess`, `HttpOnly`, `SameSite=Lax`,
+`Path=/r/<run-id>/<app>/`, `WARDYN_UI_SANDBOX_SESSION_TTL` (default 8h) — and
+`302` to `/r/<run-id>/<app><path>`. Every later request rides that cookie, and
 nothing else on this listener authenticates anything.
+
+**One session per app, per run.** The app is in the path and the cookie is
+scoped to it, so a run that declares several `ui_apps` can have them all open at
+once: each tab holds its own session, and the gateway refuses one app's session
+on another app's path. The session also names the app in `ui.open`/`ui.close`,
+so the log says which app a human actually opened.
 
 ### From the console
 
@@ -211,6 +218,7 @@ precisely what the second listener exists to prevent.
 |---|---|
 | `WARDYN_UI_SANDBOX_LISTEN` | the gateway's own address, e.g. `:8081` — never `WARDYN_LISTEN`'s |
 | `WARDYN_UI_SANDBOX_ADVERTISE` | the externally-reachable base URL, e.g. `https://wardyn-ui.example.com` (advisory copy; unset falls back to the raw bind address and warns) |
+| `WARDYN_UI_SANDBOX_SESSION_TTL` | how long a relay session stays usable, default `8h` — the relay's sibling of `WARDYN_SSH_ROLE_TTL`. Shortening it binds the cookies already in browsers |
 | `WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE` | per-run origin, e.g. `https://run-{run}.ui.example.com` — needs wildcard DNS and a wildcard certificate. **The documented default for a production deployment**; leave unset only for a single-tenant/demo install willing to accept the shared-origin residual below |
 
 **One certificate.** The gateway serves TLS with the *same* `-tls-cert`/
@@ -310,7 +318,20 @@ with a `ui.auth` denial in the log.
 **Only declared ports.** The port is captured from the effective policy when
 the ticket is redeemed and lives in the signed cookie, so no later request can
 name a different one; the dial target is re-verified against the session on
-every connection.
+every connection. The session is scoped to the ONE app whose ticket minted it —
+a second app on the same run is a second session at its own path, never a
+replacement for the first.
+
+**Bounded staleness, not a frozen bearer.** The cookie carries its own
+issued-at, so `WARDYN_UI_SANDBOX_SESSION_TTL` applies to sessions already in
+browsers — shortening it takes effect at once — and every **new** connection
+re-asserts owner-or-admin against the freshly-loaded run and consults the
+revoke cutoff `POST /sessions/revoke` stamps. A demoted, off-boarded or revoked
+human therefore stops being able to open connections on their very next one.
+The bound, stated: a connection already established (a relayed WebSocket) keeps
+working until it closes — killing the run is what ends an in-flight session,
+the same bound attach and [SSH](SSH.md#bounds) publish. This is
+the relay's sibling of `WARDYN_SSH_ROLE_TTL`.
 
 **Header hygiene, both directions.** Cookies are not port-scoped, so a shared
 hostname would otherwise hand console cookies to sandbox code: every forwarded

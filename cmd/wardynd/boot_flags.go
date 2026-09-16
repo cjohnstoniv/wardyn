@@ -225,6 +225,8 @@ type bootFlags struct {
 	uiListen         *string
 	uiAdvertise      *string
 	uiOriginTemplate *string
+	// uiSessionTTL bounds the relay session cookie — see api.Config.UISessionTTL.
+	uiSessionTTL *time.Duration
 }
 
 // parseBootFlags declares every wardynd flag (with its WARDYN_* env fallback)
@@ -387,6 +389,7 @@ func parseBootFlags() *bootFlags {
 		sshListen:        flagEnv("ssh-listen", "WARDYN_SSH_LISTEN", "", `SSH gateway listen address (e.g. ":2222"); empty (the default) disables the gateway entirely — no listener, no new surface`),
 		uiListen:         flagEnv("ui-sandbox-listen", "WARDYN_UI_SANDBOX_LISTEN", "", `UI-sandbox gateway listen address (e.g. ":8081"); empty (the default) disables the gateway entirely — no listener, no new surface. MUST differ from -listen: relayed pages are the sandbox's own code, and the separate origin is what keeps them away from the console's session`),
 		uiAdvertise:      flagEnv("ui-sandbox-advertise", "WARDYN_UI_SANDBOX_ADVERTISE", "", `externally-reachable base URL of the UI-sandbox gateway (e.g. "https://wardyn-ui.example.com"), published on /healthz for the console's Open button; purely advisory copy (the gateway binds -ui-sandbox-listen, not this)`),
+		uiSessionTTL: flagDuration("ui-sandbox-session-ttl", "WARDYN_UI_SANDBOX_SESSION_TTL", 8*time.Hour, `how long a UI-sandbox relay session (the wardyn_ui_sess cookie minted at the ticket handoff) stays usable; the relay's sibling of -ssh-role-ttl. Applied to cookies ALREADY in browsers, since the cookie carries its own issued-at — so shortening it takes effect at once. Role, run ownership and the revoke cutoff are re-checked on every new connection regardless; this bounds how long a session can outlive its enter at all`),
 		uiOriginTemplate: flagEnv("ui-sandbox-origin-template", "WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE", "", `optional PER-RUN origin for the UI-sandbox gateway, e.g. "https://run-{run}.ui.example.com" (needs wildcard DNS + a wildcard certificate). Set, every run gets its own browser origin and an enter on any other host is refused; empty, all runs share one origin separated only by a path-scoped cookie`),
 
 		sshAdvertise: flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail "Connect via SSH" pane's ssh command; purely advisory copy (the gateway itself binds -ssh-listen, not this). Empty publishes NO address at all: /healthz reports an empty advertise_addr, the console pane has no host to show and "wardyn ssh" refuses with that message — so set this whenever the gateway is enabled`),

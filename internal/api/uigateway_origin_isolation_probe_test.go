@@ -73,12 +73,12 @@ func TestF12Probe_CookieForRunAIsRefusedOnRunBPath(t *testing.T) {
 	// A fully valid, unexpired, correctly-signed cookie for run A.
 	cookieA := &http.Cookie{Name: uiCookieName, Value: h.srv.encodeUISession(uiSession{
 		Run: runA, App: "code", Port: uiTestPort, Principal: h.owner, Role: oidc.RoleMember,
-		Expires: time.Now().Add(time.Hour).Unix(),
+		Expires: time.Now().Add(time.Hour).Unix(), IssuedAt: time.Now().Unix(),
 	})}
 
 	// Sanity: the same cookie MUST work on run A's own path, or the negative
 	// result below would be meaningless (it must fail for the RIGHT reason).
-	reqA := httptest.NewRequest(http.MethodGet, uiRunPrefix+runA.String()+"/ide", nil)
+	reqA := httptest.NewRequest(http.MethodGet, uiRelayPrefix(runA, "code")+"/ide", nil)
 	reqA.AddCookie(cookieA)
 	recA := httptest.NewRecorder()
 	h.gateway.ServeHTTP(recA, reqA)
@@ -87,7 +87,7 @@ func TestF12Probe_CookieForRunAIsRefusedOnRunBPath(t *testing.T) {
 	}
 
 	// The probe: run A's cookie on run B's live relay path.
-	reqB := httptest.NewRequest(http.MethodGet, uiRunPrefix+runB.ID.String()+"/ide", nil)
+	reqB := httptest.NewRequest(http.MethodGet, uiRelayPrefix(runB.ID, "code")+"/ide", nil)
 	reqB.AddCookie(cookieA)
 	recB := httptest.NewRecorder()
 	h.gateway.ServeHTTP(recB, reqB)

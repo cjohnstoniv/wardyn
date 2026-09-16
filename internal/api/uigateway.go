@@ -23,8 +23,11 @@
 //
 //	POST /runs/{id}/attach-ticket  (existing, owner-or-admin, single-use, 30s)
 //	  → GET <ui-origin>/__wardyn/enter?run=&app=&ticket=
-//	  → cookie wardyn_ui_sess (HttpOnly, SameSite=Lax, Path=/r/<run-id>/)
-//	  → 302 /r/<run-id>/<app path>   … every later request rides the cookie
+//	  → cookie wardyn_ui_sess (HttpOnly, SameSite=Lax, Path=/r/<run-id>/<app>/)
+//	  → 302 /r/<run-id>/<app>/<app path>  … every later request rides the cookie
+//
+// The APP is in the path, and the cookie is scoped to it, because a run may
+// declare up to 8 ui_apps: see uigateway_session.go, which owns the cookie.
 //
 // Cookies are not port-scoped, so a shared hostname would let sandbox content
 // see console cookies and vice versa: every forwarded request has ALL wardyn_*
@@ -40,10 +43,6 @@ package api
 
 import (
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -67,9 +66,11 @@ const (
 	// path on this listener, and it authenticates by consuming a single-use
 	// attach ticket.
 	uiEnterPath = "/__wardyn/enter"
-	// uiRunPrefix roots every relayed request: /r/<run-id>/<app path>. The run
-	// id is IN THE PATH so the session cookie can be Path-scoped to it — one
-	// run's page cannot make the browser attach another run's cookie.
+	// uiRunPrefix roots every relayed request: /r/<run-id>/<app>/<app path>.
+	// The run id AND the app are IN THE PATH so the session cookie can be
+	// Path-scoped to both — one run's page cannot make the browser attach
+	// another run's cookie, and one app's session cannot be the other's
+	// (uiCookiePath, uigateway_session.go).
 	uiRunPrefix = "/r/"
 	// uiCookieName is the relay session cookie. The wardyn_ prefix is what the
 	// inbound strip keys on, so it MUST keep it.
@@ -77,11 +78,6 @@ const (
 	// uiCookiePrefix is the strip rule: no cookie in this namespace is ever
 	// forwarded into a sandbox, whichever wardyn surface set it.
 	uiCookiePrefix = "wardyn_"
-	// uiSessionTTL bounds a relay session. Long enough for a working session in
-	// an editor (re-entering means minting another ticket from the console),
-	// short enough that a cookie captured from a browser profile is not a
-	// permanent key to a sandbox.
-	uiSessionTTL = 8 * time.Hour
 	// maxUIConnsPerRun bounds concurrent relay connections — and therefore
 	// concurrent socat execs — per run. Browsers open ~6 connections per
 	// origin, so this is that plus headroom; it is a resource-exhaustion bound
@@ -190,79 +186,6 @@ func (s *Server) UIGatewayHandler() http.Handler {
 	})
 }
 
-// ─── session cookie ──────────────────────────────────────────────────────────
-
-// uiSession is what the relay cookie carries. It is signed (HMAC-SHA256 under
-// WARDYN's ui session key), never stored: the ONE authorization decision — is
-// this human allowed to reach this run's declared app — was made when the
-// single-use ticket was redeemed, and Port is captured there from the run's
-// EFFECTIVE policy so no later request can name a different port.
-type uiSession struct {
-	Run       uuid.UUID `json:"r"`
-	App       string    `json:"a"`
-	Port      int       `json:"p"`
-	Principal string    `json:"s"`
-	Role      string    `json:"o"`
-	Expires   int64     `json:"e"`
-}
-
-type uiSessionCtxKey struct{}
-
-func uiSessionFromContext(ctx context.Context) (uiSession, bool) {
-	sess, ok := ctx.Value(uiSessionCtxKey{}).(uiSession)
-	return sess, ok
-}
-
-// uiCookiePath scopes the cookie to ONE run's relay paths. Cookies are not
-// port-scoped, but they ARE path-scoped: this is what stops run A's page from
-// making the browser send run B's session (the shared-origin residual's
-// mitigation in path mode; host mode adds a second, stronger boundary).
-func uiCookiePath(runID uuid.UUID) string { return uiRunPrefix + runID.String() + "/" }
-
-func (s *Server) encodeUISession(sess uiSession) string {
-	payload, _ := json.Marshal(sess)
-	mac := hmac.New(sha256.New, s.cfg.UISessionKey)
-	mac.Write(payload)
-	return base64.RawURLEncoding.EncodeToString(payload) + "." +
-		base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-}
-
-// decodeUISession verifies and decodes the relay cookie. Every failure —
-// absent, malformed, forged, expired — returns false with no distinction: this
-// listener has ONE auth mechanism and no fallback, so there is nothing to
-// negotiate and no oracle to offer.
-func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, bool) {
-	c, err := r.Cookie(uiCookieName)
-	if err != nil {
-		return uiSession{}, false
-	}
-	rawPayload, rawSig, found := strings.Cut(c.Value, ".")
-	if !found {
-		return uiSession{}, false
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(rawPayload)
-	if err != nil {
-		return uiSession{}, false
-	}
-	sig, err := base64.RawURLEncoding.DecodeString(rawSig)
-	if err != nil {
-		return uiSession{}, false
-	}
-	mac := hmac.New(sha256.New, s.cfg.UISessionKey)
-	mac.Write(payload)
-	if !hmac.Equal(sig, mac.Sum(nil)) {
-		return uiSession{}, false
-	}
-	var sess uiSession
-	if err := json.Unmarshal(payload, &sess); err != nil {
-		return uiSession{}, false
-	}
-	if sess.Run == uuid.Nil || sess.Port <= 0 || now.Unix() >= sess.Expires {
-		return uiSession{}, false
-	}
-	return sess, true
-}
-
 // ─── enter: redeem the ticket, re-check, set the cookie ──────────────────────
 
 // handleUIEnter is the ticket handoff:
@@ -353,24 +276,24 @@ func (s *Server) handleUIEnter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	now := s.cfg.Now()
+	now, ttl := s.cfg.Now(), s.uiSessionTTL()
 	sess := uiSession{
 		Run: runID, App: declared.Name, Port: declared.Port,
 		Principal: ta.principal, Role: ta.role,
-		Expires: now.Add(uiSessionTTL).Unix(),
+		Expires: now.Add(ttl).Unix(), IssuedAt: now.Unix(),
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name:     uiCookieName,
 		Value:    s.encodeUISession(sess),
-		Path:     uiCookiePath(runID),
+		Path:     uiCookiePath(runID, declared.Name),
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		Secure:   s.cfg.OIDCSecureCookies,
-		Expires:  now.Add(uiSessionTTL),
+		Expires:  now.Add(ttl),
 	})
 	s.auditUI(&runID, types.ActorHuman, ta.principal, "ui.auth", declared.Name, "success",
 		map[string]any{"app": declared.Name, "port": declared.Port})
-	http.Redirect(w, r, uiRunPrefix+runID.String()+declared.PathOrRoot(), http.StatusFound)
+	http.Redirect(w, r, uiRelayPrefix(runID, declared.Name)+declared.PathOrRoot(), http.StatusFound)
 }
 
 // uiRunOrigin returns the host this run's apps must be served on in HOST mode
@@ -389,18 +312,24 @@ func (s *Server) uiRunOrigin(runID uuid.UUID) string {
 
 // ─── relay ───────────────────────────────────────────────────────────────────
 
-// handleUIRelay serves /r/<run-id>/... — every request after the handoff. The
-// cookie is the ONLY credential accepted here: there is no fall-through to the
-// console's session or admin bearer, because the caller on this origin may be
-// sandbox-authored JavaScript.
+// handleUIRelay serves /r/<run-id>/<app>/... — every request after the handoff.
+// The cookie is the ONLY credential accepted here: there is no fall-through to
+// the console's session or admin bearer, because the caller on this origin may
+// be sandbox-authored JavaScript.
+//
+// The session has to match BOTH segments. The run match is the origin-isolation
+// backstop for the browser's path-scoped cookie; the app match is the same
+// backstop for the per-app half of that path, and it is what makes a second
+// declared app on one run a separate session rather than a replacement for the
+// first one.
 func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
-	runID, ok := parseUIRunPath(r.URL.Path)
+	runID, app, ok := parseUIRunPath(r.URL.Path)
 	if !ok {
 		writeError(w, http.StatusNotFound, "not found on the Wardyn UI gateway (open an app from the run detail page)")
 		return
 	}
 	sess, ok := s.decodeUISession(r, s.cfg.Now())
-	if !ok || sess.Run != runID {
+	if !ok || sess.Run != runID || sess.App != app {
 		writeError(w, http.StatusForbidden, "no valid UI session for this run — open the app again from its run page")
 		return
 	}
@@ -414,18 +343,6 @@ func (s *Server) handleUIRelay(w http.ResponseWriter, r *http.Request) {
 	ctx := context.WithValue(r.Context(), uiSessionCtxKey{}, sess)
 	ctx = context.WithValue(ctx, uiDialErrCtxKey{}, &uiDialErrBox{})
 	s.uiReverseProxy().ServeHTTP(w, r.WithContext(ctx))
-}
-
-// parseUIRunPath extracts the run id from /r/<run-id>/... Anything else (a
-// missing or malformed id) is not a relay path at all.
-func parseUIRunPath(p string) (uuid.UUID, bool) {
-	rest := strings.TrimPrefix(p, uiRunPrefix)
-	seg, _, _ := strings.Cut(rest, "/")
-	id, err := uuid.Parse(seg)
-	if err != nil {
-		return uuid.Nil, false
-	}
-	return id, true
 }
 
 // uiReverseProxy builds the ONE shared reverse proxy (and its exec-lane
@@ -455,7 +372,10 @@ func (s *Server) uiReverseProxy() *httputil.ReverseProxy {
 	return s.uiProxy
 }
 
-// uiRewrite builds the outbound request: the /r/<run-id> prefix comes off, the
+// uiRewrite builds the outbound request: the /r/<run-id>/<app> prefix comes off
+// (the app is served at its own root, as it was before the app segment existed
+// — an app that assumes it is mounted at / is no more and no less broken than
+// under /r/<run-id>), the
 // dial target becomes "<run-id>:<port>" (parsed back apart in uiDial — there
 // is no IP to name), and the inbound hygiene runs. httputil.ProxyRequest has
 // already removed the client's X-Forwarded-* headers and we deliberately do
@@ -468,7 +388,7 @@ func (s *Server) uiRewrite(pr *httputil.ProxyRequest) {
 		pr.Out.URL.Scheme, pr.Out.URL.Host = "http", "invalid:0"
 		return
 	}
-	prefix := uiRunPrefix + sess.Run.String()
+	prefix := uiRelayPrefix(sess.Run, sess.App)
 	pr.Out.URL.Scheme = "http"
 	pr.Out.URL.Host = sess.Run.String() + ":" + strconv.Itoa(sess.Port)
 	pr.Out.URL.Path = strings.TrimPrefix(pr.In.URL.Path, prefix)
@@ -635,6 +555,12 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 	}
 	if run.State != types.RunRunning || run.SandboxRef == "" {
 		return nil, uiFail(ctx, http.StatusConflict, "run is not RUNNING; the UI app is gone (state="+string(run.State)+")")
+	}
+	// …and the human, re-asserted against that same freshly-loaded run and
+	// against the revoke cutoff. The cookie is a long-lived credential; this is
+	// what keeps it bounded-stale rather than final (uiSessionStillAuthorized).
+	if err := s.uiSessionStillAuthorized(ctx, sess, run); err != nil {
+		return nil, err
 	}
 
 	release, ok := s.acquireUIConn(sess.Run)

@@ -10,7 +10,7 @@
 #
 #   - the full handoff: mint an attach ticket on the console origin -> GET
 #     /__wardyn/enter on the UI origin -> the scoped wardyn_ui_sess cookie ->
-#     302 into /r/<run>/ -> code-server's own HTML comes back through the exec
+#     302 into /r/<run>/<app>/ -> code-server's own HTML comes back through the exec
 #     lane
 #   - the second origin IS a boundary: /__wardyn/enter 404s on the console
 #     listener (those routes exist only on the UI handler)
@@ -227,11 +227,11 @@ code=$(curl -sS -o /dev/null -D "${TMPDIR}/enter.h" -w '%{http_code}' \
 UI_SESS="$(sed -n 's/.*[Ss]et-[Cc]ookie: *wardyn_ui_sess=\([^;]*\).*/\1/p' "${TMPDIR}/enter.h" | head -1)"
 loc="$(sed -n 's/^[Ll]ocation: *//p' "${TMPDIR}/enter.h" | tr -d '\r' | head -1)"
 if [[ "${code}" == "302" && -n "${UI_SESS}" ]] \
-   && grep -qi "set-cookie:.*wardyn_ui_sess=.*Path=/r/${RUN_ID}/" "${TMPDIR}/enter.h" \
+   && grep -qi "set-cookie:.*wardyn_ui_sess=.*Path=/r/${RUN_ID}/vscode/" "${TMPDIR}/enter.h" \
    && grep -qi "set-cookie:.*wardyn_ui_sess=.*HttpOnly" "${TMPDIR}/enter.h" \
    && grep -qi "set-cookie:.*wardyn_ui_sess=.*SameSite=Lax" "${TMPDIR}/enter.h" \
-   && [[ "${loc}" == "/r/${RUN_ID}/" ]]; then
-  pass "enter: 302 -> ${loc}, cookie wardyn_ui_sess is HttpOnly + SameSite=Lax + Path=/r/${RUN_ID}/"
+   && [[ "${loc}" == "/r/${RUN_ID}/vscode/" ]]; then
+  pass "enter: 302 -> ${loc}, cookie wardyn_ui_sess is HttpOnly + SameSite=Lax + Path=/r/${RUN_ID}/vscode/"
 else
   fail "enter handoff: status ${code}, location '${loc}', headers: $(tr -d '\r' < "${TMPDIR}/enter.h" | tr '\n' '|')"
 fi
@@ -244,7 +244,7 @@ for _ in $(seq 1 6); do
   # -L: code-server's landing path 302s to ./?folder=<workdir>, a relative
   # redirect that stays on the UI origin and inside the cookie's path scope.
   code=$(curl -sS -m 60 -L -o "${TMPDIR}/vscode.html" -w '%{http_code}' \
-    -H "Cookie: wardyn_ui_sess=${UI_SESS}" "${UIBASE}/r/${RUN_ID}/")
+    -H "Cookie: wardyn_ui_sess=${UI_SESS}" "${UIBASE}/r/${RUN_ID}/vscode/")
   [[ "${code}" == "200" ]] && grep -qi "code-server" "${TMPDIR}/vscode.html" && { got_html=1; break; }
   sleep 5
 done
@@ -336,7 +336,7 @@ ECHO_SESS="$(sed -n 's/.*[Ss]et-[Cc]ookie: *wardyn_ui_sess=\([^;]*\).*/\1/p' "${
 code=$(curl -sS -m 60 -o "${TMPDIR}/echo.txt" -D "${TMPDIR}/echo.h" -w '%{http_code}' \
   -H "Cookie: wardyn_ui_sess=${ECHO_SESS}; wardyn_admin_token=MUST-NOT-LEAK; app_cookie=keepme" \
   -H "Authorization: Bearer MUST-NOT-LEAK" \
-  "${UIBASE}/r/${RUN_ID}/probe?ticket=MUST-NOT-LEAK&keep=yes")
+  "${UIBASE}/r/${RUN_ID}/echo/probe?ticket=MUST-NOT-LEAK&keep=yes")
 if [[ "${code}" == "200" ]] && grep -q "ECHO-END" "${TMPDIR}/echo.txt"; then
   if ! grep -qi "MUST-NOT-LEAK" "${TMPDIR}/echo.txt" \
      && ! grep -qi "wardyn_" "${TMPDIR}/echo.txt" \
@@ -368,7 +368,7 @@ done
 echo $n' 2>/dev/null | tr -d '\r'
 }
 for _ in $(seq 1 20); do
-  curl -sS -m 60 -o /dev/null -H "Cookie: wardyn_ui_sess=${UI_SESS}" "${UIBASE}/r/${RUN_ID}/" || true
+  curl -sS -m 60 -o /dev/null -H "Cookie: wardyn_ui_sess=${UI_SESS}" "${UIBASE}/r/${RUN_ID}/vscode/" || true
 done
 after="$(relay_execs)"
 if [[ -n "${after}" && "${after}" -le "${UI_MAX_CONNS}" ]]; then

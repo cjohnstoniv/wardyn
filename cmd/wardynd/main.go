@@ -437,6 +437,7 @@ func run() error {
 		UIListenAddr:     *f.uiListen,
 		UIAdvertiseURL:   *f.uiAdvertise,
 		UIOriginTemplate: *f.uiOriginTemplate,
+		UISessionTTL:     *f.uiSessionTTL,
 		UISessionKey:     feats.uiSessionKey,
 		// rootCtx is the daemon-lifetime base context for detached background
 		// work (the run completion watcher) that must outlive the create-run

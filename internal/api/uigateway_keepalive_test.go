@@ -68,7 +68,7 @@ func TestUIGateway_RelayedWebSocketKeepsTheRunAlive(t *testing.T) {
 		t.Fatalf("dial gateway: %v", err)
 	}
 	defer conn.Close()
-	req, err := http.NewRequest(http.MethodGet, gw.URL+uiRunPrefix+h.run.ID.String()+"/ide", nil)
+	req, err := http.NewRequest(http.MethodGet, gw.URL+uiRelayPrefix(h.run.ID, "code")+"/ide", nil)
 	if err != nil {
 		t.Fatalf("build upgrade request: %v", err)
 	}

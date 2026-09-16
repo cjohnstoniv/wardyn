@@ -607,6 +607,16 @@ type Config struct {
 	// enter served on any other host. Empty = shared path-mode origin, where one
 	// run's page is separated from another's only by the path-scoped cookie.
 	UIOriginTemplate string
+	// UISessionTTL is WARDYN_UI_SANDBOX_SESSION_TTL: how long a minted relay
+	// session stays usable, and — because the cookie carries its own issued-at
+	// — how stale an ALREADY-minted one may be. The UI relay's sibling of
+	// SSHRoleTTL: the SSH gateway bounds a stale admin-override stamp, this
+	// bounds a stale relay session, and both exist because neither lane has a
+	// live console session to re-read a current role from. Zero defaults to
+	// defaultUISessionTTL in New (matching the flag's default), so a Config
+	// built without going through cmd/wardynd's flags gets the shipped posture
+	// rather than a zero TTL that would refuse every session.
+	UISessionTTL time.Duration
 	// UISessionKey signs the wardyn_ui_sess relay cookie (HMAC-SHA256, >= 32
 	// bytes, the loadOrCreateSecret pattern). Nil/short = gateway disabled: a
 	// cookie that cannot be signed must never be issued.
@@ -765,6 +775,9 @@ func New(cfg Config) *Server {
 	}
 	if cfg.SSHRoleTTL <= 0 {
 		cfg.SSHRoleTTL = defaultSSHRoleTTL
+	}
+	if cfg.UISessionTTL <= 0 {
+		cfg.UISessionTTL = defaultUISessionTTL
 	}
 	if cfg.BaseCtx == nil {
 		cfg.BaseCtx = context.Background()
