@@ -587,11 +587,16 @@ through the constants, so adopting final wording is a one-file diff.
   counted; the tunnels still outlive shutdown). `mitmHosts` remains keyed on
   the bare host, latent since the only producer today dedupes by bare host —
   two pinned tests turn red the moment either gap becomes reachable.
-- **`OPERATOR_ONLY_REASON` ("Requires the admin role.") still stands at five
-  security-tier sites** that admit a security admin as well as an admin, each
-  owned by a different, not-yet-landed lane (`live-approvals.tsx` ×2, a
-  workspace record-pane note pinned by an existing test, the Approvals decide
-  chip, and the run-detail cockpit's decide chip).
+- **`OPERATOR_ONLY_REASON` ("Requires the admin role.") still stands at ONE
+  security-tier site**: the workspace detail record pane's tier note, which sits
+  inside a `<fieldset disabled={!securityOperator}>` and so admits a security
+  admin as well as an admin. It is pinned by an existing test asserting the
+  sentence renders twice on that pane (the pane-level note and
+  `NewSessionForm`'s own), so moving it is a test change as well as a copy one.
+  The other four sites this bullet named through 0.7.4-rc all read
+  `SECURITY_ONLY_REASON` at the tip: `live-approvals.tsx`'s panel hint and its
+  `ScopeMenu` `Always` reason, the Approvals decide chip, and the run-detail
+  cockpit's decide chip.
 - **`@mermaid-js/mermaid-cli` stays a console devDependency.** Moving it needs
   a new install location `scripts/check-diagrams.sh` can find `mmdc` at — a
   structural change out of scope for the lane that found it.
