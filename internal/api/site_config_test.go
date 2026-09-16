@@ -100,6 +100,23 @@ func TestValidateSiteConfig(t *testing.T) {
 			}}, true,
 		},
 		{
+			// F3-F5 (server half): two rows sharing a From used to save fine —
+			// findEgressRedirect resolves the first match only, so the second
+			// row was a silent dead entry.
+			"duplicate from is rejected", types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+				{From: "ghcr.io", To: "registry.corp.internal/ghcr-remote"},
+				{From: "ghcr.io", To: "registry.corp.internal/ghcr-mirror-2"},
+			}}, false,
+		},
+		{
+			// Case differs, same host: EqualFold-equivalent — findEgressRedirect
+			// would still resolve only the first at read time.
+			"duplicate from, different case is still rejected", types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+				{From: "GHCR.io", To: "registry.corp.internal/ghcr-remote"},
+				{From: "ghcr.io", To: "registry.corp.internal/ghcr-mirror-2"},
+			}}, false,
+		},
+		{
 			"good internal host, no cidrs (full liftable set)",
 			types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: "corp.internal"}}}, true,
 		},
@@ -302,6 +319,10 @@ func TestHandlePutSiteConfig_ValidationRejected(t *testing.T) {
 		{"bad scm host", `{"scm_hosts":["https://dev.azure.com"]}`},
 		{"unknown ecosystem", `{"egress_redirects":[{"from":"https://x.corp/gems/","to":"https://artifactory.corp/api/gems/gems-remote/","ecosystem":"rubygems"}]}`},
 		{"bad to url scheme", `{"egress_redirects":[{"from":"https://registry.npmjs.org/","to":"ftp://x.corp/npm/","ecosystem":"npm"}]}`},
+		{"F3-F5: duplicate from", `{"egress_redirects":[
+			{"from":"ghcr.io","to":"registry.corp.internal/ghcr-remote"},
+			{"from":"ghcr.io","to":"registry.corp.internal/ghcr-mirror-2"}
+		]}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

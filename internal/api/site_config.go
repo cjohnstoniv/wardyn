@@ -229,10 +229,25 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 			return fmt.Errorf("upstream_proxy_url: %w (the proxy sidecar loads this URL itself and refuses to start on it)", err)
 		}
 	}
+	// F3-F5 (server half): a duplicate From is producible (no client/server
+	// guard existed) — findEgressRedirect (site_config_probe_classify.go)
+	// resolves the FIRST match only, so a second row sharing a From silently
+	// never fires; the UI's own fix is disabling Add on a collision, not index
+	// keys (F3-F5's verdict explicitly rejects re-keying by index, which
+	// shifts every LATER row's identity/verdict on an unrelated edit).
+	// Case-insensitive, matching findEgressRedirect's own EqualFold compare —
+	// two rows differing only in From's case collide at read time exactly the
+	// same way.
+	seenFrom := make(map[string]int, len(cfg.EgressRedirects))
 	for i, red := range cfg.EgressRedirects {
 		if !validSiteURLOrHost(red.From) {
 			return fmt.Errorf("egress_redirects[%d]: invalid from %q", i, red.From)
 		}
+		if prev, dup := seenFrom[strings.ToLower(strings.TrimSpace(red.From))]; dup {
+			return fmt.Errorf("egress_redirects[%d]: duplicate from %q — egress_redirects[%d] already uses it, "+
+				"and a lookup resolves the first match only", i, red.From, prev)
+		}
+		seenFrom[strings.ToLower(strings.TrimSpace(red.From))] = i
 		if red.Ecosystem != "" {
 			// Ecosystem tier: To is interpolated as a real base URL into a
 			// per-tool config file (.npmrc/pip.conf/.cargo/config.toml/
