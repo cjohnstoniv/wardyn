@@ -54,4 +54,52 @@ describe("DeleteConfirmDialog — role-aware confirm", () => {
     await user.click(confirm);
     expect(onDelete).not.toHaveBeenCalled();
   });
+
+  // F5-F1/X3-F2 — `allowed` lets a caller gate on ownership (useCanMutate),
+  // not just the operator tier, WITHOUT this dialog knowing anything about
+  // workspaces/policies/secrets. Default (omitted) is unchanged: `operator`,
+  // exactly the two tests above.
+  describe("allowed — ownership-aware override", () => {
+    it("allowed=true under a viewer context: the confirm button still works (a member deleting their own row)", async () => {
+      const user = userEvent.setup();
+      const onDelete = vi.fn().mockResolvedValue(undefined);
+      render(
+        <OperatorProvider operator={false}>
+          <DeleteConfirmDialog
+            name="my-workspace"
+            entity="workspace"
+            description="test"
+            allowed={true}
+            onOpenChange={() => {}}
+            onDelete={onDelete}
+            onDeleted={() => {}}
+          />
+        </OperatorProvider>,
+      );
+      const confirm = screen.getByRole("button", { name: /delete workspace/i });
+      expect(confirm).not.toBeDisabled();
+      await user.click(confirm);
+      expect(onDelete).toHaveBeenCalled();
+    });
+
+    it("allowed=false under an operator context: the confirm button is disabled (never a flip to more permissive)", async () => {
+      const user = userEvent.setup({ pointerEventsCheck: 0 });
+      const onDelete = vi.fn().mockResolvedValue(undefined);
+      render(
+        <DeleteConfirmDialog
+          name="someone-elses-workspace"
+          entity="workspace"
+          description="test"
+          allowed={false}
+          onOpenChange={() => {}}
+          onDelete={onDelete}
+          onDeleted={() => {}}
+        />,
+      );
+      const confirm = screen.getByRole("button", { name: /delete workspace/i });
+      expect(confirm).toBeDisabled();
+      await user.click(confirm);
+      expect(onDelete).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -28,6 +28,7 @@ export function DeleteConfirmDialog({
   name,
   entity,
   description,
+  allowed,
   onOpenChange,
   onDelete,
   onDeleted,
@@ -38,6 +39,13 @@ export function DeleteConfirmDialog({
   // Lowercase noun used in the title/button ("workspace" / "policy" / "secret").
   entity: string;
   description: React.ReactNode;
+  // F5-F1/X3-F2: whether THIS caller may confirm THIS delete. Defaults to
+  // `operator` (today's behaviour, unchanged) so every existing caller
+  // (secret/policy/SCM-host/credential — all operator-only) needs no change.
+  // A caller with an ownership concept (workspaces) passes
+  // `useCanMutate(ws.owned_by)` instead, so a member can delete a row they
+  // own without this dialog knowing anything about workspaces.
+  allowed?: boolean;
   onOpenChange: (open: boolean) => void;
   onDelete: () => Promise<void>;
   // Called after a successful delete (e.g. clear selection + reload the list).
@@ -48,6 +56,7 @@ export function DeleteConfirmDialog({
   // routes through this one dialog, so gating it here is the single chokepoint
   // for all of them — no need to also gate each screen's "Delete" trigger.
   const operator = useOperator();
+  const canConfirm = allowed ?? operator;
 
   const confirmDelete = async () => {
     setDeleting(true);
@@ -85,7 +94,7 @@ export function DeleteConfirmDialog({
               e.preventDefault();
               confirmDelete();
             }}
-            disabled={!operator}
+            disabled={!canConfirm}
             aria-describedby={operator ? undefined : "delete-confirm-operator-reason"}
             className="bg-danger text-danger-foreground hover:bg-danger/90"
           >

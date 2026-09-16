@@ -240,6 +240,31 @@ export function usePrincipal(): string {
   return React.useContext(PrincipalContext);
 }
 
+// F5-F1 — the shared "may this caller mutate THIS row" predicate: an operator
+// may always; a member may ONLY a row they own (ownedBy === principal).
+// PREDICATE CORRECTION over the naive `owned_by === principal` a first draft
+// would reach for: an operator-created row carries owned_by:"" (see
+// Workspace.OwnedBy's doc comment — empty means operator-owned, not
+// "unowned"), and /me.principal is non-empty for a signed-in admin too, so
+// without the `operator ||` half every admin would lose the ability to
+// mutate the rows THEY created. `ownedBy` is optional so an operator-only
+// surface (no ownership concept at all — policies, SCM hosts, credentials)
+// can call this with just the caller's tier.
+//
+// Gated on useOperatorResolved(): with no real answer yet this reads FALSE —
+// fail CLOSED — rather than trust OperatorContext's own fail-OPEN default.
+// That default exists so an unresolved /me never locks an operator out of
+// their own console; here the asymmetry runs the other way; a destructive
+// control (delete) briefly showing disabled costs an admin one beat, while
+// briefly showing ENABLED for a member whose ownership hasn't been confirmed
+// yet is the wrong direction to fail in.
+export function useCanMutate(ownedBy?: string): boolean {
+  const operator = useOperator();
+  const operatorResolved = useOperatorResolved();
+  const principal = usePrincipal();
+  return operatorResolved && (operator || (!!principal && ownedBy === principal));
+}
+
 // The B1/B2-derived Wardyn role (GET /api/v1/me's `role`) — "admin",
 // "security_admin" or "member". `operator` above stays the legacy boolean every
 // existing gate reads; Role is additive, for UX that needs the named tier

@@ -6,7 +6,7 @@
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 
-import { OperatorProvider, useMemberLocalDirRoot, useOperator } from "./operator-context";
+import { OperatorProvider, useCanMutate, useMemberLocalDirRoot, useOperator } from "./operator-context";
 
 function Probe() {
   return <span>operator:{String(useOperator())}</span>;
@@ -14,6 +14,10 @@ function Probe() {
 
 function RootProbe() {
   return <span>root:{String(useMemberLocalDirRoot())}</span>;
+}
+
+function CanMutateProbe({ ownedBy }: { ownedBy?: string }) {
+  return <span>canMutate:{String(useCanMutate(ownedBy))}</span>;
 }
 
 describe("operator-context", () => {
@@ -66,5 +70,77 @@ describe("operator-context", () => {
       </OperatorProvider>,
     );
     expect(screen.getByText("root:/home/agent-projects")).toBeInTheDocument();
+  });
+});
+
+// F5-F1 / useCanMutate — the shared "may this caller mutate THIS row"
+// predicate: an operator may always; a member may ONLY their own
+// (ownedBy === principal). PREDICATE CORRECTION over a naive `owned_by ===
+// principal`: an operator-created row carries owned_by:"" while /me.principal
+// is non-empty for a signed-in admin too, so without the `operator ||` half
+// every admin would lose Delete on the rows THEY created. Gated on
+// useOperatorResolved(): with no real answer yet, this must fail CLOSED
+// (return false) rather than trust the operator context's own fail-OPEN
+// default — an admin briefly seeing a disabled Delete costs a beat; a member
+// briefly seeing an ENABLED one is the wrong direction for a destructive
+// control.
+describe("useCanMutate — operator, or the member who owns this row", () => {
+  it("defaults to true (operator + resolved) with no <OperatorProvider> above it", () => {
+    render(<CanMutateProbe ownedBy="someone-else" />);
+    expect(screen.getByText("canMutate:true")).toBeInTheDocument();
+  });
+
+  it("an operator may mutate any row, owned or not", () => {
+    render(
+      <OperatorProvider operator={true} principal="admin@corp">
+        <CanMutateProbe ownedBy="member@corp" />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText("canMutate:true")).toBeInTheDocument();
+  });
+
+  it("a member may mutate a row THEY own (owned_by === principal)", () => {
+    render(
+      <OperatorProvider operator={false} principal="alice">
+        <CanMutateProbe ownedBy="alice" />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText("canMutate:true")).toBeInTheDocument();
+  });
+
+  it("a member may NOT mutate someone else's row", () => {
+    render(
+      <OperatorProvider operator={false} principal="alice">
+        <CanMutateProbe ownedBy="bob" />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText("canMutate:false")).toBeInTheDocument();
+  });
+
+  it("a member may NOT mutate an operator-owned row (owned_by:\"\") — not a flip", () => {
+    render(
+      <OperatorProvider operator={false} principal="alice">
+        <CanMutateProbe ownedBy="" />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText("canMutate:false")).toBeInTheDocument();
+  });
+
+  it("with no ownedBy given (operator-only surfaces), a member reads false", () => {
+    render(
+      <OperatorProvider operator={false} principal="alice">
+        <CanMutateProbe />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText("canMutate:false")).toBeInTheDocument();
+  });
+
+  it("unresolved /me (operatorResolved=false) reads false even under the fail-open operator default", () => {
+    render(
+      <OperatorProvider operator={true} operatorResolved={false} principal="alice">
+        <CanMutateProbe ownedBy="alice" />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText("canMutate:false")).toBeInTheDocument();
   });
 });
