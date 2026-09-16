@@ -46,7 +46,15 @@ func TestAllowedExactHostAcceptsAnAuthoredPort(t *testing.T) {
 		t.Fatalf("buildInjector over the shape dispatch authors: %v", err)
 	}
 
-	// NEGATIVE CONTROLS — the three widenings this must not become. Injection
+	// A deny on a DIFFERENT port does not cancel the allow: the operator authored
+	// :443 for the credential and denied only :22, so injection still builds.
+	if !CompilePolicy(types.RunPolicySpec{
+		AllowedDomains: []string{"m.corp:443"}, DeniedDomains: []string{"m.corp:22"},
+	}).AllowedExactHost("m.corp") {
+		t.Error(`a deny on an unrelated port must not cancel the authored allow`)
+	}
+
+	// NEGATIVE CONTROLS — the widenings this must not become. Injection
 	// still requires the operator to have named the EXACT host in writing.
 	for _, c := range []struct {
 		name string
@@ -56,6 +64,15 @@ func TestAllowedExactHostAcceptsAnAuthoredPort(t *testing.T) {
 		{"allow_all_egress alone is still not exact", types.RunPolicySpec{AllowAllEgress: true}},
 		{"a denied host stays denied however it is allowed", types.RunPolicySpec{
 			AllowedDomains: []string{"m.corp:443"}, DeniedDomains: []string{"m.corp"}}},
+		// The ASYMMETRY this change could have introduced: the allow side became
+		// any-port, so the deny side must be able to cancel the ports it names.
+		// CompilePolicy routes a port-qualified deny to deniedExactPort ONLY, which
+		// the port-less deny checks above never read — so without the per-port
+		// shadow this policy would newly BUILD an injector where it used to fail
+		// closed, and the credential would ride an https request to a port the
+		// operator denied in writing.
+		{"a port-qualified deny cancels the port-qualified allow", types.RunPolicySpec{
+			AllowedDomains: []string{"m.corp:443"}, DeniedDomains: []string{"m.corp:443"}}},
 	} {
 		if CompilePolicy(c.spec).AllowedExactHost("m.corp") {
 			t.Errorf("%s: AllowedExactHost(\"m.corp\") = true, want false", c.name)
