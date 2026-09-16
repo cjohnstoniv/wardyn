@@ -171,8 +171,18 @@ func mergeAdvice(base WorkspaceProfile, adv adviceWire) WorkspaceProfile {
 	// already unions this same field across sources), and always forces
 	// NeedsReview so an operator must deliberately promote it via the
 	// workspace's ApprovedEgress list before it can ever reach a run.
-	if v := cleanSet(adv.EgressDomains); len(v) > 0 {
-		out.SuggestedEgress = cleanSet(append(append([]string(nil), out.SuggestedEgress...), v...))
+	//
+	// B11b-F6: through validateSuggestedHosts, the SAME normalise (lowercase,
+	// strip scheme/port/path), charset check, dot requirement and cap the
+	// deterministic content lane's own suggested hosts cross. An advisory host
+	// and a content-derived one land in one field and are promoted by one
+	// operator action, so they must be the same KIND of value — a bare host —
+	// and a "https://x.example:8080/p" sitting in that list is not one.
+	// allowedEgress is empty here on purpose: the subtraction that argument
+	// performs is against the filename-keyed table, and out.EgressDomains is
+	// already the union this merge is gap-filling around.
+	if v := validateSuggestedHosts(adv.EgressDomains, nil); len(v) > 0 {
+		out.SuggestedEgress = validateSuggestedHosts(append(append([]string(nil), out.SuggestedEgress...), v...), nil)
 		out.NeedsReview = true
 		added = true
 	}
@@ -189,15 +199,58 @@ func mergeAdvice(base WorkspaceProfile, adv adviceWire) WorkspaceProfile {
 	return out
 }
 
-// cleanSet trims, drops empties, dedupes and sorts (reusing gitremote.ToSorted).
+// maxAdviceItems / maxAdviceItemLen bound the advisor's three gap-filled list
+// fields. A strict JSON schema constrains the SHAPE of the answer and nothing
+// about its size, and these values reach a human-read document, so they get a
+// count and a length like every other untrusted list in this package.
+const (
+	maxAdviceItems   = 32
+	maxAdviceItemLen = 64
+)
+
+// cleanSet trims, drops empties, dedupes, VALIDATES and sorts.
+//
+// The validation is the point (B11b-F6). This list is the advisor's answer, the
+// advisor was fed UnrecognizedSamples — file content out of the scanned repo —
+// and Languages/PackageManagers/Tools are written VERBATIM into the AGENTS.md
+// that the next agent reads. An entry carrying a newline and a "## SYSTEM:"
+// heading is therefore a prompt-injection re-entry path through a field that
+// used to be trimmed and nothing else. adviceItemSafe is what closes it; the
+// count and length caps close the size half.
 func cleanSet(xs []string) []string {
 	set := make(map[string]struct{}, len(xs))
 	for _, x := range xs {
-		if t := strings.TrimSpace(x); t != "" {
-			set[t] = struct{}{}
+		t := strings.TrimSpace(x)
+		if t == "" || len(t) > maxAdviceItemLen || !adviceItemSafe(t) {
+			continue
+		}
+		set[t] = struct{}{}
+	}
+	out := gitremote.ToSorted(set)
+	if len(out) > maxAdviceItems {
+		out = out[:maxAdviceItems]
+	}
+	return out
+}
+
+// adviceItemSafe reports whether an advisor-supplied language / package-manager
+// / tool NAME is one this package is willing to paste into a markdown document.
+//
+// An allowlist, not a deny-list, because the value space is tiny and known:
+// real names are letters, digits and a handful of joiners — "C++", ".NET",
+// "Objective-C", "node.js", "GitHub Actions", "maven-wrapper". Everything a
+// markdown injection needs — a line break, a backtick, a bracket, a hash — is
+// outside that set, and so is every control character.
+func adviceItemSafe(s string) bool {
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		case r == ' ' || r == '.' || r == '+' || r == '-' || r == '_' || r == '/':
+		default:
+			return false
 		}
 	}
-	return gitremote.ToSorted(set)
+	return true
 }
 
 // runAdvisor performs one advisory CLI invocation and decodes the strict result.
