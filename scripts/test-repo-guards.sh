@@ -15,6 +15,11 @@
 #      declares, in the right bucket (default vs profile) — the doc claimed a
 #      two-service control plane and a three-member build-only profile.
 #   4. no file still names WARDYN_STAGE_CLAUDE, a knob with no reader anywhere.
+#   5. the L0 metadata block's own evidence is a connection fact, not a bare
+#      curl exit code (see guard 5 below for the full story).
+#   6. every `docker run … -p` under scripts/ publishes loopback-only —
+#      wardyn-test-pg (scripts/up.sh cmd_pg) was the one 0.0.0.0 publish in
+#      the repo (B12b-F5).
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -153,6 +158,34 @@ for knob in WARDYN_AWS_SSO_ENDPOINT_OVERRIDE WARDYN_ALLOW_TEST_ENDPOINTS; do
     fi
 done
 if [ "$test_knob_fail" = 0 ]; then ok "neither AWS SSO test-endpoint knob is renderable from deploy/helm or deploy/compose"; fi
+
+# ── 7. every `docker run … -p` in scripts/ binds loopback only ──────────────
+# wardyn-test-pg (scripts/up.sh cmd_pg) used to publish `-p 55432:5432` — 0.0.0.0
+# on every interface, the one non-loopback docker-run publish anywhere in the
+# repo — for a throwaway dev/e2e Postgres with a fixed demo password. Every
+# consumer (scripts/e2e-backend.sh's default DSN, cmd_pg's own readiness poll)
+# already dials localhost/127.0.0.1, so the wide bind bought nothing but LAN
+# reachability into it. Joins `\`-continuation lines first (up.sh's own call
+# splits `-p` onto its own line), so a wrap cannot hide a bare port from a
+# per-line grep the way it would from one.
+port_bind_fail=0
+for f in $(git ls-files -- scripts | grep '\.sh$'); do
+    [ "$f" = "scripts/test-repo-guards.sh" ] && continue   # this guard's own source, not a docker-run site
+    joined="$(sed -e ':a' -e 'N' -e '$!ba' -e 's/\\\n[[:space:]]*/ /g' "$f")"
+    docker_run_lines="$(printf '%s\n' "$joined" | grep 'docker run' || true)"
+    [ -n "$docker_run_lines" ] || continue
+    while IFS= read -r line; do
+        for val in $(printf '%s\n' "$line" | grep -oE -- '(^| )-p [^ ]+' | sed 's/^ *-p //'); do
+            case "$val" in
+                127.0.0.1:*) ;;
+                *) bad "$f: \`docker run ... -p $val\` does not bind loopback (want 127.0.0.1:<host-port>:<container-port>) — every docker-run publish in scripts/ must stay loopback-only (B12b-F5)"; port_bind_fail=1 ;;
+            esac
+        done
+    done <<EOF
+$docker_run_lines
+EOF
+done
+if [ "$port_bind_fail" = 0 ]; then ok "every 'docker run ... -p' in scripts/ binds loopback only"; fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi
 exit "$fail"

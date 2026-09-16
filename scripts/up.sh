@@ -927,9 +927,15 @@ cmd_pg() {
     docker start wardyn-test-pg >/dev/null 2>&1 || true
   else
     log "Starting wardyn-test-pg (dev/e2e Postgres) on :55432"
+    # Loopback-only (B12b-F5): this was the one 0.0.0.0 publish in the repo —
+    # every consumer (e2e-backend.sh's default DSN, this function's own
+    # readiness poll) already dials localhost/127.0.0.1, so the wide bind
+    # bought nothing but LAN-reachability into a throwaway dev Postgres with a
+    # fixed password. scripts/test-repo-guards.sh enforces every `docker run
+    # … -p` in scripts/ stays loopback-bound.
     docker run -d --name wardyn-test-pg \
       -e POSTGRES_PASSWORD=wardyn -e POSTGRES_USER=wardyn -e POSTGRES_DB=wardyn \
-      -p 55432:5432 postgres:17
+      -p 127.0.0.1:55432:5432 postgres:17
   fi
 
   _tries=0
