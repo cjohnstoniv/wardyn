@@ -36,6 +36,7 @@ import { Kbd, MOD } from "../../wardyn/kbd";
 import { RUN_WIDGETS, WIDGET_IDS, type WidgetContext, type WidgetId } from "./widget-registry";
 import { WidgetSlot } from "./widget-slot";
 import { ErrorBoundary } from "../../wardyn/error-boundary";
+import { modalLayerOpen } from "../../../lib/modal-layer-open";
 
 // Glass: the board's rgba panel + backdrop blur, in theme tokens so it survives
 // a light theme instead of being a hard-coded dark rgba.
@@ -55,6 +56,13 @@ export function FocusMode({ ctx, onExit }: { ctx: WidgetContext; onExit: () => v
   // (ssh, once the run it belongs to finishes) — clamp rather than let the
   // rail's glass panel keep rendering a widget that can no longer place a
   // tile, the same clamp the canvas's own catalog already applies (R4-F020).
+  // R-9 (documented, not fixed): `dockSelection` itself is left stale rather
+  // than cleared in an effect — if the SAME widget becomes dockable again
+  // (ctx changes availability back, not a state a finished run's ssh gate can
+  // actually re-enter) the panel would silently reopen. The run states this
+  // gates on don't reverse, so the derived clamp above is the one that
+  // matters in practice; an effect to null the raw selection too would be
+  // defending against a transition this codebase's own widgets don't produce.
   const dock = dockSelection && dockable.includes(dockSelection) ? dockSelection : null;
 
   React.useEffect(() => {
@@ -74,7 +82,7 @@ export function FocusMode({ ctx, onExit }: { ctx: WidgetContext; onExit: () => v
         // fired: the dialog closed AND focus mode exited, remounting the
         // terminal pane (dropping a live attach socket). Yield when a modal
         // layer is open; its own handler still closes it.
-        if (document.querySelector('[data-radix-dialog-content],[role="alertdialog"]')) return;
+        if (modalLayerOpen()) return;
         e.preventDefault();
         e.stopPropagation();
         onExit();

@@ -52,6 +52,7 @@ import { Button } from "./ui/button";
 import { TakeoverConfirmDialog } from "./attach-takeover-dialog";
 import { RUN_COCKPIT, TERMINAL } from "./wardyn/copy";
 import { useOperator, useOperatorResolved, usePrincipal } from "./wardyn/operator-context";
+import { modalLayerOpen } from "../lib/modal-layer-open";
 
 // ---------------------------------------------------------------------------
 // Auth-mode detection
@@ -770,7 +771,8 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   React.useEffect(() => {
     if (!fullscreen || document.fullscreenElement) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+      // R-4: yield to a dialog's own Escape-dismiss (F1-F3's sibling here).
+      if (e.key === "Escape" && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && !modalLayerOpen()) {
         e.preventDefault();
         e.stopPropagation();
         setFullscreen(false);
