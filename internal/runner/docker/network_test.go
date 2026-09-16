@@ -443,6 +443,12 @@ func TestL0_NoDNSExfil(t *testing.T) {
 	proxy := execInSandbox(ctx, t, d, sb.Ref, []string{
 		"sh", "-c", "wget -q -T 5 -O - http://wardyn-proxy:3128/ 2>&1; echo RC=$?",
 	})
+	// The negative-substring check below is this file's house pattern, and on its
+	// own an exec that returned NOTHING passes it. The probe appends its own shell
+	// RC, so requiring that marker is what makes an empty read a failure.
+	if !strings.Contains(proxy, "RC=") {
+		t.Fatalf("the proxy probe produced no RC marker — the exec returned nothing, so the check below proves nothing:\n%s", proxy)
+	}
 	low := strings.ToLower(proxy)
 	if strings.Contains(low, "bad address") || strings.Contains(low, "unreachable") || strings.Contains(low, "refused") {
 		t.Fatalf("the agent must resolve and reach wardyn-proxy:3128 (its only egress path), got:\n%s", proxy)

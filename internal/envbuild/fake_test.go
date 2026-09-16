@@ -109,6 +109,12 @@ type fakeEnvbuilderDocker struct {
 
 	// removedImages records every ref passed to ImageRemove, in order.
 	removedImages []string
+
+	// inspectErrs maps an image ref to the error ImageInspect returns for it,
+	// overriding the present/absent answer. A test seeds a NON-NotFound error
+	// here to model the daemon failing to answer, which is a different question
+	// from "the image is absent" and has to stay one.
+	inspectErrs map[string]error
 }
 
 func newFakeEnvbuilderDocker() *fakeEnvbuilderDocker {
@@ -195,6 +201,9 @@ func (f *fakeEnvbuilderDocker) ImageInspect(_ context.Context, imageID string, _
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.inspected = append(f.inspected, imageID)
+	if err, ok := f.inspectErrs[imageID]; ok {
+		return client.ImageInspectResult{}, err
+	}
 	// A real daemon 404s an inspect of an image it does not have. ensureImage's
 	// digest path reads presence THROUGH inspect, so a fake that answered every
 	// ref would report every absent digest ref present and never pull.

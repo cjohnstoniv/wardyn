@@ -42,6 +42,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/containerd/errdefs"
 	"github.com/google/uuid"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
@@ -837,8 +838,12 @@ func (b *Builder) streamLogs(ctx context.Context, containerID string, w io.Write
 // closed on its own rather than masking it.
 func (b *Builder) ensureImage(ctx context.Context, ref string) error {
 	if strings.Contains(ref, "@sha256:") {
-		if _, err := b.cli.ImageInspect(ctx, ref); err == nil {
+		_, err := b.cli.ImageInspect(ctx, ref)
+		if err == nil {
 			return nil
+		}
+		if !errdefs.IsNotFound(err) {
+			return fmt.Errorf("envbuild: image inspect %q: %w", ref, err)
 		}
 		return dockerutil.PullImage(ctx, b.cli, ref, "envbuild")
 	}

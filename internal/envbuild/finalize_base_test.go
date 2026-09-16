@@ -7,6 +7,7 @@ package envbuild
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -317,5 +318,32 @@ func TestBuild_UntagsThePerBuildBaseAfterFinalize(t *testing.T) {
 				t.Errorf("reclaiming the base untagged the image it was wrapped into — %q no longer resolves", outputTag)
 			}
 		})
+	}
+}
+
+// TestFinalizeBase_DigestInspectDaemonErrorIsNotAPull is R-04: reading presence
+// through ImageInspect has to make the distinction the docker driver's
+// imagePresent makes — "the daemon says it does not have this" is absence, and
+// anything else is the daemon failing to answer. Treating the two the same still
+// fails closed (the pull errors too), but it reports a registry refusal for what
+// was a broken socket, on the private pre-pulled base where that message is
+// least true. Which is the exact confusion B9-F8 was raised to remove.
+func TestFinalizeBase_DigestInspectDaemonErrorIsNotAPull(t *testing.T) {
+	const ref = "myco/dev:3.0@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	f := newFakeEnvbuilderDocker()
+	f.imagesPresent[ref] = true
+	f.inspectErrs = map[string]error{ref: errors.New("Cannot connect to the Docker daemon at unix:///var/run/docker.sock")}
+	b := newWithClient(f, "envbuilder:test", "")
+	b.ToolsDir = toolsDirWithRequired(t)
+
+	_, err := b.FinalizeBase(context.Background(), ref, "wardyn-byoi/run-e:latest", nil)
+	if err == nil {
+		t.Fatal("FinalizeBase with an unanswerable daemon: got nil error")
+	}
+	if !strings.Contains(err.Error(), "Cannot connect to the Docker daemon") {
+		t.Errorf("the daemon's own answer was replaced instead of surfaced: %v", err)
+	}
+	if f.pullCalled {
+		t.Errorf("a daemon that could not answer is not an absent image — it must not trigger a pull (pulled %v)", f.pulledRefs)
 	}
 }
