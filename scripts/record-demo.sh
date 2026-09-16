@@ -214,7 +214,7 @@ PW_FILTER=("walkthrough.spec.ts")
 # before their browser halves existed) has no spec to hand Playwright.
 RUN_DRIVER=1
 if [[ -n "${VIDEO}" ]]; then
-  [[ "${VIDEO}" =~ ^[0-9]{2}[a-z]?$ ]] || die "--video takes a two-digit number with an optional sub-episode letter (01..13, 03a, 12b), got: ${VIDEO}"
+  [[ "${VIDEO}" =~ ^[0-9]{2}[a-z]?$ ]] || die "--video takes a two-digit number with an optional sub-episode letter (00..13, 03a, 12b), got: ${VIDEO}"
   # No `shopt -s nullglob`: an unmatched glob stays literal and the -f test
   # below rejects it, which is one fewer shell option changed under the rest of
   # this script.

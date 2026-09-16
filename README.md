@@ -162,22 +162,34 @@ credential brokering, the audit trail — are the same for any sandboxed workloa
 | 00 — Meet Wardyn | **The front door.** One keyless run answers what a run may reach, what it may touch, and what it is handed | coming soon |
 | [01 — Why govern agents][v01] | The blast radius anything inherits when it runs as you | 6:50 |
 | [02 — Set up the host][v02] | `make setup`, from a bare host to a running control plane | 7:26 |
+| 02b — Managed desktop | Enterprise desktop deployment: the systemd installer, an MDM-distributable package | coming soon |
+| 02c — One command to a cluster | `make kind-quickstart`, from a bare cluster to a running control plane | coming soon |
 | [03a — What it stops][v03a] | **The core.** Four things that happen to a host a run may not reach, then the secret the sandbox is never handed | 11:45 |
 | [03b — The network, three more ways][v03b] | A real agent boxed in, a policy recorded from a run, an approval that lasts one connection | 5:05 |
 | 03c — Authorized, then issued | A bearer token attached at the boundary; a PAT that only ever exists in a pipe | coming soon |
 | [03d — The kinds that can't use a header][v03d] | SSH keys, brokered GitHub tokens, cloud STS — credentials no header injection can carry | 5:58 |
 | 04 — Add a workspace | Onboarding a source, so a run can mount only what was declared | coming soon |
+| 04b — A member's own workspace | A member onboards their own source, inside the ceiling an admin set | coming soon |
+| 04c — Who may do what | Governance profiles and role mappings: an admin delegates a ceiling, not the deployment | coming soon |
+| 04d — Your drive | A member's own persistent scratch space, sized and scoped to them | coming soon |
 | [05 — Your first policy][v05] | Writing the ceiling every run is clamped to | 3:58 |
 | 06 — Your first run | One governed run, launched and read back from its record | coming soon |
 | 07 — Interactive runs | Attaching a live terminal to a running sandbox | coming soon |
 | 08 — An autonomous agent | A real coding agent doing real work inside the boundary | coming soon |
 | 09 — Record a run | Run open, derive the minimal policy, replay it confined | coming soon |
 | 10 — Approvals and egress | Deciding a held request — once, this run, until, always | coming soon |
+| 11 — CI and headless | No UI, no human: a governed run's exit code becomes the pipeline's | coming soon |
+| 12 — Audit and attach | The append-only audit trail, and attaching live from browser or SSH | coming soon |
+| 12b — Admin operations | Backup, upgrade, rotation and monitoring, day-2 on a running deployment | coming soon |
+| 13 — Your terminal, our cluster | `wardyn ssh` into a Kubernetes-hosted run, from an ordinary terminal | coming soon |
 
 They ship as [release assets](https://github.com/cjohnstoniv/wardyn/releases/tag/v0.7.0),
-not in the repo, so a clone stays small. Links pin `v0.7.0`; later releases
-re-publish under the same filenames. An episode without a link has not been
-re-recorded on 0.7 yet; it is uploaded to this same release the moment its take passes.
+not in the repo, so a clone stays small. Each link pins the release that first
+shipped (or last re-recorded) that episode — a later release does **not**
+automatically re-publish an untouched episode under its own tag; only a
+re-recorded episode moves, to whichever release ships next. An episode without
+a link has not been recorded yet; it ships in whichever release its take passes
+under.
 
 [v01]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.7.0/wardyn-01-why-govern-agents.mp4
 [v02]: https://github.com/cjohnstoniv/wardyn/releases/download/v0.7.0/wardyn-02-set-up-the-host.mp4

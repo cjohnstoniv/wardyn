@@ -28,11 +28,14 @@ make record-demo ARGS="--video 11 --terminal-script scripts/demo-beats/11-ci-and
 
 ## The series harness
 
-The story is not one video, it is twelve core episodes plus lettered optional sub-episodes (03b–03d today) that hang off the episode they extend. Same rig throughout — same driver,
-same overlay, same narration, same verifier — with one spec per video. 0.6 adds
-a thirteenth, **V13 (your terminal, our cluster)**, which has no spec at all: it
-is terminal-only and shot against a Kubernetes cluster rather than the compose
-stack (see "The terminal lane" below).
+The story is not one video, it is 23 catalogued episodes
+(`ui/src/app/lib/demo-videos.ts`'s `EPISODES`) — 14 core-numbered, plus
+lettered optional sub-episodes that hang off the episode they extend: 02b/02c,
+03b–03d, 04b–04d, 12b. Same rig throughout — same driver, same overlay, same
+narration, same verifier — with one spec per video. **13 (your terminal, our
+cluster)** has no spec at all: it is terminal-only and shot against a
+Kubernetes cluster rather than the compose stack (see "The terminal lane"
+below).
 
 ```sh
 scripts/record-demo.sh --video 03a   # records ui/e2e/demo/03a-*.spec.ts, and only that
@@ -548,17 +551,18 @@ once covers the whole series.
 A fresh install lands here on its own: no runs and no dismissed tour means
 `firstRunLanding()` (`setup-gate.ts`) redirects `/` → `/setup`.
 
-### Act 2 — essentials (funnel steps 1–3)
+### Act 2 — essentials (funnel steps 1–4)
 
 | Step | Heading | Notes |
 |---|---|---|
 | 1 | **Pick your barrier** | Fence / Wall / Vault, gated on what the host really has |
-| 2 | **Network** | Mandatory gate. **Test connectivity** must pass before Next unlocks — a blocked step *replaces* Next with its own action button, which `advance()` handles generically |
-| 3 | **Secrets** | Shows the subscription connected in Act 0 |
+| 2 | **People** | An explainer, not a task — done on arrival (there is nothing to configure yet on a fresh install) |
+| 3 | **Network** | Mandatory gate. **Test connectivity** must pass before Next unlocks — a blocked step *replaces* Next with its own action button, which `advance()` handles generically |
+| 4 | **Secrets** | Shows the subscription connected in Act 0 |
 
 Footer buttons: `Next: <step>` and, on the last step, **Finish setup**.
 
-### Act 3 — the guardrails (funnel steps 4–8)
+### Act 3 — the guardrails (funnel steps 5–9)
 
 Each step's start button is `demo-start-<id>` (**Start demo**), its audit panel
 `demo-audit-panel`, and it ends with **End demo**. Approvals render as
@@ -574,7 +578,7 @@ by position (see below). Note `demo-card-<id>` now lives on the funnel's own
 | **Lines that can't be crossed** | `example.com`, `169.254.169.254`, `192.168.1.1` | Public host works; metadata and LAN refused **with egress wide open** |
 | **Once, or for good** | the same curl **twice**, then once more | First is refused *and* raises an approval → the split button's caret → **Once** → the retry returns `HTTP/2 200` → the SAME command a third time is refused again and raises a brand-new approval, left undecided |
 
-### Act 4 — your work (funnel steps 9–10)
+### Act 4 — your work (funnel steps 10–11)
 
 **Onboard a workspace** → **Add workspace** dialog: source **Local directory**,
 **Path on this host**, **Name**, the **Advanced** disclosure (mount path, write
@@ -775,7 +779,7 @@ code, and exits non-zero if any of it fails. The list below is the walkthrough's
    `deploy/compose/.env`, `~/.wardyn-demo-token`, an admin token, or a terminal
    scrollback with any of them.
 2. Confirm the claims are true, not just photogenic —
-   `wardyn audit --run <id> --json` should carry `egress.allow` for
+   `wardyn audit <id> --json` should carry `egress.allow` for
    `api.anthropic.com`, and `approval.decide outcome=approved
    decision_scope=always` → `egress.allow` for `example.com` on the Act 5 run.
    The `169.254.169.254` probe logs `egress.deny` with `rule_source=builtin:private-ip`

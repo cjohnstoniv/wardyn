@@ -107,9 +107,9 @@ cmd_up() {
 
   if [[ -n "${run_id}" ]]; then
     log "Audit trail for run ${run_id}:"
-    wardyn audit --run "${run_id}" || warn "audit query failed"
+    wardyn audit "${run_id}" || warn "audit query failed"
   else
-    warn "could not parse the created run id; run 'wardyn audit --run <full-id>' manually"
+    warn "could not parse the created run id; run 'wardyn audit <full-id>' manually"
   fi
 
   echo

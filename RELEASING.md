@@ -84,17 +84,27 @@ before step 3.
    checkout in `docs/ci/github-actions.yml` (`ref:`) and
    `docs/ci/azure-pipelines.yml` (`--branch`)**, which exist so a pasted
    pipeline does not execute tip-of-default-branch shell in a secret-bearing
-   job (docs/CI.md "Pin the wardyn checkout").
+   job (docs/CI.md "Pin the wardyn checkout"). **`docs/DESKTOP.md`'s real-hardware
+   smoke recipe** also pins both image tags by hand (`WARDYN_WARDYND_IMAGE`,
+   `WARDYN_PROXY_IMAGE` — the desktop tier's MDM config has no `$WARDYN_VERSION`
+   to interpolate; X1a-F10 found this stale for a whole release cycle).
    `scripts/test-claims-match-code.sh` fails if either pin drifts from
    `internal/version/version.go`.
    `scripts/test-install-sh.sh` asserts the two agree with each other, but it
    cannot know the tag you are cutting. `cmd/wardyn/version_test.go`'s
    `TestVersionMatchesChangelog`/`TestShippedVersionStringsAgree` enforce that
-   all four agree with the CHANGELOG's newest section — but only catch a
+   all these agree with the CHANGELOG's newest section — but only catch a
    missed bump if `make release-check` runs AFTER this commit; the
    Prerequisites run above only sees the previous release's already-consistent
    versions and passes either way. **Re-run `make release-check` after this
    commit** before tagging.
+
+   **Also add a `ROADMAP.md` Shipped row for the release you are cutting**
+   (X1c-F2 found the Shipped table stuck on "Built, awaiting release" for
+   three released versions in a row) — a new row plus flipping that release's
+   own `### What vX.Y shipped` intro from "Built, awaiting release" to
+   "Shipped as `vX.Y.Z`", pointing at the CHANGELOG's now-dated entry instead
+   of `[Unreleased]`.
 
    **`docs/VERIFY.md` is deliberately NOT on that list.** Every command in it is
    parameterised on `$WARDYN_VERSION`, which its own step 0 resolves, so it needs
@@ -188,7 +198,7 @@ before step 3.
    ```
 
    The `Location` host it prints must already be one of the two hosts
-   `internal/api/server.go`'s `media-src` CSP directive allows
+   `internal/api/security_headers.go`'s `media-src` CSP directive allows
    (`release-assets.githubusercontent.com` today) — GitHub has moved this host
    before, and a silent mismatch means the player fails to load with no console
    error a viewer would notice.

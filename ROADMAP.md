@@ -19,7 +19,10 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
 | **v0.4** | Containerized setup as the default, credential CLI, YAML policies, container workspaces with their own model credentials, Bedrock SSO, and the corporate-network build/egress lanes (below) | **Shipped (pre-alpha)** |
 | **v0.5** | Kubernetes runner substrate + the Helm chart's first sandbox-capable deploy, conformance green on a real cluster, native SSH access into a run, real admin/member RBAC with owner scoping, signed+published release images (below) | **Shipped (pre-alpha)** — tagged `v0.5.0`, 2026-08-18 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.6** | **The enterprise-POC base: cloud deployment + real permissioning.** Capability grants (four kinds, per-kind enforcement switches, IdP groups), Kubernetes as the base deployment story (one-command kind quickstart, day-2 ops, `/readyz`), terminals beyond the browser (`wardyn ssh`, a kind-proven SSH lane, an admin override), governed UI sandboxes (a ticket-gated loopback relay + a code-server image), and the ground-truth counter fix (below) | **Shipped (pre-alpha)** — `v0.6.0` (see [CHANGELOG.md](CHANGELOG.md)); the release supersets `prep/v0.6` with the demo-video series. The daemon-free merge gate (`make ci`) is green at the release tip minus DCO sign-offs; `make test-e2e` carries 10 failures that reproduce on a pre-merge baseline on the same host — a pre-existing lane defect, not a 0.6 regression |
-| **v0.7** | **Governance an org can delegate, on hardware it owns.** Assignable governance profiles (a named ceiling bound to a person, a group, or everyone) and a `security_admin` tier that can be handed the verdict without being handed the deployment, the rest of enterprise desktop deployment (systemd installer, MDM-distributable packages, the member-mode envelope, a reachable SSH gateway, digest-pinned upgrades), per-tool policy, never-resident git PATs for non-GitHub forges, and the corporate-network last miles — TLS-inspection root, internal model gateway, PrivateLink Bedrock (below) | **Built, awaiting release** — unreleased; see [CHANGELOG.md](CHANGELOG.md)'s `[Unreleased]`. The macOS `.pkg`, the MDM vendor example and the real-Mac smoke run stay **operator-gated** and are not in it |
+| **v0.7.0** | **Governance an org can delegate, on hardware it owns.** Assignable governance profiles (a named ceiling bound to a person, a group, or everyone) and a `security_admin` tier that can be handed the verdict without being handed the deployment, the rest of enterprise desktop deployment (systemd installer, MDM-distributable packages, the member-mode envelope, a reachable SSH gateway, digest-pinned upgrades), per-tool policy, never-resident git PATs for non-GitHub forges, and the corporate-network last miles — TLS-inspection root, internal model gateway, PrivateLink Bedrock (below) | **Shipped (pre-alpha)** — `v0.7.0`, 2026-09-09 (see [CHANGELOG.md](CHANGELOG.md)). The macOS `.pkg`, the MDM vendor example and the real-Mac smoke run stay **operator-gated** and are not in it |
+| **v0.7.1** | Patch: the console header read the raw OIDC `sub` instead of the IdP's `name` claim for an SSO user; a stock `helm install` (persistence off) crash-looped on an empty recording dir hitting a read-only root filesystem | **Shipped (pre-alpha)** — `v0.7.1`, 2026-09-11 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.7.2** | **Workspace Providers** — one admin object for which git/model providers are enabled, for whom, inside what bounds — an agent roster with per-person model credentials, ephemeral disk enforcement on Kubernetes, and seven field-report fixes from a private-endpoint Kubernetes estate (below) | **Shipped (pre-alpha)** — `v0.7.2`, 2026-09-12 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.7.3** | A second field report from the same estate: the per-user AWS SSO lane can no longer sign with the wrong identity (account/role pinned, enforced at three doors), the Bedrock check texts and admin sign-in door stopped conflating a deployment-wide fact with a per-person credential gap, and the CSRF Origin guard now applies in every mode (below) | **Shipped (pre-alpha)** — `v0.7.3`, 2026-09-15 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ### What v0.4 shipped
 
@@ -308,8 +311,8 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
 
 ### What v0.7 shipped
 
-Built and awaiting release; [CHANGELOG.md](CHANGELOG.md)'s `[Unreleased]` section
-is the full list.
+Shipped as `v0.7.0`; [CHANGELOG.md](CHANGELOG.md)'s `[0.7.0]` entry is the full
+list.
 
 - **Governance profiles — an assignable ceiling, not one deployment-wide
   default.** A named policy ceiling an admin binds to a person, an SSO group, or
@@ -377,8 +380,8 @@ is the full list.
 
 ### What v0.7.2 shipped
 
-Built and awaiting release; [CHANGELOG.md](CHANGELOG.md)'s `[Unreleased]` section
-is the full list. 0.7.2 is a patch line carrying ONE unplanned feature — recorded
+Shipped as `v0.7.2`; [CHANGELOG.md](CHANGELOG.md)'s `[0.7.2]` entry is the full
+list. 0.7.2 is a patch line carrying ONE unplanned feature — recorded
 as a dated exception in [RELEASING.md](RELEASING.md), since fast-forwarding
 `release/0.7` onto a feature-carrying `main` IS the release branch taking a
 feature — plus the follow-ups from two customer field reports on a
@@ -439,8 +442,8 @@ private-endpoint Kubernetes estate.
 
 ### What v0.7.3 shipped
 
-Built and awaiting release; [CHANGELOG.md](CHANGELOG.md)'s `[Unreleased]` section
-is the full list. A second field report from the same private-endpoint Kubernetes
+Shipped as `v0.7.3`; [CHANGELOG.md](CHANGELOG.md)'s `[0.7.3]` entry is the full
+list. A second field report from the same private-endpoint Kubernetes
 estate, written inside the first hour of running 0.7.2's `agent_providers` roster
 — 7 findings and 1 confirmation, all in the new surfaces, plus the CSRF Origin
 guard 0.7.2 itself named as an open gap.
@@ -486,8 +489,8 @@ Everything below is **planned, unbuilt, and undated**. Where a seam exists but n
 implementation does, [docs/PLUGGABILITY.md](docs/PLUGGABILITY.md) says so per row.
 
 v0.8 is the remaining path to alpha. The cloud base and permissioning 0.6 owed
-are shipped; 0.7's governance and desktop work is built and awaiting release
-(above), so what is left below is the alpha RC and beyond.
+are shipped, and so is 0.7's governance and desktop work (above, through
+`v0.7.3`), so what is left below is the alpha RC and beyond.
 
 **New for 0.8: posture-gated autonomy** — an org-defined rubric mapping a
 sandbox's containment posture (egress reach, secrets present, confinement class)
@@ -609,7 +612,7 @@ and `threatmodel/THREAT-MODEL.md`'s residual numbers).
   review persona's re-arm on compaction. Recorded so they are not re-discovered as
   findings in 0.8's rounds.
 - **Demo and video track** (not release-gated, owner-timed). The episode 00 script
-  gate · the dialog rewrite set · the F101 mock round · the eight unrecorded stubs
+  gate · the dialog rewrite set · the F101 mock round · the seventeen unrecorded stubs
   · the 03c act-3 rewrite (a PAT is brokered by default now) · the five held videos'
   re-take · the 04c re-take · the re-record impact tool, caption lint and quota
   probe.
@@ -640,13 +643,18 @@ shipped behavior; none is scheduled.
   stack — a supply-chain workstream rather than an image build. **Deferred to
   0.8.**
 
-- **Eight demo episodes are still unrecorded stubs.** 0.7 organised the install
-  paths around three audiences — single-user, multi-user, and joining a Wardyn
-  someone else runs — and the episodes now play inside Getting Started itself
-  (a manifest per episode, watched only on explicit click). `02b` (managed
-  desktop), `02c` (cloud), `04b` (members), `04c` (admin ops), `11`, `12`,
-  `12b` and `13` still carry `tag: null` — their grader arms and persona quizzes
-  are written, the takes are not shot.
+- **Seventeen of the 23 catalogued demo episodes are still unrecorded stubs**
+  (`ui/src/app/lib/demo-videos.ts`'s `EPISODES`; `cmd/wardynd/demo_videos_guard_test.go`
+  pins the count). 0.7 organised the install paths around three audiences —
+  single-user, multi-user, and joining a Wardyn someone else runs — and the
+  episodes now play inside Getting Started itself (a manifest per episode,
+  watched only on explicit click). `00` (front door), `03c` (authorized-then-issued),
+  `04` (add a workspace), `04b` (a member's own workspace), `04c` (who may do
+  what — governance profiles and role mappings), `04d` (a member's own drive),
+  `06`–`10` (first run, interactive, autonomous, record, approvals), `11` (CI),
+  `12` (audit and attach), `12b` (admin operations), `02b` (managed desktop),
+  `02c` (cloud) and `13` (SSH into a cluster run) still carry `tag: null` —
+  their grader arms and persona quizzes are written, the takes are not shot.
 
 - **`--agent` is still required for a run that names no image.** **0.7 narrowed
   this rather than closing it.** A `task_mode=exec` run that carries an `--image`

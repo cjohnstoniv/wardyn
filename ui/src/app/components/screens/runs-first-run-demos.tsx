@@ -35,8 +35,13 @@ export default function FirstRunDemoGrid({
         <h3 className="text-meta font-semibold uppercase tracking-wider text-muted-foreground">
           See it work
         </h3>
+        {/* DRAFT (M2 canon pending) — X4-F3: the old sentence "No model, no
+            key, no repo" was contradicted ten lines below by needsModel/
+            needsSecret, which some cards genuinely require. */}
         <p className="text-sm text-muted-foreground">
-          No model, no key, no repo. Each one runs a real governed sandbox in about a minute.
+          No repo needed. Most need no model or key either — a few show what a
+          connected model or a stored secret additionally protects. Each one runs a
+          real governed sandbox in about a minute.
         </p>
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">

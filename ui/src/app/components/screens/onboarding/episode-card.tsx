@@ -95,13 +95,18 @@ export function StepEpisodes({ stepId }: { stepId: string }) {
 // reserves an episode (RELEASING.md's "one sed") cannot leave the summary
 // line stale — see catalogSummary's own test for the arithmetic pin.
 export function catalogSummary(episodes: Episode[]): { recorded: number; minutes: number } {
-  const recorded = episodes.filter((e) => e.tag !== null).length;
-  const totalSeconds = episodes.reduce((sum, e) => {
+  // X4-F1: an unrecorded episode (tag === null) can already carry a `minutes`
+  // estimate (the take exists, the release doesn't yet) — summing over every
+  // episode WITH a minutes field counted those in too (4878s -> 81 min
+  // instead of the recorded-only 2462s -> 41 min README.md states). Filter to
+  // recorded first, then sum only inside that filtered set.
+  const recordedEpisodes = episodes.filter((e) => e.tag !== null);
+  const totalSeconds = recordedEpisodes.reduce((sum, e) => {
     if (!e.minutes) return sum;
     const [mm, ss] = e.minutes.split(":").map(Number);
     return sum + mm * 60 + ss;
   }, 0);
-  return { recorded, minutes: Math.round(totalSeconds / 60) };
+  return { recorded: recordedEpisodes.length, minutes: Math.round(totalSeconds / 60) };
 }
 
 // Shape C (approved mock round 2026-08-31): path-first groups. Core leads,

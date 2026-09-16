@@ -126,11 +126,20 @@ describe("catalogSummary", () => {
     const fixture: Episode[] = [
       { id: "a", title: "A", audience: "everyone", path: "core", tag: "v1", file: "a.mp4", minutes: "1:30", steps: [] },
       { id: "b", title: "B", audience: "everyone", path: "core", tag: "v1", file: "b.mp4", minutes: "2:00", steps: [] },
-      { id: "c", title: "C", audience: "everyone", path: "core", tag: null, file: "c.mp4", steps: [] },
+      { id: "c", title: "C", audience: "everyone", path: "core", tag: null, file: "c.mp4", minutes: "5:00", steps: [] },
     ];
     // Negative control: the reserved (tag: null) episode is excluded from
-    // both the recorded count and the minutes sum, even though it has no
-    // `minutes` to contribute anyway.
+    // both the recorded count AND the minutes sum — X4-F1's real shape, a
+    // take that already exists (a `minutes` value) for an episode not yet
+    // released: c's own 5:00 would push the total to 9 if it leaked in.
     expect(catalogSummary(fixture)).toEqual({ recorded: 2, minutes: 4 });
+  });
+
+  // X4-F8: re-derived from README.md's own "41 minutes across the six
+  // recorded episodes" — a hardcoded pin, not catalogSummary(EPISODES)
+  // checking itself, so a regression in the function (or an accidental
+  // release-tag flip in EPISODES) actually fails this.
+  it("matches README.md's 6 recorded / 41 minutes for the real catalog", () => {
+    expect(catalogSummary(EPISODES)).toEqual({ recorded: 6, minutes: 41 });
   });
 });

@@ -13,7 +13,7 @@ import (
 )
 
 // The demo video manifest (ui/src/app/lib/demo-videos.ts) and README.md each
-// name the same 13 shipped episodes' (tag, file) pairs independently — the
+// name the same shipped episodes' (tag, file) pairs independently — the
 // manifest so the console can build a download URL, README so a browser on
 // GitHub can. They drift the moment one is edited and not the other: a
 // re-shoot's "one sed" (RELEASING.md step 7) is supposed to rewrite both, and
@@ -49,8 +49,26 @@ func TestDemoVideoManifestMatchesREADME(t *testing.T) {
 	// matches — no need to slice the file to exclude it.
 	entryRe := regexp.MustCompile(`\{\s*id:\s*"[^"]+"[^}]*\}`)
 	entries := entryRe.FindAllString(string(manifest), -1)
-	if len(entries) < 21 {
-		t.Fatalf("parsed only %d demo-videos.ts entries (13 shipped + 8 reserved expected) — the parse regressed and this guard would pass vacuously", len(entries))
+	// EXACT, not a floor: 23 today (6 shipped + 17 reserved). A floor of "at
+	// least N" never fires when an episode is silently DROPPED from the
+	// manifest (only added-without-shipping would trip it), so this is a pin,
+	// re-derived by hand at each re-shoot (RELEASING.md step 7's "one sed").
+	const wantEntries = 23
+	if len(entries) != wantEntries {
+		t.Fatalf("parsed %d demo-videos.ts entries, want exactly %d — either the parse regressed or an episode was added/dropped without updating this pin", len(entries), wantEntries)
+	}
+
+	idFieldRe := regexp.MustCompile(`id:\s*"([^"]+)"`)
+	seenIDs := map[string]bool{}
+	for _, entry := range entries {
+		idM := idFieldRe.FindStringSubmatch(entry)
+		if idM == nil {
+			t.Fatalf("manifest entry has no id: field: %s", entry)
+		}
+		if seenIDs[idM[1]] {
+			t.Errorf("demo-videos.ts EPISODES has two entries with id %q — episodesFor/episodeUrl key on it", idM[1])
+		}
+		seenIDs[idM[1]] = true
 	}
 
 	tagFieldRe := regexp.MustCompile(`tag:\s*(null|"v[^"]*")`)
