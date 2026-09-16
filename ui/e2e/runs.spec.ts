@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, navTo, sidebarLink } from "./fixtures";
-import { RUN } from "../src/app/components/wardyn/copy";
+import { randomUUID } from "node:crypto";
+import { test, expect, gotoConsole, navTo, sidebarLink, sql } from "./fixtures";
+import { RUN, RUN_COCKPIT } from "../src/app/components/wardyn/copy";
 import type { Page, Locator } from "@playwright/test";
 
 // ============================================================================
@@ -408,6 +409,51 @@ test.describe("Run detail (/runs/:id)", () => {
   });
 });
 
+// F1-F4 (verifier correction over the raised finding's own fix): `:164-172`
+// documents the failure-hint chip as "the only place a FAILED run says why —
+// stays visible at every width" — so the fix is NEVER hide it (min-w-0 shrink
+// truncate), not the raised finding's `hidden … 2xl:inline-flex`. 420px is
+// well below the bar's floor (~1300px on a single-line row before the fix),
+// stressing the truncate/overflow-hidden path harder than the width loop above.
+test.describe("Run header — the failure-hint chip survives a narrow viewport (F1-F4)", () => {
+  test("no horizontal overflow at 420px, Kill stays in the viewport, and the hint chip is still visible", async ({
+    page,
+  }) => {
+    await openRuns(page);
+    const hint = "container exited with code 137: OOMKilled while installing dependencies";
+    await page.route("**/api/v1/runs/*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      if (json.task === "e2e fixture 6") json.failure_hint = hint;
+      await route.fulfill({ response, json });
+    });
+
+    await page.getByText("e2e fixture 6").click();
+    await expect(page).toHaveURL(/\/runs\/.+/);
+    await expect(page.getByText("Failed", { exact: true })).toBeVisible();
+
+    await page.setViewportSize({ width: 420, height: 720 });
+
+    // THE PAGE DOES NOT SCROLL (run-detail.tsx's own invariant) — a residual
+    // overflow here would force <main>'s overflow-y:auto into overflow-x too.
+    const overflow = await page.evaluate(() => {
+      const main = document.querySelector("main");
+      return { scrollWidth: main?.scrollWidth ?? 0, clientWidth: main?.clientWidth ?? 0 };
+    });
+    expect(overflow.scrollWidth, "main scrollWidth at 420px").toBe(overflow.clientWidth);
+
+    const killBtn = page.getByRole("button", { name: "Kill", exact: true });
+    await expect(killBtn).toBeVisible();
+    const killBox = await killBtn.boundingBox();
+    expect(killBox, "Kill boundingBox at 420px").not.toBeNull();
+    expect(killBox!.x + killBox!.width, "Kill right edge at 420px").toBeLessThanOrEqual(420);
+
+    // NEVER hidden — the chip may truncate, but it must still be on screen.
+    await expect(page.getByTitle(hint)).toBeVisible();
+  });
+});
+
 // P1 (0.7.3 field report), the "say what the box is" half: `harness login` is a
 // server-side task discriminator — it gates the credential upload route, keeps
 // the session out of the recorder, and pins an image whose own Dockerfile header
@@ -752,5 +798,55 @@ test.describe("Attach card — a failing /healthz claims nothing about the deplo
     await expect(page.getByText("UI apps")).toBeVisible();
 
     await page.unroute("**/healthz");
+  });
+});
+
+// F1-F3 repro (verdict N — NEEDS-REPRO; verified/fixed only if this goes red):
+// focus-mode.tsx's Escape handler and Radix's own AlertDialog dismiss are BOTH
+// capture-phase listeners on `document` — stopPropagation on one does not
+// suppress the other (only stopImmediatePropagation would), so the question is
+// registration order, not interception. A live browser is the only way to
+// settle it: does denying a held approval from inside focus mode, then
+// pressing Escape, close only the dialog (fine) or also exit focus mode
+// (remounts the terminal pane, dropping the live attach socket on an
+// interactive run — R1-F1's F1-F3 finding).
+test.describe("Focus mode — Escape inside a Deny confirm (F1-F3 repro)", () => {
+  test("Escape closes the Deny dialog without also exiting focus mode", async ({ page }) => {
+    const runId = sql("SELECT id FROM agent_runs ORDER BY created_at LIMIT 1");
+    sql(`UPDATE agent_runs SET state = 'RUNNING' WHERE id = '${runId}'`);
+    // tool_call is unconditionally "held" (isHeld) — LiveApprovals renders its
+    // decision strip, with a Deny button, in the terminal pane regardless of
+    // wait_for_review timing/mode.
+    const approvalId = randomUUID();
+    sql(
+      `INSERT INTO approvals (id, run_id, kind, requested_scope, state, requested_at)
+       VALUES ('${approvalId}','${runId}','tool_call','{"tool":"f1f3-repro.exec"}'::jsonb,'PENDING',now())`,
+    );
+
+    try {
+      await page.goto(`/runs/${runId}`);
+      await expect(page.getByText("Running", { exact: true }).first()).toBeVisible();
+
+      await page.getByRole("button", { name: RUN_COCKPIT.enterFocus }).click();
+      await expect(page.getByRole("button", { name: RUN_COCKPIT.exitFocus })).toBeVisible();
+      // The dock opens on the first widget (Egress) by default — its glass
+      // panel overlaps the terminal pane's own LiveApprovals strip. Close it;
+      // the repro is about Escape vs. the Deny dialog, not the dock.
+      await page.getByRole("button", { name: RUN_COCKPIT.closeDock }).click();
+
+      await page.getByRole("button", { name: "Deny", exact: true }).click();
+      const dialog = page.getByRole("alertdialog");
+      await expect(dialog).toBeVisible();
+
+      await page.keyboard.press("Escape");
+
+      // The dialog is gone (Radix's own Escape-dismiss did its job)...
+      await expect(dialog).not.toBeVisible();
+      // ...and focus mode is STILL the active surface — the SAME keypress
+      // must not have ALSO fired focus mode's onExit.
+      await expect(page.getByRole("button", { name: RUN_COCKPIT.exitFocus })).toBeVisible();
+    } finally {
+      sql(`DELETE FROM approvals WHERE id = '${approvalId}'`);
+    }
   });
 });

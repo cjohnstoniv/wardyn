@@ -121,7 +121,11 @@ export function SummaryHeader({
   return (
     <div
       data-testid="run-summary-header"
-      className="flex h-auto min-h-[52px] min-w-0 shrink-0 flex-wrap items-center gap-3 border-b border-border bg-card px-4 py-1.5 xl:h-[52px] xl:flex-nowrap xl:py-0"
+      // F1-F4: overflow-hidden — the single-line xl+ row still floors near
+      // 1300px with every "must never yield" element at its floor; the two
+      // shrinkable chips above degrade width, this catches whatever's left
+      // rather than letting <main>'s overflow-y:auto force overflow-x too.
+      className="flex h-auto min-h-[52px] min-w-0 shrink-0 flex-wrap items-center gap-3 overflow-hidden border-b border-border bg-card px-4 py-1.5 xl:h-[52px] xl:flex-nowrap xl:py-0"
     >
       <Link to="/runs" className="shrink-0 text-sm text-muted-foreground hover:text-foreground">
         Runs
@@ -226,7 +230,10 @@ export function SummaryHeader({
           agent's exit code was CLI-only (wardyn run --wait). Stays visible at
           every width: it's the only place a FAILED run says why. */}
       {exitCode !== undefined && (
-        <Chip tone={exitCode === 0 ? "neutral" : "danger"} mono className="shrink-0">
+        // F1-F4: min-w-0 shrink truncate, not shrink-0 — this chip is short
+        // ("exit N") but must degrade like failure_hint below rather than be
+        // the thing that forces the bar wider than the viewport.
+        <Chip tone={exitCode === 0 ? "neutral" : "danger"} mono className="min-w-0 shrink truncate">
           exit {exitCode}
         </Chip>
       )}
@@ -239,17 +246,20 @@ export function SummaryHeader({
           more — run-detail/failure-block.tsx's What-happened body now
           renders the full sentence for the `unknown` ending kind (D9's own
           class, review R-12 narrowed that rendering to exactly that kind),
-          where width is free. review R-16: hidden below 2xl (not just capped
-          to ~100px) — with a full-sentence home elsewhere, this chip is now
-          the cheapest thing on the bar to give up entirely at xl and below,
-          which is what actually closes the gap R-16's three-viewport
-          measurement found at 1280, not just at 1024.
+          where width is free.
+          F1-F4 (verifier correction, overrides the old R-16 note this chip
+          used to carry): `:164-172` above documents this chip as "the only
+          place a FAILED run says why — stays visible at every width", so it
+          may NEVER hide, at 2xl or any width below it — R-16's `hidden …
+          2xl:inline-flex` was exactly that regression. min-w-0 shrink lets it
+          give up WIDTH instead of existence; the overflow guard is the bar's
+          own overflow-hidden below, not this chip disappearing.
           review R-02: `truncate` on an inline-flex Chip clips mid-word with
           NO ellipsis (min-content sizing on the anonymous flex child) — the
           inner span below is a real block box, so text-overflow actually
           paints one. */}
       {run.failure_hint && (
-        <Chip tone="danger" className="hidden max-w-[100px] shrink-0 2xl:inline-flex" title={run.failure_hint}>
+        <Chip tone="danger" className="min-w-0 max-w-[160px] shrink" title={run.failure_hint}>
           <span className="block min-w-0 truncate">{run.failure_hint}</span>
         </Chip>
       )}
@@ -301,7 +311,11 @@ export function SummaryHeader({
         {elapsed}
       </span>
 
-      <div className="ml-auto flex shrink-0 items-center gap-2">
+      {/* F1-F4: min-w-0 so the pending-approval chip inside can actually
+          shrink/truncate under pressure — a flex item's default min-width:auto
+          would otherwise hold this whole group at its content width and pass
+          the overflow straight on to the bar. */}
+      <div className="ml-auto flex min-w-0 shrink-0 items-center gap-2">
         {/* review R-14: capped the same way as failure_hint (truncate on an
             inline-flex Chip clips with no ellipsis — see R-02 — so the text
             goes in its own block span). A run with real pending approvals is
@@ -331,7 +345,10 @@ export function SummaryHeader({
         <Button
           variant="outline"
           size="sm"
-          className="h-7 text-danger hover:text-danger"
+          // F1-F4: Kill is the one control on this bar that must never yield —
+          // explicit shrink-0 so it is never the thing degrading away when the
+          // group above it runs out of room.
+          className="h-7 shrink-0 text-danger hover:text-danger"
           disabled={terminal}
           onClick={() => setConfirmId(run.id)}
         >
