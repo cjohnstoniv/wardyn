@@ -549,6 +549,14 @@ ensure_postgres() {
 
 # launch_wardynd: start wardynd detached and wait for /healthz. Sets WPID + healthy.
 # nohup + </dev/null detaches; setsid (Linux only) adds a fresh session (macOS lacks it).
+#
+# Wait budget (B12b-F4): wardynd's own boot sequence is a fixed 30s connect
+# PLUS -migrate-timeout/WARDYN_MIGRATE_TIMEOUT (default 5m) before /healthz ever
+# binds (cmd/wardynd/main.go connectAndMigrate) — the same sum
+# deploy/helm/wardyn/templates/deployment.yaml's startupProbe budgets for. The
+# old 45s wait was well inside a plain migration's default budget, so a slow
+# one (a new index on a large table) hit the "not healthy" branch below while
+# wardynd was still working, not stuck.
 launch_wardynd() {
   if command -v setsid >/dev/null 2>&1; then
     setsid nohup ./scripts/run-host.sh >"$LOGFILE" 2>&1 < /dev/null &
@@ -558,11 +566,36 @@ launch_wardynd() {
   WPID=$!
   echo "$WPID" > "$PIDFILE"
   healthy=false
-  for _ in $(seq 1 45); do
+  for _ in $(seq 1 330); do
     if [ "$(curl -s -m2 -o /dev/null -w '%{http_code}' "$URL/healthz" 2>/dev/null)" = "200" ]; then healthy=true; break; fi
     kill -0 "$WPID" 2>/dev/null || break
     sleep 1
   done
+}
+
+# finish_unhealthy_launch PIDFILE WPID LOGFILE — the tail of launch_wardynd's
+# wait when /healthz never answered 200: states what happened and decides
+# whether PIDFILE survives. B12b-F4: an unconditional `rm -f PIDFILE` here
+# orphaned a wardynd that was still alive and simply still starting past this
+# script's own wait budget — `make stop-host` and the already-running check at
+# the top of this file both key off PIDFILE, so deleting it left no way to
+# find or stop that process short of a manual `kill`, and a later `make setup`
+# would try to launch a SECOND wardynd onto the same port instead of noticing
+# the first. Keep PIDFILE whenever the process it names is still actually
+# running; only delete it once the process has genuinely exited. Extracted
+# from the main body so scripts/test-setup-launch.sh can drive both arms with
+# no daemon (same reason ensure_age_key_or_die was extracted).
+finish_unhealthy_launch() {
+  _ful_pidfile=$1 _ful_wpid=$2 _ful_logfile=$3
+  if kill -0 "${_ful_wpid}" 2>/dev/null; then
+    warn "wardynd is still starting (PID ${_ful_wpid}) — watch ${_ful_logfile}; stop with make stop-host"
+  else
+    rm -f "${_ful_pidfile}"
+    warn "wardynd did not become healthy — last log lines:"
+  fi
+  tail -n 15 "${_ful_logfile}" 2>/dev/null | sed 's/^/    /'
+  warn "Full log: ${_ful_logfile}"
+  unset _ful_pidfile _ful_wpid _ful_logfile
 }
 
 ensure_postgres
@@ -850,10 +883,7 @@ if $healthy; then
       || { command -v xdg-open >/dev/null 2>&1 && xdg-open "$URL"; } || true; } >/dev/null 2>&1 &
   fi
 else
-  rm -f "$PIDFILE"
-  warn "wardynd did not become healthy — last log lines:"
-  tail -n 15 "$LOGFILE" 2>/dev/null | sed 's/^/    /'
-  warn "Full log: ${LOGFILE}"
+  finish_unhealthy_launch "$PIDFILE" "$WPID" "$LOGFILE"
   # Same non-silent recap as the healthy branch above — wardynd failing to come up
   # doesn't mean these two earlier warn-and-continue paths are moot; they're still
   # worth naming here since this is the last thing the operator reads.

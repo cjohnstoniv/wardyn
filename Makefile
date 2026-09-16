@@ -474,6 +474,7 @@ test-scripts: ## Daemon-free shell regression tests (scripts/test-*.sh)
 	./scripts/test-reset-capture-hint.sh
 	./scripts/test-reset-host-gate.sh
 	./scripts/test-reset-network-ns.sh
+	./scripts/test-setup-launch.sh
 	./scripts/test-up-policy.sh
 	./scripts/test-up-probes.sh
 
