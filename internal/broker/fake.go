@@ -39,6 +39,15 @@ type FakeGitHubMinter struct {
 	RefRulesetErr      error
 	// LastVerifiedRepos records every repo VerifyRefRuleset was asked about.
 	LastVerifiedRepos []string
+
+	// Revoked counts Revoke calls and RevokedTokens records what was handed
+	// back, so a test can assert BOTH that every discarded token was revoked
+	// (Revoked == Calls-1 on a lost race) and that the RETURNED one was not.
+	Revoked       int
+	RevokedTokens []string
+	// RevokeErr, if set, is returned by Revoke — the best-effort contract says
+	// a failed revoke must not change the caller's own error.
+	RevokeErr error
 }
 
 func (f *FakeGitHubMinter) MintInstallationToken(_ context.Context, repos []string, permissions map[string]string, ttl time.Duration) (string, time.Time, error) {
@@ -68,6 +77,20 @@ func (f *FakeGitHubMinter) MintInstallationToken(_ context.Context, repos []stri
 		exp = time.Now().Add(time.Hour)
 	}
 	return tok, exp, nil
+}
+
+// Revoke records the hand-back. An empty token is a no-op here exactly as it is
+// in the real minter, so a fake that is asked to revoke "nothing" does not
+// inflate the count a test is asserting on.
+func (f *FakeGitHubMinter) Revoke(_ context.Context, token string) error {
+	if token == "" {
+		return nil
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Revoked++
+	f.RevokedTokens = append(f.RevokedTokens, token)
+	return f.RevokeErr
 }
 
 func (f *FakeGitHubMinter) VerifyRefRuleset(_ context.Context, repo string) (bool, string, error) {

@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -183,6 +184,19 @@ type GitHubMinter interface {
 	// implementation that silently answered "confined" would open the gate it
 	// was supposed to close. The compiler must ask.
 	VerifyRefRuleset(ctx context.Context, repo string) (confined bool, detail string, err error)
+	// Revoke hands a minted installation token back to GitHub
+	// (Apps.RevokeInstallationToken — the call ruleset.go:150-163 already makes
+	// for its probe token). It exists for the mint() arms that mint a REAL token
+	// and then DISCARD it: the lost single-use race, a failed minted_jti write,
+	// a failed audit insert, a failed commit. Such a token is live for GitHub's
+	// full ~1h with NO credential.mint jti behind it, so mintedCredentialsSQL
+	// cannot see it and RevokeRun cannot reach it — this call is the only door
+	// back. Best effort at every call site: a failed revoke must never change
+	// the error the caller is already getting. It is on the interface rather
+	// than an optional type assertion for the same reason VerifyRefRuleset is —
+	// a minter that silently did nothing would leave the discard doors leaking
+	// exactly as they leaked before, and the compiler must ask.
+	Revoke(ctx context.Context, token string) error
 }
 
 // Querier is the minimal transaction surface the broker needs. It is satisfied
@@ -503,6 +517,25 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 	minted.GrantID = grantID
 	minted.ApprovalID = row.approvalID
 
+	// B11a-F1. From here on a REAL credential exists, and it only becomes the
+	// caller's on commit. Every arm below that returns an error instead is a
+	// DISCARD door — the lost single-use race, a failed minted_jti write, a
+	// failed audit insert, a failed commit — and a discarded github_token is a
+	// live ghs_… with contents:write for GitHub's full ~1h that reached NO
+	// committed credential.mint row: no jti, so mintedCredentialsSQL cannot see
+	// it and RevokeRun cannot reach it. Hand it back here.
+	//
+	// ONE defer rather than a call at each door, deliberately: the doors are the
+	// arms of a rollback that the `committed` flag already tracks for the tx, and
+	// a fifth arm added later would silently skip a fourth call site while this
+	// covers it by construction. It runs BEFORE the rollback defer above (LIFO)
+	// and depends on nothing the rollback touches.
+	defer func() {
+		if !committed {
+			b.discardMinted(ctx, minted)
+		}
+	}()
+
 	// Write minted_jti back in the SAME transaction (the provable join), and
 	// require the conditional UPDATE to affect exactly one row. This rows-affected
 	// check is LOAD-BEARING for single-use, not a backstop: the row.mintedJTI fast
@@ -590,6 +623,31 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 	}
 
 	return minted, nil
+}
+
+// discardMinted hands a credential that was minted and then NOT returned back to
+// its issuer (B11a-F1).
+//
+// Only github_token has an issuer-side revoke: the installation token is a live
+// GitHub credential the App can surrender (Apps.RevokeInstallationToken, the
+// call ruleset.go already makes for its probe token). The other kinds have
+// nothing to hand back — git_pat returns the operator's OWN long-lived PAT
+// (revoking it would destroy the stored credential every future run depends on),
+// ssh_key is a keypair this process generated and never registered anywhere, and
+// api_key never leaves the broker at all — so they are a no-op, not an omission.
+//
+// Best effort, and deliberately silent about the outcome to the caller: every
+// call site is already returning an error, and turning a failed hand-back into a
+// different error would replace the diagnosis the operator actually needs. It is
+// logged instead, without the token.
+func (b *Broker) discardMinted(ctx context.Context, m Minted) {
+	if b.github == nil || m.Kind != types.GrantGitHubToken || m.Token == "" {
+		return
+	}
+	if err := b.github.Revoke(ctx, m.Token); err != nil {
+		slog.WarnContext(ctx, "broker: discarded github token could not be revoked; it stays live until GitHub expires it",
+			"grant_id", m.GrantID, "jti", m.JTI, "err", err)
+	}
 }
 
 // leaseCoversRemint reports whether an ALREADY-MINTED approval still authorizes

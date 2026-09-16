@@ -49,6 +49,35 @@ type githubMinter struct {
 	// baseURL, when set, overrides the go-github API base URL. Test seam only
 	// (an httptest server); empty in production (the default api.github.com).
 	baseURL string
+	// httpTimeout overrides githubClientTimeout on the app-authenticated client
+	// and on the per-token client Revoke builds. Test seam only (so a
+	// never-responding-server test need not wait the production budget); zero —
+	// the production value — means githubClientTimeout.
+	httpTimeout time.Duration
+}
+
+// githubClientTimeout bounds ONE api.github.com round trip made by this minter
+// (B11a-F2).
+//
+// Without it the mint had no HTTP deadline of its own: MintInstallationToken
+// runs inside mint()'s transaction, which holds SELECT ... FOR UPDATE OF g on
+// the grant row plus a pooled Postgres connection, and the API server sets no
+// Read/WriteTimeout. The only bound was whatever deadline the caller's request
+// ctx carried. Every production caller does carry one (proxy 130 s,
+// gitApprovalBudget, inject 10 s, CLI 30 s), so the residual is a caller with
+// none — and the cost of that residual is the grant row lock and a pool
+// connection pinned for as long as api.github.com stays blackholed, queueing
+// every other mint for that grant behind it. Sized as refRulesetProbeTimeout's
+// sibling: generous for a single round trip, well below every caller budget.
+const githubClientTimeout = 15 * time.Second
+
+// timeout returns this minter's HTTP client budget: the test seam when set,
+// else the production const.
+func (m *githubMinter) timeout() time.Duration {
+	if m.httpTimeout > 0 {
+		return m.httpTimeout
+	}
+	return githubClientTimeout
 }
 
 // NewGitHubMinter builds a LAZY GitHubMinter: it validates the secret names but
@@ -107,7 +136,7 @@ func (m *githubMinter) client(ctx context.Context) (*gh.Client, error) {
 	// base URL is now supplied at construction (WithURLs), not by mutating an
 	// exported field after the fact. WithURLs normalizes a missing trailing
 	// slash itself, matching the test seam's srv.URL+"/".
-	opts := []gh.ClientOptionsFunc{gh.WithHTTPClient(&http.Client{Transport: atr})}
+	opts := []gh.ClientOptionsFunc{gh.WithHTTPClient(&http.Client{Transport: atr, Timeout: m.timeout()})}
 	if m.baseURL != "" {
 		opts = append(opts, gh.WithURLs(&m.baseURL, nil))
 	}
@@ -180,6 +209,39 @@ func (m *githubMinter) MintInstallationToken(ctx context.Context, repos []string
 		}
 	}
 	return tok.GetToken(), exp, nil
+}
+
+// Revoke hands token back to GitHub — DELETE /installation/token, authenticated
+// AS THE TOKEN ITSELF, which is why this builds its own client rather than
+// reusing the app-authenticated one. Same call ruleset.go makes for its probe
+// token; the difference is only which token is being surrendered.
+//
+// WithoutCancel is load-bearing, not tidiness: every caller is a discard door
+// reached because something already went wrong, and on the timeout arm the
+// caller's ctx is ALREADY expired — exactly the case where a live token would
+// otherwise linger for GitHub's full ~1h. A short independent budget keeps the
+// revoke from becoming a new way to hang the mint path.
+//
+// An empty token is a no-op, so a caller need not special-case a kind that
+// minted no GitHub token.
+func (m *githubMinter) Revoke(ctx context.Context, token string) error {
+	if token == "" {
+		return nil
+	}
+	opts := []gh.ClientOptionsFunc{gh.WithAuthToken(token), gh.WithTimeout(m.timeout())}
+	if m.baseURL != "" {
+		opts = append(opts, gh.WithURLs(&m.baseURL, nil))
+	}
+	c, err := gh.NewClient(opts...)
+	if err != nil {
+		return fmt.Errorf("broker: build github client for revoke: %w", err)
+	}
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refRevokeTimeout)
+	defer cancel()
+	if _, err := c.Apps.RevokeInstallationToken(rctx); err != nil {
+		return fmt.Errorf("broker: revoke installation token: %w", err)
+	}
+	return nil
 }
 
 // installationID resolves (and caches) the installation id for owner via the

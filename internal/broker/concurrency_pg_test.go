@@ -364,6 +364,17 @@ func TestPG_ConcurrentMint_ExactlyOnceWins(t *testing.T) {
 	if gh.Calls < 1 {
 		t.Fatalf("github minter calls = %d, want >= 1 (winner must mint)", gh.Calls)
 	}
+	// B11a-F1: every loser's token is a REAL ghs_… with contents:write, live for
+	// GitHub's full ~1h, and it never reaches a committed credential.mint row —
+	// so it has no jti, mintedCredentialsSQL cannot see it and RevokeRun cannot
+	// reach it. The only door back is the broker handing it to GitHub at the
+	// discard, which is what this asserts: exactly the losers were revoked
+	// (Calls-1), and therefore the winner's was NOT (wins==1 above, and the
+	// count leaves no room for it).
+	if gh.Revoked != gh.Calls-1 {
+		t.Fatalf("revoked = %d, want %d (= minter calls %d - the one winner): every discarded token must be handed back",
+			gh.Revoked, gh.Calls-1, gh.Calls)
+	}
 }
 
 // TestPG_ConcurrentMint_AutoApprovalGrant_Independent is a control alongside the
@@ -515,6 +526,17 @@ func TestPG_ConcurrentMintOnApproval_ExactlyOnce(t *testing.T) {
 	// to minter invocations. This is the very interleaving the fix defends.
 	if gh.Calls < 1 {
 		t.Fatalf("github minter calls = %d, want >= 1 (winner must mint)", gh.Calls)
+	}
+	// B11a-F1: every loser's token is a REAL ghs_… with contents:write, live for
+	// GitHub's full ~1h, and it never reaches a committed credential.mint row —
+	// so it has no jti, mintedCredentialsSQL cannot see it and RevokeRun cannot
+	// reach it. The only door back is the broker handing it to GitHub at the
+	// discard, which is what this asserts: exactly the losers were revoked
+	// (Calls-1), and therefore the winner's was NOT (wins==1 above, and the
+	// count leaves no room for it).
+	if gh.Revoked != gh.Calls-1 {
+		t.Fatalf("revoked = %d, want %d (= minter calls %d - the one winner): every discarded token must be handed back",
+			gh.Revoked, gh.Calls-1, gh.Calls)
 	}
 }
 
