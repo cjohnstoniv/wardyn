@@ -8,17 +8,24 @@
 // It is read-only and runs NO subprocess: it parses .git/config and .gitmodules
 // as plain files (so it can never trigger a git hook or a malicious
 // include.path / core.fsmonitor in a repo's config). The walk is bounded (depth,
-// .git count, file size), never follows symlinks, and fails safe — any error
-// yields fewer/zero detected repos, never a grant on uncertainty.
+// .git count, file size), never follows symlinks, reads REGULAR files only (a
+// FIFO named .gitmodules would otherwise block the scan's goroutine forever),
+// and fails safe — any error yields fewer/zero detected repos, never a grant on
+// uncertainty.
 package gitremote
 
 import (
+	"errors"
+	"io"
 	"io/fs"
 	"maps"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
+	"unicode"
 )
 
 // Bounds keep detection fast and safe on large/hostile trees.
@@ -128,14 +135,42 @@ func within(root, p string) bool {
 	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
+// readCapped reads at most maxConfigBytes from a REGULAR file, failing safe to
+// nil for anything else. It is the single chokepoint behind all three read
+// sites (the .gitmodules scan, the .git/config scan, and resolveConfigPath's
+// gitdir pointer), which is why the whole of B11a-F5 is fixed here.
+//
+// Three properties the bare os.Open + single Read did not have:
+//
+//   - O_NOFOLLOW. The walk skips symlinks everywhere EXCEPT this final open, so
+//     a .git/config symlink was the one place the package doc's "never follows
+//     symlinks" promise did not hold; it read whatever the scanning uid could
+//     reach.
+//   - O_NONBLOCK + IsRegular. A FIFO named .gitmodules (or .git/config) blocks
+//     open(2) forever waiting for a writer, and CollectFacts runs on an HTTP
+//     handler goroutine with no ctx — one such file wedged that request
+//     permanently. O_NONBLOCK makes the open return; the fstat is what decides
+//     nothing is read from it. Doing it in that order is also race-free: the
+//     flags pick what gets opened, the fstat judges the thing actually opened,
+//     so there is no path-based window between the two.
+//   - io.ReadFull over a LimitReader. A single Read is documented to return
+//     FEWER bytes than the buffer holds, which silently truncated a large
+//     config mid-line and dropped every remote after the break.
 func readCapped(p string) []byte {
-	f, err := os.Open(p)
+	f, err := os.OpenFile(p, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil
 	}
 	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil || !fi.Mode().IsRegular() {
+		return nil // FIFO, device, socket, directory: not a git config
+	}
 	buf := make([]byte, maxConfigBytes)
-	n, _ := f.Read(buf)
+	n, err := io.ReadFull(io.LimitReader(f, maxConfigBytes), buf)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return nil // a genuine read error: fail safe, as everything here does
+	}
 	return buf[:n]
 }
 
@@ -179,7 +214,7 @@ func splitKV(line string) (key, val string, ok bool) {
 // classify turns one remote URL into either a github "owner/repo" or a
 // non-GitHub host. Unsafe/unparseable values are dropped.
 func classify(url string, ghSet, otherSet map[string]struct{}) {
-	if url == "" || !safe(url) {
+	if url == "" || !FieldSafe(url) {
 		return
 	}
 	host, ownerRepo := parseRemoteURL(url)
@@ -199,34 +234,61 @@ func classify(url string, ghSet, otherSet map[string]struct{}) {
 // owner/repo is "" when it can't be cleanly extracted (host is still returned).
 func parseRemoteURL(url string) (host, ownerRepo string) {
 	s := url
-	switch {
-	case strings.HasPrefix(s, "https://"), strings.HasPrefix(s, "http://"), strings.HasPrefix(s, "ssh://"), strings.HasPrefix(s, "git://"):
+	// The SCHEME is case-insensitive (RFC 3986); the path is not. Match on a
+	// lowered copy and keep slicing the original, so "HTTPS://github.com/O/R"
+	// takes the URL arm while "O/R" survives as written. Before this, an
+	// upper-case scheme fell through to the scp arm and the SCHEME ITSELF came
+	// back as the host — "https" and "file" really appeared in the operator's
+	// "other hosts" warning (B11a-F8).
+	switch lower := strings.ToLower(s); {
+	case strings.HasPrefix(lower, "https://"), strings.HasPrefix(lower, "http://"),
+		strings.HasPrefix(lower, "ssh://"), strings.HasPrefix(lower, "git://"):
 		s = s[strings.Index(s, "://")+3:]
-		if at := strings.IndexByte(s, '@'); at >= 0 { // strip user@
+		// LastIndexByte, not IndexByte: userinfo ends at the LAST "@" (git and
+		// net/url both read it that way), so "ssh://a@b@github.com/o/r" is
+		// github.com — it used to parse as the host "b@github.com" (B11a-F9).
+		if at := strings.LastIndexByte(s, '@'); at >= 0 {
 			s = s[at+1:]
 		}
 		slash := strings.IndexByte(s, '/')
 		if slash < 0 {
 			return "", ""
 		}
-		host = strings.ToLower(s[:slash])
-		if c := strings.IndexByte(host, ':'); c >= 0 { // strip :port
-			host = host[:c]
-		}
-		return host, twoSegments(s[slash+1:])
+		return hostOnly(s[:slash]), twoSegments(s[slash+1:])
 	default:
+		// A value carrying "://" is a URL, never an scp target — that is git's
+		// own rule. A scheme this package does not handle (file://, ftp://, a
+		// typo) is therefore DROPPED rather than scp-parsed into the host
+		// "file" (B11a-F8).
+		if strings.Contains(s, "://") {
+			return "", ""
+		}
 		// scp-like: [user@]host:owner/repo
-		at := strings.IndexByte(s, '@')
-		if at >= 0 {
+		if at := strings.LastIndexByte(s, '@'); at >= 0 {
 			s = s[at+1:]
 		}
 		colon := strings.IndexByte(s, ':')
 		if colon < 0 {
 			return "", ""
 		}
-		host = strings.ToLower(s[:colon])
-		return host, twoSegments(s[colon+1:])
+		return strings.ToLower(s[:colon]), twoSegments(s[colon+1:])
 	}
+}
+
+// hostOnly lowercases a URL authority and strips an optional port, unwrapping a
+// bracketed IPv6 literal. Splitting at the first ":" truncated
+// "[2001:db8::1]:2222" to "[2001" — the same class as the git helper's
+// B11a-F11, and it is the string the operator reads in the "other hosts"
+// warning.
+func hostOnly(authority string) string {
+	h := strings.ToLower(authority)
+	if bare, _, err := net.SplitHostPort(h); err == nil {
+		return bare
+	}
+	if strings.HasPrefix(h, "[") && strings.HasSuffix(h, "]") {
+		return h[1 : len(h)-1]
+	}
+	return h
 }
 
 // twoSegments returns "owner/repo" from a path tail, stripping a trailing .git
@@ -240,19 +302,21 @@ func twoSegments(p string) string {
 	return parts[0] + "/" + parts[1]
 }
 
-// safe rejects control chars / whitespace (mirrors internal/api repoFieldSafe so
-// a detected value can never carry a shell/control payload downstream).
-func safe(s string) bool {
-	for _, r := range s {
-		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
-			return false
-		}
-		switch r {
-		case ' ', '\t', '\n', '\r', '\v', '\f', 0x85, 0xa0:
-			return false
-		}
-	}
-	return true
+// FieldSafe reports whether s carries no control character and no whitespace.
+// It is THE predicate for both doors that judge an attacker-influenceable repo
+// slug or remote URL: this package's classify(), and internal/api's
+// repoFieldSafe, which delegates here.
+//
+// One predicate, deliberately (B11a-F10). The previous local copy carried a
+// FIXED whitespace list and a comment claiming to mirror repoFieldSafe — which
+// had since moved to unicode.IsSpace, so every Unicode space separator
+// (U+2000..U+200A, U+3000, …) passed here while the api door rejected it. Two
+// doors judging one value by different rules is how a detected remote reaches a
+// grant the authoring door would have refused.
+func FieldSafe(s string) bool {
+	return !strings.ContainsFunc(s, func(r rune) bool {
+		return unicode.IsControl(r) || unicode.IsSpace(r)
+	})
 }
 
 // ToSorted dedupes and sorts a set into a slice, nil if empty. Shared with

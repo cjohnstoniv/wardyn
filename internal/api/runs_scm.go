@@ -11,9 +11,9 @@ import (
 	"log/slog"
 	"net/url"
 	"strings"
-	"unicode"
 
 	"github.com/cjohnstoniv/wardyn/internal/egress"
+	"github.com/cjohnstoniv/wardyn/internal/gitremote"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -49,10 +49,14 @@ func gitEmailLocal(principal string) string {
 // rejects Unicode space separators (U+2000-200A, U+3000, ...) the old fixed
 // list let through; approved as a hardening, not a regression, for this
 // trust-boundary check.
+//
+// The RULE lives in internal/gitremote (FieldSafe) and this delegates to it, so
+// the door that AUTHORS a repo field and the scanner that DETECTS one cannot
+// answer differently about the same value — they did, until B11a-F10: the
+// scanner still carried a fixed whitespace list from before this function moved
+// to unicode.IsSpace.
 func repoFieldSafe(s string) bool {
-	return !strings.ContainsFunc(s, func(r rune) bool {
-		return unicode.IsControl(r) || unicode.IsSpace(r)
-	})
+	return gitremote.FieldSafe(s)
 }
 
 // repo400LocatorShape — DRAFT (M2 canon pending). The write-door refusal for a
