@@ -86,6 +86,17 @@ var internalSelfGatedRoutes = []string{"/internal/token/renew"}
 //
 // A TRANSIENT READ FAILURE IS 503, not 403: renew's own reasoning applies
 // unchanged — a Postgres blip must cost a retry, never a run's credentials.
+//
+// CALLED FROM internalAuth, immediately after Verify and AFTER the claims are on
+// the context — the refusal audits against the run the token names, so it needs
+// them there first. The call site is four lines and carries only a pointer back
+// here, deliberately: http.go is at the file-size gate and the reasoning belongs
+// with the function that acts on it, not with the middleware that calls it.
+//
+// LIVENESS IS NOT AUTHENTICITY. Verify answers "was this token minted by us, for
+// this audience, unexpired and unrevoked". It cannot answer "is the run behind
+// it still running", and a run that went terminal while its revocation write
+// failed is exactly the case where those two answers differ.
 func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claims *identity.Claims) bool {
 	if s.cfg.Store == nil || pathHasAny(r.URL.Path, internalSelfGatedRoutes) {
 		return true
