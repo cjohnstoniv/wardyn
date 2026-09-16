@@ -130,6 +130,25 @@ const concurrentRaiseRetries = 5
 // The sibling bound is maxLeafCerts (mitm.go).
 const maxApprovalHosts = 4096
 
+// approvalPendingReason names WHY a non-terminal approval verdict refused, for the
+// decision row evaluate writes. Here rather than at the call site so the state
+// and its audit label stay in one file.
+func approvalPendingReason(st approvalState) string {
+	if st == apCapped {
+		return ruleSourceApprovalHostCap
+	}
+	return "approval:pending"
+}
+
+// ruleSourceApprovalHostCap is the decision-log reason for a refusal caused by
+// maxApprovalHosts rather than by a human. It exists because apCapped and
+// apPending are different facts with different fixes — "an approval is waiting on
+// you" versus "this run's host table is full, nothing was raised and nothing ever
+// will be" — and the second had no signal in the decision stream at all, only the
+// sidecar's one-shot slog ERROR. Named beside the cap it reports, next to
+// apCapped, so the state and its audit label cannot drift apart.
+const ruleSourceApprovalHostCap = "approval:host-cap"
+
 // approvalCapWarnOnce keeps the cap's log line to once per process: the
 // condition is a run-long state, and a per-request ERROR would bury it.
 var approvalCapWarnOnce sync.Once

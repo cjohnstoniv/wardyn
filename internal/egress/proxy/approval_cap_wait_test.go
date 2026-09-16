@@ -4,13 +4,17 @@
 package proxy
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -52,5 +56,41 @@ func TestResolveWaitDoesNotRetryTheHostCap(t *testing.T) {
 	}
 	if res.State == apApproved || res.State == apDenied {
 		t.Fatalf("capped ResolveWait = %v, want a fail-closed non-terminal state", res.State)
+	}
+}
+
+// TestCappedHostIsAuditedAsTheHostCap (R-03): apCapped and apPending are DIFFERENT
+// FACTS — that is the whole premise of B10-F4 — and the operator reading decision
+// rows must be able to tell them apart. "An approval is waiting on you" and "the
+// run's host table is full, nothing was raised and nothing ever will be" have
+// different fixes, and the only signal for the second used to be one slog line in
+// the sidecar. The wire verdict is unchanged (Pending, fail closed); only the
+// reason label distinguishes them.
+func TestCappedHostIsAuditedAsTheHostCap(t *testing.T) {
+	buf := &bytes.Buffer{}
+	ap := newApprovalClient("http://127.0.0.1:1", newTokenSource("tok"), uuid.New(), nil)
+	for i := 0; len(ap.hosts) < maxApprovalHosts; i++ {
+		ap.hosts[fmt.Sprintf("h%d.test", i)] = &hostApproval{state: apApproved}
+	}
+	p := newProxy(Options{
+		RunID: uuid.New(),
+		Policy: CompilePolicy(types.RunPolicySpec{
+			FirstUseApproval: types.FirstUseDenyWithReview,
+		}),
+		Approval: ap,
+		Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 8)},
+		Resolver: publicResolver{},
+	})
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, mustProxyReq(t, http.MethodGet, "http://new.test/"))
+
+	d := lastDecision(t, buf)
+	if d.Decision != egress.Pending {
+		t.Fatalf("decision = %q, want pending (fail closed)", d.Decision)
+	}
+	if d.RuleSource != ruleSourceApprovalHostCap {
+		t.Errorf("rule_source = %q, want %q — a capped host is indistinguishable from a raise "+
+			"awaiting a human", d.RuleSource, ruleSourceApprovalHostCap)
 	}
 }
