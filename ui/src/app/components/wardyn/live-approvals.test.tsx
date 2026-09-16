@@ -263,6 +263,27 @@ describe("LiveApprovals", () => {
     expect(denyMock).toHaveBeenCalledWith("a1", expect.any(String));
   });
 
+  // F2-F9: nothing gated the confirm button before — a double-click (or a
+  // second Enter) while the first deny was still in flight could fire it twice.
+  it("disables the confirm button the instant it fires, so a second click can't re-deny", async () => {
+    listApprovalsMock.mockResolvedValue([pending({ id: "a1", requested_scope: { host: "risky.example" } })]);
+    let release: (v: unknown) => void = () => {};
+    denyMock.mockImplementation(() => new Promise((r) => (release = r)));
+    render(<LiveApprovals runId="r1" />);
+    const panel = await screen.findByTestId("live-approvals");
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+
+    await user.click(within(panel).getByRole("button", { name: /^deny$/i }));
+    const dialog = await screen.findByRole("alertdialog");
+    const confirm = within(dialog).getByRole("button", { name: /^deny$/i });
+    await user.click(confirm);
+    expect(confirm).toBeDisabled();
+
+    await user.click(confirm);
+    expect(denyMock).toHaveBeenCalledTimes(1);
+    release({});
+  });
+
   // Split button, caret side (W20-hold-fsm/egress-scopes): bare click stays
   // "This run" (pinned above); the caret is the other three scopes.
   describe("scope caret", () => {

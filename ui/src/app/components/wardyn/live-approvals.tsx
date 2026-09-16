@@ -462,6 +462,11 @@ export function LiveApprovals({
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
+              // F2-F9: nothing gated this before — a double-click (or a second
+              // Enter while the first decide() was still in flight) could fire
+              // confirmDeny() twice concurrently, same race the row buttons
+              // already guard against via `busy === a.id`.
+              disabled={busy === denyTarget?.request.id}
               onClick={(e) => {
                 e.preventDefault();
                 confirmDeny();
