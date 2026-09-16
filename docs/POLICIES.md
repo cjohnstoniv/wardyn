@@ -416,6 +416,11 @@ that checks out and pushes its own branch name — not the
 way to tell that tool why. Setting the field lets this run's brokered pushes
 land on any branch the granted token may write.
 
+Setting it on a run's policy also grades **high** on the Review rail
+(`composer.Grade`), which is where a human sees what a run may do before
+approving it — the same weight a read-write host mount or a write-capable
+GitHub token carries.
+
 Either switch produces the identical audit posture: a push forwarded with
 confinement off carries `rule_source: "brokered:git:branch-ns-off"`
 (`ruleSourceGitNSOff`) instead of the ordinary `"brokered:git"`, so a reader

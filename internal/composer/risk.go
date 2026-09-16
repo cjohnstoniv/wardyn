@@ -179,6 +179,20 @@ func Grade(run RunInput, spec types.RunPolicySpec) []RiskItem {
 		}
 	}
 
+	// ── Brokered git: branch-namespace confinement. ON by default, and the
+	// reason an agent cannot rewrite main — the broker forwards a push only
+	// when every ref it updates lives under refs/heads/wardyn/<run-id>/.
+	// Turning it off is an unambiguous widening that Clamp already treats as a
+	// privilege (it is forced false unless the operator's ceiling sets it), yet
+	// it was graded nowhere: invisible on the one surface built to show a human
+	// what a run may do (B11b-F11). ──
+	if spec.GitPushAnyBranch {
+		add("git_push_any_branch", "true", RiskHigh,
+			"Branch-namespace confinement is OFF: this run's brokered pushes may update ANY branch the granted "+
+				"token can write, including main — the default confines them to refs/heads/wardyn/<run-id>/. "+
+				"The grant's own GitHub ruleset is what still bounds which repos it can touch.", "2")
+	}
+
 	// ── Idle reaping. The reaper skips on <= 0 (internal/lifecycle: "0 DISABLED"),
 	// so an omitted field — which the store COALESCEs to 0 — is just as unbounded
 	// as an explicit -1 and must grade the same. Only the rationale differs. ──
