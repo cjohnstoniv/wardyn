@@ -268,3 +268,54 @@ func TestFinalizeBase_AbsentDigestBasePullsExactlyOnce(t *testing.T) {
 		t.Fatalf("pulled %q %d times (all pulls: %v), want exactly 1", ref, pulls, f.pulledRefs)
 	}
 }
+
+// TestBuild_UntagsThePerBuildBaseAfterFinalize is B9-F3: every devcontainer
+// build pulls its own per-build base (newPushRef gives each one a fresh uuid
+// tag) and then wraps it into the output image. The base's layers are shared
+// with that output, so what is left behind is a TAG — one per build, forever,
+// each holding a full base image's worth of layers pinned against any prune. On
+// a busy builder that is the disk.
+//
+// `docker rmi <tag>` untags; it deletes nothing an output image still
+// references. Both arms assert that directly: the output tag still resolves
+// after the base is dropped. The reclaim also has to run on the FAILED finalize
+// path — a build that fails after the pull leaves exactly the same tag.
+func TestBuild_UntagsThePerBuildBaseAfterFinalize(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		buildErr string
+	}{
+		{name: "finalize succeeds"},
+		{name: "finalize fails", buildErr: "COPY failed: no such file"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeEnvbuilderDocker()
+			f.buildErr = tc.buildErr
+			b := newWithClient(f, "envbuilder:test", "reg.example.com/cache")
+			b.ToolsDir = toolsDirWithRequired(t)
+
+			const outputTag = "wardyn-env/run-rm:latest"
+			_, err := b.Build(context.Background(), BuildSpec{
+				RepoURL:        "https://example.com/repo.git",
+				OutputImageTag: outputTag,
+			})
+			if (err != nil) != (tc.buildErr != "") {
+				t.Fatalf("Build error = %v, want error: %v", err, tc.buildErr != "")
+			}
+
+			if len(f.pulledRefs) == 0 {
+				t.Fatal("finalize never pulled the per-build base — nothing to reclaim")
+			}
+			baseRef := f.pulledRefs[len(f.pulledRefs)-1]
+			if !strings.HasPrefix(baseRef, "reg.example.com/cache:") {
+				t.Fatalf("pulled ref = %q, want this build's own per-build push ref", baseRef)
+			}
+			if !f.removedImage(baseRef) {
+				t.Errorf("the per-build base %q was left tagged after finalize (removed: %v)", baseRef, f.removedImages)
+			}
+			if tc.buildErr == "" && !f.imagesPresent[outputTag] {
+				t.Errorf("reclaiming the base untagged the image it was wrapped into — %q no longer resolves", outputTag)
+			}
+		})
+	}
+}

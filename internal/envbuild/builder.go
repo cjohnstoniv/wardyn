@@ -34,6 +34,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -411,8 +412,40 @@ func (b *Builder) runBuildAndFinalize(ctx context.Context, env []string, extraBi
 	// per-build ref (buildTag). Layer Wardyn's runner tools onto it and return
 	// the resolvable local tag (H5). pullParent=true: the base was just pushed
 	// to the registry, so the finalize build must pull it.
-	return b.finalizeImage(ctx, b.pushedBaseRef(buildTag), outputTag, toolsDir, logSink, true)
+	baseRef := b.pushedBaseRef(buildTag)
+	defer b.untagPerBuildBase(ctx, baseRef)
+	return b.finalizeImage(ctx, baseRef, outputTag, toolsDir, logSink, true)
 }
+
+// untagPerBuildBase drops the local tag finalize pulled its FROM base under.
+//
+// Every build mints a fresh per-build push tag (newPushRef), pulls it back for
+// the wrap, and then never names it again — so without this each build leaves
+// one more tag behind, each pinning a whole base image's layers against any
+// prune. `docker rmi <tag>` UNTAGS: the layers the output image shares stay,
+// the output tag keeps resolving, and the reclaim is real only once nothing
+// else references them.
+//
+// Best-effort by design (a leftover tag is disk, not correctness) and
+// deliberately on the FAILED path too: a finalize that dies after the pull
+// leaves exactly the same tag. Detached from ctx because the common failure IS
+// the build deadline expiring — the cleanup would then be cancelled precisely
+// when it is needed — with its own short bound so it can never hang a build.
+func (b *Builder) untagPerBuildBase(ctx context.Context, baseRef string) {
+	if strings.TrimSpace(baseRef) == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), perBuildBaseUntagTimeout)
+	defer cancel()
+	if _, err := b.cli.ImageRemove(ctx, baseRef, client.ImageRemoveOptions{}); err != nil {
+		slog.Debug("envbuild: could not untag the per-build base image (left for the next prune)",
+			slog.String("ref", baseRef), slog.String("error", err.Error()))
+	}
+}
+
+// perBuildBaseUntagTimeout bounds the best-effort untag above: long enough for
+// a daemon round-trip, short enough that a wedged daemon cannot hold a build.
+const perBuildBaseUntagTimeout = 30 * time.Second
 
 // FinalizeBase is the Bring-Your-Own-Image path: wrap an arbitrary USER-supplied
 // base image with Wardyn's runner tools (the requiredTools set) and a cleared

@@ -28,6 +28,9 @@ type envbuilderDockerAPI interface {
 	// ImageInspect reads a local image's config; the wrap build uses it to read
 	// the base's ONBUILD triggers before using it as a FROM (see assertWrapSafeBase).
 	ImageInspect(ctx context.Context, imageID string, opts ...client.ImageInspectOption) (client.ImageInspectResult, error)
+	// ImageRemove untags an image. Used best-effort to drop the per-build base
+	// tag once it has been wrapped into the output image (runBuildAndFinalize).
+	ImageRemove(ctx context.Context, ref string, options client.ImageRemoveOptions) (client.ImageRemoveResult, error)
 
 	ContainerCreate(ctx context.Context, options client.ContainerCreateOptions) (client.ContainerCreateResult, error)
 	// CopyToContainer streams a tar into a created (not-yet-started) container —
