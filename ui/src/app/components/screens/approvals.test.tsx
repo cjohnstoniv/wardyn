@@ -497,8 +497,11 @@ describe("ApprovalsScreen — F5-F4: a poll tick heals a stuck error state", () 
       </MemoryRouter>,
     );
     // Before the initial fetch settles, neither the error view nor the queue
-    // has rendered yet.
+    // has rendered yet — the skeleton is up (R2: this control would still
+    // pass if `status` were initialised to "ready" without asserting the
+    // skeleton is actually THERE, not just that the error view isn't).
     expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
+    expect(document.querySelector(".animate-pulse")).not.toBeNull();
     await screen.findByRole("button", { name: /^approve$/i });
   });
 });

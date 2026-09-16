@@ -59,7 +59,9 @@ export const C = {
 export const WORKSPACE_DETAIL_DRAFT = {
   // F5-F6: the Add-workspace dialog's one honest image choice — replaces the
   // two dishonest "devcontainer.json" / "standard sandbox image" picks that
-  // stored byte-identical state.
+  // stored byte-identical state. TITLE is used at both the OptionCard and the
+  // collapsed Disclosure summary, so the two can never drift from each other.
+  ADD_WORKSPACE_IMAGE_AUTO_TITLE: "Auto",
   ADD_WORKSPACE_IMAGE_AUTO_HINT:
     "devcontainer.json if this repo has one, else the standard image.",
   // F5-F10: the Recorded-sessions card's subtitle claimed the loop "writes

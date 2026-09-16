@@ -159,7 +159,9 @@ export function AddWorkspaceDialog({
 
   const mountPathOrDefault = mountPath.trim() || DEFAULT_TARGET;
   const summaryImage =
-    imageChoice === "pinned" ? pinnedRef.trim() || "pinned image" : "Auto";
+    imageChoice === "pinned"
+      ? pinnedRef.trim() || "pinned image"
+      : WORKSPACE_COPY_DRAFT.ADD_WORKSPACE_IMAGE_AUTO_TITLE;
 
   const submit = async () => {
     if (!canSubmit || submitting) return;
@@ -329,7 +331,7 @@ export function AddWorkspaceDialog({
               <OptionCard
                 selected={imageChoice === "auto"}
                 onClick={() => setImageChoice("auto")}
-                title="Auto"
+                title={WORKSPACE_COPY_DRAFT.ADD_WORKSPACE_IMAGE_AUTO_TITLE}
                 hint={WORKSPACE_COPY_DRAFT.ADD_WORKSPACE_IMAGE_AUTO_HINT}
               />
               <OptionCard

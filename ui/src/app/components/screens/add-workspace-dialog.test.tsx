@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { AddWorkspaceDialog } from "./add-workspace-dialog";
 import { OperatorProvider } from "../wardyn/operator-context";
 import { workspaces as workspacesApi } from "../../lib/api/workspaces";
+import { WORKSPACE_DETAIL_DRAFT } from "../../lib/workspace-copy";
 
 vi.mock("../../lib/api/setup", () => ({ setup: { getSetupStatus: vi.fn().mockResolvedValue({ runner: { driver: "docker" } }) } }));
 vi.mock("../../lib/api/workspaces", () => ({ workspaces: { createWorkspace: vi.fn() } }));
@@ -106,8 +107,9 @@ describe("AddWorkspaceDialog — the 201's advisory warnings", () => {
 
 // F5-F2: "You can change everything later." is false — a workspace is
 // CREATE-ONLY in this console (no Edit path; updateWorkspace has zero
-// production callers, workspaces.test.tsx:181 pins the kebab menu to exactly
-// Open/Delete). Delete the sentence, keep the rest of the description.
+// production callers, workspaces.test.tsx's "kebab is Open · Delete… only"
+// describe pins the kebab menu to exactly Open/Delete). Delete the sentence,
+// keep the rest of the description.
 describe("AddWorkspaceDialog — F5-F2: no false promise of a later edit", () => {
   it("never claims everything can be changed later", () => {
     renderDialog(true, null);
@@ -156,7 +158,11 @@ describe("AddWorkspaceDialog — F5-F6: one honest Auto image choice", () => {
     await openImagePicker();
     const group = screen.getByRole("radiogroup", { name: /container image/i });
     expect(within(group).getAllByRole("button")).toHaveLength(2);
-    expect(within(group).getByRole("button", { name: /^auto/i })).toBeInTheDocument();
+    expect(
+      within(group).getByRole("button", {
+        name: new RegExp(`^${WORKSPACE_DETAIL_DRAFT.ADD_WORKSPACE_IMAGE_AUTO_TITLE}`, "i"),
+      }),
+    ).toBeInTheDocument();
     expect(within(group).getByRole("button", { name: /pinned image ref/i })).toBeInTheDocument();
     expect(within(group).queryByRole("button", { name: /^devcontainer\.json$/i })).not.toBeInTheDocument();
     expect(within(group).queryByRole("button", { name: /^standard sandbox image$/i })).not.toBeInTheDocument();
