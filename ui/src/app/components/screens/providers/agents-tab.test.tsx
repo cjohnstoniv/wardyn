@@ -109,6 +109,33 @@ describe("AgentsTab", () => {
     expect(within(group).getByRole("radio", { name: AGENTS.SOURCE_SHARED, checked: false })).toBeInTheDocument();
   });
 
+  // F4-F13 (Appendix A V8): the two role="radio" Buttons were each their own
+  // Tab stop, and arrow keys did nothing.
+  it("the credential-source group has roving tabindex and arrow keys (F4-F13)", async () => {
+    getAgentProvidersMock.mockResolvedValue({
+      providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] },
+      etag: '"e3b"',
+    });
+    render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const row = await screen.findByTestId("agent-row-claude-code");
+    const shared = within(row).getByRole("radio", { name: AGENTS.SOURCE_SHARED });
+    const perUser = within(row).getByRole("radio", { name: AGENTS.SOURCE_PER_USER });
+    expect(shared).toHaveAttribute("tabIndex", "0");
+    expect(perUser).toHaveAttribute("tabIndex", "-1");
+
+    shared.focus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(perUser).toHaveFocus();
+    expect(perUser).toHaveAttribute("aria-checked", "true");
+    expect(shared).toHaveAttribute("aria-checked", "false");
+    expect(perUser).toHaveAttribute("tabIndex", "0");
+    expect(shared).toHaveAttribute("tabIndex", "-1");
+
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(shared).toHaveFocus();
+    expect(shared).toHaveAttribute("aria-checked", "true");
+  });
+
   it("Per person is enabled once bedrock_sso is the selected mechanism", async () => {
     getAgentProvidersMock.mockResolvedValue({
       providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] },

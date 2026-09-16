@@ -45,6 +45,7 @@ import { Field, Switch } from "../../wardyn/form-primitives";
 import { Chip } from "../../wardyn/primitives";
 import { EmptyState, TableSkeleton } from "../../wardyn/states";
 import { HarnessLoginPane, isLikelyStartUrl } from "../settings/harness-login-pane";
+import { useRovingRadio } from "../../wardyn/use-roving-radio";
 
 // The two catalog agents whose declared lane folds to a coarse ai-integration
 // type harness.go's ProviderTypes checks against (harnessCatalog); a
@@ -258,6 +259,17 @@ function Row({
   // one predicate instead of two that can drift.
   const perUserSaved = isPerUserSsoRow(harness);
 
+  // F4-F13 (Appendix A V8): the credential-source group had no roving
+  // tabindex or arrow keys — two role="radio" Buttons were each their own
+  // Tab stop (wardyn/use-roving-radio.ts, the connection-cards.tsx/
+  // git-tab.tsx precedent). This group nests no expanded body, so only the
+  // roving half applies here.
+  const sourceGroup = useRovingRadio(2, credentialSource === "shared" ? 0 : 1, (i) =>
+    i === 0
+      ? onUpdate({ ...row, credential_source: undefined, sso_start_url: undefined, sso_account_id: undefined, sso_role_name: undefined })
+      : onUpdate({ ...row, credential_source: "per_user" }),
+  );
+
   // C4.2 is claude-code only (modelAccess is scoped server-side) and NEVER
   // renders for not_applicable (finding 5 — the admin-token principal's own
   // answer; an empty chip with ADMIN_OWN_CHIP_NOTE still under it would be a
@@ -375,7 +387,7 @@ function Row({
                   aria-pressed control every other screen's suite asserts, so it
                   is not the primitive to re-point here); role + aria-checked is
                   what AT reads, and a button is keyboard-operable already. */}
-              <div role="radiogroup" aria-label={AGENTS.FIELD_SOURCE} className="flex gap-2">
+              <div role="radiogroup" aria-label={AGENTS.FIELD_SOURCE} className="flex gap-2" {...sourceGroup.containerProps}>
                 <Button
                   type="button"
                   role="radio"
@@ -383,6 +395,8 @@ function Row({
                   size="sm"
                   variant={credentialSource === "shared" ? "secondary" : "outline"}
                   disabled={!operator}
+                  tabIndex={sourceGroup.itemProps(0).tabIndex}
+                  ref={sourceGroup.itemProps(0).radioRef}
                   onClick={() =>
                     onUpdate({
                       ...row,
@@ -403,6 +417,8 @@ function Row({
                   variant={credentialSource === "per_user" ? "secondary" : "outline"}
                   disabled={!operator || !perUserAvailable}
                   title={perUserAvailable ? undefined : AGENTS.PER_USER_UNAVAILABLE}
+                  tabIndex={sourceGroup.itemProps(1).tabIndex}
+                  ref={sourceGroup.itemProps(1).radioRef}
                   onClick={() => onUpdate({ ...row, credential_source: "per_user" })}
                 >
                   {AGENTS.SOURCE_PER_USER}

@@ -248,6 +248,52 @@ describe("GitTab", () => {
     expect(screen.getByRole("radio", { name: /SSH key/ })).toBeInTheDocument();
   });
 
+  // F4-F13 (Appendix A V8): the credential-lane group had no roving tabindex
+  // or arrow keys, and the selected lane's form used to render INSIDE the
+  // radiogroup — an ARIA violation (a radiogroup nesting a Save button).
+  describe("the credential-lane group has roving tabindex and arrow keys, and its body sits outside it (F4-F13)", () => {
+    it("only the checked lane is a Tab stop; ArrowRight moves selection and focus", async () => {
+      render(<Harness initial={[{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }]} />);
+      const row = screen.getByTestId("provider-row-github");
+      const [pat, app, ssh] = within(row).getAllByRole("radio");
+      expect(pat).toHaveAttribute("tabIndex", "0");
+      expect(app).toHaveAttribute("tabIndex", "-1");
+      expect(ssh).toHaveAttribute("tabIndex", "-1");
+
+      pat.focus();
+      await userEvent.keyboard("{ArrowRight}");
+      expect(app).toHaveFocus();
+      expect(app).toHaveAttribute("aria-checked", "true");
+      expect(app).toHaveAttribute("tabIndex", "0");
+      expect(pat).toHaveAttribute("tabIndex", "-1");
+
+      await userEvent.keyboard("{ArrowLeft}{ArrowLeft}");
+      expect(ssh).toHaveFocus(); // wraps
+      expect(ssh).toHaveAttribute("aria-checked", "true");
+    });
+
+    it("the radiogroup contains ONLY the three radio buttons — no nested form", () => {
+      render(<Harness initial={[{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }]} />);
+      const row = screen.getByTestId("provider-row-github");
+      const group = within(row).getByRole("radiogroup");
+      // The PAT lane is selected by default (githubApp=false in this
+      // Harness), so its Access-token field would have been nested here
+      // under the old structure.
+      expect(within(group).queryByLabelText("Access token")).not.toBeInTheDocument();
+      expect(within(row).getByLabelText("Access token")).toBeInTheDocument();
+    });
+
+    it("selecting App by arrow key renders App's fields, not PAT's — the body follows the roving selection", async () => {
+      render(<Harness initial={[{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }]} />);
+      const row = screen.getByTestId("provider-row-github");
+      const [pat] = within(row).getAllByRole("radio");
+      pat.focus();
+      await userEvent.keyboard("{ArrowRight}");
+      expect(within(row).getByLabelText("App ID")).toBeInTheDocument();
+      expect(within(row).queryByLabelText("Access token")).not.toBeInTheDocument();
+    });
+  });
+
   it("S.GIT_FOOTER renders once, as the plain note under the tab", () => {
     render(<Harness initial={[]} />);
     expect(

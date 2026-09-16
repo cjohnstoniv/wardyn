@@ -45,6 +45,7 @@ import { Field } from "../../wardyn/form-primitives";
 import { Mono } from "../../wardyn/code-block";
 import { OperatorOnlyHint } from "../../wardyn/primitives";
 import { useOperator } from "../../wardyn/operator-context";
+import { useRovingRadio } from "../../wardyn/use-roving-radio";
 import { cn } from "../../ui/utils";
 import { HarnessLoginPane } from "./harness-login-pane";
 
@@ -132,10 +133,16 @@ function Card({
   );
 }
 
-// One lane. Selecting it expands its form; a connected lane shows its state and
-// a Disconnect instead. Radio semantics (not aria-pressed) because these are
-// mutually-exclusive choices within one group, which is what a screen reader
-// needs to announce "2 of 3".
+// One lane's RADIO button only — F4-F13 (Appendix A V8): this used to also
+// render the expanded form (`children`) INSIDE itself, so a selected lane's
+// Input + Save button ended up nested inside the `role="radiogroup"` DOM
+// subtree — an ARIA violation (a radiogroup's children must be `role="radio"`
+// nodes, never a form). The caller now renders the active lane's body
+// separately with LaneBody below, OUTSIDE the radiogroup. Radio semantics
+// (not aria-pressed) because these are mutually-exclusive choices within one
+// group, which is what a screen reader needs to announce "2 of 3". `tabIndex`
+// / `radioRef` are the roving-tabindex wiring (wardyn/use-roving-radio.ts) —
+// optional so a caller with no group (there is none today) still compiles.
 export function Lane({
   id,
   title,
@@ -145,7 +152,8 @@ export function Lane({
   selected,
   onSelect,
   disabled,
-  children,
+  tabIndex,
+  radioRef,
 }: {
   id: string;
   title: string;
@@ -159,7 +167,8 @@ export function Lane({
    *  that cannot be opened cannot Save, which is the point: the alternative was
    *  a Save that wrote the secret of a DIFFERENT host. */
   disabled?: boolean;
-  children?: React.ReactNode;
+  tabIndex?: number;
+  radioRef?: (el: HTMLButtonElement | null) => void;
 }) {
   return (
     <div
@@ -176,6 +185,8 @@ export function Lane({
         id={id}
         disabled={disabled}
         onClick={onSelect}
+        tabIndex={tabIndex}
+        ref={radioRef}
         className="flex w-full items-start gap-2.5 p-3 text-left"
       >
         <span
@@ -202,9 +213,15 @@ export function Lane({
           </span>
         </span>
       </button>
-      {selected && !disabled && children && <div className="border-t border-border px-3 py-3">{children}</div>}
     </div>
   );
+}
+
+// The selected lane's expanded form — a SIBLING of the radiogroup, never a
+// descendant (see Lane's own note). One rounded card, the same visual
+// language `Lane` itself used to carry the body in.
+export function LaneBody({ children }: { children: React.ReactNode }) {
+  return <div className="rounded-lg border border-border px-3 py-3">{children}</div>;
 }
 
 // A one-secret lane form: a single write-only value + Save, and Disconnect once
@@ -451,11 +468,19 @@ export function ModelProviderCard({
   // sentence and the missing door, so they can never drift apart.
   const mechanismPrincipal = perUserSso && !!status.model_access && modelAccessState === "not_applicable";
 
+  const LANES: ModelLane[] = ["subscription", "api_key", "bedrock"];
+  const { containerProps, itemProps } = useRovingRadio(LANES.length, LANES.indexOf(lane), (i) => setLane(LANES[i]));
+
   return (
     <>
       <Card title={S.MODEL_TITLE} lede={S.MODEL_LEDE} footer={S.MODEL_FOOTER}>
         {!operator && <OperatorOnlyHint />}
-        <div role="radiogroup" aria-label={S.MODEL_TITLE} className="space-y-2">
+        {/* F4-F13 (Appendix A V8): roving tabindex + arrow keys
+            (wardyn/use-roving-radio.ts) — one Tab stop for the group, not
+            three. Each Lane's expanded form used to nest INSIDE it (an ARIA
+            violation for role="radiogroup"); the three bodies below render
+            as SIBLINGS instead. */}
+        <div role="radiogroup" aria-label={S.MODEL_TITLE} className="space-y-2" {...containerProps}>
           <Lane
             id="lane-subscription"
             title="Claude subscription"
@@ -464,46 +489,8 @@ export function ModelProviderCard({
             connectedDetail={subRow?.name}
             selected={lane === "subscription"}
             onSelect={() => setLane("subscription")}
-          >
-            {subRow ? (
-              <div className="flex items-center gap-2">
-                <span className="text-body text-muted-foreground">
-                  {managedSub
-                    ? "Captured through a login sandbox and stored by Wardyn."
-                    : "A login in this host's own Claude CLI — Wardyn reads it, but can't revoke it. Sign out with the CLI itself."}
-                </span>
-                {managedSub && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={!operator || harnessBusy}
-                    onClick={() => disconnectHarness("anthropic")}
-                  >
-                    {/* Icon slot always renders — toggling `invisible` (rather
-                        than mounting/unmounting the icon) keeps has-[>svg]
-                        padding and the icon+gap width constant so the row
-                        doesn't jump when the spinner appears. */}
-                    <Loader2
-                      className={cn("size-3.5 animate-spin", !harnessSpinning && "invisible")}
-                    />
-                    Disconnect
-                  </Button>
-                )}
-              </div>
-            ) : sharedSubBlocked ? (
-              // Not merely disabled: a greyed-out button reads as "you lack
-              // permission". The deployment itself cannot use this lane, so say so
-              // and point at the two that work.
-              <p className="text-body text-muted-foreground">
-                Unavailable in this deployment — {status.auth.shared_subscription_reason}
-              </p>
-            ) : (
-              <Button size="sm" disabled={!operator} onClick={() => setLoginOpen("anthropic")}>
-                Sign in
-              </Button>
-            )}
-          </Lane>
-
+            {...itemProps(0)}
+          />
           <Lane
             id="lane-api-key"
             title="API key"
@@ -512,28 +499,8 @@ export function ModelProviderCard({
             connectedDetail={keyRow?.name}
             selected={lane === "api_key"}
             onSelect={() => setLane("api_key")}
-          >
-            <div className="space-y-4">
-              <SecretLane
-                label="Anthropic API key"
-                placeholder="sk-ant-…"
-                secretName="anthropic-api-key"
-                stored={present.includes("anthropic-api-key")}
-                disabled={!operator}
-                onChanged={onChanged}
-                hint={S.STORE_NOTE}
-              />
-              <SecretLane
-                label="OpenAI API key"
-                placeholder="sk-…"
-                secretName="openai-api-key"
-                stored={present.includes("openai-api-key")}
-                disabled={!operator}
-                onChanged={onChanged}
-              />
-            </div>
-          </Lane>
-
+            {...itemProps(1)}
+          />
           <Lane
             id="lane-bedrock"
             title="AWS Bedrock"
@@ -572,7 +539,78 @@ export function ModelProviderCard({
             }
             selected={lane === "bedrock"}
             onSelect={() => setLane("bedrock")}
-          >
+            {...itemProps(2)}
+          />
+        </div>
+
+        {lane === "subscription" && (
+          <LaneBody>
+            {subRow ? (
+              <div className="flex items-center gap-2">
+                <span className="text-body text-muted-foreground">
+                  {managedSub
+                    ? "Captured through a login sandbox and stored by Wardyn."
+                    : "A login in this host's own Claude CLI — Wardyn reads it, but can't revoke it. Sign out with the CLI itself."}
+                </span>
+                {managedSub && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={!operator || harnessBusy}
+                    onClick={() => disconnectHarness("anthropic")}
+                  >
+                    {/* Icon slot always renders — toggling `invisible` (rather
+                        than mounting/unmounting the icon) keeps has-[>svg]
+                        padding and the icon+gap width constant so the row
+                        doesn't jump when the spinner appears. */}
+                    <Loader2
+                      className={cn("size-3.5 animate-spin", !harnessSpinning && "invisible")}
+                    />
+                    Disconnect
+                  </Button>
+                )}
+              </div>
+            ) : sharedSubBlocked ? (
+              // Not merely disabled: a greyed-out button reads as "you lack
+              // permission". The deployment itself cannot use this lane, so say so
+              // and point at the two that work.
+              <p className="text-body text-muted-foreground">
+                Unavailable in this deployment — {status.auth.shared_subscription_reason}
+              </p>
+            ) : (
+              <Button size="sm" disabled={!operator} onClick={() => setLoginOpen("anthropic")}>
+                Sign in
+              </Button>
+            )}
+          </LaneBody>
+        )}
+
+        {lane === "api_key" && (
+          <LaneBody>
+            <div className="space-y-4">
+              <SecretLane
+                label="Anthropic API key"
+                placeholder="sk-ant-…"
+                secretName="anthropic-api-key"
+                stored={present.includes("anthropic-api-key")}
+                disabled={!operator}
+                onChanged={onChanged}
+                hint={S.STORE_NOTE}
+              />
+              <SecretLane
+                label="OpenAI API key"
+                placeholder="sk-…"
+                secretName="openai-api-key"
+                stored={present.includes("openai-api-key")}
+                disabled={!operator}
+                onChanged={onChanged}
+              />
+            </div>
+          </LaneBody>
+        )}
+
+        {lane === "bedrock" && (
+          <LaneBody>
             <div className="space-y-4">
               <p className="text-meta leading-snug text-muted-foreground">
                 {bedrockConfigured ? (
@@ -628,8 +666,8 @@ export function ModelProviderCard({
                 </div>
               )}
             </div>
-          </Lane>
-        </div>
+          </LaneBody>
+        )}
       </Card>
 
       {/* This dialog hosts a live PTY, which makes it unlike every other dialog

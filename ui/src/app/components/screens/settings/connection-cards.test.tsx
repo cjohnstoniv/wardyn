@@ -94,6 +94,51 @@ describe("ModelProviderCard", () => {
     expect(screen.queryByRole("button", { name: /add integration/i })).not.toBeInTheDocument();
   });
 
+  // F4-F13 (Appendix A V8): the group had no roving tabindex or arrow keys —
+  // every radio was its own Tab stop, and Left/Right did nothing.
+  describe("the lane group has roving tabindex and arrow keys (F4-F13)", () => {
+    it("only the checked radio is a Tab stop; the rest are -1", () => {
+      model();
+      const radios = screen.getAllByRole("radio");
+      const checked = radios.filter((r) => r.getAttribute("aria-checked") === "true");
+      const unchecked = radios.filter((r) => r.getAttribute("aria-checked") === "false");
+      expect(checked).toHaveLength(1);
+      expect(checked[0]).toHaveAttribute("tabIndex", "0");
+      for (const r of unchecked) expect(r).toHaveAttribute("tabIndex", "-1");
+    });
+
+    it("ArrowRight moves selection and focus to the next lane; ArrowLeft wraps to the last", async () => {
+      model();
+      const [subscription, apiKey, bedrock] = screen.getAllByRole("radio");
+      subscription.focus();
+      await user.keyboard("{ArrowRight}");
+      expect(apiKey).toHaveFocus();
+      expect(apiKey).toHaveAttribute("aria-checked", "true");
+      expect(subscription).toHaveAttribute("aria-checked", "false");
+
+      await user.keyboard("{ArrowLeft}");
+      expect(subscription).toHaveFocus();
+      expect(subscription).toHaveAttribute("aria-checked", "true");
+
+      // Wraps: ArrowLeft off the first item lands on the last.
+      await user.keyboard("{ArrowLeft}");
+      expect(bedrock).toHaveFocus();
+      expect(bedrock).toHaveAttribute("aria-checked", "true");
+    });
+
+    // The moved-out body (LaneBody, below the radiogroup — see Lane's own
+    // note): selecting a lane by arrow key must open its form exactly as a
+    // click would.
+    it("selecting Bedrock by arrow key renders its body, not the previous lane's", async () => {
+      model();
+      const [subscription] = screen.getAllByRole("radio");
+      subscription.focus();
+      await user.keyboard("{ArrowLeft}"); // wraps to Bedrock
+      expect(screen.getByLabelText("Bedrock bearer key")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Sign in" })).not.toBeInTheDocument();
+    });
+  });
+
   // A shared subscription credential is one person's; on a multi-user deployment
   // injecting it into other people's runs breaches the harness vendor's per-user
   // authentication terms, and the OPERATOR is the one in breach. The daemon
