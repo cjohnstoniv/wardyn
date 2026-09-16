@@ -120,6 +120,35 @@ func blockKindOf(err error) blockKind {
 // only evaluate() consumes it — the other three callers (serveMITMRequest,
 // handleGitBroker, handleGitPATBroker) discard it, unaffected.
 func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, err error) {
+	// The operator's OWN exactly-allowed literal is answered FIRST, before the
+	// upstream branch and before the vet — for the same reason evaluate() step 0
+	// trusts it: an egress-redirect "To" on RFC1918/CGNAT space
+	// (substituteArtifactEgress writes that address, port-qualified, onto
+	// allowed_domains for exactly the runs the redirect covers) has no hostname
+	// behind it to rebind.
+	//
+	// ABOVE the upstream branch (B10-F2), not below it: that branch returned
+	// early, so on a corp-proxy estate with no bypass entry — the normal
+	// private-endpoint shape — evaluate() ALLOWED the redirect's literal and every
+	// re-vet path that reaches here without going through evaluate
+	// (serveMITMRequest, i.e. the token-injecting redirect lane itself, plus the
+	// two brokers) re-derived the same address and hard-denied it: an `allow` row
+	// followed by "vet failed" on the same tunnel, the operator's own mirror
+	// audited as reachable and never reached.
+	//
+	// It only ADDS an admission, on either side of the branch: a literal that is
+	// not an exactly-allowed blockPrivate address falls through unchanged, and
+	// trustsExactLiteralIP gates on blockPrivate AND onOwnSubnetOrControlPlane —
+	// the same pair liftInternalHost gates on — so loopback, link-local, metadata,
+	// NAT64, this proxy's own subnet and its control-plane host are refused
+	// however they are allow-listed. Deny still beats allow (AllowsLiteralIP
+	// checks the deny lists first). Hoisting changes no dialed bytes for a host
+	// the upstream branch would have allowed: a canonical literal is sent as the
+	// same address either way, and the corp proxy was never going to add anything
+	// to a decision evaluate() had already made.
+	if ip := net.ParseIP(strings.TrimSuffix(strings.ToLower(host), ".")); ip != nil && p.trustsExactLiteralIP(ip, port) {
+		return net.JoinHostPort(ip.String(), strconv.Itoa(port)), ruleSourceEgressRedirect, nil
+	}
 	// Upstream-first (a stated ceiling, least code): with a corporate upstream
 	// configured, EVERY forward dial is CONNECTed through it by the transport,
 	// not only by this branch (see egressDial/dialThroughUpstream) — UNLESS the
@@ -182,28 +211,6 @@ func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, 
 			ruleSource = ruleSourceInternalHost
 		}
 		return net.JoinHostPort(host, strconv.Itoa(port)), ruleSource, nil
-	}
-	// A literal IP the operator explicitly allowed EXACTLY is trusted here for
-	// the same reason evaluate() step 0 trusts it — an egress-redirect "To" on
-	// RFC1918/CGNAT space (substituteArtifactEgress adds that host to
-	// allowed_domains for exactly the runs the redirect is in scope for) has no
-	// hostname behind it to rebind. Without this, the three callers that re-vet
-	// AFTER evaluate() already allowed the request — serveMITMRequest (the
-	// token-injecting redirect lane, i.e. the whole point of a corp mirror) and
-	// the two brokers — re-derived the same address and hard-denied it, so a
-	// redirect to a literal internal address 502'd with "vet failed" even though
-	// policy had trusted it. Deny still beats allow (AllowsLiteralIP checks the
-	// deny lists first).
-	//
-	// This only ADDS an admission: a literal that is not an exactly-allowed
-	// blockPrivate address falls through to p.vetHost below unchanged (including
-	// its own InternalHosts lift), so nothing reachable before becomes
-	// unreachable — and a loopback/metadata/NAT64 literal is denied there even
-	// when allow-listed, as is one on this proxy's own subnet or its
-	// control-plane host (trustsExactLiteralIP gates on blockPrivate AND
-	// onOwnSubnetOrControlPlane, the same pair liftInternalHost gates on).
-	if ip := net.ParseIP(strings.TrimSuffix(strings.ToLower(host), ".")); ip != nil && p.trustsExactLiteralIP(ip, port) {
-		return net.JoinHostPort(ip.String(), strconv.Itoa(port)), ruleSourceEgressRedirect, nil
 	}
 	guard := p.vetHost(host)
 	if guard.Denied {

@@ -366,6 +366,58 @@ func TestRedirectLiteralIP_TrustedForItsRunOnly(t *testing.T) {
 			t.Errorf("port %d of the redirect's address is reachable, and the redirect named only 8443", port)
 		}
 	}
+
+	// B10-F2: THE SAME ANSWER UNDER A CORPORATE UPSTREAM. The upstream branch
+	// returned before the exact-literal trust below it, so on a corp-proxy estate
+	// with no bypass entry — the normal private-endpoint shape — evaluate() ALLOWED
+	// the redirect's literal (literal_ip_guard.go) and then every re-vet path
+	// (serveMITMRequest, the two brokers) 502'd it: an `allow` row followed by
+	// "llm upstream vet failed" on the same tunnel. The operator's own mirror,
+	// audited as reachable and never reached.
+	t.Run("under an upstream", func(t *testing.T) {
+		up, err := parseUpstreamProxy("http://corp-proxy.internal:3128")
+		if err != nil {
+			t.Fatalf("parseUpstreamProxy: %v", err)
+		}
+		mkUp := func(spec types.RunPolicySpec) *Proxy {
+			return newProxy(Options{
+				RunID:    uuid.New(),
+				Policy:   CompilePolicy(spec),
+				Sink:     &decisionSink{out: &bytes.Buffer{}, ch: make(chan egress.DecisionLog, 8)},
+				Resolver: publicResolver{},
+				Upstream: up,
+			})
+		}
+		target, src, err := mkUp(types.RunPolicySpec{AllowedDomains: []string{"100.64.5.7:443"}}).
+			egressTarget("100.64.5.7", 443)
+		if err != nil {
+			t.Fatalf("the redirect's own literal must stay reachable under a corp upstream: %v", err)
+		}
+		if target != "100.64.5.7:443" {
+			t.Fatalf("target = %q, want 100.64.5.7:443", target)
+		}
+		if src != ruleSourceEgressRedirect {
+			t.Fatalf("rule_source = %q, want %q", src, ruleSourceEgressRedirect)
+		}
+
+		// NEGATIVE CONTROLS — the hoist only ADDS the admission evaluate() already
+		// made; it grants nothing the direct-dial path would have refused.
+		for _, c := range []struct {
+			name string
+			host string
+			spec types.RunPolicySpec
+		}{
+			{"a literal no allowlist entry names", "100.64.5.8", types.RunPolicySpec{AllowedDomains: []string{"100.64.5.7:443"}}},
+			{"loopback, however allow-listed", "127.0.0.1", types.RunPolicySpec{AllowedDomains: []string{"127.0.0.1:443"}}},
+			{"the metadata address, however allow-listed", "169.254.169.254", types.RunPolicySpec{AllowedDomains: []string{"169.254.169.254:443"}}},
+			{"a denied literal stays denied", "100.64.5.7", types.RunPolicySpec{
+				AllowedDomains: []string{"100.64.5.7:443"}, DeniedDomains: []string{"100.64.5.7"}}},
+		} {
+			if _, _, err := mkUp(c.spec).egressTarget(c.host, 443); err == nil {
+				t.Errorf("%s: egressTarget(%q) was allowed under an upstream, want denied", c.name, c.host)
+			}
+		}
+	})
 }
 
 // TestRedirectLiteralIP_AuditedAsItsOwnGrant: the end-to-end decision log
