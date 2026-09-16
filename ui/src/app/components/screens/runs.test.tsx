@@ -364,6 +364,57 @@ describe("RunsScreen — loading skeleton matches the active density", () => {
   });
 });
 
+// F1-F7: the table cap budgeted headers GLOBALLY against the data cap
+// (`flat.slice(0, cap + groups.length)`), so a header could land exactly on
+// the cut and render as the LAST row with nothing under it.
+describe("RunsScreen table — the cap never ends on an orphan group header (F1-F7)", () => {
+  it("caps at the data-row count, not the header+data count, and never leaves a trailing header", async () => {
+    const inGroup = (id: string, title: string): AgentRun => ({ ...run, id, title, state: "COMPLETED" });
+    // Group A alone is exactly the default cap (25) — the classic trigger: the
+    // OLD code's slice landed exactly on Group B's header.
+    const groupA = Array.from({ length: 25 }, (_, i) => inGroup(`a${i}`, "Group A"));
+    const groupB = Array.from({ length: 25 }, (_, i) => inGroup(`b${i}`, "Group B"));
+    listRunsMock.mockResolvedValue([...groupA, ...groupB]);
+    const user = userEvent.setup();
+    renderScreen();
+    await user.click(screen.getByRole("button", { name: /^table$/i }));
+    await screen.findByText("Group A");
+
+    // Group B's header must not render with nothing under it.
+    expect(screen.queryByText("Group B")).not.toBeInTheDocument();
+    // The footer's count matches what's actually on screen (25 run rows).
+    expect(screen.getByText(/25 of 50/)).toBeInTheDocument();
+  });
+});
+
+// F1-F10: "Refresh now" used to call `load`, which flips status to "loading"
+// and unmounts the WHOLE toolbar (search input, focus and all) for a round
+// trip the board already runs every POLL_MS in the background.
+describe("RunsScreen — Refresh now stays on the background path (F1-F10)", () => {
+  it("never blanks the toolbar into a skeleton while the manual refresh is in flight", async () => {
+    // `load` (the old handler) flips status to "loading" SYNCHRONOUSLY, which
+    // unmounts the whole `status === "ready"` branch — search input, focus,
+    // toolbar and board — for the round trip. Hold the refresh's own fetch
+    // open so the mid-flight DOM is inspectable, not just the settled result.
+    let resolveRefresh!: (v: unknown[]) => void;
+    listRunsMock
+      .mockResolvedValueOnce([run]) // the initial foreground load
+      .mockImplementationOnce(() => new Promise((res) => { resolveRefresh = res; }));
+    const user = userEvent.setup();
+    renderScreen();
+    const search = await screen.findByPlaceholderText(/search runs/i);
+
+    await user.click(screen.getByRole("button", { name: "Refresh now" }));
+    // Still in flight: the SAME search input node is still mounted — `load`
+    // unmounting the ready branch (skeleton in its place) would hand back a
+    // brand new element here instead.
+    expect(screen.getByPlaceholderText(/search runs/i)).toBe(search);
+
+    resolveRefresh([run]);
+    await waitFor(() => expect(listRunsMock).toHaveBeenCalledTimes(2));
+  });
+});
+
 // fix: the board's collapse toggle used to be gated on `shownCount >=
 // done.length` — a count coincidence true even when nothing had ever been
 // expanded, whenever every group happened to fit within GROUP_PREVIEW. That

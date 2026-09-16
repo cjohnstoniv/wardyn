@@ -166,6 +166,17 @@ export function RunsScreen() {
   // replaced by its own page, which unmounts this screen entirely.
   usePoll(refresh, POLL_MS, false);
 
+  // F1-F10: "Refresh now" used to call `load`, which flips status to
+  // "loading" and unmounts the WHOLE toolbar (search input, focus and all)
+  // for a round trip the board already runs every POLL_MS in the background.
+  // A manual refresh is the background path plus a spinner, not a second
+  // skeleton.
+  const [refreshing, setRefreshing] = React.useState(false);
+  const manualRefresh = () => {
+    setRefreshing(true);
+    refresh().finally(() => setRefreshing(false));
+  };
+
   const kill = async (id: string) => {
     try {
       await api.killRun(id);
@@ -349,8 +360,14 @@ export function RunsScreen() {
           <Chip tone="success" dot pulse className="ml-auto" title="Polling for new runs">
             Live · refreshes every {POLL_MS / 1000}s
           </Chip>
-          <Button variant="outline" size="icon" onClick={load} aria-label="Refresh now">
-            <RotateCw className="size-4" />
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={manualRefresh}
+            disabled={refreshing}
+            aria-label="Refresh now"
+          >
+            <RotateCw className={cn("size-4", refreshing && "animate-spin")} />
           </Button>
         </div>
       )}
@@ -585,7 +602,21 @@ function RunsTable({
   ];
   const rows = [...groups.flatMap((g) => g.runs), ...loose];
   const groupedIds = new Set(groups.flatMap((g) => g.runs.map((r) => r.id)));
-  const shown = flat.slice(0, cap + groups.length);
+  // F1-F7: the old `flat.slice(0, cap + groups.length)` budgeted headers
+  // GLOBALLY against the cap, so a header could land exactly on the cut and
+  // render as the last row with nothing under it (or the cap could include
+  // more than `cap` actual runs). Count data rows while building instead, and
+  // drop a trailing header that has none.
+  const shown: ({ header: string } | AgentRun)[] = [];
+  let shownCount = 0;
+  for (const row of flat) {
+    if (!("header" in row)) {
+      if (shownCount >= cap) break;
+      shownCount++;
+    }
+    shown.push(row);
+  }
+  if (shown.length > 0 && "header" in shown[shown.length - 1]) shown.pop();
   return (
     <div className="overflow-hidden rounded-xl border border-border bg-card">
       <Table className="min-w-[960px]">
