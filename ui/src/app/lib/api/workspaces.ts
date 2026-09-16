@@ -164,16 +164,6 @@ export const workspaces = {
     return asJson<Workspace>(res);
   },
 
-  // GET /api/v1/workspaces/{id}/observed-egress -> { denied, runs_examined }.
-  // Egress hosts that runs USING this workspace were DENIED — least-privilege
-  // promotion candidates the needs panel offers one-click approval for. 404
-  // (older backend / no run history) degrades to an empty result, like getGrants.
-  async getObservedEgress(id: string): Promise<{ denied: string[]; runs_examined: number }> {
-    const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/observed-egress`, { method: "GET" });
-    if (res.status === 404) return { denied: [], runs_examined: 0 };
-    return asJson<{ denied: string[]; runs_examined: number }>(res);
-  },
-
   // GET /api/v1/workspaces/{id} -> the single onboarded workspace, or undefined on
   // 404. The import panel polls this to watch one workspace's status advance
   // (scanning → scanned; building/verifying/ready are legacy-only now) without
