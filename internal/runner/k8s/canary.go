@@ -194,6 +194,9 @@ func (d *Driver) runCanaryPhase(ctx context.Context, phaseName string, denyAll b
 		Spec: corev1.PodSpec{
 			RestartPolicy:                corev1.RestartPolicyNever,
 			AutomountServiceAccountToken: boolPtr(false),
+			// Same as the sandbox pods (sandbox.go): the canary dials the one
+			// host:port it was handed and reads no environment at all.
+			EnableServiceLinks: boolPtr(false),
 			Containers: []corev1.Container{{
 				Name:            canaryContainerName,
 				Image:           d.cfg.ProxyImage,

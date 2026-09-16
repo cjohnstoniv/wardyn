@@ -345,3 +345,35 @@ func TestApiserverHostPort_ParsesSchemeHost(t *testing.T) {
 		}
 	}
 }
+
+// TestNewWithClient_CanaryPodDisablesServiceLinks is the canary's share of
+// B9-F7: the canary runs the wardyn-proxy image with one job — dial the
+// apiserver host:port it was handed — and reads no environment at all. Leaving
+// enableServiceLinks at its default true would put every Service in the
+// operator's namespace into its env for nothing, and would drift the one pod
+// spec in this package that is NOT built by CreateSandbox away from the two
+// that are.
+func TestNewWithClient_CanaryPodDisablesServiceLinks(t *testing.T) {
+	cs := fake.NewClientset()
+	installCanaryReactor(t, cs, false)
+	cs.ClearActions()
+
+	if _, err := newWithClient(context.Background(), cs, testRestConfig(), Config{Namespace: testNamespace, ProxyImage: "wardyn/wardyn-proxy:test"}); err != nil {
+		t.Fatalf("newWithClient: %v", err)
+	}
+
+	created := 0
+	for _, a := range cs.Actions() {
+		if a.GetVerb() != "create" || a.GetResource().Resource != "pods" {
+			continue
+		}
+		pod := a.(clienttesting.CreateAction).GetObject().(*corev1.Pod)
+		created++
+		if pod.Spec.EnableServiceLinks == nil || *pod.Spec.EnableServiceLinks {
+			t.Errorf("canary pod %q EnableServiceLinks = %v, want an explicit false", pod.Name, pod.Spec.EnableServiceLinks)
+		}
+	}
+	if created == 0 {
+		t.Fatal("no canary pod was created — the assertion above proved nothing")
+	}
+}

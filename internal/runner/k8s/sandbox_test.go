@@ -261,6 +261,50 @@ func TestCreateSandbox_OrderAndRef(t *testing.T) {
 	if len(podNames) != 2 || podNames[0] != proxyPodName(spec.RunID) || podNames[1] != agentPodName(spec.RunID) {
 		t.Errorf("pod create order = %v, want [%s, %s]", podNames, proxyPodName(spec.RunID), agentPodName(spec.RunID))
 	}
+
+	// B9-F7: enableServiceLinks defaults to TRUE, which makes the kubelet inject
+	// a pair of docker-link-era env vars (<SVC>_PORT, <SVC>_SERVICE_HOST, ...)
+	// for every Service in the namespace into every container. The agent is
+	// untrusted code and the namespace is the operator's — that is a free
+	// enumeration of the cluster's service topology, handed over with no request
+	// and no use: nothing in any Wardyn image reads those variables, the agent
+	// reaches its one egress path through a HostAliases entry, and the
+	// NetworkPolicy would deny the connection anyway. The matching third field
+	// to automountServiceAccountToken:false, and off for the same reason.
+	for _, p := range []struct {
+		what string
+		name string
+	}{
+		{"agent", agentPodName(spec.RunID)},
+		{"proxy", proxyPodName(spec.RunID)},
+	} {
+		pod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), p.name, metav1.GetOptions{})
+		if err != nil {
+			t.Fatalf("get %s pod: %v", p.what, err)
+		}
+		if pod.Spec.EnableServiceLinks == nil || *pod.Spec.EnableServiceLinks {
+			t.Errorf("%s pod EnableServiceLinks = %v, want an explicit false (the default is true: every Service in the namespace lands in the container's env)", p.what, pod.Spec.EnableServiceLinks)
+		}
+	}
+
+	// Negative control for the line above: the agent's ONE egress path does not
+	// come from a service link and must be untouched by turning them off — it is
+	// the static HostAliases entry pointing wardyn-proxy at the sidecar's pod IP.
+	agentPod, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), agentPodName(spec.RunID), metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get agent pod: %v", err)
+	}
+	reachesProxy := false
+	for _, ha := range agentPod.Spec.HostAliases {
+		for _, h := range ha.Hostnames {
+			if h == proxyContainerName && ha.IP == "10.244.0.7" {
+				reachesProxy = true
+			}
+		}
+	}
+	if !reachesProxy {
+		t.Errorf("agent pod HostAliases = %v, want wardyn-proxy pinned to the proxy pod IP (its only egress path)", agentPod.Spec.HostAliases)
+	}
 }
 
 // TestCreateSandbox_NetworkPolicyFields (M6) reads both run NetworkPolicies

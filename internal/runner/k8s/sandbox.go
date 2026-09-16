@@ -176,6 +176,14 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		ObjectMeta: metav1.ObjectMeta{Name: proxyPodName(spec.RunID), Namespace: ns, Labels: wardynLabels(spec.RunID, componentProxy, spec.Labels)},
 		Spec: corev1.PodSpec{
 			AutomountServiceAccountToken: boolPtr(false),
+			// The kubelet injects a <SVC>_SERVICE_HOST/<SVC>_PORT pair for EVERY
+			// Service in the namespace into every container when this is left at
+			// its default true. Nothing in any Wardyn image reads them — the agent
+			// reaches its one egress path through the HostAliases entry below, and
+			// its NetworkPolicy would deny anything else anyway — so all it does
+			// is hand untrusted code a free enumeration of the operator's service
+			// topology. Off, for the same reason as the line above it.
+			EnableServiceLinks: boolPtr(false),
 			Containers: []corev1.Container{{
 				Name:  proxyContainerName,
 				Image: d.cfg.ProxyImage,
@@ -233,6 +241,14 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		Spec: corev1.PodSpec{
 			RestartPolicy:                corev1.RestartPolicyNever,
 			AutomountServiceAccountToken: boolPtr(false),
+			// The kubelet injects a <SVC>_SERVICE_HOST/<SVC>_PORT pair for EVERY
+			// Service in the namespace into every container when this is left at
+			// its default true. Nothing in any Wardyn image reads them — the agent
+			// reaches its one egress path through the HostAliases entry below, and
+			// its NetworkPolicy would deny anything else anyway — so all it does
+			// is hand untrusted code a free enumeration of the operator's service
+			// topology. Off, for the same reason as the line above it.
+			EnableServiceLinks: boolPtr(false),
 			HostAliases:                  []corev1.HostAlias{{IP: proxyIP, Hostnames: []string{"wardyn-proxy"}}},
 			// L3: the default ClusterFirst dnsPolicy points the agent at
 			// kube-dns/CoreDNS — which its own NetworkPolicy denies (no DNS
