@@ -619,7 +619,8 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@# Secret — proxy config plus every secret_env value — is never reclaimed.
 	@# Asserted on the Role block specifically: granting it in the cluster-scoped
 	@# ClusterRole instead would satisfy a bare grep while widening every namespace.
-	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.allowRunsInReleaseNamespace=true); \
+	@# (k8s.runtimeClasses.CC2 pinned only to satisfy the B12b-F7 guard — this gate inspects the Role's verbs, not the class)
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.runtimeClasses.CC2=gvisor --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.allowRunsInReleaseNamespace=true); \
 	role=$$(echo "$$out" | awk '/^---/{r=0} /^kind: Role$$/{r=1} r'); \
 	echo "$$role" | grep -q 'resources: \["secrets"\]' || { echo "the k8s-runner Role has no secrets rule — the two verb assertions below would be vacuous"; exit 1; }; \
 	echo "$$role" | grep -A1 'resources: \["secrets"\]' | grep -q '"list"' || { echo "the k8s-runner Role does not grant secrets: list — SweepOrphanedSandboxes lists the per-run Secret by label to reach a run whose agent AND proxy pods are both gone; without it that run's Secret (proxy config + every secret_env value) is never reclaimed"; exit 1; }; \
