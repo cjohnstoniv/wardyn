@@ -155,7 +155,10 @@ for spec in "${specs[@]}"; do
   # folded into `executed` above (so a flaky run still counts as spec_ok=1 and
   # never fails the gate), and until now never surfaced anywhere else. A flaky
   # test IS a defect (X2-F10): print it per spec and fail the whole gate on any
-  # nonzero total, the same way a genuine failure does.
+  # nonzero total, the same way a genuine failure does. Nonzero only where
+  # retries are enabled — playwright.config.ts's `retries: process.env.CI ? 2
+  # : 0` means stats_flaky is structurally 0 on an uncustomized dev box; this
+  # check has teeth in CI (and anywhere else CI=1 is set).
   if [[ ${stats_flaky} -gt 0 ]]; then
     log "${base}: ${stats_flaky} flaky test(s) (passed only after a Playwright retry)"
   fi
