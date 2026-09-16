@@ -650,6 +650,22 @@ no logic change.
 
 ### Known gaps and deferrals
 
+- **On Kubernetes, `disk_mib` bounds the pod's idle main container, not what
+  the agent writes.** A run's commands execute in an ephemeral container
+  attached to the pod (`internal/runner/k8s/exec.go`), and the kubelet does not
+  count an ephemeral container's writable layer toward the pod's
+  `ephemeral-storage` limit. The `limits[ephemeral-storage]` 0.7.2 introduced
+  does land on the pod and does evict a pod whose main container writes past
+  it — but the agent's clone, `$HOME` and `/tmp` writes live in the ephemeral
+  container and are metered only by the node's own eviction thresholds. The
+  conformance case `EphemeralDiskLimit/OverTheLimitTheRunIsEvicted` has been
+  red in CI since 0.7.2 for exactly this reason: its fill runs through `Exec`,
+  while a bare pod with the same limit is evicted within a minute on the same
+  node. The fix is an `emptyDir` with a `sizeLimit` mounted in both containers,
+  which the kubelet does meter — 0.7.5. Until then read
+  `ephemeral_disk_enforcement: eviction` as "the pod, not the agent's own
+  writes", and the helm README and OPERATIONS sections on `DiskMiB` carry the
+  same correction.
 - **A workspace create/update that fails at the store can leave library rows
   and audit entries behind.** No transaction seam exists to put both writes in
   one, and no orphan-source heal reconciles them at boot; the residue is

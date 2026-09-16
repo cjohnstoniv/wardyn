@@ -602,7 +602,11 @@ k8s-substrate equivalent), and **`replicas` stays 1**, same reason as every
 other substrate (see [docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s
 "One replica, by construction").
 
-**Closed in 0.7.2: `DiskMiB` is enforced, by eviction.** A run's `disk_mib`
+**Closed in 0.7.2: `DiskMiB` is enforced, by eviction — for the pod's main
+container.** (0.7.4 correction: the agent's own commands run in an ephemeral
+container the kubelet does not meter against this limit; see the CHANGELOG's
+0.7.4 Known gaps. An `emptyDir` with a `sizeLimit` shared by both containers is
+the 0.7.5 fix.) A run's `disk_mib`
 becomes the agent container's `resources.limits[ephemeral-storage]` (with a
 small fixed 256Mi request, so scheduling is unchanged except that a node short
 on allocatable ephemeral storage can newly leave the pod Pending), and the

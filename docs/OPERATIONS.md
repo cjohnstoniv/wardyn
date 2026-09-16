@@ -4592,7 +4592,9 @@ block storage class binds it, a network-share provisioner accepts it and
 enforces nothing), `external` (something outside Wardyn binds it, such as a
 NAS's own quota), `none` (nothing binds it), and, since 0.7.2, `eviction` (the
 kubelet measures the pod's usage periodically and evicts it once it exceeds
-the limit — the write itself is never refused): a managed claim is `request`,
+the limit — the write itself is never refused; on 0.7.x that metered usage
+excludes the ephemeral container the agent runs in, see the `DiskMiB` gap
+below): a managed claim is `request`,
 a share is `external`. It is the same honesty the `DiskMiB` gap below is
 written with, and the two vocabularies **have now converged on one**:
 `disk_mib` reports `filesystem` on Docker when the storage driver can enforce
@@ -4723,7 +4725,12 @@ driver, not a guess:
   `disk_mib` is now the agent container's `resources.limits[ephemeral-storage]`
   (`internal/runner/k8s/naming.go`) — the pod has no volumes unless a drive is
   mounted, so the clone, `$HOME`, `/tmp` and every ephemeral workspace target
-  land on the writable layer + logs, which is exactly what the kubelet meters.
+  land on a writable layer — but on the EPHEMERAL container `Exec` attaches
+  for the agent process (`internal/runner/k8s/exec.go`), and the kubelet does
+  not meter an ephemeral container's layer against the pod's limit (found in
+  0.7.4: the limit evicts writes by the pod's main container only; the
+  conformance eviction case has been red since 0.7.2 for this reason). An
+  `emptyDir` with a `sizeLimit` shared by both containers is the 0.7.5 fix.
   What remains a gap, precisely: (i) enforcement is by **eviction, not a
   quota** — the kubelet kills the POD once it exceeds the limit, in-flight work
   is lost, and the agent process never sees `ENOSPC`; it gets no chance to
