@@ -209,11 +209,15 @@ const (
 	//
 	// DRAFT (M2 canon pending)
 	modelAccessPinContradictedAction = "Your stored AWS session is for account %s / role %s; this row now allows %s / %s — sign in again."
+	// harnessCredentialAWSPinMismatchDetail is the OPERATOR's half of the same
+	// fact, on the harness_credential_aws checklist row (members never see the
+	// checklist — redactSetupStatusForMember empties it). It exists because the
+	// expired_signin arm it shares says "expired at <ts> and cannot be renewed",
+	// which of this credential is simply false.
+	//
+	// DRAFT (M2 canon pending)
+	harnessCredentialAWSPinMismatchDetail = "Your captured AWS SSO session names an AWS account and role this agent's roster row no longer allows, so Bedrock runs using it are refused before they start."
 )
-
-// harnessCredentialAWSPinMismatchDetail is the checklist row for a captured AWS
-// SSO session the roster no longer allows. DRAFT (M2 canon pending).
-const harnessCredentialAWSPinMismatchDetail = "Your captured AWS SSO session names an AWS account and role this agent's roster row no longer allows, so Bedrock runs using it are refused before they start."
 
 // harnessLoginMechanismPrincipalRefusal (M2 canon pending) — DRAFT
 // (docs/design/workspace-providers-prompt.md §7 shape: a lowercase-opening

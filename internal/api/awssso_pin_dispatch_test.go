@@ -6,6 +6,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -182,15 +183,24 @@ func TestDispatch_RefusalIsAuditedAndNamesBothIdentities(t *testing.T) {
 		t.Fatal("the run was admitted; there is no refusal to audit")
 	}
 	var refusal string
+	rows := 0
 	for _, ev := range h.audit.events {
 		if ev.Action != "run.create" || ev.Outcome != "failure" || ev.RunID == nil || *ev.RunID != run.ID {
 			continue
 		}
+		rows++
 		var data map[string]any
 		if err := json.Unmarshal(ev.Data, &data); err != nil {
 			t.Fatalf("run.create failure data is not an object: %v", err)
 		}
 		refusal, _ = data["error"].(string)
+	}
+	// EXACTLY ONE. The pin refusal REUSES the gate's existing emit rather than
+	// adding a second one, so a duplicate row would mean two refusal paths ran
+	// for one run — and an incident review counting refusals would double every
+	// one of them.
+	if rows != 1 {
+		t.Fatalf("run.create failure rows for this run = %d, want exactly 1", rows)
 	}
 	if refusal == "" {
 		t.Fatal("a refused dispatch left no run.create failure row carrying its reason")
@@ -264,6 +274,22 @@ func TestSetupStatus_StoredBlobContradictingThePinGradesExpiredSignin(t *testing
 	}
 	if awsRow.Status != "warn" {
 		t.Errorf("harness_credential_aws status = %q, want warn", awsRow.Status)
+	}
+	// AND IT MUST SAY THE TRUE THING. `expired_signin` was already a warn row
+	// before this lane, so status alone asserts nothing this fix added: without
+	// the PinMismatch arm the row reads "Your captured AWS SSO session expired
+	// at <ts> and cannot be renewed" about a session putPinnedSSOBlob made live
+	// and renewable an hour out. The Fix is ma.Action verbatim, so the
+	// operator's row and the member's action line cannot disagree about one
+	// credential.
+	if awsRow.Detail != harnessCredentialAWSPinMismatchDetail {
+		t.Errorf("harness_credential_aws detail = %q, want the pin-mismatch sentence", awsRow.Detail)
+	}
+	if strings.Contains(awsRow.Detail, "expired at") {
+		t.Errorf("harness_credential_aws detail = %q calls a LIVE, renewable session expired", awsRow.Detail)
+	}
+	if awsRow.Fix != ma.Action {
+		t.Errorf("harness_credential_aws fix = %q, want the same action line the member reads (%q)", awsRow.Fix, ma.Action)
 	}
 
 	// THE ADMIN'S OWN STATUS IS UNTOUCHED: their capture agrees with the pin, so
@@ -551,6 +577,12 @@ func TestBedrockBlobPinMismatch(t *testing.T) {
 		"an unpinned per_user row":    {sc: pinnedPerUserRoster("", ""), auth: ssoAuth("222222222222", "DevPower")},
 		"a blob carrying no pair yet": {sc: pinned, auth: ssoAuth("", "")},
 		"a blob with only a role":     {sc: pinned, auth: ssoAuth("", "DevPower")},
+		// R-03: the MIRROR of the row above, and of the two half-pinned rows —
+		// both-halves-or-neither on the STORED side too. An account-only pair
+		// differs from the pin, so without the guard it returns mismatch=true
+		// with a role nobody can name, and every caller composes a sentence
+		// that names both halves.
+		"a blob with only an account": {sc: pinned, auth: ssoAuth("222222222222", "")},
 		"a half-pinned row (account)": {sc: pinnedPerUserRoster("111111111111", ""), auth: ssoAuth("222222222222", "DevPower")},
 		"a half-pinned row (role)":    {sc: pinnedPerUserRoster("", "BedrockRunner"), auth: ssoAuth("222222222222", "DevPower")},
 		"no roster at all":            {auth: ssoAuth("222222222222", "DevPower")},
@@ -583,6 +615,117 @@ func TestBedrockBlobPinMismatch(t *testing.T) {
 			// back empty on the one path that composes a sentence from them.
 			if !stored.set() || !pin.set() {
 				t.Errorf("a mismatch returned an unnameable pair: stored=%+v pinned=%+v", stored, pin)
+			}
+		})
+	}
+}
+
+// TestBedrockProviderCheck_StoredCaptureContradictingThePinWarns is D4: the
+// THIRD roster posture on the bedrock_provider row, beside the two 0.7.3
+// shipped.
+//
+// It is the arm docs/OPERATIONS.md now sells to operators ("the setup
+// checklist's AWS Bedrock row warns naming both pairs"), and it is the one an
+// admin reads at the exact moment the row got LESS informative on its own:
+// saving the pin removes the "nothing constrains the account/role" warning
+// above, so without this the estate reads more correct than it did while every
+// run on the stored session is already refused.
+//
+// APPEND-NEVER-SUBSTITUTE is asserted, not described: the row is still the only
+// place the console names the live region and model, and the pin-vs-model
+// posture is a DIFFERENT half of the same question (what the roster pins vs the
+// model's account) that must survive this one landing on top of it.
+func TestBedrockProviderCheck_StoredCaptureContradictingThePinWarns(t *testing.T) {
+	const thirdAccountARN = "arn:aws:bedrock:us-east-1:333333333333:inference-profile/us.anthropic.claude-v1:0"
+	pinned := pinnedPerUserRoster("111111111111", "BedrockRunner")
+
+	for name, c := range map[string]struct {
+		model string
+		// alsoWantModelPosture: the pin-vs-model sentence must ALSO be present,
+		// because both postures are true of this deployment at once.
+		alsoWantModelPosture bool
+	}{
+		// The bare cross-region id names no account, so the pin-vs-model posture
+		// is silent and this one stands alone.
+		"a bare model id": {model: pinDispatchModel},
+		// A model ARN in a THIRD account: the roster pins 111111111111, the model
+		// lives in 333333333333, and the stored capture is for 222222222222 —
+		// three different accounts, two true postures, one row.
+		"a model ARN in a third account": {model: thirdAccountARN, alsoWantModelPosture: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv := New(Config{
+				BedrockRegion: "us-east-1", BedrockModel: c.model,
+				Secrets: &memSecrets{m: map[string][]byte{}},
+			})
+			bedrock := srv.setupBedrock(context.Background(), map[string]bool{}, awsSSOScope{})
+			// This caller HAS captured — and the pair they captured is the one the
+			// roster no longer allows. setupBedrock reads it off the blob in
+			// production; there is no blob in this fixture, so it is set here.
+			bedrock.SSOPresent, bedrock.Ready = true, true
+			bedrock.SSOAccountID, bedrock.SSORoleName = "222222222222", "DevPower"
+
+			chk, ok := bedrockProviderCheck(bedrock, pinned, true)
+			if !ok {
+				t.Fatal("a region+model-configured Bedrock row must always surface a check")
+			}
+			if chk.Status != "warn" {
+				t.Errorf("status = %q, want warn — every run on the stored session is refused", chk.Status)
+			}
+			for _, want := range []string{"222222222222", "DevPower", "111111111111", "BedrockRunner"} {
+				if !strings.Contains(chk.Detail, want) {
+					t.Errorf("detail = %q, want it to name %q — both pairs or the admin cannot tell which is which", chk.Detail, want)
+				}
+			}
+			if !strings.Contains(chk.Fix, bedrockPinContradictedFix) {
+				t.Errorf("fix = %q, want the DRAFT remedy (sign in again; Wardyn never rewrites a stored session)", chk.Fix)
+			}
+			// APPENDED, never substituted: the plain row (no roster ⇒ no posture)
+			// is still the head of this Detail, so the live region and model are
+			// not lost.
+			plain, _ := bedrockProviderCheck(bedrock, types.SiteConfig{}, true)
+			if plain.Status != "ok" {
+				t.Fatalf("the plain row = %+v, want ok — this fixture must be a READY deployment or the append proves nothing", plain)
+			}
+			if !strings.HasPrefix(chk.Detail, plain.Detail) {
+				t.Errorf("detail = %q, want it to keep %q and append the posture", chk.Detail, plain.Detail)
+			}
+			if !strings.Contains(chk.Detail, "us-east-1") {
+				t.Errorf("detail = %q, lost the configured region/model sentence", chk.Detail)
+			}
+			// BOTH POSTURES, when both are true. A fold that substituted instead
+			// of appending would drop the sibling, and no single-posture test
+			// would have caught it.
+			hasModelPosture := strings.Contains(chk.Detail, "333333333333")
+			if hasModelPosture != c.alsoWantModelPosture {
+				t.Errorf("pin-vs-model posture present = %v, want %v; detail = %q",
+					hasModelPosture, c.alsoWantModelPosture, chk.Detail)
+			}
+			if c.alsoWantModelPosture {
+				if !strings.Contains(chk.Detail, fmt.Sprintf(bedrockPinModelAccountDetail, "111111111111", "333333333333")) {
+					t.Errorf("detail = %q, want the pin-vs-model sentence verbatim", chk.Detail)
+				}
+				if !strings.Contains(chk.Detail, fmt.Sprintf(bedrockPinContradictedDetail,
+					"222222222222", "DevPower", "111111111111", "BedrockRunner")) {
+					t.Errorf("detail = %q, want the pin-vs-capture sentence verbatim", chk.Detail)
+				}
+				if !strings.Contains(chk.Fix, bedrockPinModelAccountFix) {
+					t.Errorf("fix = %q, want the sibling posture's remedy kept too", chk.Fix)
+				}
+			}
+
+			// An AGREEING capture says nothing: the posture is a contradiction, not
+			// a report that a session exists.
+			agreeing := bedrock
+			agreeing.SSOAccountID, agreeing.SSORoleName = "111111111111", "BedrockRunner"
+			quiet, _ := bedrockProviderCheck(agreeing, pinned, true)
+			if strings.Contains(quiet.Detail, bedrockPinContradictedFix) ||
+				strings.Contains(quiet.Detail, "no longer allows") {
+				t.Errorf("an agreeing capture raised the posture: %q", quiet.Detail)
+			}
+			// And an UNREADABLE roster asserts no posture at all, like its siblings.
+			if blind, _ := bedrockProviderCheck(bedrock, pinned, false); strings.Contains(blind.Detail, "no longer allows") {
+				t.Errorf("an unreadable roster asserted a posture: %q", blind.Detail)
 			}
 		})
 	}

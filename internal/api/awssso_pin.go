@@ -275,14 +275,18 @@ func bedrockPinDisagreement(sc types.SiteConfig, model string) (pinAccount, mode
 //   - a stored pair Wardyn does not know. account_id/role_name are `omitempty`
 //     on the wire (awsSSOBlob, harnesscred.go) and a blob written by an older
 //     binary may carry neither; refusing on absence would be that same upgrade
-//     regression, for a comparison there is no data for.
+//     regression, for a comparison there is no data for. BOTH HALVES OR
+//     NEITHER on this side too, not merely the account: a half-known stored
+//     pair (reachable the same way a half-pinned row is — a hand-edited store
+//     row) would otherwise return mismatch=true with a pair no caller can name,
+//     and every caller here composes a sentence that names both halves.
 //   - agreement.
 //
 // Returns (stored, pinned, true) ONLY on a genuine contradiction, so a caller
 // can name BOTH pairs — which is the whole point: the person reading the
 // refusal is the one who has to sign in again.
 func awsSSOPinContradiction(sc types.SiteConfig, stored awsSSOPin) (awsSSOPin, awsSSOPin, bool) {
-	if stored.AccountID == "" {
+	if !stored.set() {
 		return awsSSOPin{}, awsSSOPin{}, false
 	}
 	row, ok := perUserLoginRow(sc, awsSSOProvider)
