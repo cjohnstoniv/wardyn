@@ -155,6 +155,13 @@ export async function wfetch(
   }
 
   if (res.status === 401) {
+    // F6-F8: a REAL 401 means the bearer this request just sent was
+    // rejected (expired/revoked/foreign admin token) — leaving it stored
+    // would replay the same rejected credential on every request from here
+    // to sign-in. Scoped to exactly this branch: a store-independent 5xx
+    // (adminAuth checks the bearer before the store is ever touched, so a
+    // Postgres blip never 401s a good token) never reaches here.
+    if (getToken()) setToken(null);
     _unauthorized?.();
     throw new HttpError(401, "Unauthorized");
   }
@@ -172,16 +179,31 @@ export async function asJson<T>(res: Response): Promise<T> {
 // both the paths where a non-2xx is an EXPECTED, actionable outcome the caller
 // renders inline (e.g. verifyWorkspace's 422/503/409) and asJson, which wraps it
 // in an HttpError. Change the envelope here and both follow.
+// F6-F7: readability/DoS, not injection — React escapes whatever this
+// returns either way. But a misrouted request can land on a web server or
+// proxy in front of wardynd instead of the daemon itself, and that answer's
+// body is neither ours nor small (an nginx/ALB error page, a captive-portal
+// interstitial). Surfacing it verbatim in a toast is a body-of-unknown-size
+// rendered as text; the guard below caps what the raw-body fallback will
+// ever hand back, in bytes and in shape (never something that opens like a
+// markup document). The `{"error":"…"}` envelope is unaffected — a real API
+// error message is always small and is extracted before the guard runs.
+const RAW_BODY_MAX_CHARS = 500;
+function isRawBodyDisplayable(body: string): boolean {
+  return body.length <= RAW_BODY_MAX_CHARS && !/^\s*</.test(body);
+}
+
 export async function errText(res: Response): Promise<string> {
   try {
     const body = await res.text();
     if (!body) return res.statusText;
     try {
       const j = JSON.parse(body) as { error?: unknown };
-      return typeof j.error === "string" && j.error ? j.error : body;
+      if (typeof j.error === "string" && j.error) return j.error;
     } catch {
-      return body;
+      // not JSON — fall through to the raw-body guard below
     }
+    return isRawBodyDisplayable(body) ? body : res.statusText;
   } catch {
     return res.statusText;
   }

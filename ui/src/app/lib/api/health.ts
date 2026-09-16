@@ -254,6 +254,11 @@ export const health = {
     // never came up (stock Helm install: persistence off) — distinct from
     // "no run has produced one yet". Absent on an older daemon.
     components?: Record<string, { selected?: string; available?: string[]; source?: string }>;
+    // The daemon's own build (internal/api/healthz.go's deliberate anonymous
+    // disclosure — a support issue or CLI/server skew after a rolling upgrade
+    // has to be answerable pre-auth). Wire mirror only; not read client-side
+    // yet. Absent on an older daemon.
+    version?: string;
   }> {
     try {
       // /healthz is un-prefixed (not under /api/v1), so it is the ONE call
@@ -296,7 +301,14 @@ export const health = {
   // status:"ok" IS the not-ready verdict and no caller has to catch.
   async readyz(): Promise<{ status?: string; postgres?: string }> {
     try {
-      const res = await fetch("/readyz", { credentials: "include" });
+      // F6-F1: handleReadyz bounds its own store Ping, so the daemon itself
+      // won't hang — the real risk is the TRANSPORT (an LB/ingress accepting
+      // the connection with no ready backend behind it, which has no
+      // Read/WriteTimeout to save it). Without a signal here, `unreachable`
+      // would freeze at its LAST known value forever instead of degrading.
+      // The signal alone suffices: readyz's own catch below already turns an
+      // aborted fetch into {}, which is exactly the not-ready verdict.
+      const res = await fetch("/readyz", { credentials: "include", signal: AbortSignal.timeout(WFETCH_TIMEOUT_MS) });
       if (!res.ok) return {};
       return (await res.json()) as { status?: string; postgres?: string };
     } catch {

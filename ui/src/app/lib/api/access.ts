@@ -27,6 +27,11 @@ export interface RoleMappingUpsert {
   // DELETE carries the same count but rides no body (204), so there is
   // nothing to surface on that side.
   tokensRevoked?: number;
+  // F6 type-mirror gap: the INFORMATIONAL half of the same embed — how many
+  // live frozen snapshots named this value BEFORE the edit acted, taken
+  // before tokensRevoked's demotion runs. Omitempty; absent means zero
+  // outstanding snapshots existed for this value at write time.
+  staleTokenSnapshots?: number;
 }
 
 // Best-effort parse of a POST/DELETE 400 body as JSON — a plain
@@ -112,9 +117,11 @@ export const access = {
     const res = await wfetch("/access/mappings", { method: "POST", body: JSON.stringify(input) });
     if (!res.ok) await throwAccessWriteError(res);
     const created = res.status === 201;
-    const body = await asJson<RoleMappingUpsert["mapping"] & { tokens_revoked?: number }>(res);
-    const { tokens_revoked, ...mapping } = body;
-    return { mapping, created, tokensRevoked: tokens_revoked };
+    const body = await asJson<
+      RoleMappingUpsert["mapping"] & { tokens_revoked?: number; stale_token_snapshots?: number }
+    >(res);
+    const { tokens_revoked, stale_token_snapshots, ...mapping } = body;
+    return { mapping, created, tokensRevoked: tokens_revoked, staleTokenSnapshots: stale_token_snapshots };
   },
 
   // DELETE /api/v1/access/mappings/{id}?acknowledge_access_change=true — the

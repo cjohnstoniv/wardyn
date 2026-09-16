@@ -275,7 +275,10 @@ describe("health.readyz — the store probe /healthz deliberately isn't", () => 
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
   });
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
 
   it("asks /readyz, not /healthz", async () => {
     fetchMock.mockResolvedValue(new Response(JSON.stringify({ status: "ok" }), { status: 200 }));
@@ -309,6 +312,39 @@ describe("health.readyz — the store probe /healthz deliberately isn't", () => 
   it("an older daemon with no /readyz route (404) is not-ready, not ok", async () => {
     fetchMock.mockResolvedValue(new Response("404 page not found", { status: 404 }));
     expect((await health.readyz()).status).toBeUndefined();
+  });
+
+  // F6-F1: handleReadyz itself won't hang (it bounds its own Ping), but the
+  // live risk is the TRANSPORT — an LB/ingress that accepts a connection with
+  // no ready backend behind it. Before this fix readyz() carried no signal at
+  // all, so that case froze the {}-on-no-answer contract every other branch
+  // above already gets: `unreachable` would freeze at its LAST known value
+  // forever instead of degrading. One AbortSignal.timeout suffices; readyz's
+  // own catch already turns any thrown/aborted fetch into {} (= not ready).
+  it("a request that never answers resolves to {} at the deadline, not a permanent hang", async () => {
+    vi.useFakeTimers();
+    fetchMock.mockImplementation(
+      (_url: string, init: RequestInit = {}) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => reject(new DOMException("", "TimeoutError")));
+        }),
+    );
+    const p = health.readyz();
+    await vi.advanceTimersByTimeAsync(70_000); // past WFETCH_TIMEOUT_MS (60s)
+    await expect(p).resolves.toEqual({});
+    vi.useRealTimers();
+  });
+
+  // neg: a fast, well-behaved readyz is UNAFFECTED by the new signal — still
+  // answers ok long before any deadline could fire.
+  it("neg: a 100ms readyz still resolves ok, unaffected by the new deadline", async () => {
+    fetchMock.mockImplementation(
+      () =>
+        new Promise<Response>((resolve) =>
+          setTimeout(() => resolve(new Response(JSON.stringify({ status: "ok" }), { status: 200 })), 100),
+        ),
+    );
+    expect(await health.readyz()).toEqual({ status: "ok" });
   });
 });
 

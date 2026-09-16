@@ -309,14 +309,19 @@ export const workspaces = {
     }
   },
 
-  // POST /api/v1/workspaces/{id}/scan — kick off a (re-)scan. The response body
-  // shape DIFFERS by kind and is NOT a Workspace: a local dir scans INLINE (200,
-  // body is the derived profile, status already flipped to ready/error), while a
-  // repo launches a governed scan run (202 { scan_run_id, … } — the profile/status
-  // update asynchronously when it finishes). So callers must NOT treat the body as a
-  // Workspace; re-fetch the list for the authoritative status. Returns only the
-  // async signal + the scan-run id (repo) so the UI can message accordingly.
-  async scanWorkspace(id: string): Promise<{ async: boolean; scanRunId?: string }> {
+  // POST /api/v1/workspaces/{id}/scan — kick off a (re-)scan across every
+  // attached source (internal/api/source_scan.go's handleScanWorkspace /
+  // scanAttachedSources). The response body shape DIFFERS by outcome and is
+  // NOT a Workspace: everything scanned INLINE (local dirs, ephemeral) comes
+  // back 200 with the freshly-merged Workspace, while ANY repo source
+  // launches a governed scan run per source (202 { scan_run_ids: [...],
+  // workspace_id } — PLURAL, one id per launched run; the profile/status
+  // updates asynchronously as each finishes). So callers must NOT treat the
+  // body as a Workspace; re-fetch the list for the authoritative status.
+  // F6-F4: the old stub read a singular `scan_run_id`, a DIFFERENT route's
+  // key (the single-source handleScanSource) — this endpoint never sends it,
+  // so every governed scan silently reported no run ids.
+  async scanWorkspace(id: string): Promise<{ async: boolean; scanRunIds: string[] }> {
     // LAUNCH_DEADLINE_MS: a repo scan launches a governed run per source and
     // blocks on its CreateSandbox before the 202 (scanAttachedSources ->
     // dispatchAndSettle) — the same cold-pull exposure as recordTask above.
@@ -325,7 +330,7 @@ export const workspaces = {
       { method: "POST" },
       LAUNCH_DEADLINE_MS,
     );
-    const body = await asJson<{ scan_run_id?: string }>(res);
-    return { async: res.status === 202, scanRunId: body?.scan_run_id };
+    const body = await asJson<{ scan_run_ids?: string[] }>(res);
+    return { async: res.status === 202, scanRunIds: body?.scan_run_ids ?? [] };
   },
 };

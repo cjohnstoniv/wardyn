@@ -94,31 +94,48 @@ describe("workspace client methods", () => {
     expect(init?.method).toBe("DELETE");
   });
 
-  it("scanWorkspace() POSTs /scan; a 200 (local dir, body is the profile) reports as sync", async () => {
-    // Local-dir scan returns the derived PROFILE (not a Workspace) with 200 — the
-    // client must not treat it as a Workspace; it reports the scan as sync.
+  it("scanWorkspace() POSTs /scan; a 200 (everything scanned inline) reports as sync", async () => {
+    // Everything-inline (or ephemeral/dangling) returns the freshly-merged
+    // Workspace with 200 (source_scan.go handleScanWorkspace's fall-through)
+    // — no scan_run_ids key at all. The client reports the scan as sync.
     fetchMock.mockResolvedValueOnce(
-      new Response(JSON.stringify({ languages: ["go"] }), {
+      new Response(JSON.stringify({ id: "ws-1", status: "ready" }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
     );
     const res = await workspaces.scanWorkspace("ws-1");
-    expect(res).toEqual({ async: false, scanRunId: undefined });
+    expect(res).toEqual({ async: false, scanRunIds: [] });
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toContain("/api/v1/workspaces/ws-1/scan");
     expect(init?.method).toBe("POST");
   });
 
-  it("scanWorkspace() reports a repo scan (202 scan-run stub) as async with its scan_run_id", async () => {
+  // F6-F4: handleScanWorkspace's 202 body is `{"scan_run_ids": [...], "workspace_id": ...}`
+  // — PLURAL, one run per attached repo source (source_scan.go's
+  // scanAttachedSources) — never the singular `scan_run_id` a different route
+  // (the single-source handleScanSource) answers with. The old stub read the
+  // wrong key entirely, so every multi-repo scan silently reported no run ids.
+  it("scanWorkspace() reports a governed scan (202, PLURAL scan_run_ids) as async with the ids", async () => {
     fetchMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({ scan_run_id: "run-9", workspace_id: "ws-1", state: "queued" }),
-        { status: 202, headers: { "Content-Type": "application/json" } },
-      ),
+      new Response(JSON.stringify({ scan_run_ids: ["run-9", "run-10"], workspace_id: "ws-1" }), {
+        status: 202,
+        headers: { "Content-Type": "application/json" },
+      }),
     );
     const res = await workspaces.scanWorkspace("ws-1");
-    expect(res).toEqual({ async: true, scanRunId: "run-9" });
+    expect(res).toEqual({ async: true, scanRunIds: ["run-9", "run-10"] });
+  });
+
+  it("scanWorkspace() 202 with no scan_run_ids key (older daemon) reports async with an empty list, never undefined", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ workspace_id: "ws-1" }), {
+        status: 202,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const res = await workspaces.scanWorkspace("ws-1");
+    expect(res).toEqual({ async: true, scanRunIds: [] });
   });
 
   it("createWorkspace() accepts the composition shape (sources + base_image) alongside the legacy fields", async () => {
