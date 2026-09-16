@@ -20,6 +20,12 @@ const (
 	// run-id label is unreadable.
 	agentNamePrefix = "wardyn-agent-"
 
+	// demoAgentImagePrefix is the repository prefix of the demo agent images
+	// `make agent-images` builds (wardyn/agent-claude-code, wardyn/agent-oracle,
+	// wardyn/agent-aws-sso, ...). They live in no registry, so an absent one is
+	// the single case where a failed pull has a make target as its fix.
+	demoAgentImagePrefix = "wardyn/agent-"
+
 	// labelRun tags every Wardyn-owned object with its run UUID for audit and
 	// teardown selectors.
 	labelRun       = "wardyn.run-id"

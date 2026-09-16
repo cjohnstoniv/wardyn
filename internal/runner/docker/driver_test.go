@@ -185,6 +185,36 @@ func TestEnsureImage_MissingHintsMakeTarget(t *testing.T) {
 	}
 }
 
+// TestEnsureImage_MissingDoesNotHintMakeTargetForANonDemoRef is B9-F8: the
+// hint is only true for the demo tags `make agent-images` actually builds. On
+// any OTHER ref — an operator's own registry image, a workspace-built
+// wardyn-workspace/... tag — it is advice that cannot work, and it buries the
+// daemon's real answer (an auth failure, an unreachable registry, a typo in the
+// ref) under a make target that has nothing to do with it. The pull error
+// itself still has to survive either way; that is the whole point of wrapping.
+func TestEnsureImage_MissingDoesNotHintMakeTargetForANonDemoRef(t *testing.T) {
+	for _, ref := range []string{
+		"registry.corp.example/team/base:1.2",
+		"wardyn-workspace/w-abc:latest",
+		"ubuntu:24.04",
+	} {
+		f := newFakeDocker()
+		f.failImagePull = true // absent + unpullable
+		d := newTestDriver(f)
+
+		err := d.ensureImage(context.Background(), ref)
+		if err == nil {
+			t.Fatalf("ensureImage(%q) on an absent, unpullable image: got nil error", ref)
+		}
+		if strings.Contains(err.Error(), "make agent-images") {
+			t.Errorf("ensureImage(%q) hinted a make target that does not build it: %v", ref, err)
+		}
+		if !strings.Contains(err.Error(), ref) {
+			t.Errorf("ensureImage(%q) error lost the image ref: %v", ref, err)
+		}
+	}
+}
+
 func TestCreateSandbox_TopologyPreservesL0(t *testing.T) {
 	f := newFakeDocker()
 	f.images["busybox:latest"] = true
