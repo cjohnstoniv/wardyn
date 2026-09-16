@@ -290,6 +290,40 @@ test.describe("theme toggle", () => {
   });
 });
 
+// F3-F8/F7-F6: the mobile nav is a left-side Sheet (app-shell.tsx's
+// MobileNav) carrying the full nine-item sidebar; below the md breakpoint
+// it's the ONLY way to navigate. At a short landscape-phone height the
+// content used to be taller than the sheet's own h-full box with no scroll
+// affordance at all — the last few items (Recordings) were unreachable.
+// ui/sheet.tsx's primitive-level min-h-0 + overflow-y-auto (this lane) is
+// what keeps it reachable here.
+test.describe("mobile navigation drawer (F3-F8/F7-F6)", () => {
+  test("667x375: the drawer scrolls — Recordings (near the bottom of the list) is reachable", async ({
+    page,
+  }) => {
+    // gotoConsole waits on the DESKTOP sidebar link — below md that aside is
+    // hidden entirely (md:flex), so the viewport switch has to come AFTER
+    // landing, not before (the mobile hamburger only exists once mounted).
+    await gotoConsole(page);
+    await page.setViewportSize({ width: 667, height: 375 });
+    await page.getByRole("button", { name: "Open navigation menu" }).click();
+    const drawer = page.getByRole("dialog");
+    await expect(drawer).toBeVisible();
+
+    const recordings = drawer.getByRole("link", { name: /^Recordings/ });
+    // scrollIntoViewIfNeeded, then confirm it actually landed on-screen — the
+    // pre-fix defect was that no scroll container existed to scroll AT ALL.
+    await recordings.scrollIntoViewIfNeeded();
+    const box = await recordings.boundingBox();
+    expect(box, "Recordings link boundingBox").not.toBeNull();
+    expect(box!.y, "Recordings top edge").toBeGreaterThanOrEqual(0);
+    expect(box!.y + box!.height, "Recordings bottom edge").toBeLessThanOrEqual(375);
+
+    await recordings.click();
+    await expect(page.getByRole("heading", { name: "Recordings", level: 1 })).toBeVisible();
+  });
+});
+
 // 0.7.3 F6: the Fence tier and NetworkPolicy verdict were permanent, boot-time
 // facts that never changed while the console was open — occupying the header's
 // most valuable real estate for nothing an admin could act on. Both are gone

@@ -109,4 +109,33 @@ test.describe("Add workspace dialog", () => {
     await page.goto("/workspaces");
     await expect(page.getByRole("row", { name: new RegExp(name) })).toBeVisible();
   });
+
+  // F3-F8: the named 400x640 repro PASSED with Advanced collapsed (~560px
+  // content) — it only reproduces once Advanced is expanded (~910px), which
+  // this test does. ui/dialog.tsx's primitive-level max-h-[calc(100dvh-2rem)]
+  // + overflow-y-auto (this lane) is what keeps Add workspace reachable here.
+  test("F3-F8: 400x640, Advanced expanded — Add workspace stays reachable, not clipped off-screen", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 400, height: 640 });
+    const dlg = await openAddWorkspaceDialog(page);
+    await dlg.getByRole("button", { name: "Local directory" }).click();
+    await dlg.getByLabel("Path on this host").fill("/home/me/projects/reports");
+
+    const advanced = dlg.getByRole("button", { name: "Advanced" });
+    await expect(advanced).toBeVisible();
+    await advanced.click();
+    await expect(advanced).toHaveAttribute("aria-expanded", "true");
+
+    const add = dlg.getByRole("button", { name: "Add workspace" });
+    await expect(add).toBeVisible();
+    const box = await add.boundingBox();
+    expect(box, "Add workspace boundingBox").not.toBeNull();
+    // In-viewport, not merely "visible" (Playwright's visible ignores
+    // scrollable-container clipping) — the bottom edge must be reachable.
+    expect(box!.y + box!.height, "Add workspace bottom edge").toBeLessThanOrEqual(640);
+    await expect(add).toBeEnabled();
+    await add.click();
+    await expect(page.getByRole("dialog")).not.toBeVisible();
+  });
 });

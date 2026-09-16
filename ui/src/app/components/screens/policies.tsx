@@ -502,7 +502,10 @@ function PolicyEditor({
 
   return (
     <Dialog open={!!editor} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="scroll-thin max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+      {/* F3-F8: the primitive (ui/dialog.tsx) now carries the max-height/
+          overflow/scroll-thin floor itself — this local patch, narrower than
+          the primitive's (85vh vs 100dvh-2rem), is deleted. */}
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{isEdit ? "Edit policy" : "New policy"}</DialogTitle>
           <DialogDescription>

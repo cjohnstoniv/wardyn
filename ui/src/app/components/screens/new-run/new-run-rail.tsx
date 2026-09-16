@@ -79,7 +79,11 @@ export function RunRail({
   preflight,
 }: RunRailProps) {
   return (
-    <aside className="h-fit rounded-xl border border-border bg-card p-4 lg:sticky lg:top-6">
+    // F2-F7/F3-F1: a sticky box is clamped by its containing block — with
+    // ceiling + tool rules + 3 warnings (member/warnings path) the rail's
+    // real content runs ~700-730px, below the fold at 1280x650 with no way
+    // to reach Launch. Bounded to the viewport with its own scroll.
+    <aside className="h-fit rounded-xl border border-border bg-card p-4 lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
       <p className="mb-3 text-sm font-semibold text-foreground">What this run can do</p>
 
       {/* Below lg the rail sits UNDER the form at full width, so its sections

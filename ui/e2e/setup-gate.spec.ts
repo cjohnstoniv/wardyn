@@ -247,3 +247,30 @@ test.describe("setup gate — forced on access, never a prison", () => {
     await expect(page.getByText(/^Last checked /)).toHaveCount(0);
   });
 });
+
+// F3-F8/F7-F7: the egress-redirect "From" picker (FromCombobox) opens a
+// PopoverContent fixed at w-[420px] — wider than a 390px viewport, which used
+// to force horizontal scroll on the WHOLE page the moment it opened, not just
+// clip the popover. ui/popover.tsx's primitive-level
+// max-w-[calc(100vw-2rem)] (this lane) is what keeps it inside the viewport.
+test.describe("egress-redirect endpoint picker at 390px (F3-F8/F7-F7)", () => {
+  test("390px: opening the From picker does not force horizontal scroll", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await skipHero(page);
+    await page.goto("/setup?step=corp_network");
+    await page.getByRole("tab", { name: /Egress redirection/ }).click();
+
+    const noHScroll = () =>
+      page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+    await expect.poll(noHScroll).toBe(true);
+
+    const picker = page.getByRole("combobox").filter({ hasText: /https:\/\/…, host, or IP/ });
+    await expect(picker).toBeVisible();
+    await picker.click();
+    await expect(page.getByPlaceholder("https://…, host, or IP").last()).toBeVisible();
+
+    // The defect: the popover's own fixed width used to push page scrollWidth
+    // past the viewport the instant it opened.
+    await expect.poll(noHScroll).toBe(true);
+  });
+});

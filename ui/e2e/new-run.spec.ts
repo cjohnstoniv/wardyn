@@ -22,7 +22,7 @@
 import { test, expect, gotoConsole, ADMIN_TOKEN, launchRun } from "./fixtures";
 import { RUN } from "../src/app/components/wardyn/copy";
 import { CC_META } from "../src/app/components/wardyn/cc-meta";
-import { PROVIDERS } from "../src/app/lib/workspace-providers-copy";
+import { AGENTS, PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import type { Page } from "@playwright/test";
 import type { ConfinementClass } from "../src/app/lib/types";
 
@@ -295,5 +295,112 @@ test.describe("New run — workspace-card 'not an enabled provider' state", () =
     await page.getByRole("option", { name: "payments" }).click();
 
     await expect(page.getByText(PROVIDERS.CARD_NOT_ADMITTED)).toBeVisible();
+  });
+});
+
+// F2-F7/F3-F1: a minimal rail runs ~490-520px (fits easily at 650px tall);
+// with a governance ceiling + a saved policy's tool_rules + 3 launch warnings
+// all showing at once (the member/warnings path) it runs ~700-730px — below
+// the fold at 1280x650 with no way to reach Launch/Open run. Spliced onto the
+// real GET /policies/default, GET /policies and POST /runs responses (the
+// same splice technique agents.spec.ts's own "201 carrying warnings" test
+// uses, for the same reason: this harness's admin-token caller is never
+// member-clamped for real) rather than a genuine member session — this pins
+// the RAIL'S rendering of the combination, not the server-side clamping
+// itself (Go-tested). ui/new-run-rail.tsx's primitive-level
+// lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto (this lane) is what keeps
+// Launch/Open run reachable here.
+test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F2-F7/F3-F1)", () => {
+  test("Launch, then Open run, stay in viewport with every rail section showing at once", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 650 });
+
+    const baseSpec = {
+      allowed_domains: ["api.anthropic.com"],
+      first_use_approval: "deny_with_review" as const,
+      min_confinement_class: "CC2" as ConfinementClass,
+    };
+
+    await page.route("**/api/v1/policies/default*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ ...baseSpec, governance_profile_name: "Contractor ceiling" }),
+      });
+    });
+
+    await page.route("**/api/v1/policies*", async (route) => {
+      // listPolicies() calls withLimit("/policies"), which appends
+      // "?limit=...", so match on pathname (never the raw URL string, which
+      // still carries the query) — the same trap drives.spec.ts's own
+      // RUNS_LIST_GLOB comment names for /runs.
+      const pathname = new URL(route.request().url()).pathname;
+      if (route.request().method() !== "GET" || !pathname.endsWith("/policies")) {
+        return route.fallback();
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            id: "11111111-1111-1111-1111-111111111111",
+            name: "e2e rail-height policy",
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+            spec: {
+              ...baseSpec,
+              tool_rules: [
+                { tool: "Read", effect: "allow" },
+                { tool: "Bash", effect: "hold" },
+              ],
+            },
+          },
+        ]),
+      });
+    });
+
+    await page.route("**/api/v1/runs", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      json.warnings = [
+        "Egress narrowed to api.anthropic.com by member policy.",
+        "Confinement floor raised to CC2 by member policy.",
+        "Grant kind git_pat removed by member policy.",
+      ];
+      await route.fulfill({ response, json });
+    });
+
+    await gotoConsole(page);
+    await page.getByRole("button", { name: "New run" }).click();
+    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+
+    // Ceiling section (GET /policies/default's governance_profile_name).
+    await expect(page.getByText("Ceiling", { exact: true })).toBeVisible();
+    await expect(page.getByText(/Bounded by "Contractor ceiling"/)).toBeVisible();
+
+    // Switch to the Saved-policy lane and pick the tool_rules-bearing policy.
+    await page.getByRole("button", { name: /^Reuse a saved policy/ }).click();
+    await page.getByRole("combobox", { name: "Saved policy" }).click();
+    await page.getByRole("option", { name: "e2e rail-height policy" }).click();
+    await expect(page.getByText("Tool rules", { exact: true })).toBeVisible();
+
+    // Launch is reachable BEFORE the warnings box adds even more height.
+    const launch = page.getByRole("button", { name: "Launch run" });
+    await expect(launch).toBeVisible();
+    let box = await launch.boundingBox();
+    expect(box, "Launch run boundingBox (pre-launch)").not.toBeNull();
+    expect(box!.y + box!.height, "Launch run bottom edge (pre-launch)").toBeLessThanOrEqual(650);
+
+    await launch.click();
+
+    // Now all three warnings render too, and Open run replaces Launch — still
+    // reachable, which is the actual defect this lane's fix addresses.
+    await expect(page.getByText(AGENTS.LAUNCH_WARNING_TITLE)).toBeVisible();
+    const openRun = page.getByRole("button", { name: AGENTS.OPEN_RUN_CTA });
+    await expect(openRun).toBeVisible();
+    box = await openRun.boundingBox();
+    expect(box, "Open run boundingBox").not.toBeNull();
+    expect(box!.y + box!.height, "Open run bottom edge").toBeLessThanOrEqual(650);
   });
 });

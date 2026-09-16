@@ -139,7 +139,13 @@ export function SetupLayout({
 
       {/* Two-column grid: rail + content. Rail collapses to icon-only at lg, expands at xl. */}
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-[56px_minmax(0,1fr)] xl:grid-cols-[240px_minmax(0,1fr)]">
-        <aside className="lg:sticky lg:top-6 lg:self-start">{rail}</aside>
+        {/* F2-F7/F3-F1: a sticky box is clamped by its containing block, so a
+            rail taller than the viewport had no way to reach its own bottom
+            (the phase rail's later steps). Bounded to the viewport with its
+            own scroll. */}
+        <aside className="lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:self-start lg:overflow-y-auto">
+          {rail}
+        </aside>
 
         <div className="min-w-0">
           <HostStatusBar
