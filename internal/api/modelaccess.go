@@ -199,7 +199,21 @@ const (
 	modelAccessSignInAction = "Sign in to AWS"
 	// DRAFT (M2 canon pending)
 	modelAccessSharedExpiredAction = "Your admin's model credential expired — ask them to reconnect it"
+	// modelAccessPinContradictedAction replaces "Sign in to AWS" for the one
+	// expired_signin the timestamp says nothing about: the session is live, and
+	// it is the wrong IDENTITY. It names both pairs because the person reading
+	// it has to choose an account and a role on the login terminal, and because
+	// "sign in again" on its own reads like a transient glitch rather than a
+	// deployment rule they are now on the wrong side of. %s = the stored
+	// account, role; then the allowed account, role.
+	//
+	// DRAFT (M2 canon pending)
+	modelAccessPinContradictedAction = "Your stored AWS session is for account %s / role %s; this row now allows %s / %s — sign in again."
 )
+
+// harnessCredentialAWSPinMismatchDetail is the checklist row for a captured AWS
+// SSO session the roster no longer allows. DRAFT (M2 canon pending).
+const harnessCredentialAWSPinMismatchDetail = "Your captured AWS SSO session names an AWS account and role this agent's roster row no longer allows, so Bedrock runs using it are refused before they start."
 
 // harnessLoginMechanismPrincipalRefusal (M2 canon pending) — DRAFT
 // (docs/design/workspace-providers-prompt.md §7 shape: a lowercase-opening
@@ -244,6 +258,13 @@ type SetupModelAccess struct {
 	// does. Not a second wire copy of a fact Action already states in the
 	// member's own words — the console never re-composes that sentence.
 	Deadline string `json:"-"`
+	// PinMismatch says this answer's `expired_signin` is a CONTRADICTED identity
+	// rather than a lapsed session. IN-PROCESS only (json:"-"): the console
+	// renders Action verbatim and needs no second copy of what it says — this
+	// exists so the admin-facing checklist row (awsSSOCredentialRow) does not
+	// tell an operator their live session "expired at <ts> and cannot be
+	// renewed", which of this one credential is simply false.
+	PinMismatch bool `json:"-"`
 	// PerUser says whether this answer is about a credential THIS PRINCIPAL
 	// OWNS. IN-PROCESS only (json:"-"): it is not a fact the console renders, it
 	// is what memberModelAccess needs to decide whether a member may be told a
@@ -389,6 +410,29 @@ func setupModelAccess(sc types.SiteConfig, blob awsSSOBlob, found bool, scope aw
 	state := awsSSOCredentialState(blob, found, scope.perUser, now)
 	deadline := modelAccessDeadline(blob, found, now)
 	out := SetupModelAccess{State: state, Deadline: deadline, Action: modelAccessAction(state, deadline), PerUser: scope.perUser}
+	// A STORED SESSION THE ROSTER NO LONGER ALLOWS grades expired_signin, which
+	// is the one thing that matters here: MODEL_ACCESS_ACTIONABLE
+	// (workspace-providers-copy.ts) is what decides whether the console offers
+	// "Sign in to AWS" at all, and this session grades `live` on expiry alone —
+	// so dispatch and create refuse the person's runs (P4) while the button that
+	// would repair it is hidden and they are stranded. Signing in again IS the
+	// repair: a new login run stamps the CURRENT pin and its capture overwrites
+	// the blob, with no server-side invalidation anywhere.
+	//
+	// An EXISTING state, deliberately: it is already in the actionable set,
+	// already renders SIGN_IN_AWS, and already drives the warn arm of
+	// awsSSOCredentialRow, so the per-principal checklist row, the Getting
+	// Started chip and the button all move with one switch arm — and nothing on
+	// the wire or in the TS mirror changes.
+	if found {
+		if stored, pinned, mismatch := awsSSOPinContradiction(sc,
+			awsSSOPin{AccountID: blob.AccountID, RoleName: blob.RoleName}); mismatch {
+			out.State = modelAccessExpiredSignin
+			out.Action = fmt.Sprintf(modelAccessPinContradictedAction,
+				stored.AccountID, stored.RoleName, pinned.AccountID, pinned.RoleName)
+			out.PinMismatch = true
+		}
+	}
 	if ssoLane {
 		out.Mechanism = string(row.Mechanism)
 	} else {
@@ -456,6 +500,15 @@ func awsSSOCredentialRow(h SetupHarness, ma SetupModelAccess) SetupCheck {
 		row.Fix = "Re-run the containerized AWS SSO login on the provider step."
 	case modelAccessExpiredSignin, modelAccessSharedExpired, modelAccessNotConfigured:
 		row.Status = "warn"
+		if ma.PinMismatch {
+			// NOT "expired … and cannot be renewed": this session is live and
+			// renewable, and the row would be saying something false about the one
+			// credential it is describing. The member's own action line already
+			// names both pairs; the row says the same fact in the operator's words.
+			row.Detail = harnessCredentialAWSPinMismatchDetail
+			row.Fix = ma.Action
+			return row
+		}
 		row.Detail = "Your captured AWS SSO session expired at " + h.ExpiresAt +
 			" and cannot be renewed (no refresh token, or its client registration lapsed), so Bedrock runs using it will fail."
 		row.Fix = "Re-run the containerized AWS SSO login on the provider step."

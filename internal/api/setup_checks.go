@@ -247,6 +247,23 @@ const (
 	bedrockPinModelAccountDetail = "This agent's roster row pins AWS sign-ins to account %s, but the configured Bedrock model lives in account %s — runs will only work if that model is shared with the pinned account."
 	// DRAFT (M2 canon pending)
 	bedrockPinModelAccountFix = "Deliberate (a model shared across accounts)? Nothing to do — Wardyn takes the pin as written. Otherwise re-point sso_account_id on the agent's roster row (Settings → Agents), or WARDYN_BEDROCK_MODEL at a model in the pinned account."
+	// bedrockPinContradictedDetail/Fix: the THIRD roster posture, and the one
+	// P4 is about — a session captured BEFORE the pin existed, naming an
+	// account/role the row no longer allows. The pin is bound at capture time
+	// and nowhere else, so setting one leaves the stored blob untouched; worse,
+	// the unenforced-pin warning above DISAPPEARS on the save, and the estate
+	// reads MORE correct than it did while every run on that session is now
+	// refused. Appended like its two siblings: a fact about the ROSTER against
+	// what is stored, on a row that still names the live region and model.
+	//
+	// It speaks for the CALLER's own capture (SetupBedrock is resolved through
+	// this caller's own awsSSOScope), which is what makes it useful to the admin
+	// who set the pin and to the member whose session it contradicts alike.
+	//
+	// DRAFT (M2 canon pending)
+	bedrockPinContradictedDetail = "Your captured AWS SSO session is for account %s / role %s, which this agent's roster row no longer allows (it pins %s / %s) — runs on that session are refused before they start."
+	// DRAFT (M2 canon pending)
+	bedrockPinContradictedFix = "Sign in to AWS again (Settings → Model provider) and choose the pinned account and role; the new sign-in replaces the stored one. Wardyn never rewrites a stored session."
 )
 
 // llmProviderCheck reports the WINNING model/harness signal (llmProvenance's
@@ -287,11 +304,13 @@ func llmProviderCheck(llmDetail string, bedrock SetupBedrock) SetupCheck {
 // Bedrock knob (ok=false otherwise), so the majority who never use AWS aren't
 // shown an irrelevant row.
 //
-// TWO roster postures ride this row, both derived HERE from the site config the
-// callsite already holds (scOK=false — an unreadable roster — asserts neither):
-// BedrockSSOPinUnenforced (nothing constrains the account/role at all) and
+// THREE roster postures ride this row, all derived HERE from the site config
+// the callsite already holds (scOK=false — an unreadable roster — asserts
+// none): BedrockSSOPinUnenforced (nothing constrains the account/role at all),
 // bedrockPinDisagreement (a pin the save door takes although the configured
-// model lives in another account, S2-09/R-04). Each is a posture fact about the
+// model lives in another account, S2-09/R-04), and awsSSOPinContradiction (a
+// session captured BEFORE the pin, naming an identity the row no longer
+// allows — P4). Each is a posture fact about the
 // ROSTER, not about readiness, so it is
 // folded into WHATEVER row bedrockProviderRow produced rather than nested under
 // the ready arm: nested, the warning arrived only after the first unchecked
@@ -318,6 +337,18 @@ func bedrockProviderCheck(bedrock SetupBedrock, sc types.SiteConfig, scOK bool) 
 		chk.Status = "warn"
 		chk.Detail = strings.TrimSpace(chk.Detail + " " + fmt.Sprintf(bedrockPinModelAccountDetail, pinAccount, modelAccount))
 		chk.Fix = strings.TrimSpace(chk.Fix + " " + bedrockPinModelAccountFix)
+	}
+	// A STORED CAPTURE THE PIN NO LONGER ALLOWS (P4). Asked last and appended,
+	// never substituted, so a row already carrying the pin-vs-model posture
+	// keeps it: the two are about different halves (what the roster pins vs the
+	// model's account; what the roster pins vs what is stored) and both can be
+	// true at once.
+	if stored, pinned, mismatch := awsSSOPinContradiction(sc,
+		awsSSOPin{AccountID: bedrock.SSOAccountID, RoleName: bedrock.SSORoleName}); mismatch {
+		chk.Status = "warn"
+		chk.Detail = strings.TrimSpace(chk.Detail + " " + fmt.Sprintf(bedrockPinContradictedDetail,
+			stored.AccountID, stored.RoleName, pinned.AccountID, pinned.RoleName))
+		chk.Fix = strings.TrimSpace(chk.Fix + " " + bedrockPinContradictedFix)
 	}
 	return chk, true
 }
