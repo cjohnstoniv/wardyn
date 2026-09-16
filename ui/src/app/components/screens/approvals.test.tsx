@@ -273,7 +273,7 @@ describe("ApprovalsScreen — role-aware decide buttons", () => {
   // credential/tool_call decision now reads the honest tier sentence.
   it("a security admin never sees OPERATOR_ONLY_REASON; a member denied by kind sees the security-tier sentence", async () => {
     mockPendingKind = "tool_call";
-    render(
+    const { unmount } = render(
       <OperatorProvider operator={false} securityOperator={true}>
         <MemoryRouter>
           <ApprovalsScreen />
@@ -283,6 +283,22 @@ describe("ApprovalsScreen — role-aware decide buttons", () => {
     await screen.findByRole("button", { name: /^approve$/i });
     expect(screen.queryByText(OPERATOR_ONLY_REASON)).not.toBeInTheDocument();
     expect(screen.queryByText(SECURITY_ONLY_REASON)).not.toBeInTheDocument();
+    unmount();
+
+    // The title's second clause: a plain member (not a security admin)
+    // denied by kind sees the honest SECURITY_ONLY_REASON sentence, not the
+    // false OPERATOR_ONLY_REASON fallback — this is the arm W6-03 found
+    // unexercised (the test previously only ever mounted securityOperator).
+    render(
+      <OperatorProvider operator={false} securityOperator={false}>
+        <MemoryRouter>
+          <ApprovalsScreen />
+        </MemoryRouter>
+      </OperatorProvider>,
+    );
+    await screen.findByRole("button", { name: /^approve$/i });
+    expect(screen.getByText(SECURITY_ONLY_REASON)).toBeInTheDocument();
+    expect(screen.queryByText(OPERATOR_ONLY_REASON)).not.toBeInTheDocument();
   });
 });
 
