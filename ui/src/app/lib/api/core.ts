@@ -30,7 +30,7 @@ let _unauthorized: ((reason: string, path: string) => void) | null = null;
 // DRAFT (M2 canon pending) — X3-F7: the one reason wfetch's 401 branch can
 // honestly give (it cannot tell an expired SSO session from a revoked admin
 // token apart — both arrive as a bare 401).
-export const SESSION_ENDED_REASON = "Your session ended. Sign in again to get back to where you were.";
+export const SESSION_ENDED_REASON = "Your session ended. Sign in again to continue.";
 
 // H2: same-origin PATHNAME only. `internal/api/ui.go`'s catch-all route
 // serves index.html with no path cleaning, so `GET //evil.com` 200s and

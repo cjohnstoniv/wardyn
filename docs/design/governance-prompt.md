@@ -419,7 +419,7 @@ Listed so that every product string rendered in the mock has a key somewhere.
 | `PERM.SUBJECT_ALL` | `permissions-copy.ts` | Everyone signed in |
 | `PERM.HINT_USER` | `permissions-copy.ts` | An email address or the sign-in subject id. Either one matches the same person. |
 | `PERM.HINT_GROUP` | `permissions-copy.ts` | A group or app-role name exactly as your identity provider sends it in the token. |
-| `PERM.HINT_ALL` | `permissions-copy.ts` | Every signed-in member. Admins are exempt. |
+| `PERM.HINT_ALL` | `permissions-copy.ts` | Every signed-in member. Super admins are exempt; a security admin is not. |
 | `PERM.REMOVE` | `permissions-copy.ts` | Remove |
 | `PEOPLE.CANCEL` | `people-access-copy.ts` | Cancel |
 | `PEOPLE.ROLE_ADMIN` / `PEOPLE.ROLE_MEMBER` | `people-access-copy.ts` | Admin / Member |

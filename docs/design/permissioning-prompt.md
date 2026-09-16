@@ -276,7 +276,7 @@ the member holds.
 | `FIELD_EFFECT` | Effect |
 | `HINT_USER` | An email address or the sign-in subject id. Either one matches the same person. |
 | `HINT_GROUP` | A group or app-role name exactly as your identity provider sends it in the token. |
-| `HINT_ALL` | Every signed-in member. Admins are exempt. |
+| `HINT_ALL` | Every signed-in member. Super admins are exempt; a security admin is not. |
 | `DUPLICATE` | That grant already exists — its effect was updated. |
 | `SNAPSHOT_TITLE` | Groups are read at sign-in |
 | `SNAPSHOT_BODY` | Group membership is recorded once, when a member signs in. A group added in your identity provider reaches Wardyn on their next sign-in. Grants themselves take effect on the next request. |
