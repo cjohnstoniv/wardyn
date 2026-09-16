@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 
@@ -101,5 +101,76 @@ describe("AddWorkspaceDialog — the 201's advisory warnings", () => {
     await userEvent.type(screen.getByLabelText("Repository URL"), "acme/app");
     await userEvent.click(screen.getByRole("button", { name: "Add workspace" }));
     expect(vi.mocked(toast.warning)).not.toHaveBeenCalled();
+  });
+});
+
+// F5-F2: "You can change everything later." is false — a workspace is
+// CREATE-ONLY in this console (no Edit path; updateWorkspace has zero
+// production callers, workspaces.test.tsx:181 pins the kebab menu to exactly
+// Open/Delete). Delete the sentence, keep the rest of the description.
+describe("AddWorkspaceDialog — F5-F2: no false promise of a later edit", () => {
+  it("never claims everything can be changed later", () => {
+    renderDialog(true, null);
+    expect(screen.queryByText(/you can change everything later/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByText("A workspace is a repo or directory a run can attach."),
+    ).toBeInTheDocument();
+  });
+});
+
+// F5-F5: the Branch field's value was silently dropped for local_dir/ephemeral
+// (only the repo submit arm ever read it) — offer it only where it does
+// something, and let Name take the full row when it's gone.
+describe("AddWorkspaceDialog — F5-F5: Branch only where it's wired", () => {
+  it("shows Branch for a repo source", () => {
+    renderDialog(true, null);
+    expect(screen.getByLabelText(/branch/i)).toBeInTheDocument();
+  });
+
+  it("hides Branch for Empty — Name takes the full row", async () => {
+    renderDialog(true, null);
+    await userEvent.click(screen.getByRole("button", { name: /^empty/i }));
+    expect(screen.queryByLabelText(/branch/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/^name$/i)).toBeInTheDocument();
+  });
+
+  it("hides Branch for Local directory", async () => {
+    renderDialog(true, "/home/agent-projects");
+    await pickLocalDir();
+    expect(screen.queryByLabelText(/branch/i)).not.toBeInTheDocument();
+  });
+});
+
+// F5-F6: picking "devcontainer.json" stored {kind:"recommended"}, which
+// workspaceImage() collapses back into the absent case with no profile yet
+// (the dialog runs no scan) — an honest chip contradicted the pick the
+// operator just made. Collapse the two dishonest choices into ONE "Auto"
+// option that stores nothing at all; Pinned stays the one explicit choice.
+describe("AddWorkspaceDialog — F5-F6: one honest Auto image choice", () => {
+  async function openImagePicker() {
+    await userEvent.click(screen.getByRole("button", { name: /advanced/i }));
+  }
+
+  it("offers exactly Auto and Pinned image ref — no separate devcontainer/standard choices", async () => {
+    renderDialog(true, null);
+    await openImagePicker();
+    const group = screen.getByRole("radiogroup", { name: /container image/i });
+    expect(within(group).getAllByRole("button")).toHaveLength(2);
+    expect(within(group).getByRole("button", { name: /^auto/i })).toBeInTheDocument();
+    expect(within(group).getByRole("button", { name: /pinned image ref/i })).toBeInTheDocument();
+    expect(within(group).queryByRole("button", { name: /^devcontainer\.json$/i })).not.toBeInTheDocument();
+    expect(within(group).queryByRole("button", { name: /^standard sandbox image$/i })).not.toBeInTheDocument();
+  });
+
+  it("Auto stores nothing — no base_image on the create call", async () => {
+    vi.mocked(workspacesApi.createWorkspace).mockResolvedValue({
+      id: "ws-3",
+      name: "app",
+    } as Awaited<ReturnType<typeof workspacesApi.createWorkspace>>);
+    renderDialog(true, null);
+    await userEvent.type(screen.getByLabelText("Repository URL"), "acme/app");
+    await userEvent.click(screen.getByRole("button", { name: "Add workspace" }));
+    const call = vi.mocked(workspacesApi.createWorkspace).mock.calls[0][0];
+    expect(call).not.toHaveProperty("base_image");
   });
 });

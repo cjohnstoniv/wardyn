@@ -51,3 +51,21 @@ export const C = {
   REPO_RO:
     "Repos are cloned fresh into the sandbox — nothing on your machine is touched, so there's nothing to protect with read-only.",
 };
+
+// ==================== WORKSPACE_DETAIL_DRAFT — v0.7.4 field-report round ===
+// DRAFT (M2 canon pending): new strings this round, staged in
+// local/v074/canon/ui-workspaces-approvals.md — not part of the frozen `C`
+// export above (workspace-copy.test.ts's byte-checks parse only `C`).
+export const WORKSPACE_DETAIL_DRAFT = {
+  // F5-F6: the Add-workspace dialog's one honest image choice — replaces the
+  // two dishonest "devcontainer.json" / "standard sandbox image" picks that
+  // stored byte-identical state.
+  ADD_WORKSPACE_IMAGE_AUTO_HINT:
+    "devcontainer.json if this repo has one, else the standard image.",
+  // F5-F10: the Recorded-sessions card's subtitle claimed the loop "writes
+  // the least-privilege policy" — it writes egress: requirement rows; the
+  // policy hand-off is the separate optional "Save session profile". Retired
+  // for a sentence that matches what RecordPane's own paragraph says.
+  SESSIONS_SUBTITLE:
+    "Run a task once with everything open. Wardyn watches what it reaches and you approve the hosts. Replay it confined to prove that approval is enough.",
+} as const;

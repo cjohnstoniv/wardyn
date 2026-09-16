@@ -31,6 +31,7 @@ import { useMemberLocalDirRoot, useOperator } from "../wardyn/operator-context";
 import { getErrorMessage } from "../../lib/format";
 import { MEMBER_WORKSPACE } from "../../lib/permissions-copy";
 import { PROVIDERS } from "../../lib/workspace-providers-copy";
+import { WORKSPACE_DETAIL_DRAFT as WORKSPACE_COPY_DRAFT } from "../../lib/workspace-copy";
 import { workspaces as workspacesApi } from "../../lib/api/workspaces";
 import { useK8sRunner } from "../../lib/use-k8s-runner";
 import type { Workspace, WorkspaceSourceInput } from "../../lib/types";
@@ -38,7 +39,12 @@ import type { Workspace, WorkspaceSourceInput } from "../../lib/types";
 const DEFAULT_TARGET = "/home/agent/work";
 
 type SourceKind = "repo" | "local_dir" | "ephemeral";
-type ImageChoice = "devcontainer" | "pinned" | "standard";
+// F5-F6: "devcontainer" and "standard" used to be two separate picks that
+// stored byte-identical state ({kind:"recommended"} either way, since this
+// dialog never scans) — collapsed into one honest "auto" choice that stores
+// nothing at all and lets the server/scan decide. Pinned stays the one real
+// choice this dialog can actually promise.
+type ImageChoice = "auto" | "pinned";
 
 // Best-effort basename off a repo slug/URL or a local path — good enough to
 // pre-fill Name; the operator can always type over it.
@@ -135,7 +141,7 @@ export function AddWorkspaceDialog({
   const [name, setName] = React.useState("");
   const [nameTouched, setNameTouched] = React.useState(false);
   const [branch, setBranch] = React.useState("");
-  const [imageChoice, setImageChoice] = React.useState<ImageChoice>("standard");
+  const [imageChoice, setImageChoice] = React.useState<ImageChoice>("auto");
   const [pinnedRef, setPinnedRef] = React.useState("");
   const [mountPath, setMountPath] = React.useState(DEFAULT_TARGET);
   const [writable, setWritable] = React.useState(false);
@@ -153,11 +159,7 @@ export function AddWorkspaceDialog({
 
   const mountPathOrDefault = mountPath.trim() || DEFAULT_TARGET;
   const summaryImage =
-    imageChoice === "devcontainer"
-      ? "devcontainer.json"
-      : imageChoice === "pinned"
-        ? pinnedRef.trim() || "pinned image"
-        : "standard sandbox image";
+    imageChoice === "pinned" ? pinnedRef.trim() || "pinned image" : "Auto";
 
   const submit = async () => {
     if (!canSubmit || submitting) return;
@@ -182,12 +184,13 @@ export function AddWorkspaceDialog({
               writable: memberClamped ? undefined : writable || undefined,
             }
           : { type: "ephemeral", target, writable: writable || undefined };
+    // "auto" stores nothing — the server/scan decides (workspaceImage()
+    // already falls back to the scanned profile honestly); only an explicit
+    // pin is worth a wire field.
     const base_image =
-      imageChoice === "devcontainer"
-        ? ({ kind: "recommended" } as const)
-        : imageChoice === "pinned" && pinnedRef.trim()
-          ? ({ kind: "byo" as const, image: pinnedRef.trim() })
-          : undefined;
+      imageChoice === "pinned" && pinnedRef.trim()
+        ? ({ kind: "byo" as const, image: pinnedRef.trim() })
+        : undefined;
     try {
       const created = await workspacesApi.createWorkspace({
         name: effectiveName,
@@ -214,7 +217,10 @@ export function AddWorkspaceDialog({
         <DialogHeader>
           <DialogTitle>Add workspace</DialogTitle>
           <DialogDescription>
-            A workspace is a repo or directory a run can attach. You can change everything later.
+            {/* F5-F2: "You can change everything later." was false — a
+                workspace is create-only in this console (no Edit path;
+                updateWorkspace has zero production callers). */}
+            A workspace is a repo or directory a run can attach.
           </DialogDescription>
         </DialogHeader>
 
@@ -290,7 +296,11 @@ export function AddWorkspaceDialog({
             </p>
           )}
 
-          <div className="grid grid-cols-2 gap-3">
+          {/* F5-F5: Branch's value was only ever read on the repo submit arm
+              — offered for every kind, it silently dropped what was typed
+              for local_dir/ephemeral. Repo-only, and the row wraps to one
+              column (Name full-width) when it's gone. */}
+          <div className={cn("grid gap-3", kind === "repo" ? "grid-cols-2" : "grid-cols-1")}>
             <Field label="Name" htmlFor="aw-name">
               <Input
                 id="aw-name"
@@ -302,29 +312,25 @@ export function AddWorkspaceDialog({
                 placeholder="workspace-1"
               />
             </Field>
-            <Field label="Branch" htmlFor="aw-branch">
-              <Input
-                id="aw-branch"
-                value={branch}
-                onChange={(e) => setBranch(e.target.value)}
-                placeholder="default branch"
-              />
-            </Field>
+            {kind === "repo" && (
+              <Field label="Branch" htmlFor="aw-branch">
+                <Input
+                  id="aw-branch"
+                  value={branch}
+                  onChange={(e) => setBranch(e.target.value)}
+                  placeholder="default branch"
+                />
+              </Field>
+            )}
           </div>
 
           <Disclosure summary={`${summaryImage}, ${mountPathOrDefault}`}>
             <div className="space-y-2" role="radiogroup" aria-label="Container image">
               <OptionCard
-                selected={imageChoice === "devcontainer"}
-                onClick={() => setImageChoice("devcontainer")}
-                title="devcontainer.json"
-                hint="Built exactly as written in this repo — we don't modify it. Falls back to the standard sandbox image if there isn't one."
-              />
-              <OptionCard
-                selected={imageChoice === "standard"}
-                onClick={() => setImageChoice("standard")}
-                title="Standard sandbox image"
-                hint="Wardyn's baseline container — every tool a run needs, nothing project-specific."
+                selected={imageChoice === "auto"}
+                onClick={() => setImageChoice("auto")}
+                title="Auto"
+                hint={WORKSPACE_COPY_DRAFT.ADD_WORKSPACE_IMAGE_AUTO_HINT}
               />
               <OptionCard
                 selected={imageChoice === "pinned"}
