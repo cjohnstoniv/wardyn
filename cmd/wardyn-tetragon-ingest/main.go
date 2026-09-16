@@ -206,6 +206,16 @@ func checkBootTokenSource(flagToken string) error {
 	return nil
 }
 
+// maxPendingExportLine caps how many unterminated bytes tailExport will hold
+// in pending before dropping them (B12b-F9). Without a cap, a stretch of the
+// export file with no '\n' — a corrupted write, Tetragon itself wedged
+// mid-record, or simply a line far longer than any real record this sidecar
+// maps — grows pending without bound: os.Open/ReadBytes never refuses to
+// read, so nothing else stops it. 1 MiB is generous for any legitimate
+// Tetragon JSON line (an execve event with a long argv is still low KB) while
+// bounding the sidecar's own memory growth on a stream it does not control.
+const maxPendingExportLine = 1 << 20 // 1 MiB
+
 // tailExport follows the JSONL export file, mapping each line and emitting the
 // mapped events. It re-opens the file on truncation/rotation and waits for it to
 // appear if it does not exist yet (Tetragon may start after this sidecar).
@@ -302,9 +312,26 @@ func tailExport(ctx context.Context, path string, mapper mapLiner, sink *eventSi
 		// Hold the bytes in pending; only map once ReadBytes signals a real
 		// '\n'-terminated record (err == nil).
 		pending = append(pending, chunk...)
-		if err == nil {
+		if len(pending) > maxPendingExportLine {
+			// Drop like any other lost ground-truth event: counted, logged,
+			// never silent — the same contract dropped_unmapped and the
+			// sink's own backpressure drops already carry. Reusing the
+			// sink's counter (rather than a new one) keeps "an event was
+			// lost" as one signal on the heartbeat; the log line is what
+			// distinguishes the reason.
+			slog.WarnContext(ctx, "wardyn-tetragon-ingest: dropped an oversized/unterminated export line",
+				slog.String("path", path),
+				slog.Int("bytes", len(pending)),
+				slog.Int("cap_bytes", maxPendingExportLine),
+			)
+			sink.dropped.Add(1)
+			pending = pending[:0]
+		} else if err == nil {
 			processLine(pending, mapper, sink)
 			pending = pending[:0]
+			continue
+		}
+		if err == nil {
 			continue
 		}
 		if err == io.EOF {

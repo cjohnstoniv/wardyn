@@ -257,3 +257,100 @@ func TestTailExport_ReassemblesLineSplitAcrossEOF(t *testing.T) {
 		t.Fatal("straddling event dropped: a line split across an EOF boundary was not reassembled")
 	}
 }
+
+// TestTailExport_CapsPendingLineAt1MiB is the red-first regression for
+// B12b-F9: pending accumulated an unterminated export line with no bound at
+// all, so a stretch of writes with no '\n' (a corrupted write, or Tetragon
+// itself emitting one abnormally long record) grew tailExport's own memory
+// without limit — the tail loop cannot refuse to read the file it is handed.
+// maxPendingExportLine caps it at 1 MiB: past the cap the accumulated bytes
+// are dropped (counted on the sink, the same "lost event, never silent"
+// contract as every other drop this sidecar already counts) and pending
+// resets to empty, so a well-formed line written afterward is still read on
+// its own instead of being appended onto — and permanently lost behind — an
+// unbounded backlog.
+func TestTailExport_CapsPendingLineAt1MiB(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tetragon.log")
+
+	var (
+		mu     sync.Mutex
+		bodies []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, string(b))
+		mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	sink := newEventSink(srv.URL, "tok", 64, 8, 20*time.Millisecond, srv.Client())
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		sink.close(ctx)
+	})
+	mapper := groundtruth.NewMapper(nil) // unmapped is fine; we only need ok=true
+
+	bodyContains := func(want string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, b := range bodies {
+			if strings.Contains(b, want) {
+				return true
+			}
+		}
+		return false
+	}
+
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go tailExport(ctx, path, mapper, sink)
+
+	// Prime: land one COMPLETE line so the tailer is provably attached past
+	// its initial SeekEnd. Retry absorbs the initial-open race.
+	const primeBin = "/usr/bin/prime-marker"
+	primeLine := `{"process_exec":{"process":{"binary":"` + primeBin + `"}}}` + "\n"
+	deadline := time.Now().Add(3 * time.Second)
+	for !bodyContains(primeBin) && time.Now().Before(deadline) {
+		appendLine(t, path, primeLine)
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !bodyContains(primeBin) {
+		t.Fatal("prime event never read (tailer not attached)")
+	}
+
+	before := sink.droppedCount()
+
+	// Feed 2 MiB with NO newline — past the 1 MiB cap, with the buffer never
+	// terminated.
+	appendLine(t, path, strings.Repeat("x", 2<<20))
+
+	dropDeadline := time.Now().Add(3 * time.Second)
+	for sink.droppedCount() == before && time.Now().Before(dropDeadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := sink.droppedCount(); got == before {
+		t.Fatalf("droppedCount did not move after a 2 MiB no-newline feed (still %d) — pending grew past the cap with nothing counting it", got)
+	}
+
+	// The buffer must have RESET, not merely stopped growing: a well-formed
+	// line written afterward has to be read on its own, not appended onto —
+	// and lost behind — the dropped backlog.
+	const afterBin = "/x-after-cap-marker"
+	afterLine := `{"process_exec":{"process":{"binary":"` + afterBin + `"}}}` + "\n"
+	appendLine(t, path, afterLine)
+
+	waitDeadline := time.Now().Add(3 * time.Second)
+	for !bodyContains(afterBin) && time.Now().Before(waitDeadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !bodyContains(afterBin) {
+		t.Fatal("a well-formed line written after the oversized feed was never read — pending did not reset after the drop")
+	}
+}
