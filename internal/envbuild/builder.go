@@ -694,6 +694,17 @@ func validateBuildInput(spec BuildSpec) error {
 		}
 	}
 
+	// B9-F9: the output tag reaches envbuilder's environment and the finalize
+	// Dockerfile, and the generated-files entry point has run it through
+	// validateGeneratedTag since it was written. This door bounded its LENGTH
+	// and nothing else, so the two ways into the same build disagreed about the
+	// same field. finalizeImage and the daemon both reject it later; a
+	// defence-in-depth layer downstream is not a reason for one door to be the
+	// loose one.
+	if err := validateGeneratedTag(spec.OutputImageTag); err != nil {
+		return err
+	}
+
 	u := spec.RepoURL
 	if u == "" {
 		return fmt.Errorf("envbuild: BuildSpec.RepoURL is required")
