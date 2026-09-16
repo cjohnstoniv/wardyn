@@ -105,6 +105,7 @@ function Row({
   onUpdate,
   onRemove,
   onAdd,
+  onStatusRefresh,
 }: {
   kind: GitProviderKind;
   row: GitProvider | undefined;
@@ -114,6 +115,10 @@ function Row({
   onUpdate: (next: GitProvider) => void;
   onRemove: () => void;
   onAdd: () => void;
+  /** F4-F2 (Appendix A V8): re-fires ONLY the parent's /setup/status read —
+   *  never `load()`, which would discard an unsaved base-URL draft edit on
+   *  this or a sibling row (agents-tab.tsx's onStatusRefresh precedent). */
+  onStatusRefresh: () => void;
 }) {
   const [confirmRemove, setConfirmRemove] = React.useState(false);
   // The textarea's RAW text, held here rather than derived from
@@ -307,7 +312,7 @@ function Row({
                 secretName={patName}
                 stored={present.includes(patName)}
                 disabled={!operator}
-                onChanged={() => {}}
+                onChanged={onStatusRefresh}
                 summary={<HostSummary host={host} />}
                 hint={GIT_S.STORE_NOTE}
                 saveVariant="secondary"
@@ -332,7 +337,7 @@ function Row({
                     secretName="github-app-id"
                     stored={present.includes("github-app-id")}
                     disabled={!operator}
-                    onChanged={() => {}}
+                    onChanged={onStatusRefresh}
                     saveVariant="secondary"
                   />
                   <SecretLane
@@ -341,7 +346,7 @@ function Row({
                     secretName="github-app-key"
                     stored={present.includes("github-app-key")}
                     disabled={!operator}
-                    onChanged={() => {}}
+                    onChanged={onStatusRefresh}
                     saveVariant="secondary"
                   />
                 </div>
@@ -365,7 +370,7 @@ function Row({
                   secretName={sshName}
                   stored={present.includes(sshName)}
                   disabled={!operator}
-                  onChanged={() => {}}
+                  onChanged={onStatusRefresh}
                   summary={<HostSummary host={host} />}
                   saveVariant="secondary"
                 />
@@ -418,6 +423,7 @@ export function GitTab({
   // what commits that removal, so Add steps down to outline (CONSOLE-RULES §2
   // — one teal per surface).
   loadedEmpty = true,
+  onStatusRefresh,
 }: {
   git: GitProvider[];
   onChange: (next: GitProvider[]) => void;
@@ -425,6 +431,10 @@ export function GitTab({
   githubApp: boolean;
   operator: boolean;
   loadedEmpty?: boolean;
+  /** F4-F2 (Appendix A V8): every row's SecretLane onChanged threads here —
+   *  a setup-status-only refresh (never the screen's whole `load()`, which
+   *  would discard an unsaved base-URL draft edit on THIS or a sibling row). */
+  onStatusRefresh: () => void;
 }) {
   const rowFor = (kind: GitProviderKind) => git.find((r) => r.kind === kind);
 
@@ -471,6 +481,7 @@ export function GitTab({
               onUpdate={(next) => updateRow(kind, next)}
               onRemove={() => removeRow(kind)}
               onAdd={() => addRow(kind)}
+              onStatusRefresh={onStatusRefresh}
             />
           ))}
         </div>

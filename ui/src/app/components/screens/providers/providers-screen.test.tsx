@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpError } from "../../../lib/api/core";
-import { AGENTS, PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../../../lib/workspace-providers-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { baseStatus } from "../../../lib/test-fixtures";
@@ -222,16 +222,37 @@ describe("ProvidersScreen", () => {
     ]);
   });
 
-  it("a 412 renders the saved-elsewhere state and never overwrites", async () => {
+  // F4-F3 (Appendix A V8, corrected verdict): the banner used to SWAP the
+  // whole tab body, discarding an edit typed moments before the 412 and
+  // making it unreadable first — this test used to assert only the banner
+  // title. Extended: the draft stays MOUNTED (the edited textarea survives),
+  // and the banner's ONE control is "Discard mine and reload" — no
+  // "Save over theirs" arm (a security document is never last-writer-wins
+  // from this banner).
+  it("a 412 renders the saved-elsewhere state, keeps the draft mounted, and never overwrites", async () => {
     getWorkspaceProvidersMock.mockResolvedValue({
       providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
       etag: '"e5"',
     });
     putWorkspaceProvidersMock.mockRejectedValue(new HttpError(412, "providers changed since you loaded them — reload and retry"));
     renderScreen();
-    await screen.findByTestId("provider-row-github");
+    const row = await screen.findByTestId("provider-row-github");
+    await userEvent.type(within(row).getByLabelText(PROVIDERS.FIELD_BASE_URLS), "{Enter}https://git.corp.example/team");
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+
     expect(await screen.findByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).toBeInTheDocument();
+    // The draft is still mounted and readable — the edited line survives (a
+    // controlled textarea's value is a DOM property, not text content).
+    expect(within(row).getByLabelText(PROVIDERS.FIELD_BASE_URLS)).toHaveValue(
+      "https://github.com/acme\nhttps://git.corp.example/team",
+    );
+    // ONE control on the banner: Discard mine and reload. No "Save over
+    // theirs" — a second re-PUT arm the corrected verdict refused.
+    expect(screen.getByRole("button", { name: PROVIDERS_DRAFT.DISCARD_AND_RELOAD })).toBeInTheDocument();
+    expect(screen.queryByText(/save over theirs/i)).not.toBeInTheDocument();
+    // Save providers is STILL on screen (the draft is still there to save) —
+    // an ordinary retry sends If-Match, as the sibling test below pins.
+    expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeInTheDocument();
   });
 
   it("a 400 renders the server's own refusal verbatim under SAVE_REFUSED_TITLE", async () => {

@@ -37,6 +37,7 @@ import {
   MODEL_ACCESS_ACTIONABLE,
   MODEL_ACCESS_CHIP_LABEL,
   PROVIDERS,
+  PROVIDERS_DRAFT,
 } from "../../../lib/workspace-providers-copy";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
@@ -628,50 +629,53 @@ export function AgentsTab({
     <div className="space-y-4">
       <p className="text-body text-muted-foreground">{AGENTS.AGENTS_LEAD}</p>
 
-      {savedElsewhere ? (
+      {/* F4-F3 (Appendix A V8, corrected verdict, rule 8 — this tab's own
+          412 was HELD until 0.7.3 shipped, now unblocked): keep the draft
+          MOUNTED — the banner sits ABOVE the rows rather than replacing
+          them, so an edit typed moments before the 412 is still readable.
+          ONE control, "Discard mine and reload": the corrected verdict
+          REFUSES a "Save over theirs" arm. */}
+      {savedElsewhere && (
         <div className="space-y-3 rounded-lg border border-warning/30 bg-warning-subtle p-4">
           <p className="text-sm font-medium text-foreground">{PROVIDERS.SAVED_ELSEWHERE_TITLE}</p>
           <p className="text-body text-muted-foreground">{PROVIDERS.SAVED_ELSEWHERE_BODY}</p>
           <Button variant="outline" size="sm" onClick={load}>
-            {ACCESS_STATE.FETCH_FAILED_RETRY}
+            {PROVIDERS_DRAFT.DISCARD_AND_RELOAD}
           </Button>
         </div>
-      ) : (
-        <>
-          {saveError && (
-            <div className="rounded-lg border border-danger/30 bg-danger-subtle p-3 text-body text-danger">
-              <b className="font-semibold">{PROVIDERS.SAVE_REFUSED_TITLE}</b>
-              <p className="mt-0.5">{saveError}</p>
-            </div>
-          )}
+      )}
+      {saveError && (
+        <div className="rounded-lg border border-danger/30 bg-danger-subtle p-3 text-body text-danger">
+          <b className="font-semibold">{PROVIDERS.SAVE_REFUSED_TITLE}</b>
+          <p className="mt-0.5">{saveError}</p>
+        </div>
+      )}
 
-          <div className="space-y-3">
-            {roster.map((h) => (
-              <Row
-                key={h.id}
-                harness={h}
-                row={resolvedRow(agents, h)}
-                enabled={rowEnabled(agents, h)}
-                modelAccess={h.id === "claude-code" ? modelAccess : undefined}
-                operator={operator}
-                onUpdate={(next) => updateRow(h.id, next)}
-              />
-            ))}
-          </div>
+      <div className="space-y-3">
+        {roster.map((h) => (
+          <Row
+            key={h.id}
+            harness={h}
+            row={resolvedRow(agents, h)}
+            enabled={rowEnabled(agents, h)}
+            modelAccess={h.id === "claude-code" ? modelAccess : undefined}
+            operator={operator}
+            onUpdate={(next) => updateRow(h.id, next)}
+          />
+        ))}
+      </div>
 
-          {/* A daemon that legitimately reports an EMPTY roster is a different
-              case from an absent one — the lead still reads, and the rows are
-              simply none. But Save stays withheld: with no row on screen the
-              only thing it could write is `{agents: []}`, which nobody asked
-              for. A control appears when there is something to save. */}
-          {roster.length > 0 && (
-            <div className="flex justify-end border-t border-border pt-4">
-              <Button disabled={!operator || saving} onClick={save}>
-                {PROVIDERS.SAVE_CTA}
-              </Button>
-            </div>
-          )}
-        </>
+      {/* A daemon that legitimately reports an EMPTY roster is a different
+          case from an absent one — the lead still reads, and the rows are
+          simply none. But Save stays withheld: with no row on screen the
+          only thing it could write is `{agents: []}`, which nobody asked
+          for. A control appears when there is something to save. */}
+      {roster.length > 0 && (
+        <div className="flex justify-end border-t border-border pt-4">
+          <Button disabled={!operator || saving} onClick={save}>
+            {PROVIDERS.SAVE_CTA}
+          </Button>
+        </div>
       )}
     </div>
   );

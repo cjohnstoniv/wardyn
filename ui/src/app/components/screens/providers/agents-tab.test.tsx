@@ -12,7 +12,7 @@ import { dirname, resolve } from "node:path";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { SetupHarnessTool, SetupModelAccess } from "../../../lib/types";
-import { AGENTS, AGENTS_DRAFT, PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { AGENTS, AGENTS_DRAFT, PROVIDERS, PROVIDERS_DRAFT } from "../../../lib/workspace-providers-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { HttpError } from "../../../lib/api/core";
 import { AgentsTab, agentCapabilityFor } from "./agents-tab";
@@ -535,7 +535,12 @@ describe("AgentsTab — the ETag / 412 / 400 contract", () => {
     }
   });
 
-  it("a 412 renders SAVED_ELSEWHERE and overwrites nothing", async () => {
+  // F4-F3 (Appendix A V8, corrected verdict, rule 8 — unblocked for this
+  // tab): the banner used to SWAP the whole body — every row (and any
+  // unsaved edit on one) came down with it, unreadable first. Now the draft
+  // stays MOUNTED, the banner sits ABOVE the rows, and its ONE control is
+  // "Discard mine and reload" — no "Save over theirs" arm.
+  it("a 412 renders SAVED_ELSEWHERE ABOVE the still-mounted rows, and never overwrites", async () => {
     getAgentProvidersMock.mockResolvedValue({
       providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] },
       etag: '"v1"',
@@ -544,10 +549,14 @@ describe("AgentsTab — the ETag / 412 / 400 contract", () => {
     render(<AgentsTab harnesses={HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     await screen.findByTestId("agent-row-claude-code");
     await userEvent.click(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA }));
+
     expect(await screen.findByText(PROVIDERS.SAVED_ELSEWHERE_TITLE)).toBeInTheDocument();
     expect(screen.getByText(PROVIDERS.SAVED_ELSEWHERE_BODY)).toBeInTheDocument();
-    // The rows come down with the banner: there is nothing to save over.
-    expect(screen.queryByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeNull();
+    // The row stays mounted — there is still something on screen to save.
+    expect(screen.getByTestId("agent-row-claude-code")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: PROVIDERS_DRAFT.DISCARD_AND_RELOAD })).toBeInTheDocument();
+    expect(screen.queryByText(/save over theirs/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeInTheDocument();
     expect(putAgentProvidersMock).toHaveBeenCalledTimes(1);
   });
 

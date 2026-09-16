@@ -32,7 +32,7 @@ import { providers as api, type WorkspaceProviders } from "../../../lib/api/prov
 import { setup as setupApi } from "../../../lib/api/setup";
 import type { SetupStatus } from "../../../lib/types";
 import { getErrorMessage } from "../../../lib/format";
-import { AGENTS, PROVIDERS } from "../../../lib/workspace-providers-copy";
+import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../../../lib/workspace-providers-copy";
 import { ACCESS_STATE } from "../../../lib/people-access-copy";
 import { Button } from "../../ui/button";
 import { PageHeader } from "../../wardyn/page-header";
@@ -188,86 +188,90 @@ export function ProvidersScreen() {
             ]}
           />
 
-          {savedElsewhere ? (
+          {/* F4-F3 (Appendix A V8, corrected verdict): keep the draft MOUNTED
+              — the banner sits ABOVE the tabs rather than replacing them, so
+              an edit typed moments before the 412 is still on screen and
+              readable. ONE control, "Discard mine and reload" (= load()):
+              the corrected verdict REFUSES a "Save over theirs" arm — a
+              security document is never last-writer-wins from this banner. */}
+          {savedElsewhere && (
             <div className="space-y-3 rounded-lg border border-warning/30 bg-warning-subtle p-4">
               <p className="text-sm font-medium text-foreground">{PROVIDERS.SAVED_ELSEWHERE_TITLE}</p>
               <p className="text-body text-muted-foreground">{PROVIDERS.SAVED_ELSEWHERE_BODY}</p>
               <Button variant="outline" size="sm" onClick={load}>
-                {ACCESS_STATE.FETCH_FAILED_RETRY}
+                {PROVIDERS_DRAFT.DISCARD_AND_RELOAD}
               </Button>
             </div>
-          ) : (
-            <>
-              {narrowed !== null && (
-                <div className="rounded-lg border border-warning/30 bg-warning-subtle p-3 text-body text-warning">
-                  {PROVIDERS.SAVED_NARROWED(narrowed)}
-                </div>
-              )}
-              {saveError && (
-                <div className="rounded-lg border border-danger/30 bg-danger-subtle p-3 text-body text-danger">
-                  <b className="font-semibold">{PROVIDERS.SAVE_REFUSED_TITLE}</b>
-                  <p className="mt-0.5">{saveError}</p>
-                </div>
-              )}
+          )}
+          {narrowed !== null && (
+            <div className="rounded-lg border border-warning/30 bg-warning-subtle p-3 text-body text-warning">
+              {PROVIDERS.SAVED_NARROWED(narrowed)}
+            </div>
+          )}
+          {saveError && (
+            <div className="rounded-lg border border-danger/30 bg-danger-subtle p-3 text-body text-danger">
+              <b className="font-semibold">{PROVIDERS.SAVE_REFUSED_TITLE}</b>
+              <p className="mt-0.5">{saveError}</p>
+            </div>
+          )}
 
-              {tab === "git" && (
-                <GitTab
-                  git={draft.git ?? []}
-                  onChange={(git) => setDraft((d) => ({ ...d, git }))}
-                  present={secretsPresent}
-                  githubApp={githubApp}
-                  operator={operator}
-                  loadedEmpty={loadedEmpty}
-                />
-              )}
-              {tab === "storage" && (
-                <StorageTab
-                  storage={draft.storage ?? {}}
-                  onChange={(storage) => setDraft((d) => ({ ...d, storage }))}
-                  enforcement={enforcement}
-                  operator={operator}
-                />
-              )}
-              {/* Agents is its OWN resource (SiteConfig.agent_providers, its
-                  own GET/PUT) — a separate document from Git/Storage's
-                  WorkspaceProviders, so it fetches and saves itself (the
-                  UserDrivesCard precedent) rather than riding this screen's
-                  draft/save. Its own Save button is the tab's one teal — the
-                  shared one below is withheld while it's active. */}
-              {tab === "agents" && (
-                <AgentsTab
-                  /* UNDEFINED, never `?? []`: the tab builds its whole PUT
-                     body from this, so an older daemon's absent roster read
-                     as an empty one saved `{agents: []}` and disabled every
-                     agent. Absent is unknown (setup.ts's own rule). */
-                  harnesses={setupStatus?.harnesses}
-                  modelAccess={setupStatus?.model_access}
-                  operator={operator}
-                  /* The roster comes from THIS screen's /setup/status read, so
-                     the tab's roster-unknown Retry has to re-fire THAT — its own
-                     load() re-reads /agent-providers, which is not the read that
-                     failed, and clicking it changed nothing. */
-                  onRetryRoster={load}
-                  onStatusRefresh={refreshSetupStatus}
-                />
-              )}
-              {/* ONE teal button at a time (CONSOLE-RULES §6, prompt §4): in
-                  the legacy-open empty state the Git tab's own banner action IS
-                  the state's one affirmative, so the screen's Save providers is
-                  withheld rather than doubling it. Withheld only while there is
-                  NOTHING to save — the loaded snapshot was empty AND the draft
-                  still is: a draft emptied by Remove is a pending CHANGE (Save
-                  stays; the banner's Add steps down to outline — git-tab.tsx's
-                  `loadedEmpty`), and a first row added on a fresh install is one
-                  too (Save appears the moment the draft has a row). */}
-              {tab !== "agents" && !(tab === "git" && loadedEmpty && (draft.git ?? []).length === 0) && (
-                <div className="flex justify-end border-t border-border pt-4">
-                  <Button disabled={!operator || saving || invalidGitRow} onClick={save}>
-                    {PROVIDERS.SAVE_CTA}
-                  </Button>
-                </div>
-              )}
-            </>
+          {tab === "git" && (
+            <GitTab
+              git={draft.git ?? []}
+              onChange={(git) => setDraft((d) => ({ ...d, git }))}
+              present={secretsPresent}
+              githubApp={githubApp}
+              operator={operator}
+              loadedEmpty={loadedEmpty}
+              onStatusRefresh={refreshSetupStatus}
+            />
+          )}
+          {tab === "storage" && (
+            <StorageTab
+              storage={draft.storage ?? {}}
+              onChange={(storage) => setDraft((d) => ({ ...d, storage }))}
+              enforcement={enforcement}
+              operator={operator}
+            />
+          )}
+          {/* Agents is its OWN resource (SiteConfig.agent_providers, its
+              own GET/PUT) — a separate document from Git/Storage's
+              WorkspaceProviders, so it fetches and saves itself (the
+              UserDrivesCard precedent) rather than riding this screen's
+              draft/save. Its own Save button is the tab's one teal — the
+              shared one below is withheld while it's active. */}
+          {tab === "agents" && (
+            <AgentsTab
+              /* UNDEFINED, never `?? []`: the tab builds its whole PUT
+                 body from this, so an older daemon's absent roster read
+                 as an empty one saved `{agents: []}` and disabled every
+                 agent. Absent is unknown (setup.ts's own rule). */
+              harnesses={setupStatus?.harnesses}
+              modelAccess={setupStatus?.model_access}
+              operator={operator}
+              /* The roster comes from THIS screen's /setup/status read, so
+                 the tab's roster-unknown Retry has to re-fire THAT — its own
+                 load() re-reads /agent-providers, which is not the read that
+                 failed, and clicking it changed nothing. */
+              onRetryRoster={load}
+              onStatusRefresh={refreshSetupStatus}
+            />
+          )}
+          {/* ONE teal button at a time (CONSOLE-RULES §6, prompt §4): in
+              the legacy-open empty state the Git tab's own banner action IS
+              the state's one affirmative, so the screen's Save providers is
+              withheld rather than doubling it. Withheld only while there is
+              NOTHING to save — the loaded snapshot was empty AND the draft
+              still is: a draft emptied by Remove is a pending CHANGE (Save
+              stays; the banner's Add steps down to outline — git-tab.tsx's
+              `loadedEmpty`), and a first row added on a fresh install is one
+              too (Save appears the moment the draft has a row). */}
+          {tab !== "agents" && !(tab === "git" && loadedEmpty && (draft.git ?? []).length === 0) && (
+            <div className="flex justify-end border-t border-border pt-4">
+              <Button disabled={!operator || saving || invalidGitRow} onClick={save}>
+                {PROVIDERS.SAVE_CTA}
+              </Button>
+            </div>
           )}
         </section>
       )}

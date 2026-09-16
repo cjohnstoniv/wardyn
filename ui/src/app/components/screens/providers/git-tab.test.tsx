@@ -25,19 +25,43 @@ function Harness({
   // What the screen passes: whether the LOADED snapshot was empty. Defaults to
   // the initial draft's own emptiness, which is what a fresh load looks like.
   loadedEmpty = initial.length === 0,
+  onStatusRefresh = () => {},
 }: {
   initial: GitProvider[];
   onLatest?: (git: GitProvider[]) => void;
   loadedEmpty?: boolean;
+  onStatusRefresh?: () => void;
 }) {
   const [git, setGit] = React.useState(initial);
   onLatest?.(git);
-  return <GitTab git={git} onChange={setGit} present={[]} githubApp={false} operator loadedEmpty={loadedEmpty} />;
+  return (
+    <GitTab
+      git={git}
+      onChange={setGit}
+      present={[]}
+      githubApp={false}
+      operator
+      loadedEmpty={loadedEmpty}
+      onStatusRefresh={onStatusRefresh}
+    />
+  );
 }
 
-function CredHarness({ initial, present, githubApp }: { initial: GitProvider[]; present: string[]; githubApp: boolean }) {
+function CredHarness({
+  initial,
+  present,
+  githubApp,
+  onStatusRefresh = () => {},
+}: {
+  initial: GitProvider[];
+  present: string[];
+  githubApp: boolean;
+  onStatusRefresh?: () => void;
+}) {
   const [git, setGit] = React.useState(initial);
-  return <GitTab git={git} onChange={setGit} present={present} githubApp={githubApp} operator />;
+  return (
+    <GitTab git={git} onChange={setGit} present={present} githubApp={githubApp} operator onStatusRefresh={onStatusRefresh} />
+  );
 }
 
 describe("GitTab", () => {
@@ -434,6 +458,51 @@ describe("GitTab", () => {
       expect(setSecretMock).toHaveBeenCalledWith("git-pat-github-com", "ghp_x");
       // …and github (including GHES, kind `github` on a corporate host) keeps it.
       expect(within(row).getByLabelText("Access token")).toHaveAttribute("placeholder", "ghp_…");
+    });
+  });
+
+  // F4-F2 (Appendix A V8): every SecretLane in a provider row carried a no-op
+  // onChanged — after Save the lane still said not connected, after
+  // Disconnect it still showed Connected, until reload. Fix: thread a
+  // setup-status-only refresh through GitTab -> Row -> SecretLane (four
+  // sites). Neg: an unsaved base-URL edit on a SIBLING field must survive a
+  // credential save — the fix must never become `load()`.
+  describe("a credential save fires the setup-status-only refresh (F4-F2)", () => {
+    it("saving a PAT fires onStatusRefresh", async () => {
+      setSecretMock.mockReset().mockResolvedValue(undefined);
+      const onStatusRefresh = vi.fn();
+      render(
+        <CredHarness
+          initial={[{ id: "gh", kind: "github", base_urls: ["https://github.com/acme"] }]}
+          present={[]}
+          githubApp={false}
+          onStatusRefresh={onStatusRefresh}
+        />,
+      );
+      const row = screen.getByTestId("provider-row-github");
+      await userEvent.type(within(row).getByLabelText("Access token"), "ghp_x");
+      await userEvent.click(within(row).getByRole("button", { name: "Save" }));
+      await screen.findByText(/Stored as/);
+      expect(onStatusRefresh).toHaveBeenCalledTimes(1);
+    });
+
+    it("the base-URL draft survives a credential save — the fix is never load()", async () => {
+      setSecretMock.mockReset().mockResolvedValue(undefined);
+      render(
+        <Harness
+          initial={[{ id: "gh", kind: "github", base_urls: ["https://github.com/acme"] }]}
+          onStatusRefresh={() => {}}
+        />,
+      );
+      const row = screen.getByTestId("provider-row-github");
+      const urls = within(row).getByLabelText(PROVIDERS.FIELD_BASE_URLS);
+      await userEvent.type(urls, "{Enter}https://git.corp.example/team");
+      await userEvent.type(within(row).getByLabelText("Access token"), "ghp_x");
+      await userEvent.click(within(row).getByRole("button", { name: "Save" }));
+      await screen.findByText(/Stored as/);
+      expect(within(row).getByLabelText(PROVIDERS.FIELD_BASE_URLS)).toHaveValue(
+        "https://github.com/acme\nhttps://git.corp.example/team",
+      );
     });
   });
 
