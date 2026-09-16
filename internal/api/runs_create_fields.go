@@ -98,8 +98,10 @@ func (s *Server) validateRunTextFields(w http.ResponseWriter, req createRunReque
 }
 
 // runFieldCharsAllowed is controlCharFree (permissions.go — C0, DEL and the C1
-// range, the same hygiene every capability-grant field gets) with newline and
-// tab exempted for the two prose fields.
+// range, the same hygiene every capability-grant field gets) with newline,
+// CARRIAGE RETURN and tab exempted for the two prose fields: a description
+// pasted out of a Windows editor arrives CRLF, and refusing it would be a 400
+// nobody could act on.
 func runFieldCharsAllowed(v string, multiline bool) bool {
 	if multiline {
 		return !strings.ContainsFunc(v, func(r rune) bool {

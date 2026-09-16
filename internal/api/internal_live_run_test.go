@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -66,6 +67,11 @@ func internalDoors(runID, grantID uuid.UUID) []struct {
 		{"recording upload", http.MethodPut, "/api/v1/internal/recordings/" + runID.String(), "cast"},
 		{"scan-result upload", http.MethodPut, "/api/v1/internal/scan-results/" + runID.String(), `{}`},
 		{"sso-token upload", http.MethodPut, "/api/v1/internal/sso-token/" + runID.String(), `{}`},
+		// EXEMPT from refuseTerminalRun (internalSelfGatedRoutes) and in the table
+		// anyway: renew runs its own, stricter check, and the only structural proof
+		// that the exemption is still safe is asserting the refusal is STILL 403
+		// here — from renew's own path (R10). Gut that re-read and this row reds.
+		{"token renew", http.MethodPost, "/api/v1/internal/token/renew", ""},
 	}
 }
 
@@ -173,5 +179,47 @@ func TestInternalUploadWithinGrace(t *testing.T) {
 				t.Errorf("internalUploadWithinGrace = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestInternalAuth_StoreErrorIsARetryable503WithNoDriverText is R7 + the
+// store-error arm R10 asked for: the gate fails CLOSED on a read it could not
+// make, says so retryably, and puts no driver text on the wire — the caller here
+// is the in-sandbox proxy.
+func TestInternalAuth_StoreErrorIsARetryable503WithNoDriverText(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New()
+	srv := New(baseTestConfig(h, errRunStore{err: errors.New("conn closed by peer host=10.0.0.5 db=wardyn")}))
+	tok := h.mintRunToken(t, runID)
+
+	w := do(t, srv, http.MethodPost, "/api/v1/internal/decisions", tok,
+		`{"request":{"host":"api.anthropic.com","method":"POST"},"decision":"allow"}`)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("code = %d, want 503 — an unreadable run must refuse RETRYABLY, never admit; body=%s", w.Code, w.Body.String())
+	}
+	for _, leak := range []string{"10.0.0.5", "conn closed by peer", "db=wardyn"} {
+		if strings.Contains(w.Body.String(), leak) {
+			t.Errorf("body = %s, must not carry the driver's %q at the sandbox boundary", w.Body.String(), leak)
+		}
+	}
+}
+
+// TestInternalAuth_NoStoreAdmits is the nil-store arm (R10). A deployment with
+// no run store has no run lifecycle to be past, and refusing would turn "no
+// store" into "no internal surface" for every store-less embedding. Renew keeps
+// its own 503 there, which is the stricter answer for a fresh grant of
+// authority.
+func TestInternalAuth_NoStoreAdmits(t *testing.T) {
+	h := newHarness(t) // newHarness wires no Store
+	if h.srv.cfg.Store != nil {
+		t.Fatal("fixture now has a Store; this test is about the nil-store arm")
+	}
+	runID := uuid.New()
+	tok := h.mintRunToken(t, runID)
+
+	w := do(t, h.srv, http.MethodPost, "/api/v1/internal/decisions", tok,
+		`{"request":{"host":"api.anthropic.com","method":"POST"},"decision":"allow"}`)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("code = %d, want 202; a store-less embedding must keep its internal surface; body=%s", w.Code, w.Body.String())
 	}
 }

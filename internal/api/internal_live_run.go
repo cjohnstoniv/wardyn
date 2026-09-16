@@ -5,6 +5,7 @@ package api
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -108,7 +109,16 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 			writeError(w, http.StatusForbidden, "run not found")
 			return false
 		}
-		writeError(w, http.StatusServiceUnavailable, "read run: "+err.Error())
+		// R7: the error goes to the LOG, never to the caller. This runs on every
+		// /internal/* door, so the caller is the in-sandbox proxy — and raw pgx
+		// text carries the database host, port, user and database name from a
+		// dial failure. Same rule and same shape as writeServerError
+		// (writeservererror.go); the status differs because that helper is the
+		// 500 twin and this refusal is RETRYABLE: the sidecar should come back,
+		// which is exactly what handleInternalTokenRenew's own 503 says.
+		slog.ErrorContext(r.Context(), "api: read run for the /internal liveness gate",
+			slog.String("method", r.Method), slog.String("path", r.URL.Path), slog.Any("err", err))
+		writeError(w, http.StatusServiceUnavailable, "read run failed; retry")
 		return false
 	}
 	if !isTerminalRunState(run.State) {
@@ -122,10 +132,32 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 	return false
 }
 
-// internalUploadWithinGrace reports whether this is one of the tail-upload
-// doors AND the run went terminal recently enough for its own tail to still be
-// arriving. UpdatedAt is the terminal transition's own timestamp: every writer
-// of a terminal state goes through a CAS that bumps it.
+// internalUploadWithinGrace reports whether this is one of the tail-upload doors
+// AND the run's row was written recently enough for its own tail to still be
+// arriving.
+//
+// UpdatedAt IS NOT A TERMINAL TIMESTAMP, and the distinction is the honest
+// caveat here (R4). types.AgentRun carries only CreatedAt and UpdatedAt, and
+// every terminal transition does bump UpdatedAt — but so does any LATER
+// non-state write to the row. The boot reconciler clearing a dead run's
+// sandbox_ref is the real example: it re-opens this window hours after the run
+// died, for a run whose revocation write failed, which is exactly the case this
+// gate exists for.
+//
+// It is accepted rather than closed because the exposure is bounded on three
+// sides and closing it needs a schema column this lane does not own:
+//
+//   - all three graced doors are UPLOAD-ONLY. None mints, injects or decides
+//     anything, so a re-opened window cannot yield a credential.
+//   - each one re-checks the run for itself. The SSO-token door additionally
+//     requires the run to be an aws-sso container login AND binds the blob to
+//     the launch-time scope stamp, so a dead run cannot write anything the live
+//     run could not have written.
+//   - the caller still has to hold that run's own unexpired, unrevoked token.
+//
+// The durable fix is a terminal_at column (or having the reconciler skip the
+// sandbox_ref bump for already-terminal rows); until then the window is
+// measured from the row's last write and says so.
 func internalUploadWithinGrace(path string, run types.AgentRun, now time.Time) bool {
 	if !pathHasAny(path, terminalGraceRoutes) {
 		return false
@@ -133,7 +165,8 @@ func internalUploadWithinGrace(path string, run types.AgentRun, now time.Time) b
 	// A clock that has not been set (a zero Now, or a run row with no
 	// UpdatedAt) must not silently widen the window: Sub on a zero time is a
 	// very large positive duration, so the comparison is written to fail closed
-	// on one rather than open.
+	// on one rather than open. A FUTURE timestamp fails closed for the same
+	// reason (the age check below is >= 0).
 	if run.UpdatedAt.IsZero() {
 		return false
 	}
