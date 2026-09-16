@@ -339,6 +339,19 @@ test("the member's run gets the member's PINNED identity, and something spends i
   // to be SPENT, not merely minted.
   await page.locator("#nr-seed").fill("Reply with the single word: ready.");
   await page.getByRole("button", { name: /^Launch/ }).click();
+
+  // LAUNCH NAVIGATES NOWHERE, deliberately. The 201's advisory `warnings[]`
+  // render inline in the rail and "Open run" is what carries the member to the
+  // run "at their own pace" (new-run-screen.tsx, and new-run-screen.test.tsx's
+  // "lists the warnings and navigates NOWHERE until Open run is clicked").
+  // Without this click the spec sat on /runs/new waiting five minutes for a
+  // terminal that was live on a page it had never opened — the run itself was
+  // already up, with run.llm.bedrock mode=sso-inject in the audit.
+  //
+  // The warnings this run legitimately carries are governance working, not
+  // failure: `api.anthropic.com` is dropped from egress because this deployment
+  // is Bedrock, and the member's resources are capped to the operator maximum.
+  await page.getByRole("button", { name: "Open run" }).click();
   await expect(page.locator(".xterm-screen").first()).toBeVisible({ timeout: SANDBOX_UP });
 
   // /_seen is the observation that is not Wardyn asserting about itself: it is
