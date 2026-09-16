@@ -29,6 +29,17 @@ const (
 	apPending                       // approval raised, awaiting decision
 	apApproved                      // human approved -> runtime allowlist
 	apDenied                        // human denied  -> cached deny
+	// apCapped: the per-run host table is full (maxApprovalHosts), so no entry was
+	// made, no approval was raised and no row exists. It is FAIL CLOSED like
+	// apPending — evaluate's default arm maps both to egress.Pending, so the wire
+	// answer is unchanged — but it is a DIFFERENT FACT, and ResolveWait needs the
+	// difference: apPending with a Nil id also describes a raise still in flight,
+	// which ResolveWait retries for concurrentRaiseRetries * holdPollInterval.
+	// Retrying a cap that only a decision can clear parked a goroutine and a
+	// socket for the full 5 s budget per new host, with no holdSem slot bounding
+	// it, in a 256 MiB sidecar — and the agent chooses the host names that reach
+	// the cap (B10-F4).
+	apCapped
 )
 
 // approvalClient implements the first-use approval flow against the control
@@ -280,6 +291,9 @@ func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveRe
 	// round trip, so a few short re-resolves clear it in practice; a raise
 	// that genuinely failed stays apPending/Nil and this exits the same as
 	// before, just after a bounded extra wait.
+	// apPending ONLY: apCapped is the same fail-closed answer but a settled one —
+	// nothing a re-resolve can change — so it exits here instead of burning the
+	// budget (B10-F4).
 	for i := 0; r.State == apPending && r.ApprovalID == uuid.Nil && i < concurrentRaiseRetries; i++ {
 		select {
 		case <-ctx.Done():
@@ -288,7 +302,7 @@ func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveRe
 		}
 		r = a.Resolve(ctx, host)
 	}
-	if r.State == apApproved || r.State == apDenied || r.ApprovalID == uuid.Nil {
+	if r.State == apApproved || r.State == apDenied || r.State == apCapped || r.ApprovalID == uuid.Nil {
 		return r
 	}
 	// Bound concurrent holds: over the cap, don't park another goroutine — fall
@@ -442,7 +456,7 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 					slog.Int("cap", maxApprovalHosts),
 					slog.String("run_id", a.runID.String()))
 			})
-			return resolveResult{State: apPending}
+			return resolveResult{State: apCapped}
 		}
 		st = &hostApproval{state: apNone}
 		a.hosts[host] = st
