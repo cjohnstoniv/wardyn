@@ -337,10 +337,13 @@ func stripSandboxCredentials(h http.Header) {
 //     the vendor hosts and the operator's configured gateways, which
 //     forwardInspectedLLM dials with a hardcoded https scheme): NEVER. There is
 //     no plaintext connector behind those names to break.
-//   - cleartext to port 80: injectable. That is the ONLY shape plain-lane
-//     injection has ever meaningfully worked in (a CONNECT tunnel cannot be
-//     injected into) and the default port of the plaintext connector an
-//     operator authors on purpose.
+//   - cleartext to port 80, for a host with a BARE allowlist entry: injectable.
+//     That is the ONLY shape plain-lane injection has ever meaningfully worked
+//     in (a CONNECT tunnel cannot be injected into) and the default port of the
+//     plaintext connector an operator authors on purpose. "Bare" carries the
+//     whole justification and is checked explicitly (W6-S3,
+//     Policy.AllowedBareExactHost): the entry is SILENT about the port, so port
+//     80 is the operator's default rather than the sandbox's choice.
 //   - cleartext to any OTHER port: only when the operator authored that port in
 //     the allowlist ("connector.internal:8080" rather than a bare
 //     "connector.internal" — Policy.AuthoredPortFor). A bare entry is silent
@@ -373,7 +376,15 @@ func (p *Proxy) injectableTransport(scheme, host string, port int) bool {
 	if p.isLLMHost(host) {
 		return false
 	}
-	return port == defaultPortForScheme("http") || p.policy.AuthoredPortFor(host, port)
+	// Port 80 asks the BARE question (W6-S3). The arm's premise is an entry that
+	// is silent about the port; B10-F1 made AllowedExactHost — the binding
+	// question buildInjector asks — accept a port-QUALIFIED-only entry, which
+	// silently turned "the operator said nothing about the port" into "the
+	// operator named a DIFFERENT port". Every other port still asks
+	// AuthoredPortFor, so a host authored only as vendor.example:8443 is
+	// credentialed on the port its operator wrote down and nowhere else.
+	return (port == defaultPortForScheme("http") && p.policy.AllowedBareExactHost(host)) ||
+		p.policy.AuthoredPortFor(host, port)
 }
 
 // tlsConventionalPorts is the set of ports the industry reads as "TLS lives

@@ -36,20 +36,68 @@ package proxy
 // surviving port means the credential has somewhere the operator sanctioned to
 // go; none means every authored port was taken back in writing.
 func (p *Policy) AllowedExactHost(host string) bool {
-	host = canonHost(host)
-	if _, ok := p.deniedExact[host]; ok {
+	if p == nil {
 		return false
 	}
-	if matchWild(host, p.deniedWild) {
+	host = canonHost(host)
+	if p.exactHostDenied(host) {
 		return false
 	}
 	if _, ok := p.allowedExact[host]; ok {
 		return true
 	}
 	for port := range p.allowedExactAnyPort[host] {
-		if _, denied := p.deniedExactPort[hostPortKey(host, port)]; !denied {
-			return true
+		if _, denied := p.deniedExactPort[hostPortKey(host, port)]; denied {
+			continue
 		}
+		// W6-S5: the WILDCARD port-qualified denies too, exactly as
+		// AuthoredPortFor reads them. CompilePolicy routes "*.corp:8443" to
+		// deniedWildPort alone, which neither the port-less checks above nor the
+		// exact-port lookup on the line before can see — so without this a
+		// blanket "deny *.corp:8443" could not cancel the one port the operator
+		// authored for m.corp, and the credential stayed bound to a host whose
+		// every authored port had been taken back in writing.
+		if matchWildPort(host, port, p.deniedWildPort) {
+			continue
+		}
+		return true
 	}
 	return false
+}
+
+// exactHostDenied is the two PORT-LESS deny checks both questions below share:
+// a bare deny entry, and a wildcard deny. Neither can see a port-qualified deny
+// (CompilePolicy routes those to deniedExactPort/deniedWildPort), which is why
+// the any-port arm above shadows those itself.
+func (p *Policy) exactHostDenied(host string) bool {
+	if _, ok := p.deniedExact[host]; ok {
+		return true
+	}
+	return matchWild(host, p.deniedWild)
+}
+
+// AllowedBareExactHost is the STRICTER half of the same question: did the
+// operator name this exact host in writing WITHOUT qualifying a port — the
+// "silent about the port" entry the cleartext port-80 injection arm has always
+// been written under (W6-S3).
+//
+// AllowedExactHost answers "may a credential bind to this host at all", and
+// since B10-F1 a port-qualified-only entry answers yes. That is right for the
+// BINDING — the operator named the host — and wrong for the one caller that has
+// to read an UNAUTHORED port as consent: injectableTransport's port-80 arm,
+// whose whole justification is that a bare entry says nothing about the port,
+// so port 80 is the default port of a plaintext connector rather than the
+// sandbox choosing a transport. An operator who wrote "vendor.example:8443" DID
+// state a port; reading their silence about port 80 as permission inverts it.
+// So that arm asks this, and every other port asks AuthoredPortFor.
+func (p *Policy) AllowedBareExactHost(host string) bool {
+	if p == nil {
+		return false
+	}
+	host = canonHost(host)
+	if p.exactHostDenied(host) {
+		return false
+	}
+	_, ok := p.allowedExact[canonHost(host)]
+	return ok
 }
