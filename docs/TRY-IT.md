@@ -39,7 +39,7 @@ key), and **record, then replay confined** to onboard your own work.
 The Getting-started rail detects this host's real capabilities — which
 confinement tiers exist (Fence = CC1 hardened runc, Wall = CC2 gVisor, Vault =
 CC3 Kata microVM), whether an LLM path exists, secret-store durability — then
-walks 10 steps to your first run. Whatever you configure has to pass a live
+walks the rail's steps to your first run. Whatever you configure has to pass a live
 probe before that step unlocks; nothing is ambient, so a run reaches an
 integration only when its workspace requires it by name (see
 [OPERATIONS.md](OPERATIONS.md) → "Model access resolves" for the one exception).
@@ -95,7 +95,9 @@ owner-scoped **member** — on a **fresh** stack, `deploy/compose/.env.example`
 already maps them that way (`WARDYN_OIDC_ROLE_MAP`); an existing `.env`
 predating this pair keeps whatever it already had, so add the row by hand if
 you're on one. Point `WARDYN_OIDC_OPERATOR_EMAILS` at your own address
-instead to use your own login as admin. The split, the approval broker and the
+instead to use your own login as admin — and set `WARDYN_OIDC_EMAIL_DOMAINS`
+to your own domain — compose defaults it to `wardyn.local`, which denies
+every other address. The split, the approval broker and the
 append-only audit log all ship in the Apache-2.0 build with no paid tier; for
 the exact 403 boundary and how to give a second person their own login, see
 [OPERATIONS.md](OPERATIONS.md#second-user-same-host).

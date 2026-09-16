@@ -85,7 +85,8 @@ upgrade never silently changes who is admin (see `.env.example`'s own
 comment). Add the row yourself, or set your own
 `WARDYN_OIDC_OPERATOR_EMAILS=you@example.com` (or
 `WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST=true`) to use your own login as admin
-instead.
+instead — and set `WARDYN_OIDC_EMAIL_DOMAINS` to your own domain — compose
+defaults it to `wardyn.local`, which denies every other address.
 
 ## No-login local mode (`WARDYN_LOCAL_MODE`)
 

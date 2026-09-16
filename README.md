@@ -63,6 +63,10 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn \
   --set secrets.ageKeyFromSecret=true
 ```
 
+This installs the control plane only — add `k8s.enabled=true` and the SSO
+block from [the chart README](deploy/helm/wardyn/README.md) to get runs and
+roles.
+
 A persistent Postgres DSN needs an age identity riding in the SAME Secret
 (above) or the chart refuses to render — without one, wardynd generates a
 fresh identity every boot and cannot decrypt what the previous boot
@@ -146,7 +150,7 @@ indexed in [docs/](docs/README.md).
 
 ## Watch it work
 
-Six narrated walkthroughs ship with this release, about 41 minutes end to end;
+Six narrated walkthroughs are published, about 41 minutes end to end;
 the rest of the series is being re-recorded on 0.7 and lands in the same release as
 each episode passes (those rows read *coming soon*). Every one drives
 the real console against real sandboxes — the policies are live, the refusals
