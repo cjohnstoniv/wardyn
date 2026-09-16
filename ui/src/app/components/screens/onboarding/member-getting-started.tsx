@@ -54,7 +54,7 @@ import { driveModeWord, driveSizeLabel } from "../../../lib/user-drives-display"
 import { MEMBER_WORKSPACE } from "../../../lib/permissions-copy";
 import { EPISODES } from "../../../lib/demo-videos";
 import { EpisodeRow } from "./episode-card";
-import { YourModelKey } from "./your-model-key";
+import { YourModelKey, modelKeyProvider } from "./your-model-key";
 import type { AgentRun, SetupStatus } from "../../../lib/types";
 
 type Variant = "default" | "outline";
@@ -170,7 +170,9 @@ export function MemberGettingStarted() {
 
   const unreachable = status?.unreachable === true;
   const llmReady = !unreachable && status?.llm_ready === true;
-  const hasOwnKey = mine?.includes("anthropic-api-key") ?? false;
+  // X3-F3: the summary chip and the pane must agree on WHICH key — the name
+  // follows the org's agent roster, not a hardcoded provider.
+  const hasOwnKey = mine?.includes(modelKeyProvider(status?.harnesses).secretName) ?? false;
 
   const workspaceDone = !unreachable && !wsLoading && workspaces.length > 0;
   const modelKeyDone = !unreachable && (hasOwnKey || llmReady);
@@ -371,6 +373,7 @@ export function MemberGettingStarted() {
         <YourModelKey
           llmReady={llmReady}
           mine={mine}
+          harnesses={status?.harnesses}
           known={!unreachable}
           variant={variantFor("model-key")}
           onChanged={loadSecrets}

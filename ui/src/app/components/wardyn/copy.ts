@@ -565,6 +565,15 @@ export function credentialKind(scope: Record<string, unknown>): CredentialKind {
 // shows it verbatim as a mono label — it's the one name a member can register.
 export const YOUR_MODEL_KEY = {
   SECRET_NAME: "anthropic-api-key",
+  // DRAFT (M2 canon pending) — X3-F3. The member's own key is stored under the
+  // PROVIDER's conventional name, and which provider that is follows the org's
+  // agent roster: a codex-only roster cannot use an anthropic key at all, so
+  // offering one was a write nothing would ever read. MEMBERS.md already names
+  // both. Keyed by the harness catalog id the roster row carries.
+  BY_AGENT: {
+    "claude-code": { secretName: "anthropic-api-key", placeholder: "sk-ant-…" },
+    "codex-cli": { secretName: "openai-api-key", placeholder: "sk-…" },
+  },
   EMPTY_BODY:
     "Bring your own key. It is stored write-only under the provider's conventional name; nothing ever reads it back to you.",
   SET_HINT: "Your runs can use this key — pick it under Model access when you launch.",

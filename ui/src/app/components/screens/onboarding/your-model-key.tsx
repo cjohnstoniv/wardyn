@@ -19,14 +19,28 @@ import { Input } from "../../ui/input";
 import { Chip, DoneChip, SectionCard } from "../../wardyn/primitives";
 import { Mono } from "../../wardyn/code-block";
 import { YOUR_MODEL_KEY as T } from "../../wardyn/copy";
+import type { SetupHarnessTool } from "../../../lib/types";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { HttpError } from "../../../lib/api/core";
+
+// X3-F3 — which provider's key this member should store. The roster is the
+// org's answer to "which coding agents may a run name"; a row this pane knows
+// how to store a key for wins, in roster (catalog) order, so a deployment that
+// offers Claude Code keeps today's anthropic name and a codex-only one stops
+// asking for a key its harness can never use. No roster (an older daemon, or a
+// legacy open install) falls back to anthropic, exactly as before.
+export function modelKeyProvider(harnesses?: SetupHarnessTool[]) {
+  const known = Object.keys(T.BY_AGENT);
+  const row = (harnesses ?? []).find((h) => h.enabled !== false && known.includes(h.id));
+  return T.BY_AGENT[(row?.id ?? "claude-code") as keyof typeof T.BY_AGENT];
+}
 
 export function YourModelKey({
   llmReady,
   mine,
   variant,
   known = true,
+  harnesses,
   onChanged,
 }: {
   llmReady: boolean;
@@ -40,23 +54,27 @@ export function YourModelKey({
   // done" while the daemon can't be reached is a page-wide guarantee, not a
   // per-section one.
   known?: boolean;
+  /** The org's agent roster (SetupStatus.harnesses) — see modelKeyProvider.
+   *  Absent/empty keeps the anthropic name every existing caller had. */
+  harnesses?: SetupHarnessTool[];
   // Called after a successful Save/Remove so the parent refetches `mine`.
   onChanged: () => void;
 }) {
+  const provider = modelKeyProvider(harnesses);
   const [editing, setEditing] = React.useState(false);
   const [revealEmpty, setRevealEmpty] = React.useState(false);
   const [value, setValue] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
 
-  const hasOwn = mine?.includes(T.SECRET_NAME) ?? false;
+  const hasOwn = mine?.includes(provider.secretName) ?? false;
   const done = known && (hasOwn || (llmReady && !hasOwn));
 
   const save = async () => {
     setBusy(true);
     setError(null);
     try {
-      await secretsApi.setSecret(T.SECRET_NAME, value);
+      await secretsApi.setSecret(provider.secretName, value);
       setValue("");
       setEditing(false);
       setRevealEmpty(false);
@@ -72,7 +90,7 @@ export function YourModelKey({
     setBusy(true);
     setError(null);
     try {
-      await secretsApi.deleteSecret(T.SECRET_NAME);
+      await secretsApi.deleteSecret(provider.secretName);
       onChanged();
     } catch {
       setError(T.REMOVE_ERROR);
@@ -118,6 +136,7 @@ export function YourModelKey({
           {!editing && error && <p className="mt-1 text-xs text-danger">{error}</p>}
           {editing && (
             <EmptyForm
+              provider={provider}
               value={value}
               setValue={setValue}
               error={error}
@@ -132,7 +151,7 @@ export function YourModelKey({
           )}
         </div>
       ) : showEmptyForm ? (
-        <EmptyForm value={value} setValue={setValue} error={error} busy={busy} variant={variant} onSave={save} />
+        <EmptyForm provider={provider} value={value} setValue={setValue} error={error} busy={busy} variant={variant} onSave={save} />
       ) : (
         <div>
           <p className="text-sm text-muted-foreground">{T.PROVIDED_BODY}</p>
@@ -146,6 +165,7 @@ export function YourModelKey({
 }
 
 function EmptyForm({
+  provider,
   value,
   setValue,
   error,
@@ -154,6 +174,7 @@ function EmptyForm({
   onSave,
   onCancel,
 }: {
+  provider: (typeof T.BY_AGENT)[keyof typeof T.BY_AGENT];
   value: string;
   setValue: (v: string) => void;
   error: string | null;
@@ -167,10 +188,10 @@ function EmptyForm({
   return (
     <div className="mt-2">
       <p className="text-sm text-muted-foreground">{T.EMPTY_BODY}</p>
-      <Mono className="mt-2 block text-xs">{T.SECRET_NAME}</Mono>
+      <Mono className="mt-2 block text-xs">{provider.secretName}</Mono>
       <Input
         type="password"
-        placeholder="sk-ant-…"
+        placeholder={provider.placeholder}
         value={value}
         onChange={(e) => setValue(e.target.value)}
         aria-invalid={!!error}

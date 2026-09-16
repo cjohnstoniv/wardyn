@@ -138,3 +138,53 @@ describe("YourModelKey", () => {
     expect(screen.getByText("••••••••••••")).toBeInTheDocument();
   });
 });
+
+// X3-F3 — this pane is the ONE write path a member has, and it hardcoded
+// `anthropic-api-key`. On a codex-only roster an anthropic key can never be
+// used (the capability matrix marks it impossible for that harness), so the
+// member stored a key that nothing would ever read. The name follows the org's
+// agent roster; /secrets is untouched.
+describe("YourModelKey — the secret name follows the org's agent roster", () => {
+  const roster = (...ids: string[]) =>
+    ids.map((id) => ({ id, display: id, has_gateway: true, has_login: true, enabled: true }));
+
+  it("a codex-only roster writes and removes openai-api-key", async () => {
+    const user = userEvent.setup();
+    const { unmount } = render(
+      <YourModelKey llmReady={false} mine={[]} variant="default" harnesses={roster("codex-cli")} onChanged={() => {}} />,
+    );
+    expect(screen.getByText("openai-api-key")).toBeInTheDocument();
+    await user.type(screen.getByPlaceholderText("sk-…"), "sk-proj-abcdefgh");
+    await user.click(screen.getByRole("button", { name: "Save key" }));
+    await waitFor(() => expect(setSecretMock).toHaveBeenCalledWith("openai-api-key", "sk-proj-abcdefgh"));
+    unmount();
+
+    render(
+      <YourModelKey
+        llmReady={false}
+        mine={["openai-api-key"]}
+        variant="outline"
+        harnesses={roster("codex-cli")}
+        onChanged={() => {}}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(deleteSecretMock).toHaveBeenCalledWith("openai-api-key"));
+  });
+
+  it("negative control: a claude roster, and no roster at all, stay on anthropic-api-key", () => {
+    const { unmount } = render(
+      <YourModelKey
+        llmReady={false}
+        mine={[]}
+        variant="default"
+        harnesses={roster("claude-code", "codex-cli")}
+        onChanged={() => {}}
+      />,
+    );
+    expect(screen.getByText("anthropic-api-key")).toBeInTheDocument();
+    unmount();
+    render(<YourModelKey llmReady={false} mine={[]} variant="default" onChanged={() => {}} />);
+    expect(screen.getByText("anthropic-api-key")).toBeInTheDocument();
+  });
+});
