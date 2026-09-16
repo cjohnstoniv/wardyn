@@ -264,6 +264,10 @@ env:
   # The agent image is loaded into this cluster, not pullable from ghcr — point
   # the claude-code harness at the local tag or every run ImagePullBackOffs.
   WARDYN_AGENT_IMAGES: '{"base":"${BASE_IMAGE}","claude-code":"${AGENT_IMAGE}"}'
+  # The image bakes a CC2-floor default policy; this cluster's k8s driver
+  # advertises only [CC1] (no RuntimeClass pinned), so every default-policy run
+  # would fail closed — the same override deploy/compose/docker-compose.yaml makes.
+  WARDYN_DEFAULT_POLICY: /examples/policies/demo.json
 EOF
 
 step "helm upgrade --install ${RELEASE} (namespace ${NAMESPACE})"

@@ -159,33 +159,67 @@ for knob in WARDYN_AWS_SSO_ENDPOINT_OVERRIDE WARDYN_ALLOW_TEST_ENDPOINTS; do
 done
 if [ "$test_knob_fail" = 0 ]; then ok "neither AWS SSO test-endpoint knob is renderable from deploy/helm or deploy/compose"; fi
 
-# ── 7. every `docker run … -p` in scripts/ binds loopback only ──────────────
+# ── 7. every `docker run`/`docker create` publish in scripts/ binds loopback ─
 # wardyn-test-pg (scripts/up.sh cmd_pg) used to publish `-p 55432:5432` — 0.0.0.0
-# on every interface, the one non-loopback docker-run publish anywhere in the
+# on every interface, the one non-loopback docker publish anywhere in the
 # repo — for a throwaway dev/e2e Postgres with a fixed demo password. Every
 # consumer (scripts/e2e-backend.sh's default DSN, cmd_pg's own readiness poll)
 # already dials localhost/127.0.0.1, so the wide bind bought nothing but LAN
 # reachability into it. Joins `\`-continuation lines first (up.sh's own call
 # splits `-p` onto its own line), so a wrap cannot hide a bare port from a
 # per-line grep the way it would from one.
+#
+# R-07: the short-form-only (`-p`), `docker run`-only version of this guard
+# had three blind spots it did not advertise — the long form `--publish`, the
+# `-p=host:container` shape Go's flag parsing also accepts, and `docker
+# create` (never started via `run`). extract_bad_publishes below is the ONE
+# extraction used by both the self-test right after it (a deliberately-bad
+# fixture line, so the extractor is proven to catch what it claims BEFORE it
+# is trusted repo-wide) and the real scan.
+extract_bad_publishes() {  # $1 = one shell-command line -> one bad host:port per line
+    printf '%s\n' "$1" | grep -oE -- '(^| )(-p|--publish)[ =][^ ]+' \
+        | sed -E 's/^ *(-p|--publish)[ =]//' \
+        | grep -vE '^127\.0\.0\.1:'
+}
+selftest_fail=0
+[ -n "$(extract_bad_publishes 'docker create --publish 0.0.0.0:1234:1234 postgres:17')" ] \
+    || { bad "guard 6 self-test: a long-form --publish on a docker create line was not caught — the extractor checks nothing for that shape"; selftest_fail=1; }
+[ -n "$(extract_bad_publishes 'docker run -p=6379:6379 redis:7')" ] \
+    || { bad "guard 6 self-test: a -p=host:container (no space) was not caught"; selftest_fail=1; }
+[ -z "$(extract_bad_publishes 'docker run -p 127.0.0.1:55432:5432 postgres:17')" ] \
+    || { bad "guard 6 self-test: a loopback -p false-flagged"; selftest_fail=1; }
+if [ "$selftest_fail" = 0 ]; then ok "guard 6's extractor catches --publish, -p=, and docker create (self-test)"; fi
+
 port_bind_fail=0
 for f in $(git ls-files -- scripts | grep '\.sh$'); do
-    [ "$f" = "scripts/test-repo-guards.sh" ] && continue   # this guard's own source, not a docker-run site
+    [ "$f" = "scripts/test-repo-guards.sh" ] && continue   # this guard's own source, not a docker-run/create site
     joined="$(sed -e ':a' -e 'N' -e '$!ba' -e 's/\\\n[[:space:]]*/ /g' "$f")"
-    docker_run_lines="$(printf '%s\n' "$joined" | grep 'docker run' || true)"
-    [ -n "$docker_run_lines" ] || continue
+    docker_lines="$(printf '%s\n' "$joined" | grep -E 'docker (run|create)' || true)"
+    [ -n "$docker_lines" ] || continue
     while IFS= read -r line; do
-        for val in $(printf '%s\n' "$line" | grep -oE -- '(^| )-p [^ ]+' | sed 's/^ *-p //'); do
-            case "$val" in
-                127.0.0.1:*) ;;
-                *) bad "$f: \`docker run ... -p $val\` does not bind loopback (want 127.0.0.1:<host-port>:<container-port>) — every docker-run publish in scripts/ must stay loopback-only (B12b-F5)"; port_bind_fail=1 ;;
-            esac
+        for val in $(extract_bad_publishes "$line"); do
+            bad "$f: a docker run/create publishes $val, not loopback (want 127.0.0.1:<host-port>:<container-port>) — every docker publish in scripts/ must stay loopback-only (B12b-F5)"
+            port_bind_fail=1
         done
     done <<EOF
-$docker_run_lines
+$docker_lines
 EOF
 done
-if [ "$port_bind_fail" = 0 ]; then ok "every 'docker run ... -p' in scripts/ binds loopback only"; fi
+if [ "$port_bind_fail" = 0 ]; then ok "every docker run/create publish in scripts/ binds loopback only"; fi
+
+# ── 7. deploy/kind/quickstart.sh's generated values carry a CC2/CC3-guard
+#      escape — R-01: the B12b-F7 helm guard (k8s.enabled with no
+#      CC2/CC3 RuntimeClass pinned AND no default-policy override refuses to
+#      render) now refuses `make kind-quickstart`'s own generated values
+#      unless its heredoc sets one of the two escapes. Grepping the SCRIPT
+#      SOURCE (not a render) so a future edit that strips the line fails here,
+#      before CI ever spins up a cluster to discover it.
+quickstart_values_heredoc="$(awk '/values\.yaml" <<EOF/{f=1;next} f&&/^EOF$/{exit} f{print}' deploy/kind/quickstart.sh)"
+if printf '%s' "$quickstart_values_heredoc" | grep -qE 'WARDYN_DEFAULT_POLICY|runtimeClasses'; then
+    ok "deploy/kind/quickstart.sh's generated values carry the CC2/CC3-guard escape"
+else
+    bad "deploy/kind/quickstart.sh's generated values.yaml heredoc names neither WARDYN_DEFAULT_POLICY nor a runtimeClasses pin — the B12b-F7 helm guard now refuses this exact render (R-01); see deploy/compose/docker-compose.yaml's WARDYN_DEFAULT_POLICY override for the byte-matching fix"
+fi
 
 if [ "$fail" = 0 ]; then echo "--- test-repo-guards: PASS ---"; else echo "--- test-repo-guards: FAIL ---"; fi
 exit "$fail"
