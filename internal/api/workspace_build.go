@@ -38,6 +38,15 @@ type buildState struct {
 	// Log is the bounded tail of this build's output (maxBuildLogLines), fed by
 	// buildLogWriter. Same in-memory-only caveat as the rest of buildState.
 	Log []string `json:"log,omitempty"`
+	// Key is the workspace's image cache key AT THE MOMENT THIS BUILD STARTED
+	// (Server.workspaceBuiltImageKey) — what the build was building, not what
+	// it produced. The `done` half of a stale entry is answered by the row, but
+	// a FAILED build has no ref for the row to disagree with, so without this a
+	// failure outlived every invalidation: after a rescan moved the profile, GET
+	// still reported the previous composition's error until someone clicked
+	// Build again or wardynd restarted. Never serialised — it is an internal
+	// freshness fact, not something a caller can act on.
+	Key string `json:"-"`
 }
 
 type buildTracker struct {
@@ -88,7 +97,28 @@ func (t *buildTracker) begin(id uuid.UUID, now time.Time) bool {
 func (t *buildTracker) drop(id uuid.UUID) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	// NEVER under a live build: the entry IS the single-flight claim, so
+	// dropping one whose goroutine is still inside the image builder hands the
+	// slot back and the next Build click starts a SECOND envbuilder run for one
+	// workspace — both finishing into this tracker and the same cache columns.
+	// Keeping it costs nothing: the invalidator has already cleared the row, so
+	// whatever that build finishes with cannot answer `done` either way.
+	if st, ok := t.by[id]; ok && st.Building {
+		return
+	}
 	delete(t.by, id)
+}
+
+// bindKey records which composition the in-flight build is building. Separate
+// from begin (rather than a parameter on it) because begin's job is the
+// single-flight claim and only ONE caller — the route that actually launches a
+// build — knows the workspace well enough to answer.
+func (t *buildTracker) bindKey(id uuid.UUID, key string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if st, ok := t.by[id]; ok {
+		st.Key = key
+	}
 }
 
 func (t *buildTracker) finish(id uuid.UUID, image, errMsg string) {
@@ -100,10 +130,11 @@ func (t *buildTracker) finish(id uuid.UUID, image, errMsg string) {
 	// Carry the accumulated Log over into the terminal state — the log IS the
 	// debugging story for a failure, so it must survive Building true->false.
 	var log []string
+	var key string
 	if st, ok := t.by[id]; ok {
-		log = st.Log
+		log, key = st.Log, st.Key
 	}
-	t.by[id] = &buildState{Building: false, Image: image, Error: errMsg, Log: log}
+	t.by[id] = &buildState{Building: false, Image: image, Error: errMsg, Log: log, Key: key}
 }
 
 const (
@@ -269,11 +300,13 @@ func (s *Server) resolveBuildView(ws types.Workspace, tier workspaceReadTier) bu
 		return buildResponse{State: "nothing_to_build", Image: authoredImage(b.Image),
 			Detail: "this image boots as-is — no build involved"}
 	}
+	key, keyed := s.workspaceBuiltImageKey(ws)
 	st := s.builds.get(ws.ID)
 	switch {
 	case st.Building:
 		return buildResponse{State: "building", StartedAt: &st.StartedAt, Log: buildLog(st.Log)}
-	case st.Error != "":
+	case st.Error != "" && st.Key == key:
+		// Only about the composition it actually ran against — see buildState.Key.
 		return buildResponse{State: "failed", Detail: builderError(st.Error), Log: buildLog(st.Log)}
 	}
 	// THE ROW DECIDES WHETHER ANYTHING IS BUILT; THE TRACKER ONLY REMEMBERS HOW
@@ -286,7 +319,7 @@ func (s *Server) resolveBuildView(ws types.Workspace, tier workspaceReadTier) bu
 	// resolveWorkspaceImage actually consults, so it is what this reports; the
 	// tracker contributes only the LOG, and only while it is talking about the
 	// very ref the row names.
-	if key, ok := workspaceBuiltImageKey(ws); ok && ws.ImageRef != "" && ws.BuiltProfileHash == key {
+	if keyed && ws.ImageRef != "" && ws.BuiltProfileHash == key {
 		done := buildResponse{State: "done", Image: ws.ImageRef}
 		if st.Image == ws.ImageRef {
 			done.Log = buildLog(st.Log)
@@ -311,22 +344,34 @@ func (s *Server) resolveBuildView(ws types.Workspace, tier workspaceReadTier) bu
 // workspaceBuiltImageKey is the cache key resolveWorkspaceImage
 // (workspace_run_image.go) would compare ws.BuiltProfileHash against on the
 // next launch — the one fact that decides whether the row's cached ImageRef is
-// still the image a run gets. ok=false when the workspace has no readable
-// profile, i.e. nothing that lane could have keyed on.
+// still the image a run gets. ok=false when no lane could have keyed on
+// anything: no builder to wrap an explicit base image, or no readable profile.
 //
-// It mirrors that function's lane SELECTION rather than restating its keys: a
-// repo primary source carrying its own devcontainer keys on (clone URL, ref),
-// everything else on the scanned profile's CacheKey. The byoi lane is
-// deliberately absent — resolveBuildView answers "nothing_to_build" for an
-// explicit base image before it ever reaches here when a builder is wired, and
-// reports the honest builder-less refusal when one is not (W7-S1-2), so a byoi
-// key here would only be a second, unreachable spelling of that decision.
+// It mirrors that function's lane SELECTION rather than restating its keys: an
+// explicit base image keys on (kind, ref), a repo primary source carrying its
+// own devcontainer on (clone URL, ref), everything else on the scanned
+// profile's CacheKey.
 //
-// Reporting the repo-devcontainer lane from the ROW is also what lets that
-// lane's built image read `done` at all after a restart: its key is not the
-// profile's, so the old profile-only comparison could never match it and the
-// in-memory tracker was the only thing that ever said done for it.
-func workspaceBuiltImageKey(ws types.Workspace) (string, bool) {
+// THE EXPLICIT-IMAGE LANE IS NOT DEAD CODE, although resolveBuildView answers
+// "nothing_to_build" above for most of it: that branch excludes kind "custom",
+// which is exactly the composition that falls through to here with a byoi key
+// on the row. Keying it on the profile instead reported `none` for a workspace
+// that had built perfectly, in-process AND after a restart, and made every
+// Build click re-run the whole resolve. The builder gate keeps the honest
+// builder-less refusal below (W7-S1-2) — with no builder that base image is
+// REFUSED at run creation, so a cached wrap for it is not "done" here.
+//
+// Reporting these lanes from the ROW is also what lets their built images read
+// `done` at all after a restart: neither key is the profile's, so the old
+// profile-only comparison could never match one and the in-memory tracker was
+// the only thing that ever said done for them.
+func (s *Server) workspaceBuiltImageKey(ws types.Workspace) (string, bool) {
+	if b := ws.BaseImage; b != nil && b.Kind != "recommended" && strings.TrimSpace(b.Image) != "" {
+		if s.cfg.ImageBuilder == nil {
+			return "", false
+		}
+		return byoiCacheKey(b.Kind, b.Image), true
+	}
 	p, ok := workspaceProfile(ws)
 	if !ok {
 		return "", false
@@ -396,6 +441,12 @@ func (s *Server) handleBuildWorkspace(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusAccepted, buildResponse{State: "building", StartedAt: &already.StartedAt})
 		return
 	}
+	// What this build is building (buildState.Key): resolved from the SAME
+	// expression the reader compares the row against, so a rescan landing a new
+	// profile retires this attempt's outcome instead of reporting it against a
+	// composition it never saw.
+	buildKey, _ := s.workspaceBuiltImageKey(ws)
+	s.builds.bindKey(ws.ID, buildKey)
 	buildID := uuid.New() // audit correlation for a build with no run
 	go func() {
 		ctx := context.WithoutCancel(r.Context())

@@ -6,10 +6,12 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -61,8 +63,25 @@ func TestB4F1_FailedBuildDetailIsTieredLikeTheLog(t *testing.T) {
 // detached build goroutine to write while the test reads.
 type b4BuildStore struct {
 	store.Store
-	mu sync.Mutex
-	ws types.Workspace
+	lib sourceLibraryFake
+	mu  sync.Mutex
+	ws  types.Workspace
+}
+
+func (s *b4BuildStore) UpsertSource(ctx context.Context, src types.Source) (types.Source, error) {
+	return s.lib.UpsertSource(ctx, src)
+}
+func (s *b4BuildStore) UpsertBaseImage(ctx context.Context, b types.BaseImageEntry) (types.BaseImageEntry, error) {
+	return s.lib.UpsertBaseImage(ctx, b)
+}
+func (s *b4BuildStore) GetSourcesByIDs(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID]types.Source, error) {
+	return s.lib.GetSourcesByIDs(ctx, ids)
+}
+func (s *b4BuildStore) UpdateWorkspace(_ context.Context, _ uuid.UUID, ws types.Workspace, _ bool) (types.Workspace, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ws = ws
+	return ws, nil
 }
 
 func (s *b4BuildStore) GetWorkspace(context.Context, uuid.UUID) (types.Workspace, error) {
@@ -86,6 +105,12 @@ func (s *b4BuildStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]type
 	return nil, nil
 }
 
+func (s *b4BuildStore) setProfile(p workspacescan.WorkspaceProfile) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ws.Profile = mustJSON(p)
+}
+
 func (s *b4BuildStore) setHash(hash string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -97,12 +122,32 @@ func (s *b4BuildStore) setHash(hash string) {
 // goroutine's own store writes. release() lets it finish.
 type blockingImageBuilder struct {
 	fakeImageBuilder
-	gate chan struct{}
+	gate  chan struct{}
+	mu    sync.Mutex
+	calls int
 }
 
 func (b *blockingImageBuilder) BuildFromDevcontainerFiles(_ context.Context, _ map[string]string, tag string, _ io.Writer) (string, error) {
+	b.mu.Lock()
+	b.calls++
+	b.mu.Unlock()
 	<-b.gate
 	return tag, nil
+}
+
+func (b *blockingImageBuilder) callCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.calls
+}
+
+// failingImageBuilder is the ordinary generated-devcontainer lane failing, so a
+// test can put a real Error in the tracker through the handler that puts one
+// there, rather than seeding the tracker by hand.
+type failingImageBuilder struct{ fakeImageBuilder }
+
+func (failingImageBuilder) BuildFromDevcontainerFiles(context.Context, map[string]string, string, io.Writer) (string, error) {
+	return "", errors.New("step 3/7 : RUN go build — exit code 2")
 }
 
 // TestB4F2_TheTrackerIsSubordinateToTheRow is the invalidation regression: the
@@ -476,5 +521,180 @@ func TestB4F8_RefIsValidatedAtBothDoors(t *testing.T) {
 		`{"kind":"repo","name":"payments","locator":"acme/payments","ref":"refs/heads/feat x"}`)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("POST /sources with an unsafe ref: code = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// ─── F-1: the custom-base lane had no row-backed answer at all ─────────────
+
+// TestB4F2_CustomBaseImageReadsDoneFromTheRow closes the hole the row-decides
+// rule opened: resolveBuildView's "nothing_to_build" early return deliberately
+// EXCLUDES kind "custom", so a custom base image is the one explicit-image
+// composition that reaches the build tracker and the row — and the row's key
+// for it is byoiCacheKey, which resolveWorkspaceImage is what actually stores.
+// A key derived from the scanned profile alone can never equal it, so a custom
+// workspace that built perfectly read `none`: no image, no detail, and a Build
+// click that re-ran the whole resolve (and emitted another run.build row) every
+// single time.
+func TestB4F2_CustomBaseImageReadsDoneFromTheRow(t *testing.T) {
+	h := newHarness(t)
+	const base = "ghcr.io/acme/base:1"
+	st := &resolveImageStoreFake{}
+	cfg := baseTestConfig(h, st)
+	cfg.ImageBuilder = &capturingByoiImageBuilder{}
+	srv := New(cfg)
+	ws := types.Workspace{
+		ID:        uuid.New(),
+		Sources:   []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeEphemeral, Target: "/home/agent/work"}},
+		BaseImage: &types.WorkspaceBaseImage{Kind: "custom", Image: base},
+	}
+	built, ok := srv.resolveWorkspaceImage(context.Background(), uuid.New(), ws, nil)
+	if !ok || built == "" {
+		t.Fatal("resolveWorkspaceImage failed for a custom base image")
+	}
+	// What the real store holds once that build lands (the fake records rather
+	// than applies the write — same replay TestResolveBuildView_AgreesWithBuiltHash
+	// performs).
+	ws.ImageRef, ws.BuiltProfileHash = built, st.builtHash
+	srv.builds.finish(ws.ID, built, "")
+
+	if v := srv.resolveBuildView(ws, workspaceReadFull); v.State != "done" || v.Image != built {
+		t.Errorf("in-process view = %+v, want done/%q", v, built)
+	}
+	// And from a process that never ran the build — a restart, or the second
+	// replica. This is the half the in-memory tracker could never answer.
+	fresh := New(cfg)
+	if v := fresh.resolveBuildView(ws, workspaceReadFull); v.State != "done" || v.Image != built {
+		t.Errorf("after-restart view = %+v, want done/%q", v, built)
+	}
+}
+
+// ─── F-2: drop must not release a live single-flight slot ──────────────────
+
+// TestB4F2_DropNeverReleasesALiveBuildSlot: the invalidators drop the tracker
+// entry, and an edit DURING a build would otherwise hand the single-flight slot
+// back while the first build's goroutine is still inside the image builder — so
+// the next Build click starts a SECOND envbuilder run for one workspace, both
+// of them finishing into the same tracker and the same cache columns.
+func TestB4F2_DropNeverReleasesALiveBuildSlot(t *testing.T) {
+	h := newHarness(t)
+	profile := workspacescan.WorkspaceProfile{
+		Languages: []string{"Go"}, Confidence: workspacescan.ConfidenceHigh, Source: workspacescan.SourceDeterministic,
+	}
+	st := &b4BuildStore{ws: types.Workspace{
+		ID: uuid.New(), Name: "w", Status: types.WorkspaceScanned,
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/home/u/payments"}},
+		Profile: mustJSON(profile),
+	}}
+	builder := &blockingImageBuilder{gate: make(chan struct{})}
+	cfg := baseTestConfig(h, st)
+	cfg.ImageBuilder = builder
+	srv := New(cfg)
+	path := "/api/v1/workspaces/" + st.ws.ID.String()
+
+	if w := do(t, srv, http.MethodPost, path+"/build", adminToken, ""); w.Code != http.StatusAccepted {
+		t.Fatalf("first POST /build = %d, want 202; body=%s", w.Code, w.Body.String())
+	}
+	// Wait until that build is genuinely INSIDE the image builder (parked on the
+	// gate) — the slot is only interesting while a goroutine is really holding it.
+	for deadline := time.Now().Add(5 * time.Second); builder.callCount() == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("the first build never reached the image builder")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// A marker only THIS claim's entry carries: begin() starts every claim with a
+	// fresh, empty log, so the marker surviving is proof the slot was never
+	// re-claimed — a check that does not race the second build's goroutine.
+	const marker = "first build's log line"
+	srv.builds.appendLog(st.ws.ID, marker)
+
+	// The operator edits the composition while that build is still running.
+	if w := do(t, srv, http.MethodPut, path, adminToken,
+		`{"name":"w","sources":[{"type":"local_dir","path":"/home/u/other"}]}`); w.Code != http.StatusOK {
+		t.Fatalf("PUT /workspaces = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if !srv.builds.get(st.ws.ID).Building {
+		t.Fatal("the edit released the single-flight slot while the build was still live")
+	}
+	if w := do(t, srv, http.MethodPost, path+"/build", adminToken, ""); w.Code != http.StatusAccepted {
+		t.Fatalf("second POST /build = %d, want 202; body=%s", w.Code, w.Body.String())
+	}
+	if !slices.Contains(srv.builds.get(st.ws.ID).Log, marker) {
+		t.Error("the second click re-claimed the single-flight slot: two concurrent builds for one workspace")
+	}
+
+	close(builder.gate)
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+		if !srv.builds.get(st.ws.ID).Building {
+			if n := builder.callCount(); n != 1 {
+				t.Errorf("image builder called %d times for one workspace, want 1", n)
+			}
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("the detached build never finished")
+}
+
+// ─── F-3: a failed build outlived the composition it failed against ────────
+
+// TestB4F2_ARescanRetiresThePreviousBuildFailure: the tracker's `failed` arm is
+// consulted BEFORE the row, so a build failure survived every invalidation the
+// row half learned about — after a rescan moved the profile, GET /build still
+// reported the previous composition's error until someone clicked Build again
+// or wardynd restarted. The tracker now remembers WHICH composition it was
+// building, and answers only about that one.
+func TestB4F2_ARescanRetiresThePreviousBuildFailure(t *testing.T) {
+	h := newHarness(t)
+	profile := workspacescan.WorkspaceProfile{
+		Languages: []string{"Go"}, Confidence: workspacescan.ConfidenceHigh, Source: workspacescan.SourceDeterministic,
+	}
+	st := &b4BuildStore{ws: types.Workspace{
+		ID: uuid.New(), Name: "w", Status: types.WorkspaceScanned,
+		Sources: []types.WorkspaceSource{{Type: types.WorkspaceSourceTypeLocalDir, Path: "/home/u/payments"}},
+		Profile: mustJSON(profile),
+	}}
+	cfg := baseTestConfig(h, st)
+	cfg.ImageBuilder = failingImageBuilder{}
+	srv := New(cfg)
+	path := "/api/v1/workspaces/" + st.ws.ID.String() + "/build"
+
+	if w := do(t, srv, http.MethodPost, path, adminToken, ""); w.Code != http.StatusAccepted {
+		t.Fatalf("POST /build = %d, want 202; body=%s", w.Code, w.Body.String())
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		if !srv.builds.get(st.ws.ID).Building {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the detached build never finished")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	get := func() buildResponse {
+		t.Helper()
+		w := do(t, srv, http.MethodGet, path, adminToken, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /build = %d: %s", w.Code, w.Body.String())
+		}
+		var got buildResponse
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	// NEGATIVE CONTROL: against the composition it actually failed on, the
+	// failure is exactly what the operator must see.
+	if v := get(); v.State != "failed" {
+		t.Fatalf("view = %+v, want failed for the composition the build ran against", v)
+	}
+	// A rescan lands a new profile: everything about what would be built has
+	// changed, so the old attempt is not a report about it.
+	st.setProfile(workspacescan.WorkspaceProfile{
+		Languages: []string{"Go", "Python"}, Confidence: workspacescan.ConfidenceHigh, Source: workspacescan.SourceDeterministic,
+	})
+	if v := get(); v.State == "failed" {
+		t.Errorf("after the rescan, GET /build still reports the previous composition's failure: %+v", v)
 	}
 }
