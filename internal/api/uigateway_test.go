@@ -48,6 +48,7 @@ type uiMemStore struct {
 	tickets map[string]store.AttachTicket
 	events  []types.AuditEvent
 	touched bool
+	touches int
 }
 
 func newUIMemStore() *uiMemStore {
@@ -78,6 +79,7 @@ func (s *uiMemStore) TouchRun(context.Context, uuid.UUID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.touched = true
+	s.touches++
 	return nil
 }
 
@@ -85,6 +87,16 @@ func (s *uiMemStore) wasTouched() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.touched
+}
+
+// touchCount is wasTouched's cardinal twin: a relayed WebSocket is ONE inbound
+// request for its whole life, so "was it touched at all" cannot tell an
+// open-and-idle editor apart from one the reaper is about to stop under
+// (B3-F3). Only a count > 1 proves a keepalive is running.
+func (s *uiMemStore) touchCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.touches
 }
 
 func (s *uiMemStore) QueryAuditEvents(_ context.Context, runID uuid.UUID, limit int) ([]types.AuditEvent, error) {

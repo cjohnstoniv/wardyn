@@ -64,7 +64,7 @@ is *about* would record it in the one place already under suspicion.
 | `run.interactive` | `interactive_start` path taken | `note`, `sandbox_ref` | `internal/api/runs_dispatch.go:646` | internal |
 | `run.resources` | A run-resources query/update fails | `error` | `internal/api/run_resources.go:188` | internal |
 | `run.selftest` | Post-dispatch selftest gate (agent-image liveness check before a run is usable) | `confinement_class`, `detail`, `error`, `exit_code`, `fail_closed` | `internal/api/runs_dispatch.go:666` | internal |
-| `run.record.start` | A Record Mode session starts or fails to start. Carries the O5 cross-user marker `workspace_owner` when the launching admin is not the workspace's owner — recording a MEMBER's workspace mounts their directory and injects their credentials, so it is exactly the act that marker makes queryable | `allow_all_egress`, `confined`, `confinement`, `confinement_class`, `detail`, `label`, `mode`, `record_run_id`, `workspace_owner` | `internal/api/record.go:324` | internal |
+| `run.record.start` | A Record Mode session starts or fails to start. Carries the O5 cross-user marker `workspace_owner` when the launching admin is not the workspace's owner — recording a MEMBER's workspace mounts their directory and injects their credentials, so it is exactly the act that marker makes queryable | `allow_all_egress`, `confined`, `confinement`, `confinement_class`, `detail`, `label`, `mode`, `record_run_id`, `workspace_owner` | `internal/api/record.go:352` | internal |
 | `run.record.synthesize` | Record→Promote profile synthesis | `allowed_domains`, `anomalies`, `eligible_grants` | `internal/api/profile.go:169` | internal |
 | `run.revoke` | Credential/identity revoked on stop (API path), or the lifecycle reaper's revoke attempt fails. `approval_cancel_error` is the terminal cascade's approval half failing (`cancelRunApprovals`, `internal/api/runs_lifecycle.go:259`) — the run is already terminal by then, so like every other field here it is reported rather than propagated, and the stale-PENDING sweeper is the backstop | `approval_cancel_error`, `broker_error`, `identity_error`, `runner_error` | `internal/api/runs_lifecycle.go:230`; reaper failure at `internal/lifecycle/lifecycle.go:393` | internal |
 | `run.autostop` | Idle-timeout autostop fires | `idle_for_sec`, `reason`, `threshold_sec` | `internal/lifecycle/lifecycle.go:365` | internal |
@@ -157,7 +157,7 @@ Data is unchanged.
 | `session.attach` | A human attaches to a run's tmux session (console or CLI) | `cols`, `error`, `lane`, `reason`, `rows`, `sandbox_ref`, `transport` | `internal/api/attach.go` | internal |
 | `session.detach` | A session detaches | `read_only`, `reason`, `transport` | `internal/api/attach.go` | internal |
 | `session.takeover` | A second viewer takes over a held session (the write-lane single-holder rule) | `held_since`, `previous_holder`, `previous_source`, `taken_over` | `internal/api/attach_holder.go:419` | internal |
-| `session.recording` | A recording is attached to / detached from a session | — | `internal/api/attach.go:627` | internal |
+| `session.recording` | A recording is attached to / detached from a session | — | `internal/api/attach.go:637` | internal |
 | `recording.upload` | A sandbox uploads an asciinema-cast chunk for a run's recording session — audited on both outcomes, like every sibling recording lane, since a full store or an over-cap upload is exactly how a long session's provenance gets lost | `error` (failure only) | `internal/api/recording.go:125` | internal |
 | `ssh.auth` | Every SSH-gateway connection attempt, success or failure — `docs/SSH.md` names this one **stable** and documents it as the residual-#19 correlate | `override`, `reason` | `internal/api/sshgateway.go:309` (failure), `internal/api/sshgateway.go:345` (success); documented `docs/SSH.md:350,402,407` | **stable** (documented) |
 | `ssh.channel_rejected` | An SSH channel was REFUSED by the per-run concurrent-channel cap (`maxSSHSessionsPerRun`). Emitted for BOTH channel types, and `channel_type` distinguishes them — `session` (shell/exec/sftp) and `direct-tcpip` (`-L` forwards) draw on ONE shared counter, inverting the OpenSSH model where `MaxSessions` scopes to session channels only. Before 0.7 a refusal was invisible to the deployment: the client saw `ResourceShortage` and nothing was recorded — which matters now that the desktop envelope ships `WARDYN_SSH_LISTEN` on by default | `channel_type`, `reason`, `max` | `internal/api/sshgateway.go:446` | human |
@@ -167,9 +167,9 @@ Data is unchanged.
 | `ssh_key.add` | A human registers an SSH public key (`POST /me/ssh-keys`) | `name` | `internal/api/sshkeys.go:160` | internal |
 | `ssh_key.delete` | A human removes a registered SSH public key | — | `internal/api/sshkeys.go:193` | internal |
 | `ui.auth` | A UI-sandbox relay session is authorized or denied | `app`, `host`, `port`, `reason` | `internal/api/uigateway.go:295` | internal |
-| `ui.open` | A UI-sandbox relay session is opened | `app`, `duration_sec`, `port` | `internal/api/uigateway.go:659` | internal |
-| `ui.close` | A UI-sandbox relay session closes | `app`, `duration_sec`, `port` | `internal/api/uigateway.go:664` | internal |
-| `ui.start` | The relay starts (or fails to start) the sandbox-side app process | `app`, `launcher`, `port`, `reason` | `internal/api/uigateway.go:770` | internal |
+| `ui.open` | A UI-sandbox relay session is opened | `app`, `duration_sec`, `port` | `internal/api/uigateway.go:674` | internal |
+| `ui.close` | A UI-sandbox relay session closes | `app`, `duration_sec`, `port` | `internal/api/uigateway.go:680` | internal |
+| `ui.start` | The relay starts (or fails to start) the sandbox-side app process | `app`, `launcher`, `port`, `reason` | `internal/api/uigateway.go:786` | internal |
 
 ## Secrets, credentials & identity
 

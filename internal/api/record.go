@@ -32,6 +32,7 @@ import (
 	neturl "net/url"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -145,6 +146,18 @@ func recordResultsMap(ws types.Workspace) map[string]RecordTaskResult {
 // itself idempotent across the watcher/kill/boot/read-repair triggers.
 func (s *Server) putRecordResult(ctx context.Context, wsID uuid.UUID, taskKey string, res RecordTaskResult, onlyIfStatus string) (types.Workspace, bool, error) {
 	return s.cfg.Store.SetWorkspaceRecordResult(ctx, wsID, taskKey, mustJSON(res), onlyIfStatus)
+}
+
+// DRAFT (M2 canon pending)
+//
+// recordLabelCollisionMsg is the 409 a re-record under a DIFFERENT name that
+// slugs onto an existing session's key gets. It names BOTH labels because the
+// collision is invisible otherwise — the two names do not look alike, only
+// their slugs do — and it names the remedy the operator actually has (rename,
+// or re-use the stored name).
+func recordLabelCollisionMsg(existing, attempted string) string {
+	return "this workspace already has a recording session named " + strconv.Quote(existing) +
+		", and " + strconv.Quote(attempted) + " stores under the same key — re-record it under its existing name, or pick a name that differs by more than punctuation"
 }
 
 // recordVerifyKeyPrefix namespaces a confined verify run's record_results entry so
@@ -275,6 +288,21 @@ func (s *Server) handleRecordWorkspace(w http.ResponseWriter, r *http.Request) {
 	// in a slug, so this never collides with a learning session's key.
 	if req.Confined {
 		key = recordVerifyKeyPrefix + key
+	} else if prev, ok := recordResultsMap(ws)[key]; ok && prev.Label != "" && prev.Label != label {
+		// SLUG COLLISION, refused. recordSessionKey collapses every run of
+		// non-[a-z0-9] to one dash, so "build & test" and "Build/Test" share the
+		// key `build-test` — and the launch write is a per-key upsert with an
+		// EMPTY onlyIfStatus, i.e. a plain UPDATE with no CAS. Naming a second
+		// session with different punctuation therefore replaced a COMPLETED
+		// capture (Observations, Clean/Caught, SecretNamesMinted) with a fresh
+		// `recording` entry, silently, with no audit row to find afterwards.
+		//
+		// Refused only for a DIFFERENT label: re-recording the SAME session is
+		// the normal operator loop and still overwrites. And never for the
+		// derived verify: key (the arm above), which is namespaced precisely so
+		// a confined replay cannot collide with the recording it replays.
+		writeError(w, http.StatusConflict, recordLabelCollisionMsg(prev.Label, label))
+		return
 	}
 	// Sessions are interactive: the operator drives the real activity in the attach
 	// shell (build, test, run the agent) and stops the run to capture.

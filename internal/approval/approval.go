@@ -207,6 +207,14 @@ func ExpireStale(ctx context.Context, st Store, olderThan time.Duration) (int, e
 	}
 
 	expired := 0
+	// COLLECTED, NOT RETURNED ON THE FIRST FAILURE. ListApprovals is ordered
+	// (ORDER BY requested_at DESC in the store) and the sweeper re-lists in the
+	// same order every tick, so a single permanently failing PENDING row used to
+	// abort the sweep at the same position forever — stranding every approval
+	// sorted after it, fleet-wide, with no expiry ever reaching them. The sweep
+	// now expires what it can and reports every row it could not, the shape
+	// FSStore.Sweep already uses.
+	var failures []error
 	for _, ap := range pending {
 		if ap.RequestedAt.After(cutoff) {
 			continue
@@ -217,10 +225,13 @@ func ExpireStale(ctx context.Context, st Store, olderThan time.Duration) (int, e
 			State: types.ApprovalExpired, DecidedBy: "system", Reason: "stale",
 		}); err != nil {
 			if errors.Is(err, ErrAlreadyDecided) {
-				// Race with a concurrent Decide — not an error.
+				// Race with a concurrent Decide — not an error, and deliberately
+				// not collected either: on a busy deployment every sweep would
+				// otherwise report a failure it did not have.
 				continue
 			}
-			return expired, fmt.Errorf("approval: expire %s: %w", ap.ID, err)
+			failures = append(failures, fmt.Errorf("approval: expire %s: %w", ap.ID, err))
+			continue
 		}
 		expired++
 
@@ -245,7 +256,7 @@ func ExpireStale(ctx context.Context, st Store, olderThan time.Duration) (int, e
 			audit.LogWriteFailure(ctx, ev, err)
 		}
 	}
-	return expired, nil
+	return expired, errors.Join(failures...)
 }
 
 // CancelForRun transitions every still-PENDING approval belonging to runID to

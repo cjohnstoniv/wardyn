@@ -722,8 +722,12 @@ func runApprovalSweeper(ctx context.Context, st approvalStore, interval, after t
 		case <-ticker.C:
 			n, err := approval.ExpireStale(ctx, st, after)
 			if err != nil {
+				// NOT a `continue`: since the sweep collects per-row failures
+				// instead of aborting on the first one, a non-nil error and a
+				// non-zero count are both true on the same tick, and skipping
+				// the count here would hide the work the sweep DID do behind
+				// one wedged row.
 				slog.ErrorContext(ctx, "wardynd: approval sweep error", slog.Any("err", err))
-				continue
 			}
 			if n > 0 {
 				slog.InfoContext(ctx, "wardynd: approval sweep expired stale PENDING approvals",

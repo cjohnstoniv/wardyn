@@ -436,8 +436,21 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 				"reason": "admin_token_break_glass", "switch": envEgressSecondHuman,
 			})))
 	}
+	// THE DECISION IS ALREADY COMMITTED. Everything below is its DURABLE ECHO —
+	// the permanent `always` grant on the workspace, the verify loop's
+	// requirement row, and the fail-silent-BUT-AUDITED rows both of them write
+	// when they give up. All of it ran on r.Context(), which net/http cancels the
+	// instant the client socket goes: an operator who clicked Always and closed
+	// the tab got a 200, a green console, no durable grant, and — because the
+	// audit rows rode the same dead context — nothing anywhere saying so. The
+	// boot-only heal in approvals_reconcile.go covers the egress half alone.
+	//
+	// One WithoutCancel for both callers, the idiom launchRecordRun (:486) and
+	// the attach/ssh/ui lanes already use: keep the request's VALUES (principal,
+	// trace ids, the ceiling memo) and drop only its cancellation.
+	wbCtx := context.WithoutCancel(r.Context())
 	if approve {
-		s.learnVerifyEgress(r.Context(), result, decidedByType, decidedBy)
+		s.learnVerifyEgress(wbCtx, result, decidedByType, decidedBy)
 	}
 	// OUTSIDE the `if approve` above, which IS the approve-only guard: placing
 	// this call beside learnVerifyEgress makes deny·always a silent no-op behind
@@ -448,7 +461,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// persisting the column, this write-back stops firing too, and one
 	// deny·always test catches BOTH failures instead of neither.
 	if result.DecisionScope == types.ScopeAlways {
-		s.persistWorkspaceEgressDecision(r.Context(), result, target, approve, decidedByType, decidedBy)
+		s.persistWorkspaceEgressDecision(wbCtx, result, target, approve, decidedByType, decidedBy)
 	}
 	writeJSON(w, http.StatusOK, result)
 }

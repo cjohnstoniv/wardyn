@@ -651,6 +651,12 @@ type Server struct {
 	// shouldTouch in internal.go). Zero value is ready to use.
 	lastTouchMu sync.Mutex
 	lastTouch   map[uuid.UUID]time.Time
+	// keepaliveEvery overrides attachKeepaliveInterval for THIS server only. It
+	// exists so a test can watch the keepalive tick without waiting 30 real
+	// seconds; nothing sets it in production and the zero value means "use the
+	// constant" (attachKeepaliveEvery). Per-server rather than a package var so
+	// two tests running side by side cannot race on it.
+	keepaliveEvery time.Duration
 	// refRuleset caches the ONE outbound GitHub call the setup checklist makes,
 	// so polling /setup/status (which the wizard does) cannot turn into a
 	// per-poll API call or a rate-limit. Zero value is ready to use.

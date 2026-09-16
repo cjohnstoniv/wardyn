@@ -655,11 +655,27 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 		return nil, uiFail(ctx, http.StatusBadGateway, sshExecStreamErrorMessage(err))
 	}
 
+	// KEEPALIVE PER CONNECTION, not per inbound request. handleUIRelay touches
+	// the run once per HTTP request, and a relayed WebSocket (an editor's
+	// live-reload or LSP socket) is ONE request for its entire life — so an
+	// actively-used editor looked idle to the reaper and auto_stop_after_sec
+	// stopped the run under the human typing in it. "Open but idle keeps the run
+	// alive" is the documented semantics on attach and on both SSH lanes
+	// (sshgateway_channels.go); the relay was the outlier.
+	//
+	// WithoutCancel, then our own cancel: ctx here is the proxy's outgoing
+	// request context, and the keepalive's lifetime is the CONNECTION's — it
+	// ends in closeFn below, which net/http runs from whichever of its read or
+	// write loops closes first (uiConn.Close's sync.Once).
+	keepCtx, stopKeepalive := context.WithCancel(context.WithoutCancel(ctx))
+	go s.attachKeepalive(keepCtx, sess.Run)
+
 	opened := s.cfg.Now()
 	s.auditUI(&sess.Run, types.ActorHuman, sess.Principal, "ui.open", fmt.Sprintf("127.0.0.1:%d", sess.Port), "success",
 		map[string]any{"app": sess.App, "port": sess.Port})
 	conn := newExecConn(execSess, run.SandboxRef+":"+strconv.Itoa(sess.Port))
 	return &uiConn{execConn: conn, closeFn: func() {
+		stopKeepalive()
 		release()
 		s.auditUI(&sess.Run, types.ActorHuman, sess.Principal, "ui.close", fmt.Sprintf("127.0.0.1:%d", sess.Port), "success",
 			map[string]any{"app": sess.App, "port": sess.Port, "duration_sec": int(s.cfg.Now().Sub(opened).Seconds())})

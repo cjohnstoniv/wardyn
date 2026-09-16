@@ -38,6 +38,16 @@ const attachReadBuf = 32 * 1024
 // keystroke and buy nothing the ticker does not already guarantee.
 const attachKeepaliveInterval = 30 * time.Second
 
+// attachKeepaliveEvery is attachKeepaliveInterval unless THIS server was built
+// with an override (Server.keepaliveEvery — tests only, so the ticker can be
+// observed without a 30-second wait).
+func (s *Server) attachKeepaliveEvery() time.Duration {
+	if s.keepaliveEvery > 0 {
+		return s.keepaliveEvery
+	}
+	return attachKeepaliveInterval
+}
+
 // attachWriteTimeout bounds a single server->client frame write so a stuck
 // client socket cannot wedge the read pump forever.
 const attachWriteTimeout = 30 * time.Second
@@ -360,7 +370,7 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 // here — the worst case is the reaper sees the run as idle, which the never-reap
 // policy escape hatch covers for long unattended sessions.
 func (s *Server) attachKeepalive(ctx context.Context, id uuid.UUID) {
-	t := time.NewTicker(attachKeepaliveInterval)
+	t := time.NewTicker(s.attachKeepaliveEvery())
 	defer t.Stop()
 	for {
 		select {
