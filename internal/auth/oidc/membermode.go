@@ -50,6 +50,19 @@ import "net/http"
 // the cookie, which costs one Set-Cookie header and keeps the handler free of a
 // branch whose only job would be to answer 200 twice.
 //
+// ONE exception, and it is not cosmetic (W6-4): a caller whose STAMPED role is
+// already member, asking to turn the mode ON, gets no cookie at all. There is
+// nothing to pause — but the flag does not know that, and everything that reads
+// it keys on the flag rather than on the tier: /me would answer
+// member_mode:true, the console would paint a banner naming an admin role this
+// human does not hold, and BOTH credential-mint doors (which read
+// MemberModeFromContext, not the stamped role) would refuse this member their
+// own SSH key and API token with "Exit member mode…" — breaking the member
+// Getting Started's own "Connect your tools" card until they found the banner's
+// Exit. The route is classMember so that the EXIT is always reachable, which
+// makes this state reachable too. Turning it OFF still re-signs, always: that
+// direction has to work from inside the mode.
+//
 // Note the deliberate asymmetry with clearCookie's callers: this never CLEARS
 // the session. Toggling off has to leave the human signed in — it is the exit
 // from the mode, and an exit that signed you out would be a trap.
@@ -57,6 +70,9 @@ func (a *Authenticator) SetMemberMode(w http.ResponseWriter, r *http.Request, on
 	sess, err := a.decodeSession(r)
 	if err != nil {
 		return "", err
+	}
+	if on && sess.Role == RoleMember {
+		return sess.Role, nil
 	}
 	sess.MemberMode = on
 	cookie, err := a.encodeSession(sess)

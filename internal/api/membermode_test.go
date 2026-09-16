@@ -601,3 +601,59 @@ func TestMemberMode_InHandlerAdminTierRefusalsCarryTheMarker(t *testing.T) {
 		}
 	})
 }
+
+// TestMemberMode_RealMemberTogglingOnChangesNothing is W6-4's other half, at
+// the layer the defect is actually felt: the mint doors and /me.
+//
+// handleSetMemberMode's only guard is "is there an SSO human", and its comment
+// calls a real member toggling ON a no-op. It was not one — the flag landed on
+// the member's cookie, so GET /me answered member_mode:true (the console then
+// paints a banner naming an admin role they do not hold) and POST /me/ssh-keys
+// and POST /me/tokens both 409'd "Exit member mode…", breaking the member
+// Getting Started's own "Connect your tools · Add SSH key" card and
+// docs/MEMBERS.md's SSH path. There is no UI affordance for this — the menu
+// item is gated on operator||securityOperator — so the only way in is a
+// hand-rolled POST, which is why it is LOW and not why it is acceptable.
+func TestMemberMode_RealMemberTogglingOnChangesNothing(t *testing.T) {
+	// newTokenMemStore, not memberModeServer's rbacStore: the mint door asserted
+	// below has to be driven THROUGH into its handler, and rbacStore's
+	// credential methods are unimplemented stubs that panic there — a recovered
+	// 500 would pass a "not 409" assertion while proving nothing.
+	h := newHarness(t)
+	cfg := baseTestConfig(h, newTokenMemStore())
+	cfg.OIDC = &oidc.Authenticator{}
+	srv := New(cfg)
+	member := ssoSession(t, "sub-w6-member", "w6-member@corp.example", oidc.RoleMember)
+
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/member-mode", member, `{"enabled":true}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("a real member toggling on = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	// Whatever the server handed back is what the browser would be holding on
+	// the next request, so the two assertions below are driven through it —
+	// otherwise they would pass vacuously by re-using the cookie we sent.
+	after := member
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "wardyn_session" {
+			t.Errorf("the response re-signed the member's session: %q — there is nothing to pause", c.Value)
+			after = c
+		}
+	}
+	if body := meBody(t, srv, after); body["member_mode"] != false {
+		t.Errorf("/me member_mode = %v, want false — the member is already what they asked to be", body["member_mode"])
+	}
+	// The doors that 409 INSIDE the mode stay open. A 409 on either would break
+	// the member Getting Started's own "Connect your tools · Add SSH key" card
+	// and docs/MEMBERS.md's SSH path.
+	tok := doSSO(t, srv, http.MethodPost, "/api/v1/me/tokens", after, `{"name":"after-the-no-op"}`)
+	if tok.Code == http.StatusConflict {
+		t.Errorf("POST /me/tokens = 409 for a member who never entered the mode: %s", tok.Body.String())
+	}
+
+	// The audit row is still written — the request WAS made and answered, and
+	// real_role records the tier it was made from.
+	ev := lastAuditEvent(t, h.audit.events, "auth.member_mode")
+	if data := auditData(t, ev); data["real_role"] != oidc.RoleMember {
+		t.Errorf("real_role = %v, want %q", data["real_role"], oidc.RoleMember)
+	}
+}

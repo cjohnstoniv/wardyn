@@ -61,7 +61,11 @@ type memberModeRequest struct {
 // so an operator-gated exit would be a door that locks from the inside. A real
 // member toggling ON is a no-op 200 for the same reason — they are already what
 // they asked to be, and a 4xx would only teach them the control exists for
-// someone else.
+// someone else. It is a no-op in FACT as well as in status code: SetMemberMode
+// writes no cookie for that caller (W6-4), because everything downstream reads
+// the FLAG rather than the stamped tier — a member carrying mm:1 would be shown
+// a banner naming an admin role they do not hold and refused their own
+// credential mints by the two doors below.
 //
 // GUARD ORDER IS LOAD-BEARING, and it is TWO conditions, not one. The obvious
 // arm is "no per-human identity": the admin token and local mode are one shared

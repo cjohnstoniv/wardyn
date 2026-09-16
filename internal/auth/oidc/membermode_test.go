@@ -236,3 +236,56 @@ func (f *memberModeRevocations) IsSessionRevoked(context.Context, string, string
 }
 func (f *memberModeRevocations) RevokeSub(context.Context, string) error { return nil }
 func (f *memberModeRevocations) RevokeAll(context.Context) error         { return nil }
+
+// TestMemberMode_RealMemberTurningItOnWritesNoCookie is W6-4. The handler's own
+// comment calls a real member toggling ON "a no-op 200 … they are already what
+// they asked to be". It was not a no-op: it stamped mm:1 onto the member's
+// cookie, after which /me answers member_mode:true, the console paints a banner
+// naming an admin role they do not hold, and BOTH mint doors — which key on
+// MemberModeFromContext, not on the stamped tier — 409 their own SSH key and
+// API token. The member Getting Started's "Connect your tools · Add SSH key"
+// card and docs/MEMBERS.md's SSH path both break until they find the Exit.
+//
+// No cookie at all, rather than a cookie with the flag cleared: re-signing a
+// member's session to record a decision not to change it is a Set-Cookie
+// nobody asked for on a request that changed nothing.
+func TestMemberMode_RealMemberTurningItOnWritesNoCookie(t *testing.T) {
+	a := &writoidc.Authenticator{}
+	sess := memberModeSession()
+	sess.Sub, sess.Role = "sub-real-member", writoidc.RoleMember
+	in, err := writoidc.EncodeSessionForTest(a, sess)
+	if err != nil {
+		t.Fatalf("EncodeSessionForTest: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/me/member-mode", nil)
+	r.AddCookie(in)
+	w := httptest.NewRecorder()
+	stamped, err := a.SetMemberMode(w, r, true)
+	if err != nil {
+		t.Fatalf("SetMemberMode: %v", err)
+	}
+	if stamped != writoidc.RoleMember {
+		t.Errorf("stamped role = %q, want %q — the return value is the role the caller HOLDS", stamped, writoidc.RoleMember)
+	}
+	if got := w.Result().Cookies(); len(got) != 0 {
+		t.Fatalf("SetMemberMode wrote %d cookies for a member turning the mode ON, want 0: %+v", len(got), got)
+	}
+	// The session it was handed is untouched, so the mint doors stay open.
+	if _, _, mm, authed := principalOf(t, a, in); !authed || mm {
+		t.Errorf("after the no-op: authed=%v member_mode=%v, want true/false", authed, mm)
+	}
+
+	// THE CONTROL: a member turning it OFF is the ordinary exit and still
+	// re-signs — that direction has to work from inside the mode, and the
+	// route is classMember precisely so it always does.
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodPost, "/api/v1/me/member-mode", nil)
+	r.AddCookie(in)
+	if _, err := a.SetMemberMode(w, r, false); err != nil {
+		t.Fatalf("SetMemberMode(false): %v", err)
+	}
+	if got := w.Result().Cookies(); len(got) != 1 {
+		t.Fatalf("turning it OFF wrote %d cookies, want 1", len(got))
+	}
+}
