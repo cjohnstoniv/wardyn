@@ -642,6 +642,9 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 	// legacy open mode in all three.
 	if siteCfgOK {
 		checks = append(checks, siteConfigCheck(siteCfg, present), artifactRepoCheck(siteCfg))
+		if chk, ok := internalHostsCheck(siteCfg); ok {
+			checks = append(checks, chk)
+		}
 		onboardingComplete = siteCfg.OnboardingCompletedAt != nil
 	}
 	if s.cfg.Store != nil {

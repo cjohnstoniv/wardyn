@@ -216,6 +216,84 @@ func TestSiteConfigCheck_DanglingSecretRef(t *testing.T) {
 	}
 }
 
+// TestSiteConfigCheck_InternalHostsOnlyIsNotUnconfigured is B7-F5: a document
+// declaring ONLY InternalHosts (the one override that LIFTS the proxy's
+// private/reserved-IP SSRF guard) used to read as "No operator-wide site
+// config yet (optional)" — the emptiness test never looked at InternalHosts,
+// UpstreamProxyNoProxy or WorkspaceProviders.
+func TestSiteConfigCheck_InternalHostsOnlyIsNotUnconfigured(t *testing.T) {
+	cases := []struct {
+		name string
+		sc   types.SiteConfig
+	}{
+		{"internal_hosts only", types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: "svc.cluster.local"}}}},
+		{"upstream_proxy_no_proxy only", types.SiteConfig{UpstreamProxyNoProxy: []string{"169.254.169.254"}}},
+		{"workspace_providers only (all rows disabled)", types.SiteConfig{WorkspaceProviders: &types.WorkspaceProviders{
+			Git: []types.GitProvider{{ID: "gh", Kind: types.GitProviderGitHub, BaseURLs: []string{"https://github.example.com"}, Disabled: true}},
+		}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			chk := siteConfigCheck(tc.sc, nil)
+			if strings.Contains(chk.Detail, "No operator-wide site config yet") {
+				t.Errorf("%s: siteConfigCheck still reads as unconfigured: %q", tc.name, chk.Detail)
+			}
+		})
+	}
+}
+
+// TestInternalHostsCheck is B7-F5's dedicated row: absent when InternalHosts
+// is empty, present and "info" (never warn/fail — the neg control: the setup
+// gate only fires on warn/fail, so an install with nothing else configured
+// stays gate-inactive with only this row) when it is set, and its Detail is
+// EXACTLY the sentence the write-time log already carries — one claim, two
+// surfaces.
+func TestInternalHostsCheck(t *testing.T) {
+	if _, ok := internalHostsCheck(types.SiteConfig{}); ok {
+		t.Error("internalHostsCheck present with no InternalHosts declared")
+	}
+	hosts := []types.InternalHost{{HostSuffix: "svc.cluster.local"}}
+	chk, ok := internalHostsCheck(types.SiteConfig{InternalHosts: hosts})
+	if !ok {
+		t.Fatal("internalHostsCheck absent with InternalHosts declared")
+	}
+	if chk.ID != "internal_hosts" {
+		t.Errorf("ID = %q, want internal_hosts", chk.ID)
+	}
+	if chk.Status != "info" {
+		t.Errorf("Status = %q, want info (a fail/warn here would wrongly activate the setup gate on a deliberate, "+
+			"Liftable-validated declaration)", chk.Status)
+	}
+	if want := internalHostsDeclaredSentence(hosts); chk.Detail != want {
+		t.Errorf("Detail = %q, want the shared sentence %q", chk.Detail, want)
+	}
+}
+
+// TestArtifactRepoCheck_NoBareEcosystemsClauseWhenNetworkOnly is B7-F10:
+// every redirect network-only used to render "(ecosystems: ; 2
+// network-only)" — a bare, truncated-looking clause. The ecosystems: segment
+// must be OMITTED, not empty, when there are no ecosystem-tagged rows.
+func TestArtifactRepoCheck_NoBareEcosystemsClauseWhenNetworkOnly(t *testing.T) {
+	chk := artifactRepoCheck(types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+		{From: "registry.corp.example", To: "10.40.2.11:8443"},
+		{From: "mirror.corp.example", To: "10.40.2.12:8443"},
+	}})
+	if strings.Contains(chk.Detail, "ecosystems: ;") || strings.Contains(chk.Detail, "ecosystems: ,") {
+		t.Errorf("Detail = %q, still carries a bare ecosystems clause", chk.Detail)
+	}
+	if !strings.Contains(chk.Detail, "2 network-only") {
+		t.Errorf("Detail = %q, want it to still count the network-only rows", chk.Detail)
+	}
+	// The populated case must keep naming its ecosystems — this is an
+	// omission fix, not a removal of the clause entirely.
+	withEco := artifactRepoCheck(types.SiteConfig{EgressRedirects: []types.EgressRedirect{
+		{From: "https://registry.npmjs.org/", To: "https://artifactory.corp/api/npm/npm-remote/", Ecosystem: "npm"},
+	}})
+	if !strings.Contains(withEco.Detail, "ecosystems: npm") {
+		t.Errorf("Detail = %q, want the ecosystems clause preserved when non-empty", withEco.Detail)
+	}
+}
+
 func TestK8sEgressContainmentCheck(t *testing.T) {
 	cases := []struct {
 		name             string

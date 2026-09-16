@@ -347,6 +347,16 @@ func logWarnInternalHostsDeclared(hosts []types.InternalHost) {
 	if len(hosts) == 0 {
 		return
 	}
+	slog.Warn("wardynd: "+internalHostsDeclaredSentence(hosts), slog.Int("internal_hosts_count", len(hosts)))
+}
+
+// internalHostsDeclaredSentence is the ONE sentence naming what an
+// InternalHosts declaration does and does not lift — shared by the write-time
+// deployment log above and the console's own dedicated internal_hosts check
+// row (internalHostsCheck, setup_checks.go — B7-F5), so an operator reads the
+// identical claim on whichever surface they are looking at. Callers check
+// len(hosts) > 0 themselves; this renders unconditionally.
+func internalHostsDeclaredSentence(hosts []types.InternalHost) string {
 	decls := make([]string, 0, len(hosts))
 	for _, h := range hosts {
 		scope := "the full RFC1918/ULA/CGNAT set"
@@ -355,11 +365,10 @@ func logWarnInternalHostsDeclared(hosts []types.InternalHost) {
 		}
 		decls = append(decls, h.HostSuffix+" => "+scope)
 	}
-	slog.Warn("wardynd: site config declares INTERNAL HOSTS — the proxy's private/reserved-IP SSRF guard is LIFTED for these host suffixes, "+
-		"scoped to the ranges named: "+strings.Join(decls, "; ")+". Loopback, link-local, the cloud-metadata address, unspecified, multicast and "+
-		"NAT64-embedded addresses stay denied regardless of what is declared here, and a policy's allowed_domains must still allow the host separately — "+
-		"this lifts the built-in guard only. Remove the entry to restore the unconditional deny.",
-		slog.Int("internal_hosts_count", len(hosts)))
+	return "site config declares INTERNAL HOSTS — the proxy's private/reserved-IP SSRF guard is LIFTED for these host suffixes, " +
+		"scoped to the ranges named: " + strings.Join(decls, "; ") + ". Loopback, link-local, the cloud-metadata address, unspecified, multicast and " +
+		"NAT64-embedded addresses stay denied regardless of what is declared here, and a policy's allowed_domains must still allow the host separately — " +
+		"this lifts the built-in guard only. Remove the entry to restore the unconditional deny."
 }
 
 // maxAuditEgressRedirectPairs bounds how many from→to pairs site_config.write's

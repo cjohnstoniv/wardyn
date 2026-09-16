@@ -457,7 +457,17 @@ func siteConfigCheck(sc types.SiteConfig, present map[string]bool) SetupCheck {
 	// answer yes for an install whose git hosts come from provider rows, and no
 	// for one whose only legacy entry is a host a disabled row has claimed
 	// (workspace_providers.go).
-	if sc.UpstreamProxySecretRef == "" && sc.UpstreamProxyURL == "" && len(sc.EgressRedirects) == 0 && len(effectiveScmHosts(sc)) == 0 {
+	//
+	// B7-F5: InternalHosts and UpstreamProxyNoProxy used to be INVISIBLE here —
+	// a document declaring ONLY InternalHosts (the one override that LIFTS the
+	// proxy's private/reserved-IP SSRF guard, loud-warned at write time by
+	// logWarnInternalHostsDeclared) read as "No operator-wide site config yet".
+	// WorkspaceProviders is included too: an operator who explicitly configured
+	// (even all-disabled) git provider rows has touched this surface, whatever
+	// effectiveScmHosts currently derives from that state.
+	if sc.UpstreamProxySecretRef == "" && sc.UpstreamProxyURL == "" && len(sc.EgressRedirects) == 0 &&
+		len(effectiveScmHosts(sc)) == 0 && len(sc.InternalHosts) == 0 && len(sc.UpstreamProxyNoProxy) == 0 &&
+		sc.WorkspaceProviders == nil {
 		return SetupCheck{
 			ID: "site_config", Label: "Site config (corporate baseline)", Status: "info",
 			Detail: "No operator-wide site config yet (optional): a corporate upstream proxy, artifact-registry redirects, and default SCM hosts that every run would inherit.",
@@ -479,6 +489,30 @@ func siteConfigCheck(sc types.SiteConfig, present map[string]bool) SetupCheck {
 		ID: "site_config", Label: "Site config (corporate baseline)", Status: "info",
 		Detail: "An operator-wide site config is set (upstream proxy / egress redirects / SCM hosts); every run inherits it.",
 	}
+}
+
+// internalHostsCheck is the dedicated row for an InternalHosts declaration
+// (B7-F5) — the ONE operator override that LIFTS the proxy's private/
+// reserved-IP SSRF guard, and until now visible only as a boot-time log line
+// (logWarnInternalHostsDeclared, site_config.go) plus a bare count folded
+// into siteConfigCheck's generic sentence. Reuses that same sentence
+// (internalHostsDeclaredSentence) so an operator reads the identical claim on
+// the console that they'd read in the deployment log.
+//
+// Always "info", never "warn"/"fail": this states a fact about the
+// declaration an operator wrote down on purpose (Liftable-validated at
+// write time), not a problem — and setupGateActive only ever fires on
+// warn/fail, so an install with nothing else configured stays gate-inactive
+// with only this row present. (ok, bool) mirrors ssoRBACCheck/
+// tlsCookiePostureCheck's own "absent when not applicable" shape.
+func internalHostsCheck(sc types.SiteConfig) (SetupCheck, bool) {
+	if len(sc.InternalHosts) == 0 {
+		return SetupCheck{}, false
+	}
+	return SetupCheck{
+		ID: "internal_hosts", Label: "Internal hosts (SSRF guard override)", Status: "info",
+		Detail: internalHostsDeclaredSentence(sc.InternalHosts),
+	}, true
 }
 
 // platformChecks are the platform rows — permanent and non-fixable, so always
@@ -817,8 +851,16 @@ func artifactRepoCheck(sc types.SiteConfig) SetupCheck {
 			tokened++
 		}
 	}
-	detail := fmt.Sprintf("%d redirect(s) configured (ecosystems: %s; %d network-only); egress substitutes the corp destination in.",
-		len(sc.EgressRedirects), strings.Join(slices.Sorted(maps.Keys(ecos)), ", "), network)
+	// B7-F10: the "ecosystems: " clause is OMITTED, not rendered empty, when
+	// every redirect is network-only — a bare "(ecosystems: ; 2 network-only)"
+	// read as a truncated/broken row rather than "there are no ecosystem rows".
+	parts := make([]string, 0, 2)
+	if len(ecos) > 0 {
+		parts = append(parts, "ecosystems: "+strings.Join(slices.Sorted(maps.Keys(ecos)), ", "))
+	}
+	parts = append(parts, fmt.Sprintf("%d network-only", network))
+	detail := fmt.Sprintf("%d redirect(s) configured (%s); egress substitutes the corp destination in.",
+		len(sc.EgressRedirects), strings.Join(parts, "; "))
 	if tokened > 0 {
 		detail += fmt.Sprintf(" %d with a token injected proxy-side.", tokened)
 	}
