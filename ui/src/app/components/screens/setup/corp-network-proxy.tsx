@@ -389,7 +389,11 @@ function ProxyTestBlock({
           </>
         )}
         {state.kind === "done" && (
-          <>
+          // F3-F9: the probe VERDICT is announced to a screen reader the moment
+          // it lands — the ticker above (elapsedSec, "running" branch) stays
+          // OUTSIDE this region on purpose, or a live announcement would fire
+          // every second while the sandbox is out.
+          <div role="status" aria-live="polite">
             {/* M7(a): headline first, then the chip, then the wire detail, then
                 this verdict's own note. The order is the argument — the
                 operator reads WHAT happened before they read who owns it. */}
@@ -480,7 +484,7 @@ function ProxyTestBlock({
                 )}
               </div>
             )}
-          </>
+          </div>
         )}
       </div>
     </div>

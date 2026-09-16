@@ -78,6 +78,20 @@ describe("SetupLayout", () => {
       expect(screen.getByText("One probe, and this step is done.")).toBeInTheDocument();
     });
 
+    // F3-F9: the gate row is announced to a screen reader the moment its
+    // verdict changes — a probe landing, a redirect proving reached — without
+    // requiring the operator to re-focus the footer to discover it settled.
+    it("F3-F9: the head/reason gate row renders inside a role=status/aria-live=polite region", () => {
+      renderLayout({
+        current: "environment",
+        nextGate: { blocked: true, head: "Connectivity isn't proven yet", reason: "One probe, and this step is done.", tone: "warning" },
+      });
+      const head = screen.getByText("Connectivity isn't proven yet");
+      const region = head.closest('[role="status"]');
+      expect(region).not.toBeNull();
+      expect(region).toHaveAttribute("aria-live", "polite");
+    });
+
     it("blocked WITH an action: the action button renders IN PLACE of Next and fires its handler", async () => {
       const onAction = vi.fn();
       const onSelect = vi.fn();
@@ -247,6 +261,16 @@ describe("order — the walked steps, not the whole contract", () => {
     expect(onSelect).toHaveBeenCalledWith("review");
     await user.click(screen.getByRole("button", { name: /^back$/i }));
     expect(onSelect).toHaveBeenCalledWith("integrations");
+  });
+
+  // F3-F12: reachable via a `?step=<conditional demo>` deep link at mount,
+  // before the status-driven correction effect (setup-screen.tsx) has run —
+  // `current` not being IN `order` at all used to render "Step 0 of M".
+  it("F3-F12: a current step not in order clamps the display to Step 1, never Step 0", () => {
+    const order: SetupStepId[] = ["environment", "corp_network", "integrations", "review"];
+    renderLayout({ current: "sealed-box", order });
+    expect(screen.getByText("Step 1 of 4")).toBeInTheDocument();
+    expect(screen.queryByText("Step 0 of 4")).not.toBeInTheDocument();
   });
 });
 

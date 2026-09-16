@@ -343,15 +343,37 @@ function ecosystemFor(from: string): string | undefined {
   return EGRESS_SUGGEST.find(([url]) => url === from)?.[1];
 }
 
-function AddRedirectForm({ onAdd, operator }: { onAdd: (r: EgressRedirect) => void; operator: boolean }) {
+// DRAFT (M2 canon pending) — F3-F5: a duplicate `from` is producible today (no
+// client/server guard existed), and the rail keys redirects BY `from` — a
+// collision would silently shadow one row's probe result with the other's.
+// The plan's own correction rejects index-keying (`:409-415` shifts every
+// later row's verdict); disabling Add on the collision is the smaller fix.
+const ADD_REDIRECT_COLLISION = "A redirect already exists for this From — edit that row instead of adding a duplicate.";
+
+function AddRedirectForm({
+  onAdd,
+  operator,
+  existingFroms,
+}: {
+  onAdd: (r: EgressRedirect) => void;
+  operator: boolean;
+  /** The `from` of every redirect already configured — Add is refused on a
+   *  match (F3-F5): a duplicate `from` is otherwise producible with no
+   *  client/server guard, and the rest of this file keys a redirect BY its
+   *  `from` (there is no server id), so a collision silently shadows one
+   *  row's probe result with the other's. */
+  existingFroms: string[];
+}) {
   const [from, setFrom] = React.useState("");
   const [to, setTo] = React.useState("");
   const [token, setToken] = React.useState("");
+  const trimmedFrom = from.trim();
+  const collision = trimmedFrom !== "" && existingFroms.includes(trimmedFrom);
 
   const add = () => {
-    const f = from.trim();
+    const f = trimmedFrom;
     const t = to.trim();
-    if (!f || !t) return;
+    if (!f || !t || collision) return;
     const eco = ecosystemFor(f);
     onAdd({ from: f, to: t, token_secret_ref: token.trim() || undefined, ecosystem: eco && eco !== "container images" ? eco : undefined });
     setFrom("");
@@ -372,7 +394,8 @@ function AddRedirectForm({ onAdd, operator }: { onAdd: (r: EgressRedirect) => vo
       <Field label="Token secret name (optional)" htmlFor="eg-add-token" hint="Injected proxy-side at fetch time — the sandbox never holds it.">
         <Input id="eg-add-token" value={token} onChange={(e) => setToken(e.target.value)} placeholder="artifactory-token" className="font-mono" />
       </Field>
-      <Button variant="outline" size="sm" disabled={!operator || !from.trim() || !to.trim()} onClick={add}>
+      {collision && <p className="text-xs text-danger">{ADD_REDIRECT_COLLISION}</p>}
+      <Button variant="outline" size="sm" disabled={!operator || !trimmedFrom || !to.trim() || collision} onClick={add}>
         + Add redirect
       </Button>
     </div>
@@ -510,7 +533,11 @@ export function EgressTab({
       {redirects.length === 0 && (
         <p className="max-w-[560px] text-body leading-snug text-muted-foreground">{T.EGRESS_SEEN_EMPTY}</p>
       )}
-      <AddRedirectForm operator={operator} onAdd={(r) => setRedirects([...redirects, r])} />
+      <AddRedirectForm
+        operator={operator}
+        existingFroms={redirects.map((r) => r.from)}
+        onAdd={(r) => setRedirects([...redirects, r])}
+      />
     </div>
   );
 }

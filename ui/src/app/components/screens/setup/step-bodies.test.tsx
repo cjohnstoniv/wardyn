@@ -216,6 +216,107 @@ describe("step-bodies.tsx — smoke", () => {
     expect(screen.getByText("About this host")).toBeInTheDocument();
   });
 
+  // F3-F2: an `info` check WITH a fix (env_builder off by default, with a
+  // one-line env var to turn it on) used to land in green "Ready" alongside
+  // checks that are actually done — a false "nothing left to do". It gets its
+  // own group instead.
+  it("F3-F2: an info+fix check lands under 'Optional — not blocking', not green Ready", () => {
+    const status = baseStatus({
+      checks: [
+        { id: "gvisor", label: "gVisor runtime", status: "ok", detail: "runsc detected" },
+        {
+          id: "envbuild",
+          label: "Image builder",
+          status: "info",
+          detail: "Off by default",
+          fix: "Set WARDYN_ENVBUILD=1",
+        },
+      ],
+    });
+    render(
+      <ReviewStep
+        status={status}
+        readiness={deriveReadiness(status)}
+        onRecheck={vi.fn()}
+        rechecking={false}
+        lastCheckedAt={null}
+        onJump={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Optional — not blocking")).toBeInTheDocument();
+    expect(screen.getByText("Image builder")).toBeInTheDocument();
+    // Negative control: a plain `ok` check still lands under Ready.
+    const ready = screen.getByText("Ready").closest("section")!;
+    expect(ready).toHaveTextContent("gVisor runtime");
+    expect(ready).not.toHaveTextContent("Image builder");
+  });
+
+  // F3-F2: a platform fact that ALSO carries a fix must not be introduced by a
+  // sentence claiming "nothing to set up" — CheckRow renders its Fix line
+  // regardless, so the sentence would contradict its own section.
+  it("F3-F2: 'About this host' drops the nothing-to-set-up sentence when a platform note carries a fix", () => {
+    const status = baseStatus({
+      checks: [
+        {
+          id: "platform_wsl",
+          label: "WSL networking",
+          status: "info",
+          platform: "wsl",
+          detail: "Running under WSL2",
+          fix: "Enable mirrored networking mode",
+        },
+      ],
+    });
+    render(
+      <ReviewStep
+        status={status}
+        readiness={deriveReadiness(status)}
+        onRecheck={vi.fn()}
+        rechecking={false}
+        lastCheckedAt={null}
+        onJump={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("About this host")).toBeInTheDocument();
+    expect(screen.queryByText(/nothing to set up/i)).not.toBeInTheDocument();
+  });
+
+  // Negative control: the existing platform_wsl fixture (no fix) keeps the
+  // reassurance sentence — only a fix-carrying note loses it.
+  it("F3-F2 negative control: a platform note with no fix keeps the nothing-to-set-up sentence", () => {
+    const status = baseStatus();
+    render(
+      <ReviewStep
+        status={status}
+        readiness={deriveReadiness(status)}
+        onRecheck={vi.fn()}
+        rechecking={false}
+        lastCheckedAt={null}
+        onJump={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/nothing to set up/i)).toBeInTheDocument();
+  });
+
+  // X3-F15: "on the left" is wrong below `lg` (setup-layout.tsx stacks the
+  // rail ABOVE the content there) — the sentence now names the rail without
+  // claiming a position.
+  it("X3-F15: 'jump straight to any step' names the phase rail without claiming it's on the left", () => {
+    const status = baseStatus();
+    render(
+      <ReviewStep
+        status={status}
+        readiness={deriveReadiness(status)}
+        onRecheck={vi.fn()}
+        rechecking={false}
+        lastCheckedAt={null}
+        onJump={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/from the phase rail/i)).toBeInTheDocument();
+    expect(screen.queryByText(/phase rail on the left/i)).not.toBeInTheDocument();
+  });
+
   // The LaunchStep tests lived here. The step was cut: its "Example — not live
   // config" card showed a fabricated task against a repo that may never have
   // been onboarded, and its lede still advertised the deleted AI Run Composer.

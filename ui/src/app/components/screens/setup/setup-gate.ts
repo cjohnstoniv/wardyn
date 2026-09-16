@@ -217,3 +217,47 @@ export function markStepVisited(stepId: SetupStepId): void {
     lsSet(VISITED_KEY, JSON.stringify([...set]));
   }
 }
+
+// F3-F6: neither of the two flags above gates anything (the hard gate is
+// server-derived, setupGateActive above) — their only job is the rail's
+// "Skipped" badge. On a genuinely FRESH install (never onboarded, never run
+// anything), a stale mark from a PREVIOUS install on this same browser reads
+// as a false-green "Skipped" on a step nobody has actually visited this time
+// — the same origin-scoped-flag class setupDismissed's own v05 suffix exists
+// to prevent. Returns whether it cleared anything, so the caller can also
+// reset its own in-memory copy of the same state (setup-screen.tsx holds
+// visitedSteps/skippedIntegrations in React state, seeded from these at
+// mount — clearing storage alone would leave that copy stale).
+export function clearStaleVisitFlags(status: {
+  onboarding_complete?: boolean;
+  has_runs: boolean;
+}): boolean {
+  if (status.onboarding_complete || status.has_runs) return false;
+  lsSet(INTEGRATIONS_SKIPPED_KEY, null);
+  lsSet(VISITED_KEY, null);
+  return true;
+}
+
+// setup-screen.tsx calls THIS, not clearStaleVisitFlags directly: a mark the
+// operator sets a moment ago in THIS still-fresh session (skip Integrations,
+// navigate away, come back) must survive a remount — a real browser reload
+// really does re-mint the module (the module-level latch below resets), while
+// a same-page remount (Getting Started's own re-entry, or this file's own
+// test harness unmount/render) must not re-run the wipe. Same "once per page
+// LOAD" shape as gateFiredThisLoad above, deliberately module state rather
+// than component state for the identical reason.
+let staleFlagsCheckedThisLoad = false;
+
+export function clearStaleVisitFlagsOnce(status: {
+  onboarding_complete?: boolean;
+  has_runs: boolean;
+}): boolean {
+  if (staleFlagsCheckedThisLoad) return false;
+  staleFlagsCheckedThisLoad = true;
+  return clearStaleVisitFlags(status);
+}
+
+// Test seam only, mirroring resetGateForTests above.
+export function resetStaleFlagsCheckForTests(): void {
+  staleFlagsCheckedThisLoad = false;
+}

@@ -98,7 +98,13 @@ export function SetupLayout({
   children: ReactNode;
 }) {
   const [showIntro, setShowIntro] = useState(false);
+  // F3-F12: reachable via a `?step=<conditional demo>` deep link at mount,
+  // before the status-driven correction effect (setup-screen.tsx) has run one
+  // tick — indexOf(-1) rendered "Step 0 of M" for that one frame. Clamped for
+  // DISPLAY only; prev/next stay keyed off the raw index (there's no sensible
+  // prev/next for a step that isn't in the walkable order at all).
   const idx = order.indexOf(current);
+  const displayIdx = Math.max(0, idx);
   const prev = idx > 0 ? order[idx - 1] : null;
   const next = idx >= 0 && idx < order.length - 1 ? order[idx + 1] : null;
   const refusal = next ? refuseNext?.(next) : undefined;
@@ -161,7 +167,7 @@ export function SetupLayout({
             className="mb-6"
           />
           <div className="mb-2 text-xs uppercase tracking-wide text-muted-foreground">
-            Step {idx + 1} of {order.length}
+            Step {displayIdx + 1} of {order.length}
           </div>
           <div className="mb-4 flex items-baseline gap-3">
             <h2>{STEP_HEADING[current]}</h2>
@@ -186,7 +192,10 @@ export function SetupLayout({
             {next ? (
               <>
                 {nextGate && (nextGate.head || nextGate.reason) && (
-                  <div className="min-w-0 max-w-md space-y-0.5">
+                  // F3-F9: the gate's verdict is announced the moment it changes
+                  // (a probe landing, a redirect proving reached) — nothing here
+                  // ticks, so a live region carries no repeat-announcement risk.
+                  <div role="status" aria-live="polite" className="min-w-0 max-w-md space-y-0.5">
                     {nextGate.head && (
                       <p
                         className={cn(

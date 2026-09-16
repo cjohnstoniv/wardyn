@@ -31,6 +31,7 @@ export function PhaseRail({
   done,
   onSelect,
   order = STEP_ORDER,
+  refuseNext,
 }: {
   current: SetupStepId;
   badges: Record<SetupStepId, StepBadge>;
@@ -41,6 +42,12 @@ export function PhaseRail({
   // offer a step whose Start is closed. Defaults to the full contract order,
   // which is also what the selector returns before status lands.
   order?: SetupStepId[];
+  // F3-F3: the SAME crossing predicate the footer's Next button already
+  // renders disabled+titled (setup-screen.tsx's refuseSelect) — without this a
+  // rail click past an ungated corp_network read as a live, clickable step
+  // whose onSelect just silently no-ops (a dead click, not a disabled one).
+  // Undefined means "nothing is refused" (every existing caller/test).
+  refuseNext?: (next: SetupStepId) => string | undefined;
 }) {
   return (
     <>
@@ -55,16 +62,19 @@ export function PhaseRail({
           // explicitly-skipped model step earns its checkmark elsewhere).
           const isVisited = !isDone && badge.text === "Skipped";
           const active = current === stepId;
+          const refusal = refuseNext?.(stepId);
           const label = `${STEP_LABEL[stepId]} — ${badge.text}`;
           return (
             <button
               key={stepId}
               onClick={() => onSelect(stepId)}
               aria-current={active ? "step" : undefined}
-              title={label}
+              disabled={!!refusal}
+              title={refusal ?? label}
               className={cn(
                 "flex size-8 items-center justify-center rounded-full border transition-colors",
                 active ? "border-primary bg-primary/10" : "border-transparent hover:bg-muted",
+                refusal && "opacity-50",
               )}
             >
               <span
@@ -120,16 +130,20 @@ export function PhaseRail({
                   // A4: see the compact rail above for what this means.
                   const isVisited = !isDone && badge.text === "Skipped";
                   const active = current === stepId;
+                  const refusal = refuseNext?.(stepId);
                   return (
                     <li key={stepId}>
                       <button
                         onClick={() => onSelect(stepId)}
                         aria-current={active ? "step" : undefined}
+                        disabled={!!refusal}
+                        title={refusal}
                         className={cn(
                           "group flex w-full items-start gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors",
                           active
                             ? "border-primary/50 bg-primary/10"
                             : "border-transparent hover:bg-muted",
+                          refusal && "opacity-50",
                         )}
                       >
                         <span

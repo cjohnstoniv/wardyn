@@ -208,6 +208,11 @@ export const OPTIONAL_STEPS = new Set<SetupStepId>([
 // ------------------------------------------------------------
 export type StepBadge = { text: string; tone: "success" | "warning" | "neutral" | "info" };
 
+// DRAFT (M2 canon pending) — B7-F2 (UI half): the Review badge must not read
+// "Ready to launch" while a confinement floor warning is standing (every run
+// on the default policy is refused before it launches) — see stepBadges' review case below.
+export const REVIEW_BADGE_FLOOR_WARN = "Ready, except the default policy";
+
 // Corporate network's badge/gate facts. The first three are SiteConfig-derived
 // (see corp-network-step.tsx's isProxyConfigured/proxyDetected, the SAME
 // helpers the step body itself renders from, so the rail can never disagree
@@ -448,9 +453,15 @@ export function stepBadges(
     // one-click run — but that's a nudge, not a gate).
     review: status.checks.some((c) => c.status === "fail")
       ? { text: "Needs attention", tone: "warning" }
-      : r.ready
-        ? { text: "Ready to launch", tone: "success" }
-        : { text: "Set up the barrier first", tone: "neutral" },
+      : // B7-F2 (UI half): `ready` stays the documented barrier-only signal (4
+        // other consumers read it that way) — only this badge is wrong when the
+        // confinement floor exceeds what this runner advertises (its own check
+        // stays a `warn`, by design: profile/stored-policy runs are unaffected).
+        r.ready && status.checks.some((c) => c.id === "confinement_floor" && c.status === "warn")
+        ? { text: REVIEW_BADGE_FLOOR_WARN, tone: "warning" }
+        : r.ready
+          ? { text: "Ready to launch", tone: "success" }
+          : { text: "Set up the barrier first", tone: "neutral" },
   };
 }
 

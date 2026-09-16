@@ -360,6 +360,35 @@ describe("Evidence — 'Use this' per row, NO_PROXY carries the note instead", (
 });
 
 // ------------------------------------------------------------
+// F3-F9: the probe VERDICT is a live region — a screen-reader operator who
+// clicked Test connectivity and looked away hears the result land, instead
+// of having to re-focus the panel to discover it settled. The ticker
+// ("Starting a throwaway sandbox — Ns") stays OUTSIDE this region: it is not
+// a role="status" itself, so it never fires a repeat announcement.
+// ------------------------------------------------------------
+describe("F3-F9: the probe result is announced (role=status, aria-live=polite)", () => {
+  it("the done verdict renders inside a role=status/aria-live=polite region", async () => {
+    testProxyMock.mockResolvedValueOnce({ state: "reached", detail: "reached in 42ms" });
+    renderStep();
+    await userEvent.click(screen.getByRole("button", { name: /^test connectivity$/i }));
+    const verdict = await screen.findByText("Reached · via proxy");
+    const region = verdict.closest('[role="status"]');
+    expect(region).not.toBeNull();
+    expect(region).toHaveAttribute("aria-live", "polite");
+  });
+
+  // Negative control: while a probe is IN FLIGHT (the ticker), there is no
+  // role=status region yet — only the terminal "done" verdict is announced.
+  it("neg: the running ticker is not itself inside a role=status region", async () => {
+    testProxyMock.mockReturnValueOnce(new Promise(() => {})); // never resolves
+    renderStep();
+    await userEvent.click(screen.getByRole("button", { name: /^test connectivity$/i }));
+    await screen.findByText(/starting a throwaway sandbox/i);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
+// ------------------------------------------------------------
 // Custom-URL block — the escape for a host with no public internet. Only
 // surfaced after a real failure, never up front (T.CUSTOM_URL_WHY), and a
 // pass through it must never wear the verified treatment (T.CUSTOM_CAVEAT).

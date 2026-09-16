@@ -625,6 +625,24 @@ describe("review gate — the BARRIER is the only hard requirement; a model is o
     expect(stepDone(status, r, [], 0).review).toBe(false);
   });
 
+  // B7-F2 (UI half): the confinement_floor check stays a `warn` (by design —
+  // profile/stored-policy runs are unaffected, so `fail` would be dishonest),
+  // but "Ready to launch" over-claims while the default policy 422s every run
+  // that doesn't pin one. `ready` itself is untouched (barrier-only, 4 other
+  // consumers read it that way) — only the badge changes.
+  it("a standing confinement-floor warning keeps Review honest, without touching `ready`", () => {
+    const status = baseStatus({
+      ready: true,
+      checks: [{ id: "confinement_floor", label: "Confinement floor", status: "warn", detail: "floor exceeds this runner" }],
+    });
+    const r = deriveReadiness(status);
+    const badges = stepBadges(status, r, [], 0);
+    expect(badges.review).toEqual({ text: "Ready, except the default policy", tone: "warning" });
+    // `ready` (the barrier signal) still says yes — only this badge disagrees.
+    expect(r.ready).toBe(true);
+    expect(stepDone(status, r, [], 0).review).toBe(true);
+  });
+
   it("a connected model is a bonus, not a gate: same success texts as barrier-only", () => {
     const status = baseStatus({
       ready: true,

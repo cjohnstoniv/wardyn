@@ -389,6 +389,40 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     }
   });
 
+  // F3-F5: a duplicate `from` is producible today — no client/server guard
+  // existed, and the rest of this file keys a redirect BY `from` (there is no
+  // server id), so a collision would silently shadow one row's probe result
+  // with the other's. The plan's own correction rejects index-keying (shifts
+  // every later row's verdict) — disabling Add on the collision is smaller.
+  it("F3-F5: Add is refused on a `from` collision with an existing redirect, and the reason is shown", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderEgress();
+    await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
+    await user.click(screen.getByRole("combobox"));
+    // "https://pypi.org/simple" is already a well-known suggestion (not
+    // "novel"), so it's picked from the list rather than typed as custom.
+    await user.click(await screen.findByText("https://pypi.org/simple"));
+    await user.type(screen.getByPlaceholderText(/artifactory\.corp\.internal/i), "https://mirror.corp.internal/pypi");
+
+    expect(screen.getByRole("button", { name: /\+ add redirect/i })).toBeDisabled();
+    expect(screen.getByText(/already exists for this from/i)).toBeInTheDocument();
+  });
+
+  // Negative control: a DIFFERENT `from` alongside the same redirects list is
+  // never refused — the guard is a collision check, not a general lockout.
+  it("F3-F5 negative control: a non-colliding `from` still enables Add, with no collision message", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderEgress();
+    await user.click(screen.getByRole("tab", { name: /egress redirection/i }));
+    await user.click(screen.getByRole("combobox"));
+    await user.type(screen.getByPlaceholderText(/https:\/\/…, host, or IP/i), "https://a-new-host.example.com");
+    await user.click(await screen.findByText("use as typed"));
+    await user.type(screen.getByPlaceholderText(/artifactory\.corp\.internal/i), "https://mirror.corp.internal/new");
+
+    expect(screen.getByRole("button", { name: /\+ add redirect/i })).toBeEnabled();
+    expect(screen.queryByText(/already exists for this from/i)).not.toBeInTheDocument();
+  });
+
   // UI-SETUP-14: the "From" <Field label> pointed htmlFor="eg-add-from" at an
   // id the combobox trigger never carried — every sibling field here (To,
   // Token secret name) is wired correctly, so a screen-reader user tabbing

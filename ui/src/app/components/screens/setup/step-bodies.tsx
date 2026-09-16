@@ -99,7 +99,12 @@ export function ReviewStep({
   const infoNotes = status.checks.filter((c) => c.platform);
   const blockers = actionable.filter((c) => c.status === "fail");
   const warnings = actionable.filter((c) => c.status === "warn");
-  const ready = actionable.filter((c) => c.status === "ok" || c.status === "info");
+  // F3-F2: an `info` check WITH a fix (e.g. the image builder, off by default,
+  // with a one-line env var to turn it on) is optional, not done — lumping it
+  // under green "Ready" claimed nothing was left to do when there was. Only an
+  // `info` check with no fix (a permanent fact about this host) belongs there.
+  const optionalNotBlocking = actionable.filter((c) => c.status === "info" && c.fix);
+  const ready = actionable.filter((c) => c.status === "ok" || (c.status === "info" && !c.fix));
   const group = (label: string, tone: StepBadge["tone"], checks: SetupCheck[]) =>
     checks.length > 0 && (
       <section className="space-y-2" key={label}>
@@ -142,14 +147,23 @@ export function ReviewStep({
 
       {group("Blocking", "warning", blockers)}
       {group("Worth a look", "neutral", warnings)}
+      {/* DRAFT (M2 canon pending) — F3-F2: distinct from "Worth a look"
+          (warnings): nothing here is wrong, there's just a fix available for
+          something that was never required. */}
+      {group("Optional — not blocking", "neutral", optionalNotBlocking)}
       {group("Ready", "success", ready)}
 
       {infoNotes.length > 0 && (
         <section className="space-y-2">
           <SectionLabel>About this host</SectionLabel>
-          <p className="text-xs text-muted-foreground">
-            Permanent facts about this machine — nothing to set up, just good to know.
-          </p>
+          {/* F3-F2: a platform note that ALSO carries a fix is not "nothing to
+              set up" — CheckRow renders its Fix line regardless of this
+              sentence, so the sentence must not contradict it. */}
+          {!infoNotes.some((c) => c.fix) && (
+            <p className="text-xs text-muted-foreground">
+              Permanent facts about this machine — nothing to set up, just good to know.
+            </p>
+          )}
           <ul className="space-y-2">
             {infoNotes.map((c) => (
               <CheckRow key={c.id} check={c} />
@@ -167,7 +181,7 @@ export function ReviewStep({
         >
           Back to the first step
         </button>
-        , or jump straight to any step from the phase rail on the left — Review only summarizes; each
+        , or jump straight to any step from the phase rail — Review only summarizes; each
         item is fixed on its own step.
       </p>
     </div>

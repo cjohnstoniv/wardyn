@@ -5,6 +5,7 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 import {
+  clearStaleVisitFlags,
   dismissSetup,
   setupDismissed,
   firstRunLanding,
@@ -68,6 +69,35 @@ describe("setup-gate — the funnel's own per-browser state (no hard gate any mo
     markStepVisited("corp_network");
     markStepVisited("environment"); // no duplicate
     expect(loadVisitedSteps().sort()).toEqual(["corp_network", "environment"]);
+  });
+
+  // F3-F6: neither flag gates anything — their only job is the rail's
+  // "Skipped" badge — so a mark left by a PREVIOUS install on this browser is
+  // a false green on a fresh one that never actually visited that step.
+  it("clearStaleVisitFlags: a fresh, never-onboarded, never-run install clears both stale flags", () => {
+    markIntegrationsSkipped();
+    markStepVisited("corp_network");
+    expect(clearStaleVisitFlags({ onboarding_complete: false, has_runs: false })).toBe(true);
+    expect(integrationsSkipped()).toBe(false);
+    expect(loadVisitedSteps()).toEqual([]);
+  });
+
+  // Negative control: has_runs:true means this browser's marks describe THIS
+  // install's real history — must survive.
+  it("clearStaleVisitFlags negative control: has_runs:true keeps both flags", () => {
+    markIntegrationsSkipped();
+    markStepVisited("corp_network");
+    expect(clearStaleVisitFlags({ onboarding_complete: false, has_runs: true })).toBe(false);
+    expect(integrationsSkipped()).toBe(true);
+    expect(loadVisitedSteps()).toEqual(["corp_network"]);
+  });
+
+  // Negative control: an onboarded install (has_runs may still be false —
+  // demos/governed commands need no run) also keeps both flags.
+  it("clearStaleVisitFlags negative control: onboarding_complete:true keeps both flags", () => {
+    markIntegrationsSkipped();
+    expect(clearStaleVisitFlags({ onboarding_complete: true, has_runs: false })).toBe(false);
+    expect(integrationsSkipped()).toBe(true);
   });
 });
 

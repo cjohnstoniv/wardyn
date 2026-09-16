@@ -74,6 +74,7 @@ import { DEMOS, loadLaunchedDemos } from "../demos/demo-catalog";
 // here: this is still its public home.
 export { dismissSetup, setupDismissed } from "./setup-gate";
 import {
+  clearStaleVisitFlagsOnce,
   dismissSetup,
   integrationsSkipped,
   loadVisitedSteps,
@@ -483,6 +484,24 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
 
+  // F3-F6: once per PAGE LOAD (clearStaleVisitFlagsOnce's own module latch —
+  // NOT a per-mount ref: this screen can unmount/remount within one load, and
+  // a mark the operator set a moment ago in THIS still-fresh session must
+  // survive that), the first time status lands — a fresh install (never
+  // onboarded, no runs yet) clears any stale wardyn-integrations-skipped /
+  // wardyn-setup-visited left by a PREVIOUS install on this browser, so the
+  // rail doesn't show a false-green "Skipped" for a step nobody has actually
+  // visited this time. An install with real history (has_runs / onboarded)
+  // leaves both flags alone.
+  React.useEffect(() => {
+    if (!status) return;
+    if (clearStaleVisitFlagsOnce(status)) {
+      setSkippedIntegrations(false);
+      setVisitedSteps(new Set());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
+
   // …and the OTHER correction, deliberately its own effect and deliberately
   // UN-LATCHED: a conditional demo step can leave the walk at any time (the
   // operator deletes the demo secret on /secrets, a model disconnects), not
@@ -727,6 +746,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
             done={done}
             onSelect={selectStep}
             order={walkOrder}
+            refuseNext={refuseSelect}
           />
         }
         checking={rechecking}

@@ -143,6 +143,47 @@ describe("PhaseRail", () => {
     expect(onSelect).toHaveBeenCalledWith("integrations");
   });
 
+  // F3-F3: the rail is the SAME crossing predicate the footer's Next button
+  // already renders disabled+titled — without this, a rail click past an
+  // ungated corp_network read as a live, clickable step whose onSelect just
+  // silently no-oped (a dead click, not a disabled one). Wired identically on
+  // both rails (compact + full); this exercises the full one.
+  it("F3-F3: a step refused by refuseNext renders disabled with the refusal as its title, on both rails", () => {
+    cleanup();
+    const refuseNext = (next: SetupStepId) =>
+      next === "workspaces" || next === "review" ? "Prove network access first." : undefined;
+    render(
+      <PhaseRail
+        current="environment"
+        badges={BADGES}
+        done={DONE}
+        onSelect={vi.fn()}
+        refuseNext={refuseNext}
+      />,
+    );
+    const navs = screen.getAllByRole("navigation", { name: /setup steps/i });
+    const fullRail = within(navs[navs.length - 1]);
+    const compactRail = within(navs[0]);
+    for (const rail of [fullRail, compactRail]) {
+      const workspaces = rail.getByRole("button", { name: /workspaces/i });
+      expect(workspaces).toBeDisabled();
+      expect(workspaces).toHaveAttribute("title", "Prove network access first.");
+    }
+    // Negative control: an earlier step (environment, at-or-before current)
+    // and a demo step (never gated by the crossing predicate) both stay live.
+    for (const rail of [fullRail, compactRail]) {
+      expect(rail.getByRole("button", { name: /^environment/i })).not.toBeDisabled();
+      expect(rail.getByRole("button", { name: /record a policy/i })).not.toBeDisabled();
+    }
+  });
+
+  it("F3-F3 negative control: with no refuseNext, no button in either rail is ever disabled", () => {
+    renderRail("environment");
+    for (const btn of screen.getAllByRole("button")) {
+      expect(btn).not.toBeDisabled();
+    }
+  });
+
   it("counts the essentials phase honestly (environment + people + corp_network + integrations)", () => {
     const rail = renderRail("environment");
     // Essentials = environment + people + corp_network + integrations. The
