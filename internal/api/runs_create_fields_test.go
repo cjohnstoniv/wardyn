@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -123,7 +124,7 @@ func TestInlineSecretRefs_NoStoreNamesTheGrantKind(t *testing.T) {
 	if err == nil {
 		t.Fatal("a grant needing a secret store was accepted with no store configured")
 	}
-	if !strings.Contains(err.Error(), "git_pat") {
-		t.Errorf("message = %q, want it to name the git_pat grant", err)
+	if want := fmt.Sprintf(inlineSecretStoreMissingRefusal, types.GrantGitPAT); err.Error() != want {
+		t.Errorf("message = %q, want %q — the sentence must name the grant kind that needs the store", err, want)
 	}
 }

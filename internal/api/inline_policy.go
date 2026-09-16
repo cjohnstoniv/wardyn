@@ -19,6 +19,19 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
+// DRAFT (M2 canon pending)
+const (
+	// inlineSecretStoreMissingRefusal is the 422 for a spec whose grants need a
+	// stored secret on a deployment with no secret store wired. Reachable from
+	// four doors (create, preflight, policy create, policy update).
+	//
+	// ARTICLE-FREE on purpose: the grant KIND is interpolated (B1-F7 — the
+	// sentence used to say "api_key" for a git_pat or ssh_key grant too), and
+	// "a %s" reads as "a api_key". The kind is the first grant that needs a
+	// store, which is the one the author has to look at first.
+	inlineSecretStoreMissingRefusal = "the %s grant requires a secret store, but none is configured"
+)
+
 // boundMemberSpec is THE member bounding pipeline — the three stages that turn
 // a spec a member chose into one an admin authorized, in the one order that is
 // correct:
@@ -928,8 +941,7 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, owner string, spe
 	// injection can never resolve (fail closed). The message names the KIND that
 	// actually needs it, not whichever kind this check was written for first.
 	if s.cfg.Secrets == nil {
-		return http.StatusUnprocessableEntity, fmt.Errorf(
-			"a %s grant requires a secret store, but none is configured", needed[0].kind)
+		return http.StatusUnprocessableEntity, fmt.Errorf(inlineSecretStoreMissingRefusal, needed[0].kind)
 	}
 
 	// Names only — never Get a value here.
