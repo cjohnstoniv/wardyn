@@ -731,15 +731,12 @@ func (s *Server) handleHarnessCredentialPaste(w http.ResponseWriter, r *http.Req
 		return
 	}
 	token := strings.TrimSpace(req.Token)
-	// Format guard (NOT authentication — the token is validated for real on first
-	// use, when the proxy injects it and Anthropic accepts or rejects it). Reject
-	// an obvious paste error early with an actionable message.
-	// tokenPrefix == "" means the provider has no fixed prefix to guard on (AWS
-	// SSO): its credential arrives structurally validated via the helper-upload
-	// path instead, so the paste endpoint is not the capture route for it.
-	if hl.tokenPrefix != "" && !strings.HasPrefix(token, hl.tokenPrefix) {
-		writeError(w, http.StatusBadRequest,
-			"that does not look like a `claude setup-token` output (expected a token starting with "+hl.tokenPrefix+")")
+	// Shape + lane guards, all of them (harnesscred_paste.go): a
+	// captureViaHelper provider is not pasteable at all, and an empty or
+	// over-long token is refused before it reaches the store or the
+	// process-global mask corpus (B2-F5).
+	if msg := harnessPasteRefusal(hl, token); msg != "" {
+		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
 	blob := managedCredBlob{Token: token, CapturedAt: s.cfg.Now().UTC()}
