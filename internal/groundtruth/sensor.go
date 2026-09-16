@@ -15,11 +15,23 @@ import (
 // NULL (the sensor is host-scoped, not per-run); actor_type=system,
 // actor=sensor. The control plane records these append-only and /healthz keys
 // the ebpf_groundtruth state off the most recent one within a TTL. droppedTotal
-// is the sensor's cumulative backpressure-drop count and observedTotal the
-// cumulative count of real kernel events mapped off the tail; both are surfaced
-// on /healthz so it can tell "sensor alive but observing nothing" (idle) apart
-// from "events flowing" (healthy) and show the drop-gap size. A live heartbeat
-// ALONE never proves kernel ground truth is arriving. observedByKind (keyed by
+// is the sensor's cumulative count of events LOST before they ever reached the
+// control plane — TWO causes share this one counter: (1) backpressure, the
+// original and still primary one — the POST buffer was full and an event was
+// discarded rather than blocking the tail loop (cmd/wardyn-tetragon-ingest's
+// eventSink); and (2) an oversized/unterminated export line — tailExport's
+// pending buffer exceeded its 1 MiB cap (B12b-F9) and was dropped before it
+// ever became an event to map. Both are counted here rather than split into a
+// second field because the operator-facing question either answers is the
+// same ("is ground truth complete"), and the file's own dropped_unmapped
+// precedent (below) reserves a SEPARATE counter only for a cause with a
+// materially different operator response (a TracingPolicy/correlation fix,
+// not a capacity one) — a log line is what distinguishes the two drop causes
+// when the count alone is not enough. observedTotal is the cumulative count of
+// real kernel events mapped off the tail; both are surfaced on /healthz so it
+// can tell "sensor alive but observing nothing" (idle) apart from "events
+// flowing" (healthy) and show the drop-gap size. A live heartbeat ALONE never
+// proves kernel ground truth is arriving. observedByKind (keyed by
 // Action — ActionProcessExec/ActionNetworkConnect/ActionFileWrite) is the
 // SAME cumulative count split per event kind (W20-W20-groundtruth-mapper-4):
 // the aggregate alone cannot distinguish "all three kinds arriving" from "one

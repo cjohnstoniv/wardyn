@@ -570,7 +570,10 @@ type ApprovalDecision struct {
 //	  "correlation": "mapped" | "unmapped",  // unmapped => run_id NULL, never
 //	                                          // silently dropped (visible blindness)
 //	  "reason": "...",                  // sensor.blind / failure detail (omitempty)
-//	  "dropped_total": <uint64>,        // heartbeat only: sensor backpressure drops
+//	  "dropped_total": <uint64>,        // heartbeat only: events lost before
+//	                                    // reaching the control plane — POST
+//	                                    // backpressure OR an oversized/
+//	                                    // unterminated export line (B12b-F9)
 //	  "observed_total": <uint64>,       // heartbeat only: kernel events mapped off the tail
 //	  "dropped_unmapped": <uint64>      // heartbeat only: events dropped as
 //	                                    // uncorrelated — nonzero with
