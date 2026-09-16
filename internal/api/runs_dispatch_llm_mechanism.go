@@ -18,6 +18,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -494,4 +495,36 @@ func (s *Server) llmUnavailableDetail(ctx context.Context, run types.AgentRun, l
 		return ""
 	}
 	return fmt.Sprintf(llmDetailBedrockExpired, blob.ExpiresAt.UTC().Format(time.RFC3339))
+}
+
+// siteConfigForDispatch reads the operator-wide site config for ONE dispatch,
+// retrying a failed read exactly once.
+//
+// WHY A RETRY BELONGS HERE AND NOWHERE ELSE (B2-F1, owner decision 3). This one
+// read decides three things at once: which artifact redirects apply, which
+// upstream proxy the run gets, and — the one that matters — WHOSE model
+// credential the run may use (awsSSOScopeFor over the roster). A failed read
+// yields a zero SiteConfig, which reads as perUser=false, owner="" — the
+// OPERATOR namespace — so enforceReadableRosterForCredential refuses the
+// dispatch outright rather than serve a per_user member the deployment-wide
+// session. That is the right answer for a genuinely unreadable roster and the
+// wrong one for a single dropped connection, which is what a pgx pool blip
+// usually is.
+//
+// ONE retry, immediately, with no delay: a dead pool answers instantly so the
+// cost of the second attempt is nil, and a transient failure is very often gone
+// by the next call. A loop would turn one Postgres hiccup into a create request
+// that hangs; the sweep and the caller's own retry cover everything past that.
+//
+// It deliberately does NOT widen what is served on failure. The refusal
+// downstream is unchanged, so a deployment whose roster really cannot be read
+// still fails its Bedrock-credentialled runs closed.
+func (s *Server) siteConfigForDispatch(ctx context.Context) (types.SiteConfig, error) {
+	sc, err := s.cfg.Store.GetSiteConfig(ctx)
+	if err == nil {
+		return sc, nil
+	}
+	slog.WarnContext(ctx, "wardynd: the site config read failed at dispatch; retrying once before the credential scope is decided",
+		slog.Any("err", err))
+	return s.cfg.Store.GetSiteConfig(ctx)
 }

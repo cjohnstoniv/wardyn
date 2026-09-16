@@ -96,6 +96,16 @@ func awsSSOCredentialSourceLabel(sc awsSSOScope) string {
 // namespace under an enabled `per_user` row for this agent, the operator
 // namespace otherwise (a `shared` row, a disabled row, no row, or no roster).
 //
+// "NO ROSTER" HERE MEANS A SITE CONFIG THAT WAS READ AND CARRIES NO ROW — never
+// one that could not be read. The two are indistinguishable in the VALUE (both
+// are the zero SiteConfig), which is exactly why the distinction is made by the
+// CALLER and not here: dispatch retries the read once (siteConfigForDispatch)
+// and then refuses outright rather than resolve a scope from a read that failed
+// (enforceReadableRosterForCredential), and /setup/status fails closed to the
+// caller's own namespace (setupStatusSSOScope below). This function is pure over
+// the value it is handed and has no way to tell those apart, so it must never be
+// handed a value nobody proved they read. Owner decision 3 / B2-F1.
+//
 // Pure over the site config, so the three call sites that already hold one
 // (dispatch, the create-time mechanism gate) spend no extra read.
 func awsSSOScopeFor(sc types.SiteConfig, agentID, subject string) awsSSOScope {

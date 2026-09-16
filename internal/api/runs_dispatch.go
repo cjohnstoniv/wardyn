@@ -290,7 +290,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// a single run from two different snapshots (e.g. new SCM hosts with stale
 	// artifact overrides). Store is guaranteed non-nil in dispatch (the run-state
 	// CAS transitions below are called unconditionally).
-	siteCfg, siteCfgErr := s.cfg.Store.GetSiteConfig(ctx)
+	// ONE retry on a failed read (siteConfigForDispatch, owner decision 3 /
+	// B2-F1): this read decides WHOSE model credential the run may use, and a
+	// failed read is refused downstream rather than degraded — correct for an
+	// unreadable roster, needlessly harsh for one dropped pool connection.
+	siteCfg, siteCfgErr := s.siteConfigForDispatch(ctx)
 
 	var artifactPlan artifactRedirectPlan
 	if siteCfgErr == nil {
