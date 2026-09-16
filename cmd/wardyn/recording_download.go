@@ -4,9 +4,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -17,6 +19,7 @@ import (
 // name would fuse with this one.
 func runRecordingCmd(client clientFn) *cobra.Command {
 	var outPath, session string
+	var timeout time.Duration
 	rec := &cobra.Command{
 		Use:   "recording <run-id>",
 		Short: "Download a run's terminal recording as an asciicast (stdout unless -o)",
@@ -26,11 +29,25 @@ func runRecordingCmd(client clientFn) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			ctx := cmd.Context()
+			if timeout > 0 {
+				// GetRecording's stream is deliberately NOT bounded by
+				// Client.Timeout (pkg/client/stream_timeout_test.go pins that —
+				// http.Client.Timeout is a whole-request deadline that would cut
+				// off a legitimately large, slow .cast). A peer that sends
+				// headers and then never finishes the body isn't caught by that
+				// either, and TCP keepalive only bounds a dead one after
+				// minutes — --timeout bounds THIS call's ctx instead, so the SDK
+				// itself stays untouched.
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithTimeout(ctx, timeout)
+				defer cancel()
+			}
 			// W21-S1-6: defaults to the run's own (bare-id) cast when --session is
 			// unset — an interactive run's OTHER recordings (one per attach
 			// session, keyed "<run-id>~<session>") are otherwise unreachable from
 			// the CLI/SDK even though the server has always served them.
-			rc, err := client().GetRecording(cmd.Context(), id, session)
+			rc, err := client().GetRecording(ctx, id, session)
 			if err != nil {
 				return err
 			}
@@ -71,5 +88,6 @@ func runRecordingCmd(client clientFn) *cobra.Command {
 	}
 	rec.Flags().StringVarP(&outPath, "output", "o", "", "write the .cast here instead of stdout")
 	rec.Flags().StringVar(&session, "session", "", "attach-session id, for an interactive run's OTHER recordings (default: the run's own recording)")
+	rec.Flags().DurationVar(&timeout, "timeout", 0, "abort the download after this long, e.g. 30s (0 = no deadline)")
 	return rec
 }

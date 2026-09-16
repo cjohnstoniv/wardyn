@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -52,5 +53,38 @@ func TestRunRecording_InterruptedDownloadLeavesNoFile(t *testing.T) {
 		t.Fatalf("a truncated %d-byte cast was left at %s — a player opens it and fails there instead of here", len(b), out)
 	} else if !os.IsNotExist(serr) {
 		t.Fatalf("stat %s: %v", out, serr)
+	}
+}
+
+// B12a-F2: a peer that sends headers then never finishes the body (a dead
+// connection TCP keepalive won't catch for minutes) otherwise hangs `run
+// recording` forever — pkg/client's stream_timeout_test.go FORBIDS fixing
+// this by re-imposing Client.Timeout (that cuts off a legitimately large,
+// slow .cast). --timeout bounds it instead via context.WithTimeout at the
+// call site; the SDK itself is untouched.
+func TestRunRecording_TimeoutFlagAbortsAHangingBody(t *testing.T) {
+	runID := uuid.New()
+	block := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-asciicast")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"version":2,"width":80,"height":24}` + "\n"))
+		w.(http.Flusher).Flush()
+		<-block // headers sent, body never finishes, connection never closes
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(block) })
+
+	start := time.Now()
+	err := execCmd(t, "run", "recording", runID.String(), "--timeout", "100ms", "--url", srv.URL, "--token", "tok")
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("a hung body past --timeout returned nil — the download never aborted")
+	}
+	if !strings.Contains(err.Error(), "deadline exceeded") {
+		t.Errorf("err = %q, want a deadline error", err)
+	}
+	if elapsed > 3*time.Second {
+		t.Errorf("took %s to fail, want ~100ms — --timeout did not bound the download", elapsed)
 	}
 }
