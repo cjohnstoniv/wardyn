@@ -367,9 +367,18 @@ func buildAuditFanout(ctx context.Context, cfgJSON string) (*sinks.Fanout, error
 		return nil, nil
 	}
 	// Start the background flush loop for any sink that exposes one (webhook).
+	//
+	// WithoutCancel: SIGTERM cancels ctx, and a flusher that stops THERE returns
+	// before httpSrv.Shutdown has finished — leaving up to 15 seconds of
+	// in-flight handlers (plus FlushAuthFailedStreak's summary row) enqueueing
+	// into a 4096-slot buffer with no reader, dropped without even a counter,
+	// while fan.Close() found `done` already closed and returned instantly. The
+	// lifetime that is correct here is the FANOUT's, not the request tree's:
+	// Fanout.Close → WebhookSink.Close drains and is bounded by client.Timeout,
+	// and serveAndShutdown calls it on every exit path.
 	for _, c := range children {
 		if runner, ok := c.(interface{ Run(context.Context) }); ok {
-			go runner.Run(ctx)
+			go runner.Run(context.WithoutCancel(ctx))
 		}
 	}
 	return sinks.NewFanout(children...), nil
@@ -437,6 +446,15 @@ type maskingRecorder struct {
 var _ audit.Recorder = maskingRecorder{}
 
 func (m maskingRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
+	// CAPPED AT THE TOP OF THE CHAIN as well as at the INSERT (B6-F1): this
+	// recorder is outermost, so capping here is what bounds the SPOOL and the
+	// SIEM SINKS too — store.InsertAuditEvent's own cap only protects the
+	// database. The target is `r.URL.Path` on the authz.denied lane, which the
+	// AUTHENTICATED caller drives with no rate limit at all.
+	//
+	// Before the masker, not after: masking a megabyte of attacker-chosen path
+	// is work nobody asked for, and the mask is per-byte either way.
+	ev.Target = store.CapAuditTarget(ev.Target)
 	if m.reg != nil {
 		// W20-groundtruth-mapper-2: a run-less event (ev.RunID == nil —
 		// policy.inline, secret.*, an admin action) used to short-circuit this

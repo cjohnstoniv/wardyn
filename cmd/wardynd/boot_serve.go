@@ -248,6 +248,22 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 		}
 	}()
 
+	// EVERY exit path from here on drains the audit sinks. It used to be only the
+	// signal path's tail: a ListenAndServe error returned below (and a Shutdown
+	// error) skipped fan.Close() entirely, so whatever the webhook batcher still
+	// held went to the garbage collector instead of the SIEM — on precisely the
+	// exit an operator is most likely to be investigating. Deferred rather than
+	// repeated at three returns, and it still runs AFTER FlushAuthFailedStreak on
+	// the normal path (defers run last).
+	defer func() {
+		if fan == nil {
+			return
+		}
+		if cerr := fan.Close(); cerr != nil {
+			slog.Error("wardynd: audit sink shutdown", slog.Any("err", cerr))
+		}
+	}()
+
 	select {
 	case <-rootCtx.Done():
 		slog.Info("wardynd: shutdown signal received")
@@ -267,10 +283,7 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 	// flushes its private-IP memo in.
 	srv.FlushAuthFailedStreak()
 
-	if fan != nil {
-		if cerr := fan.Close(); cerr != nil {
-			slog.Error("wardynd: audit sink shutdown", slog.Any("err", cerr))
-		}
-	}
+	// fan.Close() is the deferred drain above — reached from here and from the
+	// serve-error return alike.
 	return nil
 }

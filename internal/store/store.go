@@ -602,6 +602,11 @@ func scanApproval(row pgx.Row) (types.ApprovalRequest, error) {
 // writers this package knows nothing about; the lock here is re-entrant within
 // the transaction and costs nothing. See db.AuditChainLockKey.
 func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEvent) error {
+	// THE CAP LIVES HERE, at the one INSERT every audit writer reaches — the api
+	// server, the broker, identity, the approval sweeper and the spool drain
+	// alike — rather than in Server.auditEvent, which internal/approval bypasses
+	// by building types.AuditEvent values of its own. See CapAuditTarget.
+	ev.Target = CapAuditTarget(ev.Target)
 	dataJSON, err := json.Marshal(ev.Data)
 	if err != nil {
 		return fmt.Errorf("store: marshal audit data: %w", err)

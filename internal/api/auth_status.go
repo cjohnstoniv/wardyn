@@ -82,9 +82,39 @@ func sessionRejectionResponse(reason string) (status int, msg string, ok bool) {
 // caller ALSO presented a bearer token, so a valid CLI/API token arriving
 // alongside a stale browser cookie still authenticates through adminAuth
 // exactly as it did before.
-func rejectedSessionAnswer(r *http.Request) (status int, msg string, ok bool) {
+// The reason is returned alongside the answer so the caller can hand it to
+// auditAuthFailed by NAME: the auth.failed reason enum is guarded against
+// docs/AUDIT-ACTIONS.md by a source walk, and passing "" there (letting
+// auditAuthFailedAs re-resolve it from the same context) reads to that guard as
+// an unnamed reason.
+func rejectedSessionAnswer(r *http.Request) (reason string, status int, msg string, ok bool) {
 	if _, hasBearer := bearerToken(r); hasBearer {
-		return 0, "", false
+		return "", 0, "", false
 	}
-	return sessionRejectionResponse(oidc.SessionRejectedFromContext(r.Context()))
+	reason = oidc.SessionRejectedFromContext(r.Context())
+	status, msg, ok = sessionRejectionResponse(reason)
+	return reason, status, msg, ok
+}
+
+// auditRejectedSession emits this boundary's auth.failed row for a rejected
+// session cookie.
+//
+// The switch is not ceremony. auditAuthFailedAs substitutes the context's
+// rejection reason for whatever it is handed, so one call passing a variable
+// would be correct at runtime — but the auth.failed `reason` enum is fenced
+// against docs/AUDIT-ACTIONS.md by a SOURCE walk (cmd/wardynd's
+// TestAuthFailedReasonEnumIsDocumented), which can only see reasons written as
+// literals or named constants at a call site. Each arm therefore passes the
+// reason it actually is, which is both true and visible to the fence.
+func (s *Server) auditRejectedSession(r *http.Request, reason string) {
+	switch reason {
+	case sessionRevocationUnavailable:
+		s.auditAuthFailed(r, sessionRevocationUnavailable)
+	case sessionExpired:
+		s.auditAuthFailed(r, sessionExpired)
+	case sessionRevoked:
+		s.auditAuthFailed(r, sessionRevoked)
+	default:
+		s.auditAuthFailed(r, sessionInvalid)
+	}
 }
