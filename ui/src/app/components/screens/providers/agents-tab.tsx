@@ -264,7 +264,19 @@ function Row({
   // Tab stop (wardyn/use-roving-radio.ts, the connection-cards.tsx/
   // git-tab.tsx precedent). This group nests no expanded body, so only the
   // roving half applies here.
-  const sourceGroup = useRovingRadio(2, credentialSource === "shared" ? 0 : 1, (i) =>
+  //
+  // R-1 (blind review, fix pass): useRovingRadio's moveTo() calls onSelect
+  // unconditionally — it has no notion of a disabled item. "Per person" is
+  // disabled off a non-bedrock_sso row (perUserAvailable, below), a guard
+  // the MOUSE path enforces (the Button's own `disabled`) but the keyboard
+  // path bypassed: ArrowRight/End on "Shared" wrote credential_source:
+  // "per_user" on e.g. a codex-cli row, which agentRowInvalid never checks
+  // (bedrock_sso only) — Save stayed enabled over a guaranteed
+  // agent400PerUser 400. Fix: a 1-item group off a non-bedrock_sso row, so
+  // every arrow key folds to index 0 (a no-op re-select of "Shared") —
+  // credentialSource can only BE "per_user" when perUserAvailable is true
+  // (normalizeAgentRow's own invariant), so this never hides the checked item.
+  const sourceGroup = useRovingRadio(perUserAvailable ? 2 : 1, credentialSource === "shared" ? 0 : 1, (i) =>
     i === 0
       ? onUpdate({ ...row, credential_source: undefined, sso_start_url: undefined, sso_account_id: undefined, sso_role_name: undefined })
       : onUpdate({ ...row, credential_source: "per_user" }),

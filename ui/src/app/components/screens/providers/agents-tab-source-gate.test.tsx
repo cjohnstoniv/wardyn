@@ -35,6 +35,7 @@ function harness(overrides: Partial<SetupHarnessTool> = {}): SetupHarnessTool {
 }
 
 const HARNESSES: SetupHarnessTool[] = [harness()];
+const CODEX_HARNESSES: SetupHarnessTool[] = [harness({ id: "codex-cli", display: "Codex CLI" })];
 const retryRosterMock = vi.fn();
 const statusRefreshMock = vi.fn();
 
@@ -71,6 +72,32 @@ describe("AgentsTab — the credential-source group has roving tabindex and arro
     await userEvent.keyboard("{ArrowLeft}");
     expect(shared).toHaveFocus();
     expect(shared).toHaveAttribute("aria-checked", "true");
+  });
+
+  // R-1 (blind review, fix pass): useRovingRadio's moveTo() called onSelect
+  // unconditionally, bypassing the mouse-only disabled guard on "Per person"
+  // (agents-tab.tsx's perUserAvailable = row.mechanism === "bedrock_sso").
+  // On a NON-bedrock_sso row, ArrowRight/ArrowDown/End on "Shared" wrote
+  // credential_source: "per_user" — a state agentRowInvalid never checks
+  // (bedrock_sso only), so Save stayed enabled over a guaranteed
+  // agent400PerUser 400 from the server.
+  it("on a non-bedrock_sso row, arrow keys on Shared never check Per person or set credential_source", async () => {
+    getAgentProvidersMock.mockResolvedValue({
+      providers: { agents: [{ id: "codex-cli", mechanism: "anthropic_api_key" }] },
+      etag: '"e3c"',
+    });
+    render(<AgentsTab harnesses={CODEX_HARNESSES} operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
+    const row = await screen.findByTestId("agent-row-codex-cli");
+    const shared = within(row).getByRole("radio", { name: AGENTS.SOURCE_SHARED });
+    const perUser = within(row).getByRole("radio", { name: AGENTS.SOURCE_PER_USER });
+    expect(perUser).toBeDisabled();
+
+    shared.focus();
+    await userEvent.keyboard("{ArrowRight}{ArrowDown}{End}");
+    expect(shared).toHaveAttribute("aria-checked", "true");
+    expect(perUser).toHaveAttribute("aria-checked", "false");
+    expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeEnabled();
+    expect(screen.queryByLabelText(AGENTS.FIELD_SSO_START_URL)).not.toBeInTheDocument();
   });
 });
 
