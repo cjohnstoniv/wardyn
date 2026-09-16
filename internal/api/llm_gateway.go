@@ -36,7 +36,7 @@ func ValidateLLMGateways(anthropicRaw, openaiRaw string) (map[string]string, err
 		if raw == "" {
 			continue
 		}
-		norm, err := validateOneLLMGateway(e.publicHost, raw)
+		norm, err := validateOneLLMGateway(e.publicHost, raw, false)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", e.envVar, err)
 		}
@@ -65,12 +65,32 @@ func ValidateLLMGateways(anthropicRaw, openaiRaw string) (map[string]string, err
 // pointing this at the public host of some other region is not an escape —
 // the value is the operator's own either way, and PF-44's ceiling already says
 // one data-plane host per deployment.
-func ValidateBedrockBaseURL(raw, region string) (string, error) {
+//
+// allowTestEndpoints (WARDYN_ALLOW_TEST_ENDPOINTS) relaxes RULE 1 AND NOTHING
+// ELSE: a plain http:// data-plane host becomes acceptable. It exists for one
+// caller — the kind SSO walk, which points this at test/awsssofake's
+// bedrock-runtime stub so a member's minted role credential is actually SPENT
+// by something. That stub serves no TLS, and this is the SigV4 lane, so no
+// per-run TLS-MITM terminates for it; https:// was not a usable answer.
+//
+// Refused by default, and the refusal names BOTH variables, for exactly the
+// reason ValidateAWSSSOEndpointOverride does (awssso_endpoint.go): plain HTTP to
+// the model data plane is a test posture, and a posture that dangerous takes two
+// deliberate acts, never one env var. With the acknowledgement unset — every
+// real deployment — this function is byte-identical to before the parameter
+// existed.
+func ValidateBedrockBaseURL(raw, region string, allowTestEndpoints bool) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "", nil
 	}
-	norm, err := validateOneLLMGateway(bedrockRuntimeHost(region), raw)
+	// The scheme check happens HERE rather than inside validateOneLLMGateway's
+	// rule 1 so the refusal can name both knobs; rule 1's own message is shared
+	// with the vendor gateways, where WARDYN_ALLOW_TEST_ENDPOINTS means nothing.
+	if !allowTestEndpoints && strings.HasPrefix(strings.ToLower(raw), "http://") {
+		return "", fmt.Errorf("WARDYN_BEDROCK_BASE_URL: %q is plain http:// — inference traffic (and, in bearer mode, the credential riding it) would cross the network unencrypted, so it is refused as a production posture; use https://, or explicitly set WARDYN_ALLOW_TEST_ENDPOINTS=true to acknowledge that this deployment is a test deployment pointed at a local stub", raw)
+	}
+	norm, err := validateOneLLMGateway(bedrockRuntimeHost(region), raw, allowTestEndpoints)
 	if err != nil {
 		return "", fmt.Errorf("WARDYN_BEDROCK_BASE_URL: %w", err)
 	}
@@ -80,7 +100,10 @@ func ValidateBedrockBaseURL(raw, region string) (string, error) {
 // validateOneLLMGateway enforces the gateway URL's seven rules and returns its
 // normalized form (one trailing "/" trimmed; path prefix and port preserved
 // otherwise) for storage in api.Config.LLMGateways.
-func validateOneLLMGateway(publicHost, raw string) (string, error) {
+// allowPlainHTTP relaxes rule 1 alone, and ONLY ValidateBedrockBaseURL ever
+// passes it true (gated on WARDYN_ALLOW_TEST_ENDPOINTS — see there). Every other
+// rule below applies identically in both postures.
+func validateOneLLMGateway(publicHost, raw string, allowPlainHTTP bool) (string, error) {
 	u, err := url.Parse(raw)
 	if err != nil {
 		return "", fmt.Errorf("invalid URL %q: %w", raw, err)
@@ -88,7 +111,7 @@ func validateOneLLMGateway(publicHost, raw string) (string, error) {
 	// Rule 1: https:// only — no loopback exception. forwardInspectedLLM dials
 	// "https://"+host unconditionally, and a host-loopback gateway is
 	// unreachable from the sandbox netns anyway.
-	if u.Scheme != "https" {
+	if u.Scheme != "https" && !(allowPlainHTTP && u.Scheme == "http") {
 		return "", fmt.Errorf("must be https:// (got %q)", raw)
 	}
 	// Rule 2: no userinfo (the site_config.go upstream-proxy-URL rule).

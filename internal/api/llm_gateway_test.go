@@ -3,7 +3,10 @@
 
 package api
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestValidateLLMGateways exercises the seven boot-time rejection rules a
 // WARDYN_ANTHROPIC_BASE_URL / WARDYN_OPENAI_BASE_URL value must pass, plus the
@@ -107,7 +110,7 @@ func TestValidateBedrockBaseURL(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got, err := ValidateBedrockBaseURL(c.raw, region)
+			got, err := ValidateBedrockBaseURL(c.raw, region, false)
 			if c.ok && err != nil {
 				t.Fatalf("expected valid, got error: %v", err)
 			}
@@ -124,5 +127,70 @@ func TestValidateBedrockBaseURL(t *testing.T) {
 				t.Fatalf("gatewayHost(%q) = %q, want %q", got, h, c.wantHost)
 			}
 		})
+	}
+}
+
+// TestValidateBedrockBaseURL_PlainHTTPOnlyWithTestEndpoints is R-01's pin: the
+// kind SSO walk points WARDYN_BEDROCK_BASE_URL at a PLAIN-HTTP fake
+// bedrock-runtime stub (test/awsssofake serves no TLS, and the bedrock_sso lane
+// is SigV4 — no per-run TLS-MITM terminates for it), so rule 1's unconditional
+// https:// refused the boot the walk depends on.
+//
+// The relaxation is gated by the SAME acknowledgement the AWS SSO endpoint hatch
+// uses — two deliberate acts, never one env var — and the PRODUCTION rule is
+// untouched: without WARDYN_ALLOW_TEST_ENDPOINTS, http:// still refuses boot,
+// and the refusal names BOTH variables so the operator knows which one they
+// meant. Every other rule applies identically in both postures.
+func TestValidateBedrockBaseURL_PlainHTTPOnlyWithTestEndpoints(t *testing.T) {
+	const region = "us-east-1"
+	const fake = "http://wardyn-awsssofake.wardyn.svc.cluster.local:8090"
+
+	// WITHOUT the acknowledgement: refused, fail closed, naming both vars.
+	got, err := ValidateBedrockBaseURL(fake, region, false)
+	if err == nil {
+		t.Fatalf("plain http with allowTestEndpoints=false returned %q, nil — want a refusal", got)
+	}
+	if got != "" {
+		t.Errorf("a refused value returned %q, want \"\" (fail closed)", got)
+	}
+	for _, name := range []string{"WARDYN_BEDROCK_BASE_URL", "WARDYN_ALLOW_TEST_ENDPOINTS"} {
+		if !strings.Contains(err.Error(), name) {
+			t.Errorf("refusal %q does not name %s — the operator cannot tell which knob to change", err, name)
+		}
+	}
+
+	// WITH it: accepted and normalized, scheme preserved.
+	got, err = ValidateBedrockBaseURL(fake, region, true)
+	if err != nil {
+		t.Fatalf("plain http with allowTestEndpoints=true errored: %v", err)
+	}
+	if got != fake {
+		t.Errorf("= %q, want %q", got, fake)
+	}
+	if h := gatewayHost(got); h != "wardyn-awsssofake.wardyn.svc.cluster.local" {
+		t.Errorf("gatewayHost(%q) = %q", got, h)
+	}
+
+	// https is unaffected by the acknowledgement, in either direction.
+	const vpce = "https://vpce-0abc.vpce.amazonaws.com"
+	for _, allow := range []bool{false, true} {
+		if g, e := ValidateBedrockBaseURL(vpce, region, allow); e != nil || g != vpce {
+			t.Errorf("ValidateBedrockBaseURL(https, allow=%v) = %q, %v — want it unchanged", allow, g, e)
+		}
+	}
+
+	// The acknowledgement relaxes rule 1 ONLY. Everything else still refuses.
+	for _, raw := range []string{
+		"http://u:p@host:8090",                           // rule 2: userinfo
+		"http:///path",                                   // rule 3: empty host
+		"http://169.254.169.254",                         // rule 4: metadata literal
+		"http://bedrock-runtime.us-east-1.amazonaws.com", // rule 5: the public host itself
+		"http://host:8090?x=1",                           // rule 6: query
+		"http://host:8090#x",                             // rule 7: fragment
+		"ftp://host",                                     // not http/https either
+	} {
+		if g, e := ValidateBedrockBaseURL(raw, region, true); e == nil {
+			t.Errorf("ValidateBedrockBaseURL(%q, allow=true) = %q, nil — the acknowledgement must relax rule 1 only", raw, g)
+		}
 	}
 }

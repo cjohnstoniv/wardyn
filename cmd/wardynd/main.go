@@ -478,7 +478,7 @@ func validateModelEndpoints(f *bootFlags) (map[string]string, string, string, er
 		return nil, "", "", err
 	}
 	// *f.bedrockRegion is already resolved (parseBootFlags folds in AWS_REGION).
-	bedrockBaseURL, err := api.ValidateBedrockBaseURL(*f.bedrockBaseURL, *f.bedrockRegion)
+	bedrockBaseURL, err := api.ValidateBedrockBaseURL(*f.bedrockBaseURL, *f.bedrockRegion, *f.allowTestEndpoints)
 	if err != nil {
 		return nil, "", "", err
 	}
