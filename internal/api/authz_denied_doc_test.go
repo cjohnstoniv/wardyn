@@ -33,6 +33,8 @@ var authzDeniedReasons = []string{
 	"groups_snapshot_stale",
 	"harness_login_mechanism_principal",
 	"not_owner",
+	"run_not_found",
+	"run_terminal",
 	"second_human_required",
 	"security_admin_surface",
 }
@@ -54,6 +56,10 @@ var (
 	reasonHelperLiterals = []*regexp.Regexp{
 		regexp.MustCompile(`capDrop\{reason:\s*"([a-z_]+)"(\s*\+)?`),
 		regexp.MustCompile(`denyMemberField\(w, r, [^,]+, "([a-z_]+)"(\s*\+)?`),
+		// The RUN-TOKEN tier (0.7.4): internalAuth's liveness gate writes the
+		// event through its own helper, which takes the reason as its third
+		// argument — see auditInternalDenied, internal_live_run.go.
+		regexp.MustCompile(`auditInternalDenied\(r, claims, "([a-z_]+)"(\s*\+)?`),
 	}
 )
 
