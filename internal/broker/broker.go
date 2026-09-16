@@ -184,7 +184,7 @@ type GitHubMinter interface {
 	// was supposed to close. The compiler must ask.
 	VerifyRefRuleset(ctx context.Context, repo string) (confined bool, detail string, err error)
 	// Revoke hands a minted installation token back to GitHub
-	// (Apps.RevokeInstallationToken — the call ruleset.go:150-163 already makes
+	// (Apps.RevokeInstallationToken — the call VerifyRefRuleset in ruleset.go already makes
 	// for its probe token). It exists for the mint() arms that mint a REAL token
 	// and then DISCARD it: the lost single-use race, a failed minted_jti write,
 	// a failed audit insert, a failed commit. Such a token is live for GitHub's
