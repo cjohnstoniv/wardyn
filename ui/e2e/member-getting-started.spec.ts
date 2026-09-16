@@ -110,6 +110,29 @@ test.describe("member Getting Started (mocked /me role)", () => {
     await expect(page.getByRole("button", { name: "Sign in to AWS" })).toHaveCount(0);
   });
 
+  // X3-F3 — the one write path a member has named the wrong secret. The roster
+  // (SetupStatus.harnesses, the org's answer to "which coding agents may a run
+  // name") is spliced to a codex-only deployment: an anthropic key is
+  // impossible for that harness, so asking for one stored a key nothing would
+  // ever read.
+  test("a codex-only roster asks for the codex provider's key, not anthropic's", async ({ page }) => {
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.llm_ready = false;
+      json.harnesses = [
+        { id: "codex-cli", display: "Codex CLI", has_gateway: true, has_login: true, enabled: true },
+      ];
+      await route.fulfill({ response, json });
+    });
+    await gotoConsole(page);
+    await navToRoute(page, "/setup");
+
+    await expect(page.getByRole("heading", { name: "Your model key" })).toBeVisible();
+    await expect(page.getByText("openai-api-key")).toBeVisible();
+    await expect(page.getByText("anthropic-api-key")).toHaveCount(0);
+  });
+
   // P1 (0.7.3 field report), the defect itself: a member's "Sign in to AWS"
   // never reached its terminal. The pane mounts AttachTerminal on a run the
   // member created one round trip earlier and passes no createdBy — there is no

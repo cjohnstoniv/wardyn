@@ -10,7 +10,7 @@
 // placeholders must never become values), and that a submit actually
 // produces a usable row. Kept small and honest — it does not assert on
 // anything this stage didn't build (no scan/build progress, no Sources tab).
-import { test, expect, gotoConsole } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, gotoConsole, mockMemberRole } from "./fixtures";
 import type { Page } from "@playwright/test";
 
 function uniqueName(tag: string): string {
@@ -144,5 +144,64 @@ test.describe("Add workspace dialog", () => {
     await expect(add).toBeEnabled();
     await add.click();
     await expect(page.getByRole("dialog")).not.toBeVisible();
+  });
+});
+
+// X3-F2 / F5-F1 / X2-F4 — DELETE /workspaces/{id} is classOwner server-side: a
+// member may delete a workspace THEY created, and the console parked it on the
+// admin role for everyone. The harness backend is always an admin (fixtures.ts),
+// so the role is spliced the usual way and the OWNER is spliced onto the list
+// the console reads — that pair is exactly the member shape this fix is about.
+test.describe("Workspaces — a member deletes the row they own", () => {
+  test("their own row's Delete is live and lands; an operator-owned row stays parked", async ({ page }) => {
+    const mine = uniqueName("mine");
+    const created = await page.request.post("/api/v1/workspaces", {
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+      // NOT the seeded "payments" path: a row's accessible name carries its
+      // source, so sharing it would make the two row locators below ambiguous.
+      data: { name: mine, kind: "local_dir", source: "/home/me/projects/reports" },
+    });
+    expect(created.ok(), "seeding the member-owned workspace failed").toBeTruthy();
+
+    const me = await (await page.request.get("/api/v1/me", {
+      headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+    })).json();
+    const principal: string = me.principal;
+    expect(principal, "the harness principal must be non-empty for the owner leg to mean anything").not.toBe("");
+
+    await mockMemberRole(page);
+    // Only the row this test created is theirs; every other seeded row keeps
+    // the absent owner an operator-created row arrives with.
+    await page.route(/\/api\/v1\/workspaces(\?|$)/, async (route) => {
+      if (route.request().method() !== "GET") return route.continue();
+      const response = await route.fetch();
+      const json = await response.json();
+      const rows = Array.isArray(json) ? json : (json.workspaces ?? []);
+      for (const w of rows) if (w.name === mine) w.owned_by = principal;
+      await route.fulfill({ response, json });
+    });
+
+    await gotoConsole(page);
+    await page.goto("/workspaces");
+
+    // The seeded "payments" row is operator-owned: its Delete is parked, and
+    // the reason is stated in the item itself, not on hover.
+    const theirs = page.getByRole("row", { name: /payments/ });
+    await theirs.getByRole("button", { name: "Workspace actions" }).click();
+    await expect(page.getByRole("menuitem", { name: /delete/i })).toHaveAttribute("aria-disabled", "true");
+    await page.keyboard.press("Escape");
+
+    const ownRow = page.getByRole("row", { name: new RegExp(mine) });
+    await ownRow.getByRole("button", { name: "Workspace actions" }).click();
+    const item = page.getByRole("menuitem", { name: /delete/i });
+    await expect(item).not.toHaveAttribute("aria-disabled", "true");
+    await item.click();
+
+    const confirm = page.getByRole("button", { name: /delete workspace/i });
+    await expect(confirm).toBeEnabled();
+    await confirm.click();
+
+    // It really went: the row is gone from the re-read list, not just the dialog.
+    await expect(page.getByRole("row", { name: new RegExp(mine) })).toHaveCount(0);
   });
 });

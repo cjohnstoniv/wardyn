@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, navTo } from "./fixtures";
+import { test, expect, gotoConsole, mockMemberRole, navTo, navToRoute } from "./fixtures";
 import { CAPABILITY_KINDS, KIND, PERM } from "../src/app/lib/permissions-copy";
+import { SECURITY_ONLY_REASON } from "../src/app/components/wardyn/copy";
 
 // ---------------------------------------------------------------------------
 // Permissions screen e2e (lane: permissions, port 8088, db wardyn_e2e).
@@ -245,5 +246,36 @@ test.describe("permissions — a snapshot, and a count, that never arrived", () 
     await expect(dialog.getByText(PERM.ENFORCE_ON_BODY_UNKNOWN)).toBeVisible();
     await expect(dialog.getByText(/\b0 members\b/)).toHaveCount(0);
     await dialog.getByRole("button", { name: "Cancel" }).click();
+  });
+});
+
+// X3-F5 — /permissions is a securityOps route hidden from a member's nav, so a
+// member reaches it only by typing the URL, where the 403 was rendered as "We
+// couldn't reach the Wardyn control plane" over a Retry that 403s forever. The
+// harness bearer is always an admin server-side (fixtures.ts), so the refusal
+// is the thing spliced here — what is real is the console's own three-way.
+test.describe("Permissions — a member by URL is told the tier, not an outage", () => {
+  test("a 403 names the role and offers no Retry; a 500 still does", async ({ page }) => {
+    await mockMemberRole(page);
+    await page.route("**/api/v1/permissions", (route) =>
+      route.request().method() === "GET"
+        ? route.fulfill({ status: 403, contentType: "application/json", body: '{"error":"forbidden"}' })
+        : route.continue(),
+    );
+    await gotoConsole(page);
+    await navToRoute(page, "/permissions");
+
+    await expect(page.getByText(SECURITY_ONLY_REASON).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: /retry/i })).toHaveCount(0);
+
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+    await mockMemberRole(page);
+    await page.route("**/api/v1/permissions", (route) =>
+      route.request().method() === "GET"
+        ? route.fulfill({ status: 500, contentType: "application/json", body: '{"error":"boom"}' })
+        : route.continue(),
+    );
+    await page.goto("/permissions");
+    await expect(page.getByRole("button", { name: /retry/i }).first()).toBeVisible();
   });
 });

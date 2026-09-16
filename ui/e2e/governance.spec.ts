@@ -17,7 +17,7 @@ import {
   sql,
 } from "./fixtures";
 import { GOVERNANCE as GOV, MEMBER, PEOPLE, PERM, PREVIEW } from "../src/app/lib/governance-copy";
-import { OPERATOR_ONLY_REASON } from "../src/app/components/wardyn/copy";
+import { OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../src/app/components/wardyn/copy";
 import type { Page } from "@playwright/test";
 
 // ---------------------------------------------------------------------------
@@ -792,5 +792,35 @@ test.describe("governance — the two storage ceilings round-trip through the ed
     const cleared = snap2.profiles.find((p: { name: string }) => p.name === name);
     expect(cleared.limits.max_ephemeral_disk_mib ?? 0).toBe(0);
     expect(cleared.limits.max_drive_size_mib ?? 0).toBe(0);
+  });
+});
+
+// X3-F5 — /governance is /permissions' securityOps sibling: hidden from a
+// member's nav, reachable by typing the URL, and its 403 was reported as an
+// unreachable control plane over a Retry that 403s forever.
+test.describe("Governance — a member by URL is told the tier, not an outage", () => {
+  test("a 403 names the role and offers no Retry; a 500 still does", async ({ page }) => {
+    await mockMemberRole(page);
+    await page.route("**/api/v1/governance", (route) =>
+      route.request().method() === "GET"
+        ? route.fulfill({ status: 403, contentType: "application/json", body: '{"error":"forbidden"}' })
+        : route.continue(),
+    );
+    await gotoConsole(page);
+    await navToRoute(page, "/governance");
+
+    await expect(page.getByText(SECURITY_ONLY_REASON).first()).toBeVisible();
+    await expect(page.getByRole("button", { name: GOV.FETCH_FAILED_TITLE })).toHaveCount(0);
+    await expect(page.getByText(GOV.FETCH_FAILED_BODY)).toHaveCount(0);
+
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+    await mockMemberRole(page);
+    await page.route("**/api/v1/governance", (route) =>
+      route.request().method() === "GET"
+        ? route.fulfill({ status: 500, contentType: "application/json", body: '{"error":"boom"}' })
+        : route.continue(),
+    );
+    await page.goto("/governance");
+    await expect(page.getByText(GOV.FETCH_FAILED_BODY)).toBeVisible();
   });
 });

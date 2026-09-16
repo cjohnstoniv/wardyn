@@ -140,3 +140,61 @@ test.describe("member why-denied (mocked /me role, real enforcement)", () => {
     await expect(page.getByText(DENIED.WORKSPACE_BODY)).toBeVisible();
   });
 });
+
+// ---------------------------------------------------------------------------
+// X3-F1 / X3-F4 — the console used to read a member's REDACTED body as facts
+// about the deployment. The harness backend always answers as an admin (see
+// fixtures.ts), so the member-shaped body is spliced the same way the role is:
+// redactSetupStatusForMember zeroes the runner struct (Driver "" — the Go zero
+// value, not the "none" sentinel), empties checks, and now says so with
+// checks_redacted.
+async function mockMemberSetupStatus(page: import("@playwright/test").Page): Promise<void> {
+  await page.route("**/api/v1/setup/status", async (route) => {
+    const response = await route.fetch();
+    const json = await response.json();
+    json.checks = [];
+    json.providers = [];
+    json.secrets = { present: [] };
+    json.checks_redacted = true;
+    // The point of the shape: the driver NAME is withheld while the classes
+    // survive the redaction. The harness backend may itself report none, so
+    // the fixture supplies a live pair when it does.
+    const classes: string[] = json.runner?.confinement_classes ?? [];
+    json.runner = { driver: "", confinement_classes: classes.length > 0 ? classes : ["CC1", "CC2"] };
+    await route.fulfill({ response, json });
+  });
+}
+
+test.describe("member console — a redacted body is not a deployment fact", () => {
+  test("Settings claims neither a missing runner nor an off image builder", async ({ page }) => {
+    await mockMemberRole(page);
+    await mockMemberSetupStatus(page);
+    await gotoConsole(page);
+    await navToRoute(page, "/settings");
+
+    await expect(page.getByRole("heading", { name: "Host", level: 3 })).toBeVisible();
+    // The barrier picker is the member's own choice and stays live — the card
+    // and its `-runner docker` fix are for a host that genuinely has none.
+    await expect(page.getByText("No sandbox runner")).toHaveCount(0);
+    await expect(page.getByText("-runner docker")).toHaveCount(0);
+    await expect(page.getByRole("radio", { name: /Wall/ })).toBeEnabled();
+    // The row itself is gone, not merely its Off sentence — the deployment's
+    // builder posture was never told to this caller.
+    await expect(page.getByText("Image builder")).toHaveCount(0);
+    await expect(page.getByText(/devcontainer builds and --image wraps are unavailable/)).toHaveCount(0);
+  });
+
+  test("an empty board offers the member's own next move, not the operator funnel", async ({ page }) => {
+    await mockMemberRole(page);
+    await page.route(/\/api\/v1\/runs(\?|$)/, (route) =>
+      route.request().method() === "GET" ? route.fulfill({ json: [] }) : route.continue(),
+    );
+    await gotoConsole(page);
+    await navToRoute(page, "/runs");
+
+    await expect(page.getByText("Runs you launch appear here")).toBeVisible();
+    await expect(page.getByText("No runs yet")).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "New run" })).toHaveAttribute("href", "/runs/new");
+    await expect(page.getByRole("link", { name: "Getting started" })).toHaveAttribute("href", "/setup");
+  });
+});
