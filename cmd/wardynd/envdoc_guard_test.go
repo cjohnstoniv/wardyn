@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
 // envDocRoots are the non-test Go trees whose WARDYN_* reads must stay in sync
@@ -349,6 +351,45 @@ func readEnvDoc(t *testing.T, root string) string {
 		t.Fatalf("read docs/ENV.md: %v", err)
 	}
 	return string(doc)
+}
+
+// TestEnvDoc_ComposeForwardsProxySidecarEnvKnobs — B12b-F3+F8: a knob
+// runner.ProxySidecarEnvKnobs forwards to a sidecar (docker Env / k8s pod
+// Env — see that function's doc comment) first has to reach wardynd's OWN
+// process env, and compose never inherits the operator's shell: unless
+// docker-compose.yaml's wardynd `environment:` block explicitly passes a key
+// through as `"${VAR:-}"`, setting it before `docker compose up` is silently
+// inert. This calls the real function (rather than a hand-copied name list)
+// so a future addition to ProxySidecarEnvKnobs fails this guard until the
+// compose block catches up, instead of drifting the way WARDYN_LLM_SCAN /
+// WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS / WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS
+// did.
+func TestEnvDoc_ComposeForwardsProxySidecarEnvKnobs(t *testing.T) {
+	root := repoRoot(t)
+	names := []string{
+		"WARDYN_LLM_SCAN",
+		"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS",
+		"WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS",
+	}
+	for _, k := range names {
+		t.Setenv(k, "envdoc-guard-probe")
+	}
+	knobs := runner.ProxySidecarEnvKnobs()
+	if len(knobs) != len(names) {
+		t.Fatalf("runner.ProxySidecarEnvKnobs returned %d keys with all %d known names set — this guard's name list is stale, update it to match sandbox.go", len(knobs), len(names))
+	}
+
+	compose, err := os.ReadFile(filepath.Join(root, "deploy", "compose", "docker-compose.yaml"))
+	if err != nil {
+		t.Fatalf("read docker-compose.yaml: %v", err)
+	}
+	for _, kv := range knobs {
+		key := kv[0]
+		re := regexp.MustCompile(`(?m)^\s*` + regexp.QuoteMeta(key) + `:\s*"\$\{` + regexp.QuoteMeta(key) + `:-\}"\s*$`)
+		if !re.Match(compose) {
+			t.Errorf(`deploy/compose/docker-compose.yaml wardynd service does not forward %s as %s: "${%s:-}" — without it, setting the operator's shell env does nothing under compose (the sidecar knob is UNREACHABLE, not "off")`, key, key, key)
+		}
+	}
 }
 
 // repoRoot walks up from the test's working directory (the package dir) to the

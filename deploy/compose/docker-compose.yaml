@@ -282,6 +282,22 @@ services:
       # the compose stack must set WARDYN_LOCAL_MODE=false to use it.
       WARDYN_EGRESS_SECOND_HUMAN: "${WARDYN_EGRESS_SECOND_HUMAN:-}"
       WARDYN_PROXY_IMAGE: "${WARDYN_PROXY_IMAGE:-wardyn/wardyn-proxy:local}"
+      # internal/runner.ProxySidecarEnvKnobs copies these three from wardynd's
+      # OWN process env into every proxy sidecar it creates (docker Env / k8s
+      # pod Env — one shared list, both drivers). They read wardynd's env only,
+      # never compose's own; unforwarded here, setting them in the operator's
+      # shell before `docker compose up` did nothing — the knob was
+      # UNREACHABLE, not "off" (docs/ENV.md WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS
+      # / WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS / WARDYN_LLM_SCAN already
+      # documents the container-runner forward; this is the missing host hop).
+      # Empty default in all three: each var's own reader (cmd/wardyn-proxy's
+      # WARDYN_LLM_SCAN switch, internal/egress/proxy.branchNSSwitch) treats an
+      # unset OR explicitly-empty value as "leave the compiled default", so
+      # `docker run -e VAR` / an unset host var / a compose `VAR=` passthrough
+      # are indistinguishable and all resolve to the same safe default.
+      WARDYN_LLM_SCAN: "${WARDYN_LLM_SCAN:-}"
+      WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS: "${WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS:-}"
+      WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS: "${WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS:-}"
       WARDYN_CONTROL_PLANE_URL: "http://wardynd:8080"
       # Devcontainer image builds — ON by default on the compose stack: the
       # wizard's DEFAULT card is "Recommended — built for this workspace", and a
@@ -335,6 +351,12 @@ services:
       # Empty (default) = system roots only, byte-identical to today.
       WARDYN_TRUSTED_CA_FILE: "${WARDYN_TRUSTED_CA_FILE:-}"
       WARDYN_RECORDING_DIR: "/data/recordings"
+      # Empty default: FlagEnv/FlagIntEnv (internal/cliutil) only override their
+      # compiled default on a NON-empty env value, so an unset host var, a
+      # `docker run -e VAR`, and this passthrough with nothing exported all
+      # land on the same default (pg store, keep-forever) — see docs/ENV.md.
+      WARDYN_RECORDING_STORE: "${WARDYN_RECORDING_STORE:-}"
+      WARDYN_RECORDING_RETENTION_DAYS: "${WARDYN_RECORDING_RETENTION_DAYS:-}"
       # Recording delivery: wardyn-rec uploads finished casts through the
       # proxy's brokered route (run-token injected proxy-side; cross-run
       # uploads 403 at the control plane). No shared volume is mounted into
