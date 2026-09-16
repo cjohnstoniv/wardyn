@@ -88,6 +88,28 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	if !decodeStrict(w, r, &req) {
 		return
 	}
+	// THE ORDER OF THE FIVE GATES BELOW IS CREATE'S OWN ORDER, and it is
+	// load-bearing rather than tidy (R9). The structural parity guard
+	// (TestPreflightMirrorsLaunchGates) can see the gate SET but not the
+	// sequence, so a body violating two gates would otherwise get a different
+	// status from Review than from launch — Review's job is to answer the
+	// refusal the caller is actually about to meet, not merely one of them.
+	// decodeAndValidateCreateRun asks, in this sequence: the agent roster, the
+	// member request denial, provider admission over the free-text repositories,
+	// the free-text field caps, then the eager integration_id check.
+
+	// The ORG ROSTER: an agent this deployment does not offer 422s at launch, so
+	// previewing it as a clean checklist is the same lie provider admission was.
+	// Surfaced by narrowing this pair's parity exception (B1-F3) rather than by a
+	// second field report. With no AgentProviders block agentRosterRefusal
+	// short-circuits to "" and Review is byte-for-byte what it was.
+	if msg, rerr := s.agentRosterRefusal(ctx, req.Agent); rerr != nil {
+		writeError(w, http.StatusInternalServerError, "get site config: "+rerr.Error())
+		return
+	} else if msg != "" {
+		writeError(w, http.StatusUnprocessableEntity, msg)
+		return
+	}
 	// Same member request-field denial launch runs (runs_create.go's
 	// decodeAndValidateCreateRun): a preflight dry-run must refuse a member's
 	// BYOI/devcontainer_repo/ungranted-workspace request with the SAME 403
@@ -95,6 +117,31 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// denied at launch.
 	ceiling, denied := s.denyMemberRequest(w, r, req)
 	if denied {
+		return
+	}
+	// Same PROVIDER ADMISSION launch runs over the two FREE-TEXT repository
+	// fields (decodeAndValidateCreateRun -> requestRepoProviderRefusals,
+	// workspace_admission.go). Neither `repo` nor `devcontainer_repo` is a spec
+	// entry, so the resolved-spec gate below never sees them — Review showed a
+	// clean checklist for a repository POST /runs then refused, 422 for an
+	// operator and 403 for a member (B1-F3).
+	//
+	// The SAME function, not a copy, so the two doors cannot answer different
+	// refusals.
+	//
+	// It can write one audit row on the grace lane
+	// (workspace.provider.legacy_host, from admitRepoSources) — the same "a
+	// refused dry run leaves the record of the refusal" rule this handler's doc
+	// comment already states for denyMemberField. In legacy open mode (no
+	// provider rows) it reads the site config and returns having refused,
+	// audited and warned nothing.
+	if s.requestRepoProviderRefusals(w, r, req) {
+		return
+	}
+	// Same free-text field caps + control-character check launch runs over every
+	// caller-supplied string on this body (runs_create_fields.go): one loop, one
+	// 400 shape, shared so Review never previews a request the create door 400s.
+	if !s.validateRunTextFields(w, req) {
 		return
 	}
 	// Same eager integration_id check launch runs (decodeAndValidateCreateRun,
@@ -107,46 +154,6 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("integration_id %q does not name an AI provider integration", req.IntegrationID))
 			return
 		}
-	}
-	// Same free-text field caps + control-character check launch runs over every
-	// caller-supplied string on this body (runs_create_fields.go): one loop, one
-	// 400 shape, shared so Review never previews a request the create door 400s.
-	if !s.validateRunTextFields(w, req) {
-		return
-	}
-	// Same PROVIDER ADMISSION launch runs over the two FREE-TEXT repository
-	// fields (decodeAndValidateCreateRun -> requestRepoProviderRefusals,
-	// workspace_admission.go). Neither `repo` nor `devcontainer_repo` is a spec
-	// entry, so the resolved-spec gate below never sees them — Review showed a
-	// clean checklist for a repository POST /runs then refused, 422 for an
-	// operator and 403 for a member (B1-F3).
-	//
-	// The SAME function, not a copy, so the two doors cannot answer different
-	// refusals; and sited HERE, immediately after the eager integration_id
-	// check, because that is where launch asks it: after the member request
-	// denial, before anything resolves a policy.
-	//
-	// It can write one audit row on the grace lane
-	// (workspace.provider.legacy_host, from admitRepoSources) — the same "a
-	// refused dry run leaves the record of the refusal" rule this handler's doc
-	// comment already states for denyMemberField. In legacy open mode (no
-	// provider rows) it reads the site config and returns having refused,
-	// audited and warned nothing.
-	if s.requestRepoProviderRefusals(w, r, req) {
-		return
-	}
-	// …and the ORG ROSTER refusal that sits beside it in the same wrapper: an
-	// agent this deployment does not offer 422s at launch, so previewing it as a
-	// clean checklist is the same lie one line up. Surfaced by narrowing this
-	// pair's parity exception (B1-F3) rather than by a second field report. With
-	// no AgentProviders block agentRosterRefusal short-circuits to "" and Review
-	// is byte-for-byte what it was.
-	if msg, rerr := s.agentRosterRefusal(ctx, req.Agent); rerr != nil {
-		writeError(w, http.StatusInternalServerError, "get site config: "+rerr.Error())
-		return
-	} else if msg != "" {
-		writeError(w, http.StatusUnprocessableEntity, msg)
-		return
 	}
 
 	// Resolve the policy through the SAME chokepoint launch uses. resolveRunPolicy

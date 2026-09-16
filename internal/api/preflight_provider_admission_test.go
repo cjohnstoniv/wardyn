@@ -6,6 +6,7 @@ package api
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -76,6 +77,26 @@ func TestPreflightAnswersTheSameProviderRefusalAsCreate(t *testing.T) {
 					pre.Body.String(), create.Body.String())
 			}
 		})
+	}
+}
+
+// TestPreflightAndCreateRefuseInTheSameORDER is R9. The structural parity guard
+// can see which gates each door runs but not the sequence, so a body that
+// violates TWO of them is the only input that can tell the orders apart — and
+// Review's job is to answer the refusal the caller is about to meet, not merely
+// one of the refusals they would meet.
+func TestPreflightAndCreateRefuseInTheSameORDER(t *testing.T) {
+	// An over-long repo (a field-cap 400) that is ALSO outside every enabled
+	// provider (an admission 422). Create asks admission first.
+	longUnadmitted := "other/" + strings.Repeat("a", maxRunRepoLen)
+	body := `{"agent":"claude-code","task":"t","repo":` + quote(longUnadmitted) + `}`
+	pre, create := firePreflightAndCreate(t, admitSite(), longUnadmitted, body, true)
+	if create.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("fixture no longer exercises the ordering (create code = %d): %s", create.Code, create.Body.String())
+	}
+	if pre.Code != create.Code {
+		t.Errorf("preflight code = %d, create code = %d — the two doors run the same gates in a different order\npreflight body: %s",
+			pre.Code, create.Code, pre.Body.String())
 	}
 }
 
