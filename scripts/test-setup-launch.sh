@@ -11,30 +11,25 @@
 # orphaned a live process — while one that has genuinely exited still has its
 # pidfile cleaned up as before.
 #
-# EXTRACTS the function under test straight from scripts/setup.sh (sed between
-# `funcname() {` and the matching top-level `}`), the same technique
-# scripts/test-up-policy.sh uses for up.sh — a live test against the real
-# source, not a copy. A real short-lived background process stands in for
-# run-host.sh: finish_unhealthy_launch only ever asks `kill -0 $WPID`, so
-# nothing about it is specific to wardynd.
+# SOURCES the function under test straight from scripts/lib/setup-launch.sh —
+# a live test against the real source, not a copy. finish_unhealthy_launch
+# lives in its own lib file (not inline in setup.sh) because setup.sh is on
+# scripts/check-file-size.sh's frozen allowlist. A real short-lived background
+# process stands in for run-host.sh: finish_unhealthy_launch only ever asks
+# `kill -0 $WPID`, so nothing about it is specific to wardynd.
 #
 # Usage: scripts/test-setup-launch.sh
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SETUP_SH="${REPO_ROOT}/scripts/setup.sh"
+SETUP_LAUNCH_SH="${REPO_ROOT}/scripts/lib/setup-launch.sh"
 
 # shellcheck source=lib/common.sh
 . "${REPO_ROOT}/scripts/lib/common.sh"  # warn (finish_unhealthy_launch's own output)
-
-extract_func() {  # $1=function name -> its body, verbatim
-  sed -n "/^$1() {/,/^}/p" "${SETUP_SH}"
-}
-for fn in finish_unhealthy_launch; do
-  body="$(extract_func "$fn")"
-  [ -n "$body" ] || { echo "test-setup-launch: '$fn' not found in ${SETUP_SH} (renamed/removed?)" >&2; exit 1; }
-  eval "$body"
-done
+[ -f "${SETUP_LAUNCH_SH}" ] || { echo "test-setup-launch: ${SETUP_LAUNCH_SH} not found (renamed/removed?)" >&2; exit 1; }
+# shellcheck source=lib/setup-launch.sh
+. "${SETUP_LAUNCH_SH}"
 
 fail() { echo "test-setup-launch: FAIL: $*" >&2; exit 1; }
 

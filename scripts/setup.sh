@@ -47,6 +47,10 @@ cd "$ROOT"
 # Sourced FIRST so the host guard below runs off the canonical os_kind() rather
 # than a second, drift-prone copy of the same ladder.
 . "$ROOT/scripts/lib/common.sh"
+# finish_unhealthy_launch — kept in its own file, not inline, because this
+# file is on check-file-size.sh's frozen allowlist (see that file's own
+# comment for why).
+. "$ROOT/scripts/lib/setup-launch.sh"
 
 # WSL2 must be detected BEFORE any native-Windows guard: some WSL2 shells (e.g.
 # via WSLENV/interop) inherit $OS=Windows_NT from Windows even though this is a
@@ -571,31 +575,6 @@ launch_wardynd() {
     kill -0 "$WPID" 2>/dev/null || break
     sleep 1
   done
-}
-
-# finish_unhealthy_launch PIDFILE WPID LOGFILE — the tail of launch_wardynd's
-# wait when /healthz never answered 200: states what happened and decides
-# whether PIDFILE survives. B12b-F4: an unconditional `rm -f PIDFILE` here
-# orphaned a wardynd that was still alive and simply still starting past this
-# script's own wait budget — `make stop-host` and the already-running check at
-# the top of this file both key off PIDFILE, so deleting it left no way to
-# find or stop that process short of a manual `kill`, and a later `make setup`
-# would try to launch a SECOND wardynd onto the same port instead of noticing
-# the first. Keep PIDFILE whenever the process it names is still actually
-# running; only delete it once the process has genuinely exited. Extracted
-# from the main body so scripts/test-setup-launch.sh can drive both arms with
-# no daemon (same reason ensure_age_key_or_die was extracted).
-finish_unhealthy_launch() {
-  _ful_pidfile=$1 _ful_wpid=$2 _ful_logfile=$3
-  if kill -0 "${_ful_wpid}" 2>/dev/null; then
-    warn "wardynd is still starting (PID ${_ful_wpid}) — watch ${_ful_logfile}; stop with make stop-host"
-  else
-    rm -f "${_ful_pidfile}"
-    warn "wardynd did not become healthy — last log lines:"
-  fi
-  tail -n 15 "${_ful_logfile}" 2>/dev/null | sed 's/^/    /'
-  warn "Full log: ${_ful_logfile}"
-  unset _ful_pidfile _ful_wpid _ful_logfile
 }
 
 ensure_postgres
