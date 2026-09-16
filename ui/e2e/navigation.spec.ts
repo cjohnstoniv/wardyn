@@ -324,6 +324,37 @@ test.describe("mobile navigation drawer (F3-F8/F7-F6)", () => {
   });
 });
 
+// F7-F2: below `sm`, the wordmark's text and the "New run" label used to stay
+// mounted at full width alongside the theme toggle and the user-menu trigger
+// with no flex-wrap and a fixed height — the header overflowed sideways on a
+// phone, and the user-menu trigger (the sign-out path) could be pushed off
+// the right edge entirely.
+test.describe("header compaction at phone width (F7-F2)", () => {
+  test("390x844 /runs: no horizontal overflow, and the user-menu trigger stays in the viewport", async ({ page }) => {
+    await gotoConsole(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+
+    const overflow = await page.evaluate(() => ({
+      scrollWidth: document.documentElement.scrollWidth,
+      innerWidth: window.innerWidth,
+    }));
+    expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.innerWidth);
+
+    const userMenuTrigger = page.locator("header button").filter({ hasText: "admin" });
+    await expect(userMenuTrigger).toBeVisible();
+    await expect(userMenuTrigger).toBeInViewport();
+  });
+
+  // Negative control: at the default desktop viewport, the wordmark's full
+  // text and the "New run" label are both still there — this is a narrow-
+  // width compaction, not a redesign.
+  test("neg: >=1024 still shows the full wordmark text and the New run label", async ({ page }) => {
+    await gotoConsole(page);
+    await expect(page.locator("header").getByText("Wardyn", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "New run" })).toContainText("New run");
+  });
+});
+
 // 0.7.3 F6: the Fence tier and NetworkPolicy verdict were permanent, boot-time
 // facts that never changed while the console was open — occupying the header's
 // most valuable real estate for nothing an admin could act on. Both are gone

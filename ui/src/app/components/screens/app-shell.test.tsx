@@ -156,6 +156,24 @@ describe("AppShell — session-expiry warning (W31-S1-7)", () => {
     await screen.findByText("cj");
     expect(screen.queryByText(/session is expiring soon/i)).toBeNull();
   });
+
+  // F3-F11: a session already past its expiry used to read "expiring soon"
+  // forever (the predicate was one-sided) — the third state names it.
+  it("F3-F11: a session already past its expiry reads 'has expired', not 'expiring soon'", async () => {
+    renderWithMe(new Date(Date.now() - 60 * 1000).toISOString());
+    expect(await screen.findByText(/session has expired/i)).toBeInTheDocument();
+    expect(screen.queryByText(/expiring soon/i)).toBeNull();
+  });
+
+  // F3-F11: `new Date("not-a-date")` parses to an Invalid Date, not null —
+  // every arithmetic read off it used to be NaN, disabling the banner
+  // silently instead of failing loudly or falling back safely.
+  it("F3-F11: an unparseable session_expires_at never warns (guarded, not NaN'd into silence)", async () => {
+    renderWithMe("not-a-real-date");
+    await screen.findByText("cj");
+    expect(screen.queryByText(/session is expiring soon/i)).toBeNull();
+    expect(screen.queryByText(/session has expired/i)).toBeNull();
+  });
 });
 
 // L1 review fix: the role chip used to render unconditionally (fail-open

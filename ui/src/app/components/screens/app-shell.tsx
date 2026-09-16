@@ -180,9 +180,9 @@ function useMeta(): [ShellMeta, () => void] {
           // this field must fail OPEN like every other identity signal here.
           securityOperator: me?.security_operator ?? true,
           role: me?.role ?? "admin",
-          sessionExpiresAt: me?.session_expires_at
-            ? new Date(me.session_expires_at)
-            : null,
+          // F3-F11: a bad string parses to an Invalid Date, not null — guard
+          // NaN here so useSessionExpiry never has to.
+          sessionExpiresAt: validExpiry(me?.session_expires_at),
           memberLocalDirRoot: me?.member_local_dir_root ?? null,
           userDrive: me?.user_drive ?? null,
           userDriveDeniedByProfile: me?.user_drive_denied_by_profile ?? "",
@@ -210,20 +210,38 @@ function useMeta(): [ShellMeta, () => void] {
 const SESSION_WARN_MS = 5 * 60 * 1000;
 const SESSION_CHECK_MS = 15 * 1000;
 
-function useSessionExpiringSoon(expiresAt: Date | null): boolean {
-  const [soon, setSoon] = React.useState(false);
+// F3-F11: the old predicate was one-sided — "expiring soon" fires at T-5min
+// and never turns itself off, so a session already past its real expiry (the
+// human stepped away, or the check interval landed late) still read
+// "expiring soon" forever, with a re-auth link that could no longer save
+// anything. Three states name the THIRD one instead of collapsing it into
+// the second.
+export type SessionExpiryState = "none" | "soon" | "expired";
+// DRAFT (M2 canon pending) — F3-F11's two new arms (was one string, "soon" only).
+const SESSION_EXPIRY_COPY = {
+  soon: ["Your session is expiring soon.", "to avoid losing your place."],
+  expired: ["Your session has expired.", "to get back in."],
+} as const;
+
+function validExpiry(iso: string | null | undefined): Date | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function useSessionExpiry(expiresAt: Date | null): SessionExpiryState {
+  const [state, setState] = React.useState<SessionExpiryState>("none");
   React.useEffect(() => {
-    if (!expiresAt) {
-      setSoon(false);
-      return;
-    }
-    const check = () =>
-      setSoon(expiresAt.getTime() - Date.now() <= SESSION_WARN_MS);
+    if (!expiresAt) return setState("none");
+    const check = () => {
+      const ms = expiresAt.getTime() - Date.now();
+      setState(ms <= 0 ? "expired" : ms <= SESSION_WARN_MS ? "soon" : "none");
+    };
     check();
     const id = setInterval(check, SESSION_CHECK_MS);
     return () => clearInterval(id);
   }, [expiresAt]);
-  return soon;
+  return state;
 }
 
 function initials(principal: string): string {
@@ -475,7 +493,7 @@ export function AppShell({
   // shell holds is the fail-open seed. Distinct from "not settled yet", which is
   // an ordinary first paint and says nothing to anybody.
   const identityUnknown = meta.resolved && !meta.identityResolved;
-  const sessionExpiringSoon = useSessionExpiringSoon(meta.sessionExpiresAt);
+  const sessionExpiry = useSessionExpiry(meta.sessionExpiresAt);
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -574,20 +592,22 @@ export function AppShell({
           refresh — this is the warning that never existed, so it is not a
           silent 401 that wipes the console mid-work. Re-authenticating now
           (while the current session still works) replaces it before it dies. */}
-            {!unreachable && sessionExpiringSoon && (
+            {/* F3-F11: three-state now — an already-past-expiry session used to
+                read "expiring soon" forever. */}
+            {!unreachable && sessionExpiry !== "none" && (
               <div
                 role="status"
                 className="relative z-50 flex shrink-0 items-center gap-2 border-b border-border bg-warning-subtle px-4 py-2 text-sm text-warning"
               >
                 <AlertTriangle className="size-4 shrink-0" />
-                <span>Your session is expiring soon.</span>
+                <span>{SESSION_EXPIRY_COPY[sessionExpiry][0]}</span>
                 <a
                   href="/auth/login"
                   className="font-medium underline underline-offset-2"
                 >
                   Sign in again
                 </a>
-                <span>to avoid losing your place.</span>
+                <span>{SESSION_EXPIRY_COPY[sessionExpiry][1]}</span>
               </div>
             )}
             <div className="flex min-h-0 flex-1">
@@ -671,7 +691,8 @@ export function TopBar({
         to="/runs"
         className="rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
       >
-        <WardynWordmark />
+        {/* F7-F2: icon-only below sm, so New run + the user menu stay onscreen. */}
+        <WardynWordmark compact="sm" />
       </Link>
 
       {/* Shown ONLY when non-default. A default install is always
@@ -695,7 +716,9 @@ export function TopBar({
         </div>
       )}
 
-      <div className="ml-auto flex items-center gap-1.5">
+      {/* F7-F2: min-w-0 lets this cluster actually shrink instead of forcing
+          the header wider than the viewport (no flex-wrap/height change). */}
+      <div className="ml-auto flex min-w-0 items-center gap-1.5">
         <Button
           variant="ghost"
           size="icon"
@@ -709,8 +732,8 @@ export function TopBar({
           )}
         </Button>
 
-        <Button onClick={onNewRun} size="sm">
-          <Plus className="size-4" /> New run
+        <Button onClick={onNewRun} size="sm" aria-label="New run">
+          <Plus className="size-4" /> <span className="hidden sm:inline">New run</span>
         </Button>
 
         <DropdownMenu>

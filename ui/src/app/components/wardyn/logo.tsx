@@ -18,12 +18,25 @@ export function WardynMark({ className }: { className?: string }) {
   );
 }
 
-export function WardynWordmark({ className, compact = false }: { className?: string; compact?: boolean }) {
+export function WardynWordmark({
+  className,
+  compact = false,
+}: {
+  className?: string;
+  // true: icon only, always. "sm": icon only below the `sm` breakpoint, full
+  // at sm+ (F7-F2 — the app-shell header's own compaction at narrow widths).
+  compact?: boolean | "sm";
+}) {
   return (
     <span className={cn("inline-flex items-center gap-2 select-none", className)}>
       <WardynMark />
-      {!compact && (
-        <span className="text-base font-semibold tracking-tight text-foreground">
+      {compact !== true && (
+        <span
+          className={cn(
+            "text-base font-semibold tracking-tight text-foreground",
+            compact === "sm" && "hidden sm:inline",
+          )}
+        >
           Wardyn
         </span>
       )}
