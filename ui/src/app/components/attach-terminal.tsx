@@ -122,11 +122,13 @@ export interface AttachTerminalProps {
    */
   fill?: boolean;
   /**
-   * The run's creator (AgentRun.created_by). Compared against the signed-in
-   * principal so a member can attach to a run THEY own — see the operator
-   * gate below. Omit for a mount site with no run object (e.g. a fresh
-   * interactive session the caller just created themselves): the gate then
-   * falls back to operator-only, same as before this prop existed.
+   * The run's creator (AgentRun.created_by), for a mount site that has a run
+   * object to read it from. Compared against the signed-in principal so a
+   * member can attach to a run THEY own — see the operator gate below.
+   * OMIT it to mean "the caller created this run; the server decides": the
+   * login pane, record-pane and demo-runner all mount on a run they launched
+   * one round trip earlier. Unknown ownership is not "not yours" — the gate
+   * lets it through to the ticket lane, which is the enforcement point.
    */
   createdBy?: string;
 }
@@ -188,7 +190,11 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // see the lane choice in connect() below.
   const operatorResolved = useOperatorResolved();
   const principal = usePrincipal();
-  const owned = !!createdBy && createdBy === principal;
+  // UNKNOWN ownership asks the server (P1, 0.7.3 field report); a STATED owner
+  // who is not the principal is still refused below, before any POST. A foreign
+  // run costs one POST + one authz.denied{reason:"not_owner"} row — cheaper
+  // than a client gate inventing a refusal it cannot justify.
+  const owned = createdBy === undefined || createdBy === principal;
   const containerRef = React.useRef<HTMLDivElement>(null);
   // The whole panel (title bar + grid) — the element handed to the native
   // Fullscreen API below.
@@ -307,9 +313,9 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   React.useEffect(() => {
     // Fail-open default (operator-context.tsx) means this stays exactly
     // today's behavior — connects immediately — for every deployment that
-    // never sets WARDYN_OIDC_OPERATOR_EMAILS. A confirmed non-operator who
-    // does not own this run (createdBy unset or mismatched) skips straight to
-    // the reason below, before creating a terminal or a socket.
+    // never sets WARDYN_OIDC_OPERATOR_EMAILS. A confirmed non-operator on a run
+    // whose stated creator is somebody else skips straight to the reason below,
+    // before creating a terminal or a socket.
     if (!operator && !owned) {
       setConnState("error");
       setErrorMsg("Attaching to a live sandbox requires the admin role or ownership of this run.");

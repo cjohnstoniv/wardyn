@@ -304,14 +304,42 @@ describe("AttachTerminal — role-aware attach", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  it("viewer: never opens a socket, and shows the reason instead of a raw error", async () => {
+  // P1: an EXPLICITLY FOREIGN run is what the client-side refusal is for. This
+  // case used to render with NO createdBy at all — which is the login pane's own
+  // mount (a run the caller just created) — so the one shape the gate had no
+  // business refusing was the shape it pinned. The refusal itself is unchanged;
+  // what changed is that it now needs a stated owner who is not you.
+  it("viewer on an explicitly FOREIGN run: never opens a socket, and shows the reason instead of a raw error", async () => {
     render(
-      <OperatorProvider operator={false}>
-        <AttachTerminal runId="run_1" />
+      <OperatorProvider operator={false} principal="alice@example.com">
+        <AttachTerminal runId="run_1" createdBy="bob@example.com" />
       </OperatorProvider>,
     );
     expect(await screen.findByText(/attaching to a live sandbox requires the admin role/i)).toBeInTheDocument();
     expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  // P1 (0.7.3 field report): a member's own AWS sign-in never reached its
+  // terminal. The login pane mounts this component for a run the member CREATED
+  // one round trip earlier and passes no createdBy — there is no run object to
+  // read one from — so `owned` was false, `operator` false, and the component
+  // refused before ever asking the server. UNKNOWN ownership is not "not yours":
+  // the ticket lane (mintAttachTicket -> getRunAuthorizedBy) is owner-or-admin
+  // and is the enforcement point, so the client asks it instead of inventing a
+  // refusal it cannot justify. A foreign run costs one POST and one
+  // authz.denied{reason:"not_owner"} row; the case above is the negative half.
+  it("member on a run they just created (createdBy unknown): asks the server instead of refusing", async () => {
+    const attachTicket = vi.mocked(runs.attachTicket);
+    attachTicket.mockReset();
+    attachTicket.mockResolvedValueOnce("tic_own");
+    render(
+      <OperatorProvider operator={false} principal="alice@example.com">
+        <AttachTerminal runId="run_1" />
+      </OperatorProvider>,
+    );
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    expect(attachTicket).toHaveBeenCalledWith("run_1");
+    expect(screen.queryByText(/attaching to a live sandbox requires the admin role/i)).toBeNull();
   });
 
   it("operator (today's default, no provider needed): connects normally", () => {
