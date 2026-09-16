@@ -25,6 +25,22 @@ import (
 // devcontainer build pulls a base image and runs the repo's full setup.
 const imageBuildTimeout = 30 * time.Minute
 
+// DRAFT (M2 canon pending)
+const (
+	// createRunGrantAbortHint is the failure_hint a run carries when POST /runs
+	// answered 500 AFTER the run row existed: the row is persisted and the
+	// identity already minted, so the compensator has to say WHY the badge reads
+	// FAILED. The driver's own error text is in the 500 body and in the audit
+	// row; this is the one line the console shows under the badge.
+	createRunGrantAbortHint = "the run's credential grants could not be recorded, so it was never started"
+	// devcontainerNoBuilderWarning is the 201 warning for a devcontainer_repo run
+	// on a deployment with no image builder wired: the build silently fell
+	// through to the convention image, which is a different sandbox from the one
+	// the caller asked for. Not a refusal — a hard fail would break every
+	// no-builder deployment that has been launching this way (B1-F9).
+	devcontainerNoBuilderWarning = "devcontainer_repo was ignored: no image builder is wired, so this run launches on the convention agent image instead of a devcontainer build"
+)
+
 // createRunRequest is the POST /api/v1/runs body. It is a TYPE ALIAS for the
 // public SDK's request DTO — the SDK's declaration IS the server's declaration,
 // so the wire contract is single-sourced and the compiler (not a parity test)
@@ -261,6 +277,26 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// FROM HERE ON A RUN ROW EXISTS, so no early return may simply answer and
+	// walk away: the row is PENDING, the identity minted above is live, and
+	// nothing downstream will notice — finalizeUndispatchedRuns only reaps it
+	// after undispatchedGrace (B1-F1). Every post-CreateRun early return goes
+	// through abort, which is the same compensation launchRecordRun's own
+	// abort() has made since 0.6 (workspace_run_launch.go, pinned by
+	// TestLaunchRecordRun_CreateGrantFailureFinalizesRun).
+	//
+	// WithoutCancel lives INSIDE the closure, not at the client-disconnect
+	// detach further down: the compensator runs on the REQUEST's context, and a
+	// 500 is very often being answered to a client that has already gone — its
+	// cancelled ctx cannot write the FAILED state the compensator exists to
+	// write, so the run would strand PENDING with un-revoked credentials on
+	// exactly the path this closure exists for. Detaching here and again below
+	// is harmless (WithoutCancel of a detached ctx is a no-op in effect) and
+	// keeps the two concerns independent.
+	abort := func(hint string) {
+		s.failAndRevoke(context.WithoutCancel(ctx), runID, types.RunPending, hint)
+	}
+
 	// resolveRunPolicy's own notes come FIRST: they are the ones that say the
 	// run is narrower than what the caller asked for. Launch used to drop them
 	// on the floor, leaving only preflight (which the console never calls) to
@@ -308,6 +344,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// see persistRunGrants. A grant write failure has already answered 500.
 	gw, ok := s.persistRunGrants(ctx, w, runID, now, spec)
 	if !ok {
+		abort(createRunGrantAbortHint)
 		return
 	}
 	// Provider-lane honesty, the same shape one line earlier in the pipeline: a
@@ -376,6 +413,16 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Resolve the sandbox image (BYOI wrap > devcontainer build > workspace
 	// profile > convention image) and persist it for provenance. A failed
 	// BYOI/devcontainer build has already marked the run FAILED and answered 201.
+	// B1-F9: the one image lane that DEGRADES rather than refusing. With no
+	// ImageBuilder wired a workspace base_image fails closed (PARITY-4, inside
+	// resolveCreateRunImage) but a devcontainer_repo silently falls through to
+	// the convention image — visible until now only as an INFO setup row no CLI
+	// or API caller ever reads. Said on the 201 instead, which is the only
+	// channel this door has. Appended BEFORE the call so the warning is already
+	// on the list the build-failed arm answers 201 with.
+	if req.DevcontainerRepo != "" && s.cfg.ImageBuilder == nil {
+		warnings = append(warnings, devcontainerNoBuilderWarning)
+	}
 	image, responded := s.resolveCreateRunImage(ctx, w, req, runID, created, warnings, wsRefs)
 	if responded {
 		return
