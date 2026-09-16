@@ -19,6 +19,7 @@ vi.mock("../../lib/api/health", () => ({
 }));
 
 import { SignIn } from "./sign-in";
+import { SESSION_ENDED_REASON } from "../../lib/api/core";
 
 function renderSignIn() {
   return render(
@@ -282,7 +283,7 @@ describe("SignIn — a mid-session expiry's reason (X3-F7)", () => {
     healthMock.mockResolvedValue({});
     render(
       <ThemeProvider>
-        <SignIn onSignIn={() => {}} reason="Your session ended. Sign in again to get back to where you were." />
+        <SignIn onSignIn={() => {}} reason={SESSION_ENDED_REASON} />
       </ThemeProvider>,
     );
     const alert = await screen.findByRole("alert");

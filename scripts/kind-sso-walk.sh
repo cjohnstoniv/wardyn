@@ -142,10 +142,10 @@ step "reading the Service CIDR off the apiserver"
 SERVICE_CIDR="$(kubectl --context "${CONTEXT}" -n kube-system get pod \
   -l component=kube-apiserver -o jsonpath='{.items[0].spec.containers[0].command}' 2>/dev/null \
   | tr ',' '\n' | sed -n 's/.*--service-cluster-ip-range=\([^"]*\).*/\1/p' | head -1)"
+SERVICE_CIDR="${WARDYN_KIND_SSO_SERVICE_CIDR:-${SERVICE_CIDR}}"
 if [[ -z "${SERVICE_CIDR}" ]]; then
   die "could not read --service-cluster-ip-range from the apiserver. Set WARDYN_KIND_SSO_SERVICE_CIDR explicitly — do NOT substitute a pod IP or the pod CIDR: liftInternalHost refuses the proxy's own subnet, so the lift would never apply."
 fi
-SERVICE_CIDR="${WARDYN_KIND_SSO_SERVICE_CIDR:-${SERVICE_CIDR}}"
 FAKE_CLUSTER_IP="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get svc "${FAKE_SVC}" -o jsonpath='{.spec.clusterIP}')"
 echo "service CIDR: ${SERVICE_CIDR}   ${FAKE_SVC} ClusterIP: ${FAKE_CLUSTER_IP}"
 

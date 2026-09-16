@@ -106,8 +106,10 @@ kind get clusters 2>/dev/null | grep -qx "${CLUSTER}" || die \
 # compose stack) — install on that mismatch and it prints a URL nothing
 # answers, the OIDC callback 404s, and the walk dies on a misleading "another
 # daemon on that port?". Fail loudly here instead, before touching the cluster.
-curl -sf -o /dev/null --max-time 3 "http://localhost:${HTTP_PORT}/healthz" || die \
-  "nothing answered http://localhost:${HTTP_PORT}/healthz — this overlay is about
+health="$(curl -sf --max-time 3 "http://localhost:${HTTP_PORT}/healthz" || true)"
+[[ "${health}" == *'"runner":"k8s"'* ]] || die \
+  "http://localhost:${HTTP_PORT}/healthz did not answer with runner=k8s (nothing there, or a
+compose stack on that port? Body: ${health}) — this overlay is about
 to print that as the console URL. Re-run the quickstart on the SAME port:
     WARDYN_QUICKSTART_HTTP_PORT=${HTTP_PORT} WARDYN_QUICKSTART_SSH_PORT=2322 make kind-quickstart"
 
