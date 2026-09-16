@@ -102,9 +102,18 @@ cosign verify \
 Then install it directly — `oci://` is native Helm, no `helm repo add`:
 
 ```sh
+kubectl create namespace wardyn
+kubectl -n wardyn create secret generic wardyn-auth \
+  --from-literal=admin-token="$(openssl rand -hex 20)"
+kubectl -n wardyn create secret generic wardyn-postgres-dsn \
+  --from-literal=dsn="<your Postgres DSN>" \
+  --from-literal=age-key="$(docker run --rm ghcr.io/cjohnstoniv/wardynd:${WARDYN_VERSION} -gen-age-key)"
+
 helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "${WARDYN_VERSION}" \
-  --namespace wardyn --create-namespace \
-  --set auth.adminToken.secretRef.name=wardyn-auth
+  --namespace wardyn \
+  --set auth.adminToken.secretRef.name=wardyn-auth \
+  --set postgres.dsn.secretRef.name=wardyn-postgres-dsn \
+  --set secrets.ageKeyFromSecret=true
 ```
 
 ## 5. Verify the release assets

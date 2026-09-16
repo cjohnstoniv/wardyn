@@ -22,8 +22,9 @@ Reuse the shipped chart and substrate; never hand-roll a manifest.
 - Multi-user semantics (admin vs member, ownership scoping, the shared
   admin-token ceiling) and the k8s known-gaps detail behind the chart
   README's summary: `docs/OPERATIONS.md`.
-- SSH gateway setup/use once the cluster is up (owner-only today — no
-  operator override; see this skill's troubleshooting table): `docs/SSH.md`.
+- SSH gateway setup/use once the cluster is up (owner **or admin** — the
+  admin override re-checks the key's role every `WARDYN_SSH_ROLE_TTL`;
+  see this skill's troubleshooting table): `docs/SSH.md`.
 
 ## Recipe
 
@@ -128,10 +129,14 @@ Reuse the shipped chart and substrate; never hand-roll a manifest.
      `value` (or a `groups` entry, or an email) to a Wardyn role:
      ```yaml
      env:
-       WARDYN_OIDC_ROLE_MAP: "Wardyn.Admin=admin,Wardyn.Member=member"
+       WARDYN_OIDC_ROLE_MAP: "Wardyn.Admin=admin,Wardyn.Security=security_admin,Wardyn.Member=member"
        # Optional: no match at all -> this role instead of denying the login.
        WARDYN_OIDC_DEFAULT_ROLE: "member"
      ```
+     `security_admin` is reachable **only** through this map — there is no
+     allowlist twin of `WARDYN_OIDC_OPERATOR_EMAILS` for it, and
+     `WARDYN_OIDC_DEFAULT_ROLE` refuses `security_admin` at boot (it accepts
+     only `admin`/`member`).
      Matching is case-insensitive and ASCII-only; any `admin` match wins over
      a `member` match regardless of which claim produced it; an email on
      `WARDYN_OIDC_OPERATOR_EMAILS` is an ADDITIONAL admin match (see step 3's
@@ -154,7 +159,7 @@ Reuse the shipped chart and substrate; never hand-roll a manifest.
    - **`env.WARDYN_OIDC_ROLE_MAP` is the chart's BOOTSTRAP layer, not the only
      place mappings get edited.** Once the install is up, an admin adds,
      edits and removes further mappings live from the console's Getting
-     Started → People step (`GET`/`POST /access/mappings`, `DELETE
+     Started → People step (`GET /access`, `POST /access/mappings`, `DELETE
      /access/mappings/{id}`) — no chart change or redeploy needed. The chart
      map always wins a duplicate key against a console row; a console row
      takes effect at that person's next sign-in, never retroactively. An
@@ -170,19 +175,36 @@ Reuse the shipped chart and substrate; never hand-roll a manifest.
 
 4. **Install / upgrade.**
    ```sh
+   kubectl create namespace wardyn
+   kubectl create namespace wardyn-runs   # k8s.runsNamespace below — must pre-exist
+
    kubectl create secret generic wardyn-auth -n wardyn \
      --from-literal=admin-token="$(openssl rand -hex 32)"   # fallback if OIDC misconfigures
+   kubectl create secret generic wardyn-pg -n wardyn \
+     --from-literal=dsn="$PG_DSN" \
+     --from-literal=age-key="$(docker run --rm "$REGISTRY/wardynd:$TAG" -gen-age-key)"
 
    helm upgrade --install wardyn ./deploy/helm/wardyn \
-     --namespace wardyn --create-namespace \
+     --namespace wardyn \
      --set postgres.dsn.secretRef.name=wardyn-pg \
+     --set secrets.ageKeyFromSecret=true \
      --set auth.adminToken.secretRef.name=wardyn-auth \
      --set serviceAccount.automount=true \
      --set k8s.enabled=true \
+     --set k8s.runsNamespace=wardyn-runs \
      --set k8s.proxyImage="$REGISTRY/wardyn-proxy:$TAG" \
      -f my-k8s-values.yaml   # the SSO/SSH/runtimeClasses block from step 2-3
    ```
-   Keep an admin token secret configured even with OIDC set up — it is the
+   `my-k8s-values.yaml` must pin `k8s.runtimeClasses.CC2`/`.CC3` (step 2) or
+   set a `defaultPolicy`/`env.WARDYN_DEFAULT_POLICY` override floored at CC1
+   (`examples/policies/demo.json` is the safe reference) — the chart refuses
+   to render `k8s.enabled=true` with neither, since the substrate then
+   advertises only `[CC1]` while the image's baked-in default policy floors
+   at CC2. `postgres.dsn.secretRef` is a PERSISTENT DSN, so the age identity riding in
+   the SAME Secret (`age-key`, via `-gen-age-key`) is required, not optional —
+   without it wardynd generates a fresh identity every boot and cannot decrypt
+   what the previous boot encrypted (crash-loops on the SECOND restart). Keep
+   an admin token secret configured even with OIDC set up — it is the
    recovery path if the Entra role map ever locks everyone out.
 
 5. **Verify.**
@@ -192,7 +214,7 @@ Reuse the shipped chart and substrate; never hand-roll a manifest.
      NetworkPolicy**, not Indeterminate or Not enforcing (see step 1).
    - Launch a run through the console or `wardyn run`, confirm it reaches
      `RUNNING`, and attach (web terminal, or SSH if `ssh.enabled` — `ssh
-     <run-id>@<advertiseHost> -p <port>`, owner-only, docs/SSH.md).
+     <run-id>@<advertiseHost> -p <port>`, owner or admin, docs/SSH.md).
    - Sign in via SSO with a member-mapped account and confirm the console
      shows member-scoped nav (no policy/workspace/secret CRUD, no BYOI); sign
      in with an admin-mapped account and confirm the full console.
@@ -203,7 +225,7 @@ Reuse the shipped chart and substrate; never hand-roll a manifest.
 |---|---|---|
 | Login redirect loop (bounces back to the IdP forever) | Secure-flagged cookies over plain HTTP — `WARDYN_TLS_TERMINATED=true` set while the browser is NOT actually on HTTPS (or the reverse: real TLS termination in front but the flag left unset can also confuse a strict ingress). A `Secure` cookie is silently dropped by the browser off HTTPS, so the OIDC state/nonce/PKCE cookies never survive the round trip. | Set `env.WARDYN_TLS_TERMINATED=true` (helm) only when an ingress/LB genuinely terminates TLS in front of wardynd (browser sees `https://`); leave it unset for plain-HTTP access (port-forward, no ingress TLS). |
 | "no Wardyn role assigned; ask your operator to map you via WARDYN_OIDC_ROLE_MAP" | `WARDYN_OIDC_ROLE_MAP` is set, the signed-in user's `roles`/`groups`/email matched none of its entries, and `WARDYN_OIDC_DEFAULT_ROLE` is unset (fail-closed default: deny). | Either assign the user an Entra App Role (step 3) and confirm "Assignment required" didn't block them, or set `env.WARDYN_OIDC_DEFAULT_ROLE=member` to admit unmatched users as members instead of denying. |
-| wardynd won't start / crash-loops, logs "parse WARDYN_OIDC_ROLE_MAP" or "invalid WARDYN_OIDC_DEFAULT_ROLE" | Both are validated at **boot**, not first use: a malformed role-map entry (bad role value, non-ASCII key, duplicate key, or non-blank input with no valid entry) or a `WARDYN_OIDC_DEFAULT_ROLE` that isn't `admin`/`member` fails boot outright rather than reaching a session cookie later. | Fix the `env.WARDYN_OIDC_ROLE_MAP` CSV syntax (`value=admin` or `value=member` pairs only, ASCII keys, no duplicates) or `env.WARDYN_OIDC_DEFAULT_ROLE` value named in the boot log, then redeploy. |
+| wardynd won't start / crash-loops, logs "parse WARDYN_OIDC_ROLE_MAP" or "invalid WARDYN_OIDC_DEFAULT_ROLE" | Both are validated at **boot**, not first use: a malformed role-map entry (bad role value, non-ASCII key, duplicate key, or non-blank input with no valid entry) or a `WARDYN_OIDC_DEFAULT_ROLE` that isn't `admin`/`member` fails boot outright rather than reaching a session cookie later. | Fix the `env.WARDYN_OIDC_ROLE_MAP` CSV syntax (`value=admin`, `value=security_admin` or `value=member` pairs only, ASCII keys, no duplicates — `security_admin` is reachable only through this map, and `env.WARDYN_OIDC_DEFAULT_ROLE` refuses it) or `env.WARDYN_OIDC_DEFAULT_ROLE` value named in the boot log, then redeploy. |
 | `id_token verification failed` / issuer mismatch | `env.WARDYN_OIDC_ISSUER` doesn't byte-match the token's `iss` claim — common with Entra: v1 vs v2 endpoint, or the wrong tenant segment in the URL. | Use Entra's v2 issuer exactly: `https://login.microsoftonline.com/<tenant-id>/v2.0`. If wardynd and the browser reach the IdP at different hostnames, set `env.WARDYN_OIDC_INTERNAL_ISSUER` for wardynd's own server-side calls and leave `WARDYN_OIDC_ISSUER` as the public one. |
 | `ImagePullBackOff` | `image.repository`/`image.tag` (or `k8s.proxyImage`) point at a tag that was never pushed, or the cluster can't reach the registry / lacks a pull secret. | Confirm the tag exists in the registry the cluster can reach; for a private registry pass `image.pullSecrets`/`k8s.imagePullSecret`. A wrong image still renders and installs fine — this is a **runtime** symptom, always check `kubectl rollout status`, never assume render success means a working image. |
 | Setup check `k8s_egress_containment` reads **Indeterminate** | wardynd reports a `k8s` driver but no canary verdict — either a build too old to compute one, or `setupRunnerInfo`'s own `Capabilities()` call errored before the canary ran. | Upgrade wardynd to a build that reports the canary verdict, and check wardynd's boot logs for the egress-canary result directly. |

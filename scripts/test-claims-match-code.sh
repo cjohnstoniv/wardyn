@@ -506,4 +506,46 @@ while read -r kind; do
 done < "${WORK}/k8s-list-kinds"
 pass "C8h every resource internal/runner/k8s lists has a 'list' verb on the chart's Role"
 
+# X1a-F1 / X1c-F1 (v0.7.4) — three front-door "helm install wardyn" recipes
+# rendered non-zero: values.yaml ships a non-empty postgres.dsn.secretRef.name
+# default, so templates/secret.yaml `fail`s any install that doesn't wire an
+# age identity; and a k8s.enabled=true install with no runs-namespace choice
+# `fail`s at templates/rbac.yaml. Nothing caught either, because a fenced
+# shell recipe is prose to every other guard here. Extracts every fenced
+# ```sh/```bash block across the front-door docs that pastes a
+# `helm install`/`helm upgrade --install wardyn` command and checks it against
+# the two render-time refusals. Ceiling: text-only (does not actually `helm
+# template` the block) — an elided `...` placeholder snippet is excluded, not
+# validated.
+helm_recipe_docs="README.md docs/VERIFY.md .claude/skills/wardyn-k8s-setup/SKILL.md deploy/helm/wardyn/README.md"
+n_blocks=0
+for relpath in ${helm_recipe_docs}; do
+  doc="${ROOT}/${relpath}"
+  [ -f "${doc}" ] || fail "${relpath} moved — this guard would check nothing (C9)"
+  rm -f "${WORK}"/c9-block-*
+  awk -v out="${WORK}/c9-block-" '
+    /^[[:space:]]*```/ {
+      if (fenced) { fenced = 0; print block > (out n); close(out n); n++; block = "" }
+      else { fenced = 1; block = "" }
+      next
+    }
+    fenced { block = block $0 "\n" }
+  ' "${doc}"
+  for b in "${WORK}"/c9-block-*; do
+    [ -f "${b}" ] || continue
+    grep -qE 'helm (install|upgrade --install) wardyn([[:space:]]|$)' "${b}" || continue
+    grep -qF '...' "${b}" && continue   # elided partial snippet, not a pasteable recipe
+    n_blocks=$((n_blocks + 1))
+    grep -qE 'secrets\.(ageKeyFromSecret|allowEphemeralAgeKey)|postgres\.dsn\.secretRef\.name=""' "${b}" \
+      || fail "${relpath} has a fenced 'helm install wardyn' block with no age-key source (secrets.ageKeyFromSecret / secrets.allowEphemeralAgeKey / an explicit postgres.dsn.secretRef.name=\"\") — postgres.dsn.secretRef.name defaults non-empty (values.yaml), so this render fails closed at templates/secret.yaml (C9): $(head -1 "${b}")"
+    if grep -qE 'k8s\.enabled=true' "${b}"; then
+      grep -qE 'k8s\.(runsNamespace|allowRunsInReleaseNamespace)' "${b}" \
+        || fail "${relpath} has a fenced k8s.enabled=true 'helm install wardyn' block with no runs-namespace choice (k8s.runsNamespace or k8s.allowRunsInReleaseNamespace) — templates/rbac.yaml fails this render (C9): $(head -1 "${b}")"
+    fi
+  done
+done
+rm -f "${WORK}"/c9-block-*
+[ "${n_blocks}" -ge 3 ] || fail "found only ${n_blocks} fenced 'helm install wardyn' blocks across the front-door docs — this guard would check nothing (C9)"
+pass "C9 every fenced 'helm install wardyn' block carries an age-key source and, with k8s.enabled=true, a runs-namespace choice"
+
 echo "test-claims-match-code: self-test PASS"

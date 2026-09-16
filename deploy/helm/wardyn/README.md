@@ -7,8 +7,8 @@ This chart deploys `wardynd` (the control plane) to a Kubernetes cluster, connec
 > builds and pushes `ghcr.io/cjohnstoniv/wardynd` on every push to `main`
 > (`:latest`, `:sha-<commit>`); every `vX.Y.Z` release tag is
 > [release.yml](../../../.github/workflows/release.yml)'s job (the bare
-> semver, e.g. `0.6.0` — matching this chart's default `image.tag`,
-> `.Chart.AppVersion`; see [RELEASING.md](../../../RELEASING.md)). The
+> semver — matching this chart's default `image.tag`, i.e. `Chart.yaml`'s own
+> `appVersion`; see [RELEASING.md](../../../RELEASING.md)). The
 > chart's defaults resolve to a real image once the version in
 > `Chart.yaml`'s `appVersion` has actually been released; for an
 > unreleased/main-tip build, override `image.tag` to `latest` or
@@ -165,13 +165,22 @@ WARDYN_VERSION=$(curl -fsSL "https://api.github.com/repos/cjohnstoniv/wardyn/rel
 ```
 
 ```bash
+kubectl create namespace wardyn
+kubectl create secret generic wardyn-auth -n wardyn \
+  --from-literal=admin-token="$(openssl rand -hex 32)"
+
 helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn \
   --version "${WARDYN_VERSION:?could not resolve a version — refusing an unpinned install}" \
-  --namespace wardyn --create-namespace \
-  --set auth.adminToken.secretRef.name=wardyn-auth
+  --namespace wardyn \
+  --set auth.adminToken.secretRef.name=wardyn-auth \
+  --set postgres.dsn.secretRef.name="" \
+  --set postgres.dsn.value="postgres://wardyn:wardyn-dev@db:5432/wardyn?sslmode=disable"
 ```
 
-The chart is cosign-signed by the same release workflow that signs the images;
+Demo-grade Postgres wiring (inline DSN, ephemeral age identity) — see
+"Database (DSN)" below for a persistent, production DSN with a wired age
+identity before using this beyond a laptop. The chart is cosign-signed by
+the same release workflow that signs the images;
 `docs/VERIFY.md` covers checking it. `oci://` is native Helm — no `helm repo add`.
 
 Installing from a clone (`./deploy/helm/wardyn`) still works and is what you want
@@ -412,13 +421,17 @@ phase B to "CNI does not enforce", inviting
   are how you find out — check them after install.
 
 ```bash
+kubectl create namespace wardyn-runs
+
 helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_VERSION" -n wardyn \
   --set auth.adminToken.secretRef.name=wardyn-auth \
   --set postgres.dsn.secretRef.name=wardyn-pg \
   --set secrets.ageKeyFromSecret=true \
   --set serviceAccount.automount=true \
   --set k8s.enabled=true \
-  --set k8s.proxyImage="$REGISTRY/wardyn-proxy:$TAG"
+  --set k8s.runsNamespace=wardyn-runs \
+  --set k8s.proxyImage="$REGISTRY/wardyn-proxy:$TAG" \
+  --set-file defaultPolicy=examples/policies/demo.json
 ```
 
 - `k8s.enabled`: turns on the wiring below. **Requires
@@ -426,16 +439,25 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   (the substrate drives the API server directly via client-go, which needs
   the pod's own projected ServiceAccount token; `automount=false` is the
   chart's own default, since a non-k8s wardynd calls no API server at all).
+  **Also requires either `k8s.runtimeClasses.CC2` (or `.CC3`) pinned, or a
+  `defaultPolicy`/`env.WARDYN_DEFAULT_POLICY` override whose
+  `min_confinement_class` is CC1** — the substrate advertises only `[CC1]`
+  until a RuntimeClass is pinned, and the image's baked-in default policy
+  floors at CC2, so a stock install with neither refuses to render.
+  `examples/policies/demo.json` above is the safe CC1 reference.
 - `k8s.rbac.create`: render the RBAC objects below. Default `true`. Set
   `false` when a platform team provisions equivalent RBAC out-of-band (e.g.
   GitOps-managed roles on a managed cluster) and would rather this chart
   not manage its own copy — you are then responsible for granting
   `serviceAccount.name` the exact verbs documented below.
 - `k8s.runsNamespace`: namespace every sandbox (Secret/NetworkPolicies/pods)
-  is created in. Empty (default) => the release namespace, with nothing extra
-  to set up. A DIFFERENT namespace must **already exist** — the chart never
-  creates or labels it — and gets its own Role/RoleBinding plus an extra
-  NetworkPolicy ingress peer (matched on the namespace's built-in
+  is created in. **Required with `k8s.enabled=true`** — the chart refuses to
+  render an empty value (it would put the k8s-runner Role, and every run's
+  pods, in the CONTROL-PLANE namespace, where those verbs cover every other
+  workload sharing it; `k8s.allowRunsInReleaseNamespace=true` is the explicit
+  opt-out for a laptop demo). The namespace must **already exist** — the
+  chart never creates or labels it — and gets its own Role/RoleBinding plus
+  an extra NetworkPolicy ingress peer (matched on the namespace's built-in
   `kubernetes.io/metadata.name` label, since an operator-created namespace
   carries no chart labels) so its proxy sidecars can still reach wardynd for
   credential mints, approval checks, and recording uploads.
@@ -972,7 +994,11 @@ See `values.yaml` for all options. Key settings:
   [Split SSH exposure](#split-ssh-exposure) above.
 - `replicas`: **leave at 1 — the chart refuses anything higher.** A render with
   `replicas > 1` fails with an explicit message unless you also set
-  `allowMultiReplica=true`. The pin is a safety control: wardynd's
+  `allowMultiReplica=true`. This chart-render pin is the first of two
+  controls: wardynd also takes a Postgres advisory lock at boot
+  (`cmd/wardynd/single_instance.go`) and refuses to serve if it can't get it
+  — `allowMultiReplica` sets `-allow-multi-instance` on the container args,
+  which lifts BOTH. The pin is a safety control: wardynd's
   secret-masking registry is in-memory, per-process, and fails OPEN, so a
   session recording uploaded to a replica that did not handle that run's
   credential injection is persisted verbatim — live credentials in cleartext,

@@ -31,7 +31,7 @@ Pick by **who runs this box**. Everything here pulls cosign-signed, SBOM-atteste
 curl -fsSL https://github.com/cjohnstoniv/wardyn/releases/download/v0.7.3/install.sh | sh
 ```
 
-Cosign-signed, not tip-of-`main` — only the script is pinned; it installs the newest release (`WARDYN_VERSION` overrides). Installs into `~/.wardyn`, opens Getting Started on <http://127.0.0.1:8080> as an **admin** (`WARDYN_HOME`, `WARDYN_PORT` override).
+Cosign-signed, not tip-of-`main` — only the script is pinned; it installs the newest release (`WARDYN_VERSION` overrides). Installs into `~/.wardyn`, prints the console URL (<http://127.0.0.1:8080>) — sign in by pasting the minted admin token (`WARDYN_HOME`, `WARDYN_PORT` override).
 **A managed laptop, one daemon per developer** — desktop profile a′: [`docs/DESKTOP.md`](docs/DESKTOP.md).
 
 ### Multi-user — an admin sets the ceiling, members run inside it
@@ -48,14 +48,26 @@ Each human gets an SSO identity and an **admin** or **member** role ([`docs/OPER
 WARDYN_VERSION=$(curl -fsSL "https://api.github.com/repos/cjohnstoniv/wardyn/releases?per_page=1" \
                  | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -1)
 
+kubectl create namespace wardyn
+kubectl -n wardyn create secret generic wardyn-auth \
+  --from-literal=admin-token="$(openssl rand -hex 20)"
+kubectl -n wardyn create secret generic wardyn-postgres-dsn \
+  --from-literal=dsn="<your Postgres DSN>" \
+  --from-literal=age-key="$(docker run --rm ghcr.io/cjohnstoniv/wardynd:${WARDYN_VERSION} -gen-age-key)"
+
 helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn \
   --version "${WARDYN_VERSION:?could not resolve a version — refusing an unpinned install}" \
-  --namespace wardyn --create-namespace \
-  --set auth.adminToken.secretRef.name=wardyn-auth
+  --namespace wardyn \
+  --set auth.adminToken.secretRef.name=wardyn-auth \
+  --set postgres.dsn.secretRef.name=wardyn-postgres-dsn \
+  --set secrets.ageKeyFromSecret=true
 ```
 
-Needs an admin token or OIDC, a Postgres DSN and an age identity — role map, substrate
-and values table: [`deploy/helm/wardyn/README.md`](deploy/helm/wardyn/README.md).
+A persistent Postgres DSN needs an age identity riding in the SAME Secret
+(above) or the chart refuses to render — without one, wardynd generates a
+fresh identity every boot and cannot decrypt what the previous boot
+encrypted. Full role map, substrate and values table:
+[`deploy/helm/wardyn/README.md`](deploy/helm/wardyn/README.md).
 
 ### Joining a Wardyn someone else runs
 
@@ -232,8 +244,9 @@ the other:
   a laptop without a real cluster, and the only one with recorded demos
   (the Getting Started demo steps).
 - **Kubernetes**: `helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn
-  --version <release>` — the chart is published as a signed OCI artifact, so no
-  clone and no `helm repo add`. See
+  --version <release>` (needs the admin-token/Postgres-DSN/age-identity Secrets
+  in the recipe above the fold) — the chart is published as a signed OCI
+  artifact, so no clone and no `helm repo add`. See
   **[`deploy/helm/wardyn`](deploy/helm/wardyn/README.md)** — the deployment
   story: `make kind-quickstart` for a one-command real-cluster install, or a
   production Helm install onto your own Kubernetes. Not yet at Compose parity
