@@ -286,7 +286,13 @@ test("the member signs in to AWS from their own seat and the capture is theirs",
   await expect
     .poll(
       async () => {
-        const text = await screen.innerText().catch(() => "");
+        // BOUNDED, and that bound is the whole fix. `locator.innerText()` takes
+        // no default timeout, so once the pane has unmounted the terminal this
+        // call does not throw — it WAITS, swallowing the entire LOGIN_DONE
+        // budget inside a single poll iteration, and the `.catch` below never
+        // runs and the server is never asked. That is what made this case fail
+        // at exactly 300s with model_access sitting at "live" the whole time.
+        const text = await screen.innerText({ timeout: 1_000 }).catch(() => "");
         if (text.includes(FAIL_MARKER)) {
           const line = text.split("\n").find((l) => l.includes(FAIL_MARKER)) ?? FAIL_MARKER;
           throw new Error(`the login helper refused this capture: ${line.trim()}`);
@@ -434,7 +440,13 @@ test("sso-pin-dispatch: a pin changed after capture warns, refuses the run, and 
   await expect
     .poll(
       async () => {
-        const text = await screen.innerText().catch(() => "");
+        // BOUNDED, and that bound is the whole fix. `locator.innerText()` takes
+        // no default timeout, so once the pane has unmounted the terminal this
+        // call does not throw — it WAITS, swallowing the entire LOGIN_DONE
+        // budget inside a single poll iteration, and the `.catch` below never
+        // runs and the server is never asked. That is what made this case fail
+        // at exactly 300s with model_access sitting at "live" the whole time.
+        const text = await screen.innerText({ timeout: 1_000 }).catch(() => "");
         if (text.includes(FAIL_MARKER)) {
           const line = text.split("\n").find((l) => l.includes(FAIL_MARKER)) ?? FAIL_MARKER;
           throw new Error(`the login helper refused this capture: ${line.trim()}`);
