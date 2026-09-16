@@ -609,3 +609,27 @@ describe("RunsScreen board — an ephemeral run names itself honestly", () => {
     expect(screen.getByText("Ephemeral scratch — no repo")).toBeInTheDocument();
   });
 });
+
+// X3-F4 — the empty board was the operator's first-run funnel: a host barrier
+// readout, an operator setup checklist and the demo grid, all of it either
+// redacted-blank or unreachable for a member. A member's own empty board says
+// what a member can do about it.
+describe("RunsScreen — the member's empty board", () => {
+  it("a member with no runs gets the member empty state, not the operator first-run funnel", async () => {
+    listRunsMock.mockResolvedValue([]);
+    renderScreen("member");
+
+    expect(await screen.findByText("Runs you launch appear here")).toBeInTheDocument();
+    expect(screen.queryByText("No runs yet")).not.toBeInTheDocument();
+    expect(screen.queryByText(/available on this host/)).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /new run/i })).toHaveAttribute("href", "/runs/new");
+    expect(screen.getByRole("link", { name: /getting started/i })).toHaveAttribute("href", "/setup");
+  });
+
+  it("negative control: an admin's empty board is the unchanged first-run funnel", async () => {
+    listRunsMock.mockResolvedValue([]);
+    renderScreen("admin");
+    expect(await screen.findByText("No runs yet")).toBeInTheDocument();
+    expect(screen.queryByText("Runs you launch appear here")).not.toBeInTheDocument();
+  });
+});

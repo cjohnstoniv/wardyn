@@ -563,6 +563,17 @@ export function credentialKind(scope: Record<string, unknown>): CredentialKind {
 // secret name every provider convention expects, and the per-state copy.
 // `SECRET_NAME` is a value (not just a type) precisely because the field
 // shows it verbatim as a mono label — it's the one name a member can register.
+// DRAFT (M2 canon pending) — X3-F4, the MEMBER's empty runs board. The operator
+// first-run funnel it replaces is a host-barrier readout plus a setup
+// checklist: redacted blank for a member, and pointing at routes their role
+// cannot reach. These three lines are what a member can actually do instead.
+export const RUNS_MEMBER_EMPTY = {
+  TITLE: "Runs you launch appear here",
+  BODY: "Nothing is running yet. Start one against a workspace your admin has made available to you.",
+  ACTION: "New run",
+  GUIDE: "Getting started",
+} as const;
+
 export const YOUR_MODEL_KEY = {
   SECRET_NAME: "anthropic-api-key",
   // DRAFT (M2 canon pending) — X3-F3. The member's own key is stored under the

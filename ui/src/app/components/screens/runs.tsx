@@ -28,6 +28,7 @@ import { usePoll } from "../../lib/use-poll";
 import { getErrorMessage, relativeTime } from "../../lib/format";
 import { deriveReadiness } from "../../lib/readiness";
 import { NoBarrierBanner, RunsFirstRun } from "./runs-first-run";
+import { RunsMemberEmpty } from "./runs-member-empty";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
@@ -379,6 +380,11 @@ export function RunsScreen() {
             }
           />
         </div>
+      ) : trueEmpty && role === "member" ? (
+        /* X3-F4: RunsFirstRun is the OPERATOR's funnel — a host-barrier readout
+           a member's redacted status renders blank, over steps their role cannot
+           reach. Same board, the member's own answer. */
+        <RunsMemberEmpty />
       ) : trueEmpty ? (
         <RunsFirstRun
           readiness={readiness}
