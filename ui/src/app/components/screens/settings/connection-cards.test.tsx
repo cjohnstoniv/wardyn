@@ -32,7 +32,7 @@ vi.mock("./harness-login-pane", () => ({
   },
 }));
 
-import { HostSummary, Lane, ModelProviderCard, S, SecretLane } from "./connection-cards";
+import { ModelProviderCard, S } from "./connection-cards";
 import { baseStatus } from "../../../lib/test-fixtures";
 import type { SetupStatus } from "../../../lib/types";
 
@@ -387,16 +387,13 @@ describe("ModelProviderCard — the login dialog's geometry", () => {
 // (screens/providers/git-tab.tsx), which has its own test coverage
 // (git-tab.test.tsx) for the lane behaviors this block used to pin here —
 // per-host secret naming, the write-only "Connected" summary + Replace, the
-// unset-lane input, and Disconnect. What stays HERE is the export smoke test:
-// Lane/SecretLane/HostSummary are the shared shell the Git tab reuses rather
-// than re-typing.
-describe("Lane / SecretLane / HostSummary — exported for the Workspace Providers Git tab", () => {
-  it("are exported function components", () => {
-    expect(typeof Lane).toBe("function");
-    expect(typeof SecretLane).toBe("function");
-    expect(typeof HostSummary).toBe("function");
-  });
-});
+// unset-lane input, and Disconnect. Lane/SecretLane/HostSummary are the
+// shared shell the Git tab reuses rather than re-typing; the export smoke
+// test that used to live here (X2-F20: `expect(typeof Lane).toBe("function")`
+// and its SecretLane/HostSummary siblings) is deleted — tsc already enforces
+// these are function components at every import site, a vacuous runtime
+// re-check of a static type. A describe with no it() fails vitest ("No test
+// found in suite"), so the empty wrapper goes with it.
 
 // U2-01 (blind round 2, lens-U2): the NON-per_user arm of the same badge.
 // `!!bedrockRow` is true as soon as deriveIntegrations sees a Bedrock row at
