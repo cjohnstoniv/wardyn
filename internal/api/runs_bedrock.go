@@ -228,6 +228,22 @@ type bedrockAuth struct {
 	// residency note for why this differs from bearer. Mutually exclusive with
 	// awsMount and the resident-key path; bearer still wins over it.
 	ssoInject bool
+	// ssoAccountID/ssoRoleName are the AWS account and IAM role the stored
+	// session this run would carry actually names — the pair
+	// awsSSOConfigFileContents bakes VERBATIM into the sandbox's ~/.aws/config
+	// and botocore then asks GetRoleCredentials for. Set ONLY on the ssoInject
+	// branch, and from the POST-refresh blob, so a comparison against them is a
+	// comparison against what the run will really use.
+	//
+	// They exist because the roster PIN is checked at capture time and nowhere
+	// else: a capture that predates a pin is the one identity the pin was meant
+	// to govern and the one nothing compares. resolveBedrockAuth cannot make
+	// that comparison itself (awsSSOScope is {perUser, owner} — it has no
+	// roster), so the pair rides out to the declared-mechanism gate one frame
+	// up, which already holds the site config. Empty for every other lane, and
+	// for a blob captured by a binary that did not record them — see
+	// bedrockBlobPinMismatch for why empty must never refuse.
+	ssoAccountID, ssoRoleName string
 	// ssoRefreshFailure carries the refusal sentence when a captured AWS SSO
 	// credential COULD have been renewed but the renewal did not land (the
 	// refresh token is spent, or the OIDC call did not complete). It is set only
@@ -592,7 +608,11 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 			s.cfg.MaskRegistry.AddGlobal([]byte(blob.AccessToken))
 			s.cfg.MaskRegistry.AddGlobal([]byte(blob.RefreshToken))
 			s.cfg.MaskRegistry.AddGlobal([]byte(blob.ClientSecret))
-			return ready(bedrockAuth{env: env, egressHosts: hosts, ssoInject: true})
+			// The POST-refresh blob's own pair: dispatch is the one pass allowed
+			// to redeem the rotating refresh token, and the identity the gate
+			// compares must be the one this run will actually present.
+			return ready(bedrockAuth{env: env, egressHosts: hosts, ssoInject: true,
+				ssoAccountID: blob.AccountID, ssoRoleName: blob.RoleName})
 		}
 	}
 
@@ -684,6 +704,14 @@ type SetupBedrock struct {
 	// different ways — and nothing on the console reads a second copy of a fact
 	// SetupStatus.ModelAccess already carries per principal.
 	SSOExpired bool `json:"-"`
+	// SSOAccountID/SSORoleName are the AWS account and IAM role the CALLER's own
+	// captured session names. IN-PROCESS only (json:"-"), for the same reason
+	// SSOExpired is: nothing on the console renders a second copy of an identity
+	// SetupStatus.ModelAccess already speaks for per principal. They exist so
+	// bedrockProviderCheck can say, on the ADMIN's own Bedrock row, that a
+	// stored capture disagrees with the roster pin — the posture that is
+	// otherwise audible only as somebody else's refused run.
+	SSOAccountID, SSORoleName string `json:"-"`
 	// PerUser/Mechanism: the CALLER's own awsSSOScope, echoed in-process (never
 	// on the wire — bedrockProviderCheck's callsite already has bedrock in
 	// hand, so no second SetupStatus consumer needs to re-derive it) so
@@ -763,10 +791,12 @@ func (s *Server) setupBedrock(ctx context.Context, present map[string]bool, sso 
 	// a declared mechanism can refuse a run, would refuse a run dispatch heals.
 	// Reading NO refresh is done here: this is a read-only probe.
 	ssoLive, ssoDead := false, false
+	ssoAccount, ssoRole := "", ""
 	if blob, found, err := s.readAWSSSOBlob(ctx, sso); err == nil && found {
 		now := s.cfg.Now()
 		ssoLive = blob.renewable(now) || !blob.expired(now)
 		ssoDead = !ssoLive
+		ssoAccount, ssoRole = blob.AccountID, blob.RoleName
 	}
 	b := SetupBedrock{
 		Region:        s.cfg.BedrockRegion,
@@ -776,6 +806,8 @@ func (s *Server) setupBedrock(ctx context.Context, present map[string]bool, sso 
 		BearerPresent: present[bedrockAPIKeySecret],
 		SSOPresent:    ssoLive,
 		SSOExpired:    ssoDead,
+		SSOAccountID:  ssoAccount,
+		SSORoleName:   ssoRole,
 	}
 	// Under per_user the OPERATOR lanes are not this caller's credential either
 	// (resolveBedrockAuth skips all three), so reporting them would read "ready"

@@ -251,6 +251,64 @@ func bedrockPinDisagreement(sc types.SiteConfig, model string) (pinAccount, mode
 	return "", ""
 }
 
+// awsSSOPinContradiction answers the question the pin was never asked after
+// capture time: does the identity a STORED session names still agree with the
+// one this deployment's roster row allows?
+//
+// It is ONE comparison with two doors — dispatch/create read it through
+// bedrockBlobPinMismatch below, and the caller's own /setup/status grading
+// (setupModelAccess, modelaccess.go) reads it directly off the blob — because a
+// second spelling of it would eventually refuse a run the console called fine.
+//
+// FOUR THINGS MAKE IT ANSWER "NO CONTRADICTION", and each is load-bearing:
+//
+//   - no ENABLED per_user bedrock_sso row (perUserLoginRow): a `shared` estate
+//     has no per-person identity to contradict, and the save door refuses pin
+//     fields on such a row anyway.
+//   - an UNPINNED row. The pin is optional on purpose and most estates carry
+//     none; firing here would take Bedrock away from every one of them on
+//     upgrade — the regression BedrockSSOPinUnenforced's doc warns about, in
+//     its dispatch form. Both halves or neither, the discipline awsSSOPin.set()
+//     already states: a half-pinned row (unreachable through
+//     validateAgentSSOPin, reachable through hand-edited JSONB) constrains
+//     nothing, so it refuses nothing.
+//   - a stored pair Wardyn does not know. account_id/role_name are `omitempty`
+//     on the wire (awsSSOBlob, harnesscred.go) and a blob written by an older
+//     binary may carry neither; refusing on absence would be that same upgrade
+//     regression, for a comparison there is no data for.
+//   - agreement.
+//
+// Returns (stored, pinned, true) ONLY on a genuine contradiction, so a caller
+// can name BOTH pairs — which is the whole point: the person reading the
+// refusal is the one who has to sign in again.
+func awsSSOPinContradiction(sc types.SiteConfig, stored awsSSOPin) (awsSSOPin, awsSSOPin, bool) {
+	if stored.AccountID == "" {
+		return awsSSOPin{}, awsSSOPin{}, false
+	}
+	row, ok := perUserLoginRow(sc, awsSSOProvider)
+	if !ok {
+		return awsSSOPin{}, awsSSOPin{}, false
+	}
+	pinned := awsSSOPin{AccountID: row.SSOAccountID, RoleName: row.SSORoleName}
+	if !pinned.set() || stored == pinned {
+		return awsSSOPin{}, awsSSOPin{}, false
+	}
+	return stored, pinned, true
+}
+
+// bedrockBlobPinMismatch is that comparison asked of a RESOLVED Bedrock auth:
+// the captured-SSO lane, and only it, carries a stored identity
+// (bedrockAuth.ssoAccountID). Every other lane — the operator's bearer key, the
+// host ~/.aws mount, the resident SigV4 keys, and every non-Bedrock transport —
+// has no account/role of its own, so there is nothing for a roster pin to
+// disagree with and this answers false for all of them.
+func bedrockBlobPinMismatch(sc types.SiteConfig, b bedrockAuth) (stored, pinned awsSSOPin, mismatch bool) {
+	if !b.ssoInject {
+		return awsSSOPin{}, awsSSOPin{}, false
+	}
+	return awsSSOPinContradiction(sc, awsSSOPin{AccountID: b.ssoAccountID, RoleName: b.ssoRoleName})
+}
+
 // bindCaptureToPin is the upload's identity binding: does this blob name the
 // account and role this capture was AUTHORIZED to produce?
 //
