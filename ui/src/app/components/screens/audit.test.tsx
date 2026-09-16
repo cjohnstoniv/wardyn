@@ -357,6 +357,76 @@ describe("AuditScreen", { timeout: 15_000 }, () => {
     expect(screen.getByText(/Denied egress to evil\.example\.com/)).toBeInTheDocument();
   });
 
+  // F5-F8: the Event-kind facet's items derive from the loaded window
+  // (`KIND_ORDER.filter((k) => presentKinds.has(k))`) — drilling into a run
+  // without the SELECTED kind unmounts that SelectItem while `kindFilter`
+  // still points at it, so the trigger goes blank/stale over a filter that
+  // now matches nothing in the narrowed window.
+  it("resets the Event facet to All when drilling narrows the window past the selected kind", async () => {
+    // Global window: an egress event (run_111) and a lifecycle event
+    // (run_222) — both kinds present.
+    listAuditMock.mockResolvedValueOnce([
+      ev({ id: "e1", run_id: "run_111", action: "egress.deny", target: "evil.example.com", outcome: "denied" }),
+      ev({ id: "e2", run_id: "run_222", action: "run.create" }),
+    ]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    await screen.findByText(/Denied egress to evil\.example\.com/);
+
+    await user.click(screen.getByRole("combobox", { name: /event/i }));
+    await user.click(await screen.findByRole("option", { name: /^Egress$/i }));
+    await waitFor(() => expect(screen.queryByText("Created the run")).not.toBeInTheDocument());
+
+    // Drill into run_111's OWN authoritative trail via its (still visible,
+    // under the Egress filter) chip — same MEDIUM-fix precedent as "re-
+    // queries the server with run_id when a run is selected from a row":
+    // the per-run server query is authoritative and can differ from the
+    // global window. Here it comes back with NO egress event at all, so the
+    // Egress facet item disappears from the Select entirely.
+    listAuditMock.mockResolvedValueOnce([ev({ id: "e3", run_id: "run_111", action: "run.create" })]);
+    await user.click(await screen.findByRole("button", { name: /111/ }));
+    await waitFor(() => expect(listAuditMock).toHaveBeenCalledWith("run_111"));
+
+    // The facet must fall back to "all" — not strand the operator on a
+    // filter whose item no longer exists in the Select's own list, hiding
+    // the one event this narrowed window actually has.
+    expect(await screen.findByText("Created the run")).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: /event/i })).toHaveTextContent("All events");
+  });
+
+  // Neg: a live poll tick is append-only (audit is an append-only log) — it
+  // must never reset a facet whose kind is still present, or a operator
+  // mid-review would lose their filter on every tick.
+  it("neg: an append-only poll tick does not reset a facet whose kind is still present", async () => {
+    listAuditMock.mockResolvedValueOnce([
+      ev({ id: "e1", run_id: "run_111", action: "egress.deny", target: "evil.example.com", outcome: "denied" }),
+    ]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderScreen();
+    await screen.findByText(/Denied egress to evil\.example\.com/);
+    await user.click(screen.getByRole("combobox", { name: /event/i }));
+    await user.click(await screen.findByRole("option", { name: /^Egress$/i }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: /event/i })).toHaveTextContent("Egress"));
+
+    // Fake timers only for the poll tick itself — Radix's Select popup
+    // interaction above stays on real timers.
+    vi.useFakeTimers();
+    try {
+      // The next poll tick appends a SECOND egress event — the kind stays
+      // present the whole time.
+      listAuditMock.mockResolvedValue([
+        ev({ id: "e1", run_id: "run_111", action: "egress.deny", target: "evil.example.com", outcome: "denied" }),
+        ev({ id: "e2", run_id: "run_111", action: "egress.allow", target: "good.example.com" }),
+      ]);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6000);
+      });
+      expect(screen.getByRole("combobox", { name: /event/i })).toHaveTextContent("Egress");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // #11: audit no longer owns a run-launcher — its truly-empty state used to
   // mount its OWN NewRunDialog (import + state + a second "Launch your first
   // run" button); it now just points at /runs, the canonical CTA (its own

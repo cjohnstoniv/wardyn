@@ -390,6 +390,17 @@ export function AuditScreen() {
     return s;
   }, [events]);
 
+  // F5-F8: the Event facet's own SelectItem list is `KIND_ORDER.filter((k) =>
+  // presentKinds.has(k))` — when the loaded window narrows (a run_id drill-in
+  // whose authoritative trail lacks the selected kind) that item unmounts
+  // while `kindFilter` still points at it, leaving the trigger blank over a
+  // filter that now matches nothing. Fall back to "all" the moment the
+  // selected kind is no longer present; an append-only poll tick only ever
+  // GROWS presentKinds, so this never fires on one.
+  React.useEffect(() => {
+    if (kindFilter !== "all" && !presentKinds.has(kindFilter)) setKindFilter("all");
+  }, [presentKinds, kindFilter]);
+
   // Query / kind / actor are sub-filters applied over the loaded window. The
   // run_id filter is enforced server-side (above), so it is not re-applied here.
   const filtered = events.filter((e) => {
