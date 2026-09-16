@@ -1,4 +1,4 @@
-.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down compose-config dco npm-license npm-audit npm-audit-dev ci
+.PHONY: test-gaps license-headers notices diagrams build build-docker build-k8s test test-docker lint ui compose-build compose-up compose-down demo clean test-conformance-docker test-conformance-k8s build-conformance-agent-image test-conformance-stub test-envbuild-integration govulncheck staticcheck agent-images test-drive help test-report test-report-pg test-report-docker test-report-k8s cover-check release-check ui-test ui-typecheck test-e2e test-e2e-concurrent test-e2e-live test-e2e-subscription test-e2e-byoi test-e2e-ssh test-e2e-ssh-k8s test-e2e-ui-sandbox test-e2e-ui screenshots record-demo setup stage-claude stop-host reset reset-all doctor dev-pg agent-images-core test-race tidy-check agent-image-full agent-image-vscode agent-image-novnc gitleaks licenses test-scripts helm-lint helm-install-test kind-quickstart kind-down kind-sso kind-sso-down compose-config dco npm-license npm-audit npm-audit-dev ci
 
 COMPOSE_FILE := deploy/compose/docker-compose.yaml
 
@@ -843,6 +843,19 @@ kind-quickstart: ## kind: build + throwaway cluster + helm install, k8s runner o
 
 kind-down: ## Delete the kind-quickstart cluster
 	deploy/kind/quickstart.sh --down
+
+# ── the multi-user (SSO) overlay on top of that cluster ─────────────────────
+# Dex + two static principals + the fake AWS endpoints, so the admin/member
+# split and the AWS SSO login are exercisable without an IdP or an AWS tenant.
+# Thin for the same reason as the pair above: everything lives in
+# deploy/kind/sso/overlay.sh, so `kind-sso-down` can never drift from
+# `kind-sso`. Neither target creates or deletes a CLUSTER — that is kind-down's
+# job, and this box may hold other clusters.
+kind-sso: ## kind: add the multi-user SSO overlay (Dex + fake AWS endpoints) to the quickstart cluster
+	deploy/kind/sso/overlay.sh
+
+kind-sso-down: ## Remove the SSO overlay (the kind-quickstart cluster stays)
+	deploy/kind/sso/overlay.sh --down
 
 # Validate the compose files parse (does NOT need a running daemon).
 # Both invocations, since scripts/ci-run.sh runs the base + the CI overlay together.

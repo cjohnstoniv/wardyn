@@ -58,18 +58,38 @@ export WARDYN_E2E_BASE_URL="http://localhost:${PORT}"
 
 log() { printf '\033[1;34m[e2e-ui]\033[0m %s\n' "$*"; }
 
+# LIVE mode (WARDYN_E2E_LIVE_BASE_URL): run a spec from ui/e2e/live/ against an
+# ALREADY-RUNNING external Wardyn — the kind SSO cluster
+# (scripts/kind-sso-walk.sh) — instead of the hermetic `-runner none` backend
+# this script otherwise boots and re-seeds per spec. Nothing about the default
+# path changes: the whole of it is skipped below on one variable, and unset
+# (every other caller) the script is byte-identical to before this block.
+#
+# The `live` Playwright project is matched by the spec PATH, not a --project
+# flag: chromium testIgnores live/**, and no other project matches it, so
+# `playwright test e2e/live/<x>.spec.ts` selects exactly one project.
+LIVE_BASE_URL="${WARDYN_E2E_LIVE_BASE_URL:-}"
+if [[ -n "${LIVE_BASE_URL}" ]]; then
+  export WARDYN_E2E_BASE_URL="${LIVE_BASE_URL}"
+  log "LIVE mode: specs run against ${LIVE_BASE_URL} (no hermetic backend, no re-seed)"
+fi
+
 # Build the backend + UI once; subsequent per-spec `up` calls reuse them (each
 # `up` also creates ${DB} if it does not exist — see e2e-backend.sh cmd_up).
-log "Building backend + UI bundle once"
-./scripts/e2e-backend.sh build || { echo "build failed"; exit 1; }
-export WARDYN_E2E_SKIP_BUILD=1
+if [[ -z "${LIVE_BASE_URL}" ]]; then
+  log "Building backend + UI bundle once"
+  ./scripts/e2e-backend.sh build || { echo "build failed"; exit 1; }
+  export WARDYN_E2E_SKIP_BUILD=1
+fi
 
 # Spec selection: args map to e2e/<arg>.spec.ts; default = all *.spec.ts.
+spec_dir="ui/e2e"
+[[ -n "${LIVE_BASE_URL}" ]] && spec_dir="ui/e2e/live"
 specs=()
 if [[ $# -gt 0 ]]; then
-  for a in "$@"; do specs+=("ui/e2e/${a}.spec.ts"); done
+  for a in "$@"; do specs+=("${spec_dir}/${a}.spec.ts"); done
 else
-  for f in ui/e2e/*.spec.ts; do specs+=("$f"); done
+  for f in "${spec_dir}"/*.spec.ts; do specs+=("$f"); done
 fi
 
 # Per-spec Playwright JSON report (schema: .stats.{expected,unexpected,flaky,
@@ -85,10 +105,15 @@ allow_all_skipped=" ${WARDYN_E2E_ALLOW_ALL_SKIPPED:-} "
 pass=0; fail=0; failed_specs=(); skipped_total=0; zero_executed_specs=()
 for spec in "${specs[@]}"; do
   base="$(basename "${spec}")"
+  # Playwright is run from ui/, so its argument is the spec path with the "ui/"
+  # prefix dropped — "e2e/foo.spec.ts", or "e2e/live/foo.spec.ts" in LIVE mode.
+  spec_rel="${spec#ui/}"
   # Retry once, and SHOW the failure. This used to be a single attempt with all
   # output sent to /dev/null, so a transient port race looked identical to a
   # genuine spec failure — the run reported "<spec> failed" with nothing to read.
-  if ! ./scripts/e2e-backend.sh up >/tmp/wardyn-e2e-up.$$ 2>&1; then
+  if [[ -n "${LIVE_BASE_URL}" ]]; then
+    : # the external Wardyn owns its own lifecycle; nothing to seed or reset
+  elif ! ./scripts/e2e-backend.sh up >/tmp/wardyn-e2e-up.$$ 2>&1; then
     log "backend up failed for ${base} — retrying once"
     tail -20 /tmp/wardyn-e2e-up.$$ >&2 || true
     ./scripts/e2e-backend.sh down >/dev/null 2>&1 || true
@@ -100,10 +125,14 @@ for spec in "${specs[@]}"; do
     fi
   fi
   rm -f /tmp/wardyn-e2e-up.$$
-  log "running ${base} against a fresh backend"
+  if [[ -n "${LIVE_BASE_URL}" ]]; then
+    log "running ${base} against ${LIVE_BASE_URL}"
+  else
+    log "running ${base} against a fresh backend"
+  fi
   rm -f "${results_json}"
   spec_ok=0
-  ( cd ui && PLAYWRIGHT_JSON_OUTPUT_NAME="${results_json}" pnpm exec playwright test "e2e/${base}" --workers=1 --reporter=list,json ) && spec_ok=1
+  ( cd ui && PLAYWRIGHT_JSON_OUTPUT_NAME="${results_json}" pnpm exec playwright test "${spec_rel}" --workers=1 --reporter=list,json ) && spec_ok=1
 
   # Read the stats Playwright's own run just wrote, defaulting every field to 0
   # (`// 0`) so a missing/corrupt results.json cannot throw arithmetic garbage
@@ -145,7 +174,7 @@ for spec in "${specs[@]}"; do
   fi
 done
 
-./scripts/e2e-backend.sh down >/dev/null 2>&1 || true
+[[ -n "${LIVE_BASE_URL}" ]] || ./scripts/e2e-backend.sh down >/dev/null 2>&1 || true
 echo
 log "UI e2e summary: ${pass} spec file(s) passed, ${fail} failed, ${skipped_total} test(s) skipped"
 if [[ ${#zero_executed_specs[@]} -gt 0 ]]; then
