@@ -67,6 +67,21 @@ import (
 // to redeem it.
 const awsSSORefreshSkew = 10 * time.Minute
 
+// awsSSORefreshServeFloor is how much validity an access token must still have
+// for a dispatch to be SERVED it rather than wait for a renewal another dispatch
+// already has in flight.
+//
+// It is the floor under the single-flight fast path, not a second skew. Every
+// caller that reaches the fast path is ALREADY inside awsSSORefreshSkew — the
+// needsRefresh gate above sees to that — so "is the token expired?" is the wrong
+// question there: it admits a token with seconds left, and the run then starts on
+// a credential that lapses under it. The skew exists precisely to keep a freshly
+// dispatched run off the expiry edge, and this is the smallest window in which
+// that promise still holds: long enough to cover a sandbox create plus the
+// agent's first model call, short enough that the fast path still covers the
+// whole part of the skew window it was added for.
+const awsSSORefreshServeFloor = 2 * time.Minute
+
 // awsSSORefreshRetryDelay is the single backoff between the two CreateToken
 // attempts a TRANSIENT failure gets (throttling, 5xx, a transport error). One
 // retry, not a loop: N members dispatching at the top of the hour on a
@@ -203,6 +218,14 @@ func (b awsSSOBlob) registrationLapsed(now time.Time) bool {
 	return !b.RegistrationExpiresAt.IsZero() && !now.Before(b.RegistrationExpiresAt)
 }
 
+// servableFor reports whether this access token has enough validity left to
+// START A RUN ON — more than floor, and therefore not merely "not expired yet".
+// See awsSSORefreshServeFloor for why that is the question at the single-flight
+// fast path.
+func (b awsSSOBlob) servableFor(now time.Time, floor time.Duration) bool {
+	return b.ExpiresAt.After(now.Add(floor))
+}
+
 // renewable reports whether this credential can be healed without a human: it
 // carries a refresh token and its client registration has not lapsed. An
 // EXPIRED access token on a renewable blob is not a dead credential — dispatch
@@ -321,12 +344,19 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 		return blob, awsSSORefreshSpentSentence
 	}
 
-	// SINGLE-FLIGHT, and non-blocking while the token in hand still works
-	// (B2-F6, tryLockAWSSSOOwner): every queued create used to pay the stalled
+	// SINGLE-FLIGHT, and non-blocking while the token in hand would still carry a
+	// run (B2-F6, tryLockAWSSSOOwner): every queued create used to pay the stalled
 	// renewal's full 2 x 10s budget again, serially, inside its own POST /runs —
 	// for a token that had minutes of validity left and needed nothing.
+	//
+	// The predicate is servableFor, NOT "not expired": every caller here is
+	// already inside the skew window, so "not expired" admits a token with
+	// seconds left and hands the run a credential that lapses under it. A
+	// dispatch that close to the edge has everything to gain by waiting for the
+	// renewal already in flight, and nothing to lose — it has no usable
+	// credential of its own either way.
 	unlock := func() {}
-	if blob.expired(now) {
+	if !blob.servableFor(now, awsSSORefreshServeFloor) {
 		unlock = s.lockAWSSSOOwner(scope.owner)
 	} else if u, ok := s.tryLockAWSSSOOwner(scope.owner); ok {
 		unlock = u

@@ -106,3 +106,61 @@ func TestAWSSSORefresh_AnExpiredTokenStillWaitsForTheRenewal(t *testing.T) {
 	unlock()
 	<-done
 }
+
+// TestAWSSSORefresh_ATokenTooCloseToExpiryStillWaits is R2's pin on B2-F6's
+// fast path.
+//
+// refreshAWSSSOBlob early-returns unless needsRefresh, so EVERY caller that
+// reaches the single-flight is already inside awsSSORefreshSkew. Keying the fast
+// path on "not expired" alone therefore let a token with SECONDS left take it:
+// the second dispatch was served a credential that lapses mid-run, where before
+// B2-F6 it queued and got the renewed pair. Renewing a whole skew window ahead
+// of expiry exists precisely to keep a freshly dispatched run off that edge.
+func TestAWSSSORefresh_ATokenTooCloseToExpiryStillWaits(t *testing.T) {
+	s, _, _ := ssoRefreshServer(t)
+	// Twenty seconds left: not expired, and nowhere near enough to start a run on.
+	blob := putAWSSSOBlob(t, s, awsSSOTestFixedNow.Add(20*time.Second))
+
+	started, release := make(chan struct{}), make(chan struct{})
+	var startOnce, releaseOnce sync.Once
+	releaseAll := func() { releaseOnce.Do(func() { close(release) }) }
+	// Registered BEFORE the parked flight is launched: a failing assertion below
+	// must not leave the fake endpoint's handler blocked forever.
+	t.Cleanup(releaseAll)
+	fakeOIDC(t, func(w http.ResponseWriter, _ map[string]string, _ int) {
+		startOnce.Do(func() { close(started) })
+		<-release
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"accessToken": "fresh-access-token-abcdefghij", "expiresIn": 3600,
+		})
+	})
+
+	first := make(chan struct{})
+	go func() {
+		defer close(first)
+		_, _ = s.refreshAWSSSOBlob(context.Background(), awsSSOScope{}, blob)
+	}()
+	<-started // the first flight is parked inside CreateToken
+
+	second := make(chan awsSSOBlob, 1)
+	go func() {
+		b, _ := s.refreshAWSSSOBlob(context.Background(), awsSSOScope{}, blob)
+		second <- b
+	}()
+	select {
+	case got := <-second:
+		releaseAll()
+		<-first
+		t.Fatalf("the second dispatch was served the near-expiry token (%q, expiring at %s) instead of waiting for the "+
+			"renewal already in flight — the run starts on a credential that lapses under it",
+			got.AccessToken, got.ExpiresAt.Format(time.RFC3339))
+	case <-time.After(200 * time.Millisecond):
+		// Still blocked on the owner lock, which is what this arm must do.
+	}
+
+	releaseAll()
+	<-first
+	if got := <-second; got.AccessToken != "fresh-access-token-abcdefghij" {
+		t.Errorf("access token = %q; the waiting dispatch must be served the RENEWED pair", got.AccessToken)
+	}
+}
