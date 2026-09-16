@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -141,6 +142,68 @@ func TestCurrent_ConcurrentRefresh_FailureIsNegativeCached(t *testing.T) {
 
 	if got := invocations(t, counter); got != 1 {
 		t.Fatalf("claude invocations = %d, want 1 — a just-failed refresh must be negative-cached, not retried per caller", got)
+	}
+}
+
+// R-04. The negative cache must EXPIRE. Every other test in this lane builds the
+// provider with a frozen clock, so `now.Sub(lastRefreshAt)` is always 0 and a
+// refreshNegativeTTL of an hour — or a cache that never releases at all — would
+// pass all of them while starving the retry that matters: the operator fixes
+// their sign-in and every caller keeps getting the cached failure. The clock is
+// injectable, so this drives it forward across the TTL.
+func TestCurrent_NegativeCacheExpires(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fake-claude is POSIX")
+	}
+	base := time.Unix(1_700_000_000, 0)
+	var clock atomic.Int64 // unix nanos; advanced between phases
+	clock.Store(base.UnixNano())
+
+	dir := t.TempDir()
+	cred := filepath.Join(dir, ".credentials.json")
+	writeCreds(t, cred, "stale-token", base.Add(time.Minute)) // inside the margin
+
+	// Counts every invocation and fails — nothing lands on disk, which is the
+	// arm the negative cache covers.
+	counter := filepath.Join(dir, "invocations")
+	bin := filepath.Join(dir, "claude")
+	if err := os.WriteFile(bin, []byte(fmt.Sprintf("#!/bin/sh\necho x >> %q\nexit 1\n", counter)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := New(Config{
+		CredPath:  cred,
+		ClaudeBin: bin,
+		Now:       func() time.Time { return time.Unix(0, clock.Load()) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, cerr := p.Current(context.Background()); cerr == nil {
+		t.Fatal("a refresh that cannot sign in must fail closed")
+	}
+	if got := invocations(t, counter); got != 1 {
+		t.Fatalf("claude invocations after the first failure = %d, want 1", got)
+	}
+
+	// Still inside the TTL: the cached failure answers, no new process.
+	clock.Store(base.Add(refreshNegativeTTL / 2).UnixNano())
+	if _, cerr := p.Current(context.Background()); cerr == nil {
+		t.Fatal("still failing, so Current must still fail")
+	}
+	if got := invocations(t, counter); got != 1 {
+		t.Fatalf("claude invocations inside the TTL = %d, want still 1 (the failure is negative-cached)", got)
+	}
+
+	// Past the TTL: the operator may have fixed their sign-in since, so the
+	// refresh must be attempted again rather than answered from cache forever.
+	clock.Store(base.Add(refreshNegativeTTL + time.Second).UnixNano())
+	if _, cerr := p.Current(context.Background()); cerr == nil {
+		t.Fatal("still failing, so Current must still fail")
+	}
+	if got := invocations(t, counter); got != 2 {
+		t.Fatalf("claude invocations past refreshNegativeTTL = %d, want 2 — the negative cache must expire, or a fixed sign-in never gets retried", got)
 	}
 }
 
