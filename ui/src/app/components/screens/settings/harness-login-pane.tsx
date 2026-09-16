@@ -423,6 +423,10 @@ export function HarnessLoginPane({
   const savedRef = React.useRef(false);
   const failedRef = React.useRef(false);
   const openedUrlRef = React.useRef(false);
+  // Consecutive unreadable polls of the starting run, not a total: one blip must
+  // not end a sign-in that is working. A ref, not state — it drives no render
+  // and must not churn the poll callback's identity.
+  const pollFailuresRef = React.useRef(0);
 
   const launch = React.useCallback(async () => {
     setPhase("launching");
@@ -454,11 +458,6 @@ export function HarnessLoginPane({
   // run ends instead. Nothing here attaches — AttachTerminal's own mint is
   // owner-or-admin and one failed mint is terminal in that component, so the
   // pane must not mount it until the ticket route would actually answer.
-  // Consecutive unreadable polls, not a total: one blip must not end a sign-in
-  // that is working. A ref, not state — it drives no render and must not reset
-  // the poll's own callback identity.
-  const pollFailuresRef = React.useRef(0);
-
   const pollRun = React.useCallback(async () => {
     if (!runId) return;
     const run = await runsApi.getRun(runId).catch(() => undefined);
