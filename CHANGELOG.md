@@ -90,8 +90,10 @@ no logic change.
   ephemeral-storage limit, or node deletion, took the agent pod with it and the
   orphan sweep reported success without touching the proxy pod, the per-run
   Secret (carrying the proxy config and every `secret_env` value) or either
-  NetworkPolicy. The sweep now also lists Secrets and NetworkPolicies, keyed on
-  the run id recovered from the sandbox ref itself. On the Docker substrate, a
+  NetworkPolicy. The sweep now also lists NetworkPolicies, keyed on the run id
+  recovered from the sandbox ref itself, and reclaims the Secret beside them
+  (the Role narrowing below is how, and why it is not a Secret list). On the
+  Docker substrate, a
   caller-supplied label may no longer override the driver's own `wardyn.run-id`
   / `wardyn.component` / `wardyn.managed` teardown selectors.
 - **A member's policy can no longer author unbounded approval holds.**
@@ -153,6 +155,61 @@ no logic change.
 - A UI-sandbox relay path must now spell its run id canonically; a
   non-canonical spelling (upper-case, braced, unhyphenated) no longer forwards
   the relay path prefix into the sandbox's own app.
+
+- **Credential injection over cleartext port 80 now requires a BARE allowlist
+  entry.** Accepting a port-qualified entry for the injector's host binding —
+  which is what lets a `m.corp:443`-shaped mirror boot at all, above — removed
+  the premise the port-80 arm was written under, that a bound host's entry is
+  *silent* about the port. A host an operator named only as
+  `vendor.example:8443` could therefore be handed the brokered credential on a
+  sandbox-chosen `http://vendor.example/` request. Every other port still asks
+  the authored-port question; a genuinely bare entry injects on port 80 exactly
+  as before.
+- **A port-qualified WILDCARD deny now cancels the injector's host binding.**
+  `allow m.corp:8443` + `deny *.corp:8443` bound the injection rule although
+  egress itself denied the port — the any-port arm shadowed exact port-denies
+  but not wildcard ones.
+- **The Kubernetes runner Role has no Secret-body read capability in any
+  configuration.** Widening the orphan sweep to reclaim a run's Secret (above)
+  first reached for `secrets: list`, and RBAC cannot scope a list by label — so
+  that verb was a namespace-wide plaintext read of every Secret's body, which
+  with the default empty `k8s.runsNamespace` is the control plane's own database
+  DSN, OIDC client secret and ingress TLS key. The reclaim is kept and the verb
+  is gone: a run's NetworkPolicies carry no credential and are now created
+  **before** its Secret and deleted **after** it, so a surviving Secret always
+  has a surviving NetworkPolicy to be found by, and the label-scoped
+  `deletecollection` the Role has always had does the reclaim. Operators running
+  their own Role (`k8s.rbac.create=false`) should add `networkpolicies: list` on
+  upgrade — without it the sweep logs one warning and behaves exactly as it did
+  in 0.7.3.
+- **A run's activity keepalive no longer touches a run that has ended.**
+  `TouchRun` stamps `updated_at`, which is also the clock the killed-run
+  tail-upload grace is measured from — and the UI relay, both attach pumps and
+  the SSH channel keepalives all called it *before* the door that refuses a
+  non-RUNNING run, so an authenticated caller could hold `/internal/recordings`
+  and `/internal/scan-results` open on a cadence for as long as they liked. The
+  guard is in the shared writer, so all four lanes close at once.
+- **Twenty-seven more member-reachable 5xx sites stopped carrying driver
+  text** — `POST /runs` (plain tier, including its member validation path and
+  the runner-capabilities 503), `/runs/{id}/{files,grants,profile}`,
+  `/me/tokens`, `/me/ssh-keys` and both inline-policy resolvers. This is the
+  claim above ("5xx bodies no longer carry driver text") becoming true of those
+  paths too: a Postgres blip no longer answers a member with the deployment's
+  database host, port, user and database name. The error still reaches the log
+  with its method and path.
+- **A policy entry that can never match is named at sidecar boot.** The
+  non-ASCII/malformed-entry refusal is a write-time check, so a policy stored
+  before it landed compiled silently — and on `denied_domains` that fails OPEN,
+  since a request arrives punycode-encoded and no compiled entry spells the
+  stored form. Each sidecar now logs one WARN per dead entry, naming the entry
+  and its list. A warning, never a refusal: the compiled policy is unchanged.
+- **Plain `http://` for `WARDYN_BEDROCK_BASE_URL` is audible.**
+  `WARDYN_ALLOW_TEST_ENDPOINTS=true` unlocks two relaxations and only the AWS
+  SSO override warned at boot. The Bedrock one re-points the bearer-mode
+  credential-injection target, so the API key rides `Authorization: Bearer` in
+  cleartext on every model call; it now logs a `TEST HATCH ACTIVE` WARN naming
+  the plaintext target, and the flag's own help names the relaxation. The
+  refusal without the acknowledgement is unchanged.
 
 ### Added
 
@@ -491,6 +548,36 @@ no logic change.
   episodes that already carry a projected length, and the "See it work" demo
   grid's subtitle no longer promises every demo needs no model or key.
 
+- **Every admin-tier `authz.denied` row now carries the `member_mode` marker.**
+  Two emitters built their own `Data` map instead of calling `authzDeniedDatum` —
+  the operator-only `decision_scope: always` refusal and `denyMemberField` (whose
+  `workspaces.llm_cred` arm is admin-tier) — so neither marked a refusal met
+  inside **view as member**, and `denyMemberField`'s rows carried no `method`
+  either. Both are reachable by an admin in the mode doing what the member
+  Getting Started invites: deciding their own run's held egress at scope
+  `always`, creating a workspace. A reviewer filtering the denial stream read an
+  admin's own member walk as a member incident — the outcome the field was added
+  to prevent. `docs/AUDIT-ACTIONS.md` and `docs/OPERATIONS.md` now describe the
+  guarantee by predicate rather than by naming four sites.
+- **A member's empty Runs board and the account menu's Demos entry key on
+  `role !== "admin"`.** `/setup/status` is redacted on `!isOperator`, which is
+  SUPER-admin only — so a **security admin**'s status arrives with `checks` `[]`,
+  `secrets.present` `[]` and the driver withheld, exactly as a member's does.
+  Through the old two-valued test that tier fell into the operator first-run
+  funnel and read every withheld field as a fact ("Needs the `<name>` secret" for
+  secrets that may exist), over two `/setup?step=` deep links that land on a
+  Getting Started which ignores `?step` — and the account menu offered the same
+  dead link. Both now match `setupGateActive` and `GettingStarted`, which already
+  moved for this reason.
+- **A real member turning member mode ON no longer stamps the flag on their own
+  cookie.** The handler already called this a no-op; it was not one. `GET /me`
+  then answered `member_mode: true`, the console painted a banner naming an admin
+  role the human does not hold, and both credential-mint doors — which key on the
+  flag, not on the stamped tier — refused them their own SSH key and API token
+  with "Exit member mode…", breaking the member Getting Started's "Connect your
+  tools · Add SSH key" card and `docs/MEMBERS.md`'s SSH path. Turning it OFF
+  still re-signs, always.
+
 ### Changed
 
 - **A workspace composition is bounded** at 64 sources, matching the door's
@@ -535,6 +622,15 @@ no logic change.
 - Three hand-rolled radio-button groups (Model provider, Git-tab credential
   lanes, Agents-tab credential-source toggle) now support arrow-key
   navigation and a single Tab stop each.
+
+- **The member-mode banner names no tier**: "Viewing as member — **your usual
+  role** is paused for this session". The control is offered to both admin tiers
+  and both clamp to `member`, which is already why the Exit copy names the mode
+  rather than a tier to return to; a security admin was reading a sentence about
+  a role they do not hold, on the one surface that is unconditional and on every
+  screen. Its ceilings tooltip also now names **secrets** alongside runs and
+  workspaces, matching `docs/OPERATIONS.md`'s ceiling 1 and what the code
+  actually scopes.
 
 ### Known gaps and deferrals
 
@@ -656,6 +752,46 @@ no logic change.
   or Kubernetes dispatch paths can still lose its final upload window; a fix
   needs signal forwarding to the wrapped process plus a bounded flush, judged
   a bigger change than this release's residue.
+
+- **The killed-run tail-upload grace is still measured from `updated_at`, not
+  from a terminal timestamp.** With the keepalive closed (above), the remaining
+  re-openers are wardynd's own writes — chiefly the boot reconciler clearing a
+  dead run's `sandbox_ref`, which can re-open the five-minute window hours after
+  the run ended. The doors it re-opens are upload-only, re-check the run for
+  themselves and still require that run's own unrevoked token. Closing it needs
+  a `terminal_at` column.
+- **A member's Model-access chip reads "Signed out" for a pin-contradicted AWS
+  SSO session that is actually live and renewable.** The server deliberately
+  grades `expired_signin` on a pin contradiction — a design choice, not a bug:
+  `PinMismatch` is `json:"-"`, so the chip is keyed on grading state alone and
+  cannot distinguish "expired" from "contradicts the current pin". The `Action`
+  line directly beneath the chip is correct and does name the pin, so the member
+  is not misdirected; only the chip's own label overstates the session's health.
+  Closing this needs either `pin_mismatch` on the wire with its own chip label
+  or a state-neutral "Model access · Sign in again", which is a canon decision
+  rather than a doc fix. `docs/OPERATIONS.md` now says so explicitly.
+- **The e2e `mockSecurityAdminRole` fixture does not splice the
+  member-projected `/setup/status`** the way `mockMemberRole`'s
+  `mockMemberSetupStatus` does, so seven specs render a security admin against
+  an *operator's* status body — the one shape that tier never receives, since
+  the redaction keys on `!isOperator`. The behaviour those specs cover is pinned
+  elsewhere (vitest over the components, plus one security-admin e2e case), so
+  this is a fixture-fidelity gap, not an uncovered surface.
+- **`mockMemberSetupStatus` hand-mirrors `redactSetupStatusForMember`'s field
+  drops with no parity guard.** It is a deliberate mirror of the server's
+  structural drops rather than a re-derivation of its value projections, and
+  nothing fails when the Go function drops one more field: the fixture simply
+  starts proving a render against a body no server produces.
+- **The Runs board's member empty state still speaks to the person who
+  launches runs.** `RUNS_MEMBER_EMPTY` reads "Runs you launch appear here" over
+  a body pointing at "a workspace your admin has made available to you" — true
+  of a member, off-key for the security admin who now reaches the same empty
+  state and sees every run on the deployment. Wording only, and a canon
+  decision.
+- **The union Go coverage floor was ratcheted 65 → 78 against a measured
+  78.3 %**, a 0.3-point margin — thin enough that an ordinary refactor can turn
+  `cover-check` red on a tree with no test regression in it. Re-measure and
+  re-set the floor at the next release rather than treating 78 as headroom.
 
 ## [0.7.3] — 2026-09-15
 
