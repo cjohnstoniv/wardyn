@@ -150,7 +150,7 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, strings.TrimPrefix(err.Error(), errRecordCeilingLimit.Error()+": "))
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "launch login sandbox: "+err.Error())
+		writeServerError(w, r, "launch login sandbox", err)
 		return
 	}
 	// ANSWER FIRST, then finish the launch. WithoutCancel keeps the request's

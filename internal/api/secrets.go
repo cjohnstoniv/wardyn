@@ -193,7 +193,7 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.cfg.Secrets.For(owner).Put(r.Context(), name, []byte(body.Value)); err != nil {
-		writeError(w, http.StatusInternalServerError, "store secret: "+err.Error())
+		writeServerError(w, r, "store secret", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
@@ -251,7 +251,7 @@ func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.cfg.Secrets.For(owner).Delete(r.Context(), name); err != nil {
-		writeError(w, http.StatusInternalServerError, "delete secret: "+err.Error())
+		writeServerError(w, r, "delete secret", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
@@ -520,7 +520,7 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 	}
 	mine, err := reservedFilteredSecretNames(ctx, s.cfg.Secrets.For(owner))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list secrets: "+err.Error())
+		writeServerError(w, r, "list secrets", err)
 		return
 	}
 	names := mine

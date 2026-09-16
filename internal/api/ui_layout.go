@@ -108,7 +108,7 @@ func (s *Server) handleGetRunLayout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "get run layout: "+err.Error())
+		writeServerError(w, r, "get run layout", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, runLayoutResponse{Preset: layout.Preset, Layout: layout.Layout, UpdatedAt: &layout.UpdatedAt})
@@ -154,7 +154,7 @@ func (s *Server) handlePutRunLayout(w http.ResponseWriter, r *http.Request) {
 
 	saved, err := ls.PutRunLayout(r.Context(), principalFromRequest(r), req.Preset, req.Layout)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "save run layout: "+err.Error())
+		writeServerError(w, r, "save run layout", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, runLayoutResponse{Preset: saved.Preset, Layout: saved.Layout, UpdatedAt: &saved.UpdatedAt})

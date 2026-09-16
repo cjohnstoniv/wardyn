@@ -104,7 +104,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// second field report. With no AgentProviders block agentRosterRefusal
 	// short-circuits to "" and Review is byte-for-byte what it was.
 	if msg, rerr := s.agentRosterRefusal(ctx, req.Agent); rerr != nil {
-		writeError(w, http.StatusInternalServerError, "get site config: "+rerr.Error())
+		writeServerError(w, r, "get site config", rerr)
 		return
 	} else if msg != "" {
 		writeError(w, http.StatusUnprocessableEntity, msg)

@@ -598,7 +598,7 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 	// CASes KILLED->KILLED (applied), re-running the idempotent teardown.
 	applied, serr := s.casRunState(cascadeCtx, id, run.State, types.RunKilled)
 	if serr != nil {
-		writeError(w, http.StatusInternalServerError, "update run state: "+serr.Error())
+		writeServerError(w, r, "update run state", serr)
 		return
 	}
 	if !applied {
