@@ -138,6 +138,7 @@ var envDocShellOnly = map[string]bool{
 	"WARDYN_QUICKSTART_SSH_PORT": true, "WARDYN_KIND_SSO_SERVICE_CIDR": true,
 	"WARDYN_KIND_SSO_REBUILD": true, "WARDYN_KIND_SSO_DEX_PORT": true,
 	"WARDYN_KIND_SSO_EVIDENCE": true, "WARDYN_KIND_SSO_ADMIN_TOKEN": true,
+	"WARDYN_KIND_SSO_SEEN_PORT": true, "WARDYN_LIVE_SEEN_URL": true,
 	// The walk's own EXPORTS to ui/e2e/live/sso-member.spec.ts (process.env,
 	// never Go) — outputs of the walk, not operator inputs.
 	"WARDYN_LIVE_ADMIN_TOKEN": true, "WARDYN_LIVE_FAKE_URL": true,

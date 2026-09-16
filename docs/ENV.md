@@ -450,6 +450,8 @@ The kind quickstart (`deploy/kind/quickstart.sh`) and the kind SSO walk
 | `WARDYN_KIND_SSO_REBUILD` | bool | (unset) | `1` rebuilds the `wardynd`/`wardyn-proxy` images from this tree before loading them into the cluster, instead of reusing the quickstart's already-built images |
 | `WARDYN_KIND_SSO_DEX_PORT` | int | `5557` | Host port `overlay.sh` port-forwards Dex onto, for the browser leg of the split-horizon OIDC flow (the cluster reaches Dex by its Service; your browser reaches it through this port) |
 | `WARDYN_KIND_SSO_EVIDENCE` | path | `local/v074/evidence/kind-sso` | Directory the walk writes its `PUT /site-config` response and `walk.log` evidence to |
+| `WARDYN_KIND_SSO_SEEN_PORT` | int | `8390` | Host port the walk port-forwards the fake AWS endpoint's read-only `/_seen` page onto (what the fake was asked to mint and which Bedrock models the stub answered); the walk reads it after the spec and copies it into the evidence directory |
+| `WARDYN_LIVE_SEEN_URL` | URL | `http://127.0.0.1:8390/_seen` | Set by the walk for `ui/e2e/live/sso-member.spec.ts` (the port-forward above); the spec asserts the member's pinned account/role and the healed pin against it |
 | `WARDYN_KIND_SSO_ADMIN_TOKEN` | string (credential) | (unset = mint a random one) | Admin bearer token the walk authenticates its own site-config PUT with |
 
 The walk also EXPORTS `WARDYN_LIVE_ADMIN_TOKEN`, `WARDYN_LIVE_FAKE_URL`,
