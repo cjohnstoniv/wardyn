@@ -495,6 +495,39 @@ func TestHandlePutSiteConfig_RejectsBothArtifactOverridesAndEgressRedirects(t *t
 	}
 }
 
+// TestHandlePutSiteConfig_LegacyArtifactOverridesUnknownEcosystem is B7-F9:
+// an unknown ecosystem key used to resolve to ecosystemPublicURL[eco] == "",
+// which the fold happily emitted as an EgressRedirect with From="" —
+// validateSiteConfig's NEXT pass then 400ed it as `egress_redirects[0]:
+// invalid from ""`, never naming the actual offending artifact_overrides key,
+// and never reaching the "unknown ecosystem" message that exists for exactly
+// this case two guards further down (it validates EgressRedirects, which by
+// then never carries the raw legacy key). The fold itself must refuse it,
+// naming `artifact_overrides.<key>`.
+func TestHandlePutSiteConfig_LegacyArtifactOverridesUnknownEcosystem(t *testing.T) {
+	fake := &fakeSiteConfigStore{}
+	srv, audit := newSiteConfigHarness(t, fake)
+
+	body := `{"artifact_overrides": {"rubygems": {"base_url": "https://artifactory.corp/api/gems/gems-remote/"}}}`
+	w := do(t, srv, http.MethodPut, "/api/v1/site-config", adminToken, body)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d, want 400; body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "artifact_overrides.rubygems") {
+		t.Errorf("body = %s, want it to name artifact_overrides.rubygems", w.Body.String())
+	}
+	// Not the empty-From message the same unknown key used to 400 as instead.
+	if strings.Contains(w.Body.String(), `invalid from ""`) {
+		t.Errorf("body = %s, still surfaces the useless empty-From message instead of naming the key", w.Body.String())
+	}
+	if fake.putSeen != nil {
+		t.Errorf("a rejected write must never reach the store, got %+v", fake.putSeen)
+	}
+	if len(audit.events) != 0 {
+		t.Errorf("a rejected write must not audit, got %d events", len(audit.events))
+	}
+}
+
 // TestUnionSiteConfigScmHosts asserts unionSiteConfigScmHosts adds the
 // operator's declared ScmHosts (deduped against what's already allowed),
 // no-ops when unconfigured/errored, and never touches AllowedDomains it

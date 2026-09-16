@@ -436,6 +436,17 @@ func foldLegacyArtifactOverrides(cfg *types.SiteConfig) error {
 		return fmt.Errorf("artifact_overrides and egress_redirects must not both be set — artifact_overrides is deprecated, migrate to egress_redirects")
 	}
 	for _, eco := range slices.Sorted(maps.Keys(cfg.ArtifactOverrides)) {
+		// B7-F9: reject an unknown ecosystem key HERE, naming the offending
+		// key. Left unchecked, ecosystemPublicURL[eco] resolves to "" for an
+		// unknown eco, and the fold emits a redirect whose From is empty —
+		// validateSiteConfig's very next pass then 400s it as
+		// `egress_redirects[0]: invalid from ""`, an accurate but useless
+		// message that never says WHICH artifact_overrides key was wrong or
+		// that "unknown ecosystem" (the check that exists for exactly this,
+		// two guards down) was unreachable behind it.
+		if !validArtifactEcosystems[eco] {
+			return fmt.Errorf("artifact_overrides.%s: unknown ecosystem", eco)
+		}
 		ov := cfg.ArtifactOverrides[eco]
 		cfg.EgressRedirects = append(cfg.EgressRedirects, types.EgressRedirect{
 			From: ecosystemPublicURL[eco], To: ov.BaseURL,
