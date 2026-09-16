@@ -355,7 +355,7 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 	// dispatch that close to the edge has everything to gain by waiting for the
 	// renewal already in flight, and nothing to lose — it has no usable
 	// credential of its own either way.
-	unlock := func() {}
+	var unlock func()
 	if !blob.servableFor(now, awsSSORefreshServeFloor) {
 		unlock = s.lockAWSSSOOwner(scope.owner)
 	} else if u, ok := s.tryLockAWSSSOOwner(scope.owner); ok {
