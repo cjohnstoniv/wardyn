@@ -59,6 +59,11 @@ test.describe("Settings — Host card (X2-F1)", () => {
     await navToRoute(page, "/settings");
 
     await expect(page.getByRole("heading", { name: "Host", level: 3 })).toBeVisible();
+    // Fix pass (review F3): the Host h3 above paints immediately, before the
+    // site-config read that gates Internet/the button resolves — an absence
+    // asserted right after it is "not yet", not "never". Wait for the fetch
+    // to actually land first.
+    await page.waitForLoadState("networkidle");
     // Image builder/Recording store are NOT operator-gated (checks_redacted
     // is a server-side fact this mocked /me splice never touches) — only
     // Internet and the proxy landing button are.
@@ -145,12 +150,21 @@ test.describe("Settings — Model provider Connect / Replace / Disconnect (X2-F3
     let names: string[] = (await secretsRes.json()).names ?? [];
     expect(names).toContain("anthropic-api-key");
 
-    // Replace.
+    // Replace. Fix pass (review F2): the secret NAME doesn't change on a
+    // replace, so "Stored as anthropic-api-key" and `names.toContain(...)`
+    // are the SAME claim already proven above — a no-op or a 500 from "Save
+    // replacement" leaves both green. Gate the click on the real write
+    // instead: wait for the actual non-GET /secrets response and assert it
+    // succeeded.
     await page.getByRole("button", { name: "Replace" }).click();
     const replaceField = page.getByLabel("Anthropic API key");
     await expect(replaceField).toBeVisible();
     await replaceField.fill("sk-ant-e2e-replaced");
+    const replacePut = page.waitForResponse(
+      (r) => r.url().includes("/api/v1/secrets") && r.request().method() !== "GET",
+    );
     await page.getByRole("button", { name: "Save replacement", exact: true }).click();
+    expect((await replacePut).ok()).toBe(true);
     await expect(page.getByText(/Stored as\s*anthropic-api-key/)).toBeVisible();
 
     secretsRes = await page.request.get("/api/v1/secrets", { headers: auth });

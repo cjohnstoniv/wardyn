@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { test, expect, gotoConsole, navTo } from "./fixtures";
+import { test, expect, ADMIN_TOKEN, gotoConsole, navTo } from "./fixtures";
 
 // E2E coverage for "Make a policy from this run" (X2-F6) — run-detail.tsx's
 // Audit tab button opens profile-review.tsx's ProfileReview sheet
@@ -12,8 +12,23 @@ import { test, expect, gotoConsole, navTo } from "./fixtures";
 // Had zero e2e — this proves the real round trip: the saved policy is a REAL
 // row the /policies screen lists, not just a client-side success toast.
 const POLICY_NAME = `e2e-run-profile-${Date.now()}`;
+const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 
 test.describe("Run detail — Make a policy from this run (X2-F6)", () => {
+  // Fix pass (review F4): this file's own backend is fresh per run-ui-e2e.sh
+  // invocation, but policies.spec.ts's file-wide invariant (a clean policy
+  // table, so its empty-state specs hold) only survives a plain
+  // `pnpm playwright test` over ONE shared backend if every mutating spec
+  // cleans up after itself — this one didn't. `request`, not `page`: an
+  // afterAll hook runs at worker scope and cannot use the test-scoped `page`
+  // fixture.
+  test.afterAll(async ({ request }) => {
+    const res = await request.get("/api/v1/policies", { headers: auth });
+    const policies: Array<{ id: string; name: string }> = await res.json();
+    const created = policies.find((p) => p.name === POLICY_NAME);
+    if (created) await request.delete(`/api/v1/policies/${created.id}`, { headers: auth });
+  });
+
   test("saves a real policy that appears on /policies", async ({ page }) => {
     await gotoConsole(page);
     await navTo(page, "Runs");

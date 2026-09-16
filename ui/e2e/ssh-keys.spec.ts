@@ -63,7 +63,10 @@ test.describe("SSH keys — add, reload, delete (X2-F2)", () => {
     // this asks the server directly, bypassing the screen entirely.
     const res = await page.request.get("/api/v1/me/ssh-keys", { headers: auth });
     expect(res.ok()).toBe(true);
-    const keys: Array<{ fingerprint: string; name?: string }> = await res.json();
+    // handleListSSHKeys marshals a nil store slice as `null`, not `[]` — a
+    // bare `await res.json()` on the truly-empty case would make the next
+    // line throw a TypeError instead of a verdict.
+    const keys: Array<{ fingerprint: string; name?: string }> = (await res.json()) ?? [];
     expect(keys.some((k) => k.fingerprint === fingerprint || k.name === KEY_NAME)).toBe(false);
   });
 });

@@ -16,7 +16,9 @@ import type { Page } from "@playwright/test";
 // with nothing here to catch it. This file is the one non-intercepted visit.
 //
 // It also pins the member delete gate (X2-F4, the UI half — the Go half is
-// authz_test.go:474 classOwner / workspaces.test.tsx:307): DELETE
+// authz_test.go's classOwner route matrix; the vitest unit coverage of the
+// SAME useCanMutate predicate, over the list screen, is workspaces.test.tsx's
+// "WorkspacesScreen — a member may delete the row they own" describe): DELETE
 // /workspaces/{id} is owner-or-admin server-side, and useCanMutate(ws.owned_by)
 // is supposed to mirror that exactly. The harness bearer is always admin
 // server-side (fixtures.ts), so a member's session is spliced onto BOTH GET

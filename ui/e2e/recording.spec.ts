@@ -257,14 +257,20 @@ test.describe("Recordings library", () => {
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
 
-    // X2-F8: a blind waitForTimeout(500) was the whole detection window —
-    // too short on a loaded runner is a silent false-green, and it proves
-    // nothing about WHEN the player is actually ready. Poll for a POSITIVE
-    // readiness signal instead: `.ap-term` is the VT core's own terminal
-    // element (asciinema-player-ui.js), created only once the WASM module
-    // instantiates and the core renders its first frame — a CompileError
-    // never gets this far.
-    await expect(dialog.locator(".ap-term")).toBeVisible({ timeout: 5_000 });
+    // X2-F8 (fix pass — the first attempt didn't deliver this): a blind
+    // waitForTimeout(500) was the whole detection window, and `.ap-term`
+    // is not a WASM readiness signal either — it's the terminal's CHROME,
+    // returned synchronously by the Terminal component with no Show/Match
+    // guard around it, while the VT core's build() promise is awaited only
+    // inside onMount's own vtReady.then(...) (asciinema-player-ui.js). A
+    // dead CompileError still paints `.ap-term`. Output only reaches the DOM
+    // through the `output` listener that vtReady.then(...) registers, so
+    // pressing Play and polling the rendered cast TEXT is downstream of the
+    // WASM instantiate this test exists to guard.
+    await dialog.getByRole("button", { name: "Play" }).click();
+    await expect(dialog.locator(".ap-term-text")).toContainText("hello from the recording", {
+      timeout: 5_000,
+    });
     expect(
       cspWasmErrors,
       `recording player logged CSP/WASM errors (CSP missing 'wasm-unsafe-eval'?):\n${cspWasmErrors.join("\n")}`,

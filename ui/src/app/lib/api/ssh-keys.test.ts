@@ -4,6 +4,8 @@
  */
 
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { sshKeys } from "./ssh-keys";
 import { HttpError } from "./core";
 
@@ -12,6 +14,31 @@ import { HttpError } from "./core";
 // really sends) had zero coverage. Reached here through fetch, stubbed at the
 // global — the same technique access.test.ts/recordings.test.ts use for their
 // api modules.
+
+// Review fix (F6): the "server's field name" claim below used to be a
+// hardcoded TS guess with nothing tying it to the Go struct it names — the
+// same repoRoot()/goJSONTags() idiom runs.wire.fields.test.ts uses for its
+// own source-parity check, scoped to the one two-field struct this module
+// talks to.
+function repoRoot(): string {
+  let dir = resolve(process.cwd());
+  for (let i = 0; i < 8; i++) {
+    if (existsSync(join(dir, "go.mod"))) return dir;
+    dir = dirname(dir);
+  }
+  throw new Error("go.mod not found walking up from " + process.cwd());
+}
+
+function goJSONTags(src: string, structName: string): string[] {
+  const m = new RegExp(`type\\s+${structName}\\s+struct\\s*\\{([\\s\\S]*?)\\n\\}`).exec(src);
+  if (!m) throw new Error(`struct ${structName} not found`);
+  const tags: string[] = [];
+  for (const t of m[1].matchAll(/json:"([^",]+)(?:,[^"]*)?"/g)) {
+    if (t[1] !== "-") tags.push(t[1]);
+  }
+  return tags;
+}
+
 describe("sshKeys — wire shape", () => {
   afterEach(() => vi.unstubAllGlobals());
 
@@ -32,7 +59,11 @@ describe("sshKeys — wire shape", () => {
     expect(init.method).toBe("GET");
   });
 
-  it("addKey POSTs {name, public_key} — the server's field name, not the client's", async () => {
+  it("addKey POSTs the server's own field names (internal/api/sshkeys.go's addSSHKeyRequest)", async () => {
+    const root = repoRoot();
+    const sshkeysGo = readFileSync(join(root, "internal/api/sshkeys.go"), "utf8");
+    const goTags = goJSONTags(sshkeysGo, "addSSHKeyRequest");
+
     const stored = { fingerprint: "SHA256:new", principal: "alice@example.com", name: "phone", public_key: "", created_at: "2026-01-02T00:00:00Z" };
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(stored, 201));
     vi.stubGlobal("fetch", fetchMock);
@@ -42,6 +73,8 @@ describe("sshKeys — wire shape", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("/api/v1/me/ssh-keys");
     expect(init.method).toBe("POST");
+    const sentKeys = Object.keys(JSON.parse(init.body as string));
+    expect(sentKeys.sort()).toEqual([...goTags].sort());
     expect(JSON.parse(init.body as string)).toEqual({ name: "phone", public_key: "ssh-ed25519 AAAA…" });
   });
 

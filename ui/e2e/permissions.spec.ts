@@ -329,6 +329,12 @@ test.describe("Permissions — a member by URL is told the tier, not an outage",
 // asserted the nav LINK is visible to this tier — nothing exercised the form
 // itself. Real writes, cleaned up at the end so the file's empty-table
 // invariant survives a re-run.
+//
+// Ceiling (review F8): the harness bearer is admin server-side (fixtures.ts),
+// so this proves the RENDER plus a working write path, not that the server
+// itself authorizes security_operator — that's authz_test.go's classSecurity
+// rows for POST /permissions/grants, DELETE /permissions/grants/{id}, and PUT
+// /permissions/enforcement.
 test.describe("Permissions — a security admin actually uses the write surface, not just sees the link (X2-F13)", () => {
   test.describe.configure({ mode: "serial" });
   const SEC_WHO = "carol@corp.example";
