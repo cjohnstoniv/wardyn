@@ -26,7 +26,9 @@ function TabsList({
     <TabsPrimitive.List
       data-slot="tabs-list"
       className={cn(
-        "bg-muted text-muted-foreground inline-flex h-9 w-fit items-center justify-center rounded-xl p-[3px] flex",
+        // F7-F11: the trailing `flex` was a redundant/conflicting duplicate
+        // of `inline-flex` on the same element — line drift, no behavior.
+        "bg-muted text-muted-foreground inline-flex h-9 w-fit items-center justify-center rounded-xl p-[3px]",
         className,
       )}
       {...props}
@@ -57,7 +59,13 @@ function TabsContent({
   return (
     <TabsPrimitive.Content
       data-slot="tabs-content"
-      className={cn("flex-1 outline-none", className)}
+      // F7-F10: outline-none with no replacement left keyboard focus on the
+      // panel itself (Radix gives TabsContent tabIndex=0) with no visible
+      // indicator at all — WCAG 2.4.7. focus-visible restores one.
+      className={cn(
+        "flex-1 outline-none focus-visible:ring-ring focus-visible:ring-[3px] focus-visible:rounded-md",
+        className,
+      )}
       {...props}
     />
   );

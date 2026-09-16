@@ -145,7 +145,7 @@ is a request, a failure is a report.
 |---|---|---|
 | `default` (teal) | The affirmative action | **Exactly one per surface.** Two teal buttons means the surface has not decided what it is for |
 | `secondary` | A second action of equal weight | Rare — usually a sign the surface does two jobs |
-| `outline` | A safe alternative or non-committal action | `Attach`, `Retry` (`states.tsx:69–71`), and **`Deny`** |
+| `outline` | A safe alternative or non-committal action | `Attach`, `Retry` (`states.tsx:86–88`), and **`Deny`** |
 | `ghost` | Back-out and chrome | Cancel, Dismiss, Close, Discard, icon buttons |
 | `destructive` | Irreversible loss | Delete, purge — confirmation dialog required |
 | `link` / `info` | Inline navigation | `--info`, underline on hover |
@@ -208,15 +208,15 @@ Bind `disabled` the instant the action fires; reveal the spinner later.
 - **Cards** are `bg-card` + `border-border`, distinct from their parent: `SectionCard`
   (`rounded-xl`, `p-4`) is the document card, `WidgetCard` (`rounded-lg`) the pane card.
   **Never nest a card in a card** — that is a section.
-- **Empty states carry the action that fills them.** `EmptyState` (`states.tsx:11`)
+- **Empty states carry the action that fills them.** `EmptyState` (`states.tsx:20`)
   takes an `action`; omit it only when the emptiness is good news. Put the doc link next
   to the need.
 - **Persistent errors render inline** with something to read, retry, or act on:
-  `ErrorState` (`states.tsx:44`) for a pane, a shell banner (`app-shell.tsx:531`),
-  `TruncatedNote` (`states.tsx:84–103`) for a partial result.
+  `ErrorState` (`states.tsx:57`) for a pane, a shell banner (`app-shell.tsx:531`),
+  `TruncatedNote` (`states.tsx:101–120`) for a partial result.
 - **Toasts (`sonner`) are transient confirmations only** — "Copied", "Secret saved".
   Anything worth reading twice is not a toast.
-- **Skeletons match the final layout's height** (`TableSkeleton`, `states.tsx:105`).
+- **Skeletons match the final layout's height** (`TableSkeleton`, `states.tsx:122`).
 - **`.scroll-thin` on every scroller** — a default OS scrollbar in a console pane is a
   visual leak.
 

@@ -8,12 +8,22 @@ import { AlertTriangle, RotateCw } from "lucide-react";
 import { Button } from "../ui/button";
 import { cn } from "../ui/utils";
 
+// F7-F10: both states used to hardcode <h3>, correct only when a caller
+// happens to sit under an h1+h2 — several don't (an EmptyState/ErrorState
+// that IS the whole visible content of a section, with nothing else on the
+// page supplying an h2), so the DOM heading order skipped a level (WCAG
+// 1.3.1/2.4.6). `as` lets a caller name the level it actually sits at;
+// defaulting to h2 (rather than h3) is the safer floor — a section's OWN
+// primary message, one level under the screen's PageHeader h1.
+type HeadingTag = "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
+
 export function EmptyState({
   icon: Icon,
   title,
   description,
   action,
   className,
+  as = "h2",
 }: {
   icon: React.ElementType;
   title: string;
@@ -26,14 +36,17 @@ export function EmptyState({
   description?: React.ReactNode;
   action?: React.ReactNode;
   className?: string;
+  /** Heading level for `title` — see the module note above. Default h2. */
+  as?: HeadingTag;
 }) {
+  const Heading = as;
   return (
     <div className={cn("flex flex-col items-center justify-center gap-3 px-6 py-16 text-center", className)}>
       <div className="flex size-12 items-center justify-center rounded-xl border border-border bg-surface-2 text-muted-foreground">
         <Icon className="size-5" />
       </div>
       <div className="space-y-1">
-        <h3 className="text-foreground">{title}</h3>
+        <Heading className="text-foreground">{title}</Heading>
         {description && <p className="max-w-sm text-sm text-muted-foreground">{description}</p>}
       </div>
       {action}
@@ -45,6 +58,7 @@ export function ErrorState({
   message,
   onRetry,
   action,
+  as = "h2",
 }: {
   message?: string;
   onRetry?: () => void;
@@ -53,14 +67,17 @@ export function ErrorState({
   // open-ended slot EmptyState already takes, for a caller that wants the
   // retry rendered itself (or something other than retry).
   action?: React.ReactNode;
+  /** Heading level for "Something went wrong" — see the module note above. Default h2. */
+  as?: HeadingTag;
 }) {
+  const Heading = as;
   return (
     <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
       <div className="flex size-12 items-center justify-center rounded-xl border border-danger/30 bg-danger-subtle text-danger">
         <AlertTriangle className="size-5" />
       </div>
       <div className="space-y-1">
-        <h3 className="text-foreground">Something went wrong</h3>
+        <Heading className="text-foreground">Something went wrong</Heading>
         <p className="max-w-sm text-sm text-muted-foreground">
           {message ?? "We couldn't reach the Wardyn control plane. Please try again."}
         </p>

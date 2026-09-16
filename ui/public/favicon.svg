@@ -1,0 +1,14 @@
+<svg viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+  <!-- F7-F16: the console shipped no favicon.svg / <link rel="icon"> at all —
+       every tab showed the browser's generic blank-page icon. Static hexes
+       (not the app's CSS custom properties, which don't reach a standalone
+       favicon document): the same shield-plus-check mark WardynMark renders
+       in the app (components/wardyn/logo.tsx), teal (#0f766e, --primary
+       light) on a dark-neutral stroke/fill pair that reads on both light and
+       dark browser chrome. -->
+  <path
+    d="M16 2.5 4 7v8.2c0 7.4 5 12.2 12 14.3 7-2.1 12-6.9 12-14.3V7L16 2.5Z"
+    fill="#171717" fill-opacity="0.85" stroke="#0f766e" stroke-width="1.6"
+  />
+  <path d="M11 16.2l3.4 3.4L21.5 12" fill="none" stroke="#0f766e" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+</svg>
