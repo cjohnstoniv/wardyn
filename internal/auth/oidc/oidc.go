@@ -292,6 +292,33 @@ type Session struct {
 	// pre-0.7 cookie — where they would NOT mean the same thing — never
 	// decodes at all.
 	GroupsTruncated bool `json:"groups_truncated,omitempty"`
+	// MemberMode (0.7.4, P2) is the "view as member" flag: this human asked to
+	// be treated as a member for the rest of this session, so an admin can see
+	// what a member sees without a second identity.
+	//
+	// It is a CLAMP INPUT and nothing else. Role above stays the
+	// sign-in-derived truth — never rewritten — and contextWithPrincipal is the
+	// single place the two meet: the EFFECTIVE role published on the context is
+	// RoleMember while this is set. That split is what makes toggling OFF safe:
+	// the stamped role is read back off the cookie rather than re-derived from
+	// the Groups snapshot above, which is a SNAPSHOT and may be truncated, so a
+	// re-derivation could answer "member" and strand an admin outside their own
+	// deployment.
+	//
+	// It only ever LOWERS. No code path writes Role, and there is no value of
+	// this field that widens anybody — which is the property that keeps a
+	// session-cookie flag from being a privilege primitive.
+	//
+	// omitempty and NO codec bump, the same argument Name above makes: an absent
+	// key decodes to false, which is the ordinary signed-in admin, and false is
+	// the FAIL-SAFE answer here (unlike GroupsTruncated, where false is the
+	// fail-open one). The cost is the rolling-upgrade window: during a k8s
+	// rollout a 0.7.3 replica ignores "mm" and answers as admin. A bump would
+	// close that window by 401-ing every live cookie mid-rollout, which is
+	// worse — so docs/OPERATIONS.md publishes the window as a ceiling and
+	// phrases the mode as "see what a member sees", never as proof that a
+	// member is refused.
+	MemberMode bool `json:"mm,omitempty"`
 }
 
 // Authenticator provides OIDC login, callback, logout, and session-check handlers.

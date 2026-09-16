@@ -66,8 +66,13 @@ func NameFromContext(ctx context.Context) string {
 	return n
 }
 
-// RoleFromContext returns the Wardyn role (RoleAdmin or RoleMember) derived
-// for the session Middleware verified, or "" when there is no SSO session.
+// RoleFromContext returns the EFFECTIVE Wardyn role for the session Middleware
+// verified, or "" when there is no SSO session.
+//
+// Effective, not stamped: a session in "view as member" mode (Session.MemberMode)
+// answers RoleMember here whatever its cookie says, because contextWithPrincipal
+// clamps it at the single origin. Nothing outside this package ever sees the
+// stamped role, which is the point — see MemberModeFromContext below.
 // This package only DERIVES and CARRIES the role — see CallbackHandler /
 // deriveRole for how it is computed. Enforcing it (deciding what an admin vs
 // a member may do) belongs to internal/api, the same split
@@ -118,10 +123,26 @@ func GroupsTruncatedFromContext(ctx context.Context) bool {
 	return t
 }
 
-// contextWithPrincipal stores the verified session's sub, email, role, and
-// group snapshot (with its truncation bit) on the context (read back via
+// MemberModeFromContext reports whether this session is in "view as member"
+// mode (Session.MemberMode) — an admin who asked to be treated as a member for
+// the rest of the session.
+//
+// RoleFromContext ALREADY answers member when this is true, so authorization
+// needs this predicate for nothing: every tier decision keeps reading the role.
+// It exists for the two things the clamped role cannot say on its own — the
+// console's banner ("your admin role is paused"), and the seams that must
+// refuse rather than clamp, namely the credential MINT doors, where a
+// member-stamped credential would be re-stamped admin at the next login and
+// outlive the mode (internal/api/membermode.go).
+func MemberModeFromContext(ctx context.Context) bool {
+	m, _ := ctx.Value(memberModeCtxKey{}).(bool)
+	return m
+}
+
+// contextWithPrincipal stores the verified session's sub, email, EFFECTIVE role,
+// and group snapshot (with its truncation bit) on the context (read back via
 // PrincipalFromContext / EmailFromContext / RoleFromContext /
-// GroupsFromContext / GroupsTruncatedFromContext).
+// GroupsFromContext / GroupsTruncatedFromContext / MemberModeFromContext).
 //
 // Groups is stored even when nil, and that is not a wasted WithValue: a nil
 // value and an absent key both read back as nil, so this line costs nothing to
@@ -133,7 +154,22 @@ func contextWithPrincipal(ctx context.Context, sess Session) context.Context {
 	ctx = context.WithValue(ctx, nameCtxKey{}, sess.Name)
 	ctx = context.WithValue(ctx, groupsCtxKey{}, sess.Groups)
 	ctx = context.WithValue(ctx, groupsTruncatedCtxKey{}, sess.GroupsTruncated)
-	ctx = context.WithValue(ctx, roleCtxKey{}, sess.Role)
+	// THE MEMBER-MODE CLAMP, and this is the only place it is applied (0.7.4,
+	// P2). This line is the sole read of sess.Role in the product, so clamping
+	// here clamps everything downstream by construction — internal/api's
+	// isOperator/isSecurityOperator, /me, the attach ticket's role stamp, the
+	// UI-gateway session's — rather than asking two dozen call sites to
+	// remember a second predicate.
+	//
+	// DOWNWARD ONLY, and the asymmetry is deliberate: the stamped sess.Role is
+	// never rewritten, so toggling off restores it verbatim instead of
+	// re-deriving it from a group snapshot that may be truncated.
+	role := sess.Role
+	if sess.MemberMode {
+		role = RoleMember
+	}
+	ctx = context.WithValue(ctx, roleCtxKey{}, role)
+	ctx = context.WithValue(ctx, memberModeCtxKey{}, sess.MemberMode)
 	return context.WithValue(ctx, expiryCtxKey{}, sess.Expiry)
 }
 
@@ -160,6 +196,10 @@ type groupsCtxKey struct{}
 // groupsTruncatedCtxKey is the context key for that snapshot's PF-26
 // truncation bit. Unexported: use GroupsTruncatedFromContext.
 type groupsTruncatedCtxKey struct{}
+
+// memberModeCtxKey is the context key for the session's "view as member" flag.
+// Unexported: use MemberModeFromContext.
+type memberModeCtxKey struct{}
 
 // expiryCtxKey is the context key for the session's expiry.
 // Unexported: use ExpiryFromContext.
