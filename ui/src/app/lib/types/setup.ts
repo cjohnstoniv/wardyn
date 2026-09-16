@@ -279,6 +279,13 @@ export interface SetupStatus {
   // reason as `bedrock` — READY_FALLBACK and older daemons omit it; treat
   // absent as "unknown", not "false".
   llm_ready?: boolean;
+  // X3-F1 — true on a body the server stripped for this caller's tier
+  // (redactSetupStatusForMember). It exists so the console can tell "withheld"
+  // from "absent": an empty `checks` list used to be read as a FACT about the
+  // deployment, and a member was shown "Image builder · Off" / operator-shaped
+  // runner fix advice for detail that was merely hidden from them. Absent on an
+  // operator's body and on any older daemon — treat absent as false.
+  checks_redacted?: boolean;
   // The CALLER's own model-access state — kept through the member redaction on
   // purpose, and what the member's Getting Started chip reads INSTEAD of
   // llm_ready. Absent when there is nothing per-principal to say (no roster row

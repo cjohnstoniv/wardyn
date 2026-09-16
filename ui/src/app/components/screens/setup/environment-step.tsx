@@ -181,7 +181,16 @@ export function EnvironmentStep({
   // treat both as no-driver, or a member landing here (e.g. a stale direct
   // /setup visit before B4's honest-landing redirect) sees the wrong "start
   // wardynd with -runner docker" fix for a runner that's merely hidden from them.
-  const noDriver = status.runner.driver === "none" || status.runner.driver === "";
+  //
+  // X3-F1 narrows that fold to the case it was written for. The redaction keeps
+  // confinement_classes, so "" WITH classes means UNKNOWN (a live runner whose
+  // name was withheld), not absent: no danger card, no operator-only fix, and —
+  // the third symptom — a picker that still works, since `selectable` below
+  // reads the same `noRunner`. Only "" with NO classes is still no-driver, which
+  // is what the HIGH-4 pin asserts.
+  const noDriver =
+    status.runner.driver === "none" ||
+    (status.runner.driver === "" && classes.length === 0);
   const noRunner = noDriver || classes.length === 0;
   const available = new Set(classes);
   const rec = recommendedTier(status);

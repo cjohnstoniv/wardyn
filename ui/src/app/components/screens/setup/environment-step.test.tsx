@@ -308,6 +308,23 @@ describe("EnvironmentStep — matrix-as-picker", () => {
     expect(screen.getByText(/-runner docker/)).toBeInTheDocument();
     expect(screen.queryByText(/start the Docker daemon/)).not.toBeInTheDocument();
   });
+
+  // X3-F1: the HIGH-4 fold above is right only when the classes list is ALSO
+  // empty. A member's redacted body carries Driver:"" WITH the real
+  // confinement_classes, so folding "" into no-driver read a hidden runner as
+  // an absent one: the red "No sandbox runner" card, an operator-only fix they
+  // cannot run, and — the third symptom — a dead picker, because `selectable`
+  // is gated on the same `noRunner`. Unknown, not broken.
+  it("(X3-F1) an empty driver WITH live classes is unknown, not absent: no card, picker still selectable", async () => {
+    const status = baseStatus({ runner: { driver: "", confinement_classes: ["CC1", "CC2"] } });
+    const { onSelect } = renderStep({ status });
+    expect(screen.queryByText(/No sandbox runner/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/-runner docker/)).not.toBeInTheDocument();
+    const wall = screen.getByRole("radio", { name: /Wall/ });
+    expect(wall).not.toBeDisabled();
+    await user.click(wall);
+    expect(onSelect).toHaveBeenCalledWith("CC2");
+  });
 });
 
 // B4: k8s variant rows — Runner/Egress containment/Confinement classes/Agent

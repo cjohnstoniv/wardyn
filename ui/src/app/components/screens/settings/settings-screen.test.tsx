@@ -16,7 +16,7 @@
 //      .test.tsx; this pins that Settings actually hands it a real provider
 //      instead of coasting on the context's fail-open default.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -241,5 +241,29 @@ describe("SettingsScreen — a FAILED site-config read is not a proxy posture", 
     await userEvent.click(screen.getByRole("button", { name: /re-check this host/i }));
     expect(await screen.findByText(/^Internet$/)).toBeInTheDocument();
     expect(screen.getByText(/proxy\.corp\.example:3128/)).toBeInTheDocument();
+  });
+});
+
+// X3-F1 (second symptom): a member reaches /settings from the account menu and
+// the BarrierChip link, and their /setup/status body carries `checks: []`
+// because redactSetupStatusForMember stripped it — not because this deployment
+// has no image builder. The row read the absence as a fact and told them the
+// per-run builder was Off. `checks_redacted` is the server saying which it is.
+describe("SettingsScreen — a redacted checks list is not an Off image builder", () => {
+  it("hides the Image builder row on a member's redacted body, and keeps it for an operator", async () => {
+    getSetupStatusMock.mockResolvedValue(baseStatus({ checks: [], checks_redacted: true }));
+    renderScreen(false);
+    await screen.findByRole("heading", { name: "Host", level: 3 });
+    expect(screen.queryByText("Image builder")).toBeNull();
+    expect(screen.queryByText(/devcontainer builds and --image wraps are unavailable/)).toBeNull();
+
+    // Negative control, same render path: an operator whose builder really IS
+    // off still gets the row and the honest Off sentence.
+    cleanup();
+    getSetupStatusMock.mockResolvedValue(baseStatus({ checks: [] }));
+    renderScreen();
+    await screen.findByRole("heading", { name: "Host", level: 3 });
+    expect(screen.getByText("Image builder")).toBeInTheDocument();
+    expect(screen.getByText(/devcontainer builds and --image wraps are unavailable/)).toBeInTheDocument();
   });
 });

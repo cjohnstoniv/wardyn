@@ -732,6 +732,12 @@ func TestRedactSetupStatusForMember_DropsHostCredentialPosture(t *testing.T) {
 	if got.Deployment != (SetupDeployment{}) {
 		t.Errorf("deployment = %+v, want zero — it is derived from the redacted Providers", got.Deployment)
 	}
+	// X3-F1: the strip is now DECLARED. Without this the console reads an empty
+	// Checks list as "this deployment has no image builder / no sandbox runner"
+	// and renders operator-shaped fix advice at a member who cannot act on it.
+	if !got.ChecksRedacted {
+		t.Error("checks_redacted = false — a member's stripped body must say the detail was withheld, not merely be empty")
+	}
 	// RIDER B7-F6: SetupBedrock rebuilt from an explicit field list, exactly
 	// like Runner two lines up. Region/Model name the AWS transport this
 	// deployment reaches Anthropic through; CredsPresent/AWSMount/

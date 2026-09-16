@@ -124,18 +124,26 @@ function HostCard({
             row already labelled "Image builder" says nothing. Its status is the
             fact: "ok" means the per-run builder is wired (devcontainer builds
             and --image wraps fire), "info" means it's off. */}
-        <Row
-          label="Image builder"
-          value={
-            envBuilder?.status === "ok" ? (
-              "Wired"
-            ) : (
-              <span className="text-muted-foreground">
-                Off — devcontainer builds and --image wraps are unavailable
-              </span>
-            )
-          }
-        />
+        {/* X3-F1: gated exactly like the Internet row below — a row that states
+            a deployment fact is drawn only when this caller was actually told
+            it. `checks_redacted` marks a body whose checks list was stripped
+            for the reader's tier, so [] there means WITHHELD, not "no builder":
+            rendering the Off sentence over it told a member their admin's
+            builder was off. Absent/false (every operator body) is unchanged. */}
+        {!status.checks_redacted && (
+          <Row
+            label="Image builder"
+            value={
+              envBuilder?.status === "ok" ? (
+                "Wired"
+              ) : (
+                <span className="text-muted-foreground">
+                  Off — devcontainer builds and --image wraps are unavailable
+                </span>
+              )
+            }
+          />
+        )}
         <Row
           label="Recording store"
           value={

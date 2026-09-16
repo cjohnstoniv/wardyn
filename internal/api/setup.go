@@ -116,6 +116,9 @@ type SetupStatus struct {
 	// banner / demo gating keep working for a member without any of that detail
 	// leaking. Kept in exact sync with ui/src/app/lib/types.ts's SetupStatus.
 	LLMReady bool `json:"llm_ready"`
+	// ChecksRedacted marks a body whose Checks/Providers/Secrets detail was
+	// stripped for this caller's tier — an empty list here is withheld, not a fact.
+	ChecksRedacted bool `json:"checks_redacted,omitempty"`
 	// ModelAccess is THIS PRINCIPAL's model-access state — the per-person answer
 	// LLMReady above structurally cannot give (it is a DEPLOYMENT fact, which is
 	// why a member whose own AWS session had lapsed read a green chip off it).
@@ -775,6 +778,8 @@ func (s *Server) consoleRoleMappingsPresent(ctx context.Context, oidcConfigured 
 // row scoped the read to their namespace). It decides one field — see Harness.
 func redactSetupStatusForMember(st SetupStatus, ownAWSRow bool) SetupStatus {
 	st.Checks = []SetupCheck{}
+	// X3-F1: say the strip happened, so a reader never takes [] for "nothing is wired".
+	st.ChecksRedacted = true
 	st.Providers = []SetupProvider{}
 	st.Secrets = SetupSecrets{Present: []string{}}
 	st.Runner = SetupRunner{ConfinementClasses: st.Runner.ConfinementClasses}
