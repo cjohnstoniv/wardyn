@@ -9,6 +9,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -192,9 +193,10 @@ func TestHandleHarnessLogin_CeilingErrorAfterCreateFailsTheRun(t *testing.T) {
 		hint:       map[uuid.UUID]string{},
 	}
 	rnr := &fakeRunner{}
+	audit := &memAudit{}
 	cfg := baseTestConfig(h, st)
 	cfg.Identity = spy
-	cfg.Audit = &memAudit{}
+	cfg.Audit = audit
 	cfg.OIDC = &oidc.Authenticator{}
 	cfg.Runner = rnr
 	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
@@ -238,5 +240,91 @@ func TestHandleHarnessLogin_CeilingErrorAfterCreateFailsTheRun(t *testing.T) {
 	}
 	if rnr.createCalls != 0 {
 		t.Errorf("CreateSandbox calls = %d, want 0 — nothing may be provisioned under an unresolved ceiling", rnr.createCalls)
+	}
+	// The ROW is half the point: "no failure_hint and no audit row naming it" is
+	// the defect shape this arm exists to end, so a silent FAILED run would pass
+	// every assertion above and still leave an operator with nothing to read.
+	// Exactly one — a compensator that writes twice is a double-count in the
+	// dispatch-failure stream.
+	rows := audit.find("run.dispatch")
+	if len(rows) != 1 {
+		t.Fatalf("run.dispatch rows = %d, want exactly 1", len(rows))
+	}
+	if rows[0].Outcome != "failure" {
+		t.Errorf("run.dispatch outcome = %q, want failure", rows[0].Outcome)
+	}
+	if !strings.Contains(string(rows[0].Data), "governance store unavailable") {
+		t.Errorf("run.dispatch data = %s, want the resolver's own error", rows[0].Data)
+	}
+}
+
+// panicRunner brings the sandbox up the way a driver bug does: it panics inside
+// CreateSandbox, which is where the detached launch's panic window actually is —
+// dispatchRun has already CASed the run PENDING->STARTING by then.
+type panicRunner struct{ *fakeRunner }
+
+func (p *panicRunner) CreateSandbox(context.Context, runner.SandboxSpec) (runner.Sandbox, error) {
+	panic("driver blew up composing the sandbox")
+}
+
+// TestFinishHarnessLoginLaunch_PanicFailsTheRunFromItsCurrentState: the recover
+// arm must leave a TERMINAL run and a revoked identity, not a silent no-op.
+//
+// `from` is a CAS precondition. Hard-coding RunPending looked right and was not:
+// by the time anything can realistically panic the run is STARTING, the CAS does
+// not apply, and failAndRevoke's non-applied path writes nothing at all — no
+// log, no audit row, no revoke — so the run sat STARTING with a live run
+// identity until a reconcile sweep. The hint is its own sentence for the same
+// reason: the ceiling sentence would name a resolution that in fact succeeded.
+func TestFinishHarnessLoginLaunch_PanicFailsTheRunFromItsCurrentState(t *testing.T) {
+	h := newHarness(t)
+	spy := &revokeSpy{Provider: h.idp}
+	st := &ceilingBlipStore{
+		integStore: &integStore{govEscapeStore: newGovEscapeStore(&capStore{}), site: agentRoster(perUserAWSRow())},
+		hint:       map[uuid.UUID]string{},
+	}
+	audit := &memAudit{}
+	cfg := baseTestConfig(h, st)
+	cfg.Identity = spy
+	cfg.Audit = audit
+	cfg.OIDC = &oidc.Authenticator{}
+	cfg.Runner = &panicRunner{fakeRunner: &fakeRunner{}}
+	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+	cfg.MaskRegistry = secretmask.NewRegistry()
+	cfg.BedrockRegion = "us-east-1"
+	cfg.DefaultPolicy = govDeployment()
+	srv := New(cfg)
+
+	ctx := withOIDCGroups(withOIDCRole(withOIDCHuman(context.Background(), "sub-member"), oidc.RoleMember), []string{"eng"})
+	ctx = withOIDCEmail(ctx, "member@corp.example")
+	hl, ok := agentHarnessLogin(awsSSOAgent)
+	if !ok {
+		t.Fatal("aws-sso harness login convention missing")
+	}
+	run, dispatch, err := srv.launchHarnessLoginRun(ctx, "member@corp.example", hl, perUserPortal, awsSSOPin{}, awsSSOScope{})
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+
+	// Must not propagate: an unrecovered panic in a detached goroutine takes the
+	// whole daemon down.
+	srv.finishHarnessLoginLaunch(ctx, run, dispatch)
+
+	got, gerr := st.GetRun(context.Background(), run.ID)
+	if gerr != nil {
+		t.Fatalf("get run: %v", gerr)
+	}
+	if got.State != types.RunFailed {
+		t.Errorf("run state = %q, want FAILED — a panicked launch must not leave a non-terminal run holding an identity", got.State)
+	}
+	if hint := st.failureHint(run.ID); hint != harnessLoginInternalError {
+		t.Errorf("failure_hint = %q, want the internal-error sentence %q (NOT the ceiling sentence — the ceiling resolved fine)",
+			hint, harnessLoginInternalError)
+	}
+	if len(spy.revoked) != 1 || spy.revoked[0] != run.ID {
+		t.Errorf("revoked = %v, want exactly this run's identity", spy.revoked)
+	}
+	if n := len(audit.find("run.dispatch")); n < 1 {
+		t.Errorf("run.dispatch failure rows = %d, want at least 1 — a panicked launch must leave a trail", n)
 	}
 }

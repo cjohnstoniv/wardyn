@@ -60,6 +60,15 @@ type harnessLoginDispatch struct {
 // (runs_dispatch.go), in this lane's words.
 const harnessLoginCeilingUnresolved = "this sign-in sandbox was not launched: Wardyn could not resolve the governance ceiling that bounds it — try again, and tell your admin if it keeps failing"
 
+// DRAFT (M2 canon pending) — the run's failure_hint when the detached launch
+// PANICS. It needs its own sentence: the panic window is almost entirely inside
+// dispatchRun, so the ceiling sentence above would tell an operator Wardyn could
+// not resolve a ceiling it in fact resolved, which is both untrue and
+// un-actionable. Names the class (an internal error, not their configuration)
+// and where the detail is, since a panic's own text is a stack trace nobody
+// should read off a console banner.
+const harnessLoginInternalError = "This sign-in sandbox hit an internal error while starting — try again; if it repeats, check the daemon log."
+
 // handleHarnessLogin launches a container-login sandbox for a provider:
 //
 //	POST /api/v1/setup/harness-login  {provider}
@@ -173,11 +182,30 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 func (s *Server) finishHarnessLoginLaunch(ctx context.Context, run types.AgentRun, d harnessLoginDispatch) {
 	// Contain a panic in a detached goroutine so a launch bug cannot take the
 	// daemon down with it (same idiom as startCompletionWatcher).
+	//
+	// FAIL FROM THE RUN'S CURRENT STATE, re-read. `from` is a CAS precondition,
+	// and by the time anything here can realistically panic dispatchRun has
+	// already CASed PENDING->STARTING (runs_dispatch.go) — so a hard-coded
+	// RunPending would not apply, and failAndRevoke's non-applied path is SILENT
+	// (no log, no audit, no revoke). The run would sit STARTING with a live
+	// identity until a reconcile sweep. One GetRun turns that into the terminal
+	// state plus the identity revocation this arm exists for; if even that read
+	// fails there is nothing better to do than fall back to PENDING.
 	defer func() {
 		if rec := recover(); rec != nil {
 			slog.ErrorContext(ctx, "wardynd: harness login launch panicked",
 				slog.String("run_id", run.ID.String()), slog.Any("panic", rec))
-			s.failAndRevoke(ctx, run.ID, types.RunPending, harnessLoginCeilingUnresolved)
+			from := types.RunPending
+			if s.cfg.Store != nil {
+				if got, gerr := s.cfg.Store.GetRun(ctx, run.ID); gerr == nil && !isTerminalRunState(got.State) {
+					from = got.State
+				}
+			}
+			s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.dispatch",
+				run.ID.String(), "failure", mustJSON(map[string]any{
+					"note": "the detached harness-login launch panicked; the run is failed rather than left non-terminal",
+				})))
+			s.failAndRevoke(ctx, run.ID, from, harnessLoginInternalError)
 		}
 	}()
 	// The acting principal's ceiling, for the dispatch DENY axis. It was resolved
