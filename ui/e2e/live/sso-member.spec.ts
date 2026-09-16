@@ -37,6 +37,7 @@
  */
 
 import { expect, test, type Page, type APIRequestContext } from "@playwright/test";
+import { MEMBER_MODE } from "../../src/app/components/wardyn/member-mode-banner";
 
 // ── the walk's inputs (scripts/kind-sso-walk.sh exports every one) ──────────
 const ADMIN_TOKEN = process.env.WARDYN_LIVE_ADMIN_TOKEN || "";
@@ -507,14 +508,13 @@ test("member-mode: an admin drops to member mode, is refused, and comes back", a
   // W5. A session flag an ADMIN sets on themselves, so operator authority is
   // genuinely gone for the duration — not a UI pretence.
   //
-  // The three strings below are the merged lane's own DRAFT constants
-  // (ui/src/app/components/wardyn/member-mode-banner.tsx's MEMBER_MODE block),
-  // quoted rather than matched loosely: the draft that this case was written
-  // against said "member mode" in the menu, and the lane shipped "View as
-  // member" — a regex that matched both would have asserted nothing.
-  const MENU_ITEM = "View as member";
-  const BANNER = "Viewing as member — your admin role is paused for this session";
-  const EXIT = "Exit member mode";
+  // The three strings are the merged lane's own DRAFT constants, imported
+  // rather than quoted: the W6 member lens made the banner tier-neutral after
+  // this case was written, and a quoted copy asserted the retired wording. A
+  // regex loose enough to match both drafts would have asserted nothing.
+  const MENU_ITEM = MEMBER_MODE.MENU;
+  const BANNER = MEMBER_MODE.BANNER;
+  const EXIT = MEMBER_MODE.EXIT;
 
   await dexSignIn(page, ADMIN_EMAIL);
   const adminWho = await me(page);
