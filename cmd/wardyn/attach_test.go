@@ -254,8 +254,10 @@ func TestRunAttach_CtxCancelRestoresTerminal(t *testing.T) {
 	}
 	os.Stdin = stdinR
 	t.Cleanup(func() {
+		// Close only the write end: the leaked half-2 read sees EOF and exits, and
+		// os.Stdin stays a VALID handle whose reads return EOF (the /dev/null
+		// contract), never "file already closed". One fd leaks for the process.
 		stdinW.Close()
-		stdinR.Close()
 	})
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -360,7 +362,16 @@ func TestHelperAttachSignal(t *testing.T) {
 // signal tests: this same test binary, selecting ONLY TestHelperAttachSignal.
 func helperCmd(t *testing.T, url string, stdin, stdout *os.File) *exec.Cmd {
 	t.Helper()
-	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperAttachSignal$")
+	// -test.timeout bounds a re-exec'd binary that `go test` is not supervising;
+	// WaitDelay bounds the parent's Wait once the child is signalled or killed.
+	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperAttachSignal$", "-test.timeout=60s")
+	cmd.WaitDelay = 10 * time.Second
+	t.Cleanup(func() {
+		if cmd.Process != nil && cmd.ProcessState == nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait() // reap; never leave a zombie behind a t.Fatal
+		}
+	})
 	cmd.Env = append(os.Environ(),
 		"WARDYN_ATTACH_SIGNAL_HELPER=1",
 		"WARDYN_ATTACH_SIGNAL_URL="+url,
@@ -430,7 +441,7 @@ func TestRunAttach_SIGTERMDetachesCleanly(t *testing.T) {
 	// make this specific test flaky without pinning what it means to. This
 	// margin keeps TERM squarely inside the pump, where restoreTerminalFn is
 	// this test's actual target.
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(500 * time.Millisecond)
 
 	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
 		t.Fatalf("signal helper: %v", err)
