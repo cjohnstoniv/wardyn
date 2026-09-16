@@ -20,7 +20,7 @@ import {
   loginFlow,
 } from "./harness-login-pane";
 import { runs as runsApiMocked } from "../../../lib/api/runs";
-import type { SetupStatus } from "../../../lib/types";
+import type { AgentRun, SetupStatus } from "../../../lib/types";
 
 // A realistic setup-token body: sk-ant-oat<2 digits>-<long url-safe blob>.
 const TOKEN = "sk-ant-oat01-" + "A".repeat(60) + "-_" + "b3".repeat(10);
@@ -181,9 +181,13 @@ describe("loginFlow doneLabel", () => {
 // only way to exercise handleOutput's marker-watching without a real xterm
 // (which does not render in jsdom).
 let lastAttachOutput: ((chunk: string) => void) | undefined;
+// The props of that same render — the login pane's whole job is to type ONE
+// chained command into the PTY, so what it hands the terminal is a contract.
+let lastAttachProps: { onOutput?: (chunk: string) => void; autoRun?: string } | undefined;
 vi.mock("../../attach-terminal", () => ({
-  AttachTerminal: React.forwardRef(function FakeTerminal(props: { onOutput?: (chunk: string) => void }) {
+  AttachTerminal: React.forwardRef(function FakeTerminal(props: { onOutput?: (chunk: string) => void; autoRun?: string }) {
     lastAttachOutput = props.onOutput;
+    lastAttachProps = props;
     return <div data-testid="fake-terminal" />;
   }),
 }));
@@ -195,7 +199,7 @@ vi.mock("../../../lib/api/harness-auth", () => ({
     harnessCredentialPaste: (...a: unknown[]) => harnessPasteMock(...a),
   },
 }));
-vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: vi.fn() } }));
+vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: vi.fn(), getRun: vi.fn() } }));
 const getSetupStatusMock = vi.fn();
 vi.mock("../../../lib/api/setup", () => ({ setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) } }));
 
@@ -204,7 +208,15 @@ describe("HarnessLoginPane — the consent gate", () => {
     harnessLoginMock.mockReset().mockResolvedValue("run-123");
     harnessPasteMock.mockReset().mockResolvedValue(undefined);
     lastAttachOutput = undefined;
+    lastAttachProps = undefined;
     vi.mocked(runsApiMocked.killRun).mockReset().mockResolvedValue(undefined);
+    // P5: the pane no longer mounts the terminal on the POST's own resolve —
+    // it polls the run to RUNNING first (a 200 now precedes dispatch). Every
+    // case below that wants a terminal gets a run that is already up; the
+    // starting/failed shapes drive this mock themselves.
+    vi.mocked(runsApiMocked.getRun)
+      .mockReset()
+      .mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun);
     getSetupStatusMock.mockReset();
   });
 
@@ -612,5 +624,70 @@ describe("serverConfirmsCapture", () => {
 
   it("a captured row for the OTHER provider does not confirm this one", () => {
     expect(serverConfirmsCapture(status({ harness: [{ provider: "anthropic", captured: true }] }), "aws", "run-123")).toBe(false);
+  });
+});
+
+// ─── P5: the pane waits for the sandbox instead of assuming it ───────────────
+//
+// POST /setup/harness-login answers with the run id BEFORE dispatch now
+// (internal/api/harnesscred_launch.go), so "resolved" no longer means
+// "attachable": handleAttachTicket 409s a non-RUNNING run and a mint failure is
+// terminal in AttachTerminal. The pane holds a `starting` phase — with the run
+// id, so Cancel kills a sandbox that is still coming up — and polls the run
+// until it is RUNNING (or ends).
+describe("HarnessLoginPane — the starting phase (P5)", () => {
+  beforeEach(() => {
+    harnessLoginMock.mockReset().mockResolvedValue("run-123");
+    harnessPasteMock.mockReset().mockResolvedValue(undefined);
+    lastAttachOutput = undefined;
+    lastAttachProps = undefined;
+    vi.mocked(runsApiMocked.killRun).mockReset().mockResolvedValue(undefined);
+    vi.mocked(runsApiMocked.getRun).mockReset();
+    getSetupStatusMock.mockReset();
+  });
+
+  async function startAws() {
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+  }
+
+  it("keeps the run id so Cancel kills a sandbox that is still coming up", async () => {
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue({ id: "run-123", state: "PENDING" } as AgentRun);
+    await startAws();
+
+    // The waiting copy, not a terminal: attaching to a PENDING run is a 409 the
+    // component treats as terminal.
+    expect(await screen.findByTestId("login-sandbox-starting")).toBeInTheDocument();
+    expect(screen.queryByTestId("fake-terminal")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    expect(runsApiMocked.killRun).toHaveBeenCalledWith("run-123");
+  });
+
+  it("polls the run to RUNNING, then mounts the terminal with the chained command", async () => {
+    vi.mocked(runsApiMocked.getRun)
+      .mockResolvedValueOnce({ id: "run-123", state: "PENDING" } as AgentRun)
+      .mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun);
+    await startAws();
+
+    // The second read is a poll tick away (RUN_POLL_MS), not a microtask.
+    expect(await screen.findByTestId("fake-terminal", {}, { timeout: 5000 })).toBeInTheDocument();
+    // The command the sandbox's own shell hint and the image's idle echo print:
+    // the login alone leaves the token in ~/.aws/sso/cache, where it dies with
+    // the container — wardyn-aws-sso is what uploads it.
+    expect(lastAttachProps?.autoRun).toContain("&& wardyn-aws-sso");
+  });
+
+  it("a FAILED run shows the run's own failure_hint instead of waiting forever", async () => {
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue({
+      id: "run-123",
+      state: "FAILED",
+      failure_hint: "the sandbox image could not be pulled",
+    } as AgentRun);
+    await startAws();
+
+    const alertBox = await screen.findByRole("alert");
+    expect(alertBox).toHaveTextContent("the sandbox image could not be pulled");
+    expect(screen.queryByTestId("fake-terminal")).not.toBeInTheDocument();
   });
 });

@@ -25,7 +25,8 @@ import { Loader2, ShieldCheck, TriangleAlert, KeyRound, Square, ExternalLink, Co
 import { harnessAuth as harnessAuthApi } from "../../../lib/api/harness-auth";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { setup as setupApi } from "../../../lib/api/setup";
-import type { SetupStatus } from "../../../lib/types";
+import { isTerminalRunState, type SetupStatus } from "../../../lib/types";
+import { usePoll } from "../../../lib/use-poll";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { AttachTerminal, type AttachTerminalHandle } from "../../attach-terminal";
 import { Button } from "../../ui/button";
@@ -79,7 +80,26 @@ const CONFIRM_RETRY_MS = 500;
 // what is about to happen and clicked Start. The pane used to fire on mount —
 // a dialog, then suddenly a terminal, then suddenly a browser auth prompt,
 // with nothing saying what was coming or what would be asked of you.
-type Phase = "intro" | "prompt" | "launching" | "attached" | "saving" | "done" | "error";
+type Phase = "intro" | "prompt" | "launching" | "starting" | "attached" | "saving" | "done" | "error";
+
+// How often the pane asks whether the login sandbox is up yet. Same cadence
+// demo-runner's own launch→starting→live machine uses, and for the same reason:
+// it is a human watching a pull, not a control loop.
+const RUN_POLL_MS = 2000;
+
+// DRAFT (M2 canon pending) — P5: POST /setup/harness-login now answers with the
+// run id BEFORE the sandbox exists (internal/api/harnesscred_launch.go), so the
+// pane has a real wait to narrate. It used to have none: it set "attached" on
+// the POST's resolve and mounted the terminal on a run that was still PENDING,
+// which handleAttachTicket 409s — and a mint failure is TERMINAL in
+// AttachTerminal, so the operator's only signal was a dead panel. Names the
+// cold pull, because that is what the wait usually is.
+const LOGIN_SANDBOX_STARTING =
+  "Starting the sign-in sandbox — the first start after an upgrade pulls the image and can take a couple of minutes.";
+// DRAFT (M2 canon pending) — the same wait ending badly on a run that carries
+// no failure_hint of its own (a kill, a stop). Says only what is known: the
+// sandbox is gone and nothing was captured.
+const LOGIN_SANDBOX_ENDED = "The sign-in sandbox stopped before it was ready — nothing was captured. Try again.";
 
 // Per-provider login conventions. Adding a provider is a new row here (mirrors
 // the server-side agentHarnessLogin table), not a forked component.
@@ -371,6 +391,12 @@ export function HarnessLoginPane({
   const [token, setToken] = React.useState("");
   const [error, setError] = React.useState("");
   const [autoCaptured, setAutoCaptured] = React.useState(false);
+  // Whether the terminal was ever mounted on this run. The error phase keeps a
+  // helper flow's terminal on screen for its SCROLLBACK (a refused capture's
+  // only other artifact) — but a run that failed while still coming up has no
+  // scrollback, and mounting AttachTerminal on it is the dead panel P5 is about:
+  // the ticket mint 409s and one failed mint is terminal in that component.
+  const [everAttached, setEverAttached] = React.useState(false);
   const [authUrl, setAuthUrl] = React.useState("");
   const [code, setCode] = React.useState("");
 
@@ -390,16 +416,52 @@ export function HarnessLoginPane({
     failedRef.current = false;
     openedUrlRef.current = false;
     setAutoCaptured(false);
+    setEverAttached(false);
     setAuthUrl("");
     try {
       const id = await harnessAuthApi.harnessLogin(provider, startUrl.trim());
+      // THE ID FIRST, THE TERMINAL LATER. Holding the id from t≈0 is what makes
+      // Cancel able to kill a sandbox that is still coming up — before P5 the
+      // POST did not answer until dispatch was done, so a timed-out launch left
+      // an orphan nobody could name.
       setRunId(id);
-      setPhase("attached");
+      setPhase("starting");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setPhase("error");
     }
   }, [provider, startUrl]);
+
+  // pollRun is the `starting` phase's whole machine: ask the run whether it is
+  // up yet, mount the terminal when it is, and end the wait honestly when the
+  // run ends instead. Nothing here attaches — AttachTerminal's own mint is
+  // owner-or-admin and one failed mint is terminal in that component, so the
+  // pane must not mount it until the ticket route would actually answer.
+  const pollRun = React.useCallback(async () => {
+    if (!runId) return;
+    const run = await runsApi.getRun(runId).catch(() => undefined);
+    if (!run) return; // a transient read is not an outcome; the next tick asks again
+    if (run.state === "RUNNING") {
+      setEverAttached(true);
+      setPhase("attached");
+      return;
+    }
+    if (isTerminalRunState(run.state)) {
+      // The run's OWN sentence when it has one (D9's failure_hint covers the
+      // pre-agent-start class this wait actually hits: an image that would not
+      // pull, a ceiling that would not resolve); never a reworded guess.
+      setError(run.failure_hint || LOGIN_SANDBOX_ENDED);
+      setPhase("error");
+    }
+  }, [runId]);
+
+  // usePoll drives BACKGROUND refreshes only (its own contract), so the first
+  // ask is made here — otherwise every sign-in waits a full tick on a sandbox
+  // that may already be up.
+  React.useEffect(() => {
+    if (phase === "starting") void pollRun();
+  }, [phase, pollRun]);
+  usePoll(pollRun, RUN_POLL_MS, phase !== "starting");
 
   // saveToken stores a token (explicit from auto-capture, or the pasted field).
   const saveToken = React.useCallback(
@@ -611,6 +673,20 @@ export function HarnessLoginPane({
         </p>
       )}
 
+      {/* The wait, with the one control that matters during it: Cancel kills
+          the run by the id the POST already handed back, so a sandbox stuck on
+          a cold pull is the operator's to end rather than the idle cap's. */}
+      {phase === "starting" && (
+        <div className="flex flex-wrap items-center gap-2" data-testid="login-sandbox-starting">
+          <p role="status" className="flex flex-1 items-center gap-2 text-xs leading-relaxed text-muted-foreground">
+            <Loader2 className="size-3.5 shrink-0 animate-spin" /> {LOGIN_SANDBOX_STARTING}
+          </p>
+          <Button size="sm" variant="outline" onClick={cancel}>
+            <Square className="size-3.5" /> Cancel
+          </Button>
+        </div>
+      )}
+
       {phase === "error" && (
         <div className="flex flex-wrap gap-2">
           <Button size="sm" onClick={() => void launch()}>
@@ -630,7 +706,7 @@ export function HarnessLoginPane({
           extracted sentence is the operator's only other artifact. The
           interactive bits below (paste boxes, the helper's own Cancel) are
           suppressed in error phase — Try again/Cancel above already cover it. */}
-      {(phase === "attached" || phase === "saving" || (phase === "error" && flow.capture === "helper")) && runId && (
+      {(phase === "attached" || phase === "saving" || (phase === "error" && flow.capture === "helper" && everAttached)) && runId && (
         <div className="space-y-2">
           {authUrl && phase !== "error" && (
             <a
