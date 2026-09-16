@@ -47,7 +47,7 @@ import {
   APPROVAL_BANNER_LABEL,
   APPROVAL_KIND_LABEL,
   CAPABILITY,
-  OPERATOR_ONLY_REASON,
+  SECURITY_ONLY_REASON,
   WIRE_TO_COPY,
   approvalScopeBadge,
   credentialKind,
@@ -603,8 +603,13 @@ function PendingCard({
             <Button variant="outline" size="sm" onClick={() => onAct("deny")} disabled={!canDecide}>
               <X className="size-4" /> Deny
             </Button>
+            {/* ui-member-cluster review finding: this fallback is reached
+                only via kindDecidable = canDecideApproval(securityOperator,
+                kind) — a SECURITY-tier gate, not an operator-tier one (a
+                security admin decides any kind). OPERATOR_ONLY_REASON named
+                a role the caller may not need. */}
             {!canDecide && (
-              <Chip tone="neutral">{hostUngranted ? DENIED.APPROVE_CHIP : OPERATOR_ONLY_REASON}</Chip>
+              <Chip tone="neutral">{hostUngranted ? DENIED.APPROVE_CHIP : SECURITY_ONLY_REASON}</Chip>
             )}
           </>
         )}

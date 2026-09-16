@@ -110,7 +110,10 @@ export const OPERATOR_ONLY_REASON = "Requires the admin role.";
 // a control refused by it must not tell the reader "requires the admin role"
 // when the role beside it would also do. Picked by the gate that fired, never
 // by a role comparison of the reader's own: a surface gated on isOperator keeps
-// OPERATOR_ONLY_REASON above.
+// OPERATOR_ONLY_REASON above. Used by ui-member-cluster's own sites AND by
+// approvals.tsx's decide-gate chip (ui-workspaces-approvals, also keyed off
+// useSecurityOperator) — one definition, canon owned by ui-member-cluster
+// (local/v074/canon/ui-member-cluster.md).
 export const SECURITY_ONLY_REASON = "Requires the admin or security admin role.";
 
 // DRAFT (M2 canon pending) — F5-F3. Removing an allowed host is PUT

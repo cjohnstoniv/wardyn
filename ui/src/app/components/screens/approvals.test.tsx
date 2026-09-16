@@ -115,7 +115,7 @@ vi.mock("../../lib/api/runs", () => ({
 import { ApprovalsScreen } from "./approvals";
 import { OperatorProvider, RoleProvider } from "../wardyn/operator-context";
 import { DENIED } from "../../lib/permissions-copy";
-import { APPROVAL } from "../wardyn/copy";
+import { APPROVAL, OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../wardyn/copy";
 
 // Every describe below assumes a LIVE run unless it says otherwise (B4 gates
 // the decision pair on the run's state), and no archived CANCELLED row.
@@ -198,7 +198,11 @@ describe("ApprovalsScreen — role-aware decide buttons", () => {
     expect(await screen.findByText("Mint a scoped credential")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^approve$/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^deny$/i })).toBeDisabled();
-    expect(screen.getByText(/requires the admin role/i)).toBeInTheDocument();
+    // The decide-gate is useSecurityOperator (admin OR security admin), not
+    // useOperator — OPERATOR_ONLY_REASON ("Requires the admin role.") is a
+    // false statement here, since a security admin could also decide this.
+    expect(screen.getByText(SECURITY_ONLY_REASON)).toBeInTheDocument();
+    expect(screen.queryByText(OPERATOR_ONLY_REASON)).not.toBeInTheDocument();
     // Clicking a disabled button must never reach the API.
     expect(approveMock).not.toHaveBeenCalled();
     expect(denyMock).not.toHaveBeenCalled();
@@ -236,7 +240,8 @@ describe("ApprovalsScreen — role-aware decide buttons", () => {
     );
     expect(await screen.findByRole("button", { name: /^approve$/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /^deny$/i })).toBeDisabled();
-    expect(screen.getByText(/requires the admin role/i)).toBeInTheDocument();
+    expect(screen.getByText(SECURITY_ONLY_REASON)).toBeInTheDocument();
+    expect(screen.queryByText(OPERATOR_ONLY_REASON)).not.toBeInTheDocument();
   });
 
   // 0.7 §B: a SECURITY ADMIN (operator:false, security_operator:true) decides
@@ -256,6 +261,28 @@ describe("ApprovalsScreen — role-aware decide buttons", () => {
     expect(await screen.findByRole("button", { name: /^approve$/i })).not.toBeDisabled();
     expect(screen.getByRole("button", { name: /^deny$/i })).not.toBeDisabled();
     expect(screen.queryByText(/requires the admin role/i)).not.toBeInTheDocument();
+  });
+
+  // ui-member-cluster review finding: the decide-gate chip's fallback text
+  // was hardcoded to OPERATOR_ONLY_REASON even though the predicate feeding
+  // it (kindDecidable = canDecideApproval(useSecurityOperator(), kind)) is
+  // security-tier, not operator-tier — "Requires the admin role." is false
+  // for a caller a security admin could also satisfy. A security admin never
+  // reaches this fallback at all (kindDecidable is unconditionally true for
+  // them); the fix is for who DOES see it — a plain member/viewer denied a
+  // credential/tool_call decision now reads the honest tier sentence.
+  it("a security admin never sees OPERATOR_ONLY_REASON; a member denied by kind sees the security-tier sentence", async () => {
+    mockPendingKind = "tool_call";
+    render(
+      <OperatorProvider operator={false} securityOperator={true}>
+        <MemoryRouter>
+          <ApprovalsScreen />
+        </MemoryRouter>
+      </OperatorProvider>,
+    );
+    await screen.findByRole("button", { name: /^approve$/i });
+    expect(screen.queryByText(OPERATOR_ONLY_REASON)).not.toBeInTheDocument();
+    expect(screen.queryByText(SECURITY_ONLY_REASON)).not.toBeInTheDocument();
   });
 });
 
