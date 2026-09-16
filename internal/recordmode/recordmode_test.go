@@ -515,6 +515,26 @@ func TestSynthesize(t *testing.T) {
 		}
 	})
 
+	// F4-F1 (Appendix A V8): policy.go's AllowedDomains carries no `omitempty`,
+	// so a nil slice serializes as `allowed_domains: null` — the TypeError
+	// profile-review.tsx's `(inline_policy.allowed_domains ?? [])` guards
+	// client-side. The Go producer should not hand a null array out in the
+	// first place: an empty recording must synthesize an empty ARRAY, never a
+	// nil one.
+	t.Run("empty input never leaves AllowedDomains nil on the wire", func(t *testing.T) {
+		spec, _ := Synthesize(Capture(nil, false, KernelWindow{}), nil, run)
+		if spec.AllowedDomains == nil {
+			t.Fatal("AllowedDomains must be an empty slice, not nil — it marshals to `null` on the wire")
+		}
+		b, err := json.Marshal(spec)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if strings.Contains(string(b), `"allowed_domains":null`) {
+			t.Errorf("allowed_domains serialized as null: %s", b)
+		}
+	})
+
 	t.Run("grant lookup: minted grants included by id, github scope warned", func(t *testing.T) {
 		ghSpec := types.GrantSpec{
 			Kind:  types.GrantGitHubToken,

@@ -444,6 +444,12 @@ func Synthesize(obs Observations, runGrants []types.CredentialGrant, run types.A
 	sort.Strings(allowed)
 	spec.AllowedDomains = allowed
 	if len(allowed) == 0 {
+		// F4-F1 (Appendix A V8): policy.go's AllowedDomains carries no
+		// `omitempty`, so a nil slice would serialize as `allowed_domains:
+		// null` — the "Synthesized profile" drawer's own TypeError on a run
+		// that most needed profiling. nil -> [] here, once, at the producer,
+		// rather than leaving every consumer to guard it.
+		spec.AllowedDomains = []string{}
 		warnings = append(warnings, "no allowed egress observed; synthesized spec denies ALL egress (allow_all_egress=false, empty allowlist) — confirm the run genuinely needed none")
 	}
 	// DeniedDomains is never synthesized: a recording only ever proves what WAS
