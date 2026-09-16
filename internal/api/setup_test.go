@@ -705,6 +705,14 @@ func TestRedactSetupStatusForMember_DropsHostCredentialPosture(t *testing.T) {
 			HasCredentials: true,
 		},
 		Deployment: SetupDeployment{HostLike: true},
+		// RIDER B7-F6: populated so this fixture can actually see the leak —
+		// TestRedactSetupStatusForMember_DropsHostCredentialPosture never did,
+		// which is exactly why the passthrough went unnoticed this long.
+		Bedrock: SetupBedrock{
+			Region: "us-east-1", Model: "anthropic.claude-3-5-sonnet-v2",
+			CredsPresent: true, AWSMount: true, BearerPresent: true, SSOPresent: true,
+			Ready: true,
+		},
 		Harness: []SetupHarness{{
 			Provider: "anthropic", Captured: true, Expired: false,
 			CapturedAt: "2026-01-02T03:04:05Z", Aging: true,
@@ -723,6 +731,22 @@ func TestRedactSetupStatusForMember_DropsHostCredentialPosture(t *testing.T) {
 	}
 	if got.Deployment != (SetupDeployment{}) {
 		t.Errorf("deployment = %+v, want zero — it is derived from the redacted Providers", got.Deployment)
+	}
+	// RIDER B7-F6: SetupBedrock rebuilt from an explicit field list, exactly
+	// like Runner two lines up. Region/Model name the AWS transport this
+	// deployment reaches Anthropic through; CredsPresent/AWSMount/
+	// BearerPresent/SSOPresent are which of four AWS credential LANES are
+	// wired — the operator's host posture, same class SCM/HostProxy exist to
+	// withhold. Only Ready survives.
+	if want := (SetupBedrock{Ready: true}); got.Bedrock != want {
+		t.Errorf("bedrock = %+v, want %+v (Ready only — the region/model/credential-lane detail is operator host posture)", got.Bedrock, want)
+	}
+	if raw, err := json.Marshal(got); err == nil {
+		if strings.Contains(string(raw), "us-east-1") || strings.Contains(string(raw), "anthropic.claude-3-5-sonnet-v2") {
+			t.Errorf("the member's serialized body still names the Bedrock region/model: %s", raw)
+		}
+	} else {
+		t.Fatal(err)
 	}
 	// The ephemeral-disk enforcement word is an operator sizing answer (which
 	// substrate binds a run's disk_mib), actionable only on surfaces a member
@@ -753,6 +777,7 @@ func TestRedactSetupStatusForMember_DropsHostCredentialPosture(t *testing.T) {
 		"has_runs":                   got.HasRuns,
 		"runner.confinement_classes": len(got.Runner.ConfinementClasses) == 1,
 		"integrations":               len(got.Integrations) == 1,
+		"bedrock.ready":              got.Bedrock.Ready,
 	} {
 		if !ok {
 			t.Errorf("%s did not survive redaction", name)

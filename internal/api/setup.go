@@ -756,9 +756,9 @@ func (s *Server) consoleRoleMappingsPresent(ctx context.Context, oidcConfigured 
 // credential refs, egress hosts and operator config, which are secret names by
 // another name and were shipping in the same body — while keeping everything a
 // member's own console needs: Ready/Auth (App.tsx's reachability gate) and
-// HasRuns, plus every field the run-launch UI reads (Bedrock, Deployment,
-// Harness*, Integrations, Platform, HostProxy, SCM, AgeKey) so a member can
-// still launch runs normally. This only ZEROES fields on an already-computed,
+// HasRuns, plus every field the run-launch UI reads (Bedrock.Ready,
+// Harness*, Integrations, Platform, AgeKey) so a member can still launch runs
+// normally. This only ZEROES fields on an already-computed,
 // already-200 response — it can never itself produce an error state (no
 // non-401 error is possible for a member here, by construction).
 //
@@ -781,6 +781,19 @@ func redactSetupStatusForMember(st SetupStatus, ownAWSRow bool) SetupStatus {
 	st.Providers = []SetupProvider{}
 	st.Secrets = SetupSecrets{Present: []string{}}
 	st.Runner = SetupRunner{ConfinementClasses: st.Runner.ConfinementClasses}
+	// RIDER B7-F6: rebuilt from an explicit field list, exactly like Runner two
+	// lines up — SetupBedrock passed through WHOLE, two fields after SCM/
+	// HostProxy are zeroed as "the operator's machine": Region/Model are boot-time
+	// config naming the AWS account's transport, and CredsPresent/AWSMount/
+	// BearerPresent/SSOPresent are which of four AWS credential LANES this
+	// deployment has wired — the same class of host-credential-posture detail
+	// SCM/HostProxy exist to withhold, just one struct over. Ready survives: it
+	// is the one bit the run-launch UI's readiness chip needs, mirrors
+	// ConfinementClasses' own "signal, not diagnostic detail" carve-out, and is
+	// already the member-safe form modelaccess.go computes SetupModelAccess
+	// from — nothing here is new information a member's own ModelAccess row
+	// (kept below) does not already imply.
+	st.Bedrock = SetupBedrock{Ready: st.Bedrock.Ready}
 	// Host credential/environment posture — a description of the OPERATOR'S
 	// MACHINE, not of anything a member can act on, and the last place a member
 	// could read it off this endpoint. SCM names which git credentials sit on
