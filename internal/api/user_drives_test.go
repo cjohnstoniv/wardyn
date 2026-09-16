@@ -786,8 +786,20 @@ func TestUpdateAllocatedUserDriveGuardsTheRehome(t *testing.T) {
 		}
 		// THE POINT OF THE FIELD: one `drive.write` action covers both kinds of
 		// edit, so without this the orphaning is invisible to an auditor.
-		if data := driveAuditData(t, rec, "drive.write"); data["rehomed"] != true {
+		data := driveAuditData(t, rec, "drive.write")
+		if data["rehomed"] != true {
 			t.Errorf("drive.write rehomed = %v, want true", data["rehomed"])
+		}
+		// AND WHICH OBJECTS IT ORPHANED (B5-F6): `rehomed:true` alone cannot
+		// answer the only question a re-home raises afterwards. The refusal this
+		// confirmation overrode named both facts and the row discarded them.
+		if got, want := data["rehomed_fields"], []any{`name "Corp NAS" → "Corp NAS archive"`}; !reflect.DeepEqual(got, want) {
+			t.Errorf("drive.write rehomed_fields = %#v, want %#v — the log cannot say which objects were left "+
+				"behind without the fields the object name is derived from", got, want)
+		}
+		if got := data["rehomed_subjects"]; got != float64(1) {
+			t.Errorf("drive.write rehomed_subjects = %v, want 1 — how many allocations moved is the other half "+
+				"of \"which objects were orphaned\"", got)
 		}
 	})
 

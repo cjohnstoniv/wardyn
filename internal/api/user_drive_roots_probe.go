@@ -132,3 +132,40 @@ func driveRootCeilingRefusal(root string, err error) (int, string) {
 	}
 	return http.StatusUnprocessableEntity, "invalid drive: " + err.Error()
 }
+
+// driveWriteAuditData is the `drive.write` payload: the WHOLE ROW, minus nothing
+// (a drive carries no secret — a share credential is the operator's, held
+// host-side — and host_root is the single most audit-worthy field on it, since
+// it is the host tree this row authorized binding into other people's
+// sandboxes), plus what the re-home guard decided.
+//
+// THE RE-HOME DETAIL IS OMITTED WHEN THERE IS NONE (B5-F6). `rehomed:true` says
+// a move happened; the refusal the admin overrode to get here said WHICH
+// identity fields moved and HOW MANY allocations went with them, and the row
+// discarded both — so the log could not answer "which objects were orphaned",
+// which is the only question a re-home raises afterwards. Present exactly when
+// `rehomed` is true, so an auditor can filter on the key rather than on a zero
+// that also means "nothing moved".
+//
+// It lives here rather than in user_drives.go for that file's size ceiling.
+func driveWriteAuditData(saved types.UserDrive, rehome driveRehome) map[string]any {
+	data := map[string]any{
+		"name":          saved.Name,
+		"backend":       saved.Backend,
+		"host_root":     saved.HostRoot,
+		"storage_class": saved.StorageClass,
+		"home_template": saved.HomeTemplate,
+		"size_mib":      saved.SizeMiB,
+		"writable":      saved.Writable,
+		"reclaim":       saved.Reclaim,
+		// The one field that separates a cosmetic edit from one that moved every
+		// allocated member's storage. Without it both are the same `drive.write`
+		// row and the orphaning is invisible in the log.
+		"rehomed": rehome.confirmed,
+	}
+	if rehome.confirmed {
+		data["rehomed_fields"] = rehome.fields
+		data["rehomed_subjects"] = rehome.subjects
+	}
+	return data
+}

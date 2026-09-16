@@ -299,10 +299,24 @@ func (s PG) upsertUserDriveOn(ctx context.Context, q driveQuerier, d types.UserD
 		// The read is not part of the DECISION — the statement above already made
 		// it, under the row lock — so it cannot reintroduce the window.
 		if errors.Is(err, ErrNotFound) {
-			if string(d.Backend) == shareBackend && d.HostRoot != "" && s.driveHomeNamespaceClash(ctx, q, d) {
+			// NAMESPACE-FIRST FOR A SHARE, unchanged: the durable blocker before
+			// the transient one.
+			namespacePossible := string(d.Backend) == shareBackend && d.HostRoot != ""
+			if namespacePossible && s.driveHomeNamespaceClash(ctx, q, d) {
 				return types.UserDrive{}, ErrDriveHomeNamespaceConflict
 			}
 			if refuseIfAllocated && s.driveHasGrants(ctx, q, d.ID) {
+				return types.UserDrive{}, ErrDriveAllocated
+			}
+			// AND WHEN ONLY ONE GUARD WAS IN THE STATEMENT, the answer is that
+			// guard's — whatever the re-read managed to say. Both re-reads answer
+			// false on an error by design (the fallback decides the MESSAGE,
+			// never the write), and a grant deleted between the refusing
+			// statement and the re-read answers false honestly; the unconditional
+			// fallback then handed a docker_volume drive the home-namespace
+			// sentence, which renders as `another host_path drive on ""` — a rule
+			// that drive cannot break and a row the admin will not find (B5-F5).
+			if refuseIfAllocated && !namespacePossible {
 				return types.UserDrive{}, ErrDriveAllocated
 			}
 			return types.UserDrive{}, ErrDriveHomeNamespaceConflict

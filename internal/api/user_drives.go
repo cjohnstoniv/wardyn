@@ -383,7 +383,7 @@ func (s *Server) writeUserDrive(w http.ResponseWriter, r *http.Request, id uuid.
 		writeError(w, code, msg)
 		return
 	}
-	code, msg, rehomed, refuseIfAllocated := s.driveRehomeGuard(r, d)
+	code, msg, rehome, refuseIfAllocated := s.driveRehomeGuard(r, d)
 	if msg != "" {
 		writeError(w, code, msg)
 		return
@@ -435,20 +435,7 @@ func (s *Server) writeUserDrive(w http.ResponseWriter, r *http.Request, id uuid.
 	// field on it, since it is the host tree this row just authorized binding
 	// into other people's sandboxes.
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"drive.write", saved.ID.String(), "success", mustJSON(map[string]any{
-			"name":          saved.Name,
-			"backend":       saved.Backend,
-			"host_root":     saved.HostRoot,
-			"storage_class": saved.StorageClass,
-			"home_template": saved.HomeTemplate,
-			"size_mib":      saved.SizeMiB,
-			"writable":      saved.Writable,
-			"reclaim":       saved.Reclaim,
-			// The one field that separates a cosmetic edit from one that moved
-			// every allocated member's storage. Without it both are the same
-			// `drive.write` row and the orphaning is invisible in the log.
-			"rehomed": rehomed,
-		})))
+		"drive.write", saved.ID.String(), "success", mustJSON(driveWriteAuditData(saved, rehome))))
 	writeJSON(w, status, saved)
 }
 
@@ -602,10 +589,10 @@ const driveRehomeConfirm = "rehome"
 // RULE stays here, where the request that asked for it is; only the precondition
 // travels. handleDeleteUserDrive's 409 is still enforced by a constraint rather
 // than by a statement, and that remains the stronger of the two.
-func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int, msg string, rehomed, refuseIfAllocated bool) {
+func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int, msg string, rehome driveRehome, refuseIfAllocated bool) {
 	drives, err := s.cfg.Store.ListUserDrives(r.Context())
 	if err != nil {
-		return http.StatusInternalServerError, "list user drives: " + err.Error(), false, false
+		return http.StatusInternalServerError, "list user drives: " + err.Error(), driveRehome{}, false
 	}
 	var before *types.UserDriveListItem
 	for i := range drives {
@@ -618,22 +605,24 @@ func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int,
 	// at a drive that does not exist yet (the FK), so there is nothing for the
 	// precondition to assert either.
 	if before == nil {
-		return 0, "", false, false
+		return 0, "", driveRehome{}, false
 	}
 	changes := driveIdentityFields(before.UserDrive, d)
 	if len(changes) == 0 {
-		return 0, "", false, false
+		return 0, "", driveRehome{}, false
 	}
 	// NOTHING IS ALLOCATED AS OF THIS READ — so the write proceeds, GUARDED on
 	// that still being true when it lands. This is the arm the race lived in.
 	if before.GrantCount == 0 {
-		return 0, "", false, true
+		return 0, "", driveRehome{}, true
 	}
 	// CONFIRMED, and the audit row has to say so: `drive.write` covers a
 	// cosmetic edit and one that moved every allocated member's storage, and
 	// without this flag an auditor cannot tell them apart after the fact.
 	if r.URL.Query().Get("confirm") == driveRehomeConfirm {
-		return 0, "", true, false
+		// The refusal this confirmation overrode named both facts; the audit row
+		// now carries them, so the log can answer which objects were orphaned.
+		return 0, "", driveRehome{confirmed: true, fields: changes, subjects: before.GrantCount}, false
 	}
 	them := "it"
 	if before.GrantCount > 1 {
@@ -651,7 +640,18 @@ func (s *Server) driveRehomeGuard(r *http.Request, d types.UserDrive) (code int,
 		"this drive is allocated to %s and this change re-homes %s: %s. Every allocated person's storage object is derived from "+
 			"these fields, so their next run mounts a different object and the one holding their work is left behind with nothing "+
 			"in Wardyn naming it. Confirming is an API action, not a console one: re-send as PUT /drives/{id}?confirm=%s.",
-		pluralDriveSubjects(before.GrantCount), them, strings.Join(changes, ", "), driveRehomeConfirm), false, false
+		pluralDriveSubjects(before.GrantCount), them, strings.Join(changes, ", "), driveRehomeConfirm), driveRehome{}, false
+}
+
+// driveRehome is what the re-home guard decided, carried to the audit row: a
+// CONFIRMED move, the identity fields it moved, and how many allocations went
+// with them. The zero value is "this write re-homed nobody", and its two detail
+// fields are nil/0 so mustJSON omits them — an auditor filters `drive.write` on
+// their presence.
+type driveRehome struct {
+	confirmed bool
+	fields    []string
+	subjects  int
 }
 
 // driveGrantConflictMsg is the ONE store.ErrConflict this write can raise, told

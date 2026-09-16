@@ -11,7 +11,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
-// TestWriteUserDriveTellsItsThree409sApart is R1 F177 and F284.
+// TestWriteUserDriveTellsItsThree409sApart is R1 F177 and F284, and B5-F5.
 //
 // UpsertUserDrive returns three different conflicts and all three WRAP
 // store.ErrConflict, so the status was already right and the sentence was not:
@@ -44,9 +44,21 @@ func TestWriteUserDriveTellsItsThree409sApart(t *testing.T) {
 			want: "derives home directory names by a different rule",
 		},
 		{
-			// THE CONTROL, and it is what makes the other two mean anything: the
-			// UNIQUE(name) refusal still says the name is taken, because for it
-			// that is true and it is the remedy.
+			// B5-F5. The FOURTH: the drive was refused because somebody was
+			// allocated it while the edit was in flight, and re-sending is the
+			// whole remedy — the guard then meets the allocation on its own read
+			// and says what re-homing would cost. The store's attribution used to
+			// fall through to the home-namespace answer whenever its re-read
+			// could not confirm the grant, which renders as `another host_path
+			// drive on ""` for a drive with no host root at all.
+			name: "somebody was allocated the drive while it was being edited",
+			err:  store.ErrDriveAllocated,
+			want: "send the same request again",
+		},
+		{
+			// THE CONTROL, and it is what makes the other three mean anything:
+			// the UNIQUE(name) refusal still says the name is taken, because for
+			// it that is true and it is the remedy.
 			name: "a name another drive really does hold",
 			err:  store.ErrConflict,
 			want: `already exists`,
