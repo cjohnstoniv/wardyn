@@ -60,27 +60,24 @@ func runRecordingCmd(client clientFn) *cobra.Command {
 			// dies partway (a dropped link, a killed server) otherwise left a
 			// truncated cast at exactly the path a player — or the next step of
 			// a CI job — then opens, and the only symptom was a parse error
-			// much later somewhere else. The rename is atomic on the same
-			// directory, so outPath either does not exist or is the whole file.
+			// much later somewhere else. finalizePartFile makes the rename
+			// atomic on the same directory, so outPath either does not exist or
+			// is the whole file.
 			partPath := outPath + ".part"
 			f, err := os.Create(partPath)
 			if err != nil {
 				return err
 			}
-			if _, err := io.Copy(f, rc); err != nil {
-				f.Close()
-				os.Remove(partPath)
-				return fmt.Errorf("recording download for run %s did not complete: %w", id, err)
+			_, copyErr := io.Copy(f, rc)
+			// Close is checked (not deferred-and-ignored): a swallowed flush
+			// error writes a truncated cast that only fails much later, in a
+			// player. The copy error wins if both fired — it is the earlier,
+			// more specific cause.
+			if closeErr := f.Close(); copyErr == nil {
+				copyErr = closeErr
 			}
-			// Close is checked: a swallowed flush error writes a truncated cast
-			// that only fails much later, in a player.
-			if err := f.Close(); err != nil {
-				os.Remove(partPath)
+			if err := finalizePartFile(partPath, outPath, copyErr); err != nil {
 				return fmt.Errorf("recording download for run %s did not complete: %w", id, err)
-			}
-			if err := os.Rename(partPath, outPath); err != nil {
-				os.Remove(partPath)
-				return err
 			}
 			fmt.Fprintf(os.Stderr, "wrote %s\n", outPath)
 			return nil
@@ -90,4 +87,24 @@ func runRecordingCmd(client clientFn) *cobra.Command {
 	rec.Flags().StringVar(&session, "session", "", "attach-session id, for an interactive run's OTHER recordings (default: the run's own recording)")
 	rec.Flags().DurationVar(&timeout, "timeout", 0, "abort the download after this long, e.g. 30s (0 = no deadline)")
 	return rec
+}
+
+// finalizePartFile finishes a "<path>.part" temp file that already exists on
+// disk (its writer/encoder is already fully closed by the caller): if err is
+// non-nil, partPath is removed and err is returned unchanged; otherwise
+// partPath is renamed to path (atomic on the same directory), and a rename
+// failure also removes partPath. Every caller ends up with a WHOLE file at
+// path or none at all — never a truncated one a downstream reader (a cast
+// player, a support ticket) can't tell from a complete one. Shared by `run
+// recording` (a streamed copy) and support-bundle (a tar.gz writer).
+func finalizePartFile(partPath, path string, err error) error {
+	if err != nil {
+		os.Remove(partPath)
+		return err
+	}
+	if err := os.Rename(partPath, path); err != nil {
+		os.Remove(partPath)
+		return err
+	}
+	return nil
 }

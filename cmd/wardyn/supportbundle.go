@@ -9,6 +9,7 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
 	"os"
 	"os/exec"
@@ -217,31 +218,57 @@ func redactSecrets(b []byte) []byte {
 	return []byte(strings.Join(lines, "\n"))
 }
 
-// writeTarGz writes files (name -> content) to a gzip-compressed tar at path,
-// in sorted-name order for a deterministic, diffable bundle.
-func writeTarGz(path string, files map[string][]byte) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	gz := gzip.NewWriter(f)
-	defer gz.Close()
+// writeTarGzWriter tar+gzip-encodes files (name -> content) into w, in
+// sorted-name order for a deterministic, diffable bundle. It closes tw then
+// gz itself — in the order data actually flows out, tar trailer before gzip
+// footer — and returns the FIRST error from either the per-entry writes or
+// those two closes: on ext4, ENOSPC usually surfaces only at the final flush
+// (the two zero trailer blocks tar.Writer.Close writes, or the footer
+// gzip.Writer.Close writes), by which point every earlier Write already
+// "succeeded" into the OS's page cache. w itself is left open — the caller
+// owns it.
+func writeTarGzWriter(w io.Writer, files map[string][]byte) error {
+	gz := gzip.NewWriter(w)
 	tw := tar.NewWriter(gz)
-	defer tw.Close()
 
-	names := slices.Sorted(maps.Keys(files))
+	var firstErr error
+	setErr := func(err error) {
+		if firstErr == nil && err != nil {
+			firstErr = err
+		}
+	}
 
 	now := time.Now()
-	for _, name := range names {
+	for _, name := range slices.Sorted(maps.Keys(files)) {
 		content := files[name]
 		hdr := &tar.Header{Name: name, Mode: 0o600, Size: int64(len(content)), ModTime: now}
 		if err := tw.WriteHeader(hdr); err != nil {
-			return err
+			setErr(err)
+			break
 		}
 		if _, err := tw.Write(content); err != nil {
-			return err
+			setErr(err)
+			break
 		}
 	}
-	return nil
+	setErr(tw.Close())
+	setErr(gz.Close())
+	return firstErr
+}
+
+// writeTarGz writes files (name -> content) to a gzip-compressed tar at path.
+// Written to a .part file and renamed on success (finalizePartFile, shared
+// with `run recording`'s download) so a flush failure midway through never
+// leaves a truncated bundle sitting at path.
+func writeTarGz(path string, files map[string][]byte) error {
+	partPath := path + ".part"
+	f, err := os.Create(partPath)
+	if err != nil {
+		return err
+	}
+	writeErr := writeTarGzWriter(f, files)
+	if closeErr := f.Close(); writeErr == nil {
+		writeErr = closeErr
+	}
+	return finalizePartFile(partPath, path, writeErr)
 }

@@ -7,6 +7,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"io"
 	"maps"
 	"net/http"
@@ -173,6 +174,84 @@ func TestWriteTarGzRoundTrip(t *testing.T) {
 	}
 	if len(order) != 2 || order[0] != "a.txt" || order[1] != "b.txt" {
 		t.Errorf("entry order = %v, want sorted [a.txt b.txt]", order)
+	}
+}
+
+// capWriter accepts the first n bytes then fails every Write after —
+// simulating ENOSPC surfacing only once the buffered tar/gzip output is
+// finally flushed (tar's trailer blocks, gzip's footer): every entry's Write
+// "succeeds" and the failure lands at Close, exactly the shape B12a-F6
+// describes ("what is lost is the final block + gzip footer + tar trailer").
+type capWriter struct{ n int }
+
+func (c *capWriter) Write(p []byte) (int, error) {
+	if c.n <= 0 {
+		return 0, errors.New("simulated disk full")
+	}
+	if len(p) > c.n {
+		n := c.n
+		c.n = 0
+		return n, errors.New("simulated disk full")
+	}
+	c.n -= len(p)
+	return len(p), nil
+}
+
+// B12a-F6: the OLD writeTarGz closed tw/gz/f via three bare `defer`s whose
+// errors were never checked — a flush failure at Close (the ENOSPC shape
+// above) was silently swallowed and writeTarGz reported success. Close is
+// now explicit, in tw -> gz order, and the FIRST error wins.
+func TestWriteTarGzWriter_FlushFailureIsNotSwallowed(t *testing.T) {
+	// gzip buffers internally and flushes only at Close for input this small,
+	// so the whole encoded output lands in one burst well under this cap —
+	// there is no room for it to land at all.
+	w := &capWriter{n: 50}
+	err := writeTarGzWriter(w, map[string][]byte{"a.txt": []byte("hello world")})
+	if err == nil {
+		t.Fatal("a flush failure at Close was swallowed — writeTarGzWriter returned nil")
+	}
+	if !strings.Contains(err.Error(), "simulated disk full") {
+		t.Errorf("err = %v, want the underlying flush failure surfaced", err)
+	}
+}
+
+// B12a-F6: finalizePartFile is the shared .part+rename mechanism (also used
+// by `run recording`'s download) — on a non-nil err it removes the .part
+// file and leaves NOTHING at path; on a rename failure it does the same.
+func TestFinalizePartFile_ErrorLeavesNoFileAtPathAndRemovesPart(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bundle.tar.gz")
+	partPath := path + ".part"
+	writeFile(t, partPath, "partial content")
+
+	if err := finalizePartFile(partPath, path, errors.New("flush failed")); err == nil {
+		t.Fatal("finalizePartFile swallowed the write error")
+	}
+	if _, serr := os.Stat(path); !os.IsNotExist(serr) {
+		t.Errorf("a file was left at %s after a write failure", path)
+	}
+	if _, serr := os.Stat(partPath); !os.IsNotExist(serr) {
+		t.Errorf(".part file %s was not cleaned up after a write failure", partPath)
+	}
+}
+
+// The rename half of the same contract: an occupied destination (here, a
+// directory sitting at path) makes the rename itself fail — finalizePartFile
+// must clean up the .part file exactly the same way.
+func TestFinalizePartFile_RenameFailureLeavesNoFileAtPathAndRemovesPart(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bundle.tar.gz")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", path, err)
+	}
+	partPath := path + ".part"
+	writeFile(t, partPath, "complete content")
+
+	if err := finalizePartFile(partPath, path, nil); err == nil {
+		t.Fatal("finalizePartFile succeeded renaming onto an occupied path")
+	}
+	if _, serr := os.Stat(partPath); !os.IsNotExist(serr) {
+		t.Errorf(".part file %s was not cleaned up after a rename failure", partPath)
 	}
 }
 
