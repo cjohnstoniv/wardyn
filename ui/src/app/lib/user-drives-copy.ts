@@ -250,7 +250,13 @@ export const DRIVES = {
   FIELD_DRIVE: "Drive",
   DRIVE_PLACEHOLDER: "Choose a drive",
   FIELD_SIZE_OVERRIDE: "Size override (MiB)",
-  SIZE_OVERRIDE_HINT: "Empty or 0 keeps the drive's size.",
+  // B5-F2 residual (Appendix A verdict): a size-only write to an already-
+  // provisioned k8s_pvc drive is a 200 and reported everywhere — the store
+  // never refuses it (OPERATIONS.md's own documented claim-shape reuse) — but
+  // the PVC itself keeps its old request; the k8s driver only WARNs the
+  // drift. Said here rather than a 409 an admin's console PUT has no way to
+  // confirm.
+  SIZE_OVERRIDE_HINT: "Empty or 0 keeps the drive's size. A larger number here is prospective for an existing PVC — it doesn't resize storage already provisioned.",
   FIELD_WRITABLE_OVERRIDE: "Writable",
   WRITABLE_OVERRIDE_INHERIT: "Same as the drive",
   WRITABLE_OVERRIDE_HINT:

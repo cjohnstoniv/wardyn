@@ -682,7 +682,7 @@ With the switch off nothing else on the screen changes.
 | `FIELD_DRIVE` | Drive |
 | `DRIVE_PLACEHOLDER` | Choose a drive |
 | `FIELD_SIZE_OVERRIDE` | Size override (MiB) |
-| `SIZE_OVERRIDE_HINT` | Empty or 0 keeps the drive's size. |
+| `SIZE_OVERRIDE_HINT` | Empty or 0 keeps the drive's size. A larger number here is prospective for an existing PVC — it doesn't resize storage already provisioned. |
 | `FIELD_WRITABLE_OVERRIDE` | Writable |
 | `WRITABLE_OVERRIDE_INHERIT` | Same as the drive |
 | `WRITABLE_OVERRIDE_HINT` | Same as the drive, or set it for this subject alone. A run can narrow the result to read-only, never widen it. |
@@ -712,6 +712,14 @@ With the switch off nothing else on the screen changes.
 | `PREVIEW_OBJECT_LABEL` | Storage object |
 | `PREVIEW_OBJECT_HINT` | What the reclaim command names — copy it when someone leaves. |
 | `PREVIEW_ENFORCEMENT_LABEL` | Enforcement |
+
+**0.7.4 ADDITION (Appendix A B5-F2 residual):** `SIZE_OVERRIDE_HINT` gained its second sentence —
+`user_drives.go`'s `driveIdentityFields`/`driveRehomeGuard` accept a size-only write to an already-
+provisioned `k8s_pvc` drive (`OPERATIONS.md`'s own documented claim-shape reuse: refusing the run
+would mean an admin editing an allocation breaks every member's runs), but the PVC itself keeps its
+old request — the k8s driver only WARNs the drift (`runner/k8s/drives.go`). A 409 was REJECTED
+(it would make resizing console-impossible, since the console PUTs with no confirm query); the
+console says so instead, where the field is authored.
 
 **`EFFECT_NOTE` and `SIGNIN_NOTE` are two halves of one fact and render together**, the
 governance round's lesson carried over with the object changed: an **allocation** is a row the
