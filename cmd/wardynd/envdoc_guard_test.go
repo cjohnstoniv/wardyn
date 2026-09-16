@@ -130,6 +130,19 @@ var envDocShellOnly = map[string]bool{
 	// deploy/desktop/install.sh (`-gen-age-key`), never by Go. Documented in
 	// ENV.md's "Setup / operator scripts" section.
 	"WARDYN_INSTALL_IMAGE": true,
+	// E-04: the kind quickstart / kind SSO walk's own knobs — read only by
+	// deploy/kind/quickstart.sh, scripts/kind-sso-walk.sh and
+	// deploy/kind/sso/overlay.sh, never by Go. Documented in ENV.md's "kind
+	// quickstart / kind SSO walk" table.
+	"WARDYN_QUICKSTART_CLUSTER": true, "WARDYN_QUICKSTART_HTTP_PORT": true,
+	"WARDYN_QUICKSTART_SSH_PORT": true, "WARDYN_KIND_SSO_SERVICE_CIDR": true,
+	"WARDYN_KIND_SSO_REBUILD": true, "WARDYN_KIND_SSO_DEX_PORT": true,
+	"WARDYN_KIND_SSO_EVIDENCE": true, "WARDYN_KIND_SSO_ADMIN_TOKEN": true,
+	// The walk's own EXPORTS to ui/e2e/live/sso-member.spec.ts (process.env,
+	// never Go) — outputs of the walk, not operator inputs.
+	"WARDYN_LIVE_ADMIN_TOKEN": true, "WARDYN_LIVE_FAKE_URL": true,
+	"WARDYN_LIVE_PIN_ACCOUNT": true, "WARDYN_LIVE_PIN_ROLE": true,
+	"WARDYN_LIVE_SSO_START_URL": true, "WARDYN_LIVE_SSO_REGION": true,
 }
 
 var wardynVarLit = regexp.MustCompile(`WARDYN_[A-Z0-9_]+`)
@@ -365,6 +378,8 @@ var envDocE2EShellFiles = []string{
 	"scripts/run-ui-e2e.sh",
 	"scripts/screenshots.sh",
 	"test/e2e/e2e.sh",
+	"scripts/kind-sso-walk.sh",
+	"deploy/kind/sso/overlay.sh",
 }
 
 // readE2EShellVars returns every WARDYN_* token found in envDocE2EShellFiles.

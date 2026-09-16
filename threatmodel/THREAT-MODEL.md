@@ -1771,11 +1771,11 @@ hiding them would repeat the failure mode we are designed to avoid.
 
 ### Operator overrides that boot past a fail-closed gate
 
-Three shipped env vars let a deployment start after a gate this document
+Four shipped env vars let a deployment start after a gate this document
 otherwise describes as unconditional. They exist because a fail-closed gate with
 no escape hatch is a gate operators disable by not upgrading — but a deployment
 that sets one is **not** the deployment §4 and §7 describe, so each is listed here
-with what it costs. All three are read once at construction, all three log an
+with what it costs. All four are read once at construction, all four log an
 unmissable warning, and none is silent on the setup checklist.
 
 | Override | Gate it passes | What the deployment loses |
@@ -1783,6 +1783,7 @@ unmissable warning, and none is silent on the setup checklist.
 | `WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` | The boot-time egress canary PROVED this cluster's CNI does not enforce `NetworkPolicy`, which normally refuses substrate construction | L1 entirely: in the driver's own words, "every sandbox this substrate creates has UNCONFINED egress". Classes stay advertised, but `NetworkPolicy` and `StructuralEgress` both report false, so the substrate never reads as confined on `/healthz`; the `k8s_egress_containment` checklist row is a hard `fail`. L2 (the proxy) still stands — this is the loss of the kernel-level layer beneath it, not of all egress control |
 | `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY=1` | Canary phase A failed in exactly the shape a platform-applied ambient default-deny produces | PROOF, not enforcement. Phase B — the deny-all test that would show Wardyn's OWN policy binds — is skipped, because behind an existing ambient deny it can only ever also refuse. `NetworkPolicy` reports false and `NetworkPolicyAcknowledged` true; the checklist row is `warn`, never `ok`. The honest reading: this cluster is probably confined by the PLATFORM's policy, and Wardyn cannot confirm its own |
 | `WARDYN_ALLOW_UNENFORCEABLE_CAPS=1` | The Docker daemon's create response reported it DISCARDED a requested CPU / memory / pids limit (`verifyCapsEnforced`), which normally refuses the run BEFORE `ContainerStart` | The per-run resource ceiling on that host. The sandbox is created and started anyway, with a `slog.Warn` naming the discarded limit — so an untrusted workload can run effectively uncapped, and a fork bomb or memory hog is a host-level event. Intended for a host the operator already trusts; the real fix is delegating the cgroup v2 controllers to the runtime user |
+| `WARDYN_ALLOW_TEST_ENDPOINTS=true` | The outright refusal of `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` (`internal/api/awssso_endpoint.go`) and the `http://` refusal on `WARDYN_BEDROCK_BASE_URL` (`ValidateBedrockBaseURL`, `internal/api/llm_gateway.go`) | Both AWS IAM Identity Center services can be re-pointed at a server of the operator's choosing, and the Bedrock data plane (and, in bearer mode, the credential riding it) can travel in cleartext — model-plane traffic in cleartext and an impersonable IAM Identity Center. Production-forbidden, not production-discouraged: no AWS SSO operation Wardyn uses is signed, so Wardyn cannot distinguish the fake endpoint from the real one — see residual #45 |
 
 `WARDYN_K8S_ACK_AMBIENT_DEFAULT_DENY` is narrower than "boot past the canary": it
 acknowledges exactly ONE phase-A shape — a canary pod that reached Running and

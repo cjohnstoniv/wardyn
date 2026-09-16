@@ -1979,7 +1979,7 @@ admin walking the member path, not an incident.
 | `reason` | Raised when | Shape |
 |---|---|---|
 | `admin_surface` | a member requested an admin-only route (`requireOperator`) | ⛔ `403` |
-| `security_admin_surface` | a member requested a route on the SECURITY tier (`requireSecurityOperator` — admin or `security_admin`). The `403` body is byte-identical to `admin_surface`'s on purpose, so a refusal never maps which tier a route sits on; only this reason distinguishes them, which is what lets a rule tell "a member hit an admin route" from "a member hit a security-tier route" | ⛔ `403` |
+| `security_admin_surface` | a member requested a route on the SECURITY tier (`requireSecurityOperator` — admin or `security_admin`), and also raised in-handler by `resolveAlwaysTarget` for `decision_scope=always` on a route that lives on the member group — the same predicate on a route a member may legally reach. The `403` body is byte-identical to `admin_surface`'s on purpose, so a refusal never maps which tier a route sits on; only this reason distinguishes them, which is what lets a rule tell "a member hit an admin route" from "a member hit a security-tier route" | ⛔ `403` |
 | `not_owner` | a member reached a run/approval/recording, or a member-OWNED workspace (`owned_by`, migration 0048), that exists but isn't theirs | ⛔ `404` (byte-identical to missing) |
 | `attach_ticket_foreign_run` | a caller who is not the super admin — **including a `security_admin`** — asked to mint a PTY attach ticket for a run they did not create. Its own reason rather than `not_owner` so an auditor can see the security tier refused a foreign shell without inferring it from the path (`internal/api/attach_ticket.go`) | ⛔ `404` (byte-identical to missing) |
 | `byoi_member` | a member named a `devcontainer_repo`, or an `image` they hold no grant for | ⛔ `403` |
@@ -2142,8 +2142,10 @@ its own ownership namespace.
   role map in `deploy/kind/sso/values.yaml`).
 - **Entra** — the walk provisions `wardyn-admin`, `wardyn-member` and
   `wardyn-outsider` (`deploy/azure-entra-sso/03-people.sh`).
-- **compose demo** — see [Second user, same host](#second-user-same-host)
-  below, which adds a second `staticPasswords` entry to the bundled Dex.
+- **compose demo** — `deploy/compose/dex.yaml` already ships two logins,
+  `demo@wardyn.local` (admin) and `member@wardyn.local` (member); see
+  [Second user, same host](#second-user-same-host) below, which adds a
+  *third* `staticPasswords` entry to the bundled Dex.
 
 > **Use a fresh browser profile / incognito window — or sign out of the IdP
 > first.** A live session for the other account in the same tab is silently
@@ -2232,8 +2234,10 @@ do for you:
    dex: condition: service_healthy` sequences this for the command above; it only
    bites if you later restart wardynd alone while Dex is down.
 
-3. **Give the second person their own login.** For the bundled Dex,
-   `staticPasswords` in `deploy/compose/dex.yaml` is the authentication list —
+3. **Give a third person their own login** (0.7.4 already ships
+   `demo@wardyn.local` and `member@wardyn.local` below — this recipe adds a
+   third identity). For the bundled Dex, `staticPasswords` in
+   `deploy/compose/dex.yaml` is the authentication list —
    `enablePasswordDB: true` with no external connector means an email absent from
    it has no password to authenticate with, full stop. (Dex authenticates, the
    operator list authorizes.) Mint a bcrypt hash (any bcrypt tool at the same
@@ -2243,7 +2247,7 @@ do for you:
    htpasswd -bnBC 10 "" 'their-password' | tr -d ':\n'
    ```
 
-   and add an entry alongside the demo user:
+   and add an entry alongside the two existing users:
 
    ```yaml
    staticPasswords:
@@ -2251,6 +2255,10 @@ do for you:
        hash: "$2a$10$SDMtAYUgJDDzcanSySsoBuLPINvmRvxVpqg3WU9jfThQABkwBvaiK"
        username: "demo"
        userID: "demo-0001"
+     - email: "member@wardyn.local"
+       hash: "$2a$10$SDMtAYUgJDDzcanSySsoBuLPINvmRvxVpqg3WU9jfThQABkwBvaiK"
+       username: "member"
+       userID: "member-0001"
      - email: "reviewer2@wardyn.local"   # not in the operator list ⇒ a member;
        hash: "<paste the whole generated hash>"  # domain must clear WARDYN_OIDC_EMAIL_DOMAINS
        username: "reviewer2"
@@ -2272,12 +2280,12 @@ do for you:
    posture). Each clicks **Sign in with SSO**.
 
 `WARDYN_OIDC_EMAIL_DOMAINS` is a separate knob with a different failure mode: an
-empty value is not "deny all", it fails **open** — any account the IdP
+**unset** value is not "deny all", it fails **open** — any account the IdP
 authenticates gets a session, and without the domains list the `email_verified`
 claim is not checked at all (both checks live inside the domains branch —
-`AllowedEmailDomains`, `internal/auth/oidc/oidc.go`). The bundled Dex's
-hand-curated `staticPasswords` makes that moot here; set the domain(s) for real
-once you point this at a corporate IdP.
+`AllowedEmailDomains`, `internal/auth/oidc/oidc.go`). Compose already pins it
+to `wardyn.local` (`docker-compose.yaml`), so this stack is fail-closed as
+shipped; re-point it when you swap Dex for a corporate IdP.
 
 With the domains list set, `email_verified` **absent** from the id_token and
 `email_verified: false` are two different denials, logged and coded separately
@@ -3176,8 +3184,9 @@ Everything above is unfalsifiable without an AWS tenant — which is why, before
 nowhere. It is testable now, on a throwaway kind cluster, with no AWS account
 and no real credential anywhere in the loop.
 
-**The cluster.** `make kind-quickstart` then `make kind-sso` (see
-`deploy/kind/sso/README.md`). The overlay adds Dex with two static principals —
+**The cluster.** `WARDYN_QUICKSTART_HTTP_PORT=8280 WARDYN_QUICKSTART_SSH_PORT=2322
+make kind-quickstart`, then `make kind-sso` (see `deploy/kind/sso/README.md`).
+The overlay adds Dex with two static principals —
 `admin@wardyn.local` and `member@wardyn.local`, password `password` — plus
 `wardyn-awsssofake`: an unsigned fake of both AWS IAM Identity Center services
 (`sso-oidc` and the `sso` portal) and a bedrock-runtime stub, all on one
@@ -3215,8 +3224,9 @@ proxy's own interface subnets. A pod IP is on the pod CIDR, which IS that
 subnet, so a pod IP can never be lifted however it is declared; a ClusterIP is
 on the Service CIDR, which can. Scope the rule to the Service CIDR your cluster
 actually uses (read it off the apiserver's `--service-cluster-ip-range`, do not
-assume `10.96.0.0/16`). The same entry covers the Bedrock stub, because it is
-the same Service.
+assume `10.96.0.0/16`; `scripts/kind-sso-walk.sh` reads it off the apiserver
+itself and falls back to `WARDYN_KIND_SSO_SERVICE_CIDR` if that read fails).
+The same entry covers the Bedrock stub, because it is the same Service.
 
 **The walk.** `WARDYN_TEST_K8S=1 scripts/kind-sso-walk.sh` does all of the
 above and then drives `ui/e2e/live/sso-member.spec.ts`: both principals sign in
