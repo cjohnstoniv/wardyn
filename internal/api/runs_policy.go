@@ -87,13 +87,19 @@ func pageWindow[T any](items []T, offset, limit int) ([]T, bool) {
 // method and path an operator needs) instead of into the body of a read a
 // MEMBER can reach — this one helper is the paged chokepoint for /runs,
 // /approvals, /audit, /policies and /workspaces alike.
+//
+// Which is exactly why the message is the route-NEUTRAL "list" and not
+// "list runs": five different nouns page through here, and telling a member
+// whose workspace list failed that listing RUNS broke is a sentence about a
+// route they did not call. A caller that wants a noun in its 500 owns its own
+// writeServerError at its own site.
 func servePage[T any](w http.ResponseWriter, r *http.Request, page store.Page, pageFn func(store.Page) ([]T, error), allFn func() ([]T, error)) {
 	var items []T
 	var truncated bool
 	if pageFn != nil {
 		got, err := pageFn(store.Page{Limit: page.Limit + 1, Offset: page.Offset})
 		if err != nil {
-			writeServerError(w, r, "list runs", err)
+			writeServerError(w, r, "list", err)
 			return
 		}
 		items = got
@@ -103,7 +109,7 @@ func servePage[T any](w http.ResponseWriter, r *http.Request, page store.Page, p
 	} else {
 		got, err := allFn()
 		if err != nil {
-			writeServerError(w, r, "list runs", err)
+			writeServerError(w, r, "list", err)
 			return
 		}
 		items, truncated = pageWindow(got, page.Offset, page.Limit)

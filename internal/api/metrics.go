@@ -247,11 +247,16 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 // its job while the drain loop is not doing its own — invisible until now
 // outside a log line.
 func (s *Server) writeHealthGauges(r *http.Request, w io.Writer) {
+	// ONE bounded context for every store read this scrape makes. A scrape must
+	// answer or fail; it must never hang, and a store that accepts a PING while
+	// stalling a query is exactly the asymmetry wardyn_auth_store_errors_total
+	// exists to describe — so the ground-truth read below gets the same deadline
+	// the ping does rather than the caller's unbounded request context.
+	ctx, cancel := context.WithTimeout(r.Context(), storePingTimeout)
+	defer cancel()
 	// Nil Store (tests, and only tests) matches /readyz: nothing to be down.
 	up := 1
 	if s.cfg.Store != nil {
-		ctx, cancel := context.WithTimeout(r.Context(), storePingTimeout)
-		defer cancel()
 		if err := s.cfg.Store.Ping(ctx); err != nil {
 			up = 0
 		}
@@ -267,7 +272,7 @@ func (s *Server) writeHealthGauges(r *http.Request, w io.Writer) {
 	s.writeSinkDrops(w)
 	// B6-F6: the eBPF sensor's cumulative counts, moved off the anonymous
 	// /healthz onto this gated scrape where every other volume series lives.
-	s.writeEbpfGroundtruthCounters(r.Context(), w)
+	s.writeEbpfGroundtruthCounters(ctx, w)
 }
 
 // writeSinkDrops emits the per-SIEM-sink delivery-drop counter (D2): events a

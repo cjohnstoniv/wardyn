@@ -143,6 +143,36 @@ func TestRejectedSessionAnswersItself(t *testing.T) {
 			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
 		}
 	})
+
+	// R-04: the narrowing keys on bearer PRESENCE, not validity, and this pins
+	// the residual that leaves. An unknown `wdn_` token (a console holding a
+	// stale one in localStorage) suppresses the 503 short-circuit, hits
+	// ErrNotFound in apiTokenAuth, falls through to adminAuth and gets 401 —
+	// so the sign-in loop B6-F2 closes is still reachable this one narrow way.
+	//
+	// It is NOT a regression (the base did the same) and the alternative —
+	// answering 503 whenever a bearer is present — would break the static admin
+	// token, which is the operator's escape hatch during exactly the database
+	// incident this is about. The trade is deliberate; this test is the record
+	// of it, so a later change to the answer is a decision and not a drift.
+	t.Run("an unknown bearer still suppresses the outage answer", func(t *testing.T) {
+		out := newHarness(t)
+		cfg := baseTestConfig(out, newTokenMemStore())
+		cfg.OIDC = &oidc.Authenticator{}
+		cfg.SessionRevocations = errRevocations{err: store.ErrNotFound}
+		outSrv := New(cfg)
+
+		r := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		r.AddCookie(expiredSSOSession(t, "sub-stale", "s@corp.example", oidc.RoleAdmin))
+		r.Header.Set("Authorization", "Bearer wdn_bogus")
+		w := httptest.NewRecorder()
+		outSrv.Handler().ServeHTTP(w, r)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("status = %d, want 401 (today's answer) — if this changed deliberately, "+
+				"the bearer-presence narrowing in rejectedSessionAnswer was re-decided; body=%s",
+				w.Code, w.Body.String())
+		}
+	})
 }
 
 // errRevocations is a SessionRevocations whose store is down — the condition
@@ -202,6 +232,21 @@ func (s errRunStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) 
 	return types.AgentRun{}, s.err
 }
 
+// ListWorkspaces fails the same way, for the second half of the test: servePage
+// is the paged chokepoint for five different nouns, so its message has to be
+// route-NEUTRAL. (store.Pager is a separate optional interface, so an embedded
+// store.Store does not satisfy it — this fake takes servePage's allFn branch.)
+func (s errRunStore) ListWorkspaces(context.Context) ([]types.Workspace, error) {
+	return nil, s.err
+}
+
+// GetSiteConfig completes the double: handleListWorkspaces builds its
+// admission stamper before it pages, and a nil embedded store panics there
+// long before servePage's message could be observed.
+func (s errRunStore) GetSiteConfig(context.Context) (types.SiteConfig, error) {
+	return types.SiteConfig{}, nil
+}
+
 // TestServerErrorsDoNotLeakDriverText pins B6-F4: ~149 sites wrote
 // `err.Error()` straight into a 5xx body, and the member tier reaches plenty of
 // them — so an ordinary member could read the deployment's database host, port
@@ -228,5 +273,21 @@ func TestServerErrorsDoNotLeakDriverText(t *testing.T) {
 	}
 	if !strings.Contains(logged.String(), secret) {
 		t.Errorf("the driver error was dropped instead of logged — the operator now has nothing:\n%s", logged.String())
+	}
+
+	// R-01: servePage serves /runs, /approvals, /audit, /policies AND
+	// /workspaces. A member whose WORKSPACE list 500s must not be told that
+	// listing RUNS failed — that is a sentence about a route they did not call,
+	// and it is the exact legibility B6-F4's own rationale rests on.
+	ws := do(t, srv, http.MethodGet, "/api/v1/workspaces", adminToken, "")
+	if ws.Code != http.StatusInternalServerError {
+		t.Fatalf("workspace list: status = %d, want 500; body=%s", ws.Code, ws.Body.String())
+	}
+	if strings.Contains(ws.Body.String(), secret) {
+		t.Errorf("the workspace-list 5xx body leaked the driver's connection string:\n%s", ws.Body.String())
+	}
+	if strings.Contains(ws.Body.String(), "runs") {
+		t.Errorf("a failed WORKSPACE list answered %s — servePage's message names a route the caller "+
+			"did not call", ws.Body.String())
 	}
 }

@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,6 +15,8 @@ import (
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
+	"github.com/cjohnstoniv/wardyn/internal/store"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
 // ─── B6-F6: the anonymous /healthz stops publishing fleet volumes ────────────
@@ -191,5 +194,91 @@ func TestHandlerDocsMatchTheRegisteredTier(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// ─── R-02: the by-kind label is a CLOSED set ─────────────────────────────────
+
+// metricsHeartbeatStore is stubHeartbeatStore plus the Ping /metrics makes for
+// wardyn_store_up (the /healthz tests never reach it).
+type metricsHeartbeatStore struct{ stubHeartbeatStore }
+
+func (metricsHeartbeatStore) Ping(context.Context) error { return nil }
+
+// TestGroundtruthByKindLabelsAreAClosedSet pins R-02. The keys of
+// observed_by_kind come straight out of the sensor's heartbeat audit row —
+// a component that is not the control plane — and Go's %q escapes a tab as
+// \t, which the Prometheus text format does not accept in a label value. One
+// odd byte would therefore fail the WHOLE scrape, taking every wardyn_* series
+// with it, including the store and auth gauges an operator pages on.
+func TestGroundtruthByKindLabelsAreAClosedSet(t *testing.T) {
+	h := newHarness(t)
+	hb := groundtruth.HeartbeatEventWithDropped(0, 10, 0, map[string]uint64{
+		groundtruth.ActionProcessExec:    1,
+		groundtruth.ActionNetworkConnect: 2,
+		"weird\tkind":                    3,
+		"kernel.file.write":              4, // real, but deliberately not in groundtruthKinds
+	})
+	hb.Time = time.Now()
+	h.srv.cfg.Store = metricsHeartbeatStore{stubHeartbeatStore{ev: hb}}
+
+	body := do(t, h.srv, http.MethodGet, "/metrics", adminToken, "").Body.String()
+	for _, want := range []string{
+		`wardyn_groundtruth_observed_by_kind_total{kind="` + groundtruth.ActionProcessExec + `"} 1`,
+		`wardyn_groundtruth_observed_by_kind_total{kind="` + groundtruth.ActionNetworkConnect + `"} 2`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/metrics missing %q", want)
+		}
+	}
+	for _, bad := range []string{"weird", `\t`, "kernel.file.write"} {
+		if strings.Contains(body, bad) {
+			t.Errorf("/metrics published a sensor-supplied label %q — one unescapable byte fails the whole scrape:\n%s",
+				bad, body)
+		}
+	}
+}
+
+// ─── R-03: the scrape's store reads are bounded ──────────────────────────────
+
+// blockingHeartbeatStore stalls the ground-truth query while answering Ping —
+// the exact asymmetry wardyn_auth_store_errors_total exists to describe: a pool
+// that pings can still hang an individual statement.
+type blockingHeartbeatStore struct {
+	store.Store
+	released chan struct{}
+}
+
+func (s blockingHeartbeatStore) Ping(context.Context) error { return nil }
+
+func (s blockingHeartbeatStore) LatestAuditEventByAction(ctx context.Context, _ string) (types.AuditEvent, error) {
+	select {
+	case <-ctx.Done():
+		return types.AuditEvent{}, ctx.Err()
+	case <-s.released:
+		return types.AuditEvent{}, store.ErrNotFound
+	}
+}
+
+// TestMetricsScrapeIsBoundedByAStalledStore pins R-03: the ground-truth read
+// ran on the caller's UNBOUNDED request context, three lines below a block in
+// the same function that deliberately bounds its own store call. A scrape must
+// answer or fail — never hang.
+func TestMetricsScrapeIsBoundedByAStalledStore(t *testing.T) {
+	released := make(chan struct{})
+	defer close(released)
+	h := newHarness(t)
+	h.srv.cfg.Store = blockingHeartbeatStore{released: released}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		do(t, h.srv, http.MethodGet, "/metrics", adminToken, "")
+	}()
+	select {
+	case <-done:
+	case <-time.After(storePingTimeout + 10*time.Second):
+		t.Fatalf("GET /metrics did not return within %s + slack against a stalled store — "+
+			"the scrape hangs instead of answering", storePingTimeout)
 	}
 }

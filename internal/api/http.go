@@ -443,10 +443,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
-		// A session cookie WAS presented and rejected: answer THAT, not the bearer
-		// lane's generic 401 (sessionRejectionResponse, auth_status.go). Skipped
-		// when a bearer came with it — a valid CLI token alongside a stale browser
-		// cookie must still authenticate.
+		// A rejected session cookie answers itself — rejectedSessionAnswer, auth_status.go.
 		if reason, status, msg, ok := rejectedSessionAnswer(r); ok {
 			s.auditRejectedSession(r, reason) // carries the ERROR log + authStoreErrorInc
 			writeError(w, status, msg)

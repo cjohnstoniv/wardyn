@@ -276,13 +276,29 @@ func (s *Server) writeEbpfGroundtruthCounters(ctx context.Context, w io.Writer) 
 		"# TYPE wardyn_groundtruth_dropped_total counter\nwardyn_groundtruth_dropped_total %d\n", num("dropped_total"))
 	fmt.Fprintf(w, "# HELP wardyn_groundtruth_dropped_unmapped_total Kernel events the sensor saw but could bind to no run — a broken correlation, not a blind sensor.\n"+
 		"# TYPE wardyn_groundtruth_dropped_unmapped_total counter\nwardyn_groundtruth_dropped_unmapped_total %d\n", num("dropped_unmapped"))
+	// CLOSED SET, filtered BEFORE the header so the family is emitted only when
+	// it has samples. This is a correctness guard, not tidiness: the map keys
+	// come straight out of the sensor's heartbeat audit row — a component that
+	// is not the control plane — and %q escapes a tab as \t, a control byte as
+	// \xNN and invalid UTF-8 as a \u escape, none of which the Prometheus text
+	// format accepts in a label value (only \\, \n and \"). ONE odd byte from
+	// the sensor would be a parse error that fails the WHOLE scrape, taking
+	// every wardyn_* series with it — including the store and auth gauges an
+	// operator is paging on. It bounds label cardinality too, and
+	// missingGroundtruthKinds already treats groundtruthKinds as closed.
 	byKind, _ := status["observed_by_kind"].(map[string]uint64)
-	if len(byKind) == 0 {
+	kinds := make([]string, 0, len(groundtruthKinds))
+	for _, k := range slices.Sorted(maps.Keys(byKind)) {
+		if slices.Contains(groundtruthKinds, k) {
+			kinds = append(kinds, k)
+		}
+	}
+	if len(kinds) == 0 {
 		return
 	}
 	fmt.Fprint(w, "# HELP wardyn_groundtruth_observed_by_kind_total Kernel events mapped to a run, by event kind.\n"+
 		"# TYPE wardyn_groundtruth_observed_by_kind_total counter\n")
-	for _, kind := range slices.Sorted(maps.Keys(byKind)) {
+	for _, kind := range kinds {
 		fmt.Fprintf(w, "wardyn_groundtruth_observed_by_kind_total{kind=%q} %d\n", kind, byKind[kind])
 	}
 }
