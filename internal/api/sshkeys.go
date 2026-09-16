@@ -53,6 +53,15 @@ func (s *Server) handleListSSHKeys(w http.ResponseWriter, r *http.Request) {
 // so validation here fails closed: unparseable input, private-key material,
 // and more-than-one-key input are all refused (422), never stored.
 func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
+	// MEMBER MODE REFUSES, it does not clamp (0.7.4, P2). A key registered here
+	// carries a role STAMP (migration 0046) that OnLogin re-derives from the
+	// human's real role at their next sign-in — so a key registered "as a
+	// member" would come back admin and outlive the mode that made it. See
+	// internal/api/membermode.go.
+	if oidc.MemberModeFromContext(r.Context()) {
+		writeError(w, http.StatusConflict, memberModeMintRefusal)
+		return
+	}
 	var req addSSHKeyRequest
 	if !decodeStrict(w, r, &req) {
 		return

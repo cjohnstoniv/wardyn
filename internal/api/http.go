@@ -491,7 +491,7 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 			// through (incl. the attach WS's ticketOrHumanAuth fallback lane), so
 			// one audit call here covers all of them.
 			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-				"authz.denied", r.URL.Path, "denied", mustJSON(map[string]any{"reason": "admin_surface", "method": r.Method})))
+				"authz.denied", r.URL.Path, "denied", mustJSON(authzDeniedDatum(r.Context(), "admin_surface", r.Method))))
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -583,7 +583,7 @@ func (s *Server) requireSecurityOperator(next http.Handler) http.Handler {
 		if !s.isSecurityOperator(r.Context()) {
 			writeError(w, http.StatusForbidden, "requires admin role")
 			s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-				"authz.denied", r.URL.Path, "denied", mustJSON(map[string]any{"reason": "security_admin_surface", "method": r.Method})))
+				"authz.denied", r.URL.Path, "denied", mustJSON(authzDeniedDatum(r.Context(), "security_admin_surface", r.Method))))
 			return
 		}
 		next.ServeHTTP(w, r)

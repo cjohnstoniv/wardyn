@@ -46,8 +46,12 @@ func setMemberMode(t *testing.T, a *writoidc.Authenticator, in *http.Cookie, on 
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/me/member-mode", nil)
 	r.AddCookie(in)
 	w := httptest.NewRecorder()
-	if err := a.SetMemberMode(w, r, on); err != nil {
+	stamped, err := a.SetMemberMode(w, r, on)
+	if err != nil {
 		t.Fatalf("SetMemberMode(%v): %v", on, err)
+	}
+	if stamped != writoidc.RoleAdmin {
+		t.Errorf("SetMemberMode returned stamped role %q, want %q — the audit row records what is PAUSED", stamped, writoidc.RoleAdmin)
 	}
 	got := w.Result().Cookies()
 	if len(got) != 1 {

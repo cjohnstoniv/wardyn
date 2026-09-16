@@ -248,6 +248,15 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 			"an API token cannot create another API token — sign in to the console to mint one")
 		return
 	}
+	// MEMBER MODE REFUSES, it does not clamp (0.7.4, P2). store.RefreshAPITokenRoles
+	// (fired by OnLogin) re-stamps EVERY token of a principal with their freshly
+	// derived role at the next sign-in, so a wdn_ token minted "as a member"
+	// would silently become an admin one — a credential outliving the mode that
+	// created it. See internal/api/membermode.go.
+	if oidc.MemberModeFromContext(ctx) {
+		writeError(w, http.StatusConflict, memberModeMintRefusal)
+		return
+	}
 	name := strings.TrimSpace(req.Name)
 	if len(name) > apiTokenNameMaxLen || !controlCharFree(name) {
 		writeError(w, http.StatusUnprocessableEntity, "name: invalid")

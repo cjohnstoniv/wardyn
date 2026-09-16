@@ -28,7 +28,15 @@ package oidc
 import "net/http"
 
 // SetMemberMode flips this request's session into or out of "view as member"
-// mode and writes the re-encoded cookie to w.
+// mode, writes the re-encoded cookie to w, and returns the session's STAMPED
+// role — what the mode pauses.
+//
+// The stamped role is returned rather than left for the caller to re-derive
+// because the caller CANNOT: RoleFromContext is already clamped to member while
+// the mode is on, so a caller reading it back would record "member" as the role
+// being paused, and a security_admin would be recorded as an admin. This
+// function has the cookie open anyway; it is one return value, not a second
+// parse of the session.
 //
 // It decodes the caller's CURRENT cookie rather than taking a Session: the
 // cookie is the only authority on what this human's session says, and building
@@ -45,16 +53,16 @@ import "net/http"
 // Note the deliberate asymmetry with clearCookie's callers: this never CLEARS
 // the session. Toggling off has to leave the human signed in — it is the exit
 // from the mode, and an exit that signed you out would be a trap.
-func (a *Authenticator) SetMemberMode(w http.ResponseWriter, r *http.Request, on bool) error {
+func (a *Authenticator) SetMemberMode(w http.ResponseWriter, r *http.Request, on bool) (stampedRole string, err error) {
 	sess, err := a.decodeSession(r)
 	if err != nil {
-		return err
+		return "", err
 	}
 	sess.MemberMode = on
 	cookie, err := a.encodeSession(sess)
 	if err != nil {
-		return err
+		return "", err
 	}
 	http.SetCookie(w, cookie)
-	return nil
+	return sess.Role, nil
 }

@@ -65,6 +65,16 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// never-a-second-copy rule as "operator" directly above. True for an
 		// admin too: the tiers overlap on this surface.
 		"security_operator": s.isSecurityOperator(r.Context()),
+		// "View as member" (0.7.4, P2): this admin has asked to be treated as a
+		// member for the rest of the session, so the console can say so in a
+		// persistent banner. Every field ABOVE is already clamped — role reads
+		// "member", both predicates read false — which is the point: the console
+		// needs no second rule, it needs to know the state it is in so the way
+		// OUT is always on screen.
+		//
+		// false for a real member and for every non-SSO caller, so an older
+		// client reading an absent key and a newer one reading false agree.
+		"member_mode": oidc.MemberModeFromContext(r.Context()),
 	}
 	// M3: the AddWorkspaceDialog root-constraint hint (member-role-desktop.md
 	// §DECISIONS O1, ui-batch2-mock.md's "New wire this mock assumes"). null for

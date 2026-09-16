@@ -450,9 +450,20 @@ var routeMatrix = map[string]classifiedRoute{
 	"GET /api/v1/workspaces/{id}/observed-egress": {class: classMember},
 	// Creating a workspace is the member ON-RAMP (the created row is
 	// owner-stamped from the session) — there is no {id} to own yet.
-	"POST /api/v1/workspaces":                  {class: classMember},
-	"POST /api/v1/auth/logout":                 {class: classMember},
-	"POST /api/v1/me/ssh-keys":                 {class: classMember},
+	"POST /api/v1/workspaces":  {class: classMember},
+	"POST /api/v1/auth/logout": {class: classMember},
+	"POST /api/v1/me/ssh-keys": {class: classMember},
+	// "View as member" (0.7.4, P2). classMember and NOT operatorOnly, on
+	// purpose: toggling OFF has to be reachable from inside the mode, where the
+	// caller's effective role IS member. Toggling ON from a real member session
+	// is a no-op 200, so the member class costs nothing; the no-human lane
+	// (admin token / local mode / no IdP) is refused inside the handler, which
+	// is a 400 rather than a tier.
+	//
+	// No `body` override: the generic "{}" bodyFor sends decodes to
+	// enabled:false and the handler answers 200, which is what classMember's
+	// assertNotBlocked probe needs.
+	"POST /api/v1/me/member-mode":              {class: classMember},
 	"POST /api/v1/policies/grade":              {class: classMember},
 	"POST /api/v1/runs":                        {class: classMember},
 	"POST /api/v1/runs/preflight":              {class: classMember},
