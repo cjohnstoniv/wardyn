@@ -426,7 +426,7 @@ func (s *Server) reconcileRecordRun(ctx context.Context, runID uuid.UUID) {
 	if err != nil {
 		return // transient store failure: leave `recording`; a later reconcile retries
 	}
-	obs := recordmode.Capture(events, res.Confined)
+	obs := recordmode.Capture(events, res.Confined, s.kernelWindow(ctx, run))
 	now := s.cfg.Now().UTC()
 	res.FinishedAt = &now
 	res.Observations = &obs
@@ -442,9 +442,11 @@ func (s *Server) reconcileRecordRun(ctx context.Context, runID uuid.UUID) {
 	// would see it. Orthogonal to KernelSensorBlind above (that's THIS run's
 	// structural CC3 blindness; this is the host sensor's own health/coverage,
 	// which can be degraded or partial regardless of confinement class).
-	if gt := s.ebpfGroundtruthCaveat(ctx); gt != "" {
-		res.Caveats = append(res.Caveats, gt)
-	}
+	//
+	// B11b-F7: two lines, not one. What THIS capture was corroborated by comes
+	// from its own kernel evidence; the host sensor's state is reported as
+	// review-time state about the host. One sentence could not honestly be both.
+	res.Caveats = append(res.Caveats, s.groundtruthCaveats(ctx, obs)...)
 	if len(obs.Domains) == 0 {
 		res.Status = recordStatusFailed
 		// W20-W20-capture-store-4: recordEmptyCaptureHint blames the operator's

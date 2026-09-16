@@ -86,7 +86,7 @@ func (s *Server) handleSynthesizeProfile(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	}
-	obs := recordmode.Capture(events, confined)
+	obs := recordmode.Capture(events, confined, s.kernelWindow(ctx, run))
 	synth, synthWarns := recordmode.Synthesize(obs, grants, run)
 
 	// The control plane itself shows up in every capture (the sandbox's
@@ -158,13 +158,12 @@ func (s *Server) handleSynthesizeProfile(w http.ResponseWriter, r *http.Request)
 	if len(events) >= maxCaptureAuditEvents {
 		warnings = append(warnings, captureAuditTruncatedNote)
 	}
-	// W20-W20-groundtruth-mapper-4: same one-line eBPF sensor coverage state
-	// reconcileRecordRun stamps onto RecordTaskResult.Caveats — a synthesized
-	// profile is reviewed on this SAME evidence, so it carries the same honesty
-	// note about how much of it is kernel-corroborated.
-	if gt := s.ebpfGroundtruthCaveat(ctx); gt != "" {
-		warnings = append(warnings, gt)
-	}
+	// W20-W20-groundtruth-mapper-4: the same eBPF sensor notes reconcileRecordRun
+	// stamps onto RecordTaskResult.Caveats — a synthesized profile is reviewed on
+	// this SAME evidence, so it carries the same honesty note about how much of
+	// it is kernel-corroborated (and, since B11b-F7, the same split between what
+	// this capture shows and what the host sensor is doing at review time).
+	warnings = append(warnings, s.groundtruthCaveats(ctx, obs)...)
 
 	s.recordAudit(ctx, s.auditEvent(&id, actorTypeFromRequest(r), principalFromRequest(r), "run.record.synthesize",
 		id.String(), "success", mustJSON(map[string]any{

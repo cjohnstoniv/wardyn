@@ -27,7 +27,6 @@ import (
 	"maps"
 	"net/http"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/groundtruth"
@@ -300,37 +299,6 @@ func (s *Server) writeEbpfGroundtruthCounters(ctx context.Context, w io.Writer) 
 		"# TYPE wardyn_groundtruth_observed_by_kind_total counter\n")
 	for _, kind := range kinds {
 		fmt.Fprintf(w, "wardyn_groundtruth_observed_by_kind_total{kind=%q} %d\n", kind, byKind[kind])
-	}
-}
-
-// ebpfGroundtruthCaveat is the one-line, human-readable note a Record Mode
-// capture (RecordTaskResult.Caveats, reconcileRecordRun) and a synthesized
-// profile (profileResponse.Warnings, handleSynthesizeProfile) each stamp for
-// every non-healthy sensor state — the SAME state ebpfGroundtruthStatus
-// reports on /healthz, read through the one function so the two surfaces can
-// never disagree about what "healthy" means (W20-W20-groundtruth-mapper-4:
-// before this, the per-kind coverage state existed ONLY on the admin-only
-// /healthz endpoint — nowhere an operator reviewing a capture or a
-// synthesized profile would ever see it). "" (no caveat) when the sensor is
-// fully healthy — there is nothing to warn about.
-func (s *Server) ebpfGroundtruthCaveat(ctx context.Context) string {
-	status := s.ebpfGroundtruthStatus(ctx)
-	switch status["state"] {
-	case "unavailable":
-		return "kernel ground truth: unavailable — no eBPF sensor heartbeat was ever observed for this run; " +
-			"proxy egress decisions are the only signal behind this capture"
-	case "degraded":
-		return "kernel ground truth: degraded — the eBPF sensor's heartbeat is stale; kernel-level coverage " +
-			"for this capture may be incomplete"
-	case "idle":
-		return "kernel ground truth: idle — the eBPF sensor is alive but mapped zero kernel events; " +
-			"this capture has no kernel-level corroboration"
-	case "partial":
-		missing, _ := status["missing_kinds"].([]string)
-		return "kernel ground truth: partial — the eBPF sensor never observed " + strings.Join(missing, ", ") +
-			"; this capture's kernel-level corroboration is incomplete"
-	default: // "healthy", or absent (tests with no Store — same as unavailable, but there's no run to caveat)
-		return ""
 	}
 }
 

@@ -118,10 +118,30 @@ type Observations struct {
 	Connects []string `json:"connects,omitempty"`
 	// Anomalies is the deduped, sorted set of human-readable signals a
 	// least-privilege synthesis must NOT silently bless. It captures exactly:
-	// an egress.deny during the open recording, an unmapped kernel connect
-	// (possible proxy bypass), an exec of a dynamic linker (the ld-linux/mmap
-	// execve-hook bypass surface), and a failed/escape kernel connect.
+	// an egress.deny during the open recording, an exec of a dynamic linker
+	// (the ld-linux/mmap execve-hook bypass surface), a failed/escape kernel
+	// connect, and the sensor dropping events as unmapped while this capture
+	// ran (KernelWindow).
 	Anomalies []string `json:"anomalies,omitempty"`
+}
+
+// KernelWindow is what the host's eBPF sensor said about ITSELF while this
+// capture was running. It is the one fact a capture's own audit events cannot
+// carry, and it has to be scoped to the capture's window: the sensor is
+// host-wide and its heartbeat is global, so the newest one read at review time
+// describes the host NOW, not the run. A count from a beat days later is not
+// evidence about this capture, and must never become its anomaly (B11b-F4 +
+// B11b-F7).
+//
+// The zero value — no heartbeat inside the window — says nothing, which is the
+// honest answer for a host with no sensor and for a capture the sensor never
+// beat during.
+type KernelWindow struct {
+	// Beat is true when a sensor heartbeat landed inside the capture window.
+	Beat bool
+	// DroppedUnmapped is that beat's cumulative count of kernel events the
+	// sensor refused to forward because they correlated to no run.
+	DroppedUnmapped uint64
 }
 
 // domainAgg is the mutable per-host accumulator used while capturing.
@@ -159,7 +179,11 @@ type mintData struct {
 // per-host DomainObservation (nothing is hidden), it just does not also land
 // in Anomalies, and its message never claims "during open recording" for a
 // session that was never open.
-func Capture(events []types.AuditEvent, confined bool) Observations {
+//
+// kernel carries the one anomaly this run's OWN events cannot show: the
+// sensor's unmapped-drop count, and whether it was reported while the capture
+// was running. See KernelWindow.
+func Capture(events []types.AuditEvent, confined bool, kernel KernelWindow) Observations {
 	domains := map[string]*domainAgg{}
 	minted := map[uuid.UUID]bool{}
 	execs := map[string]bool{}
@@ -183,6 +207,19 @@ func Capture(events []types.AuditEvent, confined bool) Observations {
 		case groundtruth.ActionFileWrite:
 			captureFileWrite(ev, files)
 		}
+	}
+
+	// B11b-F4: the ONE anomaly this run's own events can never carry. An
+	// unmapped kernel event is precisely one that correlated to NO run: the
+	// sidecar's gate drops it, and what survives arrives with a nil run_id,
+	// which the caller's own WHERE run_id = $1 then excludes. The captureConnect
+	// branch that used to look for correlation=unmapped here was therefore dead
+	// code claiming a detection nothing could trigger. The sensor's own
+	// dropped_unmapped counter is where the signal actually lives.
+	if kernel.Beat && kernel.DroppedUnmapped > 0 {
+		anomalies[fmt.Sprintf("the kernel sensor dropped %d event(s) as unmapped while this capture was running "+
+			"(correlation=unmapped): activity on this host reached the kernel and bound to no run — a possible proxy bypass, "+
+			"or a correlation failure that makes this capture incomplete", kernel.DroppedUnmapped)] = true
 	}
 
 	return Observations{
@@ -278,9 +315,16 @@ func captureExec(ev types.AuditEvent, execs, anomalies map[string]bool) {
 	}
 }
 
-// captureConnect records a connect destination and flags unmapped / failed
-// connects (a possible proxy bypass, or a reach to the cloud metadata IP —
-// the only destination the mapper stamps outcome=failure post-FIX #17).
+// captureConnect records a connect destination and flags a FAILED connect (a
+// reach to the cloud metadata IP — the only destination the mapper stamps
+// outcome=failure post-FIX #17).
+//
+// It does NOT look for correlation=unmapped: an unmapped event is by
+// definition one that bound to no run, so it is either dropped by the
+// sidecar's gate or stored with a nil run_id, and this function only ever sees
+// events already scoped to one run. That branch could not fire (B11b-F4); the
+// signal it was reaching for is the sensor's dropped_unmapped counter, which
+// Capture reads from KernelWindow.
 func captureConnect(ev types.AuditEvent, connects, anomalies map[string]bool) {
 	var d groundtruth.EventData
 	if err := json.Unmarshal(ev.Data, &d); err != nil {
@@ -293,9 +337,6 @@ func captureConnect(ev types.AuditEvent, connects, anomalies map[string]bool) {
 	label := dst
 	if label == "" {
 		label = "(unknown dst)"
-	}
-	if d.Correlation == groundtruth.CorrelationUnmapped {
-		anomalies[fmt.Sprintf("unmapped kernel connect to %s (correlation=unmapped; possible proxy bypass)", label)] = true
 	}
 	if ev.Outcome == outcomeFailure {
 		anomalies[fmt.Sprintf("anomalous kernel connect to %s (outcome=failure; cloud metadata-IP reach — credential-theft blind spot)", label)] = true

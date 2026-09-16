@@ -103,6 +103,7 @@ func TestCapture(t *testing.T) {
 		name     string
 		events   []types.AuditEvent
 		confined bool
+		kernel   KernelWindow
 		check    func(t *testing.T, obs Observations)
 	}{
 		{
@@ -250,7 +251,13 @@ func TestCapture(t *testing.T) {
 			},
 		},
 		{
-			name: "connect dedup; unmapped and failure connects flagged",
+			// B11b-F4: the per-event correlation=unmapped branch is GONE. It
+			// could not fire in production — an unmapped event is by definition
+			// one that bound to no run, so the sidecar's gate drops it and what
+			// survives carries a nil run_id, which the caller's own run-scoped
+			// query excludes. Only a hand-built event like the one below ever
+			// reached it. The failure anomaly, which is real, stays.
+			name: "connect dedup; a failed connect is flagged, an unmapped one is not",
 			events: []types.AuditEvent{
 				connectEvent("10.0.0.5:443", groundtruth.CorrelationMapped, outcomeSuccess),
 				connectEvent("10.0.0.5:443", groundtruth.CorrelationMapped, outcomeSuccess), // dup
@@ -261,11 +268,44 @@ func TestCapture(t *testing.T) {
 				if !reflect.DeepEqual(obs.Connects, want) {
 					t.Errorf("connects = %v, want %v", obs.Connects, want)
 				}
-				if !containsSubstr(obs.Anomalies, "unmapped kernel connect to 169.254.169.254:80") {
-					t.Errorf("missing unmapped anomaly: %v", obs.Anomalies)
+				if containsSubstr(obs.Anomalies, "unmapped kernel connect") {
+					t.Errorf("per-event unmapped anomaly is dead code and must not fire: %v", obs.Anomalies)
 				}
 				if !containsSubstr(obs.Anomalies, "outcome=failure") {
 					t.Errorf("missing failure anomaly: %v", obs.Anomalies)
+				}
+			},
+		},
+		{
+			// The signal that REPLACES it: the sensor's own dropped-unmapped
+			// count, scoped by the caller to a heartbeat inside this capture's
+			// window.
+			name:   "sensor unmapped drops during the capture are an anomaly",
+			events: []types.AuditEvent{egressEvent(egress.Allow, "pypi.org", "GET", "policy")},
+			kernel: KernelWindow{Beat: true, DroppedUnmapped: 7},
+			check: func(t *testing.T, obs Observations) {
+				if !containsSubstr(obs.Anomalies, "dropped 7 event(s) as unmapped") {
+					t.Errorf("missing sensor unmapped-drop anomaly: %v", obs.Anomalies)
+				}
+			},
+		},
+		{
+			name:   "a beat with no unmapped drops is not an anomaly",
+			events: []types.AuditEvent{egressEvent(egress.Allow, "pypi.org", "GET", "policy")},
+			kernel: KernelWindow{Beat: true},
+			check: func(t *testing.T, obs Observations) {
+				if len(obs.Anomalies) != 0 {
+					t.Errorf("anomalies = %v, want none", obs.Anomalies)
+				}
+			},
+		},
+		{
+			name:   "a count with no beat in the window says nothing",
+			events: []types.AuditEvent{egressEvent(egress.Allow, "pypi.org", "GET", "policy")},
+			kernel: KernelWindow{DroppedUnmapped: 7},
+			check: func(t *testing.T, obs Observations) {
+				if len(obs.Anomalies) != 0 {
+					t.Errorf("anomalies = %v, want none (no heartbeat inside the capture window)", obs.Anomalies)
 				}
 			},
 		},
@@ -303,7 +343,7 @@ func TestCapture(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.check(t, Capture(tt.events, tt.confined))
+			tt.check(t, Capture(tt.events, tt.confined, tt.kernel))
 		})
 	}
 }
@@ -321,13 +361,13 @@ func TestCaptureOrderIndependent(t *testing.T) {
 		connectEvent("1.2.3.4:443", groundtruth.CorrelationUnmapped, outcomeSuccess),
 		fileWriteEvent("/etc/hosts"),
 	}
-	forward := Capture(events, false)
+	forward := Capture(events, false, KernelWindow{})
 
 	reversed := make([]types.AuditEvent, len(events))
 	for i := range events {
 		reversed[i] = events[len(events)-1-i]
 	}
-	backward := Capture(reversed, false)
+	backward := Capture(reversed, false, KernelWindow{})
 
 	if !reflect.DeepEqual(forward, backward) {
 		t.Fatalf("Capture is order-dependent:\n forward=%+v\nbackward=%+v", forward, backward)
@@ -408,7 +448,7 @@ func TestSynthesize(t *testing.T) {
 		// and first_use_approval must be true.
 		obs := Capture([]types.AuditEvent{
 			egressEvent(egress.Allow, "api.anthropic.com", "POST", "policy"),
-		}, false)
+		}, false, KernelWindow{})
 		spec, _ := Synthesize(obs, nil, run)
 		if spec.AllowAllEgress {
 			t.Error("allow_all_egress must be forced false")
@@ -430,7 +470,7 @@ func TestSynthesize(t *testing.T) {
 			egressEvent(egress.Allow, "api.github.com", "GET", "policy"),
 			egressEvent(egress.Deny, "denied.example", "GET", "policy"),
 			egressEvent(egress.Pending, "pending.example", "GET", "policy"),
-		}, false)
+		}, false, KernelWindow{})
 		spec, warns := Synthesize(obs, nil, run)
 		want := []string{"api.github.com", "pypi.org"}
 		if !reflect.DeepEqual(spec.AllowedDomains, want) {
@@ -447,7 +487,7 @@ func TestSynthesize(t *testing.T) {
 	})
 
 	t.Run("empty input denies all egress with warning", func(t *testing.T) {
-		spec, warns := Synthesize(Capture(nil, false), nil, run)
+		spec, warns := Synthesize(Capture(nil, false, KernelWindow{}), nil, run)
 		if spec.AllowAllEgress || len(spec.AllowedDomains) != 0 {
 			t.Errorf("empty recording must produce empty default-deny egress: %+v", spec)
 		}
@@ -476,7 +516,7 @@ func TestSynthesize(t *testing.T) {
 		obs := Capture([]types.AuditEvent{
 			mintEvent(fixedGrantA, outcomeSuccess),
 			mintEvent(fixedGrantB, outcomeSuccess),
-		}, false)
+		}, false, KernelWindow{})
 		spec, warns := Synthesize(obs, runGrants, run)
 		if len(spec.EligibleGrants) != 2 {
 			t.Fatalf("want 2 eligible grants (only the minted ones), got %d: %+v", len(spec.EligibleGrants), spec.EligibleGrants)
@@ -495,7 +535,7 @@ func TestSynthesize(t *testing.T) {
 	})
 
 	t.Run("minted grant absent from catalog warns and is omitted", func(t *testing.T) {
-		obs := Capture([]types.AuditEvent{mintEvent(fixedGrantA, outcomeSuccess)}, false)
+		obs := Capture([]types.AuditEvent{mintEvent(fixedGrantA, outcomeSuccess)}, false, KernelWindow{})
 		spec, warns := Synthesize(obs, nil, run) // empty catalog
 		if len(spec.EligibleGrants) != 0 {
 			t.Errorf("unknown grant must be omitted, got %+v", spec.EligibleGrants)
@@ -506,7 +546,7 @@ func TestSynthesize(t *testing.T) {
 	})
 
 	t.Run("confinement class left empty and warns when run has none", func(t *testing.T) {
-		spec, warns := Synthesize(Capture(nil, false), nil, types.AgentRun{})
+		spec, warns := Synthesize(Capture(nil, false, KernelWindow{}), nil, types.AgentRun{})
 		if spec.MinConfinementClass != "" {
 			t.Errorf("min_confinement_class = %q, want empty", spec.MinConfinementClass)
 		}
@@ -519,7 +559,7 @@ func TestSynthesize(t *testing.T) {
 		obs := Capture([]types.AuditEvent{
 			fileWriteEvent("/workspace/app/secret.txt"),
 			fileWriteEvent("/etc/passwd"),
-		}, false)
+		}, false, KernelWindow{})
 		spec, warns := Synthesize(obs, nil, run)
 		if len(spec.WorkspaceMounts) != 0 {
 			t.Errorf("workspace_mounts must never be synthesized, got %+v", spec.WorkspaceMounts)
@@ -534,7 +574,7 @@ func TestSynthesize(t *testing.T) {
 			egressEvent(egress.Deny, "evil.example", "GET", "policy"),
 			execEvent([]string{"/usr/bin/curl"}, false),
 			connectEvent("8.8.8.8:53", groundtruth.CorrelationUnmapped, outcomeSuccess),
-		}, false)
+		}, false, KernelWindow{})
 		_, warns := Synthesize(obs, nil, run)
 		if !containsSubstr(warns, "anomaly: egress.deny to evil.example") {
 			t.Errorf("expected deny anomaly surfaced as warning: %v", warns)
@@ -564,7 +604,7 @@ func TestSynthesizeDeterministic(t *testing.T) {
 		mintEvent(fixedGrantB, outcomeSuccess),
 		execEvent([]string{"/usr/bin/git"}, false),
 		fileWriteEvent("/work/out"),
-	}, false)
+	}, false, KernelWindow{})
 
 	spec1, warns1 := Synthesize(obs, runGrants, run)
 	for i := 0; i < 25; i++ {
@@ -606,7 +646,7 @@ func TestMintedGrantIDsSorted(t *testing.T) {
 		mintEvent(fixedGrantC, outcomeSuccess),
 		mintEvent(fixedGrantA, outcomeSuccess),
 		mintEvent(fixedGrantB, outcomeSuccess),
-	}, false)
+	}, false, KernelWindow{})
 	got := make([]string, len(obs.MintedGrantIDs))
 	for i, id := range obs.MintedGrantIDs {
 		got[i] = id.String()

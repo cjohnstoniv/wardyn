@@ -492,15 +492,15 @@ func TestEbpfGroundtruthCaveat_OneLinePerState(t *testing.T) {
 			if !c.noStore {
 				h.srv.cfg.Store = stubHeartbeatStore{ev: c.hb}
 			}
-			got := h.srv.ebpfGroundtruthCaveat(context.Background())
+			got := h.srv.hostSensorCaveat(context.Background())
 			if c.wantEmpty {
 				if got != "" {
-					t.Fatalf("ebpfGroundtruthCaveat = %q, want empty (healthy sensor has nothing to caveat)", got)
+					t.Fatalf("hostSensorCaveat = %q, want empty (healthy sensor has nothing to caveat)", got)
 				}
 				return
 			}
 			if got == "" || !strings.Contains(got, "kernel ground truth") || !strings.Contains(got, c.wantState) {
-				t.Fatalf("ebpfGroundtruthCaveat = %q, want a one-line note naming %q", got, c.wantState)
+				t.Fatalf("hostSensorCaveat = %q, want a one-line note naming %q", got, c.wantState)
 			}
 		})
 	}
