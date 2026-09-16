@@ -30,6 +30,21 @@ const reserved: Episode = {
   steps: [],
 };
 
+// U-04: an unrecorded episode that already carries a projected `minutes`
+// estimate (00, 03c, 04, 06, 07, 08, 09, 10 in the real catalog all do) —
+// unlike `reserved` above, which has no `minutes` at all and so never
+// exercised the bug.
+const reservedWithMinutes: Episode = {
+  id: "00",
+  title: "Meet Wardyn",
+  audience: "everyone",
+  path: "core",
+  tag: null,
+  file: "wardyn-00-meet-wardyn.mp4",
+  minutes: "5:53",
+  steps: [],
+};
+
 describe("EpisodeRow", () => {
   it("mounts no <video> until Watch is pressed, then exactly one with the pinned src", async () => {
     const user = userEvent.setup();
@@ -54,6 +69,12 @@ describe("EpisodeRow", () => {
     expect(screen.getByText("Not recorded yet")).toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("U-04: an unrecorded episode never shows a projected minutes estimate, even when the catalog carries one", () => {
+    render(<EpisodeRow episode={reservedWithMinutes} />);
+    expect(screen.getByText("Not recorded yet")).toBeInTheDocument();
+    expect(screen.queryByText("5:53")).not.toBeInTheDocument();
   });
 
   it("a load error swaps the player for the error copy and a release-page link", async () => {

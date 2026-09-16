@@ -30,7 +30,7 @@ export interface Episode {
 }
 
 // 6 shipped episodes (titles/lengths/filenames verbatim from README.md's own
-// table) plus 18 reserved ids the series already has a shape for
+// table) plus 17 reserved ids the series already has a shape for
 // (scripts/lib/verify-demo-take-optionals.sh, docs/DEMO-SCRIPT.md) but that
 // have not been recorded yet — `tag: null` until a release ships them, at
 // which point `episodeUrl` starts resolving them.

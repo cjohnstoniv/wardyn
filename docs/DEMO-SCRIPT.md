@@ -568,7 +568,7 @@ A fresh install lands here on its own: no runs and no dismissed tour means
 
 Footer buttons: `Next: <step>` and, on the last step, **Finish setup**.
 
-### Act 3 — the guardrails (funnel steps 5–9)
+### Act 3 — the guardrails (Egress demos phase)
 
 Each step's start button is `demo-start-<id>` (**Start demo**), its audit panel
 `demo-audit-panel`, and it ends with **End demo**. Approvals render as
@@ -584,12 +584,14 @@ by position (see below). Note `demo-card-<id>` now lives on the funnel's own
 | **Lines that can't be crossed** | `example.com`, `169.254.169.254`, `192.168.1.1` | Public host works; metadata and LAN refused **with egress wide open** |
 | **Once, or for good** | the same curl **twice**, then once more | First is refused *and* raises an approval → the split button's caret → **Once** → the retry returns `HTTP/2 200` → the SAME command a third time is refused again and raises a brand-new approval, left undecided |
 
-### Act 4 — your work (funnel steps 10–11)
+### Act 4 — your work (Your work phase)
 
-**Onboard a workspace** → **Add workspace** dialog: source **Local directory**,
-**Path on this host**, **Name**, the **Advanced** disclosure (mount path, write
-permission), submit **Add workspace**. Then **Review readiness** → **Finish
-setup** → lands on Runs.
+**Providers** → which git hosts a run may clone, and the storage ceilings it
+works inside; add or confirm the rows a run will need before onboarding a
+workspace against them. Then **Onboard a workspace** → **Add workspace**
+dialog: source **Local directory**, **Path on this host**, **Name**, the
+**Advanced** disclosure (mount path, write permission), submit **Add
+workspace**. Then **Review readiness** → **Finish setup** → lands on Runs.
 
 ### Act 5 — a real run
 

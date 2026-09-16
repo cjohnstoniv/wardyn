@@ -29,7 +29,9 @@ export function EpisodeRow({ episode, chip }: { episode: Episode; chip?: string 
         <Play className="size-4 shrink-0 text-muted-foreground" aria-hidden />
         <span className="min-w-0 flex-1 truncate text-sm text-foreground">{episode.title}</span>
         {chip && <Chip tone="info">{chip}</Chip>}
-        {episode.minutes && <span className="shrink-0 text-xs text-muted-foreground">{episode.minutes}</span>}
+        {episode.tag !== null && episode.minutes && (
+          <span className="shrink-0 text-xs text-muted-foreground">{episode.minutes}</span>
+        )}
         {episode.tag === null ? (
           <Chip tone="neutral">{T.NOT_RECORDED}</Chip>
         ) : open ? (
