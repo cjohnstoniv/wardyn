@@ -5,7 +5,10 @@
 # ${DEX_CLIENT_SECRET} is never substituted — so both stay literal and must be
 # kept in lockstep with docker-compose.yaml (WARDYN_OIDC_CLIENT_SECRET).
 #
-# Demo login: demo@wardyn.local / <DEX_DEMO_PASSWORD from .env, default "password">.
+# Demo login: demo@wardyn.local / <DEX_DEMO_PASSWORD from .env, default "password">
+# (mapped to admin by docker-compose.yaml's default WARDYN_OIDC_ROLE_MAP).
+# Second identity: member@wardyn.local / "password" (same hash, mapped to
+# member) — a real second identity to exercise member mode against.
 #
 # Issuer is the PUBLIC, browser-facing URL (the browser is redirected here and
 # the id_token "iss" claim carries it). wardynd reaches Dex server-side at the
@@ -59,3 +62,13 @@ staticPasswords:
     hash: "$2a$10$SDMtAYUgJDDzcanSySsoBuLPINvmRvxVpqg3WU9jfThQABkwBvaiK"
     username: "demo"
     userID: "demo-0001"
+  # Second, genuinely non-admin identity: demo@wardyn.local is mapped to admin
+  # by docker-compose.yaml's WARDYN_OIDC_ROLE_MAP default, member@wardyn.local
+  # to member — so a real member-mode walk (403s, owner-scoped runs, "View as
+  # member") is reachable on this stack without hand-editing anything, the way
+  # deploy/kind/sso/dex.yaml's overlay already gives it a second identity.
+  # Same literal-hash reasoning as demo@wardyn.local above; same password.
+  - email: "member@wardyn.local"
+    hash: "$2a$10$SDMtAYUgJDDzcanSySsoBuLPINvmRvxVpqg3WU9jfThQABkwBvaiK"
+    username: "member"
+    userID: "member-0001"

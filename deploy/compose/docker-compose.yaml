@@ -417,8 +417,15 @@ services:
       # (preferred) set WARDYN_OIDC_OPERATOR_EMAILS above.
       WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST: "${WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST:-}"
       # Admin/member RBAC (docs/ENV.md): role map takes precedence over the
-      # operator allowlist; default role catches unmatched signers-in.
-      WARDYN_OIDC_ROLE_MAP: "${WARDYN_OIDC_ROLE_MAP:-}"
+      # operator allowlist; default role catches unmatched signers-in. Defaults
+      # to the compose stack's two Dex identities (dex.yaml) — demo@wardyn.local
+      # as admin, member@wardyn.local as member — so the `sso` profile boots
+      # with a genuine second identity out of the box, the same shape
+      # deploy/kind/sso/values.yaml's WARDYN_OIDC_ROLE_MAP already ships. This
+      # also satisfies validateOperatorPosture on its own: WARDYN_OIDC_ISSUER +
+      # this default is enough to boot without also setting
+      # WARDYN_OIDC_OPERATOR_EMAILS or WARDYN_ALLOW_OIDC_NO_OPERATOR_LIST.
+      WARDYN_OIDC_ROLE_MAP: "${WARDYN_OIDC_ROLE_MAP:-demo@wardyn.local=admin,member@wardyn.local=member}"
       WARDYN_OIDC_DEFAULT_ROLE: "${WARDYN_OIDC_DEFAULT_ROLE:-}"
       # Opt-in for an email-shaped console People-step role mapping
       # (POST /access/mappings only — WARDYN_OIDC_ROLE_MAP's own email-keyed

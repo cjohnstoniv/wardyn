@@ -85,12 +85,17 @@ real run for that.
 poke at.
 
 The UI is at http://localhost:8080. The demo stack configures no OIDC, so the
-SSO button is disabled and the admin token below is the way in; set
-`WARDYN_OIDC_*` and one role split appears — `WARDYN_OIDC_OPERATOR_EMAILS` names
-the **admins**, every other signed-in human is an owner-scoped **member**. The
-split, the approval broker and the append-only audit log all ship in the
-Apache-2.0 build with no paid tier; for the exact 403 boundary, the local Dex
-recipe and how to give a second person their own login, see
+SSO button is disabled and the admin token below is the way in; bring up the
+`sso` compose profile (`docker compose -f deploy/compose/docker-compose.yaml
+--profile sso up -d dex`, then set `WARDYN_OIDC_ISSUER=http://localhost:5556`
+and restart `wardynd` — see [deploy/compose/README.md](../deploy/compose/README.md))
+and the role split appears with two real identities already seeded in Dex:
+sign in as `demo@wardyn.local` for **admin**, `member@wardyn.local` for an
+owner-scoped **member** — `WARDYN_OIDC_ROLE_MAP` maps them that way by
+default. Point `WARDYN_OIDC_OPERATOR_EMAILS` at your own address instead to
+use your own login as admin. The split, the approval broker and the
+append-only audit log all ship in the Apache-2.0 build with no paid tier; for
+the exact 403 boundary and how to give a second person their own login, see
 [OPERATIONS.md](OPERATIONS.md#second-user-same-host).
 
 By hand against the same stack:
