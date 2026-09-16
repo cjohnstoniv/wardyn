@@ -27,7 +27,7 @@ UP_SH="${REPO_ROOT}/scripts/up.sh"
 extract_func() {  # $1=function name -> its body, verbatim
   sed -n "/^$1() {/,/^}/p" "${UP_SH}"
 }
-for fn in pick_policy host_llm_key_present llm_ready_from_status llm_ready_from_probe resolve_default_policy wardyn_cli_prefix ensure_age_key_or_die refuse_local_mode_with_oidc; do
+for fn in pick_policy host_llm_key_present llm_ready_from_status llm_ready_from_probe resolve_default_policy wardyn_cli_prefix ensure_age_key_or_die refuse_local_mode_with_oidc ensure_env_file; do
   body="$(extract_func "$fn")"
   [ -n "$body" ] || { echo "test-up-policy: '$fn' not found in ${UP_SH} (renamed/removed?)" >&2; exit 1; }
   eval "$body"
@@ -120,6 +120,35 @@ resolve_default_policy "${mode_env}" "/my/other.json" '{}' "" >/dev/null
 got="$(stat -c '%a' "${mode_env}")"
 [ "$got" = "600" ] || fail "env_set's append path left ${mode_env} mode ${got}, want 600"
 grep -q '^WARDYN_AGE_KEY=AGE-SECRET-KEY-1TESTONLY$' "${mode_env}" || fail "env_set lost unrelated lines while preserving the mode"
+
+# 3e) B12b-F2 — .env must be born 0600, not chmod'd 600 after the fact. Between
+# the old `cp .env.example .env` (born at the caller's umask, 0644 by default)
+# and cmd_up's first `chmod 600`, ensure_age_key_or_die ran and wrote
+# WARDYN_AGE_KEY (the secret-store master key) into that world-readable file —
+# the same shape T4 in test-install-sh-trust.sh pins for install.sh's own
+# .env. ensure_env_file now uses `install -m 600`, which sets the mode
+# ATOMICALLY at creation, so there is no window a chmod has to close.
+# Run under `umask 022` (a plain default) with no chmod in play at all: nothing
+# but the install call itself can produce 0600.
+example_env="${dir}/.env.example-fixture"
+printf '# example\nWARDYN_ADMIN_TOKEN=demo-admin-token\n' > "${example_env}"
+
+fresh_env="${dir}/.env-fresh"
+( umask 022; ensure_env_file "${example_env}" "${fresh_env}" )
+got="$(stat -c '%a' "${fresh_env}")"
+[ "${got}" = "600" ] || fail "ensure_env_file bore ${fresh_env} at mode ${got} under umask 022, want 600"
+grep -q '^WARDYN_ADMIN_TOKEN=demo-admin-token$' "${fresh_env}" || fail "ensure_env_file did not copy the example's content"
+
+# neg: an existing .env (the upgrade path) is left untouched — same mode,
+# same content — never re-copied over, never re-chmod'd.
+upgrade_env="${dir}/.env-upgrade"
+printf 'WARDYN_AGE_KEY=AGE-SECRET-KEY-1PREEXISTING\n' > "${upgrade_env}"
+chmod 600 "${upgrade_env}"
+( umask 022; ensure_env_file "${example_env}" "${upgrade_env}" )
+got="$(stat -c '%a' "${upgrade_env}")"
+[ "${got}" = "600" ] || fail "ensure_env_file changed an existing .env's mode to ${got} on the upgrade path, want unchanged 600"
+grep -q '^WARDYN_AGE_KEY=AGE-SECRET-KEY-1PREEXISTING$' "${upgrade_env}" \
+  || fail "ensure_env_file overwrote an existing .env's content on the upgrade path"
 
 # 4) An explicit operator override wins outright and clears the auto marker.
 got="$(resolve_default_policy "${env_file}" "/my/custom.json" '{}' "1")"

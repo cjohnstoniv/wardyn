@@ -325,6 +325,25 @@ wardynd_probe() {
   unset _wp_env _wp_path _wp_tok _wp_img
 }
 
+# ensure_env_file EXAMPLE FILE — create FILE from EXAMPLE on first run, born
+# 0600 (B12b-F2). FILE goes on to hold WARDYN_AGE_KEY and WARDYN_ADMIN_TOKEN —
+# `install -m 600` sets the mode ATOMICALLY at creation, unlike the `cp` this
+# replaced, which was born at the caller's umask (0644 by default) and stayed
+# that way until cmd_up's first `chmod 600`, well after ensure_age_key_or_die
+# had already written the secret into it. env_set (scripts/lib/common.sh) is
+# mode-preserving on its rewrite path, so once FILE is born 600 nothing later
+# in cmd_up needs to chmod it again — those calls are gone with this. A no-op
+# when FILE already exists (the upgrade path): existing mode and content are
+# left exactly alone.
+ensure_env_file() {
+  _ef_example=$1 _ef_file=$2
+  if [ ! -f "${_ef_file}" ]; then
+    log "Creating ${_ef_file} from .env.example"
+    install -m 600 "${_ef_example}" "${_ef_file}"
+  fi
+  unset _ef_example _ef_file
+}
+
 # ensure_age_key_or_die ENV_FILE — ENV_FILE must carry a PERSISTED
 # WARDYN_AGE_KEY before this stack is allowed to start: mint one if it has none,
 # REFUSE if the mint produces nothing.
@@ -579,13 +598,8 @@ cmd_up() {
   fi
   fi  # end: pulled_all fallback
 
-  if [ ! -f "${ENV_FILE}" ]; then
-    log "Creating ${ENV_FILE} from .env.example"
-    cp "${ENV_EXAMPLE}" "${ENV_FILE}"
-  fi
-
+  ensure_env_file "${ENV_EXAMPLE}" "${ENV_FILE}"
   ensure_age_key_or_die "${ENV_FILE}"
-  chmod 600 "${ENV_FILE}" 2>/dev/null || true
 
   # Persist the daemon choice wardyn_pick_docker_host derived. It is otherwise
   # env-only, so a bare `docker compose up -d wardynd` (outside this script)
@@ -628,8 +642,6 @@ cmd_up() {
     esac
   fi
   unset _prev_policy
-
-  chmod 600 "${ENV_FILE}" 2>/dev/null || true
 
   # A stale WARDYN_AGENT_IMAGES override in .env silently breaks every run at
   # pull time ("registry: denied" — locally-built tags exist in no registry),
@@ -678,14 +690,12 @@ cmd_up() {
       fi
     fi
     log "Bedrock: add the API key (preferred, never resident), a session token, or static keys in the UI after launch."
-    chmod 600 "${ENV_FILE}" 2>/dev/null || true
   fi
   unset _br_on _br_region
 
   # Must precede `compose up`: the seed is read from the wardynd container's env
   # at boot (docker-compose.yaml WARDYN_HOST_PROXY_B64).
   seed_host_proxy
-  chmod 600 "${ENV_FILE}" 2>/dev/null || true
 
   log "Starting postgres + wardynd (local mode, no SSO — see \`docker compose --profile sso up\` for Dex)"
   compose up -d postgres wardynd
