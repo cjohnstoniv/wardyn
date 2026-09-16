@@ -16,7 +16,7 @@ import type {
   WorkspaceSourceInput,
   WorkspaceWriteResult,
 } from "../types";
-import { asJson, errText, HttpError, unwrapList, wfetch, withLimit } from "./core";
+import { asJson, errText, HttpError, LAUNCH_DEADLINE_MS, unwrapList, wfetch, withLimit } from "./core";
 
 // ---- Composition + requirements-contract wire types ----
 // These moved home to lib/types/workspaces.ts when the shared Workspace type
@@ -232,10 +232,13 @@ export const workspaces = {
     // The operator drives the real activity in the attach shell. `confined` picks a
     // VERIFY session (default-deny egress, limited to the approved set) over an open
     // learning session — off-policy hosts are denied live in the confined case.
-    const res = await wfetch(`/workspaces/${encodeURIComponent(id)}/record`, {
-      method: "POST",
-      body: JSON.stringify({ name, confined }),
-    });
+    // LAUNCH_DEADLINE_MS: a record session IS a sandbox launch — same
+    // CreateSandbox, same cold pull (see the constant's note in core.ts).
+    const res = await wfetch(
+      `/workspaces/${encodeURIComponent(id)}/record`,
+      { method: "POST", body: JSON.stringify({ name, confined }) },
+      LAUNCH_DEADLINE_MS,
+    );
     if (res.status === 202) {
       const body = await asJson<{ record_run_id?: string; confinement_class?: string; warnings?: string[] }>(res);
       return {

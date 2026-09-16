@@ -84,6 +84,22 @@ export const ccRank = (cc: string): number => CC_ORDER.indexOf(cc as Confinement
 // timeoutMs.
 export const WFETCH_TIMEOUT_MS = 60_000;
 
+// LAUNCH_DEADLINE_MS — the deadline for a console call that brings a SANDBOX up.
+//
+// The default above bounds a hang; it is not a latency budget, and for these
+// calls it was being spent as one. POST /runs is synchronous through
+// CreateSandbox (runs.go), which on k8s waits canaryWaitTimeout (3 min,
+// canary.go) ON TOP of a cold image pull — a server-side worst case that
+// legitimately exceeds 60s, at which point the console reports the daemon
+// unreachable over a launch that is working fine and drops the run id it was
+// about to be handed. Five minutes covers the substrate's own ceiling with room
+// to spare; a longer deadline cannot break a call that already works today.
+//
+// The sign-in launch is NOT on this list: POST /setup/harness-login answers
+// before dispatch now (internal/api/harnesscred_launch.go), so it is a fast
+// call again and the default bound is the right one for it.
+export const LAUNCH_DEADLINE_MS = 300_000;
+
 // TIMEOUT_STATUS: no HTTP response ever happened, so there is no status to
 // report. Callers that branch on `e.status === 401` are unaffected, and the
 // message is the sentence sign-in already shows for an unreachable daemon —

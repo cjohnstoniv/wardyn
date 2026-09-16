@@ -19,7 +19,7 @@ import type {
   RunPolicySpec,
   RunResources,
 } from "../types";
-import { asJson, ccRank, errText, HttpError, str, unwrapList, wfetch, withLimit } from "./core";
+import { asJson, ccRank, errText, HttpError, LAUNCH_DEADLINE_MS, str, unwrapList, wfetch, withLimit } from "./core";
 
 // Map a backend credential-grant eligibility record (the GET /runs/{id}/grants
 // shape: { id, run_id, created_at, spec: { kind, scope, ttl_seconds,
@@ -177,7 +177,13 @@ export const runs = {
   // blocking. CreateRunResult is structurally an AgentRun, so existing onCreated
   // callbacks keep working.
   async createRun(input: RunWireInput): Promise<CreateRunResult> {
-    const res = await wfetch("/runs", { method: "POST", body: JSON.stringify(runWireBody(input)) });
+    // LAUNCH_DEADLINE_MS, not the default: this call blocks through
+    // CreateSandbox server-side (see the constant's own note).
+    const res = await wfetch(
+      "/runs",
+      { method: "POST", body: JSON.stringify(runWireBody(input)) },
+      LAUNCH_DEADLINE_MS,
+    );
     return asJson<CreateRunResult>(res);
   },
 
@@ -189,10 +195,14 @@ export const runs = {
   // XOR, invalid spec) are the real launch verdicts. Advisory: callers render an
   // error as a quiet "preflight unavailable" and never block Review.
   async preflightRun(input: RunWireInput): Promise<PreflightResult> {
-    const res = await wfetch("/runs/preflight", {
-      method: "POST",
-      body: JSON.stringify(runWireBody(input)),
-    });
+    // Same deadline as createRun: preflight runs the same resolution (mounts,
+    // grants, the blast-radius raise) against the same store, so a deployment
+    // slow enough to need it on the launch needs it on the dry run too.
+    const res = await wfetch(
+      "/runs/preflight",
+      { method: "POST", body: JSON.stringify(runWireBody(input)) },
+      LAUNCH_DEADLINE_MS,
+    );
     return asJson<PreflightResult>(res);
   },
 
