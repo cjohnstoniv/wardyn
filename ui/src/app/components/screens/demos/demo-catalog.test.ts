@@ -250,8 +250,9 @@ describe("demo catalog", () => {
     // terminal) — a command step to paste, not an autonomous task.
     expect(d.steps.some((s) => s.cmd?.includes("claude"))).toBe(true);
     // Egress is scoped to Anthropic, not deny-all like the keyless demos.
-    expect(d.policy.allowed_domains.length).toBeGreaterThan(0);
-    expect(d.policy.allowed_domains.every((h) => h.includes("anthropic.com"))).toBe(true);
+    const allowed = d.policy.allowed_domains ?? [];
+    expect(allowed.length).toBeGreaterThan(0);
+    expect(allowed.every((h) => h.includes("anthropic.com"))).toBe(true);
   });
 
   // Regression: setupUi copy pointed users at a nonexistent "Access → Egress"

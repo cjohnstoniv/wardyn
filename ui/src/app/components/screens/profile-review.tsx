@@ -181,6 +181,10 @@ function ProfileBody({
 }) {
   const { proposed, risk_assessment, overall_risk, observations, warnings } = proposal;
   const { run, inline_policy } = proposed;
+  // R-03: allowed_domains is `null` on the wire for a synthesized profile with
+  // no observed egress (recordmode.go's no-egress arm) — the key is always
+  // present, only the value is nullable.
+  const allowedDomains = inline_policy.allowed_domains ?? [];
   // 0.7 §B: both save paths below POST /policies, which stays operatorOnly
   // (routes.go:294) — stored run_policies are selectable CONTENT, and a
   // security-tier write path there re-opens the PF-22 mint through a side
@@ -215,7 +219,7 @@ function ProfileBody({
           value={
             inline_policy.allow_all_egress
               ? "Allow all (deny-list only)"
-              : `${inline_policy.allowed_domains.length} allowed`
+              : `${allowedDomains.length} allowed`
           }
         />
         <Summary
@@ -241,11 +245,11 @@ function ProfileBody({
       </div>
 
       {/* --- allowed_domains, listed --- */}
-      {!inline_policy.allow_all_egress && inline_policy.allowed_domains.length > 0 && (
+      {!inline_policy.allow_all_egress && allowedDomains.length > 0 && (
         <div>
           <SectionLabel>Proposed allowed domains</SectionLabel>
           <div className="flex flex-wrap gap-1.5">
-            {inline_policy.allowed_domains.map((d) => (
+            {allowedDomains.map((d) => (
               <span
                 key={d}
                 className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-0.5 font-mono text-meta text-foreground"

@@ -209,7 +209,11 @@ export interface ResourceLimits {
 }
 
 export interface RunPolicySpec {
-  allowed_domains: string[];
+  // R-03: the key is always present (no `,omitempty` on
+  // internal/types/policy.go's AllowedDomains), but the VALUE can be `null` on
+  // the wire — a nil slice (e.g. recordmode.go's no-observed-egress arm)
+  // marshals to `null`, not `[]`. `?? []` at every read site.
+  allowed_domains: string[] | null;
   denied_domains?: string[];
   first_use_approval: FirstUseMode;
   // How long a wait_for_review connection is HELD open awaiting a decision

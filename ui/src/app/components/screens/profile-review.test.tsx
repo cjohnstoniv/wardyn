@@ -107,6 +107,25 @@ describe("ProfileReview", () => {
     expect(screen.getByText(/clamped min_confinement_class/)).toBeInTheDocument();
   });
 
+  // R-03: allowed_domains is `null` on the wire (not `[]`) when the source
+  // recording had no observed egress — internal/types/policy.go's
+  // AllowedDomains has no `,omitempty`, so the key is always present but a
+  // nil slice marshals to `null`. Must not throw and must render "0 allowed".
+  it("renders a synthesized profile with allowed_domains: null without throwing", async () => {
+    profileRunMock.mockReset();
+    profileRunMock.mockResolvedValue(
+      proposal({
+        proposed: {
+          run: proposal().proposed.run,
+          inline_policy: { ...proposal().proposed.inline_policy, allowed_domains: null },
+        },
+      }),
+    );
+    render(<ProfileReview runId="run-null-domains" onClose={() => {}} />);
+    expect(await screen.findByText("Overall risk")).toBeInTheDocument();
+    expect(screen.getByText("0 allowed")).toBeInTheDocument();
+  });
+
   it("renders a retryable error when synthesis fails", async () => {
     profileRunMock.mockReset();
     profileRunMock.mockRejectedValue(new Error("boom"));
