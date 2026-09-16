@@ -777,13 +777,27 @@ func (b *Builder) streamLogs(ctx context.Context, containerID string, w io.Write
 // ensureImage pulls ref if not already present locally. Fail closed: never
 // attempt a build with an absent builder image.
 //
-// A digest-pinned ref (repo@sha256:...) is stored under RepoDigests, NOT
-// RepoTags, so it must be matched against both — otherwise a pre-pulled
-// digest-pinned BYOI base would never match, fall through to a pull, and fail
-// for a private/local-only image with no registry auth (mirrors the driver's
-// imagePresent @sha256: handling, so FinalizeBase honors the same pre-pull
-// workflow the docker driver does).
+// A DIGEST-PINNED ref is resolved by ImageInspect, not by scanning the image
+// list — the same guard internal/runner/docker's imagePresent uses, for the
+// same reason. No list entry ever equals such a ref verbatim: the daemon
+// reports `myco/dev:1.2@sha256:…` as `myco/dev:1.2` under RepoTags and
+// `myco/dev@sha256:…` under RepoDigests, the tag stripped from the digest
+// form. An exact-string scan over both lists matched the tag-less
+// `repo@sha256:…` spelling and nothing else, so a pre-pulled base pinned in
+// the fully-qualified form fell through to a pull — which is exactly what
+// fails for the private/local-only image the pin exists to serve. The daemon
+// resolves every spelling itself; asking it is both shorter and complete.
+//
+// A not-found inspect means genuinely absent, so it pulls. Any OTHER inspect
+// error is the daemon failing to answer, and the pull that follows fails
+// closed on its own rather than masking it.
 func (b *Builder) ensureImage(ctx context.Context, ref string) error {
+	if strings.Contains(ref, "@sha256:") {
+		if _, err := b.cli.ImageInspect(ctx, ref); err == nil {
+			return nil
+		}
+		return dockerutil.PullImage(ctx, b.cli, ref, "envbuild")
+	}
 	res, err := b.cli.ImageList(ctx, client.ImageListOptions{})
 	if err != nil {
 		return fmt.Errorf("envbuild: list images: %w", err)

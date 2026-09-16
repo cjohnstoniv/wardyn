@@ -215,3 +215,56 @@ func TestFinalizeBase_AppliesOwnDeadline(t *testing.T) {
 			"it must apply BuildTimeout/defaultBuildTimeout itself, not rely on the caller to wrap it")
 	}
 }
+
+// TestFinalizeBase_PrePulledTagAndDigestBaseIsNotRePulled is B9-F2: the
+// fully-qualified `repo:tag@sha256:...` form — what a resolved BYOI base
+// actually carries once an operator pins it — is present locally under NEITHER
+// list verbatim. A real daemon splits it: `myco/dev:1.2` under RepoTags,
+// `myco/dev@sha256:...` under RepoDigests, the tag stripped. ensureImage's
+// exact-string scan over both lists therefore matched nothing and fell through
+// to a pull — for a private or local-only image with no registry auth, that
+// pull FAILS and the wrap never happens, which is precisely the workflow the
+// digest form exists to serve.
+//
+// Its sibling TestFinalizeBase_PrePulledDigestBaseIsNotRePulled covers the
+// tag-less form, which the scan did match; this one is the form it could not.
+func TestFinalizeBase_PrePulledTagAndDigestBaseIsNotRePulled(t *testing.T) {
+	const ref = "myco/dev:1.2@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	f := newFakeEnvbuilderDocker()
+	f.imagesPresent[ref] = true
+	b := newWithClient(f, "envbuilder:test", "")
+	b.ToolsDir = toolsDirWithRequired(t)
+
+	if _, err := b.FinalizeBase(context.Background(), ref, "wardyn-byoi/run-t:latest", nil); err != nil {
+		t.Fatalf("FinalizeBase on a pre-pulled repo:tag@sha256 base: %v", err)
+	}
+	if f.pullCalled {
+		t.Fatalf("FinalizeBase re-pulled a pre-pulled repo:tag@sha256 base (pulled %v) — "+
+			"the daemon reports its tag and its digest in two different lists, so neither "+
+			"entry ever equals the ref; presence must be read by inspect", f.pulledRefs)
+	}
+}
+
+// TestFinalizeBase_AbsentDigestBasePullsExactlyOnce is the negative control for
+// the inspect-first presence check: reading presence through ImageInspect must
+// not make every digest-pinned ref look present. An ABSENT one still pulls, and
+// pulls exactly once.
+func TestFinalizeBase_AbsentDigestBasePullsExactlyOnce(t *testing.T) {
+	const ref = "myco/dev:9.9@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+	f := newFakeEnvbuilderDocker() // only envbuilder:test present
+	b := newWithClient(f, "envbuilder:test", "")
+	b.ToolsDir = toolsDirWithRequired(t)
+
+	if _, err := b.FinalizeBase(context.Background(), ref, "wardyn-byoi/run-a:latest", nil); err != nil {
+		t.Fatalf("FinalizeBase on an absent digest base: %v", err)
+	}
+	pulls := 0
+	for _, r := range f.pulledRefs {
+		if r == ref {
+			pulls++
+		}
+	}
+	if pulls != 1 {
+		t.Fatalf("pulled %q %d times (all pulls: %v), want exactly 1", ref, pulls, f.pulledRefs)
+	}
+}

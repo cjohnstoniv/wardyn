@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/containerd/errdefs"
 	dockerspec "github.com/moby/docker-image-spec/specs-go/v1"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/image"
@@ -105,6 +106,9 @@ type fakeEnvbuilderDocker struct {
 	// lastImageListHadDeadline records whether the LAST ImageList call's ctx
 	// carried a deadline (see ImageList below).
 	lastImageListHadDeadline bool
+
+	// removedImages records every ref passed to ImageRemove, in order.
+	removedImages []string
 }
 
 func newFakeEnvbuilderDocker() *fakeEnvbuilderDocker {
@@ -138,15 +142,34 @@ func (f *fakeEnvbuilderDocker) ImageList(ctx context.Context, _ client.ImageList
 		if !present {
 			continue
 		}
-		// A digest-pinned ref lives under RepoDigests, not RepoTags (mirrors the
-		// real daemon), so ensureImage must match it there.
-		if strings.Contains(ref, "@sha256:") {
-			out = append(out, image.Summary{RepoDigests: []string{ref}})
-		} else {
-			out = append(out, image.Summary{RepoTags: []string{ref}})
-		}
+		out = append(out, summaryForRef(ref))
 	}
 	return client.ImageListResult{Items: out}, nil
+}
+
+// summaryForRef splits a test-seeded ref into the RepoTags/RepoDigests shape a
+// REAL daemon reports it under — the fake's whole reason to exist here.
+//
+// The old collapse ("contains @sha256: => one RepoDigests entry holding the
+// whole string") made the fully-qualified `repo:tag@sha256:...` form — the one
+// a workspace's resolved BYOI base actually carries — self-matching against
+// ensureImage's exact-string scan, so the missing presence check was
+// unobtainable as a red test. A real daemon never reports that string: the tag
+// and the digest live in two different lists, under two different names
+// (`repo:tag` in RepoTags, `repo@sha256:...` in RepoDigests, the tag stripped),
+// and NEITHER equals the ref the caller asked about.
+func summaryForRef(ref string) image.Summary {
+	name, digest, pinned := strings.Cut(ref, "@")
+	if !pinned {
+		return image.Summary{RepoTags: []string{ref}}
+	}
+	repo := name
+	// A tag is the last ":" AFTER the last "/" (a registry host:port is not one).
+	if i := strings.LastIndex(name, ":"); i > strings.LastIndex(name, "/") {
+		repo = name[:i]
+		return image.Summary{RepoTags: []string{name}, RepoDigests: []string{repo + "@" + digest}}
+	}
+	return image.Summary{RepoDigests: []string{repo + "@" + digest}}
 }
 
 func (f *fakeEnvbuilderDocker) ImagePull(_ context.Context, ref string, _ client.ImagePullOptions) (client.ImagePullResponse, error) {
@@ -172,6 +195,12 @@ func (f *fakeEnvbuilderDocker) ImageInspect(_ context.Context, imageID string, _
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.inspected = append(f.inspected, imageID)
+	// A real daemon 404s an inspect of an image it does not have. ensureImage's
+	// digest path reads presence THROUGH inspect, so a fake that answered every
+	// ref would report every absent digest ref present and never pull.
+	if !f.imagesPresent[imageID] {
+		return client.ImageInspectResult{}, errdefs.ErrNotFound
+	}
 	cfg := &dockerspec.DockerOCIImageConfig{}
 	for key, triggers := range f.onBuild {
 		if imageID == key || strings.HasPrefix(imageID, key+":") {
@@ -190,6 +219,17 @@ func (f *fakeEnvbuilderDocker) ImageBuild(_ context.Context, buildContext io.Rea
 	f.lastBuildTags = options.Tags
 	f.lastBuildPullParent = options.PullParent
 	buildErr := f.buildErr
+	if buildErr == "" {
+		// A successful build leaves its output tag resolvable locally, the way a
+		// daemon does — so a test can tell "the per-build base was untagged" from
+		// "the image we just built was untagged too".
+		if f.imagesPresent == nil {
+			f.imagesPresent = map[string]bool{}
+		}
+		for _, tag := range options.Tags {
+			f.imagesPresent[tag] = true
+		}
+	}
 	f.mu.Unlock()
 	// Drain the context so the caller's tar writer isn't left dangling.
 	_, _ = io.Copy(io.Discard, buildContext)
@@ -276,6 +316,32 @@ func (f *fakeEnvbuilderDocker) ContainerRemove(_ context.Context, containerID st
 	f.removed = true
 	f.removedIDs = append(f.removedIDs, containerID)
 	return client.ContainerRemoveResult{}, nil
+}
+
+// ImageRemove untags ref, the way `docker rmi <tag>` does: the tag stops
+// resolving, every OTHER tag on the same image keeps resolving. Recorded so a
+// test can assert WHICH ref was reclaimed, not merely that something was.
+func (f *fakeEnvbuilderDocker) ImageRemove(_ context.Context, ref string, _ client.ImageRemoveOptions) (client.ImageRemoveResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.removedImages = append(f.removedImages, ref)
+	if !f.imagesPresent[ref] {
+		return client.ImageRemoveResult{}, errdefs.ErrNotFound
+	}
+	delete(f.imagesPresent, ref)
+	return client.ImageRemoveResult{}, nil
+}
+
+// removedImage reports whether ref was passed to ImageRemove.
+func (f *fakeEnvbuilderDocker) removedImage(ref string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, r := range f.removedImages {
+		if r == ref {
+			return true
+		}
+	}
+	return false
 }
 
 // ContainerList returns the test-seeded listItems, recording the call's
