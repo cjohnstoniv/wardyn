@@ -40,12 +40,12 @@ const (
 	hostSensorUnavailableCaveat = "kernel ground truth (host sensor, as of this review): unavailable — no eBPF sensor " +
 		"heartbeat has ever been observed on this host"
 	hostSensorDegradedCaveat = "kernel ground truth (host sensor, as of this review): degraded — the eBPF sensor's " +
-		"heartbeat is stale; whether it was healthy while this capture ran is a separate question, answered above"
+		"heartbeat is stale; whether it was healthy while this capture ran is a separate question, which this capture's own kernel evidence is what answers"
 	hostSensorIdleCaveat = "kernel ground truth (host sensor, as of this review): idle — the eBPF sensor is alive but " +
-		"has mapped zero kernel events; whether it was healthy while this capture ran is a separate question, answered above"
+		"has mapped zero kernel events; whether it was healthy while this capture ran is a separate question, which this capture's own kernel evidence is what answers"
 	hostSensorPartialCaveatPrefix = "kernel ground truth (host sensor, as of this review): partial — the eBPF sensor " +
 		"has never observed "
-	hostSensorPartialCaveatSuffix = "; whether it was healthy while this capture ran is a separate question, answered above"
+	hostSensorPartialCaveatSuffix = "; whether it was healthy while this capture ran is a separate question, which this capture's own kernel evidence is what answers"
 )
 
 // captureNoCorroborationFragment is the substring a test (or a UI filter) uses
