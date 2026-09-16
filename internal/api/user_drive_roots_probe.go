@@ -90,7 +90,15 @@ func (s *Server) userDriveHostRootCheckBounded(ctx context.Context) types.UserDr
 // offering a backend whose write door is currently answering 503 is the
 // offer-and-refuse the field exists to prevent. It is also self-correcting — the
 // strand entry disappears when the mount comes back, so the next read says yes.
+// ONE BOUND FOR THE WHOLE LOOP, not one per root. driveShareProbe bounds each
+// probe at driveShareProbeTimeout, so N distinct dead roots would cost N × that
+// on the FIRST request after a mount hangs — the strand marks only short-circuit
+// the SECOND request. A deadline on the loop's own context makes every probe
+// after the first strand return at once (driveShareProbe selects on ctx.Done),
+// so the request's cost is the bound this file's header promises (R-03).
 func (s *Server) userDriveHostRootsUsableWithin(ctx context.Context) bool {
+	ctx, cancel := context.WithTimeout(ctx, driveShareProbeTimeout)
+	defer cancel()
 	check := s.userDriveHostRootCheckBounded(ctx)
 	for _, root := range s.cfg.UserDriveHostRoots {
 		if check(root) == nil {

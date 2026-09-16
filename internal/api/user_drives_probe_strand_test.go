@@ -316,3 +316,53 @@ func TestDriveAdminDoorsAnswerFromMemoryWhileARootProbeIsStranded(t *testing.T) 
 			"operator-only, and the admin's remedy is that mount: %s", root, w.Body.String())
 	}
 }
+
+// TestDriveAdminReadIsBoundedOncePerRequestNotOncePerRoot is R-03: the bound
+// this file's header promises is per REQUEST, and the loops were per ROOT.
+//
+// driveShareProbe bounds each probe at driveShareProbeTimeout and remembers the
+// strand — but that memory only short-circuits the SECOND request. On the FIRST
+// request after a mount hangs, a deployment with N distinct dead roots paid N
+// times the timeout, on a server that sets no WriteTimeout. Both admin loops now
+// run under one context deadline, and driveShareProbe already selects on
+// ctx.Done, so every probe after the first strand returns at once.
+//
+// HONEST ABOUT WHAT THIS PINS: no unit test can make EvalSymlinks/stat actually
+// block (that needs a real hung NFS mount), so the elapsed assertion below is a
+// FORWARD regression pin over the strand short-circuit and the deadline
+// together, not a reproduction of the multi-root wait. It is green on both
+// sides of the deadline change; what the deadline buys is stated at
+// userDriveHostRootsUsableWithin and driveHostRootNesting.
+func TestDriveAdminReadIsBoundedOncePerRequestNotOncePerRoot(t *testing.T) {
+	stranded, live := t.TempDir(), t.TempDir()
+	// The hung root comes FIRST, so the loop meets it before the live one.
+	srv, _ := driveAdminServer(newDriveCRUDStore(), []string{stranded, live})
+
+	key := "root:" + stranded
+	driveShareProbes.Store(key, time.Now().Add(-time.Minute))
+	t.Cleanup(func() { driveShareProbes.Delete(key) })
+
+	start := time.Now()
+	w := driveCall(t, srv.handleGetUserDrives, http.MethodGet, "/api/v1/drives", "", nil)
+	elapsed := time.Since(start)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /drives = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if elapsed >= driveShareProbeTimeout {
+		t.Errorf("GET /drives over two roots, one of them stranded, took %v — at or past ONE probe timeout (%v). "+
+			"The bound is per REQUEST: a loop that gives each root its own deadline costs one timeout per dead "+
+			"root on the first request after a mount hangs", elapsed, driveShareProbeTimeout)
+	}
+	// The live root still answers, so the read is not merely failing fast: this
+	// is what keeps the assertion above from passing on a door that gave up.
+	var got struct {
+		HostRootsConfigured bool `json:"host_roots_configured"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !got.HostRootsConfigured {
+		t.Error("host_roots_configured = false while a LIVE root is configured beside the stranded one — the " +
+			"deadline must bound the loop, not abandon it")
+	}
+}

@@ -13,6 +13,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -101,14 +102,22 @@ func (s *Server) driveHostRootNesting(r *http.Request, d types.UserDrive) (int, 
 		// on exactly the deployment whose database is unhappy.
 		return http.StatusInternalServerError, "list user drives: " + err.Error()
 	}
-	mineReal := s.driveRootRealWithin(r.Context(), d.HostRoot)
+	// ONE BOUND FOR THE WHOLE GATE, for userDriveHostRootsUsableWithin's reason:
+	// this loop resolves EVERY stored host_path root, so without a deadline on
+	// the loop's own context the first request after a mount hangs pays
+	// driveShareProbeTimeout per distinct dead root (R-03). An expired context
+	// makes the rest answer "" and fall back to the lexical comparison, which is
+	// the same fall-back an unresolvable root already takes.
+	ctx, cancel := context.WithTimeout(r.Context(), driveShareProbeTimeout)
+	defer cancel()
+	mineReal := s.driveRootRealWithin(ctx, d.HostRoot)
 	for _, other := range drives {
 		// A row is not its own ancestor: a PUT that re-saves a drive unchanged
 		// must not start refusing itself.
 		if other.ID == d.ID || other.Backend != types.DriveBackendHostPath || other.HostRoot == "" {
 			continue
 		}
-		otherReal := s.driveRootRealWithin(r.Context(), other.HostRoot)
+		otherReal := s.driveRootRealWithin(ctx, other.HostRoot)
 		switch {
 		case driveRootInside(d.HostRoot, mineReal, other.HostRoot, otherReal):
 			return http.StatusUnprocessableEntity, fmt.Sprintf(
