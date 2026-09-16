@@ -142,8 +142,14 @@ export function SetupLayout({
         {/* F2-F7/F3-F1: a sticky box is clamped by its containing block, so a
             rail taller than the viewport had no way to reach its own bottom
             (the phase rail's later steps). Bounded to the viewport with its
-            own scroll. */}
-        <aside className="lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:self-start lg:overflow-y-auto">
+            own scroll.
+            100vh - 5rem, not -3rem: the sticky container is app-shell.tsx's
+            <main> (its own overflow-y:auto scroller), which starts BELOW the
+            h-14 (3.5rem/56px) header — sticky's `top-6` (1.5rem/24px) offset
+            is relative to THAT scroller, not the viewport, so the rail's
+            stuck position sits at 3.5rem+1.5rem = 5rem from the viewport
+            top, not 1.5rem. */}
+        <aside className="lg:sticky lg:top-6 lg:max-h-[calc(100vh-5rem)] lg:self-start lg:overflow-y-auto">
           {rail}
         </aside>
 

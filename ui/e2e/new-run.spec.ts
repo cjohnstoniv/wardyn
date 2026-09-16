@@ -320,42 +320,34 @@ test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F
       min_confinement_class: "CC2" as ConfinementClass,
     };
 
+    // A REAL policy, not a mocked list entry: POST /runs validates policy_id
+    // against the store, so a fabricated id 404s the launch itself (the
+    // splice below only patches the RESPONSE of a request that must first
+    // succeed for real — same reason agents.spec.ts's "201 carrying
+    // warnings" test launches a real run rather than mocking the whole
+    // create path).
+    const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    const created = await page.request.post("/api/v1/policies", {
+      headers: auth,
+      data: {
+        name: "e2e rail-height policy",
+        spec: {
+          ...baseSpec,
+          tool_rules: [
+            { tool: "Read", effect: "allow" },
+            { tool: "Bash", effect: "hold" },
+          ],
+        },
+      },
+    });
+    expect(created.ok(), "POST /policies").toBeTruthy();
+
     await page.route("**/api/v1/policies/default*", async (route) => {
       if (route.request().method() !== "GET") return route.fallback();
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({ ...baseSpec, governance_profile_name: "Contractor ceiling" }),
-      });
-    });
-
-    await page.route("**/api/v1/policies*", async (route) => {
-      // listPolicies() calls withLimit("/policies"), which appends
-      // "?limit=...", so match on pathname (never the raw URL string, which
-      // still carries the query) — the same trap drives.spec.ts's own
-      // RUNS_LIST_GLOB comment names for /runs.
-      const pathname = new URL(route.request().url()).pathname;
-      if (route.request().method() !== "GET" || !pathname.endsWith("/policies")) {
-        return route.fallback();
-      }
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify([
-          {
-            id: "11111111-1111-1111-1111-111111111111",
-            name: "e2e rail-height policy",
-            created_at: "2026-01-01T00:00:00Z",
-            updated_at: "2026-01-01T00:00:00Z",
-            spec: {
-              ...baseSpec,
-              tool_rules: [
-                { tool: "Read", effect: "allow" },
-                { tool: "Bash", effect: "hold" },
-              ],
-            },
-          },
-        ]),
       });
     });
 
@@ -384,12 +376,24 @@ test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F
     await page.getByRole("combobox", { name: "Saved policy" }).click();
     await page.getByRole("option", { name: "e2e rail-height policy" }).click();
     await expect(page.getByText("Tool rules", { exact: true })).toBeVisible();
+    // Launch is disabled with no title ("Give this run a title.") — fill one.
+    await page.getByLabel("Title").fill("e2e rail-height");
 
-    // Launch is reachable BEFORE the warnings box adds even more height.
+    // Reachable via scroll — not "fits with no scroll needed" (the rail is
+    // legitimately taller than the viewport here; that's what
+    // lg:overflow-y-auto is for). `lg:sticky lg:top-6` only settles the rail
+    // to its top-6 offset once the PAGE itself has scrolled past that
+    // point — at the page's natural (unscrolled) rest position the rail
+    // starts lower, under the header, so scroll the page down first (a real
+    // user filling in Workspace/Policy/Barrier above the rail already would
+    // have) THEN scroll to the button inside the now-settled rail.
+    await page.mouse.wheel(0, 400);
     const launch = page.getByRole("button", { name: "Launch run" });
     await expect(launch).toBeVisible();
+    await launch.scrollIntoViewIfNeeded();
     let box = await launch.boundingBox();
     expect(box, "Launch run boundingBox (pre-launch)").not.toBeNull();
+    expect(box!.y, "Launch run top edge (pre-launch)").toBeGreaterThanOrEqual(0);
     expect(box!.y + box!.height, "Launch run bottom edge (pre-launch)").toBeLessThanOrEqual(650);
 
     await launch.click();
@@ -399,8 +403,10 @@ test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F
     await expect(page.getByText(AGENTS.LAUNCH_WARNING_TITLE)).toBeVisible();
     const openRun = page.getByRole("button", { name: AGENTS.OPEN_RUN_CTA });
     await expect(openRun).toBeVisible();
+    await openRun.scrollIntoViewIfNeeded();
     box = await openRun.boundingBox();
     expect(box, "Open run boundingBox").not.toBeNull();
+    expect(box!.y, "Open run top edge").toBeGreaterThanOrEqual(0);
     expect(box!.y + box!.height, "Open run bottom edge").toBeLessThanOrEqual(650);
   });
 });

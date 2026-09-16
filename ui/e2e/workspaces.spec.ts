@@ -117,8 +117,11 @@ test.describe("Add workspace dialog", () => {
   test("F3-F8: 400x640, Advanced expanded — Add workspace stays reachable, not clipped off-screen", async ({
     page,
   }) => {
-    await page.setViewportSize({ width: 400, height: 640 });
+    // gotoConsole waits on the DESKTOP sidebar link — below md that aside is
+    // hidden entirely (md:flex), so the viewport switch has to come AFTER
+    // landing, not before.
     const dlg = await openAddWorkspaceDialog(page);
+    await page.setViewportSize({ width: 400, height: 640 });
     await dlg.getByRole("button", { name: "Local directory" }).click();
     await dlg.getByLabel("Path on this host").fill("/home/me/projects/reports");
 
@@ -129,10 +132,14 @@ test.describe("Add workspace dialog", () => {
 
     const add = dlg.getByRole("button", { name: "Add workspace" });
     await expect(add).toBeVisible();
+    // The defect this pins is "no scroll container exists to REACH it" —
+    // not "it fits without scrolling" (the dialog is correctly taller than
+    // the viewport here; that's what overflow-y-auto is for). Scroll to it
+    // first, then prove the scroll actually landed it on-screen.
+    await add.scrollIntoViewIfNeeded();
     const box = await add.boundingBox();
     expect(box, "Add workspace boundingBox").not.toBeNull();
-    // In-viewport, not merely "visible" (Playwright's visible ignores
-    // scrollable-container clipping) — the bottom edge must be reachable.
+    expect(box!.y, "Add workspace top edge").toBeGreaterThanOrEqual(0);
     expect(box!.y + box!.height, "Add workspace bottom edge").toBeLessThanOrEqual(640);
     await expect(add).toBeEnabled();
     await add.click();

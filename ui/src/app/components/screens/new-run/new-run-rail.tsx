@@ -83,7 +83,13 @@ export function RunRail({
     // ceiling + tool rules + 3 warnings (member/warnings path) the rail's
     // real content runs ~700-730px, below the fold at 1280x650 with no way
     // to reach Launch. Bounded to the viewport with its own scroll.
-    <aside className="h-fit rounded-xl border border-border bg-card p-4 lg:sticky lg:top-6 lg:max-h-[calc(100vh-3rem)] lg:overflow-y-auto">
+    //
+    // 100vh - 5rem, not -3rem: the sticky container is app-shell.tsx's
+    // <main> (its own overflow-y:auto scroller), which starts BELOW the
+    // h-14 (3.5rem/56px) header — sticky's `top-6` (1.5rem/24px) offset is
+    // relative to THAT scroller, not the viewport, so the rail's stuck
+    // position sits at 3.5rem+1.5rem = 5rem from the viewport top, not 1.5rem.
+    <aside className="h-fit rounded-xl border border-border bg-card p-4 lg:sticky lg:top-6 lg:max-h-[calc(100vh-5rem)] lg:overflow-y-auto">
       <p className="mb-3 text-sm font-semibold text-foreground">What this run can do</p>
 
       {/* Below lg the rail sits UNDER the form at full width, so its sections
