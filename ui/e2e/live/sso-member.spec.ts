@@ -166,6 +166,38 @@ async function seen(): Promise<{
 }
 
 /**
+ * Launch an autonomous claude-code run from the signed-in person's own seat and
+ * wait for it to be running.
+ *
+ * AUTONOMOUS, NOT INTERACTIVE — and the reason is the vendor CLI, not Wardyn.
+ * An interactive run starts the Claude Code TUI, and on a FRESH sandbox that TUI
+ * opens on its own first-run onboarding ("Welcome to Claude Code v2.1.231 …
+ * Choose the text style that looks best with your terminal"). It sits on that
+ * theme picker indefinitely: the seed prompt is never reached, no model call is
+ * ever made, GetRoleCredentials is never called, and any /_seen assertion behind
+ * it can only time out. Autonomous execs claude non-interactively — no TUI, no
+ * onboarding — so the task below actually reaches Bedrock. Reaching a TERMINAL
+ * is case 2's subject (P1) and is proven there.
+ *
+ * LAUNCH NAVIGATES NOWHERE, deliberately: the 201's advisory `warnings[]` render
+ * inline in the rail and "Open run" carries the member to the run "at their own
+ * pace" (new-run-screen.tsx; new-run-screen.test.tsx pins "navigates NOWHERE
+ * until Open run is clicked"). The warnings this run legitimately carries are
+ * governance working, not failure — `api.anthropic.com` is dropped from egress
+ * because this deployment is Bedrock, and the member's resources are capped to
+ * the operator maximum.
+ */
+async function launchAgentRun(page: Page, title: string): Promise<void> {
+  await page.goto("/runs/new");
+  await page.getByRole("combobox", { name: "Title" }).fill(title);
+  await page.getByRole("radio", { name: /^Autonomous/ }).click();
+  await page.locator("#nr-task").fill("Reply with the single word: ready.");
+  await page.getByRole("button", { name: /^Launch/ }).click();
+  await page.getByRole("button", { name: "Open run" }).click();
+  await expect(page.getByText("Running").first()).toBeVisible({ timeout: SANDBOX_UP });
+}
+
+/**
  * The agent roster write: the pin and the per-user lane, in one PUT.
  *
  * The pin is a PARAMETER because the P4 case re-pins the same roster to a
@@ -322,55 +354,7 @@ test("the capture belongs to the member alone", async ({ page }) => {
 test("the member's run gets the member's PINNED identity, and something spends it", async ({ page }) => {
   await dexSignIn(page, MEMBER_EMAIL);
 
-  await page.goto("/runs/new");
-  await page.getByRole("combobox", { name: "Title" }).fill("bedrock via my own AWS SSO session");
-
-  // LEAVE "Start with" ALONE. Its default is already the AGENT option
-  // (wizard-types.ts's interactiveStart: "agent"; pinned hermetically by
-  // new-run-screen.test.tsx), and the earlier version of this spec clicked the
-  // "Terminal — a shell in the workspace dir" radio, which switched the run to
-  // an IDLE SHELL. An idle shell calls no model: materialize_aws_sso_config
-  // writes ~/.aws and stops, so GetRoleCredentials never fires and the Bedrock
-  // stub is never hit — and the two assertions below could only ever time out,
-  // 180 seconds each, looking like the fake being down.
-  //
-  // The initial prompt is what makes claude-code actually TALK at boot, in the
-  // session we attach to. It is the whole point of the run: the credential has
-  // to be SPENT, not merely minted.
-  // AUTONOMOUS, NOT INTERACTIVE — and the reason is the vendor CLI, not Wardyn.
-  // An interactive run starts the Claude Code TUI, and on a FRESH sandbox that
-  // TUI opens on its own first-run onboarding ("Welcome to Claude Code v2.1.231
-  // … Choose the text style that looks best with your terminal"). It sits on
-  // that theme picker forever: the seed prompt is never reached, no model call
-  // is ever made, GetRoleCredentials is never called, and this case's /_seen
-  // assertion can only time out — which is exactly what it did, for three
-  // minutes, with a perfectly credentialled run (run.llm.bedrock
-  // mode=sso-inject) sitting behind the wizard.
-  //
-  // Autonomous is the shape that actually answers this case's question: agent-run
-  // execs claude NON-interactively, so there is no TUI and no onboarding, and the
-  // task below is what makes it talk to Bedrock. The terminal is case 2's
-  // subject (P1), already proven above; what this case is for is WHOSE identity
-  // the run spends.
-  await page.getByRole("radio", { name: /^Autonomous/ }).click();
-  await page.locator("#nr-task").fill("Reply with the single word: ready.");
-  await page.getByRole("button", { name: /^Launch/ }).click();
-
-  // LAUNCH NAVIGATES NOWHERE, deliberately. The 201's advisory `warnings[]`
-  // render inline in the rail and "Open run" is what carries the member to the
-  // run "at their own pace" (new-run-screen.tsx, and new-run-screen.test.tsx's
-  // "lists the warnings and navigates NOWHERE until Open run is clicked").
-  // Without this click the spec sat on /runs/new waiting five minutes for a
-  // terminal that was live on a page it had never opened — the run itself was
-  // already up, with run.llm.bedrock mode=sso-inject in the audit.
-  //
-  // The warnings this run legitimately carries are governance working, not
-  // failure: `api.anthropic.com` is dropped from egress because this deployment
-  // is Bedrock, and the member's resources are capped to the operator maximum.
-  await page.getByRole("button", { name: "Open run" }).click();
-  // An autonomous run has no terminal to attach to, so the waypoint here is the
-  // run page reporting it is actually running rather than an .xterm-screen.
-  await expect(page.getByText("Running").first()).toBeVisible({ timeout: SANDBOX_UP });
+  await launchAgentRun(page, "bedrock via my own AWS SSO session");
 
   // /_seen is the observation that is not Wardyn asserting about itself: it is
   // what the AWS SDK actually asked the portal to mint. Index 0 of the fixture
@@ -492,11 +476,21 @@ test("sso-pin-dispatch: a pin changed after capture warns, refuses the run, and 
   await page.goto("/setup");
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
 
-  // …and the fake agrees the SECOND capture asked for the SECOND pin. Without
-  // this, "live" alone could not tell a healed capture from a stale one.
-  const healed = await seen();
-  expect(healed.account_id).toBe(CONTRA_ACCOUNT);
-  expect(healed.role_name).toBe(CONTRA_ROLE);
+  // …and the healed capture is genuinely the NEW pin's, proven the only way it
+  // can be: by SPENDING it.
+  //
+  // `/_seen` reports what GetRoleCredentials was last asked to mint, and a
+  // capture never calls GetRoleCredentials — signing in reads the portal
+  // (ListAccounts / ListAccountRoles, which is how verifyPin checks the pin is
+  // reachable) and stops there. Only DISPATCH mints. So asserting /_seen
+  // straight after the re-sign-in read the pair the previous test's run had
+  // minted, and "111111111111 != 222222222222" was the assertion catching its
+  // own staleness rather than anything about the heal.
+  await launchAgentRun(page, "a run after the pin moved");
+  await expect
+    .poll(async () => (await seen()).account_id, { timeout: 180_000 })
+    .toBe(CONTRA_ACCOUNT);
+  expect((await seen()).role_name).toBe(CONTRA_ROLE);
 });
 
 test("member-mode: an admin drops to member mode, is refused, and comes back", async ({ page }) => {
