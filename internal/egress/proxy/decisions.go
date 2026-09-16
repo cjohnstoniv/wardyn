@@ -68,6 +68,16 @@ func (s *decisionSink) emit(log egress.DecisionLog) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
+		// COUNTED, not silently returned (B10-F6). A decision emitted after close
+		// is still a decision the audit never received, and the sink's stated
+		// posture is "best-effort delivery, but the gap is summarized, not silent".
+		// The window is real and lands where it matters most: MITM tunnels are
+		// served on their own hijacked http.Servers that Shutdown never stops, so
+		// the last requests of a run — the credential-injecting ones — are exactly
+		// the ones still emitting while the sink drains. close() reads this
+		// counter, so a drop that lands in that window is reported by the very
+		// call that caused it.
+		s.dropped.Add(1)
 		return
 	}
 	select {
