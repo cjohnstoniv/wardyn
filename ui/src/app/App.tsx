@@ -14,7 +14,7 @@ import { SignIn } from "./components/screens/sign-in";
 import { AppShell } from "./components/screens/app-shell";
 import { RunsScreen } from "./components/screens/runs";
 import { WardynMark } from "./components/wardyn/logo";
-import { onUnauthorized, probeAuth, setToken } from "./lib/api/core";
+import { onUnauthorized, probeAuth, safeReturnPath, setToken } from "./lib/api/core";
 import { health } from "./lib/api/health";
 import { setup as setupApi } from "./lib/api/setup";
 // From setup-gate, NOT setup-screen: the screen re-exports this, but importing it
@@ -295,6 +295,26 @@ function RequireSetup({ status }: { status: SetupStatus | null }) {
 // would leave the badge stale.
 const ATTENTION_POLL_MS = 5000;
 
+// M2: can THIS role reach a captured return path? Scoped to the one place a
+// wrong answer is a dead end the plan named (restoring a mid-session-401
+// path after re-auth) — NOT a general client-side route guard (nav-hiding
+// elsewhere is deliberately cosmetic; the server is the real gate, and a
+// member's own self-service routes like /secrets are reachable with no nav
+// entry at all). Mirrors this file's own <Route> tree tiers below: member's
+// reachable surface is Runs/Approvals/Workspaces (RunsScreen + its
+// sub-routes); /drives and /providers are the two SUPER-only routes with no
+// nav entry for anyone, gated operatorOnly server-side — restorable only for
+// an actual admin, never a security admin either.
+const MEMBER_REACHABLE_PREFIXES = ["/runs", "/approvals", "/workspaces"];
+const OPERATOR_ONLY_PREFIXES = ["/drives", "/providers"];
+export function roleCanReach(path: string, role: string): boolean {
+  const under = (prefixes: string[]) =>
+    prefixes.some((p) => path === p || path.startsWith(`${p}/`));
+  if (role === "member") return under(MEMBER_REACHABLE_PREFIXES);
+  if (under(OPERATOR_ONLY_PREFIXES)) return role === "admin";
+  return true;
+}
+
 export default function App() {
   const [auth, setAuth] = React.useState<AuthStatus>("checking");
   const [pendingApprovals, setPendingApprovals] = React.useState(0);
@@ -307,6 +327,15 @@ export default function App() {
   // <Routes> below) is already gone.
   const [authReason, setAuthReason] = React.useState<string | undefined>();
   const returnPathRef = React.useRef<string | null>(null);
+  // H1: onUnauthorized fires for EVERY 401, including the cold mount probe
+  // (no session at all yet) — mirrored in a ref (not read from `auth` state
+  // directly) because the handler below is registered once, in a mount
+  // effect with an empty dep array, and closing over `auth` there would
+  // freeze it at "checking" forever.
+  const authRef = React.useRef<AuthStatus>(auth);
+  React.useEffect(() => {
+    authRef.current = auth;
+  }, [auth]);
 
   // Both badges come off ONE tick, because the attention count is now a join:
   // a run is blocked when a held approval is parked on it, which lives in the
@@ -364,8 +393,13 @@ export default function App() {
   // teleport back to the gate with everything unexplained and unrecoverable.
   React.useEffect(() => {
     onUnauthorized((reason, path) => {
-      returnPathRef.current = path;
-      setAuthReason(reason);
+      // H1: this fires for EVERY 401, including the cold mount probe above
+      // (no session ever established this tab) — a reason/return-path only
+      // means something for a session that WAS authed and just got cut off.
+      if (authRef.current === "authed") {
+        returnPathRef.current = path;
+        setAuthReason(reason);
+      }
       setAuth("unauthed");
     });
   }, []);
@@ -467,18 +501,30 @@ export default function App() {
       <ThemeProvider>
         <SignIn
           reason={authReason}
-          onSignIn={() => {
+          onSignIn={async () => {
             setAuthReason(undefined);
             setAuth("authed");
-            // X3-F7: restore the path the 401 interrupted — root/setup are
-            // landing decisions, not "somewhere to return to", so those (and
-            // "no path captured", the ordinary mount-probe gate) fall back to
-            // Runs like every other finished flow. A route this identity can
-            // no longer reach 403s there exactly as it would from a link —
-            // the same fallback a stale/forbidden deep link already gets.
-            const path = returnPathRef.current;
+            // X3-F7/H2: restore the path the 401 interrupted, same-origin
+            // pathname only (safeReturnPath) — root/setup are landing
+            // decisions, not "somewhere to return to", so those (and "no
+            // path captured", the ordinary mount-probe gate) fall back to
+            // Runs like every other finished flow.
+            const path = safeReturnPath(returnPathRef.current);
             returnPathRef.current = null;
-            navigate(path && path !== "/" && path !== "/setup" ? path : "/runs", { replace: true });
+            // M2: nothing to check for the Runs fallback itself — every role
+            // reaches it. A real captured path might belong to the caller
+            // who was signed in BEFORE (an admin's /drives), not whoever
+            // just signed back in on this tab — a member landing there
+            // would hit a bare 403 instead of the plan's stated /runs
+            // fallback, so ask who signed in before trusting it.
+            if (path === "/runs") {
+              navigate("/runs", { replace: true });
+              return;
+            }
+            const me = await health.whoami().catch(() => null);
+            navigate(me && !roleCanReach(path, me.role) ? "/runs" : path, {
+              replace: true,
+            });
           }}
         />
         <Toaster />

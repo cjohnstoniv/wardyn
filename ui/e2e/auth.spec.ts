@@ -99,6 +99,12 @@ test.describe("auth / sign-in gate", () => {
 
     // No token should be stored yet.
     expect(await readToken(page)).toBeNull();
+
+    // H1: the cold mount probe (no session ever established this tab) is
+    // ALSO a 401 — onUnauthorized used to fire unconditionally, so this
+    // ordinary first-visit gate rendered "Your session ended…" to a human
+    // who never had one. No alert at all on this path.
+    await expect(page.getByRole("alert")).toHaveCount(0);
   });
 
   test("the token field is password-typed and the submit button is disabled while empty", async ({ page }) => {
@@ -372,6 +378,63 @@ test.describe("a session revoked mid-run (R4/F116)", () => {
 
     // Back on Workspaces, not dumped on Runs.
     await expect(page.getByRole("heading", { name: "Workspaces", level: 1 })).toBeVisible();
+  });
+});
+
+// M2: the plan's own X3-F7 row says "restore the path after re-auth
+// (fallback /runs on 403)" — the captured path belongs to whoever was
+// signed in BEFORE, not necessarily whoever signs back in on this tab.
+test.describe("the restored path is checked against the re-authenticated role (M2)", () => {
+  test("a member re-authenticating over an admin's captured operator-only path lands on Runs, not a dead end", async ({ page }) => {
+    await bootWithStoredToken(page, GOOD_TOKEN);
+    await expect(runsNav(page)).toBeVisible();
+
+    await page.goto("/drives");
+    await expect(page.getByRole("heading", { name: "User drives", level: 1 })).toBeVisible();
+
+    await page.route("**/api/v1/**", (route) =>
+      route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "unauthorized" }) }),
+    );
+    await expect(signInToken(page)).toBeVisible({ timeout: 15_000 });
+
+    // Re-authenticate as a MEMBER (the harness's bearer token is always
+    // admin server-side — splice GET /me the same way mockMemberRole does
+    // for every other member-render spec).
+    await page.unroute("**/api/v1/**");
+    await page.route("**/api/v1/me", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.role = "member";
+      json.operator = false;
+      json.security_operator = false;
+      await route.fulfill({ response, json });
+    });
+    await signInToken(page).fill(GOOD_TOKEN);
+    await useTokenButton(page).click();
+
+    // /drives has no member surface at all — landed on Runs instead of a
+    // bare 403 or a route this identity can't even reach.
+    await expect(runsNav(page)).toBeVisible();
+    await expect(page).toHaveURL(/\/runs$/);
+  });
+
+  test("neg: the SAME role re-authenticating restores to the captured operator-only path", async ({ page }) => {
+    await bootWithStoredToken(page, GOOD_TOKEN);
+    await expect(runsNav(page)).toBeVisible();
+
+    await page.goto("/drives");
+    await expect(page.getByRole("heading", { name: "User drives", level: 1 })).toBeVisible();
+
+    await page.route("**/api/v1/**", (route) =>
+      route.fulfill({ status: 401, contentType: "application/json", body: JSON.stringify({ error: "unauthorized" }) }),
+    );
+    await expect(signInToken(page)).toBeVisible({ timeout: 15_000 });
+
+    await page.unroute("**/api/v1/**");
+    await signInToken(page).fill(GOOD_TOKEN);
+    await useTokenButton(page).click();
+
+    await expect(page.getByRole("heading", { name: "User drives", level: 1 })).toBeVisible();
   });
 });
 
