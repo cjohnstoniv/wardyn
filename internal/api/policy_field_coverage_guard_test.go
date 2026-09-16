@@ -4,6 +4,8 @@
 package api
 
 import (
+	"go/scanner"
+	"go/token"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -80,8 +82,11 @@ var runPolicySpecCoverage = map[string]policyFieldCoverage{
 }
 
 func TestRunPolicySpec_EveryFieldIsBoundedOrDeclaredPassThrough(t *testing.T) {
-	policySrc := readRepoFile(t, "internal", "api", "policy.go")
-	clampSrc := readRepoFile(t, "internal", "composer", "clamp.go")
+	// W6-05: strip comments first — a bare substring match is satisfied by a
+	// field mentioned only in a comment, which would let a row read "bounded"
+	// for a field the source only talks about. See stripGoComments below.
+	policySrc := stripGoComments(t, readRepoFile(t, "internal", "api", "policy.go"))
+	clampSrc := stripGoComments(t, readRepoFile(t, "internal", "composer", "clamp.go"))
 
 	seen := map[string]bool{}
 	for _, f := range reflect.VisibleFields(reflect.TypeOf(types.RunPolicySpec{})) {
@@ -116,6 +121,51 @@ func saysOrNot(has bool) string {
 		return "DOES"
 	}
 	return "does NOT"
+}
+
+// stripGoComments removes every line and block comment from src using the
+// real Go tokenizer (go/scanner), so a string literal containing "//" or
+// "/*" is never mistaken for one. Comments are replaced with a single space
+// (not deleted outright) so a token on either side of a removed comment
+// never accidentally merges with its neighbor.
+func stripGoComments(t *testing.T, src string) string {
+	t.Helper()
+	fset := token.NewFileSet()
+	file := fset.AddFile("", fset.Base(), len(src))
+	var s scanner.Scanner
+	s.Init(file, []byte(src), nil, scanner.ScanComments)
+
+	var out strings.Builder
+	prevEnd := 0
+	for {
+		pos, tok, lit := s.Scan()
+		if tok == token.EOF {
+			break
+		}
+		if tok == token.COMMENT {
+			start := file.Offset(pos)
+			out.WriteString(src[prevEnd:start])
+			out.WriteByte(' ')
+			prevEnd = start + len(lit)
+		}
+	}
+	out.WriteString(src[prevEnd:])
+	return out.String()
+}
+
+// W6-05 negative control: a field named only inside a comment must NOT count
+// as bounded once stripGoComments runs — proving the strip actually closes
+// the loophole the guard's own doc comment declares ("It reads the SOURCE
+// rather than exercising behaviour deliberately").
+func TestStripGoComments_CommentOnlyMentionIsNotCounted(t *testing.T) {
+	raw := "package composer\n\n// Ghost is unbounded today; see .GhostField for the plan.\nfunc Clamp() {}\n"
+	if !strings.Contains(raw, ".GhostField") {
+		t.Fatal("test setup: raw source must contain the substring before stripping")
+	}
+	if strings.Contains(stripGoComments(t, raw), ".GhostField") {
+		t.Fatal("stripGoComments left a comment-only mention in the source — a field named only in a " +
+			"comment would still read as bounded")
+	}
 }
 
 // readRepoFile reads a repo-relative source file for the guards above. The
