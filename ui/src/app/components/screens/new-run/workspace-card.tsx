@@ -250,11 +250,19 @@ export function WorkspaceCard({
           // or an extra attached via the chips below survives a change to the
           // primary selection. The old form overwrote the whole array, so
           // picking a different primary silently dropped every extra.
+          // R2: dedupe — picking an id ALREADY an extra (below) must not leave
+          // it twice (double mounts/repos on the wire; the chip's Remove would
+          // then drop both the extra AND the primary the operator just chose).
+          // R3: "Ephemeral scratch — no repo" means NO workspace, not "promote
+          // the first extra" — state.workspaces.slice(1) was wrong here.
           patch({
             workspaces:
               v === "__none__"
-                ? state.workspaces.slice(1)
-                : [{ workspaceId: v, enabledOptional: [] }, ...state.workspaces.slice(1)],
+                ? []
+                : [
+                    { workspaceId: v, enabledOptional: [] },
+                    ...state.workspaces.slice(1).filter((s) => s.workspaceId !== v),
+                  ],
           })
         }
       >

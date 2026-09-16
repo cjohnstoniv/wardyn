@@ -350,4 +350,29 @@ describe("WorkspaceCard — extra selections from a multi-workspace clone", () =
       ],
     });
   });
+
+  // R2: picking an id that is ALREADY an extra must not leave it twice — a
+  // duplicate mounts/repos on the wire (buildSpec has no dedupe over
+  // selections) and makes the chip's own Remove drop BOTH entries.
+  it("picking an EXISTING extra as the primary dedupes it, once", async () => {
+    const { patch } = renderCard({
+      workspaces: [primary, extra],
+      state: { workspaces: [{ workspaceId: primary.id, enabledOptional: [] }, { workspaceId: extra.id, enabledOptional: [] }] },
+    });
+    await user.click(screen.getByRole("combobox", { name: "Workspace" }));
+    await user.click(await screen.findByRole("option", { name: "shared-libs" }));
+    expect(patch).toHaveBeenCalledWith({ workspaces: [{ workspaceId: extra.id, enabledOptional: [] }] });
+  });
+
+  // R3: "Ephemeral scratch — no repo" means NO workspace at all — it must not
+  // silently promote the first extra to primary.
+  it("picking Ephemeral scratch clears every selection, not just the primary", async () => {
+    const { patch } = renderCard({
+      workspaces: [primary, extra],
+      state: { workspaces: [{ workspaceId: primary.id, enabledOptional: [] }, { workspaceId: extra.id, enabledOptional: [] }] },
+    });
+    await user.click(screen.getByRole("combobox", { name: "Workspace" }));
+    await user.click(await screen.findByRole("option", { name: "Ephemeral scratch — no repo" }));
+    expect(patch).toHaveBeenCalledWith({ workspaces: [] });
+  });
 });
