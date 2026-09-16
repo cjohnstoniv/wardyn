@@ -27,7 +27,7 @@ import { ConfirmEgressDialog } from "../../wardyn/confirm-egress-dialog";
 import { OperatorOnlyHint } from "../../wardyn/primitives";
 import { DeleteConfirmDialog } from "../../wardyn/delete-confirm-dialog";
 import { EmptyState, ErrorState, TableSkeleton } from "../../wardyn/states";
-import { useOperator } from "../../wardyn/operator-context";
+import { useCanMutate } from "../../wardyn/operator-context";
 import { KIND_META, workspaceImage } from "../workspaces";
 import { ProfileReview } from "../profile-review";
 import { DetailSectionCard } from "./section-card";
@@ -67,9 +67,14 @@ function imageRow(ws: Workspace): { mono: string; blurb: string; rebuildable: bo
 export function WorkspaceDetailScreen() {
   const { id = "" } = useParams();
   const navigate = useNavigate();
-  const operator = useOperator();
 
   const [ws, setWs] = React.useState<Workspace | null | undefined>(undefined);
+  // X3-F2 / F5-F1: Delete (DELETE /workspaces/{id}) and Rebuild (POST
+  // /workspaces/{id}/build) are classOwner server-side — a member may act on a
+  // workspace THEY created. The predicate is the row's owner, not the caller's
+  // tier, and it fails closed on an absent owner or an unresolved /me. Every
+  // OTHER control on this page keeps its own (security/operator) gate.
+  const canMutate = useCanMutate(ws?.owned_by);
   const [status, setStatus] = React.useState<"loading" | "error" | "ready">("loading");
   const [llmReady, setLlmReady] = React.useState(false);
   // The runner's declared confinement classes — RecordPane keys its open-egress
@@ -338,13 +343,13 @@ export function WorkspaceDetailScreen() {
             size="sm"
             variant="ghost"
             className="size-8 p-0 text-danger hover:text-danger"
-            disabled={!operator}
-            title={operator ? "Delete this workspace" : undefined}
+            disabled={!canMutate}
+            title={canMutate ? "Delete this workspace" : undefined}
             aria-label="Delete this workspace"
             onClick={() => setConfirmDelete(true)}
           >
             <Trash2 className="size-4" />
-            {!operator && <OperatorOnlyHint />}
+            {!canMutate && <OperatorOnlyHint />}
           </Button>
         </div>
 
@@ -356,7 +361,7 @@ export function WorkspaceDetailScreen() {
             <p className="mt-0.5 text-meta text-muted-foreground">{image.blurb}</p>
           </div>
           {image.rebuildable && (
-            <Button size="sm" variant="outline" disabled={!operator || rebuilding} onClick={() => void rebuild()}>
+            <Button size="sm" variant="outline" disabled={!canMutate || rebuilding} onClick={() => void rebuild()}>
               Rebuild
             </Button>
           )}
@@ -393,6 +398,7 @@ export function WorkspaceDetailScreen() {
 
       <DeleteConfirmDialog
         name={confirmDelete ? ws.name : null}
+        allowed={canMutate}
         entity="workspace"
         description="Existing runs keep their history and audit trail. New runs can no longer attach it; its requirements and recorded sessions are removed."
         onOpenChange={(o) => !o && setConfirmDelete(false)}

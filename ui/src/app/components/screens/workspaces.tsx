@@ -36,7 +36,7 @@ import { AddWorkspaceDialog } from "./add-workspace-dialog";
 import { llmCredLabel, llmCredTone } from "./workspace-llm-cred";
 import { MEMBER_WORKSPACE } from "../../lib/permissions-copy";
 import { DRIVES } from "../../lib/user-drives-copy";
-import { useOperator, useRole } from "../wardyn/operator-context";
+import { useCanMutate, useOperator, useRole } from "../wardyn/operator-context";
 
 // Icon + label for the three onboardable kinds. "ephemeral" is scratch space
 // discarded after the run, so it gets an hourglass rather than reusing the
@@ -79,6 +79,20 @@ export function workspaceImage(ws: Workspace): { kind: WorkspaceImageKind; label
     : { kind: "standard", label: "standard sandbox image" };
 }
 
+// X3-F2 / F5-F1 / X2-F4 — DELETE /workspaces/{id} is classOwner server-side, so
+// a member may delete a workspace THEY created; the console parked it on the
+// admin tier and offered them nothing. Its own component because the predicate
+// is per-row and hooks cannot be called inside the row map.
+function DeleteMenuItem({ ws, onPick }: { ws: Workspace; onPick: () => void }) {
+  const allowed = useCanMutate(ws.owned_by);
+  return (
+    <DropdownMenuItem onClick={onPick} disabled={!allowed} className="text-danger focus:text-danger">
+      <Trash2 className="size-4" /> Delete…
+      {!allowed && <OperatorOnlyHint />}
+    </DropdownMenuItem>
+  );
+}
+
 export function WorkspacesScreen() {
   const operator = useOperator();
   const role = useRole();
@@ -88,6 +102,10 @@ export function WorkspacesScreen() {
   const [query, setQuery] = React.useState("");
   const [addOpen, setAddOpen] = React.useState(false);
   const [toDelete, setToDelete] = React.useState<Workspace | null>(null);
+  // X3-F2: the confirm dialog's own gate follows the SELECTED row's owner, not
+  // the caller's tier — an operator-created row arrives with owned_by absent,
+  // which useCanMutate reads as "not mine" for a member.
+  const canDeleteSelected = useCanMutate(toDelete?.owned_by);
 
   const load = React.useCallback(() => {
     setStatus("loading");
@@ -273,14 +291,7 @@ export function WorkspacesScreen() {
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem onClick={() => openDetail(w.id)}>Open</DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => setToDelete(w)}
-                            disabled={!operator}
-                            className="text-danger focus:text-danger"
-                          >
-                            <Trash2 className="size-4" /> Delete…
-                            {!operator && <OperatorOnlyHint />}
-                          </DropdownMenuItem>
+                          <DeleteMenuItem ws={w} onPick={() => setToDelete(w)} />
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </TableCell>
@@ -305,6 +316,7 @@ export function WorkspacesScreen() {
 
       <DeleteConfirmDialog
         name={toDelete?.name ?? null}
+        allowed={canDeleteSelected}
         entity="workspace"
         description="Runs can no longer attach this source. Any run already using it is unaffected — this only gates NEW runs. This cannot be undone."
         onOpenChange={(o) => !o && setToDelete(null)}

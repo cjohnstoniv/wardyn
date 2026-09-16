@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import type { RecordResult, SetupStatus, Workspace } from "../../../lib/types";
@@ -453,5 +453,48 @@ describe("WorkspaceDetailScreen — Allowed hosts, the two-tier remove", () => {
       { description: "operator role required" },
     );
     expect(toast.error).not.toHaveBeenCalledWith("Failed to remove registry.npmjs.org", expect.anything());
+  });
+});
+
+// X3-F2 / F5-F1 — the detail page's Delete and Rebuild are the same classOwner
+// route the list's kebab is, so they follow the row's OWNER, not the caller's
+// tier. Both legs fail closed: an operator-owned row (owned_by absent) and an
+// unresolved /me leave a member with nothing live.
+describe("WorkspaceDetailScreen — Delete and Rebuild follow the row's owner", () => {
+  function renderOwned(principal: string, over: Partial<Workspace> = {}, operatorResolved = true) {
+    getWorkspaceMock.mockResolvedValue(
+      ws({ profile: { has_devcontainer: true } as unknown as Record<string, unknown>, ...over }),
+    );
+    return render(
+      <MemoryRouter initialEntries={["/workspaces/ws-1"]}>
+        <OperatorProvider
+          operator={false}
+          securityOperator={false}
+          principal={principal}
+          operatorResolved={operatorResolved}
+        >
+          <Routes>
+            <Route path="/workspaces/:id" element={<WorkspaceDetailScreen />} />
+          </Routes>
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("a member's OWN row: Delete and Rebuild are live", async () => {
+    renderOwned("dana@corp.example", { owned_by: "dana@corp.example" });
+    expect(await screen.findByRole("button", { name: /delete this workspace/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Rebuild" })).not.toBeDisabled();
+  });
+
+  it("someone else's row, and an unresolved /me, leave both parked", async () => {
+    renderOwned("dana@corp.example", { owned_by: "" });
+    expect(await screen.findByRole("button", { name: /delete this workspace/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Rebuild" })).toBeDisabled();
+
+    cleanup();
+    renderOwned("dana@corp.example", { owned_by: "dana@corp.example" }, false);
+    expect(await screen.findByRole("button", { name: /delete this workspace/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Rebuild" })).toBeDisabled();
   });
 });

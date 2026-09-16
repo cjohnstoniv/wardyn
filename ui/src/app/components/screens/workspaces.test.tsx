@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import type { Workspace, WorkspaceProfile } from "../../lib/types";
@@ -429,5 +429,50 @@ describe("WorkspacesScreen — the User drives door", () => {
     );
     await screen.findByRole("button", { name: /add workspace/i });
     expect(screen.queryByRole("button", { name: DRIVES.TITLE })).not.toBeInTheDocument();
+  });
+});
+
+// X3-F2 / F5-F1 / X2-F4 — DELETE /workspaces/{id} is classOwner server-side
+// (a member may delete a workspace they own) while the console parked Delete on
+// the admin tier alone. `owned_by` is already on the wire; the predicate is
+// useCanMutate, which fails CLOSED on an empty principal and on an unresolved
+// /me so a member never gets a live control over someone else's row.
+describe("WorkspacesScreen — a member may delete the row they own", () => {
+  function renderAs(operator: boolean, principal: string, operatorResolved = true) {
+    return render(
+      <MemoryRouter>
+        <OperatorProvider operator={operator} principal={principal} operatorResolved={operatorResolved}>
+          <WorkspacesScreen />
+        </OperatorProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  beforeEach(() => {
+    listWorkspacesMock.mockReset();
+  });
+
+  it("enables Delete… on a member's OWN row", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { owned_by: "dana@corp.example" })]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderAs(false, "dana@corp.example");
+    await user.click(await screen.findByRole("button", { name: /workspace actions/i }));
+    expect(screen.getByRole("menuitem", { name: /delete/i })).not.toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("parks Delete… on an operator-owned row (owned_by \"\") and while /me is unresolved", async () => {
+    listWorkspacesMock.mockResolvedValue([ws({}, { owned_by: "" })]);
+    const user = userEvent.setup({ pointerEventsCheck: 0 });
+    renderAs(false, "dana@corp.example");
+    await user.click(await screen.findByRole("button", { name: /workspace actions/i }));
+    expect(screen.getByRole("menuitem", { name: /delete/i })).toHaveAttribute("aria-disabled", "true");
+
+    cleanup();
+    // Fails CLOSED: the fail-open `operator` default must not open a delete
+    // before the server has said who this is.
+    listWorkspacesMock.mockResolvedValue([ws({}, { owned_by: "dana@corp.example" })]);
+    renderAs(true, "dana@corp.example", false);
+    await user.click(await screen.findByRole("button", { name: /workspace actions/i }));
+    expect(screen.getByRole("menuitem", { name: /delete/i })).toHaveAttribute("aria-disabled", "true");
   });
 });
