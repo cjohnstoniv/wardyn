@@ -348,13 +348,20 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// phase adds corp hosts AND authors token injections for them mid-dispatch.
 	// A no-op with no assigned profile. See reassertCeilingDenies.
 	//
+	// It is also handed the resolved LLM TRANSPORT and the plan's Bedrock MITM
+	// entries, because the bearer injection was only ever the never-resident half
+	// of that lane: the resident SigV4 keys in sandboxEnv, the secretEnvKeys that
+	// move them onto SandboxSpec.SecretEnv, and the operator's host ~/.aws
+	// bind-mount all survived a profile that walls off Bedrock (B2-F4). Narrowed
+	// here, before buildRunMounts and splitSecretEnv read them below.
+	//
 	// EPHEMERAL DISK — the ONE fill + clamp, immediately above the re-assertion so
 	// the row that phase writes carries the effective size. See applyEphemeralDisk:
 	// the policy's own disk_mib, else the org's default_disk_mib, clamped to
 	// min(provider maximum, this profile's maximum). Never a refusal, and a zero
 	// request with no org default stays unbounded.
 	diskFilled := applyEphemeralDisk(ctx, run, &policy, siteCfg, ceiling)
-	s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, &p, sandboxEnv)
+	s.reassertCeilingDenies(ctx, run, &policy, &injections, ceiling, &p, sandboxEnv, &llm, &plan.bedrockMITMHosts)
 
 	// Host bind mounts (policy WorkspaceMounts + the host-mode Bedrock ~/.aws
 	// read-only mount) — operator-authored, never agent-chosen; see buildRunMounts.

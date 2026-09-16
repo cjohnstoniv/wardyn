@@ -448,7 +448,7 @@ func unionCeilingDenies(policy *types.RunPolicySpec, deny []string) []string {
 // required argument whose zero value dispatchRun refuses (see dispatchCeiling).
 func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 	policy *types.RunPolicySpec, injections *[]runner.InjectionGrant, c dispatchCeiling,
-	p *dispatchParams, sandboxEnv map[string]string,
+	p *dispatchParams, sandboxEnv map[string]string, llm *llmTransport, mitmHosts *[]string,
 ) {
 	// THE ENFORCEMENT half is gated on the deny list, because with nothing to
 	// deny there is nothing to union, no injection to drop and no lane to
@@ -471,6 +471,8 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 		*injections = kept
 
 		droppedLane = s.dropBrokeredLanes(c, p, sandboxEnv)
+		droppedLane = append(droppedLane, narrowCeilingBedrockLane(c, llm, mitmHosts, sandboxEnv)...)
+		slices.Sort(droppedLane)
 
 		if len(droppedInjection) > 0 || len(droppedLane) > 0 {
 			slog.WarnContext(ctx, "wardynd: governance ceiling — withholding credential lanes for hosts this principal's profile denies",
@@ -572,4 +574,59 @@ func (s *Server) dropBrokeredLanes(c dispatchCeiling, p *dispatchParams, sandbox
 	}
 	slices.Sort(dropped)
 	return dropped
+}
+
+// bedrockCeilingLane is how the re-assertion names the Bedrock credential lane
+// in dropped_broker_lanes. A lane name rather than a host list: the lane is one
+// decision (which Bedrock credential this run gets), the hosts it reaches are
+// already in denied_added, and the run's OWN denies are what an auditor reads to
+// see why.
+const bedrockCeilingLane = "bedrock"
+
+// narrowCeilingBedrockLane withholds the Bedrock credential lane when the
+// acting principal's profile denies a host that lane's traffic goes to, and
+// reports whether it did.
+//
+// WHY THIS EXISTS ALONGSIDE dropBrokeredLanes (B2-F4). The re-assertion already
+// dropped the Bedrock BEARER injection, because a bearer token rides an
+// injection rule and injection rules are filtered by host. But the bearer is the
+// one Bedrock mode that is NEVER RESIDENT. The resident modes were untouched:
+// the SigV4 keys applyBedrockTransport wrote into sandboxEnv stayed there,
+// llm.secretEnvKeys still named them so splitSecretEnv moved them onto
+// SandboxSpec.SecretEnv, buildRunMounts still bind-mounted the operator's whole
+// host ~/.aws read-only into the sandbox, and the per-run MITM host survived. So
+// a profile that walls off Bedrock produced a run that could not REACH Bedrock
+// and held the credentials for it anyway — credential RESIDENCY inside a
+// sandbox whose principal is denied the service those credentials are for.
+//
+// It narrows the TRANSPORT rather than the spec, because the transport is what
+// every consumer downstream of this phase reads: buildRunMounts takes
+// llm.bedrockReady/awsMount, splitSecretEnv takes llm.secretEnvKeys, and
+// ProxyConfig.MITMHosts takes the plan's bedrock entries. Narrowing here means
+// none of them has to learn about ceilings.
+//
+// Deliberately NOT a refusal: this phase's whole doctrine is that it only adds
+// denies and removes credentials, never fails a run (reassertCeilingDenies' own
+// doc). A run that asked for no model call, or that has another lane, still
+// launches; one that needed Bedrock meets the deny at the proxy with the
+// ordinary refusal, which is the same thing it already did for the bearer mode.
+func narrowCeilingBedrockLane(c dispatchCeiling, llm *llmTransport, mitmHosts *[]string, sandboxEnv map[string]string) []string {
+	if llm == nil || !llm.bedrockReady || !ceilingDeniesAny(c.deny, llm.bedrock.egressHosts) {
+		return nil
+	}
+	// By KEY, from the plan applyBedrockTransport actually wrote: deleting by an
+	// "AWS_" prefix would also take an env_secret grant's variable (resolved
+	// after this phase today, but the provenance is what makes it correct rather
+	// than the ordering).
+	for k := range llm.bedrock.env {
+		delete(sandboxEnv, k)
+	}
+	llm.bedrock = bedrockAuth{}
+	llm.bedrockReady = false
+	llm.injectBedrockBearer = false
+	llm.secretEnvKeys = nil
+	if mitmHosts != nil {
+		*mitmHosts = nil
+	}
+	return []string{bedrockCeilingLane}
 }
