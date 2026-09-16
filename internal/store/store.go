@@ -347,8 +347,14 @@ func (s PG) ListPolicies(ctx context.Context) ([]types.RunPolicy, error) {
 }
 
 // UpdatePolicy replaces a policy's name and spec and bumps updated_at, returning
-// the persisted row. Returns ErrNotFound when no policy has the given id. The
-// caller is responsible for validating the spec before calling (policies are
+// the persisted row. Returns ErrNotFound when no policy has the given id, and
+// ErrConflict when the rename collides with run_policies.name's UNIQUE
+// constraint — the SAME mapping CreatePolicy has made since W20-S1-3, because
+// the constraint is the same one and a rename onto a taken name is the same
+// caller-fixable mistake as an insert under one (B1-F5). Without it the API's
+// blanket 500 handed an admin the raw driver text.
+//
+// The caller is responsible for validating the spec before calling (policies are
 // admin-gated config; the API validates every spec before it reaches the store).
 func (s PG) UpdatePolicy(ctx context.Context, id uuid.UUID, name string, spec types.RunPolicySpec) (types.RunPolicy, error) {
 	specJSON, err := json.Marshal(spec)
@@ -359,7 +365,15 @@ func (s PG) UpdatePolicy(ctx context.Context, id uuid.UUID, name string, spec ty
 		UPDATE run_policies SET name=$1, spec=$2, updated_at=now()
 		WHERE id=$3
 		RETURNING id, name, created_at, updated_at, spec`
-	return scanPolicy(s.Pool.QueryRow(ctx, q, name, specJSON, id))
+	out, err := scanPolicy(s.Pool.QueryRow(ctx, q, name, specJSON, id))
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return types.RunPolicy{}, ErrConflict
+		}
+		return types.RunPolicy{}, err
+	}
+	return out, nil
 }
 
 // DeletePolicy removes a policy by id. Returns ErrNotFound when no row matched.

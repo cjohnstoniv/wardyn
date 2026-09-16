@@ -316,6 +316,15 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	if notFoundIf(w, err, "policy") {
 		return
 	}
+	if errors.Is(err, store.ErrConflict) {
+		// B1-F5, the RENAME half of W20-S1-3. run_policies.name is UNIQUE, so
+		// moving a policy ONTO a taken name raises the same 23505 an insert under
+		// one does: a caller-fixable 409, never the blanket 500 below carrying the
+		// raw Postgres constraint string. Sited after notFoundIf so an unknown id
+		// is still a 404.
+		writeError(w, http.StatusConflict, fmt.Sprintf("a policy named %q already exists", req.Name))
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "update policy: "+err.Error())
 		return

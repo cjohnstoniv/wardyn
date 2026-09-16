@@ -136,3 +136,31 @@ func TestPG_CreatePolicy_DuplicateName(t *testing.T) {
 		t.Errorf("duplicate-name create err = %v, want ErrConflict", err)
 	}
 }
+
+// TestPG_UpdatePolicy_DuplicateName is B1-F5, the UPDATE mirror of the test
+// above: renaming a policy ONTO a taken name raises the same 23505 as an
+// insert, and must map to store.ErrConflict so the API answers 409 instead of
+// a blanket 500 carrying the raw constraint text.
+func TestPG_UpdatePolicy_DuplicateName(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+
+	taken := "policy-rename-taken-" + uuid.New().String()
+	spec := types.RunPolicySpec{MinConfinementClass: types.CC2}
+	for _, name := range []string{taken, "policy-rename-src-" + uuid.New().String()} {
+		if _, err := store.NewPG(pool).CreatePolicy(ctx, types.RunPolicy{
+			ID: uuid.New(), Name: name, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Spec: spec,
+		}); err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+	}
+	src := types.RunPolicy{ID: uuid.New(), Name: "policy-rename-mover-" + uuid.New().String(),
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(), Spec: spec}
+	if _, err := store.NewPG(pool).CreatePolicy(ctx, src); err != nil {
+		t.Fatalf("create mover: %v", err)
+	}
+
+	if _, err := store.NewPG(pool).UpdatePolicy(ctx, src.ID, taken, spec); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("rename onto a taken name err = %v, want ErrConflict", err)
+	}
+}
