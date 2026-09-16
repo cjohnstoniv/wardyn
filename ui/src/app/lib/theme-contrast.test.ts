@@ -300,6 +300,31 @@ describe("light-theme WCAG AA contrast (C004)", () => {
   // directly) never had an opaque-fill-calibrated text token riding on it in
   // the first place. Auditing those ~20 pre-existing sites is out of scope
   // for R-01; this gate pins the class of bug R-01 actually is.
+  // R-08 (blind re-review): the default button's HOVER fill is the one diluted
+  // site of the R-01 shape that actually fails — --primary at /90 over the light
+  // --background reads 4.48:1 under --primary-foreground, 0.02 under AA. The
+  // alpha is read from button.tsx so the pin follows the class, not a guess.
+  it("the default button's hover fill keeps --primary-foreground at AA in the light theme", () => {
+    const src = readFileSync("src/app/components/ui/button.tsx", "utf8");
+    const m = /default:\s*"[^"]*hover:bg-primary\/(\d{1,3})/.exec(src);
+    if (!m) throw new Error("button.tsx default variant has no hover:bg-primary/NN dilution");
+    const alpha = +m[1] / 100;
+    const mix = (fg: string, bg: string): string => {
+      const ch = (h: string, i: number) => parseInt(h.slice(i, i + 2), 16);
+      const hex = (v: number) => Math.round(v).toString(16).padStart(2, "0");
+      return "#" + [1, 3, 5].map((i) => hex(alpha * ch(fg, i) + (1 - alpha) * ch(bg, i))).join("");
+    };
+    const hover = mix(token("primary"), token("background"));
+    expect(ratio(token("primary-foreground"), hover)).toBeGreaterThanOrEqual(4.5);
+  });
+
+  // ponytail: this gate couples the diluted fill and the *-foreground token by
+  // SOURCE LINE (R-09). A className split across lines — sheet.tsx's `side ===`
+  // branches, any multi-line cn(...) — is invisible to it, and a comment that
+  // mentions a diluted class one line from a "-foreground" mention would flag.
+  // Upgrade path if it ever misses: join each cn(...)/className expression
+  // before matching. Ceiling accepted for 0.7.4; button.tsx's single-string
+  // variants are what R-01 was.
   it("no BASE/dark: opacity-diluted fill sharing a *-foreground text token, anywhere in src/app, incl. components/ui/", () => {
     const offenders: string[] = [];
     const tokens = ["destructive", "success", "warning", "danger", "info", "cyan"];

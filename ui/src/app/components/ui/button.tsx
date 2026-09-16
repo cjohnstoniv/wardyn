@@ -9,7 +9,7 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:bg-primary/90",
+        default: "bg-primary text-primary-foreground hover:bg-primary/95",
         // F7-F15: --destructive is var(--danger) — text-danger-foreground is
         // its AA-proven text token, not a raw text-white guess. R-01: no
         // dark:bg-destructive/NN dilution — the unified token is already the
