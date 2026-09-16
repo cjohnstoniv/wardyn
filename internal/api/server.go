@@ -373,6 +373,23 @@ type Config struct {
 	// (bedrock.<region>.amazonaws.com) is deliberately NOT overridden; an
 	// inference-profile ARN is the answer there.
 	BedrockBaseURL string
+	// AWSSSOEndpointOverride re-points the two AWS IAM Identity Center services
+	// (sso-oidc and the sso portal) at ONE server of the operator's choosing —
+	// a TEST hatch, and nothing else. It exists so "a member signs in on
+	// Kubernetes and their Bedrock run gets per-user credentials" is provable
+	// without a real AWS tenant, by pointing the login sandbox, the dispatch
+	// egress list and the dispatch-time token renewal at test/awsssofake running
+	// on the cluster. See awssso_endpoint.go for the five derivations it moves
+	// and why it is neither BedrockBaseURL nor the global AWS_ENDPOINT_URL.
+	//
+	// Normalized by ValidateAWSSSOEndpointOverride at boot, which REFUSES a
+	// non-empty value unless WARDYN_ALLOW_TEST_ENDPOINTS=true; wardynd also
+	// WARNs on every boot that carries it. Empty (the default, and every real
+	// deployment) => every SSO derivation is byte-identical to a build that
+	// never had this field. A BOOT flag, never a SiteConfig field, for the same
+	// reason as BedrockBaseURL (PF-43): a runtime-writable spelling would let an
+	// admin re-point a credential exchange with no restart and no boot log.
+	AWSSSOEndpointOverride string
 	// BedrockAWSConfigDir, when set, bind-mounts a host AWS config directory
 	// (a `~/.aws`) READ-ONLY into the sandbox at /home/agent/.aws, so the AWS
 	// SDK inside the run resolves credentials itself — including short-lived AWS

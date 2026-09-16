@@ -176,10 +176,19 @@ type bootFlags struct {
 	// deployment at its VPC/PrivateLink endpoint. Same posture class as
 	// anthropicBaseURL above — boot-time only, never a SiteConfig field, because
 	// in bearer mode it IS the TLS-MITM and Authorization-injection target.
-	bedrockBaseURL      *string
-	bedrockAWSDir       *string
-	bedrockAWSProfile   *string
-	bedrockAWSSSORegion *string
+	bedrockBaseURL *string
+	// awsSSOEndpointOverride / allowTestEndpoints are the TEST hatch that makes
+	// "a member signs in on Kubernetes and their Bedrock run gets per-user
+	// credentials" provable without a real AWS tenant: one URL re-points BOTH
+	// AWS IAM Identity Center services (see api.Config.AWSSSOEndpointOverride
+	// for the five derivations it moves). Refused unless allowTestEndpoints is
+	// explicitly true — the same two-deliberate-acts shape as
+	// allowLocalModeWithOIDC, and for the same reason.
+	awsSSOEndpointOverride *string
+	allowTestEndpoints     *bool
+	bedrockAWSDir          *string
+	bedrockAWSProfile      *string
+	bedrockAWSSSORegion    *string
 
 	proxyURL *string
 
@@ -332,12 +341,14 @@ func parseBootFlags() *bootFlags {
 		// (aws-access-key-id/aws-secret-access-key/aws-session-token), read at
 		// dispatch time since Bedrock's SigV4 request signing can't be
 		// proxy-injected. See internal/api.Config.BedrockRegion/BedrockModel.
-		bedrockRegion:       flagEnv("bedrock-region", "WARDYN_BEDROCK_REGION", "", `optional: AWS region for the Amazon Bedrock Anthropic transport (e.g. "us-east-1"). Falls back to the standard AWS_REGION / AWS_DEFAULT_REGION when left empty. Requires -bedrock-model too, plus aws-access-key-id/aws-secret-access-key secrets. Empty (and no AWS_REGION) = Bedrock disabled.`),
-		bedrockModel:        flagEnv("bedrock-model", "WARDYN_BEDROCK_MODEL", "", `optional: Bedrock model id for claude-code — a cross-region inference-profile id (e.g. "us.anthropic.claude-sonnet-4-5-..."), or the profile's FULL ARN ("arn:aws:bedrock:<region>:<acct>:inference-profile/<id>" or ".../application-inference-profile/<id>", which is how quota, logging and guardrails attach to the profile rather than the bare model). Not a bare foundation-model id. Passed to the agent verbatim — Wardyn does not parse or validate the shape. Requires -bedrock-region too.`),
-		bedrockBaseURL:      flagEnv("bedrock-base-url", "WARDYN_BEDROCK_BASE_URL", "", `optional: Bedrock DATA-PLANE base URL (https://, an RFC1918/CGNAT literal allowed) re-pointing bedrock-runtime at a VPC/PrivateLink endpoint, so inference traffic never traverses the public internet. Empty (default) = the regional public host, byte-identical to today. It moves the egress allow-list entry, the bearer mode's TLS-MITM + Authorization-injection target, and the sandbox's ANTHROPIC_BEDROCK_BASE_URL / AWS_ENDPOINT_URL_BEDROCK_RUNTIME together. CEILING: ONE data-plane host per deployment — it wins for EVERY region, so a multi-region estate must not set it. The CONTROL plane (bedrock.<region>.amazonaws.com) is NOT overridden; pin an inference-profile ARN with -bedrock-model instead. A malformed value refuses boot.`),
-		bedrockAWSDir:       flagEnv("bedrock-aws-dir", "WARDYN_BEDROCK_AWS_DIR", "", `bind a host ~/.aws directory READ-ONLY into each Bedrock run so the AWS SDK resolves credentials itself. SSO/IAM-Identity-Center auto-refresh works only for sso-session profiles whose CACHED token is still valid (the read-only mount cannot write back a rotated token; legacy sso_start_url profiles need a periodic host 'aws sso login'). Works in compose too (mount it via the WARDYN_BEDROCK_AWS_DIR bind, same path host==container). Exposes the WHOLE ~/.aws to the untrusted sandbox — point it at ~/.aws only. Leave empty to use static aws-* secrets or a bedrock-api-key instead.`),
-		bedrockAWSProfile:   flagEnv("bedrock-aws-profile", "WARDYN_BEDROCK_AWS_PROFILE", "", `optional: AWS_PROFILE to select from the mounted ~/.aws (common with SSO). Falls back to the standard AWS_PROFILE when left empty. Only used with -bedrock-aws-dir.`),
-		bedrockAWSSSORegion: flagEnv("bedrock-aws-sso-region", "WARDYN_BEDROCK_AWS_SSO_REGION", "", `optional: AWS SSO region whose oidc.<r>/portal.sso.<r> endpoints the sandbox may reach to exchange an SSO token for role creds, and which endpoints the containerized 'aws sso login' may reach. Defaults to -bedrock-region.`),
+		bedrockRegion:          flagEnv("bedrock-region", "WARDYN_BEDROCK_REGION", "", `optional: AWS region for the Amazon Bedrock Anthropic transport (e.g. "us-east-1"). Falls back to the standard AWS_REGION / AWS_DEFAULT_REGION when left empty. Requires -bedrock-model too, plus aws-access-key-id/aws-secret-access-key secrets. Empty (and no AWS_REGION) = Bedrock disabled.`),
+		bedrockModel:           flagEnv("bedrock-model", "WARDYN_BEDROCK_MODEL", "", `optional: Bedrock model id for claude-code — a cross-region inference-profile id (e.g. "us.anthropic.claude-sonnet-4-5-..."), or the profile's FULL ARN ("arn:aws:bedrock:<region>:<acct>:inference-profile/<id>" or ".../application-inference-profile/<id>", which is how quota, logging and guardrails attach to the profile rather than the bare model). Not a bare foundation-model id. Passed to the agent verbatim — Wardyn does not parse or validate the shape. Requires -bedrock-region too.`),
+		bedrockBaseURL:         flagEnv("bedrock-base-url", "WARDYN_BEDROCK_BASE_URL", "", `optional: Bedrock DATA-PLANE base URL (https://, an RFC1918/CGNAT literal allowed) re-pointing bedrock-runtime at a VPC/PrivateLink endpoint, so inference traffic never traverses the public internet. Empty (default) = the regional public host, byte-identical to today. It moves the egress allow-list entry, the bearer mode's TLS-MITM + Authorization-injection target, and the sandbox's ANTHROPIC_BEDROCK_BASE_URL / AWS_ENDPOINT_URL_BEDROCK_RUNTIME together. CEILING: ONE data-plane host per deployment — it wins for EVERY region, so a multi-region estate must not set it. The CONTROL plane (bedrock.<region>.amazonaws.com) is NOT overridden; pin an inference-profile ARN with -bedrock-model instead. A malformed value refuses boot.`),
+		awsSSOEndpointOverride: flagEnv("aws-sso-endpoint-override", "WARDYN_AWS_SSO_ENDPOINT_OVERRIDE", "", `TEST ONLY: re-point BOTH AWS IAM Identity Center services (sso-oidc and the sso portal) at this base URL — http:// or https://. It moves the containerized login sandbox's AWS_ENDPOINT_URL_SSO/_SSO_OIDC, the ssoInject sandbox's, the SSO egress allow-list entries (including the login flow's device.sso.<r>) and the dispatch-time CreateToken URL together. It exists so an AWS SSO walk can run against test/awsssofake on a throwaway cluster with no AWS tenant. REFUSED unless -allow-test-endpoints (WARDYN_ALLOW_TEST_ENDPOINTS=true) is also set, and every boot carrying it WARNs. Never a production posture, and never a substitute for -bedrock-base-url (a different service, and a supported one). Empty (the default) = the real regional AWS endpoints.`),
+		allowTestEndpoints:     flagBool("allow-test-endpoints", "WARDYN_ALLOW_TEST_ENDPOINTS", false, "override: acknowledge that this deployment is a TEST deployment, permitting -aws-sso-endpoint-override to re-point AWS IAM Identity Center at a server of your choosing. Without it a set override REFUSES boot. Never set on a deployment holding a real credential."),
+		bedrockAWSDir:          flagEnv("bedrock-aws-dir", "WARDYN_BEDROCK_AWS_DIR", "", `bind a host ~/.aws directory READ-ONLY into each Bedrock run so the AWS SDK resolves credentials itself. SSO/IAM-Identity-Center auto-refresh works only for sso-session profiles whose CACHED token is still valid (the read-only mount cannot write back a rotated token; legacy sso_start_url profiles need a periodic host 'aws sso login'). Works in compose too (mount it via the WARDYN_BEDROCK_AWS_DIR bind, same path host==container). Exposes the WHOLE ~/.aws to the untrusted sandbox — point it at ~/.aws only. Leave empty to use static aws-* secrets or a bedrock-api-key instead.`),
+		bedrockAWSProfile:      flagEnv("bedrock-aws-profile", "WARDYN_BEDROCK_AWS_PROFILE", "", `optional: AWS_PROFILE to select from the mounted ~/.aws (common with SSO). Falls back to the standard AWS_PROFILE when left empty. Only used with -bedrock-aws-dir.`),
+		bedrockAWSSSORegion:    flagEnv("bedrock-aws-sso-region", "WARDYN_BEDROCK_AWS_SSO_REGION", "", `optional: AWS SSO region whose oidc.<r>/portal.sso.<r> endpoints the sandbox may reach to exchange an SSO token for role creds, and which endpoints the containerized 'aws sso login' may reach. Defaults to -bedrock-region.`),
 
 		// proxyURL overrides the WARDYN_PROXY_URL injected into sandbox env.
 		// Defaults to "http://wardyn-proxy:3128" (per-run sidecar docker alias).
@@ -441,6 +452,29 @@ type localModeState struct {
 // NO credential source, *f.bedrockAWSDir is defaulted to the host ~/.aws so the
 // AWS SDK resolves the operator's creds (SSO auto-refreshes) — see the inline
 // comment. Extracted verbatim from run().
+// resolveAWSSSOEndpointOverride resolves the gated AWS SSO endpoint hatch:
+// refuse when it is set without the acknowledgement, otherwise normalize it and
+// WARN — loudly, every boot, naming it a test hatch. The warning is the point:
+// this is the one knob that makes wardynd treat an arbitrary HTTP server as AWS
+// IAM Identity Center, and an operator who inherits a values file carrying it
+// must see that in the log rather than discover it from an audit row.
+//
+// The refusal shape is this file's own -local-mode-with-OIDC refusal below,
+// deliberately: a posture this dangerous takes two explicit acts, never one
+// stray env var.
+func resolveAWSSSOEndpointOverride(f *bootFlags) (string, error) {
+	override, err := api.ValidateAWSSSOEndpointOverride(*f.awsSSOEndpointOverride, *f.allowTestEndpoints)
+	if err != nil {
+		return "", err
+	}
+	if override != "" {
+		slog.Warn("wardynd: TEST HATCH ACTIVE — WARDYN_AWS_SSO_ENDPOINT_OVERRIDE re-points AWS IAM Identity Center (sso-oidc AND the sso portal) at this URL for the containerized login, for every Bedrock run's credential exchange and for dispatch-time token renewal. No AWS SSO endpoint is contacted. This is never a production posture; unset it and WARDYN_ALLOW_TEST_ENDPOINTS on any deployment holding a real credential.",
+			slog.String("aws_sso_endpoint_override", override),
+		)
+	}
+	return override, nil
+}
+
 func resolveLocalMode(f *bootFlags) (localModeState, error) {
 	lm := localModeState{loopback: listenIsLoopback(*f.listen)}
 	// bug-rbac-1: an EXPLICIT -local-mode alongside a configured -oidc-issuer

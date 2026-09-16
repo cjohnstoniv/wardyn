@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/url"
 	"os"
 	"strings"
@@ -291,7 +292,15 @@ func (s *Server) bedrockDataPlaneHost(region string) string {
 // must reach to exchange a cached SSO token for role credentials: oidc.<r> for
 // token refresh and portal.sso.<r> for GetRoleCredentials. Only needed on the
 // ~/.aws-mount path; region is the SSO region (may differ from the Bedrock one).
-func ssoEgressHosts(ssoRegion string) []string {
+//
+// endpointOverride is the TEST hatch (awssso_endpoint.go): when set, the ONE
+// fake host REPLACES both regional entries, because one server backs both
+// services — their paths never collide (test/awsssofake's package doc). Empty
+// (every real deployment) returns exactly what it always did.
+func ssoEgressHosts(ssoRegion, endpointOverride string) []string {
+	if h := gatewayHost(endpointOverride); h != "" {
+		return []string{h}
+	}
 	return []string{
 		fmt.Sprintf("oidc.%s.amazonaws.com", ssoRegion),
 		fmt.Sprintf("portal.sso.%s.amazonaws.com", ssoRegion),
@@ -491,7 +500,11 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 		// service this sandbox talks to — including STS and SSO, which the
 		// captured-SSO and ~/.aws-mount modes below use to exchange a token for
 		// role credentials. One service's private endpoint must not silently
-		// become every service's.
+		// become every service's. The SSO services have their own knob for that
+		// —  WARDYN_AWS_SSO_ENDPOINT_OVERRIDE (awssso_endpoint.go), which sets
+		// AWS_ENDPOINT_URL_SSO/_SSO_OIDC and nothing else — and it is a TEST
+		// hatch, refused unless WARDYN_ALLOW_TEST_ENDPOINTS=true. Two knobs, two
+		// services, and only one of them is a supported production posture.
 		if s.cfg.BedrockBaseURL != "" {
 			env["ANTHROPIC_BEDROCK_BASE_URL"] = s.cfg.BedrockBaseURL
 			env["AWS_ENDPOINT_URL_BEDROCK_RUNTIME"] = s.cfg.BedrockBaseURL
@@ -598,7 +611,13 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 				".aws/config": awsSSOConfigFileContents(blob),
 				".aws/sso/cache/" + awsSSOCacheFileName(awsSSOProfileName) + ".json": awsSSOCacheFileContents(blob),
 			})
-			hosts = append(hosts, ssoEgressHosts(blob.Region)...)
+			// The TEST endpoint hatch, if the operator set it: the SDK resolves
+			// this cache by CALLING GetRoleCredentials, so pointing the egress
+			// list at a fake without pointing the SDK at it too would just get the
+			// call denied on the real AWS host. nil on every real deployment, so
+			// this env map is byte-identical to before the knob existed.
+			maps.Copy(env, ssoInjectEndpointEnv(s.cfg.AWSSSOEndpointOverride))
+			hosts = append(hosts, ssoEgressHosts(blob.Region, s.cfg.AWSSSOEndpointOverride)...)
 			// Mask GLOBALLY (not per-run, like the static-key branch below does via
 			// the caller): this captured credential is reused across every run that
 			// picks this mode, not minted fresh per run, so a per-run Add would miss
@@ -652,7 +671,7 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 			// wrong regional oidc/portal.sso endpoints and 403 the credential
 			// exchange for a workspace that moved the run to another region.
 			ssoRegion := cmp.Or(s.cfg.BedrockAWSSSORegion, region)
-			hosts = append(hosts, ssoEgressHosts(ssoRegion)...)
+			hosts = append(hosts, ssoEgressHosts(ssoRegion, s.cfg.AWSSSOEndpointOverride)...)
 			return ready(bedrockAuth{env: env, egressHosts: hosts,
 				awsMount: true, awsMountSource: s.cfg.BedrockAWSConfigDir})
 		}

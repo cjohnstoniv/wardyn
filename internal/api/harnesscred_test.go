@@ -573,7 +573,7 @@ func TestHarnessLoginEgress_MatchableByTheProxy(t *testing.T) {
 			t.Fatalf("%s must support container login", agent)
 		}
 		for _, region := range []string{"", "us-east-1", "eu-west-2"} {
-			hosts := hl.loginEgress(region)
+			hosts := hl.loginEgress(region, "")
 			ev := proxy.NewBuiltinEvaluator(types.RunPolicySpec{AllowedDomains: hosts})
 			for _, entry := range hosts {
 				// A "*" anywhere but a leading "*." is the defect: classifyDomain
@@ -605,7 +605,7 @@ func TestHarnessLoginEgress_MatchableByTheProxy(t *testing.T) {
 func TestHarnessLoginEgress_AWSSSORegionScoped(t *testing.T) {
 	hl, _ := agentHarnessLogin(awsSSOAgent)
 
-	got := hl.loginEgress("eu-west-2")
+	got := hl.loginEgress("eu-west-2", "")
 	for _, want := range []string{
 		"*.awsapps.com",
 		"oidc.eu-west-2.amazonaws.com",
@@ -617,7 +617,7 @@ func TestHarnessLoginEgress_AWSSSORegionScoped(t *testing.T) {
 		}
 	}
 
-	bare := hl.loginEgress("")
+	bare := hl.loginEgress("", "")
 	if len(bare) != 1 || bare[0] != "*.awsapps.com" {
 		t.Fatalf("with no configured SSO region the login must pre-allow only the org portal, got %v", bare)
 	}
@@ -883,9 +883,9 @@ func TestLoginEnv_PinWithNoConfigEnvDoesNotPanic(t *testing.T) {
 
 	for name, env := range map[string]map[string]string{
 		// Each of these makes loginConfigEnv return nil.
-		"no region":      aws.loginEnv("https://acme.awsapps.com/start", "", pin),
-		"no start URL":   aws.loginEnv("", "us-east-1", pin),
-		"a non-AWS flow": anthropic.loginEnv("https://acme.awsapps.com/start", "us-east-1", pin),
+		"no region":      aws.loginEnv("https://acme.awsapps.com/start", "", pin, ""),
+		"no start URL":   aws.loginEnv("", "us-east-1", pin, ""),
+		"a non-AWS flow": anthropic.loginEnv("https://acme.awsapps.com/start", "us-east-1", pin, ""),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if env[awsSSOPinAccountEnvVar] != "111111111111" || env[awsSSOPinRoleEnvVar] != "BedrockRunner" {
@@ -895,15 +895,15 @@ func TestLoginEnv_PinWithNoConfigEnvDoesNotPanic(t *testing.T) {
 	}
 
 	// The whole env, both halves, on the real path.
-	full := aws.loginEnv("https://acme.awsapps.com/start", "us-east-1", pin)
+	full := aws.loginEnv("https://acme.awsapps.com/start", "us-east-1", pin, "")
 	if full[awsSSOConfigEnvVar] == "" || full[awsSSOPinAccountEnvVar] == "" {
 		t.Errorf("env = %v, want the pre-login config AND the pin", full)
 	}
 	// And an unpinned launch is byte-identical to what it always was.
-	if got := aws.loginEnv("https://acme.awsapps.com/start", "us-east-1", awsSSOPin{}); len(got) != 1 {
+	if got := aws.loginEnv("https://acme.awsapps.com/start", "us-east-1", awsSSOPin{}, ""); len(got) != 1 {
 		t.Errorf("unpinned env = %v, want only the pre-login ~/.aws/config record", got)
 	}
-	if got := anthropic.loginEnv("", "", awsSSOPin{}); got != nil {
+	if got := anthropic.loginEnv("", "", awsSSOPin{}, ""); got != nil {
 		t.Errorf("an unpinned non-AWS login seeded %v, want nil", got)
 	}
 }

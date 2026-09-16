@@ -301,6 +301,14 @@ func run() error {
 	}
 	warnMissingGatewayHosts(defaultPolicy, llmGateways)
 
+	// The gated AWS SSO endpoint hatch (boot_flags.go). Resolved here, beside
+	// the model-endpoint knobs it is deliberately NOT one of: it re-points a
+	// CREDENTIAL exchange, not a model call.
+	awsSSOEndpointOverride, err := resolveAWSSSOEndpointOverride(f)
+	if err != nil {
+		return err
+	}
+
 	if *f.adminToken == "" && !lm.enabled {
 		slog.Warn("wardynd: admin token unset; the public API is DISABLED (only /healthz responds). Set WARDYN_ADMIN_TOKEN, enable OIDC, or use -local-mode for single-developer localhost use.")
 	}
@@ -398,6 +406,7 @@ func run() error {
 		BedrockRegion:             *f.bedrockRegion,
 		BedrockModel:              *f.bedrockModel,
 		BedrockBaseURL:            bedrockBaseURL,
+		AWSSSOEndpointOverride:    awsSSOEndpointOverride,
 		BedrockAWSConfigDir:       *f.bedrockAWSDir,
 		BedrockAWSProfile:         *f.bedrockAWSProfile,
 		BedrockAWSSSORegion:       *f.bedrockAWSSSORegion,

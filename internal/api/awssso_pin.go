@@ -78,16 +78,24 @@ func awsSSOPinEnv(pin awsSSOPin) map[string]string {
 // which is not where a panic should live. Here it is one line and one test.
 //
 // An UNPINNED row adds nothing, so its launch is byte-identical to what it was.
-func (hl harnessLogin) loginEnv(ssoStartURL, ssoRegion string, pin awsSSOPin) map[string]string {
+// endpointOverride is the TEST hatch (awssso_endpoint.go): `aws sso login`
+// inside the login box reads AWS_ENDPOINT_URL_SSO/_SSO_OIDC, so without them it
+// dials the real AWS no matter what the egress allowlist says. nil on every
+// real deployment, leaving this map byte-identical to before the knob existed.
+func (hl harnessLogin) loginEnv(ssoStartURL, ssoRegion string, pin awsSSOPin, endpointOverride string) map[string]string {
 	env := hl.loginConfigEnv(ssoStartURL, ssoRegion)
-	pinEnv := awsSSOPinEnv(pin)
-	if len(pinEnv) == 0 {
+	// awsSSOPinEnv returns NIL for an unset pin, and maps.Copy into a nil map
+	// panics — so the endpoint pair is merged into a fresh map, not into it.
+	extra := map[string]string{}
+	maps.Copy(extra, awsSSOPinEnv(pin))
+	maps.Copy(extra, ssoInjectEndpointEnv(endpointOverride))
+	if len(extra) == 0 {
 		return env
 	}
 	if env == nil {
 		env = map[string]string{}
 	}
-	maps.Copy(env, pinEnv)
+	maps.Copy(env, extra)
 	return env
 }
 

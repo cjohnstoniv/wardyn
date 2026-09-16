@@ -1738,6 +1738,29 @@ hiding them would repeat the failure mode we are designed to avoid.
     terminal run's approval rather than deciding it. Both together mean a stranded
     row is decided by nobody; neither alone would.
 
+45. **A deployment can be told that an arbitrary HTTP server IS AWS IAM Identity
+    Center, and nothing downstream can tell.** `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE`
+    re-points both SSO services — the containerized `aws sso login`, every
+    Bedrock run's captured-credential exchange, the SSO egress allow-list entries
+    and the dispatch-time `CreateToken` URL — at one operator-named base URL,
+    `http://` included. It exists because the alternative was worse: without it,
+    "a member signs in on Kubernetes and their run gets THEIR OWN credentials"
+    could be tested only against a real AWS tenant, so it was tested nowhere, and
+    an untested credential path is a larger risk than a disclosed hatch. The
+    bounds are real but they are bounds, not a closure: it is refused unless
+    `WARDYN_ALLOW_TEST_ENDPOINTS=true` is ALSO set, it WARNs on every boot naming
+    itself a test hatch, it is boot-time-only (no `SiteConfig` field, so no live
+    API write can reach it), it moves only `AWS_ENDPOINT_URL_SSO`/`_SSO_OIDC` and
+    never the global `AWS_ENDPOINT_URL`, and the value is validated to be a
+    scheme-bearing, credential-free, query-free URL. What stays open is the whole
+    of what it does: an operator who sets both vars has pointed a real SSO login
+    at a server that can record the device flow and hand back credentials of its
+    choosing. Wardyn cannot distinguish that server from AWS — no SSO operation
+    Wardyn uses is signed (all four are `authtype: none`), which is exactly why
+    the fake works. Treat both vars as production-forbidden, not
+    production-discouraged. See `internal/api/awssso_endpoint.go` and
+    docs/ENV.md.
+
 ### Operator overrides that boot past a fail-closed gate
 
 Three shipped env vars let a deployment start after a gate this document

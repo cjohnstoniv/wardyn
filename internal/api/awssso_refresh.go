@@ -84,7 +84,10 @@ const awsSSORefreshTimeout = 10 * time.Second
 // captured in, and a second spelling could only ever disagree with it.
 //
 // A var, not a func, for exactly one reason: the tests point it at an httptest
-// server. Nothing in the daemon reassigns it.
+// server. Nothing in the daemon reassigns it. A DEPLOYMENT redirects it through
+// Server.awsSSOTokenEndpoint instead (Config.AWSSSOEndpointOverride, the gated
+// test hatch in awssso_endpoint.go) — configuration belongs on Config, where a
+// boot log and the ENV.md registry can name it, not in a package var.
 var awsSSOTokenURL = func(ssoRegion string) string {
 	return "https://oidc." + ssoRegion + ".amazonaws.com/token"
 }
@@ -427,7 +430,7 @@ func (s *Server) createAWSSSOToken(ctx context.Context, blob awsSSOBlob) (awsSSO
 	if err != nil {
 		return out, fmt.Errorf("aws sso create-token: marshal request: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, awsSSOTokenURL(blob.Region), bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.awsSSOTokenEndpoint(blob.Region), bytes.NewReader(body))
 	if err != nil {
 		return out, fmt.Errorf("aws sso create-token: build request: %w", err)
 	}

@@ -130,36 +130,6 @@ func agentHarnessLogin(agent string) (harnessLogin, bool) {
 	}
 }
 
-// loginEgress is the allowlist the login sandbox actually runs under: the row's
-// region-free hosts plus, for a region-scoped flow, the AWS SSO endpoints for
-// ssoRegion.
-//
-// Region-DERIVED, never wildcarded, because the proxy's only matcher
-// (classifyDomain, internal/egress/proxy/policy.go) understands exactly two
-// forms: a LEADING "*." suffix match, or an exact host. A mid-label pattern
-// like "oidc.*.amazonaws.com" is neither — it compiles to an exact hostname no
-// real request can ever equal, so it allows nothing (the shipped bug this
-// replaces: the login was denied on the very hosts it "pre-allowed"). The one
-// supported form that would cover every region is "*.amazonaws.com", which
-// opens every AWS service (S3, EC2, …) to the sandbox — far too wide for a
-// login box, so the region is resolved instead of widened.
-//
-// ssoRegion == "" (Bedrock region not configured yet) pre-allows nothing
-// regional: the two hosts the CLI dials then surface as deny_with_review
-// approvals the operator can grant from the login pane — recoverable and
-// honest, unlike the silent dead entries it replaces.
-func (hl harnessLogin) loginEgress(ssoRegion string) []string {
-	hosts := append([]string(nil), hl.egress...)
-	if hl.regionalSSOEgress && ssoRegion != "" {
-		// oidc.<r> + portal.sso.<r> — the same pair a Bedrock run needs.
-		hosts = append(hosts, ssoEgressHosts(ssoRegion)...)
-		// … plus the device-authorization verification page, which only the
-		// interactive login flow displays.
-		hosts = append(hosts, fmt.Sprintf("device.sso.%s.amazonaws.com", ssoRegion))
-	}
-	return hosts
-}
-
 // loginConfigEnv is the sandbox env that seeds the login box's NON-SECRET
 // configuration — for AWS, the pre-login ~/.aws/config the auto-typed
 // `aws sso login --sso-session wardyn` reads. Delivered through the SAME
@@ -489,7 +459,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// resolveBedrockAuth uses). Empty means "not configured": the flow's regional
 	// hosts are then left to first-use approval rather than pre-allowed wide.
 	ssoRegion := cmp.Or(s.cfg.BedrockAWSSSORegion, s.cfg.BedrockRegion)
-	egress := hl.loginEgress(ssoRegion)
+	egress := hl.loginEgress(ssoRegion, s.cfg.AWSSSOEndpointOverride)
 	policy := types.RunPolicySpec{
 		MinConfinementClass: cc,
 		// Default-deny, limited to the OAuth hosts. An off-policy host the login
@@ -511,7 +481,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// materialize_aws_sso_config in agent-run-lib.sh). Non-secret: an sso-session
 	// block with the start URL + region and NO token cache — the login sandbox
 	// must not receive a credential, it exists to produce one.
-	extraEnv := hl.loginEnv(ssoStartURL, ssoRegion, pin)
+	extraEnv := hl.loginEnv(ssoStartURL, ssoRegion, pin, s.cfg.AWSSSOEndpointOverride)
 
 	// THE LAUNCH-TIME CREDENTIAL SCOPE, STAMPED — the one authorizeHarnessLogin's
 	// roster read PROVED, passed in, never re-resolved. Re-resolving it at upload
