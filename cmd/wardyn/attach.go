@@ -49,8 +49,10 @@ func attachCmd(client clientFn) *cobra.Command {
 		Long: `Attach an interactive PTY to a RUNNING Wardyn sandbox.
 
 Connects to the WebSocket attach endpoint using the admin bearer token.
-The local terminal is placed into raw mode for the duration of the session;
-press Ctrl-C or close the session to detach.
+The local terminal is placed into raw mode for the duration of the session:
+Ctrl-C is relayed to the remote PTY as input, not used locally to detach.
+Send TERM/HUP/INT from another terminal (or let the remote side close the
+session) to detach.
 
 Authentication: WARDYN_ADMIN_TOKEN (or --token).
 `,
@@ -76,7 +78,7 @@ Authentication: WARDYN_ADMIN_TOKEN (or --token).
 //  2. Dials the WebSocket with the admin bearer token.
 //  3. Switches stdin to raw mode (deferred restore).
 //  4. Sends an initial resize frame, wires SIGWINCH for subsequent resizes.
-//  5. Runs the bidirectional pump until disconnect/EOF/Ctrl-C.
+//  5. Runs the bidirectional pump until disconnect/EOF/signal.
 func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 	// TERM/HUP/INT are wired HERE, local to the attach session — never at a
 	// root ExecuteContext. Raw mode clears ISIG, so an operator's Ctrl-C
@@ -95,6 +97,18 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 	// disconnect or an explicit ctx cancellation already takes.
 	ctx, stopSignals := signal.NotifyContext(ctx, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGINT)
 	defer stopSignals()
+	// NotifyContext holds the signal disposition redirected until stopSignals
+	// runs, which is otherwise deferred all the way to this function's own
+	// return — so if the session is wedged somewhere below that does NOT
+	// observe ctx (os.Stdin.Read and os.Stdout.Write are plain blocking
+	// syscalls, not ctx-aware), the FIRST signal cancels ctx but every
+	// subsequent one is caught by the same channel and silently discarded:
+	// what used to be killable by a second/third TERM is now unkillable by
+	// any TERM at all. Reverting the moment the first signal has been
+	// consumed restores that escape hatch — a second signal falls through to
+	// the normal, process-killing disposition exactly as it did before this
+	// wiring existed.
+	go func() { <-ctx.Done(); stopSignals() }()
 
 	wsURL := buildWSURL(c.BaseURL, runID)
 
@@ -115,6 +129,17 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 		HTTPHeader: hdr,
 	})
 	if err != nil {
+		// A signal caught by the NotifyContext above (or any other caller
+		// cancellation) arriving WHILE the handshake is in flight cancels
+		// this same ctx, and coder/websocket surfaces that as a *url.Error
+		// wrapping context.Canceled — which exitCodeFor would otherwise map
+		// to 5 ("network unreachable") with dialHint's "is wardynd running?"
+		// hint, exactly the mislabelling the signal wiring above exists to
+		// avoid. A caller-initiated cancellation is a clean detach here too,
+		// the same as one that arrives after the connection is up.
+		if ctx.Err() != nil {
+			return nil
+		}
 		// A rejected handshake (e.g. 401/403/404, never a network failure) leaves
 		// resp non-nil with the server's real status + {"error":...} body — surface
 		// it as a *sdk.APIError so exitCodeFor/dialHint classify it exactly like

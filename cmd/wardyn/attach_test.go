@@ -4,13 +4,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -224,6 +227,37 @@ func TestRunAttach_CtxCancelRestoresTerminal(t *testing.T) {
 		return nil
 	}
 
+	// os.Stdin under `go test` is not a blocking source — it is typically
+	// already at EOF — so half 2 (stdin -> server, attach.go's "Half 2" pump)
+	// would get an immediate io.EOF and end the session on ITS OWN, letting
+	// this test pass even with the ctx-cancel wiring ripped out entirely (a
+	// prior version of this test did exactly that — a blind review's mutation
+	// probe proved it green with the fix deleted). Swapping in a pipe whose
+	// write end THIS TEST holds open blocks that half indefinitely, so the
+	// cancel below is the ONLY thing that can end the session.
+	// Half 2 (attach.go's "Half 2" goroutine, os.Stdin.Read) is a KNOWN,
+	// pre-existing leak: os.Stdin.Read is a plain blocking syscall, not
+	// ctx-aware, so it stays parked on this pipe even after runAttach
+	// returns (bounded only by process exit — see the review's own
+	// "Verified OK" note). That leaked goroutine keeps reading the package
+	// var os.Stdin, so reassigning `os.Stdin = oldStdin` afterwards races it
+	// under -race with no way to synchronize the two (there is no hook into
+	// when, or if, that goroutine ever notices the pipe closing). os.Stdin is
+	// therefore deliberately left pointing at this (closed) pipe for the
+	// rest of the test binary's process — no other test in this package
+	// reads the raw global (execCmd/cobra always route stdin through
+	// cmd.SetIn, never os.Stdin directly), so nothing downstream depends on
+	// restoring it.
+	stdinR, stdinW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdin = stdinR
+	t.Cleanup(func() {
+		stdinW.Close()
+		stdinR.Close()
+	})
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, nil)
 		if err != nil {
@@ -259,6 +293,258 @@ func TestRunAttach_CtxCancelRestoresTerminal(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("runAttach did not return after ctx cancellation")
+	}
+}
+
+// --------------------------------------------------------------------------
+// B12a-F1 (review R-02): a signal (or any other caller cancellation) that
+// lands WHILE the WebSocket handshake is still in flight must also be a
+// clean detach, not a mislabelled "couldn't reach the control plane" — the
+// exact mislabelling the whole point of scoping the signal wiring locally
+// (rather than a root ExecuteContext) exists to avoid.
+// --------------------------------------------------------------------------
+
+func TestRunAttach_CancelledCtxDuringDialIsCleanDetach(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	// Already cancelled before the dial ever starts — deterministic, unlike
+	// racing a real signal against a live handshake.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL}, "run-1")
+	// main.go only calls exitCodeFor when Execute() returns a non-nil error
+	// (see main(): the nil case exits 0 implicitly without consulting it) —
+	// exitCodeFor(nil) itself falls through every errors.As arm to the
+	// catch-all 1, so the real assertion for "clean detach" is err == nil,
+	// not a round-trip through exitCodeFor.
+	if err != nil {
+		t.Fatalf("runAttach with a pre-cancelled ctx = %v, want nil (a clean detach, not a mislabelled dial failure — pre-fix this was a *url.Error wrapping context.Canceled, exitCodeFor 5)", err)
+	}
+}
+
+// --------------------------------------------------------------------------
+// B12a-F1 (review R-01): the pinning test for the SIGNAL WIRING itself — not
+// just the cancellation mechanism it feeds — needs a real signal delivered
+// to a real process. TestHelperAttachSignal is the child body, re-exec'd
+// under an env guard by the two subprocess tests below; it is not a test in
+// its own right (it Skips unless the guard env var is set).
+// --------------------------------------------------------------------------
+
+func TestHelperAttachSignal(t *testing.T) {
+	if os.Getenv("WARDYN_ATTACH_SIGNAL_HELPER") != "1" {
+		t.Skip("helper process for the subprocess signal tests; not run directly")
+	}
+	makeRawFn = func(int) (*term.State, error) { return &term.State{}, nil }
+	restoreTerminalFn = func(int, *term.State) error {
+		// The parent greps stderr for this marker: proof term.Restore's real
+		// (seamed) path actually ran, not just that the process exited.
+		fmt.Fprintln(os.Stderr, "restored")
+		return nil
+	}
+	url := os.Getenv("WARDYN_ATTACH_SIGNAL_URL")
+	if err := runAttach(context.Background(), &sdk.Client{BaseURL: url}, "run-1"); err != nil {
+		t.Fatalf("runAttach: %v", err)
+	}
+}
+
+// helperCmd builds the re-exec'd child command shared by both subprocess
+// signal tests: this same test binary, selecting ONLY TestHelperAttachSignal.
+func helperCmd(t *testing.T, url string, stdin, stdout *os.File) *exec.Cmd {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperAttachSignal$")
+	cmd.Env = append(os.Environ(),
+		"WARDYN_ATTACH_SIGNAL_HELPER=1",
+		"WARDYN_ATTACH_SIGNAL_URL="+url,
+	)
+	cmd.Stdin = stdin
+	cmd.Stdout = stdout
+	return cmd
+}
+
+// A single TERM must end the session cleanly (exit 0) and the terminal must
+// actually have been restored (the "restored" stderr marker) — without the
+// signal.NotifyContext wiring in runAttach, TERM's default disposition kills
+// the child outright: non-zero/signalled exit, no marker, ever.
+func TestRunAttach_SIGTERMDetachesCleanly(t *testing.T) {
+	accepted := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		select {
+		case accepted <- struct{}{}:
+		default:
+		}
+		// Read until the child's close frame arrives (sent by conn.Close in
+		// runAttach) so the library's own close handshake completes
+		// promptly instead of coder/websocket's Close() burning its own 5s
+		// peer-ack budget waiting on a server that never reads.
+		for {
+			if _, _, err := c.Read(r.Context()); err != nil {
+				return
+			}
+		}
+	}))
+	defer srv.Close()
+
+	// A pipe the parent never writes to: the child's stdin blocks forever
+	// (the same shape as a real interactive session), so only the signal can
+	// end it.
+	stdinR, stdinW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdinW.Close()
+	defer stdinR.Close()
+
+	cmd := helperCmd(t, srv.URL, stdinR, nil)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start helper: %v", err)
+	}
+
+	select {
+	case <-accepted:
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("helper never completed the WS handshake")
+	}
+	// The server's Accept() returning is not quite the same instant as the
+	// CHILD's own websocket.Dial call returning client-side — under heavy
+	// system load there is a small window where the child's Dial is still
+	// in flight. A TERM landing in exactly that window is a DIFFERENT
+	// (also correct) clean-exit path — R-02's dial-cancellation return,
+	// which never reaches raw mode / restoreTerminalFn at all — that would
+	// make this specific test flaky without pinning what it means to. This
+	// margin keeps TERM squarely inside the pump, where restoreTerminalFn is
+	// this test's actual target.
+	time.Sleep(50 * time.Millisecond)
+
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("signal helper: %v", err)
+	}
+
+	waitErr := cmd.Wait()
+	if waitErr != nil {
+		t.Fatalf("helper exited with %v (want a clean 0 — SIGTERM must be a clean detach); stderr:\n%s", waitErr, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "restored") {
+		t.Errorf("helper stderr never printed \"restored\" (term.Restore never ran):\n%s", stderr.String())
+	}
+}
+
+// B12a-F1 (review R-04): a SECOND TERM must still kill the process. The
+// signal disposition NotifyContext installs stays redirected until
+// stopSignals() runs, deferred all the way to runAttach's own return — so if
+// the session is wedged somewhere that does NOT observe ctx (os.Stdout.Write
+// is a plain blocking syscall, unlike conn.Read/Write), the FIRST TERM
+// cancels ctx but can't unstick the write, and every SUBSEQUENT TERM is
+// caught by the same still-registered channel and silently discarded: a
+// session that used to be killable by any TERM becomes unkillable by any
+// number of them. runAttach reverts the disposition itself the moment ctx
+// is Done, so THIS test's second TERM falls through to the normal,
+// process-killing default.
+//
+// The wedge is real, not simulated: the server floods far more than a
+// kernel pipe buffer's worth of data (Linux defaults to 64 KiB) at the
+// child over the WebSocket, and this test NEVER reads the child's stdout
+// pipe — once the buffer fills, the child's os.Stdout.Write blocks and
+// stays blocked (conn.Read/Write are ctx-aware; a bare os.File.Write is
+// not), regardless of ctx cancellation.
+func TestRunAttach_SecondSIGTERMKillsAWedgedSession(t *testing.T) {
+	accepted := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		select {
+		case accepted <- struct{}{}:
+		default:
+		}
+		chunk := bytes.Repeat([]byte("x"), 4096)
+		wctx, wcancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer wcancel()
+		for range 256 { // 1 MiB total — well past a 64 KiB pipe buffer
+			if err := c.Write(wctx, websocket.MessageBinary, chunk); err != nil {
+				return
+			}
+		}
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	stdinR, stdinW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdinW.Close()
+	defer stdinR.Close()
+
+	// The child's stdout end of a pipe THIS TEST NEVER READS FROM — the read
+	// end must stay OPEN (closing it would make the child's Write fail fast
+	// with EPIPE instead of blocking, which would defeat the wedge).
+	stdoutR, stdoutW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdoutR.Close()
+
+	cmd := helperCmd(t, srv.URL, stdinR, stdoutW)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start helper: %v", err)
+	}
+	stdoutW.Close() // this process's copy; the child keeps its own
+
+	select {
+	case <-accepted:
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("helper never completed the WS handshake")
+	}
+	// Give the flood time to actually fill the pipe and wedge the write.
+	time.Sleep(300 * time.Millisecond)
+
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("first TERM: %v", err)
+	}
+
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- cmd.Wait() }()
+
+	select {
+	case err := <-waitDone:
+		t.Fatalf("helper exited after ONE TERM (%v) — the wedge scenario did not reproduce; stderr:\n%s", err, stderr.String())
+	case <-time.After(500 * time.Millisecond):
+		// Still alive: ctx was cancelled, but the wedged stdout Write can't
+		// observe that. Expected.
+	}
+
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatalf("second TERM: %v", err)
+	}
+
+	select {
+	case <-waitDone:
+		// Gone — the second TERM's reverted (default) disposition killed it.
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		t.Fatal("a second TERM never killed the wedged session — signal disposition was not reverted after the first")
 	}
 }
 
