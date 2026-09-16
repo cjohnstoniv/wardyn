@@ -694,9 +694,19 @@ func (s PG) QueryRecentAuditEvents(ctx context.Context, limit int) ([]types.Audi
 //   - The window stays on `ORDER BY seq DESC`, which is the purpose-built
 //     (action, seq DESC) index from 0017, on a hot anonymous path. A plain
 //     `ORDER BY time DESC` would abandon it and sort the whole action's history
-//     on every probe. Twenty rows bound the disorder a spool pass can introduce
-//     (a drain rewrites the file after the pass, so a replay is a burst, not an
-//     unbounded tail) and cost one extra index-scan row per probe.
+//     on every probe.
+//
+//     TWENTY IS A WINDOW, NOT A PROOF, and the difference is worth stating: it
+//     covers a replay burst of up to twenty rows and costs nineteen extra
+//     index-scan rows per probe. A LONGER backlog — the drain replays in
+//     batches and loops until the spool clears, so an outage of more than a few
+//     heartbeat intervals produces one — pushes the fresh row out of the window
+//     and this answers the stale beat again, until the NEXT live beat arrives
+//     and takes the top of the window back. That residual is bounded by one
+//     heartbeat interval against /healthz's own TTL, and it is exactly the
+//     "transient, self-heals at the next beat" the verification accepted for
+//     B8-F5; it is pinned as documented behaviour in
+//     TestPG_LatestAuditEventByActionAnswersByEventTimeNotInsertionOrder.
 func (s PG) LatestAuditEventByAction(ctx context.Context, action string) (types.AuditEvent, error) {
 	const q = `
 		SELECT ` + auditCols + ` FROM (

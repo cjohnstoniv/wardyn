@@ -82,3 +82,81 @@ func TestPG_LatestAuditEventByActionAnswersByEventTimeNotInsertionOrder(t *testi
 		t.Error("an action with no rows answered nil error; /healthz tells 'never seen' apart from 'seen long ago' by exactly this")
 	}
 }
+
+// TestPG_LatestAuditEventByActionFallsBackPastTheWindow pins the RESIDUAL as
+// documented behaviour rather than leaving the comment claiming a bound the
+// query does not hold.
+//
+// The window is twenty rows, so it absorbs a replay burst of up to twenty. A
+// spool drain replays in batches and loops until the backlog clears, so an
+// outage longer than a few heartbeat intervals produces more than that — and
+// then the fresh beat is pushed out of the window and /healthz reads the stale
+// one again, until the next live beat arrives and takes the top of the window
+// back. That is B8-F5's accepted transience ("self-heals at the next beat"),
+// bounded by one heartbeat interval, and the difference between "the finding is
+// closed" and "the finding is bounded" is exactly what this asserts.
+func TestPG_LatestAuditEventByActionFallsBackPastTheWindow(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	pg := store.NewPG(pool)
+
+	action := "test.heartbeat." + uuid.NewString()
+	beat := func(at time.Time) uuid.UUID {
+		t.Helper()
+		ev := types.AuditEvent{
+			ID: uuid.New(), Time: at, ActorType: types.ActorSystem,
+			Actor: "b8-f5-window-probe", Action: action, Outcome: "success",
+		}
+		if err := store.InsertAuditEvent(ctx, pool, &ev); err != nil {
+			t.Fatalf("insert beat at %s: %v", at, err)
+		}
+		return ev.ID
+	}
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	fresh := beat(now)
+	// TWENTY stale replays still leave the fresh beat inside the window, so the
+	// fix holds — this is the half the bound really covers.
+	for i := range 19 {
+		beat(now.Add(-time.Duration(i+1) * time.Hour))
+	}
+	got, err := pg.LatestAuditEventByAction(ctx, action)
+	if err != nil {
+		t.Fatalf("LatestAuditEventByAction with the fresh beat still in the window: %v", err)
+	}
+	if got.ID != fresh {
+		t.Errorf("with 19 stale replays above it (20 rows total) the fresh beat was not returned; the window is "+
+			"twenty rows and this is inside it (got %s, want %s)", got.ID, fresh)
+	}
+
+	// TWO MORE push it out, and the documented fallback is the old answer: the
+	// newest row by time WITHIN the window, which is the youngest stale replay.
+	// Asserted so the comment's claim and the query cannot drift apart.
+	for i := range 2 {
+		beat(now.Add(-time.Duration(20+i) * time.Hour))
+	}
+	got, err = pg.LatestAuditEventByAction(ctx, action)
+	if err != nil {
+		t.Fatalf("LatestAuditEventByAction past the window: %v", err)
+	}
+	if got.ID == fresh {
+		t.Fatalf("21 stale replays did not push the fresh beat out of a twenty-row window — the window is not the " +
+			"size the comment says it is")
+	}
+	if !got.Time.Before(now) {
+		t.Errorf("past the window the answer is %s, which is not one of the stale replays; the fallback is the "+
+			"newest row by time inside the window", got.Time)
+	}
+
+	// AND IT SELF-HEALS AT THE NEXT BEAT, which is the whole reason the residual
+	// was accepted: one live beat takes the top of the window back.
+	next := beat(now.Add(time.Second))
+	got, err = pg.LatestAuditEventByAction(ctx, action)
+	if err != nil {
+		t.Fatalf("LatestAuditEventByAction after the next live beat: %v", err)
+	}
+	if got.ID != next {
+		t.Errorf("the next live beat did not restore the answer (got %s, want %s) — the residual would not be "+
+			"transient, and /healthz would stay degraded", got.ID, next)
+	}
+}

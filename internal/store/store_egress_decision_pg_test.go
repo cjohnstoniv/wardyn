@@ -375,4 +375,38 @@ func TestPG_EgressEditedAtMarksOnlyTheOperatorsListEdits(t *testing.T) {
 	if stamped.EgressEditedAt == nil || !stamped.EgressEditedAt.Truncate(time.Microsecond).Equal(stamp) {
 		t.Errorf("UpdateWorkspace persisted egress_edited_at %v, want %v — without this column in its SET clause a composition edit clears approved_egress and the next boot re-widens it", stamped.EgressEditedAt, stamp)
 	}
+
+	// AND THE STAMPING ARM (B8-F3), which is the OTHER half and the one the
+	// handler now uses: handleUpdateWorkspace no longer stamps in Go, it asks —
+	// and the value must come from the DATABASE. The Go-side fake models this,
+	// so an api-level test cannot tell the CASE expression from the fake's own
+	// stamping; only a live server can. The carried value handed in here is a
+	// recognisable app-clock instant well in the past: if it comes back, the
+	// stamp is the caller's and the skew is back inside the boot heal's only
+	// newer-action guard.
+	carried := time.Now().UTC().Add(-90 * time.Minute).Truncate(time.Microsecond)
+	stamped.EgressEditedAt = &carried
+	restamped, err := pg.UpdateWorkspace(ctx, ws.ID, stamped, true)
+	if err != nil {
+		t.Fatalf("UpdateWorkspace (asking for the stamp): %v", err)
+	}
+	if restamped.EgressEditedAt == nil {
+		t.Fatal("UpdateWorkspace was asked to stamp egress_edited_at and wrote NULL — the composition edit that clears approved_egress would be re-widened at the next boot")
+	}
+	if restamped.EgressEditedAt.Equal(carried) {
+		t.Errorf("UpdateWorkspace echoed the caller's %v instead of stamping now(). The value is compared against "+
+			"approvals.decided_at, which Postgres stamps, so a stamp from wardynd's clock puts the daemon/DB skew "+
+			"straight back into the heal's only newer-action guard — fail-OPEN when the daemon runs behind", carried)
+	}
+	var dbNow time.Time
+	if err := pool.QueryRow(ctx, `SELECT now()`).Scan(&dbNow); err != nil {
+		t.Fatalf("read the database clock: %v", err)
+	}
+	if restamped.EgressEditedAt.After(dbNow) {
+		t.Errorf("egress_edited_at = %v, which is AFTER the database's own clock (%v) — the stamp did not come "+
+			"from now()", restamped.EgressEditedAt, dbNow)
+	}
+	if restamped.EgressEditedAt.Before(carried) {
+		t.Errorf("egress_edited_at = %v, older than the value it replaced (%v) — a stamp must move the column forward", restamped.EgressEditedAt, carried)
+	}
 }
