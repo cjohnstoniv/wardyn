@@ -59,11 +59,17 @@ type Policy struct {
 	// ONLY that host+port. A bare host/suffix entry above matches ANY port. Keyed
 	// "host:port" (see hostPortKey) for exact, {suffix,port} for wildcard.
 	allowedExactPort map[string]struct{}
-	allowedWildPort  []wildPort
-	deniedExactPort  map[string]struct{}
-	deniedWildPort   []wildPort
-	allowedMeth      map[string]struct{} // empty == all methods allowed
-	firstUse         types.FirstUseMode
+	// allowedExactAnyPort is the PORT-STRIPPED shadow of allowedExactPort: every
+	// host the operator named exactly, whatever port they qualified it with. It
+	// answers the HOST question AllowedExactHost asks (credential injection) and
+	// nothing else — it is never consulted by evalHost, so a port-qualified entry
+	// still grants egress on that port only (F106).
+	allowedExactAnyPort map[string]struct{}
+	allowedWildPort     []wildPort
+	deniedExactPort     map[string]struct{}
+	deniedWildPort      []wildPort
+	allowedMeth         map[string]struct{} // empty == all methods allowed
+	firstUse            types.FirstUseMode
 	// toolRules is tool name -> effect, compiled from RunPolicySpec.ToolRules.
 	// Nil/empty means "no rules", which is today's behaviour: every gated call
 	// raises an approval. The "*" key is the default for unmatched tools.
@@ -85,14 +91,15 @@ type Policy struct {
 // to lowercase; trailing dots are stripped. Methods are uppercased.
 func CompilePolicy(spec types.RunPolicySpec) *Policy {
 	p := &Policy{
-		allowedExact:     make(map[string]struct{}),
-		deniedExact:      make(map[string]struct{}),
-		allowedExactPort: make(map[string]struct{}),
-		deniedExactPort:  make(map[string]struct{}),
-		allowedMeth:      make(map[string]struct{}),
-		firstUse:         spec.FirstUseApproval.Normalize(),
-		allowAll:         spec.AllowAllEgress,
-		gitPushAnyBranch: spec.GitPushAnyBranch,
+		allowedExact:        make(map[string]struct{}),
+		deniedExact:         make(map[string]struct{}),
+		allowedExactPort:    make(map[string]struct{}),
+		allowedExactAnyPort: make(map[string]struct{}),
+		deniedExactPort:     make(map[string]struct{}),
+		allowedMeth:         make(map[string]struct{}),
+		firstUse:            spec.FirstUseApproval.Normalize(),
+		allowAll:            spec.AllowAllEgress,
+		gitPushAnyBranch:    spec.GitPushAnyBranch,
 	}
 	// Compiled into a map rather than scanned: validatePolicySpec already refuses
 	// duplicates, so the map cannot lose a rule, and an exact-match lookup is the
@@ -112,6 +119,7 @@ func CompilePolicy(spec types.RunPolicySpec) *Policy {
 			p.allowedWild = append(p.allowedWild, wild)
 		case exact != "" && port > 0:
 			p.allowedExactPort[hostPortKey(exact, port)] = struct{}{}
+			p.allowedExactAnyPort[exact] = struct{}{}
 		case exact != "":
 			p.allowedExact[exact] = struct{}{}
 		}
@@ -408,6 +416,17 @@ func (p *Policy) methodAllowed(method string) bool {
 // entry (not a wildcard, not approval). Credential injection requires this
 // stricter match so an injection rule can never widen egress nor leak a
 // secret to a wildcard-matched host.
+//
+// PORT-LESS BY CONTRACT, and it consults allowedExactAnyPort for that reason
+// (B10-F1): its one caller (buildInjector) holds a rule host and no port, while
+// the producer that authors both halves writes the allowlist entry
+// PORT-QUALIFIED ("m.corp:443", F106) and the injection rule BARE. Reading only
+// the port-less map made those two contradict, so buildInjector — and therefore
+// NewServer, and therefore the sidecar of every run on an estate with a
+// corporate artifact mirror — failed closed at boot. An entry the operator
+// port-qualified is the same host named in writing; the port clamps that guard
+// the CREDENTIAL live where a port exists to check (injectableTransport,
+// mitmPortAllowed), and egress itself is unchanged (evalHost never reads this).
 func (p *Policy) AllowedExactHost(host string) bool {
 	host = canonHost(host)
 	if _, ok := p.deniedExact[host]; ok {
@@ -416,7 +435,10 @@ func (p *Policy) AllowedExactHost(host string) bool {
 	if matchWild(host, p.deniedWild) {
 		return false
 	}
-	_, ok := p.allowedExact[host]
+	if _, ok := p.allowedExact[host]; ok {
+		return true
+	}
+	_, ok := p.allowedExactAnyPort[host]
 	return ok
 }
 

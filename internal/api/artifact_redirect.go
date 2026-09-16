@@ -119,10 +119,19 @@ func redirectPort(rawURL string) int {
 	if p, spelled, ok := redirectEndpointPort(rawURL); ok && spelled {
 		return p
 	}
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(rawURL)), "http://") {
+	if redirectIsCleartext(rawURL) {
 		return 80
 	}
 	return 443
+}
+
+// redirectIsCleartext reports whether a redirect `to` asks for PLAIN HTTP — the
+// operator spelled `http://`. One predicate, two readers (redirectPort's 80/443
+// default and the injection scope's require_tls), for the F037 reason: two
+// hand-rolled scheme tests over one operator-authored field is how the port and
+// the transport intent drift apart.
+func redirectIsCleartext(rawURL string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(rawURL)), "http://")
 }
 
 // artifactRunHostSet is the lowercased bare-host set of a run's egress entries,
@@ -318,11 +327,26 @@ func (s *Server) planArtifactRedirect(ctx context.Context, run types.AgentRun, s
 		}
 		seenHost[host] = true
 		grantID := uuid.New()
-		scope, _ := json.Marshal(map[string]string{
+		// require_tls: the redirect's OWN transport intent, declared here because
+		// this producer is the one place that knows it (B10-F5). A redirect the
+		// operator spelled `https://` is TLS by construction — the proxy
+		// TLS-terminates it and injects on the decrypted leg — so a cleartext
+		// request to the mirror is the SANDBOX choosing the transport, and the
+		// corp token must be refused (403, policy:require-tls) rather than
+		// silently withheld. It is also what keeps B10-F1 from widening the
+		// cleartext door it walks through: the allowlist entry this redirect
+		// authors is port-qualified, and AuthoredPortFor reads a port-qualified
+		// entry as declared transport intent.
+		//
+		// An explicit `http://` To is the operator asking for cleartext, so it
+		// does NOT set the flag: there the mirror genuinely is a plaintext
+		// connector and injectableTransport's port-80 arm is the right answer.
+		scope, _ := json.Marshal(map[string]any{
 			"host":        host,
 			"header":      tok.header,
 			"format":      tok.format,
 			"secret_name": tok.secretName,
+			"require_tls": !redirectIsCleartext(r.To),
 		})
 		if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
 			ID: grantID, RunID: run.ID, CreatedAt: s.cfg.Now().UTC(),

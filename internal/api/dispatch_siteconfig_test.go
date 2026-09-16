@@ -203,6 +203,15 @@ func assertProxyArtifactScmBedrockComposition(t *testing.T, spec runner.SandboxS
 			if ig.Rule.SecretName != "npm-artifactory-token" {
 				t.Errorf("artifactory.corp injection SecretName = %q, want npm-artifactory-token", ig.Rule.SecretName)
 			}
+			// B10-F5: an `https://` redirect declares TLS-only transport for its
+			// corp token. Without it the rule defaulted to require_tls=false, so a
+			// sandbox-chosen `POST http://artifactory.corp/…` was merely
+			// uncredentialed instead of refused — and on a TLS-conventional port
+			// the operator authored, it was credentialed in the clear.
+			if !ig.Rule.RequireTLS {
+				t.Error("artifactory.corp injection rule has require_tls=false; an https:// redirect's " +
+					"corp token must be declared TLS-only")
+			}
 		}
 	}
 	if !foundInjection {

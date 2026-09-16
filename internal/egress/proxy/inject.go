@@ -367,14 +367,33 @@ func (p *Proxy) injectableTransport(scheme, host string, port int) bool {
 	if strings.EqualFold(scheme, "https") {
 		return true // the proxy itself runs the TLS leg
 	}
-	if port == defaultPortForScheme("https") {
-		return false // the clamp, unconditional: an authored :443 does not re-admit it
+	if tlsConventionalPorts[port] {
+		return false // the clamp, unconditional: an authored :8443 does not re-admit it
 	}
 	if p.isLLMHost(host) {
 		return false
 	}
 	return port == defaultPortForScheme("http") || p.policy.AuthoredPortFor(host, port)
 }
+
+// tlsConventionalPorts is the set of ports the industry reads as "TLS lives
+// here": 443 and the two alternates every appliance, registry and app server
+// ships as its HTTPS port. Cleartext credential injection is refused to ALL of
+// them regardless of authoring (B10-F5).
+//
+// 443 alone was the F110 leak one port over: AuthoredPortFor deliberately reads
+// a port-qualified entry as the operator declaring the transport, so
+// `allowed_domains: ["vendor.example:8443"]` plus an api_key grant handed the
+// operator's credential to `POST http://vendor.example:8443/…` IN CLEARTEXT —
+// authored, and therefore trusted, on a port whose whole convention is TLS. The
+// sandbox picks the scheme, so that is the sandbox choosing the transport.
+//
+// A cleartext connector on any OTHER port is untouched (port 80, or a port the
+// operator authored), and the genuinely-https-only vendor on a port outside this
+// set is served by `require_tls` on the rule, which refuses the request rather
+// than silently withholding the credential. Refusal HERE is still a withhold,
+// never a deny: the upstream answers 401.
+var tlsConventionalPorts = map[int]bool{443: true, 8443: true, 9443: true}
 
 // applyInjection is the plain forward lane's credential injection.
 //
