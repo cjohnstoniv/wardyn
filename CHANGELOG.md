@@ -91,7 +91,8 @@ no logic change.
   orphan sweep reported success without touching the proxy pod, the per-run
   Secret (carrying the proxy config and every `secret_env` value) or either
   NetworkPolicy. The sweep now also lists NetworkPolicies, keyed on the run id
-  recovered from the sandbox ref itself, and reclaims the Secret beside them
+  the object's own `wardyn.run-id` label carries, and reclaims the Secret beside
+  them
   (the Role narrowing below is how, and why it is not a Secret list). On the
   Docker substrate, a
   caller-supplied label may no longer override the driver's own `wardyn.run-id`
@@ -126,8 +127,10 @@ no logic change.
   SQLSTATE, table and constraint names) previously reached any member who
   could trigger a transient store failure. Every member-reachable door is
   converted — run create, preflight, read, kill, files, grants, profile and
-  layout; approvals; workspaces; secrets; tokens; SSH keys; harness login. The
-  operator-only tail is deferred (below).
+  layout; approvals; workspaces; secrets; tokens; SSH keys; harness login;
+  policies; capabilities; the setup status a member reads; the drive seed — and
+  the shared ceiling/drive helpers they route through. The admin-tier tail is
+  deferred (below).
 - **The anonymous `/healthz` no longer publishes fleet-wide kernel-sensor
   volumes.** Its ground-truth block is the verdict, its last heartbeat and why
   it is not healthy; the cumulative counts move to the operator-gated
@@ -195,10 +198,19 @@ no logic change.
   text** — `POST /runs` (plain tier, including its member validation path and
   the runner-capabilities 503), `/runs/{id}/{files,grants,profile}`,
   `/me/tokens`, `/me/ssh-keys` and both inline-policy resolvers. This, with the
-  eight doors that followed it, is what makes the claim above true of *every*
-  member-reachable door: a Postgres blip no longer answers a member with the
-  deployment's database host, port, user and database name. The error still
-  reaches the log with its method and path.
+  eight doors and the seven seams that followed it — the last four doors
+  (`GET /policies/{id}`, `GET /me/capabilities` at both of its reads,
+  `GET /setup/status`'s secret list, the drive seed's site-config read) and the
+  three shared helpers every one of them routes through (`writeCeilingError`,
+  `writeCeilingErrorPrefixed`, `writeDriveError`, which had no request to log
+  against and so pasted the driver text into the body) — and six more a full
+  route-tier enumeration found afterwards: the second capability read, the
+  site-config read behind both repo admission and the member workspace-provider
+  gate, and three in the owner-reachable workspace scan — is what makes the
+  claim above true of *every* member-reachable door: a Postgres blip no longer
+  answers
+  a member with the deployment's database host, port, user and database name. The
+  error still reaches the log with its method and path.
 - **A policy entry that can never match is named at sidecar boot.** The
   non-ASCII/malformed-entry refusal is a write-time check, so a policy stored
   before it landed compiled silently — and on `denied_domains` that fails OPEN,
@@ -559,8 +571,8 @@ no logic change.
   Getting Started invites: deciding their own run's held egress at scope
   `always`, creating a workspace. A reviewer filtering the denial stream read an
   admin's own member walk as a member incident — the outcome the field was added
-  to prevent. `docs/AUDIT-ACTIONS.md` and `docs/OPERATIONS.md` now describe the
-  guarantee by predicate rather than by naming four sites.
+  to prevent. `docs/OPERATIONS.md` now states the guarantee by predicate;
+  `docs/AUDIT-ACTIONS.md` states the predicate and cites the four sites.
 - **A member's empty Runs board and the account menu's Demos entry key on
   `role !== "admin"`.** `/setup/status` is redacted on `!isOperator`, which is
   SUPER-admin only — so a **security admin**'s status arrives with `checks` `[]`,
@@ -755,11 +767,14 @@ no logic change.
   needs signal forwarding to the wrapped process plus a bounded flush, judged
   a bigger change than this release's residue.
 
-- **Operator-only 5xx sites still carry driver text.** The member-reachable
-  doors are all converted (above) and the `writeServerError` chokepoint they
-  route through is the shape the rest will take, but roughly 120 admin-tier
-  sites still hand the caller raw pgx text. The reader is an operator who can
-  already read the DSN, so the sweep is scheduled rather than urgent: 0.7.5.
+- **Admin-tier and run-token 5xx sites still carry driver text.** Every door a
+  member can reach is converted (above) — a full route-tier enumeration says so,
+  not a spot check — and the `writeServerError` chokepoint they route through is
+  the shape the rest will take, but 86 sites across 24 files still hand the
+  caller raw pgx text. **None of them is member-reachable**: they sit on the
+  admin tier or on the run-token `/internal/*` lane, whose readers are an
+  operator who can already read the DSN and a sandbox that holds the run's own
+  token. The sweep is scheduled rather than urgent: 0.7.5.
 - **The killed-run tail-upload grace is still measured from `updated_at`, not
   from a terminal timestamp.** With the keepalive closed (above), the remaining
   re-openers are wardynd's own writes — chiefly the boot reconciler clearing a
