@@ -18,8 +18,9 @@ Approvals and Setup, alongside accessibility and theming work.
 
 **Console and refusal copy is provisional**: new `400`/`412`/`422` bodies and
 new console strings in this release ship as frozen DRAFT constants pending the
-maintainer's canon sitting (`local/v074/M2-canon-sheet.md`); tests assert
-through the constants, so adopting final wording is a one-file diff.
+maintainer's own (unpublished) canon sitting; tests assert through the
+constants, so adopting final wording is a constant-for-constant substitution,
+no logic change.
 
 ### Security
 
@@ -124,8 +125,9 @@ through the constants, so adopting final wording is a one-file diff.
   member who could trigger a transient store failure. The operator-only tail
   is deferred.
 - **The anonymous `/healthz` no longer publishes fleet-wide kernel-sensor
-  volumes.** Its ground-truth block is the verdict only; the cumulative counts
-  move to the operator-gated `/metrics`.
+  volumes.** Its ground-truth block is the verdict, its last heartbeat and why
+  it is not healthy; the cumulative counts move to the operator-gated
+  `/metrics`.
 - **Every response now carries `Cache-Control: no-store` by default**, closing
   a shared-cache exposure window the cookie-authenticated OIDC lane opened
   (hashed `/assets/` bundles and the SPA shell are unaffected).
@@ -434,8 +436,7 @@ through the constants, so adopting final wording is a one-file diff.
   read wrong (`scanWorkspace()`'s plural `scan_run_ids`).
 - A member can now be told apart from an admin for a shared destructive-delete
   control (`useCanMutate`, a new `allowed?` prop on the shared delete-confirm
-  dialog) — the primitive ships here; wiring it into the Workspaces screen is
-  a separate item.
+  dialog).
 - `--muted-foreground` and `--ring` now clear WCAG AA on the surfaces they
   actually sit on, not only on white.
 - White badge/button text on a fill that failed AA is now a token, not a
@@ -448,7 +449,7 @@ through the constants, so adopting final wording is a one-file diff.
 - Every floating or sticky container in the console is now bounded to the
   viewport (dialogs, the mobile nav drawer's sheet, popovers, and both sticky
   rails).
-- Three small accessibility/dead-code primitives: configurable heading levels
+- Four small accessibility/dead-code primitives: configurable heading levels
   on empty/error states, a focus-visible ring on tab panels, a longer default
   toast duration with a close button, and a first favicon.
 - A stale `dark:bg-destructive/60` dilution left over from the destructive-
@@ -587,6 +588,13 @@ through the constants, so adopting final wording is a one-file diff.
   counted; the tunnels still outlive shutdown). `mitmHosts` remains keyed on
   the bare host, latent since the only producer today dedupes by bare host —
   two pinned tests turn red the moment either gap becomes reachable.
+- **The fresh-install "Skipped" badge fix has its own ceiling**: "once per
+  page load" can only distinguish THIS load from the NEXT one — it cannot
+  tell "a previous install's mark" from "mine, from 30 seconds ago, before a
+  reload". A fresh install where the operator skips Integrations and then
+  reloads sees the latch re-arm and wipe its own skip. The correct fix is
+  discriminating by install identity, not by page load, which needs a stable
+  per-install marker `SetupStatus`/`GET /healthz` do not carry today.
 - **`OPERATOR_ONLY_REASON` ("Requires the admin role.") still stands at ONE
   security-tier site**: the workspace detail record pane's tier note, which sits
   inside a `<fieldset disabled={!securityOperator}>` and so admits a security
