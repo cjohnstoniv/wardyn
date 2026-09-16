@@ -91,7 +91,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// block nothing is refused: agentRosterRefusal short-circuits to "" and this
 	// path is byte-for-byte 0.7.1.
 	if msg, err := s.agentRosterRefusal(r.Context(), req.Agent); err != nil {
-		writeError(w, http.StatusInternalServerError, "get site config: "+err.Error())
+		writeServerError(w, r, "get site config", err)
 		return req, noCeiling, "", "", false
 	} else if msg != "" {
 		writeError(w, http.StatusUnprocessableEntity, msg)
@@ -432,7 +432,7 @@ func (s *Server) denyMemberRequest(w http.ResponseWriter, r *http.Request, req c
 	if req.Image != "" {
 		granted, err := s.capGranted(r.Context(), capImage, req.Image)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, "resolve capability: "+err.Error())
+			writeServerError(w, r, "resolve capability", err)
 			return governanceCeiling{}, true
 		}
 		if !granted {
@@ -482,7 +482,7 @@ func (s *Server) denyMemberRequest(w http.ResponseWriter, r *http.Request, req c
 func (s *Server) denyMemberCapability(w http.ResponseWriter, r *http.Request, kind, value, target, msg string) bool {
 	allowed, err := s.capSeamAllowed(r.Context(), kind, value)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "resolve capability: "+err.Error())
+		writeServerError(w, r, "resolve capability", err)
 		return true
 	}
 	if allowed {
@@ -579,7 +579,7 @@ func (s *Server) denyMemberRunQuota(w http.ResponseWriter, r *http.Request, ceil
 	}
 	active, err := s.cfg.Store.CountActiveRunsBy(r.Context(), principalFromRequest(r))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "count active runs: "+err.Error())
+		writeServerError(w, r, "count active runs", err)
 		return true
 	}
 	if active < limit {
@@ -617,7 +617,7 @@ func (s *Server) denyMemberSeededImage(w http.ResponseWriter, r *http.Request, s
 	}
 	granted, err := s.capGranted(r.Context(), capImage, image)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "resolve capability: "+err.Error())
+		writeServerError(w, r, "resolve capability", err)
 		return true
 	}
 	if granted {

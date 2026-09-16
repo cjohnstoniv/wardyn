@@ -41,7 +41,7 @@ type addSSHKeyRequest struct {
 func (s *Server) handleListSSHKeys(w http.ResponseWriter, r *http.Request) {
 	keys, err := s.cfg.Store.ListSSHKeysByPrincipal(r.Context(), principalFromRequest(r))
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list ssh keys: "+err.Error())
+		writeServerError(w, r, "list ssh keys", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, keys)
@@ -92,7 +92,7 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 
 	existing, err := s.cfg.Store.ListSSHKeysByPrincipal(r.Context(), principal)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "list ssh keys: "+err.Error())
+		writeServerError(w, r, "list ssh keys", err)
 		return
 	}
 	if len(existing) >= sshMaxKeysPerPrincipal {
@@ -153,7 +153,7 @@ func (s *Server) handleAddSSHKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "add ssh key: "+err.Error())
+		writeServerError(w, r, "add ssh key", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principal,
@@ -186,7 +186,7 @@ func (s *Server) handleDeleteSSHKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "delete ssh key: "+err.Error())
+		writeServerError(w, r, "delete ssh key", err)
 		return
 	}
 	s.recordAudit(r.Context(), s.auditEvent(nil, actorTypeFromRequest(r), principal,

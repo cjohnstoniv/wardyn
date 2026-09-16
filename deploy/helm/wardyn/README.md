@@ -638,7 +638,10 @@ yourself (`k8s.rbac.create=false`), add `networkpolicies: list` on upgrade.**
 You are not required to: that list is best-effort, so a Role without it logs one
 warning and keeps doing everything it did in 0.7.3 — you simply do not get the
 both-pods-gone reclaim. See the comment block at the top of
-`templates/rbac.yaml`.
+`templates/rbac.yaml`. The two policies are therefore the ONLY key to a surviving Secret: delete a
+run's NetworkPolicies out of band (an operator cleanup, a policy-as-code
+pruner) and its Secret becomes unreachable to the sweep until the run's own
+teardown or a manual `kubectl delete secret -l wardyn.run-id=<id>`.
 
 **Not a chart value: the org's provider policy.** `workspace_providers` and
 `agent_providers` — which git hosts a run may clone from, which agents this

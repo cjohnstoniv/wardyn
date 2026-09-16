@@ -4,6 +4,7 @@
 package api
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 )
@@ -35,4 +36,13 @@ func writeServerError(w http.ResponseWriter, r *http.Request, msg string, err er
 		slog.Any("err", err),
 	)
 	writeError(w, http.StatusInternalServerError, msg)
+}
+
+// loggedMsg is writeServerError for the few 5xx sites that keep their own
+// status code (a 503 from an unreachable runner): it logs err against msg and
+// hands back msg alone, so the call site stays one line and its body stays
+// free of driver text.
+func loggedMsg(ctx context.Context, msg string, err error) string {
+	slog.ErrorContext(ctx, "api: "+msg, slog.Any("err", err))
+	return msg
 }

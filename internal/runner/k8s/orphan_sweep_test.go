@@ -495,7 +495,7 @@ func TestSweepOrphanedSandboxes_SeesAPodCreatedAfterTheNetPolList(t *testing.T) 
 		t.Fatalf("SweepOrphanedSandboxes: %v", err)
 	}
 	if swept != 0 {
-		t.Errorf("swept = %d, want 0 — a pod that appeared after the Secret list must still be seen, "+
+		t.Errorf("swept = %d, want 0 — a pod that appeared after the NetworkPolicy list must still be seen, "+
 			"or its run's older Secret decides the run's fate alone", swept)
 	}
 }

@@ -1777,8 +1777,8 @@ no escape hatch is a gate operators disable by not upgrading — but a deploymen
 that sets one is **not** the deployment §4 and §7 describe, so each is listed here
 with what it costs. All four are read once at construction. The first three log
 an unmissable warning and none of them is silent on the setup checklist;
-`WARDYN_ALLOW_TEST_ENDPOINTS` warns only when paired with the SSO endpoint
-override and carries no checklist row of its own.
+`WARDYN_ALLOW_TEST_ENDPOINTS` logs the same warning on either relaxation it is
+paired with and carries no checklist row of its own.
 
 | Override | Gate it passes | What the deployment loses |
 |---|---|---|

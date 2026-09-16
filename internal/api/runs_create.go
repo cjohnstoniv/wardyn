@@ -263,7 +263,7 @@ func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.Response
 	if s.cfg.Runner != nil {
 		caps, cerr := s.cfg.Runner.Capabilities(ctx)
 		if cerr != nil {
-			writeError(w, http.StatusServiceUnavailable, "runner capabilities unavailable: "+cerr.Error())
+			writeError(w, http.StatusServiceUnavailable, loggedMsg(ctx, "runner capabilities unavailable", cerr))
 			return "", false
 		}
 		// Membership, not rank (M8): CC2 (gVisor/runsc) and CC3 (Kata/krun) resolve to
