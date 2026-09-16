@@ -54,15 +54,22 @@ func proxyContainerName(runID uuid.UUID) string { return "wardyn-proxy-" + runID
 func internalNetName(runID uuid.UUID) string { return "wardyn-int-" + runID.String() }
 
 // wardynLabels stamps every Wardyn-owned object so audit and teardown
-// selectors can find them by run and component.
+// selectors can find them by run and component. extra is applied FIRST and the
+// three reserved keys are stamped LAST — the rule the k8s driver has carried
+// since its M3 finding (k8s/naming.go), here for the same reason: extra is
+// caller-supplied (it reaches this function from policy/dispatch), and applying
+// it last let an entry named wardyn.run-id rename the run on every object it
+// stamped. Every teardown and audit selector on this substrate keys on exactly
+// that label, so a run that mislabelled itself could never be reclaimed by id
+// again — agent container, credential-holding proxy sidecar and per-run network
+// all answering to someone else's selector.
 func wardynLabels(runID uuid.UUID, component string, extra map[string]string) map[string]string {
-	l := map[string]string{
-		labelManaged:   "true",
-		labelRun:       runID.String(),
-		labelComponent: component,
-	}
+	l := make(map[string]string, len(extra)+3)
 	for k, v := range extra {
 		l[k] = v
 	}
+	l[labelManaged] = "true"
+	l[labelRun] = runID.String()
+	l[labelComponent] = component
 	return l
 }

@@ -120,19 +120,36 @@ func (d *Driver) KillSandbox(ctx context.Context, ref string) error {
 	return d.teardown(ctx, ref, &zero)
 }
 
-// teardown resolves ref's run id from its wardyn.run-id label (a ghost ref —
-// already gone — is idempotent success), then sweeps every Wardyn-owned
-// object carrying that label via three DeleteCollection calls: pods,
-// NetworkPolicies, Secrets. One label selector reaches the agent pod, the
-// proxy pod, both NetworkPolicies, and the config Secret in three calls total
-// — simpler than docker's per-object-name removal loop, because k8s's label
-// selector does in one call what docker's driver needs several names for.
+// teardown resolves ref's run id — from the agent pod's wardyn.run-id label,
+// or, when that pod is already gone, from the REF ITSELF (a sandbox ref is the
+// deterministic agent pod name) — then sweeps every Wardyn-owned object
+// carrying that label via three DeleteCollection calls: pods, NetworkPolicies,
+// Secrets. One label selector reaches the agent pod, the proxy pod, both
+// NetworkPolicies, and the config Secret in three calls total — simpler than
+// docker's per-object-name removal loop, because k8s's label selector does in
+// one call what docker's driver needs several names for.
+//
+// B9-F1: a 404 on the agent pod used to end the whole teardown as "already
+// gone". It is not: the agent pod is the one object of a run that routinely
+// disappears on its own (0.7.2 made disk_mib its ephemeral-storage limit, so
+// the kubelet EVICTS it and its terminated-pod GC reaps it — a kill path no
+// Wardyn code is on; a deleted node does the same), and what it leaves behind
+// is the credential-bearing half: a proxy pod still Running with resolved
+// upstream creds, the per-run Secret carrying every SecretEnv value verbatim,
+// and both NetworkPolicies. Recovering the id from the ref costs one string
+// parse and no API call, so only a ref that is not a wardyn agent pod name at
+// all is still the idempotent no-op it was meant to be (docker's
+// runIDFromAgentName fallback, on the substrate that lacked it).
 func (d *Driver) teardown(ctx context.Context, ref string, gracePeriodSeconds *int64) error {
 	ns := d.cfg.Namespace
 	pod, err := d.clientset.CoreV1().Pods(ns).Get(ctx, ref, metav1.GetOptions{})
 	if err != nil {
 		if isNotFound(err) {
-			return nil // ghost ref: already gone, idempotent success
+			runID, perr := runIDFromAgentPodName(ref)
+			if perr != nil {
+				return nil // ghost ref we cannot key on: idempotent success
+			}
+			return d.teardownByRunID(ctx, runID, gracePeriodSeconds)
 		}
 		return fmt.Errorf("k8s: teardown: get pod %q: %w", ref, err)
 	}
@@ -246,12 +263,9 @@ func (d *Driver) waitPodsGone(ctx context.Context, ns string, listOpts metav1.Li
 // NetworkPolicies and Secrets. A drive outlives every run that mounts it —
 // which is why the chart grants no claim delete verb at all.
 func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duration, isOrphan func(runID uuid.UUID) bool) (int, error) {
-	ns := d.cfg.Namespace
-	pods, err := d.clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: labelComponent + " in (" + componentAgent + "," + componentProxy + ")",
-	})
+	candidates, hasPod, err := d.sweepCandidates(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("k8s: list sandbox pods for orphan sweep: %w", err)
+		return 0, err
 	}
 	cutoff := time.Now().Add(-minAge)
 	// An orphan has no owner left to flush, so kill rather than wait out a
@@ -259,28 +273,99 @@ func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duratio
 	// it, which matters when a sweep finds several.
 	zeroGrace := int64(0)
 	swept := 0
-	seen := make(map[uuid.UUID]bool, len(pods.Items))
+	seen := make(map[uuid.UUID]bool, len(candidates))
 	var errs []error
-	for _, pod := range pods.Items {
-		runID, perr := uuid.Parse(pod.Labels[labelRun])
-		if perr != nil {
-			continue // not a pod whose run id we can key teardown on
-		}
-		if seen[runID] {
+	for _, c := range candidates {
+		if seen[c.runID] {
 			continue // its sibling already swept the whole run, or failed to
 		}
-		if pod.CreationTimestamp.Time.After(cutoff) {
+		if !c.fromPod && hasPod[c.runID] {
+			continue // a pod of this run was listed: that entry owns the verdict
+		}
+		if c.createdAt.After(cutoff) {
 			continue // too young: a dispatch may still be about to SetSandboxRef
 		}
-		if !isOrphan(runID) {
+		if !isOrphan(c.runID) {
 			continue // a live run legitimately owns it
 		}
-		seen[runID] = true
-		if terr := d.teardownByRunID(ctx, runID, &zeroGrace); terr != nil {
-			errs = append(errs, fmt.Errorf("k8s: teardown orphaned run %s: %w", runID, terr))
+		seen[c.runID] = true
+		if terr := d.teardownByRunID(ctx, c.runID, &zeroGrace); terr != nil {
+			errs = append(errs, fmt.Errorf("k8s: teardown orphaned run %s: %w", c.runID, terr))
 			continue
 		}
 		swept++
 	}
 	return swept, errors.Join(errs...)
+}
+
+// sweepCandidate is one object that names a run the sweep might have to
+// reclaim, with the creation time the minAge gate reads. fromPod marks the ones
+// the pod list produced, so a Secret or NetworkPolicy of a run whose pods ARE
+// listed defers to those entries rather than re-deciding with its own (older)
+// timestamp — CreateSandbox writes the Secret before either pod exists.
+type sweepCandidate struct {
+	runID     uuid.UUID
+	createdAt time.Time
+	fromPod   bool
+}
+
+// sweepCandidates lists every object that can name an orphaned run: the agent
+// and proxy pods, AND the per-run Secret and both NetworkPolicies.
+//
+// B9-F5: listing pods alone left a run whose pods are BOTH gone unreachable —
+// permanently, since the sweep is the only thing that revisits a run no
+// sandbox_ref points at. That is not a corner: a deleted node takes both pods
+// together, and an eviction plus the kubelet's terminated-pod GC gets there on
+// its own. What survives is the object the whole sweep exists for — the Secret
+// holding the proxy config JSON and every SecretEnv value verbatim — plus two
+// NetworkPolicies. Any fix that leaves the Secret reachable only via a pod
+// label repeats the bug.
+//
+// All three lists use the SAME agent/proxy component selector as the pod list.
+// That is what keeps a boot canary out: its objects carry labelManaged and a
+// labelRun that IS a parseable uuid (canary.go's M2 per-invocation suffix), so
+// only labelComponent tells them apart from a run's — and runCanaryPhase
+// cleans its own up on every path. A drive PVC is excluded twice over: it is
+// not one of the three kinds listed here, and it never carries labelRun at all.
+func (d *Driver) sweepCandidates(ctx context.Context) ([]sweepCandidate, map[uuid.UUID]bool, error) {
+	ns := d.cfg.Namespace
+	listOpts := metav1.ListOptions{
+		LabelSelector: labelComponent + " in (" + componentAgent + "," + componentProxy + ")",
+	}
+	pods, err := d.clientset.CoreV1().Pods(ns).List(ctx, listOpts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("k8s: list sandbox pods for orphan sweep: %w", err)
+	}
+	secrets, err := d.clientset.CoreV1().Secrets(ns).List(ctx, listOpts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("k8s: list sandbox secrets for orphan sweep: %w", err)
+	}
+	netpols, err := d.clientset.NetworkingV1().NetworkPolicies(ns).List(ctx, listOpts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("k8s: list sandbox network policies for orphan sweep: %w", err)
+	}
+
+	hasPod := make(map[uuid.UUID]bool, len(pods.Items))
+	candidates := make([]sweepCandidate, 0, len(pods.Items)+len(secrets.Items)+len(netpols.Items))
+	add := func(meta metav1.ObjectMeta, fromPod bool) {
+		runID, perr := uuid.Parse(meta.Labels[labelRun])
+		if perr != nil {
+			return // not an object whose run id we can key teardown on
+		}
+		if fromPod {
+			hasPod[runID] = true
+		}
+		candidates = append(candidates, sweepCandidate{runID: runID, createdAt: meta.CreationTimestamp.Time, fromPod: fromPod})
+	}
+	// Pods first: their entries hold the verdict for any run that still has one.
+	for i := range pods.Items {
+		add(pods.Items[i].ObjectMeta, true)
+	}
+	for i := range secrets.Items {
+		add(secrets.Items[i].ObjectMeta, false)
+	}
+	for i := range netpols.Items {
+		add(netpols.Items[i].ObjectMeta, false)
+	}
+	return candidates, hasPod, nil
 }

@@ -6,6 +6,7 @@
 package k8s
 
 import (
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
@@ -61,7 +62,22 @@ const (
 // run UUID alone). A raw uuid.String() is lowercase hex+hyphens, which is
 // already a legal (<=63 char) DNS-1123 label, so every name below stays under
 // the k8s length ceiling with room to spare.
-func agentPodName(runID uuid.UUID) string    { return "wardyn-agent-" + runID.String() }
+const agentPodNamePrefix = "wardyn-agent-"
+
+func agentPodName(runID uuid.UUID) string { return agentPodNamePrefix + runID.String() }
+
+// runIDFromAgentPodName recovers the run UUID from a deterministic agent pod
+// name — the mirror of docker/naming.go's runIDFromAgentName, and for the same
+// reason: a sandbox ref IS the agent pod name, so teardown can recover the run
+// id from the ref alone when the pod itself is already gone and there is no
+// label left to read. A name that is not one of ours (or carries no parseable
+// uuid) errors, which is what keeps a ghost ref idempotent.
+func runIDFromAgentPodName(name string) (uuid.UUID, error) {
+	if !strings.HasPrefix(name, agentPodNamePrefix) {
+		return uuid.Nil, fmt.Errorf("%q is not a wardyn agent pod name", name)
+	}
+	return uuid.Parse(strings.TrimPrefix(name, agentPodNamePrefix))
+}
 func proxyPodName(runID uuid.UUID) string    { return "wardyn-proxy-" + runID.String() }
 func secretName(runID uuid.UUID) string      { return "wardyn-proxy-cfg-" + runID.String() }
 func agentNetPolName(runID uuid.UUID) string { return "wardyn-agent-netpol-" + runID.String() }

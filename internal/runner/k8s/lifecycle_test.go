@@ -262,3 +262,40 @@ func TestTeardown_UnresolvedRunIDLabel(t *testing.T) {
 }
 
 func intPtr(i int) *int { return &i }
+
+// TestTeardown_AgentPodAlreadyGoneStillSweepsProxySecretAndNetPols is B9-F1:
+// the k8s twin of docker's TestTeardown_AgentAlreadyGoneStillSweepsProxyAndNetwork.
+//
+// teardown resolved the run id from the agent pod's own wardyn.run-id LABEL, so
+// when that pod was already gone the Get 404'd and the whole sweep returned nil
+// — "already torn down" — without ever touching a sibling. The pod being gone
+// first is routine, not exotic: 0.7.2 made disk_mib the agent container's
+// ephemeral-storage limit, so the kubelet evicts it and its terminated-pod GC
+// reaps it on a path no Wardyn code is on; a deleted node does the same. What
+// stays behind is the credential-bearing half of the run — a proxy pod still
+// Running with resolved upstream creds in memory, and the per-run Secret
+// carrying every SecretEnv value verbatim, plus both NetworkPolicies — until
+// the orphan sweep's next cadence, or forever if no sandbox_ref points there.
+//
+// The ref itself carries the run id (agentPodName), so nothing needs to be
+// read from the cluster to recover it.
+func TestTeardown_AgentPodAlreadyGoneStillSweepsProxySecretAndNetPols(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	installProxyIPReactor(t, cs, "10.244.0.9")
+	installAgentRunningReactor(t, cs)
+
+	spec := testSandboxSpec()
+	spec.SecretEnv = map[string]string{"GIT_TOKEN": "ghp_secret"}
+	sb, err := d.CreateSandbox(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox: %v", err)
+	}
+	if err := cs.CoreV1().Pods(testNamespace).Delete(context.Background(), agentPodName(spec.RunID), metav1.DeleteOptions{}); err != nil {
+		t.Fatalf("simulate an evicted-and-GC'd agent pod: %v", err)
+	}
+
+	if err := d.KillSandbox(context.Background(), sb.Ref); err != nil {
+		t.Fatalf("KillSandbox with the agent pod already gone: %v, want nil", err)
+	}
+	assertRunObjectsGone(t, cs, spec.RunID)
+}

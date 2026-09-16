@@ -4652,7 +4652,13 @@ driver, not a guess:
   boot and on its cadence after. It runs once the run is past
   `undispatchedGrace`, so the window between the eviction and the sweep is real
   and bounded by that grace, not by zero; a user drive's claim is never touched
-  by it; (ii) the kubelet measures periodically (~10s
+  by it. Two narrowings of that window since 0.7.3: an ordinary
+  stop/kill of a run whose agent pod is ALREADY gone now reclaims the siblings
+  itself (the sandbox ref is the agent pod name, so the run id needs no live pod
+  to read it from), and the sweep lists the per-run Secret and both
+  NetworkPolicies as well as the pods — so a run whose agent AND proxy pods are
+  both gone (a deleted node takes them together) is still reachable rather than
+  stranded forever; (ii) the kubelet measures periodically (~10s
   housekeeping), so a fast enough burst can overshoot the limit before the
   next tick catches it; (iii) with neither a policy-authored `disk_mib` nor a
   `default_disk_mib` on the deployment's storage provider, a run's `disk_mib`
