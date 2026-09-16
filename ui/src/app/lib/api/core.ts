@@ -119,6 +119,24 @@ function deadlineSignal(caller: AbortSignal | null | undefined, timeoutMs: numbe
 //  (b) always sends the OIDC session cookie (credentials: 'include'),
 //  (c) routes HTTP 401 to the module-level onUnauthorized handler,
 //  (d) bounds the request — see WFETCH_TIMEOUT_MS.
+// drainBody — read and discard a response body no caller will ever read.
+//
+// A fetch Response whose body is never consumed leaves its stream open, so the
+// request never completes: it holds its connection until the deadline aborts
+// it, and the document never reaches network-idle. Nothing else drains it —
+// securityHeaders answers every API route Cache-Control: no-store, so no cache
+// layer is reading the body on the console's behalf either.
+//
+// Swallows its own failure: a truncated or already-consumed body must never
+// change the verdict the caller already read off the status.
+async function drainBody(res: Response): Promise<void> {
+  try {
+    await res.text();
+  } catch {
+    /* nothing to discard */
+  }
+}
+
 export async function wfetch(
   path: string,
   init: RequestInit = {},
@@ -172,6 +190,9 @@ export async function wfetch(
     // STILL holds the exact token it was sent with is the real rejection.
     if (token && getToken() === token) setToken(null);
     _unauthorized?.();
+    // The 401 body is thrown over, never handed to a caller — drain it here or
+    // the rejected request stays open on its connection (see drainBody).
+    await drainBody(res);
     throw new HttpError(401, "Unauthorized");
   }
   return res;
@@ -266,7 +287,13 @@ export async function probeAuth(): Promise<AuthProbe> {
     // wfetch has already thrown HttpError(401) for a real rejection, so a
     // non-ok response here is a 403/5xx: the request carried whatever
     // credentials the caller has and the daemon still could not answer.
-    return res.ok ? "authed" : "unreachable";
+    const verdict: AuthProbe = res.ok ? "authed" : "unreachable";
+    // The probe wants the STATUS and nothing else — but the row it asked for
+    // still arrived, and an unread body never completes the request (see
+    // drainBody). This one fires on EVERY cold document load, so the leak it
+    // used to carry was the shell's, on every route and in every role.
+    await drainBody(res);
+    return verdict;
   } catch (e) {
     if (e instanceof HttpError && e.status === 401) return "unauthed";
     return "unreachable";

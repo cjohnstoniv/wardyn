@@ -57,6 +57,27 @@ describe("probeAuth — a rejected caller, a broken daemon and a dead network ar
     expect(await probeAuth()).toBe("unreachable");
   });
 
+  // X2-F14 / the member cold-load e2e: probeAuth reads only the STATUS, and it
+  // used to walk away from the response body. An unread fetch body leaves the
+  // response stream open, so the request never completes — and since
+  // securityHeaders answers every API route Cache-Control: no-store, no cache
+  // layer drains it either. One mount probe therefore held a connection open
+  // until its own deadline and the document never reached network-idle (the
+  // e2e idiom that caught it) on ANY route, in ANY role.
+  it("drains the body it does not read — an unread response never completes", async () => {
+    const res = new Response("[]", { status: 200 });
+    fetchMock.mockResolvedValue(res);
+    expect(await probeAuth()).toBe("authed");
+    expect(res.bodyUsed).toBe(true);
+  });
+
+  it("drains a non-2xx body too — the same stream, the same open connection", async () => {
+    const res = new Response(JSON.stringify({ error: "database unavailable" }), { status: 500 });
+    fetchMock.mockResolvedValue(res);
+    expect(await probeAuth()).toBe("unreachable");
+    expect(res.bodyUsed).toBe(true);
+  });
+
   it("a 503 during a rolling restart does not report a valid session as signed out", async () => {
     setToken("a-perfectly-good-token");
     fetchMock.mockResolvedValue(new Response("", { status: 503, statusText: "Service Unavailable" }));

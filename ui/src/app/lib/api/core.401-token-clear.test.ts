@@ -47,6 +47,17 @@ describe("wfetch — a real 401 clears the stored admin token", () => {
     expect(localStorage.getItem("wardyn_admin_token")).toBeNull();
   });
 
+  // Same X2-F14 leak as probeAuth's, in the one branch that throws instead of
+  // returning: the 401 body is never handed to a caller, so nothing drains it
+  // and the rejected request stays open on its connection until its deadline.
+  it("drains the 401 body it throws over", async () => {
+    setToken("t-abc");
+    const res = new Response(JSON.stringify({ error: "unauthorized" }), { status: 401 });
+    fetchMock.mockResolvedValue(res);
+    await expect(wfetch("/runs")).rejects.toMatchObject({ status: 401 });
+    expect(res.bodyUsed).toBe(true);
+  });
+
   it("still invokes the shell's onUnauthorized handler", async () => {
     const handler = vi.fn();
     onUnauthorized(handler);
