@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // B11a-F13. The upload target is the run's OWN wardyn-proxy — a known
@@ -21,47 +23,87 @@ import (
 // helper already set Proxy: nil for exactly this reason; sidecar and toolgate
 // did not.
 //
-// A nil Transport.Proxy is the whole property (net/http never proxies when it
-// is nil), and asserting it structurally is deterministic — unlike an
-// environment-driven test, because net/http captures the proxy environment ONCE
-// per process.
-func TestUploadClient_DoesNotConsultProxyEnvironment(t *testing.T) {
-	tr, ok := uploadClient().Transport.(*http.Transport)
+// WHY THIS IS NOT AN END-TO-END PROXY TEST. It cannot be, in process:
+// httpproxy's matcher exempts every LOOPBACK destination from proxying, and an
+// httptest server is always 127.0.0.1, so no client configuration makes a local
+// request proxied. A "does it reach the server" test therefore cannot tell
+// Proxy: nil apart from DefaultTransport — measured: the first version of this
+// file passed with Proxy: nil DROPPED. What discriminates is the transport's
+// own proxy DECISION on a PRODUCTION-shaped, non-loopback URL, which is what
+// this test drives, with a control proving the assertion is not vacuous.
+func TestUploadClient_NeverProxiesTheControlPlanePUT(t *testing.T) {
+	// The real thing: WARDYN_PROXY_URL's shape, which is never loopback.
+	req, err := http.NewRequest(http.MethodPut,
+		"http://wardyn-proxy:3128/wardyn/v1/scan-results/2f1c8d4e-0000-4000-8000-000000000001", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Owning a transport is half the property: a client with NO transport falls
+	// back to http.DefaultTransport, whose Proxy IS ProxyFromEnvironment. This
+	// assertion is what reds when Proxy: nil is dropped.
+	c := uploadClient()
+	tr, ok := c.Transport.(*http.Transport)
 	if !ok {
-		t.Fatalf("upload transport = %T, want *http.Transport", uploadClient().Transport)
+		t.Fatalf("upload client transport = %T, want its own *http.Transport — a nil transport inherits http.DefaultTransport, which proxies from the environment", c.Transport)
 	}
 	if tr.Proxy != nil {
-		t.Fatal("upload transport has a Proxy func — a control-plane PUT to the run's own proxy must never be forwarded through another proxy")
+		got, _ := tr.Proxy(req)
+		t.Fatalf("upload transport decided to proxy %s via %v — a control-plane PUT to the run's own proxy must never be forwarded through another proxy", req.URL, got)
+	}
+	if c.Timeout == 0 {
+		t.Fatal("upload client must keep its request timeout")
+	}
+
+	// CONTROL: the same request, through a transport shaped like the code
+	// BEFORE this fix, really is proxied away to another host. Without this the
+	// nil check above could pass for a URL nothing would ever proxy anyway.
+	other, err := url.Parse("http://other-host:3128")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctrl := &http.Transport{Proxy: http.ProxyURL(other)}
+	if got, _ := ctrl.Proxy(req); got == nil || got.Host != "other-host:3128" {
+		t.Fatalf("control transport routed %s to %v, want other-host:3128 — the control is inert, so the assertion above proves nothing", req.URL, got)
 	}
 }
 
-// End to end: the PUT reaches the server directly even when the environment
-// names a proxy that would black-hole it. Self-validating — if net/http has
-// already cached an empty proxy environment for this process the behavioural
-// half cannot run, and the structural test above is the gate.
-func TestUpload_ReachesLocalRouteDespiteProxyEnv(t *testing.T) {
-	var hit bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hit = true
+// Replacing http.DefaultTransport with a hand-built one is how a client quietly
+// loses everything the default carried, so prove the swapped transport still
+// performs a real PUT — and that a genuinely proxied client cannot, which is
+// what makes "not proxied" an observable difference at all.
+func TestUpload_StillPerformsARealPUT(t *testing.T) {
+	var hit atomic.Bool
+	var method atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hit.Store(true)
+		method.Store(r.Method)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
-	// An address nothing listens on: a request that honoured it would fail.
-	const blackhole = "http://127.0.0.1:1"
-	t.Setenv("HTTP_PROXY", blackhole)
-	t.Setenv("HTTPS_PROXY", blackhole)
-	t.Setenv("http_proxy", blackhole)
-
-	probeURL, _ := url.Parse(srv.URL)
-	if p, err := http.ProxyFromEnvironment(&http.Request{URL: probeURL}); err != nil || p == nil {
-		t.Skip("net/http already cached the proxy environment for this process; the structural test is the gate")
+	blackhole, err := url.Parse("http://127.0.0.1:1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Nothing listens on the black hole, and http.ProxyURL is a FIXED proxy
+	// func with no loopback exemption, so this client cannot reach the server.
+	ctrl := &http.Client{
+		Transport: &http.Transport{Proxy: http.ProxyURL(blackhole)},
+		Timeout:   5 * time.Second,
+	}
+	if resp, cerr := ctrl.Get(srv.URL); cerr == nil {
+		_ = resp.Body.Close()
+		t.Fatal("control: a client proxied at 127.0.0.1:1 reached the server anyway")
 	}
 
 	if err := Upload(srv.URL, []byte(`{"ok":true}`)); err != nil {
-		t.Fatalf("Upload must reach the local route directly, not through $HTTP_PROXY: %v", err)
+		t.Fatalf("Upload must still perform a real PUT after the transport swap: %v", err)
 	}
-	if !hit {
-		t.Fatal("the server was never reached — the PUT went through the environment proxy")
+	if !hit.Load() {
+		t.Fatal("the server was never reached")
+	}
+	if m, _ := method.Load().(string); m != http.MethodPut {
+		t.Fatalf("method = %q, want PUT", m)
 	}
 }
