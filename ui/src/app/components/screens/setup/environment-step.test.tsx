@@ -325,6 +325,17 @@ describe("EnvironmentStep — matrix-as-picker", () => {
     await user.click(wall);
     expect(onSelect).toHaveBeenCalledWith("CC2");
   });
+
+  // R-F5: the OTHER leg of the narrowed predicate. "none" is the runner's own
+  // sentinel — a deliberate answer, not a withheld one — so it stays no-driver
+  // whatever the classes say. Without this case the predicate could be
+  // simplified to `classes.length === 0` alone and every other pin here would
+  // still pass.
+  it('(X3-F1) an explicit "none" driver keeps the card even with classes present', () => {
+    renderStep({ status: baseStatus({ runner: { driver: "none", confinement_classes: ["CC1"] } }) });
+    expect(screen.getByText(/No sandbox runner/)).toBeInTheDocument();
+    expect(screen.getByText(/-runner docker/)).toBeInTheDocument();
+  });
 });
 
 // B4: k8s variant rows — Runner/Egress containment/Confinement classes/Agent

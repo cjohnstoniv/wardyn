@@ -74,10 +74,19 @@ function hostRows(ws: Workspace, canClearRequired: boolean, canRemove: boolean):
       // egress:<host> · required · operator_set).
       // The one predicate: can the remove path actually take this host off?
       const ownRequired = own[`egress:${host}`]?.provenance === "operator_set";
+      // ...and when it cannot, WHY it cannot: a row the remove path can't reach
+      // is either the workspace's own scan (it rebuilds on the next one) or an
+      // operator-authored requirement that arrived through the effective fold
+      // rather than this workspace's overlay — which the requirements PUT here
+      // replaces and therefore cannot clear. The same fold the provenance
+      // sentence below reads, so the row cannot say two different things.
+      const inherited = reqs[`egress:${host}`]?.provenance === "operator_set";
       const blocked = !canRemove
         ? SECURITY_ONLY_REASON
         : !approved.has(host) && !ownRequired
-          ? EGRESS.SCAN_SEEDED_REASON
+          ? inherited
+            ? EGRESS.INHERITED_REASON
+            : EGRESS.SCAN_SEEDED_REASON
           : ownRequired && !canClearRequired
             ? OPERATOR_ONLY_REASON
             : undefined;

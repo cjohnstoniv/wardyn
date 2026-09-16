@@ -533,10 +533,45 @@ describe("WorkspaceDetailScreen — Allowed hosts, removable means the remove pa
     );
   });
 
+  // R-F1: the other half of the overlay/fold mismatch. A row whose operator_set
+  // requirement is INHERITED (in the effective fold, absent from the
+  // workspace's own overlay — a source contract this workspace composes) is
+  // parked for the right reason, but it is not a scan row: saying so put two
+  // contradictory provenances on one row ("required by this workspace" beside
+  // "detected by this workspace's scan").
+  it("an INHERITED operator_set row is parked as inherited, not as a scan row", async () => {
+    getWorkspaceMock.mockResolvedValue(
+      ws({
+        approved_egress: [],
+        requirements: {},
+        effective_requirements: { "egress:corp.internal": { level: "required", provenance: "operator_set" } },
+      }),
+    );
+    renderDetail();
+
+    const parked = await screen.findByRole("button", { name: "Remove corp.internal" });
+    expect(parked).toBeDisabled();
+    expect(parked).toHaveAttribute("title", EGRESS.INHERITED_REASON);
+    expect(parked).not.toHaveAttribute("title", EGRESS.SCAN_SEEDED_REASON);
+    // The row's own sentence and its parked reason agree.
+    expect(screen.getByText("required by this workspace")).toBeInTheDocument();
+  });
+
   it("a member (whose egress: keys the server drops) is told the tier, not handed a dead X", async () => {
     getWorkspaceMock.mockResolvedValue(ws({ approved_egress: ["pypi.org"] }));
     renderDetail("ws-1", false, false);
     const parked = await screen.findByRole("button", { name: "Remove pypi.org" });
+    expect(parked).toBeDisabled();
+    expect(parked).toHaveAttribute("title", SECURITY_ONLY_REASON);
+  });
+
+  // R-F4: the Denied twin renders the same HostList behind the same
+  // securityOperator gate — a member got a bare disabled X there while the
+  // Allowed card beside it said why. Same reason, same tier.
+  it("the Denied hosts twin says the same thing to the same caller", async () => {
+    getWorkspaceMock.mockResolvedValue(ws({ denied_egress: ["evil.example.com"] }));
+    renderDetail("ws-1", false, false);
+    const parked = await screen.findByRole("button", { name: "Remove evil.example.com" });
     expect(parked).toBeDisabled();
     expect(parked).toHaveAttribute("title", SECURITY_ONLY_REASON);
   });

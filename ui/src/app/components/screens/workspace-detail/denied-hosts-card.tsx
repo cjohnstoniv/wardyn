@@ -19,15 +19,25 @@ import type { Workspace } from "../../../lib/types";
 import { DetailSectionCard } from "./section-card";
 import { HostList } from "./host-list";
 import { useSecurityOperator } from "../../wardyn/operator-context";
+import { SECURITY_ONLY_REASON } from "../../wardyn/copy";
 
 export function DeniedHostsCard({ ws, onWorkspaceUpdated }: { ws: Workspace; onWorkspaceUpdated: (w: Workspace) => void }) {
   // useSecurityOperator, not useOperator (0.7 §B): PUT
   // /workspaces/{id}/denied-egress registers on securityOps (routes.go:368),
   // the deny half of the same verdict AllowedHostsCard writes.
   const securityOperator = useSecurityOperator();
+  // The Allowed twin says why every parked Remove is parked; this card renders
+  // the same HostList behind the same gate, so it says the same thing rather
+  // than handing a member a bare disabled X with an empty tooltip.
   const rows = React.useMemo(
-    () => [...(ws.denied_egress ?? [])].sort().map((host) => ({ host, provenance: "denied for this workspace", removable: true })),
-    [ws.denied_egress],
+    () =>
+      [...(ws.denied_egress ?? [])].sort().map((host) => ({
+        host,
+        provenance: "denied for this workspace",
+        removable: true,
+        removeBlockedReason: securityOperator ? undefined : SECURITY_ONLY_REASON,
+      })),
+    [ws.denied_egress, securityOperator],
   );
   const [removing, setRemoving] = React.useState<string | null>(null);
 

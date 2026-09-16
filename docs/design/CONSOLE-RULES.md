@@ -212,7 +212,7 @@ Bind `disabled` the instant the action fires; reveal the spinner later.
   takes an `action`; omit it only when the emptiness is good news. Put the doc link next
   to the need.
 - **Persistent errors render inline** with something to read, retry, or act on:
-  `ErrorState` (`states.tsx:72`) for a pane, a shell banner (`app-shell.tsx:531`),
+  `ErrorState` (`states.tsx:72`) for a pane, a shell banner (`app-shell.tsx:538`),
   `TruncatedNote` (`states.tsx:116–135`) for a partial result.
 - **Toasts (`sonner`) are transient confirmations only** — "Copied", "Secret saved".
   Anything worth reading twice is not a toast.

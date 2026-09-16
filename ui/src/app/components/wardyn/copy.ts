@@ -120,6 +120,12 @@ export const SECURITY_ONLY_REASON = "Requires the admin or security admin role."
 // came back with its old provenance.
 export const EGRESS = {
   SCAN_SEEDED_REASON: "Detected by this workspace's scan, not approved here — the next scan puts it back.",
+  // The other half of the same mismatch: an operator-authored requirement that
+  // reaches this workspace through the EFFECTIVE fold rather than its own
+  // overlay. The requirements PUT here replaces only the overlay, so clearing
+  // it has to happen where it was written. Distinct from the scan sentence
+  // above, which would contradict the row's own "required by this workspace".
+  INHERITED_REASON: "Required by a source this workspace composes, not by an approval here — clear it where it was written.",
 } as const;
 
 // Said once, where a viewer would actually feel the consequence (the run's
@@ -576,23 +582,12 @@ export function credentialKind(scope: Record<string, unknown>): CredentialKind {
   return "generic";
 }
 
-// Member Getting Started's "Your model key" section (6c BYOK) — the fixed
-// secret name every provider convention expects, and the per-state copy.
-// `SECRET_NAME` is a value (not just a type) precisely because the field
-// shows it verbatim as a mono label — it's the one name a member can register.
-// DRAFT (M2 canon pending) — X3-F4, the MEMBER's empty runs board. The operator
-// first-run funnel it replaces is a host-barrier readout plus a setup
-// checklist: redacted blank for a member, and pointing at routes their role
-// cannot reach. These three lines are what a member can actually do instead.
-export const RUNS_MEMBER_EMPTY = {
-  TITLE: "Runs you launch appear here",
-  BODY: "Nothing is running yet. Start one against a workspace your admin has made available to you.",
-  ACTION: "New run",
-  GUIDE: "Getting started",
-} as const;
-
+// Member Getting Started's "Your model key" section (6c BYOK) — the
+// provider-conventional secret name the member's own key is stored under, and
+// the per-state copy. The name is a VALUE (not just a type) because the field
+// shows it verbatim as a mono label; since X3-F3 it is per-provider, so
+// BY_AGENT below is the only place it lives.
 export const YOUR_MODEL_KEY = {
-  SECRET_NAME: "anthropic-api-key",
   // DRAFT (M2 canon pending) — X3-F3. The member's own key is stored under the
   // PROVIDER's conventional name, and which provider that is follows the org's
   // agent roster: a codex-only roster cannot use an anthropic key at all, so
@@ -648,6 +643,19 @@ export const MEMBER_GETTING_STARTED = {
   CONNECT_HINT_PREFIX: "Register a key once: ",
   CONNECT_COMMAND: "wardyn ssh-key ensure",
   CONNECT_ACTION: "Add SSH key",
+} as const;
+
+// DRAFT (M2 canon pending) — X3-F4, the MEMBER's empty runs board. The operator
+// first-run funnel it replaces is a host-barrier readout plus a setup
+// checklist: redacted blank for a member, and pointing at routes their role
+// cannot reach. These lines are what a member can actually do instead. Sited
+// after MEMBER_GETTING_STARTED because GUIDE is that page's own title — the
+// link names where it lands, and a second literal is how the two drift.
+export const RUNS_MEMBER_EMPTY = {
+  TITLE: "Runs you launch appear here",
+  BODY: "Nothing is running yet. Start one against a workspace your admin has made available to you.",
+  ACTION: "New run",
+  GUIDE: MEMBER_GETTING_STARTED.TITLE,
 } as const;
 
 // Demo episode rows (episode-card.tsx) — the funnel steps' "Watch" affordance
