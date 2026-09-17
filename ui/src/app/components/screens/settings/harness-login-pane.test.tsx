@@ -24,8 +24,6 @@ import {
   LOGIN_SANDBOX_UNREADABLE,
 } from "./harness-login-pane";
 import { LOGIN_SANDBOX_READ_RETRYING, LOGIN_SANDBOX_SLOW_START } from "./login-start-wait";
-import { AWS_BLURB_MANAGED_OPENING } from "./login-pane-copy";
-import { HttpError } from "../../../lib/api/core";
 import { runs as runsApiMocked } from "../../../lib/api/runs";
 import type { AgentRun, SetupStatus } from "../../../lib/types";
 
