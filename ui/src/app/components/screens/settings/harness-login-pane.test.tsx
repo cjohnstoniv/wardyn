@@ -19,6 +19,7 @@ import {
   HarnessLoginPane,
   loginFlow,
   SELFRUN_MARKER,
+  CAPTURE_NOT_CORROBORATED,
 } from "./harness-login-pane";
 import { runs as runsApiMocked } from "../../../lib/api/runs";
 import type { AgentRun, SetupStatus } from "../../../lib/types";
@@ -395,8 +396,12 @@ describe("HarnessLoginPane — the consent gate", () => {
       await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
       await act(async () => {}); // flush the getSetupStatus microtask
 
-      const alertBox = await screen.findByRole("alert");
-      expect(alertBox).toHaveTextContent("The sandbox reported a capture the server does not have — sign in again.");
+      // The wait is the read-after-write tolerance (finding 7): a status that
+      // answers and never shows this run's row is re-read CAPTURE_CONFIRM_RETRIES
+      // times over 1.5s before the refusal. A forged marker never converges, so
+      // the assertion is unchanged — it just arrives a second and a half later.
+      const alertBox = await screen.findByRole("alert", {}, { timeout: 3000 });
+      expect(alertBox).toHaveTextContent(CAPTURE_NOT_CORROBORATED);
       expect(runsApiMocked.killRun).toHaveBeenCalledWith("run-123");
       expect(onDone).not.toHaveBeenCalled();
       expect(screen.queryByText(/session captured/i)).not.toBeInTheDocument();
@@ -433,8 +438,8 @@ describe("HarnessLoginPane — the consent gate", () => {
       await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
       await act(async () => {});
 
-      const alertBox = await screen.findByRole("alert");
-      expect(alertBox).toHaveTextContent("The sandbox reported a capture the server does not have — sign in again.");
+      const alertBox = await screen.findByRole("alert", {}, { timeout: 3000 });
+      expect(alertBox).toHaveTextContent(CAPTURE_NOT_CORROBORATED);
       expect(onDone).not.toHaveBeenCalled();
     });
 
@@ -464,8 +469,12 @@ describe("HarnessLoginPane — the consent gate", () => {
       await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
       await act(async () => {});
 
+      // No retry loop on this arm, deliberately: a THROW is an answer (a
+      // propagated 401), not the read-after-write gap, so the refusal is
+      // immediate and one read is all this case ever makes.
       const alertBox = await screen.findByRole("alert");
-      expect(alertBox).toHaveTextContent("The sandbox reported a capture the server does not have — sign in again.");
+      expect(alertBox).toHaveTextContent(CAPTURE_NOT_CORROBORATED);
+      expect(getSetupStatusMock).toHaveBeenCalledTimes(1);
       expect(onDone).not.toHaveBeenCalled();
     });
 
@@ -490,6 +499,28 @@ describe("HarnessLoginPane — the consent gate", () => {
       expect(getSetupStatusMock).toHaveBeenCalledTimes(2);
       expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
       expect(onDone).not.toHaveBeenCalled();
+    });
+
+    // Finding 7 (0.7.4 field report), console half: the status read ANSWERS and
+    // simply does not show this run's capture yet — a lagging replica, or the
+    // supersede's kill landing between the 204 and the read. The write really
+    // did precede the read; it was not VISIBLE to it. Refusing on that first
+    // read is what told a person whose retry worked to sign in again.
+    //
+    // Red on the unfixed tree: one read, one refusal, no second chance.
+    it("re-reads a status that answers but does not show this run's capture yet", async () => {
+      getSetupStatusMock
+        .mockResolvedValueOnce({ harness: [], model_access: undefined } as unknown as SetupStatus)
+        .mockResolvedValue({
+          harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }],
+        } as unknown as SetupStatus);
+      const { onDone } = await attachAwsRun();
+
+      await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
+
+      await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1), { timeout: 3000 });
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(getSetupStatusMock).toHaveBeenCalledTimes(2);
     });
 
     // The retry is not decoration: a blip on the FIRST read must not cost an

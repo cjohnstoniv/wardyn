@@ -40,7 +40,18 @@ import { Input } from "../../ui/input";
 // agrees (serverConfirmsCapture below) — the server is the one copy of the
 // truth the sandbox cannot write. This is the sentence shown when the two
 // disagree.
-const CAPTURE_NOT_CORROBORATED = "The sandbox reported a capture the server does not have — sign in again.";
+//
+// 0.7.4 field report, finding 7: the old sentence ("— sign in again.") told a
+// person whose interrupted first attempt had just been retried SUCCESSFULLY to
+// do the thing they had just done. The two causes need different actions from
+// the human and the pane cannot tell them apart, so the sentence names both and
+// what each one costs: retry (now safe — a new sign-in closes the old one,
+// harnesscred_supersede.go) or escalate. Exported so ui/e2e and the tests assert
+// THROUGH the constant rather than re-typing it.
+export const CAPTURE_NOT_CORROBORATED =
+  "The sandbox reported a capture the server does not have. If your last attempt was interrupted, sign in again from " +
+  "Getting Started — starting a new sign-in closes the old one. If it keeps happening, tell your admin: the sandbox's " +
+  "report and the server disagree.";
 // DRAFT (M2 canon pending) — R-3: getSetupStatus RESOLVES a synthetic
 // `unreachable` payload for a 5xx or a dropped socket, it does not throw. An
 // honest capture that DID land would then be accused of not existing. One
@@ -75,6 +86,16 @@ const ANSI_ESCAPES = /\u001b(?:\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|\[[0-9;:?]
 // answered 204, so the store write strictly precedes the marker byte. This
 // covers transport only.
 const CONFIRM_RETRY_MS = 500;
+
+// …and up to three re-reads of a status that ANSWERED but does not yet show
+// this run's capture (finding 7). The marker strictly follows the 204, so the
+// write precedes the read in real time — but "precedes" is not "is visible to":
+// a read served by a lagging replica, or a supersede's kill landing between the
+// two, produces a status that is honest and stale. Refusing on the first such
+// read is what told a person whose retry WORKED to sign in again. Three reads
+// over 1.5s is longer than any such gap and short enough that a genuinely forged
+// marker (which never becomes true) still ends in the refusal.
+const CAPTURE_CONFIRM_RETRIES = 3;
 
 // "intro" is the consent gate: nothing launches until the operator has read
 // what is about to happen and clicked Start. The pane used to fire on mount —
@@ -582,15 +603,29 @@ export function HarnessLoginPane({
   const confirmCapture = React.useCallback(async () => {
     if (runId) void runsApi.killRun(runId).catch(() => {});
     setPhase("saving");
-    let status: SetupStatus | null = null;
-    try {
-      status = await setupApi.getSetupStatus();
-      if (status.unreachable) {
-        await new Promise((r) => setTimeout(r, CONFIRM_RETRY_MS));
-        status = await setupApi.getSetupStatus();
+    // A THROW stays fail-closed and is never retried: a propagated 401 is an
+    // answer, not a blip, and retrying it would only delay the refusal.
+    const read = async (): Promise<SetupStatus | null> => {
+      try {
+        return await setupApi.getSetupStatus();
+      } catch {
+        return null;
       }
-    } catch {
-      status = null;
+    };
+    let status = await read();
+    if (status?.unreachable) {
+      await new Promise((r) => setTimeout(r, CONFIRM_RETRY_MS));
+      status = await read();
+    }
+    // THE READ TOLERATES ITS OWN WRITE (finding 7). The read above SUCCEEDED and
+    // simply shows no row for this run yet — or shows the row of a sign-in the
+    // supersede is in the middle of ending. Both converge within a tick or two,
+    // so re-read before accusing the sandbox. A forged marker never converges
+    // and still lands on the refusal 1.5s later.
+    for (let i = 0; i < CAPTURE_CONFIRM_RETRIES; i++) {
+      if (!status || status.unreachable || serverConfirmsCapture(status, provider, runId)) break;
+      await new Promise((r) => setTimeout(r, CONFIRM_RETRY_MS));
+      status = await read();
     }
     if (status && !status.unreachable && serverConfirmsCapture(status, provider, runId)) {
       setAutoCaptured(true);
