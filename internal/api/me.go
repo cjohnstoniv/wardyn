@@ -92,8 +92,14 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// ANDed with the two admin tiers — a member has nothing to pause — while
 		// the console still applies the "SSO session" half of the rule, the same
 		// predicate that hides the plain entry.
-		"member_preview_available": s.memberPreviewApplies(r.Context(), r) &&
-			(s.isOperator(r.Context()) || s.isSecurityOperator(r.Context())),
+		//
+		// THE TIERS ARE THE LEFT OPERAND, deliberately. They are context reads;
+		// memberPreviewApplies is a GetSiteConfig. In this order the roster is read
+		// only for the tier the key exists for — the other way round it put a store
+		// read on EVERY caller of the console's most-polled route, members included,
+		// to compute an answer that is false for them by construction.
+		"member_preview_available": (s.isOperator(r.Context()) || s.isSecurityOperator(r.Context())) &&
+			s.memberPreviewApplies(r.Context(), r),
 	}
 	// M3: the AddWorkspaceDialog root-constraint hint (member-role-desktop.md
 	// §DECISIONS O1, ui-batch2-mock.md's "New wire this mock assumes"). null for

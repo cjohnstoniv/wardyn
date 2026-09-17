@@ -8,12 +8,98 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
+	"github.com/cjohnstoniv/wardyn/internal/types"
 )
+
+// countingSiteStore is the login fixture's store with ONE observable: how many
+// times the roster was read. /me is the most-polled route in the console, so
+// "did this answer cost a store read" is a property worth pinning rather than
+// re-deriving from a profiler.
+type countingSiteStore struct {
+	*integStore
+	siteReads atomic.Int64
+}
+
+func (s *countingSiteStore) GetSiteConfig(ctx context.Context) (types.SiteConfig, error) {
+	s.siteReads.Add(1)
+	return s.integStore.GetSiteConfig(ctx)
+}
+
+// TestHandleMe_MemberPollPerformsNoSiteConfigRead pins the SHORT-CIRCUIT in
+// member_preview_available.
+//
+// The key ANDs "this deployment keeps a credential per person" (a roster read)
+// with "this caller is an admin" (a context read). Evaluating the roster first
+// put a SECOND GetSiteConfig on every /me — members included, who poll it on a
+// timer and whose answer is unconditionally false. Nothing leaks either way;
+// the order is the whole finding.
+//
+// The count is ONE, not zero: /me has read the site config since 0.7 for the
+// user-drive org switch (userDriveProvider), and that read is not this key's to
+// remove. One is what a member's poll costs; two is the operands the wrong way
+// round, which is what this case fails on.
+func TestHandleMe_MemberPollPerformsNoSiteConfigRead(t *testing.T) {
+	newSrv := func(t *testing.T) (*Server, *countingSiteStore) {
+		t.Helper()
+		h := newHarness(t)
+		st := &countingSiteStore{integStore: &integStore{
+			govEscapeStore: newGovEscapeStore(&capStore{}),
+			site:           agentRoster(perUserAWSRow()),
+		}}
+		cfg := baseTestConfig(h, st)
+		cfg.OIDC = &oidc.Authenticator{}
+		return New(cfg), st
+	}
+
+	t.Run("a member's poll reads no roster", func(t *testing.T) {
+		srv, st := newSrv(t)
+		w := doSSO(t, srv, http.MethodGet, "/api/v1/me",
+			ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember), "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /me = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		var body map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode /me: %v", err)
+		}
+		if body["member_preview_available"] != false {
+			t.Errorf("member_preview_available = %#v, want false for a member", body["member_preview_available"])
+		}
+		if n := st.siteReads.Load(); n != 1 {
+			t.Errorf("a member's /me made %d site-config read(s), want 1 (the user-drive org switch alone) — "+
+				"the role check has to short-circuit BEFORE the roster read on the console's most-polled route", n)
+		}
+	})
+
+	// The control: the answer itself is unchanged for the tier the key is FOR.
+	// A short-circuit that also stopped answering the admin would "fix" the cost
+	// by deleting the feature.
+	t.Run("an admin still gets the availability answer", func(t *testing.T) {
+		srv, st := newSrv(t)
+		w := doSSO(t, srv, http.MethodGet, "/api/v1/me",
+			ssoSession(t, "sub-admin", "admin@corp.example", oidc.RoleAdmin), "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET /me = %d, want 200: %s", w.Code, w.Body.String())
+		}
+		var body map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("decode /me: %v", err)
+		}
+		if body["member_preview_available"] != true {
+			t.Errorf("member_preview_available = %#v, want true on a per_user roster", body["member_preview_available"])
+		}
+		if n := st.siteReads.Load(); n < 2 {
+			t.Errorf("the admin's /me made %d site-config read(s) — the availability answer "+
+				"cannot have been resolved without a roster read beside the drive one", n)
+		}
+	})
+}
 
 // W31-S1-7: /me used to say nothing about when an SSO session would die, so
 // the console had no way to warn ahead of the silent 401 the expiry causes.
