@@ -109,7 +109,10 @@ test.describe("member mode — the banner is the way out", () => {
   // one state a per_user deployment's members are all in on day one, and the
   // console has to (a) offer it and (b) say what it does — the plain banner's
   // ceilings are false inside it.
-  test("the new-member preview offers its own menu item and paints its own banner", async ({ page }) => {
+  // Its own test rather than a second half of the one above, and that is not
+  // tidiness: entering the mode navigates (onEntered's window.location.assign),
+  // so a re-goto in the same test races that navigation and aborts it.
+  test("the account menu offers BOTH postures, and the new one posts no_credential:true", async ({ page }) => {
     await mockSSOAdmin(page);
     const bodies = await captureToggle(page);
     await gotoConsole(page);
@@ -120,15 +123,20 @@ test.describe("member mode — the banner is the way out", () => {
     const preview = menu.getByText(MEMBER_MODE.MENU_NEW);
     await expect(preview).toBeVisible();
     await preview.click();
+    // The key rides ONLY the new posture: a 0.7.4 replica decodes this body
+    // strictly, so the plain toggle above must keep sending {enabled} alone.
     await expect.poll(() => bodies).toEqual([{ enabled: true, no_credential: true }]);
+  });
 
-    // …and once the server answers the posture, the banner is the variant: the
-    // AWS state first, and the ceilings that actually hold inside it.
+  test("the new-member preview paints its own banner and its own ceilings", async ({ page }) => {
     await mockMemberMode(page, true);
     await gotoConsole(page);
+
     const banner = page.getByText(MEMBER_MODE.BANNER_NEW);
     await expect(banner).toBeVisible();
     await expect(banner).toHaveAttribute("title", MEMBER_MODE.CEILINGS_NEW);
+    // The plain sentence must be GONE, not merely joined: inside the preview its
+    // ceiling 4 ("model access still resolves to you") is false.
     await expect(page.getByText(MEMBER_MODE.BANNER)).toHaveCount(0);
   });
 
