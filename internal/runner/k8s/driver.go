@@ -271,15 +271,17 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		// periodically, and the write is never refused. Not `filesystem`: nothing
 		// here binds a byte.
 		//
-		// THAT LIMIT ALONE USED TO BOUND THE WRONG CONTAINER, which is why 0.7.4
-		// disclosed disk_mib as unenforced here: the agent runs in an ephemeral
-		// container the kubelet does not meter at all, so the budget sat on an
-		// idle main container nothing writes in. ephemeralScratchVolumes is the
-		// other half — the two emptyDirs the agent's /tmp and workdir writes land
-		// in, each carrying disk_mib as its sizeLimit, and counted toward the
-		// pod's ephemeral-storage total whichever container writes them. Dotfile
-		// writes elsewhere under the agent's $HOME remain on the ephemeral
-		// container's unmetered writable layer — a smaller, disclosed residual.
+		// THAT LIMIT ALONE BOUND THE WRONG CONTAINER, which is why 0.7.4 disclosed
+		// disk_mib as unenforced here: the agent runs in an ephemeral container the
+		// kubelet does not meter at all, so the budget sat on an idle main
+		// container nothing writes in. ephemeralScratchVolumes NARROWS that — two
+		// emptyDirs, at /tmp and the agent's workdir, each carrying disk_mib as its
+		// sizeLimit and counted toward the pod's ephemeral-storage total whichever
+		// container writes them. A narrowing, not a close: what the agent writes
+		// elsewhere (the rest of $HOME including the toolchain caches; any authored
+		// target outside the workdir) is still on the ephemeral container's
+		// unmetered layer, and that function names the full residual. `eviction`
+		// here therefore means those two paths, not every byte the agent writes.
 		EphemeralDiskEnforcement: types.StorageEnforcementEviction,
 	}, nil
 }

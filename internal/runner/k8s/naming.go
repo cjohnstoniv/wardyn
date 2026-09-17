@@ -206,14 +206,14 @@ const ephemeralStorageRequestFloorMiB int64 = 256
 // that sets nothing still gets a real cap.
 //
 // DiskMiB is limits[ephemeral-storage] PLUS an explicit small request
-// (ephemeralStorageRequestFloorMiB) — asymmetric on purpose, see that const. The
-// agent pod has no volumes unless a drive is mounted (drives.go), so the clone,
-// $HOME, /tmp and every WARDYN_EPHEMERAL_DIRS target land on the container
-// writable layer + logs, which is exactly what the kubelet meters as local
-// ephemeral storage; a drive PVC is never counted against it. Enforcement is
-// types.StorageEnforcementEviction, not a quota: the kubelet measures
-// periodically and KILLS THE POD — it never refuses the write. DiskMiB == 0
-// leaves both keys absent.
+// (ephemeralStorageRequestFloorMiB) — asymmetric on purpose, see that const. What
+// the kubelet counts against it is the pod's container writable layers + logs +
+// its local-ephemeral VOLUMES; a drive PVC is never counted against it. The
+// writable layer of the EPHEMERAL container the agent runs in is counted by
+// neither, which is why ephemeralScratchVolumes exists and what it does and does
+// not reach is stated there. Enforcement is types.StorageEnforcementEviction, not
+// a quota: the kubelet measures periodically and KILLS THE POD — it never refuses
+// the write. DiskMiB == 0 leaves both keys absent (and adds no volumes).
 //
 // PidsLimit still has NO k8s Pod-API equivalent (there is no per-container "max
 // pids" ResourceName), so that one remains a silently-nothing risk and
@@ -244,16 +244,23 @@ func resourceRequirements(res runner.Resources) corev1.ResourceRequirements {
 	return corev1.ResourceRequirements{Requests: requests, Limits: limits}
 }
 
-// The two scratch volumes and where they are mounted. They are the paths the
-// agent actually writes: /tmp (every WARDYN_EPHEMERAL_DIRS target, the per-run
-// CA files runner.AgentIdleScript writes under /tmp/wardyn) and the workdir
-// agent-run cds into, where the clone, the installs and the build output land.
+// The two scratch volumes and where they are mounted: /tmp (where
+// runner.AgentIdleScript writes the per-run CA files, under /tmp/wardyn) and the
+// workdir agent-run cds into, which is the clone's DEFAULT destination.
 //
-// NOT /home/agent ITSELF. A volume there would shadow the baked .bashrc every
-// agent image ships (the attach hint), collide with the reserved drive target
-// runner.DriveTarget under the same home, and hide the read-only ~/.claude bind
-// the subscription path mounts. The two leaf paths are the writes; the home is
-// not ours to replace.
+// TWO PATHS, NOT "where the agent writes". An authored target may legally sit at
+// /work, /workspace or anywhere else under /home/agent
+// (runner.ValidateAuthoredTarget's prefixes), and the toolchain caches a build
+// fills are env-pointed into $HOME rather than the workdir — GOPATH,
+// GOCACHE/GOTMPDIR (runs_dispatch_mounts' toolchain env), ~/.npm, ~/.cache/pip,
+// /opt/rust. None of those are in these two volumes; see this function's doc for
+// what that means for the budget.
+//
+// NOT /home/agent ITSELF, which would cover them: a volume there would shadow the
+// baked .bashrc every agent image ships (the attach hint), collide with the
+// reserved drive target runner.DriveTarget under the same home, and hide the
+// read-only ~/.claude bind the subscription path mounts. The two leaf paths are
+// what can be mounted safely today; the home is not ours to replace.
 const (
 	scratchTmpVolumeName  = "wardyn-tmp"
 	scratchWorkVolumeName = "wardyn-work"
@@ -261,10 +268,11 @@ const (
 	scratchWorkPath       = "/home/agent/work"
 )
 
-// ephemeralScratchVolumes is what makes disk_mib bound THE AGENT'S writes on
-// this substrate rather than only the idle main container's.
+// ephemeralScratchVolumes is what brings the agent's /tmp and workdir writes
+// inside disk_mib on this substrate, where before the budget bound only the idle
+// main container.
 //
-// The gap it closes (disclosed as 0.7.4's known gap (a)): the agent does its
+// The gap it NARROWS (disclosed as 0.7.4's known gap (a)): the agent does its
 // work in an EPHEMERAL container that Exec adds, and the kubelet does not meter
 // an ephemeral container's writable layer at all — resourceRequirements' limit
 // bound a container nothing writes in, so a `dd` from the agent filled the node
@@ -290,10 +298,15 @@ const (
 // resourceRequirements uses, so a pod with no disk budget keeps the volume-less
 // shape this substrate has always produced.
 //
-// STILL UNMETERED, and disclosed rather than papered over: dotfile writes
-// elsewhere under $HOME (~/.wardyn, ~/.ssh, ~/.claude) stay on the ephemeral
-// container's own writable layer. readOnlyRootFilesystem would close that and
-// is NOT set, because the agent legitimately writes those paths.
+// NARROWED, NOT CLOSED, and the residual is the larger half by bytes. Everything
+// the agent writes outside these two paths stays on the ephemeral container's own
+// unmetered writable layer: the rest of $HOME — the toolchain caches a build
+// actually fills (/home/agent/go, ~/.cache/go-build, ~/.gotmp, ~/.npm,
+// ~/.cache/pip) and the dotfiles (~/.wardyn, ~/.ssh, ~/.claude) — /opt/rust, and
+// any authored workspace_repos or ephemeral-source target outside
+// /home/agent/work. readOnlyRootFilesystem would close it and is NOT set, because
+// the agent legitimately writes those paths. Pointing the cache env under the
+// workdir on this substrate, or a third volume for it, is the 0.7.6 follow-up.
 func ephemeralScratchVolumes(diskMiB int64) ([]corev1.Volume, []corev1.VolumeMount) {
 	if diskMiB <= 0 {
 		return nil, nil

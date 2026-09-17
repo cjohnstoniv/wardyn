@@ -106,16 +106,20 @@ func (d *Driver) Exec(ctx context.Context, ref string, argv []string) (string, e
 			Image:   main.Image,
 			Command: recordCmd(runID, argv),
 			Env:     main.Env, // copied verbatim: ephemeral containers inherit nothing
-			// The user drive, for the same reason as Env and read the same way —
-			// from the live pod. An ephemeral container inherits no mounts either,
-			// and the agent's real work happens HERE, not in the idle main
-			// container: without this the member's drive would be mounted into a
-			// container their agent never touches. Copying the main container's
-			// mounts rather than rebuilding one keeps the two in step by
-			// construction and cannot invent anything (the apiserver refuses a
-			// mount naming a volume the pod does not have). The drive is the only
-			// mount that ever appears there — spec.Mounts is refused outright by
-			// CreateSandbox.
+			// The user drive AND the disk budget's scratch volumes, for the same
+			// reason as Env and read the same way — from the live pod. An ephemeral
+			// container inherits no mounts either, and the agent's real work happens
+			// HERE, not in the idle main container: without this the member's drive
+			// would be mounted into a container their agent never touches, and
+			// ephemeralScratchVolumes would bound a filesystem the agent does not
+			// write. Copying the main container's mounts rather than rebuilding them
+			// keeps the two in step by construction and cannot invent anything (the
+			// apiserver refuses a mount naming a volume the pod does not have).
+			// Those two sources are the only mounts that ever appear here —
+			// spec.Mounts is refused outright by CreateSandbox — and NONE of them may
+			// carry a subPath, which the apiserver forbids on an ephemeral container:
+			// this verbatim copy is what would turn one into a dispatch failure, and
+			// TestCreateSandbox_NoMountCarriesASubPath is the pin.
 			VolumeMounts:    main.VolumeMounts,
 			SecurityContext: agentSecurityContext(),
 			// Resources deliberately left zero-value: the apiserver rejects a

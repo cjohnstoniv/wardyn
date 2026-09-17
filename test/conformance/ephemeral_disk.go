@@ -20,11 +20,16 @@ import (
 )
 
 // ephemeralFillTarget is one path the eviction case fills, and one sub-run of
-// it. TWO of them, because "the run's disk_mib is enforced" is a claim about
-// everywhere the agent writes, not about one directory: /tmp carries the CA
-// files and every WARDYN_EPHEMERAL_DIRS target, and the workdir is where the
-// clone, the installs and the build output land. A gate that only ever filled
-// /tmp went green on 0.7.5's first fill and left the bigger hole open.
+// it. TWO of them, because a substrate's disk budget is claimed over BOTH paths
+// its agent is told it may write: /tmp, which carries the per-run CA files, and
+// the workdir, which is where a clone at its default destination lands. A gate
+// that only ever filled /tmp would go green on a substrate whose workdir writes
+// are unbounded — which is exactly the shape 0.7.4 disclosed.
+//
+// It is not a claim about "everywhere the agent writes", and this case does not
+// make one: a run can be authored to write outside both paths, and a toolchain
+// cache usually is. What the k8s substrate does and does not reach is stated in
+// its own ephemeralScratchVolumes, next to the mounts.
 //
 // substrateOwned is the difference between the two, and it changes what an
 // unwritable target MEANS:
@@ -110,7 +115,7 @@ const (
 // Background — r.Wait is bounded to opts.timeout() so it cannot drain the poll's
 // share. Summed instead of shared, one sub-run could take 3m+4m+4m = 11m against
 // the Makefile's `go test -timeout`, and a -timeout expiry is a panic that kills
-// the package and discards every verdict the other seven cases already produced.
+// the package and discards every verdict the rest of the suite already produced.
 // TestEphemeralCaseBudgetFitsTheMakefileTimeout pins the arithmetic, over the
 // whole target list rather than over one target.
 const ephemeralEvictionBudget = 4 * time.Minute
@@ -120,12 +125,15 @@ const ephemeralEvictionBudget = 4 * time.Minute
 // the Status poll.
 func ephemeralFillBudget(opts Options) time.Duration { return opts.timeout() + ephemeralEvictionBudget }
 
-// ephemeralCaseBudget is what the WHOLE eviction sub-case can cost: one fill
-// budget per target, since the targets run in sequence. Named so the
-// Makefile-timeout pin can read it rather than re-deriving the sum it is
-// asserting about.
+// ephemeralCaseBudget is what the WHOLE case can cost: one fill budget per
+// target, since the targets run in sequence, PLUS the oversized sub-case's own
+// operation timeout. That last term is easy to forget and was: the oversized
+// sub-case used to share the eviction sub-case's deadline and now takes a fresh
+// one, so leaving it out would have the Makefile-timeout pin assert about 14m
+// while the case could really spend 17m. Named so that pin can read this rather
+// than re-derive the sum it is asserting about.
 func ephemeralCaseBudget(opts Options) time.Duration {
-	return time.Duration(len(ephemeralFillTargets)) * ephemeralFillBudget(opts)
+	return time.Duration(len(ephemeralFillTargets))*ephemeralFillBudget(opts) + opts.timeout()
 }
 
 // testEphemeralDiskLimit is the ephemeral-disk enforcement gate. It runs ONLY on a

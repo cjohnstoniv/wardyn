@@ -281,12 +281,13 @@ test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TE
 	@echo "Running conformance tests on Docker (WARDYN_TEST_DOCKER=1 required)..."
 	WARDYN_TEST_DOCKER=1 go test -v -tags docker -timeout 10m ./test/conformance/...
 
-# 20m, not 10m: the ephemeral-disk eviction case may spend opts.timeout() plus
-# ephemeralEvictionBudget (7m) waiting for the kubelet ONCE PER FILL TARGET, and 0.7.5 gave
-# it two (/tmp and the agent's workdir) — 14m of worst case before the other seven cases
-# run at all. A -timeout expiry is a panic that discards every verdict already produced, so
-# this is headroom for slow evictions, not a licence for a slower suite (pinned by
-# TestEphemeralCaseBudgetFitsTheMakefileTimeout, which reads BOTH numbers).
+# 20m, not 10m: the ephemeral-disk case may spend opts.timeout() plus ephemeralEvictionBudget
+# (7m) waiting for the kubelet ONCE PER FILL TARGET, and 0.7.5 gave it two (/tmp and the
+# agent's workdir), plus one more operation timeout for the oversized sub-case — 17m of worst
+# case before any other case in the suite runs at all. A -timeout expiry is a panic that
+# discards every verdict already produced, so this is headroom for slow evictions, not a
+# licence for a slower suite (pinned by TestEphemeralCaseBudgetFitsTheMakefileTimeout, which
+# reads BOTH numbers).
 test-conformance-k8s: ## Run the conformance suite on Kubernetes (needs WARDYN_TEST_K8S=1 + a kubeconfig context)
 	@echo "Running conformance tests on Kubernetes (WARDYN_TEST_K8S=1 + WARDYN_PROXY_IMAGE + WARDYN_TEST_K8S_AGENT_IMAGE required; uses the current kubeconfig context)..."
 	WARDYN_TEST_K8S=1 go test -v -tags k8s -timeout 20m ./test/conformance/...

@@ -26,7 +26,7 @@ var makefileTimeoutRe = regexp.MustCompile(`-timeout\s+(\S+)`)
 // about: one sub-case could wait 3m for r.Wait, 4m for the eviction, and a
 // further FRESH 4m for the Status poll — 11m against a package `-timeout 10m`. A
 // Go -timeout expiry is not a red case; it is a panic that kills the package and
-// discards every verdict the other seven cases already produced. So the failure
+// discards every verdict the rest of the suite already produced. So the failure
 // mode of a slow eviction was a LOST conformance run.
 //
 // It reads both numbers rather than restating either: the budget from the code
