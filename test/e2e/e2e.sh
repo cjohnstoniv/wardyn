@@ -158,17 +158,15 @@ ok "stack healthy ($(hc "${BASE}/healthz"))"
 
 # ── 2. create a governed run against the fixture image ─────────────────────--
 log "Creating a governed run (agent=${FIXTURE_AGENT})"
-# --interactive, NO --task. The fixture is a bare alpine that exists to be probed
-# with `docker exec`; it ships no /usr/local/bin/agent-run and no wardyn-rec. A
-# TASK run execs exactly those two, the exec exits 127, and the run completes
-# FAILED a second after it was created (run.complete failure exit_code=127 — what
-# the hosted nightly showed once this script printed the run's own audit rows).
-# Every assertion after that then measured a TERMINAL run: its token refused at
-# every /internal/* door since 0.7.4, no egress audit, a 409 on kill. An
-# interactive run execs nothing and idles on the driver's own idle script, which
-# is the state this whole script assumes: a live sandbox, held open.
+# A TASK run, against a fixture that can hold one open. The fixture is a bare
+# alpine probed with `docker exec`; test/e2e/fixtures ships stub agent-run and
+# wardyn-rec so the dispatcher's task exec stays alive instead of exiting 127
+# (which completed this run FAILED a second after creation, and every assertion
+# below then measured a TERMINAL run). Not --interactive: an interactive run's
+# MAIN PROCESS is the image's real agent-run --idle contract, which a stub
+# fixture does not implement.
 CREATE="$("${COMPOSE[@]}" exec -T -e WARDYN_URL="${BASE}" -e WARDYN_ADMIN_TOKEN="${ADMIN_TOKEN}" \
-  wardynd /usr/local/bin/wardyn run --agent "${FIXTURE_AGENT}" --repo octocat/Hello-World --interactive)"
+  wardynd /usr/local/bin/wardyn run --agent "${FIXTURE_AGENT}" --repo octocat/Hello-World --task "wardyn e2e")"
 echo "${CREATE}"
 RUN_ID="$(printf '%s\n' "${CREATE}" | awk '/^created run/{print $3; exit}')"
 [[ -n "${RUN_ID}" ]] || die "could not parse created run id"
