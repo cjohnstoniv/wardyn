@@ -102,10 +102,17 @@ fi
 # attachable, and the attach hint then tells the human what to run by hand.
 if [[ "${1:-}" == "--idle" ]]; then
     if command -v tmux >/dev/null 2>&1; then
-        if tmux new-session -d -s wardyn signin-pane.sh; then
-            echo "agent-run: idle mode — sign-in session started; every attach joins it" >&2
-        elif tmux respawn-pane -k -t wardyn signin-pane.sh; then
-            echo "agent-run: idle mode — an attach won the session name; respawned its pane on the sign-in" >&2
+        # start_wardyn_session (agent-run-lib.sh) is the ONE copy of the
+        # create-or-take-over bootstrap, shared with claude-code and codex-cli:
+        # same race, same answer. This image writes no agent-started marker —
+        # there is no coding agent here for attach-bashrc to start — so the
+        # failure arm has nothing to undo, only something to say.
+        if start_wardyn_session signin-pane.sh; then
+            if [[ "$WARDYN_SESSION_START" == "created" ]]; then
+                echo "agent-run: idle mode — sign-in session started; every attach joins it" >&2
+            else
+                echo "agent-run: idle mode — an attach won the session name; respawned its pane on the sign-in" >&2
+            fi
         else
             echo "agent-run: WARNING could not start the sign-in session; attach and run '${WARDYN_AWS_SSO_LOGIN_COMMAND}' by hand" >&2
         fi

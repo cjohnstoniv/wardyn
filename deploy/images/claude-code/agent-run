@@ -74,14 +74,10 @@ set -euo pipefail
 # resolve_workdir) — identical across every agent image's agent-run.
 source /usr/local/bin/agent-run-lib.sh
 
-# DRAFT (M2 canon pending) — the only two lines a human reads in the boot pane
-# before the agent takes it over.  The pane is created BEFORE the workspace prep
-# it waits on, so without the first line an operator who attaches during an 18 s
-# clone joins a blank pane and reads the run as broken.  The second is the honest
-# end of that wait: the idle process that owed us prep-done is gone, so the seed
-# is about to run against whatever the workspace turned out to be.
-BOOT_SEED_PREPARING='⏳ Preparing workspace… the agent starts here when it is ready.'
-BOOT_SEED_PREP_GONE='wardyn: workspace preparation ended without finishing — starting the agent anyway; check the run for a failed clone.'
+# The two lines this image's boot pane prints while it waits (BOOT_SEED_PREPARING,
+# BOOT_SEED_PREP_GONE) are DRAFT constants in agent-run-lib.sh, sourced above:
+# codex-cli's boot pane prints the same two, and one sentence with two copies is
+# drift with extra steps.
 
 # ── anthropic auth-mode detection ─────────────────────────────────────────────
 # Decide how claude should authenticate to the model backend and wire the env
@@ -407,18 +403,16 @@ start_boot_session() {
     fi
     mkdir -p "$HOME/.wardyn"
     : > "$HOME/.wardyn/agent-started"
-    # The pane waits on OUR liveness rather than a clock (see --boot-seed).  The
-    # tmux server inherits this on the create path; on the respawn path the server
-    # is the ATTACH's, so hand it over explicitly — best-effort, the pane falls
-    # back to pid 1, which is this same process on both runners.
-    export WARDYN_IDLE_PID=$$
-    if tmux new-session -d -s wardyn "agent-run --boot-seed"; then
-        echo "agent-run: idle mode — boot session started for the run's seed (attach joins it)" >&2
-        return 0
-    fi
-    tmux set-environment -t wardyn WARDYN_IDLE_PID "$$" 2>/dev/null || true
-    if tmux respawn-pane -k -t wardyn "agent-run --boot-seed"; then
-        echo "agent-run: idle mode — an attach won the session name; respawned its pane on the run's seed" >&2
+    # start_wardyn_session (agent-run-lib.sh) is the ONE copy of the create-or-
+    # take-over bootstrap, shared with aws-sso and codex-cli: same race, same
+    # answer, and three copies is how it drifted.  It also exports
+    # WARDYN_IDLE_PID, which is what the pane's wait is bounded by.
+    if start_wardyn_session "agent-run --boot-seed"; then
+        if [[ "$WARDYN_SESSION_START" == "created" ]]; then
+            echo "agent-run: idle mode — boot session started for the run's seed (attach joins it)" >&2
+        else
+            echo "agent-run: idle mode — an attach won the session name; respawned its pane on the run's seed" >&2
+        fi
     else
         # BOTH tmux paths failed: there is no boot pane, so the marker written
         # above is a lie that costs the human their agent entirely —
@@ -505,60 +499,13 @@ if [[ "${1:-}" == "--boot-seed" ]]; then
         echo "agent-run: boot-seed mode with no WARDYN_INTERACTIVE_SEED — nothing to start" >&2
         exec bash
     fi
-    # WAIT for --idle's prep.  start_boot_session creates this pane BEFORE prep
-    # (so an early attach cannot take the `wardyn` session name), which means the
-    # pane opens while ~/work may still be empty and ~/.wardyn/workdir unwritten —
-    # a seed that started there would run the agent against a workspace with no
-    # repo in it.
-    #
-    # The bound is PREP ITSELF STILL RUNNING, not a clock.  Before this pane
-    # existed the seed simply started after prep, however long the clone took, and
-    # a fixed cap would silently reintroduce exactly the bug above on a big repo:
-    # at the cap the pane would start `claude "<seed>"` in the ~/work fallback
-    # against a half-cloned tree, with the operator's prompt already submitted.
-    # --idle writes prep-done LAST and UNCONDITIONALLY (even when the clone
-    # failed) and then `exec sleep infinity` as PID 1, so "the idle process is
-    # gone" is the only honest end of the wait, and it cannot hang.
-    #
-    # Say so BEFORE the loop, not after: a human attaching during an 18 s prep
-    # joins this pane, and a blank one reads as a broken run.  (The sibling
-    # sign-in pane prints first for the same reason; attach-bashrc.sh prints its
-    # own "Preparing workspace" line in the shells it owns.)
-    #
-    # No stdin drain here, deliberately: claude 2.1.231 discards type-ahead, so an
-    # Enter a human sends into this pane while it waits does NOT answer the trust
-    # prompt the agent raises afterwards (verified by execution — two Enters sent
-    # during the wait left the prompt up and unanswered, with no
-    # hasTrustDialogAccepted written).  The SHELL form's buffered bytes reach its
-    # `exec bash`, which is the operator's own typing in their own sandbox, exactly
-    # as before this pane existed.
-    printf '%s\n' "$BOOT_SEED_PREPARING" >&2
-    # PID 1 is the fallback because it IS `agent-run --idle` on both runners (the
-    # driver launches it as the container's whole main process, and it later execs
-    # `sleep infinity` keeping the same pid); WARDYN_IDLE_PID is the exact one when
-    # start_boot_session could hand it over.
-    _idle_pid="${WARDYN_IDLE_PID:-1}"
-    while [[ ! -f "$HOME/.wardyn/prep-done" ]] && kill -0 "$_idle_pid" 2>/dev/null; do sleep 1; done
-    if [[ ! -f "$HOME/.wardyn/prep-done" ]]; then
-        printf '%s\n' "$BOOT_SEED_PREP_GONE" >&2
-    fi
-    unset _idle_pid
-
-    # The OTHER cost of creating the session first: the tmux SERVER inherited
-    # --idle's env from BEFORE prep, and provision_git_helper_secret exports
-    # WARDYN_GIT_HELPER_SECRET DURING it — so this pane no longer receives it by
-    # inheritance the way it did when the session was created last.  Without it
-    # the credential helper REFUSES to mint (the secret file exists, so it does
-    # not fall open) and a seeded agent's git would silently lose brokered auth.
-    # Re-read it from the 0400 file prep wrote: the same file the helper checks
-    # the presented secret against, readable by this uid by design — see the
-    # caller-auth gate's residual note in this file's header.  `tmux
-    # set-environment` cannot do this job: it reaches new panes, and this pane is
-    # already running.
-    if [[ -z "${WARDYN_GIT_HELPER_SECRET:-}" && -r "$HOME/.wardyn/git-helper.secret" ]]; then
-        WARDYN_GIT_HELPER_SECRET="$(cat "$HOME/.wardyn/git-helper.secret")"
-        export WARDYN_GIT_HELPER_SECRET
-    fi
+    # WAIT for --idle's prep, then recover the git-helper secret the tmux server
+    # could not have inherited.  Both live in agent-run-lib.sh, called by this
+    # image's boot pane and codex-cli's: the wait is bounded by prep still
+    # RUNNING rather than by a clock, and the secret is re-read from prep's 0400
+    # file.  See the functions for why each is shaped the way it is.
+    boot_seed_wait_for_prep
+    recover_git_helper_secret
 
     # Land where --idle prepared the workspace (it wrote the resolved dir last);
     # ~/work is the fallback, the same one resolve_workdir falls back to.

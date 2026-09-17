@@ -71,12 +71,63 @@ if [[ "${1:-}" == "--selftest" ]]; then
     fi
 fi
 
+# ── boot session (a seeded interactive run starts its agent at BOOT) ─────────
+# THE SESSION MUST WIN THE NAME, so this runs BEFORE the shared prep rather than
+# after it.  Both drivers attach with `tmux new-session -A -s wardyn bash` the
+# instant the container runs (attachShell, internal/runner/docker/session.go and
+# its k8s sibling) and the console opens the run seconds later, while prep is a
+# measured ~18 s when the run clones a repo.  Created after prep — which is what
+# this image did through 0.7.4 — the session loses that race outright:
+# `new-session` fails as `duplicate session: wardyn`, the seed never starts, and
+# the only record is a warning on the container's stderr where nobody is looking.
+# The operator's task text silently dropped, on a PUBLISHED image, after the same
+# race had already been fixed in claude-code and aws-sso.
+#
+# The create-or-take-over bootstrap itself is start_wardyn_session in
+# agent-run-lib.sh — one copy for all three images, including the respawn belt
+# for an attach that beats even this.
+#
+# The agent-started marker is written FIRST, before the session can exist, for
+# the SECOND half of the same race: attach-bashrc.sh's first-shell block starts a
+# bare agent unless that marker is already there, so an attach shell that sourced
+# ~/.bashrc during prep would launch its own unseeded agent beside this one.  If
+# tmux is missing, or tmux refuses BOTH the create and the respawn, the marker is
+# not left behind: no pane can exist, so attach-bashrc's auto-start is the only
+# agent the human can get and suppressing it would cost them both.
+#
+# No client text is in the command string: --boot-seed reads the seed from
+# WARDYN_INTERACTIVE_SEED in the env the tmux server inherits from THIS process.
+#
+# No-op without a seed, which keeps the unseeded interactive run — the console's
+# default shape — byte-identical: no session, no marker, and attach-bashrc.sh
+# still starts the agent on first attach.
+start_boot_session() {
+    [[ -n "${WARDYN_INTERACTIVE_SEED:-}" ]] || return 0
+    if ! command -v tmux >/dev/null 2>&1; then
+        echo "agent-run: WARNING no tmux in this image; the run's seed cannot start at boot (attach still works)" >&2
+        return 0
+    fi
+    mkdir -p "$HOME/.wardyn"
+    : > "$HOME/.wardyn/agent-started"
+    if start_wardyn_session "agent-run --boot-seed"; then
+        if [[ "$WARDYN_SESSION_START" == "created" ]]; then
+            echo "agent-run: idle mode — boot session started for the run's seed (attach joins it)" >&2
+        else
+            echo "agent-run: idle mode — an attach won the session name; respawned its pane on the run's seed" >&2
+        fi
+    else
+        rm -f "$HOME/.wardyn/agent-started"
+        echo "agent-run: WARNING could not create the boot tmux session; the seed will not run (attach still works)" >&2
+    fi
+}
+
 # ── idle mode (INTERACTIVE runs) ──────────────────────────────────────────────
 # Interactive counterpart to task mode: prepare the workspace (MITM CA, artifact
 # config, git-helper secret, CLONE the repo into ~/work) then hold open for
 # `wardyn attach`, so the attach shell isn't empty. (No SSH lane in the codex image.)
 if [[ "${1:-}" == "--idle" ]]; then
     : "${HOME:=/home/agent}"; export HOME
+    start_boot_session  # BEFORE any prep — see the function for why
     install_mitm_ca
     prepare_claude_config_dir  # no-op unless CLAUDE_CONFIG_DIR is set (RO cred mount)
     install_artifact_config
@@ -95,40 +146,6 @@ if [[ "${1:-}" == "--idle" ]]; then
     mkdir -p "$HOME/.wardyn"
     printf '%s\n' "$workdir" > "$HOME/.wardyn/workdir"
     : > "$HOME/.wardyn/prep-done"
-    # BOOT SESSION: a seeded interactive run starts its agent (or startup command)
-    # HERE, at boot, instead of on first attach.  Create the persistent `wardyn`
-    # tmux session detached, running `agent-run --boot-seed`.  The attach chain is
-    # `tmux new-session -A -s wardyn` (attach-OR-create, same uid), so the human's
-    # attach JOINS this very session — same pane, same scrollback, work already in
-    # progress.
-    #
-    # The agent-started marker is written FIRST, before the session can exist, so
-    # ~/.bashrc's first-shell block (attach-bashrc.sh) can never bare-launch a
-    # SECOND agent over this one.  If tmux is missing or refuses, the seed is
-    # simply not started — an interactive run must still come up attachable.
-    #
-    # No client text is in the command string: --boot-seed reads the seed from
-    # WARDYN_INTERACTIVE_SEED in the env the tmux server inherits from THIS
-    # process.  That inheritance also carries WARDYN_GIT_HELPER_SECRET into the
-    # boot pane (and so into the session the human joins), which the caller-auth
-    # gate's header note above deliberately does not promise: a convenience delta,
-    # not a boundary one — the 0400 secret file is readable by the agent uid either
-    # way.
-    #
-    # `exec sleep infinity` below is UNCHANGED: tmux daemonizes its server, so the
-    # container's held-open PID is the same idle process it has always been.
-    if [[ -n "${WARDYN_INTERACTIVE_SEED:-}" ]]; then
-        if command -v tmux >/dev/null 2>&1; then
-            : > "$HOME/.wardyn/agent-started"
-            if tmux new-session -d -s wardyn "agent-run --boot-seed"; then
-                echo "agent-run: idle mode — boot session started for the run's seed (attach joins it)" >&2
-            else
-                echo "agent-run: WARNING could not create the boot tmux session; the seed will not run (attach still works)" >&2
-            fi
-        else
-            echo "agent-run: WARNING no tmux in this image; the run's seed cannot start at boot (attach still works)" >&2
-        fi
-    fi
     echo "agent-run: idle mode — workspace prepared ($workdir), holding open for attach" >&2
     exec sleep infinity
 fi
@@ -169,6 +186,16 @@ if [[ "${1:-}" == "--boot-seed" ]]; then
         echo "agent-run: boot-seed mode with no WARDYN_INTERACTIVE_SEED — nothing to start" >&2
         exec bash
     fi
+    # WAIT for --idle's prep, then recover the git-helper secret the tmux server
+    # could not have inherited.  Both live in agent-run-lib.sh and are shared with
+    # claude-code's boot pane: the session is created BEFORE prep now, so this
+    # pane opens while ~/work may still be empty and ~/.wardyn/workdir unwritten,
+    # and provision_git_helper_secret exports its secret DURING a prep this pane's
+    # tmux server predates.  See the functions for why the wait is bounded by prep
+    # still RUNNING rather than by a clock.
+    boot_seed_wait_for_prep
+    recover_git_helper_secret
+
     # Land where --idle prepared the workspace (it wrote the resolved dir last);
     # ~/work is the fallback, the same one resolve_workdir falls back to.
     workdir="$(cat "$HOME/.wardyn/workdir" 2>/dev/null || true)"

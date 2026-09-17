@@ -655,15 +655,16 @@ func TestClaudeAgentRun_BootSeedWaitsForPrep(t *testing.T) {
 	}
 }
 
-// ccShellConst reads a single-quoted shell constant out of the real agent-run,
+// ccShellConst reads a single-quoted shell constant out of the SHARED library,
 // so every assertion below goes through the ONE definition rather than a second
-// copy of the prose.
+// copy of the prose. It lives there rather than in claude-code's agent-run
+// because codex-cli's boot pane prints the same two lines.
 func ccShellConst(t *testing.T, name string) string {
 	t.Helper()
 	re := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(name) + `='([^']*)'`)
-	m := re.FindStringSubmatch(ccRead(t, ccAbs(t, ccAgentRunPath)))
+	m := re.FindStringSubmatch(ccRead(t, ccAbs(t, ccAgentRunLibPath)))
 	if m == nil {
-		t.Fatalf("claude-code agent-run defines no %s — the boot pane has no %s to print", name, name)
+		t.Fatalf("agent-run-lib.sh defines no %s — the boot panes have no %s to print", name, name)
 	}
 	return m[1]
 }

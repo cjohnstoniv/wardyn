@@ -552,6 +552,118 @@ maybe_exec_task_mode() {
     fi
 }
 
+# ── the `wardyn` tmux session, created ONCE, here ────────────────────────────
+# start_wardyn_session <pane-cmd> — create the persistent `wardyn` session
+# running <pane-cmd>, or take over the one an attach already made.
+#
+# ONE COPY, because this is one race and three images meet it. Both drivers
+# attach with `tmux new-session -A -s wardyn bash` (attach-OR-create, same uid —
+# attachShell in internal/runner/docker/session.go and its k8s sibling) the
+# INSTANT the container runs, and the console opens the run seconds later, while
+# the shared prep is a measured ~18 s. So:
+#
+#   - the session is created BEFORE prep, or an early attach wins the name and
+#     `new-session` fails as `duplicate session: wardyn` — the pane's whole job
+#     silently dropped, with only a warning on a stderr nobody reads;
+#   - and for the attach that beats even that, the belt: respawn THAT session's
+#     pane on our command instead. `-k` kills the bare `bash` the attach created;
+#     the human's client stays attached and watches the real thing start.
+#
+# Three copies of this is how it drifted: claude-code handed state to the respawn
+# path via `set-environment` and aws-sso did not, and codex-cli had neither the
+# respawn nor the ordering — the SAME race the other two had already fixed, in an
+# image that IS published.
+#
+# WARDYN_IDLE_PID is exported for the pane's own liveness-bounded wait (see
+# boot_seed_wait_for_prep). The tmux server inherits it on the create path; on the
+# respawn path the server is the ATTACH's, so it is handed over explicitly —
+# best-effort, since the pane falls back to pid 1, which is this same process on
+# both runners.
+#
+# CONTRACT: callers check for tmux themselves (what a missing tmux costs differs
+# per image, and so does what they say about it), and callers own their own
+# markers. Returns 0 with WARDYN_SESSION_START set to `created` or `respawned`;
+# returns 1 when tmux refused BOTH, which is the caller's signal to undo whatever
+# it wrote in anticipation of a pane that does not exist.
+start_wardyn_session() {
+    WARDYN_SESSION_START=""
+    export WARDYN_IDLE_PID=$$
+    if tmux new-session -d -s wardyn "$1"; then
+        WARDYN_SESSION_START="created"
+        return 0
+    fi
+    tmux set-environment -t wardyn WARDYN_IDLE_PID "$$" 2>/dev/null || true
+    if tmux respawn-pane -k -t wardyn "$1"; then
+        WARDYN_SESSION_START="respawned"
+        return 0
+    fi
+    return 1
+}
+
+# DRAFT (M2 canon pending) — the only two lines a human reads in a boot pane
+# before the agent takes it over. The pane is created BEFORE the workspace prep
+# it waits on, so without the first line an operator who attaches during an 18 s
+# clone joins a blank pane and reads the run as broken. The second is the honest
+# end of that wait: the idle process that owed us prep-done is gone, so the seed
+# is about to run against whatever the workspace turned out to be.
+#
+# HERE, not in one image's agent-run, because both boot panes print them and two
+# copies of one sentence is drift with extra steps.
+BOOT_SEED_PREPARING='⏳ Preparing workspace… the agent starts here when it is ready.'
+BOOT_SEED_PREP_GONE='wardyn: workspace preparation ended without finishing — starting the agent anyway; check the run for a failed clone.'
+
+# boot_seed_wait_for_prep — hold the boot pane until --idle's prep is done.
+#
+# The pane opens while ~/work may still be empty and ~/.wardyn/workdir unwritten,
+# because it had to be created before prep to win the session name. A seed that
+# started there would run the agent against a workspace with no repo in it, which
+# is the failure the boot session exists to prevent.
+#
+# THE BOUND IS PREP ITSELF STILL RUNNING, NOT A CLOCK. Before this pane existed
+# the seed simply started after prep, however long the clone took, and a fixed cap
+# would silently reintroduce exactly that bug on a big repo: at the cap the pane
+# would start the agent on the operator's already-submitted prompt against a
+# half-cloned tree. --idle writes prep-done LAST and UNCONDITIONALLY (even when
+# the clone failed) and then `exec sleep infinity` as PID 1, so "the idle process
+# is gone" is the only honest other end, and this cannot hang.
+#
+# Says so BEFORE the loop, not after: a human attaching during an 18 s prep joins
+# this pane, and a blank one reads as a broken run.
+#
+# No stdin drain, deliberately: an agent CLI discards type-ahead, so an Enter a
+# human sends into this pane while it waits does not answer a prompt the agent
+# raises afterwards (verified by execution). The SHELL seed form's buffered bytes
+# reach its own `exec bash` — the operator's own typing in their own sandbox,
+# exactly as before this pane existed.
+boot_seed_wait_for_prep() {
+    printf '%s\n' "$BOOT_SEED_PREPARING" >&2
+    # PID 1 is the fallback because it IS `agent-run --idle` on both runners (the
+    # driver launches it as the container's whole main process, and it later execs
+    # `sleep infinity` keeping the same pid); WARDYN_IDLE_PID is the exact one
+    # start_wardyn_session handed over.
+    local idle_pid="${WARDYN_IDLE_PID:-1}"
+    while [[ ! -f "$HOME/.wardyn/prep-done" ]] && kill -0 "$idle_pid" 2>/dev/null; do sleep 1; done
+    [[ -f "$HOME/.wardyn/prep-done" ]] || printf '%s\n' "$BOOT_SEED_PREP_GONE" >&2
+}
+
+# recover_git_helper_secret — the OTHER cost of creating the session first.
+#
+# The tmux SERVER inherited --idle's env from BEFORE prep, and
+# provision_git_helper_secret exports WARDYN_GIT_HELPER_SECRET DURING it — so a
+# boot pane no longer receives it by inheritance the way it did when the session
+# was created last. Without it the credential helper REFUSES to mint (the secret
+# file exists, so it does not fall open) and a seeded agent's git silently loses
+# brokered auth. Re-read it from the 0400 file prep wrote: the same file the
+# helper checks the presented secret against, readable by this uid by design.
+# `tmux set-environment` cannot do this job — it reaches NEW panes, and this pane
+# is already running.
+recover_git_helper_secret() {
+    if [[ -z "${WARDYN_GIT_HELPER_SECRET:-}" && -r "$HOME/.wardyn/git-helper.secret" ]]; then
+        WARDYN_GIT_HELPER_SECRET="$(cat "$HOME/.wardyn/git-helper.secret")"
+        export WARDYN_GIT_HELPER_SECRET
+    fi
+}
+
 # ── boot-seed session recording wrap ─────────────────────────────────────────
 # boot_seed_rec_wrap fills the global WARDYN_REC_WRAP array with the wardyn-rec
 # prefix a boot-seed pane runs its seed under, or leaves it EMPTY when this
