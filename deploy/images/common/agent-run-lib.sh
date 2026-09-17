@@ -210,9 +210,16 @@ materialize_managed_claude_config() {
 seed_claude_onboarding() {
     local cfg="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}"
     mkdir -p "$cfg" 2>/dev/null || true
+    # `2>/dev/null` BEFORE the `>`: redirections are applied left to right, and
+    # the "cannot create" a read-only target produces is the SHELL's own message
+    # on fd 2 — with the order reversed it is emitted while fd 2 is still the
+    # real one and lands on the container's stderr, or on the boot pane the human
+    # is attached to. Failing to seed is survivable; narrating the failure at an
+    # operator who can do nothing about it is the thing this function exists to
+    # avoid.
     local f
     for f in "${HOME}/.claude.json" "${cfg}/.claude.json"; do
-        [[ -f "$f" ]] || printf '%s\n' '{"hasCompletedOnboarding":true}' > "$f" 2>/dev/null || true
+        [[ -f "$f" ]] || printf '%s\n' '{"hasCompletedOnboarding":true}' 2>/dev/null > "$f" || true
     done
 }
 

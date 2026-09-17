@@ -282,6 +282,43 @@ RUN git config --system credential.helper \
 # fallback only for api-key mode.
 # No provider base URL is preset: that is the derived image's choice.
 
+# ── What a Claude Code CLI fetches on its OWN behalf, OFF ─────────────────────
+# INERT IN THIS IMAGE, AND HERE ON PURPOSE. agent-base ships no coding agent, so
+# nothing reads these three vars as built — but this is the image the PUBLISHED
+# claude-code lane actually is: install.sh maps the `claude-code` harness key to
+# ghcr.io/…/agent-base, and the BYOI recipe at the top of this file is
+# `FROM agent-base` + your own CLI. agent-claude-code is a local build recipe
+# (0.6.2, licensing) published nowhere, so its Dockerfile's copy of this block
+# reaches nobody who installs Wardyn the documented way.
+#
+# The DEFAULT interactive run is the path that needs IMAGE env specifically: with
+# no seed, `claude` is started by attach-bashrc.sh in a fresh attach exec that is
+# not a descendant of agent-run, so agent-run-lib.sh's exports cannot reach it.
+# Only ENV a derived image inherits does.
+#
+# What each one removes, measured host-by-host through a real proxy
+# (local/v075/evidence/agent-boot-egress/), because the obvious attribution was
+# wrong once already:
+#   - CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL — the reported pair.
+#     On first REPL start the CLI auto-installs the official PLUGIN MARKETPLACE
+#     from downloads.claude.ai, git-falling-back to github.com. Beyond the
+#     first-use approvals it parks: a governed, version-pinned image must not
+#     fetch and install third-party code at start.
+#   - DISABLE_AUTOUPDATER — NOT what removes downloads.claude.ai (on an npm
+#     install the update check dials registry.npmjs.org, which the default policy
+#     already allows). Off anyway: a pinned sandbox must not upgrade itself
+#     mid-run. A human's `claude update` still works.
+#   - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC — the raw.githubusercontent.com
+#     changelog fetch, plus telemetry / error intake.
+#
+# A derived image that installs a DIFFERENT agent is unaffected: three unread
+# strings in its environment. One that installs Claude Code inherits the quiet
+# boot without having to know this list exists — which is the point, and is
+# written down as a contract in deploy/images/README.md.
+ENV DISABLE_AUTOUPDATER=1 \
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+    CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1
+
 WORKDIR /home/agent/work
 
 USER agent

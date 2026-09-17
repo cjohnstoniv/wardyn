@@ -165,6 +165,47 @@ gains `tmux` (the same attach-shell fallback chain as every other image) and
 the same two SSH-gateway binaries, but deliberately **not** `openssh-client`/
 `corkscrew`/baked host keys — its SSH-clone story is unchanged.
 
+### An image that runs Claude Code (`claude-code`, `full`, BYOI `FROM agent-base`)
+
+Also not part of the numbered contract — no other agent's CLI reads any of it —
+but an image whose agent is **Claude Code** must carry two things, or its first
+interactive run parks first-use approvals on hosts the operator never chose and
+opens on a product tour instead of the agent:
+
+1. **These three `ENV` lines, in the Dockerfile.** `agent-base` already sets
+   them, so `FROM agent-base` inherits them and a BYOI author needs to do
+   nothing; an image built from some other base must set them itself.
+
+   ```dockerfile
+   ENV DISABLE_AUTOUPDATER=1 \
+       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+       CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1
+   ```
+
+   `…MARKETPLACE_AUTOINSTALL` is the one that matters most: on first REPL start
+   the CLI auto-installs the official plugin marketplace from
+   `downloads.claude.ai`, git-falling-back to `github.com` — third-party code
+   entering the sandbox outside the artifact you pinned and scanned.
+   `DISABLE_AUTOUPDATER` stops a version-pinned image upgrading itself mid-run
+   (a human's `claude update` still works), and `…DISABLE_NONESSENTIAL_TRAFFIC`
+   removes the changelog fetch and the telemetry/error intake. All three were
+   measured host-by-host through a real proxy.
+
+   **`ENV`, not an export in your `agent-run`.** `agent-run-lib.sh` exports the
+   same three with `:-` defaults, and that covers task mode and a seeded run's
+   boot pane only. On the DEFAULT interactive run there is no seed, so `claude`
+   is started by `attach-bashrc.sh` in a fresh attach exec that is not a
+   descendant of `agent-run` — nothing `agent-run` exports can reach it.
+
+2. **A `seed_claude_onboarding` call in `agent-run`**, before the agent starts
+   (`claude-code`'s calls it in both `--idle` and task mode). It writes
+   `{"hasCompletedOnboarding":true}` into `~/.claude.json` and
+   `$CLAUDE_CONFIG_DIR/.claude.json`, fill-missing only. Without it a first-run
+   `claude` walks the theme picker and the "Security notes" page before it can
+   reach the model. It deliberately does **not** seed `hasTrustDialogAccepted`
+   or `bypassPermissionsModeAccepted`: the workspace-trust screen is a security
+   prompt, and it stays.
+
 ---
 
 ## Credential and recording flow

@@ -26,6 +26,12 @@ const (
 	ccAgentRunPath    = "../../../deploy/images/claude-code/agent-run"
 	ccDockerfilePath  = "../../../deploy/images/claude-code/Dockerfile"
 	ccAgentRunLibPath = "../../../deploy/images/common/agent-run-lib.sh"
+	// agent-base is the image the PUBLISHED claude-code lane actually is:
+	// install.sh maps the `claude-code` harness key to ghcr.io/…/agent-base, and
+	// the BYOI recipe in deploy/images/README.md is `FROM agent-base`.
+	// agent-claude-code is a local build recipe published nowhere, so pinning its
+	// Dockerfile alone pins the one image nobody pulls.
+	ccBaseDockerfilePath = "../../../deploy/images/base/Dockerfile"
 )
 
 func ccAbs(t *testing.T, rel string) string {
@@ -95,10 +101,21 @@ var ccSelfFetchVars = []string{
 // who deliberately wants any of them can still say so on the run — asserted,
 // because a hard `=1` would be a control the operator cannot turn off.
 func TestClaudeImage_DisablesAutoUpdater(t *testing.T) {
-	dockerfile := ccRead(t, ccAbs(t, ccDockerfilePath))
-	for _, v := range ccSelfFetchVars {
-		if !strings.Contains(dockerfile, v+"=1") {
-			t.Errorf("claude-code Dockerfile never sets %s=1 — a first run parks a first-use approval on a host the product chose, not the operator", v)
+	// BOTH Dockerfiles, and agent-base is the one that reaches operators.
+	// install.sh maps the `claude-code` harness key to ghcr.io/…/agent-base and
+	// the BYOI recipe is `FROM agent-base`, so the ENV block in the unpublished
+	// agent-claude-code Dockerfile is not what a default interactive run inherits.
+	// The vars are inert in a base image that ships no Claude Code — which is the
+	// argument for putting them there, not against it.
+	for name, path := range map[string]string{
+		"claude-code": ccDockerfilePath,
+		"agent-base":  ccBaseDockerfilePath,
+	} {
+		dockerfile := ccRead(t, ccAbs(t, path))
+		for _, v := range ccSelfFetchVars {
+			if !strings.Contains(dockerfile, v+"=1") {
+				t.Errorf("%s Dockerfile never sets %s=1 — a first run parks a first-use approval on a host the product chose, not the operator", name, v)
+			}
 		}
 	}
 
@@ -230,6 +247,41 @@ func TestSeedClaudeOnboarding_NeverClobbers(t *testing.T) {
 	}
 	if got := ccRead(t, filepath.Join(home, ".claude.json")); got != resident {
 		t.Errorf("~/.claude.json = %q, want the resident file byte-for-byte %q", got, resident)
+	}
+}
+
+// TestSeedClaudeOnboarding_SilentOnAnUnwritableTarget — the seed is best-effort
+// by design (`|| true` throughout), and "best effort" has to include SAYING
+// NOTHING when it cannot write. A read-only $HOME — a BYOI image whose home is a
+// read-only mount, or a config dir the operator owns — makes the `>` redirect
+// fail, and a failed redirect's "cannot create" is the SHELL's message on fd 2,
+// not printf's. It therefore has to be silenced BEFORE the redirect is applied;
+// with `> "$f" 2>/dev/null` the message is already out.
+//
+// It lands on the container's stderr, or on the boot pane the human is looking
+// at — the operator reads a shell error about a file they never heard of, on a
+// run that is otherwise fine.
+func TestSeedClaudeOnboarding_SilentOnAnUnwritableTarget(t *testing.T) {
+	home := t.TempDir()
+	if err := os.Chmod(home, 0o555); err != nil {
+		t.Fatalf("chmod read-only home: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(home, 0o755) })
+	if f, err := os.Create(filepath.Join(home, ".probe")); err == nil { //nolint:gosec // test-owned temp path
+		_ = f.Close()
+		t.Skip("this uid can write a 0555 directory (running as root?) — the unwritable-target case cannot be staged")
+	}
+	cmd := exec.Command("bash", "-c",
+		`set -euo pipefail; source "$1"; seed_claude_onboarding`,
+		"agent-run-lib-test", ccAbs(t, ccAgentRunLibPath),
+	)
+	cmd.Env = append(os.Environ(), "HOME="+home, "CLAUDE_CONFIG_DIR=")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Errorf("seed_claude_onboarding failed on an unwritable target (%v) — it is best-effort and must not take the prep down\noutput: %s", err, out)
+	}
+	if len(out) != 0 {
+		t.Errorf("seed_claude_onboarding printed %q on an unwritable target; the operator reads a shell error about a file they never heard of, on a run that is otherwise fine", out)
 	}
 }
 
