@@ -14,6 +14,7 @@ import {
 } from "./fixtures";
 import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../src/app/lib/workspace-providers-copy";
 import { OPERATOR_ONLY_REASON } from "../src/app/components/wardyn/copy";
+import { LOGIN_SANDBOX_SLOW_START } from "../src/app/components/screens/settings/login-start-wait";
 import type { Page } from "@playwright/test";
 
 // ---------------------------------------------------------------------------
@@ -509,6 +510,48 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
     await expect(starting).toContainText("Starting the sign-in sandbox");
     await starting.getByRole("button", { name: /cancel/i }).click();
     await expect.poll(() => kills, { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
+  });
+
+  // Finding 6 (0.7.4 field report): the wait's OTHER end. A first pull of the
+  // aws-sso image measured 131s on the reporting estate — healthy reads
+  // throughout — and the pane narrated it with the same one-line "Starting…"
+  // until its 15-tick budget expired and accused the daemon of being
+  // unreadable. Past a minute the pane now says which wait it is in, and says
+  // nothing about a failure it has no evidence for.
+  //
+  // page.clock, not a real 65-second wait: the pane grades the wait on
+  // Date.now() and usePoll's setInterval, both of which the clock API fakes, so
+  // this stays a sub-second case. `-runner none` keeps the run PENDING forever,
+  // which is exactly the shape being narrated.
+  test("past a minute of healthy reads the sign-in pane says it is slow, never that it failed", async ({ page }) => {
+    const loginRunId = "3f1b7c26-0000-4000-8000-00000000f003";
+    await page.clock.install();
+    await splicePerUserBedrock(page, "live");
+    await page.route("**/api/v1/setup/harness-login", async (route) =>
+      route.fulfill({ json: { run_id: loginRunId, state: "PENDING" } }),
+    );
+    // Every poll answers, and answers PENDING: nothing here is failing.
+    await page.route(`**/api/v1/runs/${loginRunId}`, async (route) =>
+      route.fulfill({ json: { id: loginRunId, task: "harness login", state: "PENDING", interactive: true } }),
+    );
+
+    await gotoConsole(page);
+    await navToRoute(page, "/settings");
+    await page.locator("#lane-bedrock").click();
+    await page.getByRole("button", { name: "Sign in with SSO" }).click();
+    await page.getByRole("button", { name: /start login/i }).click();
+
+    const starting = page.getByTestId("login-sandbox-starting");
+    await expect(starting).toContainText("Starting the sign-in sandbox");
+
+    await page.clock.fastForward("01:10");
+    await expect(starting).toContainText(LOGIN_SANDBOX_SLOW_START);
+    // The old budget fired at ~30s of ticks; this one must not fire at all
+    // while the run is readable — not now, and not five minutes from now.
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await page.clock.fastForward("05:00");
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await expect(starting).toContainText(LOGIN_SANDBOX_SLOW_START);
   });
 
   // R3 (fix-first review pass): a spliced control BESIDE the unspliced one —

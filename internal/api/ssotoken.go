@@ -36,11 +36,13 @@ const ssoTokenUnstampedScopeRefusal = "this sign-in started before Wardyn record
 // Cancel, or the person's NEXT sign-in superseding it (one live sign-in sandbox
 // per person, harnesscred_supersede.go). The sentence is read off a terminal
 // inside that sandbox by whoever is still looking at it, so it says which
-// attempt won rather than blaming this one.
+// attempt won rather than blaming this one — CONDITIONALLY (R1-F9): after a
+// Cancel, or the pane's own post-capture kill, there is no newer sandbox to be
+// sent to, and a sentence that assumes one sends the reader looking for it.
 //
 // DRAFT (M2 canon pending)
 const ssoTokenRunKilledRefusal = "this sign-in sandbox was closed — a newer sign-in for you replaced it, " +
-	"or it was cancelled; finish the sign-in in the newer sandbox"
+	"or it was cancelled; if you started a newer sign-in, finish it there"
 
 // handleUploadSSOToken accepts a PUT /api/v1/internal/sso-token/{runID} from
 // wardyn-aws-sso running inside the AWS SSO container-login run (see

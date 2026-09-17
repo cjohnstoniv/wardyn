@@ -88,6 +88,11 @@ export function startWaitVerdict({ now, startedAt, failingSince, failures }: Sta
     // says it is not one hidden-tab tick pretending to be one.
     if (failingFor >= RUN_POLL_UNREADABLE_AFTER_MS && failures >= RUN_POLL_MIN_FAILURES) return "unreadable";
     if (failingFor >= RUN_POLL_RETRYING_AFTER_MS) return "retrying";
+    // A blip — and NOT "slow" (R1-F8). The slow-start sentence says in so many
+    // words that Wardyn CAN read the sign-in sandbox, which is false while the
+    // latest read failed. Under the retrying window a brief outage falls back to
+    // the neutral starting line rather than to a claim just contradicted.
+    return "starting";
   }
   return now - startedAt >= RUN_POLL_SLOW_START_MS ? "slow" : "starting";
 }

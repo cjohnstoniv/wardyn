@@ -55,6 +55,20 @@ describe("startWaitVerdict", () => {
     ).toBe("starting");
   });
 
+  // R1-F8: the same blip PAST the slow-start window is still "starting", never
+  // "slow" — the slow-start sentence claims Wardyn CAN read the sandbox, and the
+  // read it would be claiming that about has just failed.
+  it("never claims the sandbox is readable while the latest read failed", () => {
+    expect(
+      startWaitVerdict({
+        now: T0 + RUN_POLL_SLOW_START_MS + 5_000,
+        startedAt: T0,
+        failingSince: T0 + RUN_POLL_SLOW_START_MS,
+        failures: 2,
+      }),
+    ).toBe("starting");
+  });
+
   it("is 'retrying' once reads have been failing for the retrying window", () => {
     expect(
       startWaitVerdict({
