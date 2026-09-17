@@ -602,21 +602,44 @@ k8s-substrate equivalent), and **`replicas` stays 1**, same reason as every
 other substrate (see [docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s
 "One replica, by construction").
 
-**Closed in 0.7.2: `DiskMiB` is enforced, by eviction — for the pod's main
-container.** (0.7.4 correction: the agent's own commands run in an ephemeral
-container the kubelet does not meter against this limit; see the CHANGELOG's
-0.7.4 Known gaps. An `emptyDir` with a `sizeLimit` shared by both containers is
-the 0.7.5 fix.) A run's `disk_mib`
-becomes the agent container's `resources.limits[ephemeral-storage]` (with a
-small fixed 256Mi request, so scheduling is unchanged except that a node short
-on allocatable ephemeral storage can newly leave the pod Pending), and the
-kubelet kills the pod once it exceeds that. A real cap, but not a quota: the
-kubelet measures periodically, so a burst between two measurements can
-overshoot, in-flight work is lost, and the agent never sees `ENOSPC`. A
-deployment that sets no `storage.ephemeral.default_disk_mib` still leaves
-node-level eviction as the only bound on a run that asked for nothing. It needs
-no new RBAC verb — the limit is a field on a pod spec the runner already
-creates, as the RBAC paragraph above says.
+**Narrowed in 0.7.5: `DiskMiB` now bounds the agent's writes to `/tmp` and its workdir
+`/home/agent/work`.** A run's `disk_mib` becomes the agent container's
+`resources.limits[ephemeral-storage]` (with a small fixed 256Mi request, so scheduling is
+unchanged except that a node short on allocatable ephemeral storage can newly leave the pod
+Pending) **and** the `sizeLimit` of two `emptyDir` volumes mounted on that container —
+`wardyn-tmp` at `/tmp` and `wardyn-work` at `/home/agent/work`. The agent's own commands run in an
+ephemeral container `Exec` attaches to the pod, and the kubelet meters no part of an ephemeral
+container's writable layer: that is why 0.7.2's limit alone bound an idle container nothing writes
+in (0.7.4 disclosed it). An `emptyDir` is metered as the pod's local ephemeral storage whichever
+container writes to it, and the ephemeral container inherits the main container's mounts verbatim.
+It needs no new RBAC verb — volumes are a field on a pod spec the runner already creates.
+
+**Inside the cap:** the clone at its default destination and everything written under the workdir
+(the checked-out tree, `node_modules`, in-tree build output), plus `/tmp` and the per-run CA files.
+
+**Outside it — this is a narrowing, not a close:** everything the agent writes anywhere else stays
+on the ephemeral container's unmetered layer. That is the rest of `$HOME` — including the
+toolchain caches a build actually fills (`/home/agent/go`, `~/.cache/go-build`, `~/.gotmp`,
+`~/.npm`, `~/.cache/pip`) and the dotfiles (`~/.wardyn`, `~/.ssh`, `~/.claude`) — `/opt/rust`, and
+any authored `workspace_repos` or ephemeral-source target outside `/home/agent/work` (a target may
+legally sit at `/work`, `/workspace` or elsewhere under `/home/agent`). On a Go or Node build the
+residual is the larger half by bytes. Nothing is mounted at `/home/agent` itself on purpose: a
+volume there would shadow the baked `.bashrc` every agent image ships, swallow the reserved drive
+mount point `/home/agent/drive`, and hide the read-only `~/.claude` bind the subscription path
+uses. `readOnlyRootFilesystem` would close the residual and is deliberately not set, because the
+agent legitimately writes those paths. Pointing the cache env under the workdir here, or a third
+cache volume, is the 0.7.6 follow-up.
+
+Each volume AND their sum are capped at `disk_mib`: the kubelet counts `emptyDir` usage toward the
+pod's `ephemeral-storage` total as well, so a pod with the run's shape writing 40Mi into each
+volume of a 64Mi run is still evicted (`Pod ephemeral local storage usage exceeds the total limit
+of containers 64Mi.`). Still a real cap and still not a quota: the kubelet measures periodically,
+so a burst between two measurements can overshoot, in-flight work is lost, and the agent never
+sees `ENOSPC`. A deployment that sets no `storage.ephemeral.default_disk_mib` still leaves
+node-level eviction as the only bound on a run that asked for nothing.
+
+**Upgrading:** if you set `disk_mib` / `storage.ephemeral.default_disk_mib` on Kubernetes, size it
+for the clone plus installs first — until 0.7.5 it did not bind the agent; from 0.7.5 it evicts.
 
 An eviction is a kill path nothing in Wardyn is on, so the run's SIBLINGS — the
 proxy pod, still running with its resolved upstream credentials, and the per-run

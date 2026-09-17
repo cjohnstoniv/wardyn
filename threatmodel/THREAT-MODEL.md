@@ -764,6 +764,34 @@ here asks the CLUSTER whether a claim can bind: the stock chart's missing PVC
 rule, or a storage class with no provisioner, is still discovered at dispatch,
 after the row is written.
 
+### 4.7 Boot-time state seeded into the sandbox (v0.7.5)
+
+**Wardyn pre-answers product onboarding, never a security prompt.** The agent
+images seed exactly one key into the sandbox's Claude Code state file:
+`hasCompletedOnboarding`. It removes the CLI's theme picker and its
+"Security notes / Press Enter to continue" page — a product tour standing between
+an operator and their own agent. Three keys are deliberately NOT seeded, and a
+test pins their absence in every run mode
+(`TestSeedClaudeOnboarding_NeverSeedsASecurityKey`):
+
+- `projects.<workdir>.hasTrustDialogAccepted` — the workspace-trust dialog is the
+  gate on a cloned repo's own project settings taking effect unseen. The human
+  attached to the run is the one who answers it.
+- `bypassPermissionsModeAccepted` — Claude Code raises its own confirmation when
+  a run is launched with tool approvals skipped. Its default selection is
+  "No, exit".
+- `theme` — not a security decision, but not ours to choose either.
+
+**Known gap, and an owner decision.** A run launched with *"Let it use tools
+before I attach"* therefore does **not** come up running: the boot pane starts
+`claude … --dangerously-skip-permissions`, which parks on that Bypass Permissions
+confirmation until a person attaches and chooses "Yes" (a bare Enter there exits
+the CLI). Whether ticking that checkbox in the console should count as the
+operator's consent to the CLI's own confirmation is a decision Wardyn has not
+made. The alternative — seeding `bypassPermissionsModeAccepted` — would mean the
+platform answering a security prompt on the operator's behalf, which is precisely
+the line the paragraph above draws.
+
 ---
 
 ## 5. Out of Scope — Published Residual Risks
@@ -1869,7 +1897,54 @@ proxy-injected, and what bounds it; where a bound does not exist, it says so.
 | **Derived AWS role credentials** (every SigV4 Bedrock mode) | The short-lived role credentials the in-sandbox AWS SDK mints for itself from the SSO session (`portal.sso.<region>` `GetRoleCredentials`) | Same as access-key mode: SigV4 signs in-process, so these stay resident **regardless** of how the SSO session reached the sandbox — Phase B would end the SSO token's residency, not theirs | Bounded only by their own STS lifetime and the IAM role's scope, both set outside Wardyn. Wardyn never sees these values, so they are **not** mask-registered and cannot be masked. |
 | Bedrock **host `~/.aws` mount** (`WARDYN_BEDROCK_AWS_DIR`) | Whatever the operator's host `~/.aws` holds — the SSO token cache, and any static keys in it — readable at `/home/agent/.aws` | The AWS SDK resolves credentials from the file itself | Bind-mounted **read-only**, so the sandbox can never write the operator's host AWS state; nothing is stored by Wardyn and no keys go into env. Wardyn never reads the contents, so it cannot mask them. A single-user / self-hosted choice, not for a shared multi-tenant service. |
 | Subscription `~/.claude` mount, **`WARDYN_SUBSCRIPTION_INJECT=off` only** | A real, refreshable **copy** of the operator's Claude OAuth credentials | With injection off there is no proxy-side token provider to inject from (the distroless compose `wardynd` carries no `claude` binary of its own) | **Mode-dependent — read the defaults carefully.** With injection ON (the host-mode default) the staged `.credentials.json` is sanitized to an inert sentinel (refresh token blanked, access token replaced, expiry pinned), so nothing usable is resident. The **compose stack defaults this env var to `off`**, so on that stack the resident copy is the default. The mount is read-only, and lands only when the run's resolved `ai_provider` integration is a `resident_host` `anthropic_subscription` (a workspace pin or the operator's `DefaultFor: agent_runs` default) against an operator-blessed ceiling mount. |
-| Container-**login** runs (`harness login`) | **Launched by an admin, or — under a `per_user` agent row — by the person capturing their OWN credential, in which case the sandbox is seeded with the ADMIN'S access-portal URL and ignores any the caller supplies, so a capture can never be bound to a foreign IdP/account.** The credential the run exists to obtain: `claude setup-token` prints it to the PTY; `aws sso login` writes it to `~/.aws/sso/cache` before `wardyn-aws-sso` uploads it | The credential does not exist yet — there is nothing to inject | A throwaway box: no workspace, no repo, no credential mounts, mints nothing (the AWS flow is seeded with one NON-secret file — a `~/.aws/config` holding the operator's SSO start URL + region, which `aws sso login` cannot run without), default-deny egress pinned to the login flow's hosts, idle auto-stop. **Never recorded** — the recorder is dropped entirely for a `harness login` run (masking could not have covered it: the value arrives after the run's mask snapshot). |
+| Container-**login** runs (`harness login`) | **Launched by an admin, or — under a `per_user` agent row — by the person capturing their OWN credential, in which case the sandbox is seeded with the ADMIN'S access-portal URL and ignores any the caller supplies, so a capture can never be bound to a foreign IdP/account.** The credential the run exists to obtain: `claude setup-token` prints it to the PTY; `aws sso login` writes it to `~/.aws/sso/cache` before `wardyn-aws-sso` uploads it | The credential does not exist yet — there is nothing to inject | A throwaway box: no workspace, no repo, no credential mounts, mints nothing (the AWS flow is seeded with one NON-secret file — a `~/.aws/config` holding the operator's SSO start URL + region, which `aws sso login` cannot run without), default-deny egress pinned to the login flow's hosts, idle auto-stop. **Never recorded** — the recorder is dropped entirely for a `harness login` run (masking could not have covered it: the value arrives after the run's mask snapshot). **0.7.5 — and the sign-in the image now runs itself is not recorded either, deliberately.** The claude-code image's boot pane wraps its seed in `wardyn-rec` (`boot_seed_rec_wrap`, `deploy/images/common/agent-run-lib.sh`); the aws-sso image's sign-in pane does NOT. It handles the credential this run exists to obtain — the device code, the portal's reply, and the helper's upload — and the recorder is exactly what must not see them, for the same reason the run's recorder is dropped at dispatch: the value arrives after the run's mask snapshot is taken, so masking could not have covered it. The consequence, stated rather than implied: **there is no cast of what happened inside a sign-in sandbox**, including whatever a human typed at the pane's trailing shell after the sign-in finished. That shell has the same bounds as any other attach into this box — the AWS CLI, no repo, no mounts, default-deny egress pinned to the SSO endpoints, and a 30-minute idle cap — and the audit trail still carries the capture (`harness.credential.captured` / `.refused`) and the launch (`harness.login.started`). What is not carried is the keystrokes. |
+
+**Where this table is now stated to the person launching the run.** The New Run
+rail's "What this run can do" panel — the summary read immediately before Launch,
+and the one a security reviewer screenshots — states the run's MODEL credential
+residency rather than asserting it. Through v0.7.4 that line was unconditional
+static copy ("Minted at launch, injected by the proxy. Never written into the
+sandbox."), which is false for every row of this table: a false assurance, not a
+confusing one, delivered at the exact moment someone decides whether a per-user
+AWS credential may sit inside a CC1 shared-kernel container.
+
+Residency is a property of the lane that RESOLVES, so it is graded server-side
+from that lane (`internal/api/credential_residency.go`) and never from the agent
+roster's declared mechanism — under a `shared` row the declared lane is satisfied
+by a chain that fell through to a resident one. A table test pins every
+model-credential row of this table against that grading, so the threat model and
+the console can no longer disagree.
+
+**What the console can state WITHOUT a dry run, and what it cannot.** A roster is
+not a resolution, so `GET /setup/status` grades nothing: the run has not been
+described yet, and the deployment default policy is not what New Run sends. The
+one exception is a `per_user` + `bedrock_sso` row, which settles residency by
+itself — that row admits no other lane (the captured-SSO resolve stops at its
+per-user branch rather than falling through to the operator's bearer, host-mount
+or static arms), and the lane materialises the captured session in the sandbox
+and mints resident role credentials from it whatever the run carries. It is also
+the one case whose precise answer cannot be fetched on demand, because
+`POST /runs/preflight` refuses a member who has not signed in with a `422`. Every
+other deployment reads "Resolved at launch." in the rail until Preflight is
+pressed, and Preflight's answer is for the exact body about to launch. Two
+residuals are accepted and stated rather than closed:
+
+- **Mixed-mode staging.** With the subscription `~/.claude` mount and
+  `WARDYN_SUBSCRIPTION_INJECT` ON, the staged `.credentials.json` is sanitized to
+  an inert sentinel by an operator-run script (`scripts/stage-claude-creds.sh`,
+  which warns "Do not mix modes"). The daemon never reads that file back, so
+  "injected at the proxy" there is the deployment's STATED mode, not a fact
+  Wardyn verified. The rail says so in those words — it names the mount instead
+  of promising nothing is mounted — but an operator who staged a REAL credential
+  and left injection on has a resident copy the console will describe as staged.
+- **A credential changed between Preflight and launch.** Preflight's verdict is
+  resolved when it answers. Deleting the `bedrock-api-key` secret afterwards drops
+  the run from the never-resident bearer lane onto a resident SigV4 one while the
+  rail still says proxy, and **the dispatch-time mechanism gate does not catch
+  it**: a `shared` Bedrock row is satisfied at the coarse provider level, so
+  bearer → captured-SSO / host `~/.aws` mount / static keys is not a mechanism
+  change in its terms. The window is one Preflight-to-Launch long and is not
+  closed here; a `per_user` row is unaffected, since it admits one lane only.
 
 **`ssh_key` and `git_pat` — the brokered/unbrokered split** is stated once, in
 full, under asset #4 (§2). Two citations that live only here: on an unbrokered
@@ -2329,6 +2404,22 @@ floor and the control plane refuses to schedule below it.
   older daemons io_uring is exposed under `RuntimeDefault`; a regression test
   (`TestDockerDefaultSeccompProfile_BlocksIoUring`) locks in the vendored default's
   denial, but nothing probes the live daemon version.
+- **Docker's `/tmp` mount flags have no Kubernetes equivalent — on any confinement class — before
+  or after the 0.7.5 disk fix.** On the Docker path `/tmp` is a tmpfs mounted
+  `rw,nosuid,nodev,noexec,size=256m` (`internal/runner/docker/hardening.go`), so a payload dropped
+  there cannot be executed and no setuid bit or device node on it is honoured. On Kubernetes
+  `/tmp` carried none of those flags before 0.7.5 (it was part of the container's `overlay`
+  rootfs, mounted `rw,relatime`) and carries none after (it is now an `emptyDir`, which the
+  kubelet bind-mounts from the node filesystem — measured on kind v1.30: `/dev/sdf /tmp ext4
+  rw,relatime,discard,errors=remount-ro,data=ordered`). An `emptyDir` cannot carry mount flags at
+  all: `VolumeMount` has no options field, and `noexec` there would need a node-level mount Wardyn
+  does not own. CC2 and CC3 inherit the same volume, so none of them differ. **This is therefore a
+  standing Docker/Kubernetes parity gap, not a 0.7.5 regression** — the disk fix changed which
+  filesystem backs `/tmp`, not what is permitted on it. One byte-level change worth naming: the
+  image's `/tmp` is `1777` (sticky), an `emptyDir` arrives `0777` root-owned without the sticky
+  bit. In a sandbox pod every container runs as the same uid 1000 and the proxy is a separate pod,
+  so there is no second principal for the sticky bit to protect against; it is a difference, not
+  an exposure.
 
 **Recommended use:** development environments where the host is already a
 dedicated machine and the threat model does not include adversarial agent

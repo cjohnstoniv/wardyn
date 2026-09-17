@@ -146,3 +146,45 @@ make agent-images-core CODEX_INSTALL=native
 
 Both staged binaries (`deploy/images/{claude-code/claude-bin,codex-cli/codex-bin}`)
 are gitignored — never commit them.
+
+## Stop the agent fetching on its own behalf
+
+The claude-code image sets three environment variables, and a corp image that
+rebuilds from our Dockerfile inherits all three:
+
+```
+CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1
+DISABLE_AUTOUPDATER=1
+CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+```
+
+**`CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1` is the one that
+matters in a default-deny estate.** On its first REPL start Claude Code
+auto-installs the official plugin marketplace from `downloads.claude.ai`, falling
+back to a `git` clone from `github.com` — measured as exactly the two hosts a
+first run parks approvals on. Beyond the prompts, this is a supply-chain
+decision rather than a convenience: a governed, version-pinned image must not
+fetch and install a plugin marketplace at start, because that is third-party code
+entering the sandbox outside the artifact you scanned and pinned. Turn it off and
+install the plugins you want deliberately, in the image.
+
+`DISABLE_AUTOUPDATER=1` does **not** remove `downloads.claude.ai`. On the npm
+install above the update check dials `registry.npmjs.org`, which the shipped
+default policy already allows, so it never parked. Set it anyway: a
+version-pinned image that upgrades itself mid-run is no longer the artifact you
+scanned. A human's `claude update` still works (`DISABLE_UPDATES` blocks that
+too, if you want it blocked). `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
+removes the changelog fetch from `raw.githubusercontent.com` plus the
+telemetry/error intake. Under `CLAUDE_CODE_USE_BEDROCK=1` what remains is the
+Bedrock runtime endpoint plus the STS/SSO hosts, which `wardyn-aws-sso` already
+adds to the run's allowlist.
+
+**Authoring your own image from scratch** (not rebuilding ours): set all three in
+your Dockerfile. Copying our `agent-run` and `agent-run-lib.sh` is **not** a
+substitute. The library exports the same three with `${VAR:-1}` defaults, but
+that only reaches agent-run's own process tree — task mode and a seeded
+interactive run's boot pane. On the DEFAULT interactive run there is no seed, so
+`claude` is started by `attach-bashrc.sh` in a fresh attach exec that is not a
+descendant of `agent-run`, and only the image `ENV` reaches it. The `:-` defaults
+are there so an operator who deliberately wants one of these can set it to `0` on
+the run.
