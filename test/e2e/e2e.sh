@@ -61,6 +61,18 @@ PROXY_NAME=""
 CC_AGENT="claude-code"                   # real agent NAME (image via WARDYN_AGENT_IMAGES)
 CC_IMAGE="wardyn/agent-claude-code:local" # the demo tag the compose stack maps to
 
+# Pin BOTH agent images this script launches. An agent name the operator map
+# does not carry resolves to the CONVENTION image
+# ghcr.io/cjohnstoniv/agent-<name>:<the DAEMON's own version> (agentImageForKey
+# in internal/api/runs_policy.go) — ":latest" only while the binary carries no
+# version. The fixture is built locally as :latest and published nowhere, so a
+# version-stamped daemon asked for agent-e2e-fixture:<version>, failed the pull
+# ("denied"), and every run went straight to FAILED — which is what has kept the
+# nightly e2e-live job red since 0.7.0 stamped the first non-empty version. The
+# operator map wins over the convention, so registering the fixture here fixes it
+# without touching how the product resolves images.
+export WARDYN_AGENT_IMAGES="{\"${FIXTURE_AGENT}\":\"${FIXTURE_IMAGE}\",\"${CC_AGENT}\":\"${CC_IMAGE}\"}"
+
 pass=0; fail=0
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 ok()   { printf '\033[1;32m  PASS\033[0m %s\n' "$*"; pass=$((pass+1)); }

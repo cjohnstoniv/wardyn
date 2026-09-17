@@ -215,6 +215,17 @@ docker compose version >/dev/null 2>&1 || die "docker compose v2 required"
 # ── optional stack bring-up ───────────────────────────────────────────────────
 if [[ "${OPT_UP}" -eq 1 ]]; then
   log "--up: bringing compose stack up"
+  # The per-run proxy sidecar image is NOT a compose service the `up` below
+  # builds — it lives behind the build-only profile (scripts/up.sh builds it in
+  # its run-images step, which is why `make demo` then `make test-drive` works).
+  # On a cold host
+  # that never ran `make demo` — every CI runner — it is absent, the sidecar
+  # cannot be pulled (wardyn/wardyn-proxy is published nowhere), and EVERY run
+  # dies at dispatch: "sandbox not RUNNING", section after section. Build it
+  # here, exactly as test/e2e/e2e.sh does, so --up is a complete bring-up.
+  log "--up: building the per-run proxy sidecar image (${WARDYN_PROXY_IMAGE:-wardyn/wardyn-proxy:local})"
+  "${COMPOSE[@]}" --profile build-only build proxy-image >/dev/null \
+    || die "proxy image build failed; check: docker compose -f ${COMPOSE_FILE} --profile build-only build proxy-image"
   "${COMPOSE[@]}" up -d postgres dex wardynd >/dev/null \
     || die "compose up failed; check: docker compose -f ${COMPOSE_FILE} logs"
   log "Waiting for wardynd to become healthy"
