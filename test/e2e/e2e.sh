@@ -429,6 +429,17 @@ if [[ "${CC_REC}" == "200" ]]; then
 else
   bad "(i) recording not auto-delivered (GET=${CC_REC}); agent-run/wardyn-rec/-out-dir chain"
   note "(i) last cast dir listing on the agent: $(docker exec "${CC_AGENT_CTR}" ls -la /wardyn/recordings 2>&1 | tr '\n' ' ' || echo '<exec failed>')"
+  # WHY, not just THAT. A cast lands only after the agent process EXITS (wardyn-rec
+  # uploads on exit), so the first question is whether it has: the run's state, what
+  # is still running in the sandbox, and what the agent last printed. On a CI
+  # runner none of this survives the job.
+  note "(i) run state: $(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/runs/${CC_RUN_ID}" | python3 -c 'import sys,json;r=json.load(sys.stdin);print(r.get("state"),"exit_code=",r.get("exit_code"))' 2>&1 || true)"
+  note "(i) processes in the agent: $(docker exec "${CC_AGENT_CTR}" sh -c 'ps -eo pid,etime,args 2>/dev/null | head -15' 2>&1 | tr '\n' '|' || echo '<exec failed>')"
+  note "(i) recorder staging: $(docker exec "${CC_AGENT_CTR}" sh -c 'ls -la /var/log/wardyn /tmp/wardyn-rec 2>&1 | head -12' 2>&1 | tr '\n' '|' || echo '<exec failed>')"
+  hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/audit?run_id=${CC_RUN_ID}&limit=50" \
+    | python3 -c 'import sys,json
+d=json.load(sys.stdin); ev=d if isinstance(d,list) else d.get("events",[])
+for e in ev[-12:]: print("  NOTE (i) audit:",e.get("action"),e.get("outcome"),json.dumps(e.get("data"))[:200])' 2>/dev/null || true
 fi
 
 # (ii) brokered git-credential chain, LIVE, from inside the real sandbox.
