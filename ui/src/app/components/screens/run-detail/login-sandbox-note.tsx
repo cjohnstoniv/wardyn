@@ -37,28 +37,42 @@ export const HARNESS_LOGIN_TASK = "harness login";
 export const AWS_SSO_LOGIN_AGENT = "aws-sso";
 
 // DRAFT (M2 canon pending) — says the three things the page could not: what the
-// box is, that the sign-in is ALREADY RUNNING in it, and that nobody has to clean
-// it up. The old sentence sent the reader to Getting Started to sign in, which was
+// box is, what the terminal below is waiting for, and that nobody has to clean it
+// up. The old sentence sent the reader to Getting Started to sign in, which was
 // the right advice when this terminal was a bare shell and the console pane was
 // the only thing that typed the chained command. The image runs it itself now
 // (deploy/images/aws-sso/signin-pane.sh) and this terminal is attached to that very
 // session, so telling the reader to start a SECOND sign-in elsewhere would be the
 // one instruction guaranteed to waste their device code.
 //
-// AND IT DOES NOT SAY "closes itself when it is done", which is false exactly where
-// this note renders. Nothing server-side stops a login run on capture — the shutdown
-// is the console sign-in pane's own killRun, and a sandbox reached from the Runs list
-// never gets one. What ends it is the reaper: the login policy takes its
-// AutoStopAfterSec from harnessLoginIdleCap (internal/api/harnesscred.go), which
-// internal/lifecycle reads as an IDLE timeout of 30 minutes. So "stops itself after
-// 30 idle minutes" is the true sentence, and the one an operator can plan around.
+// U-2 (W6 blind lens) — AND IT CLAIMS NOTHING THE PAGE CANNOT KNOW. "the sign-in
+// is already running in this box" is a fact about the IMAGE, not about this run:
+// an operator WARDYN_AGENT_IMAGES pin (what private estates use) makes a
+// console-0.7.5 / image-0.7.4 pairing real, and on an image-0.7.4 sandbox reached
+// from the Runs list nothing types the pair at all — the note then labelled
+// finding 4's bare shell "already running". So the note points at the TERMINAL and
+// names both shapes it can be in, which is true of either image. What the console
+// does know is the box, and when it ends.
+//
+// "stops itself after 30 idle minutes" is that second fact. Nothing server-side
+// stops a login run on capture — the shutdown is the console sign-in pane's own
+// killRun, and a sandbox reached from the Runs list never gets one. What ends it is
+// the reaper: the login policy takes its AutoStopAfterSec from harnessLoginIdleCap
+// (internal/api/harnesscred.go), which internal/lifecycle reads as an IDLE timeout
+// of 30 minutes — the one number an operator can plan around.
 export const LOGIN_SANDBOX_NOTE =
-  "AWS sign-in sandbox — the sign-in is already running in this box; finish the device-code step in your browser. Nothing else runs here, and the sandbox stops itself after 30 idle minutes.";
+  "AWS sign-in sandbox — the AWS CLI and nothing else. If the terminal shows a device code, finish it in your browser; if it shows a prompt, run the command the shell prints. It stops itself after 30 idle minutes.";
 
 // Renders nothing for every other run, so nothing on this page moves unless the
 // run really is a login box.
+//
+// U-2: …and only while that box is UP. Every clause above — the terminal, the
+// device code, the idle cap — describes a RUNNING sandbox, and the Runs list is
+// exactly where a KILLED or COMPLETED login run is reopened. A run that is still
+// PENDING has no terminal to point at either.
 export function LoginSandboxNote({ run }: { run: AgentRun }) {
   if (run.task !== HARNESS_LOGIN_TASK || run.agent !== AWS_SSO_LOGIN_AGENT) return null;
+  if (run.state !== "RUNNING") return null;
   return (
     <div
       className="flex shrink-0 items-start gap-2 rounded-lg border border-border bg-muted/40 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground"

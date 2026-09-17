@@ -470,6 +470,12 @@ test.describe("Run detail — a login sandbox says what it is", () => {
     // The task is PROVIDER-AGNOSTIC (every container login carries it), so the
     // splice sets the agent too: fixture 6 becomes the AWS box, fixture 4 the
     // Anthropic one that carries the same task and must say nothing about AWS.
+    //
+    // U-2: the splice also states RUNNING. The note describes a box that is UP
+    // (its terminal, its device code, its idle cap), and the seeded fixtures are
+    // deliberately spread across every terminal state — so pinning the AGENT gate
+    // needs the state held constant, exactly as pinning the STATE gate (its own
+    // case below) needs the agent held constant.
     await page.route("**/api/v1/runs/*", async (route) => {
       if (route.request().method() !== "GET") return route.fallback();
       const response = await route.fetch();
@@ -477,10 +483,12 @@ test.describe("Run detail — a login sandbox says what it is", () => {
       if (json.task === "e2e fixture 6") {
         json.task = "harness login";
         json.agent = "aws-sso";
+        json.state = "RUNNING";
       }
       if (json.task === "e2e fixture 4") {
         json.task = "harness login";
         json.agent = "claude-code";
+        json.state = "RUNNING";
       }
       await route.fulfill({ response, json });
     });
@@ -538,15 +546,45 @@ test.describe("Run detail — a login sandbox says what it is", () => {
     await expect(page).toHaveURL(/\/runs\/.+/);
     const note = page.getByTestId("login-sandbox-note");
     await expect(note).toBeVisible();
-    await expect(note).toContainText("the sign-in is already running in this box");
-    await expect(note).toContainText("finish the device-code step in your browser");
-    await expect(note).toContainText("stops itself after 30 idle minutes");
-    // The two things this page must no longer say: start a SECOND sign-in
-    // elsewhere while this one is live, and that the box closes itself when the
-    // sign-in is done — nothing server-side stops a run on capture, so on THIS
-    // path it lives to the idle cap.
+    await expect(note).toContainText(LOGIN_SANDBOX_NOTE);
+    // The three things this page must no longer say: start a SECOND sign-in
+    // elsewhere while this one is live; that the box closes itself when the
+    // sign-in is done (nothing server-side stops a run on capture, so on THIS
+    // path it lives to the idle cap); and — U-2 — that the sign-in is ALREADY
+    // RUNNING, which is a fact about the image, not about this run: an operator
+    // image pin makes a console-0.7.5 / image-0.7.4 pairing real, and there
+    // nothing types the pair at all.
     await expect(note).not.toContainText("Sign in from Getting Started");
     await expect(note).not.toContainText("closes itself when it is done");
+    await expect(note).not.toContainText("already running in this box");
+  });
+
+  // U-2 (W6 blind lens): the state gate, with the agent held constant. A login
+  // run that is over — killed by the pane's own shutdown, or reaped — is opened
+  // from /runs exactly like a live one, and every clause of the note describes a
+  // sandbox that no longer exists.
+  test("a harness-login run that is OVER says nothing about a terminal, a device code or an idle cap", async ({
+    page,
+  }) => {
+    for (const state of ["KILLED", "COMPLETED"]) {
+      await openRuns(page);
+      await page.route("**/api/v1/runs/*", async (route) => {
+        if (route.request().method() !== "GET") return route.fallback();
+        const response = await route.fetch();
+        const json = await response.json();
+        if (json.task === "e2e fixture 2") {
+          json.task = "harness login";
+          json.agent = "aws-sso";
+          json.state = state;
+        }
+        await route.fulfill({ response, json });
+      });
+      await page.getByText("e2e fixture 2").click();
+      await expect(page).toHaveURL(/\/runs\/.+/);
+      await expect(page.getByTestId("run-summary-header")).toBeVisible();
+      await expect(page.getByTestId("login-sandbox-note")).toHaveCount(0);
+      await page.unrouteAll({ behavior: "ignoreErrors" });
+    }
   });
 });
 

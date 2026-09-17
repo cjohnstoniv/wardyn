@@ -37,6 +37,20 @@ describe("LoginSandboxNote", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  // U-2 (W6 blind lens): the note is about a box that is UP. On a KILLED or
+  // COMPLETED login run every clause of it — the terminal, the device code, the
+  // idle cap — describes a sandbox that is gone, and the Runs list is exactly
+  // where a finished login run is reopened.
+  it.each(["KILLED", "COMPLETED", "FAILED", "PENDING"])(
+    "renders nothing for a %s harness-login run — the box is not up",
+    (state) => {
+      const { container } = render(
+        <LoginSandboxNote run={{ ...run(HARNESS_LOGIN_TASK), state } as AgentRun} />,
+      );
+      expect(container).toBeEmptyDOMElement();
+    },
+  );
+
   it("keys on the server-side task AND agent literals", () => {
     // harnessLoginTask / awsSSOAgent (internal/api/harnesscred.go). Held to the
     // Go side by TestHarnessLoginTask_UIParity; these two assertions are the
