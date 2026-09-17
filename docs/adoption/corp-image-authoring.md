@@ -183,7 +183,8 @@ control plane itself at dispatch, never by anything inside the sandbox
 
 **This whole section describes an image carrying the three `ENV` lines —
 rebuild to get them.** `agent-claude-code` is not a published image (it bundles
-Anthropic's own agreement with its vendor); `agent-base` is what ships, and
+Anthropic's Claude Code CLI, which an operator installs under their own
+agreement with its vendor); `agent-base` is what ships, and
 0.7.5 puts the three lines there too, so any image built `FROM agent-base:0.7.5`
 inherits them. Also needed for the quiet boot, alongside the `ENV` lines: a
 `seed_claude_onboarding` call in `agent-run` before the agent starts (product
