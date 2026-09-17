@@ -226,7 +226,10 @@ func TestBootEgress_NoFirstUseApproval(t *testing.T) {
 	if claudeImage && enters > 1 {
 		t.Logf("NOTE: %d Enters were needed — this image parks behind onboarding screens the seed removes", enters)
 	}
-	if !strings.Contains(repl, bootEgressWantREPL) {
+	// Claude-specific marker, so only claude-code fails on it: another agent
+	// image is being measured for its hosts, and its prompt looks like whatever
+	// it looks like. The host measurement below applies either way.
+	if claudeImage && !strings.Contains(repl, bootEgressWantREPL) {
 		t.Errorf("the CLI prompt (%q) never appeared after %d Enter(s); everything the REPL fetches is unmeasured\nscreen:\n%s", bootEgressWantREPL, enters, repl)
 	}
 	// The REPL is up: give its first-start fetches (the plugin-marketplace
