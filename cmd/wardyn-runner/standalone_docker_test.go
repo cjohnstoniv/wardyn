@@ -158,7 +158,13 @@ func TestStandalone_CapabilityHonesty(t *testing.T) {
 	// default `sh` exits at once, and a modern dockerd releases an exited
 	// container's endpoint IP, so CreateSandbox could not resolve the proxy's
 	// per-run IP. Mirrors conformance_docker_test.go; a real proxy is long-running.
-	drv, err := dockerdriver.New(dockerdriver.Config{ProxyImage: "busybox:latest", ProxyCmd: []string{"sleep", "infinity"}})
+	//
+	// Record: true because SessionRecording is reported HONESTLY — it mirrors
+	// Config.Record (capabilitiesForWith), since Exec only wraps the agent argv
+	// with wardyn-rec when Record is on; a Record=false driver that advertised
+	// recording would promise the site-config probe a cast nothing uploads. The
+	// Record=false arm is asserted at the end of this test.
+	drv, err := dockerdriver.New(dockerdriver.Config{ProxyImage: "busybox:latest", ProxyCmd: []string{"sleep", "infinity"}, Record: true})
 	if err != nil {
 		t.Fatalf("docker.New: %v", err)
 	}
@@ -179,7 +185,7 @@ func TestStandalone_CapabilityHonesty(t *testing.T) {
 		t.Error("docker driver must declare StructuralEgress (L0 is structural here)")
 	}
 	if !caps.SessionRecording {
-		t.Error("docker driver supports wardyn-rec, must declare SessionRecording")
+		t.Error("a Record=true docker driver wraps the agent with wardyn-rec, so it must declare SessionRecording")
 	}
 	if caps.NetworkPolicy {
 		t.Error("L1 NetworkPolicy is not implemented in v0; declaring it would overclaim (invariant 5)")
@@ -189,6 +195,21 @@ func TestStandalone_CapabilityHonesty(t *testing.T) {
 	}
 	if caps.ConfinementClasses[0] != types.CC1 {
 		t.Errorf("ConfinementClasses must start with CC1 (always-available, strongest last), got %v", caps.ConfinementClasses)
+	}
+
+	// The honest false arm: no Record, no SessionRecording claim. This is the
+	// assertion whose absence let the nightly docker-tagged job go red — the
+	// case above was pinned as an unconditional true.
+	off, err := dockerdriver.New(dockerdriver.Config{ProxyImage: "busybox:latest", ProxyCmd: []string{"sleep", "infinity"}})
+	if err != nil {
+		t.Fatalf("docker.New (Record off): %v", err)
+	}
+	offCaps, err := orchestrator.New(off).Capabilities(ctx)
+	if err != nil {
+		t.Fatalf("Capabilities (Record off): %v", err)
+	}
+	if offCaps.SessionRecording {
+		t.Error("a Record=false docker driver never wraps wardyn-rec; declaring SessionRecording would overclaim (invariant 5)")
 	}
 }
 
