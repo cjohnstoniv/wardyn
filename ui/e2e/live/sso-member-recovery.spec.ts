@@ -37,6 +37,14 @@
  * C heals the member back to `live`, and D and E each call
  * makeMemberActionable() for their own.
  *
+ * ── WHAT IS SKIPPED HERE, AND WHY ───────────────────────────────────────────
+ * D and E only. They are `test.fixme("login-pane")` because that lane has not
+ * merged and the three sentences they assert do not exist yet — one of them
+ * (LOGIN_SANDBOX_SLOW_START) has not even been drafted, so its placeholder is a
+ * sentinel that REDS rather than passes if the fixme is flipped without
+ * re-pointing it. Every other case runs live. The spec therefore always
+ * executes tests, so it is deliberately NOT on WARDYN_E2E_ALLOW_ALL_SKIPPED.
+ *
  * Self-skips without WARDYN_TEST_K8S=1, same as its sibling.
  */
 
@@ -73,18 +81,24 @@ test.describe.configure({ mode: "serial" });
 
 // ── CONSTANTS THIS FILE ASSERTS THROUGH THAT ARE NOT MERGED YET ─────────────
 //
-// Every case that uses one of these is `test.fixme("<lane>")` below. When the
-// lane merges, the coordinator REPLACES this block with the real imports and
-// deletes the literals — never the other way round, and never a regex loose
-// enough to match both spellings.
+// The cases that use the `login-pane` three are `test.fixme("login-pane")`
+// below. When that lane merges, the coordinator REPLACES its literals with the
+// real imports and deletes them — never the other way round, and never a regex
+// loose enough to match both spellings.
 //
-// lane `ui-rail-truth` → ui/src/app/components/wardyn/copy.ts:
-//   import { RAIL_CREDENTIAL, RECORDING_DISABLED_TITLE } from "../../src/app/components/wardyn/copy";
-//   RAIL_CREDENTIAL.SANDBOX_BEDROCK, RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_PER_USER
-// lane `login-pane` → .../settings/harness-login-pane.tsx (exported by that lane)
-//   and .../settings/login-start-wait.ts:
+// lane `login-pane` (NOT MERGED) → .../settings/harness-login-pane.tsx (which
+//   that lane exports these from) and .../settings/login-start-wait.ts:
 //   import { CAPTURE_NOT_CORROBORATED, LOGIN_SANDBOX_UNREADABLE } from "../../src/app/components/screens/settings/harness-login-pane";
 //   import { LOGIN_SANDBOX_SLOW_START } from "../../src/app/components/screens/settings/login-start-wait";
+//
+// lane `ui-rail-truth` IS MERGED (feat/v0.7.5 = 2027d0bf) and case A(rail) runs
+// LIVE against these three — but this BRANCH is not rebased onto it yet, so the
+// import would not resolve here. The three values below were read out of
+// `git show feat/v0.7.5:ui/src/app/components/wardyn/copy.ts` and are
+// BYTE-IDENTICAL to `RAIL_CREDENTIAL.SANDBOX_BEDROCK`,
+// `RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_PER_USER` and
+// `RECORDING_DISABLED_TITLE`. AT THE REBASE, delete them and add:
+//   import { RAIL_CREDENTIAL, RECORDING_DISABLED_TITLE } from "../../src/app/components/wardyn/copy";
 const RAIL_CREDENTIAL_SANDBOX_BEDROCK =
   "Model credential — AWS credentials sign inside the sandbox, so this run holds them for its lifetime.";
 const RAIL_CREDENTIAL_CHIP_PER_USER = "Your AWS sign-in";
@@ -293,7 +307,6 @@ test("A: an admin sets the org's agent standard in the console and a member is b
 });
 
 test("A(rail): the New Run rail states THIS run's credential residency, with no click", async ({ page }) => {
-  test.fixme(true, "ui-rail-truth");
   // The field report's finding 1, live: on a per_user/bedrock_sso estate the
   // rail must say the AWS credential is RESIDENT — the opposite of 0.7.4's
   // unconditional "Never written into the sandbox" — and it must say so on the
@@ -312,8 +325,14 @@ test("A(rail): the New Run rail states THIS run's credential residency, with no 
   // …and Recording states the truth about a stock Helm install rather than
   // promising a capture that cannot happen: the kind quickstart leaves
   // persistence.enabled=false.
-  await expect(page.getByText(RECORDING_DISABLED_TITLE_DRAFT)).toBeVisible();
+  // The Recording row reads /healthz, so it arrives on that answer rather than
+  // on mount — poll it rather than racing it.
+  await expect(page.getByText(RECORDING_DISABLED_TITLE_DRAFT)).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText("Every keystroke and every outbound connection")).toHaveCount(0);
+  // …and the honest-absence arm is NOT what rendered: this estate's roster row
+  // settles residency without a dry run, so "Resolved at launch." belongs to
+  // every OTHER estate and would be the quiet failure here.
+  await expect(page.getByText("Resolved at launch.")).toHaveCount(0);
 });
 
 // ── C — the sandbox signs itself in, and the Runs list joins that session ───
@@ -503,14 +522,15 @@ test("E (login-pane): a sign-in held in STARTING for 90 s reads as slow, never a
 // ── G — a first claude-code run parks on nothing ────────────────────────────
 
 test("G (agent-boot-egress): a member's first claude-code run raises no approvals", async ({ page }) => {
-  test.fixme(true, "agent-boot-egress");
-  // Red on d8f26511: the CLI auto-installs the official plugin marketplace on
-  // its first REPL start, which dials downloads.claude.ai and falls back to a
-  // git clone from github.com — two parked approvals for hosts nobody asked
-  // for, on a default-deny estate. The fix is that the traffic stops
-  // (CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1), not that the
-  // hosts are allowed, so the shipped default policy is unchanged and an EMPTY
-  // approvals list is the whole assertion.
+  // Red on d8f26511: the CLI auto-installs the official plugin MARKETPLACE on
+  // its first REPL start — a GCS fetch from downloads.claude.ai with a git
+  // clone from github.com as its fallback — so a default-deny estate parked
+  // approvals for hosts nobody had asked for. It is NOT the auto-updater: on an
+  // npm install that dials registry.npmjs.org, which the shipped default policy
+  // already allows, so what DISABLE_AUTOUPDATER removes never parked. The fix
+  // is that the traffic stops (CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1),
+  // not that the hosts are now allowed — examples/policies/default.json is
+  // deliberately unchanged — so an EMPTY approvals list is the whole assertion.
   await dexSignIn(page, MEMBER_EMAIL);
 
   // A DELTA, not `> 0`: /_seen counts the whole walk, and by this point it is
@@ -518,15 +538,23 @@ test("G (agent-boot-egress): a member's first claude-code run raises no approval
   // reaching Bedrock.
   const before = (await seen()).bedrock_calls;
   const id = await launchAgentRun(page, "a first run that parks on nothing");
-  await expect.poll(async () => (await seen()).bedrock_calls, { timeout: 180_000 }).toBeGreaterThan(before);
 
-  expect(await approvalsFor(page, id), "the first run parked an approval nobody asked for").toEqual([]);
+  // EMPTY FOR THE WHOLE RUN, not merely at the end. A run that parked an
+  // approval and had it expire or be swept before the last read would pass a
+  // single closing check — and "0 approvals" measured at one instant is exactly
+  // the blindness the lane's own review caught in its Go twin.
+  await expect
+    .poll(async () => (await seen()).bedrock_calls, { timeout: 180_000 })
+    .toBeGreaterThan(before);
+  for (let i = 0; i < 10; i++) {
+    expect(await approvalsFor(page, id), "the first run parked an approval nobody asked for").toEqual([]);
+    await page.waitForTimeout(2_000);
+  }
 });
 
 // ── H — an INTERACTIVE run reaches the model: the owner's literal path ──────
 
 test("H (agent-boot-egress): an interactive run answers ONE trust prompt and reaches Bedrock", async ({ page }) => {
-  test.fixme(true, "agent-boot-egress");
   // THE STEP LIST IS THE W0 SPIKE'S, PRE-DECLARED, NOT DISCOVERED HERE
   // (local/v075/evidence/w0-spike/RESULT.md §2). The spike drove the real image
   // under a real PTY and recorded which screens each config shows:
@@ -567,7 +595,9 @@ test("H (agent-boot-egress): an interactive run answers ONE trust prompt and rea
   expect(trustScreen).not.toContain("Choose the text style");
   expect(trustScreen).not.toContain("Security notes");
 
-  // Step 5 — ONE Enter. The default option is already the accepting one.
+  // Step 5 — ONE Enter, and one is the measured number on the fixed image (the
+  // lane measured 3 on :d8f26511 and 1 on the rebuilt one). The default option
+  // is already the accepting one.
   await screen.click();
   await page.keyboard.press("Enter");
 
@@ -575,17 +605,28 @@ test("H (agent-boot-egress): an interactive run answers ONE trust prompt and rea
   await expect
     .poll(async () => (await screen.innerText({ timeout: 1_000 }).catch(() => "")), { timeout: 120_000 })
     .toContain("Amazon Bedrock");
+  expect(await screen.innerText({ timeout: 1_000 })).toContain("manual mode on");
+
+  // THE APPROVALS CHECK BELONGS HERE — AFTER THE ENTER, BEFORE THE PROMPT.
+  // Everything the field report saw park happened on the CLI's FIRST REPL
+  // start, which is what the Enter above unblocks; a list read while the run
+  // was still sitting on the trust dialog is blind to exactly the thing this
+  // case exists to measure, and would have read empty on the BROKEN image too.
+  expect(
+    await approvalsFor(page, runIDFromURL(page)),
+    "the CLI's first REPL start parked an approval nobody asked for",
+  ).toEqual([]);
 
   // Step 7 — one short prompt, and the model call it makes. A DELTA, for the
   // same reason case G uses one.
+  //
+  // This is the ONE `page.keyboard.type` in the file, and it is deliberate: it
+  // is a claude-code run's own CLI prompt, not a sign-in pane. Case C's
+  // negative control is that no sign-in sandbox is ever typed into.
   const before = (await seen()).bedrock_calls;
   await page.keyboard.type("Reply with the single word: ready.");
   await page.keyboard.press("Enter");
   await expect.poll(async () => (await seen()).bedrock_calls, { timeout: 180_000 }).toBeGreaterThan(before);
-
-  // …and answering the trust prompt raised no approvals: pressing Enter there
-  // is not an egress event.
-  expect(await approvalsFor(page, runIDFromURL(page))).toEqual([]);
 });
 
 // ── F — the no-credential member preview (LAST: it signs the ADMIN in) ──────
