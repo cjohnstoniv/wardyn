@@ -167,7 +167,18 @@ sleep 1
 STATE="$(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/runs/${RUN_ID}" \
   | python3 -c 'import sys,json;print(json.load(sys.stdin)["state"])')"
 if [[ "${STATE}" == "RUNNING" ]]; then ok "run dispatched to RUNNING (live sandbox created)"; else
-  bad "run state=${STATE}, expected RUNNING (sandbox dispatch failed)"; fi
+  bad "run state=${STATE}, expected RUNNING (sandbox dispatch failed)"
+  # Name the cause HERE: the run row's own reason, the run's failure audit rows
+  # and the daemon's last warnings. On a CI runner all three are gone with the VM.
+  hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/runs/${RUN_ID}" \
+    | python3 -c 'import sys,json;r=json.load(sys.stdin);print("  run:",{k:r.get(k) for k in ("state","failure_reason","exit_code","task_mode","interactive")})' || true
+  hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/audit?run_id=${RUN_ID}&limit=50" \
+    | python3 -c 'import sys,json
+d=json.load(sys.stdin); ev=d if isinstance(d,list) else d.get("events",[])
+for e in ev:
+    if e.get("outcome")!="success": print("  audit:",e.get("action"),e.get("outcome"),json.dumps(e.get("data"))[:300])' || true
+  "${COMPOSE[@]}" logs --tail 200 wardynd 2>/dev/null | grep -Ei 'level=(warn|error)|"level":"(warn|error)"' | tail -15 || true
+fi
 AGENT="wardyn-agent-${RUN_ID}"
 
 # (h) GAP-1 closure: the auto-launched proxy sidecar must be RUNNING (it used
@@ -203,7 +214,11 @@ log "(b) metadata IP 169.254.169.254 unreachable from sandbox"
 # host had accepted the sandbox's connection. %{num_connects} is 1 whenever a
 # connection was actually made and 0 when none was. stderr is dropped so stdout
 # carries the -w output and nothing else.
-MD="$(docker exec "${AGENT}" curl -sS -o /dev/null -m 6 --connect-timeout 5 -w '%{http_code} %{num_connects}' \
+# --noproxy '*': the agent's env carries http_proxy, so a bare curl is answered
+# by wardyn-proxy's builtin-deny 403 (rc 0) and this check then called the proxy
+# doing its job "REACHABLE". That is what (c) below measures; THIS probe is the
+# no-route one and has to leave the proxy out of it.
+MD="$(docker exec "${AGENT}" curl -sS -o /dev/null -m 6 --connect-timeout 5 --noproxy '*' -w '%{http_code} %{num_connects}' \
        http://169.254.169.254/latest/meta-data/ 2>/dev/null)"; MRC=$?
 MD_CODE="${MD%% *}"; MD_CONNS="${MD##* }"
 if [[ ${MRC} -eq 0 ]]; then bad "metadata IP REACHABLE (http_code=${MD_CODE}) — invariant 3 violated";
@@ -229,8 +244,13 @@ log "(c/d) probing allow/pending/metadata through the auto-launched sidecar"
 # confinement (a deny beats allow_all_egress, a promoted ApprovedEgress entry,
 # and first-use review alike). Asserted both ways: refused AND no approval.
 log "(d) brokered github.com is HARD-DENIED on the direct route (deny beats first-use review)"
-GH_DIRECT_CODE="$(docker exec "${AGENT}" curl -sS -o /dev/null -m 20 --connect-timeout 10 -w '%{http_code}' \
-          -x http://wardyn-proxy:3128 https://github.com/ 2>&1 || true)"
+# %{http_connect}, stderr dropped. github.com is HTTPS, so the proxy refuses it
+# at CONNECT: curl exits 56, %{http_code} stays 000 (no response from the ORIGIN
+# ever existed) and the 403 lives in %{http_connect}. Capturing 2>&1 on top of
+# that made the compared value "curl: (56) CONNECT tunnel failed, response 403
+# 000" — a refusal, read as "NOT refused".
+GH_DIRECT_CODE="$(docker exec "${AGENT}" curl -sS -o /dev/null -m 20 --connect-timeout 10 -w '%{http_connect}' \
+          -x http://wardyn-proxy:3128 https://github.com/ 2>/dev/null || true)"
 if [[ "${GH_DIRECT_CODE}" == "403" ]]; then
   ok "(d) direct github.com refused by the proxy (403) — only /wardyn/gh/ remains for that name"
 else
