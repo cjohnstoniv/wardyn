@@ -482,6 +482,13 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 		s.cfg.Identity.RevokeRun(ctx, runID) //nolint:errcheck // best-effort cleanup of the minted-but-unused token
 		return types.AgentRun{}, harnessLoginDispatch{}, fmt.Errorf("create harness login run: %w", err)
 	}
+	// AND AGAIN, now that this run's row EXISTS. The pass above cannot see a
+	// sibling launch whose row is not written yet, so two in flight for one
+	// person each read the other as absent and BOTH survive. This one ends the
+	// caller's login runs that come before this one in a deterministic total
+	// order, which needs no lock and holds across replicas — see
+	// supersedeOlderLoginRuns for why that leaves exactly one, never zero.
+	s.supersedeOlderLoginRuns(ctx, actor, hl.agent, created)
 	// Pre-login ~/.aws/config for the AWS flow, delivered through the SAME
 	// WARDYN_AWS_SSO_CONFIG_B64 channel a Bedrock run uses (materialized by
 	// materialize_aws_sso_config in agent-run-lib.sh). Non-secret: an sso-session

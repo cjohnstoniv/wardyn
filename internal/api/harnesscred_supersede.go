@@ -127,6 +127,80 @@ func (s *Server) supersedeOneLoginRun(ctx context.Context, run types.AgentRun, a
 		slog.String("run_id", run.ID.String()), slog.Int("attempts", supersedeCASAttempts))
 }
 
+// supersedeOlderLoginRuns is the SECOND pass, run immediately after the new
+// run's row exists — and it is what makes "one live sign-in per person" hold
+// under CONCURRENCY.
+//
+// The pass above reads the live runs and only THEN is the new row inserted, so
+// two launches in flight for one person (a double-click, or the console and a
+// `wdn_` token on the same subject) each read the other as not-yet-existing:
+// neither is superseded, both stay live, and the field report's defect is back
+// until a third launch. A mutex would not fix it — wardynd runs replicated, and
+// an in-process lock is not a lock at all on the second replica.
+//
+// So the tie-break is DETERMINISTIC instead, and every replica computes the same
+// answer with no coordination: a launch supersedes only the caller's own login
+// runs that come BEFORE its own in loginRunPrecedes' total order. Two properties
+// follow, and they are the whole design:
+//
+//   - NEVER TWO. Each second pass runs strictly after its own CreateRun, so of
+//     two concurrent launches at least one sees both rows — it cannot be that
+//     each pass ran before the other's insert — and that one ends the older.
+//   - NEVER ZERO. Nothing ever kills a run newer than itself: the first pass can
+//     only see rows that already existed when it read, which are therefore older
+//     than the row it is about to insert, and this pass takes only strictly
+//     older ones. The newest launch is killed by nobody. The one residue is a
+//     launch whose OWN run has already been superseded (an exactly-equal clock
+//     reading, where the first pass and this order can disagree) — that run is
+//     absent from the live set below and returns without touching anything,
+//     rather than taking a live sibling down with it.
+//
+// Best effort, like the first pass, and for the same reason: the capture PUT's
+// KILLED guard is the belt, and nobody is locked out of signing in because a
+// store read failed.
+func (s *Server) supersedeOlderLoginRuns(ctx context.Context, actor, agent string, newRun types.AgentRun) {
+	if s.cfg.Store == nil || actor == "" {
+		return
+	}
+	live, err := s.liveLoginRunsBy(ctx, actor, agent)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: could not re-check this person's live sign-in sandboxes after the new one was created",
+			slog.String("agent", agent), slog.Any("error", err))
+		return
+	}
+	stillLive := false
+	for _, run := range live {
+		if run.ID == newRun.ID {
+			stillLive = true
+			break
+		}
+	}
+	if !stillLive {
+		// This launch's own run is already terminal — a sibling launch superseded
+		// it. A dead run must not supersede a live one, or two launches end with
+		// nothing signed in.
+		return
+	}
+	for _, run := range live {
+		if !loginRunPrecedes(run, newRun) {
+			continue
+		}
+		s.supersedeOneLoginRun(ctx, run, actor, newRun.ID)
+	}
+}
+
+// loginRunPrecedes is the total order above: created_at, then the run id as the
+// tie-break for two rows stamped on the same clock reading. Total and
+// replica-independent — both fields are stored on the row, so every caller
+// orders the same pair the same way — and it answers false for a run against
+// itself, which is what keeps a launch from superseding the run it just made.
+func loginRunPrecedes(a, b types.AgentRun) bool {
+	if a.CreatedAt.Equal(b.CreatedAt) {
+		return a.ID.String() < b.ID.String()
+	}
+	return a.CreatedAt.Before(b.CreatedAt)
+}
+
 // liveLoginRunsBy answers "which of this person's login sandboxes are still
 // live", through the optional store seam.
 //

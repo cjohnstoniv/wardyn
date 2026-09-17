@@ -320,6 +320,112 @@ func TestHarnessLogin_SupersedePrecedesTheQuota(t *testing.T) {
 	}
 }
 
+// TestHarnessLogin_ConcurrentLaunchesLeaveExactlyOneLiveLoginRun is the race the
+// first pass cannot win on its own.
+//
+// supersede-then-create is not atomic: each launch reads the live runs BEFORE
+// its own row exists, so a double-click (or the console and a `wdn_` token on
+// one subject) leaves two live sign-in sandboxes — and the field report's defect
+// with them, since the loser completes its login unattended and its late capture
+// lands after the winner's. The second pass is what closes it, and it has to do
+// so WITHOUT an in-process mutex, which is not a lock on the second replica.
+//
+// Both subtests put both rows in the store BEFORE either second pass runs —
+// precisely the window — and then run the passes in each order, because the
+// property being pinned is that the ANSWER DOES NOT DEPEND ON THE ORDER.
+func TestHarnessLogin_ConcurrentLaunchesLeaveExactlyOneLiveLoginRun(t *testing.T) {
+	const actor = "sub-double-click"
+	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+
+	setup := func(t *testing.T) (supersedeFixture, types.AgentRun, types.AgentRun, types.AgentRun) {
+		t.Helper()
+		f := newSupersedeFixture(t, nil, nil)
+		older := f.store.seed(types.AgentRun{
+			ID: uuid.New(), CreatedBy: actor, Task: harnessLoginTask, Agent: awsSSOAgent, CreatedAt: base,
+		})
+		newer := f.store.seed(types.AgentRun{
+			ID: uuid.New(), CreatedBy: actor, Task: harnessLoginTask, Agent: awsSSOAgent,
+			CreatedAt: base.Add(time.Millisecond),
+		})
+		// The negative control travels with the race: a second person's sign-in is
+		// never in this order at all.
+		theirs := f.store.seed(types.AgentRun{
+			ID: uuid.New(), CreatedBy: "sub-other", Task: harnessLoginTask, Agent: awsSSOAgent, CreatedAt: base,
+		})
+		return f, older, newer, theirs
+	}
+
+	check := func(t *testing.T, f supersedeFixture, older, newer, theirs types.AgentRun) {
+		t.Helper()
+		if got := f.store.stateOf(t, older.ID.String()); got != types.RunKilled {
+			t.Errorf("the older concurrent sign-in is %s, want KILLED — two live sign-in sandboxes for one "+
+				"person is finding 7: the loser's unattended capture overwrites the winner's", got)
+		}
+		if got := f.store.stateOf(t, newer.ID.String()); got != types.RunRunning {
+			t.Errorf("the newer concurrent sign-in is %s, want RUNNING — a tie-break that leaves ZERO live "+
+				"sign-ins is worse than the defect: the person is told to sign in again, forever", got)
+		}
+		if got := f.store.stateOf(t, theirs.ID.String()); got != types.RunRunning {
+			t.Errorf("another person's sign-in sandbox is %s, want RUNNING", got)
+		}
+	}
+
+	t.Run("the newer launch finishes its pass first", func(t *testing.T) {
+		f, older, newer, theirs := setup(t)
+		f.srv.supersedeOlderLoginRuns(context.Background(), actor, awsSSOAgent, newer)
+		f.srv.supersedeOlderLoginRuns(context.Background(), actor, awsSSOAgent, older)
+		check(t, f, older, newer, theirs)
+	})
+
+	t.Run("the older launch finishes its pass first", func(t *testing.T) {
+		f, older, newer, theirs := setup(t)
+		f.srv.supersedeOlderLoginRuns(context.Background(), actor, awsSSOAgent, older)
+		f.srv.supersedeOlderLoginRuns(context.Background(), actor, awsSSOAgent, newer)
+		check(t, f, older, newer, theirs)
+	})
+
+	// Same created_at to the nanosecond — a coarse clock, or two rows stamped in
+	// the same tick. The id tie-break still has to name ONE survivor: an order
+	// that is not total degenerates to "neither supersedes the other", which is
+	// the defect, or to "each supersedes the other", which is zero.
+	t.Run("an exactly equal clock reading still leaves one", func(t *testing.T) {
+		f := newSupersedeFixture(t, nil, nil)
+		a := f.store.seed(types.AgentRun{
+			ID: uuid.New(), CreatedBy: actor, Task: harnessLoginTask, Agent: awsSSOAgent, CreatedAt: base,
+		})
+		b := f.store.seed(types.AgentRun{
+			ID: uuid.New(), CreatedBy: actor, Task: harnessLoginTask, Agent: awsSSOAgent, CreatedAt: base,
+		})
+		f.srv.supersedeOlderLoginRuns(context.Background(), actor, awsSSOAgent, a)
+		f.srv.supersedeOlderLoginRuns(context.Background(), actor, awsSSOAgent, b)
+		live := 0
+		for _, run := range []types.AgentRun{a, b} {
+			if !f.store.stateOf(t, run.ID.String()).IsTerminal() {
+				live++
+			}
+		}
+		if live != 1 {
+			t.Fatalf("%d live sign-in sandboxes after two passes, want exactly 1", live)
+		}
+	})
+}
+
+// TestHarnessLogin_TheSecondPassSparesTheRunItJustMade: the HTTP launch drives
+// both passes, and the second one must not end the run the caller is about to be
+// handed. The pass is keyed on a total order over the caller's OWN live runs, so
+// a launch with nothing else in flight has to be a no-op.
+func TestHarnessLogin_TheSecondPassSparesTheRunItJustMade(t *testing.T) {
+	f := newSupersedeFixture(t, nil, nil)
+	run := launchLoginRun(t, f.srv, memberLoginSession(t))
+	waitRunState(t, f.store, run, types.RunRunning)
+	if got := f.store.stateOf(t, run); got.IsTerminal() {
+		t.Fatalf("the only sign-in is %s — the second pass superseded the run it just created", got)
+	}
+	if rows := f.audit.find("run.kill"); len(rows) != 0 {
+		t.Errorf("a lone launch wrote %d run.kill row(s), want none", len(rows))
+	}
+}
+
 // TestHarnessLogin_NeverKillsAnotherPersonsLoginRun is the negative control that
 // matters most: the supersede is scoped to the CALLER's own runs. A shared
 // deployment where one person's sign-in ends another's would be a denial of
