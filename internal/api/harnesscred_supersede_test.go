@@ -597,6 +597,106 @@ func TestUploadSSOToken_KilledRunIsRefused(t *testing.T) {
 	})
 }
 
+// toctouRunStore is the login-run store with a switch: the run reads RUNNING
+// until kill() is called, KILLED after. It models the supersede, which takes
+// none of the upload route's locks and can therefore land at any instant.
+type toctouRunStore struct {
+	ssoLoginRunStore
+	mu     sync.Mutex
+	killed bool
+}
+
+func (s *toctouRunStore) GetRun(context.Context, uuid.UUID) (types.AgentRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run := s.ssoLoginRunStore.run
+	if s.killed {
+		run.State = types.RunKilled
+	}
+	return run, nil
+}
+
+func (s *toctouRunStore) kill() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.killed = true
+}
+
+// killOnReadSecrets fires that switch from INSIDE the critical section: the
+// once-only guard's read is taken under lockAWSSSOOwner, after the handler's
+// top-of-route KILLED check has already passed. Hooking the kill here is what
+// puts it in the window rather than before or after it.
+type killOnReadSecrets struct {
+	*memSecrets
+	runs *toctouRunStore
+}
+
+func (s *killOnReadSecrets) Get(ctx context.Context, name string) ([]byte, error) {
+	s.runs.kill()
+	return s.memSecrets.Get(ctx, name)
+}
+
+// TestUploadSSOToken_KilledInsideTheLockIsRefused is the TOCTOU under the belt.
+//
+// The handler reads the run state ONCE at the top and then does a great deal
+// before it writes: the body, the launch stamp, the bindings, the scope, the
+// lock wait, the once-only read. A supersede landing anywhere in there — the
+// person's own next sign-in, which is the commonest thing to happen while a
+// login sandbox is still polling — leaves this upload storing AFTER the new
+// sandbox's, which is the late-capture ordering the whole supersede exists to
+// prevent, arriving through a door that had already been checked.
+//
+// The guard is the state re-read as the last statement before the write. This
+// case fails on the unfixed tree with a 204 and a stored blob.
+func TestUploadSSOToken_KilledInsideTheLockIsRefused(t *testing.T) {
+	h := newHarness(t)
+	runID := uuid.New()
+	st := &toctouRunStore{ssoLoginRunStore: ssoLoginRunStore{
+		run: types.AgentRun{
+			ID: runID, Task: harnessLoginTask, Agent: awsSSOAgent, State: types.RunRunning,
+			UpdatedAt: time.Now().UTC(),
+		},
+		events: ssoLoginStartedEvents(runID, "https://my-sso.awsapps.com/start"),
+	}}
+	sec := &memSecrets{m: map[string][]byte{}}
+	cfg := baseTestConfig(h, st)
+	cfg.Secrets = &killOnReadSecrets{memSecrets: sec, runs: st}
+	cfg.BedrockRegion = "us-west-2"
+	srv := New(cfg)
+	h.srv = srv
+	tok := h.mintRunToken(t, runID)
+
+	w := do(t, srv, http.MethodPut, "/api/v1/internal/sso-token/"+runID.String(), tok, validSSOBody)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("code = %d, want 409 — a run killed while this upload was in flight must not store; body=%s",
+			w.Code, w.Body.String())
+	}
+	if _, stored := sec.m[harnessCredSecretName(awsSSOProvider)]; stored {
+		t.Error("the superseded sandbox's capture was stored anyway — it is now the credential the person's " +
+			"NEW sign-in will be told it cannot confirm")
+	}
+	var refused *types.AuditEvent
+	for _, ev := range h.audit.events {
+		if ev.Action == "harness.credential.refused" {
+			refused = &ev
+			break
+		}
+	}
+	if refused == nil {
+		t.Fatal("no harness.credential.refused row for a refused capture")
+	}
+	data := killData(t, *refused)
+	if data["reason"] != refuseReasonRunKilled {
+		t.Errorf("refusal reason = %v, want %q — the same reason the top-of-route check answers, "+
+			"so the two arms group as one thing in an incident review", data["reason"], refuseReasonRunKilled)
+	}
+	// The scope IS decided by the time this arm fires, so the row carries the
+	// pair that makes a per_user estate's refusal stream groupable by person.
+	if _, ok := data["owner"]; !ok {
+		t.Errorf("refusal data = %v, want the owner/credential_source pair beside the reason", data)
+	}
+}
+
 // TestKillRunCascade_FinishesAfterTheCallersContextDies is R1-F1: the cascade
 // detaches ITSELF, so no caller can leak a cancellation into a half-applied
 // kill.

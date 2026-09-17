@@ -182,6 +182,33 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// THE RUN STATE AGAIN, RE-READ INSIDE THE LOCK — the KILLED check at the top
+	// of this handler is a check-then-use with everything between it and the
+	// write in the window: the body read, the stamp read, the bind, the scope
+	// resolve, the lock wait and the once-only read. That is easily long enough
+	// for the person's OWN next sign-in to supersede this run, and this upload
+	// would then store AFTER the new sandbox's — the late-capture ordering the
+	// supersede exists to prevent, arriving through the one door that had already
+	// been checked. Same reason as the once-only guard beside it: a read-then-put
+	// is only a guard if the read is inside the critical section.
+	//
+	// ONE GetRun, and the last thing before the write. It cannot be exact — the
+	// kill takes no lock of ours — but it narrows a window measured in reads and
+	// a lock wait to the two statements below.
+	//
+	// FAIL CLOSED on an unreadable run, with store_error beside the other two
+	// arms decided in here: a capture whose owning run cannot be read is a
+	// capture nobody can say is still wanted, and the sandbox's remedy (sign in
+	// again) is the same either way.
+	if live, rerr := s.cfg.Store.GetRun(r.Context(), claims.RunID); rerr != nil {
+		s.refuseCapture(w, r, claims, http.StatusInternalServerError, refuseReasonStoreError,
+			"re-read login run before storing aws sso credential: "+rerr.Error(), &scope)
+		return
+	} else if live.State == types.RunKilled {
+		s.refuseCapture(w, r, claims, http.StatusConflict, refuseReasonRunKilled, ssoTokenRunKilledRefusal, &scope)
+		return
+	}
+
 	// Provenance is SERVER-set, never trusted from the client.
 	blob.CapturedAt = s.cfg.Now().UTC()
 	blob.SourceRunID = claims.RunID.String()
