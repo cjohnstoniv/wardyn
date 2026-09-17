@@ -907,7 +907,11 @@ export const RECORDING_DISABLED_DESC =
 
 export const RAIL_CREDENTIAL = {
   // residency "proxy": late-bound, swapped onto the wire, never resident.
-  PROXY: "Model credential — minted at launch and injected by the proxy; never written into the sandbox.",
+  // U-15: "minted" was true of the Bedrock exchange this lane is NOT — a static
+  // API key or a stored bearer is injected as it stands, nothing is minted for
+  // it. What every proxy lane shares is where the credential goes and where it
+  // does not.
+  PROXY: "Model credential — injected by the proxy at launch; never written into the sandbox.",
   // residency "proxy" + staged_placeholder: the ~/.claude mount with injection
   // ON. "Proxy" is the deployment's STATED mode, not something Wardyn verified —
   // the sentinel is written by an operator-run script (scripts/stage-claude-creds.sh)
@@ -919,7 +923,12 @@ export const RAIL_CREDENTIAL = {
     "Model credential — AWS credentials sign inside the sandbox, so this run holds them for its lifetime.",
   // Whose credential that is — the per_user/shared distinction, in the Barrier
   // chip's shape because it is the same kind of fact: a bound, stated up front.
-  SANDBOX_BEDROCK_CHIP_PER_USER: "Your AWS sign-in",
+  // U-3: OWNERSHIP, not status. This chip is painted from the ROSTER ROW alone —
+  // the rail never reads model_access — so "Your AWS sign-in" (byte-identical to
+  // YOUR_MODEL_KEY.SIGNED_IN_CHIP, which on Getting Started is the SIGNED-IN
+  // success chip) told a member who had not signed in that they had. The row's
+  // fact is whose credential the lane uses, and that is what it now says.
+  SANDBOX_BEDROCK_CHIP_PER_USER: "Per-person AWS sign-in",
   SANDBOX_BEDROCK_CHIP_SHARED: "Admin's credential",
   // residency "sandbox", subscription: WARDYN_SUBSCRIPTION_INJECT=off, which is
   // the COMPOSE stack's own default (threatmodel/THREAT-MODEL.md).
@@ -937,3 +946,12 @@ export const RAIL_CREDENTIAL = {
   // one click away on the panel directly to the left.
   RUN_PREFLIGHT_HINT: "Run Preflight to see where this run's model credential will live.",
 } as const;
+
+// DRAFT (M2 canon pending) — U-15: the New Run rail's "recording is on"
+// sentence. It was an inline literal in the rail and re-typed in its vitest and
+// in ui/e2e/new-run.spec.ts, while its DISABLED twin
+// (RECORDING_DISABLED_TITLE, right above) was already a shared constant — so a
+// reworded promise would have moved on screen while three copies of the old one
+// went on passing. Beside RAIL_CREDENTIAL rather than inside it: the rail's
+// Recording section is not a credential fact.
+export const RAIL_RECORDING_ON = "Every keystroke and every outbound connection.";

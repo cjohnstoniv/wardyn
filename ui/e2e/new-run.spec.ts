@@ -20,16 +20,17 @@
 // are configured for the roster-pin e2e), so the model-provider warning
 // below is unconditionally absent, not merely an environment fact.
 import { test, expect, gotoConsole, ADMIN_TOKEN, launchRun } from "./fixtures";
-import { RAIL_CREDENTIAL, RECORDING_DISABLED_TITLE, RUN } from "../src/app/components/wardyn/copy";
+import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../src/app/components/wardyn/copy";
 import { CC_META } from "../src/app/components/wardyn/cc-meta";
 import { AGENTS, PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import type { Page } from "@playwright/test";
 import type { ConfinementClass } from "../src/app/lib/types";
 
-// The rail's "recording is on" sentence and the unconditional credential line it
-// replaced — neither is a shared constant (the first is inline in the rail, the
-// second no longer exists), so they are spelled here to be asserted against.
-const RAIL_RECORDING_ON = "Every keystroke and every outbound connection.";
+// U-15: the rail's "recording is on" sentence is a shared constant now
+// (RAIL_RECORDING_ON, imported above) instead of a literal re-typed here — its
+// DISABLED twin always was one, so a reworded promise could move on screen while
+// this copy went on passing. The unconditional credential line it replaced
+// exists nowhere, so that one is still spelled out, to be asserted absent.
 const OLD_UNCONDITIONAL_CREDENTIAL_LINE =
   "Minted at launch, injected by the proxy. Never written into the sandbox.";
 
@@ -524,6 +525,45 @@ test.describe("New run rail — credentials and recording are read, not asserted
     } finally {
       await page.request.delete("/api/v1/secrets/bedrock-api-key", { headers: auth });
     }
+  });
+
+  // U-4 (W6 blind lens): a CURRENT verdict that carries no `model_credential` —
+  // what a 0.7.4 daemon always answers, and what 0.7.5 answers when the roster
+  // read failed or there is no store. The rail still told the reader to press the
+  // button whose result was on screen beside it: a promise that is false the
+  // moment it is followed.
+  test("a preflight verdict with no model_credential drops the Run Preflight hint", async ({ page }) => {
+    await page.route("**/api/v1/runs/preflight", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      delete body.model_credential;
+      await route.fulfill({ response, json: body });
+    });
+
+    await openNewRun(page);
+    await expect(page.getByText(RAIL_CREDENTIAL.RUN_PREFLIGHT_HINT, { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Preflight" }).click();
+    await expect(page.getByTestId("preflight-result")).toBeVisible();
+    await expect(page.getByText(RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH, { exact: true })).toBeVisible();
+    await expect(page.getByText(RAIL_CREDENTIAL.RUN_PREFLIGHT_HINT)).toHaveCount(0);
+  });
+
+  // U-5 (W6 blind lens): a stock install before any key is added — llm_ready
+  // false WITH a roster row. One section said this run's first model call fails
+  // AND that its credential is resolved at launch AND to press Preflight to see
+  // where. Nothing resolves at launch when nothing is connected.
+  test("with no model provider connected the rail makes no residency promise at all", async ({ page }) => {
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      body.llm_ready = false;
+      await route.fulfill({ response, json: body });
+    });
+
+    await openNewRun(page);
+    await expect(page.getByText(/No model provider is connected/)).toBeVisible();
+    await expect(page.getByText(RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH)).toHaveCount(0);
+    await expect(page.getByText(RAIL_CREDENTIAL.RUN_PREFLIGHT_HINT)).toHaveCount(0);
   });
 
   // The ROW-FIXED shape — the field report's own estate, which this daemon has no

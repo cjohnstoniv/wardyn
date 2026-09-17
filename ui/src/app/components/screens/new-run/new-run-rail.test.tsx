@@ -29,10 +29,11 @@ vi.mock("../../../lib/api/health", () => ({
 }));
 
 import { RunRail } from "./new-run-rail";
-import { RAIL_CREDENTIAL, RECORDING_DISABLED_TITLE } from "../../wardyn/copy";
+import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE } from "../../wardyn/copy";
 import type { ModelCredential, PreflightResult, SetupHarnessTool } from "../../../lib/types";
 
-const RECORDING_ON = "Every keystroke and every outbound connection.";
+// U-15: through the constant, never a fourth typed copy of the sentence.
+const RECORDING_ON = RAIL_RECORDING_ON;
 
 // The server publishes credential_residency for ONE row shape, so these fixtures
 // carry the declared mechanism the real wire carries — precisely so that a
@@ -53,12 +54,16 @@ function preflightWith(cred: ModelCredential): PreflightResult {
   return { setup_items: [], enforced_confinement_class: "CC1", model_credential: cred };
 }
 
-function renderRail(props: { agentRow?: SetupHarnessTool; preflightResult?: PreflightResult }) {
+function renderRail(props: {
+  agentRow?: SetupHarnessTool;
+  preflightResult?: PreflightResult;
+  showModelWarning?: boolean;
+}) {
   return render(
     <MemoryRouter>
       <RunRail
         cc="CC1"
-        showModelWarning={false}
+        showModelWarning={props.showModelWarning ?? false}
         startup="It starts."
         showHoldNote={false}
         toolRules={null}
@@ -204,6 +209,44 @@ describe("New run rail — the two facts it used to assert (Appendix A finding 1
     expect(screen.queryByText("Credentials")).toBeNull();
   });
 
+  // U-4 (W6 blind lens). "Run Preflight to see where this run's model credential
+  // will live." is a promise that is false the moment it is followed: a CURRENT
+  // verdict that carries no `model_credential` (always so against a 0.7.4 daemon,
+  // and on 0.7.5 whenever the roster read failed) leaves the rail telling the
+  // reader to press the button they just pressed. The hint renders only while
+  // there is no verdict at all.
+  it("a current preflight verdict with no model_credential drops the Preflight hint", async () => {
+    renderRail({
+      agentRow: harnessRow(),
+      preflightResult: { setup_items: [], enforced_confinement_class: "CC1" },
+    });
+    expect(await screen.findByText(RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH)).toBeInTheDocument();
+    expect(screen.queryByText(RAIL_CREDENTIAL.RUN_PREFLIGHT_HINT)).toBeNull();
+  });
+
+  // U-5 (W6 blind lens). A stock install before any key is added: llm_ready false
+  // AND a roster row. One section said "No model provider is connected… its first
+  // model call fails." AND "Resolved at launch." AND "Run Preflight…" — nothing
+  // resolves at launch when nothing is connected.
+  it("the no-provider warning replaces the credential facts rather than sitting beside them", async () => {
+    renderRail({ agentRow: harnessRow(), showModelWarning: true });
+    expect(await screen.findByText(/No model provider is connected/)).toBeInTheDocument();
+    expect(screen.queryByText(RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH)).toBeNull();
+    expect(screen.queryByText(RAIL_CREDENTIAL.RUN_PREFLIGHT_HINT)).toBeNull();
+  });
+
+  // U-5's bound: a RESOLVED credential still states its residency beside the
+  // warning — that sentence is read off the verdict, not guessed.
+  it("…but a resolved credential is still stated beside the warning", async () => {
+    renderRail({
+      agentRow: harnessRow(),
+      showModelWarning: true,
+      preflightResult: preflightWith({ residency: "proxy", mechanism: "anthropic_api_key" }),
+    });
+    expect(await screen.findByText(RAIL_CREDENTIAL.PROXY)).toBeInTheDocument();
+    expect(screen.getByText(/No model provider is connected/)).toBeInTheDocument();
+  });
+
   // F3 REGRESSION PIN. An unread /healthz is not evidence that recording is on,
   // and this rail is where the promise about it gets made.
   it("recording says nothing until /healthz has actually answered", async () => {
@@ -212,5 +255,9 @@ describe("New run rail — the two facts it used to assert (Appendix A finding 1
     expect(await screen.findByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK)).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByText(RECORDING_ON)).toBeNull());
     expect(screen.queryByText(RECORDING_DISABLED_TITLE)).toBeNull();
+    // U-15: and the HEADING goes with it — a bare "Recording" over nothing reads
+    // as a section that failed to load, on a rail read as a list of what the run
+    // can do. Credentials already withholds its own heading the same way.
+    expect(screen.queryByText("Recording")).toBeNull();
   });
 });

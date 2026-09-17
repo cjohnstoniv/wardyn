@@ -30,7 +30,7 @@ import { Chip, ConfinementChip, RiskBadge } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
 import { GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
-import { RAIL_CREDENTIAL, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
+import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
 import { RailSection } from "./new-run-primitives";
 
@@ -104,9 +104,12 @@ interface RunRailProps {
 function CredentialFacts({
   cred,
   agentRow,
+  preflightRun,
 }: {
   cred?: ModelCredential;
   agentRow?: SetupHarnessTool;
+  /** Whether a CURRENT preflight verdict is on screen (U-4). */
+  preflightRun: boolean;
 }) {
   if (cred) {
     // Keyed on the RESOLVED mechanism, never on the row's declared one.
@@ -131,7 +134,12 @@ function CredentialFacts({
   return (
     <>
       <CredentialLine>{RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH}</CredentialLine>
-      <CredentialLine>{RAIL_CREDENTIAL.RUN_PREFLIGHT_HINT}</CredentialLine>
+      {/* U-4: …and the way to find out, ONLY while there is nothing to find it
+          in. A current verdict that carries no `model_credential` — always so
+          against a 0.7.4 daemon, and on 0.7.5 whenever the roster read failed or
+          there is no store — left this hint beside the result of pressing it: a
+          promise that is false the moment it is followed. */}
+      {!preflightRun && <CredentialLine>{RAIL_CREDENTIAL.RUN_PREFLIGHT_HINT}</CredentialLine>}
     </>
   );
 }
@@ -193,6 +201,12 @@ export function RunRail({
   // withholds agentRow for one) and no warning to raise has no Credentials
   // section at all, rather than a heading over a sentence about nothing.
   const showCredentials = showModelWarning || !!cred || !!agentRow;
+  // U-5: with NO provider connected and nothing resolved, "Resolved at launch."
+  // and the Preflight hint sat directly under "No model provider is connected.
+  // This run launches; its first model call fails." Nothing resolves at launch
+  // when there is nothing to resolve. A RESOLVED credential still states itself
+  // — that sentence is read off the verdict, not guessed.
+  const showCredentialFacts = !!cred || (!!agentRow && !showModelWarning);
   return (
     // F2-F7/F3-F1: a sticky box is clamped by its containing block — with
     // ceiling + tool rules + 3 warnings (member/warnings path) the rail's
@@ -254,7 +268,9 @@ export function RunRail({
               </Link>
             </p>
           )}
-          {(cred || agentRow) && <CredentialFacts cred={cred} agentRow={agentRow} />}
+          {showCredentialFacts && (
+            <CredentialFacts cred={cred} agentRow={agentRow} preflightRun={!!preflight.result} />
+          )}
         </RailSection>
         )}
 
@@ -278,22 +294,24 @@ export function RunRail({
           </RailSection>
         )}
 
-        <RailSection title="Recording">
-          {/* A stock Helm install leaves persistence.enabled=false, so this
-              promise was false out of the box — and wrong in both dangerous
-              directions at once. The shared hook is the same /healthz read the
-              Recordings library and the run cockpit make. */}
-          {/* UNKNOWN renders nothing: a promise this specific may not be made
-              from a /healthz read that has not landed, failed, or carried no
-              recording component at all. */}
-          {recordingDisabled !== undefined && (
+        {/* A stock Helm install leaves persistence.enabled=false, so this
+            promise was false out of the box — and wrong in both dangerous
+            directions at once. The shared hook is the same /healthz read the
+            Recordings library and the run cockpit make.
+
+            UNKNOWN renders nothing: a promise this specific may not be made
+            from a /healthz read that has not landed, failed, or carried no
+            recording component at all — and U-15: the whole SECTION goes with
+            it, as Credentials already does above. A bare "Recording" heading
+            over nothing is a section that failed to load, and this rail is read
+            as a checklist of what the run can do. */}
+        {recordingDisabled !== undefined && (
+          <RailSection title="Recording">
             <p className="text-xs text-muted-foreground">
-              {recordingDisabled
-                ? RECORDING_DISABLED_TITLE
-                : "Every keystroke and every outbound connection."}
+              {recordingDisabled ? RECORDING_DISABLED_TITLE : RAIL_RECORDING_ON}
             </p>
-          )}
-        </RailSection>
+          </RailSection>
+        )}
       </div>
 
       {launch.error && (

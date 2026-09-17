@@ -55,6 +55,7 @@ import { LOGIN_SANDBOX_SLOW_START, LOGIN_SANDBOX_READ_RETRYING } from "../../src
 import {
   MEMBER_GETTING_STARTED,
   RAIL_CREDENTIAL,
+  RAIL_RECORDING_ON,
   RECORDING_DISABLED_TITLE,
   YOUR_MODEL_KEY,
 } from "../../src/app/components/wardyn/copy";
@@ -369,10 +370,11 @@ test("A(rail): the New Run rail states THIS run's credential residency, with no 
   // persistence.enabled=false. The Recording row reads /healthz, so it arrives
   // on that answer rather than on mount — poll it rather than racing it.
   await expect(page.getByText(RECORDING_DISABLED_TITLE)).toBeVisible({ timeout: 60_000 });
-  // 0.7.4's unconditional Recording sentence. A LITERAL on purpose: it was
-  // deleted with the fix, so there is no constant left to import — and if it is
-  // ever re-introduced under a new name this still catches it.
-  await expect(page.getByText("Every keystroke and every outbound connection")).toHaveCount(0);
+  // 0.7.4's unconditional Recording sentence — which survives as the ENABLED
+  // arm's own copy, so U-15 made it a constant (RAIL_RECORDING_ON) and this
+  // asserts through it: on this estate recording is off, and the promise must
+  // not be on screen beside the sentence that says so.
+  await expect(page.getByText(RAIL_RECORDING_ON)).toHaveCount(0);
   // …and the honest-absence arm is NOT what rendered: this estate's roster row
   // settles residency without a dry run, so RESOLVED_AT_LAUNCH belongs to every
   // OTHER estate and would be the quiet failure here.
