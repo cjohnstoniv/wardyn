@@ -51,8 +51,13 @@ if [[ "${1:-}" == "--selftest" ]]; then
     echo "--- coding-agent shims (this image is NOT a coding agent) ---"
     # PRESENCE is not the property — a `claude` that ran something would be
     # worse than none. Each shim must refuse (non-zero) and say what the box is.
+    # `</dev/null` and a `timeout`: the check RUNS each shim, and on a DERIVED
+    # image that installed a real `claude` over ours that is an interactive CLI
+    # reading its terminal — it would sit there forever with the selftest holding
+    # the run's dispatch open. Starved of stdin and bounded, an agent that ignores
+    # both still FAILS the check (timeout exits non-zero) instead of hanging it.
     for shim in claude codex; do
-        if "$shim" >/dev/null 2>&1; then
+        if timeout 10 "$shim" >/dev/null 2>&1 </dev/null; then
             echo "  BAD     $shim did not refuse"; ok=0
         elif command -v "$shim" >/dev/null 2>&1; then
             echo "  REFUSES $shim ($(command -v "$shim"))"

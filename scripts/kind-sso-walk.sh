@@ -188,6 +188,16 @@ health="$(curl -s "${BASE_URL}/healthz" || true)"
 # next sandbox with no restart needed.
 if [[ "${WARDYN_KIND_SSO_REBUILD:-}" == "1" ]]; then
   command -v kind >/dev/null 2>&1 || die "kind not found on PATH (needed for WARDYN_KIND_SSO_REBUILD=1)"
+  # ONE warning, because the rebuild reaches past this walk. It RETAGS on the
+  # picked daemon, and two of those tags (wardyn/agent-claude-code:local,
+  # wardyn/agent-aws-sso:local) are exactly what a compose stack on that SAME
+  # daemon resolves for NEW runs (deploy/compose/docker-compose.yaml's default
+  # agent-image map) — so a demo or quickstart sharing the daemon silently adopts
+  # these images from the next run onward, and an agent-full:local built on the
+  # old claude-code goes stale. Opt-in and intended; not something to find out
+  # afterwards from a demo behaving differently.
+  printf '\033[1;33m==> WARNING\033[0m %s\n' \
+    "this rebuild retags wardyn/agent-claude-code:local and wardyn/agent-aws-sso:local on the daemon at ${DOCKER_HOST:-the default socket}; a compose stack on that daemon will adopt them for new runs" >&2
   step "rebuilding the five images this walk judges, from this tree"
   build_image() { # <dockerfile> <tag> <logname>
     docker build -f "$1" -t "$2" . >"${EVIDENCE_DIR}/rebuild-$3.log" 2>&1 \

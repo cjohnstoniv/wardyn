@@ -707,6 +707,19 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Build the image locally (scan target — never pushed)
         run: docker build -f ${{ matrix.dockerfile }} -t wardyn/${{ matrix.name }}:trivy-scan .
+      # The aws-sso image's --selftest, against the image that was actually
+      # BUILT. Everything it checks (tmux present; both coding-agent shims
+      # present AND refusing) is otherwise exercised only by source-level Go
+      # tests with fake binaries on a test host's PATH — so a build that COPYs
+      # cleanly but drops tmux, or resolves a shim to something that runs,
+      # shipped green. tmux is load-bearing here: without it nothing starts the
+      # sign-in and every attach falls through to the bare shell the 0.7.5 fix
+      # exists to remove. This job already builds the image, so the check is one
+      # `docker run` and no extra build. --entrypoint: the image deliberately has
+      # none (the runner contract), so the binary is named explicitly.
+      - name: agent-run --selftest against the built image
+        if: matrix.name == 'agent-aws-sso'
+        run: docker run --rm --entrypoint agent-run wardyn/${{ matrix.name }}:trivy-scan --selftest
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: wardyn/${{ matrix.name }}:trivy-scan

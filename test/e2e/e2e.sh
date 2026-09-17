@@ -71,7 +71,27 @@ CC_IMAGE="wardyn/agent-claude-code:local" # the demo tag the compose stack maps 
 # nightly e2e-live job red since 0.7.0 stamped the first non-empty version. The
 # operator map wins over the convention, so registering the fixture here fixes it
 # without touching how the product resolves images.
-export WARDYN_AGENT_IMAGES="{\"${FIXTURE_AGENT}\":\"${FIXTURE_IMAGE}\",\"${CC_AGENT}\":\"${CC_IMAGE}\"}"
+#
+# MERGED, not clobbered. A caller may already carry an operator map (a corp
+# registry mirror, an extra agent their harness launches), and overwriting it
+# here silently changed the resolution of every OTHER agent in that map. The two
+# keys below are non-negotiable — the assertions further down check the resolved
+# image by name — so a caller who pins either of them to something ELSE is told
+# so, rather than having their value dropped without a word.
+E2E_PINNED_IMAGES="{\"${FIXTURE_AGENT}\":\"${FIXTURE_IMAGE}\",\"${CC_AGENT}\":\"${CC_IMAGE}\"}"
+if [[ -n "${WARDYN_AGENT_IMAGES:-}" ]]; then
+    WARDYN_AGENT_IMAGES="$(python3 - "${WARDYN_AGENT_IMAGES}" "${E2E_PINNED_IMAGES}" <<'PY'
+import json, sys
+caller, pinned = json.loads(sys.argv[1]), json.loads(sys.argv[2])
+for k, v in pinned.items():
+    if caller.get(k, v) != v:
+        sys.exit("WARDYN_AGENT_IMAGES pins %s=%s, but this suite asserts on %s" % (k, caller[k], v))
+caller.update(pinned)
+print(json.dumps(caller, separators=(",", ":"), sort_keys=True))
+PY
+)" || { printf '\033[1;31m[error]\033[0m could not merge the caller-supplied WARDYN_AGENT_IMAGES\n' >&2; exit 1; }
+fi
+export WARDYN_AGENT_IMAGES="${WARDYN_AGENT_IMAGES:-${E2E_PINNED_IMAGES}}"
 
 pass=0; fail=0
 log()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }

@@ -297,12 +297,25 @@ if [[ "${1:-}" == "--selftest" ]]; then
     echo "  CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=${CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL:-<unset>}"
     echo "  DISABLE_AUTOUPDATER=${DISABLE_AUTOUPDATER:-<unset>}"
     echo "  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-<unset>}"
-    if [[ "${CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL:-}" != "1" \
-       || "${DISABLE_AUTOUPDATER:-}" != "1" \
-       || "${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-}" != "1" ]]; then
-        echo "  BAD     the agent would fetch on its own behalf at startup (plugin marketplace, update check or telemetry)" >&2
-        ok=0
-    fi
+    # A documented `=0` is an OPERATOR DECISION, not a broken image. The library
+    # sets all three with `:-` precisely so a run can turn one back on, and this
+    # selftest is fail-closed at dispatch for wrapped/BYOI images — so treating 0
+    # as a failure meant the documented opt-out could not start a run at all.
+    # Report it (it is worth seeing in the run's log) and carry on. UNSET or
+    # anything else IS a broken image: nothing turned the fetch off.
+    cc_fetch_ok=1
+    for cc_fetch_var in CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL \
+                        DISABLE_AUTOUPDATER \
+                        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC; do
+        case "${!cc_fetch_var:-}" in
+            1) ;;
+            0) echo "  OPT-OUT $cc_fetch_var=0 — this run turned it back on deliberately; the agent may fetch on its own behalf and park a first-use approval" ;;
+            *) echo "  BAD     $cc_fetch_var=${!cc_fetch_var:-<unset>} — the agent would fetch on its own behalf at startup (plugin marketplace, update check or telemetry)" >&2
+               cc_fetch_ok=0 ;;
+        esac
+    done
+    [[ $cc_fetch_ok -eq 1 ]] || ok=0
+    unset cc_fetch_var cc_fetch_ok
     echo "--- anthropic auth mode (selftest: detect only, no env change) ---"
     selftest_mode="$(detect_anthropic_mode)"
     echo "  detected mode: $selftest_mode"

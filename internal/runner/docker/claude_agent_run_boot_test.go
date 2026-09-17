@@ -754,3 +754,91 @@ func TestClaudeAgentRun_BootSeedWaitIsBoundedByPrepNotAClock(t *testing.T) {
 		t.Errorf("the pane never started the agent after prep ended — an interactive run must still come up usable\noutput:\n%s", got)
 	}
 }
+
+// TestClaudeAgentRun_SelftestHonoursTheDocumentedOptOut — the three self-fetch
+// vars are set with `:-` in agent-run-lib.sh precisely so an operator can turn
+// one back on for a run, and that is documented. The selftest is fail-closed at
+// dispatch for wrapped/BYOI images, so reading a deliberate `=0` as a failure
+// meant the documented opt-out could not start a run at all — a control the
+// operator is told they have, that does not exist.
+//
+// UNSET stays a FAIL in the same test, because that is the case the check was
+// written for: an image where nothing turned the fetch off.
+func TestClaudeAgentRun_SelftestHonoursTheDocumentedOptOut(t *testing.T) {
+	root := t.TempDir()
+	home, binDir := filepath.Join(root, "home"), filepath.Join(root, "bin")
+	for _, d := range []string{home, binDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	// The selftest requires these to EXIST; it never runs any of them.
+	for _, bin := range []string{"claude", "wardyn-rec", "wardyn-git-helper"} {
+		if err := os.WriteFile(filepath.Join(binDir, bin), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil { //nolint:gosec // test fixture
+			t.Fatalf("write fake %s: %v", bin, err)
+		}
+	}
+	// The image wires the credential helper in the SYSTEM gitconfig, and the
+	// selftest fails without it. A test host has no such line, so stand one in
+	// via GIT_CONFIG_SYSTEM — otherwise both arms below go red for a reason that
+	// has nothing to do with the self-fetch vars under test.
+	sysGitconfig := filepath.Join(root, "system.gitconfig")
+	if err := os.WriteFile(sysGitconfig, []byte("[credential]\n\thelper = /usr/local/bin/wardyn-git-helper\n"), 0o600); err != nil {
+		t.Fatalf("write system gitconfig: %v", err)
+	}
+	base := []string{
+		"HOME=" + home,
+		"PATH=" + binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+		"GIT_CONFIG_SYSTEM=" + sysGitconfig,
+	}
+	run := func(t *testing.T, env ...string) (string, error) {
+		t.Helper()
+		cmd := exec.Command("bash", ccRunnableAgentRun(t), "--selftest")
+		cmd.Env = append(os.Environ(), append(append([]string{}, base...), env...)...)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+
+	var zero, unset []string
+	for _, v := range ccSelfFetchVars {
+		zero = append(zero, v+"=0")
+		unset = append(unset, v+"=")
+	}
+
+	t.Run("operator opt-out is reported, not failed", func(t *testing.T) {
+		// The library's `:-` leaves an explicit 0 alone, so this is exactly what
+		// a run with the opt-out set sees.
+		out, err := run(t, zero...)
+		if err != nil {
+			t.Errorf("--selftest failed (%v) on the DOCUMENTED =0 opt-out — dispatch is fail-closed on this, so the "+
+				"control the operator is told they have would refuse to start their run\noutput:\n%s", err, out)
+		}
+		if !strings.Contains(out, "OPT-OUT") {
+			t.Errorf("--selftest said nothing about the opt-out; it belongs in the run's log\noutput:\n%s", out)
+		}
+	})
+
+	t.Run("unset still fails", func(t *testing.T) {
+		// NEGATIVE CONTROL: the case the check exists for. Sourcing the library
+		// would set all three, so the vars are cleared AFTER it runs, the way a
+		// BYOI image that never sources it leaves them.
+		stripped := filepath.Join(t.TempDir(), "agent-run")
+		if err := os.WriteFile(stripped, []byte(strings.Replace(
+			ccRead(t, ccAbs(t, ccAgentRunPath)),
+			"source /usr/local/bin/agent-run-lib.sh",
+			"source "+ccAbs(t, ccAgentRunLibPath)+"; unset "+strings.Join(ccSelfFetchVars, " "),
+			1)), 0o700); err != nil { //nolint:gosec // test fixture
+			t.Fatalf("write stripped agent-run: %v", err)
+		}
+		cmd := exec.Command("bash", stripped, "--selftest")
+		cmd.Env = append(os.Environ(), append(append([]string{}, base...), unset...)...)
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			t.Errorf("--selftest PASSED with all three self-fetch vars unset — nothing turned the fetch off and a "+
+				"first run would park approvals on hosts the operator never chose\noutput:\n%s", out)
+		}
+		if !strings.Contains(string(out), "BAD") {
+			t.Errorf("--selftest did not name the unset var\noutput:\n%s", out)
+		}
+	})
+}
