@@ -911,11 +911,12 @@ export const RAIL_CREDENTIAL = {
   // residency "image" (a `none` roster row, BYOA). The server's own
   // llmMechanismWords wording for that lane, said once in both places.
   IMAGE: "Wardyn wires no model credential — the image brings its own, and Wardyn cannot say where it lives.",
-  // residency "unknown", and the absent-row doctrine in one line: the rail
-  // states no residency it was not given.
+  // Nothing resolved, and the absent-row doctrine in one line: the rail states
+  // no residency it was not given. This is the COMMON case, not an error — a
+  // roster cannot settle residency, so only a dry run of this exact body can.
   RESOLVED_AT_LAUNCH: "Resolved at launch.",
-  // The scoped heading's one exception: `env_secret` and `ssh_key` grants are
-  // resident BY DESIGN (the same THREAT-MODEL table), so a policy that carries
-  // one must not read as covered by a sentence about the model credential.
-  POLICY_GRANTS_SECRETS: "Secrets this policy grants are delivered into the sandbox.",
+  // …and therefore the way to find out, said where the absence is. Without it
+  // "Resolved at launch." reads as "nothing to see", when the precise answer is
+  // one click away on the panel directly to the left.
+  RUN_PREFLIGHT_HINT: "Run Preflight to see where this run's model credential will live.",
 } as const;

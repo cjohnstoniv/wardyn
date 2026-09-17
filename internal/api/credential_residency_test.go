@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
@@ -194,82 +195,130 @@ func harnessRow(t *testing.T, w *httptest.ResponseRecorder, agent string) SetupH
 	return SetupHarnessTool{}
 }
 
-// TestSetupStatusResidency_PerUserSSOMemberWhoHasNotSignedIn is the FIELD CASE,
-// on the DEFAULT path: a member opens New Run, presses nothing, and has to read
-// that their AWS sign-in will live inside the sandbox — before they decide
+// TestSetupStatusPublishesOnlyTheRowFixedResidency is the whole of what the
+// STATUS surface claims.
+//
+// A roster is not a resolution: the lane that fires decides residency, and a
+// status handler has no request body to resolve one from — New Run sends a
+// policy_id or a minimal inline spec, and create folds the run/workspace/default
+// integration before any lane is picked. So every row here is SILENT except the
+// one the row itself settles, and a console reading this row can be wrong only
+// by saying nothing.
+func TestSetupStatusPublishesOnlyTheRowFixedResidency(t *testing.T) {
+	perUserSSO := types.AgentProvider{
+		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
+		CredentialSource: types.CredentialSourcePerUser,
+	}
+	for _, tc := range []struct {
+		name string
+		row  types.AgentProvider
+		want string
+	}{
+		{"per_user bedrock_sso — the one row that settles it", perUserSSO, string(residencySandbox)},
+		{"per_user bedrock_sso, DISABLED — launches nothing, says nothing",
+			types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
+				CredentialSource: types.CredentialSourcePerUser, Disabled: true}, ""},
+		// Every shared row's declared lane is satisfied by the whole Bedrock chain
+		// (mechanismSatisfied compares the coarse provider type), so the roster
+		// cannot tell bearer-at-the-proxy from a fall-through to the resident
+		// ~/.aws mount or to static SigV4 keys. Silent.
+		{"shared bedrock_bearer", agentRosterRow(types.AgentMechanismBedrockBearer), ""},
+		{"shared bedrock_env", agentRosterRow(types.AgentMechanismBedrockEnv), ""},
+		{"shared bedrock_sso — the admin's one capture, but the chain may still move", agentRosterRow(types.AgentMechanismBedrockSSO), ""},
+		{"shared bedrock_aws_dir", agentRosterRow(types.AgentMechanismBedrockAWSDir), ""},
+		{"anthropic_api_key", agentRosterRow(types.AgentMechanismAnthropicAPIKey), ""},
+		// The mount-vs-sentinel question is decided by the DAEMON's posture and by
+		// whether a resident_host integration actually resolved, neither of which
+		// is in the roster.
+		{"anthropic_subscription", agentRosterRow(types.AgentMechanismAnthropicSubscription), ""},
+		{"none — BYOA", agentRosterRow(types.AgentMechanismNone), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tools := setupHarnessTools(agentRoster(tc.row), nil)
+			var claude SetupHarnessTool
+			for _, tool := range tools {
+				if tool.ID == "claude-code" {
+					claude = tool
+				}
+			}
+			if claude.CredentialResidency != tc.want {
+				t.Errorf("credential_residency = %q, want %q", claude.CredentialResidency, tc.want)
+			}
+		})
+	}
+
+	// Legacy mode — no AgentProviders block at all, the compose default. No row,
+	// so nothing is settled, so nothing is claimed.
+	for _, tool := range setupHarnessTools(types.SiteConfig{}, nil) {
+		if tool.CredentialResidency != "" {
+			t.Errorf("legacy mode published %+v — there is no row to settle it", tool)
+		}
+	}
+}
+
+// agentRosterRow is a `shared` row for claude-code on the named lane.
+func agentRosterRow(m types.AgentMechanism) types.AgentProvider {
+	return types.AgentProvider{ID: "claude-code", Mechanism: m, CredentialSource: types.CredentialSourceShared}
+}
+
+// TestSetupStatusResidency_PerUserSSOReachesTheWireSignedInOrNot is the FIELD
+// CASE, on the DEFAULT path: a member opens New Run, presses nothing, and has to
+// read that their AWS sign-in will live inside the sandbox — before they decide
 // whether that is acceptable, not after.
 //
-// The preflight twin of this exact state is a 422 (the declared lane has not
-// resolved because they have not signed in), which is why the status row is the
-// default path and preflight only overrides it.
-func TestSetupStatusResidency_PerUserSSOMemberWhoHasNotSignedIn(t *testing.T) {
+// BOTH sign-in states, because the answer must not depend on one: the preflight
+// twin of the not-signed-in state is a 422 (the declared lane has not resolved),
+// which is exactly why this row is the default path and why it is graded from
+// the row rather than from a lane.
+func TestSetupStatusResidency_PerUserSSOReachesTheWireSignedInOrNot(t *testing.T) {
+	for _, signedIn := range []bool{false, true} {
+		t.Run(map[bool]string{false: "not signed in", true: "signed in"}[signedIn], func(t *testing.T) {
+			srv, _ := perUserLoginSrv(t)
+			srv.cfg.Now = func() time.Time { return awsSSOTestFixedNow }
+			if signedIn {
+				putAWSSSOBlob(t, srv, awsSSOTestFixedNow.Add(time.Hour))
+			}
+			member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+			row := harnessRow(t, doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", member, ""), "claude-code")
+			if row.CredentialResidency != string(residencySandbox) {
+				t.Errorf("credential_residency = %q, want %q — a per_user bedrock_sso row is resident "+
+					"whether or not this member has signed in yet", row.CredentialResidency, residencySandbox)
+			}
+		})
+	}
+
+	// And the preflight twin of the not-signed-in state: a 422 that publishes no
+	// verdict at all. A refusal has none to publish, and pretending otherwise is
+	// what would make the status row unnecessary.
 	srv, _ := perUserLoginSrv(t)
 	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
-
-	row := harnessRow(t, doSSO(t, srv, http.MethodGet, "/api/v1/setup/status", member, ""), "claude-code")
-	if row.CredentialResidency != string(residencySandbox) {
-		t.Errorf("credential_residency = %q, want %q — a per_user bedrock_sso row is resident "+
-			"whether or not this member has signed in yet", row.CredentialResidency, residencySandbox)
-	}
-
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", member,
-		`{"agent":"claude-code","task":"t"}`)
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs/preflight", member, `{"agent":"claude-code","task":"t"}`)
 	if w.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("preflight = %d, want 422 — the declared lane has not resolved; body=%s", w.Code, w.Body.String())
+		t.Fatalf("preflight = %d, want 422; body=%s", w.Code, w.Body.String())
 	}
 	if strings.Contains(w.Body.String(), "model_credential") {
-		t.Errorf("the 422 carries a model_credential: %s — a refusal has no verdict to publish", w.Body.String())
+		t.Errorf("the 422 carries a model_credential: %s", w.Body.String())
 	}
 }
 
-// TestSetupStatusResidency_SharedBearerRowFallingToTheAWSMount is review trap
-// (b): mechanismSatisfied compares only the coarse provider type, so a declared
-// bedrock_bearer row is SATISFIED by a chain that fell through to the host
-// ~/.aws mount — which is resident. A console that mapped the roster enum to a
-// sentence would say "never written into the sandbox" here.
-func TestSetupStatusResidency_SharedBearerRowFallingToTheAWSMount(t *testing.T) {
-	h := newHarness(t)
-	cfg := baseTestConfig(h, &integStore{
-		govEscapeStore: newGovEscapeStore(&capStore{}),
-		site:           agentRoster(types.AgentProvider{ID: "claude-code", Mechanism: types.AgentMechanismBedrockBearer}),
-	})
-	cfg.Secrets = &memSecrets{m: map[string][]byte{}} // no bedrock-api-key: the bearer lane cannot fire
-	cfg.BedrockRegion = "us-east-1"
-	cfg.BedrockModel = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-	cfg.BedrockAWSConfigDir = t.TempDir()
-	srv := New(cfg)
-
-	row := harnessRow(t, do(t, srv, http.MethodGet, "/api/v1/setup/status", adminToken, ""), "claude-code")
-	if row.CredentialResidency != string(residencySandbox) {
-		t.Errorf("credential_residency = %q, want %q — the declared bearer lane did not fire; the ~/.aws "+
-			"mount did, and the AWS SDK signs SigV4 inside the sandbox", row.CredentialResidency, residencySandbox)
-	}
-}
-
-// TestSetupStatusResidency_SubscriptionWithInjectOff: THREAT-MODEL's
-// "Subscription ~/.claude mount, WARDYN_SUBSCRIPTION_INJECT=off only" row, whose
-// own note is that the COMPOSE stack defaults the variable to off — so on that
-// stack a real, refreshable copy of the operator's OAuth credentials is resident
-// BY DEFAULT and the rail must say so.
-func TestSetupStatusResidency_SubscriptionWithInjectOff(t *testing.T) {
+// TestSetupStatusSaysNothingUnderASubscriptionDeployment: the daemon posture
+// that USED to be read here (an inject-off deployment blessing the ~/.claude
+// mount in its default policy) now changes nothing on this surface — there is no
+// lane resolution left on a GET at all.
+func TestSetupStatusSaysNothingUnderASubscriptionDeployment(t *testing.T) {
 	h := newHarness(t)
 	cfg := baseTestConfig(h, &integStore{govEscapeStore: newGovEscapeStore(&capStore{})})
 	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
-	// The deployment default policy blesses the ~/.claude mount; no token
-	// provider is wired, which IS injection off (subscriptionInjectEnabled).
+	// No token provider wired, which IS injection off (subscriptionInjectEnabled).
 	cfg.DefaultPolicy = types.RunPolicySpec{
 		AllowedDomains:  []string{"api.anthropic.com"},
 		WorkspaceMounts: []types.WorkspaceMount{{Target: claudeCredTarget}},
 	}
 	srv := New(cfg)
-
 	row := harnessRow(t, do(t, srv, http.MethodGet, "/api/v1/setup/status", adminToken, ""), "claude-code")
-	if row.CredentialResidency != string(residencySandbox) {
-		t.Errorf("credential_residency = %q, want %q — with no proxy-side token provider the mount IS "+
-			"the credential", row.CredentialResidency, residencySandbox)
-	}
-	if row.StagedPlaceholder {
-		t.Errorf("staged_placeholder = true with injection off — the staged file is the real credential there")
+	if row.CredentialResidency != "" {
+		t.Errorf("credential_residency = %q, want empty — the deployment default policy is not the "+
+			"body New Run sends, so a GET may not grade one", row.CredentialResidency)
 	}
 }
 
@@ -286,10 +335,11 @@ func TestResidencyInLegacyModeGradesFromTheResolvedLanes(t *testing.T) {
 	cfg.DefaultPolicy = govDeployment()
 	srv := New(cfg)
 
+	// The STATUS row stays silent — there is no row to settle it — while PREFLIGHT
+	// answers precisely, which is the whole shape of the design.
 	row := harnessRow(t, do(t, srv, http.MethodGet, "/api/v1/setup/status", adminToken, ""), "claude-code")
-	if row.CredentialResidency != string(residencyProxy) {
-		t.Errorf("/setup/status credential_residency = %q, want %q — the bearer lane resolves and the "+
-			"proxy substitutes it on the wire", row.CredentialResidency, residencyProxy)
+	if row.CredentialResidency != "" {
+		t.Errorf("/setup/status credential_residency = %q, want empty in legacy mode", row.CredentialResidency)
 	}
 
 	w := do(t, srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, `{"agent":"claude-code","task":"t"}`)
@@ -301,14 +351,22 @@ func TestResidencyInLegacyModeGradesFromTheResolvedLanes(t *testing.T) {
 		t.Fatalf("decode preflight: %v", err)
 	}
 	if got.ModelCredential == nil || got.ModelCredential.Residency != residencyProxy {
-		t.Errorf("preflight model_credential = %+v, want residency %q", got.ModelCredential, residencyProxy)
+		t.Fatalf("preflight model_credential = %+v, want residency %q", got.ModelCredential, residencyProxy)
+	}
+	// The RESOLVED mechanism rides with it: the rail keys its sentence and its
+	// chip on this field, never on the roster's declared one, and in legacy mode
+	// there is no declared one to key on at all.
+	if got.ModelCredential.Mechanism != string(types.AgentMechanismBedrockBearer) {
+		t.Errorf("preflight mechanism = %q, want %q — the lane that resolved",
+			got.ModelCredential.Mechanism, types.AgentMechanismBedrockBearer)
 	}
 }
 
 // TestPreflightResidencyIsOmittedForANonModelRun: task_mode=exec runs a plain
 // shell command and is handed no model credential at all, so there is no
-// residency to state — omitted, never defaulted (the rail then shows nothing
-// rather than the proxy sentence).
+// residency to state — omitted, never defaulted. The rail renders no Credentials
+// sentence at all for such a run (the screen withholds the agent row too), which
+// is the absent-row doctrine rather than a fallback.
 func TestPreflightResidencyIsOmittedForANonModelRun(t *testing.T) {
 	h := newHarness(t)
 	cfg := baseTestConfig(h, &integStore{govEscapeStore: newGovEscapeStore(&capStore{})})

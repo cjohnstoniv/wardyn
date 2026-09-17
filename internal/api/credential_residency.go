@@ -149,3 +149,34 @@ func gradeModelCredential(row types.AgentProvider, declared bool, lanes llmLanes
 	}
 	return f
 }
+
+// rowFixedResidency is the ONE residency a roster ROW settles on its own, "" for
+// every other row — the whole of what GET /setup/status publishes.
+//
+// Residency is a property of the lane that RESOLVES, and a roster is not a
+// resolution: a status handler that dry-ran one would have to invent a request
+// body, and New Run never sends the deployment default policy (it sends a
+// policy_id or a minimal inline spec, and create folds the run / workspace /
+// default integration first, which is where a wizard-built Bedrock integration's
+// region and model arrive). That approximation can be confidently wrong in BOTH
+// directions — "never written into the sandbox" over a run carrying resident
+// SigV4 keys is the exact defect this lane exists to remove — so it is not made.
+//
+// The per-user Bedrock SSO row is different in kind, not in confidence. It
+// admits no other lane at all: resolveBedrockAuth stops at its per-user branch
+// rather than falling through to the operator's bearer / mount / static arms,
+// and mechanismSatisfied accepts only bedrock_sso under per_user. That lane
+// materialises the captured session inside the sandbox and the in-sandbox SDK
+// mints resident role credentials from it, whatever policy, workspace or
+// integration the run carries. It is also the one state whose precise answer is
+// unavailable on demand: Preflight answers 422 for a member who has not signed
+// in — which is exactly the person deciding whether to sign in.
+//
+// A DISABLED row launches nothing, so it says nothing.
+func rowFixedResidency(row types.AgentProvider) string {
+	if row.Disabled || row.CredentialSource != types.CredentialSourcePerUser ||
+		row.Mechanism != types.AgentMechanismBedrockSSO {
+		return ""
+	}
+	return string(residencySandbox)
+}

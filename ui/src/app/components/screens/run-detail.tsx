@@ -134,7 +134,7 @@ export function RunDetailScreen() {
   const [recKey, setRecKey] = React.useState(id);
   // W21-S1-7, now the shared hook: the same /healthz read the Recordings
   // library and the New Run rail make. See use-recording-disabled.ts.
-  const recordingDisabled = useRecordingDisabled();
+  const recordingDisabled = useRecordingDisabled() === true;
 
   const { copied, copyAsync } = useCopyToClipboard(1400);
   const [decide, setDecide] = React.useState<{

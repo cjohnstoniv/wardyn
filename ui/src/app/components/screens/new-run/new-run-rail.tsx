@@ -15,6 +15,7 @@
 // side by side. Squeezing a 320px rail into a phone column is how the
 // consequences of a choice end up unreadable exactly where they are hardest to
 // scroll back to.
+import type * as React from "react";
 import { Link } from "react-router-dom";
 import { Loader2, TriangleAlert } from "lucide-react";
 import type {
@@ -74,87 +75,88 @@ interface RunRailProps {
   };
   preflight: { error: string | null; result: PreflightResult | null };
   /**
-   * The picked agent's /setup/status roster row, when the screen has one. It
-   * carries the DEFAULT-path answer to "where does this run's model credential
-   * live" — credential_residency, graded server-side from the lanes that
-   * actually resolve. Undefined for an agent the status read did not name, or
-   * before that read lands: the absent-row doctrine again, and the Credentials
-   * section falls back to "Resolved at launch." rather than to the sentence the
-   * rail used to assert unconditionally.
+   * The picked agent's /setup/status roster row — WITHHELD by the screen for a
+   * run that makes no model call (a shell command), so its absence is also how
+   * this rail knows there is no model credential to describe.
+   *
+   * Its `credential_residency` is published for ONE row shape only (an enabled
+   * per_user + bedrock_sso row) and is the only thing read off it here. The
+   * row's `mechanism` is the DECLARED lane and is NEVER read: under a `shared`
+   * row that lane is satisfied by a chain that fell through to a different,
+   * resident one, and in legacy mode the field is empty — keying a sentence on it
+   * rendered "AWS credentials sign inside the sandbox" over a Claude sign-in.
    */
   agentRow?: SetupHarnessTool;
 }
 
-// modelCredentialOf is the rail's ONE precedence rule: a preflight the operator
-// actually ran describes the body they are about to launch, so it wins; the
-// status row is what everyone else reads, since Preflight is a manual button
-// nothing fires by default and answers 422 for a per_user member who has not
-// signed in yet.
+// CredentialFacts states where the MODEL credential lands, and nothing wider —
+// "Credentials" as a heading over "never written into the sandbox" was a
+// universal claim only the model credential ever supported.
 //
-// Returns undefined when NEITHER source graded one — never a default. The old
-// copy's whole defect was that it had a default.
-function modelCredentialOf(
-  preflight: PreflightResult | null,
-  agentRow?: SetupHarnessTool,
-): ModelCredential | undefined {
-  if (preflight?.model_credential) return preflight.model_credential;
-  if (!agentRow?.credential_residency) return undefined;
-  return {
-    residency: agentRow.credential_residency,
-    mechanism: agentRow.mechanism,
-    credential_source: agentRow.credential_source,
-    staged_placeholder: agentRow.staged_placeholder,
-  };
-}
-
-// CredentialFacts renders where the MODEL credential lands, and nothing wider:
-// every sentence names the model credential explicitly, because "Credentials" as
-// a heading over "never written into the sandbox" was a universal claim only the
-// model credential ever supported — env_secret and ssh_key grants are resident
-// by design (threatmodel/THREAT-MODEL.md's resident-secret table), which is what
-// the policy line at the bottom is for.
+// THE PRECEDENCE, and why it is only two rungs. A CURRENT preflight verdict
+// describes the exact body about to be launched, resolved lane and all, so it
+// wins and everything below is read off IT. Otherwise the only claim available
+// is the one the roster row settles by itself — a per-user Bedrock SSO row,
+// resident whatever the run carries — and that row is also the one case whose
+// precise answer cannot be fetched, since Preflight 422s a member who has not
+// signed in. Anything else is unresolved, and says so: there is no third rung
+// that guesses.
 function CredentialFacts({
   cred,
-  savedPolicy,
+  agentRow,
 }: {
   cred?: ModelCredential;
-  savedPolicy?: { name: string; spec: RunPolicySpec };
+  agentRow?: SetupHarnessTool;
 }) {
-  // env_secret / ssh_key are delivered INTO the sandbox whatever the model
-  // credential does. Only for a saved policy, whose spec is the one the rail
-  // actually holds — an inline spec is not a prop here, and a line about grants
-  // the rail cannot see would be the same kind of unconditional claim.
-  const residentGrants = (savedPolicy?.spec.eligible_grants ?? []).some(
-    (g) => g.kind === "env_secret" || g.kind === "ssh_key",
-  );
+  if (cred) {
+    // Keyed on the RESOLVED mechanism, never on the row's declared one.
+    const bedrock = cred.residency === "sandbox" && cred.mechanism !== "anthropic_subscription";
+    return (
+      <>
+        <CredentialLine>{credentialSentence(cred)}</CredentialLine>
+        {bedrock && <AWSSignInChip perUser={cred.credential_source === "per_user"} />}
+      </>
+    );
+  }
+  if (agentRow?.credential_residency === "sandbox") {
+    // The row-fixed case. per_user by construction — it is the only shape the
+    // server publishes this field for.
+    return (
+      <>
+        <CredentialLine>{RAIL_CREDENTIAL.SANDBOX_BEDROCK}</CredentialLine>
+        <AWSSignInChip perUser />
+      </>
+    );
+  }
   return (
     <>
-      <p className="text-xs leading-relaxed text-muted-foreground">
-        {credentialSentence(cred)}
-      </p>
-      {cred?.residency === "sandbox" && cred.mechanism !== "anthropic_subscription" && (
-        <div className="mt-1.5">
-          <Chip tone="neutral">
-            {cred.credential_source === "per_user"
-              ? RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_PER_USER
-              : RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_SHARED}
-          </Chip>
-        </div>
-      )}
-      {residentGrants && (
-        <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
-          {RAIL_CREDENTIAL.POLICY_GRANTS_SECRETS}
-        </p>
-      )}
+      <CredentialLine>{RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH}</CredentialLine>
+      <CredentialLine>{RAIL_CREDENTIAL.RUN_PREFLIGHT_HINT}</CredentialLine>
     </>
   );
 }
 
-// credentialSentence maps a graded residency to the one sentence that is true of
-// it. The "unknown" arm is also the arm an absent grade takes, so the proxy
-// sentence is unreachable from an absence — the defect this lane exists for.
-function credentialSentence(cred?: ModelCredential): string {
-  switch (cred?.residency) {
+function CredentialLine({ children }: { children: React.ReactNode }) {
+  return <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground first:mt-0">{children}</p>;
+}
+
+// Whose AWS sign-in is resident — the difference between "my own session is in
+// there" and "the admin's is", in the Barrier chip + tagline shape.
+function AWSSignInChip({ perUser }: { perUser: boolean }) {
+  return (
+    <div className="mt-1.5">
+      <Chip tone="neutral">
+        {perUser
+          ? RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_PER_USER
+          : RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_SHARED}
+      </Chip>
+    </div>
+  );
+}
+
+// credentialSentence maps a RESOLVED grade to the one sentence true of it.
+function credentialSentence(cred: ModelCredential): string {
+  switch (cred.residency) {
     case "proxy":
       return cred.staged_placeholder ? RAIL_CREDENTIAL.PROXY_STAGED : RAIL_CREDENTIAL.PROXY;
     case "sandbox":
@@ -184,8 +186,13 @@ export function RunRail({
 }: RunRailProps) {
   // Both of finding 1's facts, read rather than asserted: where the model
   // credential lands, and whether this deployment records anything at all.
-  const cred = modelCredentialOf(preflight.result, agentRow);
+  // `recordingDisabled` is TRI-STATE — undefined until /healthz answers.
+  const cred = preflight.result?.model_credential;
   const recordingDisabled = useRecordingDisabled();
+  // A run with no model credential to describe (a shell command — the screen
+  // withholds agentRow for one) and no warning to raise has no Credentials
+  // section at all, rather than a heading over a sentence about nothing.
+  const showCredentials = showModelWarning || !!cred || !!agentRow;
   return (
     // F2-F7/F3-F1: a sticky box is clamped by its containing block — with
     // ceiling + tool rules + 3 warnings (member/warnings path) the rail's
@@ -235,6 +242,7 @@ export function RunRail({
           <p className="text-xs text-muted-foreground">{CC_META[cc].doesntProtect}</p>
         </RailSection>
 
+        {showCredentials && (
         <RailSection title="Credentials">
           {showModelWarning && (
             <p className="mb-1.5 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-foreground">
@@ -246,8 +254,9 @@ export function RunRail({
               </Link>
             </p>
           )}
-          <CredentialFacts cred={cred} savedPolicy={savedPolicy} />
+          {(cred || agentRow) && <CredentialFacts cred={cred} agentRow={agentRow} />}
         </RailSection>
+        )}
 
         {/* What actually happens when this launches. The startup choice is a
             real fork, and the rail is where this screen states consequences
@@ -274,11 +283,16 @@ export function RunRail({
               promise was false out of the box — and wrong in both dangerous
               directions at once. The shared hook is the same /healthz read the
               Recordings library and the run cockpit make. */}
-          <p className="text-xs text-muted-foreground">
-            {recordingDisabled
-              ? RECORDING_DISABLED_TITLE
-              : "Every keystroke and every outbound connection."}
-          </p>
+          {/* UNKNOWN renders nothing: a promise this specific may not be made
+              from a /healthz read that has not landed, failed, or carried no
+              recording component at all. */}
+          {recordingDisabled !== undefined && (
+            <p className="text-xs text-muted-foreground">
+              {recordingDisabled
+                ? RECORDING_DISABLED_TITLE
+                : "Every keystroke and every outbound connection."}
+            </p>
+          )}
         </RailSection>
       </div>
 

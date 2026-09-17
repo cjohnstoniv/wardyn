@@ -85,7 +85,7 @@ export function RecordingScreen() {
 
   // W21-S1-7, now the shared hook: the same /healthz read the run cockpit and
   // the New Run rail make. See use-recording-disabled.ts.
-  const recordingDisabled = useRecordingDisabled();
+  const recordingDisabled = useRecordingDisabled() === true;
 
   const load = React.useCallback(() => {
     let cancelled = false;

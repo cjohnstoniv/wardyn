@@ -229,24 +229,22 @@ export interface SetupHarnessTool {
   // portal URL (see the Go SetupHarnessTool doc).
   mechanism?: string;
   credential_source?: string;
-  // WHERE this agent's model credential would land for THIS caller, graded
-  // server-side from the lanes that actually RESOLVE (internal/api's
-  // gradeModelCredential) — never from `mechanism` above, which is the roster's
-  // DECLARED lane and is satisfied, under a `shared` row, by a chain that fell
-  // through to a resident one.
+  // Published for exactly ONE row shape: an enabled `per_user` + `bedrock_sso`
+  // row, which is "sandbox". ABSENT for every other row, and absent is the
+  // common case — not an older daemon, not an error.
   //
-  // The New Run rail's DEFAULT-path source: that screen already fetches
-  // /setup/status on mount, while Preflight is a manual button nothing fires by
-  // default and which answers 422 for a per_user member who has not signed in.
-  // Absent on an older daemon and on a row nothing was graded for — treat absent
-  // as unknown and say so; the "injected by the proxy" sentence must never be
-  // reachable from an absence.
+  // A roster cannot say where a credential lands; the lane that RESOLVES decides
+  // that, and a GET has no run body to resolve one from. The per-user Bedrock SSO
+  // row is the one exception in kind: it admits no other lane, that lane writes
+  // the captured session into the sandbox whatever the run carries, and it is the
+  // one state whose precise answer is unavailable (Preflight 422s a member who
+  // has not signed in — the very person deciding whether to sign in).
+  //
+  // Everywhere else the console says "Resolved at launch." and offers Preflight,
+  // which answers for the exact run. NEVER infer a sentence from `mechanism`
+  // above: that is the DECLARED lane, and under a `shared` row it is satisfied by
+  // a chain that fell through to a different, resident one.
   credential_residency?: ModelCredentialResidency;
-  // The ~/.claude mount with proxy-side injection ON: "proxy" is the
-  // deployment's stated mode rather than something Wardyn verified, because the
-  // staged sentinel is written by an operator-run script the daemon never reads
-  // back. The rail names the mount instead of promising nothing is mounted.
-  staged_placeholder?: boolean;
 }
 
 // THIS PRINCIPAL's model-access state (internal/api.SetupModelAccess) — the

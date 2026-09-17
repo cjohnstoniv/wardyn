@@ -29,9 +29,9 @@ import * as React from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
-import type { ConfinementClass, CreateRunResult, PreflightResult, RunPolicySpec, SetupHarnessTool, Workspace } from "../../../lib/types";
+import { CC_ORDER as ORDERED_CLASSES, type ConfinementClass, type CreateRunResult, type PreflightResult, type RunPolicySpec, type SetupHarnessTool, type Workspace } from "../../../lib/types";
 import { Link } from "react-router-dom";
-import { SectionCard, Seg } from "./new-run-primitives";
+import { ccRank as rank, SectionCard, Seg } from "./new-run-primitives";
 import { RunRail } from "./new-run-rail";
 import { AgentPicker } from "./agent-picker";
 import { runs as runsApi } from "../../../lib/api/runs";
@@ -68,11 +68,6 @@ import {
   type RunPrefill,
   type WizardState,
 } from "./wizard-types";
-
-const ORDERED_CLASSES: ConfinementClass[] = ["CC1", "CC2", "CC3"];
-
-// A tier is pickable only if the host can BUILD it and the policy allows it.
-const rank = (c: ConfinementClass) => ORDERED_CLASSES.indexOf(c);
 
 export function NewRunScreen() {
   const navigate = useNavigate();
@@ -980,7 +975,7 @@ export function NewRunScreen() {
               ? { error: preflightError, result: preflightResult }
               : { error: null, result: null }
           }
-          agentRow={harnesses?.find((h) => h.id === state.agent)}
+          agentRow={isAgent ? harnesses?.find((h) => h.id === state.agent) : undefined}
         />
       </div>
 

@@ -10,7 +10,15 @@
 // in the file depends on them beyond calling them.
 
 import * as React from "react";
+import { CC_ORDER, type ConfinementClass } from "../../../lib/types";
 import { cn } from "../../ui/utils";
+
+// Where a barrier sits on the Fence < Wall < Vault ladder. It lives beside the
+// screen's other shared pieces rather than in it because lib/types already owns
+// the ORDER (CC_ORDER) — the screen kept a second copy of the same array, which
+// is the duplication that file's own comment warns about — and because the
+// screen is at the 1000-line gate.
+export const ccRank = (c: ConfinementClass) => CC_ORDER.indexOf(c);
 
 export function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
   return (

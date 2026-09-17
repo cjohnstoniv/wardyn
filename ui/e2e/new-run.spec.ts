@@ -420,17 +420,19 @@ test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F
 
 // ── Appendix A finding 1: the rail states what the server resolved ───────────
 //
-// The point of these two is the DEFAULT path. Preflight is a manual button that
-// nothing fires, and it answers 422 for exactly the field scenario (a per_user
-// member who has not signed in), so a preflight-only design would show every
-// user "Resolved at launch." at the decision point. The rail therefore reads
-// /setup/status's harness row by default and lets a CURRENT preflight override
-// it — and both arms are asserted against what those endpoints actually say on
-// this daemon, not against a sentence hardcoded here.
+// Three cases, and the split between them is the design. /setup/status settles
+// residency for ONE row shape (an enabled per_user + bedrock_sso row), because a
+// roster cannot know which lane a run resolves; every other deployment reads
+// "Resolved at launch." until Preflight answers for the exact body. So: case 1
+// pins the no-click state on THIS daemon and asserts the row really is silent,
+// case 2 pins the precise answer against the response the console itself got,
+// and case 3 route-stubs the row-fixed shape at the height suite's viewport so
+// the chip's extra line is MEASURED rather than assumed.
 
 // railCredentialSentence is the rail's own mapping, spelled once more here so
 // the assertion is "the console repeats the server", not "the console renders a
-// string this spec also hardcodes". Keep in step with new-run-rail.tsx.
+// string this spec also hardcodes". It reads the RESOLVED mechanism only — never
+// the roster's declared one. Keep in step with new-run-rail.tsx.
 function railCredentialSentence(cred?: {
   residency?: string;
   mechanism?: string;
@@ -451,24 +453,32 @@ function railCredentialSentence(cred?: {
 }
 
 test.describe("New run rail — credentials and recording are read, not asserted", () => {
-  test("with NO Preflight click the rail says what /setup/status and /healthz say", async ({ page }) => {
+  test("with NO Preflight click the rail says exactly what /setup/status and /healthz say", async ({
+    page,
+  }, testInfo) => {
     const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
     const status = await (await page.request.get("/api/v1/setup/status", { headers: auth })).json();
     const health = await (await page.request.get("/healthz", { headers: auth })).json();
     const row = (status.harnesses ?? []).find((h: { id: string }) => h.id === "claude-code");
-    const wantCredential = railCredentialSentence({
-      residency: row?.credential_residency,
-      mechanism: row?.mechanism,
-      staged_placeholder: row?.staged_placeholder,
-    });
     const recordingOff = health.components?.recording?.selected === "none";
+    testInfo.annotations.push({
+      type: "arm",
+      description: `claude-code row: credential_residency=${row?.credential_residency ?? "(absent)"}, ` +
+        `mechanism=${row?.mechanism ?? "(absent)"}; recording.selected=${health.components?.recording?.selected ?? "(absent)"}`,
+    });
+    // This daemon declares NO agent roster (scripts/e2e-backend.sh), so the row
+    // settles nothing — which is the common deployment and the arm being pinned.
+    // A future seeded roster would have to change this assertion deliberately
+    // rather than silently re-point the case at a different arm.
+    expect(row, "claude-code is in the harness catalog").toBeTruthy();
+    expect(row.credential_residency, "no roster ⇒ the row settles no residency").toBeUndefined();
 
     await openNewRun(page);
-    // Nothing is clicked: this is the state every person is in at the decision
-    // point, and the state the old copy answered with "never written into the
-    // sandbox" regardless of which lane the run would resolve to.
+    // Nothing is clicked: the state every person is in at the decision point, and
+    // the state the old copy answered with "never written into the sandbox".
     await expect(page.getByTestId("preflight-result")).toHaveCount(0);
-    await expect(page.getByText(wantCredential, { exact: true })).toBeVisible();
+    await expect(page.getByText(RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH, { exact: true })).toBeVisible();
+    await expect(page.getByText(RAIL_CREDENTIAL.RUN_PREFLIGHT_HINT, { exact: true })).toBeVisible();
     await expect(
       page.getByText(recordingOff ? RECORDING_DISABLED_TITLE : RAIL_RECORDING_ON, { exact: true }),
     ).toBeVisible();
@@ -476,21 +486,84 @@ test.describe("New run rail — credentials and recording are read, not asserted
     await expect(page.getByText(OLD_UNCONDITIONAL_CREDENTIAL_LINE)).toHaveCount(0);
   });
 
-  test("after Preflight the rail states the verdict for the body it graded", async ({ page }) => {
-    // Read the response the CONSOLE itself got, rather than reconstructing the
-    // request body here — the override is defined as "the verdict for the body
-    // this screen dry-ran", so that is what must be compared against.
-    let graded: { residency?: string; mechanism?: string; staged_placeholder?: boolean } | undefined;
-    await page.route("**/api/v1/runs/preflight", async (route) => {
+  test("after Preflight the rail states the verdict for the body it graded", async ({ page }, testInfo) => {
+    const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    // Give the daemon a lane that actually RESOLVES, so this case pins the
+    // precise answer rather than re-pinning "unknown": with a region and model
+    // already configured (scripts/e2e-backend.sh), a stored bedrock-api-key makes
+    // the bearer lane fire — the one Bedrock lane that is never resident.
+    const put = await page.request.put("/api/v1/secrets/bedrock-api-key", {
+      headers: auth,
+      data: { value: "e2e-bedrock-bearer" },
+    });
+    expect(put.ok(), "PUT /secrets/bedrock-api-key").toBeTruthy();
+    try {
+      // Read the response the CONSOLE itself got, rather than reconstructing the
+      // request body here — the override is defined as "the verdict for the body
+      // this screen dry-ran", so that is what must be compared against.
+      let graded: { residency?: string; mechanism?: string; staged_placeholder?: boolean } | undefined;
+      await page.route("**/api/v1/runs/preflight", async (route) => {
+        const response = await route.fetch();
+        graded = (await response.json()).model_credential;
+        await route.fulfill({ response });
+      });
+
+      await openNewRun(page);
+      await page.getByRole("button", { name: "Preflight" }).click();
+      await expect(page.getByTestId("preflight-result")).toBeVisible();
+      expect(graded, "POST /runs/preflight carried a model_credential").toBeDefined();
+      testInfo.annotations.push({
+        type: "arm",
+        description: `preflight model_credential: residency=${graded!.residency}, mechanism=${graded!.mechanism}`,
+      });
+      // A resolved verdict, not the unresolved one case 1 already covers.
+      expect(graded!.residency, "preflight resolved a lane").not.toBe("unknown");
+      expect(["proxy", "sandbox", "image"]).toContain(graded!.residency);
+      await expect(page.getByText(railCredentialSentence(graded), { exact: true })).toBeVisible();
+      await expect(page.getByText(RAIL_CREDENTIAL.RUN_PREFLIGHT_HINT)).toHaveCount(0);
+    } finally {
+      await page.request.delete("/api/v1/secrets/bedrock-api-key", { headers: auth });
+    }
+  });
+
+  // The ROW-FIXED shape — the field report's own estate, which this daemon has no
+  // roster for. Stubbed at the height suite's own 1280x650 so the chip's extra
+  // line is MEASURED: the sandbox arm renders a sentence AND a chip where every
+  // other arm renders one line, and Launch must stay reachable.
+  test("a per_user Bedrock SSO row states residency with no click, and Launch stays reachable at 1280x650", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 650 });
+    await page.route("**/api/v1/setup/status*", async (route) => {
       const response = await route.fetch();
-      graded = (await response.json()).model_credential;
-      await route.fulfill({ response });
+      const body = await response.json();
+      body.harnesses = (body.harnesses ?? []).map((h: { id: string }) =>
+        h.id === "claude-code"
+          ? {
+              ...h,
+              mechanism: "bedrock_sso",
+              credential_source: "per_user",
+              credential_residency: "sandbox",
+            }
+          : h,
+      );
+      await route.fulfill({ response, json: body });
     });
 
     await openNewRun(page);
-    await page.getByRole("button", { name: "Preflight" }).click();
-    await expect(page.getByTestId("preflight-result")).toBeVisible();
-    expect(graded, "POST /runs/preflight carried a model_credential").toBeDefined();
-    await expect(page.getByText(railCredentialSentence(graded), { exact: true })).toBeVisible();
+    await expect(page.getByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK, { exact: true })).toBeVisible();
+    await expect(
+      page.getByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_PER_USER, { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByText(RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH)).toHaveCount(0);
+
+    await page.getByLabel("Title").fill("e2e rail residency");
+    await page.mouse.wheel(0, 400);
+    const launch = page.getByRole("button", { name: "Launch run" });
+    await launch.scrollIntoViewIfNeeded();
+    const box = await launch.boundingBox();
+    expect(box, "Launch run boundingBox").not.toBeNull();
+    expect(box!.y, "Launch run top edge").toBeGreaterThanOrEqual(0);
+    expect(box!.y + box!.height, "Launch run bottom edge").toBeLessThanOrEqual(650);
   });
 });

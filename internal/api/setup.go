@@ -716,7 +716,7 @@ func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
 		// Integrations reuses the single integrationsWithCapabilitiesUsing call
 		// hoisted above (PLATFORM-API-7 optimization + HIGH-4 llm_ready reuse).
 		Integrations: integrations,
-		Harnesses:    s.setupHarnessToolsFor(ctx, siteCfg, runIdentitySubject(ctx, principalFromRequest(r))),
+		Harnesses:    setupHarnessTools(siteCfg, s.cfg.AgentImages),
 		LLMReady:     llmReady,
 		ModelAccess:  modelAccess,
 		// A count derived from the SAME PEM string TrustedCAPEM's doc comment

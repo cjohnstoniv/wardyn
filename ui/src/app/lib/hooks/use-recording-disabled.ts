@@ -19,19 +19,28 @@
 // for after-the-fact review does not have it, and a member who assumes they are
 // not recorded may be.
 //
-// FALSE WHILE UNKNOWN, deliberately and unchanged from the two reads it
-// replaces: a fetch that has not landed (or failed — health.health swallows a
-// failure into {}) is not evidence that recording is off, and the surfaces here
-// all render their ordinary state in that case.
+// TRI-STATE, and that is the point. `undefined` means UNKNOWN: the fetch has not
+// landed, or it failed (health.health swallows a failure into {}), or this
+// daemon's /healthz carries no `recording.selected` at all. A caller that
+// collapses unknown to `false` goes on ASSERTING "every keystroke and every
+// outbound connection" over a deployment that records nothing — which is the
+// same shape of defect as the credentials line this lane exists to remove, one
+// surface over. The two list/cockpit callers compare `=== true` (an empty state
+// stays as it was until the answer arrives); the New Run rail, which makes a
+// PROMISE rather than explaining an absence, renders no sentence at all while
+// this is undefined.
 import * as React from "react";
 import { health } from "../api/health";
 
-export function useRecordingDisabled(): boolean {
-  const [disabled, setDisabled] = React.useState(false);
+export function useRecordingDisabled(): boolean | undefined {
+  const [disabled, setDisabled] = React.useState<boolean | undefined>(undefined);
   React.useEffect(() => {
     let alive = true;
     health.health().then((h) => {
-      if (alive && h.components?.recording?.selected === "none") setDisabled(true);
+      const selected = h.components?.recording?.selected;
+      // An absent field is UNKNOWN, not "on": only a value we actually read
+      // settles this either way.
+      if (alive && selected) setDisabled(selected === "none");
     });
     return () => {
       alive = false;
