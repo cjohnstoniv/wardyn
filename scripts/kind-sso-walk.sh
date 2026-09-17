@@ -402,8 +402,14 @@ for _ in $(seq 1 60); do
   for pod in $(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get pods \
                  -l app.kubernetes.io/name=wardyn --field-selector=status.phase=Running \
                  -o name 2>/dev/null | sed 's|^pod/||'); do
-    if kubectl --context "${CONTEXT}" -n "${NAMESPACE}" logs "${pod}" --tail=500 2>/dev/null \
-         | grep -q "TEST HATCH ACTIVE"; then
+    # CAPTURE, THEN MATCH — never `kubectl logs | grep -q` under `pipefail`.
+    # `grep -q` exits on its first match; kubectl is still writing the lines
+    # after it, takes SIGPIPE, and pipefail reports the PIPELINE failed although
+    # the match was found. Measured on a live pod: 11 of 12 reads "failed" with
+    # the warning sitting in the log — and the more the daemon has logged since
+    # boot, the surer the miss, so polling for two minutes only made it worse.
+    pod_log="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" logs "${pod}" --tail=500 2>/dev/null)"
+    if grep -q "TEST HATCH ACTIVE" <<<"${pod_log}"; then
       hatch_found="${pod}"
       break
     fi
