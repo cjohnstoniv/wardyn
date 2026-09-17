@@ -103,6 +103,27 @@ evidence only for the tip somebody actually ran it on.
   read 0.0% in the K8S-gated bucket above. Prereqs: `make kind-quickstart` +
   `make kind-sso`; recipe in docs/OPERATIONS.md, "Testing AWS SSO without an
   AWS tenant".
+
+  **0.7.5 — a second spec file.** The walk now runs
+  `ui/e2e/live/sso-member.spec.ts` AND
+  `ui/e2e/live/sso-member-recovery.spec.ts`, in that order, in one invocation
+  against one cluster. The recovery file adds: the agent roster saved from the
+  CONSOLE (not the API) and a member bound by its three org settings; the
+  member's "Your model key" card in both its per-person states; the sign-in
+  sandbox self-running and being joined from the Runs list with nothing typed; a
+  cancel/retry that moves the stored capture to the second run; a superseded
+  orphan login run; a 65-second `STARTING` hold (inside the 90-second proxy-pod
+  IP wait that bounds it) which must read as slow rather than unreadable; an
+  interactive claude-code run that answers ONE workspace-
+  trust prompt and reaches Bedrock; a first run whose approvals list is empty;
+  and the admin's no-credential member preview.
+
+  Still NOT covered by either file, and deliberately: a real AWS tenant (every
+  endpoint is an unsigned on-cluster fake), a genuinely cold registry pull
+  (`kind load` warms the node and the pod pulls `IfNotPresent`, so the cold-start
+  case is a node TAINT standing in for a slow start), a real IdP (Dex with two
+  static passwords), concurrent members, and a device-code step that is anything
+  other than pre-approved.
 - `scripts/run-e2e-ssh-k8s.sh` (`make test-e2e-ssh-k8s`) — the SSH gateway over
   the k8s exec lane: `internal/runner/k8s`'s Attach/Close/ExecStream/Read/
   Resize/Write, every one of them listed in the K8S-gated bucket above.

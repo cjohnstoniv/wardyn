@@ -1107,6 +1107,27 @@ sets one, resources and `auto_stop_after_sec` capped, grants narrowed to what th
 ceiling allows, and `workspace_mounts` dropped entirely. An admin's own
 `inline_policy` is not clamped.
 
+**A first claude-code run parks on nothing the product itself needs.** The
+claude-code image turns off the CLI's own fetches —
+`CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1` (the plugin-marketplace
+auto-install, which is what reached `downloads.claude.ai` and `github.com`),
+`DISABLE_AUTOUPDATER=1` and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`; see
+[corp-image-authoring.md](adoption/corp-image-authoring.md) "Stop the agent
+fetching on its own behalf" — and writes `{"hasCompletedOnboarding": true}` into
+the sandbox's `~/.claude.json` before the CLI starts. Without those, the first
+Claude Code run anybody launched met the CLI's theme picker and then first-use
+approvals for hosts nobody had asked for. The shipped default policy
+(`examples/policies/default.json`) is deliberately unchanged: the fix is that the
+traffic no longer happens, not that those hosts are now allowed. **This applies
+to the claude-code image only** — the `codex-cli` image still reaches for several
+hosts of its own at start (see the CHANGELOG's known gaps).
+
+What an interactive run still shows on first use is Claude Code's
+**workspace-trust** prompt (`Accessing workspace: …` / `1. Yes, I trust this
+folder`). That one is a security question — it gates a cloned repo's own project
+settings taking effect — and Wardyn does not answer it for you. Pressing Enter
+there raises no approvals.
+
 **The desktop tier's standing honesty gap: the operator IS the admin.**
 [The desktop tier](../deploy/desktop/) (`WARDYN_LOCAL_MODE=true`) has no member
 role at all — local-mode callers are *always* admins
@@ -2078,7 +2099,7 @@ A persistent banner says so on every screen and carries the way back out
 (**Exit member mode**). Every audit row the session writes still names **your
 own sub** — this is not impersonation, and there is no way to become anybody
 else. The transition itself is audited as `auth.member_mode`
-(`enabled`, `real_role`), and each `403` an **admin-tier gate** raises while the
+(`enabled`, `real_role`, and `no_credential` on the preview below), and each `403` an **admin-tier gate** raises while the
 mode is on carries `member_mode: true` on its `authz.denied` row — the two
 middleware chokepoints and every in-handler refusal that raises the same two
 reasons — so a reviewer reads the burst as an admin walking the member path
@@ -2093,6 +2114,39 @@ over SSO only: the admin token, local mode and a deployment with no identity
 provider are one shared credential with no per-person role to pause, so there is
 nothing to pause and the route answers those callers `400`.
 
+**The no-credential preview — "view as a new member (not signed in)".** The
+same menu offers a second entry, **View as a new member (not signed in)**. It is
+the plain toggle plus one thing: your OWN captured AWS SSO session reads as
+absent for the rest of the session. On a `per_user` deployment that is the state
+every new member is in before they sign in, and it is the one state the plain
+toggle structurally cannot show — it clamps your role and leaves your subject
+alone, so every per-principal credential lookup still finds your own. In the
+preview, `GET /setup/status` grades your model access `not_configured` with
+"Sign in to AWS", a Claude Code run is refused at create with the same sentence
+a member who has not signed in meets, and `POST /setup/harness-login` answers
+`409` — *"Exit member mode to sign in to AWS — the capture would land on your
+own identity."* Nothing is deleted: your session sits untouched in the store
+and comes back the moment you exit. The transition is audited as
+`auth.member_mode` with `no_credential: true` beside `enabled` and `real_role`.
+
+**It appears only where the org gives each person their own sign-in.** The menu
+entry is offered, and the posture granted, only when the model-access agent's
+roster row is `per_user` — on a `shared` deployment there is no per-member
+sign-in to be missing, so the entry does not exist and a request for it enters
+the plain mode instead (`GET /me` publishes `member_preview_available`, and the
+toggle refuses to grant the posture regardless of what the console sends). One
+residual, by design rather than by omission: an admin already inside the
+preview when somebody flips the roster `per_user` → `shared` keeps the variant
+banner until they exit.
+
+**It is MODEL ACCESS only, and THIS BROWSER SESSION only.** The posture rides
+this session's cookie, so the same admin's CLI, their `wdn_` API token and a
+second browser all still create and dispatch runs on their real credential —
+"runs that need it are refused" is true of this console session and of nothing
+else. Everything outside model access is untouched too: `GET /me` still returns
+the admin's own user-drive allocation, and their own runs, workspaces and
+secrets are still theirs (ceilings 1 and 2).
+
 Two doors REFUSE instead of clamping, both with `409`: minting an API token
 (`POST /me/tokens`) and registering an SSH key (`POST /me/ssh-keys`). Both
 credentials carry a role stamp that is re-derived from your REAL role at your
@@ -2100,7 +2154,7 @@ next sign-in, so one minted "as a member" would quietly become an admin
 credential that outlives the mode. Exit first.
 
 > **It shows you what a member SEES. It is not proof that a member is
-> REFUSED.** Three ceilings, all deliberate:
+> REFUSED.** Four ceilings, all deliberate:
 >
 > 1. **Role only.** Runs, workspaces and secrets you created stay yours, so
 >    owner-legal paths still pass for you where they would 404 for someone else.
@@ -2120,10 +2174,35 @@ credential that outlives the mode. Exit first.
 >    worse). During a rolling Kubernetes upgrade a replica still running the
 >    previous version ignores the flag and answers your requests as an admin.
 >    Finish the rollout before you rely on what you see.
+> 4. **Model access, in the PLAIN toggle, is still yours.** The mode clamps the
+>    role and deliberately leaves your subject alone, so under a `per_user` roster
+>    row your own captured AWS SSO session is what `/setup/status`, run create and
+>    dispatch all resolve — an admin who has signed in sees a live credential
+>    while "viewing as member". Use **View as a new member (not signed in)** to
+>    see the not-signed-in state instead. Inside that preview the ceiling reads
+>    the other way round: your sign-in is *hidden, not removed*, and a rolling
+>    upgrade (ceiling 3) hides nothing at all.
 >
 > For the question "would a member actually be refused this?", use a real second
 > identity — recipe below. The two compose: toggle for the fast look, second
 > identity for the proof.
+>
+> **The preview shows the STATE, not the FLOW.** Signing in is refused inside it
+> (`409`), by design — a capture made there would land on your own identity and
+> overwrite your real session. So it reproduces what a member with no credential
+> SEES; it cannot rehearse a member's FIRST SIGN-IN. That still needs a real
+> second identity — `member@wardyn.local` in the kind quickstart, `wardyn-member`
+> on Entra.
+>
+> **Rolling upgrades, for the preview specifically.** The posture rides the same
+> session cookie as the mode, as a second `omitempty` bool with no codec bump. A
+> replica still running 0.7.4 ignores it: it shows you your OWN credential AND
+> does not refuse harness-login — so *"sign-in is refused inside the preview"*
+> does not hold mid-upgrade. In the other direction a 0.7.5 console POSTing
+> `no_credential` to a 0.7.4 replica gets a `400` from the strict body decode
+> (`DisallowUnknownFields`), the mode is NOT entered, and the menu item says so;
+> the plain toggle keeps working throughout, because the console sends the key
+> only for the new posture. Finish the rollout before you rely on what you see.
 
 Note the name collision: the `WARDYN_MEMBER_MODE` environment variable
 ([ENV.md](ENV.md)) is a different, unrelated thing — a boot-time assertion that
@@ -2515,6 +2594,38 @@ managed-subscription fallback is not universal: a `codex-cli` run with a
 connected managed subscription and no integration gets no model access via this
 lane. Full transport precedence (subscription → Bedrock → api-key) once a run
 reaches dispatch: [TRY-IT.md](TRY-IT.md) → "Model auth: three ways".
+
+### What the New Run rail states
+
+The right-hand "What this run can do" panel is read, not asserted. Two of its
+rows consult the server, and both are silent rather than wrong when the server
+has not answered.
+
+- **Credentials** names where THIS run's model credential will land. Pressing
+  **Preflight** is what produces that answer for real: it dry-runs the exact body
+  Launch would send and returns `proxy` (minted at launch and swapped onto the
+  wire), `sandbox` (a live credential inside the run for its lifetime), or
+  `image` (a `none` roster row — Wardyn wires nothing and cannot say where the
+  image's own credential lives). The `sandbox` arm additionally chips whose
+  credential it is: **Your AWS sign-in** under a `per_user` roster row,
+  **Admin's credential** under `shared`.
+  **With no click the rail states a residency only under a per-person Bedrock
+  SSO roster row** (`credential_source: per_user`, `mechanism: bedrock_sso`),
+  which is resident whether or not that person has signed in — the one shape the
+  roster settles on its own, and the one whose Preflight answer is a `422` for
+  exactly the member who needs it. Every other deployment reads "Resolved at
+  launch." and an invitation to press Preflight. That is deliberate: a roster
+  cannot tell which lane a run resolves — the run's policy, its workspace
+  binding, and the folded run/workspace/default integration all move it — so an
+  answer given before the run is described could be confidently wrong in either
+  direction, which is the defect this replaced. A run that makes no model call
+  (a shell command) shows no Credentials row at all.
+- **Recording** reads `/healthz`. A stock Helm install leaves
+  `persistence.enabled=false`, so no run on that server ever produces a cast; the
+  rail then states that instead of promising "every keystroke and every outbound
+  connection". While that read is still in flight — or if it failed — the rail
+  states neither. Set `persistence.enabled` (Helm) or `WARDYN_RECORDING_DIR` to
+  turn recording on.
 
 ### What an admin can put a fence around
 
@@ -2995,19 +3106,63 @@ an admin always reaches it, and under a `per_user` row captures their own
 session exactly as anyone else does.
 
 **What the sign-in sandbox is, and what it is not.** It is the AWS CLI and
-nothing else: no LLM harness, no `claude` binary, no repo, no mounts. Its run is
-labelled `harness login` server-side, and the run page names it so opening it
-from `/runs` is not a mystery box. Wardyn's own sign-in pane types ONE chained
-command into it —
+nothing else: no LLM harness, no repo, no mounts. Its run is labelled `harness
+login` server-side, and the run page names it, so opening it from `/runs` is not
+a mystery box. Typing `claude` or `codex` in it answers *"This is the AWS
+sign-in sandbox, not a coding agent. Start a Claude Code run from New run."* and
+exits non-zero, rather than the `command not found` that reads like a broken run.
+
+**The sandbox signs itself in.** ONE chained command does the whole capture —
 `aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso`
 — and both halves matter: `aws sso login` alone leaves the session in
-`~/.aws/sso/cache`, where it dies with the container; `wardyn-aws-sso` is what
-uploads it through the brokered endpoint. Somebody who instead opens the run
-from `/runs` gets a bare shell, so the shell itself prints that same command on
-attach (one definition, `deploy/images/aws-sso/login-hint.sh`, pinned against
-the console's copy by a parity test). Signing in from Getting Started is still
-the path to prefer — it types the command, watches for the helper's success
-marker, and shuts the sandbox down when the capture lands.
+`~/.aws/sso/cache`, where it dies with the container, and `wardyn-aws-sso` is
+what uploads it through the brokered endpoint. Since 0.7.5 the IMAGE runs that
+command, not the console: `agent-run --idle` creates a `wardyn` tmux session on
+`signin-pane.sh` BEFORE its own workspace prep, the pane prints
+*"wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in
+your browser. Nothing else runs here."*, waits for prep to finish, and runs the
+pair exactly ONCE. Every attach path joins that one session — Wardyn's sign-in
+pane, `wardyn attach`, an SSH attach, and **the Runs list** — because attaching
+is `tmux new-session -A -s wardyn`, attach-or-create. So the path that used to
+hand out a bare prompt now shows the sign-in already in progress.
+
+It runs once on purpose. A retry would mint a SECOND live device code while the
+person may still be entering the first, and a refusal that is deterministic (a
+wrong-account pin) cannot be fixed by signing in again. When the pair does not
+complete, the pane says so and names the command:
+*"wardyn: sign-in did not complete — start a new sign-in from Getting Started,
+or run: …"*. When it does, it says *"wardyn: sign-in command finished — this
+pane is now a plain shell."* and hands the pane over as a shell, with the
+scrollback intact for somebody attaching late.
+
+**An unpinned multi-account sign-in asks a question in the pane.** If the
+roster row pins `sso_account_id` and `sso_role_name`, the sign-in is fully
+unattended once the browser step is done. If it does NOT, and the person's SSO
+session reaches more than one account (or more than one role in the chosen
+account), the helper asks WHICH ONE in the sign-in terminal and allows three
+tries. Anyone with a WRITABLE attach can answer — the console's sign-in pane,
+`wardyn attach`, an SSH attach, or the Runs list when they hold the terminal.
+A read-only viewer cannot, and watches it time out. Pin the account and the
+role on the roster row and the question never comes up.
+
+**Signing in from Getting Started is still the path to prefer** — it watches for
+the helper's success marker, corroborates the capture with the server, and shuts
+the sandbox down when it lands. The Runs-list path shows the same sign-in; it
+just has no console around it — with one difference worth stating: nothing
+server-side stops a login run when the capture lands (the shutdown is the
+console pane's own kill), so a sandbox opened from `/runs` stays up until the
+reaper's 30-minute idle cap. The run page says so.
+
+**Version skew (console newer than the image).** The aws-sso image tag is
+version-locked on the ghcr default, but an operator `WARDYN_AGENT_IMAGES` pin —
+what a private-registry estate uses — can pair a 0.7.5 console with a pre-0.7.5
+image that does not self-run. The sign-in pane covers it: it waits 12 seconds
+after attaching and, ONLY if the sandbox has not announced itself (no
+`wardyn: sign-in running`, no device URL, no success or refusal marker), types
+the chained command itself, exactly as 0.7.4 did. The first thing the new image
+prints is that announcement, before its own prep wait, so on a current image the
+console never types and a second sign-in is never started over a running one.
+If you pin agent images, pull the 0.7.5 aws-sso image at the same upgrade.
 
 **The launch answers before the sandbox is up.** Since 0.7.4 `POST
 /setup/harness-login` returns `{run_id, state: "PENDING"}` as soon as the run
@@ -3181,6 +3336,87 @@ Deprovisioning the person in the IdP is therefore the complete answer, and
 deleting the Wardyn console account does **not** by itself delete the stored
 blob.
 
+### One live sign-in sandbox per person
+
+Starting a sign-in closes that person's previous one. Wardyn kills the caller's other non-terminal
+sign-in runs for the same agent before it creates the new run, and the superseded run's `run.kill`
+audit row carries `reason = superseded_by_new_login` and `superseded_for = <the person>`; it is a
+normal, successful kill, so a `run.kill` with `outcome=failure` still means a teardown or revocation
+step failed and the run may not be contained.
+
+This exists because an abandoned sign-in used to survive: the sandbox runs `aws sso login` itself, so
+a sign-in nobody is watching still completes when the person approves it in an old browser tab, and
+its (legitimate) capture then lands after the one they just made. The console would report *"The
+sandbox reported a capture the server does not have"* for a sign-in that had, in fact, worked.
+
+Two consequences worth knowing:
+
+- **Retrying is safe, including under a concurrency cap.** The supersede runs before the new run is
+  created, so a member whose governance profile allows one concurrent run is not refused by their own
+  abandoned sign-in.
+- **A closed sandbox cannot upload.** A killed sign-in run's credential upload is refused with
+  `harness.credential.refused` / `reason = run_killed`, even inside the five-minute grace a terminal
+  run otherwise has for its own tail uploads. Credential revocation alone is best-effort; this is the
+  belt.
+
+### What the sign-in pane's waiting messages mean
+
+The pane polls the run while the sandbox comes up and says which of three waits it is in:
+
+| On screen | What Wardyn knows |
+|---|---|
+| "Starting the sign-in sandbox…" | Reads are working; the sandbox is not up yet; less than a minute has passed. |
+| "Still starting — Wardyn can read the sign-in sandbox, it just isn't up yet…" | Same, past a minute. Usually a first image pull on this node. Nothing on this path can *prove* a pull is what it is waiting on, which is why the sentence is hedged. |
+| "Wardyn can't read the sign-in sandbox right now — still trying…" | The console's reads of the run are failing (a daemon restart, an ingress 5xx, a roster edit that made the read a 403). The sandbox itself may be perfectly fine. |
+| "Wardyn stopped being able to read the sign-in sandbox…" | Reads have been failing for five minutes. The wait ends; the run id is kept, so Cancel still tears the sandbox down. |
+
+The wait is now measured on the clock (five minutes of failing reads), not in poll ticks. A healthy
+wait is never ended by the pane, however long the pull takes — what bounds it is the server, below.
+
+### The two server bounds a slow registry hits, and what to do about them
+
+The pane will wait; the **runner** will not wait forever, and those are the bounds an operator has to
+size:
+
+- `canaryWaitTimeout` = **3 minutes** (`internal/runner/k8s/canary.go`) bounds the wait for the
+  sandbox container to be running. A first pull of the `aws-sso` image was measured at **131 seconds**
+  on a reporting estate — 73% of this budget.
+- `podIPWaitTimeout` = **90 seconds** (same file) is the second, tighter bound.
+
+Neither is configurable in 0.7.5 and neither was moved: they bound every Kubernetes run on every
+estate, and finding 6 was about what the console SAYS, not about how long the runner waits. A pull
+slower than them fails the run honestly — the run carries a `failure_hint` naming the deadline and
+the pod's Pending state, and the pane shows that sentence rather than a guess.
+
+**The fix for a slow registry is to pre-pull, not to wait longer.** Get the agent and `aws-sso`
+images onto every node at upgrade time — a DaemonSet that pulls the new tags, or the node cache of
+whatever registry mirror the cluster uses. Then the first sign-in after an upgrade is a warm start.
+
+### Telling an estate-side failure from a Wardyn one
+
+If people report *"Wardyn stopped being able to read the sign-in sandbox"*, the reads were failing,
+and the cause is almost always in front of Wardyn (an ingress/WAF 5xx or 429 against a 2-second poll,
+or a `wardynd` pod rolling during the upgrade that triggered the pull). Run both of these while it is
+happening — one shows what the console's poll sees, the other what the sandbox is actually doing:
+
+```sh
+# What the pane's poll sees. Same route, same cadence. Watch the status codes.
+while :; do
+  curl -s -o /dev/null -w '%{http_code} %{time_total}s\n' \
+    -H "Cookie: $WARDYN_SESSION" "$WARDYN_URL/api/v1/runs/$RUN_ID"
+  sleep 2
+done
+
+# What the sandbox is doing, on the cluster side.
+kubectl -n "$WARDYN_NS" get pods -l wardyn.run-id="$RUN_ID" -w
+kubectl -n "$WARDYN_NS" describe pod -l wardyn.run-id="$RUN_ID" | sed -n '/Events/,$p'
+```
+
+A steady stream of `200`s with a Pending pod is a slow pull (pre-pull, above). A stream of `502`/`503`/
+`429`, or `200`s that take tens of seconds, is the ingress or the daemon — no console change fixes
+that. `describe pod` is also where `ImagePullBackOff`/`ErrImagePull` shows up, which the runner treats
+as terminal and reports on the run.
+
 ### Testing AWS SSO without an AWS tenant
 
 Everything above is unfalsifiable without an AWS tenant — which is why, before
@@ -3246,13 +3482,97 @@ the member completes the containerized `aws sso login` from their own seat, and
 `not_configured` for the admin at the same moment. The closing assertion is the
 one that is not Wardyn asserting about itself: the fake's own `/_seen` reports
 which account and role real botocore asked it to mint, and that the Bedrock stub
-was hit. It is a manual proof, not a CI job — no workflow runs it, so a green
+was hit.
+
+**What the second spec adds (0.7.5).** The walk now runs TWO spec files in one
+invocation and against one cluster —
+`./scripts/run-ui-e2e.sh sso-member sso-member-recovery` — in that order,
+because the second inherits the state the first leaves: a member who is
+already signed in, and a roster pin that already contradicts nothing. It
+covers the paths a member who is already `live` cannot reach from their own
+seat, and three things 0.7.4's walk did not touch at all:
+
+- **the org standard set in the CONSOLE, not by an API PUT.** An admin drives
+  the Agents tab once — mechanism, per-person credential source, and the three
+  org settings the row carries (SSO start URL, pinned account, pinned role) —
+  and the walk then proves a MEMBER is bound by all of it: New Run offers only
+  the enabled agent, and the member's own sign-in pane has no start-URL field
+  at all, because the organization's portal wins. That last one is the proof
+  an org setting is ENFORCED on a member rather than merely saved.
+- **the sign-in sandbox signing itself in, reached from the RUNS LIST.** The
+  member presses the CTA and immediately leaves the console. Opening the run
+  from `/runs` joins the same tmux session the image already started, shows
+  the sandbox's own banner and the device-code URL, and the capture completes
+  with the test typing nothing at all. The absence of a keystroke is the
+  assertion: before 0.7.5 the console typed the command and a Runs-list attach
+  got a bare prompt.
+- **cancel, retry and supersede.** A sign-in cancelled while it is still
+  starting leaves no stored credential, the retry replaces the blob (proven by
+  the stored capture's `source_run_id` MOVING to the second run — "it reaches
+  live" proves nothing about a member who was already live), and starting a
+  third sign-in over an abandoned one kills the orphan, leaving exactly one
+  live sandbox per person.
+
+It also holds a sign-in in `STARTING` for 65 seconds on purpose — by tainting
+the kind node so nothing the run needs can schedule — and asserts that the
+console says the start is SLOW, and never that Wardyn cannot read the sandbox,
+with the pane's own 2-second poll answering 200 throughout. That is the live
+twin of the Go characterization test, and it is the datum that tells an
+operator whether an "unreadable" they saw was estate-side.
+
+The 65 seconds are not arbitrary and neither is what they hold up. A sandbox
+creates its PROXY pod first and waits for that pod's IP for **90 seconds**
+before the agent pod exists at all, so under a taint it is the proxy pod that
+sits `Pending`, and 90 seconds is the point at which the run itself fails.
+The hold is therefore five seconds past the 60 at which the slow-start
+sentence appears, and the taint comes off the moment the assertion is made —
+about 25 seconds of margin. A walk that is killed mid-case would leave the
+node unschedulable, so the walk script clears that taint before its own
+restarts and again on exit.
+
+**Run it on images built from the tip you are judging.** The console is baked
+into the daemon image, so a cluster loaded before a console change judges the
+OLD screens with the NEW assertions — which is exactly how one 0.7.4 walk went
+red with a correct tree. `WARDYN_KIND_SSO_REBUILD=1 WARDYN_TEST_K8S=1
+scripts/kind-sso-walk.sh` rebuilds `wardynd` and `wardyn-proxy` from the
+working tree and reloads them first. Either way the walk writes an
+`images.txt` into its evidence directory naming the tree's HEAD and each
+image's content digest and build time, so "which tip did this prove?" is
+answerable afterwards rather than remembered.
+
+**It is still a manual proof, not a CI job** — no workflow runs it, so a green
 result is evidence only for the tip somebody actually ran it on.
 
-**What it still does not prove.** A real two-entitlement AWS tenant, real
-SigV4, and real Bedrock inference remain owner-hardware-only. The fake proves
-the wire shape (a real `aws sso login` from the AWS CLI v2 completes against it
-— `test/awsssofake/docker_test.go`), not AWS's behaviour.
+**And here is what a green walk still does NOT prove.** Naming these is the
+point of the walk, not a caveat on it:
+
+- **No real AWS tenant.** Every SSO and Bedrock endpoint is an unsigned fake
+  on the cluster. It confirms which account and role real botocore asked it to
+  mint; it cannot confirm that AWS would have minted them, that the role's
+  policy permits Bedrock, or that a real IAM Identity Center behaves as this
+  fake does at any edge. The real-tenant walk is a separate, owner-gated
+  exercise.
+- **No genuinely cold image pull.** Images reach the node by `kind load` and
+  the sandbox pod's pull policy is `IfNotPresent`, so nothing is ever fetched
+  from a registry on any walk. The hold above is manufactured with a node
+  taint, which reproduces a pod that cannot SCHEDULE — not the network
+  conditions of a slow registry, and not an `ImagePullBackOff`, which is
+  terminal rather than slow. What it does prove is the half an operator
+  actually asked about: that a start which is merely slow is narrated as slow
+  and never as unreadable.
+- **The device-code URL is a bare path.** The on-cluster fake is served by a
+  handler with no public base URL of its own, so it answers
+  `/verify?user_code=…` and the sandbox prints that. Nothing here exercises a
+  real portal's absolute URL, or a human opening one.
+- **No real IdP.** Dex with two static passwords stands in for the estate's
+  Entra tenant, so group-to-role mapping, conditional access and token
+  lifetimes are all out of scope here.
+- **One person at a time.** Both principals are driven serially by one
+  browser; nothing here exercises two members signing in at once, or a member
+  signing in while another's run is dispatching.
+- **The device-code step is pre-approved.** The fake approves every device
+  code permanently, so the walk never exercises a human being slow, a code
+  expiring before anyone attaches, or a browser leg that fails.
 
 ### Internal model gateway
 
@@ -4592,9 +4912,11 @@ block storage class binds it, a network-share provisioner accepts it and
 enforces nothing), `external` (something outside Wardyn binds it, such as a
 NAS's own quota), `none` (nothing binds it), and, since 0.7.2, `eviction` (the
 kubelet measures the pod's usage periodically and evicts it once it exceeds
-the limit — the write itself is never refused; on 0.7.x that metered usage
-excludes the ephemeral container the agent runs in, see the `DiskMiB` gap
-below): a managed claim is `request`,
+the limit — the write itself is never refused; since 0.7.5 that metered usage
+includes the agent's `/tmp` and workdir writes, which land in
+`emptyDir` volumes the kubelet meters; what the agent writes anywhere else — the rest of `$HOME`
+including the toolchain caches, and any authored target outside the workdir — still does not, see
+the `DiskMiB` gap below): a managed claim is `request`,
 a share is `external`. It is the same honesty the `DiskMiB` gap below is
 written with, and the two vocabularies **have now converged on one**:
 `disk_mib` reports `filesystem` on Docker when the storage driver can enforce
@@ -4721,17 +5043,36 @@ driver, not a guess:
   kubelet `podPidsLimit` (or your distribution's
   `SystemReserved`/`KubeReserved` PID accounting) as a cluster-wide fork-bomb
   backstop — coarser but real, and the only lever this substrate has today.
-- 🟡 **`DiskMiB` is enforced by EVICTION, and that leaves a real gap.** A run's
-  `disk_mib` is now the agent container's `resources.limits[ephemeral-storage]`
-  (`internal/runner/k8s/naming.go`) — the pod has no volumes unless a drive is
-  mounted, so the clone, `$HOME`, `/tmp` and every ephemeral workspace target
-  land on a writable layer — but on the EPHEMERAL container `Exec` attaches
-  for the agent process (`internal/runner/k8s/exec.go`), and the kubelet does
-  not meter an ephemeral container's layer against the pod's limit (found in
-  0.7.4: the limit evicts writes by the pod's main container only; the
-  conformance eviction case has been red since 0.7.2 for this reason). An
-  `emptyDir` with a `sizeLimit` shared by both containers is the 0.7.5 fix.
-  What remains a gap, precisely: (i) enforcement is by **eviction, not a
+- 🟡 **`DiskMiB` is enforced by EVICTION, and since 0.7.5 it reaches the agent's `/tmp` and
+  workdir writes — a narrowing, not a close.** A run's `disk_mib` is the agent container's
+  `resources.limits[ephemeral-storage]` and the `sizeLimit` of the two `emptyDir` volumes mounted
+  on it (`internal/runner/k8s/naming.go`'s `ephemeralScratchVolumes`): `wardyn-tmp` at `/tmp` and
+  `wardyn-work` at `/home/agent/work`. The ephemeral container `Exec` attaches for the agent
+  process (`internal/runner/k8s/exec.go`) copies the main container's mounts verbatim, so writes
+  to those two paths land in volumes the kubelet meters as the pod's local ephemeral storage.
+  Before 0.7.5 they landed on the ephemeral container's own writable layer, which the kubelet
+  meters not at all: the limit evicted writes by the pod's idle main container only, and the
+  conformance case `EphemeralDiskLimit/OverTheLimitTheRunIsEvicted` was red from 0.7.2 for exactly
+  that reason (0.7.4 disclosed it; it now runs for BOTH fill targets and passes). The two
+  `sizeLimit`s are one budget, not two: `emptyDir` usage counts toward the pod's
+  `ephemeral-storage` total as well, so filling both volumes halfway still evicts. **Upgrade
+  note:** an operator's `default_disk_mib` or policy `disk_mib` did not bind an autonomous k8s run
+  before 0.7.5 and does now — size it for the clone plus installs before upgrading, or a run that
+  used to finish will be evicted with its in-flight work lost. **What is still OUTSIDE the cap:**
+  everything the agent writes beyond those two paths — the rest of `$HOME`, including the
+  toolchain caches a build actually fills (`/home/agent/go`, `~/.cache/go-build`, `~/.gotmp`,
+  `~/.npm`, `~/.cache/pip`; `internal/api/runs_dispatch_mounts.go` sets the Go ones) and the
+  dotfiles (`~/.wardyn`, `~/.ssh`, `~/.claude`); `/opt/rust`; and any authored `workspace_repos`
+  or ephemeral-source target outside `/home/agent/work`, since an authored target may legally sit
+  at `/work`, `/workspace` or elsewhere under `/home/agent` (`internal/runner/mount.go`'s allowed
+  target prefixes). Nothing is mounted at `/home/agent` itself, because a volume there would
+  shadow each image's baked `.bashrc`, swallow the reserved drive target `/home/agent/drive`, and
+  hide the read-only `~/.claude` bind the subscription path mounts; pointing the cache env under
+  the workdir on this substrate, or a third cache volume, is the 0.7.6 follow-up. **What the proof
+  does not cover:** the kind conformance evidence is from the busybox conformance-agent image on
+  runc (CC1) — no real `agent-run` boot on an `emptyDir`-backed workdir, and `emptyDir` metering of
+  ephemeral-container writes is unmeasured under gVisor and Kata. What remains a gap about the
+  mechanism, precisely: (i) enforcement is by **eviction, not a
   quota** — the kubelet kills the POD once it exceeds the limit, in-flight work
   is lost, and the agent process never sees `ENOSPC`; it gets no chance to
   flush or fail gracefully. An eviction is a kill path no Wardyn code is on, so
