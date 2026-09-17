@@ -184,10 +184,19 @@ let lastAttachOutput: ((chunk: string) => void) | undefined;
 // The props of that same render — the login pane's whole job is to type ONE
 // chained command into the PTY, so what it hands the terminal is a contract.
 let lastAttachProps: { onOutput?: (chunk: string) => void; autoRun?: string } | undefined;
+// The aws sandbox runs the chained command ITSELF now, so the pane's only
+// remaining typing path is its grace-window fallback through this handle — the
+// same `sendText` the pasted-code field uses. Spied, because "did the console
+// type a SECOND login into a sandbox already running one" is the whole question.
+const sendTextSpy = vi.fn();
 vi.mock("../../attach-terminal", () => ({
-  AttachTerminal: React.forwardRef(function FakeTerminal(props: { onOutput?: (chunk: string) => void; autoRun?: string }) {
+  AttachTerminal: React.forwardRef(function FakeTerminal(
+    props: { onOutput?: (chunk: string) => void; autoRun?: string },
+    ref: React.ForwardedRef<{ sendText: (t: string) => void }>,
+  ) {
     lastAttachOutput = props.onOutput;
     lastAttachProps = props;
+    React.useImperativeHandle(ref, () => ({ sendText: (t: string) => sendTextSpy(t) }), []);
     return <div data-testid="fake-terminal" />;
   }),
 }));
@@ -664,7 +673,7 @@ describe("HarnessLoginPane — the starting phase (P5)", () => {
     expect(runsApiMocked.killRun).toHaveBeenCalledWith("run-123");
   });
 
-  it("polls the run to RUNNING, then mounts the terminal with the chained command", async () => {
+  it("polls the run to RUNNING, then mounts the terminal without auto-typing into a self-running sandbox", async () => {
     vi.mocked(runsApiMocked.getRun)
       .mockResolvedValueOnce({ id: "run-123", state: "PENDING" } as AgentRun)
       .mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun);
@@ -672,10 +681,15 @@ describe("HarnessLoginPane — the starting phase (P5)", () => {
 
     // The second read is a poll tick away (RUN_POLL_MS), not a microtask.
     expect(await screen.findByTestId("fake-terminal", {}, { timeout: 5000 })).toBeInTheDocument();
-    // The command the sandbox's own shell hint and the image's idle echo print:
-    // the login alone leaves the token in ~/.aws/sso/cache, where it dies with
-    // the container — wardyn-aws-sso is what uploads it.
-    expect(lastAttachProps?.autoRun).toContain("&& wardyn-aws-sso");
+    // The image starts the chained command itself (deploy/images/aws-sso/signin-pane.sh)
+    // and this terminal joins that session, so AttachTerminal's unconditional
+    // 900ms type would land on the running login's stdin and run a SECOND
+    // wardyn-aws-sso in the same run — already_captured, i.e. a fail marker on a
+    // sign-in that worked. The pane's own grace-window fallback replaces it.
+    expect(lastAttachProps?.autoRun).toBeUndefined();
+    // …but the flow still CARRIES the command, because the fallback types it and
+    // cmd/wardyn-aws-sso's TestLoginCommand_UIParity reads this literal.
+    expect(loginFlow("aws").cmd).toContain("&& wardyn-aws-sso");
   });
 
   // R-07: `getRun` failures were swallowed unconditionally ("a blip is not an
@@ -718,6 +732,62 @@ describe("HarnessLoginPane — the starting phase (P5)", () => {
     // evidence at all that the sandbox stopped.
     await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
     expect(runsApiMocked.killRun).toHaveBeenCalledWith("run-123");
+  });
+
+  // ── the self-run grace window (finding 4) ─────────────────────────────────
+  //
+  // The aws-sso image starts the pair in its own tmux session before its prep,
+  // and every attach path joins that session. The pane therefore types nothing
+  // — UNLESS the sandbox never announced itself, which is what an operator
+  // WARDYN_AGENT_IMAGES pin on an older image looks like from here.
+  async function attachedAwsSandbox() {
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun);
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    await screen.findByTestId("fake-terminal");
+  }
+
+  it("does not type when the image announces the self-run", async () => {
+    sendTextSpy.mockClear();
+    await attachedAwsSandbox();
+    // The banner the image prints as its FIRST act, before its own prep wait —
+    // which is exactly why it beats this timer.
+    act(() => lastAttachOutput?.("wardyn: sign-in running — AWS sign-in sandbox.\r\n"));
+
+    // NEITHER typing path: AttachTerminal's own unconditional autoRun is what
+    // 0.7.4 used, and it fires 900ms after connect with no marker check at all.
+    expect(lastAttachProps?.autoRun).toBeUndefined();
+
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000); // well past the grace window
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(sendTextSpy).not.toHaveBeenCalled();
+  });
+
+  it("types after the grace window when an old image is pinned", async () => {
+    sendTextSpy.mockClear();
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      vi.mocked(runsApiMocked.getRun).mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun);
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+      await user.click(screen.getByRole("button", { name: /start login/i }));
+      await screen.findByTestId("fake-terminal");
+      // An image that predates the self-run says nothing at all.
+      expect(sendTextSpy).not.toHaveBeenCalled();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(sendTextSpy).toHaveBeenCalledTimes(1);
+    expect(sendTextSpy.mock.calls[0][0]).toBe(loginFlow("aws").cmd + "\r");
   });
 
   it("a FAILED run shows the run's own failure_hint instead of waiting forever", async () => {

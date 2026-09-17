@@ -506,6 +506,44 @@ test.describe("Run detail — a login sandbox says what it is", () => {
     await expect(note).toContainText("AWS sign-in sandbox");
     await expect(note).toContainText("the sandbox closes itself when it is done");
   });
+
+  // Finding 4 (0.7.4 field report), the Runs-list half: the member reached the
+  // login run from /runs, got a prompt with nothing typed, ran `aws sso login`
+  // alone and captured nothing. The image runs the pair itself now and this
+  // terminal joins that very session, so the page must say the sign-in is
+  // ALREADY RUNNING here — 0.7.4's sentence sent the reader to Getting Started
+  // to start a second one, which is the one instruction guaranteed to waste
+  // their device code.
+  //
+  // BOUND: this daemon runs `-runner none` (scripts/e2e-backend.sh), so a login
+  // run can never reach RUNNING and the attached PTY is out of reach here. What
+  // the console does with a live sandbox is pinned by
+  // harness-login-pane.test.tsx; what the SANDBOX does is pinned by the
+  // pure-shell tests in internal/runner/docker and proven against the built
+  // image under evidence/login-sandbox-selfrun/manual-proof-*.
+  test("opening a harness-login run from /runs shows the running sign-in, not a bare prompt", async ({ page }) => {
+    await openRuns(page);
+    await page.route("**/api/v1/runs/*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      if (json.task === "e2e fixture 2") {
+        json.task = "harness login";
+        json.agent = "aws-sso";
+      }
+      await route.fulfill({ response, json });
+    });
+
+    await page.getByText("e2e fixture 2").click();
+    await expect(page).toHaveURL(/\/runs\/.+/);
+    const note = page.getByTestId("login-sandbox-note");
+    await expect(note).toBeVisible();
+    await expect(note).toContainText("the sign-in is already running in this box");
+    await expect(note).toContainText("finish the device-code step in your browser");
+    // The instruction this page must no longer give: a SECOND sign-in started
+    // elsewhere while this one is live.
+    await expect(note).not.toContainText("Sign in from Getting Started");
+  });
 });
 
 test.describe("Kill availability via the row dropdown (table)", () => {

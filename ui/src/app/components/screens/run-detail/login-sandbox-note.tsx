@@ -37,12 +37,15 @@ export const HARNESS_LOGIN_TASK = "harness login";
 export const AWS_SSO_LOGIN_AGENT = "aws-sso";
 
 // DRAFT (M2 canon pending) — says the three things the page could not: what the
-// box is, where the sign-in that actually captures happens, and that nobody has
-// to clean it up. Deliberately does NOT tell the operator to type the chained
-// command here: the sandbox's own attach shell prints it (deploy/images/aws-sso),
-// and the console pane types it, so this page has no fourth copy of it.
+// box is, that the sign-in is ALREADY RUNNING in it, and that nobody has to clean
+// it up. The old sentence sent the reader to Getting Started to sign in, which was
+// the right advice when this terminal was a bare shell and the console pane was
+// the only thing that typed the chained command. The image runs it itself now
+// (deploy/images/aws-sso/signin-pane.sh) and this terminal is attached to that very
+// session, so telling the reader to start a SECOND sign-in elsewhere would be the
+// one instruction guaranteed to waste their device code.
 export const LOGIN_SANDBOX_NOTE =
-  "AWS sign-in sandbox — the AWS CLI and nothing else. Sign in from Getting Started so the capture uploads; the sandbox closes itself when it is done.";
+  "AWS sign-in sandbox — the sign-in is already running in this box; finish the device-code step in your browser. Nothing else runs here, and the sandbox closes itself when it is done.";
 
 // Renders nothing for every other run, so nothing on this page moves unless the
 // run really is a login box.

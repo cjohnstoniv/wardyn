@@ -117,6 +117,30 @@ const LOGIN_SANDBOX_ENDED = "The sign-in sandbox stopped before it was ready —
 const LOGIN_SANDBOX_UNREADABLE =
   "Wardyn stopped being able to read the sign-in sandbox, so it can't say whether it came up. Try again.";
 
+// DRAFT (M2 canon pending) — THE SANDBOX SIGNS ITSELF IN NOW. The aws-sso image
+// starts the chained command in its own tmux session BEFORE its prep
+// (deploy/images/aws-sso/agent-run → signin-pane.sh), and every attach path —
+// this pane, the Runs list, `wardyn attach`, ssh — joins that one session. So the
+// pane no longer hands AttachTerminal an `autoRun` for aws: that unconditional
+// type would land on the running login's stdin and run a SECOND wardyn-aws-sso in
+// the same run, which the server refuses as already_captured — a fail marker on a
+// sign-in that worked.
+//
+// It cannot simply stop typing either. The aws-sso tag is version-locked on the
+// ghcr default, but an operator WARDYN_AGENT_IMAGES pin (what private estates use)
+// makes a console-N+1 / image-N pairing real, and on an image-N sandbox nothing
+// types the pair at all — finding 4 again. So: wait out a grace window and type
+// ONLY if the sandbox has not announced itself. The image prints this marker as
+// its FIRST act, before its own prep wait, precisely so it beats this timer; the
+// grace is long enough for a slow first paint and far shorter than the device
+// code's ~600 s life.
+//
+// The timer lives HERE, never in AttachTerminal: the Runs-list mount
+// (run-detail/terminal-notice.tsx) shares that component, and a terminal that
+// types on its own is how a read-only viewer would start a second sign-in.
+export const SELFRUN_MARKER = "wardyn: sign-in running";
+const SELFRUN_GRACE_MS = 12_000;
+
 // Per-provider login conventions. Adding a provider is a new row here (mirrors
 // the server-side agentHarnessLogin table), not a forked component.
 //
@@ -427,6 +451,8 @@ export function HarnessLoginPane({
   // not end a sign-in that is working. A ref, not state — it drives no render
   // and must not churn the poll callback's identity.
   const pollFailuresRef = React.useRef(0);
+  // ONE self-run grace timer per launch, armed on the FIRST attach.
+  const selfRunArmedRef = React.useRef(false);
 
   const launch = React.useCallback(async () => {
     setPhase("launching");
@@ -438,6 +464,7 @@ export function HarnessLoginPane({
     setAutoCaptured(false);
     setEverAttached(false);
     pollFailuresRef.current = 0;
+    selfRunArmedRef.current = false;
     setAuthUrl("");
     try {
       const id = await harnessAuthApi.harnessLogin(provider, startUrl.trim());
@@ -494,6 +521,25 @@ export function HarnessLoginPane({
     if (phase === "starting") void pollRun();
   }, [phase, pollRun]);
   usePoll(pollRun, RUN_POLL_MS, phase !== "starting");
+
+  // The version-skew fallback, armed once on the first attach: if the sandbox
+  // has not said it is signing in by the time the grace window closes, this is
+  // an image that predates the self-run and nothing else will type the pair.
+  // Four signals all mean "it IS signing in, do not touch it": the image's own
+  // banner, a device URL already on screen, and either helper marker (a capture
+  // that already landed, or one already refused).
+  React.useEffect(() => {
+    if (phase !== "attached" || flow.capture !== "helper" || selfRunArmedRef.current) return;
+    selfRunArmedRef.current = true;
+    const timer = setTimeout(() => {
+      const buf = outBufRef.current;
+      if (openedUrlRef.current || buf.includes(SELFRUN_MARKER)) return;
+      if (flow.doneMarker && buf.includes(flow.doneMarker)) return;
+      if (flow.failMarker && buf.includes(flow.failMarker)) return;
+      termRef.current?.sendText(flow.cmd + "\r");
+    }, SELFRUN_GRACE_MS);
+    return () => clearTimeout(timer);
+  }, [phase, flow]);
 
   // saveToken stores a token (explicit from auto-capture, or the pasted field).
   const saveToken = React.useCallback(
@@ -761,7 +807,9 @@ export function HarnessLoginPane({
           <AttachTerminal
             ref={termRef}
             runId={runId}
-            autoRun={flow.cmd}
+            /* helper flows (aws): the sandbox runs the pair itself — see
+               SELFRUN_MARKER above. Every other provider still auto-types. */
+            autoRun={flow.capture === "helper" ? undefined : flow.cmd}
             onOutput={handleOutput}
             ptyCols={LOGIN_PTY_COLS}
             heightClass="h-96"
