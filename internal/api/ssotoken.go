@@ -32,6 +32,16 @@ const maxSSOTokenUploadBytes = 16 << 10 // 16 KiB
 const ssoTokenUnstampedScopeRefusal = "this sign-in started before Wardyn recorded whose model credential it was for, " +
 	"and this deployment now gives each person their own — start the sign-in again"
 
+// ssoTokenRunKilledRefusal answers a login run that has been KILLED: its own
+// Cancel, or the person's NEXT sign-in superseding it (one live sign-in sandbox
+// per person, harnesscred_supersede.go). The sentence is read off a terminal
+// inside that sandbox by whoever is still looking at it, so it says which
+// attempt won rather than blaming this one.
+//
+// DRAFT (M2 canon pending)
+const ssoTokenRunKilledRefusal = "this sign-in sandbox was closed — a newer sign-in for you replaced it, " +
+	"or it was cancelled; finish the sign-in in the newer sandbox"
+
 // handleUploadSSOToken accepts a PUT /api/v1/internal/sso-token/{runID} from
 // wardyn-aws-sso running inside the AWS SSO container-login run (see
 // cmd/wardyn-aws-sso and harnesscred.go's captureViaHelper doc). It is the
@@ -64,6 +74,24 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	}
 	if run.Task != harnessLoginTask || run.Agent != awsSSOAgent {
 		writeError(w, http.StatusForbidden, "run is not an aws sso container-login run")
+		return
+	}
+	// A KILLED run MAY STILL REACH THIS ROUTE, and that is the belt the supersede
+	// needs. Killing a run revokes its identity and token verification fails
+	// closed on a revoked run (internal/identity/embedded.go) — but RevokeRun is
+	// best-effort (a failed revoke is reported, not retried forever), and
+	// /internal/sso-token/ is one of the routes a TERMINAL run is deliberately
+	// allowed to use for five minutes after it ends (internal_live_run.go), so
+	// revocation would otherwise be the ONLY thing standing between a superseded
+	// sandbox's late upload and the capture the person just made in the new one.
+	//
+	// Safe against the honest paths: confirmCapture kills only AFTER the upload
+	// (harness-login-pane.tsx, R-7) and Cancel wants no upload at all. Only
+	// KILLED — a COMPLETED/FAILED/STOPPED login run is not a run something else
+	// deliberately ended, and refusing those would be a new rule about a state
+	// this lane has never produced.
+	if run.State == types.RunKilled {
+		s.refuseCapture(w, r, claims, http.StatusConflict, refuseReasonRunKilled, ssoTokenRunKilledRefusal, nil)
 		return
 	}
 

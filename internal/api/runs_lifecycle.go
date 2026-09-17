@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"time"
 
@@ -588,15 +589,7 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 	cascadeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 
-	// (1) WIN THE TERMINAL TRANSITION FIRST (C002). Revoking before this CAS meant a
-	// kill that then LOST the CAS to a concurrent dispatch forward-transition
-	// (PENDING->STARTING) had already revoked the run's credentials — leaving a live
-	// RUNNING run with dead creds behind a silent 409. Own the KILLED transition
-	// first; only then tear down + revoke what is now unambiguously ours. Conditional
-	// from the (non-terminal) state we read, so a completion watcher winning
-	// RUNNING->COMPLETED is not clobbered. A re-kill of an already-KILLED run still
-	// CASes KILLED->KILLED (applied), re-running the idempotent teardown.
-	applied, serr := s.casRunState(cascadeCtx, id, run.State, types.RunKilled)
+	applied, killData, serr := s.killRunCascade(cascadeCtx, run, killerType, killer, nil)
 	if serr != nil {
 		writeServerError(w, r, "update run state", serr)
 		return
@@ -611,6 +604,57 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(killData) > 0 {
+		s.recordAudit(cascadeCtx, s.auditEvent(&id, types.ActorSystem, "wardynd", "run.revoke",
+			id.String(), "failure", mustJSON(killData)))
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"id":     id,
+			"state":  types.RunKilled,
+			"errors": killData,
+			"error":  "run marked KILLED but one or more teardown/revocation steps failed; the run may not be fully contained — retry the kill",
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusAccepted, map[string]any{"id": id, "state": types.RunKilled})
+}
+
+// killRunCascade is the kill itself, with no HTTP in it: the CAS, the approval
+// cancellation, the runner teardown, both revocations and the run.kill row, in
+// the fixed order handleKillRun's doc comment states. EXTRACTED so the server
+// has a kill it can call on its own behalf — supersedeCallerLoginRuns
+// (harnesscred_supersede.go) ends a person's older sign-in sandbox when they
+// start a new one — rather than a second, drifting copy of a cascade whose
+// ORDER is the security property.
+//
+// Returns whether the KILLED transition was ours (a lost CAS is `false`, with
+// nothing torn down) and the per-step error map, so the caller decides what a
+// partial cascade means for IT: the handler answers 500 with a run.revoke row,
+// the supersede logs and proceeds — a new sign-in must not be blocked because
+// the old run's revoke failed.
+//
+// `extra` rides the run.kill row's DATA and is deliberately NOT merged into the
+// error map: outcome is computed from the errors ALONE, so a supersede's
+// `reason` cannot make a clean kill audit as a failure (and conjure a
+// run.revoke row for a run that was torn down correctly).
+func (s *Server) killRunCascade(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string, extra map[string]any) (bool, map[string]any, error) {
+	id := run.ID
+	// (1) WIN THE TERMINAL TRANSITION FIRST (C002). Revoking before this CAS meant a
+	// kill that then LOST the CAS to a concurrent dispatch forward-transition
+	// (PENDING->STARTING) had already revoked the run's credentials — leaving a live
+	// RUNNING run with dead creds behind a silent 409. Own the KILLED transition
+	// first; only then tear down + revoke what is now unambiguously ours. Conditional
+	// from the (non-terminal) state we read, so a completion watcher winning
+	// RUNNING->COMPLETED is not clobbered. A re-kill of an already-KILLED run still
+	// CASes KILLED->KILLED (applied), re-running the idempotent teardown.
+	applied, serr := s.casRunState(ctx, id, run.State, types.RunKilled)
+	if serr != nil {
+		return false, nil, serr
+	}
+	if !applied {
+		return false, nil, nil
+	}
+
 	killData := map[string]any{}
 	// (1b) Approvals: the transition is unambiguously ours, so the run's
 	// outstanding questions are cancelled here — BEFORE teardown, because a
@@ -618,10 +662,10 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 	// and after the CAS for the same reason revocation is (a kill that lost the
 	// CAS must not touch a still-live run). Kill does NOT route through
 	// finalizeRunTail, so this is the second call site of one function.
-	s.cancelRunApprovals(cascadeCtx, id)
+	s.cancelRunApprovals(ctx, id)
 	// (2) Runner teardown (immediate). Idempotent on a gone sandbox.
 	if s.cfg.Runner != nil && run.SandboxRef != "" {
-		if kerr := s.cfg.Runner.KillSandbox(cascadeCtx, run.SandboxRef); kerr != nil {
+		if kerr := s.cfg.Runner.KillSandbox(ctx, run.SandboxRef); kerr != nil {
 			killData["runner_error"] = kerr.Error()
 		}
 	}
@@ -632,13 +676,13 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 	// provider must not panic mid-cascade (after the KILLED CAS + KillSandbox but
 	// before the audit) — the revoke step is simply skipped.
 	if s.cfg.Identity != nil {
-		if rerr := retryQuick(cascadeCtx, func() error { return s.cfg.Identity.RevokeRun(cascadeCtx, id) }); rerr != nil {
+		if rerr := retryQuick(ctx, func() error { return s.cfg.Identity.RevokeRun(ctx, id) }); rerr != nil {
 			killData["identity_error"] = rerr.Error()
 		}
 	}
 	// (4) Broker credential revocation (best-effort; audits per minted jti).
 	if s.cfg.Broker != nil {
-		if berr := retryQuick(cascadeCtx, func() error { return s.cfg.Broker.RevokeRun(cascadeCtx, id) }); berr != nil {
+		if berr := retryQuick(ctx, func() error { return s.cfg.Broker.RevokeRun(ctx, id) }); berr != nil {
 			killData["broker_error"] = berr.Error()
 		}
 	}
@@ -654,28 +698,19 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 	if len(killData) > 0 {
 		outcome = "failure"
 	}
-	s.recordAudit(cascadeCtx, s.auditEvent(&id, killerType, killer, "run.kill",
-		id.String(), outcome, mustJSON(killData)))
+	data := make(map[string]any, len(killData)+len(extra))
+	maps.Copy(data, killData)
+	maps.Copy(data, extra)
+	s.recordAudit(ctx, s.auditEvent(&id, killerType, killer, "run.kill",
+		id.String(), outcome, mustJSON(data)))
 
 	// A killed workspace run still settles its workspace: verify/scan runs get
 	// the no-result reconcile; a record run's kill IS the normal "Done recording"
 	// for interactive mode (which has no completion watcher), so capture here.
-	s.reconcileWorkspaceRun(cascadeCtx, id)
-	s.reconcileRecordRun(cascadeCtx, id)
+	s.reconcileWorkspaceRun(ctx, id)
+	s.reconcileRecordRun(ctx, id)
 
-	if outcome == "failure" {
-		s.recordAudit(cascadeCtx, s.auditEvent(&id, types.ActorSystem, "wardynd", "run.revoke",
-			id.String(), "failure", mustJSON(killData)))
-		writeJSON(w, http.StatusInternalServerError, map[string]any{
-			"id":     id,
-			"state":  types.RunKilled,
-			"errors": killData,
-			"error":  "run marked KILLED but one or more teardown/revocation steps failed; the run may not be fully contained — retry the kill",
-		})
-		return
-	}
-
-	writeJSON(w, http.StatusAccepted, map[string]any{"id": id, "state": types.RunKilled})
+	return true, killData, nil
 }
 
 // retryQuick runs fn up to 3 times with a short linear backoff, returning the

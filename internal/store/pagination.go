@@ -111,6 +111,49 @@ type RunsByCreatorPager interface {
 // Compile-time assertion: PG satisfies RunsByCreatorPager.
 var _ RunsByCreatorPager = PG{}
 
+// ActiveRunsByCreatorReader answers the ONE question a new sign-in asks before
+// it launches: which of THIS person's runs of this lane are still live, so the
+// supersede can end them (supersedeCallerLoginRuns, internal/api).
+//
+// A capability interface for ActiveRunsAtPathReader's reasons, and it takes the
+// same shape: a WHERE clause, not a window, and the api-layer call site falls
+// back to the unbounded ListRuns plus an in-Go filter when a store does not
+// implement it. That fallback is SAFE here — the answer is identical either
+// way, only slower — unlike RunsByCreatorPager's, whose absence would widen a
+// member's own listing.
+//
+// task and agent, not "provider": a run row carries no provider column (the
+// provider lives in the harness.login.started audit datum), and task+agent is
+// what actually separates one lane's login box from another's.
+type ActiveRunsByCreatorReader interface {
+	ActiveRunsByCreator(ctx context.Context, createdBy, task, agent string) ([]types.AgentRun, error)
+}
+
+// Compile-time assertion: PG satisfies ActiveRunsByCreatorReader.
+var _ ActiveRunsByCreatorReader = PG{}
+
+// ActiveRunsByCreator returns createdBy's non-terminal runs of one task+agent.
+//
+// The state predicate is the POSITIVE list (types.NonTerminalRunStates), the
+// choice CountActiveRunsBy and ActiveRunsAtWorkspacePath both make and for the
+// same reason: a state added to the enum and forgotten here merely misses a
+// supersede, while `NOT IN (terminal)` would hand a newly-added TERMINAL state
+// to the kill cascade.
+//
+// ponytail: no new index. agent_runs_created_by_idx already indexes the
+// selective column and one person owns few runs; a composite is the upgrade if
+// a deployment ever has a member with enough history to notice.
+func (s PG) ActiveRunsByCreator(ctx context.Context, createdBy, task, agent string) ([]types.AgentRun, error) {
+	states := make([]string, 0, len(types.NonTerminalRunStates))
+	for _, st := range types.NonTerminalRunStates {
+		states = append(states, string(st))
+	}
+	q := `SELECT ` + runCols + ` FROM agent_runs
+		WHERE created_by = $1 AND task = $2 AND agent = $3 AND state = ANY($4)
+		ORDER BY created_at DESC`
+	return collect(ctx, s.Pool, "list", "active runs by creator", q, []any{createdBy, task, agent, states}, scanRun)
+}
+
 // ActiveRunsAtPathReader answers ONE question the create path asks on every run:
 // which OTHER non-terminal runs already operate on this host workspace path.
 //

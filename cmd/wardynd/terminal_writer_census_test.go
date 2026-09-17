@@ -48,7 +48,10 @@ var terminalWriterCensus = map[string]string{
 	"sweepRunWatchers":         "reconcileFinalize -> finalizeRunTail",
 	"reconcileWatch":           "reconcileFinalize -> finalizeRunTail",
 	// (2) The kill switch, which deliberately does NOT route through the tail.
-	"handleKillRun": "calls cancelRunApprovals directly",
+	// handleKillRun is the HTTP half only; the cascade is killRunCascade, which
+	// the login supersede (supersedeCallerLoginRuns) calls too — one cascade with
+	// two callers, so the approval treatment cannot drift between them.
+	"killRunCascade": "calls cancelRunApprovals directly",
 	// (3) The idle reaper, in this package. Reaches the same helper through
 	// api.Server.CancelTerminalRunApprovals, threaded in at boot.
 	"StopRun": "calls cancelApprovals (api.Server.CancelTerminalRunApprovals)",

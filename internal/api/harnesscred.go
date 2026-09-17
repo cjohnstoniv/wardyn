@@ -447,6 +447,12 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	if cerr != nil {
 		return types.AgentRun{}, harnessLoginDispatch{}, cerr
 	}
+	// ONE LIVE SIGN-IN SANDBOX PER PERSON, and it happens HERE — before
+	// newStepRun, where the concurrency quota is counted — so a member capped at
+	// one run is never refused by their own abandoned sign-in. See
+	// supersedeCallerLoginRuns (harnesscred_supersede.go) for why the old run has
+	// to end server-side at all.
+	s.supersedeCallerLoginRuns(ctx, actor, hl.agent)
 	run, token, err := s.newStepRun(ctx, runID, actor, harnessLoginTask, cc, harnessLoginGovernance(ceiling), func(run *types.AgentRun) {
 		run.Agent = hl.agent // the vendor CLI being logged into, never the catalog default
 		run.Interactive = true

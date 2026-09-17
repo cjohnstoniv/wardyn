@@ -119,6 +119,10 @@ const (
 	refuseReasonAlreadyCaptured  = "already_captured"
 	refuseReasonStampUnreadable  = "stamp_unreadable"
 	refuseReasonStoreError       = "store_error"
+	// refuseReasonRunKilled: the login run this upload comes from has been
+	// KILLED — by its own Cancel, or by the person's next sign-in superseding it
+	// (harnesscred_supersede.go). See ssoTokenRunKilledRefusal.
+	refuseReasonRunKilled = "run_killed"
 )
 
 // ── DRAFT (M2 canon pending) ────────────────────────────────────────────────
