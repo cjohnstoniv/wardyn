@@ -58,6 +58,17 @@ docker build -q -f deploy/images/oracle/Dockerfile -t wardyn/agent-oracle:local 
 if curl -sf "${BASE}/healthz" >/dev/null 2>&1; then
   log "reusing the wardynd already listening at ${BASE}"
 else
+  # THE PROXY SIDECAR IMAGE, on a host that has never built one. Every sandbox
+  # is an agent container PLUS a wardyn-proxy sidecar, and run-host.sh points the
+  # daemon at wardyn/wardyn-proxy:local — published nowhere. A dev box has it from
+  # `make setup`; a cold CI runner does not, and then every run dies at dispatch
+  # in under a second with nothing in this script's output saying why (the hosted
+  # nightly was red on exactly that, behind the 422 that 0.7.5 fixed).
+  PROXY_IMAGE="${WARDYN_PROXY_IMAGE:-wardyn/wardyn-proxy:local}"
+  if ! docker image inspect "${PROXY_IMAGE}" >/dev/null 2>&1; then
+    log "building the proxy sidecar image (${PROXY_IMAGE} absent on this host)"
+    docker build -q -f deploy/compose/Dockerfile.proxy -t "${PROXY_IMAGE}" . >/dev/null || die "build proxy sidecar image failed"
+  fi
   log "starting a host-mode wardynd (logs: ${WARDYND_LOG})"
   # Ensure compose Postgres is up (run-host.sh expects 127.0.0.1:5432).
   docker compose -f deploy/compose/docker-compose.yaml up -d postgres >/dev/null 2>&1 || true
@@ -82,4 +93,11 @@ WARDYN_TEST_DOCKER=1 WARDYN_E2E_BASE_URL="${BASE}" \
 rc=$?
 
 [[ ${rc} -eq 0 ]] && log "LIVE e2e PASSED" || log "LIVE e2e FAILED (rc=${rc})"
+# A run that goes FAILED at dispatch tells the TEST nothing but its state; the
+# reason is in the daemon's log, which on a CI runner is gone with the VM. Print
+# its warnings and errors on a red run so the next hosted failure names itself.
+if [[ ${rc} -ne 0 && -n "${STARTED_WARDYND:-}" && -s "${WARDYND_LOG}" ]]; then
+  log "wardynd WARN/ERROR lines (${WARDYND_LOG}):"
+  grep -Ei 'level=(warn|error)|"level":"(warn|error)"' "${WARDYND_LOG}" | tail -40 || true
+fi
 exit ${rc}

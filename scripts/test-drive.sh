@@ -386,8 +386,13 @@ if run_section 3; then
     # connect). Capture ONLY the clean http_code on stdout (stderr -> /dev/null);
     # a connection that never establishes yields http_code "000". Mixing curl's
     # stderr into the captured value (2>&1) would corrupt the comparison.
+    # --noproxy '*': the agent container's env carries http_proxy (that is how
+    # its egress is governed at all), so a bare curl here is NOT a direct
+    # connection — it goes to wardyn-proxy, which answers its builtin-deny 403,
+    # and this probe then reported the proxy DOING ITS JOB as an L0 breach. That
+    # is what probe 2 measures, on purpose; this one has to leave the proxy out.
     S3_DIRECT="$(docker exec "${S3_CTR}" curl -s -o /dev/null -m 6 --connect-timeout 5 \
-                   -w '%{http_code}' http://169.254.169.254/ 2>/dev/null || true)"
+                   --noproxy '*' -w '%{http_code}' http://169.254.169.254/ 2>/dev/null || true)"
     if [[ "${S3_DIRECT}" == "000" || "${S3_DIRECT}" == "" ]]; then
       ok "section 3: 169.254.169.254 unreachable directly (L0 — no default route)"
     else
@@ -619,7 +624,12 @@ print(next((a['id'] for a in aps
 
     # Invariant 1: no token in sandbox env.
     S5_ENV="$(docker exec "${S5_CTR}" env 2>/dev/null || echo "")"
-    if echo "${S5_ENV}" | grep -iE 'token|ghp_|github.*key' | grep -v 'GRANT_ID'; then
+    # GIT_AUTHOR_/GIT_COMMITTER_ carry the run creator's PRINCIPAL, and on a
+    # stack driven by the admin token that principal is literally "admin-token"
+    # (GIT_AUTHOR_NAME=admin-token) — an identity label, not a secret. Matching
+    # the bare word "token" anywhere in env read that as a leaked credential.
+    if echo "${S5_ENV}" | grep -vE '^GIT_(AUTHOR|COMMITTER)_(NAME|EMAIL)=' \
+         | grep -iE 'token|ghp_|ghs_|github.*key' | grep -v 'GRANT_ID'; then
       bad "section 5: token-like value found in sandbox env (invariant 1 violated)"
     else
       ok "section 5: sandbox env contains no token/key values (invariant 1 preserved)"
@@ -720,12 +730,16 @@ if run_section 6; then
     fi
 
     # run.kill audit event.
+    # actor_type follows HOW THE CALLER AUTHENTICATED (actorFromRequest): a
+    # local-mode or OIDC session audits `human`; the shared admin token — what
+    # this script drives a CI stack with — audits `system`/`admin-token`. Pinning
+    # `human` made this red on every stack that is not a developer's local mode.
     S6_KILL_AUDIT="$(audit_count "${S6_RUN_ID}" \
-      'e.get("action")=="run.kill" and e.get("actor_type")=="human"')"
+      'e.get("action")=="run.kill" and e.get("actor_type") in ("human","system")')"
     if [[ "${S6_KILL_AUDIT}" -ge 1 ]]; then
-      ok "section 6: run.kill audit event with actor_type=human present"
+      ok "section 6: run.kill audit event present (actor_type human or system, per auth mode)"
     else
-      bad "section 6: no run.kill audit event (actor_type=human)"
+      bad "section 6: no run.kill audit event"
     fi
   fi
   echo

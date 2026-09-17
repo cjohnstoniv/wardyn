@@ -207,6 +207,17 @@ jobs:
       # runs -tags docker over ./..., which pulls live in and made this job red
       # by construction without ever measuring the docker-tagged (fakeDocker)
       # coverage it exists for. Scope the package list to exclude it instead.
+      # 0.7.5 added test/conformance's TestBootEgress_NoFirstUseApproval, which
+      # boots the REAL claude-code image behind a REAL proxy sidecar. Under
+      # WARDYN_TEST_DOCKER=1 it does not skip on a missing image — it fails on the
+      # pull, deliberately (ci.yml's `conformance` job explains why a skip would be
+      # worse). ci.yml builds both images in front of it; this job did not, so the
+      # first hosted nightly after 0.7.5 went red on a pull-denied for an image
+      # that is published nowhere. Same two builds, same tags.
+      - name: Build wardyn-proxy image (local only — the boot-egress sidecar)
+        run: docker build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:local .
+      - name: Build agent-claude-code image (local only — the boot under measurement)
+        run: docker build -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:local .
       - name: docker-tagged suite with reports (real Docker; WARDYN_TEST_DOCKER=1)
         env:
           WARDYN_TEST_DOCKER: "1"
