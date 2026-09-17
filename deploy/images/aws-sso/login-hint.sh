@@ -20,8 +20,37 @@
 # Go, TypeScript and shell cannot share a constant.
 WARDYN_AWS_SSO_LOGIN_COMMAND='aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso'
 
-# INTERACTIVE SHELLS ONLY. agent-run sources this file for the variable and must
+# DRAFT (M2 canon pending) — the sandbox RUNS the pair itself now
+# (deploy/images/aws-sso/signin-pane.sh, started by agent-run --idle before its
+# own prep), so these three lines are the sign-in's whole narration in the pane
+# every attach path joins. BANNER is printed BEFORE the prep wait, and its first
+# words are the console's SELFRUN_MARKER: seeing them is the one thing that stops
+# a console on an older version typing the pair a second time.
+WARDYN_AWS_SSO_SELFRUN_BANNER='wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in your browser. Nothing else runs here.'
+WARDYN_AWS_SSO_SELFRUN_DONE='wardyn: sign-in command finished — this pane is now a plain shell.'
+WARDYN_AWS_SSO_SELFRUN_FAILED='wardyn: sign-in did not complete — start a new sign-in from Getting Started, or run: %s'
+
+# EXPORTED, because the sign-in pane is a separate process: `agent-run --idle`
+# creates the tmux session and the tmux server inherits this environment, which
+# is how signin-pane.sh gets the command and the three lines above without a
+# second copy of any of them.
+export WARDYN_AWS_SSO_LOGIN_COMMAND \
+       WARDYN_AWS_SSO_SELFRUN_BANNER \
+       WARDYN_AWS_SSO_SELFRUN_DONE \
+       WARDYN_AWS_SSO_SELFRUN_FAILED
+
+# INTERACTIVE SHELLS ONLY. agent-run sources this file for the variables and must
 # print nothing while doing it; the attach shell is the one that needs the hint.
+#
+# …AND ONLY WHEN THE SIGN-IN DID NOT RUN ITSELF. This file is sourced by EVERY
+# interactive shell in the image — including the plain shell signin-pane.sh execs
+# when the sign-in is over. Unguarded, a Runs-list user reads "run this command"
+# immediately after a SUCCESSFUL capture, runs it, and meets an already_captured
+# refusal plus the console's fail marker on a sign-in that worked.
 case $- in
-  *i*) printf '\033[36mℹ AWS sign-in sandbox — the AWS CLI and nothing else. Run: %s\033[0m\n' "$WARDYN_AWS_SSO_LOGIN_COMMAND" ;;
+  *i*)
+    if [ -z "${WARDYN_AWS_SSO_SELFRAN:-}" ]; then
+      printf '\033[36mℹ AWS sign-in sandbox — nothing else runs here. The sign-in did not start on its own; run: %s\033[0m\n' "$WARDYN_AWS_SSO_LOGIN_COMMAND"
+    fi
+    ;;
 esac

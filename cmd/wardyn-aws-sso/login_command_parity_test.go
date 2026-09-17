@@ -92,3 +92,57 @@ func TestLoginCommand_NoFourthCopy(t *testing.T) {
 		t.Error("deploy/images/aws-sso/Dockerfile no longer installs login-hint.sh at /usr/local/lib/wardyn-attach-hint.sh; agent-run sources that path and would fail the container at start")
 	}
 }
+
+// ── the sandbox signs itself in (finding 4) ──────────────────────────────────
+
+var (
+	shellSelfRunBanner = regexp.MustCompile(`WARDYN_AWS_SSO_SELFRUN_BANNER='([^']+)'`)
+	paneSelfRunMarker  = regexp.MustCompile(`SELFRUN_MARKER\s*=\s*"([^"]+)"`)
+)
+
+// TestAWSSSOImage_HasTmuxAndShims: the three image facts the self-run rests on.
+// Without tmux every attach falls through to a bare `bash -i` and nothing runs
+// the pair; without the shims `claude` is `command not found`, which the operator
+// who found this read (reasonably) as a misconfigured run. A Dockerfile source
+// parse, because only building the image would prove it otherwise — and this has
+// to red in a unit suite, not in a 10-minute image build.
+func TestAWSSSOImage_HasTmuxAndShims(t *testing.T) {
+	dockerfile := repoFile(t, "deploy", "images", "aws-sso", "Dockerfile")
+	for _, want := range []string{
+		"        tmux \\",
+		"COPY deploy/images/common/tmux.conf /etc/tmux.conf",
+		"COPY deploy/images/aws-sso/signin-pane.sh /usr/local/bin/signin-pane.sh",
+		"COPY deploy/images/aws-sso/not-a-coding-agent.sh /usr/local/bin/claude",
+		"COPY deploy/images/aws-sso/not-a-coding-agent.sh /usr/local/bin/codex",
+	} {
+		if !strings.Contains(dockerfile, want) {
+			t.Errorf("deploy/images/aws-sso/Dockerfile no longer has %q", want)
+		}
+	}
+	// PRESENCE is not the property for the shims: a `claude` that returned 0
+	// would be worse than none at all.
+	shim := repoFile(t, "deploy", "images", "aws-sso", "not-a-coding-agent.sh")
+	if !strings.Contains(shim, "exit 1") {
+		t.Error("the coding-agent shim no longer fails closed; a script that shells out to `claude` here would look like it worked")
+	}
+}
+
+// TestSelfRunBanner_UIParity: the console waits out a grace window and then types
+// the chained command itself, for an operator-pinned image that predates the
+// self-run. The ONE thing that stops it is seeing the sandbox's own banner — so
+// the shell line has to START with the exact prefix the pane scans for, in two
+// languages that cannot share a constant. Same source-parse idiom as
+// TestLoginCommand_UIParity above.
+func TestSelfRunBanner_UIParity(t *testing.T) {
+	m := shellSelfRunBanner.FindStringSubmatch(repoFile(t, "deploy", "images", "aws-sso", "login-hint.sh"))
+	if m == nil {
+		t.Fatal("no WARDYN_AWS_SSO_SELFRUN_BANNER in deploy/images/aws-sso/login-hint.sh — the sign-in pane announces nothing and the console types over it")
+	}
+	p := paneSelfRunMarker.FindStringSubmatch(repoFile(t, "ui", "src", "app", "components", "screens", "settings", "harness-login-pane.tsx"))
+	if p == nil {
+		t.Fatal("no SELFRUN_MARKER in harness-login-pane.tsx")
+	}
+	if !strings.HasPrefix(m[1], p[1]) {
+		t.Errorf("banner drift: the sandbox prints %q, the console watches for the prefix %q — the console would type a SECOND login into a sandbox already running one", m[1], p[1])
+	}
+}

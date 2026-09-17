@@ -13,11 +13,14 @@
 # written by materialize_aws_sso_config below. Both normal task
 # mode and idle mode converge on that same command; there is no "task" for an
 # aws-sso run to interpret, so the task text (if any) is logged, not consumed.
-# The intended usage is `wardyn attach` into an idle run and typing the login
-# command by hand (the device-code flow prints a URL + code for the operator
-# to open elsewhere), but `agent-run "<anything>"` also runs it directly for a
-# non-interactive/scripted launch — the driver's session recorder captures
-# the printed URL/code either way.
+# Idle mode RUNS THE LOGIN ITSELF: it starts the `wardyn` tmux session on
+# signin-pane.sh before the prep below, and every attach path (the console's
+# login pane, the Runs list, `wardyn attach`, ssh) joins that one session and
+# watches it — nobody has to know, or type, the chained command. The device-code
+# flow prints a URL + code for the operator to open elsewhere. `agent-run
+# "<anything>"` still runs the login directly for a non-interactive/scripted
+# launch — the driver's session recorder captures the printed URL/code either
+# way.
 #
 # --selftest mode (no AWS credentials needed):
 #   Verifies required binaries and prints env wiring. Side-effect-free: never
@@ -41,7 +44,22 @@ if [[ "${1:-}" == "--selftest" ]]; then
     # wardyn-aws-sso is REQUIRED, not a nicety: `aws sso login` only writes the
     # token to ~/.aws/sso/cache — this helper is what uploads it, so an image
     # missing it completes a login that captures nothing.
-    selftest_check_bins aws wardyn-aws-sso || ok=0
+    # tmux is load-bearing now, not a nicety: the sign-in session IS the fix for
+    # "the Runs list hands out a bare shell". Without it every attach falls
+    # through to a plain bash and nothing runs the pair on its own.
+    selftest_check_bins aws wardyn-aws-sso tmux || ok=0
+    echo "--- coding-agent shims (this image is NOT a coding agent) ---"
+    # PRESENCE is not the property — a `claude` that ran something would be
+    # worse than none. Each shim must refuse (non-zero) and say what the box is.
+    for shim in claude codex; do
+        if "$shim" >/dev/null 2>&1; then
+            echo "  BAD     $shim did not refuse"; ok=0
+        elif command -v "$shim" >/dev/null 2>&1; then
+            echo "  REFUSES $shim ($(command -v "$shim"))"
+        else
+            echo "  MISSING $shim"; ok=0
+        fi
+    done
     echo "--- env wiring ---"
     echo "  HTTP_PROXY=${HTTP_PROXY:-<unset>}"
     echo "  HTTPS_PROXY=${HTTPS_PROXY:-<unset>}"
@@ -59,8 +77,39 @@ if [[ "${1:-}" == "--selftest" ]]; then
     fi
 fi
 
-# ── shared prep (both idle and normal task mode) ─────────────────────────────
 : "${HOME:=/home/agent}"; export HOME
+
+# ── the sign-in session, created BEFORE the shared prep ──────────────────────
+# THE SESSION MUST WIN THE NAME. Both drivers attach with `tmux new-session -A -s
+# wardyn bash` the instant the container runs (attachShell in
+# internal/runner/docker/session.go and its k8s sibling), and the console opens
+# the run within seconds of RUNNING. Prep below is a measured ~18s, so a session
+# created after it loses the race to an early attach: `new-session` fails as a
+# duplicate and the human is back at the bare shell this whole change exists to
+# remove. Created first, the pane simply waits for prep-done before it signs in
+# (the login needs the MITM CA and the materialised ~/.aws/config).
+#
+# Belt for the race we cannot win — an attach that beats even this: respawn that
+# session's pane on the sign-in instead. -k kills the bare `bash` the attach
+# created; the human's client stays attached and watches the sign-in start.
+#
+# Warn and continue without tmux: an interactive run must still come up
+# attachable, and the attach hint then tells the human what to run by hand.
+if [[ "${1:-}" == "--idle" ]]; then
+    if command -v tmux >/dev/null 2>&1; then
+        if tmux new-session -d -s wardyn signin-pane.sh; then
+            echo "agent-run: idle mode — sign-in session started; every attach joins it" >&2
+        elif tmux respawn-pane -k -t wardyn signin-pane.sh; then
+            echo "agent-run: idle mode — an attach won the session name; respawned its pane on the sign-in" >&2
+        else
+            echo "agent-run: WARNING could not start the sign-in session; attach and run '${WARDYN_AWS_SSO_LOGIN_COMMAND}' by hand" >&2
+        fi
+    else
+        echo "agent-run: WARNING no tmux in this image; the sign-in cannot start on its own (attach still works)" >&2
+    fi
+fi
+
+# ── shared prep (both idle and normal task mode) ─────────────────────────────
 install_mitm_ca
 install_artifact_config
 materialize_aws_sso_config
@@ -72,18 +121,17 @@ dispatch_repo_clones
 resolve_workdir
 
 # ── idle mode (INTERACTIVE runs) ──────────────────────────────────────────────
-# Prepare the workspace then hold open for `wardyn attach`, where the operator
-# runs `aws sso login --sso-session wardyn --no-browser --use-device-code` by hand and follows the
-# printed URL/code.
+# Prepare the workspace, release the sign-in pane (prep-done is what it waits
+# on), then hold open for attach. The operator follows the printed URL/code; the
+# pane runs BOTH commands for them — the login alone leaves the token in
+# ~/.aws/sso/cache, where it dies with the container, and wardyn-aws-sso is what
+# uploads it.
 if [[ "${1:-}" == "--idle" ]]; then
     mkdir -p "$HOME/.wardyn"
     printf '%s\n' "$workdir" > "$HOME/.wardyn/workdir"
     : > "$HOME/.wardyn/prep-done"
     echo "agent-run: idle mode — workspace prepared ($workdir), holding open for attach" >&2
-    # BOTH commands: the login alone leaves the token in ~/.aws/sso/cache, where it
-    # dies with the container. wardyn-aws-sso uploads it (the setup UI types this
-    # same chained form into the attach PTY, and the attach shell prints it).
-    echo "agent-run: run '${WARDYN_AWS_SSO_LOGIN_COMMAND}' in the attached shell" >&2
+    echo "agent-run: the sign-in session is running '${WARDYN_AWS_SSO_LOGIN_COMMAND}'" >&2
     exec sleep infinity
 fi
 

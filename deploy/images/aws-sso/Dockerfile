@@ -16,8 +16,13 @@
 # the small toolset the login flow needs.
 #
 # IMAGE CONTRACT (all agent images must satisfy these — see deploy/images/README.md):
-#   - NO ENTRYPOINT: the Wardyn docker driver sets Cmd=["sleep","infinity"];
-#     an ENTRYPOINT would wrap that, tearing the sandbox down immediately.
+#   - NO ENTRYPOINT: both drivers REPLACE this image's CMD at create time — with
+#     `agent-run --idle` for an interactive run, with the shared idle script
+#     otherwise (the `idleCmd` variable in the docker driver's CreateSandbox and
+#     in its k8s sibling). An ENTRYPOINT would wrap whichever one they chose,
+#     tearing the sandbox down immediately. The baked CMD below is therefore
+#     never what a Wardyn-launched sandbox runs; it only covers a bare
+#     `docker run` of this image.
 #   - /usr/local/bin/agent-run "<task>" / --idle / --selftest: same CLI
 #     surface as the other images. There is no LLM here, so normal task mode
 #     and idle (attach) mode both converge on the same interactive SSO login —
@@ -105,6 +110,12 @@ LABEL org.opencontainers.image.title="agent-aws-sso" \
 # git + openssh-client: parity with the sibling images' git-broker wiring.
 # gnupg: ONLY needed to verify the AWS CLI installer's GPG signature at build
 #   time — purged below so it doesn't bloat the shipped image.
+# tmux: the persistent attach session, same pairing the sibling images ship. Here
+#   it is load-bearing rather than cosmetic: agent-run --idle starts the sign-in
+#   in a `wardyn` session and BOTH drivers attach with `tmux new-session -A -s
+#   wardyn bash`, so every attach path joins the sign-in already running instead
+#   of getting a bare prompt. Without tmux each attach falls through to `bash -i`
+#   and the box is the bare shell finding 4 reported.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
@@ -112,6 +123,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         less \
         git \
         openssh-client \
+        tmux \
         gnupg \
     && rm -rf /var/lib/apt/lists/*
 
@@ -267,12 +279,28 @@ COPY deploy/images/aws-sso/agent-run /usr/local/bin/agent-run
 # and the interactive attach shell sources it for the hint it prints (the common
 # attach-bashrc.sh picks up this path when an image ships it).
 COPY deploy/images/aws-sso/login-hint.sh /usr/local/lib/wardyn-attach-hint.sh
+# The sign-in pane's body — what `agent-run --idle` runs in the `wardyn` tmux
+# session, and therefore what every attach path joins. A FILE, not an inline
+# `sh -c '…'`: it quotes operator-facing prose, and one apostrophe would split it.
+COPY deploy/images/aws-sso/signin-pane.sh /usr/local/bin/signin-pane.sh
+# ONE script, TWO names. This image has no coding agent; `command not found` is
+# the shell's answer to a typo, and the operator who typed `claude` here read it
+# (reasonably) as a misconfigured run. These answer the question instead, and
+# fail closed so nothing mistakes them for a working agent.
+COPY deploy/images/aws-sso/not-a-coding-agent.sh /usr/local/bin/claude
+COPY deploy/images/aws-sso/not-a-coding-agent.sh /usr/local/bin/codex
+# tmux config for the persistent attach session: no status bar (clean terminal,
+# no xterm.js line-drawing artifacts), truecolor, large scrollback.
+COPY deploy/images/common/tmux.conf /etc/tmux.conf
 # Interactive attach shell sources this: waits for workspace prep to finish
 # (mirrors claude-code/codex-cli) so `wardyn attach` never lands mid-setup.
 COPY --chown=agent:agent deploy/images/common/attach-bashrc.sh /home/agent/.bashrc
 RUN chmod +x /usr/local/bin/wardyn-rec \
            /usr/local/bin/wardyn-git-helper \
            /usr/local/bin/wardyn-aws-sso \
+           /usr/local/bin/signin-pane.sh \
+           /usr/local/bin/claude \
+           /usr/local/bin/codex \
            /usr/local/bin/agent-run
 
 # System-wide GLOBAL git credential helper (all hosts) — same wiring as the
@@ -285,7 +313,11 @@ WORKDIR /home/agent/work
 
 USER agent
 
-# No ENTRYPOINT on purpose (see contract above). The Wardyn docker driver
-# replaces CMD with `sleep infinity` at container create.
+# No ENTRYPOINT on purpose (see contract above). Both drivers replace this CMD
+# at container create (`idleCmd` in CreateSandbox, docker and k8s), so an
+# interactive Wardyn run boots `agent-run --idle` — which starts the sign-in
+# itself — and never reaches the line below. This CMD is the bare-`docker run`
+# fallback only, and it says so rather than telling a Wardyn operator to type a
+# command the sandbox now runs for them.
 ENTRYPOINT []
-CMD ["/bin/bash", "-c", "echo 'wardyn aws-sso agent: attach and run aws sso login --sso-session wardyn --no-browser --use-device-code' && sleep infinity"]
+CMD ["/bin/bash", "-c", "echo 'wardyn aws-sso agent: no Wardyn run launched this container; `agent-run --idle` is what starts the sign-in' && sleep infinity"]
