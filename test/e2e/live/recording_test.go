@@ -150,6 +150,11 @@ func (h *harness) seedScriptWorkspace(label, script string) string {
 	if err := os.WriteFile(filepath.Join(td, "solution.sh"), []byte(script), 0o755); err != nil {
 		h.t.Fatalf("write solution.sh: %v", err)
 	}
+	// ONBOARD, exactly as seedWorkspace does: the run-create mount gate
+	// (validateWorkspaceSources) refuses a local-dir source that was never
+	// onboarded. This seeder skipped it and only looked green on a box whose
+	// onboarded rows had accumulated from earlier runs — a fresh runner 422s.
+	h.onboardLocalDir(ws)
 	return ws
 }
 
