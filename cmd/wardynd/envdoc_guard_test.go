@@ -41,6 +41,11 @@ var envDocAllow = map[string]bool{
 	// asserted by hand, not enforced by any ratchet. Keep it in sync manually
 	// until something scans test/*.go too.
 	"WARDYN_TEST_K8S": true, "WARDYN_TEST_K8S_AGENT_IMAGE": true,
+	// Same situation, one file over: the agent image whose BOOT egress
+	// test/conformance/boot_egress_docker_test.go measures. The FORWARD ratchet
+	// never walks test/, but the REVERSE one reads every ENV.md row, so without
+	// this entry a documented var reads as a stale row.
+	"WARDYN_TEST_AGENT_IMAGE": true,
 	// The Playwright e2e backend's two listen addresses (scripts/e2e-backend.sh):
 	// the console's and the UI-sandbox gateway's, which must differ. Shell-only,
 	// so — unlike the pair above — TestEnvDoc_E2EShellVarsAreDocumented DOES
