@@ -284,6 +284,20 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			}},
 		},
 	}
+	// The scratch volumes, and ONLY when the run carries a disk budget: they are
+	// what puts the AGENT's own writes inside disk_mib, because Exec copies the
+	// main container's mounts onto the ephemeral container the agent actually runs
+	// in (see ephemeralScratchVolumes). Appended to the MAIN container alone —
+	// exec.go is not a second call site to keep in step, it reads these back off
+	// the live pod.
+	if vols, mounts := ephemeralScratchVolumes(spec.Resources.DiskMiB); len(vols) > 0 {
+		agentPod.Spec.Volumes = append(agentPod.Spec.Volumes, vols...)
+		for i := range agentPod.Spec.Containers {
+			if agentPod.Spec.Containers[i].Name == mainContainerName {
+				agentPod.Spec.Containers[i].VolumeMounts = append(agentPod.Spec.Containers[i].VolumeMounts, mounts...)
+			}
+		}
+	}
 	// The drive, and ONLY on a pod that has one: a drive-less agent pod keeps the
 	// nil pod-level SecurityContext it has always had, so nothing about the pods
 	// this substrate already produces changes shape. applyDriveToPod appends

@@ -711,10 +711,17 @@ func TestCreateSandbox_DriveShapesTheAgentPod(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get agent pod: %v", err)
 	}
-	if len(pod.Spec.Volumes) != 1 {
-		t.Fatalf("agent pod volumes = %v, want exactly the drive", pod.Spec.Volumes)
+	// The drive is found BY NAME, not at index 0: since 0.7.5 a pod with a disk
+	// budget also carries the two scratch emptyDirs (ephemeralScratchVolumes),
+	// and this case is about the drive, not about volume ordering.
+	if len(pod.Spec.Volumes) != 1+len(wantScratch) {
+		t.Fatalf("agent pod volumes = %v, want the drive plus the %d scratch volumes", pod.Spec.Volumes, len(wantScratch))
 	}
-	vol := pod.Spec.Volumes[0]
+	dv := volumeFor(pod.Spec.Volumes, driveVolumeName)
+	if dv == nil {
+		t.Fatalf("agent pod carries no %q volume: %v", driveVolumeName, pod.Spec.Volumes)
+	}
+	vol := *dv
 	if vol.Name != driveVolumeName || vol.PersistentVolumeClaim == nil {
 		t.Fatalf("agent pod volume = %+v, want a %q persistentVolumeClaim volume", vol, driveVolumeName)
 	}
@@ -727,8 +734,16 @@ func TestCreateSandbox_DriveShapesTheAgentPod(t *testing.T) {
 		t.Error("agent pod carries a hostPath volume — forbidden by Pod Security Standards Baseline and Restricted alike")
 	}
 	wantMount := corev1.VolumeMount{Name: driveVolumeName, MountPath: runner.DriveTarget, ReadOnly: false}
-	if got := pod.Spec.Containers[0].VolumeMounts; len(got) != 1 || got[0] != wantMount {
-		t.Errorf("main container mounts = %+v, want [%+v]", got, wantMount)
+	if got := mountFor(pod.Spec.Containers[0].VolumeMounts, driveVolumeName); got == nil || *got != wantMount {
+		t.Errorf("main container drive mount = %+v, want %+v (mounts=%+v)", got, wantMount, pod.Spec.Containers[0].VolumeMounts)
+	}
+	// The drive target is under the agent's HOME, and the scratch volumes are
+	// deliberately NOT: a volume at /home/agent itself would swallow the reserved
+	// drive mount point whole.
+	for name := range wantScratch {
+		if m := mountFor(pod.Spec.Containers[0].VolumeMounts, name); m != nil && strings.HasPrefix(runner.DriveTarget+"/", m.MountPath+"/") {
+			t.Errorf("scratch volume %q is mounted at %q, which contains the reserved drive target %q", name, m.MountPath, runner.DriveTarget)
+		}
 	}
 	sc := pod.Spec.SecurityContext
 	if sc == nil || sc.FSGroup == nil || *sc.FSGroup != driveFSGroup {
@@ -738,9 +753,10 @@ func TestCreateSandbox_DriveShapesTheAgentPod(t *testing.T) {
 		t.Errorf("fsGroupChangePolicy = %v, want OnRootMismatch (an Always recursive chown of a large drive is a minutes-long pod start)", sc.FSGroupChangePolicy)
 	}
 
-	// Negative control: a drive-less run's pod is byte-identical to what this
-	// substrate produced before drives existed — no volume, no mount, and above
-	// all no pod-level security context.
+	// Negative control: a drive-less run carries NO drive volume, no drive mount,
+	// and above all no pod-level security context — the fsGroup is the drive's
+	// alone. Its scratch volumes come from the disk budget, not from the drive,
+	// so they are named out explicitly rather than counted.
 	spec2 := testSandboxSpec()
 	sb2, err := d.CreateSandbox(context.Background(), spec2)
 	if err != nil {
@@ -750,11 +766,30 @@ func TestCreateSandbox_DriveShapesTheAgentPod(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get agent pod (drive-less): %v", err)
 	}
-	if len(pod2.Spec.Volumes) != 0 || len(pod2.Spec.Containers[0].VolumeMounts) != 0 {
-		t.Errorf("drive-less pod carries volumes %v / mounts %v, want none", pod2.Spec.Volumes, pod2.Spec.Containers[0].VolumeMounts)
+	if volumeFor(pod2.Spec.Volumes, driveVolumeName) != nil || mountFor(pod2.Spec.Containers[0].VolumeMounts, driveVolumeName) != nil {
+		t.Errorf("drive-less pod carries a %q volume/mount: volumes=%v mounts=%v", driveVolumeName, pod2.Spec.Volumes, pod2.Spec.Containers[0].VolumeMounts)
+	}
+	if len(pod2.Spec.Volumes) != len(wantScratch) {
+		t.Errorf("drive-less pod volumes = %v, want exactly the %d scratch volumes (its spec carries a disk budget)", pod2.Spec.Volumes, len(wantScratch))
 	}
 	if pod2.Spec.SecurityContext != nil {
 		t.Errorf("drive-less pod securityContext = %+v, want nil (hardening on this substrate is container-level)", pod2.Spec.SecurityContext)
+	}
+
+	// And with NEITHER a drive NOR a disk budget, the pod is byte-identical to
+	// what this substrate produced before either existed: no volumes at all.
+	spec3 := testSandboxSpec()
+	spec3.Resources.DiskMiB = 0
+	sb3, err := d.CreateSandbox(context.Background(), spec3)
+	if err != nil {
+		t.Fatalf("CreateSandbox (no drive, no disk budget): %v", err)
+	}
+	pod3, err := cs.CoreV1().Pods(testNamespace).Get(context.Background(), sb3.Ref, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get agent pod (no drive, no disk budget): %v", err)
+	}
+	if len(pod3.Spec.Volumes) != 0 || len(pod3.Spec.Containers[0].VolumeMounts) != 0 {
+		t.Errorf("a pod with no drive and no disk budget carries volumes %v / mounts %v, want none", pod3.Spec.Volumes, pod3.Spec.Containers[0].VolumeMounts)
 	}
 }
 
@@ -853,10 +888,20 @@ func TestCreateSandbox_DriveReadOnlyOnBothHalves(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get agent pod: %v", err)
 	}
-	if !pod.Spec.Volumes[0].PersistentVolumeClaim.ReadOnly {
+	// By name: the pod also carries the scratch emptyDirs its disk budget adds,
+	// and index 0 is no longer the drive.
+	vol := volumeFor(pod.Spec.Volumes, driveVolumeName)
+	if vol == nil || vol.PersistentVolumeClaim == nil {
+		t.Fatalf("no %q claim volume on the pod: %v", driveVolumeName, pod.Spec.Volumes)
+	}
+	if !vol.PersistentVolumeClaim.ReadOnly {
 		t.Error("volume readOnly = false for a read-only allocation")
 	}
-	if !pod.Spec.Containers[0].VolumeMounts[0].ReadOnly {
+	mount := mountFor(pod.Spec.Containers[0].VolumeMounts, driveVolumeName)
+	if mount == nil {
+		t.Fatalf("no %q mount on the agent container: %v", driveVolumeName, pod.Spec.Containers[0].VolumeMounts)
+	}
+	if !mount.ReadOnly {
 		t.Error("volumeMount readOnly = false for a read-only allocation")
 	}
 }

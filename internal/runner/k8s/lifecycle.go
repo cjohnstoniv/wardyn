@@ -134,9 +134,11 @@ func (d *Driver) KillSandbox(ctx context.Context, ref string) error {
 //
 // B9-F1: a 404 on the agent pod used to end the whole teardown as "already
 // gone". It is not: the agent pod is the one object of a run that routinely
-// disappears on its own (0.7.2 made disk_mib its ephemeral-storage limit, so
-// the kubelet EVICTS it and its terminated-pod GC reaps it — a kill path no
-// Wardyn code is on; a deleted node does the same), and what it leaves behind
+// disappears on its own (0.7.2 made disk_mib its ephemeral-storage limit and
+// 0.7.5 put the agent's own writes inside that budget via
+// ephemeralScratchVolumes, so the kubelet EVICTS it and its terminated-pod GC
+// reaps it — a kill path no Wardyn code is on; a deleted node does the same),
+// and what it leaves behind
 // is the credential-bearing half: a proxy pod still Running with resolved
 // upstream creds, the per-run Secret carrying every SecretEnv value verbatim,
 // and both NetworkPolicies. Recovering the id from the ref costs one string
@@ -250,8 +252,11 @@ func (d *Driver) waitPodsGone(ctx context.Context, ns string, listOpts metav1.Li
 // 0.7.2 is what makes that reachable routinely rather than only after a
 // control-plane crash: a run's disk_mib is now the agent container's
 // ephemeral-storage LIMIT (naming.go's resourceRequirements), so the kubelet
-// EVICTS the agent pod — a kill path no Wardyn code is on, and one an operator
-// can trigger with an ordinary `dd`. Nothing then tears down the run's
+// EVICTS the agent pod — a kill path no Wardyn code is on. An ORDINARY `dd` from
+// the agent reaches it only since 0.7.5, which mounted the agent's /tmp and
+// workdir on metered emptyDirs (ephemeralScratchVolumes); before that the agent
+// wrote to an ephemeral container's unmetered layer and nothing was ever
+// evicted for it. Nothing then tears down the run's
 // siblings, and the credential-bearing ones are the point: the proxy pod stays
 // Running with its resolved upstream creds in memory, and the per-run Secret
 // (proxy config JSON + every SecretEnv value) stays in the namespace.

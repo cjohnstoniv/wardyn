@@ -244,6 +244,80 @@ func resourceRequirements(res runner.Resources) corev1.ResourceRequirements {
 	return corev1.ResourceRequirements{Requests: requests, Limits: limits}
 }
 
+// The two scratch volumes and where they are mounted. They are the paths the
+// agent actually writes: /tmp (every WARDYN_EPHEMERAL_DIRS target, the per-run
+// CA files runner.AgentIdleScript writes under /tmp/wardyn) and the workdir
+// agent-run cds into, where the clone, the installs and the build output land.
+//
+// NOT /home/agent ITSELF. A volume there would shadow the baked .bashrc every
+// agent image ships (the attach hint), collide with the reserved drive target
+// runner.DriveTarget under the same home, and hide the read-only ~/.claude bind
+// the subscription path mounts. The two leaf paths are the writes; the home is
+// not ours to replace.
+const (
+	scratchTmpVolumeName  = "wardyn-tmp"
+	scratchWorkVolumeName = "wardyn-work"
+	scratchTmpPath        = "/tmp"
+	scratchWorkPath       = "/home/agent/work"
+)
+
+// ephemeralScratchVolumes is what makes disk_mib bound THE AGENT'S writes on
+// this substrate rather than only the idle main container's.
+//
+// The gap it closes (disclosed as 0.7.4's known gap (a)): the agent does its
+// work in an EPHEMERAL container that Exec adds, and the kubelet does not meter
+// an ephemeral container's writable layer at all — resourceRequirements' limit
+// bound a container nothing writes in, so a `dd` from the agent filled the node
+// and the pod was never evicted. An emptyDir is metered as the POD's local
+// ephemeral storage no matter which container writes into it, and Exec copies
+// the main container's VolumeMounts verbatim onto the ephemeral container, so
+// mounting here reaches the agent by construction.
+//
+// WHOLE-VOLUME MOUNTS, NEVER SubPath. corev1.VolumeMount's own contract says
+// subpath mounts are not allowed for ephemeral containers, and Exec copies these
+// mounts VERBATIM: a SubPath here would make UpdateEphemeralContainers fail for
+// every autonomous k8s run with disk_mib set, while a fake-clientset test went
+// on passing. One volume per mount point is the only shape that survives the
+// copy.
+//
+// TWO SizeLimits AND the container limit are not a triple budget: the kubelet
+// evicts on whichever binds first, and it counts emptyDir usage toward the pod's
+// ephemeral-storage total as well, so the two volumes together still cannot
+// exceed resourceRequirements' limits[ephemeral-storage] = disk_mib. The
+// per-volume SizeLimit is the tighter, earlier stop.
+//
+// Zero disk_mib adds nothing at all — the same "absent means unbounded" shape
+// resourceRequirements uses, so a pod with no disk budget keeps the volume-less
+// shape this substrate has always produced.
+//
+// STILL UNMETERED, and disclosed rather than papered over: dotfile writes
+// elsewhere under $HOME (~/.wardyn, ~/.ssh, ~/.claude) stay on the ephemeral
+// container's own writable layer. readOnlyRootFilesystem would close that and
+// is NOT set, because the agent legitimately writes those paths.
+func ephemeralScratchVolumes(diskMiB int64) ([]corev1.Volume, []corev1.VolumeMount) {
+	if diskMiB <= 0 {
+		return nil, nil
+	}
+	targets := []struct{ name, path string }{
+		{scratchTmpVolumeName, scratchTmpPath},
+		{scratchWorkVolumeName, scratchWorkPath},
+	}
+	vols := make([]corev1.Volume, 0, len(targets))
+	mounts := make([]corev1.VolumeMount, 0, len(targets))
+	for _, t := range targets {
+		// A fresh Quantity per volume: one shared pointer would alias two
+		// spec fields onto the same object.
+		vols = append(vols, corev1.Volume{
+			Name: t.name,
+			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{
+				SizeLimit: resource.NewQuantity(diskMiB*1024*1024, resource.BinarySI),
+			}},
+		})
+		mounts = append(mounts, corev1.VolumeMount{Name: t.name, MountPath: t.path})
+	}
+	return vols, mounts
+}
+
 // proxyResourcesMilliCPU/proxyResourcesMemoryMiB are the wardyn-proxy
 // sidecar's fixed cgroup envelope — mirrors docker's proxyResources: the
 // proxy only relays HTTP, so a tight, run-independent footprint leaves ample

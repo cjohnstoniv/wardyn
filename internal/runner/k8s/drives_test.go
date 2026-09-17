@@ -553,12 +553,17 @@ func TestExec_EphemeralContainerMountsTheDrive(t *testing.T) {
 		if len(pod.Spec.EphemeralContainers) != 1 {
 			t.Fatalf("ro=%v: ephemeral containers = %d, want 1", readOnly, len(pod.Spec.EphemeralContainers))
 		}
+		// BY NAME, and the count is the drive PLUS the scratch mounts a disk
+		// budget adds (ephemeralScratchVolumes): exec.go copies the main
+		// container's WHOLE mount list, so every one of them arrives here. The
+		// drive's own three read-only flags are still what this case walks.
 		mounts := pod.Spec.EphemeralContainers[0].VolumeMounts
-		if len(mounts) != 1 {
-			t.Fatalf("ro=%v: exec container mounts = %v, want exactly the drive", readOnly, mounts)
+		if len(mounts) != 1+len(wantScratch) {
+			t.Fatalf("ro=%v: exec container mounts = %v, want the drive plus the %d scratch mounts", readOnly, mounts, len(wantScratch))
 		}
-		if mounts[0] != wantMain {
-			t.Errorf("ro=%v: exec container mount = %+v, want %+v", readOnly, mounts[0], wantMain)
+		execMount := mountFor(mounts, driveVolumeName)
+		if execMount == nil || *execMount != wantMain {
+			t.Errorf("ro=%v: exec container drive mount = %+v, want %+v", readOnly, execMount, wantMain)
 		}
 
 		// The claim the whole run resolved against is still a drive, not a
@@ -587,8 +592,11 @@ func TestExec_EphemeralContainerMountsTheDrive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get agent pod (drive-less): %v", err)
 	}
-	if got := pod2.Spec.EphemeralContainers[0].VolumeMounts; len(got) != 0 {
-		t.Errorf("drive-less exec container mounts = %v, want none", got)
+	if got := mountFor(pod2.Spec.EphemeralContainers[0].VolumeMounts, driveVolumeName); got != nil {
+		t.Errorf("drive-less exec container mounts %q = %+v, want no drive at all", driveVolumeName, got)
+	}
+	if got := pod2.Spec.EphemeralContainers[0].VolumeMounts; len(got) != len(wantScratch) {
+		t.Errorf("drive-less exec container mounts = %v, want exactly the %d scratch mounts its disk budget adds", got, len(wantScratch))
 	}
 }
 

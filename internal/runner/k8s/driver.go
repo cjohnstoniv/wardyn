@@ -270,6 +270,16 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		// where the kubelet enforces it by EVICTING the pod — measured
 		// periodically, and the write is never refused. Not `filesystem`: nothing
 		// here binds a byte.
+		//
+		// THAT LIMIT ALONE USED TO BOUND THE WRONG CONTAINER, which is why 0.7.4
+		// disclosed disk_mib as unenforced here: the agent runs in an ephemeral
+		// container the kubelet does not meter at all, so the budget sat on an
+		// idle main container nothing writes in. ephemeralScratchVolumes is the
+		// other half — the two emptyDirs the agent's /tmp and workdir writes land
+		// in, each carrying disk_mib as its sizeLimit, and counted toward the
+		// pod's ephemeral-storage total whichever container writes them. Dotfile
+		// writes elsewhere under the agent's $HOME remain on the ephemeral
+		// container's unmetered writable layer — a smaller, disclosed residual.
 		EphemeralDiskEnforcement: types.StorageEnforcementEviction,
 	}, nil
 }
