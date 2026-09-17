@@ -1124,7 +1124,7 @@ to the claude-code image only** — the `codex-cli` image still reaches for seve
 hosts of its own at start (see the CHANGELOG's known gaps). **And only to an
 image actually carrying the three `ENV` lines**: `agent-claude-code` (where they
 were measured) is not a published image — `agent-base` is what ships, and it now
-carries the three lines too, so any image built `FROM agent-base:0.7.5`
+carries the three lines too, so any image built `FROM ghcr.io/cjohnstoniv/agent-base:0.7.5`
 inherits them. An image on another base, or an older tag pinned in
 `WARDYN_AGENT_IMAGES`, still parks on the CLI's own bootstrap; see
 [corp-image-authoring.md](adoption/corp-image-authoring.md) for the rebuild

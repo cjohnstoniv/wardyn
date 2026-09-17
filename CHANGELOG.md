@@ -98,8 +98,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   disk-budgeted run builds — the one thing no fake clientset can check.
 
   **Upgrade note.** If you set `disk_mib` / `storage.ephemeral.default_disk_mib` on Kubernetes, size
-  it for the clone plus installs before upgrading: until now it did not bind the agent; from 0.7.5
-  it evicts.
+  it for the clone plus installs before upgrading: until now it did not bind an AUTONOMOUS run's agent;
+  from 0.7.5 it evicts. An interactive run's agent has been bound since 0.7.2.
 - **"Your model key" told a member their model access was already done, under a
   per-person AWS SSO lane, whether or not they had signed in.** The card read the
   deployment-wide `llm_ready` flag, which goes true the moment an admin saves a
@@ -203,7 +203,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   traffic is deleted, not allowed. Measured against a real `wardyn-proxy` with a
   model-host-only allowlist, past the trust prompt and into the REPL, plus an
   autonomous run: the stock v0.7.4 image parked approvals; the rebuilt image
-  dials nothing.
+  dials nothing at boot.
 
 - **An interactive claude-code run comes up on the agent, not on a product tour.**
   The image writes `{"hasCompletedOnboarding": true}` into the sandbox's
@@ -346,7 +346,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `downloads.claude.ai` (git-falling-back to `github.com`), self-updating and
   fetching a changelog lived only in `agent-claude-code`, which has not been
   published since 0.6.2. The vars are inert in an image with no Claude Code; what
-  they buy is that an image (re)built `FROM agent-base:0.7.5` inherits the quiet
+  they buy is that an image (re)built `FROM ghcr.io/cjohnstoniv/agent-base:0.7.5` inherits the quiet
   boot without having to know the list exists. `deploy/images/README.md` now
   states that contract (these
   ENV lines — not an `agent-run` export, which a default interactive run's
@@ -379,14 +379,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   refuses both the create and the respawn the outcome is identical, and the
   marker stayed: the human attached to a bare shell that started nothing while
   nothing ran anywhere.
-- **`claude-code --selftest` honours the documented opt-out.** The three
+- **`agent-run --selftest` honours the documented opt-out.** The three
   self-fetch vars are set with `:-` precisely so a run can turn one back on, and
   the selftest is fail-closed at dispatch — so a deliberate `=0` refused to start
   the run. It is reported now, not failed. Any other value still fails. The
   selftest cannot detect an image that lacks the Dockerfile `ENV` lines
   altogether — the library defaults them before the check ever runs.
-- **The "recording is disabled" sentence (the Recordings library, a run's
-  Recording tab, and now the New Run rail) named the wrong switch.** It has told
+- **The "recording is disabled" sentence (the Recordings library and a run's
+  Recording tab) named the wrong switch.** It has told
   the reader to set `WARDYN_RECORDING_DIR` since 0.7.1; `WARDYN_RECORDING_DIR`
   only moves the `fs` store's path and turns nothing on or off. The actual
   switch is `WARDYN_RECORDING_STORE` (the Helm chart renders `off` while
@@ -397,8 +397,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 ### Changed
 
 - The recording-disabled title and description are one shared pair instead of
-  three spellings (the Recordings library, the run cockpit's Recording tab, and
-  now the New Run rail all read it), and the three `/healthz` reads behind them
+  three spellings (the Recordings library and the run cockpit's Recording tab read
+  both; the New Run rail reads the title), and the three `/healthz` reads behind them
   are one hook whose answer is TRI-STATE: until `/healthz` has actually replied,
   no surface claims recording is on OR off. The cockpit's own copy had already
   drifted — *"No run on this server captures one"* vs *"will ever produce one"*.
@@ -413,7 +413,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   the same upgrade. **The Claude Code quiet-boot fix needs the same care**:
   rebuild the claude-code image from the 0.7.5 tree (`make agent-images`, or
   `docker build -f deploy/images/claude-code/Dockerfile`), or rebuild a derived
-  image `FROM agent-base:0.7.5` re-copying `deploy/images/claude-code/agent-run`
+  image `FROM ghcr.io/cjohnstoniv/agent-base:0.7.5` re-copying `deploy/images/claude-code/agent-run`
   and `deploy/images/common/agent-run-lib.sh`. An image on another base must set
   the three `ENV` lines in its own Dockerfile. An older tag pinned in
   `WARDYN_AGENT_IMAGES` keeps 0.7.4's behaviour.
@@ -436,8 +436,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   settings (start URL, pinned account, pinned role), the sign-in sandbox running
   its own login and being joined from the Runs list with nothing typed, a
   cancelled sign-in retried cleanly, an abandoned one superseded, a 65-second
-  `STARTING` hold (the run fails at the 90-second pod-IP bound) that must read
-  as slow rather than unreadable, an interactive
+  `STARTING` hold — capped there because the run would otherwise die at the
+  90-second pod-IP bound — that must read as slow rather than unreadable, an interactive
   claude-code run reaching Bedrock through one workspace-trust prompt, a first
   run whose approvals list is empty, and the admin's no-credential member
   preview.
@@ -477,7 +477,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 - **The quiet Claude Code boot, the onboarding seed and the early-attach fix reach only images
   rebuilt on 0.7.5.** `agent-claude-code` is not published; rebuild your derived image
-  `FROM agent-base:0.7.5` and re-copy `deploy/images/claude-code/agent-run` +
+  `FROM ghcr.io/cjohnstoniv/agent-base:0.7.5` and re-copy `deploy/images/claude-code/agent-run` +
   `deploy/images/common/agent-run-lib.sh`. An image on any other base must set the three `ENV` lines
   in its own Dockerfile — copying `agent-run` is not enough, because a default interactive run's
   `claude` is started by the attach shell. An older tag pinned in `WARDYN_AGENT_IMAGES` keeps 0.7.4's
@@ -623,8 +623,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - It does not exercise a **genuinely cold image pull**. Images reach the kind
   node by `kind load` and the sandbox pod pulls `IfNotPresent`, so nothing is
   fetched from a registry on any walk. The cold-start case manufactures its
-  65-second hold with a node taint (the run fails at the 90-second pod-IP
-  bound), which reproduces a pod that cannot start — not a slow registry, and
+  65-second hold with a node taint (capped there because the run would otherwise
+  die at the 90-second pod-IP bound, and lifted so the run survives), which reproduces a pod that cannot start — not a slow registry, and
   not an `ImagePullBackOff` (which is terminal, not slow). A private-registry
   estate's real cold pull is still unmeasured.
 - The IdP is **Dex with two static passwords**, so group-to-role mapping,
@@ -755,8 +755,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **Admin-tier and run-token 5xx sites still carry driver text.** Every door a
   member can reach is converted (0.7.4) — a full route-tier enumeration says so,
   not a spot check — and the `writeServerError` chokepoint they route through is
-  the shape the rest will take, but 86 sites across 24 files still hand the
-  caller raw pgx text. **None of them is member-reachable**: they sit on the
+  the shape the rest will take, but the admin-tier and run-token 5xx sites still
+  hand the caller raw pgx text. **None of them is member-reachable**: they sit on the
   admin tier or on the run-token `/internal/*` lane, whose readers are an
   operator who can already read the DSN and a sandbox that holds the run's own
   token. The sweep did not land in 0.7.5 and is rescheduled: 0.7.6.
