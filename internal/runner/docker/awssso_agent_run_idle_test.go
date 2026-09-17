@@ -50,6 +50,7 @@ func loginHintConsts(t *testing.T) map[string]string {
 		"WARDYN_AWS_SSO_SELFRUN_BANNER",
 		"WARDYN_AWS_SSO_SELFRUN_DONE",
 		"WARDYN_AWS_SSO_SELFRUN_FAILED",
+		"WARDYN_AWS_SSO_SELFRUN_PREP_STUCK",
 	} {
 		if out[k] == "" {
 			t.Fatalf("login-hint.sh defines no %s — the sign-in pane has no %s to print", k, k)
@@ -388,13 +389,21 @@ exit 0
 // rather than from anything the test put in the environment.
 func runnableSigninPane(t *testing.T) string {
 	t.Helper()
-	src, err := os.ReadFile(awsSSOSigninPane) //nolint:gosec // fixed in-repo path
-	if err != nil {
-		t.Fatalf("read signin-pane.sh: %v", err)
-	}
 	hint, err := filepath.Abs(awsSSOLoginHintPath)
 	if err != nil {
 		t.Fatalf("resolve login-hint.sh: %v", err)
+	}
+	return runnableSigninPaneWithHint(t, hint)
+}
+
+// runnableSigninPaneWithHint is runnableSigninPane with the installed hint path
+// remapped somewhere ELSE — a missing file, for the case where the image's own
+// strings are unavailable and the script's `[ -r … ] &&` guard skips the source.
+func runnableSigninPaneWithHint(t *testing.T, hint string) string {
+	t.Helper()
+	src, err := os.ReadFile(awsSSOSigninPane) //nolint:gosec // fixed in-repo path
+	if err != nil {
+		t.Fatalf("read signin-pane.sh: %v", err)
 	}
 	const installed = "/usr/local/lib/wardyn-attach-hint.sh"
 	body := string(src)
@@ -573,5 +582,160 @@ func TestSigninPane_KeysTypedDuringTheWaitAreDiscarded(t *testing.T) {
 	}
 	if !strings.Contains(got, pe.consts["WARDYN_AWS_SSO_SELFRUN_DONE"]) {
 		t.Errorf("the pane did not report a finished sign-in, so the drain assertion above proved nothing\noutput:\n%s", got)
+	}
+}
+
+// signinPaneCmdNoHome is signinPaneCmd with HOME stripped from the child's
+// environment entirely — `os.Environ()` carries the developer's own, so it has
+// to be filtered rather than merely left unset in the extra slice.
+func signinPaneCmdNoHome(t *testing.T, pe paneEnv, extraEnv ...string) *exec.Cmd {
+	t.Helper()
+	cmd := signinPaneCmd(t, pe, extraEnv...)
+	kept := cmd.Env[:0]
+	for _, kv := range cmd.Env {
+		if !strings.HasPrefix(kv, "HOME=") {
+			kept = append(kept, kv)
+		}
+	}
+	cmd.Env = kept
+	return cmd
+}
+
+// fakeSleep drops a no-op `sleep` ahead of the real one, so a test can walk the
+// pane's 300 s prep wait in milliseconds. It shadows nothing else: the pane's
+// only other timing is `read -t`, which is a bash builtin.
+func fakeSleep(t *testing.T, pe paneEnv) {
+	t.Helper()
+	writeExec(t, pe.binDir, "sleep", "#!/bin/sh\nexit 0\n")
+}
+
+// TestSigninPane_EveryPathReachesTheShell — the invariant, stated as a test
+// because `set -u` is what breaks it and `set -u` fails at EXPANSION time, i.e.
+// on a line nobody walked in review.
+//
+// The pane prints its banner FIRST, deliberately: the console reads that marker
+// and stops typing the pair itself. Everything after the banner therefore
+// inherits an obligation — if the script dies there, the session is destroyed
+// (create path) or the attached client is dropped (respawn path), the console
+// will never type, and the human is left with the silent failure this whole file
+// exists to remove. Two expansions could do exactly that, both reachable on the
+// respawn path where the pane's environment is the ATTACH exec's rather than
+// agent-run's.
+func TestSigninPane_EveryPathReachesTheShell(t *testing.T) {
+	t.Run("HOME unset", func(t *testing.T) {
+		pe := signinPaneEnv(t)
+		fakeSleep(t, pe)
+		cmd := signinPaneCmdNoHome(t, pe)
+		cmd.Stdin = strings.NewReader("")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Errorf("the pane died with HOME unset (%v) — it prints the banner first, so the console has already "+
+				"stopped typing and nobody will ever run the pair\noutput:\n%s", err, out)
+		}
+		if strings.Contains(string(out), "unbound variable") {
+			t.Errorf("the pane hit an unbound expansion after its banner\noutput:\n%s", out)
+		}
+		if !strings.Contains(string(out), pe.consts["WARDYN_AWS_SSO_SELFRUN_BANNER"]) {
+			t.Errorf("no banner, so this case proved nothing about what happens after it\noutput:\n%s", out)
+		}
+	})
+
+	t.Run("no login command", func(t *testing.T) {
+		pe := signinPaneEnv(t)
+		fakeSleep(t, pe)
+		if err := os.WriteFile(filepath.Join(pe.home, ".wardyn", "prep-done"), nil, 0o600); err != nil {
+			t.Fatalf("write prep-done: %v", err)
+		}
+		// The image's own hint file is unreadable: nothing defines the command,
+		// and the environment does not carry one either (the respawn path's tmux
+		// server inherited the attach exec's environment).
+		missing := filepath.Join(t.TempDir(), "no-such-hint.sh")
+		cmd := exec.Command("timeout", "20s", "bash", runnableSigninPaneWithHint(t, missing))
+		cmd.Env = append(os.Environ(),
+			"HOME="+pe.home,
+			"PATH="+pe.binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"AWS_LOG="+pe.awsLog,
+			"TMUX_LOG="+pe.tmuxLog,
+		)
+		cmd.Stdin = strings.NewReader("")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Errorf("the pane died with no login command defined (%v) — the console has already stopped typing\noutput:\n%s", err, out)
+		}
+		if strings.Contains(string(out), "unbound variable") {
+			t.Errorf("the pane hit an unbound expansion after its banner\noutput:\n%s", out)
+		}
+		if n := countLines(readLog(t, pe.awsLog), "aws sso login"); n != 0 {
+			t.Errorf("`aws sso login` ran %d times with no command defined\naws log:\n%s", n, readLog(t, pe.awsLog))
+		}
+	})
+}
+
+// TestSigninPane_PrepNeverFinishedSaysSo — the 300 s wait has two ends, and the
+// second one used to be dishonest. A prep that never writes prep-done means no
+// MITM CA and no [sso-session wardyn] block, so the pair would fail — safely
+// (TLS verify fails closed, the CLI errors, nothing is captured) but on an error
+// about a missing profile, ending on the FAILED line, which names a command that
+// fails identically for as long as prep is hung.
+//
+// So the pair is SKIPPED and the pane says the true thing instead: the only move
+// that works is a new run. And it still ends in a usable shell.
+func TestSigninPane_PrepNeverFinishedSaysSo(t *testing.T) {
+	pe := signinPaneEnv(t)
+	fakeSleep(t, pe) // walk the 300s wait in milliseconds; prep-done is never written
+	cmd := signinPaneCmd(t, pe)
+	cmd.Stdin = strings.NewReader("")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Errorf("the pane died when prep never finished (%v) — it must still hand over a shell\noutput:\n%s", err, out)
+	}
+	if !strings.Contains(string(out), pe.consts["WARDYN_AWS_SSO_SELFRUN_PREP_STUCK"]) {
+		t.Errorf("the pane did not say that workspace preparation never finished\nwant: %s\noutput:\n%s",
+			pe.consts["WARDYN_AWS_SSO_SELFRUN_PREP_STUCK"], out)
+	}
+	if n := countLines(readLog(t, pe.awsLog), "aws sso login"); n != 0 {
+		t.Errorf("the pair ran %d time(s) against a workspace with no CA and no ~/.aws/config\naws log:\n%s", n, readLog(t, pe.awsLog))
+	}
+	// NOT the FAILED line: it names a command to re-run, and that command fails
+	// identically while prep is hung. Telling a human to retry a thing that
+	// cannot work is the defect, not the absence of a message.
+	failedPrefix, _, _ := strings.Cut(pe.consts["WARDYN_AWS_SSO_SELFRUN_FAILED"], "%s")
+	if strings.Contains(string(out), failedPrefix) {
+		t.Errorf("the pane printed the FAILED line, whose named command fails identically while prep is hung\noutput:\n%s", out)
+	}
+	if strings.Contains(string(out), pe.consts["WARDYN_AWS_SSO_SELFRUN_DONE"]) {
+		t.Errorf("the pane claimed the sign-in finished\noutput:\n%s", out)
+	}
+}
+
+// TestSigninPane_FailedLineIsProseNotAFormat — the FAILED line is a canon string
+// under review, and it used to be handed to printf as a FORMAT. Two ways that
+// breaks on an edit nobody would call risky: a literal `%` ("100% of the time")
+// makes printf emit garbage or an "invalid number" error, and dropping the `%s`
+// makes the command vanish silently — leaving "or run:" with nothing after it.
+//
+// Both halves are asserted, because fixing only one leaves the other. The string
+// carries exactly one `%`, and it is the `%s`; and the pane substitutes it by
+// parameter expansion, which the sibling cases above prove by matching the
+// composed line (the command contains `&&`, which bash 5.2's `${var/pat/rep}`
+// would expand as the matched text — so those cases fail on that shape too).
+func TestSigninPane_FailedLineIsProseNotAFormat(t *testing.T) {
+	failed := loginHintConsts(t)["WARDYN_AWS_SSO_SELFRUN_FAILED"]
+	if n := strings.Count(failed, "%s"); n != 1 {
+		t.Errorf("WARDYN_AWS_SSO_SELFRUN_FAILED has %d %%s, want exactly 1 — the pane substitutes the command into "+
+			"that one placeholder: %q", n, failed)
+	}
+	if n := strings.Count(failed, "%"); n != 1 {
+		t.Errorf("WARDYN_AWS_SSO_SELFRUN_FAILED carries %d %% signs, want exactly 1 (the %%s): %q", n, failed)
+	}
+	// The pane's OWN body: never `printf "$FAILED"`. A future edit that reaches
+	// for the shorter form reintroduces both failure modes above at once.
+	body, err := os.ReadFile(awsSSOSigninPane) //nolint:gosec // fixed in-repo path
+	if err != nil {
+		t.Fatalf("read signin-pane.sh: %v", err)
+	}
+	if strings.Contains(string(body), `printf "${WARDYN_AWS_SSO_SELFRUN_FAILED`) {
+		t.Errorf("signin-pane.sh hands the FAILED canon string to printf as a FORMAT again — a literal %% in it prints " +
+			"garbage and a missing %%s swallows the command with no error at all")
 	}
 }

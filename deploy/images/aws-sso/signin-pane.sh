@@ -26,7 +26,16 @@
 # human running this script by hand from an attached shell.
 set -u
 
-# UNCONDITIONALLY, so all four strings are image-baked. agent-run exports them and
+# `set -u` and $HOME in the same script: every expansion below has to be one this
+# file guarantees. agent-run exports HOME on the create path, but on the RESPAWN
+# path this pane's environment is the ATTACH exec's — and with HOME unset the
+# script died at the prep wait with "HOME: unbound variable", AFTER the banner.
+# The console had already seen SELFRUN_MARKER and will never type, so the pane
+# just closed: precisely the silent shape this file exists to remove. Same
+# default agent-run itself uses.
+: "${HOME:=/home/agent}"; export HOME
+
+# UNCONDITIONALLY, so all five strings are image-baked. agent-run exports them and
 # the tmux server inherits that environment — but on the respawn path the server
 # was created by the ATTACH exec, whose environment is the container's, not
 # agent-run's. Nothing puts a caller's text in there today (the login launch is
@@ -44,6 +53,16 @@ set -u
 # BUFFER those bytes at a pane whose script is still waiting, and the trailing
 # shell below would run them — a SECOND device code, minted while the human is
 # still entering the first.
+#
+# CLEARED FIRST, on both paths. On the RESPAWN path (`respawn-pane -k`, when an
+# attach won the session name) this pane has already run a bare interactive bash,
+# which printed the attach hint's "the sign-in did not start on its own; run: …"
+# line — untrue the instant this script starts, and sitting directly above the
+# banner that says otherwise. On the create path the pane is empty and this is a
+# no-op. The escape clears screen + scrollback for the terminal, `clear-history`
+# for tmux's own buffer; both best-effort, neither load-bearing.
+printf '\033[H\033[2J\033[3J'
+tmux clear-history 2>/dev/null || true
 printf '%s\n' "${WARDYN_AWS_SSO_SELFRUN_BANNER:-}"
 
 # AND THE SESSION IS MARKED AS SELF-RUN HERE, NOT AT THE END. The attach hint's
@@ -60,11 +79,30 @@ tmux set-environment -t wardyn WARDYN_AWS_SSO_SELFRAN 1 2>/dev/null || true
 # agent-run's shared prep, which runs AFTER this session is created (that
 # ordering is deliberate — see the bootstrap in deploy/images/aws-sso/agent-run).
 # Bounded like the attach shell's own wait: a failed prep still writes prep-done,
-# so this cannot hang, and a prep that never finishes falls through to a login
-# that reports its own error rather than a pane that says nothing forever.
+# so this cannot hang. A prep that never finishes is a DIFFERENT outcome, not a
+# late one — see the PREP_STUCK arm below, which skips the pair rather than
+# running it against a workspace that has no CA and no ~/.aws/config.
 _i=0
 while [[ ! -f "${HOME}/.wardyn/prep-done" ]] && [[ $_i -lt 300 ]]; do sleep 1; _i=$((_i + 1)); done
 unset _i
+
+# print_failed — the FAILED line with its ONE %s replaced by the command, by
+# PARAMETER EXPANSION rather than by handing the canon string to printf as a
+# FORMAT. Three reasons it is not `printf "$FAILED\n" "$CMD"`: a canon edit that
+# adds a literal `%` prints garbage ("printf: CMD: invalid number"), one that
+# drops the `%s` makes the command vanish with no error at all, and printf is the
+# wrong tool for substituting into prose. And not bash's `${FAILED/\%s/$CMD}`
+# either: since bash 5.2 an unescaped `&` in the REPLACEMENT expands to the
+# matched text, and the command is `aws sso login … && wardyn-aws-sso` — that
+# form prints `… --use-device-code %s%s wardyn-aws-sso` (executed). Prefix +
+# command + suffix is the one shape that is correct for every string.
+print_failed() {
+    local _f="${WARDYN_AWS_SSO_SELFRUN_FAILED:-%s}" _c="${WARDYN_AWS_SSO_LOGIN_COMMAND:-}"
+    case "$_f" in
+        *%s*) printf '%s%s%s\n' "${_f%%\%s*}" "$_c" "${_f#*\%s}" ;;
+        *)    printf '%s\n' "$_f" ;;
+    esac
+}
 
 # ONCE. No re-arm loop: a retry mints a SECOND live device code while the human
 # may still be entering the first, and `A && B` would re-run the login after a
@@ -80,11 +118,31 @@ unset _i
 # out. Bytes buffered at this pane before that prompt appears (a 0.7.4 console's
 # auto-typed line, a human's stray keystroke) are read by the chooser as one of
 # those tries; wrong answers are refused, not acted on.
-if bash -c "$WARDYN_AWS_SSO_LOGIN_COMMAND"; then
+#
+# EVERY ARM ENDS AT THE `exec bash` BELOW — that is the invariant, not a
+# convenience. The console has already seen SELFRUN_MARKER and stopped typing, so
+# a pane that exits instead is a session destroyed (create path) or an attached
+# client dropped (respawn path), with nothing said. Under `set -u` an unguarded
+# expansion is exactly that: silent death after the banner.
+if [[ ! -f "${HOME}/.wardyn/prep-done" ]]; then
+    # Prep never finished. SKIP the pair rather than run it: it needs the MITM CA
+    # and the materialised ~/.aws/config that prep writes, so it would fail —
+    # safely (no CA means TLS verify fails closed, no [sso-session wardyn] means
+    # the CLI errors, nothing is captured) but on an error about a missing
+    # profile, ending on a FAILED line that names a command which fails
+    # identically for as long as prep is hung. Its own line, naming the only move
+    # that works.
+    printf '%s\n' "${WARDYN_AWS_SSO_SELFRUN_PREP_STUCK:-}"
+elif [[ -z "${WARDYN_AWS_SSO_LOGIN_COMMAND:-}" ]]; then
+    # No command to run: the image's login-hint.sh was unreadable or defines
+    # nothing. `bash -c ""` would "succeed" and print the DONE line over a
+    # sign-in that never happened, and under `set -u` the bare expansion killed
+    # the pane outright. Report it as the failure it is and hand over the shell.
+    print_failed
+elif bash -c "$WARDYN_AWS_SSO_LOGIN_COMMAND"; then
     printf '%s\n' "${WARDYN_AWS_SSO_SELFRUN_DONE:-}"
 else
-    # shellcheck disable=SC2059 # the format IS the canon string; its one %s is the command to re-run
-    printf "${WARDYN_AWS_SSO_SELFRUN_FAILED:-%s}\n" "$WARDYN_AWS_SSO_LOGIN_COMMAND"
+    print_failed
 fi
 
 # The session was marked self-run above; this covers THIS process's own shell,
