@@ -24,6 +24,7 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
 | **v0.7.2** | **Workspace Providers** — one admin object for which git/model providers are enabled, for whom, inside what bounds — an agent roster with per-person model credentials, ephemeral disk enforcement on Kubernetes, and seven field-report fixes from a private-endpoint Kubernetes estate (below) | **Shipped (pre-alpha)** — `v0.7.2`, 2026-09-12 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.7.3** | A second field report from the same estate: the per-user AWS SSO lane can no longer sign with the wrong identity (account/role pinned, enforced at three doors), the Bedrock check texts and admin sign-in door stopped conflating a deployment-wide fact with a per-person credential gap, and the CSRF Origin guard now applies in every mode (below) | **Shipped (pre-alpha)** — `v0.7.3`, 2026-09-15 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.7.4** | **Governance hardening over the whole surface a member or an operator's identity touches.** Per-run credential residency and revocation, the five findings of the 0.7.3 field report plus the owner's two testability asks, a kind-provable AWS SSO test path, an admin's own "view as member", and a repo-wide review campaign's fixes across the runner substrate, the egress proxy and the console (below) | **Shipped (pre-alpha)** — `v0.7.4`, 2026-09-16 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.7.5** | A third field report from the same private-endpoint Kubernetes estate (Entra SSO, one enabled roster row: `claude-code` / `bedrock_sso` / `per_user`): the console stops asserting things that are false on that deployment shape (the New Run rail's credential-residency and Recording claims, the member's "Your model key" card, and Getting Started's lede), an admin can preview the not-signed-in member state, the AWS sign-in sandbox now runs the sign-in itself with every attach path joining it, a slow sign-in start no longer reads as unreadable and a new sign-in supersedes an orphaned one, a rebuilt Claude Code image boots without parking approvals on the CLI's own bootstrap, and on Kubernetes an autonomous run's `/tmp` and `/home/agent/work` are now inside `disk_mib` (narrowed, not closed) (below) | **Shipped (pre-alpha)** — `v0.7.5`, 2026-09-17 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ### What v0.4 shipped
 
@@ -554,6 +555,59 @@ The review campaign, by class:
   reference docs, with the drifts it found fixed at the doc or at the code,
   whichever was wrong.
 
+### What v0.7.5 shipped
+
+Shipped as `v0.7.5`; [CHANGELOG.md](CHANGELOG.md)'s `[0.7.5]` entry is the full
+list. A third field report from the same private-endpoint Kubernetes estate —
+Entra SSO, one enabled roster row (`claude-code` / `bedrock_sso` / `per_user`) —
+found seven findings (plus 2b, a lede that contradicted its own chip) in the
+console's own copy and the AWS sign-in sandbox's behaviour on that deployment
+shape, all fixed below alongside the estate's disclosed Kubernetes gap.
+
+- **The New Run rail stopped asserting things that are false on this
+  deployment shape** (finding 1). Its "What this run can do" panel now reads
+  the server's own graded residency for the model credential and the
+  `/healthz` recording state instead of two unconditional claims, one of which
+  was a false assurance on the per-user Bedrock SSO lane.
+- **A member's "Your model key" card stopped saying "already done" or
+  "provided by your admin" under a per-person AWS SSO lane** (findings 2 and
+  2b) — the card now reads the same truth table the "Model access" chip above
+  it already used, and the page's lede stopped saying "shared credentials"
+  under a lane that is specifically not shared.
+- **An admin can preview a new member's not-signed-in state** (finding 3).
+  "View as a new member (not signed in)" is a second posture beside the plain
+  member-mode toggle, offered only on a `per_user` deployment, that hides the
+  admin's own captured AWS session for the session and refuses a sign-in
+  attempted inside it rather than capturing over the admin's own identity.
+- **The AWS sign-in sandbox now runs its own sign-in, and every attach path
+  joins it** (finding 4) — the console's sign-in pane, `wardyn attach`, an SSH
+  attach and the Runs list all land on the same running sign-in instead of the
+  Runs-list path handing out a bare, unlabelled shell.
+- **A rebuilt Claude Code image boots without parking an approval on the
+  agent's own bootstrap** (finding 5): the plugin-marketplace auto-install,
+  the self-updater and the changelog fetch are off by default in `agent-base`
+  and any image built from it — an image on another base, or an older pinned
+  tag, still parks them (Known gap).
+- **A slow sign-in start no longer reads as unreadable, and a new sign-in
+  supersedes an orphaned one** (findings 6 and 7): the wait is graded on a
+  clock instead of a poll-tick budget too short for a cold image pull, and
+  starting a sign-in now closes that person's previous one server-side before
+  the retry can be refused by a concurrency cap.
+- **On Kubernetes, an autonomous run's `disk_mib` now bounds its `/tmp` and
+  workdir writes** — narrowed, not closed: the rest of `$HOME` an autonomous
+  run's agent writes to is still outside the cap, and an interactive run was
+  already fully metered since 0.7.2. The estate's own disclosed gap from
+  0.7.4.
+
+What did **not** close this release — see the CHANGELOG's "Known gaps and
+deferrals" for the full statement of each: the rest of `$HOME` an autonomous
+k8s run's agent writes to, outside the `/tmp`/workdir cap; a rare
+cross-replica timestamp race that can still leave two live sign-in sandboxes
+for one person; a green **hosted** nightly run, not yet observed even though
+the four harness defects that kept it red are fixed; and Claude Code's own
+*Bypass Permissions mode* confirmation, which a run launched with "let it use
+tools before I attach" still parks on until a human attaches and answers it.
+
 ## Planned
 
 Everything below is **planned, unbuilt, and undated**. Where a seam exists but no
@@ -561,7 +615,7 @@ implementation does, [docs/PLUGGABILITY.md](docs/PLUGGABILITY.md) says so per ro
 
 v0.8 is the remaining path to alpha. The cloud base and permissioning 0.6 owed
 are shipped, and so is 0.7's governance and desktop work (above, through
-`v0.7.4`), so what is left below is the alpha RC and beyond.
+`v0.7.5`), so what is left below is the alpha RC and beyond.
 
 **New for 0.8: posture-gated autonomy** — an org-defined rubric mapping a
 sandbox's containment posture (egress reach, secrets present, confinement class)
