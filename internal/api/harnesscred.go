@@ -345,12 +345,12 @@ func (s *Server) readManagedBlob(ctx context.Context, provider string) (managedC
 // (internal/secretstore/pg), so the obvious For(owner).Get would serve the
 // ADMIN'S session to a member who has captured nothing — the exact substitution
 // per_user exists to refuse. For("").List() is never consulted, so the owner's
-// own rows are all this can see. A per-user scope with NO owner reads as
-// ABSENT: a credential nobody owns is not the operator's.
+// own rows are all this can see. A per-user scope with NO owner — or one read
+// inside the no-credential member preview — is ABSENT (previewHidesOwnCredential).
 func (s *Server) readAWSSSOBlob(ctx context.Context, scope awsSSOScope) (awsSSOBlob, bool, error) {
 	st := s.cfg.Secrets
 	if scope.perUser {
-		if st == nil || !scope.namespaced() {
+		if st == nil || !scope.namespaced() || previewHidesOwnCredential(ctx) {
 			return awsSSOBlob{}, false, nil
 		}
 		st = st.For(scope.owner)

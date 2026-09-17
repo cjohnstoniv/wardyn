@@ -52,6 +52,16 @@ const (
 // request that must never be hard to make.
 type memberModeRequest struct {
 	Enabled bool `json:"enabled"`
+	// NoCredential (0.7.5) selects the "view as a NEW member (not signed in)"
+	// posture — see membermode_preview.go. Meaningful only with Enabled, and
+	// stored as the AND of the two, so there is no body that turns the mode off
+	// and leaves the preview on.
+	//
+	// decodeStrict sets DisallowUnknownFields (helpers.go), so a 0.7.5 console
+	// POSTing this key to a 0.7.4 replica gets a 400 and does NOT enter the mode
+	// — the fail-safe direction during a rolling upgrade, and the reason the
+	// console sends the key only when it is true.
+	NoCredential bool `json:"no_credential"`
 }
 
 // handleSetMemberMode is POST /api/v1/me/member-mode.
@@ -99,7 +109,7 @@ func (s *Server) handleSetMemberMode(w http.ResponseWriter, r *http.Request) {
 	if r.ContentLength != 0 && !decodeStrict(w, r, &req) {
 		return
 	}
-	realRole, err := s.cfg.OIDC.SetMemberMode(w, r, req.Enabled)
+	realRole, err := s.cfg.OIDC.SetMemberMode(w, r, req.Enabled, req.NoCredential)
 	if err != nil {
 		// decodeSession's own errors: the cookie went missing or stopped
 		// verifying between the middleware and here. Not a 500 — there is
@@ -120,10 +130,21 @@ func (s *Server) handleSetMemberMode(w http.ResponseWriter, r *http.Request) {
 	// off the cookie — never oidcRoleFromContext, which is already clamped to
 	// member while the mode is on and would record the wrong tier on the
 	// turning-OFF row (and would flatten a security_admin into an admin).
+	//
+	// no_credential rides the datum ONLY when the mode was turned ON with the
+	// preview posture asked for: every row a 0.7.4 deployment could write stays
+	// byte-identical, and the key is a MARKER of which posture was entered
+	// rather than a field every row answers — the same rule authzDeniedDatum's
+	// member_mode marker below follows.
+	datum := map[string]any{"enabled": req.Enabled, "real_role": realRole}
+	if req.Enabled && req.NoCredential {
+		datum["no_credential"] = true
+	}
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
-		"auth.member_mode", "/api/v1/me/member-mode", "success",
-		mustJSON(map[string]any{"enabled": req.Enabled, "real_role": realRole})))
-	writeJSON(w, http.StatusOK, map[string]any{"member_mode": req.Enabled})
+		"auth.member_mode", "/api/v1/me/member-mode", "success", mustJSON(datum)))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"member_mode": req.Enabled, "member_mode_no_credential": req.Enabled && req.NoCredential,
+	})
 }
 
 // authzDeniedDatum builds the `authz.denied` Data map, marking the refusals met

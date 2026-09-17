@@ -319,6 +319,30 @@ type Session struct {
 	// phrases the mode as "see what a member sees", never as proof that a
 	// member is refused.
 	MemberMode bool `json:"mm,omitempty"`
+	// MemberModeNoCredential (0.7.5, field report finding 3) is the SECOND
+	// posture of the same mode: "view as a NEW member — one who has not signed
+	// in yet". Meaningful only with MemberMode; SetMemberMode writes it as
+	// `on && noCredential`, so turning the mode off clears it by construction
+	// and it can never be set on its own.
+	//
+	// MemberMode alone cannot show that state. It clamps the effective ROLE and
+	// deliberately leaves Sub — ownership, the secret namespace, every audit row
+	// — the admin's own, so an admin who has completed their own AWS SSO sign-in
+	// keeps reading their own live credential while "viewing as member", which
+	// is the one state every new member on a per_user deployment is NOT in.
+	// Clamping Sub instead would have rewritten identity, which is the property
+	// the whole mode rests on not doing.
+	//
+	// A SEPARATE BOOL, not an enum on "mm": a 0.7.4 replica decodes "mm" as a
+	// bool, so a non-bool value there would fail json.Unmarshal in decodeSession
+	// and 401 a live cookie mid-rollout. An unknown omitempty key is simply
+	// ignored (the codec sets no DisallowUnknownFields), so no codec bump.
+	//
+	// The rolling-upgrade window is the same one MemberMode publishes and it
+	// fails SAFE in the same direction: an older replica ignores this key and
+	// shows the admin their own credential — the 0.7.4 behaviour, never a
+	// widening. docs/OPERATIONS.md publishes it as a ceiling.
+	MemberModeNoCredential bool `json:"mmnc,omitempty"`
 }
 
 // Authenticator provides OIDC login, callback, logout, and session-check handlers.

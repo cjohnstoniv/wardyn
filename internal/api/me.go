@@ -75,6 +75,12 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// false for a real member and for every non-SSO caller, so an older
 		// client reading an absent key and a newer one reading false agree.
 		"member_mode": oidc.MemberModeFromContext(r.Context()),
+		// WHICH POSTURE of that mode (0.7.5, finding 3): the no-credential
+		// preview, in which this caller's own per-user model credential reads as
+		// absent. It implies member_mode above, so the console reads it only to
+		// choose which banner sentence to paint — the ceilings differ, and the
+		// one nobody may misread is that sign-in is refused until they exit.
+		"member_mode_no_credential": oidc.MemberPreviewNoCredential(r.Context()),
 	}
 	// M3: the AddWorkspaceDialog root-constraint hint (member-role-desktop.md
 	// §DECISIONS O1, ui-batch2-mock.md's "New wire this mock assumes"). null for

@@ -139,6 +139,25 @@ func MemberModeFromContext(ctx context.Context) bool {
 	return m
 }
 
+// MemberPreviewNoCredential reports whether this session is in the NO-CREDENTIAL
+// posture of member mode — "view as a new member who has not signed in"
+// (Session.MemberModeNoCredential, 0.7.5 field report finding 3).
+//
+// It is published as `MemberMode && MemberModeNoCredential`, so it implies
+// MemberModeFromContext and no caller has to read both.
+//
+// Like MemberModeFromContext it authorizes nothing and clamps nothing: the
+// effective role is already member, the principal is still the admin's own sub,
+// and the ONE thing this predicate moves is whether a PER-USER model-credential
+// read answers "absent" (internal/api's previewHidesOwnCredential). Everything
+// that already fails closed on an absent credential — the create-time mechanism
+// gate, dispatch, /setup/status's probe — then reaches the not-signed-in state
+// with no second rule of its own.
+func MemberPreviewNoCredential(ctx context.Context) bool {
+	m, _ := ctx.Value(memberPreviewNoCredCtxKey{}).(bool)
+	return m
+}
+
 // contextWithPrincipal stores the verified session's sub, email, EFFECTIVE role,
 // and group snapshot (with its truncation bit) on the context (read back via
 // PrincipalFromContext / EmailFromContext / RoleFromContext /
@@ -170,6 +189,11 @@ func contextWithPrincipal(ctx context.Context, sess Session) context.Context {
 	}
 	ctx = context.WithValue(ctx, roleCtxKey{}, role)
 	ctx = context.WithValue(ctx, memberModeCtxKey{}, sess.MemberMode)
+	// The preview posture, ANDed with the mode rather than copied: a cookie
+	// hand-built with "mmnc" and no "mm" is inert, so the bit is never a
+	// primitive of its own. sess.Sub above is untouched by both — clamping
+	// identity is the one thing this mode does not do.
+	ctx = context.WithValue(ctx, memberPreviewNoCredCtxKey{}, sess.MemberMode && sess.MemberModeNoCredential)
 	return context.WithValue(ctx, expiryCtxKey{}, sess.Expiry)
 }
 
@@ -200,6 +224,10 @@ type groupsTruncatedCtxKey struct{}
 // memberModeCtxKey is the context key for the session's "view as member" flag.
 // Unexported: use MemberModeFromContext.
 type memberModeCtxKey struct{}
+
+// memberPreviewNoCredCtxKey is the context key for the no-credential posture of
+// that flag. Unexported: use MemberPreviewNoCredential.
+type memberPreviewNoCredCtxKey struct{}
 
 // expiryCtxKey is the context key for the session's expiry.
 // Unexported: use ExpiryFromContext.

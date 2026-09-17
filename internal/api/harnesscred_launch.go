@@ -101,6 +101,19 @@ func (s *Server) handleHarnessLogin(w http.ResponseWriter, r *http.Request) {
 	if !allowed {
 		return
 	}
+	// AFTER the authorization, never before: inside the no-credential member
+	// preview an admin is meant to meet what a real member meets, and on a
+	// `shared` deployment that is authorizeHarnessLogin's own
+	// harness_login_not_per_user 403. Refusing first would replace the member's
+	// answer with this one and hide the very state the preview exists to show.
+	//
+	// A capture made here would land on the ADMIN'S OWN namespace — the preview
+	// hides their credential, it does not hand them a second identity — so this
+	// is the one door the preview has to close rather than let fail closed.
+	if previewHidesOwnCredential(r.Context()) {
+		writeError(w, http.StatusConflict, memberPreviewSignInRefusal)
+		return
+	}
 	// AWS: `aws sso login` cannot run at all without an sso_start_url + sso_region
 	// in the sandbox's ~/.aws/config. The region is boot config; the start URL is
 	// the request's ONLY in legacy mode, where the operator is the sole caller and

@@ -16,6 +16,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"slices"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -40,13 +44,14 @@ func memberModeSession() writoidc.Session {
 }
 
 // setMemberMode drives (*Authenticator).SetMemberMode over a request carrying
-// `in` and returns the cookie it wrote.
-func setMemberMode(t *testing.T, a *writoidc.Authenticator, in *http.Cookie, on bool) *http.Cookie {
+// `in` and returns the cookie it wrote. noCredential is variadic so every case
+// written before the 0.7.5 posture existed still reads as "the plain mode".
+func setMemberMode(t *testing.T, a *writoidc.Authenticator, in *http.Cookie, on bool, noCredential ...bool) *http.Cookie {
 	t.Helper()
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/me/member-mode", nil)
 	r.AddCookie(in)
 	w := httptest.NewRecorder()
-	stamped, err := a.SetMemberMode(w, r, on)
+	stamped, err := a.SetMemberMode(w, r, on, len(noCredential) > 0 && noCredential[0])
 	if err != nil {
 		t.Fatalf("SetMemberMode(%v): %v", on, err)
 	}
@@ -261,7 +266,7 @@ func TestMemberMode_RealMemberTurningItOnWritesNoCookie(t *testing.T) {
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/me/member-mode", nil)
 	r.AddCookie(in)
 	w := httptest.NewRecorder()
-	stamped, err := a.SetMemberMode(w, r, true)
+	stamped, err := a.SetMemberMode(w, r, true, false)
 	if err != nil {
 		t.Fatalf("SetMemberMode: %v", err)
 	}
@@ -282,10 +287,131 @@ func TestMemberMode_RealMemberTurningItOnWritesNoCookie(t *testing.T) {
 	w = httptest.NewRecorder()
 	r = httptest.NewRequest(http.MethodPost, "/api/v1/me/member-mode", nil)
 	r.AddCookie(in)
-	if _, err := a.SetMemberMode(w, r, false); err != nil {
+	if _, err := a.SetMemberMode(w, r, false, false); err != nil {
 		t.Fatalf("SetMemberMode(false): %v", err)
 	}
 	if got := w.Result().Cookies(); len(got) != 1 {
 		t.Fatalf("turning it OFF wrote %d cookies, want 1", len(got))
+	}
+}
+
+// previewOf drives a cookie through Middleware and reports the NO-CREDENTIAL
+// posture the context published (MemberPreviewNoCredential) beside the plain
+// mode bit — the only reading of the pair anything downstream makes.
+func previewOf(t *testing.T, a *writoidc.Authenticator, c *http.Cookie) (memberMode, preview bool) {
+	t.Helper()
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		memberMode = writoidc.MemberModeFromContext(r.Context())
+		preview = writoidc.MemberPreviewNoCredential(r.Context())
+		w.WriteHeader(http.StatusOK)
+	})
+	r := httptest.NewRequest(http.MethodGet, "/", nil)
+	r.AddCookie(c)
+	a.Middleware(next).ServeHTTP(httptest.NewRecorder(), r)
+	return memberMode, preview
+}
+
+// TestMemberMode_NoCredentialNeverSurvivesExit: the preview posture (0.7.5,
+// finding 3) is stored as `on && noCredential`, so turning the mode OFF clears
+// it BY CONSTRUCTION rather than by a second statement somebody could delete.
+// An admin who exits and re-enters the plain mode must read their own
+// credential again — the alternative is an admin silently stuck with model
+// access hidden and no control that says so.
+//
+// THE RE-ISSUE ARM. The one thing that could resurrect a cleared bit is a path
+// that decodes a whole Session and re-signs it. There are exactly two
+// encodeSession callers in this package — SetMemberMode (driven below in both
+// directions) and the OIDC callback, which builds a FRESH Session literal from
+// the id_token and therefore cannot carry a stale preview bit across a re-login.
+// There is no sliding-window/renewal re-issue at all: Expiry and IssuedAt are
+// copied verbatim, never extended. The scan below is what keeps that true — a
+// future re-issue path lands here and has to decide, rather than inheriting the
+// bit silently.
+func TestMemberMode_NoCredentialNeverSurvivesExit(t *testing.T) {
+	a := &writoidc.Authenticator{}
+	in, err := writoidc.EncodeSessionForTest(a, memberModeSession())
+	if err != nil {
+		t.Fatalf("EncodeSessionForTest: %v", err)
+	}
+
+	on := setMemberMode(t, a, in, true, true)
+	if stamped := decodePayload(t, on); !stamped.MemberMode || !stamped.MemberModeNoCredential {
+		t.Fatalf("entering the preview stamped mm=%v mmnc=%v, want true/true", stamped.MemberMode, stamped.MemberModeNoCredential)
+	}
+	if mm, preview := previewOf(t, a, on); !mm || !preview {
+		t.Fatalf("inside the preview: member_mode=%v preview=%v, want true/true", mm, preview)
+	}
+
+	// enabled:false WITH no_credential:true — the body a console bug, a stale
+	// tab or a hand-rolled curl can send. `on && noCredential` is what makes it
+	// an exit rather than a session that is out of the mode and still hiding its
+	// own credential, with no banner left on screen to say so.
+	off := setMemberMode(t, a, on, false, true)
+	if stamped := decodePayload(t, off); stamped.MemberMode || stamped.MemberModeNoCredential {
+		t.Fatalf("after enabled:false the cookie still carries mm=%v mmnc=%v", stamped.MemberMode, stamped.MemberModeNoCredential)
+	}
+	if mm, preview := previewOf(t, a, off); mm || preview {
+		t.Fatalf("after the exit: member_mode=%v preview=%v, want false/false", mm, preview)
+	}
+
+	// Re-entering the PLAIN mode must not resurrect the posture: the admin asked
+	// to view as a member, not as one who cannot see their own credential.
+	again := setMemberMode(t, a, off, true)
+	if stamped := decodePayload(t, again); !stamped.MemberMode || stamped.MemberModeNoCredential {
+		t.Fatalf("re-entering the plain mode stamped mm=%v mmnc=%v, want true/false", stamped.MemberMode, stamped.MemberModeNoCredential)
+	}
+	if _, preview := previewOf(t, a, again); preview {
+		t.Error("the plain mode published the no-credential posture")
+	}
+
+	// THE SCAN: exactly two re-sign sites, both accounted for above.
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read package dir: %v", err)
+	}
+	var callers []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") ||
+			strings.HasSuffix(e.Name(), "_test.go") || e.Name() == "session_codec.go" {
+			continue
+		}
+		src, rerr := os.ReadFile(e.Name())
+		if rerr != nil {
+			t.Fatalf("read %s: %v", e.Name(), rerr)
+		}
+		if strings.Contains(string(src), "a.encodeSession(") {
+			callers = append(callers, e.Name())
+		}
+	}
+	sort.Strings(callers)
+	want := []string{"membermode.go", "oidc_callback.go"}
+	if !slices.Equal(callers, want) {
+		t.Errorf("session re-sign sites = %v, want %v — a NEW one must decide what it does with "+
+			"MemberModeNoCredential (a re-issue that copies a whole decoded Session would carry the "+
+			"preview across an exit); add it here once it has", callers, want)
+	}
+}
+
+// TestMemberMode_NoCredentialWithoutTheModeIsInert: a hand-built cookie
+// carrying "mmnc" with no "mm" publishes NOTHING. The posture is not a
+// primitive of its own — contextWithPrincipal ANDs it with the mode — so
+// there is no cookie shape that hides a credential from a session that is not
+// in member mode at all.
+func TestMemberMode_NoCredentialWithoutTheModeIsInert(t *testing.T) {
+	a := &writoidc.Authenticator{}
+	payload := []byte(`{"v":` + strconv.Itoa(writoidc.SessionCodecVersion) +
+		`,"sub":"sub-admin-1","email":"admin@corp.example","role":"admin","mmnc":true,` +
+		`"expiry":"` + time.Now().UTC().Add(time.Hour).Format(time.RFC3339) + `","groups":[]}`)
+	c := writoidc.EncodeRawSessionForTest(a, payload)
+
+	sub, role, mm, authed := principalOf(t, a, c)
+	if !authed || sub != "sub-admin-1" || role != writoidc.RoleAdmin {
+		t.Fatalf("authed=%v sub=%q role=%q, want true/sub-admin-1/admin — an unknown-to-0.7.4 key must not break the session", authed, sub, role)
+	}
+	if mm {
+		t.Error("MemberModeFromContext = true for a cookie with no mm key")
+	}
+	if _, preview := previewOf(t, a, c); preview {
+		t.Error("MemberPreviewNoCredential = true for a cookie carrying mmnc with no mm — the posture is not a primitive of its own")
 	}
 }

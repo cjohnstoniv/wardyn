@@ -66,7 +66,17 @@ import "net/http"
 // Note the deliberate asymmetry with clearCookie's callers: this never CLEARS
 // the session. Toggling off has to leave the human signed in — it is the exit
 // from the mode, and an exit that signed you out would be a trap.
-func (a *Authenticator) SetMemberMode(w http.ResponseWriter, r *http.Request, on bool) (stampedRole string, err error) {
+//
+// noCredential (0.7.5) selects the SECOND posture, "view as a new member who has
+// not signed in" — see Session.MemberModeNoCredential. It is stored as
+// `on && noCredential` rather than verbatim, which is what makes turning the
+// mode OFF clear it by construction: there is no path that leaves the preview
+// bit set on a session whose mode bit is not, so nothing downstream has to
+// defend against that pair. It rides BELOW the real-member early return above
+// for the same reason the mode bit does — a real member has no credential of
+// their own to hide from themselves, and the doors that key on the preview
+// would refuse them their own sign-in.
+func (a *Authenticator) SetMemberMode(w http.ResponseWriter, r *http.Request, on, noCredential bool) (stampedRole string, err error) {
 	sess, err := a.decodeSession(r)
 	if err != nil {
 		return "", err
@@ -75,6 +85,7 @@ func (a *Authenticator) SetMemberMode(w http.ResponseWriter, r *http.Request, on
 		return sess.Role, nil
 	}
 	sess.MemberMode = on
+	sess.MemberModeNoCredential = on && noCredential
 	cookie, err := a.encodeSession(sess)
 	if err != nil {
 		return "", err
