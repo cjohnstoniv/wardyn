@@ -101,7 +101,12 @@ AGENT_IMAGE="wardyn/agent-claude-code:local"
 AWS_SSO_IMAGE="wardyn/agent-aws-sso:local"
 FAKE_IMAGE="wardyn/awsssofake:local"
 NAMESPACE="wardyn"
+# Where run pods land — must agree with deploy/kind/quickstart.sh (k8s.runsNamespace).
+RUNS_NAMESPACE="wardyn-runs"
 RELEASE="wardyn"
+# The org default disk budget step 4b declares (MiB). Any positive size puts the
+# walk's runs on the scratch volumes; 2 GiB is comfortably more than either writes.
+DISK_MIB=2048
 HTTP_PORT="${WARDYN_QUICKSTART_HTTP_PORT:-8280}"
 BASE_URL="http://localhost:${HTTP_PORT}"
 
@@ -450,16 +455,34 @@ code="$(curl -s -o "${EVIDENCE_DIR}/site-config-put.json" -w '%{http_code}' \
   -d "${merged}" "${BASE_URL}/api/v1/site-config")"
 [[ "${code}" == "200" ]] || { cat "${EVIDENCE_DIR}/site-config-put.json" >&2; die "PUT /site-config answered ${code}"; }
 
+# ── 4b. AN ORG DISK BUDGET, so the walk's runs land on the scratch volumes ────
+# Since 0.7.5 a Kubernetes run WITH a disk budget gets its /tmp and
+# /home/agent/work as two sized emptyDirs (ephemeralScratchVolumes); a run
+# without one keeps the volume-less pod. The conformance suite proves the pod
+# SHAPE with a stub agent — only a real image booting its real agent-run on the
+# emptyDir-backed workdir proves the shape is one the product can live on. So
+# the walk declares what a real estate declares, and both the sign-in sandbox
+# and the claude-code run below inherit it at dispatch (default_disk_mib).
+# A bare PUT, not GET-then-merge: step 3 reset this install, so there is no
+# block to clobber — and a stale one surviving would be the reset failing.
+step "declaring an org default disk budget (storage.ephemeral.default_disk_mib=${DISK_MIB})"
+code="$(curl -s -o "${EVIDENCE_DIR}/workspace-providers-put.json" -w '%{http_code}' \
+  -X PUT -H "Authorization: Bearer ${ADMIN_TOKEN}" -H 'Content-Type: application/json' \
+  -d "{\"storage\":{\"ephemeral\":{\"default_disk_mib\":${DISK_MIB}}}}" "${BASE_URL}/api/v1/workspace-providers")"
+[[ "${code}" == "200" ]] || { cat "${EVIDENCE_DIR}/workspace-providers-put.json" >&2; die "PUT /workspace-providers answered ${code}"; }
+
 # ── 5. the walk ─────────────────────────────────────────────────────────────
 # run-ui-e2e.sh in LIVE mode: it skips the hermetic backend entirely and points
 # the `live` Playwright project at this cluster. One spec file, as always.
 step "opening the read-only port-forward to the fake's /_seen (127.0.0.1:${SEEN_PORT})"
 seen_pf_pid=""
+pod_watch_pid=""
 # ALSO the taint: this is the script's only EXIT trap, so the cold-start case's
 # node taint has to come off here too (see untaint_coldpull above for the failure
 # a leftover one causes on the NEXT walk).
 cleanup_walk() {
   [[ -n "${seen_pf_pid}" ]] && kill "${seen_pf_pid}" 2>/dev/null
+  [[ -n "${pod_watch_pid}" ]] && kill "${pod_watch_pid}" 2>/dev/null
   untaint_coldpull
   return 0
 }
@@ -473,6 +496,14 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 [[ -n "${seen_ok}" ]] || die "the fake's /_seen never answered on ${SEEN_URL} (port-forward failed; is ${SEEN_PORT} taken?)"
+
+# WATCH the run pods' volumes for the whole walk, because a run pod does not
+# outlive its run for long and "was it there" asked afterwards is a race. -w
+# appends a row per pod event; the assertion below reads the FILE.
+kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" get pods -w \
+  -o custom-columns='NAME:.metadata.name,VOLUMES:.spec.volumes[*].name' \
+  >"${EVIDENCE_DIR}/run-pod-volumes.txt" 2>/dev/null &
+pod_watch_pid=$!
 
 step "running the walk (ui/e2e/live/sso-member.spec.ts + sso-member-recovery.spec.ts)"
 export WARDYN_LIVE_SEEN_URL="${SEEN_URL}"
@@ -509,4 +540,10 @@ if [[ "${walk_rc}" -ne 0 ]]; then
   echo "kind-sso-walk: FAILED (see ${EVIDENCE_DIR}/walk.log)" >&2
   exit 1
 fi
+# The walk being green ALREADY says a real agent-run booted and spent a
+# credential; this says it did so ON the scratch volumes. Without it a dispatch
+# that silently stopped filling disk_mib would leave the walk green on the old
+# volume-less pod, proving nothing about step 4b.
+grep -Eq '^wardyn-agent-.*wardyn-tmp.*wardyn-work|^wardyn-agent-.*wardyn-work.*wardyn-tmp' "${EVIDENCE_DIR}/run-pod-volumes.txt" \
+  || die "no run pod carried the wardyn-tmp + wardyn-work scratch volumes (see ${EVIDENCE_DIR}/run-pod-volumes.txt) — the org disk budget did not reach dispatch"
 echo "kind-sso-walk: PASS — evidence in ${EVIDENCE_DIR}"
