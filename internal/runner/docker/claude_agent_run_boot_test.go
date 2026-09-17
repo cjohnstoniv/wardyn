@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -59,24 +61,44 @@ func ccCount(s, want string) int {
 
 // ── the agent's own boot traffic ─────────────────────────────────────────────
 
-// TestClaudeImage_DisablesAutoUpdater — finding 5: on a stock install the FIRST
-// Claude Code run anyone launches stops on a first-use approval for
-// downloads.claude.ai, before they have asked the agent to do anything. The CLI
-// checks that CDN for a newer release ON STARTUP, and that check does not care
-// how it was installed — this image installs from npm at a pinned version, so
-// the BUILD is clean and the RUN still dials it.
+// ccSelfFetchVars are the three things claude-code fetches on its OWN behalf,
+// each of which parked a first-use approval before the operator had asked the
+// agent for anything. Named individually because the obvious attribution was
+// wrong: it is the FIRST of these — not the updater — that removes the
+// downloads.claude.ai + github.com pair the field report named.
 //
-// Two disjoint paths, so two assertions: the image ENV covers an attach shell
-// where a human types `claude` and agent-run never ran; the library export
-// covers a BYOI/corp image that COPYs agent-run but not our Dockerfile. `:-` in
-// the library so an operator who deliberately wants the updater can still say so
-// on the run — asserted, because a hard `=1` would be a control the operator
-// cannot turn off.
+//   - CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL: on first REPL start
+//     the CLI auto-installs the official PLUGIN MARKETPLACE from
+//     downloads.claude.ai, git-falling-back to github.com. Beyond the approvals,
+//     a governed version-pinned image must not install third-party code at start.
+//   - DISABLE_AUTOUPDATER: on this image's npm install the update check dials
+//     registry.npmjs.org, which the default policy already allows — so it never
+//     parked. Off anyway: a pinned sandbox must not upgrade itself mid-run.
+//   - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: the raw.githubusercontent.com
+//     changelog fetch, plus telemetry / error intake.
+var ccSelfFetchVars = []string{
+	"CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL",
+	"DISABLE_AUTOUPDATER",
+	"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+}
+
+// TestClaudeImage_DisablesAutoUpdater — finding 5: on a stock install the FIRST
+// Claude Code run anyone launches parks first-use approvals on hosts the product
+// reaches for itself, before anyone has asked the agent to do anything.
+//
+// Two paths, and NEITHER substitutes for the other, so both are asserted. The
+// image ENV is the one that covers the DEFAULT interactive run: with no seed,
+// `claude` is started by attach-bashrc.sh in a fresh attach exec that is not a
+// descendant of agent-run, so the library export cannot reach it. The library
+// export covers task mode and the boot pane — what a BYOI/corp image gets when
+// it COPYs agent-run but not our Dockerfile. `:-` in the library so an operator
+// who deliberately wants any of them can still say so on the run — asserted,
+// because a hard `=1` would be a control the operator cannot turn off.
 func TestClaudeImage_DisablesAutoUpdater(t *testing.T) {
 	dockerfile := ccRead(t, ccAbs(t, ccDockerfilePath))
-	for _, want := range []string{"DISABLE_AUTOUPDATER=1", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1"} {
-		if !strings.Contains(dockerfile, want) {
-			t.Errorf("claude-code Dockerfile never sets %s — a first run parks a first-use approval on the agent's own CDN", want)
+	for _, v := range ccSelfFetchVars {
+		if !strings.Contains(dockerfile, v+"=1") {
+			t.Errorf("claude-code Dockerfile never sets %s=1 — a first run parks a first-use approval on a host the product chose, not the operator", v)
 		}
 	}
 
@@ -86,10 +108,12 @@ func TestClaudeImage_DisablesAutoUpdater(t *testing.T) {
 	// never call.
 	run := func(t *testing.T, pre ...string) map[string]string {
 		t.Helper()
+		var prints []string
+		for _, v := range ccSelfFetchVars {
+			prints = append(prints, `printf '`+v+`=%s\n' "${`+v+`:-<unset>}"`)
+		}
 		cmd := exec.Command("bash", "-c",
-			`set -euo pipefail; source "$1"; `+
-				`printf 'DISABLE_AUTOUPDATER=%s\n' "${DISABLE_AUTOUPDATER:-<unset>}"; `+
-				`printf 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=%s\n' "${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-<unset>}"`,
+			`set -euo pipefail; source "$1"; `+strings.Join(prints, "; "),
 			"agent-run-lib-test", lib,
 		)
 		cmd.Env = append(os.Environ(), pre...)
@@ -105,29 +129,35 @@ func TestClaudeImage_DisablesAutoUpdater(t *testing.T) {
 		return got
 	}
 
+	var unset, zero []string
+	for _, v := range ccSelfFetchVars {
+		unset = append(unset, v+"=")
+		zero = append(zero, v+"=0")
+	}
+
 	t.Run("defaults to off", func(t *testing.T) {
-		got := run(t, "DISABLE_AUTOUPDATER=", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=")
-		for k, want := range map[string]string{
-			"DISABLE_AUTOUPDATER":                      "1",
-			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-		} {
-			if got[k] != want {
-				t.Errorf("after sourcing agent-run-lib.sh %s = %q, want %q", k, got[k], want)
+		got := run(t, unset...)
+		for _, v := range ccSelfFetchVars {
+			if got[v] != "1" {
+				t.Errorf("after sourcing agent-run-lib.sh %s = %q, want %q", v, got[v], "1")
 			}
 		}
 	})
 
 	t.Run("operator opt-out survives", func(t *testing.T) {
-		got := run(t, "DISABLE_AUTOUPDATER=0", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=0")
-		for k := range got {
-			if got[k] != "0" {
-				t.Errorf("%s = %q, want the operator's own 0 preserved (the export must use `:-`)", k, got[k])
+		got := run(t, zero...)
+		for _, v := range ccSelfFetchVars {
+			if got[v] != "0" {
+				t.Errorf("%s = %q, want the operator's own 0 preserved (the export must use `:-`)", v, got[v])
 			}
 		}
 	})
 }
 
 // ── the onboarding seed ──────────────────────────────────────────────────────
+
+// ccSeededFile is the WHOLE file the image may write, byte for byte.
+const ccSeededFile = "{\"hasCompletedOnboarding\":true}\n"
 
 // ccSeed sources the real library and calls seed_claude_onboarding with the
 // given env, returning the scratch $HOME it ran against.
@@ -243,11 +273,11 @@ func TestSeedClaudeOnboarding_NeverSeedsASecurityKey(t *testing.T) {
 		t.Run(m.name, func(t *testing.T) {
 			home := ccSeed(t, m.env...)
 			for _, rel := range []string{".claude.json", ".claude/.claude.json"} {
-				got := ccRead(t, filepath.Join(home, rel))
-				for _, forbidden := range []string{"hasTrustDialogAccepted", "bypassPermissionsModeAccepted"} {
-					if strings.Contains(got, forbidden) {
-						t.Errorf("~/%s seeds %s — Wardyn pre-answers product onboarding, never a security prompt\nfile: %s", rel, forbidden, got)
-					}
+				// EQUALITY, not a deny-list of two names. A deny-list passes the
+				// next key somebody adds — `theme`, another `projects.*` entry —
+				// which is exactly the drift this pin exists to stop.
+				if got := ccRead(t, filepath.Join(home, rel)); got != ccSeededFile {
+					t.Errorf("~/%s = %q, want EXACTLY %q — Wardyn pre-answers product onboarding and nothing else, least of all a security prompt", rel, got, ccSeededFile)
 				}
 			}
 		})
@@ -508,6 +538,10 @@ func TestClaudeAgentRun_BootSeedWaitsForPrep(t *testing.T) {
 		"CLAUDE_CODE_USE_BEDROCK=1",
 		"WARDYN_RECORDING=",
 		"WARDYN_GIT_HELPER_SECRET=",
+		// The pane waits while prep is owed AND the idle process is alive. Point
+		// that at this test process: alive, and the same uid, which `kill -0`
+		// needs. In the sandbox it is pid 1 — agent-run --idle itself.
+		"WARDYN_IDLE_PID="+strconv.Itoa(os.Getpid()),
 	)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start agent-run --boot-seed: %v", err)
@@ -538,5 +572,105 @@ func TestClaudeAgentRun_BootSeedWaitsForPrep(t *testing.T) {
 	// seeded agent's brokered git silently stops working.
 	if !strings.Contains(got, "secret="+helperSecret) {
 		t.Errorf("the boot pane did not recover WARDYN_GIT_HELPER_SECRET from prep's 0400 file — a seeded agent's brokered git would be refused a token\nclaude log:\n%s", got)
+	}
+}
+
+// ccShellConst reads a single-quoted shell constant out of the real agent-run,
+// so every assertion below goes through the ONE definition rather than a second
+// copy of the prose.
+func ccShellConst(t *testing.T, name string) string {
+	t.Helper()
+	re := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(name) + `='([^']*)'`)
+	m := re.FindStringSubmatch(ccRead(t, ccAbs(t, ccAgentRunPath)))
+	if m == nil {
+		t.Fatalf("claude-code agent-run defines no %s — the boot pane has no %s to print", name, name)
+	}
+	return m[1]
+}
+
+// TestClaudeAgentRun_BootSeedWaitIsBoundedByPrepNotAClock — the boot pane waits
+// on whether the prep is STILL RUNNING, never on a clock.
+//
+// Before this pane existed the seed simply started after prep, however long the
+// clone took. A fixed cap would silently reintroduce the very bug the wait
+// prevents: on a big repo the pane would hit the cap and start `claude "<seed>"`
+// in the ~/work fallback against a half-cloned tree, with the operator's prompt
+// already submitted and no way to tell from inside the pane. So the only end of
+// the wait is prep-done appearing — or the process that owed it dying, which on
+// both runners takes the container with it.
+//
+// It also pins the line a human sees while waiting (F6): the pane is created
+// BEFORE the prep, so an operator attaching during an 18s clone joins it, and a
+// blank pane reads as a broken run.
+func TestClaudeAgentRun_BootSeedWaitIsBoundedByPrepNotAClock(t *testing.T) {
+	root := t.TempDir()
+	home, binDir := filepath.Join(root, "home"), filepath.Join(root, "bin")
+	for _, d := range []string{filepath.Join(home, ".wardyn"), binDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte("#!/bin/sh\necho STARTED >> \"$HOME/claude.log\"\n"), 0o700); err != nil { //nolint:gosec // test fixture
+		t.Fatalf("write fake claude: %v", err)
+	}
+
+	// Stand-in for `agent-run --idle`: alive, owing us a prep-done it never writes.
+	idle := exec.Command("sleep", "120")
+	if err := idle.Start(); err != nil {
+		t.Fatalf("start fake idle process: %v", err)
+	}
+	defer func() { _ = idle.Process.Kill() }()
+
+	outPath := filepath.Join(root, "pane.out")
+	f, err := os.Create(outPath) //nolint:gosec // test-owned temp path
+	if err != nil {
+		t.Fatalf("create pane out: %v", err)
+	}
+	defer f.Close() //nolint:errcheck // test fixture
+
+	// The cap that used to live here was 120s; `timeout 15s` is far past it, so a
+	// clock-bounded wait would have started the agent inside this window.
+	cmd := exec.Command("timeout", "15s", "bash", ccRunnableAgentRun(t), "--boot-seed")
+	cmd.Env = append(os.Environ(),
+		"HOME="+home,
+		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"WARDYN_INTERACTIVE_START=agent",
+		ccSeedEnv,
+		"WARDYN_IDLE_PID="+strconv.Itoa(idle.Process.Pid),
+		"WARDYN_RECORDING=",
+	)
+	cmd.Stdout, cmd.Stderr = f, f
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start agent-run --boot-seed: %v", err)
+	}
+
+	preparing := ccShellConst(t, "BOOT_SEED_PREPARING")
+	var sawLine bool
+	for i := 0; i < 40 && !sawLine; i++ {
+		time.Sleep(100 * time.Millisecond)
+		sawLine = strings.Contains(ccRead(t, outPath), preparing)
+	}
+	if !sawLine {
+		t.Errorf("the boot pane printed nothing before waiting on prep; a human attaching during the clone joins a blank pane\noutput:\n%s", ccRead(t, outPath))
+	}
+
+	// Nothing may start while prep is still owed, whatever the clock says.
+	time.Sleep(4 * time.Second)
+	if _, err := os.Stat(filepath.Join(home, "claude.log")); err == nil {
+		t.Fatalf("the boot pane started the agent while prep was still running — a big clone would be half-finished\noutput:\n%s", ccRead(t, outPath))
+	}
+
+	// The prep dies without ever writing prep-done: the ONLY other honest end.
+	if err := idle.Process.Kill(); err != nil {
+		t.Fatalf("kill fake idle process: %v", err)
+	}
+	_ = idle.Wait() // reap it — a zombie still answers `kill -0`
+	_ = cmd.Wait()
+	got := ccRead(t, outPath)
+	if !strings.Contains(got, ccShellConst(t, "BOOT_SEED_PREP_GONE")) {
+		t.Errorf("the pane gave up on prep without saying so\noutput:\n%s", got)
+	}
+	if !strings.Contains(ccRead(t, filepath.Join(home, "claude.log")), "STARTED") {
+		t.Errorf("the pane never started the agent after prep ended — an interactive run must still come up usable\noutput:\n%s", got)
 	}
 }

@@ -294,22 +294,42 @@ RUN git config --system credential.helper \
 # fallback only for api-key mode.
 ENV ANTHROPIC_BASE_URL=http://wardyn-proxy:3128/wardyn/llm/anthropic
 
-# The agent's own updater and non-essential traffic, OFF for every process in
-# this image. The startup version check is INDEPENDENT of install method: this
-# image installs claude from npm at a pinned CLAUDE_CODE_VERSION, so the BUILD
-# never touches downloads.claude.ai (the native arm above is the only place it
-# appears) and the CLI still dials it on the first run inside the sandbox —
-# which, against the shipped default policy, parks a first-use approval on
-# Anthropic's own CDN before the operator has asked the agent for anything.
-# Delete the traffic rather than widen the policy: a version-pinned image must
-# not self-update. `claude update` still works when a human asks for it.
+# Everything the CLI reaches for on ITS OWN behalf, OFF for every process in this
+# image. Against the shipped default policy each of these parks a first-use
+# approval before the operator has asked the agent for anything — a new member's
+# first impression of the governance model being a prompt about a host they did
+# not choose. Delete the traffic rather than widen the policy.
 #
-# agent-run-lib.sh exports the same two vars with `:-` defaults, and that is not
-# a duplicate — the two paths are disjoint. This ENV covers an attach shell where
-# a human types `claude` and agent-run never ran; the library export covers a
-# BYOI/corp image that COPYs agent-run but not this Dockerfile.
+# CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1 is the one that removes
+# the reported pair. On first REPL start the CLI auto-installs the OFFICIAL
+# PLUGIN MARKETPLACE from
+# https://downloads.claude.ai/claude-code-releases/plugins/claude-plugins-official,
+# falling back to a git clone from github.com — measured as exactly the two hosts
+# the field report saw park. A governed, version-pinned image must not fetch and
+# install a plugin marketplace at start: that is third-party code entering the
+# sandbox outside the artifact the operator scanned and pinned, which is a
+# supply-chain decision, not a convenience.
+#
+# DISABLE_AUTOUPDATER=1 is NOT what removes downloads.claude.ai. On this image's
+# npm install (CLAUDE_INSTALL=npm, pinned CLAUDE_CODE_VERSION) the updater's
+# startup check dials registry.npmjs.org — twice — which the default policy
+# already allows, so it never parked. It is disabled anyway because a
+# version-pinned image must not self-update mid-run; `claude update` still works
+# when a human asks for it. CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 removes
+# the changelog fetch from raw.githubusercontent.com and the telemetry/error
+# intake. All three measured host-by-host through a real proxy — see
+# local/v075/evidence/agent-boot-egress/.
+#
+# agent-run-lib.sh exports the same three vars with `:-` defaults, and that is
+# NOT a duplicate of this ENV — nor a substitute for it. On the DEFAULT
+# interactive run there is no seed, so `claude` is started by attach-bashrc.sh in
+# a fresh attach exec that is not a descendant of agent-run: the library export
+# cannot reach it and only this ENV does. The library export covers task mode and
+# the boot pane — i.e. a BYOI/corp image that COPYs agent-run but not this
+# Dockerfile keeps those two paths and MUST set these itself for interactive runs.
 ENV DISABLE_AUTOUPDATER=1 \
-    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 \
+    CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1
 
 WORKDIR /home/agent/work
 

@@ -10,32 +10,45 @@
 #
 # Requires `set -euo pipefail` and bash (matches agent-run itself).
 
-# ── Agent-harness self-update / telemetry OFF ────────────────────────────────
-# Claude Code checks downloads.claude.ai for a newer release ON STARTUP, and that
-# check is INDEPENDENT of how it was installed: our image installs it from npm at
-# a pinned version (CLAUDE_INSTALL=npm, claude-code/Dockerfile), so the build
-# never touches that CDN — and the CLI still dials it on the first run inside the
-# sandbox. Against the shipped default policy (examples/policies/default.json,
-# which does not list it) that parks a first_use_approval on Anthropic's own CDN
-# before the operator has asked the agent to do anything: the FIRST thing a new
-# member ever sees of the governance model is a prompt about a host they did not
-# choose. The fix is to delete the traffic, not to widen the policy — a pinned
-# image must never self-update anyway (CLAUDE_CODE_VERSION is the contract, and a
-# sandbox that upgrades itself mid-run is not the artifact that was scanned).
+# ── What the agent CLI fetches on its OWN behalf, OFF ────────────────────────
+# Each of these parks a first_use_approval against the shipped default policy
+# (examples/policies/default.json) before the operator has asked the agent to do
+# anything — the FIRST thing a new member sees of the governance model being a
+# prompt about a host they did not choose. Delete the traffic, don't widen the
+# policy. Measured host-by-host through a real proxy (see the lane evidence);
+# each var below names what it actually removes, because the obvious guess was
+# wrong once already.
 #
-# CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 drops the same startup's telemetry /
-# error-intake and changelog fetches, which are the other non-model hosts a boot
-# reaches for.
+# CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL — the one that removes the
+# reported pair. On first REPL start the CLI auto-installs the official PLUGIN
+# MARKETPLACE from downloads.claude.ai, with a git fallback to github.com. Beyond
+# the approvals: a governed, version-pinned image must not fetch and install a
+# plugin marketplace at start — that is third-party code entering the sandbox
+# outside the artifact the operator pinned and scanned.
 #
-# Set HERE as well as in the image Dockerfile because the two paths are disjoint:
-# the Dockerfile ENV covers an attach shell where a human types `claude` and
-# agent-run never ran, and this export covers a BYOI/corp image that COPYs
-# agent-run + this library but not our Dockerfile. `:-` in both, so an operator
-# who deliberately wants the updater can still set the var to 0 on the run.
-# Exported at SOURCE time, not from a prep function, so `--selftest` (which
-# returns long before any prep) reports the same env a real run gets.
+# DISABLE_AUTOUPDATER — NOT what removes downloads.claude.ai. On an npm install
+# (this image's default, at a pinned CLAUDE_CODE_VERSION) the updater's startup
+# check dials registry.npmjs.org, which the default policy already allows. Off
+# anyway: a version-pinned sandbox that upgrades itself mid-run is not the
+# artifact that was scanned. A human's `claude update` still works.
+#
+# CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC — the changelog fetch from
+# raw.githubusercontent.com, plus telemetry / error intake.
+#
+# Set HERE as well as in the image Dockerfile, and NEITHER place is redundant nor
+# a substitute for the other. This export reaches only agent-run's own process
+# tree: task mode, and the boot pane of a SEEDED interactive run. The DEFAULT
+# interactive run carries no seed, so `claude` is started by attach-bashrc.sh in
+# a fresh attach exec that is not a descendant of agent-run — nothing here can
+# reach it, and only the image ENV does. A BYOI/corp image that COPYs agent-run
+# and this library but not our Dockerfile therefore gets the two paths above and
+# MUST set these itself for interactive runs. `:-` throughout, so an operator who
+# deliberately wants any of them can set it to 0 on the run. Exported at SOURCE
+# time, not from a prep function, so `--selftest` (which returns long before any
+# prep) reports the same env a real run gets.
 export DISABLE_AUTOUPDATER="${DISABLE_AUTOUPDATER:-1}"
 export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-1}"
+export CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL="${CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL:-1}"
 
 # ── TLS-MITM CA install ───────────────────────────────────────────────────────
 # When the run opts into intercept_tls, dispatch delivers the per-run CA PUBLIC

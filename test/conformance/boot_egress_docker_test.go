@@ -34,6 +34,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -58,6 +59,9 @@ const bootEgressModelHost = "bedrock-runtime.us-east-1.amazonaws.com"
 const (
 	bootEgressWantScreen = "Accessing workspace:"
 	bootEgressWantTrust  = "trust this folder"
+	// What the single Enter on that prompt must produce: the REPL, where the
+	// hosts this test exists to measure are actually fetched.
+	bootEgressWantREPL = "Amazon Bedrock"
 )
 
 // The screens the onboarding seed removes. Seeing either means the seed did not
@@ -74,19 +78,23 @@ const bootEgressProxyImage = "wardyn/wardyn-proxy:local"
 // Boots the claude-code image as a real INTERACTIVE run behind a real
 // wardyn-proxy carrying a model-host-only allowlist with
 // first_use_approval=deny_with_review, attaches the way the console does, and
-// asserts three things over the next 60s: the sandbox raised no first-use
-// approval, no host was denied, and the first screen is the workspace-trust
-// prompt (not the theme picker, not "Security notes").
+// walks the run the way a human does: the workspace-trust prompt (the one screen
+// a human is meant to answer, and NOT the theme picker or "Security notes"),
+// then the single Enter that prompt's default invites, then the REPL — asserting
+// throughout that no first-use approval was raised and no host denied. A third
+// arm runs the AUTONOMOUS `claude -p` shape, which meets no dialog at all.
 //
-// RED at d8f26511, measured rather than assumed: the boot raised ONE first-use
-// approval — `raw.githubusercontent.com`, the CLI's changelog fetch, which
-// CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 removes — and the first screen was
-// the theme picker. The reported `downloads.claude.ai` park did NOT reproduce
-// inside this window, which is itself worth knowing: the unseeded CLI stops on
-// its onboarding screens, so some of its startup fetches never happen until a
-// human has clicked through them. Seeding onboarding therefore has to be
-// measured TOGETHER with disabling the updater, not after it — which is what
-// this test does.
+// RED at d8f26511: the boot parks on `downloads.claude.ai` and `github.com` —
+// the field report's pair — and the first screen is the theme picker. Those two
+// are the CLI auto-installing the OFFICIAL PLUGIN MARKETPLACE on first REPL
+// start (GCS fetch, git fallback), NOT the updater: on this image's npm install
+// the update check dials registry.npmjs.org, which the default policy already
+// allows, so it never parked.
+//
+// Which is why this test presses Enter and keeps measuring. An earlier revision
+// stopped at the trust prompt and reported "zero approvals" while the product
+// was one keystroke away from dialling both — a measurement that agreed with a
+// wrong explanation because it never reached the code that fetches.
 //
 // The host list and the raw decision rows are logged on every run, pass or fail:
 // the measurement is the point, not just the verdict.
@@ -169,45 +177,99 @@ func TestBootEgress_NoFirstUseApproval(t *testing.T) {
 	}
 	defer sess.Close() //nolint:errcheck // detach only; the sandbox is torn down above
 
-	raw := bootEgressReadFor(sess, 60*time.Second)
-	screen := bootEgressPlain(raw)
-	t.Logf("first screen (%d raw bytes), rendered:\n%s", len(raw), screen)
+	// PHASE 1 — up to the workspace-trust prompt, the one screen a human is meant
+	// to answer.
+	tail := bootEgressWatch(sess)
+	screen := tail.waitFor(bootEgressWantTrust, 45*time.Second)
+	t.Logf("first screen, rendered:\n%s", screen)
+
+	claudeImage := strings.Contains(image, "claude")
+	if claudeImage {
+		if !strings.Contains(screen, bootEgressWantScreen) || !strings.Contains(screen, bootEgressWantTrust) {
+			t.Errorf("the first screen is not the workspace-trust prompt (%q + %q)\nscreen:\n%s",
+				bootEgressWantScreen, bootEgressWantTrust, screen)
+		}
+		for _, unwanted := range bootEgressUnwantedScreens {
+			if strings.Contains(screen, unwanted) {
+				t.Errorf("the first screen still shows %q — the onboarding seed did not land, so an operator meets a product tour before their agent\nscreen:\n%s", unwanted, screen)
+			}
+		}
+	} else {
+		t.Logf("%s is not the claude-code image; screen assertions skipped (the host measurement still applies)", image)
+	}
+
+	// PHASE 2 — PAST the dialog, which is where this test used to be blind. The
+	// hosts that matter are fetched once the REPL is actually up, so a run that
+	// stops at a pre-REPL prompt can report "zero approvals" while the product is
+	// about to dial two.
+	//
+	// Press the one key the human presses (the default option is already "Yes, I
+	// trust this folder") and wait for the prompt. Then keep pressing, bounded:
+	// on an image WITHOUT the onboarding seed the run is parked behind the theme
+	// picker and the Security-notes page as well, and those extra Enters are what
+	// a human would press to get to the same place. Phase 1 already asserts the
+	// fixed image needs none of them; here the count is EVIDENCE, and reaching the
+	// REPL at all is what makes the measurement below mean anything.
+	enters := 0
+	var repl string
+	for enters < 4 {
+		if _, err := sess.Write([]byte("\r")); err != nil {
+			t.Fatalf("send Enter (#%d): %v", enters+1, err)
+		}
+		enters++
+		repl = tail.waitFor(bootEgressWantREPL, 30*time.Second)
+		if strings.Contains(repl, bootEgressWantREPL) {
+			break
+		}
+	}
+	t.Logf("reached the CLI prompt after %d Enter(s); rendered:\n%s", enters, repl)
+	if claudeImage && enters > 1 {
+		t.Logf("NOTE: %d Enters were needed — this image parks behind onboarding screens the seed removes", enters)
+	}
+	if !strings.Contains(repl, bootEgressWantREPL) {
+		t.Errorf("the CLI prompt (%q) never appeared after %d Enter(s); everything the REPL fetches is unmeasured\nscreen:\n%s", bootEgressWantREPL, enters, repl)
+	}
+	// The REPL is up: give its first-start fetches (the plugin-marketplace
+	// auto-install among them) room to happen before the proxy log is read.
+	time.Sleep(20 * time.Second)
 
 	// Give the sink's async worker a moment after the read window closes.
-	time.Sleep(2 * time.Second)
+	time.Sleep(3 * time.Second)
 	logs := bootEgressProxyLogs(t, runID)
-	hosts, pending, denied := bootEgressDecisions(logs)
-	// The MEASUREMENT is the point, not just the verdict: log the host set and
-	// the decision stream it came from, pass or fail, so a run of this test is
-	// self-contained evidence of what the image dialled.
-	t.Logf("hosts dialled by %s at boot: %v", image, hosts)
-	t.Logf("proxy decision stream:\n%s", bootEgressDecisionLines(logs))
+	bootEgressAssertQuiet(t, image, "interactive attach, past the trust prompt", logs)
 
-	if len(pending) > 0 {
-		t.Errorf("the boot raised %d first-use approval(s): %v\n"+
-			"A member's first run must park on nothing before they have asked the agent for anything.", len(pending), pending)
-	}
-	if len(denied) > 0 {
-		t.Errorf("the boot was denied %d host(s): %v\n"+
-			"Every host a stock boot reaches for is the product's own bootstrap, not the user's work.", len(denied), denied)
-	}
-
-	// The screen assertions are Claude Code's screens. The host measurement above
-	// is not — point WARDYN_TEST_AGENT_IMAGE at another agent image and this test
-	// measures ITS boot egress, which is how the codex-cli image was checked for
-	// a boot host of its own without forking a second copy of all of the above.
-	if !strings.Contains(image, "claude") {
-		t.Logf("%s is not the claude-code image; screen assertions skipped (the host measurement above still applies)", image)
+	// PHASE 3 — the AUTONOMOUS shape, which meets no dialog at all and is what the
+	// live walk's case G launches. Its first-use approvals are the ones a member
+	// sees on the run they did not attach to, so they get their own arm rather
+	// than an assumption that the interactive measurement covers them.
+	if !claudeImage {
 		return
 	}
-	if !strings.Contains(screen, bootEgressWantScreen) || !strings.Contains(screen, bootEgressWantTrust) {
-		t.Errorf("the first screen is not the workspace-trust prompt (%q + %q)\nscreen:\n%s",
-			bootEgressWantScreen, bootEgressWantTrust, screen)
+	if _, err := sub.Exec(ctx, sb.Ref, []string{
+		"agent-run", "say hello in five words",
+	}); err != nil {
+		t.Fatalf("Exec autonomous agent-run: %v", err)
 	}
-	for _, unwanted := range bootEgressUnwantedScreens {
-		if strings.Contains(screen, unwanted) {
-			t.Errorf("the first screen still shows %q — the onboarding seed did not land, so an operator meets a product tour before their agent\nscreen:\n%s", unwanted, screen)
-		}
+	time.Sleep(45 * time.Second)
+	autoLogs := bootEgressProxyLogs(t, runID)
+	bootEgressAssertQuiet(t, image, "autonomous `claude -p` run", autoLogs)
+}
+
+// bootEgressAssertQuiet is the whole verdict: what the sandbox dialled, and
+// whether any of it parked. Logged pass or fail — the measurement is the
+// deliverable, not just the verdict.
+func bootEgressAssertQuiet(t *testing.T, image, phase, logs string) {
+	t.Helper()
+	hosts, pending, denied := bootEgressDecisions(logs)
+	t.Logf("hosts dialled by %s (%s): %v", image, phase, hosts)
+	t.Logf("proxy decision stream (%s):\n%s", phase, bootEgressDecisionLines(logs))
+	if len(pending) > 0 {
+		t.Errorf("%s raised %d first-use approval(s): %v\n"+
+			"A member's first run must park on nothing before they have asked the agent for anything.", phase, len(pending), pending)
+	}
+	if len(denied) > 0 {
+		t.Errorf("%s was denied %d host(s): %v\n"+
+			"Every host a stock boot reaches for is the product's own bootstrap, not the user's work.", phase, len(denied), denied)
 	}
 }
 
@@ -229,20 +291,57 @@ func bootEgressPlain(raw string) string {
 	return strings.TrimSpace(bootEgressSpace.ReplaceAllString(s, " "))
 }
 
-// bootEgressReadFor drains the PTY for d, returning everything it saw. A TUI
-// keeps redrawing, so this reads to the deadline rather than to a marker.
-func bootEgressReadFor(sess runner.Session, d time.Duration) string {
-	var buf bytes.Buffer
-	done := make(chan struct{})
+// bootEgressTail is the ONE reader of the PTY for the whole test. It must be
+// one: a second goroutine reading the same session competes for the bytes, and
+// the loser's buffer comes back empty — which reads exactly like "the screen
+// never appeared" while the CLI is in fact fine.
+type bootEgressTail struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func bootEgressWatch(sess runner.Session) *bootEgressTail {
+	tl := &bootEgressTail{}
 	go func() {
-		defer close(done)
-		_, _ = io.Copy(&buf, sess)
+		b := make([]byte, 4096)
+		for {
+			n, err := sess.Read(b)
+			if n > 0 {
+				tl.mu.Lock()
+				tl.buf.Write(b[:n])
+				tl.mu.Unlock()
+			}
+			if err != nil {
+				return
+			}
+		}
 	}()
-	select {
-	case <-done:
-	case <-time.After(d):
+	return tl
+}
+
+func (tl *bootEgressTail) rendered() string {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	return bootEgressPlain(tl.buf.String())
+}
+
+// waitFor polls the RENDERED screen until it contains want or the deadline
+// passes, returning what it saw either way. A TUI redraws continuously, so
+// watching for a marker rather than burning the clock is what lets the test
+// spend its budget on the phase AFTER the dialog instead of staring at it.
+func (tl *bootEgressTail) waitFor(want string, d time.Duration) string {
+	deadline := time.Now().Add(d)
+	for {
+		got := tl.rendered()
+		if strings.Contains(got, want) {
+			time.Sleep(1500 * time.Millisecond) // let the frame settle
+			return tl.rendered()
+		}
+		if time.Now().After(deadline) {
+			return got
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
-	return buf.String()
 }
 
 // bootEgressProxyLogs returns the wardyn-proxy sidecar's whole container log.
