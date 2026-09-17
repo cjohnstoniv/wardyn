@@ -254,6 +254,46 @@ func TestHarnessLogin_NewLaunchSupersedesTheCallersLiveLoginRun(t *testing.T) {
 	}
 }
 
+// TestMemberPreview_SignInRefusalPrecedesTheSupersede pins the ORDER of the two
+// guards on this route, which nothing else does.
+//
+// GREEN ON THE UNFIXED TREE — a regression pin, not a defect fix. The
+// no-credential preview's 409 sits in handleHarnessLogin, before
+// launchHarnessLoginRun and therefore before the supersede; the existing preview
+// case asserts only "no run row, no harness.login.started" on a fixture with no
+// supersede seam and no live login run, so moving the 409 below the launch (or
+// hoisting the supersede into the handler — a plausible refactor, since the
+// comment at the supersede call already argues about placement) would kill the
+// admin's REAL sign-in from inside a preview with every test still green. That
+// is the worst possible shape of this feature: a view that destroys the thing it
+// is pretending not to have.
+func TestMemberPreview_SignInRefusalPrecedesTheSupersede(t *testing.T) {
+	f := newSupersedeFixture(t, nil, nil)
+
+	// The admin's own live sign-in — the run a supersede reached from inside the
+	// preview would end. Its created_by is the preview session's subject, so it
+	// IS selected by supersedeCallerLoginRuns' creator+task+agent key.
+	live := f.store.seed(types.AgentRun{
+		ID: uuid.New(), CreatedBy: memberPreviewAdminSub, Task: harnessLoginTask, Agent: awsSSOAgent,
+	})
+
+	w := doSSO(t, f.srv, http.MethodPost, "/api/v1/setup/harness-login",
+		memberPreviewSession(t, true, true), `{"provider":"`+awsSSOProvider+`"}`)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("harness-login in the preview = %d, want 409: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), memberPreviewSignInRefusal) {
+		t.Errorf("body = %q, want %q", w.Body.String(), memberPreviewSignInRefusal)
+	}
+	if got := f.store.stateOf(t, live.ID.String()); got != types.RunRunning {
+		t.Errorf("the admin's own sign-in sandbox is %s, want RUNNING — a refused launch must not "+
+			"supersede anything: the preview hides their credential, it must not destroy their session", got)
+	}
+	if rows := f.audit.find("run.kill"); len(rows) != 0 {
+		t.Errorf("a refused sign-in wrote %d run.kill row(s); the supersede ran below the refusal", len(rows))
+	}
+}
+
 // TestHarnessLogin_SupersedePrecedesTheQuota: the supersede runs BEFORE
 // newStepRun, so the slot the orphan held is free by the time the quota is
 // counted. A member capped at one concurrent run must be able to retry their own
