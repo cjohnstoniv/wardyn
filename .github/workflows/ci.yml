@@ -718,7 +718,10 @@ jobs:
       # `docker run` and no extra build. --entrypoint: the image deliberately has
       # none (the runner contract), so the binary is named explicitly.
       - name: agent-run --selftest against the built image
-        if: matrix.name == 'agent-aws-sso'
+        # codex-cli too: 0.7.5 restructured its PUBLISHED agent-run around the shared
+        # boot-session functions in agent-run-lib.sh, and a syntax break in that lib
+        # would otherwise ship in an image CI built and never ran.
+        if: matrix.name == 'agent-aws-sso' || matrix.name == 'agent-codex-cli'
         run: docker run --rm --entrypoint agent-run wardyn/${{ matrix.name }}:trivy-scan --selftest
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:

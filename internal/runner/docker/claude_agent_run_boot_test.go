@@ -525,6 +525,15 @@ func TestClaudeAgentRun_EarlyAttachWonTheName(t *testing.T) {
 	if n := ccCount(log, "argv: respawn-pane -k -t wardyn agent-run --boot-seed"); n != 1 {
 		t.Errorf("tmux got %d `respawn-pane -k -t wardyn agent-run --boot-seed` calls, want exactly 1 — an attach won the session name and nothing replaced its bare shell\ntmux log:\n%s\nagent-run output:\n%s", n, log, out)
 	}
+	// The respawned pane inherits its environment from the ATTACH exec, not from
+	// agent-run, so the idle pid the pane's prep-wait is bounded by has to be
+	// handed over through the session environment BEFORE the respawn. Behaviour
+	// survives without it only via the pid-1 fallback; this pins the hand-off.
+	setEnv := strings.Index(log, "argv: set-environment -t wardyn WARDYN_IDLE_PID ")
+	respawn := strings.Index(log, "argv: respawn-pane -k -t wardyn")
+	if setEnv < 0 || respawn < 0 || setEnv > respawn {
+		t.Errorf("want `set-environment -t wardyn WARDYN_IDLE_PID <pid>` BEFORE `respawn-pane` (set-environment at %d, respawn at %d)\ntmux log:\n%s", setEnv, respawn, log)
+	}
 }
 
 // TestClaudeAgentRun_TotalTmuxFailureLeavesNoMarker — the third tmux outcome,
