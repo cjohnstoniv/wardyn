@@ -55,7 +55,7 @@ import { MEMBER_WORKSPACE } from "../../../lib/permissions-copy";
 import { EPISODES } from "../../../lib/demo-videos";
 import { EpisodeRow } from "./episode-card";
 import { YourModelKey, modelKeyProvider } from "./your-model-key";
-import { modelKeyState } from "./model-key-state";
+import { modelKeyState, ownKeyApplies } from "./model-key-state";
 import type { AgentRun, SetupStatus } from "../../../lib/types";
 
 type Variant = "default" | "outline";
@@ -176,6 +176,14 @@ export function MemberGettingStarted() {
   const modelKeyProviderRow = modelKeyProvider(status?.harnesses);
   const hasOwnKey = mine?.includes(modelKeyProviderRow.secretName) ?? false;
   const isPerUserModelAccess = modelKeyProviderRow.credentialSource === "per_user";
+  // FIX PASS 1 (REVIEW-1.md H1) — hasOwnKey alone is not enough: a member's
+  // own API key can never satisfy a per_user OR a shared-Bedrock row
+  // (mechanismSatisfied refuses it on provider mismatch either way), so the
+  // chip row's success chip, action line and Sign-in button must all ignore
+  // a leftover `mine` write the same way the card already does.
+  const ownKeyCounts =
+    hasOwnKey &&
+    ownKeyApplies({ credential_source: modelKeyProviderRow.credentialSource, mechanism: modelKeyProviderRow.mechanism });
 
   const workspaceDone = !unreachable && !wsLoading && workspaces.length > 0;
   // Appendix A finding 2 — ONE predicate for both the checklist and the
@@ -254,7 +262,7 @@ export function MemberGettingStarted() {
                     {T.BARRIER_CHIP(CC_META[strongest].label)}
                   </Chip>
                 )}
-                {hasOwnKey ? (
+                {ownKeyCounts ? (
                   <Chip tone="success">{T.MODEL_ACCESS_OWN_CHIP}</Chip>
                 ) : status?.model_access && status.model_access.state !== "not_applicable" ? (
                   // C4.5/C3: the chip stops reading llm_ready (a DEPLOYMENT
@@ -282,10 +290,14 @@ export function MemberGettingStarted() {
                       {MODEL_ACCESS_CHIP_LABEL[status.model_access.state]}
                     </Chip>
                   ) : null
-                ) : llmReady ? (
-                  // model_access absent (older daemon, or the fetch failed) —
-                  // today's rendering, unchanged: never claim a dead
-                  // credential on a blip.
+                ) : llmReady && !isPerUserModelAccess ? (
+                  // model_access absent (older daemon, or the fetch failed),
+                  // or not_applicable — today's rendering, unchanged, EXCEPT
+                  // (FIX PASS 1, REVIEW-1.md H1b) under a per_user row: that
+                  // chip would contradict the card's per_user body/lede
+                  // directly beside it. A shared row (Bedrock or otherwise)
+                  // still gets it — llmReady is the correct deployment-wide
+                  // answer there.
                   <Chip tone="success">{T.MODEL_ACCESS_PROVIDED_CHIP}</Chip>
                 ) : null}
                 {status?.auth.mode === "sso" && (
@@ -305,14 +317,14 @@ export function MemberGettingStarted() {
               </div>
               {/* The server's own words, verbatim, as the chip row's own line
                   — never reworded client-side (C4.5). */}
-              {!hasOwnKey && status?.model_access?.action && (
+              {!ownKeyCounts && status?.model_access?.action && (
                 <p className="mt-2 text-sm text-warning">{status.model_access.action}</p>
               )}
               {/* not_configured / expired_signin / expiring are the per_user
                   states — the member's OWN sign-in. shared_expired (an
                   admin's dead credential) and live get no button: there is
                   either nothing to do, or nothing this member can do about it. */}
-              {!hasOwnKey &&
+              {!ownKeyCounts &&
                 status?.model_access &&
                 MODEL_ACCESS_ACTIONABLE.has(status.model_access.state) &&
                 (awsLoginOpen ? (

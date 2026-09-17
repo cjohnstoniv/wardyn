@@ -74,11 +74,27 @@ function run(id: string): AgentRun {
   return { id, created_at: "", updated_at: "" } as AgentRun;
 }
 
-// Appendix A finding 2 — a per_user roster row (modelKeyProvider picks the
-// first enabled row in T.BY_AGENT order; "claude-code" matches the default
-// secret name every fixture above already uses).
+// Appendix A finding 2 — a per_user roster row (modelKeyProvider's
+// harnesses.find picks the first enabled row in the SERVER's catalog order;
+// "claude-code" matches the default secret name every fixture above already
+// uses). mechanism: bedrock_sso is the real wire shape this state pairs with
+// (FIX PASS 1, REVIEW-1.md ruling R1).
 const perUserHarness: SetupHarnessTool[] = [
-  { id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true, enabled: true, credential_source: "per_user" },
+  {
+    id: "claude-code",
+    display: "Claude Code",
+    has_gateway: true,
+    has_login: true,
+    enabled: true,
+    credential_source: "per_user",
+    mechanism: "bedrock_sso",
+  },
+];
+
+// FIX PASS 1 — a NON-per_user row whose mechanism is Bedrock (ruling R2(b)):
+// a member's own key can never satisfy it either, but the row is "shared".
+const sharedBedrockHarness: SetupHarnessTool[] = [
+  { id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true, enabled: true, mechanism: "bedrock_sso" },
 ];
 
 // The page reads its drive off the shell's ONE GET /me (operator-context's
@@ -436,6 +452,19 @@ describe("MemberGettingStarted", () => {
       expect(screen.getByTestId("harness-login-pane")).toBeInTheDocument();
     });
 
+    // FIX PASS 1 (REVIEW-1.md H1) — the SAME scenario, but through the
+    // CARD's own button (buttons[1]) instead of the chip row's: both must
+    // reach the identical single pane mount.
+    it("...and so does the CARD's own Sign in to AWS button", async () => {
+      const user = userEvent.setup();
+      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_configured" }, harnesses: perUserHarness }));
+      renderPage();
+      const buttons = await screen.findAllByRole("button", { name: AGENTS.SIGN_IN_AWS });
+      expect(buttons).toHaveLength(2);
+      await user.click(buttons[1]);
+      expect(screen.getByTestId("harness-login-pane")).toBeInTheDocument();
+    });
+
     // V1 r2 LOW: the pane's start-URL field started EMPTY, so every member had to
     // find their org's access portal themselves — and the server ignores what
     // they type under a per_user row, signing in against the row's own
@@ -459,6 +488,15 @@ describe("MemberGettingStarted", () => {
     // llm_ready that made a not-signed-in member's card say "Provided by
     // your admin".
     it("not_configured + llm_ready:true (the field report's own scenario): card says Not signed in, checklist NOT done, two buttons, one pane", async () => {
+      // FIX PASS 1 (REVIEW-1.md M1) — a workspace present makes "model-key"
+      // the page's first NOT-done actionable section IF (and only if)
+      // modelKeyDone is actually false: reverting modelKeyDone to the old
+      // `hasOwnKey || llmReady` predicate (llmReady:true here) would flip it
+      // true, hand the page's one `default`-variant slot to "first-run"
+      // instead, and leave this whole test green — which is exactly the gap
+      // the reviewer's probe found. Assert the OBSERVABLE: it's still the
+      // card's own Sign-in button that gets `default`, not "New run".
+      listWorkspacesMock.mockResolvedValue([{ id: "w1" }]);
       getSetupStatusMock.mockResolvedValue(
         status({ model_access: { state: "not_configured" }, llm_ready: true, harnesses: perUserHarness }),
       );
@@ -471,9 +509,14 @@ describe("MemberGettingStarted", () => {
       // different section and out of scope here).
       const modelKeySection = screen.getByRole("heading", { name: "Your model key" }).closest("section")!;
       expect(within(modelKeySection).queryByText("Done")).not.toBeInTheDocument();
-      const buttons = screen.getAllByRole("button", { name: AGENTS.SIGN_IN_AWS });
+      const buttons = await screen.findAllByRole("button", { name: AGENTS.SIGN_IN_AWS });
       expect(buttons).toHaveLength(2);
       expect(screen.getByText(T.SETUP_SUMMARY_HELPER_PER_USER)).toBeInTheDocument();
+      // M1's observable: modelKeyDone false -> model-key wins the ONE
+      // `default` CTA over "New run" (which stays outline).
+      await waitFor(() => expect(defaultButtons().length).toBe(1));
+      expect(defaultButtons()[0].textContent).toContain(AGENTS.SIGN_IN_AWS);
+      expect(screen.getByRole("link", { name: "New run" }).className).not.toContain("bg-primary ");
     });
 
     it("live + llm_ready:true: card says Your AWS sign-in; lede says the per_user variant", async () => {
@@ -491,7 +534,16 @@ describe("MemberGettingStarted", () => {
     // row: a stale `mine` write from before the roster switched this member
     // to per_user must not read as "Your key" over a lane that can never use
     // it, and the checklist must not mark the section done.
-    it("hasOwn:true + per_user + not_configured: still Not signed in, checklist NOT done, reveal absent", async () => {
+    // FIX PASS 1 (REVIEW-1.md H1) — before this fix, this exact fixture left
+    // the chip row showing MODEL_ACCESS_OWN_CHIP ("Your key", success) AND
+    // the card's own Sign-in button dead (both gated on the old bare
+    // `hasOwnKey`): H1's probe caught PROBE pane present after click = false.
+    it("hasOwn:true + per_user + not_configured: still Not signed in, checklist NOT done, reveal absent, own chip absent, card's own button mounts the pane", async () => {
+      const user = userEvent.setup();
+      // FIX PASS 1 (M1) — same observable-of-modelKeyDone technique as the
+      // test above: a workspace present makes model-key the page's sole
+      // `default`-variant section IFF modelKeyDone is actually false.
+      listWorkspacesMock.mockResolvedValue([{ id: "w1" }]);
       listSecretsMineMock.mockResolvedValue({ names: ["anthropic-api-key"], mine: ["anthropic-api-key"] });
       getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_configured" }, harnesses: perUserHarness }));
       renderPage();
@@ -499,6 +551,22 @@ describe("MemberGettingStarted", () => {
       const modelKeySection = screen.getByRole("heading", { name: "Your model key" }).closest("section")!;
       expect(within(modelKeySection).queryByText("Done")).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Use my own key instead" })).not.toBeInTheDocument();
+      // H1 — the chip row's own success chip must not render over a lane
+      // this member's key cannot use, and the card's "Provided by your
+      // admin" fallback must not either.
+      expect(screen.queryByText(T.MODEL_ACCESS_OWN_CHIP)).not.toBeInTheDocument();
+      expect(screen.queryByText(YMK.PROVIDED_CHIP)).not.toBeInTheDocument();
+      // H1 — TWO buttons (chip row + card), and the CARD's own (buttons[1])
+      // is wired to the SAME pane, not dead.
+      const buttons = await screen.findAllByRole("button", { name: AGENTS.SIGN_IN_AWS });
+      expect(buttons).toHaveLength(2);
+      // M1's observable: modelKeyDone false -> model-key still wins the ONE
+      // `default` CTA (would flip to "New run" if hasOwnKey alone marked it
+      // done, since hasOwnKey is true in this fixture).
+      await waitFor(() => expect(defaultButtons().length).toBe(1));
+      expect(defaultButtons()[0].textContent).toContain(AGENTS.SIGN_IN_AWS);
+      await user.click(buttons[1]);
+      expect(screen.getByTestId("harness-login-pane")).toBeInTheDocument();
     });
 
     // Negative control for the reveal-hidden assertion above: a shared/api-key
@@ -545,6 +613,42 @@ describe("MemberGettingStarted", () => {
       await screen.findByText(T.SETUP_SUMMARY_HELPER);
       expect(screen.queryByText(T.MODEL_ACCESS_PROVIDED_CHIP)).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
+    });
+
+    // FIX PASS 1 (REVIEW-1.md H1b/M2) — the two fixtures above (both WITHOUT
+    // a per_user harness row) stay byte-identical; THIS is the combination
+    // the server actually produces (not_applicable is emitted only for the
+    // admin-token principal on an ENABLED per_user row,
+    // awsSSOScopeIsMechanism in internal/api/modelaccess.go). Under it: the
+    // card shows PER_PERSON_NA_BODY, no form, no chip, no sign-in button —
+    // and neither PROVIDED_* string appears anywhere on the page, including
+    // the chip row's own llm_ready fallback (H1b: that fallback must not
+    // fire under a per_user row, or it would contradict the card and the
+    // per_user lede beside it).
+    it("not_applicable WITH the per_user harness fixture: PER_PERSON_NA_BODY, no form/chip/button, no PROVIDED_* anywhere", async () => {
+      getSetupStatusMock.mockResolvedValue(
+        status({ model_access: { state: "not_applicable" }, llm_ready: true, harnesses: perUserHarness }),
+      );
+      renderPage();
+      expect(await screen.findByText(YMK.PER_PERSON_NA_BODY)).toBeInTheDocument();
+      expect(screen.queryByPlaceholderText("sk-ant-…")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Use my own key instead" })).not.toBeInTheDocument();
+      expect(screen.queryByText(T.MODEL_ACCESS_PROVIDED_CHIP)).not.toBeInTheDocument();
+      expect(screen.queryByText(YMK.PROVIDED_CHIP)).not.toBeInTheDocument();
+      expect(screen.queryByText(YMK.PROVIDED_BODY)).not.toBeInTheDocument();
+      const modelKeySection = screen.getByRole("heading", { name: "Your model key" }).closest("section")!;
+      expect(within(modelKeySection).queryByText("Done")).not.toBeInTheDocument();
+    });
+
+    // FIX PASS 1 (REVIEW-1.md R2(b)/I1) — a NON-per_user row whose mechanism
+    // is Bedrock: the deployment-wide llm_ready IS the right answer (this is
+    // a shared credential, graded per-deployment, not per-principal), so the
+    // chip row's fallback still fires — H1b's suppression is per_user-only.
+    it("shared row with a Bedrock mechanism, llm_ready:true: chip row STILL shows Provided by your admin", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ llm_ready: true, harnesses: sharedBedrockHarness }));
+      renderPage();
+      expect(await screen.findByText(T.MODEL_ACCESS_PROVIDED_CHIP)).toBeInTheDocument();
     });
   });
 });

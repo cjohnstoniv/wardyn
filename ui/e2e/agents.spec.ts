@@ -287,8 +287,17 @@ test.describe("agents — member Getting Started's Model access chip (spliced st
       });
       await gotoConsole(page);
       await navToRoute(page, "/setup");
-      await expect(page.getByRole("heading", { name: "What's set up for you" })).toBeVisible();
-      await expect(page.getByText(c.chip)).toBeVisible();
+      // FIX PASS 1 (REVIEW-1.md H2) — scoped to the chip row's own section:
+      // the shared_expired case's chip text now ALSO renders on the "Your
+      // model key" card below (Appendix A finding 2's R2(b) — a shared row
+      // with no roster still reports shared_expired there instead of the old
+      // silent "provided"/empty-form guess), so an unscoped getByText double-
+      // matches under Playwright's strict mode.
+      const setupSummarySection = page
+        .locator("section")
+        .filter({ has: page.getByRole("heading", { name: "What's set up for you" }) });
+      await expect(setupSummarySection).toBeVisible();
+      await expect(setupSummarySection.getByText(c.chip)).toBeVisible();
       const cta = page.getByRole("button", { name: AGENTS.SIGN_IN_AWS });
       if (c.hasCta) {
         await expect(cta).toBeVisible();

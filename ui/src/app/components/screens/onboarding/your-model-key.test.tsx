@@ -23,10 +23,19 @@ import { AGENTS } from "../../../lib/workspace-providers-copy";
 import type { SetupHarnessTool } from "../../../lib/types";
 
 // Appendix A finding 2 — a per_user roster row (the wire shape a real
-// bedrock_sso lane sends: modelKeyProvider picks the first enabled row in
-// T.BY_AGENT order and this test's id matches the default claude-code key).
+// bedrock_sso lane sends: modelKeyProvider's harnesses.find picks the first
+// enabled row in the SERVER's catalog order, and this test's id matches the
+// default claude-code key).
 const perUserHarness: SetupHarnessTool[] = [
-  { id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true, enabled: true, credential_source: "per_user" },
+  {
+    id: "claude-code",
+    display: "Claude Code",
+    has_gateway: true,
+    has_login: true,
+    enabled: true,
+    credential_source: "per_user",
+    mechanism: "bedrock_sso",
+  },
 ];
 
 describe("YourModelKey", () => {
@@ -121,6 +130,8 @@ describe("YourModelKey", () => {
         />,
       );
       expect(screen.getByText(T.EXPIRING_CHIP)).toBeInTheDocument();
+      // L2 (REVIEW-1.md) — the expiring body, not just the chip.
+      expect(screen.getByText(T.SIGNED_IN_BODY)).toBeInTheDocument();
       await user.click(screen.getByRole("button", { name: AGENTS.SIGN_IN_AWS }));
       expect(onSignInAws).toHaveBeenCalledTimes(1);
     });
@@ -173,6 +184,99 @@ describe("YourModelKey", () => {
       expect(screen.getByText(T.SHARED_EXPIRED_BODY)).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: T.USE_OWN_KEY })).toBeInTheDocument();
+    });
+
+    // FIX PASS 1 (REVIEW-1.md M2) — not_applicable is emitted ONLY for the
+    // admin-token principal on an ENABLED per_user row (awsSSOScopeIsMechanism,
+    // internal/api/modelaccess.go): real traffic, not a skew artifact. Ruling
+    // R2(a): result stays `unknown`, but the body is now PER_PERSON_NA_BODY,
+    // never a bare title.
+    it("not_applicable under per_user -> PER_PERSON_NA_BODY, no chip, no button, no form, reveal hidden", () => {
+      render(
+        <YourModelKey
+          llmReady={true}
+          mine={[]}
+          harnesses={perUserHarness}
+          modelAccess={{ state: "not_applicable" }}
+          variant="default"
+          onChanged={() => {}}
+        />,
+      );
+      expect(screen.getByText(T.PER_PERSON_NA_BODY)).toBeInTheDocument();
+      expect(screen.queryByText("Done")).not.toBeInTheDocument();
+      expect(screen.queryByText(T.PROVIDED_CHIP)).not.toBeInTheDocument();
+      expect(screen.queryByText(T.PROVIDED_BODY)).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: T.USE_OWN_KEY })).not.toBeInTheDocument();
+      expect(screen.queryByPlaceholderText("sk-ant-…")).not.toBeInTheDocument();
+    });
+  });
+
+  // FIX PASS 1 (REVIEW-1.md rulings R1/R2(b)) — a SHARED row (no per_user
+  // credential_source) whose declared mechanism is Bedrock: mechanismSatisfied
+  // refuses a member's own API key on ANY Bedrock roster row regardless of
+  // credential_source, so this band behaves like per_user for hasOwn/reveal
+  // purposes even though `status.model_access` here is the deployment-wide
+  // answer (the caller is not graded per-principal on a shared row).
+  describe("shared row with a Bedrock mechanism (REVIEW-1.md I1/R2(b))", () => {
+    const sharedBedrockHarness: SetupHarnessTool[] = [
+      { id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true, enabled: true, mechanism: "bedrock_sso" },
+    ];
+
+    it("hasOwn is ignored: still shows shared_expired, not 'Your key'", () => {
+      render(
+        <YourModelKey
+          llmReady={false}
+          mine={["anthropic-api-key"]}
+          harnesses={sharedBedrockHarness}
+          modelAccess={{ state: "shared_expired" }}
+          variant="default"
+          onChanged={() => {}}
+        />,
+      );
+      expect(screen.getByText(AGENTS.MODEL_ACCESS_SHARED_EXPIRED)).toBeInTheDocument();
+      expect(screen.getByText(T.SHARED_EXPIRED_BODY)).toBeInTheDocument();
+      expect(screen.queryByText("Done")).not.toBeInTheDocument();
+      expect(screen.queryByText("••••••••••••")).not.toBeInTheDocument();
+      // Reveal is HIDDEN here (unlike the plain shared_expired case above) —
+      // a member's own key is useless under Bedrock regardless of credential_source.
+      expect(screen.queryByRole("button", { name: T.USE_OWN_KEY })).not.toBeInTheDocument();
+    });
+
+    it("llmReady true, anything else -> provided chip/body, reveal HIDDEN (I1's own deviation, now fixed)", () => {
+      render(
+        <YourModelKey
+          llmReady={true}
+          mine={[]}
+          harnesses={sharedBedrockHarness}
+          modelAccess={{ state: "live" }}
+          variant="default"
+          onChanged={() => {}}
+        />,
+      );
+      expect(screen.getByText(T.PROVIDED_CHIP)).toBeInTheDocument();
+      expect(screen.getByText(T.PROVIDED_BODY)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: T.USE_OWN_KEY })).not.toBeInTheDocument();
+      expect(screen.queryByPlaceholderText("sk-ant-…")).not.toBeInTheDocument();
+    });
+
+    it("llmReady false, anything else -> ADMIN_NOT_READY_BODY, no chip, no button, no form", () => {
+      render(
+        <YourModelKey
+          llmReady={false}
+          mine={[]}
+          harnesses={sharedBedrockHarness}
+          modelAccess={{ state: "not_applicable" }}
+          variant="default"
+          onChanged={() => {}}
+        />,
+      );
+      expect(screen.getByText(T.ADMIN_NOT_READY_BODY)).toBeInTheDocument();
+      expect(screen.queryByText("Done")).not.toBeInTheDocument();
+      expect(screen.queryByText(T.PROVIDED_CHIP)).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: T.USE_OWN_KEY })).not.toBeInTheDocument();
+      expect(screen.queryByPlaceholderText("sk-ant-…")).not.toBeInTheDocument();
     });
   });
 

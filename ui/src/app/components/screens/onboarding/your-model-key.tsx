@@ -40,6 +40,10 @@ export function modelKeyProvider(harnesses?: SetupHarnessTool[]) {
     // when it falls back to the default with no row at all. "per_user" is
     // the only value model-key-state.ts branches on.
     credentialSource: row?.credential_source,
+    // FIX PASS 1 (REVIEW-1.md ruling R1) — the SAME row's declared
+    // mechanism, for ownKeyApplies: a "bedrock_"-prefixed mechanism refuses
+    // a member's own API key even under a SHARED (non-per_user) row.
+    mechanism: row?.mechanism,
   };
 }
 
@@ -90,6 +94,7 @@ export function YourModelKey({
     llmReady,
     modelAccess,
     credentialSource: provider.credentialSource,
+    mechanism: provider.mechanism,
   });
 
   const save = async () => {
@@ -201,25 +206,35 @@ export function YourModelKey({
       ) : state.result === "shared_expired" ? (
         <div>
           <p className="text-sm text-muted-foreground">{T.SHARED_EXPIRED_BODY}</p>
-          <Button variant="link" size="sm" className="mt-1 h-auto p-0" onClick={() => setRevealEmpty(true)}>
-            {T.USE_OWN_KEY}
-          </Button>
+          {/* FIX PASS 1 (R2(b)) — hidden under shared_bedrock: a member's own
+              key can never satisfy a Bedrock mechanism even on a shared row. */}
+          {state.revealAllowed && (
+            <Button variant="link" size="sm" className="mt-1 h-auto p-0" onClick={() => setRevealEmpty(true)}>
+              {T.USE_OWN_KEY}
+            </Button>
+          )}
         </div>
       ) : state.result === "provided" ? (
         <div>
           <p className="text-sm text-muted-foreground">{T.PROVIDED_BODY}</p>
-          <Button variant="link" size="sm" className="mt-1 h-auto p-0" onClick={() => setRevealEmpty(true)}>
-            {T.USE_OWN_KEY}
-          </Button>
+          {state.revealAllowed && (
+            <Button variant="link" size="sm" className="mt-1 h-auto p-0" onClick={() => setRevealEmpty(true)}>
+              {T.USE_OWN_KEY}
+            </Button>
+          )}
         </div>
       ) : (
-        // result === "unknown" under per_user (showEmptyForm is unreachable
-        // there): no claim exists to make and nothing on the page names a
-        // string for it — same "no claim" as known=false, rendered as
-        // nothing rather than a guessed sentence. ponytail: rare combo (an
-        // unrecognised model_access.state under a per_user row); add copy
-        // when a real state needs one.
-        <></>
+        // result === "unknown" and showEmptyForm is unreachable here
+        // (ownKeyApplies(row) is false in both bands that land on this
+        // branch): a per_user row with a state the card takes no action on
+        // (band "per_user" — not_applicable is the common real case, the
+        // admin-token principal on an enabled per_user row), or a shared row
+        // whose mechanism is Bedrock but llmReady is false (band
+        // "shared_bedrock"). FIX PASS 1 (R2): a neutral sentence per band,
+        // never a bare title.
+        <p className="text-sm text-muted-foreground">
+          {state.band === "per_user" ? T.PER_PERSON_NA_BODY : T.ADMIN_NOT_READY_BODY}
+        </p>
       )}
     </SectionCard>
   );

@@ -615,18 +615,26 @@ export const YOUR_MODEL_KEY = {
   REFUSED_SHORT: "Keys shorter than 8 characters are refused.",
   SAVE_ERROR: "Couldn't save this key.",
   REMOVE_ERROR: "Couldn't remove this key.",
-  // DRAFT (M2 canon pending) — Appendix A finding 2, plan sunny-snacking-phoenix.md
-  // lane ui-member-model-key. Under a per_user roster row the card reads
-  // status.model_access instead of the deployment-wide llm_ready (see
-  // model-key-state.ts's total truth table). EXPIRING reuses SIGNED_IN_BODY
-  // (still true — the sign-in just needs renewing soon) and SHARED_EXPIRED
-  // reuses AGENTS.MODEL_ACCESS_SHARED_EXPIRED for its chip (workspace-providers-copy.ts).
+  // DRAFT (M2 canon pending) — Appendix A finding 2. Under a per_user roster
+  // row the card reads status.model_access instead of the deployment-wide
+  // llm_ready (see model-key-state.ts's total truth table). EXPIRING reuses
+  // SIGNED_IN_BODY (still true — the sign-in just needs renewing soon) and
+  // SHARED_EXPIRED reuses AGENTS.MODEL_ACCESS_SHARED_EXPIRED for its chip
+  // (workspace-providers-copy.ts).
   SIGNED_IN_CHIP: "Your AWS sign-in",
   SIGNED_IN_BODY: "You signed in to AWS. Your runs use your own session.",
   EXPIRING_CHIP: "Your AWS sign-in · Expiring",
   NOT_SIGNED_IN_CHIP: "Not signed in",
   NOT_SIGNED_IN_BODY: "Sign in to AWS to give your runs model access. Nothing is configured for you until you do.",
   SHARED_EXPIRED_BODY: "Ask your admin to sign in again.",
+  // FIX PASS 1 (REVIEW-1.md rulings R1/R2) — the two "unknown" bodies a
+  // member with no actionable state can land on: PER_PERSON_NA_BODY for a
+  // per_user row whose model_access is a state the card takes no action on
+  // (not_applicable — the admin-token principal on an enabled per_user row —
+  // is the common real case, not a skew artifact); ADMIN_NOT_READY_BODY for
+  // a shared row whose mechanism is Bedrock but llmReady is false.
+  PER_PERSON_NA_BODY: "Model access on this deployment is per person. There is nothing to set up for this sign-in.",
+  ADMIN_NOT_READY_BODY: "Model access is not set up on this deployment yet. Ask your admin.",
 } as const;
 
 // Member Getting Started (Phase 5) — the six-SectionCard page a member lands
@@ -664,10 +672,10 @@ export const MEMBER_GETTING_STARTED = {
   CONNECT_HINT_PREFIX: "Register a key once: ",
   CONNECT_COMMAND: "wardyn ssh-key ensure",
   CONNECT_ACTION: "Add SSH key",
-  // DRAFT (M2 canon pending) — Appendix A finding 2b, plan sunny-snacking-phoenix.md
-  // lane ui-member-model-key. Under a per_user roster row the credential is
-  // specifically NOT shared and NOT inherited — that is the entire point of
-  // the lane, and the chip beside this sentence already says so.
+  // DRAFT (M2 canon pending) — Appendix A finding 2b. Under a per_user
+  // roster row the credential is specifically NOT shared and NOT inherited
+  // — that is the entire point of the lane, and the chip beside this
+  // sentence already says so.
   SETUP_SUMMARY_HELPER_PER_USER:
     "Your admin configured the barrier, network and the model-access lane. Model access uses your own AWS sign-in; your runs inherit the rest.",
 } as const;
