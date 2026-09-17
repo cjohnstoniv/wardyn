@@ -60,11 +60,18 @@ func TestWalkRosterBodyDecodes(t *testing.T) {
 // ever goes back to an object, or drops `id`, this reds instead of the walk
 // dying at its first assertion on a cluster somebody spent ten minutes standing up.
 func TestWalkRosterBodyMatchesTheSpec(t *testing.T) {
-	raw, err := os.ReadFile("../../ui/e2e/live/sso-member.spec.ts")
-	if err != nil {
-		t.Fatalf("read the live walk spec: %v", err)
+	// The roster PUT lives in the walk's shared helpers since 0.7.5 (putRoster
+	// moved out of sso-member.spec.ts when the recovery spec began sending the
+	// same body), so BOTH live files are read: the body must exist in one of
+	// them, and the object-shaped mistake must exist in neither.
+	var spec string
+	for _, f := range []string{"../../ui/e2e/live/helpers.ts", "../../ui/e2e/live/sso-member.spec.ts"} {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read the live walk source %s: %v", f, err)
+		}
+		spec += string(raw) + "\n"
 	}
-	spec := string(raw)
 	for _, want := range []string{
 		`agents: [`,         // a LIST, never an object keyed by agent id
 		`id: "claude-code"`, // …whose element names its agent
