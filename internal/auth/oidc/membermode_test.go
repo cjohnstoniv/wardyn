@@ -369,26 +369,38 @@ func TestMemberMode_NoCredentialNeverSurvivesExit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read package dir: %v", err)
 	}
-	var callers []string
+	var callers, signers []string
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") ||
-			strings.HasSuffix(e.Name(), "_test.go") || e.Name() == "session_codec.go" {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
 			continue
 		}
 		src, rerr := os.ReadFile(e.Name())
 		if rerr != nil {
 			t.Fatalf("read %s: %v", e.Name(), rerr)
 		}
-		if strings.Contains(string(src), "a.encodeSession(") {
+		// ".encodeSession(" and not "a.encodeSession(": a re-issue written on a
+		// differently-named receiver would slip past the literal form.
+		if e.Name() != "session_codec.go" && strings.Contains(string(src), ".encodeSession(") {
 			callers = append(callers, e.Name())
+		}
+		// The second hole: a re-issue that signs a payload itself, bypassing
+		// encodeSession entirely. sessionHMAC is the only way to do that, and it
+		// must stay inside the codec.
+		if strings.Contains(string(src), "sessionHMAC(") {
+			signers = append(signers, e.Name())
 		}
 	}
 	sort.Strings(callers)
+	sort.Strings(signers)
 	want := []string{"membermode.go", "oidc_callback.go"}
 	if !slices.Equal(callers, want) {
 		t.Errorf("session re-sign sites = %v, want %v — a NEW one must decide what it does with "+
 			"MemberModeNoCredential (a re-issue that copies a whole decoded Session would carry the "+
 			"preview across an exit); add it here once it has", callers, want)
+	}
+	if !slices.Equal(signers, []string{"session_codec.go"}) {
+		t.Errorf("sessionHMAC call sites = %v, want [session_codec.go] — a cookie signed outside the "+
+			"codec bypasses encodeSession and the scan above with it", signers)
 	}
 }
 

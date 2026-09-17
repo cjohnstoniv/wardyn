@@ -109,7 +109,15 @@ func (s *Server) handleSetMemberMode(w http.ResponseWriter, r *http.Request) {
 	if r.ContentLength != 0 && !decodeStrict(w, r, &req) {
 		return
 	}
-	realRole, err := s.cfg.OIDC.SetMemberMode(w, r, req.Enabled, req.NoCredential)
+	// THE POSTURE IS GRANTED BY THE SERVER, never taken from the body. The
+	// no-credential preview only does anything where the model-access agent's
+	// roster row is per_user (memberPreviewApplies, membermode_preview.go);
+	// asking for it anywhere else would enter a mode whose banner asserts a
+	// state the same deployment immediately contradicts. On `shared` this
+	// silently downgrades to the plain mode — the honest answer, and no new
+	// string.
+	preview := req.Enabled && req.NoCredential && s.memberPreviewApplies(ctx, r)
+	realRole, err := s.cfg.OIDC.SetMemberMode(w, r, req.Enabled, preview)
 	if err != nil {
 		// decodeSession's own errors: the cookie went missing or stopped
 		// verifying between the middleware and here. Not a 500 — there is
@@ -136,14 +144,21 @@ func (s *Server) handleSetMemberMode(w http.ResponseWriter, r *http.Request) {
 	// byte-identical, and the key is a MARKER of which posture was entered
 	// rather than a field every row answers — the same rule authzDeniedDatum's
 	// member_mode marker below follows.
+	// noCred is what the SESSION now carries, never what the body asked for.
+	// Besides the roster gate above it drops the REAL-MEMBER case: SetMemberMode
+	// writes that caller no cookie at all, so echoing their request would report
+	// — and audit — a posture nobody is in, and would make this row's own
+	// AUDIT-ACTIONS sentence ("only on a row that turned the mode ON with it")
+	// false.
+	noCred := preview && realRole != oidc.RoleMember
 	datum := map[string]any{"enabled": req.Enabled, "real_role": realRole}
-	if req.Enabled && req.NoCredential {
+	if noCred {
 		datum["no_credential"] = true
 	}
 	s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),
 		"auth.member_mode", "/api/v1/me/member-mode", "success", mustJSON(datum)))
 	writeJSON(w, http.StatusOK, map[string]any{
-		"member_mode": req.Enabled, "member_mode_no_credential": req.Enabled && req.NoCredential,
+		"member_mode": req.Enabled, "member_mode_no_credential": noCred,
 	})
 }
 

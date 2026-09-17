@@ -81,6 +81,19 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// choose which banner sentence to paint — the ceilings differ, and the
 		// one nobody may misread is that sign-in is refused until they exit.
 		"member_mode_no_credential": oidc.MemberPreviewNoCredential(r.Context()),
+		// WHETHER THE PREVIEW IS WORTH OFFERING on this deployment (0.7.5): the
+		// posture hides something only where the model-access agent's roster row
+		// is per_user, so on a `shared` install the console must not offer an
+		// entry whose banner would assert a state that deployment contradicts.
+		// The server refuses to GRANT it there either (handleSetMemberMode); this
+		// field is what keeps the control from appearing, and that refusal is the
+		// defence in depth behind it.
+		//
+		// ANDed with the two admin tiers — a member has nothing to pause — while
+		// the console still applies the "SSO session" half of the rule, the same
+		// predicate that hides the plain entry.
+		"member_preview_available": s.memberPreviewApplies(r.Context(), r) &&
+			(s.isOperator(r.Context()) || s.isSecurityOperator(r.Context())),
 	}
 	// M3: the AddWorkspaceDialog root-constraint hint (member-role-desktop.md
 	// §DECISIONS O1, ui-batch2-mock.md's "New wire this mock assumes"). null for

@@ -15,11 +15,13 @@ package api
 // Its own file: modelaccess_test.go is past 1000 lines (scripts/check-file-size.sh).
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -160,6 +162,138 @@ func TestMemberPreview_SetupStatusGradesNotSignedIn(t *testing.T) {
 	}
 	if !hasAWSHarnessRow(harness) {
 		t.Error("plain member mode dropped the captured aws row")
+	}
+
+	// THE PER-USER-ONLY PIN (F2). The guard lives INSIDE readAWSSSOBlob's
+	// `if scope.perUser`, and that placement is the security property, not a
+	// detail: the zero scope is the OPERATOR namespace, the one credential a
+	// `shared` install gives every run. Hoisting the term one block up would
+	// hide it from an admin on a deployment where no member has a sign-in of
+	// their own to be missing — and every other case here stays green when you
+	// do, which is why this arm exists. A hand-built mmnc cookie is used
+	// deliberately: the toggle refuses to GRANT the posture here (see
+	// TestMemberPreview_SharedRosterDowngradesToThePlainMode), so this pins the
+	// READ even if the bit arrives some other way.
+	shared, _, sharedSec, _ := memberPreviewSrv(t, types.AgentProvider{
+		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
+	})
+	putScopedSSOBlob(t, sharedSec, "", awsSSOTestFixedNow.Add(time.Hour), "operator-access-token")
+	plainMA, plainRows := previewSetupStatus(t, shared, memberPreviewSession(t, true, false))
+	previewMA, previewRows := previewSetupStatus(t, shared, memberPreviewSession(t, true, true))
+	if previewMA != plainMA {
+		t.Errorf("on a SHARED roster the preview graded %+v, want exactly what the plain mode grades (%+v) — "+
+			"the guard reached the operator namespace, which is the credential the whole install runs on", previewMA, plainMA)
+	}
+	if !hasAWSHarnessRow(previewRows) || len(previewRows) != len(plainRows) {
+		t.Errorf("on a SHARED roster the preview changed the harness rows: %+v vs plain %+v", previewRows, plainRows)
+	}
+}
+
+// TestMemberPreview_SharedRosterDowngradesToThePlainMode is F1: the posture is
+// GRANTED by the server, never taken from the body. Where the model-access
+// agent's row is `shared` the preview hides nothing, so entering it would paint
+// "not signed in to AWS — runs that need it are refused" over a /setup/status
+// that grades live and a POST /runs that answers 201. The toggle answers the
+// PLAIN mode instead, /me says so, the audit row carries no marker, and /me
+// tells the console not to offer the entry at all.
+func TestMemberPreview_SharedRosterDowngradesToThePlainMode(t *testing.T) {
+	srv, audit, sec, _ := memberPreviewSrv(t, types.AgentProvider{
+		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
+	})
+	putScopedSSOBlob(t, sec, "", awsSSOTestFixedNow.Add(time.Hour), "operator-access-token")
+	admin := memberPreviewSessionAs(t, memberPreviewAdminSub, oidc.RoleAdmin, false, false)
+
+	if me := meBody(t, srv, admin); me["member_preview_available"] != false {
+		t.Errorf("/me member_preview_available = %v on a shared roster, want false", me["member_preview_available"])
+	}
+
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/member-mode", admin, `{"enabled":true,"no_credential":true}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("toggle = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode toggle response: %v", err)
+	}
+	if body["member_mode"] != true || body["member_mode_no_credential"] != false {
+		t.Errorf("toggle response = %v, want member_mode true and no_credential FALSE on a shared roster", body)
+	}
+	cookies := w.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("the toggle wrote %d cookies, want 1", len(cookies))
+	}
+	me := meBody(t, srv, cookies[0])
+	if me["member_mode"] != true || me["member_mode_no_credential"] != false {
+		t.Errorf("/me = member_mode:%v no_credential:%v, want true/false", me["member_mode"], me["member_mode_no_credential"])
+	}
+	rows := audit.find("auth.member_mode")
+	if len(rows) != 1 {
+		t.Fatalf("auth.member_mode rows = %d, want 1", len(rows))
+	}
+	datum := map[string]any{}
+	if err := json.Unmarshal(rows[0].Data, &datum); err != nil {
+		t.Fatalf("decode audit datum: %v", err)
+	}
+	if _, present := datum["no_credential"]; present {
+		t.Errorf("a downgraded toggle audited no_credential: %v — the key must name the posture the session IS in", datum)
+	}
+	// …and the credential it would have hidden is still there.
+	if ma, harness := previewSetupStatus(t, srv, cookies[0]); ma.State != modelAccessLive || !hasAWSHarnessRow(harness) {
+		t.Errorf("after the downgrade /setup/status = %+v (aws row %v), want the untouched shared credential",
+			ma, hasAWSHarnessRow(harness))
+	}
+
+	// THE CONTROL: the same request on a per_user roster IS granted.
+	perUser, _, perUserSec, _ := memberPreviewSrv(t)
+	putScopedSSOBlob(t, perUserSec, memberPreviewAdminSub, awsSSOTestFixedNow.Add(time.Hour), "admin-access-token")
+	if me := meBody(t, perUser, admin); me["member_preview_available"] != true {
+		t.Errorf("/me member_preview_available = %v on a per_user roster, want true", me["member_preview_available"])
+	}
+	w = doSSO(t, perUser, http.MethodPost, "/api/v1/me/member-mode", admin, `{"enabled":true,"no_credential":true}`)
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode toggle response: %v", err)
+	}
+	if body["member_mode_no_credential"] != true {
+		t.Errorf("per_user toggle response = %v, want the posture GRANTED", body)
+	}
+}
+
+// TestMemberPreview_RealMemberIsNeverGrantedThePosture is F4. SetMemberMode
+// writes a real member no cookie at all, so echoing their request would report
+// and AUDIT a posture nobody is in — and would make this row's own
+// docs/AUDIT-ACTIONS.md sentence false.
+func TestMemberPreview_RealMemberIsNeverGrantedThePosture(t *testing.T) {
+	srv, audit, _, _ := memberPreviewSrv(t)
+	member := memberPreviewSessionAs(t, "sub-real-member", oidc.RoleMember, false, false)
+
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/me/member-mode", member, `{"enabled":true,"no_credential":true}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("member toggle = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode toggle response: %v", err)
+	}
+	if body["member_mode_no_credential"] != false {
+		t.Errorf("a real member's request echoed member_mode_no_credential:%v, want false — no cookie was written", body["member_mode_no_credential"])
+	}
+	rows := audit.find("auth.member_mode")
+	if len(rows) != 1 {
+		t.Fatalf("auth.member_mode rows = %d, want 1", len(rows))
+	}
+	datum := map[string]any{}
+	if err := json.Unmarshal(rows[0].Data, &datum); err != nil {
+		t.Fatalf("decode audit datum: %v", err)
+	}
+	if _, present := datum["no_credential"]; present {
+		t.Errorf("a real member's row carries no_credential: %v", datum)
+	}
+	if datum["real_role"] != oidc.RoleMember {
+		t.Errorf("real_role = %v, want member", datum["real_role"])
+	}
+	// A member is never offered the control either.
+	if me := meBody(t, srv, member); me["member_preview_available"] != false {
+		t.Errorf("/me member_preview_available = %v for a member, want false", me["member_preview_available"])
 	}
 }
 
@@ -349,5 +483,51 @@ func TestMemberPreview_NonGatedRunAlsoReadsAbsent(t *testing.T) {
 	if specSSOPayload(spec) != "" {
 		t.Errorf("the preview's own ungated run carries AWS SSO material (%s set) — "+
 			"the admin's captured session reached a sandbox", awsSSOConfigEnvVar)
+	}
+}
+
+// ctxFromCookie drives a cookie through the REAL OIDC middleware and returns the
+// context it published — the same context every handler downstream reads, and
+// the only honest way to ask a ctx-keyed predicate a question in a test.
+func ctxFromCookie(t *testing.T, srv *Server, cookie *http.Cookie) context.Context {
+	t.Helper()
+	var got context.Context
+	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { got = r.Context() })
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.AddCookie(cookie)
+	srv.cfg.OIDC.Middleware(next).ServeHTTP(httptest.NewRecorder(), req)
+	if got == nil {
+		t.Fatal("the middleware published no context — the cookie did not authenticate")
+	}
+	return got
+}
+
+// TestMemberPreview_DispatchResolveReadsAbsent is F3: the DISPATCH-side claim,
+// pinned directly. The create gate always refuses a model run first, so no
+// route reaches resolveBedrockAuth inside the preview — which left
+// membermode_preview.go's "dispatch's resolveBedrockAuth answers not signed in"
+// asserted by nothing. This calls it on the context the real middleware
+// publishes for each cookie, so it reds the moment the guard stops firing.
+func TestMemberPreview_DispatchResolveReadsAbsent(t *testing.T) {
+	srv, _, sec, _ := memberPreviewSrv(t)
+	putScopedSSOBlob(t, sec, memberPreviewAdminSub, awsSSOTestFixedNow.Add(time.Hour), "admin-access-token")
+	scope := awsSSOScope{perUser: true, owner: memberPreviewAdminSub}
+
+	preview := srv.resolveBedrockAuth(ctxFromCookie(t, srv, memberPreviewSession(t, true, true)),
+		"claude-code", false, true, false, nil, scope)
+	if preview.ready || preview.ssoInject {
+		t.Errorf("inside the preview dispatch resolved ready=%v ssoInject=%v — the admin's own session credentials a run",
+			preview.ready, preview.ssoInject)
+	}
+	if preview.env[awsSSOConfigEnvVar] != "" {
+		t.Error("inside the preview dispatch composed the ~/.aws bundle")
+	}
+
+	// CONTROL: the identical call on the PLAIN cookie takes the SSO lane, so the
+	// absence above is the guard and not an inert fixture.
+	plain := srv.resolveBedrockAuth(ctxFromCookie(t, srv, memberPreviewSession(t, true, false)),
+		"claude-code", false, true, false, nil, scope)
+	if !plain.ready || !plain.ssoInject {
+		t.Fatalf("the plain mode must still resolve the owner's own session: ready=%v ssoInject=%v", plain.ready, plain.ssoInject)
 	}
 }

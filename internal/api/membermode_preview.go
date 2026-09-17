@@ -14,6 +14,7 @@ package api
 
 import (
 	"context"
+	"net/http"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
@@ -71,4 +72,36 @@ const (
 // not inherit it silently.
 func previewHidesOwnCredential(ctx context.Context) bool {
 	return oidc.MemberPreviewNoCredential(ctx)
+}
+
+// memberPreviewApplies reports whether the no-credential posture would MEAN
+// anything on this deployment for this caller: the model-access agent's roster
+// row has to name a credential PER PERSON.
+//
+// It is the AVAILABILITY rule, enforced at the write (the toggle) and published
+// on /me, rather than left to the console. Under a `shared` row — or any install
+// with no enabled bedrock_sso/per_user row — the guard in readAWSSSOBlob
+// deliberately never fires, so entering the posture there would paint a banner
+// saying "not signed in to AWS … runs that need it are refused" over a
+// /setup/status that grades `live` and a POST /runs that answers 201. A sentence
+// false on some deployments is the exact defect class this release exists to
+// close, and the strings are canon — so the fix is availability, not wording.
+// On `shared` the caller lands in the PLAIN mode, whose banner is true
+// everywhere.
+//
+// FAIL-CLOSED on a roster that could not be read: ok=false answers false, so a
+// store blip downgrades to the plain mode rather than promising a hiding that
+// will not happen. A nil store is not that blip — awsSSOScopeForAgent reads it
+// as an install with no roster, which is a deployment with no per-user estate
+// and therefore correctly unavailable.
+//
+// RESIDUAL, documented rather than coded (docs/OPERATIONS.md): an admin already
+// inside the preview when an admin flips the roster per_user -> shared keeps the
+// variant banner until they exit. The cookie is the record of what they asked
+// for, and re-reading the roster on every render to expire a banner would put a
+// store read on every screen.
+func (s *Server) memberPreviewApplies(ctx context.Context, r *http.Request) bool {
+	scope, ok := s.awsSSOScopeForAgent(ctx, modelAccessAgent,
+		runIdentitySubject(ctx, principalFromRequest(r)))
+	return ok && scope.perUser
 }
