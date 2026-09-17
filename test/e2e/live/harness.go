@@ -222,6 +222,14 @@ func (h *harness) seedWorkspace(task Task, runLabel string, oracle bool) string 
 		}
 		copyFileExec(h.t, filepath.Join(task.dir, "solution.sh"), filepath.Join(td, "solution.sh"))
 	}
+	// WRITABLE BY THE SANDBOX'S UID, not just this process's. The agent runs as
+	// uid 1000 inside the container and this dir is bind-mounted in; on a dev box
+	// the person running the suite is usually uid 1000 too, so 0755 "works". A
+	// GitHub-hosted runner is uid 1001: the oracle could not write one file, the
+	// run still COMPLETED, and every grader then failed on "index.html missing" —
+	// which read like five broken tasks rather than one unwritable mount. These are
+	// throwaway per-run dirs under the e2e work root; open them up.
+	openForSandbox(h.t, ws)
 	// ONBOARD the seeded dir so it passes the run-create mount gate
 	// (validateWorkspaceSources rejects any local-dir mount source that is not a
 	// pre-onboarded workspace). Every live lane mounts its seeded workspace, so
@@ -229,6 +237,32 @@ func (h *harness) seedWorkspace(task Task, runLabel string, oracle bool) string 
 	// — the real operator flow (onboard, then mount), not a bypass.
 	h.onboardLocalDir(ws)
 	return ws
+}
+
+// openForSandbox makes a seeded workspace tree writable by any uid: dirs 0777,
+// files gain rw for everyone and keep whatever exec bits they had. See the call
+// site in seedWorkspace for why the sandbox's uid is not this process's.
+func openForSandbox(t *testing.T, root string) {
+	t.Helper()
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, werr error) error {
+		if werr != nil {
+			return werr
+		}
+		info, ierr := d.Info()
+		if ierr != nil {
+			return ierr
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
+		if d.IsDir() {
+			return os.Chmod(p, 0o777)
+		}
+		return os.Chmod(p, info.Mode().Perm()|0o666)
+	})
+	if err != nil {
+		t.Fatalf("open workspace %s for the sandbox uid: %v", root, err)
+	}
 }
 
 // onboardLocalDir registers a host dir as an onboarded local_dir workspace via
