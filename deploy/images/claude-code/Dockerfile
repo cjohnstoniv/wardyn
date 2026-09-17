@@ -294,6 +294,23 @@ RUN git config --system credential.helper \
 # fallback only for api-key mode.
 ENV ANTHROPIC_BASE_URL=http://wardyn-proxy:3128/wardyn/llm/anthropic
 
+# The agent's own updater and non-essential traffic, OFF for every process in
+# this image. The startup version check is INDEPENDENT of install method: this
+# image installs claude from npm at a pinned CLAUDE_CODE_VERSION, so the BUILD
+# never touches downloads.claude.ai (the native arm above is the only place it
+# appears) and the CLI still dials it on the first run inside the sandbox —
+# which, against the shipped default policy, parks a first-use approval on
+# Anthropic's own CDN before the operator has asked the agent for anything.
+# Delete the traffic rather than widen the policy: a version-pinned image must
+# not self-update. `claude update` still works when a human asks for it.
+#
+# agent-run-lib.sh exports the same two vars with `:-` defaults, and that is not
+# a duplicate — the two paths are disjoint. This ENV covers an attach shell where
+# a human types `claude` and agent-run never ran; the library export covers a
+# BYOI/corp image that COPYs agent-run but not this Dockerfile.
+ENV DISABLE_AUTOUPDATER=1 \
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+
 WORKDIR /home/agent/work
 
 USER agent

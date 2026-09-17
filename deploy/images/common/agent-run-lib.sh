@@ -10,6 +10,33 @@
 #
 # Requires `set -euo pipefail` and bash (matches agent-run itself).
 
+# ── Agent-harness self-update / telemetry OFF ────────────────────────────────
+# Claude Code checks downloads.claude.ai for a newer release ON STARTUP, and that
+# check is INDEPENDENT of how it was installed: our image installs it from npm at
+# a pinned version (CLAUDE_INSTALL=npm, claude-code/Dockerfile), so the build
+# never touches that CDN — and the CLI still dials it on the first run inside the
+# sandbox. Against the shipped default policy (examples/policies/default.json,
+# which does not list it) that parks a first_use_approval on Anthropic's own CDN
+# before the operator has asked the agent to do anything: the FIRST thing a new
+# member ever sees of the governance model is a prompt about a host they did not
+# choose. The fix is to delete the traffic, not to widen the policy — a pinned
+# image must never self-update anyway (CLAUDE_CODE_VERSION is the contract, and a
+# sandbox that upgrades itself mid-run is not the artifact that was scanned).
+#
+# CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 drops the same startup's telemetry /
+# error-intake and changelog fetches, which are the other non-model hosts a boot
+# reaches for.
+#
+# Set HERE as well as in the image Dockerfile because the two paths are disjoint:
+# the Dockerfile ENV covers an attach shell where a human types `claude` and
+# agent-run never ran, and this export covers a BYOI/corp image that COPYs
+# agent-run + this library but not our Dockerfile. `:-` in both, so an operator
+# who deliberately wants the updater can still set the var to 0 on the run.
+# Exported at SOURCE time, not from a prep function, so `--selftest` (which
+# returns long before any prep) reports the same env a real run gets.
+export DISABLE_AUTOUPDATER="${DISABLE_AUTOUPDATER:-1}"
+export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-1}"
+
 # ── TLS-MITM CA install ───────────────────────────────────────────────────────
 # When the run opts into intercept_tls, dispatch delivers the per-run CA PUBLIC
 # cert in WARDYN_MITM_CA_PEM and points NODE_EXTRA_CA_CERTS at the bare CA
@@ -128,15 +155,52 @@ materialize_managed_claude_config() {
     if printf '%s' "$WARDYN_CLAUDE_MANAGED_B64" | base64 -d > "$cfg/.credentials.json" 2>/dev/null; then
         chmod 0600 "$cfg/.credentials.json" 2>/dev/null || true
     fi
-    # Onboarding-complete marker so an interactive managed session doesn't prompt.
-    [[ -f "${HOME}/.claude.json" ]] || printf '%s\n' '{"hasCompletedOnboarding":true}' > "${HOME}/.claude.json" 2>/dev/null || true
-    # Claude v1 reads $HOME/.claude.json; v2 with CLAUDE_CONFIG_DIR set keeps its
-    # state file INSIDE the config dir — with only the v1 marker, v2 declared the
-    # install brand-new and showed the login picker without ever reading the
-    # sentinel beside it. Fill-missing only: prepare_claude_config_dir may have
-    # copied a RESIDENT $HOME/.claude.json here already, and a state file claude
-    # itself wrote must never be clobbered.
-    [[ -f "${cfg}/.claude.json" ]] || printf '%s\n' '{"hasCompletedOnboarding":true}' > "${cfg}/.claude.json" 2>/dev/null || true
+    # The onboarding marker this function used to write for the managed lane alone
+    # is now seed_claude_onboarding below, called UNCONDITIONALLY — every mode
+    # needs it, not just managed. Managed mode is unchanged: the same two files
+    # with the same one key, written before this runs.
+}
+
+# ── Claude onboarding seed (product onboarding, never a security prompt) ─────
+# A first-run `claude` with no state file walks the operator through its own
+# first-use screens BEFORE it can reach the model: the theme picker and the
+# "Security notes / Press Enter to continue" page. Under bedrock_sso nothing
+# writes that state file (the managed-subscription path above is the only thing
+# that ever did, and it returns immediately unless WARDYN_CLAUDE_MANAGED_B64 is
+# set), so an INTERACTIVE run came up on a product tour instead of a prompt — the
+# reason ui/e2e/live/sso-member.spec.ts could only ever launch an AUTONOMOUS run.
+#
+# Measured on claude 2.1.231 (local/v075/evidence/w0-spike/RESULT.md):
+# `{"hasCompletedOnboarding": true}` alone removes BOTH of those screens, so that
+# is the WHOLE key set. Deliberately NOT seeded:
+#   - `theme` — the picker is already gone with the key above; seeding it would
+#     invent a user-visible default nobody chose.
+#   - `projects.<workdir>.hasTrustDialogAccepted` — the workspace-trust screen is
+#     a SECURITY prompt ("do you trust this folder's code and its project
+#     settings?"), and it is the one screen a human is MEANT to see. Pre-accepting
+#     it cannot even buy an unattended seeded run: under WARDYN_SEED_AUTO_TOOLS=1
+#     the CLI raises its own "Bypass Permissions mode" confirmation, whose default
+#     selection is `No, exit`. So the seed would hide a security question and
+#     still not start the run.
+#   - `bypassPermissionsModeAccepted` — answering that confirmation on the
+#     operator's behalf is a new security decision, not product onboarding.
+# Wardyn pre-answers product onboarding only. That boundary is pinned by test
+# (TestSeedClaudeOnboarding_NeverSeedsASecurityKey) precisely because the next
+# "one more key and it boots unattended" edit is the tempting one.
+#
+# BOTH files, fill-missing only: claude v1 reads $HOME/.claude.json, v2 with
+# CLAUDE_CONFIG_DIR set keeps its state INSIDE the config dir. CLAUDE_CONFIG_DIR
+# is UNSET on the bedrock lane (dispatch sets it only for the subscription and
+# managed lanes), so the second path is the ${CLAUDE_CONFIG_DIR:-$HOME/.claude}
+# fallback there. Never clobbers: a resident state file, or one claude itself
+# wrote, is the operator's — this only fills a file that is not there at all.
+seed_claude_onboarding() {
+    local cfg="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}"
+    mkdir -p "$cfg" 2>/dev/null || true
+    local f
+    for f in "${HOME}/.claude.json" "${cfg}/.claude.json"; do
+        [[ -f "$f" ]] || printf '%s\n' '{"hasCompletedOnboarding":true}' > "$f" 2>/dev/null || true
+    done
 }
 
 # ── Artifact-registry redirect config ────────────────────────────────────────
