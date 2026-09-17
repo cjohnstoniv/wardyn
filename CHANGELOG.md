@@ -14,12 +14,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   The response carries
   `model_credential {mechanism, residency, credential_source, staged_placeholder}`
   — `proxy` / `sandbox` / `image` / `unknown` — graded from the lane that
-  ACTUALLY resolves for that exact body, never from the agent roster's declared
-  mechanism (under a `shared` row that declared lane is satisfied by a chain that
-  fell through to the host `~/.aws` mount or to resident SigV4 keys). Omitted for
-  a run that makes no model call, and for the `422` a refusal answers with. A
-  table test pins every model-credential row of THREAT-MODEL's resident-secret
-  exceptions table, so the threat model and the console can no longer disagree.
+  ACTUALLY resolves for that exact body, not from the roster's declared
+  mechanism — except the two cases a row settles by itself (`per_user` +
+  `bedrock_sso` → `sandbox`; a `none` row with no lane → `image`) — so a `shared`
+  row that declared lane is satisfied by a chain that fell through to the host
+  `~/.aws` mount or to resident SigV4 keys grades the lane that actually
+  resolved. Omitted for a run that makes no model call, and for the `422` a
+  refusal answers with. A table test pins the grader against a hand-mirrored
+  copy of every model-credential row of THREAT-MODEL's resident-secret table;
+  nothing parses the document, so a new row there needs a case added by hand.
 - **`GET /setup/status`'s harness rows carry `credential_residency` for the one
   row shape a roster settles by itself**: an enabled `per_user` + `bedrock_sso`
   row, which is `sandbox` whether or not that person has signed in. That is the
@@ -56,15 +59,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
     anything else to the plain mode.
 - **Member mode's ceilings gain a fourth** (`docs/OPERATIONS.md`, and the banner tooltip
   that is actually on screen when the mistake is made): in the PLAIN toggle, model access
-  and ownership still resolve to you — use the new preview to see the not-signed-in state.
+  and ownership still resolve to you. On a `per_user` deployment the new preview shows the
+  not-signed-in state; the tooltip names no control, because the preview is not offered on
+  shared/legacy deployments or while a mode is on.
+- `/me` computes `member_preview_available` for the two admin tiers only, so a member's poll adds
+  no store read of the agent roster.
 
 ### Fixed
 
-- **Kubernetes: `disk_mib` now bounds the agent's writes to `/tmp` and its workdir
-  `/home/agent/work`, narrowing 0.7.4's known gap (a).** A run's `disk_mib` was the agent
-  container's `resources.limits[ephemeral-storage]` and nothing else, so it bound a container
-  nothing writes in: the agent's commands run in an ephemeral container `Exec` attaches to the pod,
-  and the kubelet meters no part of an ephemeral container's writable layer. `CreateSandbox` now
+- **Kubernetes: `disk_mib` now bounds an AUTONOMOUS (task-mode) run's writes to `/tmp` and its
+  workdir `/home/agent/work`, narrowing 0.7.4's first known gap.** A run's `disk_mib` was the agent
+  container's `resources.limits[ephemeral-storage]` and nothing else, so on an autonomous run it
+  bound a container nothing writes in: the agent's commands run in an ephemeral container `Exec`
+  attaches to the pod, and the kubelet meters no part of an ephemeral container's writable layer.
+  (An INTERACTIVE run never calls `Exec` before an attach — its agent runs in the pod's own main
+  container, whose whole writable layer the kubelet has metered against `disk_mib` since 0.7.2; this
+  fix and the gap below do not touch it.) `CreateSandbox` now
   also mounts two whole-volume `emptyDir`s on the agent container, each with `sizeLimit` =
   `disk_mib` — `wardyn-tmp` at `/tmp` and `wardyn-work` at `/home/agent/work` — and the ephemeral
   container inherits them, because `Exec` copies the main container's mounts verbatim. An
@@ -81,7 +91,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `ephemeral-storage` total as well, proven on kind — a pod with the run's shape, writing 40Mi into
   each of two 64Mi volumes against a 64Mi container limit, is evicted with `Pod ephemeral local
   storage usage exceeds the total limit of containers 64Mi.` A run with no `disk_mib` gets no
-  volumes at all, exactly the pod shape this substrate produced before. The conformance case
+  scratch volumes, exactly the pod shape this substrate produced before. The conformance case
   `TestConformanceK8s/EphemeralDiskLimit/OverTheLimitTheRunIsEvicted`, red in CI since 0.7.2, now
   runs once per fill target (`/tmp` and the workdir) and passes against a real apiserver; a new k8s
   case `ExecIsAcceptedWithADiskBudget` pins that the apiserver admits the ephemeral container a
@@ -102,21 +112,23 @@ and does not yet follow semantic versioning (interfaces are not stable).
   governing row the result is never "Your key" and never "Provided by your admin" —
   it is "Your AWS sign-in" (live/renewable), "Your AWS sign-in · Expiring" (with a
   Sign in to AWS button), or "Not signed in" (with the same button, and the
-  checklist item stays NOT done). A member's own leftover API key under a `per_user`
-  row (or, FIX PASS 1: a SHARED row whose declared mechanism is Bedrock) is ignored
+  checklist item stays NOT done). An expired sign-in reads "Signed out" with the
+  same button; `not_applicable` or an unreadable state claims nothing (below).
+  A member's own leftover API key under a `per_user`
+  row (or a SHARED row whose declared mechanism is Bedrock) is ignored
   for this purpose, EVERYWHERE it is read — that lane's dispatch mechanism can never
   accept one, so "Your key" + a done checklist would have sat over runs that are all
   refused. Reported by the 0.7.4 field report (finding 2).
   - The card's "Sign in to AWS" button and the page's existing chip-row button now
     both open the SAME sign-in pane (`setAwsLoginOpen`) — one pane, two entry points.
-  - FIX PASS 1: the page's OWN "Model access · Your key" chip, action line, and
+  - The page's OWN "Model access · Your key" chip, action line, and
     Sign-in button were still reading the bare `hasOwnKey` — a stale `mine` write
     from before an admin switched the roster to per_user (or Bedrock) left the chip
     row claiming "Your key" over a card that, one line below, said "Not signed in",
     and left the card's own new button dead (clicking it did nothing — the pane
     mount was ALSO gated on the same bare `hasOwnKey`). All three now read the same
     `ownKeyApplies`-gated predicate the card uses.
-  - W6: the card's own chips for `expired_signin` and `shared_expired` now drop the
+  - The card's own chips for `expired_signin` and `shared_expired` now drop the
     `Model access · ` qualifier the reused frozen strings carry — the card's own
     heading ("Your model key") is already the subject, so the qualifier stated a
     second one. *"There is nothing to set up for this sign-in."* now renders for the
@@ -125,7 +137,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **A shared credential whose lane is Bedrock could still offer "Use my own key
   instead."** `mechanismSatisfied` refuses an Anthropic/OpenAI key on ANY Bedrock
   roster row, not only a per_user one — so a `shared` row with a Bedrock mechanism
-  was, before FIX PASS 1, the one combination left over: the card still let a member
+  was, before this fix, the one combination left over: the card still let a member
   bring their own key, and a leftover key still said "Your key" / Done. It now
   behaves like a per_user row for this purpose (own key ignored, no bring-your-own
   form), but is graded on the deployment-wide `llmReady`/`shared_expired` rather than
@@ -171,12 +183,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   30 idle minutes, which is what the reaper actually does with
   `harnessLoginIdleCap`. The old clause ("closes itself when it is done")
   described the console pane's own `killRun`, which the Runs-list path never
-  gets. W6: the banner is now byte-identical for both image generations (it no
+  gets. The banner is now byte-identical for both image generations (it no
   longer asserts the sign-in is "already running", which was false for an
   older-pinned image and for a login run that had already finished) and renders
   only while the run is RUNNING.
-- **A first Claude Code run no longer parks an approval on the agent's own
-  bootstrap.** On its first REPL start the CLI auto-installed the official plugin
+- **A first Claude Code run on an image carrying 0.7.5's three `ENV` lines no
+  longer parks an approval on the agent's own bootstrap.** On its first REPL
+  start the CLI auto-installed the official plugin
   marketplace from `downloads.claude.ai`, git-falling-back to `github.com` —
   exactly the two hosts a private estate reported parking before anyone had asked
   the agent to do anything. The claude-code image now sets
@@ -224,23 +237,28 @@ and does not yet follow semantic versioning (interfaces are not stable).
   second promises recording that a stock Helm install
   (`persistence.enabled=false`, the chart's own default) never captures. Both
   facts are now read from the server, and where the server has not answered the
-  rail states neither. (Appendix A finding 1)
+  rail states neither.
 - **A retry after an interrupted AWS SSO sign-in no longer reports a capture the server does not
-  have.** Starting a sign-in now closes that person's previous sign-in sandbox server-side (before
-  the new run is created, so a concurrency cap cannot refuse the retry), a closed sandbox's late
-  credential upload is refused (`harness.credential.refused`, `reason = run_killed`), and the
-  console's capture check re-reads the server's status a few times before accusing the sandbox — a
-  status read can answer correctly and still be a moment behind the capture it is being asked about.
-  The refusal sentence now names both causes and what each one needs from the person.
+  have.** Starting a sign-in now closes that person's previous sign-in sandbox for the same agent
+  server-side, best-effort (before the new run is created, so a concurrency cap does not refuse the
+  retry in the ordinary case) — the Claude subscription login sandbox follows the same rule — a
+  closed sandbox's late credential upload is refused (`harness.credential.refused`,
+  `reason = run_killed`), and the console's capture check re-reads the server's status a few times
+  before accusing the sandbox — a status read can answer correctly and still be a moment behind the
+  capture it is being asked about. The sandbox-side `run_killed` refusal names both causes (replaced,
+  or cancelled) and where to finish.
 - **The sign-in pane no longer gives up on a sandbox that is starting normally.** The wait was
   budgeted in poll ticks ("15 ≈ 30s", in practice anything from 30 seconds to fifteen minutes) and a
   measured 131-second first image pull — with healthy reads throughout — was narrated as an ordinary
   start until it wasn't. The wait is now measured on the clock and says which wait it is in: still
-  starting, still starting but slow (the usual cause is a first pull after an upgrade), reads are
+  starting, still starting but slow (a first start may need to pull the image), reads are
   failing but still retrying, or — after five minutes of failing reads — that Wardyn cannot read the
-  run. Cancel still ends the sandbox in every one of them.
-- Nightly CI is green again on a cold runner. Three independent harness defects kept four nightly
-  jobs red since 0.7.0, none of them a product regression and none of them visible to PR CI:
+  run. Cancel still asks the server to end the sandbox in every one of them; where Wardyn cannot be
+  reached the request is lost, and the sandbox ends at its 30-minute idle cap or the person's next
+  sign-in.
+- Four harness defects that kept four nightly jobs red since 0.7.0 are fixed; a green hosted
+  nightly has not been observed yet (see Known gaps). None was a product regression and none was
+  visible to PR CI:
   - `task-e2e-live`: the live e2e's recording seeder (`seedScriptWorkspace`) never onboarded the
     workspace it created, so every recording run was refused by the run-create mount gate
     ("is not an onboarded local directory"). It passed on a developer box only because onboarded
@@ -257,9 +275,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   - `docker-tagged-live`: `TestStandalone_CapabilityHonesty` still asserted an unconditional
     `SessionRecording: true` after the capability became honest (it mirrors `Config.Record`). The
     test now builds the driver the way a recording daemon does and pins the `Record=false` arm too.
-- **Eight console sentences that were false on some deployment.** A blind read of
-  every sentence 0.7.5 added or moved, against the states the server actually
-  emits, found claims that are true on the estate they were written for and
+- **Eight console sentences that were false on some deployment.** A systematic
+  check of every sentence 0.7.5 added or moved, against the states the server
+  actually emits, found claims that are true on the estate they were written for and
   wrong elsewhere. All eight are now either GATED on the state that makes them
   true or replaced by a no-claim state — no surface guesses:
   - A member on a **shared** Bedrock deployment read *"Model access · Your AWS
@@ -306,14 +324,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - Two AWS SSO sign-ins started at the same moment for one person (a double-click, or the console and
   a `wdn_` token) no longer leave two live sign-in sandboxes in the ordinary case. The launch
   re-checks once its own run row exists and ends only the caller's older sign-ins, a deterministic
-  order that holds across replicas without a lock, and never leaves the person with nothing signed
-  in. See Known gaps for the interleaving it does not cover.
+  order that holds across replicas without a lock, and the re-check itself never ends the last live
+  sign-in sandbox (a launch that fails after its first pass can still leave none — see Known gaps).
 - A sign-in sandbox superseded while its credential upload was already in flight can no longer
   overwrite the capture that replaced it: the upload door re-reads the run's state immediately
   before it stores and refuses `run_killed` there too.
-- `GET /me` no longer reads the agent roster for callers who cannot use the answer. The
-  member-preview availability check now short-circuits on the caller's tier first, taking a store
-  read off every member's poll of the console's most-polled route.
 - **The `conformance` CI job builds the two local-only images its new
   boot-egress case needs.** 0.7.5's `TestBootEgress_NoFirstUseApproval` boots the
   real claude-code image behind the real `wardyn-proxy` sidecar; neither
@@ -331,8 +346,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `downloads.claude.ai` (git-falling-back to `github.com`), self-updating and
   fetching a changelog lived only in `agent-claude-code`, which has not been
   published since 0.6.2. The vars are inert in an image with no Claude Code; what
-  they buy is that every derived image inherits the quiet boot without having to
-  know the list exists. `deploy/images/README.md` now states that contract (these
+  they buy is that an image (re)built `FROM agent-base:0.7.5` inherits the quiet
+  boot without having to know the list exists. `deploy/images/README.md` now
+  states that contract (these
   ENV lines — not an `agent-run` export, which a default interactive run's
   `claude` never inherits — plus a `seed_claude_onboarding` call).
 - **A codex-cli interactive run no longer loses its seed to an early attach.**
@@ -342,9 +358,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   run attached during prep hit `duplicate session: wardyn`, dropped the seed, and
   had its shell auto-start suppressed by the marker — a bare prompt with the
   operator's task text gone and no record anywhere a human looks. The
-  create-or-take-over bootstrap, the boot pane's prep wait (bounded by the prep
-  process still running, never a clock) and the git-helper caller-auth secret
-  re-read are now one shared implementation used by all three images.
+  create-or-take-over bootstrap is now one shared implementation used by all
+  three images; the boot pane's prep wait (bounded by the prep process still
+  running, never a clock) and the git-helper caller-auth secret re-read are
+  shared by the two coding-agent images. The aws-sso sign-in pane keeps its own
+  300-second prep wait.
 - **A sign-in pane that cannot do its job still hands over a shell.** Two
   `set -u` expansions — an unset `HOME`, and an unset login command — killed the
   pane AFTER its banner, which is the one point at which the console has stopped
@@ -364,8 +382,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **`claude-code --selftest` honours the documented opt-out.** The three
   self-fetch vars are set with `:-` precisely so a run can turn one back on, and
   the selftest is fail-closed at dispatch — so a deliberate `=0` refused to start
-  the run. It is reported now, not failed. Unset still fails: that is the case
-  the check exists for.
+  the run. It is reported now, not failed. Any other value still fails. The
+  selftest cannot detect an image that lacks the Dockerfile `ENV` lines
+  altogether — the library defaults them before the check ever runs.
+- **The "recording is disabled" sentence (the Recordings library, a run's
+  Recording tab, and now the New Run rail) named the wrong switch.** It has told
+  the reader to set `WARDYN_RECORDING_DIR` since 0.7.1; `WARDYN_RECORDING_DIR`
+  only moves the `fs` store's path and turns nothing on or off. The actual
+  switch is `WARDYN_RECORDING_STORE` (the Helm chart renders `off` while
+  `persistence.enabled=false`), and the sentence now says so:
+  *"No run on this server will ever produce one — set `persistence.enabled`
+  (Helm) or `WARDYN_RECORDING_STORE=pg` to turn it on."*
 
 ### Changed
 
@@ -383,7 +410,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
   a running sign-in would have run a second `wardyn-aws-sso` in the same run,
   which the server refuses as `already_captured`: a fail marker on a capture that
   succeeded. Estates that pin agent images should pull the 0.7.5 aws-sso image at
-  the same upgrade.
+  the same upgrade. **The Claude Code quiet-boot fix needs the same care**:
+  rebuild the claude-code image from the 0.7.5 tree (`make agent-images`, or
+  `docker build -f deploy/images/claude-code/Dockerfile`), or rebuild a derived
+  image `FROM agent-base:0.7.5` re-copying `deploy/images/claude-code/agent-run`
+  and `deploy/images/common/agent-run-lib.sh`. An image on another base must set
+  the three `ENV` lines in its own Dockerfile. An older tag pinned in
+  `WARDYN_AGENT_IMAGES` keeps 0.7.4's behaviour.
 - `run.kill` audit rows can now come from Wardyn itself, carrying `reason =
   superseded_by_new_login`, `superseded_for` and `superseded_by_run`; they audit as `success` like any clean
   kill. A supersede whose teardown or revocation failed audits `failure` with the failing step and writes no
@@ -393,16 +426,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   `harness.credential.refused`'s `run_killed` reason is now decided on BOTH sides of the per-owner
   lock (the late arm carries `owner` + `credential_source` beside it), and `store_error` there now
   also covers the login run's re-read.
-- A kill's teardown/revocation cascade now completes even if the caller's connection dies mid-request
-  (it always did on the kill route; it now does wherever the server kills a run on its own behalf).
+- A kill's teardown/revocation cascade is detached from the caller and runs to its own 30-second
+  bound (`killCascadeTimeout`) even if the caller's connection dies mid-request (it always did on
+  the kill route; it now does wherever the server kills a run on its own behalf).
 - The live AWS SSO walk (`scripts/kind-sso-walk.sh`) now runs TWO spec files in
   one invocation against one cluster — `sso-member` then `sso-member-recovery`.
   The second covers the paths a member who is already signed in cannot reach:
   the agent roster saved from the CONSOLE and a member bound by its three org
   settings (start URL, pinned account, pinned role), the sign-in sandbox running
   its own login and being joined from the Runs list with nothing typed, a
-  cancelled sign-in retried cleanly, an abandoned one superseded, a 90-second
-  `STARTING` hold that must read as slow rather than unreadable, an interactive
+  cancelled sign-in retried cleanly, an abandoned one superseded, a 65-second
+  `STARTING` hold (the run fails at the 90-second pod-IP bound) that must read
+  as slow rather than unreadable, an interactive
   claude-code run reaching Bedrock through one workspace-trust prompt, a first
   run whose approvals list is empty, and the admin's no-credential member
   preview.
@@ -433,9 +468,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - `scripts/kind-sso-walk.sh`'s opt-in rebuild prints one warning that it retags
   the `:local` agent images on the picked daemon, which a compose stack on that
   same daemon adopts for new runs.
+- `make ui-typecheck` now also runs `playwright test --project=live --list`, so a
+  live spec that cannot even be collected (an import reaching a stylesheet, a
+  syntax error) fails PR CI instead of surfacing only in the manual kind walk —
+  the live specs themselves still run only there, never in CI.
 
 ### Known gaps and deferrals
 
+- **The quiet Claude Code boot, the onboarding seed and the early-attach fix reach only images
+  rebuilt on 0.7.5.** `agent-claude-code` is not published; rebuild your derived image
+  `FROM agent-base:0.7.5` and re-copy `deploy/images/claude-code/agent-run` +
+  `deploy/images/common/agent-run-lib.sh`. An image on any other base must set the three `ENV` lines
+  in its own Dockerfile — copying `agent-run` is not enough, because a default interactive run's
+  `claude` is started by the attach shell. An older tag pinned in `WARDYN_AGENT_IMAGES` keeps 0.7.4's
+  behaviour: a first interactive run still parks `downloads.claude.ai` and `github.com`.
 - **Two concurrent sign-ins can still, rarely, both stay alive.** A run's `created_at` is stamped
   in-process just before the row is written, so timestamp order and write order can disagree — most
   plausibly across replicas with clock skew, or after a stall between the two steps. If the run
@@ -457,8 +503,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
   offered the member-side sign-in CTA** (the actionable-state set is shared with
   the per-person lane). The chip beside it now says the credential is the
   admin's.
-- **On Kubernetes, `disk_mib` is NARROWED to `/tmp` and the workdir, not closed.** 0.7.5 put `/tmp`
-  and `/home/agent/work` inside the budget. Everything the agent writes anywhere else stays on the
+- **On Kubernetes, `disk_mib` is NARROWED to `/tmp` and the workdir for an AUTONOMOUS run, not
+  closed.** 0.7.5 put `/tmp` and `/home/agent/work` inside the budget for a run whose agent commands
+  execute through `Exec` (task mode). Everything such a run's agent writes anywhere else stays on the
   ephemeral container's unmetered writable layer: the rest of `$HOME` — including the toolchain
   caches a build actually fills (`/home/agent/go`, `~/.cache/go-build`, `~/.gotmp`, `~/.npm`,
   `~/.cache/pip`) and the dotfiles (`~/.wardyn`, `~/.ssh`, `~/.claude`) — `/opt/rust`, and any
@@ -469,12 +516,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   reserved drive mount point `/home/agent/drive`, and hide the read-only `~/.claude` bind the
   subscription path uses. `readOnlyRootFilesystem` would close the residual and is not set, because
   the agent legitimately writes those paths. Node-level eviction still backstops all of it.
-  **0.7.6 follow-up:** point `GOCACHE`/`GOTMPDIR`/`GOPATH` and the npm cache under the workdir on
-  this substrate, or give the caches a third volume.
+  **An interactive run's agent runs in the pod's own main container, whose whole writable layer —
+  `$HOME` and the toolchain caches included — the kubelet has counted against `disk_mib` since
+  0.7.2; there is nothing outside the cap, so size an interactive run's `disk_mib` for its caches
+  too, not only the clone.** **0.7.6 follow-up:** point `GOCACHE`/`GOTMPDIR`/`GOPATH` and the npm
+  cache under the workdir on this substrate, or give the caches a third volume.
 - **What the 0.7.5 proof does not cover.** The kind conformance proof ran against the busybox
-  conformance-agent image on runc (CC1): no real `agent-run` boot on an `emptyDir`-backed workdir
-  was exercised, and `emptyDir` metering of writes from an ephemeral container is unmeasured under
-  gVisor (CC2) and Kata (CC3).
+  conformance-agent image on runc (CC1): `emptyDir` metering of writes from an ephemeral container is
+  unmeasured under gVisor (CC2) and Kata (CC3). The live kind SSO walk separately exercises a real
+  `agent-run` boot — both the aws-sso sign-in sandbox and a real claude-code run — on the
+  `emptyDir`-backed `/tmp` and `/home/agent/work`, on runc; that walk is manual, not CI (see
+  `docs/TEST-GAPS.md`).
 - **Docker's `/tmp` mount flags have no Kubernetes equivalent, on any confinement class.**
   `nosuid,nodev,noexec` on the Docker path's tmpfs `/tmp` have no counterpart on Kubernetes, before
   or after this change: an `emptyDir` cannot carry mount options. Measured, not assumed — see
@@ -530,11 +582,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   to put the flag in, so it is out of scope here and recorded as a follow-up.
 
 - **The `codex-cli` image still parks five first-use approvals at boot, and this
-  release does not fix it.** Measured with the same harness
-  (`evidence/agent-boot-egress/hosts-wardyn-agent-codex-cli-local.log`): a stock
+  release does not fix it.** Measured with the same harness: a stock
   interactive codex run reaches for `api.github.com`, `github.com`,
   `raw.githubusercontent.com` and `chatgpt.com` within a second of coming up, and
-  `ab.chatgpt.com` about a minute later. The claude-code fix is two environment variables; codex-cli has
+  `ab.chatgpt.com` about a minute later. The claude-code fix is three environment variables; codex-cli has
   no equivalent — every `CODEX_*` name in the shipped binary (0.149.1) was
   enumerated and none disables an update check or telemetry, and the two
   `chatgpt.com` hosts are an unauthenticated CLI reaching for sign-in and feature
@@ -544,7 +595,9 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - The rail states a model-credential residency with **no click** only under a
   per-person Bedrock SSO roster row. On every other deployment the honest answer
   needs the run to be described first, so the rail says "Resolved at launch."
-  until **Preflight** is pressed.
+  until Preflight answers with a residency — a verdict that carries none (a
+  0.7.4 daemon, a roster read that failed) leaves the same sentence up, minus
+  the now-false Preflight hint.
 - A model-credential secret deleted **between Preflight and Launch** can drop a
   `shared` roster row from the never-resident Bedrock bearer lane onto a resident
   SigV4 one while the rail still shows the Preflight verdict. The dispatch-time
@@ -570,9 +623,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - It does not exercise a **genuinely cold image pull**. Images reach the kind
   node by `kind load` and the sandbox pod pulls `IfNotPresent`, so nothing is
   fetched from a registry on any walk. The cold-start case manufactures its
-  90-second hold with a node taint, which reproduces a pod that cannot start —
-  not a slow registry, and not an `ImagePullBackOff` (which is terminal, not
-  slow). A private-registry estate's real cold pull is still unmeasured.
+  65-second hold with a node taint (the run fails at the 90-second pod-IP
+  bound), which reproduces a pod that cannot start — not a slow registry, and
+  not an `ImagePullBackOff` (which is terminal, not slow). A private-registry
+  estate's real cold pull is still unmeasured.
 - The IdP is **Dex with two static passwords**, so group-to-role mapping,
   conditional access and token lifetimes are out of scope; the device-code step
   is **pre-approved permanently** by the fake, so a code that expires before
@@ -699,15 +753,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   a bigger change than this release's residue.
 
 - **Admin-tier and run-token 5xx sites still carry driver text.** Every door a
-  member can reach is converted (above) — a full route-tier enumeration says so,
+  member can reach is converted (0.7.4) — a full route-tier enumeration says so,
   not a spot check — and the `writeServerError` chokepoint they route through is
   the shape the rest will take, but 86 sites across 24 files still hand the
   caller raw pgx text. **None of them is member-reachable**: they sit on the
   admin tier or on the run-token `/internal/*` lane, whose readers are an
   operator who can already read the DSN and a sandbox that holds the run's own
-  token. The sweep is scheduled rather than urgent: 0.7.5.
+  token. The sweep did not land in 0.7.5 and is rescheduled: 0.7.6.
 - **The killed-run tail-upload grace is still measured from `updated_at`, not
-  from a terminal timestamp.** With the keepalive closed (above), the remaining
+  from a terminal timestamp.** With the keepalive closed (0.7.4), the remaining
   re-openers are wardynd's own writes — chiefly the boot reconciler clearing a
   dead run's `sandbox_ref`, which can re-open the five-minute window hours after
   the run ended. The doors it re-opens are upload-only, re-check the run for
@@ -745,6 +799,7 @@ and does not yet follow semantic versioning (interfaces are not stable).
   78.3 %**, a 0.3-point margin — thin enough that an ordinary refactor can turn
   `cover-check` red on a tree with no test regression in it. Re-measure and
   re-set the floor at the next release rather than treating 78 as headroom.
+  Not re-measured in 0.7.5.
 
 ## [0.7.4] — 2026-09-16
 
