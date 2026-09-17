@@ -264,6 +264,18 @@ else
   bad "(d) direct github.com was NOT refused (http_code=${GH_DIRECT_CODE}) — git-broker confinement not in force"
 fi
 
+# (d) THE ALLOW HALF, which this script stopped dialling without noticing. The
+# allowed probe used to BE github.com; when --repo made github broker-managed the
+# probe above became a hard-deny assertion and nothing was left that dials an
+# ALLOW-LISTED name — so "expected >=1 egress.allow audit event" further down could
+# only ever read 0. proxy.golang.org is the one name examples/policies/demo.json
+# allows. The tunnel being ESTABLISHED (%{http_connect}=200) is the fact; what the
+# origin then answers is not this suite's business.
+ALLOW_CODE="$(docker exec "${AGENT}" curl -sS -o /dev/null -m 20 --connect-timeout 10 -w '%{http_connect}' \
+          -x http://wardyn-proxy:3128 https://proxy.golang.org/ 2>/dev/null || true)"
+if [[ "${ALLOW_CODE}" == "200" ]]; then ok "(d) allow-listed proxy.golang.org tunnelled by the proxy (CONNECT 200)";
+else bad "(d) allow-listed proxy.golang.org was not tunnelled (http_connect=${ALLOW_CODE})"; fi
+
 DENY="$(docker exec "${AGENT}" curl -sS -m 12 --connect-timeout 8 \
          -x http://wardyn-proxy:3128 https://evil.example.com/ 2>&1)"
 if echo "${DENY}" | grep -q '403'; then ok "(c) unknown evil.example.com HELD by proxy (403, first-use approval)";
@@ -617,6 +629,10 @@ PROXY_NAME=""
 PRE="$(hc -o /dev/null -w '%{http_code}' -X POST "${BASE}/api/v1/internal/decisions" \
         -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
         -d '{"request":{"host":"prekill.example","port":443,"method":"CONNECT"},"decision":"deny","rule_source":"e2e:prekill"}')"
+# The kill is made with the ADMIN TOKEN, which actorFromRequest audits as
+# actor_type `system` (principal admin-token); a local-mode or OIDC session
+# audits `human`. The audit check below accepts both — pinning `human` kept this
+# section red on every stack driven by the token, i.e. every CI stack.
 KILL="$(hc -o /dev/null -w '%{http_code}' -X POST "${BASE}/api/v1/runs/${RUN_ID}/kill" -H "Authorization: Bearer ${ADMIN_TOKEN}")"
 sleep 2
 GONE="$(docker ps -a --filter "name=${AGENT}" --format '{{.Names}}')"
@@ -626,7 +642,7 @@ POST="$(hc -o /dev/null -w '%{http_code}' -X POST "${BASE}/api/v1/internal/decis
 KSTATE="$(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/runs/${RUN_ID}" \
   | python3 -c 'import sys,json;print(json.load(sys.stdin)["state"])')"
 KILL_AUDIT="$(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/audit?run_id=${RUN_ID}" \
-  | python3 -c 'import sys,json;print(sum(1 for e in json.load(sys.stdin) if e["action"]=="run.kill" and e["actor_type"]=="human"))')"
+  | python3 -c 'import sys,json;print(sum(1 for e in json.load(sys.stdin) if e["action"]=="run.kill" and e["actor_type"] in ("human","system")))')"
 echo "pre-kill token=${PRE} kill=${KILL} agent_gone=$([[ -z "${GONE}" ]] && echo yes || echo no) post-kill token=${POST} state=${KSTATE} run.kill_audit=${KILL_AUDIT}"
 if [[ "${PRE}" == "202" && "${KILL}" == "202" && -z "${GONE}" && "${POST}" == "401" && "${KSTATE}" == "KILLED" && "${KILL_AUDIT}" -ge 1 ]]; then
   ok "(e) kill cascade: container gone + run token revoked (401) + state KILLED + run.kill audit"
