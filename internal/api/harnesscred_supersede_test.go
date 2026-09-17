@@ -320,8 +320,8 @@ func TestHarnessLogin_SupersedePrecedesTheQuota(t *testing.T) {
 	}
 }
 
-// TestHarnessLogin_ConcurrentLaunchesLeaveExactlyOneLiveLoginRun is the race the
-// first pass cannot win on its own.
+// TestHarnessLogin_APassSeeingBothConcurrentRunsLeavesOne is the race the first
+// pass cannot win on its own.
 //
 // supersede-then-create is not atomic: each launch reads the live runs BEFORE
 // its own row exists, so a double-click (or the console and a `wdn_` token on
@@ -330,10 +330,14 @@ func TestHarnessLogin_SupersedePrecedesTheQuota(t *testing.T) {
 // lands after the winner's. The second pass is what closes it, and it has to do
 // so WITHOUT an in-process mutex, which is not a lock on the second replica.
 //
-// Both subtests put both rows in the store BEFORE either second pass runs —
-// precisely the window — and then run the passes in each order, because the
-// property being pinned is that the ANSWER DOES NOT DEPEND ON THE ORDER.
-func TestHarnessLogin_ConcurrentLaunchesLeaveExactlyOneLiveLoginRun(t *testing.T) {
+// WHAT IS PINNED, EXACTLY: the interleaving where a pass SEES BOTH ROWS — both
+// are in the store before either second pass runs. That is the ordinary
+// double-click, and the passes are run in each order because the property is
+// that the answer does not depend on which finishes first. It is NOT a universal
+// claim: created_at is stamped in-process before the insert, so a launch whose
+// clock runs behind can insert AFTER a sibling's pass has already run and leave
+// two survivors (see supersedeOlderLoginRuns' own note, and the 0.7.6 follow-up).
+func TestHarnessLogin_APassSeeingBothConcurrentRunsLeavesOne(t *testing.T) {
 	const actor = "sub-double-click"
 	base := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 
@@ -385,9 +389,10 @@ func TestHarnessLogin_ConcurrentLaunchesLeaveExactlyOneLiveLoginRun(t *testing.T
 	})
 
 	// Same created_at to the nanosecond — a coarse clock, or two rows stamped in
-	// the same tick. The id tie-break still has to name ONE survivor: an order
-	// that is not total degenerates to "neither supersedes the other", which is
-	// the defect, or to "each supersedes the other", which is zero.
+	// the same tick — again with both rows visible to both passes. The id
+	// tie-break still has to name ONE survivor: an order that is not total
+	// degenerates to "neither supersedes the other", which is the defect, or to
+	// "each supersedes the other", which is zero.
 	t.Run("an exactly equal clock reading still leaves one", func(t *testing.T) {
 		f := newSupersedeFixture(t, nil, nil)
 		a := f.store.seed(types.AgentRun{

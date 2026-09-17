@@ -129,7 +129,7 @@ func (s *Server) supersedeOneLoginRun(ctx context.Context, run types.AgentRun, a
 
 // supersedeOlderLoginRuns is the SECOND pass, run immediately after the new
 // run's row exists — and it is what makes "one live sign-in per person" hold
-// under CONCURRENCY.
+// under CONCURRENCY in all but one named interleaving.
 //
 // The pass above reads the live runs and only THEN is the new row inserted, so
 // two launches in flight for one person (a double-click, or the console and a
@@ -141,19 +141,29 @@ func (s *Server) supersedeOneLoginRun(ctx context.Context, run types.AgentRun, a
 // So the tie-break is DETERMINISTIC instead, and every replica computes the same
 // answer with no coordination: a launch supersedes only the caller's own login
 // runs that come BEFORE its own in loginRunPrecedes' total order. Two properties
-// follow, and they are the whole design:
+// follow, and they are the whole design — the first of them holds in all but one
+// named interleaving, which is stated rather than claimed away:
 //
-//   - NEVER TWO. Each second pass runs strictly after its own CreateRun, so of
-//     two concurrent launches at least one sees both rows — it cannot be that
-//     each pass ran before the other's insert — and that one ends the older.
-//   - NEVER ZERO. Nothing ever kills a run newer than itself: the first pass can
-//     only see rows that already existed when it read, which are therefore older
-//     than the row it is about to insert, and this pass takes only strictly
-//     older ones. The newest launch is killed by nobody. The one residue is a
-//     launch whose OWN run has already been superseded (an exactly-equal clock
-//     reading, where the first pass and this order can disagree) — that run is
-//     absent from the live set below and returns without touching anything,
-//     rather than taking a live sibling down with it.
+//   - TWO BECOMES UNLIKELY, NOT IMPOSSIBLE — and the residue is named rather
+//     than papered over. Whenever a pass sees BOTH rows it ends the earlier one,
+//     which covers the ordinary double-click: the second launch's first pass, or
+//     one of the two second passes, sees the sibling. What defeats it is
+//     created_at being stamped IN-PROCESS by newStepRun BEFORE the insert, so
+//     timestamp order and INSERT order can disagree. Take X, whose clock runs
+//     behind (a second replica, or a stall between newStepRun and CreateRun),
+//     and Y: both first passes see nothing; Y inserts and its second pass runs
+//     before X's insert, so it sees only itself; X then inserts and its pass
+//     sees both, but Y does not PRECEDE X, so it kills nothing. Two live
+//     sign-ins survive — and neither is KILLED, so the capture PUT's guard does
+//     not apply to that pair either. A third sign-in clears it. Closing it needs
+//     a per-actor advisory lock around insert + pass; that is 0.7.6's, and it is
+//     a LOW residual of a LOW finding.
+//   - NEVER ZERO. A launch's own run can only be ended by a pass that ran after
+//     its insert, and the LAST insert is followed only by its own pass, which
+//     never takes itself. There is always a survivor. The one shape that could
+//     have broken it — a launch whose OWN run was already superseded going on to
+//     supersede a live sibling — is why the live-set check below exists: such a
+//     run returns without touching anything.
 //
 // Best effort, like the first pass, and for the same reason: the capture PUT's
 // KILLED guard is the belt, and nobody is locked out of signing in because a

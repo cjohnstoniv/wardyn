@@ -487,7 +487,10 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// person each read the other as absent and BOTH survive. This one ends the
 	// caller's login runs that come before this one in a deterministic total
 	// order, which needs no lock and holds across replicas — see
-	// supersedeOlderLoginRuns for why that leaves exactly one, never zero.
+	// supersedeOlderLoginRuns for why that makes two survivors UNLIKELY rather
+	// than impossible (created_at is stamped before the insert, so with replica
+	// clock skew the timestamp order and the insert order can disagree), and why
+	// it never leaves zero.
 	s.supersedeOlderLoginRuns(ctx, actor, hl.agent, created)
 	// Pre-login ~/.aws/config for the AWS flow, delivered through the SAME
 	// WARDYN_AWS_SSO_CONFIG_B64 channel a Bedrock run uses (materialized by
