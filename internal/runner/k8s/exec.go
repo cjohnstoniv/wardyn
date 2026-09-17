@@ -149,11 +149,16 @@ func findContainer(containers []corev1.Container, name string) (corev1.Container
 // delivery is ALWAYS the masked brokered upload, never the unmasked
 // shared-mount fallback. hostAliases + NO_PROXY + the agent NetworkPolicy
 // already permit exactly this route (the agent's only egress peer is the
-// proxy on 3128). castDir is a plain "/tmp": unlike docker (one container,
-// one filesystem), the ephemeral container has its OWN rootfs — ephemeral
-// containers do NOT share the main container's filesystem, so
-// AgentIdleScript's /tmp/wardyn (written by the MAIN container's idle
-// process) is not visible here. Do not assume a shared /tmp.
+// proxy on 3128). castDir is a plain "/tmp", and WHAT that path is depends on
+// the run's disk budget. Unlike docker (one container, one filesystem), an
+// ephemeral container inherits no filesystem from the main container: with no
+// budget it writes its cast to its OWN rootfs /tmp, and AgentIdleScript's
+// /tmp/wardyn (written by the MAIN container's idle process) is not visible
+// here. With disk_mib > 0 the VolumeMounts copied from the main container
+// above carry ephemeralScratchVolumes' /tmp emptyDir, so /tmp is then ONE
+// filesystem shared by the main container and every ephemeral container of the
+// SAME run — and of that run only, since an emptyDir lives and dies with its
+// pod. Assume a shared /tmp only when those scratch volumes are present.
 //
 // runID mirrors docker's own tolerance for an unresolvable label: recording
 // is best-effort, so a missing/corrupt wardyn.run-id label degrades to a
