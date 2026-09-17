@@ -55,8 +55,16 @@ export const RUN_POLL_MIN_FAILURES = 15;
 // pane cannot PROVE a pull is what it is waiting on (see the header), so it
 // states what it knows — reads are working, the run is not up — and names the
 // pull as the usual cause rather than as the diagnosis.
+//
+// U-12 (W6 blind lens): "the first start after an upgrade pulls the image onto
+// this node" asserted three things the pane does not know. On Docker/compose
+// there is no node and, with the image already local, nothing pulls; on a first
+// install nothing was upgraded; and the same sentence narrates the ANTHROPIC
+// flow, whose image is the ordinary agent one. What holds in every one of those
+// is that a first start MAY need to pull — same wording as
+// LOGIN_SANDBOX_STARTING's, one fact said one way.
 export const LOGIN_SANDBOX_SLOW_START =
-  "Still starting — Wardyn can read the sign-in sandbox, it just isn't up yet. The first start after an upgrade pulls the image onto this node, which can take a few minutes.";
+  "Still starting — Wardyn can read the sign-in sandbox, it just isn't up yet. A first start may need to pull the image, which can take a few minutes.";
 
 // DRAFT (M2 canon pending) — reads are failing, but not for long enough to give
 // up. Without this a 300-second budget would show "Starting…" for five minutes

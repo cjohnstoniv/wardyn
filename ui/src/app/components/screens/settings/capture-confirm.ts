@@ -28,14 +28,24 @@ import type { SetupStatus } from "../../../lib/types";
 // 0.7.4 field report, finding 7: the old sentence ("— sign in again.") told a
 // person whose interrupted first attempt had just been retried SUCCESSFULLY to
 // do the thing they had just done. The two causes need different actions from
-// the human and the pane cannot tell them apart, so the sentence names both and
-// what each one costs: retry (now safe — a new sign-in closes the old one,
-// harnesscred_supersede.go) or escalate. Exported so ui/e2e and the tests assert
-// THROUGH the constant rather than re-typing it.
+// the human and the pane cannot tell them apart, so the sentence names both.
+// Exported so ui/e2e and the tests assert THROUGH the constant rather than
+// re-typing it.
+//
+// U-7 (W6 blind lens) — WHO IS READING IT. This pane has three mounts and two of
+// them are the ADMIN's (agents-tab.tsx, connection-cards.tsx), so "sign in again
+// from Getting Started" named a page the reader is not on — while the pane's own
+// "Try again" sits directly below — and "tell your admin" was addressed to the
+// admin. The location and the escalation both go; the retry says only to sign in
+// again, which is true wherever this renders.
+//
+// "starting a new sign-in closes the old one" goes too: the supersede it
+// describes (harnesscred_supersede.go) is NEW in 0.7.5, and during a rolling
+// upgrade a 0.7.4 replica answers the same call without it. The audit trail is
+// what a reader can actually check either way.
 export const CAPTURE_NOT_CORROBORATED =
-  "The sandbox reported a capture the server does not have. If your last attempt was interrupted, sign in again from " +
-  "Getting Started — starting a new sign-in closes the old one. If it keeps happening, tell your admin: the sandbox's " +
-  "report and the server disagree.";
+  "The sandbox reported a capture the server does not have. If your last attempt was interrupted, sign in again. " +
+  "If it keeps happening, the sandbox's report and the server disagree — check the run's audit trail.";
 // DRAFT (M2 canon pending) — R-3: getSetupStatus RESOLVES a synthetic
 // `unreachable` payload for a 5xx or a dropped socket, it does not throw. An
 // honest capture that DID land would then be accused of not existing. One

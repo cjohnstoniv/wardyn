@@ -43,8 +43,13 @@ export const MEMBER_MODE = {
   MENU_NEW: "View as a new member (not signed in)",
   // Names the AWS state first, because that is the whole difference and it is
   // what the admin came to look at; the paused role rides second, as in BANNER.
+  // U-11: "signing in is refused until you exit" was in the variant TOOLTIP
+  // only, and a tooltip is a hover — no keyboard, no touch. It is the one limit
+  // an admin can act on from inside the preview (Getting Started offers two
+  // sign-in buttons here, and the launch 409s deterministically,
+  // harnesscred_launch.go), so it rides the visible sentence.
   BANNER_NEW:
-    "Viewing as a new member — not signed in to AWS; your usual role is paused for this session",
+    "Viewing as a new member — not signed in to AWS; signing in is refused until you exit; your usual role is paused for this session",
   EXIT: "Exit member mode",
   // The three CEILINGS, verbatim from the design, on the banner as a title
   // tooltip. They are here and not only in OPERATIONS.md because the one
@@ -60,9 +65,15 @@ export const MEMBER_MODE = {
     "Credentials you already hold — your SSH key, any API token — keep their admin stamp until refreshed at your next sign-in. " +
     // Ceiling 4 (0.7.5): the one the field report found by being misled by it.
     // It is in the PLAIN tooltip and not only in OPERATIONS.md because the
-    // mistake it prevents is made while the banner is on screen, and the way out
-    // of it is the other menu item — so the sentence names it.
-    "Model access and ownership still resolve to you — use 'View as a new member' to see the not-signed-in state. " +
+    // mistake it prevents is made while the banner is on screen.
+    //
+    // U-6: and it STOPS there. It used to point at 'View as a new member', an
+    // item that is not rendered at all on a shared/legacy deployment or against
+    // a 0.7.4 daemon (memberPreviewAvailable false), and that disappears from
+    // the menu while ANY member mode is on — which is precisely when this
+    // tooltip is on screen. Naming a control the reader cannot find is worse
+    // than naming none: the ceiling itself is the true half.
+    "Model access and ownership still resolve to you. " +
     "During a rolling upgrade an older replica ignores the flag and answers as admin. " +
     "It shows you what a member sees — sign in as a real member to prove what a member is refused.",
   // The variant tooltip swaps ceiling 4 for what the preview actually does. It

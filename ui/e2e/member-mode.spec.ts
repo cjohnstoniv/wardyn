@@ -139,6 +139,11 @@ test.describe("member mode — the banner is the way out", () => {
     const banner = page.getByText(MEMBER_MODE.BANNER_NEW);
     await expect(banner).toBeVisible();
     await expect(banner).toHaveAttribute("title", MEMBER_MODE.CEILINGS_NEW);
+    // U-11: the one limit an admin can walk into from inside the preview — the
+    // sign-in Getting Started still offers here is refused with a 409 — is in the
+    // VISIBLE sentence now, not only in a title tooltip a hover reveals and a
+    // keyboard or a touch screen never does.
+    await expect(banner).toContainText("signing in is refused until you exit");
     // The plain sentence must be GONE, not merely joined: inside the preview its
     // ceiling 4 ("model access still resolves to you") is false.
     await expect(page.getByText(MEMBER_MODE.BANNER)).toHaveCount(0);

@@ -15,6 +15,10 @@ import {
 import { AGENTS, PROVIDERS, PROVIDERS_DRAFT } from "../src/app/lib/workspace-providers-copy";
 import { OPERATOR_ONLY_REASON } from "../src/app/components/wardyn/copy";
 import { LOGIN_SANDBOX_SLOW_START } from "../src/app/components/screens/settings/login-start-wait";
+// U-15: the starting sentence is a constant in a CSS-free module now — this
+// spec used to re-type its opening clause, so a reworded wait could move on
+// screen while the assertion went on passing.
+import { LOGIN_SANDBOX_STARTING } from "../src/app/components/screens/settings/login-pane-copy";
 import type { Page } from "@playwright/test";
 
 // ---------------------------------------------------------------------------
@@ -507,7 +511,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
 
     const starting = page.getByTestId("login-sandbox-starting");
     await expect(starting).toBeVisible();
-    await expect(starting).toContainText("Starting the sign-in sandbox");
+    await expect(starting).toContainText(LOGIN_SANDBOX_STARTING);
     await starting.getByRole("button", { name: /cancel/i }).click();
     await expect.poll(() => kills, { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
   });
@@ -542,7 +546,7 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
     await page.getByRole("button", { name: /start login/i }).click();
 
     const starting = page.getByTestId("login-sandbox-starting");
-    await expect(starting).toContainText("Starting the sign-in sandbox");
+    await expect(starting).toContainText(LOGIN_SANDBOX_STARTING);
 
     await page.clock.fastForward("01:10");
     await expect(starting).toContainText(LOGIN_SANDBOX_SLOW_START);

@@ -20,6 +20,35 @@
 export const LOGIN_SANDBOX_UNREADABLE =
   "Wardyn stopped being able to read the sign-in sandbox, so it can't say whether it came up. Try again.";
 
+// DRAFT (M2 canon pending) — P5: POST /setup/harness-login answers with the run
+// id BEFORE the sandbox exists (internal/api/harnesscred_launch.go), so the pane
+// has a real wait to narrate; it used to mount the terminal on a run that was
+// still PENDING, which handleAttachTicket 409s, and a failed mint is TERMINAL in
+// AttachTerminal — the operator's only signal was a dead panel.
+//
+// U-12 (W6 blind lens): it named the wait "the first start after an upgrade",
+// which is false on a FIRST install (nothing was upgraded), and named a pull
+// that does not happen on a Docker/compose host with the image already local. It
+// is also shown for the anthropic flow, whose image is the ordinary agent one.
+// What is true of every one of those is that a first start MAY pull.
+//
+// Declared HERE, not in the pane: ui/e2e/providers.spec.ts asserts through it
+// (U-15) and a Playwright spec cannot import the pane — it reaches
+// AttachTerminal's xterm.css, which Node's loader cannot load. The pane
+// re-exports it.
+export const LOGIN_SANDBOX_STARTING =
+  "Starting the sign-in sandbox. A first start may need to pull the image, which can take a few minutes.";
+
+// DRAFT (M2 canon pending) — U-8: the aws blurb's opening clause under
+// `startURLManaged` (every per_user member). The unmanaged clause asks the
+// reader to give Wardyn their organization's access portal URL — and under a
+// managed row there is no field to give it in, the server ignores a supplied one
+// (harnessLogin uses the row's own sso_start_url), and the intro one line above
+// has just said there is nothing to enter. The rest of the blurb is unchanged:
+// the sandbox, the ~/.aws/config it writes and the command it runs are the same.
+export const AWS_BLURB_MANAGED_OPENING =
+  "Your admin set your organization's AWS access portal; there is nothing to enter.";
+
 // DRAFT (M2 canon pending) — the first line the aws-sso image's sign-in pane
 // prints (deploy/images/aws-sso/login-hint.sh's banner starts with it). The
 // console types the login command only if this never appears; see the pane's

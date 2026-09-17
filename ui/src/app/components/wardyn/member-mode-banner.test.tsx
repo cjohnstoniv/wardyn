@@ -50,8 +50,13 @@ describe("MemberModeBanner", () => {
     // the admin's OWN model credential, and the tooltip has to say so — being
     // misled by exactly this is what the finding reports — and name the way out.
     expect(MEMBER_MODE.CEILINGS).toMatch(/Model access and ownership still resolve to you/);
-    // …and it names the control that shows that state, not a doc section.
-    expect(MEMBER_MODE.CEILINGS).toContain("View as a new member");
+    // U-6 (W6 blind lens) — SUPERSEDES "…and it names the control that shows
+    // that state". The sentence used to point at 'View as a new member', an item
+    // that is not rendered at all on a shared/legacy deployment or against a
+    // 0.7.4 daemon (memberPreviewAvailable false), and that disappears from the
+    // menu while ANY member mode is on — precisely when this tooltip is on
+    // screen. Naming a control the reader cannot find is worse than naming none.
+    expect(MEMBER_MODE.CEILINGS).not.toContain("View as a new member");
     expect(MEMBER_MODE.MENU_NEW).toContain("View as a new member");
   });
 

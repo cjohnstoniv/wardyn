@@ -22,6 +22,7 @@
 // `aws sso login --sso-session wardyn …` run unattended.
 import * as React from "react";
 import { Loader2, ShieldCheck, TriangleAlert, KeyRound, Square, ExternalLink, CornerDownLeft } from "lucide-react";
+import { HttpError } from "../../../lib/api/core";
 import { harnessAuth as harnessAuthApi } from "../../../lib/api/harness-auth";
 import { runs as runsApi } from "../../../lib/api/runs";
 import { isTerminalRunState } from "../../../lib/types";
@@ -47,8 +48,13 @@ import {
 // sentence moved to capture-confirm.ts to keep this file under the size cap, and
 // every existing importer — this pane's tests, ui/e2e — keeps its import path.
 export { CAPTURE_NOT_CORROBORATED, serverConfirmsCapture } from "./capture-confirm";
-import { LOGIN_SANDBOX_UNREADABLE, SELFRUN_MARKER } from "./login-pane-copy";
-export { LOGIN_SANDBOX_UNREADABLE, SELFRUN_MARKER } from "./login-pane-copy";
+import {
+  AWS_BLURB_MANAGED_OPENING,
+  LOGIN_SANDBOX_STARTING,
+  LOGIN_SANDBOX_UNREADABLE,
+  SELFRUN_MARKER,
+} from "./login-pane-copy";
+export { LOGIN_SANDBOX_STARTING, LOGIN_SANDBOX_UNREADABLE, SELFRUN_MARKER } from "./login-pane-copy";
 
 // DRAFT (M2 canon pending) — U2-05 (blind round 2, lens-U2): the refusal
 // sentence below the lead-in is the SANDBOX's prose, printed by
@@ -87,15 +93,9 @@ const RUN_POLL_MS = 2000;
 // reads, while a measured 131-second cold pull with healthy reads never tripped
 // it at all (finding 6).
 
-// DRAFT (M2 canon pending) — P5: POST /setup/harness-login now answers with the
-// run id BEFORE the sandbox exists (internal/api/harnesscred_launch.go), so the
-// pane has a real wait to narrate. It used to have none: it set "attached" on
-// the POST's resolve and mounted the terminal on a run that was still PENDING,
-// which handleAttachTicket 409s — and a mint failure is TERMINAL in
-// AttachTerminal, so the operator's only signal was a dead panel. Names the
-// cold pull, because that is what the wait usually is.
-const LOGIN_SANDBOX_STARTING =
-  "Starting the sign-in sandbox — the first start after an upgrade pulls the image and can take a couple of minutes.";
+// LOGIN_SANDBOX_STARTING lives in ./login-pane-copy with the other two strings
+// something outside the browser bundle reads (U-15: ui/e2e/providers.spec.ts
+// asserts through it, and a Playwright spec cannot import THIS module).
 // DRAFT (M2 canon pending) — the same wait ending badly on a run that carries
 // no failure_hint of its own (a kill, a stop). Says only what is known: the
 // sandbox is gone and nothing was captured.
@@ -143,7 +143,10 @@ type CaptureMode = "scrape" | "helper";
 type LoginFlow = {
   cmd: string;
   title: string;
-  blurb: React.ReactNode;
+  // U-8: taken as a FUNCTION of `startURLManaged` because the aws flow's opening
+  // clause is false under a managed row (there is no field, and the server
+  // ignores a supplied URL). Every other flow ignores the argument.
+  blurb: (startURLManaged: boolean) => React.ReactNode;
   capture: CaptureMode;
   // What the "done" phase's success line names as connected — provider-specific
   // so an AWS SSO capture never claims a Claude subscription (or vice versa).
@@ -198,7 +201,7 @@ const LOGIN_FLOWS: Record<string, LoginFlow> = {
         proxy-side — a run&apos;s sandbox never holds it.
       </>,
     ],
-    blurb: (
+    blurb: () => (
       <>
         Wardyn opened a sandbox and is running{" "}
         <code className="rounded bg-background/70 px-1 py-0.5 font-mono">claude setup-token</code> for you. It opens the
@@ -235,9 +238,10 @@ const LOGIN_FLOWS: Record<string, LoginFlow> = {
         short-lived role credentials.
       </>,
     ],
-    blurb: (
+    blurb: (startURLManaged: boolean) => (
       <>
-        Give Wardyn your organization&apos;s AWS access portal URL and it opens a sandbox, writes a minimal{" "}
+        {startURLManaged ? `${AWS_BLURB_MANAGED_OPENING} Wardyn` : "Give Wardyn your organization\u2019s AWS access portal URL and it"}{" "}
+        opens a sandbox, writes a minimal{" "}
         <code className="rounded bg-background/70 px-1 py-0.5 font-mono">~/.aws/config</code> holding just that URL and
         the configured SSO region (no credential — the sandbox has none to start with), and runs{" "}
         <code className="rounded bg-background/70 px-1 py-0.5 font-mono">aws sso login</code> for you. It prints a
@@ -389,6 +393,10 @@ export function HarnessLoginPane({
   // scrollback, and mounting AttachTerminal on it is the dead panel P5 is about:
   // the ticket mint 409s and one failed mint is terminal in that component.
   const [everAttached, setEverAttached] = React.useState(false);
+  // U-11: whether the LAST launch was refused with a 409 rather than failing.
+  // Reset on every launch attempt (see `launch`), so a refusal cannot outlive
+  // the condition that caused it.
+  const [refused, setRefused] = React.useState(false);
   const [authUrl, setAuthUrl] = React.useState("");
   const [code, setCode] = React.useState("");
 
@@ -429,6 +437,7 @@ export function HarnessLoginPane({
     waitNoteRef.current = "starting";
     setWaitNote("starting");
     selfRunArmedRef.current = false;
+    setRefused(false);
     setAuthUrl("");
     try {
       const id = await harnessAuthApi.harnessLogin(provider, startUrl.trim());
@@ -440,6 +449,12 @@ export function HarnessLoginPane({
       setPhase("starting");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      // U-11: a 409 is a REFUSAL, not a failure — the server declined this launch
+      // for a reason still true a second later (a sign-in already running for
+      // this principal, or the no-credential member preview,
+      // harnesscred_launch.go). "Try again" there offers the same refusal again,
+      // which is the loop the preview walked an admin into.
+      setRefused(e instanceof HttpError && e.status === 409);
       setPhase("error");
     }
   }, [provider, startUrl]);
@@ -642,7 +657,9 @@ export function HarnessLoginPane({
       {/* The blurb narrates the RUNNING flow ("Wardyn opened a sandbox…") — on
           the intro nothing has launched yet, so the expectations list speaks
           instead and the blurb would be a lie. */}
-      {phase !== "intro" && <p className="text-xs leading-relaxed text-muted-foreground">{flow.blurb}</p>}
+      {phase !== "intro" && (
+        <p className="text-xs leading-relaxed text-muted-foreground">{flow.blurb(startURLManaged)}</p>
+      )}
 
       {error && (
         <div
@@ -734,9 +751,13 @@ export function HarnessLoginPane({
 
       {phase === "error" && (
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" onClick={() => void launch()}>
-            <KeyRound className="size-3.5" /> Try again
-          </Button>
+          {/* U-11: suppressed on a 409 — the refusal above already says why, and
+              a retry earns the identical answer. Cancel remains the way out. */}
+          {!refused && (
+            <Button size="sm" onClick={() => void launch()}>
+              <KeyRound className="size-3.5" /> Try again
+            </Button>
+          )}
           {/* `cancel`, not a bare onCancel: an error can now arrive while the
               sandbox is still ALIVE — the wait ended because Wardyn stopped
               being able to read the run, not because the run stopped — and
