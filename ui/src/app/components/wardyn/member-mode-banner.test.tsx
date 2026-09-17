@@ -109,7 +109,12 @@ describe("MemberModeBanner", () => {
 
 describe("MemberModeMenuItem", () => {
   function renderItem(props: {
-    meta: { operator: boolean; securityOperator: boolean; method: string };
+    meta: {
+      operator: boolean;
+      securityOperator: boolean;
+      method: string;
+      memberPreviewAvailable?: boolean;
+    };
     onEntered?: () => void;
   }) {
     return render(
@@ -123,7 +128,7 @@ describe("MemberModeMenuItem", () => {
 
   // The /me tier shapes, verbatim: "admin" is both predicates, "security_admin"
   // is only the second, "member" is neither (me.go's two predicates).
-  const admin = { operator: true, securityOperator: true, method: "sso" };
+  const admin = { operator: true, securityOperator: true, method: "sso", memberPreviewAvailable: true };
   const securityAdmin = { operator: false, securityOperator: true, method: "sso" };
   const member = { operator: false, securityOperator: false, method: "sso" };
 
@@ -164,6 +169,23 @@ describe("MemberModeMenuItem", () => {
   // The SECOND item (0.7.5). Both postures are offered at once because they
   // answer different questions, and the new one is the only way to reach the
   // state a per_user deployment's members are actually in on day one.
+  // F1: under a `shared` roster the preview hides nothing, so its banner would
+  // assert a state the deployment contradicts. /me says so and the entry is not
+  // rendered — the plain one is untouched.
+  it("hides the new posture when the server says it is unavailable", () => {
+    renderItem({ meta: { ...admin, memberPreviewAvailable: false } });
+    expect(screen.getByText(MEMBER_MODE.MENU)).toBeInTheDocument();
+    expect(screen.queryByText(MEMBER_MODE.MENU_NEW)).not.toBeInTheDocument();
+  });
+
+  // A pre-0.7.5 daemon omits the field entirely, which must read as "do not
+  // offer it" rather than as "offer it".
+  it("hides the new posture when the field is absent", () => {
+    const { memberPreviewAvailable: _drop, ...older } = admin;
+    renderItem({ meta: older });
+    expect(screen.queryByText(MEMBER_MODE.MENU_NEW)).not.toBeInTheDocument();
+  });
+
   it("offers BOTH postures, and the new one posts no_credential:true", async () => {
     const onEntered = vi.fn();
     renderItem({ meta: admin, onEntered });

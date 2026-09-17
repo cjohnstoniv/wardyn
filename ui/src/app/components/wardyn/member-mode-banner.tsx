@@ -106,7 +106,17 @@ export function MemberModeMenuItem({
   /** The three /me fields the predicate reads. Taken as ONE object so the whole
    *  rule lives in this module and app-shell.tsx (at the file-size gate) spends
    *  one line on the control — its ShellMeta satisfies this structurally. */
-  meta: { operator: boolean; securityOperator: boolean; method: string };
+  meta: {
+    operator: boolean;
+    securityOperator: boolean;
+    method: string;
+    /** 0.7.5 — the server's answer to "does the preview hide anything here?".
+     *  Under a `shared` roster row it hides nothing, so the second entry is not
+     *  rendered at all: its banner would assert a state this deployment then
+     *  contradicts. Optional so a caller that predates the field (and a
+     *  pre-0.7.5 daemon, whose /me omits it) simply does not offer it. */
+    memberPreviewAvailable?: boolean;
+  };
   /** Injected in tests; the default reloads at the root because the session
    *  cookie changed and every screen's cached data was fetched as an admin. */
   onEntered?: () => void;
@@ -132,10 +142,12 @@ export function MemberModeMenuItem({
         <Eye className="size-4" />{" "}
         {failed === "plain" ? MEMBER_MODE.FAILED : MEMBER_MODE.MENU}
       </DropdownMenuItem>
-      <DropdownMenuItem onSelect={(e) => enter(e, true)}>
-        <Eye className="size-4" />{" "}
-        {failed === "new" ? MEMBER_MODE.FAILED : MEMBER_MODE.MENU_NEW}
-      </DropdownMenuItem>
+      {meta.memberPreviewAvailable && (
+        <DropdownMenuItem onSelect={(e) => enter(e, true)}>
+          <Eye className="size-4" />{" "}
+          {failed === "new" ? MEMBER_MODE.FAILED : MEMBER_MODE.MENU_NEW}
+        </DropdownMenuItem>
+      )}
     </>
   );
 }

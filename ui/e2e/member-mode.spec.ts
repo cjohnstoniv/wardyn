@@ -49,6 +49,10 @@ async function mockSSOAdmin(page: import("@playwright/test").Page): Promise<void
     const response = await route.fetch();
     const json = await response.json();
     json.method = "sso";
+    // The second entry is server-gated (0.7.5): /me only says "available" under
+    // a per_user roster row, and the seeded e2e backend has no such row — so the
+    // splice is what puts the console in the deployment shape this case is about.
+    json.member_preview_available = true;
     await route.fulfill({ response, json });
   });
 }

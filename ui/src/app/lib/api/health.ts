@@ -84,6 +84,13 @@ export interface Me {
   // ceilings apply. Absent on a pre-0.7.5 daemon, which reads the same as "the
   // plain mode" — and the plain mode is exactly what such a daemon is in.
   member_mode_no_credential?: boolean;
+  // WHETHER THE PREVIEW IS WORTH OFFERING here (0.7.5): true only where the
+  // org's model-access agent row gives each person their OWN AWS sign-in. Under
+  // a `shared` row the posture hides nothing, so its banner would claim a state
+  // this deployment contradicts — the entry is not rendered at all, and the
+  // server refuses to grant the posture as well. Absent on a pre-0.7.5 daemon,
+  // which reads the same as "do not offer it".
+  member_preview_available?: boolean;
   // WHY /me COULD NOT ANSWER for this caller's drive, or "" when it could.
   // Always present on a 0.7 daemon, so an absent key is an older server rather
   // than "nothing is wrong".

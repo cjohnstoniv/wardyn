@@ -136,6 +136,9 @@ export interface ShellMeta {
    *  this admin's own model credential reads as not signed in. Implies
    *  memberMode, so only the banner's wording changes on it. */
   memberModeNoCredential: boolean;
+  /** 0.7.5 — whether this deployment's roster makes the no-credential preview
+   *  mean anything. False hides the second account-menu entry entirely. */
+  memberPreviewAvailable: boolean;
 }
 
 /** The shell's identity, plus the retry that re-fires /me (B1's banner action). */
@@ -163,6 +166,7 @@ function useMeta(): [ShellMeta, () => void] {
     userDriveUnavailable: "",
     memberMode: false,
     memberModeNoCredential: false,
+    memberPreviewAvailable: false,
   });
   React.useEffect(() => {
     let alive = true;
@@ -194,6 +198,7 @@ function useMeta(): [ShellMeta, () => void] {
           userDriveUnavailable: me?.user_drive_unavailable ?? "",
           memberMode: me?.member_mode ?? false,
           memberModeNoCredential: me?.member_mode_no_credential ?? false,
+          memberPreviewAvailable: me?.member_preview_available ?? false,
         });
       })
       .catch(() => {
