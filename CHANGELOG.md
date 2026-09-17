@@ -46,11 +46,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
   - Wire: `/me` gains `member_mode_no_credential`; `POST /me/member-mode` accepts
     `no_credential`; `auth.member_mode` audit rows carry `no_credential: true` when the
     posture is entered (and nothing at all otherwise — existing rows are byte-identical).
-  - The banner states the limit at the point of use: a variant sentence plus a variant
-    ceilings tooltip that says the sign-in is *hidden, not removed*, and that signing in
-    is refused until you exit. The entry is offered — and the posture granted — only where the
-    org's model-access roster row is `per_user`; `/me` publishes `member_preview_available`
-    and the toggle downgrades anything else to the plain mode.
+  - The banner states the limit at the point of use: its VISIBLE sentence, not only its
+    tooltip, says *"signing in is refused until you exit"* — a `title` is a hover, and the
+    refusal is the one limit an admin walks into from inside the preview. The tooltip
+    additionally says the sign-in is *hidden, not removed*. The sign-in pane offers no
+    "Try again" when a launch was refused with `409` — the way out is to exit the mode. The
+    entry is offered — and the posture granted — only where the org's model-access roster
+    row is `per_user`; `/me` publishes `member_preview_available` and the toggle downgrades
+    anything else to the plain mode.
 - **Member mode's ceilings gain a fourth** (`docs/OPERATIONS.md`, and the banner tooltip
   that is actually on screen when the mistake is made): in the PLAIN toggle, model access
   and ownership still resolve to you — use the new preview to see the not-signed-in state.
@@ -113,6 +116,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
     and left the card's own new button dead (clicking it did nothing — the pane
     mount was ALSO gated on the same bare `hasOwnKey`). All three now read the same
     `ownKeyApplies`-gated predicate the card uses.
+  - W6: the card's own chips for `expired_signin` and `shared_expired` now drop the
+    `Model access · ` qualifier the reused frozen strings carry — the card's own
+    heading ("Your model key") is already the subject, so the qualifier stated a
+    second one. *"There is nothing to set up for this sign-in."* now renders for the
+    `not_applicable` state only; any other unreadable/unknown state under `per_user`
+    renders no body at all rather than a guess.
 - **A shared credential whose lane is Bedrock could still offer "Use my own key
   instead."** `mechanismSatisfied` refuses an Anthropic/OpenAI key on ANY Bedrock
   roster row, not only a per_user one — so a `shared` row with a Bedrock mechanism
@@ -155,11 +164,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   a sign-in that had worked.
 - **The run page's sign-in banner no longer sends the reader elsewhere to sign
   in, and no longer promises a shutdown that does not happen on that path.** It
-  says the sign-in is already running in this box, to finish the device-code step
-  in the browser, and that the sandbox stops itself after 30 idle minutes — which
-  is what the reaper actually does with `harnessLoginIdleCap`. The old clause
-  ("closes itself when it is done") described the console pane's own `killRun`,
-  which the Runs-list path never gets.
+  points at the terminal — *"If the terminal shows a device code, finish it in
+  your browser; if it shows a prompt, run the command the shell prints."* —
+  which is true whether the image is new enough to self-run or an older pinned
+  one that still hands out a bare shell, and that the sandbox stops itself after
+  30 idle minutes, which is what the reaper actually does with
+  `harnessLoginIdleCap`. The old clause ("closes itself when it is done")
+  described the console pane's own `killRun`, which the Runs-list path never
+  gets. W6: the banner is now byte-identical for both image generations (it no
+  longer asserts the sign-in is "already running", which was false for an
+  older-pinned image and for a login run that had already finished) and renders
+  only while the run is RUNNING.
 - **A first Claude Code run no longer parks an approval on the agent's own
   bootstrap.** On its first REPL start the CLI auto-installed the official plugin
   marketplace from `downloads.claude.ai`, git-falling-back to `github.com` —
@@ -242,6 +257,115 @@ and does not yet follow semantic versioning (interfaces are not stable).
   - `docker-tagged-live`: `TestStandalone_CapabilityHonesty` still asserted an unconditional
     `SessionRecording: true` after the capability became honest (it mirrors `Config.Record`). The
     test now builds the driver the way a recording daemon does and pins the `Record=false` arm too.
+- **Eight console sentences that were false on some deployment.** A blind read of
+  every sentence 0.7.5 added or moved, against the states the server actually
+  emits, found claims that are true on the estate they were written for and
+  wrong elsewhere. All eight are now either GATED on the state that makes them
+  true or replaced by a no-claim state — no surface guesses:
+  - A member on a **shared** Bedrock deployment read *"Model access · Your AWS
+    sign-in"* over a card saying *"Provided by your admin"*. The server projects
+    `live` for the admin's shared credential (that is what a member's model
+    access IS there), and the chip said it was theirs. The chip row now says
+    whose credential it is, and the New Run rail's own chip states **ownership**
+    (*"Per-person AWS sign-in"*) rather than a sign-in status it never read.
+  - The **login-sandbox note** on `/runs/:id` said the sign-in was *"already
+    running in this box"* on every harness-login run — including one that had
+    already finished, and including a sandbox from an older pinned `aws-sso`
+    image where nothing types the chained command at all. It now points at the
+    terminal, names both shapes it can be in, and renders only while the run is
+    RUNNING.
+  - The New Run rail told the reader to *"Run Preflight to see where this run's
+    model credential will live."* beside a Preflight verdict that carried no
+    residency (what every 0.7.4 daemon answers), and said *"Resolved at
+    launch."* beside *"No model provider is connected."* Neither renders when it
+    cannot be kept, and the **Recording** section withholds its heading, not
+    just its sentence, until `/healthz` has answered.
+  - The sign-in pane's corroboration refusal sent the reader to *"Getting
+    Started"* — from the two admin screens that mount the same pane — told the
+    admin to *"tell your admin"*, and promised a supersede a 0.7.4 replica does
+    not perform mid-upgrade. It now says to sign in again, and names the run's
+    audit trail.
+  - Both *"Starting the sign-in sandbox"* waits blamed *"the first start after an
+    upgrade"* pulling an image *"onto this node"* — on a first install nothing
+    was upgraded, on compose there is no node, and the same line narrates the
+    Claude flow.
+  - The AWS blurb asked for the organization's access portal URL under a managed
+    row, where there is no field and the server ignores what is sent.
+  - The member-mode tooltip pointed at *'View as a new member'*, a menu item that
+    is absent on shared/legacy deployments and gone from the menu while the mode
+    is on.
+  - An **expired** AWS sign-in read *"Not signed in" / "Nothing is configured for
+    you until you do"* on the card while the chip row said *"Signed out"* and the
+    server's action line said a session existed.
+- **The member's Getting Started page carried two buttons with the identical
+  accessible name "Sign in to AWS"** (plus a plain-text action line saying the
+  same words), and the card's one opened a pane in a different card above it
+  while staying enabled as a no-op. Both buttons now carry distinct accessible
+  names — the visible text is unchanged — and the card's is hidden while the
+  pane is open.
+- Two AWS SSO sign-ins started at the same moment for one person (a double-click, or the console and
+  a `wdn_` token) no longer leave two live sign-in sandboxes in the ordinary case. The launch
+  re-checks once its own run row exists and ends only the caller's older sign-ins, a deterministic
+  order that holds across replicas without a lock, and never leaves the person with nothing signed
+  in. See Known gaps for the interleaving it does not cover.
+- A sign-in sandbox superseded while its credential upload was already in flight can no longer
+  overwrite the capture that replaced it: the upload door re-reads the run's state immediately
+  before it stores and refuses `run_killed` there too.
+- `GET /me` no longer reads the agent roster for callers who cannot use the answer. The
+  member-preview availability check now short-circuits on the caller's tier first, taking a store
+  read off every member's poll of the console's most-polled route.
+- **The `conformance` CI job builds the two local-only images its new
+  boot-egress case needs.** 0.7.5's `TestBootEgress_NoFirstUseApproval` boots the
+  real claude-code image behind the real `wardyn-proxy` sidecar; neither
+  `wardyn/agent-claude-code:local` nor `wardyn/wardyn-proxy:local` is published
+  anywhere, and `CreateSandbox` fails closed on an image it cannot pull — so the
+  required job went red on the release commit while `make ci`, which deliberately
+  excludes that target, stayed green everywhere locally. The job now builds both
+  before running the suite. No skip-if-the-image-is-absent knob: the one
+  measurement that proves a stock boot parks no first-use approval must not be
+  able to quietly not run.
+- **`agent-base` carries the three ENV lines that keep a Claude Code boot
+  quiet.** `install.sh` maps the `claude-code` harness key to
+  `ghcr.io/…/agent-base`, and the BYOI recipe is `FROM agent-base` — so the fix
+  that stops the CLI auto-installing a plugin marketplace from
+  `downloads.claude.ai` (git-falling-back to `github.com`), self-updating and
+  fetching a changelog lived only in `agent-claude-code`, which has not been
+  published since 0.6.2. The vars are inert in an image with no Claude Code; what
+  they buy is that every derived image inherits the quiet boot without having to
+  know the list exists. `deploy/images/README.md` now states that contract (these
+  ENV lines — not an `agent-run` export, which a default interactive run's
+  `claude` never inherits — plus a `seed_claude_onboarding` call).
+- **A codex-cli interactive run no longer loses its seed to an early attach.**
+  The published `agent-codex-cli` still had the 0.7.4 boot shape: the `wardyn`
+  tmux session created AFTER the workspace prep, the agent-started marker written
+  first, no respawn fallback, and a boot pane that waited for nothing. A seeded
+  run attached during prep hit `duplicate session: wardyn`, dropped the seed, and
+  had its shell auto-start suppressed by the marker — a bare prompt with the
+  operator's task text gone and no record anywhere a human looks. The
+  create-or-take-over bootstrap, the boot pane's prep wait (bounded by the prep
+  process still running, never a clock) and the git-helper caller-auth secret
+  re-read are now one shared implementation used by all three images.
+- **A sign-in pane that cannot do its job still hands over a shell.** Two
+  `set -u` expansions — an unset `HOME`, and an unset login command — killed the
+  pane AFTER its banner, which is the one point at which the console has stopped
+  typing the sign-in itself: the session was destroyed (or an attached client
+  dropped) with nothing said. Both paths now end in the shell the pane promises.
+  When workspace preparation never finishes, the pane says so in its own words
+  and SKIPS the sign-in rather than running a pair that cannot work and landing
+  on a line that names a command which fails identically. The respawn path also
+  clears the stale "the sign-in did not start on its own" line the bare shell
+  left above the banner.
+- **A total tmux failure no longer leaves the agent-started marker behind.** When
+  tmux is missing the marker is deliberately never written — the shell's
+  auto-start is then the only agent a human can get. When tmux is present but
+  refuses both the create and the respawn the outcome is identical, and the
+  marker stayed: the human attached to a bare shell that started nothing while
+  nothing ran anywhere.
+- **`claude-code --selftest` honours the documented opt-out.** The three
+  self-fetch vars are set with `:-` precisely so a run can turn one back on, and
+  the selftest is fail-closed at dispatch — so a deliberate `=0` refused to start
+  the run. It is reported now, not failed. Unset still fails: that is the case
+  the check exists for.
 
 ### Changed
 
@@ -264,6 +388,11 @@ and does not yet follow semantic versioning (interfaces are not stable).
   superseded_by_new_login`, `superseded_for` and `superseded_by_run`; they audit as `success` like any clean
   kill. A supersede whose teardown or revocation failed audits `failure` with the failing step and writes no
   `run.revoke` row — the new sign-in still proceeds, and the closed sandbox's capture upload is refused.
+  `superseded_for` is the run's `created_by` — under the shared admin-token or a local-mode principal
+  that names a CREDENTIAL, not a person, so two operators sharing one supersede each other.
+  `harness.credential.refused`'s `run_killed` reason is now decided on BOTH sides of the per-owner
+  lock (the late arm carries `owner` + `credential_source` beside it), and `store_error` there now
+  also covers the login run's re-read.
 - A kill's teardown/revocation cascade now completes even if the caller's connection dies mid-request
   (it always did on the kill route; it now does wherever the server kills a run on its own behalf).
 - The live AWS SSO walk (`scripts/kind-sso-walk.sh`) now runs TWO spec files in
@@ -287,9 +416,47 @@ and does not yet follow semantic versioning (interfaces are not stable).
   into the daemon image, so without it a walk can judge the previous release's
   screens with the current release's assertions. Every walk now also records the
   tree's HEAD and each image's digest into `images.txt` beside its evidence.
+- CI runs `agent-run --selftest` against the aws-sso image it already builds for
+  the trivy scan. Everything that selftest checks — tmux present, both
+  coding-agent shims present and refusing — was otherwise exercised only by
+  source-level tests with fake binaries, so a build that lost `tmux` shipped
+  green, and without tmux nothing starts the sign-in.
+- The conformance suites' `go test -timeout` values (docker 20m, k8s 25m) and the
+  k8s job's `timeout-minutes` (35) now have room for the cases 0.7.5 added, and
+  the budget pin asserts the eviction case leaves five minutes for the REST of
+  the suite rather than merely fitting the ceiling by itself. A post-verdict
+  sandbox teardown is bounded, so a slow cleanup of a case that PASSED can no
+  longer spend the package timeout and panic away every verdict.
+- `test/e2e/e2e.sh` merges a caller-supplied `WARDYN_AGENT_IMAGES` instead of
+  overwriting it, and refuses loudly if the caller pins either of the two keys
+  its own assertions name.
+- `scripts/kind-sso-walk.sh`'s opt-in rebuild prints one warning that it retags
+  the `:local` agent images on the picked daemon, which a compose stack on that
+  same daemon adopts for new runs.
 
 ### Known gaps and deferrals
 
+- **Two concurrent sign-ins can still, rarely, both stay alive.** A run's `created_at` is stamped
+  in-process just before the row is written, so timestamp order and write order can disagree — most
+  plausibly across replicas with clock skew, or after a stall between the two steps. If the run
+  carrying the EARLIER timestamp is written after the other launch's re-check, neither launch sees
+  a run it should supersede and both survive. Neither is KILLED, so the capture upload's
+  `run_killed` refusal does not separate them either; the person's next sign-in clears it. Closing
+  it needs a per-person advisory lock around the insert and the re-check — 0.7.6.
+- **The supersede's kill cascade still runs synchronously inside the launch POST** (up to ~30 s per
+  superseded run; on Kubernetes it waits for pod deletion). The teardown is detached and always
+  finishes, but a client that gives up mid-launch can be left with the old sign-in gone and no new
+  one — retry. Documented in `docs/OPERATIONS.md` ("One live sign-in sandbox per person") rather
+  than fixed, because the remedy is one retry and the alternative is a launch that answers before
+  the slot it needs is free.
+- **The New Run rail still paints its credential chip from the ROSTER ROW alone:**
+  it says whose credential the lane uses, not whether that person has signed in.
+  The signed-in/expired state lives on Getting Started, which is where the
+  action is.
+- **A member on a shared Bedrock row whose ADMIN credential is `expiring` is still
+  offered the member-side sign-in CTA** (the actionable-state set is shared with
+  the per-person lane). The chip beside it now says the credential is the
+  admin's.
 - **On Kubernetes, `disk_mib` is NARROWED to `/tmp` and the workdir, not closed.** 0.7.5 put `/tmp`
   and `/home/agent/work` inside the budget. Everything the agent writes anywhere else stays on the
   ephemeral container's unmetered writable layer: the rest of `$HOME` — including the toolchain
