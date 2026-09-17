@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -30,6 +31,25 @@ import (
 // A warning, never a refusal: failing closed on a legacy entry would take every
 // run on the estate down on upgrade day, which is a worse outcome than the deny
 // this is reporting. The policy still compiles byte-identically.
+// lockedBuffer is a bytes.Buffer safe to install behind the process-global slog
+// default — see its one use below.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
 func TestBootWarnsOnceForEachDeadDomainEntry(t *testing.T) {
 	newSrv := func(t *testing.T, spec types.RunPolicySpec) string {
 		t.Helper()
@@ -43,7 +63,13 @@ func TestBootWarnsOnceForEachDeadDomainEntry(t *testing.T) {
 		if err := cfg.applyDefaultsAndValidate(); err != nil {
 			t.Fatalf("config: %v", err)
 		}
-		var logged bytes.Buffer
+		// A LOCKED buffer, because slog.SetDefault is PROCESS-global: for as long as
+		// this handler is installed, every goroutine an earlier test in this package
+		// left running (a proxy's token-renew loop logging its back-off, chiefly)
+		// writes into it too. A bare bytes.Buffer made that a data race with the
+		// String() below — red under `make test-race` whenever such a goroutine
+		// happened to log inside this window, green otherwise.
+		var logged lockedBuffer
 		prev := slog.Default()
 		slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
 		defer slog.SetDefault(prev)
