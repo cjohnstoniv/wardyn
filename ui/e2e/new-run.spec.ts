@@ -20,11 +20,18 @@
 // are configured for the roster-pin e2e), so the model-provider warning
 // below is unconditionally absent, not merely an environment fact.
 import { test, expect, gotoConsole, ADMIN_TOKEN, launchRun } from "./fixtures";
-import { RUN } from "../src/app/components/wardyn/copy";
+import { RAIL_CREDENTIAL, RECORDING_DISABLED_TITLE, RUN } from "../src/app/components/wardyn/copy";
 import { CC_META } from "../src/app/components/wardyn/cc-meta";
 import { AGENTS, PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import type { Page } from "@playwright/test";
 import type { ConfinementClass } from "../src/app/lib/types";
+
+// The rail's "recording is on" sentence and the unconditional credential line it
+// replaced — neither is a shared constant (the first is inline in the rail, the
+// second no longer exists), so they are spelled here to be asserted against.
+const RAIL_RECORDING_ON = "Every keystroke and every outbound connection.";
+const OLD_UNCONDITIONAL_CREDENTIAL_LINE =
+  "Minted at launch, injected by the proxy. Never written into the sandbox.";
 
 async function openNewRun(page: Page) {
   await gotoConsole(page);
@@ -408,5 +415,82 @@ test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F
     expect(box, "Open run boundingBox").not.toBeNull();
     expect(box!.y, "Open run top edge").toBeGreaterThanOrEqual(0);
     expect(box!.y + box!.height, "Open run bottom edge").toBeLessThanOrEqual(650);
+  });
+});
+
+// ── Appendix A finding 1: the rail states what the server resolved ───────────
+//
+// The point of these two is the DEFAULT path. Preflight is a manual button that
+// nothing fires, and it answers 422 for exactly the field scenario (a per_user
+// member who has not signed in), so a preflight-only design would show every
+// user "Resolved at launch." at the decision point. The rail therefore reads
+// /setup/status's harness row by default and lets a CURRENT preflight override
+// it — and both arms are asserted against what those endpoints actually say on
+// this daemon, not against a sentence hardcoded here.
+
+// railCredentialSentence is the rail's own mapping, spelled once more here so
+// the assertion is "the console repeats the server", not "the console renders a
+// string this spec also hardcodes". Keep in step with new-run-rail.tsx.
+function railCredentialSentence(cred?: {
+  residency?: string;
+  mechanism?: string;
+  staged_placeholder?: boolean;
+}): string {
+  switch (cred?.residency) {
+    case "proxy":
+      return cred.staged_placeholder ? RAIL_CREDENTIAL.PROXY_STAGED : RAIL_CREDENTIAL.PROXY;
+    case "sandbox":
+      return cred.mechanism === "anthropic_subscription"
+        ? RAIL_CREDENTIAL.SANDBOX_SUBSCRIPTION
+        : RAIL_CREDENTIAL.SANDBOX_BEDROCK;
+    case "image":
+      return RAIL_CREDENTIAL.IMAGE;
+    default:
+      return RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH;
+  }
+}
+
+test.describe("New run rail — credentials and recording are read, not asserted", () => {
+  test("with NO Preflight click the rail says what /setup/status and /healthz say", async ({ page }) => {
+    const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
+    const status = await (await page.request.get("/api/v1/setup/status", { headers: auth })).json();
+    const health = await (await page.request.get("/healthz", { headers: auth })).json();
+    const row = (status.harnesses ?? []).find((h: { id: string }) => h.id === "claude-code");
+    const wantCredential = railCredentialSentence({
+      residency: row?.credential_residency,
+      mechanism: row?.mechanism,
+      staged_placeholder: row?.staged_placeholder,
+    });
+    const recordingOff = health.components?.recording?.selected === "none";
+
+    await openNewRun(page);
+    // Nothing is clicked: this is the state every person is in at the decision
+    // point, and the state the old copy answered with "never written into the
+    // sandbox" regardless of which lane the run would resolve to.
+    await expect(page.getByTestId("preflight-result")).toHaveCount(0);
+    await expect(page.getByText(wantCredential, { exact: true })).toBeVisible();
+    await expect(
+      page.getByText(recordingOff ? RECORDING_DISABLED_TITLE : RAIL_RECORDING_ON, { exact: true }),
+    ).toBeVisible();
+    // The old unconditional sentence is gone from the screen entirely.
+    await expect(page.getByText(OLD_UNCONDITIONAL_CREDENTIAL_LINE)).toHaveCount(0);
+  });
+
+  test("after Preflight the rail states the verdict for the body it graded", async ({ page }) => {
+    // Read the response the CONSOLE itself got, rather than reconstructing the
+    // request body here — the override is defined as "the verdict for the body
+    // this screen dry-ran", so that is what must be compared against.
+    let graded: { residency?: string; mechanism?: string; staged_placeholder?: boolean } | undefined;
+    await page.route("**/api/v1/runs/preflight", async (route) => {
+      const response = await route.fetch();
+      graded = (await response.json()).model_credential;
+      await route.fulfill({ response });
+    });
+
+    await openNewRun(page);
+    await page.getByRole("button", { name: "Preflight" }).click();
+    await expect(page.getByTestId("preflight-result")).toBeVisible();
+    expect(graded, "POST /runs/preflight carried a model_credential").toBeDefined();
+    await expect(page.getByText(railCredentialSentence(graded), { exact: true })).toBeVisible();
   });
 });

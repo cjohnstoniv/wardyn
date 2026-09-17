@@ -128,10 +128,9 @@ func gradeModelCredential(row types.AgentProvider, declared bool, lanes llmLanes
 		// The managed setup-token lane (no mount) has no resident copy to be off
 		// about: the sandbox holds the sentinel and the proxy injects the live
 		// token, so it is proxy either way.
-		switch {
-		case lanes.subscription && !subscriptionInject:
+		if lanes.subscription && !subscriptionInject {
 			f.Residency = residencySandbox
-		default:
+		} else {
 			f.Residency = residencyProxy
 			f.StagedPlaceholder = lanes.subscription
 		}
