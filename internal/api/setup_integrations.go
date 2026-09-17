@@ -507,6 +507,24 @@ type SetupHarnessTool struct {
 	// credentials per person.
 	Mechanism        string `json:"mechanism,omitempty"`
 	CredentialSource string `json:"credential_source,omitempty"`
+	// CredentialResidency is WHERE this agent's model credential would land for
+	// THIS caller (gradeModelCredential) — "proxy", "sandbox", "image" or
+	// "unknown", empty on a row nothing was graded for. StagedPlaceholder rides
+	// with it; see modelCredentialFacts for both.
+	//
+	// It is here, on a row the New Run screen already fetches on mount, because
+	// Preflight is a MANUAL button nothing fires by default AND answers 422 for
+	// exactly the field scenario — a per_user member who has not signed in. A
+	// preflight-only design would have shown every user "Resolved at launch." at
+	// the decision point. Member-safe for the same reason the two fields above
+	// are: a residency carries no host, no secret name and no portal URL.
+	//
+	// Graded against the DEPLOYMENT DEFAULT policy, which is what the New Run
+	// screen launches with until a saved policy is picked; the preflight response
+	// carries the same grade for the body actually being launched and overrides
+	// this one in the rail.
+	CredentialResidency string `json:"credential_residency,omitempty"`
+	StagedPlaceholder   bool   `json:"staged_placeholder,omitempty"`
 }
 
 // setupHarnessTools projects the static harness catalog for SetupStatus, folded
@@ -573,4 +591,56 @@ func setupHarnessTools(sc types.SiteConfig, agentImages map[string]string) []Set
 		}
 	}
 	return out
+}
+
+// setupHarnessToolsFor is setupHarnessTools plus the model-credential residency
+// each row would resolve to FOR THIS CALLER — the DEFAULT-path answer the New
+// Run rail states when nobody has pressed Preflight (which is nobody, by
+// default: it is a manual button, and it answers 422 for a per_user member who
+// has not signed in).
+//
+// The projection above stays a pure function of the roster because that is what
+// it is; residency is not derivable from a roster at all. It is the RESOLVED
+// lane that decides it — under a `shared` row the declared bedrock_bearer lane
+// is satisfied by a chain that fell through to the resident ~/.aws mount — so
+// this half needs the store, the secrets and the caller's own SSO namespace.
+//
+// Graded per ENABLED row only: a row the admin disabled cannot be launched, so
+// resolving its lanes would be a secret-store read for a sentence nothing
+// renders.
+func (s *Server) setupHarnessToolsFor(ctx context.Context, sc types.SiteConfig, subject string) []SetupHarnessTool {
+	out := setupHarnessTools(sc, s.cfg.AgentImages)
+	for i := range out {
+		if !out[i].Enabled {
+			continue
+		}
+		f := s.statusModelCredential(ctx, sc, out[i].ID, subject)
+		out[i].CredentialResidency, out[i].StagedPlaceholder = string(f.Residency), f.StagedPlaceholder
+	}
+	return out
+}
+
+// statusModelCredential grades one agent's model credential at STATUS time —
+// where there is no run request yet, so the inputs are the deployment's own
+// defaults: the default run policy (what New Run launches with until a saved
+// policy is picked), an interactive model run, and no workspace Bedrock
+// override.
+//
+// That default is also this answer's BOUND, and the reason preflight overrides
+// it in the rail: a saved policy that mounts ~/.claude, or one that brokers an
+// api_key grant the default does not, resolves a different lane. Where the
+// default resolves nothing the grade is "unknown" and the rail says "Resolved at
+// launch." — an absence, never the proxy sentence, which is what made the old
+// copy a false assurance.
+//
+// The per_user row-fixed case needs none of that: it is decided by the roster
+// (gradeModelCredential), so a member who has not signed in still reads the
+// truth about where their AWS session will land.
+func (s *Server) statusModelCredential(ctx context.Context, sc types.SiteConfig, agent, subject string) modelCredentialFacts {
+	spec := s.cfg.DefaultPolicy
+	req := createRunRequest{Agent: agent, Interactive: true}
+	lanes := s.resolveRunLLMLanes(ctx, req, &spec, nil, awsSSOScopeFor(sc, agent, subject))
+	selected, ok := s.selectedMechanism(agent, lanes.subscription, lanes.bedrock, lanes.managed, lanes.apiKey)
+	row, declared := agentProviderFor(sc, agent)
+	return gradeModelCredential(row, declared, lanes, selected, ok, s.subscriptionInjectEnabled())
 }

@@ -40,6 +40,22 @@ type preflightResponse struct {
 	// resolveRunPolicy's doc comment) so Review tells the member WHY their
 	// inline_policy differs from what they typed, before they launch.
 	Warnings []string `json:"warnings,omitempty"`
+	// ModelCredential is WHERE this run's model credential will land, graded from
+	// the lanes the mechanism gate just resolved (gradeModelCredential). The New
+	// Run rail states it verbatim instead of the unconditional "never written
+	// into the sandbox" it used to assert.
+	//
+	// It OVERRIDES the /setup/status harness row's own residency, which is the
+	// default-path answer graded against the deployment default policy: this one
+	// is graded against the body the caller is actually about to launch, and
+	// preflightIsCurrent compares that whole body — so a verdict for a different
+	// agent can never render.
+	//
+	// ABSENT for a run that makes no model call, for a caller whose roster read
+	// failed, and — the case worth naming — on the 422 this handler answers for a
+	// per_user member who has not signed in, where there is no response body to
+	// carry it. That is exactly why the status row exists as the default path.
+	ModelCredential *modelCredentialFacts `json:"model_credential,omitempty"`
 }
 
 // handlePreflightRun is a DRY-RUN of handleCreateRun's resolution + gating: it
@@ -280,8 +296,14 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// door (runs.go): a per_user lane resolves against the principal's namespace,
 	// and secretOwnerFromRequest's "" for an operator would preview "sign in
 	// again" for an admin whose own capture is right there.
+	//
+	// The out-param is this handler's ONE resolution of the run's credential
+	// lanes: the gate already resolves them to judge the declared mechanism, and
+	// grading residency from a second resolution would both cost another
+	// secret-store read and let the rail describe a lane the gate did not judge.
 	ssoSubject := runIdentitySubject(ctx, principalFromRequest(r))
-	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject) {
+	var modelCred modelCredentialFacts
+	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred) {
 		return
 	}
 
@@ -301,11 +323,18 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	items := s.deriveSetupItems(ctx, s.secretOwnerFromRequest(r), runInput, spec, presentSecrets, llmAccess)
-	writeJSON(w, http.StatusOK, preflightResponse{
+	// A zero residency means nothing was graded (no store, an unreadable roster,
+	// a non-model run) — omitted rather than published as a guess, which leaves
+	// the rail on the /setup/status row it already had.
+	resp := preflightResponse{
 		SetupItems:               items,
 		EnforcedConfinementClass: enforced,
 		RiskAssessment:           riskItems,
 		OverallRisk:              overallRisk,
 		Warnings:                 clampWarnings,
-	})
+	}
+	if modelCred.Residency != "" {
+		resp.ModelCredential = &modelCred
+	}
+	writeJSON(w, http.StatusOK, resp)
 }

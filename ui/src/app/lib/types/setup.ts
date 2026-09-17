@@ -6,7 +6,7 @@
 // First-run setup — GET /api/v1/setup/status (mirrors internal/api/setup.go
 // SetupStatus). FROZEN CONTRACT — keep in exact sync with the Go struct.
 // The wizard derives its per-step "done" state from these fields.
-import type { ConfinementClass } from "./runs";
+import type { ConfinementClass, ModelCredentialResidency } from "./runs";
 import type { StorageEnforcement } from "../api/drives";
 
 export type SetupCheckStatus = "ok" | "warn" | "fail" | "info";
@@ -229,6 +229,24 @@ export interface SetupHarnessTool {
   // portal URL (see the Go SetupHarnessTool doc).
   mechanism?: string;
   credential_source?: string;
+  // WHERE this agent's model credential would land for THIS caller, graded
+  // server-side from the lanes that actually RESOLVE (internal/api's
+  // gradeModelCredential) — never from `mechanism` above, which is the roster's
+  // DECLARED lane and is satisfied, under a `shared` row, by a chain that fell
+  // through to a resident one.
+  //
+  // The New Run rail's DEFAULT-path source: that screen already fetches
+  // /setup/status on mount, while Preflight is a manual button nothing fires by
+  // default and which answers 422 for a per_user member who has not signed in.
+  // Absent on an older daemon and on a row nothing was graded for — treat absent
+  // as unknown and say so; the "injected by the proxy" sentence must never be
+  // reachable from an absence.
+  credential_residency?: ModelCredentialResidency;
+  // The ~/.claude mount with proxy-side injection ON: "proxy" is the
+  // deployment's stated mode rather than something Wardyn verified, because the
+  // staged sentinel is written by an operator-run script the daemon never reads
+  // back. The rail names the mount instead of promising nothing is mounted.
+  staged_placeholder?: boolean;
 }
 
 // THIS PRINCIPAL's model-access state (internal/api.SetupModelAccess) — the

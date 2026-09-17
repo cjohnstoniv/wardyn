@@ -443,4 +443,30 @@ export interface PreflightResult {
   // tells the member WHY the enforced policy differs from what they typed, since
   // launch itself stays silent. Absent on an older server that predates it.
   warnings?: string[];
+  // WHERE this run's model credential will land (internal/api's
+  // gradeModelCredential), graded from the lanes the create/Review mechanism gate
+  // just resolved for THIS body. The rail prefers it over the /setup/status
+  // harness row, which is the same grade taken against the deployment default
+  // policy — and preflightIsCurrent compares the whole request body, so a verdict
+  // for a different agent can never render.
+  //
+  // ABSENT for an exec / non-model run, for a caller whose roster read failed,
+  // and on the 422 answered for a per_user member who has not signed in (a
+  // refusal has no verdict to publish). The status row is the default path for
+  // exactly that reason.
+  model_credential?: ModelCredential;
+}
+
+// Where a run's MODEL credential lands (internal/api.modelCredentialResidency).
+// A vocabulary of PLACE, not mechanism: this rail's reader is deciding whether a
+// credential may sit inside the sandbox they are about to grant.
+export type ModelCredentialResidency = "proxy" | "sandbox" | "image" | "unknown";
+
+// internal/api.modelCredentialFacts. Member-safe: a lane name, "shared" /
+// "per_user", and a place — no host, no secret name, no access-portal URL.
+export interface ModelCredential {
+  mechanism?: string;
+  residency: ModelCredentialResidency;
+  credential_source?: string;
+  staged_placeholder?: boolean;
 }

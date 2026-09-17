@@ -417,11 +417,22 @@ func (s *Server) resolveRunLLMLanes(ctx context.Context, req createRunRequest, s
 // their model has said that a run on some other lane is not what it wants.
 //
 // The roster read is the only cost in legacy mode: no row for this agent, no
-// lane resolution at all.
+// lane resolution at all — unless a caller asked for the residency grade (out
+// non-nil), which legacy mode must answer too and which has no other source for
+// it. That is Review's cost alone; create passes nil and pays nothing.
+//
+// out, when non-nil, receives where this run's model credential will land
+// (gradeModelCredential) from the SAME resolved lanes the refusal is judged on.
+// It is filled here rather than resolved again one frame up because a third
+// resolution would mean a third secret-store read per Review, and because a
+// residency graded from different lanes than the gate's could tell the operator
+// "never written into the sandbox" about a run the gate is refusing for being on
+// the resident lane. Left untouched (residency stays "") wherever nothing was
+// resolved, so the caller omits the field rather than publishing a guess.
 //
 // Returns ok=false when it has already written the 422.
 func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseWriter, req createRunRequest,
-	spec types.RunPolicySpec, bedrockRef *types.WorkspaceBedrockRef, subject string,
+	spec types.RunPolicySpec, bedrockRef *types.WorkspaceBedrockRef, subject string, out *modelCredentialFacts,
 ) bool {
 	if !llmMechanismGateApplies(req) || s.cfg.Store == nil {
 		return true
@@ -434,7 +445,7 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 		return true
 	}
 	row, declared := agentProviderFor(sc, req.Agent)
-	if !declared {
+	if !declared && out == nil {
 		return true
 	}
 	// The roster read above is also what says WHOSE credential this run may use,
@@ -444,6 +455,12 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 	// while dispatch resolved it fine.
 	lanes := s.resolveRunLLMLanes(ctx, req, &spec, bedrockRef, awsSSOScopeFor(sc, req.Agent, subject))
 	selected, ok := s.selectedMechanism(req.Agent, lanes.subscription, lanes.bedrock, lanes.managed, lanes.apiKey)
+	if out != nil {
+		*out = gradeModelCredential(row, declared, lanes, selected, ok, s.subscriptionInjectEnabled())
+	}
+	if !declared {
+		return true
+	}
 	// The stored-identity refusal first, exactly as dispatch orders it: this door
 	// exists so a run dispatch would refuse never boots at all, and a run whose
 	// stored AWS sign-in the roster no longer allows is one of them.

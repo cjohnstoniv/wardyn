@@ -233,7 +233,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// their own per_user capture here while dispatch, reading run.CreatedBy,
 	// resolved it fine.
 	ssoSubject := runIdentitySubject(ctx, principalFromRequest(r))
-	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject) {
+	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, nil) {
 		return
 	}
 

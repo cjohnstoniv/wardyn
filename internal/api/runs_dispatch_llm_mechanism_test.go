@@ -438,7 +438,7 @@ func TestEnforceCreateLLMMechanism_RefusesBeforeARunExists(t *testing.T) {
 			srv := New(cfg)
 			rec := httptest.NewRecorder()
 
-			ok := srv.enforceCreateLLMMechanism(context.Background(), rec, c.req, types.RunPolicySpec{}, nil, "")
+			ok := srv.enforceCreateLLMMechanism(context.Background(), rec, c.req, types.RunPolicySpec{}, nil, "", nil)
 			if ok == c.wantRefused {
 				t.Fatalf("admitted = %v, want refused = %v (body %q)", ok, c.wantRefused, rec.Body.String())
 			}
