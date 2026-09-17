@@ -283,6 +283,17 @@ test.describe("agents — member Getting Started's Model access chip (spliced st
         const response = await route.fetch();
         const json = await response.json();
         json.model_access = { state: c.state };
+        // U-1 (W6 blind lens): the roster row rides the splice now. `live` and
+        // `expiring` are PER-PERSON labels, and the server emits the same two
+        // states for a SHARED row's admin credential — where the chip row says
+        // "Provided by your admin", because that is whose credential it is. The
+        // six labels this case walks are the per_user lane's, so the fixture is
+        // the per_user lane.
+        json.harnesses = (json.harnesses ?? []).map((h: { id: string }) =>
+          h.id === "claude-code"
+            ? { ...h, enabled: true, mechanism: "bedrock_sso", credential_source: "per_user" }
+            : h,
+        );
         await route.fulfill({ response, json });
       });
       await gotoConsole(page);
@@ -298,9 +309,12 @@ test.describe("agents — member Getting Started's Model access chip (spliced st
         .filter({ has: page.getByRole("heading", { name: "What's set up for you" }) });
       await expect(setupSummarySection).toBeVisible();
       await expect(setupSummarySection.getByText(c.chip)).toBeVisible();
+      // U-13: under the per_user fixture the CARD carries its own sign-in button
+      // beside the chip row's, with its own accessible name — so this asks for
+      // the FIRST of the two rather than a single match.
       const cta = page.getByRole("button", { name: AGENTS.SIGN_IN_AWS });
       if (c.hasCta) {
-        await expect(cta).toBeVisible();
+        await expect(cta.first()).toBeVisible();
       } else {
         await expect(cta).toHaveCount(0);
       }

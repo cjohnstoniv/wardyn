@@ -553,10 +553,21 @@ test.describe("New run rail — credentials and recording are read, not asserted
   // AND that its credential is resolved at launch AND to press Preflight to see
   // where. Nothing resolves at launch when nothing is connected.
   test("with no model provider connected the rail makes no residency promise at all", async ({ page }) => {
+    // The warning is derived from the INTEGRATION ROWS (hasLlmPath, lib/
+    // readiness.ts), never from `llm_ready` — one source of truth with the
+    // Integrations page. This daemon has a Bedrock region+model configured
+    // (scripts/e2e-backend.sh), so the splice takes away every input an AI row
+    // is built from: that is the stock install this ruling is about.
     await page.route("**/api/v1/setup/status*", async (route) => {
       const response = await route.fetch();
       const body = await response.json();
       body.llm_ready = false;
+      body.secrets = { ...(body.secrets ?? {}), present: [] };
+      body.providers = [];
+      body.harness = [];
+      body.integrations = [];
+      delete body.bedrock;
+      body.composer = { ...(body.composer ?? {}), backends: [] };
       await route.fulfill({ response, json: body });
     });
 
