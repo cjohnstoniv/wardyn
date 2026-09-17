@@ -71,7 +71,11 @@ export default defineConfig({
       testMatch: "live/**/*.spec.ts",
       retries: 0,
       timeout: 30 * 60_000,
-      use: { ...devices["Desktop Chrome"] },
+      // A single ACTION may never wait out the 30-minute test budget: a missing
+      // element (0.7.5's first walk: the admin was on the welcome gate, not on
+      // Settings) must cost three minutes, not the whole walk. Long waits in
+      // these specs are expect.poll calls with their own explicit timeouts.
+      use: { ...devices["Desktop Chrome"], actionTimeout: 180_000 },
     },
     {
       // screenshots: regenerates the docs/img UI PNGs (e2e/screenshots/docs.spec.ts)

@@ -198,7 +198,21 @@ async function approvalsFor(page: Page, runID: string): Promise<unknown[]> {
  *  carry the e2e daemon's bearer token and base URL, neither of which applies
  *  on a cluster driven through Dex. */
 async function gotoAgentsTab(page: Page): Promise<void> {
-  await page.goto("/settings");
+  // NEVER `page.goto("/settings")` as the admin. App.tsx's RequireSetup bounces
+  // the FIRST gated-route access of every full document load into /setup while
+  // any setup check grades fail or warn — which a fresh kind install always does
+  // — and only ONCE per load (setup-gate.ts's gateFiredThisLoad). 0.7.5's first
+  // green-looking walk sat 30 minutes on the welcome page for exactly this. So:
+  // spend that one bounce on a full load of a gated route, then navigate
+  // CLIENT-SIDE, the way ui/e2e/fixtures.ts's navToRoute does for the hermetic
+  // suite (pushState + popstate; a second full load would re-arm the gate).
+  await page.goto("/runs");
+  await page.waitForURL((u) => u.pathname === "/runs" || u.pathname === "/setup", { timeout: 60_000 });
+  await page.evaluate((path) => {
+    window.history.pushState({}, "", path);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  }, "/settings");
+  await expect(page).toHaveURL(/\/settings$/, { timeout: 30_000 });
   await page.getByTestId("providers-card").getByText(PROVIDERS.CARD_OPEN).click();
   await expect(page).toHaveURL(/\/providers$/);
   await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
