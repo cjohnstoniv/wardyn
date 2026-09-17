@@ -65,6 +65,26 @@ type Variant = "default" | "outline";
 // to MODEL_ACCESS_NOT_CONFIGURED for anything else — one root cause, one table.
 // A MISS is "no chip", never a default label (see its doc comment).
 
+// U-1 (W6 blind lens) — WHOSE credential the state describes, which the label
+// table alone cannot say. Under a row that is NOT per_user the server still
+// projects `live`/`expiring` (memberModelAccess, internal/api/modelaccess.go):
+// that is the ADMIN's shared credential, graded for this member. Rendering
+// MODEL_ACCESS_LIVE ("Your AWS sign-in") there claimed a sign-in the member does
+// not have, directly above a card reading "Provided by your admin" and a New Run
+// rail reading "Admin's credential". Every other state keeps the table's label:
+// shared_expired already names the admin, and the per-person states are only
+// ever emitted for a per_user row. A miss is still NO chip, never a default.
+function modelAccessChip(
+  state: string,
+  perUser: boolean,
+): { label: string; tone: "success" | "warning" } | null {
+  if (!perUser && (state === "live" || state === "expiring")) {
+    return { label: T.MODEL_ACCESS_PROVIDED_CHIP, tone: "success" };
+  }
+  const label = MODEL_ACCESS_CHIP_LABEL[state];
+  return label ? { label, tone: state === "live" ? "success" : "warning" } : null;
+}
+
 export function MemberGettingStarted() {
   const [status, setStatus] = React.useState<SetupStatus | null>(null);
   const [retryTick, setRetryTick] = React.useState(0);
@@ -189,6 +209,10 @@ export function MemberGettingStarted() {
   // Appendix A finding 2 — ONE predicate for both the checklist and the
   // card (your-model-key.tsx): a per_user roster row is graded on THIS
   // caller's own model_access, never on the deployment-wide llm_ready.
+  // U-9 (W6 blind lens): `mechanism` was the one input the card passed and this
+  // call did not, so "ONE predicate" was two — under a SHARED Bedrock row with a
+  // leftover own key the page graded "own" (done) while the card graded the
+  // credential expired. Both readings now take the same row.
   const modelKeyDone =
     !unreachable &&
     modelKeyState({
@@ -196,6 +220,7 @@ export function MemberGettingStarted() {
       llmReady,
       modelAccess: status?.model_access,
       credentialSource: modelKeyProviderRow.credentialSource,
+      mechanism: modelKeyProviderRow.mechanism,
     }).done;
   const firstRunDone = !unreachable && (ownRuns?.length ?? 0) > 0;
   const connectDone = !unreachable && (sshKeyCount ?? 0) > 0;
@@ -216,6 +241,12 @@ export function MemberGettingStarted() {
   const strongest = status
     ? strongestAvailable(status.runner.confinement_classes)
     : undefined;
+
+  // U-1: the chip row's own model-access chip, or null for a state outside the
+  // five (unknown ≠ not configured — the absent-row doctrine).
+  const accessChip = status?.model_access
+    ? modelAccessChip(status.model_access.state, isPerUserModelAccess)
+    : null;
 
   // Shape C (approved mock round 2026-08-31): the member's own path leads
   // (every member-audience episode — which now includes 13, whose lesson is
@@ -285,10 +316,11 @@ export function MemberGettingStarted() {
                   // otherwise the deployment-wide "Provided by your admin"
                   // chip that arm exists to show is lost under exactly the
                   // caller (automation, the shared token) most likely to hit it.
-                  MODEL_ACCESS_CHIP_LABEL[status.model_access.state] ? (
-                    <Chip tone={status.model_access.state === "live" ? "success" : "warning"}>
-                      {MODEL_ACCESS_CHIP_LABEL[status.model_access.state]}
-                    </Chip>
+                  //
+                  // U-1: WHICH label is modelAccessChip's call, not the table's
+                  // — a shared row's `live` is the admin's credential.
+                  accessChip ? (
+                    <Chip tone={accessChip.tone}>{accessChip.label}</Chip>
                   ) : null
                 ) : llmReady && !isPerUserModelAccess ? (
                   // model_access absent (older daemon, or the fetch failed),
@@ -346,7 +378,21 @@ export function MemberGettingStarted() {
                 ) : (
                   // outline: this card is informational (file header) and
                   // never enters the page's one-teal-at-a-time computation.
-                  <Button size="sm" variant="outline" className="mt-3" onClick={() => setAwsLoginOpen(true)}>
+                  //
+                  // U-13 (a11y): this page carries TWO buttons whose visible
+                  // text is "Sign in to AWS" (this one and the card's), plus a
+                  // plain-text action line saying the same words — a screen
+                  // reader listing the buttons got the same name twice with
+                  // nothing to choose by. The aria-label keeps the visible text
+                  // and names the section it is in; it starts with the visible
+                  // text so a by-name lookup still finds it.
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="mt-3"
+                    aria-label={T.SIGN_IN_AWS_ARIA_SUMMARY}
+                    onClick={() => setAwsLoginOpen(true)}
+                  >
                     {AGENTS.SIGN_IN_AWS}
                   </Button>
                 ))}
@@ -401,6 +447,10 @@ export function MemberGettingStarted() {
           harnesses={status?.harnesses}
           modelAccess={status?.model_access}
           onSignInAws={() => setAwsLoginOpen(true)}
+          /* U-13: the pane opens in the card ABOVE this one and moves no focus,
+             so while it is open the card's own button is a no-op that reads as
+             a second, live way in. */
+          signInOpen={awsLoginOpen}
           known={!unreachable}
           variant={variantFor("model-key")}
           onChanged={loadSecrets}

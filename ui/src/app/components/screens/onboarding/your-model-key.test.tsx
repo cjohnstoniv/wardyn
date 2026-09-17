@@ -19,8 +19,15 @@ vi.mock("../../../lib/api/secrets", () => ({
 
 import { YourModelKey } from "./your-model-key";
 import { YOUR_MODEL_KEY as T } from "../../wardyn/copy";
-import { AGENTS } from "../../../lib/workspace-providers-copy";
+import { AGENTS, modelAccessChipBare } from "../../../lib/workspace-providers-copy";
 import type { SetupHarnessTool } from "../../../lib/types";
+
+// U-13 (a11y): the two "Sign in to AWS" buttons now carry DISTINCT accessible
+// names (the visible text plus the section they are in), so a lookup by the
+// visible name is a prefix match — the same query, still by what the button
+// says, and the exact aria-labels are pinned in their own case below.
+const SIGN_IN_AWS_NAME = new RegExp(`^${AGENTS.SIGN_IN_AWS}`);
+
 
 // Appendix A finding 2 — a per_user roster row (the wire shape a real
 // bedrock_sso lane sends: modelKeyProvider's harnesses.find picks the first
@@ -112,7 +119,7 @@ describe("YourModelKey", () => {
       );
       expect(screen.getByText(T.SIGNED_IN_CHIP)).toBeInTheDocument();
       expect(screen.getByText(T.SIGNED_IN_BODY)).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: SIGN_IN_AWS_NAME })).not.toBeInTheDocument();
     });
 
     it("expiring -> expiring: chip 'Your AWS sign-in · Expiring' + the sign-in button", async () => {
@@ -132,7 +139,7 @@ describe("YourModelKey", () => {
       expect(screen.getByText(T.EXPIRING_CHIP)).toBeInTheDocument();
       // L2 (REVIEW-1.md) — the expiring body, not just the chip.
       expect(screen.getByText(T.SIGNED_IN_BODY)).toBeInTheDocument();
-      await user.click(screen.getByRole("button", { name: AGENTS.SIGN_IN_AWS }));
+      await user.click(screen.getByRole("button", { name: SIGN_IN_AWS_NAME }));
       expect(onSignInAws).toHaveBeenCalledTimes(1);
     });
 
@@ -149,13 +156,18 @@ describe("YourModelKey", () => {
       );
       expect(screen.getByText(T.NOT_SIGNED_IN_CHIP)).toBeInTheDocument();
       expect(screen.getByText(T.NOT_SIGNED_IN_BODY)).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: SIGN_IN_AWS_NAME })).toBeInTheDocument();
       expect(screen.queryByText("Done")).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: T.USE_OWN_KEY })).not.toBeInTheDocument();
       expect(screen.queryByPlaceholderText("sk-ant-…")).not.toBeInTheDocument();
     });
 
-    it("expired_signin -> not_signed_in: same as not_configured", () => {
+    // U-10 (W6 blind lens) — SUPERSEDES "same as not_configured": an expired
+    // session is not "nothing is configured for you". The chip is the chip row's
+    // own label for the state (bare inside this card), and the body says what
+    // actually happened — which is also what the server's action line on the
+    // same page says.
+    it("expired_signin -> not_signed_in with its OWN chip and body, never 'nothing is configured'", () => {
       render(
         <YourModelKey
           llmReady={true}
@@ -166,11 +178,33 @@ describe("YourModelKey", () => {
           onChanged={() => {}}
         />,
       );
-      expect(screen.getByText(T.NOT_SIGNED_IN_CHIP)).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeInTheDocument();
+      expect(screen.getByText(modelAccessChipBare("expired_signin")!)).toBeInTheDocument();
+      expect(screen.getByText(T.EXPIRED_SIGNIN_BODY)).toBeInTheDocument();
+      expect(screen.queryByText(T.NOT_SIGNED_IN_CHIP)).not.toBeInTheDocument();
+      expect(screen.queryByText(T.NOT_SIGNED_IN_BODY)).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: SIGN_IN_AWS_NAME })).toBeInTheDocument();
     });
 
-    it("shared_expired (shared/none): reuses AGENTS.MODEL_ACCESS_SHARED_EXPIRED chip, NOT done, no button, reveal shown", () => {
+    // U-10's other half: not_configured keeps today's chip and body exactly.
+    it("not_configured keeps the not-signed-in chip and body", () => {
+      render(
+        <YourModelKey
+          llmReady={true}
+          mine={[]}
+          harnesses={perUserHarness}
+          modelAccess={{ state: "not_configured" }}
+          variant="default"
+          onChanged={() => {}}
+        />,
+      );
+      expect(screen.getByText(T.NOT_SIGNED_IN_CHIP)).toBeInTheDocument();
+      expect(screen.getByText(T.NOT_SIGNED_IN_BODY)).toBeInTheDocument();
+      expect(screen.queryByText(T.EXPIRED_SIGNIN_BODY)).not.toBeInTheDocument();
+    });
+
+    // U-15: the chip is the same label as the chip row's, WITHOUT the
+    // "Model access · " qualifier — this card's own heading is the subject.
+    it("shared_expired (shared/none): the bare shared-expired chip, NOT done, no button, reveal shown", () => {
       render(
         <YourModelKey
           llmReady={false}
@@ -180,9 +214,10 @@ describe("YourModelKey", () => {
           onChanged={() => {}}
         />,
       );
-      expect(screen.getByText(AGENTS.MODEL_ACCESS_SHARED_EXPIRED)).toBeInTheDocument();
+      expect(screen.getByText(modelAccessChipBare("shared_expired")!)).toBeInTheDocument();
+      expect(screen.queryByText(AGENTS.MODEL_ACCESS_SHARED_EXPIRED)).not.toBeInTheDocument();
       expect(screen.getByText(T.SHARED_EXPIRED_BODY)).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: SIGN_IN_AWS_NAME })).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: T.USE_OWN_KEY })).toBeInTheDocument();
     });
 
@@ -206,9 +241,59 @@ describe("YourModelKey", () => {
       expect(screen.queryByText("Done")).not.toBeInTheDocument();
       expect(screen.queryByText(T.PROVIDED_CHIP)).not.toBeInTheDocument();
       expect(screen.queryByText(T.PROVIDED_BODY)).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: SIGN_IN_AWS_NAME })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: T.USE_OWN_KEY })).not.toBeInTheDocument();
       expect(screen.queryByPlaceholderText("sk-ant-…")).not.toBeInTheDocument();
+    });
+
+    // U-14 (W6 blind lens): PER_PERSON_NA_BODY is the `not_applicable` ANSWER,
+    // and it was ALSO the fallthrough for any absent or unrecognised state under
+    // a per_user row — telling a member whose state could not be read that there
+    // was nothing to set up, beside a lede saying model access uses their own AWS
+    // sign-in. Unknown claims nothing.
+    it.each([["expired_renewable"], [undefined]])(
+      "per_user + state %s renders NO body at all (U-14)",
+      (state) => {
+        render(
+          <YourModelKey
+            llmReady={true}
+            mine={[]}
+            harnesses={perUserHarness}
+            modelAccess={state ? { state } : undefined}
+            variant="default"
+            onChanged={() => {}}
+          />,
+        );
+        expect(screen.queryByText(T.PER_PERSON_NA_BODY)).not.toBeInTheDocument();
+        expect(screen.queryByText(T.ADMIN_NOT_READY_BODY)).not.toBeInTheDocument();
+        expect(screen.queryByText(T.PROVIDED_BODY)).not.toBeInTheDocument();
+        expect(screen.queryByPlaceholderText("sk-ant-…")).not.toBeInTheDocument();
+      },
+    );
+  });
+
+  // U-13 (a11y) — two buttons on the page said "Sign in to AWS" with the same
+  // accessible name, and the card's opens a pane in a DIFFERENT card above it.
+  describe("the card's own Sign in to AWS button (U-13)", () => {
+    const signInProps = {
+      llmReady: true,
+      mine: [] as string[],
+      harnesses: perUserHarness,
+      modelAccess: { state: "not_configured" },
+      variant: "default" as const,
+      onChanged: () => {},
+    };
+
+    it("carries its own accessible name, which still starts with the visible text", () => {
+      render(<YourModelKey {...signInProps} />);
+      const button = screen.getByRole("button", { name: T.SIGN_IN_AWS_ARIA_CARD });
+      expect(button).toHaveTextContent(AGENTS.SIGN_IN_AWS);
+      expect(T.SIGN_IN_AWS_ARIA_CARD.startsWith(AGENTS.SIGN_IN_AWS)).toBe(true);
+    });
+
+    it("is hidden while the pane it opens is already open", () => {
+      render(<YourModelKey {...signInProps} signInOpen />);
+      expect(screen.queryByRole("button", { name: SIGN_IN_AWS_NAME })).not.toBeInTheDocument();
     });
   });
 
@@ -234,7 +319,7 @@ describe("YourModelKey", () => {
           onChanged={() => {}}
         />,
       );
-      expect(screen.getByText(AGENTS.MODEL_ACCESS_SHARED_EXPIRED)).toBeInTheDocument();
+      expect(screen.getByText(modelAccessChipBare("shared_expired")!)).toBeInTheDocument();
       expect(screen.getByText(T.SHARED_EXPIRED_BODY)).toBeInTheDocument();
       expect(screen.queryByText("Done")).not.toBeInTheDocument();
       expect(screen.queryByText("••••••••••••")).not.toBeInTheDocument();
@@ -274,7 +359,7 @@ describe("YourModelKey", () => {
       expect(screen.getByText(T.ADMIN_NOT_READY_BODY)).toBeInTheDocument();
       expect(screen.queryByText("Done")).not.toBeInTheDocument();
       expect(screen.queryByText(T.PROVIDED_CHIP)).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: SIGN_IN_AWS_NAME })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: T.USE_OWN_KEY })).not.toBeInTheDocument();
       expect(screen.queryByPlaceholderText("sk-ant-…")).not.toBeInTheDocument();
     });

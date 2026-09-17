@@ -284,6 +284,21 @@ export const MODEL_ACCESS_CHIP_LABEL: Record<string, string> = {
   shared_expired: AGENTS.MODEL_ACCESS_SHARED_EXPIRED,
 };
 
+// The same five labels WITHOUT the "Model access · " qualifier, for a chip
+// rendered INSIDE the "Your model key" card (U-15): the card's own heading
+// already says which credential is being described, so the qualifier read as a
+// second subject — "Model access · Your admin's credential expired" under a
+// heading that says "Your model key". Derived from the ONE table above rather
+// than typed again: a canon edit to a label moves both surfaces at once. A miss
+// is still undefined — no chip, never a default label.
+const MODEL_ACCESS_CHIP_QUALIFIER = "Model access · ";
+export function modelAccessChipBare(state: string): string | undefined {
+  const label = MODEL_ACCESS_CHIP_LABEL[state];
+  return label?.startsWith(MODEL_ACCESS_CHIP_QUALIFIER)
+    ? label.slice(MODEL_ACCESS_CHIP_QUALIFIER.length)
+    : label;
+}
+
 // U-10: the per_user "something actionable to do" states — the member's own
 // sign-in. Exported once so the Agents tab (admin) and member Getting
 // Started (member) share ONE policy instead of two independently-typed

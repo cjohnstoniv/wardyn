@@ -60,6 +60,13 @@ import { DRIVES, DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { MEMBER_GETTING_STARTED as T, YOUR_MODEL_KEY as YMK } from "../../wardyn/copy";
 
+// U-13 (a11y): the two "Sign in to AWS" buttons now carry DISTINCT accessible
+// names (the visible text plus the section they are in), so a lookup by the
+// visible name is a prefix match — the same query, still by what the button
+// says, and the exact aria-labels are pinned in their own case below.
+const SIGN_IN_AWS_NAME = new RegExp(`^${AGENTS.SIGN_IN_AWS}`);
+
+
 function status(overrides: Partial<SetupStatus> = {}): SetupStatus {
   return baseStatus({
     ready: true,
@@ -371,38 +378,45 @@ describe("MemberGettingStarted", () => {
   // "live", every other state warning with the server's own `action` verbatim
   // as the chip row's own line.
   describe("the Model access chip reads status.model_access", () => {
+    // U-1 — these two carry the PER_USER row now (they used to carry none):
+    // "Your AWS sign-in" and "Expiring" are per-person labels, and the server
+    // emits the same two states for a SHARED row's admin credential, where they
+    // would name a sign-in this member does not have (the U-1 cases below).
     it("live: success tone, no action line, no CTA", async () => {
-      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "live" } }));
+      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "live" }, harnesses: perUserHarness }));
       renderPage();
       const chip = await screen.findByText(AGENTS.MODEL_ACCESS_LIVE);
       expect(chip).toBeInTheDocument();
       expect(chip.closest("span")?.className).toMatch(/success/);
-      expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: SIGN_IN_AWS_NAME })).not.toBeInTheDocument();
     });
 
     it("expiring: warning tone, the server's action verbatim, and the CTA", async () => {
       getSetupStatusMock.mockResolvedValue(
-        status({ model_access: { state: "expiring", action: "Sign in again before 2026-09-12 09:00" } }),
+        status({
+          model_access: { state: "expiring", action: "Sign in again before 2026-09-12 09:00" },
+          harnesses: perUserHarness,
+        }),
       );
       renderPage();
       const chip = await screen.findByText(AGENTS.MODEL_ACCESS_EXPIRING);
       expect(chip.closest("span")?.className).toMatch(/warning/);
       expect(screen.getByText("Sign in again before 2026-09-12 09:00")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeInTheDocument();
+      expect(screen.getAllByRole("button", { name: SIGN_IN_AWS_NAME }).length).toBeGreaterThan(0);
     });
 
     it("expired_signin: warning tone and the CTA", async () => {
       getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "expired_signin" } }));
       renderPage();
       await screen.findByText(AGENTS.MODEL_ACCESS_EXPIRED);
-      expect(screen.getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: SIGN_IN_AWS_NAME })).toBeInTheDocument();
     });
 
     it("not_configured: warning tone and the CTA", async () => {
       getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_configured" } }));
       renderPage();
       await screen.findByText(AGENTS.MODEL_ACCESS_NOT_CONFIGURED);
-      expect(screen.getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: SIGN_IN_AWS_NAME })).toBeInTheDocument();
     });
 
     it("shared_expired: warning tone, the action line, and NO button — nothing the member can do", async () => {
@@ -425,7 +439,7 @@ describe("MemberGettingStarted", () => {
       expect(
         screen.getByText("Your admin's model credential expired — ask them to reconnect it"),
       ).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: SIGN_IN_AWS_NAME })).not.toBeInTheDocument();
       // The card's own body: correctly scoped, not "Provided by your admin".
       expect(screen.getByText(YMK.SHARED_EXPIRED_BODY)).toBeInTheDocument();
       expect(screen.queryByText(YMK.PROVIDED_CHIP)).not.toBeInTheDocument();
@@ -435,7 +449,7 @@ describe("MemberGettingStarted", () => {
       getSetupStatusMock.mockResolvedValue(status({ llm_ready: true }));
       renderPage();
       expect(await screen.findByText("Model access · Provided by your admin")).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: SIGN_IN_AWS_NAME })).not.toBeInTheDocument();
     });
 
     // Appendix A finding 2 — a per_user row's not_configured state is
@@ -446,7 +460,7 @@ describe("MemberGettingStarted", () => {
       const user = userEvent.setup();
       getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_configured" }, harnesses: perUserHarness }));
       renderPage();
-      const buttons = await screen.findAllByRole("button", { name: AGENTS.SIGN_IN_AWS });
+      const buttons = await screen.findAllByRole("button", { name: SIGN_IN_AWS_NAME });
       expect(buttons).toHaveLength(2);
       await user.click(buttons[0]);
       expect(screen.getByTestId("harness-login-pane")).toBeInTheDocument();
@@ -459,7 +473,7 @@ describe("MemberGettingStarted", () => {
       const user = userEvent.setup();
       getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_configured" }, harnesses: perUserHarness }));
       renderPage();
-      const buttons = await screen.findAllByRole("button", { name: AGENTS.SIGN_IN_AWS });
+      const buttons = await screen.findAllByRole("button", { name: SIGN_IN_AWS_NAME });
       expect(buttons).toHaveLength(2);
       await user.click(buttons[1]);
       expect(screen.getByTestId("harness-login-pane")).toBeInTheDocument();
@@ -473,7 +487,7 @@ describe("MemberGettingStarted", () => {
       const user = userEvent.setup();
       getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_configured" }, harnesses: perUserHarness }));
       renderPage();
-      const buttons = await screen.findAllByRole("button", { name: AGENTS.SIGN_IN_AWS });
+      const buttons = await screen.findAllByRole("button", { name: SIGN_IN_AWS_NAME });
       expect(buttons).toHaveLength(2);
       await user.click(buttons[0]);
       expect(screen.getByText(AGENTS.SSO_START_URL_MANAGED)).toBeInTheDocument();
@@ -509,7 +523,7 @@ describe("MemberGettingStarted", () => {
       // different section and out of scope here).
       const modelKeySection = screen.getByRole("heading", { name: "Your model key" }).closest("section")!;
       expect(within(modelKeySection).queryByText("Done")).not.toBeInTheDocument();
-      const buttons = await screen.findAllByRole("button", { name: AGENTS.SIGN_IN_AWS });
+      const buttons = await screen.findAllByRole("button", { name: SIGN_IN_AWS_NAME });
       expect(buttons).toHaveLength(2);
       expect(screen.getByText(T.SETUP_SUMMARY_HELPER_PER_USER)).toBeInTheDocument();
       // M1's observable: modelKeyDone false -> model-key wins the ONE
@@ -558,7 +572,7 @@ describe("MemberGettingStarted", () => {
       expect(screen.queryByText(YMK.PROVIDED_CHIP)).not.toBeInTheDocument();
       // H1 — TWO buttons (chip row + card), and the CARD's own (buttons[1])
       // is wired to the SAME pane, not dead.
-      const buttons = await screen.findAllByRole("button", { name: AGENTS.SIGN_IN_AWS });
+      const buttons = await screen.findAllByRole("button", { name: SIGN_IN_AWS_NAME });
       expect(buttons).toHaveLength(2);
       // M1's observable: modelKeyDone false -> model-key still wins the ONE
       // `default` CTA (would flip to "New run" if hasOwnKey alone marked it
@@ -588,7 +602,7 @@ describe("MemberGettingStarted", () => {
       expect(screen.queryByText(AGENTS.MODEL_ACCESS_NOT_CONFIGURED)).not.toBeInTheDocument();
       expect(screen.queryByText(AGENTS.MODEL_ACCESS_LIVE)).not.toBeInTheDocument();
       expect(screen.queryByText(/^Model access · /)).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: SIGN_IN_AWS_NAME })).not.toBeInTheDocument();
     });
 
     // Appendix A finding 5: not_applicable is the admin-token principal's own
@@ -601,7 +615,7 @@ describe("MemberGettingStarted", () => {
       getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_applicable" }, llm_ready: true }));
       renderPage();
       expect(await screen.findByText(T.MODEL_ACCESS_PROVIDED_CHIP)).toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: SIGN_IN_AWS_NAME })).not.toBeInTheDocument();
     });
 
     // A member under not_applicable with no other model access must not be
@@ -612,7 +626,7 @@ describe("MemberGettingStarted", () => {
       renderPage();
       await screen.findByText(T.SETUP_SUMMARY_HELPER);
       expect(screen.queryByText(T.MODEL_ACCESS_PROVIDED_CHIP)).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: SIGN_IN_AWS_NAME })).not.toBeInTheDocument();
     });
 
     // FIX PASS 1 (REVIEW-1.md H1b/M2) — the two fixtures above (both WITHOUT
@@ -632,7 +646,7 @@ describe("MemberGettingStarted", () => {
       renderPage();
       expect(await screen.findByText(YMK.PER_PERSON_NA_BODY)).toBeInTheDocument();
       expect(screen.queryByPlaceholderText("sk-ant-…")).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: SIGN_IN_AWS_NAME })).not.toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Use my own key instead" })).not.toBeInTheDocument();
       expect(screen.queryByText(T.MODEL_ACCESS_PROVIDED_CHIP)).not.toBeInTheDocument();
       expect(screen.queryByText(YMK.PROVIDED_CHIP)).not.toBeInTheDocument();
@@ -649,6 +663,90 @@ describe("MemberGettingStarted", () => {
       getSetupStatusMock.mockResolvedValue(status({ llm_ready: true, harnesses: sharedBedrockHarness }));
       renderPage();
       expect(await screen.findByText(T.MODEL_ACCESS_PROVIDED_CHIP)).toBeInTheDocument();
+    });
+
+    // U-1 (W6 blind lens) — THE WIRE SHAPE THE SERVER REALLY EMITS for a shared
+    // bedrock_sso row: memberModelAccess (internal/api/modelaccess.go) projects
+    // `live` for the ADMIN's credential, so the fixture above (no model_access at
+    // all) never exercised the branch that actually renders. With it, the chip row
+    // read "Model access · Your AWS sign-in" — a sign-in this member does not have
+    // — over a card saying "Provided by your admin", and New Run's rail says
+    // "Admin's credential". live/expiring under a NOT-per_user row is the admin's
+    // shared credential, so the chip row says what the card says.
+    it("U-1: shared bedrock_sso row + model_access live renders the PROVIDED chip, never 'Your AWS sign-in'", async () => {
+      getSetupStatusMock.mockResolvedValue(
+        status({ model_access: { state: "live" }, llm_ready: true, harnesses: sharedBedrockHarness }),
+      );
+      renderPage();
+      expect(await screen.findByText(T.MODEL_ACCESS_PROVIDED_CHIP)).toBeInTheDocument();
+      expect(screen.queryByText(AGENTS.MODEL_ACCESS_LIVE)).not.toBeInTheDocument();
+    });
+
+    // …and the same for `expiring`: the admin's credential is the one expiring,
+    // and the member has no sign-in of their own to renew.
+    it("U-1: shared bedrock_sso row + model_access expiring renders the PROVIDED chip too", async () => {
+      getSetupStatusMock.mockResolvedValue(
+        status({ model_access: { state: "expiring" }, llm_ready: true, harnesses: sharedBedrockHarness }),
+      );
+      renderPage();
+      expect(await screen.findByText(T.MODEL_ACCESS_PROVIDED_CHIP)).toBeInTheDocument();
+      expect(screen.queryByText(AGENTS.MODEL_ACCESS_EXPIRING)).not.toBeInTheDocument();
+    });
+
+    // U-1's negative control: under a PER_USER row `live` is genuinely this
+    // member's own sign-in, and the success chip stays exactly as it is.
+    it("U-1 negative control: per_user + live still renders MODEL_ACCESS_LIVE", async () => {
+      getSetupStatusMock.mockResolvedValue(
+        status({ model_access: { state: "live" }, llm_ready: true, harnesses: perUserHarness }),
+      );
+      renderPage();
+      expect(await screen.findByText(AGENTS.MODEL_ACCESS_LIVE)).toBeInTheDocument();
+      expect(screen.queryByText(T.MODEL_ACCESS_PROVIDED_CHIP)).not.toBeInTheDocument();
+    });
+
+    // U-13 (a11y, W6 blind lens) — the page's two sign-in buttons had the
+    // IDENTICAL accessible name "Sign in to AWS" (plus a plain-text action line
+    // saying the same words), and the card's one opens a pane mounted in the card
+    // ABOVE it, moving no focus and staying enabled as a no-op once it is open.
+    it("U-13: the two Sign in to AWS buttons have distinct accessible names, and the card's hides while the pane is open", async () => {
+      const user = userEvent.setup();
+      getSetupStatusMock.mockResolvedValue(
+        status({ model_access: { state: "not_configured" }, harnesses: perUserHarness }),
+      );
+      renderPage();
+      const buttons = await screen.findAllByRole("button", { name: SIGN_IN_AWS_NAME });
+      expect(buttons).toHaveLength(2);
+      expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual([
+        T.SIGN_IN_AWS_ARIA_SUMMARY,
+        YMK.SIGN_IN_AWS_ARIA_CARD,
+      ]);
+      // Both still SAY "Sign in to AWS" — only the accessible name gained the
+      // section, so the visible console is byte-identical.
+      for (const b of buttons) expect(b).toHaveTextContent(AGENTS.SIGN_IN_AWS);
+      await user.click(buttons[0]);
+      expect(screen.getByTestId("harness-login-pane")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: SIGN_IN_AWS_NAME })).not.toBeInTheDocument();
+    });
+
+    // U-9 (W6 blind lens) — the page called modelKeyState WITHOUT `mechanism`
+    // while the card passed it, so the file's own "ONE predicate" comment was
+    // untrue: under a shared BEDROCK row with a leftover own key, the page graded
+    // "own" (done) and the card graded shared_expired (not done). The observable
+    // is the colour budget — the one teal moved to "New run" while the card said
+    // the credential had expired.
+    it("U-9: shared bedrock row + own key + shared_expired — the page agrees with the card, 'New run' is not teal", async () => {
+      listWorkspacesMock.mockResolvedValue([{ id: "w1" }]);
+      listSecretsMineMock.mockResolvedValue({ names: ["anthropic-api-key"], mine: ["anthropic-api-key"] });
+      getSetupStatusMock.mockResolvedValue(
+        status({ model_access: { state: "shared_expired" }, llm_ready: true, harnesses: sharedBedrockHarness }),
+      );
+      renderPage();
+      expect(await screen.findByText(YMK.SHARED_EXPIRED_BODY)).toBeInTheDocument();
+      const modelKeySection = screen.getByRole("heading", { name: "Your model key" }).closest("section")!;
+      expect(within(modelKeySection).queryByText("Done")).not.toBeInTheDocument();
+      await waitFor(() =>
+        expect(screen.getByRole("link", { name: "New run" }).className).not.toContain("bg-primary "),
+      );
     });
   });
 });

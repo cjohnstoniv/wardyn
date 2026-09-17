@@ -4,6 +4,8 @@
  */
 
 import { test, expect, gotoConsole, mockMemberRole, mockSecurityAdminRole, navToRoute } from "./fixtures";
+import { AGENTS, MODEL_ACCESS_CHIP_LABEL } from "../src/app/lib/workspace-providers-copy";
+import { MEMBER_GETTING_STARTED, YOUR_MODEL_KEY } from "../src/app/components/wardyn/copy";
 
 // Member Getting Started (Phase 5) — same mockMemberRole splice
 // member-console.spec.ts uses (the seeded backend always authenticates as
@@ -115,6 +117,60 @@ test.describe("member Getting Started (mocked /me role)", () => {
     await navToRoute(page, "/setup");
     await expect(page.getByRole("heading", { name: "What's set up for you" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Sign in to AWS" })).toHaveCount(0);
+  });
+
+  // U-1 (W6 blind lens) — a SHARED bedrock_sso roster row with model_access
+  // `live`: the wire shape every member of such a deployment gets
+  // (memberModelAccess projects the ADMIN's credential for them). The chip row
+  // used to read "Model access · Your AWS sign-in" over a card saying "Provided
+  // by your admin" — a sign-in this member has never done. One owner, one chip.
+  test("a shared bedrock row's live credential is the ADMIN's on the chip row too", async ({ page }) => {
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      body.llm_ready = true;
+      body.model_access = { state: "live" };
+      body.harnesses = (body.harnesses ?? []).map((h: { id: string }) =>
+        h.id === "claude-code" ? { ...h, enabled: true, mechanism: "bedrock_sso", credential_source: "shared" } : h,
+      );
+      await route.fulfill({ response, json: body });
+    });
+    await gotoConsole(page);
+    await navToRoute(page, "/setup");
+    await expect(page.getByRole("heading", { name: "What's set up for you" })).toBeVisible();
+    await expect(page.getByText(MODEL_ACCESS_CHIP_LABEL.live)).toHaveCount(0);
+    await expect(page.getByText(MEMBER_GETTING_STARTED.MODEL_ACCESS_PROVIDED_CHIP).first()).toBeVisible();
+  });
+
+  // U-13 (a11y) — the page's two "Sign in to AWS" buttons had the same
+  // accessible name. The visible text is unchanged; the names are not.
+  test("the two Sign in to AWS buttons are distinguishable to a screen reader", async ({ page }) => {
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      body.model_access = { state: "not_configured" };
+      body.harnesses = (body.harnesses ?? []).map((h: { id: string }) =>
+        h.id === "claude-code"
+          ? { ...h, enabled: true, mechanism: "bedrock_sso", credential_source: "per_user" }
+          : h,
+      );
+      await route.fulfill({ response, json: body });
+    });
+    await gotoConsole(page);
+    await navToRoute(page, "/setup");
+    await expect(
+      page.getByRole("button", { name: MEMBER_GETTING_STARTED.SIGN_IN_AWS_ARIA_SUMMARY, exact: true }),
+    ).toBeVisible();
+    const cardButton = page.getByRole("button", { name: YOUR_MODEL_KEY.SIGN_IN_AWS_ARIA_CARD, exact: true });
+    await expect(cardButton).toBeVisible();
+    // Both still SAY the frozen visible text.
+    await expect(cardButton).toHaveText(AGENTS.SIGN_IN_AWS);
+    // …and opening the pane takes the card's duplicate off the page.
+    await page
+      .getByRole("button", { name: MEMBER_GETTING_STARTED.SIGN_IN_AWS_ARIA_SUMMARY, exact: true })
+      .click();
+    await expect(page.getByTestId("harness-login-pane")).toBeVisible();
+    await expect(cardButton).toHaveCount(0);
   });
 
   // X3-F3 — the one write path a member has named the wrong secret. The roster

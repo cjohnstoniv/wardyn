@@ -635,6 +635,15 @@ export const YOUR_MODEL_KEY = {
   // a shared row whose mechanism is Bedrock but llmReady is false.
   PER_PERSON_NA_BODY: "Model access on this deployment is per person. There is nothing to set up for this sign-in.",
   ADMIN_NOT_READY_BODY: "Model access is not set up on this deployment yet. Ask your admin.",
+  // DRAFT (M2 canon pending) — U-10: `expired_signin` and `not_configured` both
+  // grade `not_signed_in`, and NOT_SIGNED_IN_BODY's "Nothing is configured for
+  // you until you do" is false for the first: a session IS stored for this
+  // member and it stopped working — which is also what the server's own action
+  // line on the same page says.
+  EXPIRED_SIGNIN_BODY: "Your AWS sign-in is no longer valid. Sign in to AWS again to give your runs model access.",
+  // DRAFT (M2 canon pending) — U-13's other half; see
+  // MEMBER_GETTING_STARTED.SIGN_IN_AWS_ARIA_SUMMARY for why.
+  SIGN_IN_AWS_ARIA_CARD: "Sign in to AWS — from Your model key",
 } as const;
 
 // Member Getting Started (Phase 5) — the six-SectionCard page a member lands
@@ -678,6 +687,14 @@ export const MEMBER_GETTING_STARTED = {
   // sentence already says so.
   SETUP_SUMMARY_HELPER_PER_USER:
     "Your admin configured the barrier, network and the model-access lane. Model access uses your own AWS sign-in; your runs inherit the rest.",
+  // DRAFT (M2 canon pending) — U-13 (a11y). This page renders TWO buttons whose
+  // visible text is "Sign in to AWS" (this card's and "Your model key"'s) plus a
+  // plain-text action line saying the same words, so a screen reader's button
+  // list carried the same name twice with nothing to choose by. The visible text
+  // is unchanged; the accessible name adds the section. It STARTS with
+  // AGENTS.SIGN_IN_AWS so a lookup by the visible name still finds it (pinned in
+  // member-getting-started.test.tsx).
+  SIGN_IN_AWS_ARIA_SUMMARY: "Sign in to AWS — from What's set up for you",
 } as const;
 
 // DRAFT (M2 canon pending) — X3-F4, the MEMBER's empty runs board. The operator
