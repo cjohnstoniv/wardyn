@@ -138,9 +138,9 @@ func TestSelfRunBanner_UIParity(t *testing.T) {
 	if m == nil {
 		t.Fatal("no WARDYN_AWS_SSO_SELFRUN_BANNER in deploy/images/aws-sso/login-hint.sh — the sign-in pane announces nothing and the console types over it")
 	}
-	p := paneSelfRunMarker.FindStringSubmatch(repoFile(t, "ui", "src", "app", "components", "screens", "settings", "harness-login-pane.tsx"))
+	p := paneSelfRunMarker.FindStringSubmatch(repoFile(t, "ui", "src", "app", "components", "screens", "settings", "login-pane-copy.ts"))
 	if p == nil {
-		t.Fatal("no SELFRUN_MARKER in harness-login-pane.tsx")
+		t.Fatal("no SELFRUN_MARKER in login-pane-copy.ts")
 	}
 	if !strings.HasPrefix(m[1], p[1]) {
 		t.Errorf("banner drift: the sandbox prints %q, the console watches for the prefix %q — the console would type a SECOND login into a sandbox already running one", m[1], p[1])

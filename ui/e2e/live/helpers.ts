@@ -20,7 +20,9 @@
  */
 
 import { expect, type Page, type APIRequestContext } from "@playwright/test";
-import { SELFRUN_MARKER } from "../../src/app/components/screens/settings/harness-login-pane";
+// From the CSS-free copy module, NEVER from harness-login-pane: that module
+// reaches xterm.css, which Playwright's Node loader cannot load ("No tests found").
+import { SELFRUN_MARKER } from "../../src/app/components/screens/settings/login-pane-copy";
 
 // ── the walk's inputs (scripts/kind-sso-walk.sh exports every one) ──────────
 export const ADMIN_TOKEN = process.env.WARDYN_LIVE_ADMIN_TOKEN || "";

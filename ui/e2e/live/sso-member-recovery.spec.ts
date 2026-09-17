@@ -49,7 +49,8 @@ import { expect, test, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { MEMBER_MODE } from "../../src/app/components/wardyn/member-mode-banner";
 import { LOGIN_SANDBOX_NOTE } from "../../src/app/components/screens/run-detail/login-sandbox-note";
-import { CAPTURE_NOT_CORROBORATED, LOGIN_SANDBOX_UNREADABLE } from "../../src/app/components/screens/settings/harness-login-pane";
+import { CAPTURE_NOT_CORROBORATED } from "../../src/app/components/screens/settings/capture-confirm";
+import { LOGIN_SANDBOX_UNREADABLE } from "../../src/app/components/screens/settings/login-pane-copy";
 import { LOGIN_SANDBOX_SLOW_START, LOGIN_SANDBOX_READ_RETRYING } from "../../src/app/components/screens/settings/login-start-wait";
 import {
   MEMBER_GETTING_STARTED,

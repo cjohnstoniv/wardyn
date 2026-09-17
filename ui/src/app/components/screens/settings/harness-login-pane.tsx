@@ -47,6 +47,8 @@ import {
 // sentence moved to capture-confirm.ts to keep this file under the size cap, and
 // every existing importer — this pane's tests, ui/e2e — keeps its import path.
 export { CAPTURE_NOT_CORROBORATED, serverConfirmsCapture } from "./capture-confirm";
+import { LOGIN_SANDBOX_UNREADABLE, SELFRUN_MARKER } from "./login-pane-copy";
+export { LOGIN_SANDBOX_UNREADABLE, SELFRUN_MARKER } from "./login-pane-copy";
 
 // DRAFT (M2 canon pending) — U2-05 (blind round 2, lens-U2): the refusal
 // sentence below the lead-in is the SANDBOX's prose, printed by
@@ -98,13 +100,9 @@ const LOGIN_SANDBOX_STARTING =
 // no failure_hint of its own (a kill, a stop). Says only what is known: the
 // sandbox is gone and nothing was captured.
 const LOGIN_SANDBOX_ENDED = "The sign-in sandbox stopped before it was ready — nothing was captured. Try again.";
-// DRAFT (M2 canon pending) — the wait ending because Wardyn can no longer READ
-// the run (a daemon restart mid-pull, a pruned run, a 403 after a roster edit).
-// Distinct from the sentence above on purpose: that one asserts the sandbox
-// stopped, which this pane has not established — all it knows is that it stopped
-// being able to ask.
-export const LOGIN_SANDBOX_UNREADABLE =
-  "Wardyn stopped being able to read the sign-in sandbox, so it can't say whether it came up. Try again.";
+// LOGIN_SANDBOX_UNREADABLE lives in ./login-pane-copy (imported and re-exported
+// above): the live walk asserts through it, and a Playwright spec cannot import
+// THIS module — it reaches AttachTerminal's xterm.css, which Node cannot load.
 
 // DRAFT (M2 canon pending) — THE SANDBOX SIGNS ITSELF IN NOW. The aws-sso image
 // starts the chained command in its own tmux session BEFORE its prep
@@ -127,7 +125,7 @@ export const LOGIN_SANDBOX_UNREADABLE =
 // The timer lives HERE, never in AttachTerminal: the Runs-list mount
 // (run-detail/terminal-notice.tsx) shares that component, and a terminal that
 // types on its own is how a read-only viewer would start a second sign-in.
-export const SELFRUN_MARKER = "wardyn: sign-in running";
+// SELFRUN_MARKER itself is declared in ./login-pane-copy for the same reason.
 const SELFRUN_GRACE_MS = 12_000;
 
 // Per-provider login conventions. Adding a provider is a new row here (mirrors
