@@ -468,10 +468,13 @@ func TestMemberPreview_NonGatedRunAlsoReadsAbsent(t *testing.T) {
 			"the absence asserted below would prove nothing", awsSSOConfigEnvVar)
 	}
 
-	// THE PIN: the ungated run kind, inside the preview.
-	fr2 := &fakeRunner{}
-	srv.cfg.Runner = runner.Runner(fr2)
-	w := doSSO(t, srv, http.MethodPost, "/api/v1/runs", memberPreviewSession(t, true, true),
+	// THE PIN: the ungated run kind, inside the preview — on its OWN server.
+	// Swapping cfg.Runner on the first one raced that run's detached completion
+	// watcher, which reads cfg.Runner for its Wait (caught by make test-race).
+	srv2, _, sec2, _ := memberPreviewSrv(t)
+	putScopedSSOBlob(t, sec2, memberPreviewAdminSub, awsSSOTestFixedNow.Add(time.Hour), "admin-access-token")
+	fr2 := srv2.cfg.Runner.(*fakeRunner)
+	w := doSSO(t, srv2, http.MethodPost, "/api/v1/runs", memberPreviewSession(t, true, true),
 		`{"agent":"claude-code","task_mode":"exec","task":"echo hi"}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("exec run in the preview = %d, want 201 (the gate does not cover it): %s", w.Code, w.Body.String())
