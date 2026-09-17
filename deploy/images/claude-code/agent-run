@@ -372,7 +372,9 @@ fi
 # here, it is written before any attach shell can read it.  If tmux is missing the
 # marker is deliberately NOT written: the seed cannot start, so attach-bashrc's
 # auto-start is the only agent the human would get, and suppressing it would cost
-# them both.
+# them both.  The same rule, the same reason, when tmux IS present but BOTH the
+# create and the respawn fail — so the marker is REMOVED on that path rather than
+# left behind claiming an agent that no longer exists.
 #
 # No client text is in the command string: --boot-seed reads the seed from
 # WARDYN_INTERACTIVE_SEED in the env the tmux server inherits from THIS process.
@@ -405,6 +407,13 @@ start_boot_session() {
     if tmux respawn-pane -k -t wardyn "agent-run --boot-seed"; then
         echo "agent-run: idle mode — an attach won the session name; respawned its pane on the run's seed" >&2
     else
+        # BOTH tmux paths failed: there is no boot pane, so the marker written
+        # above is a lie that costs the human their agent entirely —
+        # attach-bashrc.sh reads it, starts nothing, and hands over a bare shell
+        # while no seed is running anywhere.  Same rule as the no-tmux case, and
+        # for the same reason: when the seed cannot start, the bashrc auto-start
+        # is the only agent left and must not be suppressed.
+        rm -f "$HOME/.wardyn/agent-started"
         echo "agent-run: WARNING could not create the boot tmux session; the seed will not run (attach still works)" >&2
     fi
 }

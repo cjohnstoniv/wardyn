@@ -416,8 +416,9 @@ func ccIdleEnv(t *testing.T) (home, binDir, tmuxLog string) {
   if [ -e "$HOME/.wardyn/prep-done" ]; then printf 'prep-done: present\n'; else printf 'prep-done: absent\n'; fi
 } >> "$TMUX_LOG"
 case "$1" in
-  new-session) rc=${FAKE_TMUX_NEW_SESSION_RC:-0} ;;
-  *)           rc=0 ;;
+  new-session)   rc=${FAKE_TMUX_NEW_SESSION_RC:-0} ;;
+  respawn-pane)  rc=${FAKE_TMUX_RESPAWN_RC:-0} ;;
+  *)             rc=0 ;;
 esac
 [ "$rc" -eq 0 ] || echo "duplicate session: wardyn" >&2
 exit "$rc"
@@ -523,6 +524,33 @@ func TestClaudeAgentRun_EarlyAttachWonTheName(t *testing.T) {
 	log := ccRead(t, tmuxLog)
 	if n := ccCount(log, "argv: respawn-pane -k -t wardyn agent-run --boot-seed"); n != 1 {
 		t.Errorf("tmux got %d `respawn-pane -k -t wardyn agent-run --boot-seed` calls, want exactly 1 — an attach won the session name and nothing replaced its bare shell\ntmux log:\n%s\nagent-run output:\n%s", n, log, out)
+	}
+}
+
+// TestClaudeAgentRun_TotalTmuxFailureLeavesNoMarker — the third tmux outcome,
+// and the one the marker's own rule already covers everywhere else. When tmux is
+// MISSING the marker is deliberately not written: no boot pane can exist, so
+// attach-bashrc.sh's auto-start is the only agent the human can get and
+// suppressing it would cost them both. When tmux is PRESENT but both the create
+// and the respawn fail, the outcome is identical — no pane, no seed — yet the
+// marker written before the attempt stayed behind, so the human attached to a
+// bare shell that started nothing, with nothing running anywhere.
+func TestClaudeAgentRun_TotalTmuxFailureLeavesNoMarker(t *testing.T) {
+	home, binDir, tmuxLog := ccIdleEnv(t)
+	code, out := ccRunIdle(t, home, binDir, tmuxLog, ccSeedEnv,
+		"FAKE_TMUX_NEW_SESSION_RC=1", "FAKE_TMUX_RESPAWN_RC=1")
+	if code != 124 {
+		t.Fatalf("agent-run --idle exited %d (output: %s), want 124 — a tmux that refuses everything must not kill the run", code, out)
+	}
+	log := ccRead(t, tmuxLog)
+	if !strings.Contains(log, "argv: respawn-pane") {
+		t.Fatalf("agent-run never tried the respawn fallback, so this test proved nothing about the path after it\ntmux log:\n%s", log)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".wardyn", "agent-started")); err == nil {
+		t.Error("the agent-started marker survived a total tmux failure — attach-bashrc.sh reads it, starts nothing, and the human gets a bare shell while no seed is running anywhere")
+	}
+	if !strings.Contains(out, "could not create the boot tmux session") {
+		t.Errorf("no WARNING that the seed will not run\noutput:\n%s", out)
 	}
 }
 
