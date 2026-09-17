@@ -36,9 +36,19 @@ import (
 type coldPullRunner struct {
 	*fakeRunner
 	gate chan struct{}
+	// entered, when non-nil, is closed the FIRST time CreateSandbox is actually
+	// reached: the only way a test can know the detached launch goroutine is
+	// inside the pull rather than not there yet (R1-F3). waitForSandbox cannot
+	// serve — it counts calls the fakeRunner records only AFTER the gate opens.
+	// Optional, so the cases that need the gate alone construct this as before.
+	entered     chan struct{}
+	enteredOnce sync.Once
 }
 
 func (g *coldPullRunner) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (runner.Sandbox, error) {
+	if g.entered != nil {
+		g.enteredOnce.Do(func() { close(g.entered) })
+	}
 	<-g.gate
 	return g.fakeRunner.CreateSandbox(ctx, spec)
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 )
@@ -29,19 +30,23 @@ import (
 // real server bug as a wording problem — stop and report rather than adjusting
 // the test.
 func TestGetRun_LoginRunStaysReadableWhileCreateSandboxBlocks(t *testing.T) {
-	gr := &coldPullRunner{fakeRunner: &fakeRunner{}, gate: make(chan struct{})}
+	gr := &coldPullRunner{
+		fakeRunner: &fakeRunner{},
+		gate:       make(chan struct{}),
+		entered:    make(chan struct{}),
+	}
 	released := false
 	t.Cleanup(func() {
 		if !released {
 			close(gr.gate)
 		}
 	})
-	// supersedeLoginSrv, not perUserLoginSrvWithRunner: this test READS the run,
+	// newSupersedeFixture, not perUserLoginSrvWithRunner: this test READS the run,
 	// and that path projects a run's UI apps out of its audit trail — a query the
 	// plain login double does not answer at all (a nil promoted method, i.e. a
 	// panic, not the logged error handleGetRun tolerates). The store is otherwise
 	// the same one.
-	srv, _, _ := supersedeLoginSrv(t, nil, gr)
+	srv := newSupersedeFixture(t, nil, gr).srv
 	mine := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
 
 	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login", mine, `{"provider":"aws"}`)
@@ -53,6 +58,18 @@ func TestGetRun_LoginRunStaysReadableWhileCreateSandboxBlocks(t *testing.T) {
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &launched); err != nil {
 		t.Fatalf("decode launch: %v (%s)", err, w.Body.String())
+	}
+
+	// THE PREMISE, ESTABLISHED (R1-F3): wait until the detached launch goroutine
+	// is actually INSIDE CreateSandbox. Without this the ten reads below most
+	// likely finish before dispatch ever reaches the runner, and the test would
+	// prove nothing about reading a run mid-pull. What it still cannot speak for
+	// is a real store: an in-memory double takes no locks, so this pins the
+	// HANDLER's shape (no runner call on the read path), not PG's behaviour.
+	select {
+	case <-gr.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the detached launch never reached CreateSandbox within 5s — the reads below would not be mid-pull")
 	}
 
 	// Ten reads, the span the pane's first ticks cover, all while the sandbox is

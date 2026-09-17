@@ -586,7 +586,7 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 	// if the client disconnects, or a half-applied kill could strand a live token
 	// or a running sandbox (C4). Read the principal from the request first.
 	killerType, killer := actorFromRequest(r)
-	cascadeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	cascadeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
 	defer cancel()
 
 	applied, killData, serr := s.killRunCascade(cascadeCtx, run, killerType, killer, nil)
@@ -639,6 +639,21 @@ func (s *Server) handleKillRun(w http.ResponseWriter, r *http.Request) {
 // run.revoke row for a run that was torn down correctly).
 func (s *Server) killRunCascade(ctx context.Context, run types.AgentRun, killerType types.ActorType, killer string, extra map[string]any) (bool, map[string]any, error) {
 	id := run.ID
+	// THE CASCADE DETACHES ITSELF (C4; R1-F1). Once a kill begins it must finish
+	// even if the CALLER's context dies, or a half-applied kill strands exactly
+	// what a kill exists to remove: past the CAS the row reads KILLED while
+	// KillSandbox is cancelled, retryQuick bails on ctx.Done() without revoking
+	// the identity, and the run.kill row itself fails to write — a terminal state
+	// change nothing revisits, since the idle reaper lists RUNNING and the next
+	// supersede selects non-terminal runs only.
+	//
+	// It belongs HERE, not in each caller: the login supersede runs inside the
+	// launch POST, and a person closing that tab mid-launch is the very
+	// orphan-making behaviour that lane exists to end. handleKillRun keeps its
+	// own detach — a second WithoutCancel is a no-op, and the handler's
+	// post-cascade run.revoke row needs a live context too.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), killCascadeTimeout)
+	defer cancel()
 	// (1) WIN THE TERMINAL TRANSITION FIRST (C002). Revoking before this CAS meant a
 	// kill that then LOST the CAS to a concurrent dispatch forward-transition
 	// (PENDING->STARTING) had already revoked the run's credentials — leaving a live
@@ -712,6 +727,11 @@ func (s *Server) killRunCascade(ctx context.Context, run types.AgentRun, killerT
 
 	return true, killData, nil
 }
+
+// killCascadeTimeout bounds a detached kill cascade. The teardown and both
+// revocations are a handful of store/runner calls; 30s is the generous bound the
+// kill route has always applied, kept as one name now that two callers share it.
+const killCascadeTimeout = 30 * time.Second
 
 // retryQuick runs fn up to 3 times with a short linear backoff, returning the
 // last error. It stops early if ctx is done. Used by the kill-switch revocation

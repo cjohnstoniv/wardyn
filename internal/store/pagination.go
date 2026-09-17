@@ -115,12 +115,16 @@ var _ RunsByCreatorPager = PG{}
 // it launches: which of THIS person's runs of this lane are still live, so the
 // supersede can end them (supersedeCallerLoginRuns, internal/api).
 //
-// A capability interface for ActiveRunsAtPathReader's reasons, and it takes the
-// same shape: a WHERE clause, not a window, and the api-layer call site falls
-// back to the unbounded ListRuns plus an in-Go filter when a store does not
-// implement it. That fallback is SAFE here — the answer is identical either
-// way, only slower — unlike RunsByCreatorPager's, whose absence would widen a
-// member's own listing.
+// A capability interface for ActiveRunsAtPathReader's reasons, and answered the
+// same way — a WHERE clause, not a window — but its ABSENCE is handled
+// differently from either neighbour: the api-layer call site (liveLoginRunsBy)
+// takes NO fallback at all. It does not widen anything the way an unscoped list
+// would (RunsByCreatorPager's fail-closed case), and it does not fall back to
+// the unbounded ListRuns the way ActiveRunsAtPathReader does, because this runs
+// on a route every store-less embedding drives and the scan would read a whole
+// run table to find at most one row. A store without this method simply does
+// not supersede; PG is the production store and implements it, and the capture
+// upload's own KILLED guard is the belt.
 //
 // task and agent, not "provider": a run row carries no provider column (the
 // provider lives in the harness.login.started audit datum), and task+agent is

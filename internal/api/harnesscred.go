@@ -452,7 +452,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// one run is never refused by their own abandoned sign-in. See
 	// supersedeCallerLoginRuns (harnesscred_supersede.go) for why the old run has
 	// to end server-side at all.
-	s.supersedeCallerLoginRuns(ctx, actor, hl.agent)
+	s.supersedeCallerLoginRuns(ctx, actor, hl.agent, runID)
 	run, token, err := s.newStepRun(ctx, runID, actor, harnessLoginTask, cc, harnessLoginGovernance(ceiling), func(run *types.AgentRun) {
 		run.Agent = hl.agent // the vendor CLI being logged into, never the catalog default
 		run.Interactive = true

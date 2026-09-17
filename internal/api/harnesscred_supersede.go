@@ -7,6 +7,8 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/google/uuid"
+
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -64,7 +66,7 @@ const (
 // terminal run for five minutes and RevokeRun is best-effort. Failures are
 // logged and audited (the run.kill row carries the failing step) rather than
 // propagated.
-func (s *Server) supersedeCallerLoginRuns(ctx context.Context, actor, agent string) {
+func (s *Server) supersedeCallerLoginRuns(ctx context.Context, actor, agent string, newRunID uuid.UUID) {
 	if s.cfg.Store == nil || actor == "" {
 		return
 	}
@@ -75,7 +77,7 @@ func (s *Server) supersedeCallerLoginRuns(ctx context.Context, actor, agent stri
 		return
 	}
 	for _, run := range live {
-		s.supersedeOneLoginRun(ctx, run, actor)
+		s.supersedeOneLoginRun(ctx, run, actor, newRunID)
 	}
 }
 
@@ -83,13 +85,19 @@ func (s *Server) supersedeCallerLoginRuns(ctx context.Context, actor, agent stri
 // re-reading on a lost CAS: the run may be mid-dispatch (PENDING->STARTING), and
 // a supersede that shrugged at a lost CAS would leave exactly the run it exists
 // to end.
-func (s *Server) supersedeOneLoginRun(ctx context.Context, run types.AgentRun, actor string) {
+func (s *Server) supersedeOneLoginRun(ctx context.Context, run types.AgentRun, actor string, newRunID uuid.UUID) {
 	for attempt := 0; attempt < supersedeCASAttempts; attempt++ {
 		applied, killData, err := s.killRunCascade(ctx, run, types.ActorSystem, "wardynd",
 			// WHO is attributed: the server, not the person. They asked for a new
-			// sign-in, not for a kill — `superseded_for` names whose sandbox it was
-			// so the row still answers "why did my box disappear".
-			map[string]any{"reason": supersedeReasonNewLogin, "superseded_for": actor})
+			// sign-in, not for a kill — `superseded_for` names whose sandbox it was,
+			// `superseded_by_run` the sign-in that replaced it, so the row answers
+			// both "why did my box disappear" and "which one took over" without a
+			// join back through harness.login.started.
+			map[string]any{
+				"reason":            supersedeReasonNewLogin,
+				"superseded_for":    actor,
+				"superseded_by_run": newRunID.String(),
+			})
 		if err != nil {
 			slog.WarnContext(ctx, "wardynd: could not supersede a live sign-in sandbox",
 				slog.String("run_id", run.ID.String()), slog.Any("error", err))
@@ -112,6 +120,11 @@ func (s *Server) supersedeOneLoginRun(ctx context.Context, run types.AgentRun, a
 		}
 		run = got
 	}
+	// Out of attempts: the run kept winning forward transitions. Say so — the
+	// caller's retry can still meet "too many runs at once" from this very run,
+	// and a quota refusal with nothing in the log is unanswerable.
+	slog.WarnContext(ctx, "wardynd: gave up superseding a live sign-in sandbox after repeated state changes",
+		slog.String("run_id", run.ID.String()), slog.Int("attempts", supersedeCASAttempts))
 }
 
 // liveLoginRunsBy answers "which of this person's login sandboxes are still
