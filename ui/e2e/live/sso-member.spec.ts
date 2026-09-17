@@ -34,206 +34,41 @@
  * tests. Where a case quoted a DRAFT sentence the lane then shipped
  * differently, the assertion was re-pointed at the MERGED constant and says so
  * in place — never loosened to match both spellings.
+ *
+ * ── 0.7.5: THIS FILE IS HALF THE WALK ───────────────────────────────────────
+ * The walk now runs `sso-member sso-member-recovery` in ONE invocation, against
+ * ONE cluster (scripts/kind-sso-walk.sh). The shared inputs, the two Dex
+ * sessions and the read/write helpers moved to ui/e2e/live/helpers.ts so both
+ * files use the same ones; this file's own order and assertions are unchanged
+ * apart from the two 0.7.5 edits marked in place. THIS FILE RUNS FIRST and
+ * leaves the member `live` under the CONTRADICTING pair — the recovery file
+ * depends on both facts and says so in its header.
  */
 
-import { expect, test, type Page, type APIRequestContext } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { MEMBER_MODE } from "../../src/app/components/wardyn/member-mode-banner";
-
-// ── the walk's inputs (scripts/kind-sso-walk.sh exports every one) ──────────
-const ADMIN_TOKEN = process.env.WARDYN_LIVE_ADMIN_TOKEN || "";
-const PIN_ACCOUNT = process.env.WARDYN_LIVE_PIN_ACCOUNT || "222222222222";
-const PIN_ROLE = process.env.WARDYN_LIVE_PIN_ROLE || "WardynDev";
-const SSO_START_URL = process.env.WARDYN_LIVE_SSO_START_URL || "https://wardyn-dev.awsapps.com/start";
-/** The harness's read-only route to the fake's /_seen — see seen() below. */
-const SEEN_URL = process.env.WARDYN_LIVE_SEEN_URL || "http://127.0.0.1:8390/_seen";
-
-const ADMIN_EMAIL = "admin@wardyn.local";
-const MEMBER_EMAIL = "member@wardyn.local";
-/** deploy/kind/sso/README.md's demo literal — a throwaway Dex, no secret. */
-const DEX_PASSWORD = "password";
-
-/** harness-login-pane.tsx's aws.doneMarker — the helper's PTY success contract. */
-const SUCCESS_MARKER = "wardyn: aws sso credential captured";
-/**
- * cmd/wardyn-aws-sso's failMarker (TestFailMarker_UIParity pins this spelling
- * equal to the pane's). Watched ALONGSIDE the success marker, because a login
- * the control plane has already REFUSED prints this and then exits — and a poll
- * that only ever looks for success spends the whole LOGIN_DONE budget before
- * saying "did not happen", with the reason sitting on the terminal the entire
- * time. Five wasted minutes per red, and a red that names nothing.
- */
-const FAIL_MARKER = "wardyn: aws sso credential rejected:";
-/** harness-login-pane.tsx's aws.cmd — chained so the upload needs no second command. */
-const CHAINED_CMD = "aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso";
-
-// A sandbox on a cluster is a pod: image pull, schedule, proxy sidecar, then a
-// device-code flow. Generous, and bounded — an unbounded wait is how a live
-// suite turns a failure into a hang.
-const SANDBOX_UP = 300_000;
-const LOGIN_DONE = 300_000;
+import { MEMBER_GETTING_STARTED, YOUR_MODEL_KEY } from "../../src/app/components/wardyn/copy";
+import {
+  ADMIN_EMAIL,
+  ADMIN_TOKEN,
+  MEMBER_EMAIL,
+  PIN_ACCOUNT,
+  PIN_ROLE,
+  SANDBOX_UP,
+  awaitCapture,
+  awaitSelfRunStarted,
+  dexSignIn,
+  dexSignOut,
+  launchAgentRun,
+  me,
+  modelAccess,
+  openLoginPane,
+  putRoster,
+  seen,
+} from "./helpers";
 
 test.skip(process.env.WARDYN_TEST_K8S !== "1", "live cluster walk: set WARDYN_TEST_K8S=1 (scripts/kind-sso-walk.sh)");
 test.describe.configure({ mode: "serial" });
-
-// ── helpers ─────────────────────────────────────────────────────────────────
-
-/**
- * Sign in through Dex's static-password form.
- *
- * Deliberately a local copy of ui/e2e/demo/sso.ts's dexSignIn rather than an
- * import: that module pulls in the demo narration overlay (captions, beats, a
- * recording), none of which belongs in a test gate. The three locators are the
- * whole of it — Dex's login form is plain HTML with no accessible names.
- */
-async function dexSignIn(page: Page, email: string): Promise<void> {
-  await page.goto("/");
-  await page
-    .getByRole("link", { name: "Sign in with SSO" })
-    .or(page.getByRole("button", { name: "Sign in with SSO" }))
-    .first()
-    .click();
-  await page.locator('input[type="password"]').waitFor({ timeout: 60_000 });
-  await page.locator('input[type="text"], input[name="login"]').first().fill(email);
-  await page.locator('input[type="password"]').fill(DEX_PASSWORD);
-  await page.getByRole("button", { name: /log ?in/i }).click();
-  await expect(page.getByRole("link", { name: /^Runs/ })).toBeVisible({ timeout: 60_000 });
-}
-
-async function dexSignOut(page: Page): Promise<void> {
-  await page.locator("header").getByRole("button").last().click();
-  await page
-    .getByRole("button", { name: "Sign out" })
-    .or(page.getByRole("menuitem", { name: "Sign out" }))
-    .first()
-    .click();
-  await expect(
-    page.getByRole("link", { name: "Sign in with SSO" }).or(page.getByRole("button", { name: "Sign in with SSO" })).first(),
-  ).toBeVisible({ timeout: 60_000 });
-}
-
-/**
- * The signed-in browser session's own view of who it is.
- *
- * `email` is the field that carries the ADDRESS. `principal` is the OIDC SUBJECT
- * — for this Dex it is the opaque `Cg5nc3YtYWRtaW4tMDAwMRIFbG9jYWw`, not
- * "admin@wardyn.local" — and internal/api/me.go says so in place: the principal
- * is "the key every ownership check compares against", while the console header
- * reads name, then email, then principal. An earlier version of this file
- * asserted the address against `principal` and failed on the walk's very first
- * assertion, with a real, correctly signed-in admin session behind it.
- */
-async function me(
-  page: Page,
-): Promise<{ principal?: string; email?: string; operator?: boolean; member_mode?: boolean }> {
-  return page.evaluate(async () => {
-    const r = await fetch("/api/v1/me", { credentials: "include" });
-    return (await r.json()) as Record<string, unknown>;
-  });
-}
-
-/** The signed-in session's /setup/status — a MEMBER's own answer, not an admin's. */
-async function modelAccess(page: Page): Promise<{ state?: string; action?: string }> {
-  return page.evaluate(async () => {
-    const r = await fetch("/api/v1/setup/status", { credentials: "include" });
-    const body = (await r.json()) as { model_access?: { state?: string; action?: string } };
-    return body.model_access ?? {};
-  });
-}
-
-/**
- * The fake's `/_seen`, read through the harness's own port-forward.
- *
- * NOTHING UNDER TEST USES THIS ROUTE. The fourth precondition still holds:
- * every sandbox, the login run and dispatch-time renewal all address the fake by
- * its in-cluster Service name. scripts/kind-sso-walk.sh opens a read-only
- * `kubectl port-forward` purely so the harness can read the counter the fake
- * keeps, and hands the URL over in WARDYN_LIVE_SEEN_URL.
- *
- * It used to be `kubectl exec deployment/wardyn -- wget`, which CANNOT work on
- * any deployment: the wardynd image is distroless — no wget, no curl, no shell —
- * so that exec fails with "executable file not found in $PATH". This is the one
- * observation in this file that is not Wardyn asserting about itself, so it
- * failing silently-looking was the worst possible place for it.
- */
-async function seen(): Promise<{
-  account_id: string;
-  role_name: string;
-  bedrock_calls: number;
-  bedrock_model: string;
-  bedrock_models: string[];
-}> {
-  const res = await fetch(SEEN_URL);
-  if (!res.ok) throw new Error(`GET ${SEEN_URL}: ${res.status}`);
-  return (await res.json()) as Awaited<ReturnType<typeof seen>>;
-}
-
-/**
- * Launch an autonomous claude-code run from the signed-in person's own seat and
- * wait for it to be running.
- *
- * AUTONOMOUS, NOT INTERACTIVE — and the reason is the vendor CLI, not Wardyn.
- * An interactive run starts the Claude Code TUI, and on a FRESH sandbox that TUI
- * opens on its own first-run onboarding ("Welcome to Claude Code v2.1.231 …
- * Choose the text style that looks best with your terminal"). It sits on that
- * theme picker indefinitely: the seed prompt is never reached, no model call is
- * ever made, GetRoleCredentials is never called, and any /_seen assertion behind
- * it can only time out. Autonomous execs claude non-interactively — no TUI, no
- * onboarding — so the task below actually reaches Bedrock. Reaching a TERMINAL
- * is case 2's subject (P1) and is proven there.
- *
- * LAUNCH NAVIGATES NOWHERE, deliberately: the 201's advisory `warnings[]` render
- * inline in the rail and "Open run" carries the member to the run "at their own
- * pace" (new-run-screen.tsx; new-run-screen.test.tsx pins "navigates NOWHERE
- * until Open run is clicked"). The warnings this run legitimately carries are
- * governance working, not failure — `api.anthropic.com` is dropped from egress
- * because this deployment is Bedrock, and the member's resources are capped to
- * the operator maximum.
- */
-async function launchAgentRun(page: Page, title: string): Promise<void> {
-  await page.goto("/runs/new");
-  await page.getByRole("combobox", { name: "Title" }).fill(title);
-  await page.getByRole("radio", { name: /^Autonomous/ }).click();
-  await page.locator("#nr-task").fill("Reply with the single word: ready.");
-  await page.getByRole("button", { name: /^Launch/ }).click();
-  await page.getByRole("button", { name: "Open run" }).click();
-  await expect(page.getByText("Running").first()).toBeVisible({ timeout: SANDBOX_UP });
-}
-
-/**
- * The agent roster write: the pin and the per-user lane, in one PUT.
- *
- * The pin is a PARAMETER because the P4 case re-pins the same roster to a
- * DIFFERENT pair and must send a byte-identical body otherwise — a second
- * hand-written literal is how the two drift and the refusal stops being about
- * the pin. Defaults are the walk's own pinned pair.
- */
-async function putRoster(
-  request: APIRequestContext,
-  account: string = PIN_ACCOUNT,
-  role: string = PIN_ROLE,
-): Promise<void> {
-  const res = await request.put("/api/v1/agent-providers", {
-    headers: { Authorization: `Bearer ${ADMIN_TOKEN}`, "Content-Type": "application/json" },
-    // `agents` is a LIST whose elements carry `id` (types.AgentProviders), and
-    // handlePutAgentProviders decodes STRICTLY — an object keyed by agent id is
-    // a 400, which on the walk's first assertion means nothing after it runs.
-    // internal/api/agent_providers_walk_shape_test.go pins this body's shape
-    // from the Go side so the next change reds there, not on a cluster.
-    data: {
-      agents: [
-        {
-          id: "claude-code",
-          mechanism: "bedrock_sso",
-          credential_source: "per_user",
-          sso_start_url: SSO_START_URL,
-          sso_account_id: account,
-          sso_role_name: role,
-        },
-      ],
-    },
-  });
-  expect(res.status(), `PUT /agent-providers: ${await res.text()}`).toBe(200);
-}
 
 // ── the walk ────────────────────────────────────────────────────────────────
 
@@ -267,7 +102,23 @@ test("the member signs in to AWS from their own seat and the capture is theirs",
 
   // The member's own Getting Started carries the CTA (P3 / lane
   // member-cold-load: the member's page must not call an admin-only endpoint).
+  //
+  // 0.7.5 BUILD 0(a), lane ui-member-model-key (merged): the "Your model key"
+  // card no longer tells a per_user member their model access is already done.
+  // This is the one live seat that can read the NOT-SIGNED-IN half — it needs a
+  // real second identity under a real per_user roster row, which the lane's own
+  // vitest matrix cannot produce. Asserted THROUGH the merged constants.
   await page.goto("/setup");
+  await expect(page.getByText(YOUR_MODEL_KEY.NOT_SIGNED_IN_CHIP).first()).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(YOUR_MODEL_KEY.NOT_SIGNED_IN_BODY)).toBeVisible();
+  // …and the page's own lede names whose sign-in it is (finding 2b). The old
+  // SETUP_SUMMARY_HELPER — "shared credentials … your runs inherit them" — is
+  // the sentence this deployment contradicts, so its ABSENCE is the assertion
+  // that the branch actually took.
+  await expect(page.getByText(MEMBER_GETTING_STARTED.SETUP_SUMMARY_HELPER_PER_USER)).toBeVisible();
+  await expect(page.getByText(MEMBER_GETTING_STARTED.SETUP_SUMMARY_HELPER)).toHaveCount(0);
+  // There are TWO "Sign in to AWS" buttons on an actionable per_user member's
+  // page — the chip row's and the card's own — and both open the same pane.
   const cta = page.getByRole("button", { name: "Sign in to AWS" }).first();
   await expect(cta).toBeVisible({ timeout: 60_000 });
   await cta.click();
@@ -288,59 +139,23 @@ test("the member signs in to AWS from their own seat and the capture is theirs",
     timeout: SANDBOX_UP,
   });
 
-  // The pane AUTO-TYPES the chained command. If it has not (a pane change, a
-  // dropped keystroke), type it into the PTY ourselves — the xterm idiom from
-  // ui/e2e/demo: click the screen, then page.keyboard.type with a trailing \n.
-  // Assertions on xterm are expect.poll(innerText) per the series law:
-  // toContainText starves on a canvas-backed buffer that repaints under load.
-  await expect
-    .poll(async () => (await screen.innerText()).includes("aws sso login"), { timeout: 60_000 })
-    .toBe(true)
-    .catch(async () => {
-      await screen.click();
-      await page.keyboard.type(`${CHAINED_CMD}\n`, { delay: 20 });
-    });
+  // 0.7.5 BUILD 0(b), lane login-sandbox-selfrun (merged): the SANDBOX runs the
+  // chained command itself, so the console types nothing and this file types
+  // nothing either. The poll that used to wait 60 s for the echoed argv and
+  // then TYPE the command on a miss is gone — see awaitSelfRunStarted() for the
+  // double-run it caused once the image self-ran.
+  await awaitSelfRunStarted(screen);
 
   // The helper's own success marker — the PTY contract cmd/wardyn-aws-sso and
-  // the pane share (TestSuccessMarker_UIParity pins the two spellings equal).
-  // THE PANE TEARS THE TERMINAL DOWN THE MOMENT IT SEES THE MARKER, so polling
-  // for the marker alone is a race the test loses on a slow box.
-  // harness-login-pane.tsx's handleOutput → confirmCapture fires `killRun` and
-  // then `onDone`, and the parent closes the pane — all within milliseconds of
-  // the marker being printed. `screen.innerText()` then reads a detached node
-  // (or throws), so the poll can watch for its full five minutes while the
-  // capture has ALREADY succeeded server-side. That is exactly what happened:
-  // `harness.credential.captured` in the audit, `session.detach reason="client
-  // closed"` right after it, and a spec still waiting.
-  //
-  // So accept either witness — the marker if we catch it in flight, or the
-  // SERVER's own answer if the pane beat us to the teardown — and keep failing
-  // fast on the helper's refusal. The server fact is the stronger of the two:
-  // it is what every assertion after this one rests on.
-  await expect
-    .poll(
-      async () => {
-        // BOUNDED, and that bound is the whole fix. `locator.innerText()` takes
-        // no default timeout, so once the pane has unmounted the terminal this
-        // call does not throw — it WAITS, swallowing the entire LOGIN_DONE
-        // budget inside a single poll iteration, and the `.catch` below never
-        // runs and the server is never asked. That is what made this case fail
-        // at exactly 300s with model_access sitting at "live" the whole time.
-        const text = await screen.innerText({ timeout: 1_000 }).catch(() => "");
-        if (text.includes(FAIL_MARKER)) {
-          const line = text.split("\n").find((l) => l.includes(FAIL_MARKER)) ?? FAIL_MARKER;
-          throw new Error(`the login helper refused this capture: ${line.trim()}`);
-        }
-        if (text.includes(SUCCESS_MARKER)) return true;
-        return (await modelAccess(page)).state === "live";
-      },
-      { timeout: LOGIN_DONE },
-    )
-    .toBe(true);
+  // the pane share (TestSuccessMarker_UIParity pins the two spellings equal) —
+  // or the server's own answer if the pane beat us to the teardown.
+  await awaitCapture(page, screen);
 
   // THE MEMBER'S OWN STATUS, from the member's own session.
   await page.goto("/setup");
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
+  // …and the card now reads the signed-in half of the same pair of constants.
+  await expect(page.getByText(YOUR_MODEL_KEY.SIGNED_IN_CHIP).first()).toBeVisible({ timeout: 60_000 });
 });
 
 test("the capture belongs to the member alone", async ({ page }) => {
@@ -431,57 +246,14 @@ test("sso-pin-dispatch: a pin changed after capture warns, refuses the run, and 
   // anywhere — modelaccess.go says so). So the member repeats exactly what they
   // did in the second test, under the new pin, and their own status comes back
   // to `live` on the contradicting pair.
-  await page.goto("/setup");
-  const cta = page.getByRole("button", { name: "Sign in to AWS" }).first();
-  await expect(cta).toBeVisible({ timeout: 60_000 });
-  await cta.click();
-  const start = page.getByRole("button", { name: "Start login" });
-  if (await start.isVisible().catch(() => false)) {
-    await start.click();
-  }
+  await openLoginPane(page);
   const screen = page.locator(".xterm-screen").first();
   await expect(screen).toBeVisible({ timeout: SANDBOX_UP });
-  await expect
-    .poll(async () => (await screen.innerText()).includes("aws sso login"), { timeout: 60_000 })
-    .toBe(true)
-    .catch(async () => {
-      await screen.click();
-      await page.keyboard.type(`${CHAINED_CMD}\n`, { delay: 20 });
-    });
-  // THE PANE TEARS THE TERMINAL DOWN THE MOMENT IT SEES THE MARKER, so polling
-  // for the marker alone is a race the test loses on a slow box.
-  // harness-login-pane.tsx's handleOutput → confirmCapture fires `killRun` and
-  // then `onDone`, and the parent closes the pane — all within milliseconds of
-  // the marker being printed. `screen.innerText()` then reads a detached node
-  // (or throws), so the poll can watch for its full five minutes while the
-  // capture has ALREADY succeeded server-side. That is exactly what happened:
-  // `harness.credential.captured` in the audit, `session.detach reason="client
-  // closed"` right after it, and a spec still waiting.
-  //
-  // So accept either witness — the marker if we catch it in flight, or the
-  // SERVER's own answer if the pane beat us to the teardown — and keep failing
-  // fast on the helper's refusal. The server fact is the stronger of the two:
-  // it is what every assertion after this one rests on.
-  await expect
-    .poll(
-      async () => {
-        // BOUNDED, and that bound is the whole fix. `locator.innerText()` takes
-        // no default timeout, so once the pane has unmounted the terminal this
-        // call does not throw — it WAITS, swallowing the entire LOGIN_DONE
-        // budget inside a single poll iteration, and the `.catch` below never
-        // runs and the server is never asked. That is what made this case fail
-        // at exactly 300s with model_access sitting at "live" the whole time.
-        const text = await screen.innerText({ timeout: 1_000 }).catch(() => "");
-        if (text.includes(FAIL_MARKER)) {
-          const line = text.split("\n").find((l) => l.includes(FAIL_MARKER)) ?? FAIL_MARKER;
-          throw new Error(`the login helper refused this capture: ${line.trim()}`);
-        }
-        if (text.includes(SUCCESS_MARKER)) return true;
-        return (await modelAccess(page)).state === "live";
-      },
-      { timeout: LOGIN_DONE },
-    )
-    .toBe(true);
+  // 0.7.5 BUILD 0(b) again — the SAME poll-then-type pair lived here too, and a
+  // fix applied only to the first copy would have left this second sign-in
+  // double-running. See awaitSelfRunStarted().
+  await awaitSelfRunStarted(screen);
+  await awaitCapture(page, screen);
 
   await page.goto("/setup");
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
