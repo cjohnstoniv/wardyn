@@ -1,0 +1,88 @@
+// Copyright 2025 The Wardyn Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+)
+
+// TestGetRun_LoginRunStaysReadableWhileCreateSandboxBlocks is a CHARACTERIZATION
+// test, and it is expected GREEN — it is not red-first, and saying so is the
+// point of it.
+//
+// The 0.7.4 field report (finding 6) reads as if the pane's poll had been unable
+// to READ the run during a cold image pull: "Wardyn stopped being able to read
+// the sign-in sandbox". The read path says otherwise — handleGetRun is a plain
+// store SELECT with no runner call, no lock and no dependence on dispatch — and
+// the pane's budget was a tick count that a 131-second pull with healthy reads
+// never trips. So the pane's sentence was fixed (login-start-wait.ts) and the
+// server was NOT changed. This test is the evidence for that decision: with
+// CreateSandbox held open, the launching member reads their own run over and
+// over, and gets it.
+//
+// IF THIS EVER GOES RED the cause is in-tree and the console fix is treating a
+// real server bug as a wording problem — stop and report rather than adjusting
+// the test.
+func TestGetRun_LoginRunStaysReadableWhileCreateSandboxBlocks(t *testing.T) {
+	gr := &coldPullRunner{fakeRunner: &fakeRunner{}, gate: make(chan struct{})}
+	released := false
+	t.Cleanup(func() {
+		if !released {
+			close(gr.gate)
+		}
+	})
+	// supersedeLoginSrv, not perUserLoginSrvWithRunner: this test READS the run,
+	// and that path projects a run's UI apps out of its audit trail — a query the
+	// plain login double does not answer at all (a nil promoted method, i.e. a
+	// panic, not the logged error handleGetRun tolerates). The store is otherwise
+	// the same one.
+	srv, _, _ := supersedeLoginSrv(t, nil, gr)
+	mine := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+
+	w := doSSO(t, srv, http.MethodPost, "/api/v1/setup/harness-login", mine, `{"provider":"aws"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("launch: code = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var launched struct {
+		RunID string `json:"run_id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &launched); err != nil {
+		t.Fatalf("decode launch: %v (%s)", err, w.Body.String())
+	}
+
+	// Ten reads, the span the pane's first ticks cover, all while the sandbox is
+	// still coming up.
+	for i := 0; i < 10; i++ {
+		r := doSSO(t, srv, http.MethodGet, "/api/v1/runs/"+launched.RunID, mine, "")
+		if r.Code != http.StatusOK {
+			t.Fatalf("read %d: code = %d, want 200 — the pane's poll reads this exact route; body=%s",
+				i, r.Code, r.Body.String())
+		}
+		var got struct {
+			State string `json:"state"`
+		}
+		if err := json.Unmarshal(r.Body.Bytes(), &got); err != nil {
+			t.Fatalf("read %d: decode run: %v (%s)", i, err, r.Body.String())
+		}
+		if got.State != "PENDING" && got.State != "STARTING" {
+			t.Fatalf("read %d: state = %q, want PENDING or STARTING while CreateSandbox blocks", i, got.State)
+		}
+	}
+
+	// The ownership rule is the same one on the same route: somebody else's
+	// sign-in is a 404, not a 403 — which is also the ONE way a healthy daemon
+	// makes getRun fail for the pane (a roster edit mid-wait).
+	theirs := ssoSession(t, "sub-other", "other@corp.example", oidc.RoleMember)
+	r := doSSO(t, srv, http.MethodGet, "/api/v1/runs/"+launched.RunID, theirs, "")
+	if r.Code != http.StatusNotFound {
+		t.Fatalf("foreign read: code = %d, want 404; body=%s", r.Code, r.Body.String())
+	}
+
+	close(gr.gate)
+	released = true
+}

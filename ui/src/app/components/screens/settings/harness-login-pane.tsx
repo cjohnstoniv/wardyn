@@ -31,6 +31,12 @@ import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { AttachTerminal, type AttachTerminalHandle } from "../../attach-terminal";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
+import {
+  LOGIN_SANDBOX_READ_RETRYING,
+  LOGIN_SANDBOX_SLOW_START,
+  startWaitVerdict,
+  type StartWaitVerdict,
+} from "./login-start-wait";
 
 // DRAFT (M2 canon pending) — S-13 (blind security review, lens-S.md): the PTY
 // success marker is sandbox-forgeable by construction (a replaced/malicious
@@ -108,14 +114,11 @@ type Phase = "intro" | "prompt" | "launching" | "starting" | "attached" | "savin
 // it is a human watching a pull, not a control loop.
 const RUN_POLL_MS = 2000;
 
-// How many CONSECUTIVE unreadable polls end the wait. A single failed read is a
-// blip and must not end a sign-in that is working; a PERSISTENT one (the daemon
-// restarted mid-pull, the run was pruned, a roster edit made the read a 403)
-// otherwise leaves "Starting the sign-in sandbox…" on screen forever with
-// nothing but Cancel to end it. 15 ticks ≈ 30s of silence — far longer than any
-// restart, far shorter than the sandbox's 30-minute idle cap. Reset by any
-// successful read, so a flaky link never accumulates its way to a false ending.
-const RUN_POLL_MAX_CONSECUTIVE_FAILURES = 15;
+// What ENDS the wait, and what it says while it lasts, is a clock now — see
+// login-start-wait.ts. The tick budget this replaces called itself "≈30s" and
+// could mean anything from 30 seconds of fast 5xx to fifteen minutes of hung
+// reads, while a measured 131-second cold pull with healthy reads never tripped
+// it at all (finding 6).
 
 // DRAFT (M2 canon pending) — P5: POST /setup/harness-login now answers with the
 // run id BEFORE the sandbox exists (internal/api/harnesscred_launch.go), so the
@@ -135,7 +138,7 @@ const LOGIN_SANDBOX_ENDED = "The sign-in sandbox stopped before it was ready —
 // Distinct from the sentence above on purpose: that one asserts the sandbox
 // stopped, which this pane has not established — all it knows is that it stopped
 // being able to ask.
-const LOGIN_SANDBOX_UNREADABLE =
+export const LOGIN_SANDBOX_UNREADABLE =
   "Wardyn stopped being able to read the sign-in sandbox, so it can't say whether it came up. Try again.";
 
 // DRAFT (M2 canon pending) — THE SANDBOX SIGNS ITSELF IN NOW. The aws-sso image
@@ -470,8 +473,16 @@ export function HarnessLoginPane({
   const openedUrlRef = React.useRef(false);
   // Consecutive unreadable polls of the starting run, not a total: one blip must
   // not end a sign-in that is working. A ref, not state — it drives no render
-  // and must not churn the poll callback's identity.
+  // and must not churn the poll callback's identity. Same for the two clocks
+  // beside it: when THIS launch began, and when the current run of failed reads
+  // did (null while reads are healthy) — startWaitVerdict's whole input.
   const pollFailuresRef = React.useRef(0);
+  const startedAtRef = React.useRef(0);
+  const failingSinceRef = React.useRef<number | null>(null);
+  // The graded wait, and the last grade RENDERED — so a tick that changes
+  // nothing does not re-render the pane every two seconds.
+  const [waitNote, setWaitNote] = React.useState<StartWaitVerdict>("starting");
+  const waitNoteRef = React.useRef<StartWaitVerdict>("starting");
   // ONE self-run grace timer per launch, armed on the FIRST attach.
   const selfRunArmedRef = React.useRef(false);
 
@@ -485,6 +496,10 @@ export function HarnessLoginPane({
     setAutoCaptured(false);
     setEverAttached(false);
     pollFailuresRef.current = 0;
+    startedAtRef.current = Date.now();
+    failingSinceRef.current = null;
+    waitNoteRef.current = "starting";
+    setWaitNote("starting");
     selfRunArmedRef.current = false;
     setAuthUrl("");
     try {
@@ -509,18 +524,32 @@ export function HarnessLoginPane({
   const pollRun = React.useCallback(async () => {
     if (!runId) return;
     const run = await runsApi.getRun(runId).catch(() => undefined);
+    const now = Date.now();
     if (!run) {
-      // A transient read is not an outcome; the next tick asks again — until
-      // enough of them fail in a row that "still starting" is a claim this pane
-      // can no longer make.
+      // A transient read is not an outcome; the next tick asks again. What ENDS
+      // the wait is the clock below, not this counter.
       pollFailuresRef.current += 1;
-      if (pollFailuresRef.current >= RUN_POLL_MAX_CONSECUTIVE_FAILURES) {
-        setError(LOGIN_SANDBOX_UNREADABLE);
-        setPhase("error");
-      }
+      failingSinceRef.current ??= now;
+    } else {
+      pollFailuresRef.current = 0;
+      failingSinceRef.current = null;
+    }
+    const verdict = startWaitVerdict({
+      now,
+      startedAt: startedAtRef.current,
+      failingSince: failingSinceRef.current,
+      failures: pollFailuresRef.current,
+    });
+    if (verdict === "unreadable") {
+      setError(LOGIN_SANDBOX_UNREADABLE);
+      setPhase("error");
       return;
     }
-    pollFailuresRef.current = 0;
+    if (verdict !== waitNoteRef.current) {
+      waitNoteRef.current = verdict;
+      setWaitNote(verdict);
+    }
+    if (!run) return;
     if (run.state === "RUNNING") {
       setEverAttached(true);
       setPhase("attached");
@@ -792,7 +821,12 @@ export function HarnessLoginPane({
       {phase === "starting" && (
         <div className="flex flex-wrap items-center gap-2" data-testid="login-sandbox-starting">
           <p role="status" className="flex flex-1 items-center gap-2 text-xs leading-relaxed text-muted-foreground">
-            <Loader2 className="size-3.5 shrink-0 animate-spin" /> {LOGIN_SANDBOX_STARTING}
+            <Loader2 className="size-3.5 shrink-0 animate-spin" />{" "}
+            {waitNote === "retrying"
+              ? LOGIN_SANDBOX_READ_RETRYING
+              : waitNote === "slow"
+                ? LOGIN_SANDBOX_SLOW_START
+                : LOGIN_SANDBOX_STARTING}
           </p>
           <Button size="sm" variant="outline" onClick={cancel}>
             <Square className="size-3.5" /> Cancel

@@ -20,7 +20,9 @@ import {
   loginFlow,
   SELFRUN_MARKER,
   CAPTURE_NOT_CORROBORATED,
+  LOGIN_SANDBOX_UNREADABLE,
 } from "./harness-login-pane";
+import { LOGIN_SANDBOX_READ_RETRYING, LOGIN_SANDBOX_SLOW_START } from "./login-start-wait";
 import { runs as runsApiMocked } from "../../../lib/api/runs";
 import type { AgentRun, SetupStatus } from "../../../lib/types";
 
@@ -746,7 +748,20 @@ describe("HarnessLoginPane — the starting phase (P5)", () => {
 
       // advanceTimersByTimeAsync flushes the microtasks each rejected read
       // queues, which is what usePoll's in-flight guard waits on.
+      //
+      // FINDING 6: fifteen ticks is no longer an ending. It was called "≈30s"
+      // and the reporting estate's cold pull took 131 — so thirty seconds of a
+      // daemon being unreachable now says "still trying", and the wait ends on
+      // the CLOCK (RUN_POLL_UNREADABLE_AFTER_MS, 150 ticks at this cadence).
       for (let i = 0; i < 15; i++) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2000);
+        });
+      }
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.getByTestId("login-sandbox-starting")).toHaveTextContent(LOGIN_SANDBOX_READ_RETRYING);
+
+      for (let i = 15; i < 150; i++) {
         await act(async () => {
           await vi.advanceTimersByTimeAsync(2000);
         });
@@ -764,6 +779,81 @@ describe("HarnessLoginPane — the starting phase (P5)", () => {
     // evidence at all that the sandbox stopped.
     await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
     expect(runsApiMocked.killRun).toHaveBeenCalledWith("run-123");
+  });
+
+  // Finding 6, the case the old budget could not express: the reads are FINE,
+  // the sandbox just isn't up — a 131-second first pull of the aws-sso image on
+  // the reporting estate. Nothing here ever fails, so the failure counter this
+  // replaced would have sat at zero forever while the copy claimed the start was
+  // ordinary.
+  it("a healthy STARTING read past 60s shows the slow-start sentence and never an alert", async () => {
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue({ id: "run-123", state: "PENDING" } as AgentRun);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    try {
+      render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+      await user.click(screen.getByRole("button", { name: /start login/i }));
+      expect(screen.getByTestId("login-sandbox-starting")).toHaveTextContent("Starting the sign-in sandbox");
+
+      for (let i = 0; i < 35; i++) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2000);
+        });
+      }
+      expect(screen.getByTestId("login-sandbox-starting")).toHaveTextContent(LOGIN_SANDBOX_SLOW_START);
+      expect(screen.queryByRole("alert")).toBeNull();
+
+      // Well past the old 30s budget AND past the new 300s one — which does not
+      // apply, because nothing is failing.
+      for (let i = 35; i < 200; i++) {
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(2000);
+        });
+      }
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.getByTestId("login-sandbox-starting")).toHaveTextContent(LOGIN_SANDBOX_SLOW_START);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The unreadable clock measures the CURRENT run of failures, not the wait: a
+  // sign-in that loses the daemon for four minutes, gets one answer, and loses
+  // it again for another four has never been unreadable for five — and ending it
+  // on the sum would be the tick counter's mistake with a clock's face on it.
+  it("one successful read resets the unreadable clock", async () => {
+    let up = false;
+    vi.mocked(runsApiMocked.getRun).mockImplementation(async () => {
+      if (!up) throw new Error("control plane unreachable");
+      up = false; // exactly ONE answer, then dark again
+      return { id: "run-123", state: "PENDING" } as AgentRun;
+    });
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    try {
+      render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+      await user.click(screen.getByRole("button", { name: /start login/i }));
+
+      const advance = async (ticks: number) => {
+        for (let i = 0; i < ticks; i++) {
+          await act(async () => {
+            await vi.advanceTimersByTimeAsync(2000);
+          });
+        }
+      };
+
+      await advance(120); // 240s dark — retrying, not over
+      expect(screen.queryByRole("alert")).toBeNull();
+      up = true;
+      await advance(1); // one answer
+      await advance(120); // another 240s dark: 480s total, 240s consecutive
+      expect(screen.queryByRole("alert")).toBeNull();
+
+      await advance(35); // now 310s consecutive, and the wait ends
+      expect(screen.getByRole("alert")).toHaveTextContent(LOGIN_SANDBOX_UNREADABLE);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // ── the self-run grace window (finding 4) ─────────────────────────────────

@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
@@ -62,6 +63,14 @@ func (s *supersedeStore) CountActiveRunsBy(_ context.Context, createdBy string) 
 	return n, nil
 }
 
+// QueryAuditEvents: the RUN READ path asks for a run's events to project its UI
+// apps (effectiveUIApps, runs_policy.go), and an unimplemented promoted method
+// on a double is a nil-pointer panic rather than the logged error that read path
+// is written to tolerate. Empty is what a run with no ui.open rows really has.
+func (s *supersedeStore) QueryAuditEvents(context.Context, uuid.UUID, int) ([]types.AuditEvent, error) {
+	return nil, nil
+}
+
 func (s *supersedeStore) stateOf(t *testing.T, id string) types.RunState {
 	t.Helper()
 	rid, err := uuid.Parse(id)
@@ -84,10 +93,13 @@ func (s *supersedeStore) seed(run types.AgentRun) types.AgentRun {
 	return run
 }
 
-func supersedeLoginSrv(t *testing.T, cs *capStore) (*Server, *memAudit, *supersedeStore) {
+func supersedeLoginSrv(t *testing.T, cs *capStore, rnr runner.Runner) (*Server, *memAudit, *supersedeStore) {
 	t.Helper()
 	if cs == nil {
 		cs = &capStore{}
+	}
+	if rnr == nil {
+		rnr = &fakeRunner{}
 	}
 	h := newHarness(t)
 	audit := &memAudit{}
@@ -98,7 +110,7 @@ func supersedeLoginSrv(t *testing.T, cs *capStore) (*Server, *memAudit, *superse
 	cfg := baseTestConfig(h, st)
 	cfg.Audit = audit
 	cfg.OIDC = &oidc.Authenticator{}
-	cfg.Runner = &fakeRunner{}
+	cfg.Runner = rnr
 	cfg.Secrets = &memSecrets{m: map[string][]byte{}}
 	cfg.MaskRegistry = secretmask.NewRegistry()
 	cfg.BedrockRegion = "us-east-1"
@@ -151,7 +163,7 @@ func waitRunState(t *testing.T, st *supersedeStore, id string, want types.RunSta
 // Red on the unfixed tree: both stay live, and the old one's unattended capture
 // is then free to overwrite the new one's.
 func TestHarnessLogin_NewLaunchSupersedesTheCallersLiveLoginRun(t *testing.T) {
-	srv, _, st := supersedeLoginSrv(t, nil)
+	srv, _, st := supersedeLoginSrv(t, nil, nil)
 	sess := memberLoginSession(t)
 
 	first := launchLoginRun(t, srv, sess)
@@ -173,7 +185,7 @@ func TestHarnessLogin_NewLaunchSupersedesTheCallersLiveLoginRun(t *testing.T) {
 // sign-in — otherwise the fix for finding 7 hands them a 403 instead.
 func TestHarnessLogin_SupersedePrecedesTheQuota(t *testing.T) {
 	srv, _, st := supersedeLoginSrv(t, assignedStore(limitsProfile("one-at-a-time",
-		types.GovernanceLimits{MaxConcurrentRuns: 1})))
+		types.GovernanceLimits{MaxConcurrentRuns: 1})), nil)
 	// A GROUP-carrying session: the profile above is assigned by group tier, and
 	// a session with no groups snapshot is refused before the quota is ever read.
 	sess := govSession(t, "sub-capped", []string{"eng"}, false)
@@ -197,7 +209,7 @@ func TestHarnessLogin_SupersedePrecedesTheQuota(t *testing.T) {
 // deployment where one person's sign-in ends another's would be a denial of
 // service with an audit row saying Wardyn did it on purpose.
 func TestHarnessLogin_NeverKillsAnotherPersonsLoginRun(t *testing.T) {
-	srv, _, st := supersedeLoginSrv(t, nil)
+	srv, _, st := supersedeLoginSrv(t, nil, nil)
 
 	theirs := st.seed(types.AgentRun{
 		ID: uuid.New(), CreatedBy: "sub-other", Task: harnessLoginTask, Agent: awsSSOAgent,
@@ -215,7 +227,7 @@ func TestHarnessLogin_NeverKillsAnotherPersonsLoginRun(t *testing.T) {
 // working run because they signed in would be the worst possible reading of
 // "one live sign-in per person".
 func TestHarnessLogin_NeverKillsANonLoginRun(t *testing.T) {
-	srv, _, st := supersedeLoginSrv(t, nil)
+	srv, _, st := supersedeLoginSrv(t, nil, nil)
 	sess := memberLoginSession(t)
 
 	// The caller's own principal, taken from a real launch so the test cannot
@@ -252,7 +264,7 @@ func TestHarnessLogin_NeverKillsANonLoginRun(t *testing.T) {
 // on the handler path — take the 500 branch. The reason rides the row's DATA
 // beside the errors, never inside them.
 func TestHarnessLogin_SupersedeAuditsSuccessWithTheReason(t *testing.T) {
-	srv, audit, st := supersedeLoginSrv(t, nil)
+	srv, audit, st := supersedeLoginSrv(t, nil, nil)
 	sess := memberLoginSession(t)
 
 	first := launchLoginRun(t, srv, sess)
