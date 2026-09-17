@@ -37,13 +37,10 @@
  * C heals the member back to `live`, and D and E each call
  * makeMemberActionable() for their own.
  *
- * ── WHAT IS SKIPPED HERE, AND WHY ───────────────────────────────────────────
- * D and E only. They are `test.fixme("login-pane")` because that lane has not
- * merged and the three sentences they assert do not exist yet — one of them
- * (LOGIN_SANDBOX_SLOW_START) has not even been drafted, so its placeholder is a
- * sentinel that REDS rather than passes if the fixme is flipped without
- * re-pointing it. Every other case runs live. The spec therefore always
- * executes tests, so it is deliberately NOT on WARDYN_E2E_ALLOW_ALL_SKIPPED.
+ * ── NOTHING IS SKIPPED HERE ─────────────────────────────────────────────────
+ * Every case runs live (D and E were flipped when lane `login-pane` merged).
+ * The spec always executes tests, so it is deliberately NOT on
+ * WARDYN_E2E_ALLOW_ALL_SKIPPED.
  *
  * Self-skips without WARDYN_TEST_K8S=1, same as its sibling.
  */
@@ -52,6 +49,8 @@ import { expect, test, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { MEMBER_MODE } from "../../src/app/components/wardyn/member-mode-banner";
 import { LOGIN_SANDBOX_NOTE } from "../../src/app/components/screens/run-detail/login-sandbox-note";
+import { CAPTURE_NOT_CORROBORATED, LOGIN_SANDBOX_UNREADABLE } from "../../src/app/components/screens/settings/harness-login-pane";
+import { LOGIN_SANDBOX_SLOW_START, LOGIN_SANDBOX_READ_RETRYING } from "../../src/app/components/screens/settings/login-start-wait";
 import {
   MEMBER_GETTING_STARTED,
   RAIL_CREDENTIAL,
@@ -86,29 +85,12 @@ import {
 test.skip(process.env.WARDYN_TEST_K8S !== "1", "live cluster walk: set WARDYN_TEST_K8S=1 (scripts/kind-sso-walk.sh)");
 test.describe.configure({ mode: "serial" });
 
-// ── THE ONE LANE THAT HAS NOT MERGED: `login-pane` ──────────────────────────
-//
-// Cases D and E are `test.fixme("login-pane")` and these four stand in for the
-// constants that lane exports. The VALUES are its own canon table verbatim, so
-// the flip is mechanical: delete this block, restore the two import lines each
-// case's header repeats, and nothing else moves. Never the other way round, and
-// never a regex loose enough to match both spellings.
-//
-//   import { CAPTURE_NOT_CORROBORATED, LOGIN_SANDBOX_UNREADABLE } from "../../src/app/components/screens/settings/harness-login-pane";
-//   import { LOGIN_SANDBOX_SLOW_START, LOGIN_SANDBOX_READ_RETRYING } from "../../src/app/components/screens/settings/login-start-wait";
-const CAPTURE_NOT_CORROBORATED =
-  "The sandbox reported a capture the server does not have. If your last attempt was interrupted, sign in again from Getting Started — starting a new sign-in closes the old one. If it keeps happening, tell your admin: the sandbox's report and the server disagree.";
-// Unchanged by that lane — this is the value already in the tree.
-const LOGIN_SANDBOX_UNREADABLE =
-  "Wardyn stopped being able to read the sign-in sandbox, so it can't say whether it came up. Try again.";
-const LOGIN_SANDBOX_SLOW_START =
-  "Still starting — Wardyn can read the sign-in sandbox, it just isn't up yet. The first start after an upgrade pulls the image onto this node, which can take a few minutes.";
-// The OTHER starting-phase line, and case E's real negative control: "Wardyn
-// can read the sandbox" and "Wardyn can't read it right now" are the two halves
-// the case exists to tell apart, so asserting only the absence of the terminal
-// UNREADABLE error would miss a wait that had silently flipped to retrying.
-const LOGIN_SANDBOX_READ_RETRYING =
-  "Wardyn can't read the sign-in sandbox right now — still trying. It may be starting normally.";
+// Lane `login-pane` merged (feat/v0.7.5 da115293): cases D and E are LIVE and
+// assert THROUGH its exported constants. LOGIN_SANDBOX_READ_RETRYING is case E's
+// real negative control: "Wardyn can read the sandbox" and "Wardyn can't read it
+// right now" are the two halves the case exists to tell apart, so asserting only
+// the absence of the terminal UNREADABLE error would miss a wait that had
+// silently flipped to retrying.
 
 /** The 409 body of POST /setup/harness-login inside the no-credential preview
  *  (internal/api/membermode_preview.go's memberPreviewSignInRefusal — Go-side
@@ -470,10 +452,6 @@ test("D (login-pane): a cancelled sign-in retries cleanly, and a new one superse
   page,
   request,
 }) => {
-  // ON THE FLIP, delete the four stand-in constants at the top of this file and
-  // restore, verbatim:
-  //   import { CAPTURE_NOT_CORROBORATED } from "../../src/app/components/screens/settings/harness-login-pane";
-  test.fixme(true, "login-pane");
   await dexSignIn(page, MEMBER_EMAIL);
   await makeMemberActionable(request);
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("expired_signin");
@@ -529,11 +507,6 @@ test("E (login-pane): a sign-in held 65 s in STARTING reads as slow, never as un
   page,
   request,
 }) => {
-  // ON THE FLIP, delete the four stand-in constants at the top of this file and
-  // restore, verbatim:
-  //   import { LOGIN_SANDBOX_UNREADABLE } from "../../src/app/components/screens/settings/harness-login-pane";
-  //   import { LOGIN_SANDBOX_SLOW_START, LOGIN_SANDBOX_READ_RETRYING } from "../../src/app/components/screens/settings/login-start-wait";
-  test.fixme(true, "login-pane");
   // The live twin of the Go characterization test, and the datum that tells an
   // operator whether an UNREADABLE they saw was estate-side.
   //
