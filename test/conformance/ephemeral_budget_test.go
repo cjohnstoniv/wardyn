@@ -31,7 +31,10 @@ var makefileTimeoutRe = regexp.MustCompile(`-timeout\s+(\S+)`)
 //
 // It reads both numbers rather than restating either: the budget from the code
 // (ephemeralCaseBudget) and the ceiling from the Makefile recipe that actually
-// runs this suite. Raising one without the other reds here.
+// runs this suite. Raising one without the other reds here — and since
+// ephemeralCaseBudget is now one fill budget PER TARGET, adding a third fill
+// target reds here too rather than silently spending a fourth eviction budget
+// the Makefile never made room for.
 func TestEphemeralCaseBudgetFitsTheMakefileTimeout(t *testing.T) {
 	b, err := os.ReadFile("../../Makefile")
 	if err != nil {
@@ -70,7 +73,8 @@ func TestEphemeralCaseBudgetFitsTheMakefileTimeout(t *testing.T) {
 
 // TestEphemeralFillScriptCodesAreDistinct pins the fill script's exit-code
 // contract, which is what the case BRANCHES on — 90 skips as an image verdict, 91
-// as an environment one, and anything else is read as "the fill ran".
+// as an environment one (or, on a substrate-owned target, a substrate verdict),
+// and anything else is read as "the fill ran".
 //
 // It is a source assertion and not an execution: running busybox here would need
 // Docker, and the thing that broke was not the shell but WHERE it wrote. So the
@@ -78,28 +82,52 @@ func TestEphemeralCaseBudgetFitsTheMakefileTimeout(t *testing.T) {
 // is `/` for uid 1000 on the agent image, and root-owned), and the open is probed
 // under its own code so an unwritable target cannot be reported as a substrate
 // that does not enforce.
+//
+// EVERY TARGET, not just the first. 0.7.5 added the workdir fill because /tmp
+// alone left the clone, the installs and the build output outside disk_mib; a
+// second target that quietly wrote under $HOME or folded its open probe into the
+// fill would reintroduce the exact false negative this pin exists for.
 func TestEphemeralFillScriptCodesAreDistinct(t *testing.T) {
-	if strings.Contains(ephemeralFillScript, "$HOME") {
-		t.Error("the fill writes under $HOME, which runc answers as `/` for the agent image's uid 1000 — " +
-			"root-owned, so every fill dies `Permission denied` with exit 1, the coded skip never fires, and " +
-			"the case reports a substrate that does not enforce. Write under /tmp.")
+	if len(ephemeralFillTargets) < 2 {
+		t.Fatalf("only %d fill target(s): /tmp alone leaves the agent's workdir — where the clone, the "+
+			"installs and the build output land — outside disk_mib, which is the gap 0.7.4 disclosed",
+			len(ephemeralFillTargets))
 	}
-	if !strings.Contains(ephemeralFillScript, "/tmp/") {
-		t.Error("the fill target is not under /tmp — it must be a path that is writable in every image this " +
-			"gate runs against AND metered by the kubelet as local ephemeral storage")
-	}
-	for _, code := range []string{"exit 90", "exit 91"} {
-		if strings.Count(ephemeralFillScript, code) != 1 {
-			t.Errorf("the fill script names %q %d times, want exactly once — 90 is the missing-applet IMAGE "+
-				"verdict and 91 the unwritable-target ENVIRONMENT one, and the case skips on both",
-				code, strings.Count(ephemeralFillScript, code))
+	var sawTmp, sawSubstrateOwned bool
+	for _, target := range ephemeralFillTargets {
+		script := ephemeralFillScriptFor(target.path)
+		sawTmp = sawTmp || strings.HasPrefix(target.path, "/tmp/")
+		sawSubstrateOwned = sawSubstrateOwned || target.substrateOwned
+		if strings.Contains(script, "$HOME") {
+			t.Errorf("target %s writes under $HOME, which runc answers as `/` for the agent image's uid 1000 — "+
+				"root-owned, so every fill dies `Permission denied` with exit 1, the coded skip never fires, and "+
+				"the case reports a substrate that does not enforce. Spell the path out.", target.name)
+		}
+		if !strings.HasPrefix(target.path, "/") {
+			t.Errorf("target %s path %q is not absolute — the fill runs with an image-chosen working directory",
+				target.name, target.path)
+		}
+		for _, code := range []string{"exit 90", "exit 91"} {
+			if strings.Count(script, code) != 1 {
+				t.Errorf("target %s names %q %d times, want exactly once — 90 is the missing-applet IMAGE "+
+					"verdict and 91 the unwritable-target one, and the case branches on both",
+					target.name, code, strings.Count(script, code))
+			}
+		}
+		// The zero-byte probe is what separates "cannot open" from "out of space":
+		// ENOSPC is the PASS path here, so folding the two would hide an eviction
+		// behind an environment skip.
+		if !strings.Contains(script, "count=0") {
+			t.Errorf("target %s does not probe the open separately (no count=0 create) — a single dd cannot tell "+
+				"EACCES from ENOSPC, and ENOSPC is this case's pass path", target.name)
 		}
 	}
-	// The zero-byte probe is what separates "cannot open" from "out of space":
-	// ENOSPC is the PASS path here, so folding the two would hide an eviction
-	// behind an environment skip.
-	if !strings.Contains(ephemeralFillScript, "count=0") {
-		t.Error("the open is not probed separately (no count=0 create) — a single dd cannot tell EACCES from " +
-			"ENOSPC, and ENOSPC is this case's pass path")
+	if !sawTmp {
+		t.Error("no fill target is under /tmp — it must be a path that is writable in every image this " +
+			"gate runs against AND metered as local ephemeral storage")
+	}
+	if !sawSubstrateOwned {
+		t.Error("no fill target is substrateOwned — then an unopenable scratch mount skips as an environment " +
+			"problem, and a substrate that stopped providing the agent's workdir would grade green")
 	}
 }

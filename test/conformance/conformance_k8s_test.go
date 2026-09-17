@@ -125,6 +125,10 @@ func TestConformanceK8s(t *testing.T) {
 	t.Run("AgentCannotReachAPIServer", func(t *testing.T) {
 		testAgentCannotReachAPIServer(t, r, agentImage)
 	})
+
+	t.Run("ExecIsAcceptedWithADiskBudget", func(t *testing.T) {
+		testExecIsAcceptedWithADiskBudget(t, r, agentImage)
+	})
 }
 
 // apiServerProbeScript is a CODED probe (review round 2, H2): the original
@@ -211,6 +215,80 @@ func testAgentCannotReachAPIServer(t *testing.T, r runner.Runner, agentImage str
 		t.Error("agent pod reached the Kubernetes API server (KUBERNETES_SERVICE_HOST:PORT) directly — L1 confinement breach: the agent NetworkPolicy must allow ONLY the proxy sidecar")
 	default:
 		t.Fatalf("apiserver probe exited %d, a code the script never emits — investigate before trusting this result either way", code)
+	}
+}
+
+// scratchWritableScript writes one byte to each scratch mount under its own exit
+// code. It is the cheap answer to "an emptyDir arrives root-owned 0777 — is that
+// actually writable by the agent's uid 1000?", and the codes are distinct per
+// mount so a failure names WHICH path regressed instead of "something under the
+// sandbox was read-only".
+const scratchWritableScript = `echo scratch > /tmp/wardyn-scratch-probe || exit 91
+echo scratch > /home/agent/work/wardyn-scratch-probe || exit 92
+exit 0`
+
+// testExecIsAcceptedWithADiskBudget is the assertion no fake clientset can make:
+// that a REAL apiserver accepts the ephemeral container Exec builds for a run
+// whose disk_mib is set.
+//
+// WHY IT IS ITS OWN CASE. A disk budget makes CreateSandbox mount the two scratch
+// emptyDirs on the main container, and Exec copies that container's VolumeMounts
+// VERBATIM onto the ephemeral container. The apiserver refuses mount shapes THERE
+// that it accepts on an ordinary container — a subPath above all ("Subpath mounts
+// are not allowed for ephemeral containers"). A fake clientset records whatever
+// the driver sends and calls it green, so the failure mode is a substrate where
+// every autonomous run with a disk budget dies at dispatch while the unit suite
+// stays green. The eviction case cannot stand in for this: it treats an Exec
+// error as EXPECTED, because on a substrate that does enforce, the exec transport
+// dies with the pod it is filling.
+//
+// It is a REGRESSION PIN — green the day it was written — and it deliberately
+// says nothing about enforcement, only about admission and writability.
+func testExecIsAcceptedWithADiskBudget(t *testing.T, r runner.Runner, agentImage string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	caps, err := r.Capabilities(ctx)
+	if err != nil {
+		t.Fatalf("Capabilities: %v", err)
+	}
+	if len(caps.ConfinementClasses) == 0 {
+		t.Skip("no ConfinementClasses declared; cannot create a sandbox")
+	}
+	spec := runner.SandboxSpec{
+		RunID:            uuid.New(),
+		Image:            agentImage,
+		ConfinementClass: caps.ConfinementClasses[len(caps.ConfinementClasses)-1],
+		Labels:           map[string]string{"wardyn.conformance": "true"},
+		// Comfortably larger than the probe writes: this case is about ADMISSION,
+		// and an eviction here would be a different (and confusing) verdict.
+		Resources: runner.Resources{DiskMiB: 512},
+	}
+	sb, err := r.CreateSandbox(ctx, spec)
+	if err != nil {
+		t.Fatalf("CreateSandbox with DiskMiB %d: %v", spec.Resources.DiskMiB, err)
+	}
+	defer func() { _ = r.StopSandbox(context.Background(), sb.Ref) }()
+
+	if _, err := r.Exec(ctx, sb.Ref, []string{"sh", "-c", scratchWritableScript}); err != nil {
+		t.Fatalf("Exec on a sandbox with disk_mib set: %v — the apiserver REFUSED the ephemeral container. "+
+			"Every autonomous k8s run with a disk budget fails at dispatch in this shape, and no fake-clientset test "+
+			"can see it: check the mounts CreateSandbox puts on the main container (exec.go copies them verbatim, and "+
+			"a subPath among them is rejected outright on an ephemeral container)", err)
+	}
+	code, err := r.Wait(ctx, sb.Ref)
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	switch code {
+	case 0:
+		// Admitted, and both scratch mounts were writable by the agent's uid.
+	case 91, 92:
+		t.Errorf("the agent could not write its own scratch (exit %d: 91=/tmp, 92=the workdir) — a disk budget "+
+			"mounted over a path the agent cannot write is worse than no budget: the run cannot work at all", code)
+	default:
+		t.Fatalf("scratch-writability probe exited %d, a code the script never emits — investigate before trusting this result either way", code)
 	}
 }
 
