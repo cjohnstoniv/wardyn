@@ -144,11 +144,18 @@ var envDocShellOnly = map[string]bool{
 	"WARDYN_KIND_SSO_REBUILD": true, "WARDYN_KIND_SSO_DEX_PORT": true,
 	"WARDYN_KIND_SSO_EVIDENCE": true, "WARDYN_KIND_SSO_ADMIN_TOKEN": true,
 	"WARDYN_KIND_SSO_SEEN_PORT": true, "WARDYN_LIVE_SEEN_URL": true,
-	// The walk's own EXPORTS to ui/e2e/live/sso-member.spec.ts (process.env,
-	// never Go) — outputs of the walk, not operator inputs.
+	"WARDYN_KIND_SSO_NODE": true,
+	// The walk's own EXPORTS to ui/e2e/live/sso-member.spec.ts and
+	// ui/e2e/live/sso-member-recovery.spec.ts (process.env, never Go) — outputs
+	// of the walk, not operator inputs.
 	"WARDYN_LIVE_ADMIN_TOKEN": true, "WARDYN_LIVE_FAKE_URL": true,
 	"WARDYN_LIVE_PIN_ACCOUNT": true, "WARDYN_LIVE_PIN_ROLE": true,
 	"WARDYN_LIVE_SSO_START_URL": true, "WARDYN_LIVE_SSO_REGION": true,
+	// 0.7.5: the cluster coordinates the recovery spec's cold-start case taints
+	// the node and reads a pod phase with. Passed rather than guessed, so a
+	// renamed cluster reds that case instead of making its 90 s hold vacuous.
+	"WARDYN_LIVE_KUBE_CONTEXT": true, "WARDYN_LIVE_KUBE_NAMESPACE": true,
+	"WARDYN_LIVE_KUBE_NODE": true,
 }
 
 var wardynVarLit = regexp.MustCompile(`WARDYN_[A-Z0-9_]+`)

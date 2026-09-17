@@ -45,10 +45,17 @@
 # Service name throughout and why this script reads the Service CIDR off the
 # apiserver rather than guessing it.
 #
-# The walk itself is a Playwright project (ui/e2e/live/sso-member.spec.ts),
-# driven through scripts/run-ui-e2e.sh in its LIVE mode — same runner, same
-# per-spec reporting and the same zero-executed check, pointed at this cluster
-# instead of the hermetic backend it otherwise boots.
+# The walk itself is a Playwright project (ui/e2e/live/sso-member.spec.ts and,
+# since 0.7.5, ui/e2e/live/sso-member-recovery.spec.ts), driven through
+# scripts/run-ui-e2e.sh in its LIVE mode — same runner, same per-spec reporting
+# and the same zero-executed check, pointed at this cluster instead of the
+# hermetic backend it otherwise boots. The two files run in ONE invocation and
+# in THAT order: the recovery file inherits a member who is already `live` and a
+# roster pin that already contradicts nothing.
+#
+# WARDYN_KIND_SSO_REBUILD=1 rebuilds wardynd + the proxy from this tree and
+# reloads them before the walk — the flag a RELEASE walk sets, because the
+# console is baked into the daemon image (see step 1b).
 #
 # GUARD: self-skips unless WARDYN_TEST_K8S=1, the same knob every other
 # cluster-dependent lane uses.
@@ -78,6 +85,19 @@ done
 # Must agree with deploy/kind/quickstart.sh and deploy/kind/sso/overlay.sh.
 CLUSTER="${WARDYN_QUICKSTART_CLUSTER:-wardyn-quickstart}"
 CONTEXT="kind-${CLUSTER}"
+# kind's own node name for a single-node cluster. The recovery spec taints it to
+# manufacture a Pending run pod; it is exported rather than guessed there so a
+# renamed cluster reds that case instead of making it vacuous.
+KIND_NODE="${WARDYN_KIND_SSO_NODE:-${CLUSTER}-control-plane}"
+
+# The four locally built, `kind load`ed images this cluster runs. No registry is
+# involved anywhere here — the names MUST agree with deploy/kind/quickstart.sh
+# (wardynd/proxy/claude-code) and deploy/kind/sso/overlay.sh (aws-sso), or the
+# provenance record below names images the node never saw.
+WARDYND_IMAGE="wardyn/wardynd:quickstart"
+PROXY_IMAGE="wardyn/wardyn-proxy:quickstart"
+AGENT_IMAGE="wardyn/agent-claude-code:local"
+AWS_SSO_IMAGE="wardyn/agent-aws-sso:local"
 NAMESPACE="wardyn"
 RELEASE="wardyn"
 HTTP_PORT="${WARDYN_QUICKSTART_HTTP_PORT:-8280}"
@@ -131,6 +151,45 @@ kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get svc "${FAKE_SVC}" >/dev/nul
 health="$(curl -s "${BASE_URL}/healthz" || true)"
 [[ "${health}" == *'"runner":"k8s"'* ]] \
   || die "${BASE_URL}/healthz did not answer with runner=k8s (another daemon on that port?). Body: ${health}"
+
+# ── 1b. the images this walk will actually judge ────────────────────────────
+#
+# THE CONSOLE IS BAKED INTO THE DAEMON IMAGE. wardynd serves ui/dist from its own
+# layers, so a walk run against a cluster loaded before a console change judges
+# the OLD screens with the NEW spec — which is exactly how 0.7.4's walk-3 went
+# red on a stale console image, with a correct tree and correct assertions.
+# WARDYN_KIND_SSO_REBUILD=1 rebuilds wardynd + the proxy from THIS tree and
+# reloads them; the fresh-install restart below then picks them up. It is the
+# flag to set on a release walk, and the reason it is not the default is the
+# eight minutes it costs on a re-run that changed nothing.
+if [[ "${WARDYN_KIND_SSO_REBUILD:-}" == "1" ]]; then
+  command -v kind >/dev/null 2>&1 || die "kind not found on PATH (needed for WARDYN_KIND_SSO_REBUILD=1)"
+  step "rebuilding wardynd + wardyn-proxy from this tree and loading them into ${CLUSTER}"
+  docker build -f deploy/compose/Dockerfile.wardynd -t "${WARDYND_IMAGE}" . \
+    >"${EVIDENCE_DIR}/rebuild-wardynd.log" 2>&1 \
+    || { tail -30 "${EVIDENCE_DIR}/rebuild-wardynd.log" >&2; die "wardynd image build failed"; }
+  docker build -f deploy/compose/Dockerfile.proxy -t "${PROXY_IMAGE}" . \
+    >"${EVIDENCE_DIR}/rebuild-proxy.log" 2>&1 \
+    || { tail -30 "${EVIDENCE_DIR}/rebuild-proxy.log" >&2; die "wardyn-proxy image build failed"; }
+  for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}"; do
+    kind load docker-image "${img}" --name "${CLUSTER}" || die "kind load ${img} failed"
+  done
+fi
+
+# Recorded EVERY run, rebuilt or not. None of these images carries an
+# org.opencontainers.image.revision label, so the honest provenance is the
+# tree's own HEAD plus each image's content digest and build time — enough to
+# say afterwards whether the walk judged the tip or something older.
+step "recording the image provenance into ${EVIDENCE_DIR}/images.txt"
+{
+  echo "walk tree:      $(git -C "${ROOT}" rev-parse HEAD 2>/dev/null || echo '(not a git tree)')"
+  echo "walk tree dirty: $(git -C "${ROOT}" status --porcelain 2>/dev/null | wc -l) file(s)"
+  echo "rebuilt:        ${WARDYN_KIND_SSO_REBUILD:-0}"
+  for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}" "${AWS_SSO_IMAGE}"; do
+    printf '%-34s %s\n' "${img}" \
+      "$(docker image inspect "${img}" --format '{{.Id}} created={{.Created}}' 2>/dev/null || echo '(not present locally)')"
+  done
+} | tee "${EVIDENCE_DIR}/images.txt"
 
 # ── 2. the Service CIDR (never a pod IP) ────────────────────────────────────
 # Read off the apiserver's own flag rather than hardcoding kind's 10.96.0.0/16:
@@ -340,7 +399,7 @@ for _ in $(seq 1 30); do
 done
 [[ -n "${seen_ok}" ]] || die "the fake's /_seen never answered on ${SEEN_URL} (port-forward failed; is ${SEEN_PORT} taken?)"
 
-step "running the walk (ui/e2e/live/sso-member.spec.ts)"
+step "running the walk (ui/e2e/live/sso-member.spec.ts + sso-member-recovery.spec.ts)"
 export WARDYN_LIVE_SEEN_URL="${SEEN_URL}"
 export WARDYN_E2E_LIVE_BASE_URL="${BASE_URL}"
 export WARDYN_TEST_K8S=1
@@ -350,7 +409,18 @@ export WARDYN_LIVE_PIN_ACCOUNT="${PIN_ACCOUNT}"
 export WARDYN_LIVE_PIN_ROLE="${PIN_ROLE}"
 export WARDYN_LIVE_SSO_START_URL="${SSO_START_URL}"
 export WARDYN_LIVE_SSO_REGION="${SSO_REGION}"
-./scripts/run-ui-e2e.sh sso-member 2>&1 | tee "${EVIDENCE_DIR}/walk.log"
+# The recovery spec's cold-start case manufactures a Pending run pod with a node
+# TAINT, and reads that pod's phase back to prove the hold was real. It needs
+# the cluster coordinates this script already holds — never its own guesses, or
+# a renamed cluster would make the 90 s assertion vacuous instead of red.
+export WARDYN_LIVE_KUBE_CONTEXT="${CONTEXT}"
+export WARDYN_LIVE_KUBE_NAMESPACE="${NAMESPACE}"
+export WARDYN_LIVE_KUBE_NODE="${KIND_NODE}"
+# BOTH specs, ONE invocation: run-ui-e2e.sh runs them sequentially against this
+# one cluster, and sso-member-recovery.spec.ts inherits the state
+# sso-member.spec.ts leaves (a `live` member under the contradicting pin, and
+# the Dex principals). Order is the argument order — never sort these.
+./scripts/run-ui-e2e.sh sso-member sso-member-recovery 2>&1 | tee "${EVIDENCE_DIR}/walk.log"
 walk_rc="${PIPESTATUS[0]}"
 
 # /_seen is the one observation that is not Wardyn asserting about itself: it is

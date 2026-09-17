@@ -458,9 +458,16 @@ The kind quickstart (`deploy/kind/quickstart.sh`) and the kind SSO walk
 | `WARDYN_KIND_SSO_SEEN_PORT` | int | `8390` | Host port the walk port-forwards the fake AWS endpoint's read-only `/_seen` page onto (what the fake was asked to mint and which Bedrock models the stub answered); the walk reads it after the spec and copies it into the evidence directory |
 | `WARDYN_LIVE_SEEN_URL` | URL | `http://127.0.0.1:8390/_seen` | Set by the walk for `ui/e2e/live/sso-member.spec.ts` (the port-forward above); the spec asserts the member's pinned account/role and the healed pin against it |
 | `WARDYN_KIND_SSO_ADMIN_TOKEN` | string (credential) | (unset = mint a random one) | Admin bearer token the walk authenticates its own site-config PUT with |
+| `WARDYN_KIND_SSO_NODE` | string | `<cluster>-control-plane` | The kind NODE the walk hands to `ui/e2e/live/sso-member-recovery.spec.ts`, whose cold-start case taints it to hold a run pod in `Pending`. Override it only on a multi-node kind cluster |
 
 The walk also EXPORTS `WARDYN_LIVE_ADMIN_TOKEN`, `WARDYN_LIVE_FAKE_URL`,
-`WARDYN_LIVE_PIN_ACCOUNT`, `WARDYN_LIVE_PIN_ROLE`, `WARDYN_LIVE_SSO_START_URL`
-and `WARDYN_LIVE_SSO_REGION` as its own internal handoff to
-`ui/e2e/live/sso-member.spec.ts` (which reads them via `process.env`) —
-outputs of the walk, not operator inputs; nothing external should set them.
+`WARDYN_LIVE_PIN_ACCOUNT`, `WARDYN_LIVE_PIN_ROLE`, `WARDYN_LIVE_SSO_START_URL`,
+`WARDYN_LIVE_SSO_REGION`, `WARDYN_LIVE_KUBE_CONTEXT`,
+`WARDYN_LIVE_KUBE_NAMESPACE` and `WARDYN_LIVE_KUBE_NODE` as its own internal
+handoff to `ui/e2e/live/sso-member.spec.ts` and
+`ui/e2e/live/sso-member-recovery.spec.ts` (which read them via `process.env`) —
+outputs of the walk, not operator inputs; nothing external should set them. The
+last three are the cluster coordinates the recovery spec's cold-start case needs
+to taint the node and read the run pod's phase back: passing them rather than
+letting the spec guess is what makes that case RED on a renamed cluster instead
+of vacuous.
