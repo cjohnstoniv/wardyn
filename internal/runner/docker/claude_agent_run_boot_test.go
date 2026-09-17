@@ -481,13 +481,22 @@ func TestClaudeAgentRun_BootSeedWaitsForPrep(t *testing.T) {
 		}
 	}
 	// A `claude` that records the workspace it was started in.
-	fake := "#!/bin/sh\npwd >> \"$HOME/claude.log\"\nprintf '%s\\n' \"$*\" >> \"$HOME/claude.log\"\n"
+	fake := "#!/bin/sh\npwd >> \"$HOME/claude.log\"\nprintf '%s\\n' \"$*\" >> \"$HOME/claude.log\"\n" +
+		"printf 'secret=%s\\n' \"${WARDYN_GIT_HELPER_SECRET:-<unset>}\" >> \"$HOME/claude.log\"\n"
 	if err := os.WriteFile(filepath.Join(binDir, "claude"), []byte(fake), 0o700); err != nil { //nolint:gosec // test fixture
 		t.Fatalf("write fake claude: %v", err)
 	}
 	work := filepath.Join(home, "work", "repo")
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		t.Fatalf("mkdir work: %v", err)
+	}
+
+	// The git-helper caller-auth secret prep writes. The tmux server was started
+	// BEFORE prep now, so the pane cannot have inherited the exported value — it
+	// has to recover it from this file or the agent's brokered git goes dark.
+	const helperSecret = "d0dd0d0dbeefcafe"
+	if err := os.WriteFile(filepath.Join(home, ".wardyn", "git-helper.secret"), []byte(helperSecret), 0o400); err != nil {
+		t.Fatalf("write git-helper secret: %v", err)
 	}
 
 	cmd := exec.Command("timeout", "10s", "bash", ccRunnableAgentRun(t), "--boot-seed")
@@ -498,6 +507,7 @@ func TestClaudeAgentRun_BootSeedWaitsForPrep(t *testing.T) {
 		ccSeedEnv,
 		"CLAUDE_CODE_USE_BEDROCK=1",
 		"WARDYN_RECORDING=",
+		"WARDYN_GIT_HELPER_SECRET=",
 	)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start agent-run --boot-seed: %v", err)
@@ -522,5 +532,11 @@ func TestClaudeAgentRun_BootSeedWaitsForPrep(t *testing.T) {
 	}
 	if !strings.Contains(got, "say hello in five words") {
 		t.Errorf("the seed never reached claude\nclaude log:\n%s", got)
+	}
+	// The pane was created before prep, so it can only have this by re-reading
+	// the 0400 file. Without it the credential helper refuses to mint and the
+	// seeded agent's brokered git silently stops working.
+	if !strings.Contains(got, "secret="+helperSecret) {
+		t.Errorf("the boot pane did not recover WARDYN_GIT_HELPER_SECRET from prep's 0400 file — a seeded agent's brokered git would be refused a token\nclaude log:\n%s", got)
 	}
 }

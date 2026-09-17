@@ -474,6 +474,22 @@ if [[ "${1:-}" == "--boot-seed" ]]; then
     while [[ ! -f "$HOME/.wardyn/prep-done" && $_i -lt 120 ]]; do sleep 1; _i=$((_i+1)); done
     unset _i
 
+    # The OTHER cost of creating the session first: the tmux SERVER inherited
+    # --idle's env from BEFORE prep, and provision_git_helper_secret exports
+    # WARDYN_GIT_HELPER_SECRET DURING it — so this pane no longer receives it by
+    # inheritance the way it did when the session was created last.  Without it
+    # the credential helper REFUSES to mint (the secret file exists, so it does
+    # not fall open) and a seeded agent's git would silently lose brokered auth.
+    # Re-read it from the 0400 file prep wrote: the same file the helper checks
+    # the presented secret against, readable by this uid by design — see the
+    # caller-auth gate's residual note in this file's header.  `tmux
+    # set-environment` cannot do this job: it reaches new panes, and this pane is
+    # already running.
+    if [[ -z "${WARDYN_GIT_HELPER_SECRET:-}" && -r "$HOME/.wardyn/git-helper.secret" ]]; then
+        WARDYN_GIT_HELPER_SECRET="$(cat "$HOME/.wardyn/git-helper.secret")"
+        export WARDYN_GIT_HELPER_SECRET
+    fi
+
     # Land where --idle prepared the workspace (it wrote the resolved dir last);
     # ~/work is the fallback, the same one resolve_workdir falls back to.
     workdir="$(cat "$HOME/.wardyn/workdir" 2>/dev/null || true)"
