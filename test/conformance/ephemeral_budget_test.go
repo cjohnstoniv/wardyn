@@ -22,6 +22,11 @@ import (
 // number, so re-ordering the Makefile does not silently disarm this.
 var makefileTimeoutRe = regexp.MustCompile(`-timeout\s+(\S+)`)
 
+// ephemeralBudgetSuiteMargin is what the eviction case must leave behind for
+// every OTHER case in the package. 5m against a measured 457 s green run — the
+// margin is the measurement, rounded up, not a round number chosen for comfort.
+const ephemeralBudgetSuiteMargin = 5 * time.Minute
+
 // TestEphemeralCaseBudgetFitsTheMakefileTimeout is the arithmetic finding 3 was
 // about: one sub-case could wait 3m for r.Wait, 4m for the eviction, and a
 // further FRESH 4m for the Status poll — 11m against a package `-timeout 10m`. A
@@ -35,6 +40,15 @@ var makefileTimeoutRe = regexp.MustCompile(`-timeout\s+(\S+)`)
 // ephemeralCaseBudget is now one fill budget PER TARGET, adding a third fill
 // target reds here too rather than silently spending a fourth eviction budget
 // the Makefile never made room for.
+//
+// THE MARGIN IS PART OF THE ASSERTION, not decoration. `budget < timeout` is the
+// arithmetic of a suite with exactly one case in it: this case is the FIRST thing
+// the package runs, and a green k8s run spends a further 457 s on everything
+// after it (local/v075/evidence/k8s-emptydir/green-conformance-k8s.log). A
+// pathological eviction that fits the ceiling with one second to spare still
+// panics the package while the ordinary cases behind it are mid-verdict — the
+// exact loss this pin exists to prevent, arrived at through the pin. So the
+// eviction case must leave at least ephemeralBudgetSuiteMargin for the rest.
 func TestEphemeralCaseBudgetFitsTheMakefileTimeout(t *testing.T) {
 	b, err := os.ReadFile("../../Makefile")
 	if err != nil {
@@ -62,11 +76,11 @@ func TestEphemeralCaseBudgetFitsTheMakefileTimeout(t *testing.T) {
 	// Default options: what `make test-conformance-k8s` runs with unless a driver
 	// harness overrides Timeout, and the shape conformance_k8s_test.go uses (3m).
 	for _, opts := range []Options{{}, {Timeout: 3 * time.Minute}} {
-		if got := ephemeralCaseBudget(opts); got >= timeout {
-			t.Errorf("the eviction case may run %s against `go test -timeout %s` (Options.Timeout=%s): a -timeout "+
-				"expiry PANICS the package and throws away every verdict already produced, so the whole "+
-				"conformance run is lost rather than one case going red. Either shrink the budget or raise the "+
-				"Makefile's -timeout.", got, timeout, opts.timeout())
+		if got := ephemeralCaseBudget(opts); got+ephemeralBudgetSuiteMargin > timeout {
+			t.Errorf("the eviction case may run %s against `go test -timeout %s` (Options.Timeout=%s), leaving less "+
+				"than %s for the REST of the suite: a -timeout expiry PANICS the package and throws away every "+
+				"verdict already produced, so the whole conformance run is lost rather than one case going red. "+
+				"Either shrink the budget or raise the Makefile's -timeout.", got, timeout, opts.timeout(), ephemeralBudgetSuiteMargin)
 		}
 	}
 }

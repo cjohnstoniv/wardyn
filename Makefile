@@ -277,20 +277,32 @@ release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 	@echo "commit-timestamp test cannot be cleared once the PNGs re-render"
 	@echo "byte-identical) — confirm CI is green on the commit before tagging."
 
+# 20m, not 10m: this suite is no longer the runner-contract cases alone. 0.7.5's
+# boot-egress measurement boots the REAL claude-code image, walks its first screens
+# through a PTY and then waits out two fixed settle sleeps on the proxy's decision
+# stream — 74-192 s measured (local/v075/evidence/agent-boot-egress), against its own
+# 6m context. A -timeout expiry is a panic that discards every verdict already
+# produced, so the ceiling belongs to the case that takes minutes, not the ones that
+# take seconds. The two :local images it needs (wardyn/wardyn-proxy,
+# wardyn/agent-claude-code) are built by ci.yml's `conformance` job right before this
+# runs; locally they come from `make agent-images` / compose.
 test-conformance-docker: ## Run the conformance suite on Docker (needs WARDYN_TEST_DOCKER=1)
-	@echo "Running conformance tests on Docker (WARDYN_TEST_DOCKER=1 required)..."
-	WARDYN_TEST_DOCKER=1 go test -v -tags docker -timeout 10m ./test/conformance/...
+	@echo "Running conformance tests on Docker (WARDYN_TEST_DOCKER=1 required; needs wardyn/wardyn-proxy:local + wardyn/agent-claude-code:local)..."
+	WARDYN_TEST_DOCKER=1 go test -v -tags docker -timeout 20m ./test/conformance/...
 
-# 20m, not 10m: the ephemeral-disk case may spend opts.timeout() plus ephemeralEvictionBudget
+# 25m, not 10m: the ephemeral-disk case may spend opts.timeout() plus ephemeralEvictionBudget
 # (7m) waiting for the kubelet ONCE PER FILL TARGET, and 0.7.5 gave it two (/tmp and the
 # agent's workdir), plus one more operation timeout for the oversized sub-case — 17m of worst
 # case before any other case in the suite runs at all. A -timeout expiry is a panic that
 # discards every verdict already produced, so this is headroom for slow evictions, not a
 # licence for a slower suite (pinned by TestEphemeralCaseBudgetFitsTheMakefileTimeout, which
-# reads BOTH numbers).
+# reads BOTH numbers). The 5m over that 17m is the REST of the suite: a green k8s run is
+# 457 s of other cases (local/v075/evidence/k8s-emptydir/green-conformance-k8s.log), and a
+# ceiling set to the eviction case alone loses the whole run whenever the pathological case
+# and an ordinary suite land together.
 test-conformance-k8s: ## Run the conformance suite on Kubernetes (needs WARDYN_TEST_K8S=1 + a kubeconfig context)
 	@echo "Running conformance tests on Kubernetes (WARDYN_TEST_K8S=1 + WARDYN_PROXY_IMAGE + WARDYN_TEST_K8S_AGENT_IMAGE required; uses the current kubeconfig context)..."
-	WARDYN_TEST_K8S=1 go test -v -tags k8s -timeout 20m ./test/conformance/...
+	WARDYN_TEST_K8S=1 go test -v -tags k8s -timeout 25m ./test/conformance/...
 
 # H1 (review round 2): the conformance agent image MUST carry wardyn-rec —
 # k8s's SessionRecording is unconditionally true (exec.go's recordCmd has no

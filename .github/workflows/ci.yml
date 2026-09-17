@@ -322,10 +322,12 @@ jobs:
   # round 2, M8: the step name below used to imply otherwise).
   conformance-k8s:
     runs-on: ubuntu-latest
-    # 30, not 20: the Makefile recipe's own `-timeout` is 20m since the eviction case
-    # gained its second fill target, and a job timeout at or below it would kill the
-    # suite mid-verdict instead of letting go test report which case ran long.
-    timeout-minutes: 30
+    # 35, not 25: the Makefile recipe's own `-timeout` is 25m since the eviction case
+    # gained its second fill target AND a margin for the rest of the suite
+    # (TestEphemeralCaseBudgetFitsTheMakefileTimeout), and a job timeout at or below it
+    # would kill the suite mid-verdict instead of letting go test report which case ran
+    # long. The extra 10m is the image builds and the kind/Calico bring-up in front of it.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -494,8 +496,22 @@ jobs:
   # no build tag, so the build job's `make cover-check` already runs it under
   # both tag sets and `make test-race` runs it again — a third CI run would be a
   # pure duplicate. The stub target stays in the Makefile for local use.
+  #
+  # THE TWO :local IMAGES BELOW ARE NOT OPTIONAL. 0.7.5's boot-egress
+  # measurement (test/conformance/boot_egress_docker_test.go) boots the REAL
+  # claude-code image behind the REAL wardyn-proxy sidecar — unlike the sibling
+  # runner-contract suite, which only ever needed busybox:latest. Neither tag is
+  # published anywhere (agent-claude-code has not been published since 0.6.2),
+  # and CreateSandbox fails closed on an image it cannot pull, so without these
+  # two builds the job t.Fatalf's on GitHub while every local gate is green
+  # (`make ci` deliberately excludes this target). A skip-if-the-image-is-absent
+  # knob would be worse: the one measurement that proves a stock boot parks no
+  # first-use approval would silently never run.
   conformance:
     runs-on: ubuntu-latest
+    # Two image builds (one of them a bookworm + node + `npm install -g` layer)
+    # in front of a suite whose own `go test -timeout` is 20m.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
@@ -503,6 +519,10 @@ jobs:
           go-version-file: go.mod
       - name: Docker smoke check
         run: docker run --rm hello-world
+      - name: Build wardyn-proxy image (local only — the boot-egress sidecar)
+        run: docker build -f deploy/compose/Dockerfile.proxy -t wardyn/wardyn-proxy:local .
+      - name: Build agent-claude-code image (local only — the boot under measurement)
+        run: docker build -f deploy/images/claude-code/Dockerfile -t wardyn/agent-claude-code:local .
       - name: Run conformance tests (docker)
         env:
           WARDYN_TEST_DOCKER: "1"

@@ -599,9 +599,22 @@ func createStrongestSandbox(t *testing.T, ctx context.Context, r runner.Runner, 
 	if err != nil {
 		t.Fatalf("CreateSandbox for %s: %v", caseName, err)
 	}
-	t.Cleanup(func() { _ = r.StopSandbox(context.Background(), sb.Ref) })
+	// BOUNDED, not context.Background(): cleanup runs AFTER the case has produced
+	// its verdict, and it runs on a substrate that may be the very thing that is
+	// slow. An unbounded StopSandbox there can spend the package's remaining
+	// `-timeout` on a teardown nobody is waiting for, and the expiry is a panic
+	// that discards the verdicts already produced — losing the run to the cleanup
+	// of a case that passed. 60s is well past a healthy stop on either driver.
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), conformanceCleanupTimeout)
+		defer cancel()
+		_ = r.StopSandbox(ctx, sb.Ref)
+	})
 	return sb
 }
+
+// conformanceCleanupTimeout bounds a post-verdict teardown. See the t.Cleanup above.
+const conformanceCleanupTimeout = 60 * time.Second
 
 // minimalSpec returns a SandboxSpec with a unique RunID suitable for
 // conformance testing. No secrets, no proxy config, no resource limits.
