@@ -520,7 +520,11 @@ export WARDYN_LIVE_SSO_REGION="${SSO_REGION}"
 # the cluster coordinates this script already holds — never its own guesses, or
 # a renamed cluster would make the 90 s assertion vacuous instead of red.
 export WARDYN_LIVE_KUBE_CONTEXT="${CONTEXT}"
-export WARDYN_LIVE_KUBE_NAMESPACE="${NAMESPACE}"
+# The RUNS namespace, not the release's: the pod that case reads is a run's
+# proxy pod, and run pods land in k8s.runsNamespace. Handing it ${NAMESPACE} made
+# the phase read come back empty for the whole hold — a red about a Pending pod
+# that was there all along, one namespace over.
+export WARDYN_LIVE_KUBE_NAMESPACE="${RUNS_NAMESPACE}"
 export WARDYN_LIVE_KUBE_NODE="${KIND_NODE}"
 # BOTH specs, ONE invocation: run-ui-e2e.sh runs them sequentially against this
 # one cluster, and sso-member-recovery.spec.ts inherits the state

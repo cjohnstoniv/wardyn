@@ -62,7 +62,6 @@ import {
 import { AGENTS, AGENTS_DRAFT, PROVIDERS } from "../../src/app/lib/workspace-providers-copy";
 import {
   ADMIN_EMAIL,
-  DEVICE_CODE_PATH,
   LOGIN_DONE,
   MEMBER_EMAIL,
   SANDBOX_UP,
@@ -104,7 +103,8 @@ const MEMBER_PREVIEW_SIGNIN_REFUSAL =
 /** The kind context/namespace the walk installed into, so case E can taint the
  *  node and read the run pod's phase. scripts/kind-sso-walk.sh exports both. */
 const KUBE_CONTEXT = process.env.WARDYN_LIVE_KUBE_CONTEXT || "kind-wardyn-quickstart";
-const KUBE_NAMESPACE = process.env.WARDYN_LIVE_KUBE_NAMESPACE || "wardyn";
+// Where RUN pods land (k8s.runsNamespace) — not the release namespace.
+const KUBE_NAMESPACE = process.env.WARDYN_LIVE_KUBE_NAMESPACE || "wardyn-runs";
 const KUBE_NODE = process.env.WARDYN_LIVE_KUBE_NODE || "wardyn-quickstart-control-plane";
 const COLDPULL_TAINT = "wardyn-coldpull=1:NoSchedule";
 
@@ -455,15 +455,18 @@ test("C (login-sandbox-selfrun): the sign-in sandbox runs the pair itself and th
 
   // The sandbox's OWN output, not an echo of an argv nothing prints: the
   // image's banner (SELFRUN_MARKER, imported — TestSelfRunBanner_UIParity pins
-  // the shell side to it) and the device-code verification URI the AWS CLI
-  // printed. THE STRICT banner assertion belongs here and only here: there is
-  // no console pane on this page to tear the terminal down on capture.
+  // the shell side to it). THE STRICT banner assertion belongs here and only
+  // here: there is no console pane on this page to tear the terminal down on
+  // capture.
+  //
+  // NOT the device-code URL. AWS CLI 2.31 prints "visit the following URL" only
+  // after a FIRST CreateToken answers authorization_pending, and the on-cluster
+  // fake pre-approves every device code — so StartDeviceAuthorization is followed
+  // by an immediate 200 and the CLI goes straight to "Successfully logged into"
+  // (read off the sandbox's own tmux history and an `aws --debug` trace, walk-5).
+  // An assertion on that line could only ever time out here; against real AWS
+  // the first poll IS pending and the line prints.
   await awaitSelfRunStarted(screen);
-  await expect
-    .poll(async () => (await screen.innerText({ timeout: 1_000 }).catch(() => "")).includes(DEVICE_CODE_PATH), {
-      timeout: 120_000,
-    })
-    .toBe(true);
 
   // …and it COMPLETED, with no console around it and nothing typed.
   await awaitCapture(page, screen);
@@ -486,7 +489,7 @@ test("D (login-pane): a cancelled sign-in retries cleanly, and a new one superse
 
   // "Reaches live" is VACUOUS here — the member was live when this case
   // started. The assertion is that the BLOB MOVED: source_run_id is the second
-  // run's and captured_at advanced.
+  // run's.
   const before = await ownAWSRow(page);
 
   // Cancel is the only control while the run is STARTING, and it kills the run
@@ -503,7 +506,10 @@ test("D (login-pane): a cancelled sign-in retries cleanly, and a new one superse
 
   const after = await ownAWSRow(page);
   expect(after.source_run_id, "the stored capture did not move to the retry's run").not.toBe(before.source_run_id);
-  expect(Date.parse(after.captured_at ?? "")).toBeGreaterThan(Date.parse(before.captured_at ?? ""));
+  // source_run_id is the WHOLE witness, by design: redactSetupStatusForMember
+  // keeps it on the caller's own per_user aws row and strips captured_at
+  // ("operator credential-lifecycle detail"), so a member's session — the only
+  // one this case may use — never sees a capture time to compare.
   // The pane corroborates a marker against the SERVER before it claims a
   // capture; this sentence is what it shows when the server disagrees. On a
   // healthy walk it must never render.
@@ -522,11 +528,16 @@ test("D (login-pane): a cancelled sign-in retries cleanly, and a new one superse
   await expect
     .poll(async () => (await myLoginRuns(page)).find((r) => r.id === orphan.id)?.state, { timeout: 120_000 })
     .toBe("KILLED");
-  // …and exactly ONE non-terminal login run is left for this member. (The run
-  // JSON carries no reason field — the `superseded_by_new_login` reason is
-  // asserted on the run.kill AUDIT row, in the Go test.)
+  // …and NEVER MORE THAN ONE non-terminal login run is left for this member.
+  // At most, not exactly: the second sign-in went through the console PANE,
+  // which kills its own run the moment the capture is corroborated
+  // (confirmCapture → killRun), so the honest count here is 0, or 1 for the
+  // instant that kill is still in flight. "Exactly one" was this file's first
+  // live red, against a product doing the right thing. (The run JSON carries no
+  // reason field — the `superseded_by_new_login` reason is asserted on the
+  // run.kill AUDIT row, in the Go test.)
   const open = (await myLoginRuns(page)).filter((r) => !["KILLED", "DONE", "FAILED", "TIMED_OUT"].includes(r.state ?? ""));
-  expect(open.map((r) => r.id), "more than one live sign-in sandbox for one member").toHaveLength(1);
+  expect(open.length, `more than one live sign-in sandbox for one member: ${open.map((r) => r.id).join(", ")}`).toBeLessThanOrEqual(1);
 });
 
 // ── E — a sign-in held in STARTING reads as slow, never as unreadable ───────

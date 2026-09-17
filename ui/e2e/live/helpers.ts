@@ -31,24 +31,6 @@ export const PIN_ROLE = process.env.WARDYN_LIVE_PIN_ROLE || "WardynDev";
 export const SSO_START_URL = process.env.WARDYN_LIVE_SSO_START_URL || "https://wardyn-dev.awsapps.com/start";
 /** The harness's read-only route to the fake's /_seen — see seen() below. */
 export const SEEN_URL = process.env.WARDYN_LIVE_SEEN_URL || "http://127.0.0.1:8390/_seen";
-/**
- * What the AWS CLI actually prints as the device-code verification URI inside
- * the sign-in pane — a BARE PATH, not an absolute URL.
- *
- * The on-cluster fake is built with `NewHandler()` (test/awsssofake/cmd),
- * whose `URL()` is `""` because the caller owns the listener. So
- * `StartDeviceAuthorization` answers `verificationUri: "/verify"` and
- * `verificationUriComplete: "/verify?user_code=WXYZ-1234"`, and that is what
- * the CLI echoes. The user code is a FIXED literal in the fake (`userCode` in
- * test/awsssofake/server.go's NewHandler), not a random one, so the whole
- * string is stable across walks.
- *
- * An earlier draft of case C asserted the fake's in-cluster BASE URL here, on
- * the plan's premise that the pane shows "the fake's device-code URL". It does
- * not and never did — nothing gives this fake a public base URL to print — so
- * that assertion could only ever have timed out.
- */
-export const DEVICE_CODE_PATH = "/verify?user_code=WXYZ-1234";
 
 export const ADMIN_EMAIL = "admin@wardyn.local";
 export const MEMBER_EMAIL = "member@wardyn.local";
@@ -162,7 +144,6 @@ export async function modelAccess(page: Page): Promise<{ state?: string; action?
  */
 export async function ownAWSRow(page: Page): Promise<{
   captured?: boolean;
-  captured_at?: string;
   source_run_id?: string;
 }> {
   return page.evaluate(async () => {
