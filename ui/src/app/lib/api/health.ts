@@ -77,6 +77,13 @@ export interface Me {
   // way OUT on screen. Absent on a pre-0.7.4 daemon, which reads the same as
   // "off".
   member_mode?: boolean;
+  // WHICH posture of that mode (0.7.5): the no-credential preview — "view as a
+  // new member (not signed in)" — in which the server answers this caller's own
+  // per-user model credential as absent. It implies member_mode, so nothing
+  // reads it to decide whether the mode is on; the banner reads it to say which
+  // ceilings apply. Absent on a pre-0.7.5 daemon, which reads the same as "the
+  // plain mode" — and the plain mode is exactly what such a daemon is in.
+  member_mode_no_credential?: boolean;
   // WHY /me COULD NOT ANSWER for this caller's drive, or "" when it could.
   // Always present on a 0.7 daemon, so an absent key is an older server rather
   // than "nothing is wrong".
@@ -393,10 +400,18 @@ export const health = {
   // Throws on a non-2xx (asJson), unlike logout above: a failed toggle must not
   // be followed by a reload that lands the admin back where they started with no
   // explanation. The caller shows the error.
-  async setMemberMode(enabled: boolean): Promise<void> {
+  //
+  // noCredential (0.7.5) asks for the "view as a new member (not signed in)"
+  // posture. The key is sent ONLY when it is true, and that is a
+  // rolling-upgrade decision rather than tidiness: the server decodes this body
+  // strictly (DisallowUnknownFields), so a 0.7.5 console that always sent the
+  // key would 400 against a 0.7.4 replica and break the PLAIN toggle mid-
+  // upgrade. Sent only for the new posture, the old toggle keeps working and
+  // only the new one fails — visibly, on the menu item that asked for it.
+  async setMemberMode(enabled: boolean, noCredential = false): Promise<void> {
     const res = await wfetch("/me/member-mode", {
       method: "POST",
-      body: JSON.stringify({ enabled }),
+      body: JSON.stringify(noCredential ? { enabled, no_credential: true } : { enabled }),
     });
     await asJson<{ member_mode: boolean }>(res);
   },

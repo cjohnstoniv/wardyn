@@ -36,6 +36,15 @@ export const MEMBER_MODE = {
   // unconditional and on every screen. This is the same reason EXIT names the
   // mode rather than a tier to go back to, two lines down.
   BANNER: "Viewing as member — your usual role is paused for this session",
+  // The SECOND posture (0.7.5, field report finding 3). A separate menu item
+  // rather than a toggle inside the mode: the two are different questions — "what
+  // does a member see" and "what does a member who has not signed in see" — and
+  // the second is the one a per_user deployment actually cannot show otherwise.
+  MENU_NEW: "View as a new member (not signed in)",
+  // Names the AWS state first, because that is the whole difference and it is
+  // what the admin came to look at; the paused role rides second, as in BANNER.
+  BANNER_NEW:
+    "Viewing as a new member — not signed in to AWS; your usual role is paused for this session",
   EXIT: "Exit member mode",
   // The three CEILINGS, verbatim from the design, on the banner as a title
   // tooltip. They are here and not only in OPERATIONS.md because the one
@@ -49,6 +58,23 @@ export const MEMBER_MODE = {
     "Member mode clamps your ROLE only. Runs, workspaces and secrets you created stay yours, " +
     "and governance ceilings still resolve against your real group membership. " +
     "Credentials you already hold — your SSH key, any API token — keep their admin stamp until refreshed at your next sign-in. " +
+    // Ceiling 4 (0.7.5): the one the field report found by being misled by it.
+    // It is in the PLAIN tooltip and not only in OPERATIONS.md because the
+    // mistake it prevents is made while the banner is on screen, and the way out
+    // of it is the other menu item — so the sentence names it.
+    "Model access and ownership still resolve to you — use 'View as a new member' to see the not-signed-in state. " +
+    "During a rolling upgrade an older replica ignores the flag and answers as admin. " +
+    "It shows you what a member sees — sign in as a real member to prove what a member is refused.",
+  // The variant tooltip swaps ceiling 4 for what the preview actually does. It
+  // says HIDDEN, NOT REMOVED on purpose: the admin's captured session is still
+  // in the store, untouched, and it comes back on exit — and it says sign-in is
+  // refused because that is the one thing the preview cannot rehearse, so an
+  // admin must not conclude from it that a first sign-in works.
+  CEILINGS_NEW:
+    "Member mode clamps your ROLE only. Runs, workspaces and secrets you created stay yours, " +
+    "and governance ceilings still resolve against your real group membership. " +
+    "Credentials you already hold — your SSH key, any API token — keep their admin stamp until refreshed at your next sign-in. " +
+    "Your own AWS sign-in is hidden, not removed: model access reads as not signed in, runs that need it are refused, and signing in is refused until you exit. " +
     "During a rolling upgrade an older replica ignores the flag and answers as admin. " +
     "It shows you what a member sees — sign in as a real member to prove what a member is refused.",
   // Shown in place of a reload when the toggle itself failed. The console must
@@ -85,22 +111,32 @@ export function MemberModeMenuItem({
    *  cookie changed and every screen's cached data was fetched as an admin. */
   onEntered?: () => void;
 }) {
-  const [failed, setFailed] = React.useState(false);
+  // One `failed` per item, keyed by the posture that failed: against a 0.7.4
+  // replica mid-upgrade the plain item still works and the new one 400s, and a
+  // shared flag would paint that failure onto the item that did not fail.
+  const [failed, setFailed] = React.useState<"" | "plain" | "new">("");
   const eligible = meta.operator || meta.securityOperator;
   if (!eligible || meta.method !== "sso") return null;
+  const enter = (e: Event, noCredential: boolean) => {
+    // The menu would close and unmount this item mid-request otherwise, taking
+    // the failure message with it.
+    e.preventDefault();
+    setFailed("");
+    api
+      .setMemberMode(true, noCredential)
+      .then(onEntered, () => setFailed(noCredential ? "new" : "plain"));
+  };
   return (
-    <DropdownMenuItem
-      onSelect={(e) => {
-        // The menu would close and unmount this item mid-request otherwise,
-        // taking the failure message with it.
-        e.preventDefault();
-        setFailed(false);
-        api.setMemberMode(true).then(onEntered, () => setFailed(true));
-      }}
-    >
-      <Eye className="size-4" />{" "}
-      {failed ? MEMBER_MODE.FAILED : MEMBER_MODE.MENU}
-    </DropdownMenuItem>
+    <>
+      <DropdownMenuItem onSelect={(e) => enter(e, false)}>
+        <Eye className="size-4" />{" "}
+        {failed === "plain" ? MEMBER_MODE.FAILED : MEMBER_MODE.MENU}
+      </DropdownMenuItem>
+      <DropdownMenuItem onSelect={(e) => enter(e, true)}>
+        <Eye className="size-4" />{" "}
+        {failed === "new" ? MEMBER_MODE.FAILED : MEMBER_MODE.MENU_NEW}
+      </DropdownMenuItem>
+    </>
   );
 }
 
@@ -111,9 +147,14 @@ export function MemberModeMenuItem({
  */
 export function MemberModeBanner({
   active,
+  noCredential = false,
   onExited = () => window.location.reload(),
 }: {
   active: boolean;
+  /** The 0.7.5 posture: it only swaps the sentence and the tooltip. Defaulted,
+   *  so a caller that has not been taught about it renders the plain banner —
+   *  which is what a pre-0.7.5 daemon answers anyway. */
+  noCredential?: boolean;
   /** Injected in tests; the default reloads for the same reason entering does. */
   onExited?: () => void;
 }) {
@@ -125,7 +166,9 @@ export function MemberModeBanner({
       className="relative z-50 flex shrink-0 items-center gap-2 border-b border-border bg-warning-subtle px-4 py-2 text-sm text-warning"
     >
       <EyeOff className="size-4 shrink-0" />
-      <span title={MEMBER_MODE.CEILINGS}>{MEMBER_MODE.BANNER}</span>
+      <span title={noCredential ? MEMBER_MODE.CEILINGS_NEW : MEMBER_MODE.CEILINGS}>
+        {noCredential ? MEMBER_MODE.BANNER_NEW : MEMBER_MODE.BANNER}
+      </span>
       <button
         type="button"
         onClick={() => {

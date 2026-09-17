@@ -44,6 +44,7 @@ function renderMobileNav(role: Role = "admin") {
           userDriveDeniedByProfile: "",
           userDriveUnavailable: "",
           memberMode: false,
+          memberModeNoCredential: false,
         }}
       />
     </MemoryRouter>,
@@ -544,6 +545,7 @@ function renderTopBar(role: Role) {
             userDriveDeniedByProfile: "",
             userDriveUnavailable: "",
             memberMode: false,
+            memberModeNoCredential: false,
           }}
           pendingApprovals={0}
           attentionCount={0}

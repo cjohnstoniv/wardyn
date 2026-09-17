@@ -15,7 +15,7 @@ import { health as api } from "../../lib/api/health";
 // The POST bodies matter as much as the render: the whole feature is one route
 // with one boolean, and sending the wrong one silently strands an admin in
 // member mode with an "Exit" that re-enters it.
-let setMemberMode: MockInstance<(enabled: boolean) => Promise<void>>;
+let setMemberMode: MockInstance<(enabled: boolean, noCredential?: boolean) => Promise<void>>;
 
 beforeEach(() => {
   setMemberMode = vi.spyOn(api, "setMemberMode").mockResolvedValue(undefined);
@@ -30,7 +30,7 @@ describe("MemberModeBanner", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("states the mode and names the three ceilings in its tooltip", () => {
+  it("states the mode and names the ceilings in its tooltip", () => {
     render(<MemberModeBanner active={true} />);
     const line = screen.getByText(MEMBER_MODE.BANNER);
     expect(line).toBeInTheDocument();
@@ -46,6 +46,32 @@ describe("MemberModeBanner", () => {
     // exactly as run and workspace ownership survive the clamp. Omitting the
     // third is the one of the three an admin is most likely to test blind.
     expect(MEMBER_MODE.CEILINGS).toMatch(/secrets/);
+    // Ceiling 4 (0.7.5, field report finding 3): the plain mode still resolves
+    // the admin's OWN model credential, and the tooltip has to say so — being
+    // misled by exactly this is what the finding reports — and name the way out.
+    expect(MEMBER_MODE.CEILINGS).toMatch(/Model access and ownership still resolve to you/);
+    // …and it names the control that shows that state, not a doc section.
+    expect(MEMBER_MODE.CEILINGS).toContain("View as a new member");
+    expect(MEMBER_MODE.MENU_NEW).toContain("View as a new member");
+  });
+
+  // The no-credential posture: one prop, two sentences, and the sentence it
+  // REPLACES is the one that would now be false.
+  it("the no-credential preview states the AWS state and swaps ceiling 4", () => {
+    render(<MemberModeBanner active={true} noCredential={true} />);
+    const line = screen.getByText(MEMBER_MODE.BANNER_NEW);
+    expect(line).toBeInTheDocument();
+    expect(line).toHaveAttribute("title", MEMBER_MODE.CEILINGS_NEW);
+    expect(screen.queryByText(MEMBER_MODE.BANNER)).not.toBeInTheDocument();
+    expect(MEMBER_MODE.CEILINGS_NEW).toMatch(/hidden, not removed/);
+    expect(MEMBER_MODE.CEILINGS_NEW).toMatch(/signing in is refused until you exit/);
+    // The plain ceiling-4 sentence must NOT ride the variant: inside the preview
+    // model access does not resolve to the admin, which is the whole point.
+    expect(MEMBER_MODE.CEILINGS_NEW).not.toMatch(/Model access and ownership still resolve to you/);
+    // Everything the two postures share is still there — the variant is a swap,
+    // not a rewrite.
+    expect(MEMBER_MODE.CEILINGS_NEW).toMatch(/ROLE only/);
+    expect(MEMBER_MODE.CEILINGS_NEW).toMatch(/rolling upgrade/);
   });
 
   // W6-5. The control is offered to BOTH admin tiers (`eligible = operator ||
@@ -131,7 +157,35 @@ describe("MemberModeMenuItem", () => {
     const onEntered = vi.fn();
     renderItem({ meta: admin, onEntered });
     await userEvent.click(screen.getByText(MEMBER_MODE.MENU));
-    await waitFor(() => expect(setMemberMode).toHaveBeenCalledWith(true));
+    await waitFor(() => expect(setMemberMode).toHaveBeenCalledWith(true, false));
     await waitFor(() => expect(onEntered).toHaveBeenCalled());
+  });
+
+  // The SECOND item (0.7.5). Both postures are offered at once because they
+  // answer different questions, and the new one is the only way to reach the
+  // state a per_user deployment's members are actually in on day one.
+  it("offers BOTH postures, and the new one posts no_credential:true", async () => {
+    const onEntered = vi.fn();
+    renderItem({ meta: admin, onEntered });
+    expect(screen.getByText(MEMBER_MODE.MENU)).toBeInTheDocument();
+    await userEvent.click(screen.getByText(MEMBER_MODE.MENU_NEW));
+    await waitFor(() => expect(setMemberMode).toHaveBeenCalledWith(true, true));
+    await waitFor(() => expect(onEntered).toHaveBeenCalled());
+  });
+
+  // Mid-rolling-upgrade a 0.7.4 replica 400s the new posture (decodeStrict) and
+  // still serves the plain one. The failure has to land on the item that failed,
+  // or the admin reads "could not change member mode" on a control that works.
+  it("a failed new-posture toggle marks only that item", async () => {
+    setMemberMode.mockRejectedValue(new Error("400"));
+    renderItem({ meta: admin });
+    await userEvent.click(screen.getByText(MEMBER_MODE.MENU_NEW));
+    expect(await screen.findByText(MEMBER_MODE.FAILED)).toBeInTheDocument();
+    expect(screen.getByText(MEMBER_MODE.MENU)).toBeInTheDocument();
+  });
+
+  it("the new posture is hidden for a member too", () => {
+    renderItem({ meta: member });
+    expect(screen.queryByText(MEMBER_MODE.MENU_NEW)).not.toBeInTheDocument();
   });
 });

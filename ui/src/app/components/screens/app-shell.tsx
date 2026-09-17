@@ -132,6 +132,10 @@ export interface ShellMeta {
   userDriveUnavailable: string;
   /** 0.7.4 "view as member" — an admin whose role is paused for this session. */
   memberMode: boolean;
+  /** 0.7.5 — WHICH posture of that mode: the no-credential preview, in which
+   *  this admin's own model credential reads as not signed in. Implies
+   *  memberMode, so only the banner's wording changes on it. */
+  memberModeNoCredential: boolean;
 }
 
 /** The shell's identity, plus the retry that re-fires /me (B1's banner action). */
@@ -158,6 +162,7 @@ function useMeta(): [ShellMeta, () => void] {
     userDriveDeniedByProfile: "",
     userDriveUnavailable: "",
     memberMode: false,
+    memberModeNoCredential: false,
   });
   React.useEffect(() => {
     let alive = true;
@@ -188,6 +193,7 @@ function useMeta(): [ShellMeta, () => void] {
           userDriveDeniedByProfile: me?.user_drive_denied_by_profile ?? "",
           userDriveUnavailable: me?.user_drive_unavailable ?? "",
           memberMode: me?.member_mode ?? false,
+          memberModeNoCredential: me?.member_mode_no_credential ?? false,
         });
       })
       .catch(() => {
@@ -548,7 +554,7 @@ export function AppShell({
             {/* Renders nothing when the mode is off. FIRST of the banners and not
           hidden in focus mode: it explains every refusal the other three
           might be mistaken for, and it is the only way back out. */}
-            <MemberModeBanner active={meta.memberMode} />
+            <MemberModeBanner active={meta.memberMode} noCredential={meta.memberModeNoCredential} />
             {/* NOT hidden in focus mode, and z-50 so the cockpit's overlay (z-40)
           cannot paint over it: this banner is the only thing that separates a
           quiet fleet from a dead daemon, and a full-bleed terminal is exactly

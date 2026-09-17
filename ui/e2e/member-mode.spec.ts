@@ -23,11 +23,15 @@ import { MEMBER_MODE } from "../src/app/components/wardyn/member-mode-banner";
 
 /** Splices member_mode (and the tier fields the server clamps with it) onto the
  *  real /me, so the console believes it is an admin in member mode. */
-async function mockMemberMode(page: import("@playwright/test").Page): Promise<void> {
+async function mockMemberMode(
+  page: import("@playwright/test").Page,
+  noCredential = false,
+): Promise<void> {
   await page.route("**/api/v1/me", async (route) => {
     const response = await route.fetch();
     const json = await response.json();
     json.member_mode = true;
+    json.member_mode_no_credential = noCredential;
     json.role = "member";
     json.operator = false;
     json.security_operator = false;
@@ -99,6 +103,33 @@ test.describe("member mode — the banner is the way out", () => {
     await expect(item).toBeVisible();
     await item.click();
     await expect.poll(() => bodies).toEqual([{ enabled: true }]);
+  });
+
+  // 0.7.5, field report finding 3. The preview is the posture that can show the
+  // one state a per_user deployment's members are all in on day one, and the
+  // console has to (a) offer it and (b) say what it does — the plain banner's
+  // ceilings are false inside it.
+  test("the new-member preview offers its own menu item and paints its own banner", async ({ page }) => {
+    await mockSSOAdmin(page);
+    const bodies = await captureToggle(page);
+    await gotoConsole(page);
+
+    await page.locator("header").getByRole("button").last().click();
+    const menu = page.getByRole("menu");
+    await expect(menu.getByText(MEMBER_MODE.MENU)).toBeVisible();
+    const preview = menu.getByText(MEMBER_MODE.MENU_NEW);
+    await expect(preview).toBeVisible();
+    await preview.click();
+    await expect.poll(() => bodies).toEqual([{ enabled: true, no_credential: true }]);
+
+    // …and once the server answers the posture, the banner is the variant: the
+    // AWS state first, and the ceilings that actually hold inside it.
+    await mockMemberMode(page, true);
+    await gotoConsole(page);
+    const banner = page.getByText(MEMBER_MODE.BANNER_NEW);
+    await expect(banner).toBeVisible();
+    await expect(banner).toHaveAttribute("title", MEMBER_MODE.CEILINGS_NEW);
+    await expect(page.getByText(MEMBER_MODE.BANNER)).toHaveCount(0);
   });
 
   test("an admin NOT in member mode sees no banner", async ({ page }) => {
