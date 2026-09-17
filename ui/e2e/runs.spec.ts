@@ -6,6 +6,7 @@
 import { randomUUID } from "node:crypto";
 import { test, expect, gotoConsole, navTo, sidebarLink, sql } from "./fixtures";
 import { RUN, RUN_COCKPIT } from "../src/app/components/wardyn/copy";
+import { LOGIN_SANDBOX_NOTE } from "../src/app/components/screens/run-detail/login-sandbox-note";
 import type { Page, Locator } from "@playwright/test";
 
 // ============================================================================
@@ -503,8 +504,7 @@ test.describe("Run detail — a login sandbox says what it is", () => {
     await expect(page).toHaveURL(/\/runs\/.+/);
     const note = page.getByTestId("login-sandbox-note");
     await expect(note).toBeVisible();
-    await expect(note).toContainText("AWS sign-in sandbox");
-    await expect(note).toContainText("the sandbox closes itself when it is done");
+    await expect(note).toContainText(LOGIN_SANDBOX_NOTE);
   });
 
   // Finding 4 (0.7.4 field report), the Runs-list half: the member reached the
@@ -540,9 +540,13 @@ test.describe("Run detail — a login sandbox says what it is", () => {
     await expect(note).toBeVisible();
     await expect(note).toContainText("the sign-in is already running in this box");
     await expect(note).toContainText("finish the device-code step in your browser");
-    // The instruction this page must no longer give: a SECOND sign-in started
-    // elsewhere while this one is live.
+    await expect(note).toContainText("stops itself after 30 idle minutes");
+    // The two things this page must no longer say: start a SECOND sign-in
+    // elsewhere while this one is live, and that the box closes itself when the
+    // sign-in is done — nothing server-side stops a run on capture, so on THIS
+    // path it lives to the idle cap.
     await expect(note).not.toContainText("Sign in from Getting Started");
+    await expect(note).not.toContainText("closes itself when it is done");
   });
 });
 

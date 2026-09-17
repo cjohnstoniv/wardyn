@@ -507,7 +507,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	}
 	// No injections, no repo, no verify plan: a blank interactive box (plus, for
 	// AWS, the non-secret ~/.aws/config above). The `--idle` path installs the MITM
-	// CA and attaches; the login pane auto-types the provider's command.
+	// CA; the aws-sso image then runs the chained login itself in its tmux session.
 	return created, harnessLoginDispatch{
 		RunToken: token, Image: image, Policy: policy, ExtraEnv: extraEnv,
 	}, nil

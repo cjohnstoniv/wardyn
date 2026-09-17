@@ -26,7 +26,14 @@
 # human running this script by hand from an attached shell.
 set -u
 
-[[ -n "${WARDYN_AWS_SSO_LOGIN_COMMAND:-}" ]] || . /usr/local/lib/wardyn-attach-hint.sh
+# UNCONDITIONALLY, so all four strings are image-baked. agent-run exports them and
+# the tmux server inherits that environment — but on the respawn path the server
+# was created by the ATTACH exec, whose environment is the container's, not
+# agent-run's. Nothing puts a caller's text in there today (the login launch is
+# server-built and the roster's values travel as a base64 config FILE, never as a
+# command string), and re-reading the file is what keeps it that way: the command
+# this script hands to `bash -c` is always the one baked into the image.
+[ -r /usr/local/lib/wardyn-attach-hint.sh ] && . /usr/local/lib/wardyn-attach-hint.sh
 
 # THE BANNER IS THE FIRST ACT, BEFORE THE WAIT. Not cosmetic ordering: the
 # console pane gives an old image a grace window and then types the pair itself
@@ -38,6 +45,16 @@ set -u
 # shell below would run them — a SECOND device code, minted while the human is
 # still entering the first.
 printf '%s\n' "${WARDYN_AWS_SSO_SELFRUN_BANNER:-}"
+
+# AND THE SESSION IS MARKED AS SELF-RUN HERE, NOT AT THE END. The attach hint's
+# "the sign-in did not start on its own" line fires in every interactive shell in
+# this image, and tmux's prefix is intact — so a human who opens a second WINDOW
+# or a split WHILE the login is in flight would read that line, believe it, and
+# run the pair a second time. "Started" is already true at this point, which is
+# the only thing the line is about. A new window inherits the SESSION environment,
+# not this process's, which is why it takes `set-environment` and not the `export`
+# below.
+tmux set-environment -t wardyn WARDYN_AWS_SSO_SELFRAN 1 2>/dev/null || true
 
 # The login needs the MITM CA and the materialised ~/.aws/config, both written by
 # agent-run's shared prep, which runs AFTER this session is created (that
@@ -55,6 +72,14 @@ unset _i
 # cannot fix. A device code that expires before anyone attaches (~600s) lands on
 # the FAILED line, which names the command to run — honest, and rare: the console
 # attaches within seconds of RUNNING.
+#
+# NOT ALWAYS UNATTENDED: with no sso_account_id/sso_role_name pin on the roster
+# row and more than one account or role reachable, wardyn-aws-sso asks WHICH ONE
+# in this pane (chooseAccountRole, cmd/wardyn-aws-sso) and gives three tries. Only
+# a WRITABLE attach can answer it — a read-only Runs-list viewer watches it time
+# out. Bytes buffered at this pane before that prompt appears (a 0.7.4 console's
+# auto-typed line, a human's stray keystroke) are read by the chooser as one of
+# those tries; wrong answers are refused, not acted on.
 if bash -c "$WARDYN_AWS_SSO_LOGIN_COMMAND"; then
     printf '%s\n' "${WARDYN_AWS_SSO_SELFRUN_DONE:-}"
 else
@@ -62,21 +87,18 @@ else
     printf "${WARDYN_AWS_SSO_SELFRUN_FAILED:-%s}\n" "$WARDYN_AWS_SSO_LOGIN_COMMAND"
 fi
 
-# DRAIN. Anything typed at this pane while the script ran — a console on an old
-# version that typed the pair anyway, a human's keystrokes during the device-code
-# wait — is sitting in the tty buffer, and `exec bash` below would execute it.
+# The session was marked self-run above; this covers THIS process's own shell,
+# which is a child of it rather than a new client of the session.
+export WARDYN_AWS_SSO_SELFRAN=1
+
+# DRAIN, LAST. Anything typed at this pane while the script ran — a console on an
+# old version that typed the pair anyway, a human's keystrokes during the
+# device-code wait — is sitting in the tty buffer, and `exec bash` below would
+# execute it. It sits immediately before the exec, with no fork (no `tmux`, no
+# subshell) between: every command that follows a drain is another window in which
+# bytes can arrive and survive into the shell.
 while IFS= read -r -t 0.2 -n 4096 _discard; do :; done
 unset _discard
-
-# The attach hint's "the sign-in did not start on its own" line is printed by
-# EVERY interactive shell in this image, including the one below — without this
-# marker a Runs-list user reads that false sentence right after a successful
-# capture, re-runs the pair, and meets already_captured + the fail marker. The
-# export covers this pane's own shell; set-environment covers a tmux WINDOW the
-# human opens later, which inherits the session's environment and not this
-# process's.
-export WARDYN_AWS_SSO_SELFRAN=1
-tmux set-environment -t wardyn WARDYN_AWS_SSO_SELFRAN 1 2>/dev/null || true
 
 # Hand the pane over as a plain shell — NEVER `sleep`: holding the container open
 # is `agent-run --idle`'s job, this pane's job is to stay usable and keep its

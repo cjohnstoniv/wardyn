@@ -246,8 +246,11 @@ the e2e suite can prove each task in `test/e2e/tasks/` is solvable and its
 grader scores correctly — and `aws-sso/`, also not a coding agent: its only
 job is to host an interactive
 `aws sso login --sso-session wardyn --no-browser --use-device-code` session
-(device-code flow) so an operator can `wardyn attach` in and authenticate an
-AWS SSO profile from inside a governed sandbox. The `[sso-session wardyn]`
+(device-code flow). The image RUNS that login itself: `agent-run --idle` starts
+it in a `wardyn` tmux session before its own prep, and every attach path — the
+console's sign-in pane, the Runs list, `wardyn attach`, ssh — joins that one
+session rather than landing on a bare prompt with nothing typed. It also ships
+`claude`/`codex` shims that say what the box is and exit non-zero. The `[sso-session wardyn]`
 block that command reads (`sso_start_url` from the setup UI + `sso_region`
 from the daemon's config — no credential) is seeded by the control plane via
 `WARDYN_AWS_SSO_CONFIG_B64`. It carries AWS

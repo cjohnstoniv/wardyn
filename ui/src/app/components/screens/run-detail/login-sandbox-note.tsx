@@ -44,8 +44,16 @@ export const AWS_SSO_LOGIN_AGENT = "aws-sso";
 // (deploy/images/aws-sso/signin-pane.sh) and this terminal is attached to that very
 // session, so telling the reader to start a SECOND sign-in elsewhere would be the
 // one instruction guaranteed to waste their device code.
+//
+// AND IT DOES NOT SAY "closes itself when it is done", which is false exactly where
+// this note renders. Nothing server-side stops a login run on capture — the shutdown
+// is the console sign-in pane's own killRun, and a sandbox reached from the Runs list
+// never gets one. What ends it is the reaper: the login policy takes its
+// AutoStopAfterSec from harnessLoginIdleCap (internal/api/harnesscred.go), which
+// internal/lifecycle reads as an IDLE timeout of 30 minutes. So "stops itself after
+// 30 idle minutes" is the true sentence, and the one an operator can plan around.
 export const LOGIN_SANDBOX_NOTE =
-  "AWS sign-in sandbox — the sign-in is already running in this box; finish the device-code step in your browser. Nothing else runs here, and the sandbox closes itself when it is done.";
+  "AWS sign-in sandbox — the sign-in is already running in this box; finish the device-code step in your browser. Nothing else runs here, and the sandbox stops itself after 30 idle minutes.";
 
 // Renders nothing for every other run, so nothing on this page moves unless the
 // run really is a login box.

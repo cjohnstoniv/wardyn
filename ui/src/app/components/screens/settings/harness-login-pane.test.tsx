@@ -18,6 +18,7 @@ import {
   serverConfirmsCapture,
   HarnessLoginPane,
   loginFlow,
+  SELFRUN_MARKER,
 } from "./harness-login-pane";
 import { runs as runsApiMocked } from "../../../lib/api/runs";
 import type { AgentRun, SetupStatus } from "../../../lib/types";
@@ -740,44 +741,59 @@ describe("HarnessLoginPane — the starting phase (P5)", () => {
   // and every attach path joins that session. The pane therefore types nothing
   // — UNLESS the sandbox never announced itself, which is what an operator
   // WARDYN_AGENT_IMAGES pin on an older image looks like from here.
-  async function attachedAwsSandbox() {
+  //
+  // FAKE TIMERS BEFORE RENDER, always: the pane arms its grace timer the moment
+  // it attaches, so timers installed afterwards can never fire it and every
+  // "did not type" assertion below would be true for the wrong reason.
+  async function attachedOnFakeTimers(): Promise<void> {
     vi.mocked(runsApiMocked.getRun).mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun);
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    await user.click(screen.getByRole("button", { name: /start login/i }));
     await screen.findByTestId("fake-terminal");
   }
 
-  it("does not type when the image announces the self-run", async () => {
-    sendTextSpy.mockClear();
-    await attachedAwsSandbox();
-    // The banner the image prints as its FIRST act, before its own prep wait —
-    // which is exactly why it beats this timer.
-    act(() => lastAttachOutput?.("wardyn: sign-in running — AWS sign-in sandbox.\r\n"));
-
-    // NEITHER typing path: AttachTerminal's own unconditional autoRun is what
-    // 0.7.4 used, and it fires 900ms after connect with no marker check at all.
-    expect(lastAttachProps?.autoRun).toBeUndefined();
-
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    try {
-      await act(async () => {
-        await vi.advanceTimersByTimeAsync(30_000); // well past the grace window
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-    expect(sendTextSpy).not.toHaveBeenCalled();
-  });
+  // Each case emits ONE suppressing signal and advances well past the window.
+  // The suppression, not the arming, is what is under test — "types after the
+  // grace window when an old image is pinned" below is the control that proves
+  // the timer fires at all on this same shape.
+  for (const [name, chunk] of [
+    // The image's own banner, through the exported constant the shell side is
+    // pinned against (TestSelfRunBanner_UIParity, cmd/wardyn-aws-sso).
+    ["the image announces the self-run", `${SELFRUN_MARKER} — AWS sign-in sandbox.\r\n`],
+    // A device code is already on screen: the login is live whatever else the
+    // buffer does or does not say.
+    ["a device verification URL has already been seen", "https://d-1234567890.awsapps.com/start/#/device?user_code=ABCD-EFGH\r\n"],
+    // The refusal line is still printing (no trailing newline yet), so the fail
+    // arm has not fired and the phase has not changed — the timer's own
+    // failMarker check is the only thing standing between this sandbox and a
+    // second sign-in typed over its refusal.
+    ["the sandbox is part-way through printing a refusal", "wardyn: aws sso credential rejected: the pinned account"],
+  ] as const) {
+    it(`does not type when ${name}`, async () => {
+      sendTextSpy.mockClear();
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        await attachedOnFakeTimers();
+        // NEITHER typing path: AttachTerminal's own unconditional autoRun is
+        // what 0.7.4 used, and it fires 900ms after connect with no check at all.
+        expect(lastAttachProps?.autoRun).toBeUndefined();
+        act(() => lastAttachOutput?.(chunk));
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(30_000);
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+      expect(sendTextSpy).not.toHaveBeenCalled();
+    });
+  }
 
   it("types after the grace window when an old image is pinned", async () => {
     sendTextSpy.mockClear();
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
-      vi.mocked(runsApiMocked.getRun).mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun);
-      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-      render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
-      await user.click(screen.getByRole("button", { name: /start login/i }));
-      await screen.findByTestId("fake-terminal");
+      await attachedOnFakeTimers();
       // An image that predates the self-run says nothing at all.
       expect(sendTextSpy).not.toHaveBeenCalled();
       await act(async () => {
