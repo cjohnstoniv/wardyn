@@ -54,9 +54,6 @@ import {
   MEMBER_EMAIL,
   PIN_ACCOUNT,
   PIN_ROLE,
-  SANDBOX_UP,
-  awaitCapture,
-  awaitSelfRunStarted,
   dexSignIn,
   dexSignOut,
   launchAgentRun,
@@ -65,6 +62,7 @@ import {
   openLoginPane,
   putRoster,
   seen,
+  signInThroughPane,
 } from "./helpers";
 
 test.skip(process.env.WARDYN_TEST_K8S !== "1", "live cluster walk: set WARDYN_TEST_K8S=1 (scripts/kind-sso-walk.sh)");
@@ -117,39 +115,19 @@ test("the member signs in to AWS from their own seat and the capture is theirs",
   // that the branch actually took.
   await expect(page.getByText(MEMBER_GETTING_STARTED.SETUP_SUMMARY_HELPER_PER_USER)).toBeVisible();
   await expect(page.getByText(MEMBER_GETTING_STARTED.SETUP_SUMMARY_HELPER)).toHaveCount(0);
-  // There are TWO "Sign in to AWS" buttons on an actionable per_user member's
-  // page — the chip row's and the card's own — and both open the same pane.
-  const cta = page.getByRole("button", { name: "Sign in to AWS" }).first();
-  await expect(cta).toBeVisible({ timeout: 60_000 });
-  await cta.click();
-
-  // The pane launches the login sandbox on open. The start URL is roster-managed
-  // here (the admin set sso_start_url), so the pane goes straight to "Start
-  // login" rather than asking for one.
-  const start = page.getByRole("button", { name: "Start login" });
-  if (await start.isVisible().catch(() => false)) {
-    await start.click();
-  }
-
-  // P1 + P5 (lane login-pane): the pane must REACH the terminal from a member's
-  // seat and must not block on a cold image pull. Today's gate is the assertion
-  // below; the lane adds the banner and the async launch.
-  const screen = page.locator(".xterm-screen").first();
-  await expect(screen, "the member never reached their own login sandbox's terminal (P1)").toBeVisible({
-    timeout: SANDBOX_UP,
-  });
-
+  // P1 + P5: the member must REACH their own sign-in from their own seat, and
+  // must not block on a cold image pull.
+  //
   // 0.7.5 BUILD 0(b), lane login-sandbox-selfrun (merged): the SANDBOX runs the
-  // chained command itself, so the console types nothing and this file types
-  // nothing either. The poll that used to wait 60 s for the echoed argv and
-  // then TYPE the command on a miss is gone — see awaitSelfRunStarted() for the
-  // double-run it caused once the image self-ran.
-  await awaitSelfRunStarted(screen);
-
-  // The helper's own success marker — the PTY contract cmd/wardyn-aws-sso and
-  // the pane share (TestSuccessMarker_UIParity pins the two spellings equal) —
-  // or the server's own answer if the pane beat us to the teardown.
-  await awaitCapture(page, screen);
+  // chained command itself, so neither the console nor this file types anything
+  // — the 60 s poll for the echoed argv and its TYPING fallback are gone (see
+  // awaitSelfRunStarted() for the double-run they caused once the image
+  // self-ran). And P1 is no longer witnessed by asserting the terminal NODE is
+  // on screen: the pane now unmounts it within half a second of the capture,
+  // which a boot-time sign-in against a pre-approving fake can reach before the
+  // assertion's first poll. signInThroughPane() takes the sandbox's own banner
+  // or the server's moved capture instead — see there.
+  await signInThroughPane(page, openLoginPane);
 
   // THE MEMBER'S OWN STATUS, from the member's own session.
   await page.goto("/setup");
@@ -246,14 +224,10 @@ test("sso-pin-dispatch: a pin changed after capture warns, refuses the run, and 
   // anywhere — modelaccess.go says so). So the member repeats exactly what they
   // did in the second test, under the new pin, and their own status comes back
   // to `live` on the contradicting pair.
-  await openLoginPane(page);
-  const screen = page.locator(".xterm-screen").first();
-  await expect(screen).toBeVisible({ timeout: SANDBOX_UP });
   // 0.7.5 BUILD 0(b) again — the SAME poll-then-type pair lived here too, and a
   // fix applied only to the first copy would have left this second sign-in
-  // double-running. See awaitSelfRunStarted().
-  await awaitSelfRunStarted(screen);
-  await awaitCapture(page, screen);
+  // double-running. Same helper as the second test, for the same reason.
+  await signInThroughPane(page, openLoginPane);
 
   await page.goto("/setup");
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");

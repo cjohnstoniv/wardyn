@@ -30,12 +30,23 @@ export const SSO_START_URL = process.env.WARDYN_LIVE_SSO_START_URL || "https://w
 /** The harness's read-only route to the fake's /_seen — see seen() below. */
 export const SEEN_URL = process.env.WARDYN_LIVE_SEEN_URL || "http://127.0.0.1:8390/_seen";
 /**
- * The fake's IN-CLUSTER base URL — the one the sandbox addresses it by, and so
- * the one the AWS CLI prints as the device-code verification URI inside the
- * sign-in pane. NOT reachable from this browser, deliberately (the fourth
- * precondition): it is asserted as TEXT, never dialled.
+ * What the AWS CLI actually prints as the device-code verification URI inside
+ * the sign-in pane — a BARE PATH, not an absolute URL.
+ *
+ * The on-cluster fake is built with `NewHandler()` (test/awsssofake/cmd),
+ * whose `URL()` is `""` because the caller owns the listener. So
+ * `StartDeviceAuthorization` answers `verificationUri: "/verify"` and
+ * `verificationUriComplete: "/verify?user_code=WXYZ-1234"`, and that is what
+ * the CLI echoes. The user code is a FIXED literal in the fake (`userCode` in
+ * test/awsssofake/server.go's NewHandler), not a random one, so the whole
+ * string is stable across walks.
+ *
+ * An earlier draft of case C asserted the fake's in-cluster BASE URL here, on
+ * the plan's premise that the pane shows "the fake's device-code URL". It does
+ * not and never did — nothing gives this fake a public base URL to print — so
+ * that assertion could only ever have timed out.
  */
-export const FAKE_URL = process.env.WARDYN_LIVE_FAKE_URL || "http://wardyn-awsssofake.wardyn.svc.cluster.local:8090";
+export const DEVICE_CODE_PATH = "/verify?user_code=WXYZ-1234";
 
 export const ADMIN_EMAIL = "admin@wardyn.local";
 export const MEMBER_EMAIL = "member@wardyn.local";
@@ -368,6 +379,18 @@ export async function openLoginPane(page: Page): Promise<void> {
  * SELFRUN_MARKER is imported, not quoted — TestSelfRunBanner_UIParity pins the
  * shell banner's prefix equal to this constant, and a literal here would assert
  * a third spelling neither side is bound to.
+ *
+ * THE SERIES LAW, kept with the code it governs: assertions on an xterm buffer
+ * are `expect.poll(innerText)`, never `toContainText`. `toContainText` starves
+ * on a terminal that repaints under load — it re-queries the same node and can
+ * miss every frame the text was in. (It also matters that this reads
+ * `innerText`: the console mounts xterm's DOM renderer, with no canvas or webgl
+ * addon, so the buffer really is in the DOM to be read.)
+ *
+ * STRICT, and only for a caller with NO console pane attached — case C, which
+ * has abandoned the pane and is watching from the Runs list. A pane-attached
+ * sign-in tears the terminal down on capture, so it uses signInThroughPane()
+ * below instead, which never depends on the terminal existing.
  */
 export async function awaitSelfRunStarted(screen: ReturnType<Page["locator"]>): Promise<void> {
   await expect
@@ -415,5 +438,66 @@ export async function awaitCapture(page: Page, screen: ReturnType<Page["locator"
       },
       { timeout: LOGIN_DONE },
     )
+    .toBe(true);
+}
+
+/**
+ * Drive a sign-in THROUGH THE CONSOLE PANE, from opening it to the capture
+ * landing, without ever depending on the terminal being on screen.
+ *
+ * WHY THE TERMINAL CANNOT BE THE WITNESS ANY MORE. Since 0.7.5 the sandbox
+ * starts the sign-in at BOOT (signin-pane.sh) and the on-cluster fake
+ * pre-approves every device code permanently, so for a no-repo run the whole
+ * pair can finish before — or within a fraction of a second of — the pane
+ * attaching. The pane sees the done marker in its first tmux redraw, corroborates
+ * it with the server, kills the run and unmounts the terminal in ~0.2-0.5 s.
+ * `expect(screen).toBeVisible()` polls at second granularity once it has waited
+ * a little, so it can miss that window entirely and then burn its whole 300 s
+ * budget on a sign-in that SUCCEEDED. In 0.7.4 this could not happen: the
+ * console typed the command AFTER attaching, so the terminal was necessarily
+ * still there.
+ *
+ * SO: two witnesses, neither of them the DOM node's presence.
+ *
+ *   1. the sandbox ANNOUNCED itself (SELFRUN_MARKER in the pane), or
+ *   2. the SERVER says the stored capture MOVED — the caller's own aws row
+ *      carries a `source_run_id` different from the one it carried before the
+ *      pane was opened.
+ *
+ * (2) is the one that is never vacuous. "reaches live" is not usable here: a
+ * member who was ALREADY live reads live throughout, which is exactly the trap
+ * case D exists to avoid. The refusal marker still fails fast, because a login
+ * the control plane refused prints it and exits, and waiting the full budget for
+ * a reason sitting on the terminal is five wasted minutes per red.
+ */
+export async function signInThroughPane(page: Page, openPane: (p: Page) => Promise<void>): Promise<void> {
+  const before = (await ownAWSRow(page)).source_run_id ?? "";
+  await openPane(page);
+  const screen = page.locator(".xterm-screen").first();
+
+  // Bounded read; see awaitCapture() for why the bound is the whole fix.
+  const paneText = async (): Promise<string> => {
+    const text = await screen.innerText({ timeout: 1_000 }).catch(() => "");
+    if (text.includes(FAIL_MARKER)) {
+      const line = text.split("\n").find((l) => l.includes(FAIL_MARKER)) ?? FAIL_MARKER;
+      throw new Error(`the login helper refused this capture: ${line.trim()}`);
+    }
+    return text;
+  };
+  const captureMoved = async (): Promise<boolean> => {
+    const row = await ownAWSRow(page);
+    return !!row.source_run_id && row.source_run_id !== before;
+  };
+
+  // The sandbox is up and doing something — or it has already finished.
+  await expect
+    .poll(async () => (await paneText()).includes(SELFRUN_MARKER) || (await captureMoved()), { timeout: SANDBOX_UP })
+    .toBe(true);
+  // …and the capture itself landed, on a NEW login run.
+  await expect
+    .poll(async () => {
+      await paneText();
+      return captureMoved();
+    }, { timeout: LOGIN_DONE })
     .toBe(true);
 }

@@ -52,11 +52,17 @@ import { expect, test, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { MEMBER_MODE } from "../../src/app/components/wardyn/member-mode-banner";
 import { LOGIN_SANDBOX_NOTE } from "../../src/app/components/screens/run-detail/login-sandbox-note";
-import { MEMBER_GETTING_STARTED, YOUR_MODEL_KEY } from "../../src/app/components/wardyn/copy";
+import {
+  MEMBER_GETTING_STARTED,
+  RAIL_CREDENTIAL,
+  RECORDING_DISABLED_TITLE,
+  YOUR_MODEL_KEY,
+} from "../../src/app/components/wardyn/copy";
 import { AGENTS, AGENTS_DRAFT, PROVIDERS } from "../../src/app/lib/workspace-providers-copy";
 import {
   ADMIN_EMAIL,
-  FAKE_URL,
+  DEVICE_CODE_PATH,
+  LOGIN_DONE,
   MEMBER_EMAIL,
   SANDBOX_UP,
   SSO_START_URL,
@@ -74,42 +80,35 @@ import {
   ownAWSRow,
   runIDFromURL,
   seen,
+  signInThroughPane,
 } from "./helpers";
 
 test.skip(process.env.WARDYN_TEST_K8S !== "1", "live cluster walk: set WARDYN_TEST_K8S=1 (scripts/kind-sso-walk.sh)");
 test.describe.configure({ mode: "serial" });
 
-// ── CONSTANTS THIS FILE ASSERTS THROUGH THAT ARE NOT MERGED YET ─────────────
+// ── THE ONE LANE THAT HAS NOT MERGED: `login-pane` ──────────────────────────
 //
-// The cases that use the `login-pane` three are `test.fixme("login-pane")`
-// below. When that lane merges, the coordinator REPLACES its literals with the
-// real imports and deletes them — never the other way round, and never a regex
-// loose enough to match both spellings.
+// Cases D and E are `test.fixme("login-pane")` and these four stand in for the
+// constants that lane exports. The VALUES are its own canon table verbatim, so
+// the flip is mechanical: delete this block, restore the two import lines each
+// case's header repeats, and nothing else moves. Never the other way round, and
+// never a regex loose enough to match both spellings.
 //
-// lane `login-pane` (NOT MERGED) → .../settings/harness-login-pane.tsx (which
-//   that lane exports these from) and .../settings/login-start-wait.ts:
 //   import { CAPTURE_NOT_CORROBORATED, LOGIN_SANDBOX_UNREADABLE } from "../../src/app/components/screens/settings/harness-login-pane";
-//   import { LOGIN_SANDBOX_SLOW_START } from "../../src/app/components/screens/settings/login-start-wait";
-//
-// lane `ui-rail-truth` IS MERGED (feat/v0.7.5 = 2027d0bf) and case A(rail) runs
-// LIVE against these three — but this BRANCH is not rebased onto it yet, so the
-// import would not resolve here. The three values below were read out of
-// `git show feat/v0.7.5:ui/src/app/components/wardyn/copy.ts` and are
-// BYTE-IDENTICAL to `RAIL_CREDENTIAL.SANDBOX_BEDROCK`,
-// `RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_PER_USER` and
-// `RECORDING_DISABLED_TITLE`. AT THE REBASE, delete them and add:
-//   import { RAIL_CREDENTIAL, RECORDING_DISABLED_TITLE } from "../../src/app/components/wardyn/copy";
-const RAIL_CREDENTIAL_SANDBOX_BEDROCK =
-  "Model credential — AWS credentials sign inside the sandbox, so this run holds them for its lifetime.";
-const RAIL_CREDENTIAL_CHIP_PER_USER = "Your AWS sign-in";
-const RECORDING_DISABLED_TITLE_DRAFT = "Session recording is disabled on this deployment";
-const CAPTURE_NOT_CORROBORATED = "The sandbox reported a capture the server does not have — sign in again.";
+//   import { LOGIN_SANDBOX_SLOW_START, LOGIN_SANDBOX_READ_RETRYING } from "../../src/app/components/screens/settings/login-start-wait";
+const CAPTURE_NOT_CORROBORATED =
+  "The sandbox reported a capture the server does not have. If your last attempt was interrupted, sign in again from Getting Started — starting a new sign-in closes the old one. If it keeps happening, tell your admin: the sandbox's report and the server disagree.";
+// Unchanged by that lane — this is the value already in the tree.
 const LOGIN_SANDBOX_UNREADABLE =
   "Wardyn stopped being able to read the sign-in sandbox, so it can't say whether it came up. Try again.";
-// NOT DRAFTED AT W2 — lane `login-pane` had not started. Deliberately a
-// sentinel rather than "": flipping case E's fixme without re-pointing this at
-// the lane's constant must RED immediately, not pass vacuously.
-const LOGIN_SANDBOX_SLOW_START = "<LOGIN_SANDBOX_SLOW_START — lane login-pane has not drafted this sentence>";
+const LOGIN_SANDBOX_SLOW_START =
+  "Still starting — Wardyn can read the sign-in sandbox, it just isn't up yet. The first start after an upgrade pulls the image onto this node, which can take a few minutes.";
+// The OTHER starting-phase line, and case E's real negative control: "Wardyn
+// can read the sandbox" and "Wardyn can't read it right now" are the two halves
+// the case exists to tell apart, so asserting only the absence of the terminal
+// UNREADABLE error would miss a wait that had silently flipped to retrying.
+const LOGIN_SANDBOX_READ_RETRYING =
+  "Wardyn can't read the sign-in sandbox right now — still trying. It may be starting normally.";
 
 /** The 409 body of POST /setup/harness-login inside the no-credential preview
  *  (internal/api/membermode_preview.go's memberPreviewSignInRefusal — Go-side
@@ -125,8 +124,25 @@ const KUBE_NAMESPACE = process.env.WARDYN_LIVE_KUBE_NAMESPACE || "wardyn";
 const KUBE_NODE = process.env.WARDYN_LIVE_KUBE_NODE || "wardyn-quickstart-control-plane";
 const COLDPULL_TAINT = "wardyn-coldpull=1:NoSchedule";
 
+/** `stdio: "pipe"`, deliberately: an untaint of a node that is not tainted
+ *  exits 1 and writes to stderr, and inheriting it spams the report after every
+ *  single test. Callers that tolerate failure use kubectlOrEmpty(). */
 function kubectl(...args: string[]): string {
-  return execFileSync("kubectl", ["--context", KUBE_CONTEXT, ...args], { encoding: "utf8" }).trim();
+  return execFileSync("kubectl", ["--context", KUBE_CONTEXT, ...args], { encoding: "utf8", stdio: "pipe" }).trim();
+}
+
+/** A kubectl read that may legitimately have nothing to read.
+ *
+ *  `kubectl get pod <name>` on a pod that does not exist EXITS 1, so
+ *  execFileSync throws — and a throw inside `expect.poll` aborts the poll
+ *  instead of retrying it. Case E polls for a pod the control plane has not
+ *  created yet, so "not there yet" has to read as "" rather than as a failure. */
+function kubectlOrEmpty(...args: string[]): string {
+  try {
+    return kubectl(...args);
+  } catch {
+    return "";
+  }
 }
 
 type RunRow = { id: string; task?: string; state?: string; created_at?: string };
@@ -146,6 +162,41 @@ async function myLoginRuns(page: Page): Promise<RunRow[]> {
   return rows
     .filter((r) => r.task === "harness login")
     .sort((a, b) => Date.parse(b.created_at ?? "") - Date.parse(a.created_at ?? ""));
+}
+
+/** Open the login run the CALLER just started, from the Runs list.
+ *
+ *  BOTH HALVES OF THIS ARE THE FIX FOR A REAL TRAP. By the time this file runs,
+ *  the member already OWNS two KILLED `harness login` runs from
+ *  sso-member.spec.ts (the pane kills a login run the moment it corroborates
+ *  the capture), so:
+ *
+ *   - "wait until a login run exists" is ALREADY true and returns instantly,
+ *     which is why every caller passes the set of ids it saw BEFORE opening the
+ *     pane and waits for one that is not in it. That wait doubles as the
+ *     barrier that stops a `page.goto` firing while POST /setup/harness-login
+ *     is still in flight — a navigation would abort it;
+ *   - picking the FIRST "harness login" card on the board picks the wrong run:
+ *     runs.tsx orders `attention, active, done`, and KILLED ranks as attention,
+ *     so the top card is a dead run from the previous file. The card is
+ *     selected by the run id on its own id chip (`title={run.id}`,
+ *     run-card.tsx) instead of by position. */
+async function openLoginRunCard(page: Page, runID: string): Promise<void> {
+  await page.goto("/runs");
+  await page
+    .getByTestId("run-card")
+    .filter({ has: page.locator(`[title="${runID}"]`) })
+    .getByText("harness login")
+    .click();
+  await expect(page).toHaveURL(new RegExp(`/runs/${runID}$`), { timeout: 60_000 });
+}
+
+/** The caller's newest login run that was NOT in `prior` — see openLoginRunCard. */
+async function newLoginRun(page: Page, prior: Set<string>): Promise<RunRow> {
+  await expect
+    .poll(async () => (await myLoginRuns(page)).some((r) => !prior.has(r.id)), { timeout: SANDBOX_UP })
+    .toBe(true);
+  return (await myLoginRuns(page)).filter((r) => !prior.has(r.id))[0];
 }
 
 /** Approvals the member can read for THEIR OWN run (routes.go's classMember +
@@ -268,10 +319,18 @@ test("A: an admin sets the org's agent standard in the console and a member is b
     sso_account_id: pin.account,
     sso_role_name: pin.role,
   });
-  for (const id of ["codex-cli", "none"]) {
-    const other = (await getRoster(request)).find((a) => a.id === id);
-    if (other) expect(other.enabled, `${id} must be disabled on this deployment`).toBe(false);
-  }
+  // …and ONE row is enabled, which is this deployment's whole shape.
+  //
+  // THE WIRE FIELD IS `disabled`, NOT `enabled` (types.AgentProviders). An
+  // earlier draft read `.enabled` and compared it to `false`: that is
+  // `undefined === false` on every row, so it asserted nothing — and it would
+  // not have caught a save that silently re-enabled the other two. Reading the
+  // whole enabled SET, rather than each row, is also what makes this fail if a
+  // future catalog id appears and defaults on.
+  expect(
+    (await getRoster(request)).filter((a) => !a.disabled).map((a) => a.id),
+    "this deployment must carry exactly one enabled agent row",
+  ).toEqual(["claude-code"]);
   await dexSignOut(page);
 
   // ── and now the MEMBER, bound by all of it ────────────────────────────────
@@ -320,19 +379,21 @@ test("A(rail): the New Run rail states THIS run's credential residency, with no 
   await page.goto("/runs/new");
   await page.getByRole("radio", { name: /^Autonomous/ }).click();
 
-  await expect(page.getByText(RAIL_CREDENTIAL_SANDBOX_BEDROCK)).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByText(RAIL_CREDENTIAL_CHIP_PER_USER)).toBeVisible();
+  await expect(page.getByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK)).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_PER_USER)).toBeVisible();
   // …and Recording states the truth about a stock Helm install rather than
   // promising a capture that cannot happen: the kind quickstart leaves
-  // persistence.enabled=false.
-  // The Recording row reads /healthz, so it arrives on that answer rather than
-  // on mount — poll it rather than racing it.
-  await expect(page.getByText(RECORDING_DISABLED_TITLE_DRAFT)).toBeVisible({ timeout: 60_000 });
+  // persistence.enabled=false. The Recording row reads /healthz, so it arrives
+  // on that answer rather than on mount — poll it rather than racing it.
+  await expect(page.getByText(RECORDING_DISABLED_TITLE)).toBeVisible({ timeout: 60_000 });
+  // 0.7.4's unconditional Recording sentence. A LITERAL on purpose: it was
+  // deleted with the fix, so there is no constant left to import — and if it is
+  // ever re-introduced under a new name this still catches it.
   await expect(page.getByText("Every keystroke and every outbound connection")).toHaveCount(0);
   // …and the honest-absence arm is NOT what rendered: this estate's roster row
-  // settles residency without a dry run, so "Resolved at launch." belongs to
-  // every OTHER estate and would be the quiet failure here.
-  await expect(page.getByText("Resolved at launch.")).toHaveCount(0);
+  // settles residency without a dry run, so RESOLVED_AT_LAUNCH belongs to every
+  // OTHER estate and would be the quiet failure here.
+  await expect(page.getByText(RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH)).toHaveCount(0);
 });
 
 // ── C — the sandbox signs itself in, and the Runs list joins that session ───
@@ -353,21 +414,23 @@ test("C (login-sandbox-selfrun): the sign-in sandbox runs the pair itself and th
   // (attaching is `tmux new-session -A`). If this case ever needs a keystroke to
   // pass, the feature is not there.
   await dexSignIn(page, MEMBER_EMAIL);
+  // The member ALREADY owns two KILLED login runs from sso-member.spec.ts, so
+  // "a login run exists" says nothing — snapshot the ids first and wait for one
+  // that is NOT among them. See openLoginRunCard() for the two bugs that fixes.
+  const prior = new Set((await myLoginRuns(page)).map((r) => r.id));
   await openLoginPane(page);
 
-  // Leave the console behind IMMEDIATELY. Nothing server-side stops a login run
-  // on capture — the shutdown is this pane's own killRun — so navigating away
-  // is what makes the rest of this case the RUNS-LIST path rather than the
-  // console one.
-  await expect.poll(async () => (await myLoginRuns(page)).length > 0, { timeout: SANDBOX_UP }).toBe(true);
-  const loginRun = (await myLoginRuns(page))[0];
-  await page.goto("/runs");
+  // Leave the console behind IMMEDIATELY — but only once the new run EXISTS.
+  // Nothing server-side stops a login run on capture (the shutdown is this
+  // pane's own killRun), so navigating away is what makes the rest of this case
+  // the RUNS-LIST path rather than the console one; navigating away too early
+  // would abort the POST that creates the run.
+  const loginRun = await newLoginRun(page, prior);
 
   // The run is openable from the list by the task the server stamped on it
   // (harnessLoginTask), which is the whole point of labelling it: opening it
   // from /runs is not a mystery box.
-  await page.getByText("harness login").first().click();
-  await expect(page).toHaveURL(new RegExp(`/runs/${loginRun.id}$`), { timeout: 60_000 });
+  await openLoginRunCard(page, loginRun.id);
   expect(runIDFromURL(page)).toBe(loginRun.id);
   // …and the run page NAMES the box, including that the sign-in is already
   // running in it and what ends it (LOGIN_SANDBOX_NOTE, imported).
@@ -380,13 +443,14 @@ test("C (login-sandbox-selfrun): the sign-in sandbox runs the pair itself and th
     timeout: SANDBOX_UP,
   });
 
-  // The pane's OWN output, not an echo of an argv nothing prints: the image's
-  // banner (SELFRUN_MARKER, imported — TestSelfRunBanner_UIParity pins the
-  // shell side to it) and the device-code URL the AWS CLI printed, which is the
-  // fake addressed by its in-cluster Service name.
+  // The sandbox's OWN output, not an echo of an argv nothing prints: the
+  // image's banner (SELFRUN_MARKER, imported — TestSelfRunBanner_UIParity pins
+  // the shell side to it) and the device-code verification URI the AWS CLI
+  // printed. THE STRICT banner assertion belongs here and only here: there is
+  // no console pane on this page to tear the terminal down on capture.
   await awaitSelfRunStarted(screen);
   await expect
-    .poll(async () => (await screen.innerText({ timeout: 1_000 }).catch(() => "")).includes(FAKE_URL), {
+    .poll(async () => (await screen.innerText({ timeout: 1_000 }).catch(() => "")).includes(DEVICE_CODE_PATH), {
       timeout: 120_000,
     })
     .toBe(true);
@@ -406,6 +470,9 @@ test("D (login-pane): a cancelled sign-in retries cleanly, and a new one superse
   page,
   request,
 }) => {
+  // ON THE FLIP, delete the four stand-in constants at the top of this file and
+  // restore, verbatim:
+  //   import { CAPTURE_NOT_CORROBORATED } from "../../src/app/components/screens/settings/harness-login-pane";
   test.fixme(true, "login-pane");
   await dexSignIn(page, MEMBER_EMAIL);
   await makeMemberActionable(request);
@@ -423,12 +490,10 @@ test("D (login-pane): a cancelled sign-in retries cleanly, and a new one superse
   await page.getByRole("button", { name: "Cancel" }).first().click();
   await expect(page.getByTestId("harness-login-pane")).toHaveCount(0, { timeout: 60_000 });
 
-  // The retry, completed.
-  await openLoginPane(page);
-  const screen = page.locator(".xterm-screen").first();
-  await expect(screen).toBeVisible({ timeout: SANDBOX_UP });
-  await awaitSelfRunStarted(screen);
-  await awaitCapture(page, screen);
+  // The retry, completed. signInThroughPane() rather than a terminal
+  // assertion: a boot-time sign-in against a pre-approving fake can finish
+  // before the terminal is ever on screen (see there).
+  await signInThroughPane(page, openLoginPane);
 
   const after = await ownAWSRow(page);
   expect(after.source_run_id, "the stored capture did not move to the retry's run").not.toBe(before.source_run_id);
@@ -440,12 +505,14 @@ test("D (login-pane): a cancelled sign-in retries cleanly, and a new one superse
 
   // ── the supersede, live ───────────────────────────────────────────────────
   // Start a sign-in, navigate away WITHOUT Cancel (the orphan), start another.
+  // The prior-id snapshot again: by now this member owns several terminal login
+  // runs, so "a login run exists" is always true and would hand back a dead one.
   await makeMemberActionable(request);
+  const priorOrphan = new Set((await myLoginRuns(page)).map((r) => r.id));
   await openLoginPane(page);
-  await expect.poll(async () => (await myLoginRuns(page)).length, { timeout: SANDBOX_UP }).toBeGreaterThan(0);
-  const orphan = (await myLoginRuns(page))[0];
+  const orphan = await newLoginRun(page, priorOrphan);
   await page.goto("/runs");
-  await openLoginPane(page);
+  await signInThroughPane(page, openLoginPane);
   await expect
     .poll(async () => (await myLoginRuns(page)).find((r) => r.id === orphan.id)?.state, { timeout: 120_000 })
     .toBe("KILLED");
@@ -454,69 +521,90 @@ test("D (login-pane): a cancelled sign-in retries cleanly, and a new one superse
   // asserted on the run.kill AUDIT row, in the Go test.)
   const open = (await myLoginRuns(page)).filter((r) => !["KILLED", "DONE", "FAILED", "TIMED_OUT"].includes(r.state ?? ""));
   expect(open.map((r) => r.id), "more than one live sign-in sandbox for one member").toHaveLength(1);
-
-  await awaitCapture(page, page.locator(".xterm-screen").first());
 });
 
-// ── E — a login run that stays in STARTING for 90 s never reads as UNREADABLE ─
+// ── E — a sign-in held in STARTING reads as slow, never as unreadable ───────
 
-test("E (login-pane): a sign-in held in STARTING for 90 s reads as slow, never as unreadable", async ({
+test("E (login-pane): a sign-in held 65 s in STARTING reads as slow, never as unreadable", async ({
   page,
   request,
 }) => {
+  // ON THE FLIP, delete the four stand-in constants at the top of this file and
+  // restore, verbatim:
+  //   import { LOGIN_SANDBOX_UNREADABLE } from "../../src/app/components/screens/settings/harness-login-pane";
+  //   import { LOGIN_SANDBOX_SLOW_START, LOGIN_SANDBOX_READ_RETRYING } from "../../src/app/components/screens/settings/login-start-wait";
   test.fixme(true, "login-pane");
   // The live twin of the Go characterization test, and the datum that tells an
-  // operator whether an UNREADABLE they saw was estate-side. The hold is
-  // manufactured by a node TAINT, which never evicts a running pod and which
-  // the run pod cannot tolerate — there is not one `Toleration` reference in
-  // internal/runner/k8s — so the pod parks in Pending.
+  // operator whether an UNREADABLE they saw was estate-side.
   //
-  // 90 s, and no longer: it is well inside canaryWaitTimeout's 3 minutes, past
-  // which the run itself fails and the case would be measuring the wrong thing.
+  // THE HOLD IS MANUFACTURED BY A NODE TAINT, and the pod it parks is the
+  // PROXY's, not the agent's. CreateSandbox creates `wardyn-proxy-<run id>`
+  // FIRST and waits for its pod IP before the agent pod exists at all
+  // (internal/runner/k8s's sandbox creation, `podIPWaitTimeout`), so under a
+  // taint nothing schedules, the proxy pod sits Pending and `wardyn-agent-<id>`
+  // is never created. An earlier draft of this case watched for the AGENT pod
+  // and would have polled a name that cannot exist.
+  //
+  // AND THE BOUND IS THAT 90 s POD-IP WAIT, not the 3-minute canary: at 90 s
+  // the RUN FAILS. So the hold is 65 s measured from RUN CREATION — five
+  // seconds past the 60 s at which the slow-start sentence appears, and ~25 s
+  // of margin before the run dies — and the untaint happens the instant the
+  // assertions are made, not at the end of the case.
   kubectl("taint", "nodes", KUBE_NODE, COLDPULL_TAINT);
 
   await dexSignIn(page, MEMBER_EMAIL);
   await makeMemberActionable(request);
+  const prior = new Set((await myLoginRuns(page)).map((r) => r.id));
   await openLoginPane(page);
+  const loginRun = await newLoginRun(page, prior);
+  const created = Date.parse(loginRun.created_at ?? "") || Date.now();
 
-  await expect.poll(async () => (await myLoginRuns(page)).length, { timeout: 120_000 }).toBeGreaterThan(0);
-  const loginRun = (await myLoginRuns(page))[0].id;
-
-  // Without this the 90 s assertion is vacuous — a pod that scheduled anyway
-  // would pass it by simply working.
+  // Without this the hold is vacuous — a pod that scheduled anyway would pass
+  // it by simply working. kubectlOrEmpty, because `get pod` on a pod the
+  // control plane has not created yet EXITS 1, and a throw inside expect.poll
+  // aborts the poll instead of retrying it.
   await expect
     .poll(
-      () => kubectl("-n", KUBE_NAMESPACE, "get", "pod", `wardyn-agent-${loginRun}`, "-o", "jsonpath={.status.phase}"),
+      () =>
+        kubectlOrEmpty(
+          "-n",
+          KUBE_NAMESPACE,
+          "get",
+          "pod",
+          `wardyn-proxy-${loginRun.id}`,
+          "-o",
+          "jsonpath={.status.phase}",
+        ),
       { timeout: 60_000 },
     )
     .toBe("Pending");
 
   // The pane's own 2 s GET /runs/{id} poll must stay readable for the whole
-  // hold: a single non-200 is what raises LOGIN_SANDBOX_UNREADABLE, and the
-  // point of this case is that a SLOW start and an UNREADABLE one are different
-  // sentences.
+  // hold: it is an unreadable RUN, not a slow one, that raises the other
+  // sentence, and telling those two apart is this case's entire subject.
   const codes: number[] = [];
-  const stop = Date.now() + 90_000;
-  while (Date.now() < stop) {
+  while (Date.now() < created + 65_000) {
     codes.push(
       await page.evaluate(async (id: string) => {
         const r = await fetch(`/api/v1/runs/${id}`, { credentials: "include" });
         return r.status;
-      }, loginRun),
+      }, loginRun.id),
     );
     await page.waitForTimeout(2_000);
   }
   expect(codes.filter((c) => c !== 200), "the harness could not read the run for the whole hold").toHaveLength(0);
 
   await expect(page.getByText(LOGIN_SANDBOX_SLOW_START)).toBeVisible();
+  // BOTH of the other two sentences. The pane's terminal error is one of them;
+  // the starting-phase "can't read it right now" line is the other, and a wait
+  // that had silently flipped to retrying would pass an assertion that only
+  // looked for the first.
   await expect(page.getByText(LOGIN_SANDBOX_UNREADABLE)).toHaveCount(0);
+  await expect(page.getByText(LOGIN_SANDBOX_READ_RETRYING)).toHaveCount(0);
 
+  // IMMEDIATELY — every second after this is spent against the 90 s bound.
   kubectl("taint", "nodes", KUBE_NODE, "wardyn-coldpull-");
-  const screen = page.locator(".xterm-screen").first();
-  await expect(screen).toBeVisible({ timeout: SANDBOX_UP });
-  await awaitSelfRunStarted(screen);
-  await awaitCapture(page, screen);
-  await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
+  await expect.poll(async () => (await modelAccess(page)).state, { timeout: LOGIN_DONE }).toBe("live");
 });
 
 // ── G — a first claude-code run parks on nothing ────────────────────────────
@@ -605,15 +693,20 @@ test("H (agent-boot-egress): an interactive run answers ONE trust prompt and rea
   await expect
     .poll(async () => (await screen.innerText({ timeout: 1_000 }).catch(() => "")), { timeout: 120_000 })
     .toContain("Amazon Bedrock");
-  expect(await screen.innerText({ timeout: 1_000 })).toContain("manual mode on");
+  // Polled, not read once: the footer paints on its own schedule, and an
+  // unpolled read here fails on a frame that simply had not landed yet.
+  await expect
+    .poll(async () => (await screen.innerText({ timeout: 1_000 }).catch(() => "")), { timeout: 60_000 })
+    .toContain("manual mode on");
 
-  // THE APPROVALS CHECK BELONGS HERE — AFTER THE ENTER, BEFORE THE PROMPT.
-  // Everything the field report saw park happened on the CLI's FIRST REPL
-  // start, which is what the Enter above unblocks; a list read while the run
-  // was still sitting on the trust dialog is blind to exactly the thing this
-  // case exists to measure, and would have read empty on the BROKEN image too.
+  // THE APPROVALS CHECK BELONGS AFTER THE ENTER, not before it. Everything the
+  // field report saw park happened on the CLI's FIRST REPL start, which is what
+  // the Enter above unblocks; a list read while the run was still sitting on
+  // the trust dialog is blind to exactly the thing this case measures, and
+  // would have read empty on the BROKEN image too.
+  const runID = runIDFromURL(page);
   expect(
-    await approvalsFor(page, runIDFromURL(page)),
+    await approvalsFor(page, runID),
     "the CLI's first REPL start parked an approval nobody asked for",
   ).toEqual([]);
 
@@ -627,6 +720,13 @@ test("H (agent-boot-egress): an interactive run answers ONE trust prompt and rea
   await page.keyboard.type("Reply with the single word: ready.");
   await page.keyboard.press("Enter");
   await expect.poll(async () => (await seen()).bedrock_calls, { timeout: 180_000 }).toBeGreaterThan(before);
+
+  // AND AGAIN, at the end. The marketplace fetch is asynchronous AFTER the REPL
+  // starts, so the read above can land before a broken image has dialled
+  // anything; this one is after a full round trip to Bedrock. Decided approvals
+  // are never deleted, so one closing read cannot miss a row that appeared and
+  // went — it would still be sitting there.
+  expect(await approvalsFor(page, runID), "the run parked an approval after its first model call").toEqual([]);
 });
 
 // ── F — the no-credential member preview (LAST: it signs the ADMIN in) ──────
@@ -650,11 +750,7 @@ test("F (member-preview): an admin previews the state a member is in before they
   // removed, and comes back on exit) would be unprovable. It is NOT on /setup:
   // an operator's /setup is the operator Getting Started, so the admin's own
   // sign-in is the Agents tab's (openAdminLoginPane).
-  await openAdminLoginPane(page);
-  const screen = page.locator(".xterm-screen").first();
-  await expect(screen).toBeVisible({ timeout: SANDBOX_UP });
-  await awaitSelfRunStarted(screen);
-  await awaitCapture(page, screen);
+  await signInThroughPane(page, openAdminLoginPane);
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
 
   // Into the preview.
@@ -673,8 +769,16 @@ test("F (member-preview): an admin previews the state a member is in before they
   // …and the one door that could WRITE inside the preview is refused, because a
   // capture made here would land on the admin's own identity and overwrite
   // their real session.
+  //
+  // THE CTA IS NOT THE REQUEST. Under startURLManaged the pane opens in phase
+  // `intro` and POST /setup/harness-login is sent only by "Start login"
+  // (harness-login-pane.tsx's launch) — so a case that clicked the CTA and then
+  // waited for the 409 sentence would have waited for a request it never made.
+  // The sentence is Go-side (memberPreviewSignInRefusal) and reaches the console
+  // as the pane's error, which renders in its role="alert" region.
   await page.getByRole("button", { name: AGENTS.SIGN_IN_AWS }).first().click();
-  await expect(page.getByText(MEMBER_PREVIEW_SIGNIN_REFUSAL)).toBeVisible({ timeout: 60_000 });
+  await page.getByRole("button", { name: "Start login" }).click();
+  await expect(page.getByRole("alert").getByText(MEMBER_PREVIEW_SIGNIN_REFUSAL)).toBeVisible({ timeout: 60_000 });
 
   // Nothing was deleted: the admin's session sits untouched in the store and
   // comes back the moment they exit.

@@ -90,14 +90,16 @@ CONTEXT="kind-${CLUSTER}"
 # renamed cluster reds that case instead of making it vacuous.
 KIND_NODE="${WARDYN_KIND_SSO_NODE:-${CLUSTER}-control-plane}"
 
-# The four locally built, `kind load`ed images this cluster runs. No registry is
+# The five locally built, `kind load`ed images this cluster runs. No registry is
 # involved anywhere here — the names MUST agree with deploy/kind/quickstart.sh
-# (wardynd/proxy/claude-code) and deploy/kind/sso/overlay.sh (aws-sso), or the
-# provenance record below names images the node never saw.
+# (wardynd/proxy/claude-code) and deploy/kind/sso/overlay.sh (aws-sso, the
+# fake), or step 1b rebuilds tags nothing on the node is running and the
+# provenance record names images the node never saw.
 WARDYND_IMAGE="wardyn/wardynd:quickstart"
 PROXY_IMAGE="wardyn/wardyn-proxy:quickstart"
 AGENT_IMAGE="wardyn/agent-claude-code:local"
 AWS_SSO_IMAGE="wardyn/agent-aws-sso:local"
+FAKE_IMAGE="wardyn/awsssofake:local"
 NAMESPACE="wardyn"
 RELEASE="wardyn"
 HTTP_PORT="${WARDYN_QUICKSTART_HTTP_PORT:-8280}"
@@ -139,7 +141,7 @@ SSO_REGION="us-east-1"
 BEDROCK_MODEL="arn:aws:bedrock:${SSO_REGION}:${PIN_ACCOUNT}:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 SSO_START_URL="https://wardyn-dev.awsapps.com/start"
 
-EVIDENCE_DIR="${WARDYN_KIND_SSO_EVIDENCE:-${ROOT}/local/v074/evidence/kind-sso}"
+EVIDENCE_DIR="${WARDYN_KIND_SSO_EVIDENCE:-${ROOT}/local/v075/evidence/kind-sso}"
 mkdir -p "${EVIDENCE_DIR}"
 
 # ── 1. the cluster and the overlay are up ───────────────────────────────────
@@ -154,42 +156,92 @@ health="$(curl -s "${BASE_URL}/healthz" || true)"
 
 # ── 1b. the images this walk will actually judge ────────────────────────────
 #
-# THE CONSOLE IS BAKED INTO THE DAEMON IMAGE. wardynd serves ui/dist from its own
-# layers, so a walk run against a cluster loaded before a console change judges
-# the OLD screens with the NEW spec — which is exactly how 0.7.4's walk-3 went
-# red on a stale console image, with a correct tree and correct assertions.
-# WARDYN_KIND_SSO_REBUILD=1 rebuilds wardynd + the proxy from THIS tree and
-# reloads them; the fresh-install restart below then picks them up. It is the
-# flag to set on a release walk, and the reason it is not the default is the
-# eight minutes it costs on a re-run that changed nothing.
+# FIVE images, not two, and the two most easily forgotten are the ones 0.7.5
+# actually changed for this walk:
+#
+#   * wardynd — THE CONSOLE IS BAKED INTO IT. wardynd serves ui/dist from its
+#     own layers, so a cluster loaded before a console change judges the OLD
+#     screens with the NEW spec. That is how 0.7.4's walk-3 went red with a
+#     correct tree and correct assertions.
+#   * the aws-sso login image — carries signin-pane.sh and the self-run banner.
+#     On a node still holding 0.7.4's copy NO banner is ever printed, and the
+#     spec's wait for it (which no longer has a typing fallback, by design) reds
+#     the FIRST sign-in of the walk and serial mode skips everything after it.
+#   * the claude-code image — carries the marketplace/updater env and the
+#     onboarding seed. A stale one parks four approvals and opens on the theme
+#     picker, so cases G and H red for a reason that is not the code under test.
+#   * wardyn-proxy and the fake — ordinary staleness, but the fake is the only
+#     thing that can mint anything at all.
+#
+# And deploy/kind/quickstart.sh REUSES an existing :local agent tag rather than
+# rebuilding it, so nothing else in the recipe ever refreshes those two on a
+# cluster that is being reused. Hence: build all five here, load all five.
+#
+# THE RELOAD ONLY MATTERS BECAUSE OF THE RESTART BELOW. `kind load` replaces the
+# image in the node's containerd store, but a Deployment already running the old
+# one keeps running it — the pod template is byte-identical, so Helm rolls
+# nothing. Step 3b's `rollout restart` of wardynd/postgres/the fake is what
+# recreates those pods, and because the chart's pull policy for a :local /
+# :quickstart tag resolves to IfNotPresent the new pods pick up the newly loaded
+# image from the node rather than trying to pull. The agent images are not
+# Deployments at all: every run creates a fresh pod, so they take effect on the
+# next sandbox with no restart needed.
 if [[ "${WARDYN_KIND_SSO_REBUILD:-}" == "1" ]]; then
   command -v kind >/dev/null 2>&1 || die "kind not found on PATH (needed for WARDYN_KIND_SSO_REBUILD=1)"
-  step "rebuilding wardynd + wardyn-proxy from this tree and loading them into ${CLUSTER}"
-  docker build -f deploy/compose/Dockerfile.wardynd -t "${WARDYND_IMAGE}" . \
-    >"${EVIDENCE_DIR}/rebuild-wardynd.log" 2>&1 \
-    || { tail -30 "${EVIDENCE_DIR}/rebuild-wardynd.log" >&2; die "wardynd image build failed"; }
-  docker build -f deploy/compose/Dockerfile.proxy -t "${PROXY_IMAGE}" . \
-    >"${EVIDENCE_DIR}/rebuild-proxy.log" 2>&1 \
-    || { tail -30 "${EVIDENCE_DIR}/rebuild-proxy.log" >&2; die "wardyn-proxy image build failed"; }
-  for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}"; do
+  step "rebuilding the five images this walk judges, from this tree"
+  build_image() { # <dockerfile> <tag> <logname>
+    docker build -f "$1" -t "$2" . >"${EVIDENCE_DIR}/rebuild-$3.log" 2>&1 \
+      || { tail -30 "${EVIDENCE_DIR}/rebuild-$3.log" >&2; die "$2 image build failed (see ${EVIDENCE_DIR}/rebuild-$3.log)"; }
+  }
+  build_image deploy/compose/Dockerfile.wardynd   "${WARDYND_IMAGE}"  wardynd
+  build_image deploy/compose/Dockerfile.proxy     "${PROXY_IMAGE}"    proxy
+  build_image deploy/images/aws-sso/Dockerfile    "${AWS_SSO_IMAGE}"  aws-sso
+  build_image deploy/images/claude-code/Dockerfile "${AGENT_IMAGE}"   claude-code
+  build_image test/awsssofake/cmd/Dockerfile      "${FAKE_IMAGE}"     awsssofake
+
+  step "loading all five into ${CLUSTER} (no registry pull)"
+  for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AWS_SSO_IMAGE}" "${AGENT_IMAGE}" "${FAKE_IMAGE}"; do
     kind load docker-image "${img}" --name "${CLUSTER}" || die "kind load ${img} failed"
   done
 fi
 
 # Recorded EVERY run, rebuilt or not. None of these images carries an
 # org.opencontainers.image.revision label, so the honest provenance is the
-# tree's own HEAD plus each image's content digest and build time — enough to
-# say afterwards whether the walk judged the tip or something older.
+# tree's own HEAD plus each image's content digest and build time.
+#
+# AND IT READS THE NODE, not just the host. `docker image inspect` answers about
+# the daemon this script talks to; what the walk is actually judged by is what
+# the kind node's containerd holds. Those two disagree exactly when the reload
+# was forgotten — which is the failure this record exists to catch — so the host
+# view alone would have printed fresh ids for a walk running stale images.
 step "recording the image provenance into ${EVIDENCE_DIR}/images.txt"
 {
-  echo "walk tree:      $(git -C "${ROOT}" rev-parse HEAD 2>/dev/null || echo '(not a git tree)')"
+  echo "walk tree:       $(git -C "${ROOT}" rev-parse HEAD 2>/dev/null || echo '(not a git tree)')"
   echo "walk tree dirty: $(git -C "${ROOT}" status --porcelain 2>/dev/null | wc -l) file(s)"
-  echo "rebuilt:        ${WARDYN_KIND_SSO_REBUILD:-0}"
-  for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}" "${AWS_SSO_IMAGE}"; do
+  echo "rebuilt:         ${WARDYN_KIND_SSO_REBUILD:-0}"
+  echo
+  echo "--- host daemon ---"
+  for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}" "${AWS_SSO_IMAGE}" "${FAKE_IMAGE}"; do
     printf '%-34s %s\n' "${img}" \
       "$(docker image inspect "${img}" --format '{{.Id}} created={{.Created}}' 2>/dev/null || echo '(not present locally)')"
   done
+  echo
+  echo "--- node ${KIND_NODE} (containerd: what the pods actually run) ---"
+  docker exec "${KIND_NODE}" crictl images --no-trunc 2>/dev/null | grep 'wardyn/' \
+    || echo "(could not read the node's image store)"
 } | tee "${EVIDENCE_DIR}/images.txt"
+
+# A KILLED PLAYWRIGHT LEAVES THE NODE UNSCHEDULABLE. The recovery spec's
+# cold-start case taints this node to hold a run pod Pending and untaints it in
+# an afterEach — but an afterEach does not run if the process is killed, and the
+# next walk then dies at `rollout status deployment/postgres` with every new pod
+# unschedulable and nothing naming the taint. Clear it here, before the restart
+# below creates any pod, and again on exit. `-` is kubectl's remove suffix and a
+# no-op when the taint is absent, which is the ordinary case.
+untaint_coldpull() {
+  kubectl --context "${CONTEXT}" taint nodes "${KIND_NODE}" wardyn-coldpull- >/dev/null 2>&1 || true
+}
+untaint_coldpull
 
 # ── 2. the Service CIDR (never a pod IP) ────────────────────────────────────
 # Read off the apiserver's own flag rather than hardcoding kind's 10.96.0.0/16:
@@ -387,8 +439,15 @@ code="$(curl -s -o "${EVIDENCE_DIR}/site-config-put.json" -w '%{http_code}' \
 # the `live` Playwright project at this cluster. One spec file, as always.
 step "opening the read-only port-forward to the fake's /_seen (127.0.0.1:${SEEN_PORT})"
 seen_pf_pid=""
-cleanup_seen_pf() { [[ -n "${seen_pf_pid}" ]] && kill "${seen_pf_pid}" 2>/dev/null; return 0; }
-trap cleanup_seen_pf EXIT
+# ALSO the taint: this is the script's only EXIT trap, so the cold-start case's
+# node taint has to come off here too (see untaint_coldpull above for the failure
+# a leftover one causes on the NEXT walk).
+cleanup_walk() {
+  [[ -n "${seen_pf_pid}" ]] && kill "${seen_pf_pid}" 2>/dev/null
+  untaint_coldpull
+  return 0
+}
+trap cleanup_walk EXIT
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" port-forward "svc/${FAKE_SVC}" \
   "${SEEN_PORT}:${FAKE_PORT}" >/dev/null 2>&1 &
 seen_pf_pid=$!
