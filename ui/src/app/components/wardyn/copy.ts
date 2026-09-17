@@ -865,3 +865,57 @@ export const TERMINAL = {
   // alternative to the filed Ctrl+Shift+Esc.
   ESCAPE_CHORD_HINT: `${ESCAPE_CHORD} leaves the terminal`,
 } as const;
+
+// ── DRAFT (M2 canon pending) — the New Run rail's TRUTH block ────────────────
+// Appendix A finding 1: the rail rendered two unconditional security claims —
+// "Minted at launch, injected by the proxy. Never written into the sandbox." and
+// "Every keystroke and every outbound connection." — neither of which consulted
+// anything. The first is a FALSE ASSURANCE on a bedrock_sso deployment, read at
+// the moment someone decides whether a per-user AWS credential may sit inside a
+// CC1 container; the second promises recording that a stock Helm install
+// (persistence.enabled=false) never captures.
+//
+// So every sentence below is SCOPED to the model credential and selected by what
+// the SERVER resolved (SetupHarnessTool.credential_residency, overridden by
+// preflight's model_credential). There is deliberately no default: an unresolved
+// lane renders RESOLVED_AT_LAUNCH, never the proxy sentence.
+
+// Recording, deduplicated: the same two facts were spelled three times
+// (recording.tsx's local consts, run-detail.tsx's inline EmptyState literals)
+// and had already drifted — "will ever produce one" vs "captures one". One
+// spelling, and the rail reads it too.
+export const RECORDING_DISABLED_TITLE = "Session recording is disabled on this deployment";
+export const RECORDING_DISABLED_DESC =
+  "No run on this server will ever produce one — set persistence.enabled (Helm) or WARDYN_RECORDING_DIR to turn it on.";
+
+export const RAIL_CREDENTIAL = {
+  // residency "proxy": late-bound, swapped onto the wire, never resident.
+  PROXY: "Model credential — minted at launch and injected by the proxy; never written into the sandbox.",
+  // residency "proxy" + staged_placeholder: the ~/.claude mount with injection
+  // ON. "Proxy" is the deployment's STATED mode, not something Wardyn verified —
+  // the sentinel is written by an operator-run script (scripts/stage-claude-creds.sh)
+  // the daemon never reads back — so the mount is named rather than denied.
+  PROXY_STAGED:
+    "Model credential — this deployment injects it at the proxy; the sign-in mounted into the sandbox is staged as a placeholder.",
+  // residency "sandbox", Bedrock family. The operator's own sentence.
+  SANDBOX_BEDROCK:
+    "Model credential — AWS credentials sign inside the sandbox, so this run holds them for its lifetime.",
+  // Whose credential that is — the per_user/shared distinction, in the Barrier
+  // chip's shape because it is the same kind of fact: a bound, stated up front.
+  SANDBOX_BEDROCK_CHIP_PER_USER: "Your AWS sign-in",
+  SANDBOX_BEDROCK_CHIP_SHARED: "Admin's credential",
+  // residency "sandbox", subscription: WARDYN_SUBSCRIPTION_INJECT=off, which is
+  // the COMPOSE stack's own default (threatmodel/THREAT-MODEL.md).
+  SANDBOX_SUBSCRIPTION:
+    "Model credential — this deployment mounts the Claude sign-in into the sandbox, so this run holds it for its lifetime.",
+  // residency "image" (a `none` roster row, BYOA). The server's own
+  // llmMechanismWords wording for that lane, said once in both places.
+  IMAGE: "Wardyn wires no model credential — the image brings its own, and Wardyn cannot say where it lives.",
+  // residency "unknown", and the absent-row doctrine in one line: the rail
+  // states no residency it was not given.
+  RESOLVED_AT_LAUNCH: "Resolved at launch.",
+  // The scoped heading's one exception: `env_secret` and `ssh_key` grants are
+  // resident BY DESIGN (the same THREAT-MODEL table), so a policy that carries
+  // one must not read as covered by a sentence about the model credential.
+  POLICY_GRANTS_SECRETS: "Secrets this policy grants are delivered into the sandbox.",
+} as const;

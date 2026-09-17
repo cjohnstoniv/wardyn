@@ -17,13 +17,20 @@
 // scroll back to.
 import { Link } from "react-router-dom";
 import { Loader2, TriangleAlert } from "lucide-react";
-import type { ConfinementClass, PreflightResult, RunPolicySpec } from "../../../lib/types";
+import type {
+  ConfinementClass,
+  ModelCredential,
+  PreflightResult,
+  RunPolicySpec,
+  SetupHarnessTool,
+} from "../../../lib/types";
 import { Button } from "../../ui/button";
 import { Chip, ConfinementChip, RiskBadge } from "../../wardyn/primitives";
 import { CC_META } from "../../wardyn/cc-meta";
 import { GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
-import { RUN } from "../../wardyn/copy";
+import { RAIL_CREDENTIAL, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
+import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
 import { RailSection } from "./new-run-primitives";
 
 interface RunRailProps {
@@ -66,6 +73,101 @@ interface RunRailProps {
     onOpenRun: (() => void) | null;
   };
   preflight: { error: string | null; result: PreflightResult | null };
+  /**
+   * The picked agent's /setup/status roster row, when the screen has one. It
+   * carries the DEFAULT-path answer to "where does this run's model credential
+   * live" — credential_residency, graded server-side from the lanes that
+   * actually resolve. Undefined for an agent the status read did not name, or
+   * before that read lands: the absent-row doctrine again, and the Credentials
+   * section falls back to "Resolved at launch." rather than to the sentence the
+   * rail used to assert unconditionally.
+   */
+  agentRow?: SetupHarnessTool;
+}
+
+// modelCredentialOf is the rail's ONE precedence rule: a preflight the operator
+// actually ran describes the body they are about to launch, so it wins; the
+// status row is what everyone else reads, since Preflight is a manual button
+// nothing fires by default and answers 422 for a per_user member who has not
+// signed in yet.
+//
+// Returns undefined when NEITHER source graded one — never a default. The old
+// copy's whole defect was that it had a default.
+function modelCredentialOf(
+  preflight: PreflightResult | null,
+  agentRow?: SetupHarnessTool,
+): ModelCredential | undefined {
+  if (preflight?.model_credential) return preflight.model_credential;
+  if (!agentRow?.credential_residency) return undefined;
+  return {
+    residency: agentRow.credential_residency,
+    mechanism: agentRow.mechanism,
+    credential_source: agentRow.credential_source,
+    staged_placeholder: agentRow.staged_placeholder,
+  };
+}
+
+// CredentialFacts renders where the MODEL credential lands, and nothing wider:
+// every sentence names the model credential explicitly, because "Credentials" as
+// a heading over "never written into the sandbox" was a universal claim only the
+// model credential ever supported — env_secret and ssh_key grants are resident
+// by design (threatmodel/THREAT-MODEL.md's resident-secret table), which is what
+// the policy line at the bottom is for.
+function CredentialFacts({
+  cred,
+  savedPolicy,
+}: {
+  cred?: ModelCredential;
+  savedPolicy?: { name: string; spec: RunPolicySpec };
+}) {
+  // env_secret / ssh_key are delivered INTO the sandbox whatever the model
+  // credential does. Only for a saved policy, whose spec is the one the rail
+  // actually holds — an inline spec is not a prop here, and a line about grants
+  // the rail cannot see would be the same kind of unconditional claim.
+  const residentGrants = (savedPolicy?.spec.eligible_grants ?? []).some(
+    (g) => g.kind === "env_secret" || g.kind === "ssh_key",
+  );
+  return (
+    <>
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        {credentialSentence(cred)}
+      </p>
+      {cred?.residency === "sandbox" && cred.mechanism !== "anthropic_subscription" && (
+        <div className="mt-1.5">
+          <Chip tone="neutral">
+            {cred.credential_source === "per_user"
+              ? RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_PER_USER
+              : RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_SHARED}
+          </Chip>
+        </div>
+      )}
+      {residentGrants && (
+        <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+          {RAIL_CREDENTIAL.POLICY_GRANTS_SECRETS}
+        </p>
+      )}
+    </>
+  );
+}
+
+// credentialSentence maps a graded residency to the one sentence that is true of
+// it. The "unknown" arm is also the arm an absent grade takes, so the proxy
+// sentence is unreachable from an absence — the defect this lane exists for.
+function credentialSentence(cred?: ModelCredential): string {
+  switch (cred?.residency) {
+    case "proxy":
+      return cred.staged_placeholder ? RAIL_CREDENTIAL.PROXY_STAGED : RAIL_CREDENTIAL.PROXY;
+    case "sandbox":
+      // The only two families that ever grade `sandbox`: every SigV4 Bedrock
+      // lane, and the ~/.claude mount with proxy-side injection off.
+      return cred.mechanism === "anthropic_subscription"
+        ? RAIL_CREDENTIAL.SANDBOX_SUBSCRIPTION
+        : RAIL_CREDENTIAL.SANDBOX_BEDROCK;
+    case "image":
+      return RAIL_CREDENTIAL.IMAGE;
+    default:
+      return RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH;
+  }
 }
 
 export function RunRail({
@@ -78,7 +180,12 @@ export function RunRail({
   toolRules,
   launch,
   preflight,
+  agentRow,
 }: RunRailProps) {
+  // Both of finding 1's facts, read rather than asserted: where the model
+  // credential lands, and whether this deployment records anything at all.
+  const cred = modelCredentialOf(preflight.result, agentRow);
+  const recordingDisabled = useRecordingDisabled();
   return (
     // F2-F7/F3-F1: a sticky box is clamped by its containing block — with
     // ceiling + tool rules + 3 warnings (member/warnings path) the rail's
@@ -139,9 +246,7 @@ export function RunRail({
               </Link>
             </p>
           )}
-          <p className="text-xs leading-relaxed text-muted-foreground">
-            Minted at launch, injected by the proxy. Never written into the sandbox.
-          </p>
+          <CredentialFacts cred={cred} savedPolicy={savedPolicy} />
         </RailSection>
 
         {/* What actually happens when this launches. The startup choice is a
@@ -165,8 +270,14 @@ export function RunRail({
         )}
 
         <RailSection title="Recording">
+          {/* A stock Helm install leaves persistence.enabled=false, so this
+              promise was false out of the box — and wrong in both dangerous
+              directions at once. The shared hook is the same /healthz read the
+              Recordings library and the run cockpit make. */}
           <p className="text-xs text-muted-foreground">
-            Every keystroke and every outbound connection.
+            {recordingDisabled
+              ? RECORDING_DISABLED_TITLE
+              : "Every keystroke and every outbound connection."}
           </p>
         </RailSection>
       </div>

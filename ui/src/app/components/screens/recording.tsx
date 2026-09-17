@@ -18,7 +18,7 @@ import type { AgentRun, Recording } from "../../lib/types";
 import { runHeadline } from "../../lib/types";
 import { recordings as api } from "../../lib/api/recordings";
 import { runs as runsApi } from "../../lib/api/runs";
-import { health } from "../../lib/api/health";
+import { useRecordingDisabled } from "../../lib/hooks/use-recording-disabled";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { fmtBytes, relativeTime } from "../../lib/format";
 import { Button } from "../ui/button";
@@ -40,6 +40,7 @@ import {
 import { AgentBadge, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
 import { Mono } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TruncatedNote } from "../wardyn/states";
+import { RECORDING_DISABLED_DESC, RECORDING_DISABLED_TITLE } from "../wardyn/copy";
 import { PageHeader } from "../wardyn/page-header";
 import { TerminalPlayer } from "../wardyn/terminal-player";
 
@@ -64,13 +65,6 @@ function formatDuration(totalSeconds: number): string {
   return `${m}:${String(s % 60).padStart(2, "0")}`;
 }
 
-// W21-S1-7: shared copy for both empty states below — a stock Helm install
-// (persistence.enabled=false, the default) never constructs a recording
-// store, so "launch more runs" is not just unhelpful here, it's false.
-const RECORDING_DISABLED_TITLE = "Session recording is disabled on this deployment";
-const RECORDING_DISABLED_DESC =
-  "No run on this server will ever produce one — set persistence.enabled (Helm) or WARDYN_RECORDING_DIR to turn it on.";
-
 // Only show search/facets once there's enough of a library to make them
 // useful — a filter bar over two cards is just noise.
 // fixed threshold; make it configurable if it ever matters.
@@ -89,17 +83,9 @@ export function RecordingScreen() {
   const [playingRecording, setPlayingRecording] = React.useState<Recording | null>(null);
   const [playError, setPlayError] = React.useState<string | null>(null);
 
-  // W21-S1-7: /healthz's components.recording is the honest "will this
-  // deployment EVER produce one" signal (server.go's ComponentInfo) — "none"
-  // means the recording store never came up (stock Helm install: persistence
-  // off), not "no run has happened yet". Read once; it's a boot-time fact,
-  // not something that changes while this screen is open.
-  const [recordingDisabled, setRecordingDisabled] = React.useState(false);
-  React.useEffect(() => {
-    health.health().then((h) => {
-      if (h.components?.recording?.selected === "none") setRecordingDisabled(true);
-    });
-  }, []);
+  // W21-S1-7, now the shared hook: the same /healthz read the run cockpit and
+  // the New Run rail make. See use-recording-disabled.ts.
+  const recordingDisabled = useRecordingDisabled();
 
   const load = React.useCallback(() => {
     let cancelled = false;

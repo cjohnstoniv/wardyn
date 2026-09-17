@@ -44,7 +44,7 @@ import {
 } from "../../lib/api/audit";
 import { LIST_LIMIT } from "../../lib/api/core";
 import { recordings as recordingsApi } from "../../lib/api/recordings";
-import { health } from "../../lib/api/health";
+import { useRecordingDisabled } from "../../lib/hooks/use-recording-disabled";
 import { usePoll } from "../../lib/use-poll";
 import { useCopyToClipboard } from "../../lib/use-copy-to-clipboard";
 import { absoluteTime, clockTime, getErrorMessage, relativeTime } from "../../lib/format";
@@ -72,6 +72,8 @@ import { LiveApprovals, isHeld } from "../wardyn/live-approvals";
 import { ReasonDialog } from "../wardyn/reason-dialog";
 import { useOperator, usePrincipal, useSecurityOperator } from "../wardyn/operator-context";
 import {
+  RECORDING_DISABLED_DESC,
+  RECORDING_DISABLED_TITLE,
   RUN_COCKPIT,
   SECURITY_ONLY_REASON,
   VIEWER_APPROVAL_BLOCKS_NOTE,
@@ -130,16 +132,9 @@ export function RunDetailScreen() {
   // Which cast to replay: the run's own (stored under the bare run id) or one
   // interactive attach session (the composite `<run-id>~<session-uuid>` key).
   const [recKey, setRecKey] = React.useState(id);
-  // W21-S1-7: /healthz's components.recording — "none" means this
-  // deployment's recording store never came up (stock Helm install:
-  // persistence off), so a missing cast is a deployment fact, not "this run
-  // happened not to get one". A boot-time fact; read once.
-  const [recordingDisabled, setRecordingDisabled] = React.useState(false);
-  React.useEffect(() => {
-    health.health().then((h) => {
-      if (h.components?.recording?.selected === "none") setRecordingDisabled(true);
-    });
-  }, []);
+  // W21-S1-7, now the shared hook: the same /healthz read the Recordings
+  // library and the New Run rail make. See use-recording-disabled.ts.
+  const recordingDisabled = useRecordingDisabled();
 
   const { copied, copyAsync } = useCopyToClipboard(1400);
   const [decide, setDecide] = React.useState<{
@@ -874,7 +869,7 @@ function RecordingTab({
             icon={SquareTerminal}
             title={
               recordingDisabled
-                ? "Session recording is disabled on this deployment"
+                ? RECORDING_DISABLED_TITLE
                 // F1-F11: a SPECIFIC attach session's missing cast is not a
                 // fact about the whole run — the picker above is already
                 // looking at one session, so the empty state must say so too.
@@ -884,7 +879,7 @@ function RecordingTab({
             }
             description={
               recordingDisabled
-                ? "No run on this server captures one — set persistence.enabled (Helm) or WARDYN_RECORDING_DIR to turn it on."
+                ? RECORDING_DISABLED_DESC
                 : selected !== runId
                   ? RECORDING_MISSING_SESSION_BODY
                   : "This run has no captured terminal session. A recording is produced once an agent process runs in the sandbox."

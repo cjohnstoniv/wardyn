@@ -980,6 +980,7 @@ export function NewRunScreen() {
               ? { error: preflightError, result: preflightResult }
               : { error: null, result: null }
           }
+          agentRow={harnesses?.find((h) => h.id === state.agent)}
         />
       </div>
 
