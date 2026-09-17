@@ -55,6 +55,7 @@ import { MEMBER_WORKSPACE } from "../../../lib/permissions-copy";
 import { EPISODES } from "../../../lib/demo-videos";
 import { EpisodeRow } from "./episode-card";
 import { YourModelKey, modelKeyProvider } from "./your-model-key";
+import { modelKeyState } from "./model-key-state";
 import type { AgentRun, SetupStatus } from "../../../lib/types";
 
 type Variant = "default" | "outline";
@@ -172,10 +173,22 @@ export function MemberGettingStarted() {
   const llmReady = !unreachable && status?.llm_ready === true;
   // X3-F3: the summary chip and the pane must agree on WHICH key — the name
   // follows the org's agent roster, not a hardcoded provider.
-  const hasOwnKey = mine?.includes(modelKeyProvider(status?.harnesses).secretName) ?? false;
+  const modelKeyProviderRow = modelKeyProvider(status?.harnesses);
+  const hasOwnKey = mine?.includes(modelKeyProviderRow.secretName) ?? false;
+  const isPerUserModelAccess = modelKeyProviderRow.credentialSource === "per_user";
 
   const workspaceDone = !unreachable && !wsLoading && workspaces.length > 0;
-  const modelKeyDone = !unreachable && (hasOwnKey || llmReady);
+  // Appendix A finding 2 — ONE predicate for both the checklist and the
+  // card (your-model-key.tsx): a per_user roster row is graded on THIS
+  // caller's own model_access, never on the deployment-wide llm_ready.
+  const modelKeyDone =
+    !unreachable &&
+    modelKeyState({
+      hasOwn: hasOwnKey,
+      llmReady,
+      modelAccess: status?.model_access,
+      credentialSource: modelKeyProviderRow.credentialSource,
+    }).done;
   const firstRunDone = !unreachable && (ownRuns?.length ?? 0) > 0;
   const connectDone = !unreachable && (sshKeyCount ?? 0) > 0;
 
@@ -326,7 +339,7 @@ export function MemberGettingStarted() {
                   </Button>
                 ))}
               <p className="mt-3 text-sm text-muted-foreground">
-                {T.SETUP_SUMMARY_HELPER}
+                {isPerUserModelAccess ? T.SETUP_SUMMARY_HELPER_PER_USER : T.SETUP_SUMMARY_HELPER}
               </p>
               {/* The chip names the profile; this says what having one means.
                   Both render only when there IS one. */}
@@ -374,6 +387,8 @@ export function MemberGettingStarted() {
           llmReady={llmReady}
           mine={mine}
           harnesses={status?.harnesses}
+          modelAccess={status?.model_access}
+          onSignInAws={() => setAwsLoginOpen(true)}
           known={!unreachable}
           variant={variantFor("model-key")}
           onChanged={loadSecrets}

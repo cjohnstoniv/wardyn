@@ -19,9 +19,11 @@ import { Input } from "../../ui/input";
 import { Chip, DoneChip, SectionCard } from "../../wardyn/primitives";
 import { Mono } from "../../wardyn/code-block";
 import { YOUR_MODEL_KEY as T } from "../../wardyn/copy";
-import type { SetupHarnessTool } from "../../../lib/types";
+import { AGENTS } from "../../../lib/workspace-providers-copy";
+import type { SetupHarnessTool, SetupModelAccess } from "../../../lib/types";
 import { secrets as secretsApi } from "../../../lib/api/secrets";
 import { HttpError } from "../../../lib/api/core";
+import { modelKeyState } from "./model-key-state";
 
 // X3-F3 — which provider's key this member should store. The roster is the
 // org's answer to "which coding agents may a run name"; a row this pane knows
@@ -32,7 +34,13 @@ import { HttpError } from "../../../lib/api/core";
 export function modelKeyProvider(harnesses?: SetupHarnessTool[]) {
   const known = Object.keys(T.BY_AGENT);
   const row = (harnesses ?? []).find((h) => h.enabled !== false && known.includes(h.id));
-  return T.BY_AGENT[(row?.id ?? "claude-code") as keyof typeof T.BY_AGENT];
+  return {
+    ...T.BY_AGENT[(row?.id ?? "claude-code") as keyof typeof T.BY_AGENT],
+    // Appendix A finding 2 — the governing row's declared lane, undefined
+    // when it falls back to the default with no row at all. "per_user" is
+    // the only value model-key-state.ts branches on.
+    credentialSource: row?.credential_source,
+  };
 }
 
 export function YourModelKey({
@@ -41,6 +49,8 @@ export function YourModelKey({
   variant,
   known = true,
   harnesses,
+  modelAccess,
+  onSignInAws,
   onChanged,
 }: {
   llmReady: boolean;
@@ -57,6 +67,13 @@ export function YourModelKey({
   /** The org's agent roster (SetupStatus.harnesses) — see modelKeyProvider.
    *  Absent/empty keeps the anthropic name every existing caller had. */
   harnesses?: SetupHarnessTool[];
+  /** THIS PRINCIPAL's model-access state (Appendix A finding 2) — read
+   *  instead of `llmReady` whenever the governing harness row is per_user;
+   *  see model-key-state.ts's total truth table. */
+  modelAccess?: SetupModelAccess;
+  /** Opens the SAME HarnessLoginPane the chip row above already mounts (one
+   *  pane, two buttons) — required whenever a per_user state is actionable. */
+  onSignInAws?: () => void;
   // Called after a successful Save/Remove so the parent refetches `mine`.
   onChanged: () => void;
 }) {
@@ -68,7 +85,12 @@ export function YourModelKey({
   const [error, setError] = React.useState<string | null>(null);
 
   const hasOwn = mine?.includes(provider.secretName) ?? false;
-  const done = known && (hasOwn || (llmReady && !hasOwn));
+  const state = modelKeyState({
+    hasOwn,
+    llmReady,
+    modelAccess,
+    credentialSource: provider.credentialSource,
+  });
 
   const save = async () => {
     setBusy(true);
@@ -99,20 +121,28 @@ export function YourModelKey({
     }
   };
 
-  const showEmptyForm = !hasOwn && (revealEmpty || !llmReady);
+  // Appendix A finding 2 — governing row is NOT per_user AND (revealEmpty OR
+  // result is unknown). Under per_user this is ALWAYS false: a member's own
+  // API key can never satisfy a bedrock_sso lane, so the form never shows.
+  const showEmptyForm = state.revealAllowed && (revealEmpty || state.result === "unknown");
   // The header carries exactly one chip (CONSOLE-RULES: no second chip in the
-  // body of a done section): the generic "Done" when the member holds their
-  // own key, "Provided by your admin" when the admin's covers them instead —
-  // never both, and none while the empty form is showing.
-  const headerChip = showEmptyForm || !known ? undefined : hasOwn ? (
-    <DoneChip />
-  ) : done ? (
-    <Chip tone="success">{T.PROVIDED_CHIP}</Chip>
-  ) : undefined;
+  // body of a done section) — never while the empty form is showing, and
+  // never a claim `known=false` (an unreachable page) can't back.
+  const headerChip = showEmptyForm || !known ? undefined : (
+    {
+      own: <DoneChip />,
+      signed_in: <Chip tone="success">{T.SIGNED_IN_CHIP}</Chip>,
+      expiring: <Chip tone="warning">{T.EXPIRING_CHIP}</Chip>,
+      not_signed_in: <Chip tone="warning">{T.NOT_SIGNED_IN_CHIP}</Chip>,
+      shared_expired: <Chip tone="warning">{AGENTS.MODEL_ACCESS_SHARED_EXPIRED}</Chip>,
+      provided: <Chip tone="success">{T.PROVIDED_CHIP}</Chip>,
+      unknown: undefined,
+    }[state.result]
+  );
 
   return (
     <SectionCard title="Your model key" right={headerChip}>
-      {hasOwn ? (
+      {state.result === "own" ? (
         <div>
           <div className="flex items-center gap-2">
             <Mono className="text-sm">••••••••••••</Mono>
@@ -152,13 +182,44 @@ export function YourModelKey({
         </div>
       ) : showEmptyForm ? (
         <EmptyForm provider={provider} value={value} setValue={setValue} error={error} busy={busy} variant={variant} onSave={save} />
-      ) : (
+      ) : state.result === "signed_in" ? (
+        <p className="text-sm text-muted-foreground">{T.SIGNED_IN_BODY}</p>
+      ) : state.result === "expiring" ? (
+        <div>
+          <p className="text-sm text-muted-foreground">{T.SIGNED_IN_BODY}</p>
+          <Button variant={variant} size="sm" className="mt-3" onClick={onSignInAws}>
+            {AGENTS.SIGN_IN_AWS}
+          </Button>
+        </div>
+      ) : state.result === "not_signed_in" ? (
+        <div>
+          <p className="text-sm text-muted-foreground">{T.NOT_SIGNED_IN_BODY}</p>
+          <Button variant={variant} size="sm" className="mt-3" onClick={onSignInAws}>
+            {AGENTS.SIGN_IN_AWS}
+          </Button>
+        </div>
+      ) : state.result === "shared_expired" ? (
+        <div>
+          <p className="text-sm text-muted-foreground">{T.SHARED_EXPIRED_BODY}</p>
+          <Button variant="link" size="sm" className="mt-1 h-auto p-0" onClick={() => setRevealEmpty(true)}>
+            {T.USE_OWN_KEY}
+          </Button>
+        </div>
+      ) : state.result === "provided" ? (
         <div>
           <p className="text-sm text-muted-foreground">{T.PROVIDED_BODY}</p>
           <Button variant="link" size="sm" className="mt-1 h-auto p-0" onClick={() => setRevealEmpty(true)}>
             {T.USE_OWN_KEY}
           </Button>
         </div>
+      ) : (
+        // result === "unknown" under per_user (showEmptyForm is unreachable
+        // there): no claim exists to make and nothing on the page names a
+        // string for it — same "no claim" as known=false, rendered as
+        // nothing rather than a guessed sentence. ponytail: rare combo (an
+        // unrecognised model_access.state under a per_user row); add copy
+        // when a real state needs one.
+        <></>
       )}
     </SectionCard>
   );

@@ -615,6 +615,18 @@ export const YOUR_MODEL_KEY = {
   REFUSED_SHORT: "Keys shorter than 8 characters are refused.",
   SAVE_ERROR: "Couldn't save this key.",
   REMOVE_ERROR: "Couldn't remove this key.",
+  // DRAFT (M2 canon pending) — Appendix A finding 2, plan sunny-snacking-phoenix.md
+  // lane ui-member-model-key. Under a per_user roster row the card reads
+  // status.model_access instead of the deployment-wide llm_ready (see
+  // model-key-state.ts's total truth table). EXPIRING reuses SIGNED_IN_BODY
+  // (still true — the sign-in just needs renewing soon) and SHARED_EXPIRED
+  // reuses AGENTS.MODEL_ACCESS_SHARED_EXPIRED for its chip (workspace-providers-copy.ts).
+  SIGNED_IN_CHIP: "Your AWS sign-in",
+  SIGNED_IN_BODY: "You signed in to AWS. Your runs use your own session.",
+  EXPIRING_CHIP: "Your AWS sign-in · Expiring",
+  NOT_SIGNED_IN_CHIP: "Not signed in",
+  NOT_SIGNED_IN_BODY: "Sign in to AWS to give your runs model access. Nothing is configured for you until you do.",
+  SHARED_EXPIRED_BODY: "Ask your admin to sign in again.",
 } as const;
 
 // Member Getting Started (Phase 5) — the six-SectionCard page a member lands
@@ -652,6 +664,12 @@ export const MEMBER_GETTING_STARTED = {
   CONNECT_HINT_PREFIX: "Register a key once: ",
   CONNECT_COMMAND: "wardyn ssh-key ensure",
   CONNECT_ACTION: "Add SSH key",
+  // DRAFT (M2 canon pending) — Appendix A finding 2b, plan sunny-snacking-phoenix.md
+  // lane ui-member-model-key. Under a per_user roster row the credential is
+  // specifically NOT shared and NOT inherited — that is the entire point of
+  // the lane, and the chip beside this sentence already says so.
+  SETUP_SUMMARY_HELPER_PER_USER:
+    "Your admin configured the barrier, network and the model-access lane. Model access uses your own AWS sign-in; your runs inherit the rest.",
 } as const;
 
 // DRAFT (M2 canon pending) — X3-F4, the MEMBER's empty runs board. The operator

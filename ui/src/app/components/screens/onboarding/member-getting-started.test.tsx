@@ -4,10 +4,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import type { SetupStatus, AgentRun } from "../../../lib/types";
+import type { SetupStatus, AgentRun, SetupHarnessTool } from "../../../lib/types";
 import { baseMe, baseMeDrive, baseStatus } from "../../../lib/test-fixtures";
 
 const getSetupStatusMock = vi.fn();
@@ -58,7 +58,7 @@ import { OperatorProvider } from "../../wardyn/operator-context";
 import { MEMBER } from "../../../lib/governance-copy";
 import { DRIVES, DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
-import { MEMBER_GETTING_STARTED as T } from "../../wardyn/copy";
+import { MEMBER_GETTING_STARTED as T, YOUR_MODEL_KEY as YMK } from "../../wardyn/copy";
 
 function status(overrides: Partial<SetupStatus> = {}): SetupStatus {
   return baseStatus({
@@ -73,6 +73,13 @@ function status(overrides: Partial<SetupStatus> = {}): SetupStatus {
 function run(id: string): AgentRun {
   return { id, created_at: "", updated_at: "" } as AgentRun;
 }
+
+// Appendix A finding 2 — a per_user roster row (modelKeyProvider picks the
+// first enabled row in T.BY_AGENT order; "claude-code" matches the default
+// secret name every fixture above already uses).
+const perUserHarness: SetupHarnessTool[] = [
+  { id: "claude-code", display: "Claude Code", has_gateway: true, has_login: true, enabled: true, credential_source: "per_user" },
+];
 
 // The page reads its drive off the shell's ONE GET /me (operator-context's
 // UserDriveContext), not a fetch of its own — so a case states its /me body
@@ -392,11 +399,20 @@ describe("MemberGettingStarted", () => {
         }),
       );
       renderPage();
-      await screen.findByText(AGENTS.MODEL_ACCESS_SHARED_EXPIRED);
+      // Appendix A finding 2 — the card now ALSO renders this same label
+      // (shared_expired is a "shared/none" row's own state, so the card's
+      // truth table lands there too, correctly scoped instead of the old
+      // "Provided by your admin"/empty-form guess). Scope to the chip row's
+      // own section to keep this test about the chip row alone.
+      const summarySection = (await screen.findByRole("heading", { name: T.SETUP_SUMMARY_TITLE })).closest("section")!;
+      expect(within(summarySection).getByText(AGENTS.MODEL_ACCESS_SHARED_EXPIRED)).toBeInTheDocument();
       expect(
         screen.getByText("Your admin's model credential expired — ask them to reconnect it"),
       ).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
+      // The card's own body: correctly scoped, not "Provided by your admin".
+      expect(screen.getByText(YMK.SHARED_EXPIRED_BODY)).toBeInTheDocument();
+      expect(screen.queryByText(YMK.PROVIDED_CHIP)).not.toBeInTheDocument();
     });
 
     it("model_access absent (older daemon / a failed fetch) keeps today's llm_ready rendering", async () => {
@@ -406,11 +422,17 @@ describe("MemberGettingStarted", () => {
       expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).not.toBeInTheDocument();
     });
 
+    // Appendix A finding 2 — a per_user row's not_configured state is
+    // actionable on BOTH the chip row (unchanged) and the card (new): TWO
+    // "Sign in to AWS" buttons, one pane, either one opens it (both call the
+    // same setAwsLoginOpen(true)).
     it("clicking Sign in to AWS opens HarnessLoginPane in place", async () => {
       const user = userEvent.setup();
-      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_configured" } }));
+      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_configured" }, harnesses: perUserHarness }));
       renderPage();
-      await user.click(await screen.findByRole("button", { name: AGENTS.SIGN_IN_AWS }));
+      const buttons = await screen.findAllByRole("button", { name: AGENTS.SIGN_IN_AWS });
+      expect(buttons).toHaveLength(2);
+      await user.click(buttons[0]);
       expect(screen.getByTestId("harness-login-pane")).toBeInTheDocument();
     });
 
@@ -420,14 +442,71 @@ describe("MemberGettingStarted", () => {
     // sso_start_url. The field was a control with no effect; the note is the fact.
     it("...and that pane asks for no access portal — the admin's is the one used", async () => {
       const user = userEvent.setup();
-      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_configured" } }));
+      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_configured" }, harnesses: perUserHarness }));
       renderPage();
-      await user.click(await screen.findByRole("button", { name: AGENTS.SIGN_IN_AWS }));
+      const buttons = await screen.findAllByRole("button", { name: AGENTS.SIGN_IN_AWS });
+      expect(buttons).toHaveLength(2);
+      await user.click(buttons[0]);
       expect(screen.getByText(AGENTS.SSO_START_URL_MANAGED)).toBeInTheDocument();
       expect(document.getElementById("harness-login-start-url")).toBeNull();
       // The pane is at its consent gate, ready to launch — not stuck waiting on
       // a field it no longer shows.
       expect(screen.getByTestId("login-intro")).toBeInTheDocument();
+    });
+
+    // Appendix A finding 2 — the card's own claim now follows the SAME
+    // per-principal state as the chip row, instead of the deployment-wide
+    // llm_ready that made a not-signed-in member's card say "Provided by
+    // your admin".
+    it("not_configured + llm_ready:true (the field report's own scenario): card says Not signed in, checklist NOT done, two buttons, one pane", async () => {
+      getSetupStatusMock.mockResolvedValue(
+        status({ model_access: { state: "not_configured" }, llm_ready: true, harnesses: perUserHarness }),
+      );
+      renderPage();
+      expect(await screen.findByText(YMK.NOT_SIGNED_IN_CHIP)).toBeInTheDocument();
+      expect(screen.getByText(YMK.NOT_SIGNED_IN_BODY)).toBeInTheDocument();
+      expect(screen.queryByText(YMK.PROVIDED_CHIP)).not.toBeInTheDocument();
+      // NOT done: the "Your model key" section's own header carries no Done
+      // chip (scoped to its <section> — Workspace's Done/not-done is a
+      // different section and out of scope here).
+      const modelKeySection = screen.getByRole("heading", { name: "Your model key" }).closest("section")!;
+      expect(within(modelKeySection).queryByText("Done")).not.toBeInTheDocument();
+      const buttons = screen.getAllByRole("button", { name: AGENTS.SIGN_IN_AWS });
+      expect(buttons).toHaveLength(2);
+      expect(screen.getByText(T.SETUP_SUMMARY_HELPER_PER_USER)).toBeInTheDocument();
+    });
+
+    it("live + llm_ready:true: card says Your AWS sign-in; lede says the per_user variant", async () => {
+      getSetupStatusMock.mockResolvedValue(
+        status({ model_access: { state: "live" }, llm_ready: true, harnesses: perUserHarness }),
+      );
+      renderPage();
+      expect(await screen.findByText(YMK.SIGNED_IN_CHIP)).toBeInTheDocument();
+      expect(screen.getByText(YMK.SIGNED_IN_BODY)).toBeInTheDocument();
+      expect(screen.getByText(T.SETUP_SUMMARY_HELPER_PER_USER)).toBeInTheDocument();
+      expect(screen.queryByText(T.SETUP_SUMMARY_HELPER)).not.toBeInTheDocument();
+    });
+
+    // Appendix A finding 2, plan item 5 — hasOwn is IGNORED under a per_user
+    // row: a stale `mine` write from before the roster switched this member
+    // to per_user must not read as "Your key" over a lane that can never use
+    // it, and the checklist must not mark the section done.
+    it("hasOwn:true + per_user + not_configured: still Not signed in, checklist NOT done, reveal absent", async () => {
+      listSecretsMineMock.mockResolvedValue({ names: ["anthropic-api-key"], mine: ["anthropic-api-key"] });
+      getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_configured" }, harnesses: perUserHarness }));
+      renderPage();
+      expect(await screen.findByText(YMK.NOT_SIGNED_IN_CHIP)).toBeInTheDocument();
+      const modelKeySection = screen.getByRole("heading", { name: "Your model key" }).closest("section")!;
+      expect(within(modelKeySection).queryByText("Done")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Use my own key instead" })).not.toBeInTheDocument();
+    });
+
+    // Negative control for the reveal-hidden assertion above: a shared/api-key
+    // row (no per_user credential_source) keeps today's reveal.
+    it("negative control: reveal IS present under a shared/api-key row", async () => {
+      getSetupStatusMock.mockResolvedValue(status({ llm_ready: true }));
+      renderPage();
+      expect(await screen.findByRole("button", { name: "Use my own key instead" })).toBeInTheDocument();
     });
 
     // V1 r2 LOW: every unrecognised state fell through to
