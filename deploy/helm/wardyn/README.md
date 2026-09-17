@@ -602,23 +602,28 @@ k8s-substrate equivalent), and **`replicas` stays 1**, same reason as every
 other substrate (see [docs/OPERATIONS.md](../../../docs/OPERATIONS.md)'s
 "One replica, by construction").
 
-**Narrowed in 0.7.5: `DiskMiB` now bounds the agent's writes to `/tmp` and its workdir
-`/home/agent/work`.** A run's `disk_mib` becomes the agent container's
+**Narrowed in 0.7.5: `DiskMiB` now bounds an AUTONOMOUS (task-mode) run's writes to `/tmp` and its
+workdir `/home/agent/work`.** A run's `disk_mib` becomes the agent container's
 `resources.limits[ephemeral-storage]` (with a small fixed 256Mi request, so scheduling is
 unchanged except that a node short on allocatable ephemeral storage can newly leave the pod
 Pending) **and** the `sizeLimit` of two `emptyDir` volumes mounted on that container —
-`wardyn-tmp` at `/tmp` and `wardyn-work` at `/home/agent/work`. The agent's own commands run in an
-ephemeral container `Exec` attaches to the pod, and the kubelet meters no part of an ephemeral
+`wardyn-tmp` at `/tmp` and `wardyn-work` at `/home/agent/work`. An autonomous run's commands run in
+an ephemeral container `Exec` attaches to the pod, and the kubelet meters no part of an ephemeral
 container's writable layer: that is why 0.7.2's limit alone bound an idle container nothing writes
-in (0.7.4 disclosed it). An `emptyDir` is metered as the pod's local ephemeral storage whichever
-container writes to it, and the ephemeral container inherits the main container's mounts verbatim.
-It needs no new RBAC verb — volumes are a field on a pod spec the runner already creates.
+in on such a run (0.7.4 disclosed it). An `emptyDir` is metered as the pod's local ephemeral storage
+whichever container writes to it, and the ephemeral container inherits the main container's mounts
+verbatim. It needs no new RBAC verb — volumes are a field on a pod spec the runner already creates.
+**An INTERACTIVE run never calls `Exec` before an attach — its agent runs in the pod's own main
+container**, whose whole writable layer (`$HOME` and the toolchain caches included) the kubelet has
+metered against `disk_mib` since 0.7.2; nothing below is outside the cap for that run shape.
 
-**Inside the cap:** the clone at its default destination and everything written under the workdir
-(the checked-out tree, `node_modules`, in-tree build output), plus `/tmp` and the per-run CA files.
+**Inside the cap, for an autonomous run:** the clone at its default destination and everything
+written under the workdir (the checked-out tree, `node_modules`, in-tree build output), plus `/tmp`
+and the per-run CA files.
 
-**Outside it — this is a narrowing, not a close:** everything the agent writes anywhere else stays
-on the ephemeral container's unmetered layer. That is the rest of `$HOME` — including the
+**Outside it, for an autonomous run — this is a narrowing, not a close:** everything the agent
+writes anywhere else stays on the ephemeral container's unmetered layer. That is the rest of
+`$HOME` — including the
 toolchain caches a build actually fills (`/home/agent/go`, `~/.cache/go-build`, `~/.gotmp`,
 `~/.npm`, `~/.cache/pip`) and the dotfiles (`~/.wardyn`, `~/.ssh`, `~/.claude`) — `/opt/rust`, and
 any authored `workspace_repos` or ephemeral-source target outside `/home/agent/work` (a target may
@@ -639,7 +644,8 @@ sees `ENOSPC`. A deployment that sets no `storage.ephemeral.default_disk_mib` st
 node-level eviction as the only bound on a run that asked for nothing.
 
 **Upgrading:** if you set `disk_mib` / `storage.ephemeral.default_disk_mib` on Kubernetes, size it
-for the clone plus installs first — until 0.7.5 it did not bind the agent; from 0.7.5 it evicts.
+for the clone plus installs first — until 0.7.5 it did not bind an autonomous run's agent; from
+0.7.5 it evicts. An interactive run's agent has been bound since 0.7.2; size for its caches too.
 
 An eviction is a kill path nothing in Wardyn is on, so the run's SIBLINGS — the
 proxy pod, still running with its resolved upstream credentials, and the per-run

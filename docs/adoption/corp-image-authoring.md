@@ -176,8 +176,22 @@ scanned. A human's `claude update` still works (`DISABLE_UPDATES` blocks that
 too, if you want it blocked). `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`
 removes the changelog fetch from `raw.githubusercontent.com` plus the
 telemetry/error intake. Under `CLAUDE_CODE_USE_BEDROCK=1` what remains is the
-Bedrock runtime endpoint plus the STS/SSO hosts, which `wardyn-aws-sso` already
-adds to the run's allowlist.
+Bedrock runtime endpoint and, on the AWS SSO lanes, `oidc.<region>.amazonaws.com`
++ `portal.sso.<region>.amazonaws.com` — added to the run's allowlist by the
+control plane itself at dispatch, never by anything inside the sandbox
+(`wardyn-aws-sso` is an in-sandbox upload helper; it edits no allowlist).
+
+**This whole section describes an image carrying the three `ENV` lines —
+rebuild to get them.** `agent-claude-code` is not a published image (it bundles
+Anthropic's own agreement with its vendor); `agent-base` is what ships, and
+0.7.5 puts the three lines there too, so any image built `FROM agent-base:0.7.5`
+inherits them. Also needed for the quiet boot, alongside the `ENV` lines: a
+`seed_claude_onboarding` call in `agent-run` before the agent starts (product
+onboarding only — the workspace-trust and Bypass Permissions prompts are
+security questions and are never pre-answered; see
+[deploy/images/README.md](../../deploy/images/README.md)). An image on another
+base, or an older tag pinned in `WARDYN_AGENT_IMAGES`, still parks
+`downloads.claude.ai` and `github.com` on a first interactive run.
 
 **Authoring your own image from scratch** (not rebuilding ours): set all three in
 your Dockerfile. Copying our `agent-run` and `agent-run-lib.sh` is **not** a

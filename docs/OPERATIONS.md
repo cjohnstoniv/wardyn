@@ -1107,11 +1107,12 @@ sets one, resources and `auto_stop_after_sec` capped, grants narrowed to what th
 ceiling allows, and `workspace_mounts` dropped entirely. An admin's own
 `inline_policy` is not clamped.
 
-**A first claude-code run parks on nothing the product itself needs.** The
-claude-code image turns off the CLI's own fetches —
-`CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1` (the plugin-marketplace
-auto-install, which is what reached `downloads.claude.ai` and `github.com`),
-`DISABLE_AUTOUPDATER=1` and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`; see
+**A first claude-code run parks on nothing the product itself needs — on an
+image rebuilt from the 0.7.5 tree.** The claude-code image turns off the CLI's
+own fetches — `CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL=1` (the
+plugin-marketplace auto-install, which is what reached `downloads.claude.ai`
+and `github.com`), `DISABLE_AUTOUPDATER=1` and
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`; see
 [corp-image-authoring.md](adoption/corp-image-authoring.md) "Stop the agent
 fetching on its own behalf" — and writes `{"hasCompletedOnboarding": true}` into
 the sandbox's `~/.claude.json` before the CLI starts. Without those, the first
@@ -1120,13 +1121,24 @@ approvals for hosts nobody had asked for. The shipped default policy
 (`examples/policies/default.json`) is deliberately unchanged: the fix is that the
 traffic no longer happens, not that those hosts are now allowed. **This applies
 to the claude-code image only** — the `codex-cli` image still reaches for several
-hosts of its own at start (see the CHANGELOG's known gaps).
+hosts of its own at start (see the CHANGELOG's known gaps). **And only to an
+image actually carrying the three `ENV` lines**: `agent-claude-code` (where they
+were measured) is not a published image — `agent-base` is what ships, and it now
+carries the three lines too, so any image built `FROM agent-base:0.7.5`
+inherits them. An image on another base, or an older tag pinned in
+`WARDYN_AGENT_IMAGES`, still parks on the CLI's own bootstrap; see
+[corp-image-authoring.md](adoption/corp-image-authoring.md) for the rebuild
+recipe and the CHANGELOG's Known gaps for the full statement.
 
 What an interactive run still shows on first use is Claude Code's
 **workspace-trust** prompt (`Accessing workspace: …` / `1. Yes, I trust this
 folder`). That one is a security question — it gates a cloned repo's own project
 settings taking effect — and Wardyn does not answer it for you. Pressing Enter
-there raises no approvals.
+there raises no approvals. A run launched with *"Let it use tools before I
+attach"* also parks on Claude Code's own *Bypass Permissions mode* confirmation
+(default "No, exit") until someone attaches and chooses Yes — Wardyn does not
+answer that one either ([THREAT-MODEL.md](../threatmodel/THREAT-MODEL.md)
+§4.7).
 
 **The desktop tier's standing honesty gap: the operator IS the admin.**
 [The desktop tier](../deploy/desktop/) (`WARDYN_LOCAL_MODE=true`) has no member
@@ -2199,7 +2211,9 @@ credential that outlives the mode. Exit first.
 > not offered at all on a deployment whose roster row is `shared` (there is
 > nothing for the preview to hide) or against a pre-0.7.5 daemon
 > (`member_preview_available`, `internal/api/me.go`, is ANDed with the caller's
-> real admin tier — the same clamp that made ceiling 4 true in the first place).
+> EFFECTIVE (clamped) admin tier — the same clamp that made ceiling 4 true in
+> the first place, so the entry vanishes from the menu the instant either mode
+> clamps `isOperator`/`isSecurityOperator` false).
 > So the ceiling states the limit and stops; it does not point at a control that
 > is, at that moment, not on screen. Inside that second posture the ceiling reads
 > the other way round: your sign-in is *hidden, not removed*, and a rolling
@@ -2622,32 +2636,42 @@ has not answered.
 - **Credentials** names where THIS run's model credential will land. Pressing
   **Preflight** is what produces that answer for real: it dry-runs the exact body
   Launch would send and returns `proxy` (injected by the proxy at launch, never
-  written into the sandbox — a Bedrock exchange mints a credential there; a
-  static API key or a stored bearer is injected as it stands, nothing is
-  minted), `sandbox` (a live credential inside the run for its lifetime), or
+  written into the sandbox — a static API key, a stored Bedrock bearer or the
+  subscription token, injected as it stands; nothing is minted), `sandbox` (a
+  live credential inside the run for its lifetime — a Bedrock SSO exchange
+  mints role credentials there), or
   `image` (a `none` roster row — Wardyn wires nothing and cannot say where the
-  image's own credential lives). The `sandbox` arm additionally chips whose
-  credential it is: **Per-person AWS sign-in** under a `per_user` roster row,
-  **Admin's credential** under `shared` — ownership, not sign-in status: the
-  rail is painted from the roster row alone and never reads whether that
-  person has actually signed in.
+  image's own credential lives), or `unknown` (nothing resolved — reads the
+  same "Resolved at launch." as no verdict at all). The `sandbox` arm chips
+  whose credential it is ONLY for a Bedrock lane — **Per-person AWS sign-in**
+  under a `per_user` roster row, **Admin's credential** under `shared` —
+  ownership, not sign-in status: the rail is painted from the roster row alone
+  and never reads whether that person has actually signed in. The Claude
+  subscription's own `sandbox` case (the `~/.claude` mount with proxy-side
+  injection off) carries no such chip — nothing AWS is involved.
   **With no click the rail states a residency only under a per-person Bedrock
   SSO roster row** (`credential_source: per_user`, `mechanism: bedrock_sso`),
   which is resident whether or not that person has signed in — the one shape the
   roster settles on its own, and the one whose Preflight answer is a `422` for
-  exactly the member who needs it. Every other deployment reads "Resolved at
-  launch." and an invitation to press Preflight. That is deliberate: a roster
+  exactly the member who needs it. Every other deployment WITH A PROVIDER
+  CONNECTED reads "Resolved at launch." and an invitation to press Preflight
+  (until Preflight has run). That is deliberate: a roster
   cannot tell which lane a run resolves — the run's policy, its workspace
   binding, and the folded run/workspace/default integration all move it — so an
   answer given before the run is described could be confidently wrong in either
-  direction, which is the defect this replaced. A run that makes no model call
+  direction, which is the defect this replaced. With no model provider
+  connected the rail shows the no-provider warning instead, and the Preflight
+  hint does not render. A run that makes no model call
   (a shell command) shows no Credentials row at all.
 - **Recording** reads `/healthz`. A stock Helm install leaves
-  `persistence.enabled=false`, so no run on that server ever produces a cast; the
-  rail then states that instead of promising "every keystroke and every outbound
+  `persistence.enabled=false`, which renders `WARDYN_RECORDING_STORE=off` — the
+  actual switch — so no run on that server ever produces a cast; the rail then
+  states that instead of promising "every keystroke and every outbound
   connection". While that read is still in flight — or if it failed — the rail
-  states neither. Set `persistence.enabled` (Helm) or `WARDYN_RECORDING_DIR` to
-  turn recording on.
+  states neither. Recording is off only where `WARDYN_RECORDING_STORE=off`.
+  Turn it on with `persistence.enabled=true` (the `fs` store on the PVC) or
+  `env.WARDYN_RECORDING_STORE=pg` (no PVC needed). `WARDYN_RECORDING_DIR` only
+  moves the `fs` store's path — it does not turn recording on or off.
 
 ### What an admin can put a fence around
 
@@ -3142,11 +3166,16 @@ what uploads it through the brokered endpoint. Since 0.7.5 the IMAGE runs that
 command, not the console: `agent-run --idle` creates a `wardyn` tmux session on
 `signin-pane.sh` BEFORE its own workspace prep, the pane prints
 *"wardyn: sign-in running — AWS sign-in sandbox. Finish the device-code step in
-your browser. Nothing else runs here."*, waits for prep to finish, and runs the
-pair exactly ONCE. Every attach path joins that one session — Wardyn's sign-in
-pane, `wardyn attach`, an SSH attach, and **the Runs list** — because attaching
-is `tmux new-session -A -s wardyn`, attach-or-create. So the path that used to
-hand out a bare prompt now shows the sign-in already in progress.
+your browser. Nothing else runs here."*, waits up to five minutes for prep, and
+runs the pair at most ONCE. Every attach path joins that one session — Wardyn's
+sign-in pane, `wardyn attach`, an SSH attach, and **the Runs list** — because
+attaching is `tmux new-session -A -s wardyn`, attach-or-create. So the path that
+used to hand out a bare prompt now shows the sign-in already in progress.
+If prep never finishes it runs nothing and prints *"wardyn: workspace
+preparation did not finish — stop this run and start a new sign-in."* If the
+session could not be started at all (no `tmux` in a derived image), an attach
+lands on a plain shell that prints *"AWS sign-in sandbox — nothing else runs
+here. The sign-in did not start on its own; run: `<the chained command>`"*.
 
 It runs once on purpose. A retry would mint a SECOND live device code while the
 person may still be entering the first, and a refusal that is deterministic (a
@@ -3164,8 +3193,9 @@ session reaches more than one account (or more than one role in the chosen
 account), the helper asks WHICH ONE in the sign-in terminal and allows three
 tries. Anyone with a WRITABLE attach can answer — the console's sign-in pane,
 `wardyn attach`, an SSH attach, or the Runs list when they hold the terminal.
-A read-only viewer cannot, and watches it time out. Pin the account and the
-role on the roster row and the question never comes up.
+A read-only viewer cannot; the prompt itself has no deadline, so it waits until
+a writable attach answers or the sandbox's own 30-minute idle cap ends the run.
+Pin the account and the role on the roster row and the question never comes up.
 
 **Signing in from Getting Started is still the path to prefer** — it watches for
 the helper's success marker, corroborates the capture with the server, and shuts
@@ -3367,19 +3397,24 @@ Starting a sign-in closes that person's previous one. Wardyn kills the caller's 
 sign-in runs for the same agent before it creates the new run, and the superseded run's `run.kill`
 audit row carries `reason = superseded_by_new_login` and `superseded_for = <the person>`; it is a
 normal, successful kill, so a `run.kill` with `outcome=failure` still means a teardown or revocation
-step failed and the run may not be contained.
+step failed and the run may not be contained. The key is the run's `created_by`, which is not
+always a distinguishable PERSON: on an install with no OIDC, the shared admin-token bearer and a
+local-mode caller's principal are one shared credential, so two humans using that credential
+supersede each other's sign-ins (`docs/AUDIT-ACTIONS.md`'s `run.kill` row).
 
 This exists because an abandoned sign-in used to survive: the sandbox runs `aws sso login` itself, so
 a sign-in nobody is watching still completes when the person approves it in an old browser tab, and
 its (legitimate) capture then lands after the one they just made. The console would report *"The
 sandbox reported a capture the server does not have"* for a sign-in that had, in fact, worked.
 
-Two consequences worth knowing:
+Consequences worth knowing:
 
 - **Retrying is safe, including under a concurrency cap.** The supersede runs before the new run is
-  created, so a member whose governance profile allows one concurrent run is not refused by their own
-  abandoned sign-in.
-- **A closed sandbox cannot upload.** A killed sign-in run's credential upload is refused with
+  created, so a member whose governance profile allows one concurrent run is ordinarily not refused
+  by their own abandoned sign-in — the supersede is best-effort (a lookup error skips it, and a
+  losing CAS race is abandoned after three tries), so a concurrency-limited member can rarely still
+  meet the cap.
+- **A closed sandbox's upload is refused.** A killed sign-in run's credential upload is refused with
   `harness.credential.refused` / `reason = run_killed`, even inside the five-minute grace a terminal
   run otherwise has for its own tail uploads. Credential revocation alone is best-effort; this is the
   belt.
@@ -3402,26 +3437,32 @@ Two consequences worth knowing:
   EARLIER timestamp can be written after the other's re-check, and both stay alive. Neither is
   killed, so the upload refusal below does not separate them either. The next sign-in clears it.
   Closing the last case needs a per-person lock around the write and is a 0.7.6 follow-up.
-- **A sandbox superseded while its capture was already in flight cannot win.** The upload door
+- **A sandbox superseded mid-upload almost never wins.** The upload door
   re-reads the run's state immediately before it stores, so a capture that was uploading when the
-  person's next sign-in replaced its sandbox is refused (`harness.credential.refused` /
-  `reason = run_killed`) instead of overwriting the newer session. Whoever is watching the old
+  person's next sign-in replaced its sandbox is ordinarily refused (`harness.credential.refused` /
+  `reason = run_killed`) instead of overwriting the newer session. The re-read is the last statement
+  before the write, not a lock: a supersede landing between those two statements still loses to the
+  old capture, and the next sign-in replaces it. Whoever is watching the old
   sandbox sees "this sign-in sandbox was closed — a newer sign-in for you replaced it…" and finishes
   in the new one.
 
 ### What the sign-in pane's waiting messages mean
 
-The pane polls the run while the sandbox comes up and says which of three waits it is in:
+The pane polls the run while the sandbox comes up and says which of four states it is in:
 
 | On screen | What Wardyn knows |
 |---|---|
-| "Starting the sign-in sandbox…" | Reads are working; the sandbox is not up yet; less than a minute has passed. |
-| "Still starting — Wardyn can read the sign-in sandbox, it just isn't up yet…" | Same, past a minute. Usually a first image pull on this node. Nothing on this path can *prove* a pull is what it is waiting on, which is why the sentence is hedged. |
-| "Wardyn can't read the sign-in sandbox right now — still trying…" | The console's reads of the run are failing (a daemon restart, an ingress 5xx, a roster edit that made the read a 403). The sandbox itself may be perfectly fine. |
-| "Wardyn stopped being able to read the sign-in sandbox…" | Reads have been failing for five minutes. The wait ends; the run id is kept, so Cancel still tears the sandbox down. |
+| "Starting the sign-in sandbox…" | Reads are healthy, OR have been failing for under 10 seconds (a blip); the sandbox is not up yet; less than a minute has passed since launch. |
+| "Still starting — Wardyn can read the sign-in sandbox, it just isn't up yet…" | Reads are healthy, past a minute since launch. Usually a first image pull on this node. Nothing on this path can *prove* a pull is what it is waiting on, which is why the sentence is hedged. |
+| "Wardyn can't read the sign-in sandbox right now — still trying…" | The console's reads of the run have been failing for at least 10 seconds (a daemon restart, an ingress 5xx, a roster edit that made the read a 403). The sandbox itself may be perfectly fine. |
+| "Wardyn stopped being able to read the sign-in sandbox…" | Reads have been failing for at least five minutes AND at least 15 consecutive polls. The wait ends; the run id is kept, so Cancel still tears the sandbox down. |
 
-The wait is now measured on the clock (five minutes of failing reads), not in poll ticks. A healthy
-wait is never ended by the pane, however long the pull takes — what bounds it is the server, below.
+The wait is graded on BOTH the clock and a poll-count floor, not on poll ticks alone: the clock
+(five minutes of failing reads) says the outage is real, and the 15-failure floor — kept from the
+old tick budget — says it is not one hidden-tab poll pretending to be one (a backgrounded tab skips
+ticks entirely, so a single failed read after ten minutes away must not immediately read as
+unreadable). A healthy wait is never ended by the pane, however long the pull takes — what bounds
+it is the server, below.
 
 ### The two server bounds a slow registry hits, and what to do about them
 
@@ -3585,8 +3626,11 @@ restarts and again on exit.
 into the daemon image, so a cluster loaded before a console change judges the
 OLD screens with the NEW assertions — which is exactly how one 0.7.4 walk went
 red with a correct tree. `WARDYN_KIND_SSO_REBUILD=1 WARDYN_TEST_K8S=1
-scripts/kind-sso-walk.sh` rebuilds `wardynd` and `wardyn-proxy` from the
-working tree and reloads them first. Either way the walk writes an
+scripts/kind-sso-walk.sh` rebuilds all five images the walk judges (`wardynd`,
+`wardyn-proxy`, `agent-aws-sso`, `agent-claude-code`, the SSO fake) from the
+working tree and reloads them first. It retags the two `:local` agent images
+on that Docker daemon — a compose stack sharing that daemon adopts them for
+new runs, which the walk warns about once. Either way the walk writes an
 `images.txt` into its evidence directory naming the tree's HEAD and each
 image's content digest and build time, so "which tip did this prove?" is
 answerable afterwards rather than remembered.
@@ -5094,8 +5138,12 @@ driver, not a guess:
   kubelet `podPidsLimit` (or your distribution's
   `SystemReserved`/`KubeReserved` PID accounting) as a cluster-wide fork-bomb
   backstop — coarser but real, and the only lever this substrate has today.
-- 🟡 **`DiskMiB` is enforced by EVICTION, and since 0.7.5 it reaches the agent's `/tmp` and
-  workdir writes — a narrowing, not a close.** A run's `disk_mib` is the agent container's
+- 🟡 **`DiskMiB` is enforced by EVICTION, and since 0.7.5 it reaches an AUTONOMOUS run's `/tmp`
+  and workdir writes — a narrowing, not a close.** All of this describes AUTONOMOUS (task-mode)
+  runs. An interactive run's agent runs in the pod's main container, whose whole writable layer —
+  `$HOME` and the toolchain caches included — the kubelet has counted against `disk_mib` since
+  0.7.2; there nothing is outside the cap, so size an interactive run's budget for its caches too.
+  A run's `disk_mib` is the agent container's
   `resources.limits[ephemeral-storage]` and the `sizeLimit` of the two `emptyDir` volumes mounted
   on it (`internal/runner/k8s/naming.go`'s `ephemeralScratchVolumes`): `wardyn-tmp` at `/tmp` and
   `wardyn-work` at `/home/agent/work`. The ephemeral container `Exec` attaches for the agent
@@ -5121,8 +5169,10 @@ driver, not a guess:
   hide the read-only `~/.claude` bind the subscription path mounts; pointing the cache env under
   the workdir on this substrate, or a third cache volume, is the 0.7.6 follow-up. **What the proof
   does not cover:** the kind conformance evidence is from the busybox conformance-agent image on
-  runc (CC1) — no real `agent-run` boot on an `emptyDir`-backed workdir, and `emptyDir` metering of
-  ephemeral-container writes is unmeasured under gVisor and Kata. What remains a gap about the
+  runc (CC1), and `emptyDir` metering of ephemeral-container writes is unmeasured under gVisor and
+  Kata. The live kind SSO walk separately exercises a real `agent-run` boot — the aws-sso sign-in
+  sandbox and a real claude-code run — on the `emptyDir`-backed `/tmp` and `/home/agent/work`, on
+  runc; that walk is manual and self-skipping, not CI (see `docs/TEST-GAPS.md`). What remains a gap about the
   mechanism, precisely: (i) enforcement is by **eviction, not a
   quota** — the kubelet kills the POD once it exceeds the limit, in-flight work
   is lost, and the agent process never sees `ENOSPC`; it gets no chance to

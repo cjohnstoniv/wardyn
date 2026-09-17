@@ -766,8 +766,10 @@ after the row is written.
 
 ### 4.7 Boot-time state seeded into the sandbox (v0.7.5)
 
-**Wardyn pre-answers product onboarding, never a security prompt.** The agent
-images seed exactly one key into the sandbox's Claude Code state file:
+**Wardyn pre-answers product onboarding, never a security prompt.** The
+claude-code-family images (`seed_claude_onboarding`, `deploy/images/common/agent-run-lib.sh`,
+called from `deploy/images/claude-code/agent-run`) seed exactly one key into the sandbox's Claude
+Code state file — codex-cli and aws-sso have no such file to seed:
 `hasCompletedOnboarding`. It removes the CLI's theme picker and its
 "Security notes / Press Enter to continue" page — a product tour standing between
 an operator and their own agent. Three keys are deliberately NOT seeded, and a
@@ -2409,9 +2411,11 @@ floor and the control plane refuses to schedule below it.
   `rw,nosuid,nodev,noexec,size=256m` (`internal/runner/docker/hardening.go`), so a payload dropped
   there cannot be executed and no setuid bit or device node on it is honoured. On Kubernetes
   `/tmp` carried none of those flags before 0.7.5 (it was part of the container's `overlay`
-  rootfs, mounted `rw,relatime`) and carries none after (it is now an `emptyDir`, which the
-  kubelet bind-mounts from the node filesystem — measured on kind v1.30: `/dev/sdf /tmp ext4
-  rw,relatime,discard,errors=remount-ro,data=ordered`). An `emptyDir` cannot carry mount flags at
+  rootfs, mounted `rw,relatime`) and carries none after (with a `disk_mib` it is now an `emptyDir`,
+  which the kubelet bind-mounts from the node filesystem — measured on kind v1.30: `/dev/sdf /tmp
+  ext4 rw,relatime,discard,errors=remount-ro,data=ordered`; with none it is still the overlay
+  rootfs, no flags either way — `ephemeralScratchVolumes` returns no volumes for a zero budget).
+  An `emptyDir` cannot carry mount flags at
   all: `VolumeMount` has no options field, and `noexec` there would need a node-level mount Wardyn
   does not own. CC2 and CC3 inherit the same volume, so none of them differ. **This is therefore a
   standing Docker/Kubernetes parity gap, not a 0.7.5 regression** — the disk fix changed which

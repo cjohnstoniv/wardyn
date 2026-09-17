@@ -87,11 +87,13 @@ per-PR run has." Classified by package (no cluster here to prove it).
 
 ### Manual cluster lanes no coverage profile can see at all
 
-No workflow runs these, and `-coverpkg` never observes them — not even as the
+No workflow runs the first two, and `-coverpkg` never observes any of the three — not even as the
 K8S-gated bucket above, since they exercise code far beyond
 `internal/runner/k8s`. Listed here so the k8s surface is not read as
-untouched. All three self-skip without `WARDYN_TEST_K8S=1`; a green result is
-evidence only for the tip somebody actually ran it on.
+untouched. `make test-conformance-k8s` is the exception: CI runs it on kind + Calico
+(the `conformance-k8s` job, busybox conformance-agent image, runc only) — the other two self-skip
+without `WARDYN_TEST_K8S=1` and a green result for them is evidence only for the tip somebody
+actually ran it on.
 
 - `scripts/kind-sso-walk.sh` — **the AWS SSO walk** (0.7.4). Two Dex principals
   on a kind cluster, the containerized `aws sso login` against an on-cluster
@@ -116,7 +118,12 @@ evidence only for the tip somebody actually ran it on.
   IP wait that bounds it) which must read as slow rather than unreadable; an
   interactive claude-code run that answers ONE workspace-
   trust prompt and reaches Bedrock; a first run whose approvals list is empty;
-  and the admin's no-credential member preview.
+  and the admin's no-credential member preview. The walk also declares an org
+  default disk budget (`storage.ephemeral.default_disk_mib`) and asserts a real
+  run pod carried the `wardyn-tmp` + `wardyn-work` scratch volumes — so a real
+  aws-sso sign-in sandbox and a real claude-code run booting on the
+  `emptyDir`-backed `/tmp` and `/home/agent/work` are exercised here, not only
+  by the stub-agent conformance suite above.
 
   Still NOT covered by either file, and deliberately: a real AWS tenant (every
   endpoint is an unsigned on-cluster fake), a genuinely cold registry pull
