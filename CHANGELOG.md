@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.7.5] — 2026-09-17
+
 ### Added
 
 - **`POST /runs/preflight` answers where a run's model credential will live.**
