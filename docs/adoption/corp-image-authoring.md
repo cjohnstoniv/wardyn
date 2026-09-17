@@ -194,6 +194,14 @@ security questions and are never pre-answered; see
 base, or an older tag pinned in `WARDYN_AGENT_IMAGES`, still parks
 `downloads.claude.ai` and `github.com` on a first interactive run.
 
+**A rebuild is not a rollout.** `make agent-images` tags
+`wardyn/agent-claude-code:local` on the machine that built it, which a cluster's
+nodes cannot pull. Build with your own tag from the repo root
+(`docker build -f deploy/images/claude-code/Dockerfile -t <your-registry>/agent-claude-code:0.7.5 .`),
+push it to the registry your nodes pull from, and re-point the `claude-code`
+entry of `WARDYN_AGENT_IMAGES` at it — a `helm upgrade` of the control plane
+neither rebuilds that image nor moves an entry you have pinned.
+
 **Authoring your own image from scratch** (not rebuilding ours): set all three in
 your Dockerfile. Copying our `agent-run` and `agent-run-lib.sh` is **not** a
 substitute. The library exports the same three with `${VAR:-1}` defaults, but

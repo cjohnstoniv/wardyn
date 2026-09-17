@@ -205,7 +205,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   autonomous run: the stock v0.7.4 image parked approvals; the rebuilt image
   dials nothing at boot.
 
-- **An interactive claude-code run comes up on the agent, not on a product tour.**
+- **An interactive claude-code run on a 0.7.5-rebuilt image comes up on the agent, not on a
+  product tour.**
   The image writes `{"hasCompletedOnboarding": true}` into the sandbox's
   `~/.claude.json` (and `${CLAUDE_CONFIG_DIR:-~/.claude}/.claude.json`) before the
   CLI starts, which removes Claude Code's theme picker and its "Security notes"
@@ -215,7 +216,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   **not** pre-accepted: it is a security question, and the human attached to the
   run is the one who answers it.
 
-- **A seeded interactive run no longer loses its task text to an early attach.**
+- **A seeded interactive run on a 0.7.5-rebuilt image no longer loses its task text to an early
+  attach.**
   The claude-code image created its `wardyn` tmux session *after* preparing the
   workspace, and both runners attach with `tmux new-session -A -s wardyn bash` the
   instant the container runs. With a repo to clone, prep is a measured 18 seconds:
@@ -412,11 +414,15 @@ and does not yet follow semantic versioning (interfaces are not stable).
   succeeded. Estates that pin agent images should pull the 0.7.5 aws-sso image at
   the same upgrade. **The Claude Code quiet-boot fix needs the same care**:
   rebuild the claude-code image from the 0.7.5 tree (`make agent-images`, or
-  `docker build -f deploy/images/claude-code/Dockerfile`), or rebuild a derived
-  image `FROM ghcr.io/cjohnstoniv/agent-base:0.7.5` re-copying `deploy/images/claude-code/agent-run`
+  `docker build -f deploy/images/claude-code/Dockerfile -t <your-registry>/agent-claude-code:0.7.5 .`
+  from the repo root), or rebuild a derived image
+  `FROM ghcr.io/cjohnstoniv/agent-base:0.7.5` re-copying `deploy/images/claude-code/agent-run`
   and `deploy/images/common/agent-run-lib.sh`. An image on another base must set
-  the three `ENV` lines in its own Dockerfile. An older tag pinned in
-  `WARDYN_AGENT_IMAGES` keeps 0.7.4's behaviour.
+  the three `ENV` lines in its own Dockerfile. **Then deliver it:** `make agent-images`
+  only tags `wardyn/agent-claude-code:local` on the machine that built it, which a
+  cluster's nodes cannot pull — push the rebuilt image to the registry your nodes
+  pull from and re-point the `claude-code` entry of `WARDYN_AGENT_IMAGES` at the new
+  tag. An older tag left pinned there keeps 0.7.4's behaviour.
 - `run.kill` audit rows can now come from Wardyn itself, carrying `reason =
   superseded_by_new_login`, `superseded_for` and `superseded_by_run`; they audit as `success` like any clean
   kill. A supersede whose teardown or revocation failed audits `failure` with the failing step and writes no
@@ -478,7 +484,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **The quiet Claude Code boot, the onboarding seed and the early-attach fix reach only images
   rebuilt on 0.7.5.** `agent-claude-code` is not published; rebuild your derived image
   `FROM ghcr.io/cjohnstoniv/agent-base:0.7.5` and re-copy `deploy/images/claude-code/agent-run` +
-  `deploy/images/common/agent-run-lib.sh`. An image on any other base must set the three `ENV` lines
+  `deploy/images/common/agent-run-lib.sh`, push it where your nodes pull from, and re-point the
+  `claude-code` entry of `WARDYN_AGENT_IMAGES` at it — a `helm upgrade` alone delivers none of the three. An image on any other base must set the three `ENV` lines
   in its own Dockerfile — copying `agent-run` is not enough, because a default interactive run's
   `claude` is started by the attach shell. An older tag pinned in `WARDYN_AGENT_IMAGES` keeps 0.7.4's
   behaviour: a first interactive run still parks `downloads.claude.ai` and `github.com`.
