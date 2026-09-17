@@ -2129,6 +2129,13 @@ own identity."* Nothing is deleted: your session sits untouched in the store
 and comes back the moment you exit. The transition is audited as
 `auth.member_mode` with `no_credential: true` beside `enabled` and `real_role`.
 
+Inside the preview, **signing in is refused** — `POST /setup/harness-login`
+answers `409` while the posture is on, deliberately: the preview shows a new
+member's STATE, not their flow, and a sign-in completed there would capture a
+credential against the admin's own principal. Both the banner (visibly, since
+the 0.7.5 fix wave) and its tooltip say so, and the sign-in pane offers no "Try
+again" for that refusal — the way out is to exit the mode.
+
 **It appears only where the org gives each person their own sign-in.** The menu
 entry is offered, and the posture granted, only when the model-access agent's
 roster row is `per_user` — on a `shared` deployment there is no per-member
@@ -2174,18 +2181,29 @@ credential that outlives the mode. Exit first.
 >    worse). During a rolling Kubernetes upgrade a replica still running the
 >    previous version ignores the flag and answers your requests as an admin.
 >    Finish the rollout before you rely on what you see.
-> 4. **Model access, in the PLAIN toggle, is still yours.** The mode clamps the
+> 4. **Model access and ownership still resolve to you.** The mode clamps the
 >    role and deliberately leaves your subject alone, so under a `per_user` roster
 >    row your own captured AWS SSO session is what `/setup/status`, run create and
 >    dispatch all resolve — an admin who has signed in sees a live credential
->    while "viewing as member". Use **View as a new member (not signed in)** to
->    see the not-signed-in state instead. Inside that preview the ceiling reads
->    the other way round: your sign-in is *hidden, not removed*, and a rolling
->    upgrade (ceiling 3) hides nothing at all.
+>    while "viewing as member". This is what the 0.7.4 field report was misled
+>    by.
 >
 > For the question "would a member actually be refused this?", use a real second
 > identity — recipe below. The two compose: toggle for the fast look, second
 > identity for the proof.
+>
+> **Ceiling 4, and why the tooltip stops short of naming the other item.** The
+> *second* posture — **View as a new member (not signed in)** — is what shows the
+> not-signed-in state, and it is reached from the account menu **before** entering
+> member mode: both menu items disappear while either mode is on, and the item is
+> not offered at all on a deployment whose roster row is `shared` (there is
+> nothing for the preview to hide) or against a pre-0.7.5 daemon
+> (`member_preview_available`, `internal/api/me.go`, is ANDed with the caller's
+> real admin tier — the same clamp that made ceiling 4 true in the first place).
+> So the ceiling states the limit and stops; it does not point at a control that
+> is, at that moment, not on screen. Inside that second posture the ceiling reads
+> the other way round: your sign-in is *hidden, not removed*, and a rolling
+> upgrade (ceiling 3) hides nothing at all.
 >
 > **The preview shows the STATE, not the FLOW.** Signing in is refused inside it
 > (`409`), by design — a capture made there would land on your own identity and
@@ -2603,12 +2621,16 @@ has not answered.
 
 - **Credentials** names where THIS run's model credential will land. Pressing
   **Preflight** is what produces that answer for real: it dry-runs the exact body
-  Launch would send and returns `proxy` (minted at launch and swapped onto the
-  wire), `sandbox` (a live credential inside the run for its lifetime), or
+  Launch would send and returns `proxy` (injected by the proxy at launch, never
+  written into the sandbox — a Bedrock exchange mints a credential there; a
+  static API key or a stored bearer is injected as it stands, nothing is
+  minted), `sandbox` (a live credential inside the run for its lifetime), or
   `image` (a `none` roster row — Wardyn wires nothing and cannot say where the
   image's own credential lives). The `sandbox` arm additionally chips whose
-  credential it is: **Your AWS sign-in** under a `per_user` roster row,
-  **Admin's credential** under `shared`.
+  credential it is: **Per-person AWS sign-in** under a `per_user` roster row,
+  **Admin's credential** under `shared` — ownership, not sign-in status: the
+  rail is painted from the roster row alone and never reads whether that
+  person has actually signed in.
   **With no click the rail states a residency only under a per-person Bedrock
   SSO roster row** (`credential_source: per_user`, `mechanism: bedrock_sso`),
   which is resident whether or not that person has signed in — the one shape the
@@ -3167,9 +3189,12 @@ If you pin agent images, pull the 0.7.5 aws-sso image at the same upgrade.
 **The launch answers before the sandbox is up.** Since 0.7.4 `POST
 /setup/harness-login` returns `{run_id, state: "PENDING"}` as soon as the run
 row exists and the launch is stamped; the pane then polls the run and attaches
-once it is RUNNING. The reason is the first start after an upgrade: a cold image
-pull plus (on Kubernetes) the network-policy canary can exceed the console's own
-request deadline, and the synchronous version answered so late that the console
+once it is RUNNING. The reason is that a **first start may need to pull the
+image**: that pull, plus (on Kubernetes) the network-policy canary, can exceed
+the console's own request deadline. It is not specific to an upgrade — a first
+install pulls too, and a host that already has the image pulls nothing — which
+is why the console's own waiting copy hedges the same way. The synchronous
+version answered so late that the console
 reported the control plane unreachable over a launch that was working — and
 dropped the run id, leaving a sandbox alive to its 30-minute idle cap with
 nothing able to name it. Cancel now kills it from the first second. A launch
@@ -3358,6 +3383,31 @@ Two consequences worth knowing:
   `harness.credential.refused` / `reason = run_killed`, even inside the five-minute grace a terminal
   run otherwise has for its own tail uploads. Credential revocation alone is best-effort; this is the
   belt.
+- **The old sandbox is torn down INSIDE the launch request, and that can take time.** The supersede
+  is not a background sweep: the launch POST runs the old run's full kill cascade before it answers
+  — the state change, the sandbox teardown, the run identity's revocation and the audit row, up to
+  about 30 seconds per superseded run, and on Kubernetes it waits for the pod to actually go away.
+  The teardown itself is detached from the client's connection, so it finishes either way. What does
+  NOT finish is the rest of the launch: a client that gives up (a closed tab, a proxy timeout) can
+  leave the old sign-in already gone and no new one created. Nothing is lost and nothing is stuck —
+  start the sign-in again. This is also why a sign-in that hangs is worth waiting out once rather
+  than clicking twice.
+- **Two sign-ins started at once almost always leave one.** A double-click, or the console and a
+  `wdn_` token driving the route for the same person, used to leave BOTH sandboxes alive: each
+  launch checks for live sign-ins before its own run row exists, so neither could see the other. The
+  launch now re-checks once its row exists and ends only the caller's OLDER sign-ins — an order every
+  replica computes the same way, with no lock — and a launch never ends up with nothing signed in.
+  It is not absolute: a run's timestamp is stamped a moment before it is written, so on a
+  multi-replica install with clock skew (or after a stall between the two) the run carrying the
+  EARLIER timestamp can be written after the other's re-check, and both stay alive. Neither is
+  killed, so the upload refusal below does not separate them either. The next sign-in clears it.
+  Closing the last case needs a per-person lock around the write and is a 0.7.6 follow-up.
+- **A sandbox superseded while its capture was already in flight cannot win.** The upload door
+  re-reads the run's state immediately before it stores, so a capture that was uploading when the
+  person's next sign-in replaced its sandbox is refused (`harness.credential.refused` /
+  `reason = run_killed`) instead of overwriting the newer session. Whoever is watching the old
+  sandbox sees "this sign-in sandbox was closed — a newer sign-in for you replaced it…" and finishes
+  in the new one.
 
 ### What the sign-in pane's waiting messages mean
 
@@ -3510,8 +3560,9 @@ seat, and three things 0.7.4's walk did not touch at all:
   starting leaves no stored credential, the retry replaces the blob (proven by
   the stored capture's `source_run_id` MOVING to the second run — "it reaches
   live" proves nothing about a member who was already live), and starting a
-  third sign-in over an abandoned one kills the orphan, leaving exactly one
-  live sandbox per person.
+  third sign-in over an abandoned one kills the orphan — the ordinary case
+  leaves exactly one live sandbox per person; a rare timestamp race across
+  replicas can leave two (see "One live sign-in sandbox per person" below).
 
 It also holds a sign-in in `STARTING` for 65 seconds on purpose — by tainting
 the kind node so nothing the run needs can schedule — and asserts that the
