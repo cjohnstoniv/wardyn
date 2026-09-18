@@ -87,8 +87,15 @@ over the model credential carrying the sign-in on the run's own page
   (`on` | `off`) — `off` restores the 0.7.5 behaviour for new dispatches.
   (Migration `0064_approval_credential_reauth` adds the approval kind; a
   downgrade to 0.7.5 with such rows present is unsupported.)
-<!-- PASS 4b: canon/ui-w6-fixes.md line -->
-<!-- PASS 4b: hold fix-pass-3 canon (legacy no-roster; injection pinned to the snapshot's account/role; plaintext-inside-tunnel client leg) -->
+  A deployment with no agent roster at all now completes this lane instead of refusing every resolve
+  with "the roster changed" — there was nothing to have drifted from. The proxy's injected session is
+  now pinned to `GET /federation/credentials` with the run's own dispatch-time account and role
+  whenever the captured session names both, so it can no longer be ridden onto a different account or
+  role, or onto `POST /logout` (which AWS treats as ending every run that person has, not just this
+  one); a request the pin does not cover is forwarded with no credential rather than refused. And the
+  MITM'd tunnel to a plain-HTTP `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` now serves a client that speaks
+  plain HTTP inside the tunnel, not only one that speaks TLS — the agent's own SDK does the former,
+  which was the walk's real blocker.
 
 ### Fixed
 
@@ -127,6 +134,19 @@ over the model credential carrying the sign-in on the run's own page
   2026-09-19T14:03:22Z` (RFC3339 UTC) is now rendered through the viewer's own locale on the
   member's Getting Started and the admin's Agents tab, and as "in 3h" — with the absolute stamp as
   the element's title — in the strip.
+- **The held-run sign-in door is offered only to the person whose sign-in can resolve it.** A mid-run
+  AWS sign-in request is cleared by the subject the row names — a capture lands in the capturer's own
+  scope — so the cockpit row and the `/approvals` card now show the button only to that person (or,
+  on the shared lane, to an operator, whose credential it is). A shared-lane member and an admin
+  reading somebody else's held run each read a sentence naming whose sign-in is awaited, and no
+  control. The board card and the cockpit header say "Waiting for the owner's AWS sign-in" to the
+  same readers, instead of calling it theirs.
+- **A login sandbox that gets stuck on a terminal reason closes its placeholder tab.** The tab the
+  click opened says the page changes to the provider's sign-in page by itself; on an
+  `ImagePullBackOff` it never would, and the error sat on the tab behind it.
+- **On Settings, the sign-in banner's button has a name of its own.** A member keeps the banner on
+  that page, beside the Settings card's admin-only button of the same label — two controls, one
+  accessible name.
 
 ### Changed
 

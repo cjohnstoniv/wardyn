@@ -176,11 +176,22 @@ result for them is evidence only for the tip somebody actually ran it on.
   docker-gated `test/awsssofake/reauth_hold_docker_test.go` does NOT prove the
   MITM path either — that fake serves plain HTTP too, and those tests point
   the agent straight at it with no proxy at all, deliberately, to measure the
-  SDK's own patience. The terminate → strip → inject → re-originate path is
-  pinned instead by `internal/egress/proxy`'s own tests — a real CONNECT
-  through a real proxy listener and a real TLS handshake against the Wardyn
-  leaf into a real plain-HTTP origin
-  (`TestMITMConnect_PlaintextOriginIsReachedThroughTheTunnel`) — and the whole
+  SDK's own patience. The terminate → strip → inject → re-originate path has
+  TWO independently-scheme'd legs, measured offline against the real agent
+  image rather than assumed: the CLIENT leg (what the SDK sends inside the
+  CONNECT tunnel it opens) and the ORIGIN leg (what the terminator re-dials
+  on the far side) can each be TLS or plain HTTP, and they need not match —
+  the real SDK, told its endpoint is `http://`, CONNECTs and then sends
+  PLAINTEXT inside the tunnel (measured first byte `0x47`, ASCII `G`, never a
+  TLS ClientHello's `0x16`), which a proxy that always TLS-handshook its
+  client side (the original bug) dropped every time. Both client shapes are
+  pinned by `internal/egress/proxy`'s own tests:
+  `TestMITMConnect_PlaintextClientInsideTheTunnelIsServed` (the SDK's own
+  shape) and `TestMITMConnect_TLSClientAgainstAPlaintextEntryStillWorks` (a
+  TLS-speaking client against the same plaintext entry keeps working too);
+  the origin leg by its own re-origination test. See
+  `evidence/credential-reauth-hold/SDK-PATH.md` for how the client leg was
+  measured. And the whole
   estate end to end by the kind walk itself.
 
   Still NOT driven on this walk, each with its own reason:

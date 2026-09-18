@@ -1831,6 +1831,47 @@ hiding them would repeat the failure mode we are designed to avoid.
     Contained by `WARDYN_AWS_SSO_PROXY_INJECT=off`, which restores the 0.7.5 behaviour for new
     dispatches (a run already dispatched keeps the lane it was authored with until it ends).
 
+### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
+
+Residual #46 above named what the proxy injects; this narrows WHICH requests it injects onto. Raised
+in fix pass 1 as a 0.7.7 candidate, raised again by the blind W6 security round with the AWS
+documentation attached, and shipped in 0.7.6 on the owner's ruling.
+
+**What was true before.** The proxy injected the session on **any** request to the run's portal host:
+`GET /federation/credentials` for any account/role pair the person could assume, the `/assignment/*`
+enumeration, and `POST /logout` — which AWS documents as invalidating the owner's server-side IAM
+Identity Center sign-in session, i.e. every run that person has, not just this one. The roster's
+account/role pin was enforced at the RESOLVE (`driftFrom`, against the roster and the dispatch-time
+snapshot) and never against what the SANDBOX asked for. Exposure was identical to 0.7.5's resident
+token, so it was never a regression — but 0.7.5 could not have done better and Phase B can, because
+the proxy now sees the request line.
+
+**What ships.** The authored injection rule carries a PIN (`egress.InjectionRule.PinPath` /
+`PinQuery`), and the captured-AWS-SSO lane sets it to `GET /federation/credentials` with `account_id`
+and `role_name` equal to the grant's own dispatch-time snapshot, whenever that snapshot carries both
+fields (an unpinned roster row leaves the rule unpinned, today's behaviour). A request the pin does
+not cover is **forwarded without the header**, and AWS answers it as an unauthenticated call.
+
+Three properties, each a way this could have been gotten wrong:
+
+- **It is a withholding, not a refusal.** No new refusal vocabulary, no new decision row, no new
+  failure mode for a legitimate call. A sandbox cannot tell a withheld header from an expired
+  session.
+- **The strip still runs.** A host with an injection rule always has the sandbox's own credential
+  headers removed, including the header that rule supplies — otherwise a withheld injection would
+  fall through to the "no rule at all" branch, which PRESERVES the agent's header, and the sandbox's
+  own value would ride exactly the requests the pin exists to narrow.
+- **Both lanes.** The pin is applied on the MITM lane and on the plain (absolute-URI) lane, or it
+  would be bypassable by simply not using TLS.
+
+**The pair is the SNAPSHOT'S**, generated from the same captured blob, one call apart, as the
+sandbox's own `~/.aws/config` — so it is byte-for-byte what the SDK asks for, on a roster row that
+pins account/role and on one that does not.
+
+**What it does not do.** It does not bound what the person is entitled to, and it does not stop a
+sandbox reaching the portal — only what a Wardyn-held credential may be spent on. A sandbox that
+obtains a session by some other means is outside this boundary, as it always was.
+
 ### Operator overrides that boot past a fail-closed gate
 
 Four shipped env vars let a deployment start after a gate this document
