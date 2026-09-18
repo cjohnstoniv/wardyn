@@ -146,6 +146,19 @@ grading anything but `dead` there would promise a launch that does not work. Nev
 strength of a registration timestamp a spent token can no longer redeem. See `docs/AUDIT-ACTIONS.md`'s
 `harness.credential.refresh` row and `CHANGELOG.md`.
 
+### A7. "A credential that lapses mid-run kills the run" — RESOLVED in 0.7.6, behind a switch
+
+On the captured-AWS-SSO Bedrock lane the proxy now injects the session on the wire instead of writing
+it into the sandbox, and a session that lapses mid-run HOLDS the sandbox's next credential exchange
+while its owner signs in again, bounded by `WARDYN_CREDENTIAL_REAUTH_TIMEOUT`. The person is told in
+the run's own cockpit, and the sign-in they were going to do anyway is what resumes the call.
+
+**What the report asked for and 0.7.6 does not claim:** the agent is not *paused* — its tool call is
+slow, and a client that gives up first still loses the turn. **What it does not do at all:** the other
+Bedrock lanes (the host `~/.aws` mount, static keys, the bearer token) have nothing Wardyn can hold on,
+and create-time refusals are still refusals — Finding 3 gives those a door instead. See
+`docs/OPERATIONS.md` "A run is holding for a sign-in" and `threatmodel/THREAT-MODEL.md` residual #46.
+
 ---
 
 ## B. Structural gaps
