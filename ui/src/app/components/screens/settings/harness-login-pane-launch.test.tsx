@@ -230,3 +230,52 @@ describe("the wait reads the substrate's reason (finding 6)", () => {
     }
   });
 });
+
+// Review S2: the terminal status write is the one a 500ms deadline may drop, so
+// a FAILED run can reach the pane with the reason only in failure_hint. The
+// server rebuilds status_detail from that hint — but the pane must never put its
+// stuck lead-in in front of an EMPTY sentence whatever it is handed, and a
+// pre-0.7.6 daemon hands it the hint alone.
+describe("a terminal ending that arrived only as a failure_hint", () => {
+  beforeEach(() => {
+    harnessLoginMock.mockReset().mockResolvedValue("run-123");
+    vi.mocked(runsApiMocked.killRun).mockReset().mockResolvedValue(undefined);
+    vi.mocked(runsApiMocked.getRun).mockReset();
+  });
+
+  it("the server's rebuilt detail reads exactly like the run that kept it", async () => {
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue({
+      id: "run-123",
+      state: "FAILED",
+      // What projectStatusDetail rebuilds from the hint when the row held nothing.
+      status_detail: "agent: ImagePullBackOff: rpc error: pull access denied",
+      status_reason: "ImagePullBackOff",
+      failure_hint:
+        "the sandbox could not be created: agent container stuck waiting (ImagePullBackOff): rpc error: pull access denied",
+    } as AgentRun);
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+
+    const alertBox = await screen.findByRole("alert");
+    expect(alertBox).toHaveTextContent(LOGIN_SANDBOX_STUCK_LEAD_IN);
+    expect(alertBox).toHaveTextContent("pull access denied");
+    expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument();
+  });
+
+  // The old daemon: a reason and a hint, no detail. Never a lead-in with nothing
+  // after it — the run's own sentence is better than a promise with no words.
+  it("falls through to the run's own sentence rather than promising words it has not got", async () => {
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue({
+      id: "run-123",
+      state: "FAILED",
+      failure_hint:
+        "the sandbox could not be created: agent container stuck waiting (ImagePullBackOff): rpc error: pull access denied",
+    } as AgentRun);
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+
+    const alertBox = await screen.findByRole("alert");
+    expect(alertBox).toHaveTextContent("pull access denied");
+    expect(alertBox.textContent ?? "").not.toMatch(new RegExp(`${LOGIN_SANDBOX_STUCK_LEAD_IN}\\s*$`));
+  });
+});

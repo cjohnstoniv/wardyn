@@ -128,8 +128,15 @@ export function parseStatusDetail(
 // so every caller can render it unconditionally.
 export function statusDetailSentence(raw: string | null | undefined, reason?: string | null): string {
   const text = (raw ?? "").trim();
-  if (!text) return "";
   const d = parseStatusDetail(text, reason);
+  if (!text) {
+    // Defence in depth (review S2): the server rebuilds the detail from
+    // failure_hint whenever it has a terminal reason, so a terminal reason with
+    // no words should be unreachable — and if it ever is reached, the pane has
+    // already promised the reader a sentence after its lead-in, so an empty
+    // string is the one answer that must not come back.
+    return isTerminalStatusReason(d.reason) ? STARTING_RAW_PREFIX + d.reason : "";
+  }
   const withMessage = (lead: string) => (d.message ? `${lead} ${d.message}` : lead);
   switch (d.reason) {
     case "ContainerCreating":
@@ -139,12 +146,16 @@ export function statusDetailSentence(raw: string | null | undefined, reason?: st
       return STARTING_FIRST_PULL;
     case "Unschedulable":
       return STARTING_UNSCHEDULABLE;
-    // An empty reason belongs here rather than with the unknown ones below: the
-    // line parsed, it just named no reason, which is the same "the pod is there
-    // and nothing has taken it" fact Pending states.
     case "Pending":
-    case "":
       return STARTING_WAITING_FOR_NODE;
+    // An empty reason on a line that PARSED (it named a component) is the same
+    // "the pod is there and nothing has taken it" fact Pending states. A line
+    // that did not parse at all is NOT (review N2) — calling an unrecognised
+    // string a node wait invents exactly the kind of diagnosis this module
+    // exists to stop, so it falls through to the raw arm below.
+    case "":
+      if (d.component) return STARTING_WAITING_FOR_NODE;
+      return STARTING_RAW_PREFIX + text;
     case "ImagePullBackOff":
     case "ErrImagePull":
       return withMessage(STUCK_IMAGE_PULL);
@@ -166,8 +177,11 @@ export function statusDetailSentence(raw: string | null | undefined, reason?: st
 // "" when there is nothing to say.
 export function statusDetailChip(raw: string | null | undefined, reason?: string | null): string {
   const text = (raw ?? "").trim();
-  if (!text) return "";
-  switch (parseStatusDetail(text, reason).reason) {
+  const d = parseStatusDetail(text, reason);
+  // Same defence as the sentence's (review S2): a terminal reason always gets a
+  // chip, detail or no detail.
+  if (!text && !isTerminalStatusReason(d.reason)) return "";
+  switch (d.reason) {
     case "Pulling":
       return CHIP_DOWNLOADING;
     case "ContainerCreating":
@@ -182,9 +196,14 @@ export function statusDetailChip(raw: string | null | undefined, reason?: string
     case "CreateContainerConfigError":
     case "CrashLoopBackOff":
       return CHIP_CONTAINER_WONT_START;
-    default:
-      // Unschedulable, Pending, an empty reason, and anything unknown: the chip
-      // says the general fact and its `title` carries the full sentence.
+    case "Unschedulable":
+    case "Pending":
       return CHIP_WAITING_FOR_MACHINE;
+    default:
+      // An UNKNOWN reason is not a machine wait (review N1). The chip is the
+      // only register a narrow header ever shows, so asserting the wrong short
+      // answer there is worse than carrying a long true one; the `title` has the
+      // full sentence either way. An ABSENT reason keeps the general chip.
+      return d.reason ? STARTING_RAW_PREFIX + d.reason : CHIP_WAITING_FOR_MACHINE;
   }
 }

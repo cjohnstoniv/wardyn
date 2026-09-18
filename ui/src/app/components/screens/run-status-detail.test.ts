@@ -15,6 +15,7 @@ import {
   CHIP_DOWNLOADING,
   CHIP_IMAGE_PULL_FAILED,
   CHIP_SETTING_UP,
+  CHIP_CONTAINER_WONT_START,
   CHIP_WAITING_FOR_MACHINE,
   STARTING_CONTAINER_CREATING,
   STARTING_FIRST_PULL,
@@ -91,6 +92,33 @@ describe("statusDetailSentence", () => {
     expect(isTerminalStatusReason("SomeFutureReason")).toBe(false);
   });
 
+  // N2 (review): a line that did not parse at all is NOT the "nothing has taken
+  // the pod" fact. Saying "Waiting for a machine to start it on." over a string
+  // nobody recognised invents a diagnosis, which is the whole defect this module
+  // exists to end.
+  it("hands an UNPARSEABLE line over raw rather than calling it a node wait", () => {
+    expect(statusDetailSentence("something the substrate said")).toBe(
+      STARTING_RAW_PREFIX + "something the substrate said",
+    );
+    // …while a line that DID parse — it named a component — and merely carried
+    // no reason is that fact, and keeps the node-wait sentence.
+    expect(parseStatusDetail("pod: : nothing has taken it").component).toBe("pod");
+    expect(statusDetailSentence("pod: : nothing has taken it")).toBe(STARTING_WAITING_FOR_NODE);
+  });
+
+  // S2 (review): the server now always sends the detail beside a terminal
+  // reason, but a UI that returns "" for one is a blank sentence under a lead-in
+  // that promises words. Defence in depth, both registers.
+  it("never falls silent on a terminal reason, even with no detail at all", () => {
+    expect(statusDetailSentence("", "ImagePullBackOff")).toBe(STARTING_RAW_PREFIX + "ImagePullBackOff");
+    expect(statusDetailChip("", "ImagePullBackOff")).toBe(CHIP_IMAGE_PULL_FAILED);
+    expect(statusDetailChip(null, "CrashLoopBackOff")).toBe(CHIP_CONTAINER_WONT_START);
+    // A NON-terminal reason with no detail stays silent: nothing is wrong, and
+    // there is nothing to say.
+    expect(statusDetailSentence("", "ContainerCreating")).toBe("");
+    expect(statusDetailChip("", "ContainerCreating")).toBe("");
+  });
+
   it("says NOTHING when there is nothing to say", () => {
     expect(statusDetailSentence(undefined)).toBe("");
     expect(statusDetailSentence(null)).toBe("");
@@ -119,6 +147,13 @@ describe("statusDetailChip — the short register", () => {
     expect(statusDetailChip("agent: ContainerCreating", "ContainerCreating")).toBe(CHIP_SETTING_UP);
     expect(statusDetailChip("pod: Unschedulable: taint", "Unschedulable")).toBe(CHIP_WAITING_FOR_MACHINE);
     expect(statusDetailChip("agent: ImagePullBackOff: denied", "ImagePullBackOff")).toBe(CHIP_IMAGE_PULL_FAILED);
+    // N1 (review): an unknown reason must not be asserted to be a machine wait.
+    // The chip is the only register a narrow header shows, so a wrong short
+    // answer there is worse than a long true one.
+    expect(statusDetailChip("agent: SomeFutureReason: x", "SomeFutureReason")).toBe(
+      STARTING_RAW_PREFIX + "SomeFutureReason",
+    );
+    expect(statusDetailChip("pod: Pending", "Pending")).toBe(CHIP_WAITING_FOR_MACHINE);
     for (const chip of [CHIP_DOWNLOADING, CHIP_SETTING_UP, CHIP_WAITING_FOR_MACHINE, CHIP_IMAGE_PULL_FAILED]) {
       expect(chip.length).toBeLessThanOrEqual(24);
       expect(chip.toLowerCase()).not.toContain("starting");

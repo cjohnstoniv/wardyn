@@ -25,7 +25,7 @@ import { Loader2, ShieldCheck, TriangleAlert, KeyRound, Square, ExternalLink, Co
 import { HttpError } from "../../../lib/api/core";
 import { harnessAuth as harnessAuthApi } from "../../../lib/api/harness-auth";
 import { runs as runsApi } from "../../../lib/api/runs";
-import { isTerminalRunState } from "../../../lib/types";
+import { isTerminalRunState, type AgentRun } from "../../../lib/types";
 import { usePoll } from "../../../lib/use-poll";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { AttachTerminal, type AttachTerminalHandle } from "../../attach-terminal";
@@ -470,7 +470,17 @@ export function HarnessLoginPane({
     }
   }, [provider, startUrl]);
 
-  // pollRun is the `starting` phase's whole machine: ask the run whether it is
+  // startingSentenceOf is the substrate's sentence for this read, or "". The lead-in
+// below promises the reader words after it, so BOTH arms that use it check for
+// "" first and fall through — to the clock, or to the run's own failure_hint —
+// rather than putting a promise on screen with nothing behind it (review S2).
+// run-status-detail.ts already guarantees a terminal reason gets a sentence, so
+// this is defence in depth against a future daemon, not a reachable state today.
+function startingSentenceOf(run: AgentRun | undefined): string {
+  return statusDetailSentence(run?.status_detail, run?.status_reason);
+}
+
+// pollRun is the `starting` phase's whole machine: ask the run whether it is
   // up yet, mount the terminal when it is, and end the wait honestly when the
   // run ends instead. Nothing here attaches — AttachTerminal's own mint is
   // owner-or-admin and one failed mint is terminal in that component, so the
@@ -488,7 +498,7 @@ export function HarnessLoginPane({
       pollFailuresRef.current = 0;
       failingSinceRef.current = null;
     }
-    setStartingSentence(statusDetailSentence(run?.status_detail, run?.status_reason));
+    setStartingSentence(startingSentenceOf(run));
     const verdict = startWaitVerdict({
       now,
       startedAt: startedAtRef.current,
@@ -507,9 +517,9 @@ export function HarnessLoginPane({
     // The wait ending on a REASON rather than a clock: the substrate has given
     // its final answer, and the five minutes that used to follow it were five
     // minutes of waiting for news that had already arrived.
-    if (verdict === "stuck") {
+    if (verdict === "stuck" && startingSentenceOf(run)) {
       setStuck(true);
-      setError(`${LOGIN_SANDBOX_STUCK_LEAD_IN} ${statusDetailSentence(run?.status_detail, run?.status_reason)}`);
+      setError(`${LOGIN_SANDBOX_STUCK_LEAD_IN} ${startingSentenceOf(run)}`);
       setPhase("error");
       return;
     }
@@ -527,9 +537,9 @@ export function HarnessLoginPane({
       // Codex #11: the run that went STARTING -> FAILED between two polls. The
       // server keeps a TERMINAL reason on a FAILED run so this branch can still
       // say what happened — failure_hint is only dispatch's wrapper around it.
-      if (isTerminalStatusReason(run.status_reason)) {
+      if (isTerminalStatusReason(run.status_reason) && startingSentenceOf(run)) {
         setStuck(true);
-        setError(`${LOGIN_SANDBOX_STUCK_LEAD_IN} ${statusDetailSentence(run.status_detail, run.status_reason)}`);
+        setError(`${LOGIN_SANDBOX_STUCK_LEAD_IN} ${startingSentenceOf(run)}`);
         setPhase("error");
         return;
       }
