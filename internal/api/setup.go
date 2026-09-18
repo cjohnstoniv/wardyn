@@ -945,7 +945,7 @@ func (s *Server) setupHarnessCreds(ctx context.Context, sc types.SiteConfig, sco
 			SourceRunID: blob.SourceRunID,
 		})
 	}
-	return out, managedDetail, setupModelAccess(sc, blob, found, scope, s.cfg.OIDC != nil, s.cfg.Now().UTC())
+	return out, managedDetail, setupModelAccess(sc, blob, found, s.awsSSOTokenSpentFor(blob), scope, s.cfg.OIDC != nil, s.cfg.Now().UTC())
 }
 
 // siteConfigSnapshot reads the one site-config document, reporting whether the

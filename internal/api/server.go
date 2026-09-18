@@ -763,7 +763,10 @@ type Server struct {
 	// like sshSessions and lastTouch above, and correct for the same reason
 	// (replicas>1 is refused by construction). Zero values are ready to use.
 	// ponytail: ssoRefreshSpent grows one small entry per spent token per daemon
-	// lifetime — bound it only if that ever stops being negligible.
+	// lifetime — bound it only if that ever stops being negligible. Grading
+	// reads it too now (setupModelAccess, Finding 5), not only the refresher's
+	// own short-circuit — so a restart re-grades a spent credential `live`
+	// until the next dispatch marks it spent again, same as the refresher did.
 	ssoRefreshMu    sync.Mutex
 	ssoRefreshLocks map[string]*sync.Mutex
 	ssoRefreshSpent map[string]bool

@@ -386,7 +386,7 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 		return blob, awsSSORefreshSpentSentence
 	}
 
-	resp, err := s.createAWSSSOTokenWithRetry(ctx, blob)
+	resp, attempts, err := s.createAWSSSOTokenWithRetry(ctx, blob)
 	if err != nil {
 		spent := errors.Is(err, errAWSSSOCredentialSpent)
 		if spent {
@@ -395,7 +395,7 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 		slog.ErrorContext(ctx, "wardynd: renewing the captured AWS SSO credential failed",
 			slog.Bool("credential_spent", spent), slog.Any("err", err))
 		s.auditAWSSSORefresh(ctx, scope, "failure", map[string]any{
-			"provider": awsSSOProvider, "spent": spent, "error": err.Error(),
+			"provider": awsSSOProvider, "spent": spent, "error": err.Error(), "attempts": attempts,
 		})
 		if spent {
 			return blob, awsSSORefreshSpentSentence
@@ -472,17 +472,28 @@ func (s *Server) auditAWSSSORefresh(ctx context.Context, scope awsSSOScope, outc
 // createAWSSSOTokenWithRetry is createAWSSSOToken plus the ONE backoff retry a
 // transient failure gets. A spent credential is never retried — the answer will
 // not change, and hammering it is how a throttle becomes a fleet outage.
-func (s *Server) createAWSSSOTokenWithRetry(ctx context.Context, blob awsSSOBlob) (awsSSOTokenResponse, error) {
+//
+// Returns attempts (1 or 2) so the failure audit row can say whether a dropped
+// packet was one flaky call or two (Finding 5 — the retry already existed; this
+// makes it LEGIBLE rather than adding a second one). On a second failure the two
+// errors are errors.Join'd so BOTH are in the row: two EOFs read as a network
+// story, an EOF then invalid_grant already says spent, now with attempts:2
+// beside it.
+func (s *Server) createAWSSSOTokenWithRetry(ctx context.Context, blob awsSSOBlob) (awsSSOTokenResponse, int, error) {
 	resp, err := s.createAWSSSOToken(ctx, blob)
 	if err == nil || errors.Is(err, errAWSSSOCredentialSpent) {
-		return resp, err
+		return resp, 1, err
 	}
 	select {
 	case <-ctx.Done():
-		return resp, err
+		return resp, 1, err
 	case <-time.After(awsSSORefreshRetryDelay):
 	}
-	return s.createAWSSSOToken(ctx, blob)
+	resp2, err2 := s.createAWSSSOToken(ctx, blob)
+	if err2 != nil {
+		return resp2, 2, errors.Join(err, err2)
+	}
+	return resp2, 2, nil
 }
 
 // createAWSSSOToken performs the SSO-OIDC CreateToken refresh_token grant.
