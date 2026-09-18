@@ -80,7 +80,7 @@ import { C } from "../../../lib/workspace-copy";
 const VERIFY_APPROVE_LEARNS_HINT =
   "Approving a held request here also adds that host to this workspace's requirements — future runs won't ask again.";
 import { useOperator, useSecurityOperator } from "../../wardyn/operator-context";
-import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
+import { OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../../wardyn/copy";
 
 export function RecordPane({
   ws,
@@ -187,7 +187,7 @@ export function RecordPane({
     // controls need the higher operatorOnly tier on top of it, and add their
     // own useOperator gate where they live (see the note above).
     <fieldset disabled={!securityOperator} className="m-0 min-w-0 border-0 p-0 space-y-4">
-      {!securityOperator && <p className="text-xs text-muted-foreground">{OPERATOR_ONLY_REASON}</p>}
+      {!securityOperator && <p className="text-xs text-muted-foreground">{SECURITY_ONLY_REASON}</p>}
       {/* No "Sessions" label here — the DetailSectionCard wrapping this pane already
           titles it; repeating it would show the same word twice on the page. */}
       <Chip tone="info">Recommended · skippable</Chip>
