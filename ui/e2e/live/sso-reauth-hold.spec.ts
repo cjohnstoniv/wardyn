@@ -13,7 +13,7 @@
  * and because every case here makes its OWN capture — nothing after it should
  * depend on which session the member is holding.
  *
- * ── WHAT IS SIMULATED HERE, AND WHAT IS NOT ─────────────────────────────────
+ * ── WHAT THIS FILE PROVES LIVE, AND WHAT IT DEFERS ─────────────────────────
  * Corrected 2026-09-18 (W6-I SHOULD-3): the first version of this header said
  * the walk's injection "rides the cleartext lane" and that the production path
  * is "proven by the docker-gated test, whose fake serves TLS". Both are false.
@@ -23,13 +23,13 @@
  * with no proxy at all, deliberately, because what they measure is the SDK's
  * patience. Nothing in them touches mitm.go.
  *
- * What is SIMULATED is exactly one thing: the timeout BODY. Over plain HTTP the
- * sandbox's SDK still sees the fake's own 401 rather than the hold's sentence,
- * so case K is a SIMULATED check of that. The terminate → strip → inject →
- * re-originate path is pinned by internal/egress/proxy's own
- * TestMITMConnect_PlaintextOriginIsReachedThroughTheTunnel, which drives a real
- * CONNECT through a real proxy listener and a real TLS handshake against the
- * Wardyn leaf into a real plain-HTTP origin — and by this walk, end to end.
+ * Nothing here is simulated: the SDK speaks plain HTTP inside its CONNECT tunnel,
+ * the proxy terminates it (peeking the first byte — no TLS handshake for this
+ * client), strips the placeholder, injects the session and re-originates in the
+ * entry's scheme, and the hold's own sentence reaches the SDK. That path is
+ * pinned by internal/egress/proxy's TestMITMConnect_PlaintextClientInsideTheTunnelIsServed,
+ * TestMITMConnect_TLSClientAgainstAPlaintextEntryStillWorks and
+ * TestForwardInspectedLLM_ReOriginatesInTheSchemeTheEntryNames — and by this walk, end to end.
  *
  * What IS real here, and is proven nowhere else: a real member, a real k8s
  * sandbox, a real agent process, a real session retired at the portal mid-run,

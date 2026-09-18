@@ -8,14 +8,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
-The 0.7.5 field report (`HANDOFF-wardyn-076-sso-ux.md`) consolidated one journey — a person getting
+The 0.7.5 field report (an operator's handoff from running 0.7.1–0.7.5 on a private-endpoint Kubernetes estate) consolidated one journey — a person getting
 AWS SSO working and running a Claude Code agent — into eight findings. This release answers seven of
 them; the eighth (a mid-run credential lapse holding the run instead of killing it) ships behind a
 kill switch, sequenced last — see Known gaps.
 
 Verified on the kind AWS SSO walk against images rebuilt from the commit under
 test, on two fresh installs (walk-9 on the spec set that ships here, then walk-10 on
-the release tip `3eaa42db`; each walk's `MANIFEST.json` records the tip, zero dirty
+`3eaa42db`, the tree this release descends from with documentation-only changes after it; each walk's `MANIFEST.json` records the tip, zero dirty
 files, the rebuilt images with host and node digests agreeing, and the kill-switch
 posture, `on`). A never-signed-in member is told on the Runs board and on New Run
 (findings 2 and 1); a lapsed member signs in from the strip itself without leaving
@@ -180,9 +180,9 @@ observe the expiry (the proxy's own tests pin that path); see TEST-GAPS.
 ### From the 0.7.x readiness review
 
 Independent documentation/security-lane patches from the owner's separate `review/0.7x-ledger`
-readiness campaign, cherry-picked individually onto this release (`local/review-0.7.x/PATCH-LEDGER.md`
-is the full ledger; none is a schema, API, configured-cap or deployment-requirement change, and one
-tightens an existing input check — see below).
+readiness campaign, cherry-picked individually onto this release (the campaign's own ledger is kept
+on its private review branch; none is a schema, configured-cap or deployment-requirement change; two
+tighten an existing input check and one turns a relayed oversized upload into a 413 — see below).
 
 - Keep contributor UI commands at repository root.
 - Clarify automated conformance versus manual live acceptance gates.
@@ -219,7 +219,7 @@ tightens an existing input check — see below).
   against the reference agent's own SDK found it still waiting on a parked credential exchange at
   eleven minutes — the test's own ceiling, not the SDK's — so the 600 s default hold is the binding
   constraint, not the SDK; the docker-gated resume test
-  (`TestDocker_TheSameRunResumesWhenTheHoldReleases`) has run green on this release's tip (22 s).
+  (`TestDocker_TheSameRunResumesWhenTheHoldReleases`) has run green on this release's lineage (~22 s).
   The live kind SSO walk found that Phase B's TLS-MITM entry for the portal host could not serve a
   plain-HTTP SSO endpoint (`WARDYN_AWS_SSO_ENDPOINT_OVERRIDE`, the kind test estate's own posture):
   terminating the CONNECT is mandatory — the sandbox holds only an inert placeholder, so the real
@@ -260,14 +260,12 @@ tightens an existing input check — see below).
 - **Masking has no TTL.** Each resolve registers the session token in the run's own mask set (evicted
   for terminal runs past `RunSecretGrace`) and the renewal path keeps its global registration, which
   has no expiry. Unchanged from 0.7.5, restated because this lane adds a registration site.
-- **The kind SSO walk's case K stays a SIMULATED check of the production timeout body only.** The
-  walk's fake serves plain HTTP, but the run still terminates a TLS CONNECT through the proxy's MITM
-  lane (the sandbox holds only a placeholder, so the real token can only be substituted into a
-  request the proxy can see) — over plain HTTP the SDK sees the fake's own 401 rather than the hold's
-  sentence, which is the one thing SIMULATED. The terminate → strip → inject → re-originate path
+- **The kind SSO walk's case K exercises the real path end to end. The terminate → strip → inject → re-originate path
   itself is pinned by `internal/egress/proxy`'s own tests
   (`TestForwardInspectedLLM_ReOriginatesInTheSchemeTheEntryNames`), not by the docker-gated
   SDK-tolerance test, whose fake also serves plain HTTP with no proxy in the loop at all.
+  The hold's own sentence reaches a client that speaks inside the terminated tunnel (the walk's
+  SDK does); only a client on the un-terminated plain lane would see the origin's own 401.
 - **The support bundle's Compose entry is redacted for reading, not for re-use.** It is not a valid
   `docker compose -f` input when marker-named structural keys exist (e.g. a `secrets:` section or a
   `*_token`-named volume) — those keys are redacted whole rather than per-value, so the redacted
@@ -282,7 +280,7 @@ tightens an existing input check — see below).
   tightening has no effect there (probed: files land `-rwxrwxrwx` regardless).
 - **A policy file ending in a bare `---`** (a legal, empty second YAML document) was silently accepted
   on the first document alone; it is now rejected with "policy input must contain exactly one
-  document" — the one behavior change on previously-accepted input; no shipped example policy uses a
+  document" — the one behavior change on a previously-accepted policy file; no shipped example policy uses a
   document separator.
 - A member under a dead SHARED model credential is told, and has nothing to do about it: Wardyn
   offers no way to notify the admin from that strip. The sentence names the admin because they are

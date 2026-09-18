@@ -155,12 +155,11 @@ result for them is evidence only for the tip somebody actually ran it on.
     killing the run, and the same run id continues after the member signs in;
   - **the run door** (case J) — a dispatch refused over the model credential
     carries the server's own sentence and a sign-in on the run's own page;
-  - **two ways a hold ends** — one nobody answers times out with the proxy's
-    `credential:reauth-timeout` decision while the request stays open, and one
-    whose run is killed has its request cancelled with it.
+  - **how a hold ends** — one whose run is killed has its request cancelled
+    with it (live); the one nobody answers is deferred (below).
 
-  **Case K is labelled SIMULATED, deliberately — and its reason was corrected
-  after walk-3.** The kind fake serves plain HTTP, but the walk does NOT ride
+  **Case K carried a SIMULATED label through walk-5; the label is retired, and here
+  is why it looked true.** The kind fake serves plain HTTP, but the walk does NOT ride
   a plaintext lane: the agent's SDK issues a CONNECT for the portal host (36–69
   per run), Phase B marks that host:port TLS-MITM eligible, and the proxy
   TERMINATES the tunnel — the sandbox holds only an inert placeholder, so the
@@ -169,8 +168,10 @@ result for them is evidence only for the tip somebody actually ran it on.
   therefore mandatory, and the walk exercises that MITM lane, not a plain one
   (a `curl` from inside the sandbox rides the plain lane instead and is
   credentialed correctly, which is what made the earlier "rides the cleartext
-  lane" description look true). What stays SIMULATED is only the production
-  TIMEOUT BODY: over plain HTTP the SDK still sees the fake's own 401 rather
+  lane" description look true). Nothing in case K is simulated: the hold's own
+  sentence reaches a client that speaks inside the terminated tunnel, which the
+  walk's SDK does; only a client on the un-terminated plain lane would see the
+  origin's own 401 instead
   than the hold's sentence. What the walk DOES prove live: the control plane,
   the approval, the console and the resume, on a real cluster. The
   docker-gated `test/awsssofake/reauth_hold_docker_test.go` does NOT prove the
@@ -196,11 +197,12 @@ result for them is evidence only for the tip somebody actually ran it on.
 
   **The timeout negative (a hold nobody answers) is deferred, with its measurements**
   (`ui/e2e/live/sso-reauth-hold.spec.ts`, `test.fixme`). The decision row that names a spent
-  hold (`credential:reauth-timeout`) is written for the FIRST live observer of the expiry,
-  once per hold rather than once per retry; a hold that ends with no call in flight writes
-  nothing. On the walk the sandbox's SDK re-calls on its own ~30 s cadence and cannot be held
-  still, so two budgets (30 s and 90 s) both expired with nothing waiting: a real hold was
-  raised each time (a PENDING row and `credential.reauth.requested`) and no decision followed.
+  hold (`credential:reauth-timeout`) is written by the FIRST observer after the expiry, once per
+  hold rather than once per retry — so a budget that ends between the SDK's own ~30 s re-calls is
+  observed by its next retry, and the case is drivable with a prompt sent after the budget. The two
+  attempts on this release (30 s and 90 s budgets) both raised a real hold (a PENDING row and
+  `credential.reauth.requested`) and asserted the decision too early; it is deferred for walk
+  time, not for a product limit, and lands in 0.7.7.
   The other ending of a hold — killing the held run cancels its request — is live and green;
   the timeout path is pinned by the proxy's `credhold` tests.
 
@@ -210,7 +212,7 @@ result for them is evidence only for the tip somebody actually ran it on.
   |---|---|
   | I6 — a sign-in started BEFORE the request does not resolve it | The kind fake pre-approves every device code permanently, so a login run's capture lands within seconds of the run starting. There is no controllable window in which a sign-in is in flight ACROSS the raise: a login started before the hold has already captured before the hold opens, which prevents the hold instead of racing it. Pinned hermetically by the hold lane's own tests. |
   | the `not_configured` strip for a member who has signed in before | Nothing in the product deletes a member's stored AWS session, and `DELETE /setup/harness-credential` is operator-only AND scoped to the caller's own subject. The walk asserts it in the one window it exists — before the member's first capture. |
-  | the hold's 401 body reaching the sandbox's SDK | Plain-HTTP lane; see SIMULATED above. |
+  | the hold's timeout body asserted live | Reaches the SDK inside the terminated tunnel (proxy tests); asserting it on the walk is the deferred timeout negative above. |
   | `awsMount` / bearer Bedrock lanes show no re-auth behaviour | The walk installs one estate (`bedrock_sso` + `per_user`); a second mechanism would need a second install. Pinned hermetically. |
 
   Three gaps the walk does NOT close, closed elsewhere instead:

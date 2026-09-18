@@ -185,7 +185,7 @@ control plane itself at dispatch, never by anything inside the sandbox
 rebuild to get them.** `agent-claude-code` is not a published image (it bundles
 Anthropic's Claude Code CLI, which an operator installs under their own
 agreement with its vendor); `agent-base` is what ships, and
-0.7.5 puts the three lines there too, so any image built `FROM ghcr.io/cjohnstoniv/agent-base:0.7.5`
+0.7.6 puts the three lines there too, so any image built `FROM ghcr.io/cjohnstoniv/agent-base:0.7.6`
 inherits them. Also needed for the quiet boot, alongside the `ENV` lines: a
 `seed_claude_onboarding` call in `agent-run` before the agent starts (product
 onboarding only — the workspace-trust and Bypass Permissions prompts are
@@ -197,7 +197,7 @@ base, or an older tag pinned in `WARDYN_AGENT_IMAGES`, still parks
 **A rebuild is not a rollout.** `make agent-images` tags
 `wardyn/agent-claude-code:local` on the machine that built it, which a cluster's
 nodes cannot pull. Build with your own tag from the repo root
-(`docker build -f deploy/images/claude-code/Dockerfile -t <your-registry>/agent-claude-code:0.7.5 .`),
+(`docker build -f deploy/images/claude-code/Dockerfile -t <your-registry>/agent-claude-code:0.7.6 .`),
 push it to the registry your nodes pull from, and re-point the `claude-code`
 entry of `WARDYN_AGENT_IMAGES` at it — a `helm upgrade` of the control plane
 neither rebuilds that image nor moves an entry you have pinned.

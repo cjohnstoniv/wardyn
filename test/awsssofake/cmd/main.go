@@ -88,9 +88,10 @@ func main() {
 		Handler:           h,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	// TLS when the operator supplied a pair, because the PLAINTEXT lane cannot
-	// prove the production shape: injection errors are swallowed on the plain
-	// forward lane (the SDK sees the fake's own 401), so the timeout's 401
+	// TLS when the operator supplied a pair, for a client that speaks TLS inside
+	// its tunnel; a client that speaks plain HTTP inside the tunnel (the real SDK)
+	// is served by the terminator either way. On the un-terminated plain forward
+	// lane injection errors are swallowed (that client sees the fake's own 401), so the timeout's 401
 	// UnauthorizedException body and the MITM path that writes it are only
 	// exercised over a TLS CONNECT the proxy terminates.
 	if *tlsCert != "" || *tlsKey != "" {

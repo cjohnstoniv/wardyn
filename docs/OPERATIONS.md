@@ -1176,7 +1176,7 @@ to the claude-code image only** — the `codex-cli` image still reaches for seve
 hosts of its own at start (see the CHANGELOG's known gaps). **And only to an
 image actually carrying the three `ENV` lines**: `agent-claude-code` (where they
 were measured) is not a published image — `agent-base` is what ships, and it now
-carries the three lines too, so any image built `FROM ghcr.io/cjohnstoniv/agent-base:0.7.5`
+carries the three lines too, so any image built `FROM ghcr.io/cjohnstoniv/agent-base:0.7.6`
 inherits them. An image on another base, or an older tag pinned in
 `WARDYN_AGENT_IMAGES`, still parks on the CLI's own bootstrap; see
 [corp-image-authoring.md](adoption/corp-image-authoring.md) for the rebuild
@@ -3315,7 +3315,7 @@ after attaching and, ONLY if the sandbox has not announced itself (no
 the chained command itself, exactly as 0.7.4 did. The first thing the new image
 prints is that announcement, before its own prep wait, so on a current image the
 console never types and a second sign-in is never started over a running one.
-If you pin agent images, pull the 0.7.5 aws-sso image at the same upgrade.
+If you pin agent images, pull the 0.7.6 aws-sso image at the same upgrade.
 
 **The launch answers before the sandbox is up.** Since 0.7.4 `POST
 /setup/harness-login` returns `{run_id, state: "PENDING"}` as soon as the run
@@ -3794,7 +3794,9 @@ working tree and reloads them first. It retags the two `:local` agent images
 on that Docker daemon — a compose stack sharing that daemon adopts them for
 new runs, which the walk warns about once. Either way the walk writes an
 `images.txt` into its evidence directory naming the tree's HEAD and each
-image's content digest and build time, so "which tip did this prove?" is
+image's content digest and build time (and, since 0.7.6, a `MANIFEST.json` with the host and node
+digests compared per image, the dirty paths, the fake's TTL knobs and the kill-switch posture read
+back off the Deployment), so "which tip did this prove?" is
 answerable afterwards rather than remembered.
 
 **It is still a manual proof, not a CI job** — no workflow runs it, so a green
