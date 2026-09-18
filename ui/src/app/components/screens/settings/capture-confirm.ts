@@ -229,12 +229,21 @@ function hintIntervalAt(elapsedMs: number): number {
 }
 
 // Real setTimeout, abort-cancellable — the same clock every test in this lane
-// drives with vi.useFakeTimers, no injection needed.
-function sleep(ms: number, signal: AbortSignal): Promise<void> {
+// drives with vi.useFakeTimers, no injection needed. `wake` (review-1 S2) is
+// an EventTarget whose "tick" event resolves the wait EARLY — the schedule's
+// own interval is still the ceiling, `wake` only shortens it.
+function sleep(ms: number, signal: AbortSignal, wake?: EventTarget): Promise<void> {
   return new Promise((resolve) => {
     if (signal.aborted) return resolve();
-    const t = setTimeout(resolve, ms);
-    signal.addEventListener("abort", () => { clearTimeout(t); resolve(); }, { once: true });
+    const done = () => {
+      clearTimeout(t);
+      wake?.removeEventListener("tick", done);
+      signal.removeEventListener("abort", done);
+      resolve();
+    };
+    const t = setTimeout(done, ms);
+    signal.addEventListener("abort", done, { once: true });
+    wake?.addEventListener("tick", done, { once: true });
   });
 }
 
@@ -253,14 +262,22 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 //     running out of time (false).
 // Bounded by the run's own life (terminal + CAPTURE_POST_RUN_GRACE_MS) OR the
 // absolute CAPTURE_WATCH_MAX_MS, whichever comes first.
+//
+// `wake` (review-1 S2, the back-off schedule's "immediate tick" arm): an
+// EventTarget the caller can dispatch a `new Event("tick")` on to cut the
+// CURRENT wait short — the CLI-line hint and a return-to-visible both do
+// this. The run's own state transition needs no separate wiring: the loop
+// already re-reads `getRun` every tick regardless.
 export async function watchForCapture({
   provider,
   runId,
   signal,
+  wake,
 }: {
   provider: string;
   runId: string;
   signal: AbortSignal;
+  wake?: EventTarget;
 }): Promise<boolean> {
   const startedAt = Date.now();
   let terminalAt: number | null = null;
@@ -293,7 +310,7 @@ export async function watchForCapture({
     }
 
     if (signal.aborted) return false;
-    await sleep(hintIntervalAt(Date.now() - startedAt), signal);
+    await sleep(hintIntervalAt(Date.now() - startedAt), signal, wake);
   }
   return false;
 }

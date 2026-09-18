@@ -16,6 +16,22 @@
 // `opener` is a `[Replaceable]` settable attribute, so assigning null works
 // and keeps the forward handle (`w.location`, `w.close()`) usable even once
 // the document has navigated cross-origin.
+//
+// review-1 B2, COORDINATOR RULING (option A) — `close()` is BEST-EFFORT, not
+// guaranteed, once the tab has navigated. Chromium (verified in e2e) refuses
+// `.close()` — and any further `.location` write — on a window it did not
+// itself open with script, once that window's `opener` has been disowned AND
+// it has navigated cross-origin: the tab-nabbing mitigation above is exactly
+// what makes the browser stop trusting this handle as "ours" past that point.
+// The alternative — NOT severing `opener` — was rejected: it would hand the
+// provider's own page (a *.awsapps.com / claude.ai origin) a live reference
+// back into the console tab via `window.opener`, which is the bound Finding
+// 7a exists inside, not a bug to trade away for a `close()` that always
+// works. So: before navigation, `close()` reliably closes the placeholder
+// (every exit path in the pane still does this). After navigation, the
+// provider's own page — the one the person approves — IS the tab's end
+// state; the pane's `closeAuthTab()` calls are harmless no-ops past that
+// point (caught, never thrown) rather than something to route around.
 export type AuthTab = {
   navigate(url: string): void;
   close(): void;
