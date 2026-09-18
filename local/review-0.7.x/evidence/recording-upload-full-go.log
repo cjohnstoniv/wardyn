@@ -1,0 +1,58 @@
+ok  	github.com/cjohnstoniv/wardyn/cmd/wardyn	2.502s
+ok  	github.com/cjohnstoniv/wardyn/cmd/wardyn-aws-sso	0.050s
+ok  	github.com/cjohnstoniv/wardyn/cmd/wardyn-git-helper	12.034s
+ok  	github.com/cjohnstoniv/wardyn/cmd/wardyn-proxy	0.005s
+ok  	github.com/cjohnstoniv/wardyn/cmd/wardyn-rec	0.764s
+ok  	github.com/cjohnstoniv/wardyn/cmd/wardyn-runner	0.239s
+?   	github.com/cjohnstoniv/wardyn/cmd/wardyn-scan	[no test files]
+ok  	github.com/cjohnstoniv/wardyn/cmd/wardyn-tetragon-ingest	4.526s
+ok  	github.com/cjohnstoniv/wardyn/cmd/wardyn-toolgate	0.354s
+ok  	github.com/cjohnstoniv/wardyn/cmd/wardynd	17.934s
+?   	github.com/cjohnstoniv/wardyn/examples/workspaces/github-push	[no test files]
+ok  	github.com/cjohnstoniv/wardyn/internal/api	73.285s
+ok  	github.com/cjohnstoniv/wardyn/internal/approval	0.004s
+ok  	github.com/cjohnstoniv/wardyn/internal/audit	0.004s
+ok  	github.com/cjohnstoniv/wardyn/internal/audit/sinks	10.645s
+ok  	github.com/cjohnstoniv/wardyn/internal/auth/oidc	6.727s
+ok  	github.com/cjohnstoniv/wardyn/internal/broker	4.443s
+ok  	github.com/cjohnstoniv/wardyn/internal/cliutil	0.004s
+ok  	github.com/cjohnstoniv/wardyn/internal/component	0.003s
+ok  	github.com/cjohnstoniv/wardyn/internal/composer	0.010s
+ok  	github.com/cjohnstoniv/wardyn/internal/contentscan	0.372s
+ok  	github.com/cjohnstoniv/wardyn/internal/db	0.133s
+ok  	github.com/cjohnstoniv/wardyn/internal/directory	0.023s
+ok  	github.com/cjohnstoniv/wardyn/internal/egress	0.024s
+?   	github.com/cjohnstoniv/wardyn/internal/egress/evaluatortest	[no test files]
+ok  	github.com/cjohnstoniv/wardyn/internal/egress/proxy	22.852s
+ok  	github.com/cjohnstoniv/wardyn/internal/envbuild	0.005s
+ok  	github.com/cjohnstoniv/wardyn/internal/gitremote	0.215s
+ok  	github.com/cjohnstoniv/wardyn/internal/groundtruth	0.007s
+ok  	github.com/cjohnstoniv/wardyn/internal/hostrules	0.004s
+?   	github.com/cjohnstoniv/wardyn/internal/identity	[no test files]
+ok  	github.com/cjohnstoniv/wardyn/internal/identity/embedded	0.011s
+?   	github.com/cjohnstoniv/wardyn/internal/identity/identitytest	[no test files]
+ok  	github.com/cjohnstoniv/wardyn/internal/ipguard	0.003s
+ok  	github.com/cjohnstoniv/wardyn/internal/lifecycle	0.004s
+ok  	github.com/cjohnstoniv/wardyn/internal/recording	0.021s
+?   	github.com/cjohnstoniv/wardyn/internal/recording/recordingtest	[no test files]
+ok  	github.com/cjohnstoniv/wardyn/internal/recordmode	0.006s
+ok  	github.com/cjohnstoniv/wardyn/internal/runner	0.031s
+ok  	github.com/cjohnstoniv/wardyn/internal/runner/docker	54.725s
+ok  	github.com/cjohnstoniv/wardyn/internal/runner/orchestrator	0.005s
+?   	github.com/cjohnstoniv/wardyn/internal/runner/substrate	[no test files]
+ok  	github.com/cjohnstoniv/wardyn/internal/secretmask	0.004s
+?   	github.com/cjohnstoniv/wardyn/internal/secretstore	[no test files]
+ok  	github.com/cjohnstoniv/wardyn/internal/secretstore/pg	0.005s
+?   	github.com/cjohnstoniv/wardyn/internal/secretstore/secretstoretest	[no test files]
+ok  	github.com/cjohnstoniv/wardyn/internal/setup	6.040s
+ok  	github.com/cjohnstoniv/wardyn/internal/sidecar	0.008s
+ok  	github.com/cjohnstoniv/wardyn/internal/store	0.022s
+ok  	github.com/cjohnstoniv/wardyn/internal/subscription	0.427s
+ok  	github.com/cjohnstoniv/wardyn/internal/types	0.012s
+?   	github.com/cjohnstoniv/wardyn/internal/version	[no test files]
+ok  	github.com/cjohnstoniv/wardyn/internal/workspacescan	0.328s
+ok  	github.com/cjohnstoniv/wardyn/pkg/client	0.362s
+ok  	github.com/cjohnstoniv/wardyn/test/apie2e	0.014s
+ok  	github.com/cjohnstoniv/wardyn/test/awsssofake	0.018s
+?   	github.com/cjohnstoniv/wardyn/test/awsssofake/cmd	[no test files]
+ok  	github.com/cjohnstoniv/wardyn/test/conformance	0.019s

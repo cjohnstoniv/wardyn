@@ -1,0 +1,30 @@
+wrote /tmp/wardyn-review-cache/go-tmp/TestCLIExports_PreserveUnrelatedPartFilesrecordingregular3789929040/001/export
+wrote /tmp/wardyn-review-cache/go-tmp/TestCLIExports_PreserveUnrelatedPartFilesrecordingsymlink152609238/001/export
+--- FAIL: TestCLIExports_PreserveUnrelatedPartFiles (0.01s)
+    --- FAIL: TestCLIExports_PreserveUnrelatedPartFiles/recording (0.00s)
+        --- FAIL: TestCLIExports_PreserveUnrelatedPartFiles/recording/regular (0.00s)
+            export_temp_test.go:59: unrelated path changed: /tmp/wardyn-review-cache/go-tmp/TestCLIExports_PreserveUnrelatedPartFilesrecordingregular3789929040/001/export.part = "", open /tmp/wardyn-review-cache/go-tmp/TestCLIExports_PreserveUnrelatedPartFilesrecordingregular3789929040/001/export.part: no such file or directory
+            export_temp_test.go:73: expected only export and the two preserved paths, entries=[- export - unrelated.txt], err=<nil>
+        --- FAIL: TestCLIExports_PreserveUnrelatedPartFiles/recording/symlink (0.00s)
+            export_temp_test.go:59: unrelated path changed: /tmp/wardyn-review-cache/go-tmp/TestCLIExports_PreserveUnrelatedPartFilesrecordingsymlink152609238/001/unrelated.txt = "{\"version\":2}\n", <nil>
+            export_temp_test.go:59: unrelated path changed: /tmp/wardyn-review-cache/go-tmp/TestCLIExports_PreserveUnrelatedPartFilesrecordingsymlink152609238/001/export.part = "", open /tmp/wardyn-review-cache/go-tmp/TestCLIExports_PreserveUnrelatedPartFilesrecordingsymlink152609238/001/export.part: no such file or directory
+            export_temp_test.go:68: export must be a private regular file, mode = Lrwxrwxrwx
+            export_temp_test.go:73: expected only export and the two preserved paths, entries=[L export - unrelated.txt], err=<nil>
+        --- FAIL: TestCLIExports_PreserveUnrelatedPartFiles/recording/rename_failure (0.00s)
+            export_temp_test.go:59: unrelated path changed: /tmp/wardyn-review-cache/go-tmp/TestCLIExports_PreserveUnrelatedPartFilesrecordingrename_failu2001180092/001/export.part = "", open /tmp/wardyn-review-cache/go-tmp/TestCLIExports_PreserveUnrelatedPartFilesrecordingrename_failu2001180092/001/export.part: no such file or directory
+            export_temp_test.go:73: expected only export and the two preserved paths, entries=[d export/ - unrelated.txt], err=<nil>
+    --- FAIL: TestCLIExports_PreserveUnrelatedPartFiles/bundle (0.00s)
+        --- FAIL: TestCLIExports_PreserveUnrelatedPartFiles/bundle/regular (0.00s)
+            export_temp_test.go:59: unrelated path changed: /tmp/wardyn-review-cache/go-tmp/TestCLIExports_PreserveUnrelatedPartFilesbundleregular1794394926/001/export.part = "", open /tmp/wardyn-review-cache/go-tmp/TestCLIExports_PreserveUnrelatedPartFilesbundleregular1794394926/001/export.part: no such file or directory
+            export_temp_test.go:73: expected only export and the two preserved paths, entries=[- export - unrelated.txt], err=<nil>
+        --- FAIL: TestCLIExports_PreserveUnrelatedPartFiles/bundle/symlink (0.00s)
+            export_temp_test.go:59: unrelated path changed: /tmp/wardyn-review-cache/go-tmp/TestCLIExports_PreserveUnrelatedPartFilesbundlesymlink1286374837/001/unrelated.txt = "\x1f\x8b\b\x00\x00\x00\x00\x00\x00\xff\xec\xcfA\n\x830\x10\x85\xe19JNP^\xa6I{\x9e\x90\x86\x9aM\x02f\x04\xbd\xbd \xb8ѥ\x04\x11\xe6ۼ\xe5\xfcS\xaa\xa4\x97\xccB\x1d\x01\xc0\a\xd8\x16\xe7\x05ؑ\xf5\xec\xdf\xec<3\x13,\xbe\x0ed\xd03j75\t#\xe1\xf2\xad\xe3s\x0fі\"C\x92\x1c\xcd/\x87\x7f\xa9Mr\xbc\xbbI)\xa5T\x7fk\x00\x00\x00\xff\xff\xe6ހx\x00\b\x00\x00", <nil>
+            export_temp_test.go:59: unrelated path changed: /tmp/wardyn-review-cache/go-tmp/TestCLIExports_PreserveUnrelatedPartFilesbundlesymlink1286374837/001/export.part = "", open /tmp/wardyn-review-cache/go-tmp/TestCLIExports_PreserveUnrelatedPartFilesbundlesymlink1286374837/001/export.part: no such file or directory
+            export_temp_test.go:68: export must be a private regular file, mode = Lrwxrwxrwx
+            export_temp_test.go:73: expected only export and the two preserved paths, entries=[L export - unrelated.txt], err=<nil>
+        --- FAIL: TestCLIExports_PreserveUnrelatedPartFiles/bundle/rename_failure (0.00s)
+            export_temp_test.go:59: unrelated path changed: /tmp/wardyn-review-cache/go-tmp/TestCLIExports_PreserveUnrelatedPartFilesbundlerename_failure216360107/001/export.part = "", open /tmp/wardyn-review-cache/go-tmp/TestCLIExports_PreserveUnrelatedPartFilesbundlerename_failure216360107/001/export.part: no such file or directory
+            export_temp_test.go:73: expected only export and the two preserved paths, entries=[d export/ - unrelated.txt], err=<nil>
+FAIL
+FAIL	github.com/cjohnstoniv/wardyn/cmd/wardyn	0.016s
+FAIL

@@ -41,6 +41,17 @@ tests. A sixteenth independent patch (R023) subsequently passed its full default
 Go tree and recording-package race tests; it is not in that frozen batch.
 The historical plan-review snapshot is not a current patch-status list.
 
+## Round 2 — resumed after release-owner handoff
+
+The owner sent the first ledger to the separate 0.7.6 agent and requested continued
+parallel 0.7.x work. The original frozen integration and its evidence are retained.
+A new integration at `cd179c617acee6dd14ba6bc273db44569310355b` combines that batch
+with R023 solely to finish its complete merge-gate verification; uninterrupted
+`make ci` passed at that exact SHA, with a clean worktree. New independent fixes
+below remain based on `dfa89f60`, not on the
+other agent's changing feature branch. Current overlap checks found its SSO,
+credential-hold, model-access and startup-detail work outside these new seams.
+
 ## Status definitions
 
 `candidate` → `confirmed` → `implemented` → `checks-passed` → `release-ready`.
@@ -55,7 +66,7 @@ command, skipped suite, or passing mock is never a completed live verification.
 | --- | --- | --- | --- | --- |
 | R076-001 | Prior ledger was untracked in /tmp; statuses overstated verification. | implemented | review/0.7x-ledger | Track handoff and distinguish focused checks from release readiness. |
 | R076-002 | Concurrent login launches can leave two live sandboxes when timestamp and insert order disagree. Low, documented residual. | candidate | lifecycle lane | harnesscred_supersede.go, CHANGELOG 0.7.5. Reconcile ownership before fixing. |
-| R076-003 | Autonomous Kubernetes Go/npm caches can escape the two metered scratch paths. | candidate | lifecycle lane | ephemeralScratchVolumes, runs_dispatch_mounts.go. Requires compatibility and live proof. |
+| R076-003 | Autonomous Kubernetes Go/npm caches can escape the two metered scratch paths. | confirmed; design/live proof pending | lifecycle lane; no product commit | Image login profile overrides Go cache env defaults; leaf volumes can hide prewarmed contents. Other campaign's local selection recommends DEFER-0.7.7. Requires compatible cache layout and live toolchain/eviction proof, not an automatic env-only patch. See R003-K8S-CACHE-ASSESSMENT.md. |
 | R076-004 | Successful AWS capture from Runs leaves the login sandbox alive to its idle cap. | candidate | lifecycle lane | handleUploadSSOToken. Stop must allow upload response to finish. |
 | R076-005 | Recording-pane member hint names admin only although its gate admits security admins. Low. | checks-passed (focused + browser) | review/0.7x-record-tier-hint / 6ee6f585 | Red member assertion before fix; 51 component tests and typecheck pass. Independent mock review passed. Full browser suite passed: 30 spec files, no failures/skips/flakes; evidence/record-tier-ui-e2e.log. Supersedes unsigned a470804d; do not cherry-pick both. |
 | R076-006 | Console rules say reduced motion is unimplemented although global CSS guard and tests ship. Low. | checks-passed (focused) | review/0.7x-doc-motion / 3f1f4c95 | theme.css global guard predates rubric claim; existing theme suite 31 passed. |
@@ -75,8 +86,11 @@ command, skipped suite, or passing mock is never a completed live verification.
 | R076-020 | Desktop/SSH docs call all shell recordings unmasked and permanently retained. | checks-passed (focused + citations) | review/0.7x-doc-desktop-masking / baa4611e | 15 tests cover registered/mid-session masking, retention and doc/citation guards; lifecycle peer approved. Preserves unregistered-output and restart-loss residuals. |
 | R076-021 | Run-detail test uses afterEach without an explicit import, breaking default/editor tsc configuration. | checks-passed (focused + both typechecks) | review/0.7x-ui-test-hook-import / 94c4fa84 | Baseline default tsc reproduced 3 TS2304 errors; one import fixes them; 36 run-detail tests and both typecheck configurations pass. Official repository typecheck already included Vitest globals, so this was NOT a failing merge/runtime gate. |
 | R076-022 | Selected operational docs move guarded audit citations. Integration dependency, not an independent product feature. | checks-passed (focused + combined make ci) | review/0.7x-doc-integration-citations / 5adf090c | Five citation-only replacements; original evidence and guards preserved. Depends on R015/R016/R019/R020 plus the initial eight-patch integration. Must re-point again if a release selects a different documentation combination. |
-| R076-023 | Filesystem recording reads follow shared-mount symlinks outside the recording root. Conditional security issue; default PostgreSQL unaffected. | checks-passed (full default Go tree + package race + peer) | review/0.7x-recording-root-read / 18fb91fd | Separate post-freeze patch, NOT in 0d63ab2e. Four synthetic escape cases fail on baseline; rooted reads pass them and compatibility checks. Complete recording race suite and full default Go tree passed; independent lifecycle peer approved. Full make ci on a release combination remains required. See RECORDING-ROOT-READ.md for preconditions and residuals. |
-| R076-024 | SheetOverlay has the same missing-ref pattern as the fixed Dialog/AlertDialog overlays. Low UX. | candidate; not implemented | no patch branch | MobileNav tests emit the ref warning; needs its own baseline regression, mock and browser lifetime checks. Not included in R018 or the frozen batch. |
+| R076-023 | Filesystem recording reads follow shared-mount symlinks outside the recording root. Conditional security issue; default PostgreSQL unaffected. | checks-passed (full default Go tree + package race + peer + combined make ci) | review/0.7x-recording-root-read / 18fb91fd | Separate post-freeze patch, NOT in 0d63ab2e. Four synthetic escape cases fail on baseline; rooted reads pass them and compatibility checks. Full make ci passed in cd179c61; original package race/full default Go tree and independent peer review passed. See RECORDING-ROOT-READ.md for preconditions and residuals. |
+| R076-024 | SheetOverlay drops the backdrop before its existing exit animation finishes. Low UX. | implemented; browser gate in progress | review/0.7x-sheet-overlay-ref | Four side-specific lifetime regressions fail on baseline; two focus tests pass. Mock approved before edits, actual Chromium verifies all sides and reduced motion; 50 focused tests and typecheck pass. Root peer approved. Existing classes, 150ms backdrop/300ms panel and focus preserved. Not included in R018 or the first frozen batch. |
+| R076-025 | CLI recording/bundle exports reuse a predictable .part file, truncating unrelated files or colliding across simultaneous downloads. | checks-passed (regression + package race + peer) | review/0.7x-cli-private-temp / 2307b07c | Six regular/symlink/rename-failure cases and synchronized concurrent download fail on baseline. Both exporters now use unique same-directory 0600 files; full CLI race suite passed (5.033s), interruption cleanup checked. Final target replacement remains last successful rename wins. Full combined gate pending. |
+| R076-026 | CLI policy conversion silently ignores later YAML documents, including malformed ones and intended restrictions. | checks-passed (regression + package race + peer) | review/0.7x-cli-policy-document / f5fbb166 | Red-first converter and create/update/render/run policy-file regressions; shared converter rejects extra documents before API calls. Valid single JSON/YAML with markers/comments unchanged; full CLI race passed (4.844s). Independent docs peer approved. Ambiguous multi-document input intentionally becomes an error. |
+| R076-027 | Recording-upload masking cleanup can block on an upstream body read after filesystem storage has already failed. | checks-passed (full default Go tree + package race + peer) | review/0.7x-recording-upload-cancel / 0bb4699b | Real FSStore early-failure regression failed on baseline and passes with demand-driven bounded masking. Root peer approved; complete API/secretmask race passed (92.161s/1.019s), full Go tree including citation guards passed. Existing masking, cap and error/tail ordering preserved. Handler/masking lifetime fix, not a new HTTP transport deadline or PG-outage claim. |
 
 ## Coverage matrix
 
@@ -84,8 +98,8 @@ command, skipped suite, or passing mock is never a completed live verification.
 | --- | --- | --- |
 | Identity / authority | Router split, CSRF host guard, recording-pane tier split; OIDC email claim and SSH revocation boundaries checked against code; recording owner/tier and run-token checks inspected. | Broad live identity/revocation/session scenarios; no new live cross-user certification. |
 | Credentials / egress | Upload boundary/race tests; support-bundle baseline/fixed structured-redaction and archive tests; login launch/capture review. | Real SSO/concurrent-user walk and broader broker/redirect adversarial checks; other campaign owns SSO changes. |
-| Lifecycle / storage | Six terminal-status combinations; scoped live WaitExitCode and actual emptyDir eviction; synthetic PG audit/secret/recording restore; filesystem recording read-confinement regression and fix. | Full API finalization, restart/reconcile, user-drive restore, healthy-proxy lifecycle proof; R023 needs release-combination CI. |
-| Product / UX | Approved mocks; recording-pane browser sweep; overlay 347-test browser suite plus DOM lifetime/focus proof; frozen combined batch's 347 browser tests passed. | Complete real-identity recovery journeys remain separate; SheetOverlay candidate not implemented. |
+| Lifecycle / storage | Six terminal-status combinations; scoped live WaitExitCode and actual emptyDir eviction; synthetic PG audit/secret/recording restore; filesystem recording read-confinement regression, fix and combined make ci. | Full API finalization, restart/reconcile, user-drive restore, healthy-proxy lifecycle proof. |
+| Product / UX | Approved mocks; recording-pane browser sweep; overlay 347-test browser suite plus DOM lifetime/focus proof; frozen combined batch's 347 browser tests passed; SheetOverlay fix has focused/actual-browser proof. | Complete real-identity recovery journeys remain separate; SheetOverlay full browser gate running. |
 | Deployment / recovery | Isolated PG dump/restore with append-only guards; corrected age-key and audit-spool runbooks. | Fresh Helm/upgrade, outage/full application recovery, split runtime roles and pending-spool replay. |
 | Engineering / docs | Independent DCO commits, nightly overlap check, guard-preserving citation repair, release/UI recipes; uninterrupted final combined make ci passed. | Live deployment acceptance remains outside make ci. |
 
@@ -156,6 +170,12 @@ command, skipped suite, or passing mock is never a completed live verification.
   evidence/recording-root-full-tree.log. It also passed recording package race,
   conformance, vet and size checks, with independent peer review. This does not
   extend 0d63ab2e's combined make-ci/browser acceptance to R023.
+- The subsequent integration `cd179c617acee6dd14ba6bc273db44569310355b` adds only
+  R023 to the original frozen batch. Its uninterrupted `make ci` passed, exit 0,
+  clean worktree: Go union coverage 78.4%, all three race configurations passed,
+  UI 155 files / 2,880 tests passed. Evidence: evidence/round2-ci-recording-root.log,
+  SHA-256 `94d1883e2140c2cb9dd1d2d9d09a67f1b98189d8baca67242ee94c24cebed948`.
+  This is not yet acceptance for the four newer patches R024–R027.
 - Support-bundle red-first and fixed logs are evidence/redaction-baseline.log and
   evidence/redaction-fixed.log. The detached baseline reproduction worktree has
   only the new test file; its production source remains exactly dfa89f60.
@@ -204,6 +224,14 @@ and scope verification, not a substitute for runtime acceptance.
 - R076-021: Make the run-detail test's lifecycle-hook import explicit.
 - R076-023 (post-freeze): Confine filesystem recording replay and metadata reads
   to the configured recording directory, including symlink resolution.
+- R076-024: Preserve sheet backdrop exit animations by forwarding the DOM ref.
+- R076-025: Write recording downloads and support bundles through unique private
+  temporary files. Completed exports now have mode 0600; intentional replacement
+  of the requested final path remains unchanged.
+- R076-026: Reject ambiguous multi-document policy files before any API call;
+  ordinary single-document YAML and JSON remain supported.
+- R076-027: Stop reading recording bodies when storage does not request more
+  data; preserve masking and existing upload limits without an eager copy goroutine.
 
 ## Open findings, not implemented
 
@@ -224,11 +252,9 @@ provider's email claim without requiring email_verified; changing that would
 require an explicit compatibility decision, especially for Entra. Split-horizon
 OIDC HTTP/HTTPS scheme support remains an unresolved compatibility question.
 
-The final unit run still emits a SheetOverlay ref warning in MobileNav tests.
-The Sheet wrapper has the same missing ref forwarding pattern as the separately
-fixed Dialog/AlertDialog wrappers; it is not included in the frozen batch. A
-follow-up needs its own baseline regression, mock/actual-browser lifetime check
-and regression gate before claiming that the sheet animation issue is fixed.
+The first frozen batch's unit run still emits a SheetOverlay ref warning in
+MobileNav tests. R024 is the separate follow-up, currently undergoing its own
+baseline regression, mock/actual-browser and regression-gate checks.
 
 ## Review-owned test resources
 
@@ -237,6 +263,8 @@ and regression gate before claiming that the sheet animation issue is fixed.
 - Overlay browser database: wardyn_review_overlay; ports 18890/18891; completed.
 - Combined browser acceptance: wardyn_review_combined; ports 18892/18893; isolated
   from both prior runs and the other 0.7.6 campaign.
+- Sheet browser acceptance: wardyn_review_sheet; ports 18894/18895; isolated from
+  the other browser runs and the other 0.7.6 campaign.
 - Operations check databases: wardyn_review_ops_* (documentation lane).
 - Dedicated Kubernetes acceptance cluster wardyn-review-07x-life was deleted
   after scoped live tests; existing clusters were untouched. Review images remain.

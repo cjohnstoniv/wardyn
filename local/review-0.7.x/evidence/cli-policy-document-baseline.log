@@ -1,0 +1,26 @@
+--- FAIL: TestPolicyToJSON_RejectsAdditionalDocuments (0.00s)
+    --- FAIL: TestPolicyToJSON_RejectsAdditionalDocuments/---_first_use_approval:_always_deny_ (0.00s)
+        policy_document_test.go:22: silently accepted only the first policy document: {"allowed_domains":["example.com"]}
+    --- FAIL: TestPolicyToJSON_RejectsAdditionalDocuments/---_ (0.00s)
+        policy_document_test.go:22: silently accepted only the first policy document: {"allowed_domains":["example.com"]}
+    --- FAIL: TestPolicyToJSON_RejectsAdditionalDocuments/---_invalid:_[unterminated_ (0.00s)
+        policy_document_test.go:22: silently accepted only the first policy document: {"allowed_domains":["example.com"]}
+{
+  "allowed_domains": [
+    "example.com"
+  ],
+  "first_use_approval": "",
+  "min_confinement_class": ""
+}
+--- FAIL: TestPolicyCommands_RejectAdditionalDocumentBeforeRequest (0.00s)
+    --- FAIL: TestPolicyCommands_RejectAdditionalDocumentBeforeRequest/policy_create (0.00s)
+        policy_document_test.go:43: want a local document-count error, got build request: parse ":invalid/api/v1/policies": missing protocol scheme
+    --- FAIL: TestPolicyCommands_RejectAdditionalDocumentBeforeRequest/policy_update (0.00s)
+        policy_document_test.go:43: want a local document-count error, got build request: parse ":invalid/api/v1/policies/c4a66d8a-ae5f-46b9-8151-7d0a9931d21b": missing protocol scheme
+    --- FAIL: TestPolicyCommands_RejectAdditionalDocumentBeforeRequest/policy_render (0.00s)
+        policy_document_test.go:43: want a local document-count error, got <nil>
+    --- FAIL: TestPolicyCommands_RejectAdditionalDocumentBeforeRequest/run_--agent (0.00s)
+        policy_document_test.go:43: want a local document-count error, got parse --policy-file /tmp/wardyn-review-cache/go-tmp/TestPolicyCommands_RejectAdditionalDocumentBeforeRequest2634045373/001/policy.yaml: json: unknown field "name"
+FAIL
+FAIL	github.com/cjohnstoniv/wardyn/cmd/wardyn	0.008s
+FAIL

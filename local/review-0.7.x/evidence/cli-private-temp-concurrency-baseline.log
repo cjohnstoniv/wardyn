@@ -1,0 +1,16 @@
+wrote /tmp/wardyn-review-cache/go-tmp/TestRunRecording_ConcurrentExportsKeepIndependentTempFiles3784255118/001/run.cast
+Error: recording download for run 02f701e2-ab74-4789-a153-22a59a83842a did not complete: rename /tmp/wardyn-review-cache/go-tmp/TestRunRecording_ConcurrentExportsKeepIndependentTempFiles3784255118/001/run.cast.part /tmp/wardyn-review-cache/go-tmp/TestRunRecording_ConcurrentExportsKeepIndependentTempFiles3784255118/001/run.cast: no such file or directory
+Usage:
+  recording <run-id> [flags]
+
+Flags:
+  -h, --help               help for recording
+  -o, --output string      write the .cast here instead of stdout
+      --session string     attach-session id, for an interactive run's OTHER recordings (default: the run's own recording)
+      --timeout duration   abort the download after this long, e.g. 30s (0 = no deadline)
+
+--- FAIL: TestRunRecording_ConcurrentExportsKeepIndependentTempFiles (0.00s)
+    export_temp_test.go:120: first download interfered with second: recording download for run 02f701e2-ab74-4789-a153-22a59a83842a did not complete: rename /tmp/wardyn-review-cache/go-tmp/TestRunRecording_ConcurrentExportsKeepIndependentTempFiles3784255118/001/run.cast.part /tmp/wardyn-review-cache/go-tmp/TestRunRecording_ConcurrentExportsKeepIndependentTempFiles3784255118/001/run.cast: no such file or directory
+FAIL
+FAIL	github.com/cjohnstoniv/wardyn/cmd/wardyn	0.006s
+FAIL

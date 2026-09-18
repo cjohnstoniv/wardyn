@@ -1,0 +1,5 @@
+--- FAIL: TestUploadRecording_StorageFailureDoesNotWaitForBody (1.00s)
+    recording_upload_cancel_test.go:71: storage already failed, but upload cleanup waited for the request body
+FAIL
+FAIL	github.com/cjohnstoniv/wardyn/internal/api	1.013s
+FAIL

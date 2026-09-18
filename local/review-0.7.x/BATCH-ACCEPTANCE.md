@@ -48,8 +48,10 @@ It is NOT present at `0d63ab2e`, and none of the first batch's combined checks
 should be attributed to it. It has a red-first synthetic regression, complete
 recording-package race pass, conformance/vet/size checks and independent peer
 review. Full default-tree Go tests passed (exit 0), including daemon guard tests;
-the patch worktree stayed clean. Its complete make-ci release-combination gate
-has not been run. Detailed preconditions,
+the patch worktree stayed clean. A subsequent, separately frozen integration at
+`cd179c61` has now passed its complete make-ci gate; see ROUND2-HANDOFF.md for that
+exact selection and evidence. This does not change the first batch's SHA or scope.
+Detailed preconditions,
 compatibility and residual limits are in RECORDING-ROOT-READ.md.
 
 ## Environment and scope of the evidence
