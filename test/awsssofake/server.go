@@ -495,6 +495,13 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		// Rotate on issuance so checkBearer only accepts the token this
 		// login just handed out.
 		s.accessToken = "fake-access-token-" + randHex(8)
+		// BOTH tokens rotate on a device-flow redemption too, as on a refresh
+		// (the refresh arm below says why): the real service issues a fresh
+		// refresh token per sign-in, and wardynd keys its spent-mark by the
+		// refresh token's fingerprint — a fake that hands out ONE refresh token
+		// for its whole life makes every re-sign-in after a spent mark read as
+		// still spent (walk-6 FINDING-fake-refresh-token.txt).
+		s.refreshToken = "fake-refresh-token-" + randHex(8)
 		access := s.accessToken
 		refresh := s.refreshToken
 		s.mu.Unlock()
