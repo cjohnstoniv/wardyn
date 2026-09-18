@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -91,7 +92,11 @@ type injEntry struct {
 	// Immutable after buildInjector — it comes from the authored rule, never from
 	// a re-resolve — so it needs no lock.
 	requireTLS bool
-	expiresAt  int64 // unix ms
+	// rule is the authored rule itself, kept for the fields that describe WHICH
+	// requests may carry the credential (PinPath/PinQuery). Immutable after
+	// buildInjector for requireTLS's reason, so it needs no lock.
+	rule      egress.InjectionRule
+	expiresAt int64 // unix ms
 }
 
 // buildInjector mints each injection rule's secret once and formats its
@@ -134,6 +139,7 @@ func buildInjector(ctx context.Context, base string, token *tokenSource, pol *Po
 			grantID:    r.GrantID,
 			header:     injectedHeader{name: resolved.Header, value: resolved.Value},
 			requireTLS: r.RequireTLS,
+			rule:       r.InjectionRule,
 			expiresAt:  resolved.ExpiresAt,
 		}
 
@@ -427,7 +433,16 @@ func registerBasicAuthCredential(user, tok string) {
 //
 // Proxy-Authorization is deliberately absent: it is hop-by-hop and already
 // removed by removeHopByHop (proxy.go) on every one of these paths.
-func stripSandboxCredentials(h http.Header) {
+// owned is the header THIS rule supplies. It is stripped alongside the fixed
+// list because the fixed list cannot know it: a rule may inject under any header
+// (the captured-AWS-SSO lane uses x-amz-sso_bearer_token, which is on no generic
+// credential list), and while an INJECTED request overwrites it anyway, a
+// request whose injection the rule's pin withholds does not — so the sandbox's
+// own value rode exactly the requests the pin exists to narrow (W6-S F3).
+func stripSandboxCredentials(h http.Header, owned string) {
+	if owned != "" {
+		h.Del(owned)
+	}
 	for _, name := range []string{
 		"Authorization",
 		"X-Api-Key",
@@ -570,7 +585,16 @@ func (i *injector) apply(req *http.Request, host string, port int) {
 	if err != nil || !ok {
 		return
 	}
-	stripSandboxCredentials(req.Header)
+	// STRIP ALWAYS, INJECT ONLY WHERE THE RULE'S PIN ALLOWS — the same two
+	// decisions the MITM lane makes (forwardInspectedLLM), and they have to be
+	// made here too or the pin is bypassable by simply not using TLS: the plain
+	// lane reaches the very same portal host, and a `POST /logout` sent as an
+	// ordinary absolute-URI request would have been injected while the tunnelled
+	// one was not.
+	stripSandboxCredentials(req.Header, h.name)
+	if !i.allowsInjection(host, req.Method, req.URL.Path, req.URL.Query()) {
+		return
+	}
 	req.Header.Set(h.name, h.value)
 }
 
@@ -631,4 +655,47 @@ func resolveInjection(ctx context.Context, base, token string, grantID uuid.UUID
 		return types.ResolvedInjection{}, fmt.Errorf("injection resolve returned empty header/value")
 	}
 	return ri, nil
+}
+
+// allowsInjection reports whether host's rule lets THIS request carry the
+// credential. True for an unknown host (no rule, nothing to narrow) and for
+// every unpinned rule, so every lane but the captured-AWS-SSO one is unchanged.
+func (i *injector) allowsInjection(host, method, path string, query url.Values) bool {
+	if i == nil {
+		return true
+	}
+	key := strings.ToLower(strings.TrimSuffix(host, "."))
+	i.mu.Lock()
+	e, ok := i.byHost[key]
+	i.mu.Unlock()
+	if !ok {
+		return true
+	}
+	return e.rule.AllowsInjection(method, path, query)
+}
+
+// applyCredential puts a rule's credential on an upstream request.
+//
+// STRIP AND INJECT ARE TWO DECISIONS, not one. A host with an injection rule
+// always has the sandbox's own credential headers removed — including the header
+// that rule supplies — because the rule says this host's credential is Wardyn's
+// to provide. Whether one is then provided is the rule's PIN (W6-S F3): a
+// request the pin does not cover is forwarded with NEITHER the sandbox's header
+// nor Wardyn's, and the origin answers it unauthenticated.
+//
+// Folding the two together is what let a withheld injection fall through to the
+// "no rule at all" branch, which PRESERVES the agent's own header — so the
+// sandbox's placeholder, or anything else it chose to send, reached the portal on
+// exactly the requests the pin exists to narrow.
+//
+// ownedHeader == "" means no rule governs this host, and then nothing is
+// stripped: the agent's own resident credential is its own business.
+func applyCredential(h http.Header, ownedHeader string, hdr *injectedHeader) {
+	if ownedHeader == "" {
+		return
+	}
+	stripSandboxCredentials(h, ownedHeader)
+	if hdr != nil {
+		h.Set(hdr.name, hdr.value)
+	}
 }

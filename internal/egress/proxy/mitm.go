@@ -4,6 +4,7 @@
 package proxy
 
 import (
+	"bufio"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -308,13 +309,45 @@ func (p *Proxy) channelForHost(host string) contentscan.Channel {
 // decisions are emitted inside. port is the REAL CONNECT port (handleConnect's
 // parsed target) carried through to serveMITMRequest's dial (W13-S1-5) — never
 // assume 443, a corp artifact mirror may listen elsewhere.
+// tlsRecordHandshake is the first byte of a TLS ClientHello (content type 22,
+// "handshake"). It is the ONE byte that tells a terminated tunnel's two possible
+// clients apart.
+const tlsRecordHandshake = 0x16
+
+// clientSpeaksTLS peeks the first byte the client sends inside the tunnel
+// WITHOUT consuming it.
+//
+// A peek rather than a flag, because the entry's scheme says what the ORIGIN
+// speaks and this asks what the CLIENT speaks, and they are not the same
+// question: the AWS SDK sends plaintext into the tunnel for an http:// endpoint
+// (measured, SDK-PATH.md) while curl -k and every ordinary TLS client still send
+// a ClientHello to the same host. Answering the second question by reading the
+// first one's answer would have broken them.
+//
+// A read error answers TLS, so the unchanged path handles it and reports the
+// failure exactly as before.
+func clientSpeaksTLS(br *bufio.Reader) bool {
+	b, err := br.Peek(1)
+	return err != nil || b[0] == tlsRecordHandshake
+}
+
+// readerConn is a net.Conn whose reads come from r — the hijacked connection's
+// own buffered reader, so bytes already buffered (or peeked) are served rather
+// than lost.
+type readerConn struct {
+	net.Conn
+	r io.Reader
+}
+
+func (c *readerConn) Read(p []byte) (int, error) { return c.r.Read(p) }
+
 func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string, port int) {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		http.Error(w, "hijacking unsupported", http.StatusInternalServerError)
 		return
 	}
-	clientConn, _, err := hj.Hijack()
+	clientConn, brw, err := hj.Hijack()
 	if err != nil {
 		return
 	}
@@ -340,9 +373,18 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 	// operator pointed WARDYN_AWS_SSO_ENDPOINT_OVERRIDE at a plaintext origin, a
 	// deployment that already refuses to boot without WARDYN_ALLOW_TEST_ENDPOINTS,
 	// and that rule's require_tls is false for the same reason.
-	served := net.Conn(clientConn)
-	if !p.mitmPlaintextUpstream(host) {
-		tlsConn := tls.Server(clientConn, &tls.Config{
+	// EVERY read goes through the hijack's own buffered reader, so nothing the
+	// client has already sent is lost — and so the peek below can put its byte
+	// back.
+	buffered := &readerConn{Conn: clientConn, r: brw.Reader}
+	// ORDER MATTERS, and the short circuit is load-bearing: a TLS entry must
+	// never reach the peek, because peeking waits for a byte the client has not
+	// sent yet and a TLS client is waiting for the server to go first. Only a
+	// plaintext entry — the one deployment shape whose origin serves cleartext —
+	// asks the second question at all.
+	served := net.Conn(buffered)
+	if !p.mitmPlaintextUpstream(host, port) || clientSpeaksTLS(brw.Reader) {
+		tlsConn := tls.Server(buffered, &tls.Config{
 			MinVersion: tls.VersionTLS12,
 			GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
 				// Mint for the VALIDATED CONNECT host, NOT the agent-chosen SNI: this
@@ -358,6 +400,9 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 		}
 		served = tlsConn
 	}
+	// …otherwise the client is speaking PLAINTEXT inside the tunnel and `served`
+	// stays the raw connection. Nothing else about the lane changes: the same
+	// strip-inject-forward path runs below either way.
 	// Serve the decrypted connection with a real http.Server (correct HTTP/1.1
 	// framing + keep-alive + timeouts) over a one-shot listener. Serve returns
 	// as soon as the listener yields the single conn; the per-conn goroutine
@@ -543,9 +588,30 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	if ok {
 		injectHdr = &hdr
 	}
+	// THE PIN (W6-S F3). A rule may narrow its credential to ONE request shape;
+	// anything else to the same host is forwarded WITHOUT it and the origin
+	// answers as it answers any unauthenticated call. For the captured-AWS-SSO
+	// lane that is what stops the injected session riding `POST /logout` — which
+	// AWS documents as invalidating the owner's server-side sign-in session for
+	// every one of their runs — or a GetRoleCredentials for some other account or
+	// role the session happens to hold. Unpinned rules are unaffected, which is
+	// every other lane.
+	//
+	// The STRIP still runs — see forwardInspectedLLM. A withheld injection must
+	// not fall through to the "no rule at all" branch, which preserves the
+	// agent's own header: that would forward whatever the sandbox chose to send
+	// on exactly the requests this pin exists to narrow.
+	// The header this host's rule OWNS, known even when the pin withholds it.
+	ownedHeader := ""
+	if ok {
+		ownedHeader = hdr.name
+	}
+	if injectHdr != nil && !p.inject.allowsInjection(host, r.Method, r.URL.Path, r.URL.Query()) {
+		injectHdr = nil
+	}
 	// Forwards over the pinned transport; DialContext dials the vetted target from
 	// the request context, so the host is never re-resolved.
-	p.forwardInspectedLLM(w, r, host, port, rest, target, injectHdr, mitmSource, bodyReader, scanSummary)
+	p.forwardInspectedLLM(w, r, host, port, rest, target, injectHdr, ownedHeader, mitmSource, bodyReader, scanSummary)
 }
 
 // oneConnListener hands a single already-accepted conn to http.Server.Serve and

@@ -204,6 +204,27 @@ func (s *Server) authorBedrockSSOInjection(ctx context.Context, run types.AgentR
 		// carrying Wardyn's own sentence instead of a bare AWS 401 the person
 		// cannot act on.
 		"require_tls": s.cfg.AWSSSOEndpointOverride == "",
+		// THE PATH PIN (W6-S F3). The injected session may ride exactly ONE
+		// request: the GetRoleCredentials for the account and role this run was
+		// dispatched with. Everything else the sandbox sends to the portal host —
+		// `POST /logout`, which AWS documents as invalidating the owner's
+		// server-side sign-in session for every run they have; a
+		// GetRoleCredentials naming some other account or role the session holds;
+		// /assignment/* — is forwarded WITHOUT the header and answered by AWS as
+		// an unauthenticated call. Nothing Wardyn holds is exposed either way.
+		//
+		// 0.7.5 could not do this: the token was resident in the sandbox, so its
+		// reach was the agent's. Proxy-side injection is the first point at which
+		// the admin-asserted pair becomes an ENFORCED one.
+		//
+		// The pair is the SNAPSHOT's, which is the same blob the sandbox's own
+		// ~/.aws/config is generated from (awsSSOConfigFileContents, one call
+		// apart), so it is byte-for-byte what the SDK will ask for — on a roster
+		// row that pins account/role AND on one that does not. Both empty (a blob
+		// that carried neither) leaves the rule unpinned, which is today's
+		// behaviour.
+		"pin_path":  awsSSORoleCredentialsPath,
+		"pin_query": awsSSOPinQuery(t.bedrock.ssoAccountID, t.bedrock.ssoRoleName),
 	})
 	grantID := uuid.New()
 	if _, gerr := s.cfg.Store.CreateGrant(ctx, types.CredentialGrant{
@@ -221,4 +242,19 @@ func (s *Server) authorBedrockSSOInjection(ctx context.Context, run types.AgentR
 		injections = append(injections, runner.InjectionGrant{GrantID: grantID, Rule: rule})
 	}
 	return injections, mitmHosts, true
+}
+
+// awsSSORoleCredentialsPath is the ONE portal path a Phase-B run's session is
+// allowed on: the AWS SSO portal's GetRoleCredentials.
+const awsSSORoleCredentialsPath = "/federation/credentials"
+
+// awsSSOPinQuery is the query the pinned request must carry. Nil when the blob
+// named no account/role, which leaves the rule unpinned rather than pinning it
+// to the empty pair — a pin nothing could ever match would withhold the
+// credential from the one call that needs it.
+func awsSSOPinQuery(accountID, roleName string) map[string]string {
+	if accountID == "" || roleName == "" {
+		return nil
+	}
+	return map[string]string{"account_id": accountID, "role_name": roleName}
 }

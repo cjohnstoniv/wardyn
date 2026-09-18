@@ -15,6 +15,8 @@
 package egress
 
 import (
+	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/google/uuid"
@@ -134,6 +136,44 @@ type InjectionRule struct {
 	//
 	// Default false = today's behaviour, so no shipped policy changes meaning.
 	RequireTLS bool `json:"require_tls,omitempty"`
+	// PinPath and PinQuery narrow this rule's credential to ONE request shape:
+	// a GET of PinPath whose query carries exactly these key=value pairs. Any
+	// other request to the same host is forwarded WITHOUT the header, and the
+	// origin answers it however it answers an unauthenticated call — nothing
+	// Wardyn holds is exposed either way.
+	//
+	// It exists because an injected credential otherwise rides EVERY request the
+	// sandbox makes to that host. For the captured-AWS-SSO lane that includes
+	// `POST /logout`, which AWS documents as invalidating the owner's server-side
+	// sign-in session, and a GetRoleCredentials for any other account/role the
+	// session holds. In 0.7.5 the token was resident in the sandbox, so its reach
+	// was the same and nothing could narrow it; proxy-side injection is the first
+	// point at which an admin-asserted identity can become an enforced one.
+	//
+	// Both empty = unpinned = today's behaviour, which is every other rule.
+	PinPath  string            `json:"pin_path,omitempty"`
+	PinQuery map[string]string `json:"pin_query,omitempty"`
+}
+
+// Pinned reports whether this rule narrows its credential to one request shape.
+func (r InjectionRule) Pinned() bool { return r.PinPath != "" }
+
+// AllowsInjection reports whether a request may carry this rule's credential.
+// An UNPINNED rule allows every request, which is what every rule but the
+// captured-AWS-SSO one does today.
+func (r InjectionRule) AllowsInjection(method, path string, query url.Values) bool {
+	if !r.Pinned() {
+		return true
+	}
+	if method != http.MethodGet || path != r.PinPath {
+		return false
+	}
+	for k, want := range r.PinQuery {
+		if query.Get(k) != want {
+			return false
+		}
+	}
+	return true
 }
 
 // ValidHeaderName reports whether name is a legal HTTP field-name — an RFC 9110

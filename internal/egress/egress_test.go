@@ -5,6 +5,7 @@ package egress
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -189,7 +190,9 @@ func TestInjectionRuleJSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(b, &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if out != in {
+	// reflect.DeepEqual, not ==: the rule carries a PinQuery map now, and a
+	// struct with a map in it is not comparable.
+	if !reflect.DeepEqual(out, in) {
 		t.Errorf("round-trip mismatch: got %+v, want %+v", out, in)
 	}
 }

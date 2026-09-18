@@ -323,7 +323,7 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 	}
 	// The brokered credential is guaranteed present here (headerFor ok above), so
 	// the sandbox credential is always stripped and the brokered one injected.
-	p.forwardInspectedLLM(w, r, host, port, rest, target, &hdr, ruleSourceLLM, bodyReader, scanSummary)
+	p.forwardInspectedLLM(w, r, host, port, rest, target, &hdr, hdr.name, ruleSourceLLM, bodyReader, scanSummary)
 }
 
 // llmRouteTarget resolves the brokered LLM route's dial target, choosing the
@@ -364,8 +364,8 @@ func (p *Proxy) llmRouteTarget(host string, port int) (string, error) {
 // own resident credential, inspect-only), records the allow decision
 // (scanSummary may be nil = quiet), and streams the response back. ruleSource
 // is the decision-log source.
-func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host string, port int, rest, target string, hdr *injectedHeader, ruleSource string, bodyReader io.Reader, scanSummary *egress.ScanSummary) {
-	scheme, defaultPort := p.upstreamSchemeFor(host)
+func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host string, port int, rest, target string, hdr *injectedHeader, ownedHeader string, ruleSource string, bodyReader io.Reader, scanSummary *egress.ScanSummary) {
+	scheme, defaultPort := p.upstreamSchemeFor(host, port)
 	hostport := host
 	if port != defaultPort {
 		hostport = net.JoinHostPort(host, strconv.Itoa(port))
@@ -399,12 +399,7 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 	}
 	copyHeader(outReq.Header, r.Header)
 	removeHopByHop(outReq.Header)
-	if hdr != nil {
-		// One definition of "the sandbox's own credential headers", shared with
-		// the plain forward lane's injector.apply (inject.go, F104).
-		stripSandboxCredentials(outReq.Header)
-		outReq.Header.Set(hdr.name, hdr.value)
-	}
+	applyCredential(outReq.Header, ownedHeader, hdr)
 	outReq.Host = hostport
 	outReq.Header.Del("Host")
 

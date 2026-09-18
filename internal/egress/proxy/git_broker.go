@@ -261,7 +261,7 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	// the local Header.Del("Authorization") this replaces left every OTHER
 	// credential header the sandbox set — X-Api-Key, Cookie, X-Access-Token — on
 	// the request alongside the brokered installation token.
-	stripSandboxCredentials(outReq.Header)
+	stripSandboxCredentials(outReq.Header, "")
 	outReq.SetBasicAuth(gitBrokerUsername, token) // GitHub App installation-token auth
 	outReq.Host = githubHost
 	outReq.Header.Del("Host")

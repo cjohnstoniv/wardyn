@@ -237,7 +237,7 @@ func (p *Proxy) handlePATBroker(w http.ResponseWriter, r *http.Request) {
 	// this lane exists for), X-Api-Key, Api-Key, X-Auth-Token and Cookie on the
 	// request beside the brokered Basic auth, so the FORGE chose which
 	// credential won while the decision row still read as brokered egress.
-	stripSandboxCredentials(outReq.Header)
+	stripSandboxCredentials(outReq.Header, "")
 	outReq.SetBasicAuth(username, token)
 	outReq.Host = host
 	outReq.Header.Del("Host")

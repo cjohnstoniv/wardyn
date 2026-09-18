@@ -70,8 +70,15 @@ func parseMITMHostPort(entry string) (host string, port int, plaintext bool) {
 // silently covers every rule that never set it, and inverting it would have
 // started dialling cleartext at real TLS origins. This map holds only what an
 // entry actually SAID.
-func (p *Proxy) mitmPlaintextUpstream(host string) bool {
-	return p.mitmPlaintext[strings.ToLower(strings.TrimSuffix(host, "."))]
+func (p *Proxy) mitmPlaintextUpstream(host string, port int) bool {
+	return p.mitmPlaintext[plaintextKey(strings.ToLower(strings.TrimSuffix(host, ".")), port)]
+}
+
+// plaintextKey is the ONE spelling of the plaintext set's key. A port of 0 is
+// the legacy any-port entry, which keeps its own key so it cannot be confused
+// with a port-scoped one.
+func plaintextKey(host string, port int) string {
+	return host + "\x00" + strconv.Itoa(port)
 }
 
 // compileMITMHosts turns the configured entries into the three lookups the
@@ -93,7 +100,14 @@ func compileMITMHosts(entries []string) (hosts map[string]bool, ports map[string
 		hosts[h] = true
 		ports[h] = port
 		if plain {
-			plaintext[h] = true
+			// KEYED BY host:port, not by host (W6-S F2). The scheme is a property
+			// of the ENTRY, and entries are port-scoped; a host-keyed flag is
+			// sticky while ports[h] is last-writer-wins, so
+			// {"http://h:8090", "h:443"} re-originated the :443 TLS entry in
+			// cleartext. Only a test deployment can author both today, but a
+			// scheme decision keyed one level coarser than the thing it describes
+			// is a defect waiting for a second author.
+			plaintext[plaintextKey(h, port)] = true
 		}
 	}
 	return hosts, ports, plaintext
@@ -113,8 +127,8 @@ func compileMITMHosts(entries []string) (hosts map[string]bool, ports map[string
 // credentials reached the sandbox and every model call starved. NOT terminating
 // the tunnel is not the alternative — a blind tunnel carries the sandbox's
 // placeholder through untouched, which is Phase B not happening.
-func (p *Proxy) upstreamSchemeFor(host string) (scheme string, defaultPort int) {
-	if p.mitmPlaintextUpstream(host) {
+func (p *Proxy) upstreamSchemeFor(host string, port int) (scheme string, defaultPort int) {
+	if p.mitmPlaintextUpstream(host, port) {
 		return "http", 80
 	}
 	return "https", 443

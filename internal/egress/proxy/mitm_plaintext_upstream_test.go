@@ -6,6 +6,8 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
+	"crypto/x509"
 	"io"
 	"net"
 	"net/http"
@@ -100,8 +102,8 @@ func TestForwardInspectedLLM_ReOriginatesInTheSchemeTheEntryNames(t *testing.T) 
 			p.mitmHosts = map[string]bool{plainMITMHost: true}
 			p.mitmPorts = map[string]int{plainMITMHost: 8090}
 			p.mitmPlaintext = map[string]bool{}
-			if h, _, plaintext := parseMITMHostPort(tc.entry); plaintext {
-				p.mitmPlaintext[h] = true
+			if h, port, plaintext := parseMITMHostPort(tc.entry); plaintext {
+				p.mitmPlaintext[plaintextKey(h, port)] = true
 			}
 
 			req := httptest.NewRequest(http.MethodGet,
@@ -138,13 +140,16 @@ func TestForwardInspectedLLM_ReOriginatesInTheSchemeTheEntryNames(t *testing.T) 
 
 const plainMITMHost = "wardyn-awsssofake.wardyn.svc.cluster.local"
 
-// THE WHOLE LANE, THE WAY THE SANDBOX ACTUALLY DRIVES IT.
+// BOTH CLIENTS, ONE PLAINTEXT ENTRY. The tunnel is terminated either way; what
+// the entry's scheme decides is the ORIGIN, and what the first byte decides is
+// the CLIENT. They are different questions and the proxy answers them
+// separately, so a plaintext entry still serves an ordinary TLS client (curl,
+// anything with the CA installed) while also serving the plaintext one the AWS
+// SDK actually sends (SDK-PATH.md).
 //
-// An earlier version of this test drove a TLS client into the tunnel, because
-// that is what a MITM is "supposed" to see. It is not what happens, and the
-// assumption is what let walk-5 stay red after the upstream leg was fixed — see
-// the case below, and SDK-PATH.md for the measurement. A TLS client against a
-// TLS entry is production, and mitm_test.go's suite owns it.
+// An earlier version of this file assumed only the TLS shape, which is what a
+// MITM is "supposed" to see — and that assumption is what let walk-5 stay red
+// after the upstream leg was fixed.
 
 // THE CLIENT LEG, MEASURED (SDK-PATH.md). The test above drives the tunnel the
 // way a TLS client does. The agent's SDK does NOT: with a proxy configured it
@@ -228,5 +233,203 @@ func TestMITMConnect_PlaintextClientInsideTheTunnelIsServed(t *testing.T) {
 	if gotHeader != "the-real-session-token" {
 		t.Errorf("the origin saw %q on the injected header, want the brokered token — the tunnel is "+
 			"TERMINATED precisely so the sandbox's placeholder can be stripped and replaced", gotHeader)
+	}
+}
+
+// …and the TLS client against that SAME plaintext entry still works: the peek
+// sees a ClientHello and the unchanged TLS path runs. Without this the fix
+// would have traded one broken client for another.
+func TestMITMConnect_TLSClientAgainstAPlaintextEntryStillWorks(t *testing.T) {
+	var gotHeader string
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get("x-amz-sso_bearer_token")
+		_, _ = w.Write([]byte(`{"roleCredentials":{"accessKeyId":"ASIAFAKE"}}`))
+	}))
+	defer origin.Close()
+
+	certPEM, keyPEM := genTestCA(t)
+	ca, caErr := newCertAuthority(certPEM, keyPEM)
+	if caErr != nil {
+		t.Fatalf("newCertAuthority: %v", caErr)
+	}
+	inj := &injector{byHost: map[string]*injEntry{plainMITMHost: {
+		grantID: uuid.New(),
+		header:  injectedHeader{name: "x-amz-sso_bearer_token", value: "the-real-session-token"},
+	}}}
+	buf := &bytes.Buffer{}
+	p := newProxy(Options{
+		RunID:     uuid.New(),
+		Policy:    CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{plainMITMHost}}),
+		Injector:  inj,
+		Sink:      &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Resolver:  publicResolver{},
+		Dial:      redirectDial(upstreamAddr(origin)),
+		MITMHosts: []string{"http://" + plainMITMHost + ":8090"},
+		CA:        ca,
+	})
+	proxySrv := httptest.NewServer(p)
+	defer proxySrv.Close()
+
+	conn, err := net.Dial("tcp", strings.TrimPrefix(proxySrv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, werr := io.WriteString(conn,
+		"CONNECT "+plainMITMHost+":8090 HTTP/1.1\r\nHost: "+plainMITMHost+":8090\r\n\r\n"); werr != nil {
+		t.Fatal(werr)
+	}
+	br := bufio.NewReader(conn)
+	resp, rerr := http.ReadResponse(br, &http.Request{Method: http.MethodConnect})
+	if rerr != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("CONNECT: %v / %v", rerr, resp)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(certPEM) {
+		t.Fatal("could not trust the Wardyn CA")
+	}
+	tlsConn := tls.Client(conn, &tls.Config{ServerName: plainMITMHost, RootCAs: pool})
+	if herr := tlsConn.Handshake(); herr != nil {
+		t.Fatalf("a TLS client against a plaintext ENTRY was refused its handshake: %v — the entry's "+
+			"scheme describes the ORIGIN, not the client", herr)
+	}
+	defer func() { _ = tlsConn.Close() }()
+
+	req, _ := http.NewRequest(http.MethodGet,
+		"https://"+plainMITMHost+":8090/federation/credentials?account_id=111111111111", nil)
+	req.Header.Set("x-amz-sso_bearer_token", "wardyn-proxy-injected")
+	if werr := req.Write(tlsConn); werr != nil {
+		t.Fatalf("write: %v", werr)
+	}
+	got, gerr := http.ReadResponse(bufio.NewReader(tlsConn), req)
+	if gerr != nil {
+		t.Fatalf("read: %v", gerr)
+	}
+	defer func() { _ = got.Body.Close() }()
+	if got.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200\n--- decisions ---\n%s", got.StatusCode, buf.String())
+	}
+	if gotHeader != "the-real-session-token" {
+		t.Errorf("the origin saw %q, want the brokered token", gotHeader)
+	}
+}
+
+// ONE HOST, TWO ENTRIES, TWO SCHEMES (W6-S F2). The scheme belongs to the
+// ENTRY, and entries are port-scoped: a cleartext entry on :8090 must not make
+// the TLS entry on :443 for the same host re-originate in cleartext. Keyed by
+// host alone it did — the flag was sticky while the port map was
+// last-writer-wins.
+func TestCompileMITMHosts_PlaintextIsPortScoped(t *testing.T) {
+	_, _, plaintext := compileMITMHosts([]string{"http://fake.internal:8090", "fake.internal:443"})
+	p := &Proxy{mitmPlaintext: plaintext}
+	if !p.mitmPlaintextUpstream("fake.internal", 8090) {
+		t.Error("the http:// entry on :8090 is not plaintext")
+	}
+	if p.mitmPlaintextUpstream("fake.internal", 443) {
+		t.Error("the TLS entry on :443 was made cleartext by the other entry's scheme")
+	}
+	if scheme, _ := p.upstreamSchemeFor("fake.internal", 443); scheme != "https" {
+		t.Errorf("upstreamSchemeFor(:443) = %q, want https", scheme)
+	}
+	if scheme, _ := p.upstreamSchemeFor("fake.internal", 8090); scheme != "http" {
+		t.Errorf("upstreamSchemeFor(:8090) = %q, want http", scheme)
+	}
+	// A host with no plaintext entry at all is TLS on every port — production.
+	if p.mitmPlaintextUpstream("portal.sso.eu-west-2.amazonaws.com", 443) {
+		t.Error("a host with no entry was treated as cleartext")
+	}
+}
+
+// ─── the path/query pin (W6-S F3) ────────────────────────────────────────────
+
+// THE INJECTED SESSION RIDES ONE REQUEST SHAPE, NOT ONE HOST.
+//
+// Before this, the resolved header went on whatever the sandbox sent to the
+// portal host. That includes `POST /logout`, which AWS documents as invalidating
+// the owner's server-side sign-in session — for every run they have, not just
+// this one — and a GetRoleCredentials naming any other account or role the
+// session holds. 0.7.5 could not narrow it (the token was resident in the
+// sandbox, so its reach was the agent's); proxy-side injection is the first
+// point at which the dispatched pair becomes enforced rather than asserted.
+//
+// A refused request is FORWARDED, not blocked: it simply carries no credential,
+// and the origin answers it as it answers any unauthenticated call. Nothing
+// Wardyn holds is exposed either way, and a sandbox cannot tell a withheld
+// header from an expired session.
+func TestMITMInjection_IsPinnedToTheDispatchedRoleCredentialsCall(t *testing.T) {
+	const (
+		account = "111122223333"
+		role    = "WardynAgent"
+	)
+	for _, tc := range []struct {
+		name       string
+		pinned     bool
+		method     string
+		path       string
+		query      string
+		wantHeader string
+	}{
+		{"the dispatched GetRoleCredentials", true, http.MethodGet, "/federation/credentials",
+			"account_id=" + account + "&role_name=" + role, "the-real-session-token"},
+		{"logout — a sandbox must not end its owner's sign-in session", true, http.MethodPost, "/logout", "", ""},
+		{"another account's credentials", true, http.MethodGet, "/federation/credentials",
+			"account_id=999988887777&role_name=" + role, ""},
+		{"another role's credentials", true, http.MethodGet, "/federation/credentials",
+			"account_id=" + account + "&role_name=AdministratorAccess", ""},
+		{"the right path, the wrong verb", true, http.MethodPost, "/federation/credentials",
+			"account_id=" + account + "&role_name=" + role, ""},
+		{"listing the session's accounts", true, http.MethodGet, "/assignment/accounts", "", ""},
+		// The UNPINNED rule is every other lane, and it is unchanged: the
+		// credential rides whatever the sandbox sends, exactly as before.
+		{"unpinned — logout still carries it, as it always did", false, http.MethodPost, "/logout", "", "the-real-session-token"},
+		{"unpinned — any account, as it always did", false, http.MethodGet, "/federation/credentials",
+			"account_id=999988887777", "the-real-session-token"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotHeader string
+			origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotHeader = r.Header.Get("x-amz-sso_bearer_token")
+				_, _ = w.Write([]byte(`{}`))
+			}))
+			defer origin.Close()
+
+			rule := egress.InjectionRule{Host: plainMITMHost, Header: "x-amz-sso_bearer_token", Format: "%s"}
+			if tc.pinned {
+				rule.PinPath = "/federation/credentials"
+				rule.PinQuery = map[string]string{"account_id": account, "role_name": role}
+			}
+			inj := &injector{byHost: map[string]*injEntry{plainMITMHost: {
+				grantID: uuid.New(),
+				header:  injectedHeader{name: "x-amz-sso_bearer_token", value: "the-real-session-token"},
+				rule:    rule,
+			}}}
+			p, _ := newLocalRouteProxy(t, "http://cp.invalid", "RUNTOK", upstreamAddr(origin), inj, nil)
+			p.mitmHosts = map[string]bool{plainMITMHost: true}
+			p.mitmPorts = map[string]int{plainMITMHost: 8090}
+			p.mitmPlaintext = map[string]bool{plaintextKey(plainMITMHost, 8090): true}
+
+			u := "https://" + plainMITMHost + ":8090" + tc.path
+			if tc.query != "" {
+				u += "?" + tc.query
+			}
+			req := httptest.NewRequest(tc.method, u, nil)
+			// The sandbox's own placeholder, which the strip removes either way.
+			req.Header.Set("x-amz-sso_bearer_token", "wardyn-proxy-injected")
+			rec := httptest.NewRecorder()
+			p.serveMITMRequest(rec, req, plainMITMHost, 8090)
+
+			if gotHeader != tc.wantHeader {
+				t.Errorf("the origin saw %q on the injected header, want %q", gotHeader, tc.wantHeader)
+			}
+			// FORWARDED either way — a withheld credential is not a refusal.
+			if rec.Code != http.StatusOK {
+				t.Errorf("status = %d, want 200: a request the pin does not cover is still forwarded, "+
+					"it just carries no credential", rec.Code)
+			}
+			// …and the sandbox's placeholder never reaches the origin, pinned or not.
+			if gotHeader == "wardyn-proxy-injected" {
+				t.Error("the sandbox's own placeholder was forwarded — the strip must run whatever the pin says")
+			}
+		})
 	}
 }

@@ -319,6 +319,12 @@ func injectionRuleFromScope(scope json.RawMessage) (egress.InjectionRule, error)
 		// injection rule is a host/header/format binding and has no business
 		// carrying identity.
 		Snapshot json.RawMessage `json:"snapshot"`
+		// PinPath/PinQuery narrow WHICH requests to Host may carry the
+		// credential. Unlike Snapshot they ARE the rule's business — they
+		// describe the request, not the identity — so they are carried through
+		// to the sidecar. Absent on every scope but the captured-AWS-SSO one.
+		PinPath  string            `json:"pin_path"`
+		PinQuery map[string]string `json:"pin_query"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(scope))
 	dec.DisallowUnknownFields()
@@ -336,7 +342,7 @@ func injectionRuleFromScope(scope json.RawMessage) (egress.InjectionRule, error)
 	}
 	return egress.InjectionRule{
 		Host: sc.Host, Header: sc.Header, SecretName: sc.SecretName, Format: sc.Format,
-		RequireTLS: sc.RequireTLS,
+		RequireTLS: sc.RequireTLS, PinPath: sc.PinPath, PinQuery: sc.PinQuery,
 	}, nil
 }
 
