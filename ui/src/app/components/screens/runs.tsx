@@ -40,6 +40,7 @@ import { PageHeader } from "../wardyn/page-header";
 import { useRole } from "../wardyn/operator-context";
 import { cn } from "../ui/utils";
 import { BoardSkeleton, CardGrid, RunActions, RunCard, SectionHeading } from "./runs/run-card";
+import { statusDetailSentence } from "./run-status-detail";
 import { AttentionLane } from "./runs/attention-lane";
 import {
   approvalSignals,
@@ -689,6 +690,17 @@ function RunsTable({
                 </TableCell>
                 <TableCell>
                   <RunStateBadge state={run.state} />
+                  {/* 0.7.6 finding 6: what a STARTING run is waiting ON, under
+                      its badge. The full sentence, not the header's short
+                      register — the cell is wide and this is the one surface
+                      where a person scanning the board can tell a pull from a
+                      scheduling failure without opening the run. Absent for
+                      every run the server did not send a reason for. */}
+                  {statusDetailSentence(run.status_detail, run.status_reason) && (
+                    <span className="mt-0.5 block max-w-[260px] truncate text-meta text-muted-foreground">
+                      {statusDetailSentence(run.status_detail, run.status_reason)}
+                    </span>
+                  )}
                 </TableCell>
                 <TableCell>
                   <ConfinementChip value={run.confinement_class} />

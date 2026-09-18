@@ -13,7 +13,7 @@
 // up stays in the sibling file.
 import * as React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 // The pane reaches AttachTerminal (and through it xterm's stylesheet); no case
@@ -42,6 +42,8 @@ import { AWS_BLURB_MANAGED_OPENING } from "./login-pane-copy";
 import { HttpError } from "../../../lib/api/core";
 import { runs as runsApiMocked } from "../../../lib/api/runs";
 import type { AgentRun } from "../../../lib/types";
+import { LOGIN_SANDBOX_SLOW_START, LOGIN_SANDBOX_STUCK_LEAD_IN, RUN_POLL_SLOW_START_MS } from "./login-start-wait";
+import { STARTING_CONTAINER_CREATING, STUCK_IMAGE_PULL } from "../run-status-detail";
 
 // U-11 (W6 blind lens) — the no-credential member preview offers "Sign in to
 // AWS" (Getting Started renders the CTA off a not_configured state) and the
@@ -128,5 +130,103 @@ describe("the aws blurb under a managed access portal (U-8)", () => {
     const text = await blurbAfterStart(false);
     expect(text).toContain("Give Wardyn your organization");
     expect(text).not.toContain(AWS_BLURB_MANAGED_OPENING);
+  });
+});
+
+// 0.7.6 finding 6: the wait ends on the REASON, not on the clock. "The first
+// time, it produced a 'Could not reach the control plane' error and a wrong
+// diagnosis; the second time we only stayed calm because we had measured it
+// before."
+describe("the wait reads the substrate's reason (finding 6)", () => {
+  beforeEach(() => {
+    harnessLoginMock.mockReset().mockResolvedValue("run-123");
+    vi.mocked(runsApiMocked.killRun).mockReset().mockResolvedValue(undefined);
+    vi.mocked(runsApiMocked.getRun).mockReset();
+  });
+
+  it("a STARTING run on an unpullable image shows the registry's words and offers Cancel ONLY", async () => {
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue({
+      id: "run-123",
+      state: "STARTING",
+      status_detail: "agent: ImagePullBackOff: rpc error: code = Unknown desc = pull access denied",
+      status_reason: "ImagePullBackOff",
+    } as AgentRun);
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+
+    const alertBox = await screen.findByRole("alert");
+    expect(alertBox).toHaveTextContent(LOGIN_SANDBOX_STUCK_LEAD_IN);
+    expect(alertBox).toHaveTextContent(STUCK_IMAGE_PULL);
+    expect(alertBox).toHaveTextContent("pull access denied");
+    // round-2 UX B3/S9: Try again is SUPPRESSED. It earns the identical answer
+    // until an admin changes the cluster or the image, exactly as U-11's 409
+    // does — a test asserting Try again here would pin the pre-ruling behaviour.
+    expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
+  });
+
+  // Codex #11: dispatch marks the run FAILED the instant waitContainerRunning
+  // errors, which can land between two of the pane's polls. The server keeps a
+  // TERMINAL reason on a FAILED run precisely so this branch still says why.
+  it("the same run caught already FAILED says the same thing", async () => {
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue({
+      id: "run-123",
+      state: "FAILED",
+      failure_hint: "the sandbox could not be created: agent container stuck waiting (ImagePullBackOff): denied",
+      status_detail: "agent: ImagePullBackOff: rpc error: code = Unknown desc = pull access denied",
+      status_reason: "ImagePullBackOff",
+    } as AgentRun);
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+
+    const alertBox = await screen.findByRole("alert");
+    expect(alertBox).toHaveTextContent(STUCK_IMAGE_PULL);
+    expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument();
+  });
+
+  // The other half of the field report's sentence: "ContainerCreating for two
+  // minutes is normal". The clock still says 'slow' — the SENTENCE is the
+  // substrate's instead of the hedged guess the pane used to make.
+  it("ContainerCreating past the slow window reads as the ordinary first start", async () => {
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue({
+      id: "run-123",
+      state: "STARTING",
+      status_detail: "agent: ContainerCreating",
+      status_reason: "ContainerCreating",
+    } as AgentRun);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+      await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+      await screen.findByTestId("login-sandbox-starting");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(RUN_POLL_SLOW_START_MS + 5_000);
+      });
+      const block = screen.getByTestId("login-sandbox-starting");
+      expect(block).toHaveTextContent(STARTING_CONTAINER_CREATING);
+      expect(block).not.toHaveTextContent(LOGIN_SANDBOX_SLOW_START);
+      // Still a wait, not an ending.
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The regression pin: a run with NO reason — a warm docker image, a pre-0.7.6
+  // daemon — grades exactly as 0.7.5 did.
+  it("with no reason at all, the 0.7.5 slow-start sentence still stands", async () => {
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue({ id: "run-123", state: "STARTING" } as AgentRun);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+      await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+      await screen.findByTestId("login-sandbox-starting");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(RUN_POLL_SLOW_START_MS + 5_000);
+      });
+      expect(screen.getByTestId("login-sandbox-starting")).toHaveTextContent(LOGIN_SANDBOX_SLOW_START);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

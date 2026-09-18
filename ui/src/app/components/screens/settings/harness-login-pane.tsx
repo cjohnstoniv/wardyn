@@ -34,9 +34,11 @@ import { Input } from "../../ui/input";
 import {
   LOGIN_SANDBOX_READ_RETRYING,
   LOGIN_SANDBOX_SLOW_START,
+  LOGIN_SANDBOX_STUCK_LEAD_IN,
   startWaitVerdict,
   type StartWaitVerdict,
 } from "./login-start-wait";
+import { isTerminalStatusReason, statusDetailSentence } from "../run-status-detail";
 import {
   CAPTURE_CHECK_UNREACHABLE,
   CAPTURE_NOT_CORROBORATED,
@@ -397,6 +399,10 @@ export function HarnessLoginPane({
   // Reset on every launch attempt (see `launch`), so a refusal cannot outlive
   // the condition that caused it.
   const [refused, setRefused] = React.useState(false);
+  // 0.7.6 finding 6: whether the SUBSTRATE gave a terminal answer. Suppresses
+  // "Try again" for the reason `refused` does — the next attempt earns the same
+  // answer — but a separate flag, because who can fix it differs. Reset per launch.
+  const [stuck, setStuck] = React.useState(false);
   const [authUrl, setAuthUrl] = React.useState("");
   const [code, setCode] = React.useState("");
 
@@ -419,6 +425,9 @@ export function HarnessLoginPane({
   // nothing does not re-render the pane every two seconds.
   const [waitNote, setWaitNote] = React.useState<StartWaitVerdict>("starting");
   const waitNoteRef = React.useRef<StartWaitVerdict>("starting");
+  // The substrate's sentence for the CURRENT wait, or "". It REPLACES the hedged
+  // slow-start line rather than joining it: one wait, one sentence.
+  const [startingSentence, setStartingSentence] = React.useState("");
   // ONE self-run grace timer per launch, armed on the FIRST attach.
   const selfRunArmedRef = React.useRef(false);
 
@@ -436,8 +445,10 @@ export function HarnessLoginPane({
     failingSinceRef.current = null;
     waitNoteRef.current = "starting";
     setWaitNote("starting");
+    setStartingSentence("");
     selfRunArmedRef.current = false;
     setRefused(false);
+    setStuck(false);
     setAuthUrl("");
     try {
       const id = await harnessAuthApi.harnessLogin(provider, startUrl.trim());
@@ -477,14 +488,28 @@ export function HarnessLoginPane({
       pollFailuresRef.current = 0;
       failingSinceRef.current = null;
     }
+    setStartingSentence(statusDetailSentence(run?.status_detail, run?.status_reason));
     const verdict = startWaitVerdict({
       now,
       startedAt: startedAtRef.current,
       failingSince: failingSinceRef.current,
       failures: pollFailuresRef.current,
+      // Null on a failed read by construction — the wait then grades on the
+      // clock exactly as it did in 0.7.5.
+      detail: run?.status_detail ?? null,
+      reason: run?.status_reason ?? null,
     });
     if (verdict === "unreadable") {
       setError(LOGIN_SANDBOX_UNREADABLE);
+      setPhase("error");
+      return;
+    }
+    // The wait ending on a REASON rather than a clock: the substrate has given
+    // its final answer, and the five minutes that used to follow it were five
+    // minutes of waiting for news that had already arrived.
+    if (verdict === "stuck") {
+      setStuck(true);
+      setError(`${LOGIN_SANDBOX_STUCK_LEAD_IN} ${statusDetailSentence(run?.status_detail, run?.status_reason)}`);
       setPhase("error");
       return;
     }
@@ -499,6 +524,15 @@ export function HarnessLoginPane({
       return;
     }
     if (isTerminalRunState(run.state)) {
+      // Codex #11: the run that went STARTING -> FAILED between two polls. The
+      // server keeps a TERMINAL reason on a FAILED run so this branch can still
+      // say what happened — failure_hint is only dispatch's wrapper around it.
+      if (isTerminalStatusReason(run.status_reason)) {
+        setStuck(true);
+        setError(`${LOGIN_SANDBOX_STUCK_LEAD_IN} ${statusDetailSentence(run.status_detail, run.status_reason)}`);
+        setPhase("error");
+        return;
+      }
       // The run's OWN sentence when it has one (D9's failure_hint covers the
       // pre-agent-start class this wait actually hits: an image that would not
       // pull, a ceiling that would not resolve); never a reworded guess.
@@ -737,10 +771,12 @@ export function HarnessLoginPane({
         <div className="flex flex-wrap items-center gap-2" data-testid="login-sandbox-starting">
           <p role="status" className="flex flex-1 items-center gap-2 text-xs leading-relaxed text-muted-foreground">
             <Loader2 className="size-3.5 shrink-0 animate-spin" />{" "}
+            {/* A reason always beats the clock's hedged guess; with none to
+                read this is 0.7.5's ladder byte for byte. */}
             {waitNote === "retrying"
               ? LOGIN_SANDBOX_READ_RETRYING
               : waitNote === "slow"
-                ? LOGIN_SANDBOX_SLOW_START
+                ? startingSentence || LOGIN_SANDBOX_SLOW_START
                 : LOGIN_SANDBOX_STARTING}
           </p>
           <Button size="sm" variant="outline" onClick={cancel}>
@@ -753,7 +789,7 @@ export function HarnessLoginPane({
         <div className="flex flex-wrap gap-2">
           {/* U-11: suppressed on a 409 — the refusal above already says why, and
               a retry earns the identical answer. Cancel remains the way out. */}
-          {!refused && (
+          {!refused && !stuck && (
             <Button size="sm" onClick={() => void launch()}>
               <KeyRound className="size-3.5" /> Try again
             </Button>

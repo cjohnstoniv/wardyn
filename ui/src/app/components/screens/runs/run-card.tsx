@@ -41,6 +41,7 @@ import { repoLabel, rowHeadline, runAttention, shortId, signalsFor, type RunSign
 // this door and the run header's (run-detail.tsx onClone) share ONE refusal
 // path and ONE string, rather than reimplementing the same guard twice.
 import { cloneFromAudit, CLONE_LOAD_FAILED, CLONE_UNREADABLE } from "../new-run/wizard-types";
+import { statusDetailSentence } from "../run-status-detail";
 
 export function CardGrid({ children }: { children: React.ReactNode }) {
   // auto-fill with a min(100%, floor) track: cards reflow and collapse to ONE
@@ -201,6 +202,13 @@ export function RunCard({
         </span>
         <ConfinementChip value={run.confinement_class} />
         <RunStateBadge state={run.state} variant="label" />
+        {/* 0.7.6 finding 6: the same reason the table row carries, so a person
+            reading the board in card mode is not the one left guessing. */}
+        {statusDetailSentence(run.status_detail, run.status_reason) && (
+          <span className="min-w-0 truncate text-muted-foreground">
+            {statusDetailSentence(run.status_detail, run.status_reason)}
+          </span>
+        )}
         {/* A held approval says what is waiting; a failure says nothing extra —
             the glyph and Review already carry it, and a sentence repeating the
             state was three words of noise on every attention card. */}
