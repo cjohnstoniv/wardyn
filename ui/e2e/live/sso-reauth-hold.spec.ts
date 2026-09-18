@@ -291,9 +291,18 @@ const MINUTE = 60_000;
  *  assertion, so the id must cross the test boundary rather than be looked up
  *  again by a heuristic that could find a different row. */
 let heldRunID = "";
-/** The audit row count at the moment the hold opened — K(resume)'s "no new run,
- *  no new grant" assertions are about rows added AFTER this point. */
-let auditAtHold: AuditRow[] = [];
+/** WHEN the hold opened, as the RAISE ROW itself stamps it, and the grant ids
+ *  the run had at that moment. K(resume)'s "no new run, no new grant" claims
+ *  are about what arrived after that instant.
+ *
+ *  A TIMESTAMP, not a row count: the first version sliced the list by the
+ *  difference in length and assumed the newest rows were at the front. They are
+ *  not — GET /audit?run_id= answers oldest-first — so it read the run's own
+ *  creation rows and reported "a second run.create landed on the held run"
+ *  about the FIRST one. A slice by position cannot state this claim; an instant
+ *  can. */
+let holdOpenedAt = 0;
+let grantIDsAtHold: string[] = [];
 
 // ── K — a member's session dies mid-run and the run is HELD, not killed ─────
 
@@ -371,9 +380,14 @@ test("K (credential-reauth-hold): a session retired mid-run HOLDS the model call
 
     // The audit row is the only place the RAISE explains itself, and it carries
     // whose credential it was and which lane raised it.
-    auditAtHold = await auditFor(page, run.id);
+    const auditAtHold = await auditFor(page, run.id);
     const raised = auditAtHold.find((e) => e.action === "credential.reauth.requested");
     expect(raised, "no credential.reauth.requested row on the held run").toBeTruthy();
+    holdOpenedAt = Date.parse(raised?.created_at ?? "");
+    expect(Number.isFinite(holdOpenedAt), "the raise row carries no readable timestamp").toBe(true);
+    grantIDsAtHold = auditAtHold
+      .filter((e) => e.action === "credential.mint")
+      .map((e) => String((e.data ?? {}).grant_id ?? ""));
     expect(String(raised?.data?.credential_source)).toBe("per_user");
     expect(String(raised?.data?.owner), "the hold names the MEMBER as the owner").toBe((await me(page)).principal);
     expect(String(raised?.data?.provider)).toBe("aws");
@@ -477,14 +491,26 @@ test("K(resume) (credential-reauth-hold): the member signs in and the SAME run c
   const seenAfter = await seen();
   expect(seenAfter.bedrock_calls, "no model call completed after the hold released").toBeGreaterThan(0);
 
-  // NO NEW RUN, NO NEW GRANT, NO SECOND DISPATCH. Measured as rows added AFTER
-  // the hold opened, which is the only honest form of "nothing new happened":
-  // the run's own create/grant rows are all before it.
+  // NO NEW RUN, NO NEW GRANT, NO SECOND DISPATCH — measured as rows stamped
+  // AFTER the raise row, which is the only honest form of "nothing new
+  // happened": the run's own create and grant rows are all before it.
   const now = await auditFor(page, heldRunID);
-  const fresh = now.slice(0, Math.max(0, now.length - auditAtHold.length));
+  const fresh = now.filter((e) => Date.parse(e.created_at ?? "") > holdOpenedAt);
   const freshActions = fresh.map((e) => e.action ?? "");
+  expect(fresh.length, "no audit row at all arrived after the hold opened — the filter is wrong").toBeGreaterThan(0);
   expect(freshActions, "a second run.create landed on the held run").not.toContain("run.create");
-  expect(freshActions.filter((a) => a === "credential.mint").length, "the resume minted a NEW grant").toBe(0);
+  // A NEW GRANT is the claim, not a new ROW. The final resolve re-resolves the
+  // injection exactly once when the answer arrives (credhold.go's own comment),
+  // and that write is allowed to audit — what must not happen is a grant id
+  // this run did not already hold, which is what "no new grant, no policy
+  // relaxation" means.
+  const freshGrantIDs = fresh
+    .filter((e) => e.action === "credential.mint")
+    .map((e) => String((e.data ?? {}).grant_id ?? ""));
+  expect(
+    freshGrantIDs.filter((g) => !grantIDsAtHold.includes(g)),
+    "the resume minted a grant this run did not already hold",
+  ).toEqual([]);
   expect(freshActions, "the resolve is audited").toContain("credential.reauth.resolved");
 
   // …and the console is back to an ordinary cockpit: no strip, because the
