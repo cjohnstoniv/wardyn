@@ -40,7 +40,7 @@ function Probe({ label = "probe" }: { label?: string }) {
       <span data-testid={`${label}-actionable`}>{String(door.actionable)}</span>
       <span data-testid={`${label}-claimed`}>{String(door.claimed)}</span>
       <span data-testid={`${label}-open`}>{String(door.open)}</span>
-      <button type="button" onClick={door.openDoor}>{`${label} open`}</button>
+      <button type="button" onClick={() => door.openDoor()}>{`${label} open`}</button>
       <button type="button" onClick={door.closeDoor}>{`${label} close`}</button>
       <button type="button" onClick={() => void door.refresh()}>{`${label} refresh`}</button>
     </div>

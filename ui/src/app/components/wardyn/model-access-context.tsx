@@ -59,7 +59,15 @@ export interface ModelAccessDoorHandle extends ModelAccessDoor {
    *  fail-open default in exactly the window the door refuses to grade. */
   operator: boolean;
   open: boolean;
-  openDoor: () => void;
+  /** `returnTo` — the element focus should return to when the door closes and
+   *  no better target exists. Callers whose OWN trigger unmounts before the
+   *  door closes (the New Run rail's sign-in control, gone the moment the
+   *  state it described clears) pass their neighbour (Launch) here:
+   *  document.activeElement at call time is a DETACHED node by the time
+   *  onCloseAutoFocus runs, and focusOpener() on a detached node fails.
+   *  Omitted, it falls back to document.activeElement exactly as before —
+   *  backward compatible for every other caller (S1 fix, review-1). */
+  openDoor: (returnTo?: HTMLElement | null) => void;
   closeDoor: () => void;
   /** Put focus back on the control that opened the door, and say whether it
    *  could: false once a completed sign-in has taken that surface away, which
@@ -73,7 +81,7 @@ interface ModelAccessContextValue {
   claim: () => () => void;
   claimed: boolean;
   open: boolean;
-  openDoor: () => void;
+  openDoor: (returnTo?: HTMLElement | null) => void;
   closeDoor: () => void;
   focusOpener: () => boolean;
 }
@@ -131,8 +139,8 @@ export function ModelAccessProvider({
   // closes — right after a cancellation, and wrong after a sign-in that took
   // the control away with the state that justified it.
   const opener = React.useRef<Element | null>(null);
-  const openDoor = React.useCallback(() => {
-    opener.current = typeof document === "undefined" ? null : document.activeElement;
+  const openDoor = React.useCallback((returnTo?: HTMLElement | null) => {
+    opener.current = returnTo ?? (typeof document === "undefined" ? null : document.activeElement);
     setOpen(true);
   }, []);
   const closeDoor = React.useCallback(() => setOpen(false), []);

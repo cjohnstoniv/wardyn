@@ -275,7 +275,7 @@ describe("where focus goes when the door closes", () => {
     function PageDoor() {
       const door = useModelAccessDoor();
       return (
-        <button type="button" onClick={door.openDoor}>
+        <button type="button" onClick={() => door.openDoor()}>
           page door
         </button>
       );
