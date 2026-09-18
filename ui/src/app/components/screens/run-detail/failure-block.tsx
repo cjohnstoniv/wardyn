@@ -25,13 +25,18 @@
 // more than no instruction. review R-01: failure_hint used to be
 // header-chip-only, clipped to a handful of characters at 1280px; this is
 // its other, unclipped home.
+import * as React from "react";
 import type { ReactNode } from "react";
 import { ScrollText } from "lucide-react";
 import type { AgentRun, AuditEvent, RunEndingKind } from "../../../lib/types";
 import { runEndingFromAudit } from "../../../lib/api/audit";
 import { absoluteTime } from "../../../lib/format";
+import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { Button } from "../../ui/button";
 import { Mono } from "../../wardyn/code-block";
+import { MODEL_ACCESS_RUN_DOOR } from "../../wardyn/model-access-copy";
+import { useClaimModelAccessDoor, useModelAccessDoor } from "../../wardyn/model-access-context";
+import { usePrincipal } from "../../wardyn/operator-context";
 import { formatElapsed } from "../run-detail-summary-header";
 
 // COPY CHANGE (M7): the two labels, the action, and the four reason bodies.
@@ -95,6 +100,12 @@ const ENDING_COPY: Partial<Record<RunEndingKind, EndingCopy>> = {
   // `unknown` is deliberately absent — see the file header. run.failure_hint
   // (below, review R-01) covers it when the server sent one; there is still
   // no INVENTED copy for an unknown cause with no hint at all.
+  //
+  // `credential` is absent for a stronger reason: the SERVER's refusal is a
+  // complete explanation — what the lane is, what state it is in, and that
+  // nothing was substituted — and it is already on the run as failure_hint. A
+  // "What happened" of our own would be that sentence in weaker words. The one
+  // thing the console adds is the sign-in itself (0.7.6 Finding 3).
 };
 
 // A kill whose cascade did NOT fully succeed. run.kill carries outcome
@@ -125,6 +136,46 @@ export function RunFailureBlock({
   onGoAudit: () => void;
 }) {
   const ending = runEndingFromAudit(run.state, audit);
+  const door = useModelAccessDoor();
+  const principal = usePrincipal();
+  const credential = ending?.kind === "credential";
+  // EVERY term is load-bearing, and each rules out a door that would repair
+  // nothing:
+  //  - the ending's own lane, not the viewer's: `reason` covers every declared
+  //    mechanism (an OpenAI row's refusal included) while model_access grades
+  //    Claude Code alone (Codex #14);
+  //  - the roster TODAY: a sign-in repairs nothing for an agent that has since
+  //    moved off bedrock_sso, and a captured session keeps grading after such a
+  //    move;
+  //  - `actionable`: a member under a shared credential, and a refusal whose
+  //    renewal merely did not complete ("launch again in a moment", which
+  //    grades live), both get the sentence and no button;
+  //  - the VIEWER owns the run: the door is this person's own credential, so an
+  //    admin reading a member's failed run must not be offered a sign-in that
+  //    repairs nothing for that run (round-2 general S5). An empty principal is
+  //    /me unresolved or a deployment with no OIDC — never matched against an
+  //    equally empty created_by.
+  const showDoor =
+    credential &&
+    ending.mechanism === "bedrock_sso" &&
+    door.bedrockSSO &&
+    door.actionable &&
+    !!principal &&
+    run.created_by === principal;
+  // One primary recovery action per state per screen: while this block carries
+  // the button the shell strip keeps its sentence and drops its own.
+  useClaimModelAccessDoor(showDoor);
+  // The context's status can be up to five minutes old, and a just-refused run
+  // is exactly when the credential's state changed — so read it again, ONCE per
+  // mount (the trail arrives after the first paint, so this fires when the
+  // ending resolves, not necessarily on the first effect).
+  const refresh = door.refresh;
+  const refreshed = React.useRef(false);
+  React.useEffect(() => {
+    if (!credential || refreshed.current) return;
+    refreshed.current = true;
+    void refresh();
+  }, [credential, refresh]);
   if (!ending) return null;
   const copy =
     ending.kind === "killed" && ending.outcome === "failure" ? KILL_INCOMPLETE : ENDING_COPY[ending.kind];
@@ -186,6 +237,18 @@ export function RunFailureBlock({
             </>
           )}
         </>
+      )}
+
+      {showDoor && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {/* The page's one primary action, so the one `default` Button on this
+              surface (CONSOLE-RULES §6) — the sentence above it is the server's
+              and names no control. */}
+          <Button size="sm" aria-label={MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA} onClick={door.openDoor}>
+            {AGENTS.SIGN_IN_AWS}
+          </Button>
+          <span className="text-xs leading-relaxed text-muted-foreground">{MODEL_ACCESS_RUN_DOOR.NOTE}</span>
+        </div>
       )}
 
       <div className="mt-3 flex items-center gap-3">

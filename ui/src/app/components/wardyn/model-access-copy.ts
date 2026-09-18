@@ -88,3 +88,21 @@ export const RAIL_MODEL_ACCESS = {
   NO_PROVIDER: "No model provider is connected. This run launches; its first model call fails.",
   NO_PROVIDER_CTA: "Connect →",
 } as const;
+
+// DRAFT (M2 canon pending) — ruled by the UX rounds (B7, S7, S8)
+//
+// The FAILED run's own door (0.7.6 Finding 3). Its sentence is the SERVER's,
+// rendered from the run's failure_hint exactly as it always was; these two
+// strings are everything the console adds.
+export const MODEL_ACCESS_RUN_DOOR = {
+  // What the button does NOT do, said before the person clicks it: signing in
+  // here does not restart anything. It names the run HEADER rather than the
+  // control on it ("Start a run like this one"), because this block also
+  // renders inside focus mode, which portals the terminal pane alone and never
+  // draws that header (round-2 UX B7 / S7).
+  NOTE: "Sign in here. This run stays failed — relaunch it from the run header.",
+  // The accessible name, distinct from every other "Sign in to AWS" a page can
+  // carry (S8; the SIGN_IN_AWS_ARIA_CARD precedent in wardyn/copy.ts). The
+  // visible label stays AGENTS.SIGN_IN_AWS — one spelling of one control.
+  SIGN_IN_ARIA: "Sign in to AWS — for this failed run",
+} as const;

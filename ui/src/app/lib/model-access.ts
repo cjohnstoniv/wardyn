@@ -72,6 +72,14 @@ export interface ModelAccessDoor {
   actionable: boolean;
   /** The claude-code row is an enabled per_user + bedrock_sso lane. */
   perUser: boolean;
+  /** The claude-code row is an enabled bedrock_sso lane TODAY, per_user or
+   *  shared — the weaker half of `perUser`, and the one a surface bound to a
+   *  PAST event needs: a failed run's declared lane is history, and an AWS
+   *  sign-in repairs nothing for an agent the roster has since moved to another
+   *  mechanism (Codex #14). `model_access` keeps grading a captured session
+   *  after such a move (setupModelAccess grades it whenever a blob is found),
+   *  so `actionable` alone does not answer this. */
+  bedrockSSO: boolean;
 }
 
 const NO_DOOR: ModelAccessDoor = {
@@ -81,6 +89,7 @@ const NO_DOOR: ModelAccessDoor = {
   needsAttention: false,
   actionable: false,
   perUser: false,
+  bedrockSSO: false,
 };
 
 /** The door's fail-open default: nothing graded, nothing to say. Exported so a
@@ -122,5 +131,12 @@ export function modelAccessDoor(
     // time: ONE predicate decides whether this deployment gives each person
     // their own sign-in.
     perUser: !!status?.harnesses?.some((h) => h.id === MODEL_ACCESS_AGENT && isPerUserSsoRow(h)),
+    // isPerUserSsoRow without its credential_source half: the shared row's
+    // ADMIN has a working door too (authorizeHarnessLogin admits any operator),
+    // and `enabled !== false` is load-bearing here for the same reason it is
+    // there — the server treats a disabled row as no per-user lane at all.
+    bedrockSSO: !!status?.harnesses?.some(
+      (h) => h.id === MODEL_ACCESS_AGENT && h.enabled !== false && h.mechanism === "bedrock_sso",
+    ),
   };
 }

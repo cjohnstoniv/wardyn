@@ -8,10 +8,17 @@
 // the audit trail for an operator to find through the API.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import userEvent from "@testing-library/user-event";
-import type { AgentRun, AuditEvent, RunState } from "../../../lib/types";
+import type { AgentRun, AuditEvent, RunState, SetupHarnessTool, SetupModelAccess } from "../../../lib/types";
 import { runEndingFromAudit } from "../../../lib/api/audit";
 import { RunFailureBlock } from "./failure-block";
+import { ModelAccessBanner } from "../../wardyn/model-access-banner";
+import { ModelAccessProvider } from "../../wardyn/model-access-context";
+import { MODEL_ACCESS_RUN_DOOR } from "../../wardyn/model-access-copy";
+import { OperatorProvider } from "../../wardyn/operator-context";
+import { AGENTS } from "../../../lib/workspace-providers-copy";
+import { baseStatus } from "../../../lib/test-fixtures";
 
 const CREATED = "2026-08-28T10:00:00Z";
 
@@ -248,5 +255,162 @@ describe("RunFailureBlock", () => {
   it("carries no second clone door — the run header is the one door", () => {
     renderBlock("KILLED", [ev("run.kill", "success", { actor: "alice", actor_type: "human" })]);
     expect(screen.queryByRole("button", { name: /Start a run like this one/i })).toBeNull();
+  });
+});
+
+// ── 0.7.6 Finding 3 — the failed run IS the door ───────────────────────────
+//
+// The dispatch refusal named a destination ("sign in again under Settings →
+// Model provider") to a person who had just been interrupted, on a page that
+// can mount the sign-in itself. The block now shows the server's own sentence
+// with the sign-in beside it — but ONLY where a sign-in this viewer can
+// complete would repair THIS run's lane.
+const PER_USER_ROW: SetupHarnessTool = {
+  id: "claude-code",
+  display: "claude-code",
+  has_gateway: false,
+  has_login: true,
+  enabled: true,
+  mechanism: "bedrock_sso",
+  credential_source: "per_user",
+};
+
+const REFUSAL =
+  "this run's model access is configured as Amazon Bedrock (captured AWS SSO session), and that session can no longer be renewed — sign in to AWS from Getting started in the console, or from the sign-in banner the console shows on every page. Wardyn does not substitute a different model provider.";
+
+/** The dispatch refusal's audit row: the sentence, its class, and the run's
+ *  DECLARED lane. */
+function credentialTrail(mechanism = "bedrock_sso"): AuditEvent[] {
+  return [ev("run.create", "failure", { data: { error: REFUSAL, reason: "model_credential", mechanism } })];
+}
+
+function renderCredentialBlock({
+  access = { state: "expired_signin", action: AGENTS.SIGN_IN_AWS } as SetupModelAccess,
+  row = PER_USER_ROW,
+  trail = credentialTrail(),
+  principal = "alice",
+  operator = false,
+  onRefresh = vi.fn(),
+  withStrip = false,
+}: {
+  access?: SetupModelAccess;
+  row?: SetupHarnessTool;
+  trail?: AuditEvent[];
+  principal?: string;
+  operator?: boolean;
+  onRefresh?: () => void;
+  withStrip?: boolean;
+} = {}) {
+  render(
+    <MemoryRouter initialEntries={["/runs/3b7f10c4"]}>
+      <ModelAccessProvider
+        status={baseStatus({ model_access: access, harnesses: [row] })}
+        onRefresh={onRefresh}
+      >
+        <OperatorProvider operator={operator} securityOperator={operator} principal={principal}>
+          {withStrip && (
+            <div role="status">
+              <ModelAccessBanner />
+            </div>
+          )}
+          <RunFailureBlock
+            run={{ ...run("FAILED"), failure_hint: REFUSAL }}
+            audit={trail}
+            onGoAudit={vi.fn()}
+          />
+        </OperatorProvider>
+      </ModelAccessProvider>
+    </MemoryRouter>,
+  );
+  return onRefresh;
+}
+
+const doorButton = () => screen.queryByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA });
+
+describe("the credential ending's door — only where a sign-in repairs THIS run", () => {
+  it("renders the SERVER's sentence and the sign-in, and the sentence exactly once", () => {
+    renderCredentialBlock();
+    expect(screen.getByTestId("run-failure-block")).toHaveAttribute("data-ending", "credential");
+    expect(screen.getAllByText(REFUSAL)).toHaveLength(1);
+    expect(doorButton()).toBeInTheDocument();
+    expect(screen.getByText(MODEL_ACCESS_RUN_DOOR.NOTE)).toBeInTheDocument();
+    // No invented "What to do" — the server's sentence IS the reason.
+    expect(screen.queryByText("What to do")).not.toBeInTheDocument();
+  });
+
+  it("refreshes the door once on mount — the context can be five minutes stale", () => {
+    const onRefresh = renderCredentialBlock();
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("a member under a SHARED credential gets the sentence and no button", () => {
+    renderCredentialBlock({
+      access: { state: "shared_expired", action: "Your admin's model credential expired — ask them to reconnect it" },
+      row: { ...PER_USER_ROW, credential_source: "shared" },
+    });
+    expect(screen.getAllByText(REFUSAL)).toHaveLength(1);
+    expect(doorButton()).toBeNull();
+  });
+
+  it("a refusal whose renewal merely did not complete gets no button (model access is live)", () => {
+    renderCredentialBlock({ access: { state: "live" } });
+    expect(screen.getAllByText(REFUSAL)).toHaveLength(1);
+    expect(doorButton()).toBeNull();
+  });
+
+  // Codex #14: the reason covers EVERY declared lane; the viewer's model_access
+  // grades Claude Code alone. Without the run's own lane on the row, a failed
+  // Codex run whose owner also lacks an AWS sign-in would be offered one.
+  it("another provider's refusal gets no AWS door, however actionable the Claude row is", () => {
+    renderCredentialBlock({ trail: credentialTrail("openai_api_key") });
+    expect(doorButton()).toBeNull();
+  });
+
+  // The roster moved since: signing in to AWS repairs nothing for an agent that
+  // no longer reaches its model that way.
+  it("a historical bedrock_sso refusal gets no door once the row's mechanism changed", () => {
+    renderCredentialBlock({
+      row: { ...PER_USER_ROW, mechanism: "anthropic_api_key", credential_source: "shared" },
+    });
+    expect(doorButton()).toBeNull();
+  });
+
+  // The door is the VIEWER's credential (round-2 general S5): an admin reading a
+  // member's failed run must not be offered a sign-in that repairs nothing for
+  // that run.
+  it("a viewer who does not own the run gets no button", () => {
+    renderCredentialBlock({ principal: "bob", operator: true });
+    expect(screen.getAllByText(REFUSAL)).toHaveLength(1);
+    expect(doorButton()).toBeNull();
+  });
+
+  // One primary recovery action per state per screen: the page that owns the
+  // door takes the button, the strip keeps its sentence.
+  it("claims the door, so the shell strip drops its button while the block has one", () => {
+    renderCredentialBlock({ withStrip: true });
+    expect(doorButton()).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeNull();
+  });
+
+  it("does not claim the door for a NON-credential ending", () => {
+    render(
+      <MemoryRouter initialEntries={["/runs/3b7f10c4"]}>
+        <ModelAccessProvider
+          status={baseStatus({
+            model_access: { state: "expired_signin", action: AGENTS.SIGN_IN_AWS },
+            harnesses: [PER_USER_ROW],
+          })}
+          onRefresh={vi.fn()}
+        >
+          <OperatorProvider operator={false} securityOperator={false} principal="alice">
+            <div role="status">
+              <ModelAccessBanner />
+            </div>
+            <RunFailureBlock run={run("FAILED")} audit={[ev("run.build", "failure")]} onGoAudit={vi.fn()} />
+          </OperatorProvider>
+        </ModelAccessProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeInTheDocument();
   });
 });

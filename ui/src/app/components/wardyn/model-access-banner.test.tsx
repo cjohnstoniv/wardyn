@@ -385,6 +385,7 @@ describe("modelAccessStripCopy", () => {
     needsAttention: true,
     actionable: true,
     perUser: true,
+    bedrockSSO: true,
     ...over,
   });
 

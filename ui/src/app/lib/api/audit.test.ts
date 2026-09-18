@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { audit, demoAuditRows, egressFromAudit, exitCodeFromAudit } from "./audit";
+import { audit, demoAuditRows, egressFromAudit, exitCodeFromAudit, runEndingFromAudit } from "./audit";
 import type { AuditEvent } from "../types";
 
 // egressFromAudit is the ONLY source of the run-detail egress table — the backend
@@ -188,5 +188,68 @@ describe("exitCodeFromAudit", () => {
         ev({ action: "run.complete", data: { panic: "boom" } }),
       ]),
     ).toBe(1);
+  });
+});
+
+// 0.7.6 Finding 3 — "the failure names a destination instead of being one". The
+// dispatch-time model-credential refusal used to grade `unknown`: a complete
+// sentence with no machine-readable class, so the console could only print it.
+// The class is one key on the audit row the refusal already writes.
+describe("runEndingFromAudit — the model-credential refusal is its own ending", () => {
+  const failed = (data: Record<string, unknown>): AuditEvent =>
+    ev({ id: "c", actor_type: "system", actor: "wardynd", action: "run.create", outcome: "failure", data });
+  const REFUSAL =
+    "this run's model access is configured as Amazon Bedrock (captured AWS SSO session), and that session can no longer be renewed — sign in to AWS from Getting started in the console, or from the sign-in banner the console shows on every page. Wardyn does not substitute a different model provider.";
+
+  it("grades `credential`, and carries the DECLARED lane", () => {
+    const ending = runEndingFromAudit("FAILED", [
+      failed({ error: REFUSAL, reason: "model_credential", mechanism: "bedrock_sso" }),
+    ]);
+    expect(ending?.kind).toBe("credential");
+    expect(ending?.action).toBe("run.create");
+    expect(ending?.mechanism).toBe("bedrock_sso");
+  });
+
+  it("carries NO detail — data.error is the run's own failure_hint, which the block already renders", () => {
+    const ending = runEndingFromAudit("FAILED", [
+      failed({ error: REFUSAL, reason: "model_credential", mechanism: "bedrock_sso" }),
+    ]);
+    expect(ending?.detail).toBeUndefined();
+  });
+
+  // Every OTHER run.create failure — a sandbox-create error, a lost
+  // sandbox_ref, an api_key grant that would not compile — is still a cause
+  // this build does not diagnose.
+  it("a run.create failure with no reason still grades unknown", () => {
+    expect(runEndingFromAudit("FAILED", [failed({ error: "create sandbox: no such image" })])?.kind).toBe("unknown");
+  });
+
+  it("a different reason on the same action grades unknown too", () => {
+    expect(runEndingFromAudit("FAILED", [failed({ error: "x", reason: "roster_unreadable" })])?.kind).toBe("unknown");
+  });
+
+  // The FAILED_CAUSE scan runs FIRST: an image that could not be built is the
+  // earlier cause, and the credential refusal that followed is fallout.
+  it("run.build/failure still wins over a later credential refusal", () => {
+    const ending = runEndingFromAudit("FAILED", [
+      ev({ id: "b", action: "run.build", outcome: "failure", data: { error: "step 4/9: npm ci exited 1" } }),
+      failed({ error: REFUSAL, reason: "model_credential", mechanism: "bedrock_sso" }),
+    ]);
+    expect(ending?.kind).toBe("image");
+  });
+
+  // A refusal with no mechanism key (an older daemon) still grades credential —
+  // the console's door is what checks the lane, and a missing key is simply not
+  // bedrock_sso.
+  it("grades credential without a mechanism key, leaving it undefined", () => {
+    const ending = runEndingFromAudit("FAILED", [failed({ error: REFUSAL, reason: "model_credential" })]);
+    expect(ending?.kind).toBe("credential");
+    expect(ending?.mechanism).toBeUndefined();
+  });
+
+  it("says nothing about a run that did not fail", () => {
+    expect(
+      runEndingFromAudit("COMPLETED", [failed({ error: REFUSAL, reason: "model_credential" })]),
+    ).toBeUndefined();
   });
 });

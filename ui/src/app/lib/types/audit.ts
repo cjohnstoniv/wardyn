@@ -151,6 +151,12 @@ export type RunEndingKind =
   | "selftest" // run.selftest failed CLOSED: the wrapped image was refused before any task
   | "killed" // an operator killed it
   | "auto_stop" // the idle reaper stopped it — the policy working, not a fault
+  // the dispatch-time model-credential refusal (0.7.6 Finding 3): the declared
+  // model-access lane could not carry this run. The SERVER's sentence is the
+  // whole explanation — there is no ENDING_COPY row for it — and the console's
+  // only addition is the sign-in itself, where a sign-in this viewer can
+  // complete would repair it.
+  | "credential"
   | "unknown";
 
 export interface RunEnding {
@@ -168,4 +174,12 @@ export interface RunEnding {
    * reads (cmd/wardyn/commands.go). Absent when the row carried none.
    */
   detail?: string;
+  /**
+   * For `credential`: the DECLARED mechanism of the run that was refused
+   * (`data.mechanism` — "bedrock_sso", "anthropic_api_key", …), so a surface
+   * offering a repair binds to the failed run's own lane rather than to
+   * whatever the viewer's claude-code row says today. Absent on an older
+   * trail, which reads as "not a lane this console has a door for".
+   */
+  mechanism?: string;
 }
