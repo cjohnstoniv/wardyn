@@ -1,0 +1,67 @@
+
+ RUN  v3.2.7 /tmp/wardyn-review-0.7x-sheet-overlay-ref/ui
+
+stderr | src/app/components/ui/sheet-overlay.test.tsx > Sheet overlay > preserves focus when dismissed with Escape
+Warning: Function components cannot be given refs. Attempts to access this ref will fail. Did you mean to use React.forwardRef()?
+
+Check the render method of `Primitive.div.Slot`.
+    at SheetOverlay (/tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/src/app/components/ui/sheet.tsx:49:3)
+    at file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/@radix-ui+react-slot@1.3.3_@types+react@18.3.12_react@18.3.1/node_modules/@radix-ui/react-slot/dist/index.mjs:10:11
+    at file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/@radix-ui+react-primitive@2.1.10_@types+react-dom@18.3.1_@types+react@18.3.12_react-dom@18.3._2rnygbizvrhl4q7cxmmaodjvba/node_modules/@radix-ui/react-primitive/dist/index.mjs:31:13
+    at Portal (file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/@radix-ui+react-portal@1.1.17_@types+react-dom@18.3.1_@types+react@18.3.12_react-dom@18.3.1_react@18.3.1__react@18.3.1/node_modules/@radix-ui/react-portal/dist/index.mjs:13:24)
+    at Presence (file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/@radix-ui+react-presence@1.1.10_@types+react-dom@18.3.1_@types+react@18.3.12_react-dom@18.3.1_react@18.3.1__react@18.3.1/node_modules/@radix-ui/react-presence/dist/index.mjs:21:11)
+    at Provider (file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/@radix-ui+react-context@1.2.2_@types+react@18.3.12_react@18.3.1/node_modules/@radix-ui/react-context/dist/index.mjs:38:15)
+    at DialogPortal (file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/@radix-ui+react-dialog@1.1.23_@types+react-dom@18.3.1_@types+react@18.3.12_react-dom@18.3.1_react@18.3.1__react@18.3.1/node_modules/@radix-ui/react-dialog/dist/index.mjs:92:11)
+    at SheetPortal (/tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/src/app/components/ui/sheet.tsx:40:6)
+    at SheetContent (/tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/src/app/components/ui/sheet.tsx:73:3)
+    at Provider (file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/@radix-ui+react-context@1.2.2_@types+react@18.3.12_react@18.3.1/node_modules/@radix-ui/react-context/dist/index.mjs:38:15)
+    at Dialog (file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/@radix-ui+react-dialog@1.1.23_@types+react-dom@18.3.1_@types+react@18.3.12_react-dom@18.3.1_react@18.3.1__react@18.3.1/node_modules/@radix-ui/react-dialog/dist/index.mjs:28:5)
+    at Sheet (/tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/src/app/components/ui/sheet.tsx:14:21)
+    at Navigation (/tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/src/app/components/ui/sheet-overlay.test.tsx:13:23)
+
+ ❯ src/app/components/ui/sheet-overlay.test.tsx (6 tests | 4 failed) 452ms
+   ✓ Sheet overlay > preserves focus when dismissed with Escape 221ms
+   ✓ Sheet overlay > preserves focus when dismissed with Close 57ms
+   × Sheet overlay > retains the top sheet backdrop until its exit animation ends 53ms
+     → expect(element).toBeInTheDocument()
+
+element could not be found in the document
+   × Sheet overlay > retains the right sheet backdrop until its exit animation ends 40ms
+     → expect(element).toBeInTheDocument()
+
+element could not be found in the document
+   × Sheet overlay > retains the bottom sheet backdrop until its exit animation ends 42ms
+     → expect(element).toBeInTheDocument()
+
+element could not be found in the document
+   × Sheet overlay > retains the left sheet backdrop until its exit animation ends 38ms
+     → expect(element).toBeInTheDocument()
+
+element could not be found in the document
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 4 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/app/components/ui/sheet-overlay.test.tsx > Sheet overlay > retains the top sheet backdrop until its exit animation ends
+ FAIL  src/app/components/ui/sheet-overlay.test.tsx > Sheet overlay > retains the right sheet backdrop until its exit animation ends
+ FAIL  src/app/components/ui/sheet-overlay.test.tsx > Sheet overlay > retains the bottom sheet backdrop until its exit animation ends
+ FAIL  src/app/components/ui/sheet-overlay.test.tsx > Sheet overlay > retains the left sheet backdrop until its exit animation ends
+Error: expect(element).toBeInTheDocument()
+
+element could not be found in the document
+ ❯ src/app/components/ui/sheet-overlay.test.tsx:62:23
+     60|       expect(overlay).toBeInTheDocument();
+     61|       await user.click(screen.getByRole("button", { name: "Close" }));
+     62|       expect(overlay).toBeInTheDocument();
+       |                       ^
+     63|       expect(overlay).toHaveAttribute("data-state", "closed");
+     64|       const end = new Event("animationend", { bubbles: true });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/4]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  4 failed | 2 passed (6)
+   Start at  10:30:20
+   Duration  1.80s (transform 85ms, setup 158ms, collect 196ms, tests 452ms, environment 615ms, prepare 110ms)
+
+JUNIT report written to /tmp/wardyn-review-0.7x-sheet-overlay-ref/test/reports/ui/junit.xml

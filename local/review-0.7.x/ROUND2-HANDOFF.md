@@ -13,7 +13,7 @@ umbrella on top of them.
 
 | Finding | Original commit | Change and compatibility boundary |
 | --- | --- | --- |
-| R024 | Pending final browser gate | Forward SheetOverlay's DOM ref so Radix can finish its existing backdrop exit animation. No style, timing, token, focus or copy changes. |
+| R024 | `f6e787a5d37a2efac00881923865df06ed5eba53` | Forward SheetOverlay's DOM ref so Radix can finish its existing backdrop exit animation. No style, timing, token, focus or copy changes. |
 | R025 | `2307b07c57443776baddf1b9926c04f9c27c2587` | Use unique private sibling files for CLI recording downloads and support bundles. Existing unrelated `.part` files are preserved; simultaneous exports no longer share a temporary inode. Output permissions intentionally tighten to owner-only. Final-path replacement still uses the last successful atomic rename. |
 | R026 | `f5fbb1669175074fc9e418a744b2c8cf9ed21054` | Reject additional YAML policy documents before create/update/render/run can consume only the first. Ambiguous multi-document input now errors; single JSON/YAML documents, markers/comments and legacy empty-input handling are unchanged. |
 | R027 | `0bb4699b9de6f462552ddc031393ea875b437928` | Read recording upload data only when storage requests it, using the existing masking writer. An early filesystem-store failure no longer waits on an independently blocked input goroutine. Existing masking, upload cap, and tail/error ordering remain. |
@@ -30,7 +30,9 @@ output and the existing masker tail, not a 32 KiB total-memory guarantee.
 - R024: four side-specific lifetime tests fail on baseline; two focus-restoration
   tests pass. The mock was independently approved before implementation. Actual
   patched Chromium checks passed all four sides and reduced-motion behavior;
-  50 focused tests and official typecheck passed. Full console gate is running.
+  50 focused tests and official typecheck passed. The full console gate passed:
+  347 tests / 30 specs, zero failures/skips/flakes. Root independently reviewed
+  the product diff. SHEET-OVERLAY-ACCEPTANCE.md retains the complete scope.
 - R025: baseline regression covers existing regular/symlink `.part` files,
   rename failure and synchronized concurrent downloads. Patched complete CLI
   race suite passed in 5.033s; interruption cleanup checks all directory entries.
@@ -61,10 +63,13 @@ Log: `evidence/round2-ci-recording-root.log`, SHA-256
 `94d1883e2140c2cb9dd1d2d9d09a67f1b98189d8baca67242ee94c24cebed948`.
 This closes R023's combined merge-gate gap; it does not cover R024–R027.
 
-A new `/tmp/wardyn-review-0.7x-round2-final` integration is being prepared for all
-four new patches. No combined pass is claimed until that selection is frozen and
-its gates finish. Browser acceptance will use a separate worktree at the same
-exact SHA, avoiding concurrent CI/browser build artifacts.
+The new `/tmp/wardyn-review-0.7x-round2-final` selection is frozen at
+`6a3dc8659ea7105ae81d127b5f3f1a198333f67d`, including all four new patches. Full CI
+and browser gates are running; no combined pass is claimed yet. Browser worktree
+`/tmp/wardyn-review-0.7x-round2-ui` uses the same SHA and its own build artifacts,
+database wardyn_review_round2 and ports 18896/18897. Real PostgreSQL acceptance is
+queued in a third same-tip worktree. Independent composition review passed; see
+evidence/round2-composition-review.md for the exact original/integrated mappings.
 
 ## Release integration
 
@@ -74,6 +79,23 @@ recording.upload citation in docs/AUDIT-ACTIONS.md; that file is also changing i
 the other 0.7.6 campaign. Re-point against the actual selected source, preserving
 the other campaign's rows and guards. The old R022 citation patch remains specific
 to its documentation selection, not a universal release prerequisite.
+
+R027's adjacent citation conflict in this review integration was resolved by
+keeping recording.upload's new source line 119 and the earlier R022 SSH doc
+references 380/432/437. The actual patch delta is unchanged (zero-context patch
+IDs match); the focused citation guards passed after resolution. Do not accept
+the entire baseline-side hunk and accidentally revert the existing SSH citations.
+
+The other owner's selection plans to fold R024 into R018 and update the console
+rules' overlay references. Do not apply the Sheet hunk twice if that has already
+happened. R002/R003/R004 are marked deferred to 0.7.7 in that selection; the new
+R003-K8S-CACHE-ASSESSMENT.md records the profile-override and prewarmed-cache
+compatibility constraints, without introducing a runtime cache relocation.
+
+One further low-risk cleanup candidate, R028, was code-reviewed while acceptance
+ran: FSStore does not unlink its owned temporary file when the final rename
+fails. It is recorded for the next isolated patch/reproduction, not silently
+added to this frozen batch or claimed tested. Default PostgreSQL is unaffected.
 
 Release-owner gates are still required after mixing these patches with 0.7.6.
 The existing live SSO/Kubernetes/full-application-restore gaps remain; daemon-free

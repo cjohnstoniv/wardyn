@@ -1,0 +1,105 @@
+
+ RUN  v3.2.7 /tmp/wardyn-review-0.7x-sheet-overlay-ref/ui
+
+stderr | src/app/components/screens/app-shell.test.tsx > AppShell (control plane unreachable) > stays silent while the daemon answers
+Warning: An update to AppShell inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at AppShell (/tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/src/app/components/screens/app-shell.tsx:368:3)
+    at ThemeProvider (/tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/src/app/components/wardyn/theme-provider.tsx:7:26)
+    at Router (file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/react-router@7.18.2_react-dom@18.3.1_react@18.3.1__react@18.3.1/node_modules/react-router/dist/development/chunk-62JRHF6Z.mjs:7036:13)
+    at MemoryRouter (file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/react-router@7.18.2_react-dom@18.3.1_react@18.3.1__react@18.3.1/node_modules/react-router/dist/development/chunk-62JRHF6Z.mjs:6952:3)
+
+stderr | src/app/components/screens/app-shell.test.tsx > AppShell (control plane unreachable) > banners the outage
+Warning: An update to AppShell inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at AppShell (/tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/src/app/components/screens/app-shell.tsx:368:3)
+    at ThemeProvider (/tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/src/app/components/wardyn/theme-provider.tsx:7:26)
+    at Router (file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/react-router@7.18.2_react-dom@18.3.1_react@18.3.1__react@18.3.1/node_modules/react-router/dist/development/chunk-62JRHF6Z.mjs:7036:13)
+    at MemoryRouter (file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/react-router@7.18.2_react-dom@18.3.1_react@18.3.1__react@18.3.1/node_modules/react-router/dist/development/chunk-62JRHF6Z.mjs:6952:3)
+
+ ✓ src/app/components/ui/sheet-overlay.test.tsx (6 tests) 563ms
+stderr | src/app/components/screens/profile-review.test.tsx > ProfileReview > Save as policy prompts for a name and POSTs the proposed inline_policy
+Warning: Function components cannot be given refs. Attempts to access this ref will fail. Did you mean to use React.forwardRef()?
+
+Check the render method of `Primitive.div.Slot`.
+    at DialogOverlay (/tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/src/app/components/ui/dialog.tsx:53:3)
+    at file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/@radix-ui+react-slot@1.3.3_@types+react@18.3.12_react@18.3.1/node_modules/@radix-ui/react-slot/dist/index.mjs:10:11
+    at file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/@radix-ui+react-primitive@2.1.10_@types+react-dom@18.3.1_@types+react@18.3.12_react-dom@18.3._2rnygbizvrhl4q7cxmmaodjvba/node_modules/@radix-ui/react-primitive/dist/index.mjs:31:13
+    at Portal (file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/@radix-ui+react-portal@1.1.17_@types+react-dom@18.3.1_@types+react@18.3.12_react-dom@18.3.1_react@18.3.1__react@18.3.1/node_modules/@radix-ui/react-portal/dist/index.mjs:13:24)
+    at Presence (file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/@radix-ui+react-presence@1.1.10_@types+react-dom@18.3.1_@types+react@18.3.12_react-dom@18.3.1_react@18.3.1__react@18.3.1/node_modules/@radix-ui/react-presence/dist/index.mjs:21:11)
+    at Provider (file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/@radix-ui+react-context@1.2.2_@types+react@18.3.12_react@18.3.1/node_modules/@radix-ui/react-context/dist/index.mjs:38:15)
+    at DialogPortal (file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/@radix-ui+react-dialog@1.1.23_@types+react-dom@18.3.1_@types+react@18.3.12_react-dom@18.3.1_react@18.3.1__react@18.3.1/node_modules/@radix-ui/react-dialog/dist/index.mjs:92:11)
+    at DialogPortal (/tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/src/app/components/ui/dialog.tsx:35:6)
+    at DialogContent (/tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/src/app/components/ui/dialog.tsx:77:3)
+    at Provider (file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/@radix-ui+react-context@1.2.2_@types+react@18.3.12_react@18.3.1/node_modules/@radix-ui/react-context/dist/index.mjs:38:15)
+    at Dialog (file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/@radix-ui+react-dialog@1.1.23_@types+react-dom@18.3.1_@types+react@18.3.12_react-dom@18.3.1_react@18.3.1__react@18.3.1/node_modules/@radix-ui/react-dialog/dist/index.mjs:28:5)
+    at Dialog (/tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/src/app/components/ui/dialog.tsx:17:6)
+    at SavePolicyDialog (/tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/src/app/components/screens/profile-review.tsx:720:3)
+    at ProfileReview (/tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/src/app/components/screens/profile-review.tsx:44:3)
+
+ ✓ src/app/components/screens/profile-review.test.tsx (5 tests) 802ms
+   ✓ ProfileReview > synthesizes a profile for the run and renders the observations  334ms
+   ✓ ProfileReview > Save as policy prompts for a name and POSTs the proposed inline_policy  302ms
+stderr | src/app/components/screens/policies.test.tsx > PoliciesScreen — required fields + error announcement (ui-secretsPolicies-2/3) > marks Name and Spec as required in the create dialog
+Warning: Function components cannot be given refs. Attempts to access this ref will fail. Did you mean to use React.forwardRef()?
+
+Check the render method of `Primitive.div.Slot`.
+    at DialogOverlay (/tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/src/app/components/ui/dialog.tsx:53:3)
+    at file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/@radix-ui+react-slot@1.3.3_@types+react@18.3.12_react@18.3.1/node_modules/@radix-ui/react-slot/dist/index.mjs:10:11
+    at file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/@radix-ui+react-primitive@2.1.10_@types+react-dom@18.3.1_@types+react@18.3.12_react-dom@18.3._2rnygbizvrhl4q7cxmmaodjvba/node_modules/@radix-ui/react-primitive/dist/index.mjs:31:13
+    at Portal (file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/@radix-ui+react-portal@1.1.17_@types+react-dom@18.3.1_@types+react@18.3.12_react-dom@18.3.1_react@18.3.1__react@18.3.1/node_modules/@radix-ui/react-portal/dist/index.mjs:13:24)
+    at Presence (file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/@radix-ui+react-presence@1.1.10_@types+react-dom@18.3.1_@types+react@18.3.12_react-dom@18.3.1_react@18.3.1__react@18.3.1/node_modules/@radix-ui/react-presence/dist/index.mjs:21:11)
+    at Provider (file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/@radix-ui+react-context@1.2.2_@types+react@18.3.12_react@18.3.1/node_modules/@radix-ui/react-context/dist/index.mjs:38:15)
+    at DialogPortal (file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/@radix-ui+react-dialog@1.1.23_@types+react-dom@18.3.1_@types+react@18.3.12_react-dom@18.3.1_react@18.3.1__react@18.3.1/node_modules/@radix-ui/react-dialog/dist/index.mjs:92:11)
+    at DialogPortal (/tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/src/app/components/ui/dialog.tsx:35:6)
+    at DialogContent (/tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/src/app/components/ui/dialog.tsx:77:3)
+    at Provider (file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/@radix-ui+react-context@1.2.2_@types+react@18.3.12_react@18.3.1/node_modules/@radix-ui/react-context/dist/index.mjs:38:15)
+    at Dialog (file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/@radix-ui+react-dialog@1.1.23_@types+react-dom@18.3.1_@types+react@18.3.12_react-dom@18.3.1_react@18.3.1__react@18.3.1/node_modules/@radix-ui/react-dialog/dist/index.mjs:28:5)
+    at Dialog (/tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/src/app/components/ui/dialog.tsx:17:6)
+    at PolicyEditor (/tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/src/app/components/screens/policies.tsx:788:3)
+    at div
+    at PoliciesScreen (/tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/src/app/components/screens/policies.tsx:65:58)
+
+stderr | src/app/components/screens/app-shell.test.tsx > AppShell — account-menu trigger uses the shared Button (ui-shellAuth-4) > carries the shared Button's focus-visible ring classes
+Warning: An update to AppShell inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at AppShell (/tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/src/app/components/screens/app-shell.tsx:368:3)
+    at ThemeProvider (/tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/src/app/components/wardyn/theme-provider.tsx:7:26)
+    at Router (file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/react-router@7.18.2_react-dom@18.3.1_react@18.3.1__react@18.3.1/node_modules/react-router/dist/development/chunk-62JRHF6Z.mjs:7036:13)
+    at MemoryRouter (file:///tmp/wardyn-review-0.7x-sheet-overlay-ref/ui/node_modules/.pnpm/react-router@7.18.2_react-dom@18.3.1_react@18.3.1__react@18.3.1/node_modules/react-router/dist/development/chunk-62JRHF6Z.mjs:6952:3)
+
+ ✓ src/app/components/screens/policies.test.tsx (9 tests) 1262ms
+   ✓ PoliciesScreen — table row semantics (ui-secretsPolicies-1) > keeps the row's implicit 'row' role instead of overriding it to 'button'  308ms
+   ✓ PoliciesScreen — required fields + error announcement (ui-secretsPolicies-2/3) > announces a rejected save via role=alert and wires it to the Save button  310ms
+ ✓ src/app/components/screens/app-shell.test.tsx (30 tests) 1435ms
+
+ Test Files  4 passed (4)
+      Tests  50 passed (50)
+   Start at  10:30:53
+   Duration  3.37s (transform 856ms, setup 666ms, collect 2.43s, tests 4.06s, environment 2.69s, prepare 462ms)
+
+JUNIT report written to /tmp/wardyn-review-0.7x-sheet-overlay-ref/test/reports/ui/junit.xml
