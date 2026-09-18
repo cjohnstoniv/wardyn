@@ -91,8 +91,10 @@ over the model credential carrying the sign-in on the run's own page
   with "the roster changed" — there was nothing to have drifted from. The proxy's injected session is
   now pinned to `GET /federation/credentials` with the run's own dispatch-time account and role
   whenever the captured session names both, so it can no longer be ridden onto a different account or
-  role, or onto `POST /logout` (which AWS treats as ending every run that person has, not just this
-  one); a request the pin does not cover is forwarded with no credential rather than refused. And the
+  role, or onto `POST /logout` (which invalidates the person's sign-in session, so every run of
+  theirs fails at its NEXT credential exchange — already-minted role credentials keep working until
+  the permission set's own duration expires); a request the pin does not cover is forwarded with no
+  credential rather than refused. And the
   MITM'd tunnel to a plain-HTTP `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` now serves a client that speaks
   plain HTTP inside the tunnel, not only one that speaks TLS — the agent's own SDK does the former,
   which was the walk's real blocker.
@@ -144,9 +146,6 @@ over the model credential carrying the sign-in on the run's own page
 - **A login sandbox that gets stuck on a terminal reason closes its placeholder tab.** The tab the
   click opened says the page changes to the provider's sign-in page by itself; on an
   `ImagePullBackOff` it never would, and the error sat on the tab behind it.
-- **On Settings, the sign-in banner's button has a name of its own.** A member keeps the banner on
-  that page, beside the Settings card's admin-only button of the same label — two controls, one
-  accessible name.
 
 ### Changed
 
@@ -264,8 +263,8 @@ tightens an existing input check — see below).
   request the proxy can see) — over plain HTTP the SDK sees the fake's own 401 rather than the hold's
   sentence, which is the one thing SIMULATED. The terminate → strip → inject → re-originate path
   itself is pinned by `internal/egress/proxy`'s own tests
-  (`TestMITMConnect_PlaintextOriginIsReachedThroughTheTunnel`), not by the docker-gated SDK-tolerance
-  test, whose fake also serves plain HTTP with no proxy in the loop at all.
+  (`TestForwardInspectedLLM_ReOriginatesInTheSchemeTheEntryNames`), not by the docker-gated
+  SDK-tolerance test, whose fake also serves plain HTTP with no proxy in the loop at all.
 - **The support bundle's Compose entry is redacted for reading, not for re-use.** It is not a valid
   `docker compose -f` input when marker-named structural keys exist (e.g. a `secrets:` section or a
   `*_token`-named volume) — those keys are redacted whole rather than per-value, so the redacted

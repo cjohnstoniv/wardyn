@@ -189,7 +189,7 @@ result for them is evidence only for the tip somebody actually ran it on.
   `TestMITMConnect_PlaintextClientInsideTheTunnelIsServed` (the SDK's own
   shape) and `TestMITMConnect_TLSClientAgainstAPlaintextEntryStillWorks` (a
   TLS-speaking client against the same plaintext entry keeps working too);
-  the origin leg by its own re-origination test. See
+  the origin leg by `TestForwardInspectedLLM_ReOriginatesInTheSchemeTheEntryNames`. See
   `evidence/credential-reauth-hold/SDK-PATH.md` for how the client leg was
   measured. And the whole
   estate end to end by the kind walk itself.

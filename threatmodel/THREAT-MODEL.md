@@ -1840,17 +1840,22 @@ documentation attached, and shipped in 0.7.6 on the owner's ruling.
 **What was true before.** The proxy injected the session on **any** request to the run's portal host:
 `GET /federation/credentials` for any account/role pair the person could assume, the `/assignment/*`
 enumeration, and `POST /logout` — which AWS documents as invalidating the owner's server-side IAM
-Identity Center sign-in session, i.e. every run that person has, not just this one. The roster's
+Identity Center sign-in session, i.e. the next credential exchange of every run that person has, not
+just this one (already-minted role credentials keep working until the permission set's own duration
+expires). The roster's
 account/role pin was enforced at the RESOLVE (`driftFrom`, against the roster and the dispatch-time
 snapshot) and never against what the SANDBOX asked for. Exposure was identical to 0.7.5's resident
 token, so it was never a regression — but 0.7.5 could not have done better and Phase B can, because
 the proxy now sees the request line.
 
 **What ships.** The authored injection rule carries a PIN (`egress.InjectionRule.PinPath` /
-`PinQuery`), and the captured-AWS-SSO lane sets it to `GET /federation/credentials` with `account_id`
-and `role_name` equal to the grant's own dispatch-time snapshot, whenever that snapshot carries both
-fields (an unpinned roster row leaves the rule unpinned, today's behaviour). A request the pin does
-not cover is **forwarded without the header**, and AWS answers it as an unauthenticated call.
+`PinQuery`). The PATH half (`GET /federation/credentials`) is authored UNCONDITIONALLY on this lane —
+there is no roster shape that leaves it off. The QUERY half (`account_id` + `role_name`) is set from
+the grant's own dispatch-time snapshot, which always names both fields: the capture upload refuses a
+blob missing either (`ssotoken.go`'s `missingFields` check), so every stored session — whether or not
+the roster row itself pins an account/role — carries a snapshot the query pin can be built from. A
+request the pin does not cover is **forwarded without the header**, and AWS answers it as an
+unauthenticated call.
 
 Three properties, each a way this could have been gotten wrong:
 
