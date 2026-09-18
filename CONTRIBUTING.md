@@ -147,11 +147,11 @@ and the one precondition (`internal_hosts`) that fails first if you skip it.
 
 The UI is a React + Vite app with its own blocking CI jobs (typecheck, unit
 tests with coverage, build, and a Playwright e2e suite) — a PR that touches
-`ui/` must pass all of them. Locally:
+`ui/` must pass all of them. Run these commands from the repository root:
 
 ```bash
-cd ui && pnpm install --frozen-lockfile     # Node 22 + pnpm 9 (package.json pins packageManager)
-npx playwright install chromium             # once; run-ui-e2e.sh also needs jq on PATH
+(cd ui && pnpm install --frozen-lockfile)   # Node 22 + pnpm 9 (package.json pins packageManager)
+(cd ui && pnpm exec playwright install chromium) # once; run-ui-e2e.sh also needs jq on PATH
 make ui-typecheck         # tsc --noEmit
 make ui-test              # vitest with coverage
 make ui                   # production build (vite)
