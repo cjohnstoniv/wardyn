@@ -21,6 +21,7 @@
 // below is unconditionally absent, not merely an environment fact.
 import { test, expect, gotoConsole, ADMIN_TOKEN, launchRun } from "./fixtures";
 import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../src/app/components/wardyn/copy";
+import { RAIL_MODEL_ACCESS } from "../src/app/components/wardyn/model-access-copy";
 import { CC_META } from "../src/app/components/wardyn/cc-meta";
 import { AGENTS, PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import type { Page } from "@playwright/test";
@@ -616,5 +617,49 @@ test.describe("New run rail — credentials and recording are read, not asserted
     expect(box, "Launch run boundingBox").not.toBeNull();
     expect(box!.y, "Launch run top edge").toBeGreaterThanOrEqual(0);
     expect(box!.y + box!.height, "Launch run bottom edge").toBeLessThanOrEqual(650);
+  });
+
+  // Finding 1: model_access is a per-PERSON fact, independent of the
+  // deployment-wide llm_ready check the other cases in this describe cover.
+  // This daemon declares no per-user roster (scripts/e2e-backend.sh), so the
+  // state is faked at the wire the same way the height case above fakes
+  // credential_residency — the LIVE proof against a real captured/lapsed
+  // session is e2e-sso-path's case A(rail)+.
+  test("a not_configured claude-code row states the rail's own sign-in, and a Launch 422 shows the server's sentence", async ({
+    page,
+  }) => {
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      body.model_access = { state: "not_configured", action: AGENTS.SIGN_IN_AWS };
+      body.harnesses = (body.harnesses ?? []).map((h: { id: string }) =>
+        h.id === "claude-code"
+          ? { ...h, enabled: true, mechanism: "bedrock_sso", credential_source: "per_user" }
+          : h,
+      );
+      await route.fulfill({ response, json: body });
+    });
+    // The exact refusal is dispatch's own (llmMechanismRefusal) — this pins the
+    // WIRING (create's 422 lands untruncated in the rail, launch.error), not
+    // the server's wording, which the door/dispatch lanes own.
+    const refusal = "this deployment gives each person their own AWS sign-in; sign in before launching.";
+    await page.route("**/api/v1/runs", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      await route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ error: refusal }) });
+    });
+
+    await openNewRun(page);
+    await expect(page.getByText(RAIL_MODEL_ACCESS.NOT_SIGNED_IN)).toBeVisible();
+    await expect(page.getByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeVisible();
+    // The distinct name (U-13): the strip's/Getting Started's own control is
+    // never reached from the rail. `exact: true` matters here — Playwright's
+    // getByRole name match is substring by default, and the rail's own
+    // accessible name ("Sign in to AWS — from the New Run rail") CONTAINS this
+    // string, which would otherwise pass for the wrong reason.
+    await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true })).toHaveCount(0);
+
+    await page.getByLabel("Title").fill("e2e model access refusal");
+    await page.getByRole("button", { name: "Launch run" }).click();
+    await expect(page.getByText(refusal)).toBeVisible();
   });
 });

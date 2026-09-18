@@ -17,6 +17,7 @@
 // /healthz makes no promise either way (F3).
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
 // undefined = /healthz has not answered (or carried no recording component).
@@ -30,7 +31,18 @@ vi.mock("../../../lib/api/health", () => ({
 
 import { RunRail } from "./new-run-rail";
 import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE } from "../../wardyn/copy";
-import type { ModelCredential, PreflightResult, SetupHarnessTool } from "../../../lib/types";
+import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
+import { ModelAccessProvider, useModelAccessDoor } from "../../wardyn/model-access-context";
+import { OperatorProvider } from "../../wardyn/operator-context";
+import { AGENTS } from "../../../lib/workspace-providers-copy";
+import { baseStatus } from "../../../lib/test-fixtures";
+import type { ReactNode } from "react";
+import type {
+  ModelCredential,
+  PreflightResult,
+  SetupHarnessTool,
+  SetupModelAccess,
+} from "../../../lib/types";
 
 // U-15: through the constant, never a fourth typed copy of the sentence.
 const RECORDING_ON = RAIL_RECORDING_ON;
@@ -58,30 +70,63 @@ function renderRail(props: {
   agentRow?: SetupHarnessTool;
   preflightResult?: PreflightResult;
   showModelWarning?: boolean;
+  /** Undefined (the default) mounts NO <ModelAccessProvider> at all — the
+   *  fail-open contract every one of the ~15 pre-existing cases below relies
+   *  on. Pass a value to grade a door for the rail's own tests. */
+  modelAccess?: SetupModelAccess;
+  operator?: boolean;
+  onLaunch?: () => void;
+  launchError?: string | null;
+  /** Mounted as a sibling INSIDE the same ModelAccessProvider — a test-only
+   *  stand-in for a surface elsewhere in the shell that can close the shared
+   *  door (the real dialog lives in model-access-banner.tsx, out of this
+   *  lane's files). */
+  extra?: ReactNode;
 }) {
+  const rail = (
+    <RunRail
+      cc="CC1"
+      showModelWarning={props.showModelWarning ?? false}
+      startup="It starts."
+      showHoldNote={false}
+      toolRules={null}
+      launch={{
+        onLaunch: props.onLaunch ?? (() => {}),
+        disabled: false,
+        spinning: false,
+        inFlight: false,
+        problem: null,
+        error: props.launchError ?? null,
+        warnings: [],
+        onOpenRun: null,
+      }}
+      preflight={{ error: null, result: props.preflightResult ?? null }}
+      agentRow={props.agentRow}
+    />
+  );
+  if (props.modelAccess === undefined) {
+    return render(<MemoryRouter>{rail}</MemoryRouter>);
+  }
+  const status = baseStatus({
+    model_access: props.modelAccess,
+    harnesses: props.agentRow ? [props.agentRow] : [],
+  });
   return render(
     <MemoryRouter>
-      <RunRail
-        cc="CC1"
-        showModelWarning={props.showModelWarning ?? false}
-        startup="It starts."
-        showHoldNote={false}
-        toolRules={null}
-        launch={{
-          onLaunch: () => {},
-          disabled: false,
-          spinning: false,
-          inFlight: false,
-          problem: null,
-          error: null,
-          warnings: [],
-          onOpenRun: null,
-        }}
-        preflight={{ error: null, result: props.preflightResult ?? null }}
-        agentRow={props.agentRow}
-      />
+      <ModelAccessProvider status={status} onRefresh={() => {}}>
+        <OperatorProvider operator={!!props.operator} securityOperator={!!props.operator} principal="p@corp.example">
+          {props.extra}
+          {rail}
+        </OperatorProvider>
+      </ModelAccessProvider>
     </MemoryRouter>,
   );
+}
+
+// The claude-code per_user row model_access grades — used by the Finding-1
+// cases below, which read the DOOR rather than only the roster row.
+function modelAccessRow(overrides: Partial<SetupHarnessTool> = {}): SetupHarnessTool {
+  return { ...harnessRow(), ...overrides };
 }
 
 // THE SIX SENTENCES, each keyed on what PREFLIGHT resolved. `mechanism` here is
@@ -259,5 +304,150 @@ describe("New run rail — the two facts it used to assert (Appendix A finding 1
     // as a section that failed to load, on a rail read as a list of what the run
     // can do. Credentials already withholds its own heading the same way.
     expect(screen.queryByText("Recording")).toBeNull();
+  });
+});
+
+// Finding 1 (Appendix A / plan lane ui-new-run-model-access): llmReady is a
+// DEPLOYMENT fact, true the moment an admin saves a per_user roster row — so
+// the warning above never reached the member who had not signed in. The rail
+// now reads the shared model-access door for the claude-code row and states
+// which per-person state the launcher is in, in the server's own words.
+//
+// A test-only sibling that closes the shared door — the real dialog lives in
+// model-access-banner.tsx (the door lane's file, out of scope here).
+function DoorCloser() {
+  const door = useModelAccessDoor();
+  return (
+    <button type="button" onClick={door.closeDoor}>
+      close door (test only)
+    </button>
+  );
+}
+
+describe("Finding 1 — the rail states WHO needs to sign in, not just whether a provider is connected", () => {
+  it("not_configured states the person is not signed in and the server's action verbatim", async () => {
+    renderRail({
+      agentRow: modelAccessRow(),
+      modelAccess: { state: "not_configured", action: AGENTS.SIGN_IN_AWS },
+    });
+    expect(await screen.findByText(RAIL_MODEL_ACCESS.NOT_SIGNED_IN)).toBeInTheDocument();
+    // The server's action here is byte-identical to the button's own label, so
+    // it must not be printed a second time as prose (S1) — exactly one control
+    // carries that name.
+    expect(screen.getAllByText(AGENTS.SIGN_IN_AWS)).toHaveLength(1);
+  });
+
+  it("renders the rail's OWN sign-in control under a DISTINCT accessible name, hidden while the door is open", async () => {
+    renderRail({
+      agentRow: modelAccessRow(),
+      modelAccess: { state: "not_configured", action: AGENTS.SIGN_IN_AWS },
+    });
+    // The two names never collide: this getByRole must not match the rail's
+    // own control.
+    expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeNull();
+    const signIn = screen.getByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA });
+    await userEvent.click(signIn);
+    // Opening the door hides the rail's own control — never a live control
+    // pointing at a dialog that is already on screen.
+    expect(screen.queryByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeNull();
+  });
+
+  it("expiring renders the deadline line, and the run is never called refused", () => {
+    const deadline = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+    renderRail({
+      agentRow: modelAccessRow(),
+      modelAccess: { state: "expiring", action: `Sign in again before ${deadline}`, deadline },
+    });
+    expect(screen.getByText(/^Your AWS sign-in lapses in /)).toBeInTheDocument();
+    expect(screen.queryByText(/refused/i)).toBeNull();
+    // No separate door.action line for `expiring` — the deadline is already IN
+    // the sentence (S1 / W0-mock ruling 1; the lane's own state table said
+    // "+ action", which the ruling names stale).
+    expect(screen.queryByText(`Sign in again before ${deadline}`)).toBeNull();
+  });
+
+  it("a member's shared_expired states the admin's action and offers no CTA", () => {
+    const action = "Your admin's model credential expired — ask them to reconnect it";
+    renderRail({
+      agentRow: modelAccessRow({ credential_source: "shared" }),
+      modelAccess: { state: "shared_expired", action },
+    });
+    expect(screen.getByText(RAIL_MODEL_ACCESS.SHARED_EXPIRED)).toBeInTheDocument();
+    expect(screen.getByText(action)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeNull();
+  });
+
+  // CODEX-ROW NEGATIVE. model_access grades the claude-code row alone
+  // (internal/api/modelaccess.go's modelAccessAgent) — a different selected
+  // agent renders nothing whatever the door says.
+  it("a codex row with an actionable claude-code model_access renders nothing", () => {
+    renderRail({
+      agentRow: { ...modelAccessRow(), id: "codex", display: "Codex" },
+      modelAccess: { state: "not_configured", action: AGENTS.SIGN_IN_AWS },
+    });
+    expect(screen.queryByText(RAIL_MODEL_ACCESS.NOT_SIGNED_IN)).toBeNull();
+    expect(screen.queryByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeNull();
+  });
+
+  // LIVE BYTE-IDENTICAL. A graded door that needs no attention must not change
+  // one byte of what the rail renders today.
+  it("model_access live leaves today's rail byte-identical", () => {
+    const withoutDoor = renderRail({ agentRow: harnessRow("sandbox") });
+    const withLiveDoor = renderRail({
+      agentRow: harnessRow("sandbox"),
+      modelAccess: { state: "live" },
+    });
+    expect(withLiveDoor.container.innerHTML).toBe(withoutDoor.container.innerHTML);
+  });
+
+  // THE FAIL-OPEN CONTRACT. With no <ModelAccessProvider> above (every one of
+  // the ~15 pre-existing cases in this file), the rail must render exactly
+  // today's output — proven directly here rather than only by inference.
+  it("with no ModelAccessProvider above, the rail offers no model-access line or control", () => {
+    renderRail({ agentRow: harnessRow() });
+    expect(screen.queryByText(RAIL_MODEL_ACCESS.NOT_SIGNED_IN)).toBeNull();
+    expect(screen.queryByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeNull();
+  });
+
+  // A non-operator's shared_expired needsAttention but is NOT actionable
+  // (MODEL_ACCESS_ACTIONABLE excludes it; the door's shared_expired arm is
+  // audience-aware) — so no CTA is offered even though the line renders.
+  it("an operator's shared_expired IS actionable and offers the working repair path", () => {
+    renderRail({
+      agentRow: modelAccessRow({ credential_source: "shared" }),
+      modelAccess: { state: "shared_expired", action: "Your admin's model credential expired — ask them to reconnect it" },
+      operator: true,
+    });
+    expect(screen.getByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeInTheDocument();
+  });
+
+  // Focus discipline (round-2 nit): opening the dialog from the rail's OWN
+  // control returns focus to Launch when it closes — never to #main-content,
+  // which would drop the launcher at the top of the form they were mid-way
+  // through.
+  it("focus returns to Launch when the dialog opened from the rail's own control closes", async () => {
+    renderRail({
+      agentRow: modelAccessRow(),
+      modelAccess: { state: "not_configured", action: AGENTS.SIGN_IN_AWS },
+      extra: <DoorCloser />,
+    });
+    await userEvent.click(screen.getByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA }));
+    await userEvent.click(screen.getByRole("button", { name: "close door (test only)" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Launch run" })).toHaveFocus());
+  });
+
+  // NEGATIVE: a door someone ELSE opened (the rail never claimed it and never
+  // rendered its own control here — showModelAccess false) must not steal
+  // focus to Launch when it closes.
+  it("does not move focus when the door was never opened from this rail", async () => {
+    renderRail({
+      agentRow: harnessRow(),
+      modelAccess: { state: "live" },
+      extra: <DoorCloser />,
+    });
+    const launch = screen.getByRole("button", { name: "Launch run" });
+    launch.blur();
+    await userEvent.click(screen.getByRole("button", { name: "close door (test only)" }));
+    expect(launch).not.toHaveFocus();
   });
 });
