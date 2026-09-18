@@ -647,9 +647,15 @@ eight are unconditional below; the eighth ships behind a kill switch.
   (finding 8), `WARDYN_DAEMON_PROXY_URL`, that does not share `HTTPS_PROXY`'s
   process-wide blast radius into the Kubernetes client's own API access.
 - **A mid-run AWS SSO credential lapse holds the run instead of killing it**
-  (finding 4) — the one finding shipped behind a kill switch
-  (`WARDYN_AWS_SSO_PROXY_INJECT`, off by default), pending a docker-gated
-  SDK-tolerance measurement and a dedicated security round on the release tip.
+  (finding 4) — the SSO access token is no longer written into the sandbox on
+  that lane; the proxy injects it on the wire instead, and a lapsed session
+  parks the sandbox's next credential exchange (bounded by
+  `WARDYN_CREDENTIAL_REAUTH_TIMEOUT`, default 600 s) while its owner signs in
+  again, then resumes the SAME run. The measured tolerance of the reference
+  agent's own SDK — at least eleven minutes, unbounded by the test's own
+  budget — comfortably outlasts that hold, so 600 s stands. Shipped **on by
+  default**; the kill switch `WARDYN_AWS_SSO_PROXY_INJECT=off` is the
+  rollback, pending W4's docker-gated resume proof on the release tip.
 
 What did **not** close this release, and what was deliberately deferred to
 0.7.7 — see the CHANGELOG's "Known gaps" for the full statement of each: the

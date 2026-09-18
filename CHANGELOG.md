@@ -119,6 +119,10 @@ kill switch, sequenced last — see Known gaps.
   who could repair their own captured session to the one page that will not let them. Under a
   `shared` row the Settings destination stays (it is the admin's own door), and the arm where nothing
   ever credentialed the run drops "again".
+- The captured-AWS-SSO egress allowlist now carries the test endpoint override's **port** beside its
+  bare host. Only the injecting lane reads it; a bare entry already matched any port, so nothing is
+  newly reachable. Without it the cleartext kind-walk lane was allowlisted, MITM-less and silently
+  UNCREDENTIALED — the SDK saw the fake's own 401 and nothing in the proxy said why.
 
 ### Retired (from 0.7.5's Known gaps)
 
@@ -135,8 +139,54 @@ kill switch, sequenced last — see Known gaps.
 ### Known gaps
 
 - **Finding 4 (a mid-run credential lapse holding the run instead of killing it) ships behind
-  `WARDYN_AWS_SSO_PROXY_INJECT`**, off by default pending the docker-gated SDK-tolerance measurement
-  and the dedicated security round on the release tip. The flag exists and is the rollback either way.
+  `WARDYN_AWS_SSO_PROXY_INJECT`, on by default**; the kill switch `WARDYN_AWS_SSO_PROXY_INJECT=off`
+  is the rollback, restoring the 0.7.5 behaviour for new dispatches. A docker-gated measurement
+  against the reference agent's own SDK found it still waiting on a parked credential exchange at
+  eleven minutes — the test's own ceiling, not the SDK's — so the 600 s default hold is the binding
+  constraint, not the SDK; the docker-gated resume test
+  (`TestDocker_TheSameRunResumesWhenTheHoldReleases`) is written and runs in W4 on the release tip.
+- **A PENDING `credential_reauth` row is not proof a model call is still parked.** The row outlives
+  the hold on purpose (the sign-in is still wanted), so it survives a hold that timed out, an SDK
+  that disconnected and a final resolve that refused a roster drift. The console's copy says only
+  what the row proves; the audit trail (`credential.reauth.requested` / `.resolved`, and the
+  `credential:reauth-timeout` decision row) is what distinguishes the three.
+- **The sign-in supersede race is wider now, and still open.** A visible re-auth door (the
+  model-access banner mounts outside the router and can raise a sign-in mid-run, from any page) makes
+  concurrent sign-ins likelier. 0.7.5's `run_killed` refusal inside the owner lock already makes a
+  late capture lose whenever a pass saw both sign-ins. It does not cover the case where the two rows'
+  timestamp order and insert order disagree: there neither run is KILLED, both stay live, and the
+  later of the two uploads wins regardless of which sign-in is newer. The per-person advisory lock
+  stays 0.7.7 (O-1).
+- **A sign-in started from the Settings, Agents or Getting Started pane and then navigated away
+  from, or whose browser tab is closed, leaves its login sandbox running to the 30-minute idle cap;
+  the capture itself still lands.** The sign-in opened from the model-access strip is unaffected —
+  its pane outlives a route change and ends the sandbox once the server confirms the capture. There
+  is no CLI sign-in path.
+- **The stale-capture guard (I6) compares two clocks.** A re-auth request's `requested_at` is
+  stamped on wardynd's clock; a login run's `created_at` is normalised to Postgres's. A database
+  clock running ahead therefore admits a sign-in started up to that skew before the request was
+  raised. Both clocks are on the same deployment (the skew is NTP drift, not an attacker input) and
+  the case needs a login sandbox already alive under the same principal, so the window is narrow —
+  but it is real, and closing it means re-timing `approvals.requested_at` for every kind, a
+  shared-column change and not this lane's to make. 0.7.7.
+- **A sticky terminal hold still costs one control-plane resolve per retry.** Once a hold has ended,
+  the sidecar cannot know which approval id a later 423 names without asking, so each post-expiry
+  retry makes one injection resolve — a broker mint and a `credential.mint` audit row — before the
+  coordinator hands it the terminal result at once. What the hold removes is the second WAIT, the
+  second counted workflow and the repeated decision row, not the round trip. Inherent to the design
+  and accepted.
+- **`wardyn_credential_reauth_total{outcome="cancelled"}` can overcount by one.** The run-kill cascade
+  counts this run's still-PENDING re-auth rows just before cancelling them, because after the cancel
+  there is nothing of the kind left pending to count. A row decided by its owner in that window is
+  counted as cancelled as well as resolved. Metric-only, needs a sign-in landing inside one cascade,
+  and closing it means a per-kind return from `CancelForRun`. 0.7.7.
+- **Masking has no TTL.** Each resolve registers the session token in the run's own mask set (evicted
+  for terminal runs past `RunSecretGrace`) and the renewal path keeps its global registration, which
+  has no expiry. Unchanged from 0.7.5, restated because this lane adds a registration site.
+- **The kind SSO walk's case K is a SIMULATED check of the plaintext lane.** The walk runs the AWS
+  SSO fake over plain HTTP, so the injection rides the cleartext path and the timeout's 401 body does
+  not reach the SDK there. The production-shaped path — TLS CONNECT → MITM → header injection → CA
+  trust → the timeout body — is proven by the docker-gated test, whose fake serves TLS.
 - A member under a dead SHARED model credential is told, and has nothing to do about it: Wardyn
   offers no way to notify the admin from that strip. The sentence names the admin because they are
   the only repair; "Not now" is the only control the member gets.
@@ -167,7 +217,8 @@ kill switch, sequenced last — see Known gaps.
   outright, because `ensureImage` has just proved the host does not have it.
 - **Carried forward from 0.7.5, still open (O-1: not bundled into 0.7.6, moved to 0.7.7):**
   - a per-person advisory lock closing the sign-in supersede race that, rarely, leaves two live
-    sandboxes;
+    sandboxes (see the corrected statement above — the residual is wider than 0.7.5's own bullet
+    described);
   - a third Kubernetes cache volume (or `GOCACHE`/`GOTMPDIR`/`GOPATH`/npm cache pointed under the
     metered workdir) closing the autonomous-run `disk_mib` residual;
   - the admin-tier and run-token 5xx driver-text sweep (none of the sites is member-reachable).
