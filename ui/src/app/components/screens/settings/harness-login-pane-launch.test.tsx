@@ -387,6 +387,49 @@ describe("the verification tab opens on the click (Finding 7a)", () => {
     expect(screen.getByTestId("auth-tab-blocked-note")).toBeInTheDocument();
   });
 
+  // W6-U SHOULD-2 — the two `stuck` arms returned early and left the
+  // placeholder tab open. That tab was FOREGROUNDED by the click and reads
+  // "this page changes to your provider's sign-in page by itself… if nothing
+  // happens, go back there" — on the one start that never will, with the error
+  // sitting on the tab behind it. The CHANGELOG's "Wardyn closes it while it is
+  // still the placeholder (Cancel, an error, a completed sign-in)" was false
+  // for exactly these two.
+  it.each([["STARTING"], ["FAILED"]] as const)(
+    "a %s run stuck on a terminal reason closes the placeholder tab with the error",
+    async (state) => {
+      harnessLoginMock.mockResolvedValue("run-123");
+      vi.mocked(runsApiMocked.getRun).mockResolvedValue({
+        id: "run-123",
+        state,
+        status_detail: "agent: ImagePullBackOff: rpc error: code = Unknown desc = pull access denied",
+        status_reason: "ImagePullBackOff",
+        failure_hint:
+          state === "FAILED"
+            ? "the sandbox could not be created: agent container stuck waiting (ImagePullBackOff): denied"
+            : undefined,
+      } as AgentRun);
+      render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+      await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+      expect(await screen.findByRole("alert")).toHaveTextContent(LOGIN_SANDBOX_STUCK_LEAD_IN);
+      // Exactly once: the arm returns, so the poll cannot close it again.
+      expect(fakeWindow.close).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  // The negative control: the generic FAILED arm already closed it, and still does.
+  it("an ordinary FAILED run (no terminal reason) still closes the tab", async () => {
+    harnessLoginMock.mockResolvedValue("run-123");
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue({
+      id: "run-123",
+      state: "FAILED",
+      failure_hint: "boom",
+    } as AgentRun);
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    await screen.findByRole("alert");
+    expect(fakeWindow.close).toHaveBeenCalled();
+  });
+
   it("Cancel closes the tab", async () => {
     harnessLoginMock.mockResolvedValue("run-123");
     render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);

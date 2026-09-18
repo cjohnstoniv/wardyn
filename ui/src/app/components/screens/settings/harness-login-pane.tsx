@@ -398,6 +398,11 @@ function startingSentenceOf(run: AgentRun | undefined): string {
       setStuck(true);
       setError(`${LOGIN_SANDBOX_STUCK_LEAD_IN} ${startingSentenceOf(run)}`);
       setPhase("error");
+      // The placeholder tab was FOREGROUNDED by the click and reads "this page
+      // changes to your provider's sign-in page by itself" — on the one start
+      // that never will. Every other exit from the wait closes it; this arm
+      // returned early and left it open with the error on the tab behind it.
+      closeAuthTab();
       return;
     }
     if (verdict !== waitNoteRef.current) {
@@ -418,6 +423,7 @@ function startingSentenceOf(run: AgentRun | undefined): string {
         setStuck(true);
         setError(`${LOGIN_SANDBOX_STUCK_LEAD_IN} ${startingSentenceOf(run)}`);
         setPhase("error");
+        closeAuthTab(); // same reason as the STARTING arm above
         return;
       }
       // The run's OWN sentence when it has one (D9's failure_hint covers the
