@@ -517,8 +517,8 @@ func TestSetupModelAccess_SpentGradesExpiringWithCause(t *testing.T) {
 	if !shown {
 		t.Fatal("the AWS row must be shown for a captured session")
 	}
-	if !strings.Contains(row.Detail, "retired by AWS") {
-		t.Errorf("admin row detail = %q, want the renewal-spent sentence", row.Detail)
+	if want := fmt.Sprintf(harnessCredentialAWSRenewalSpentDetail, wantDeadline); row.Detail != want {
+		t.Errorf("admin row detail = %q, want the renewal-spent sentence through the constant: %q", row.Detail, want)
 	}
 	if !strings.Contains(row.Detail, wantDeadline) {
 		t.Errorf("admin row detail = %q, does not name the graded deadline", row.Detail)
@@ -1148,7 +1148,7 @@ func TestAWSSSOCredentialRow_NamesTheGradedDeadline(t *testing.T) {
 	if !shown {
 		t.Fatal("the AWS row must be shown for a captured session")
 	}
-	if strings.Contains(row.Detail, "retired by AWS") {
+	if renewalSpentPrefix := strings.SplitN(harnessCredentialAWSRenewalSpentDetail, "%s", 2)[0]; strings.HasPrefix(row.Detail, renewalSpentPrefix) {
 		t.Errorf("admin row detail = %q, must NOT use the renewal-spent sentence for a registration lapsing on schedule", row.Detail)
 	}
 	wantDeadline := blob.RegistrationExpiresAt.UTC().Format(time.RFC3339)
