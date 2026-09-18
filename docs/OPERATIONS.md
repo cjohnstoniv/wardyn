@@ -630,7 +630,19 @@ dropped (buffer overflow or retry exhaustion) even though Postgres — the
 primary — still got the row; non-zero means SIEM-side loss only, not a gap in
 the append-only trail itself. `wardyn_drive_refusals_total{reason}` counts
 runs refused their user drive, by reason — a signal for the drive-claim
-allocator, not the audit pipeline.
+allocator, not the audit pipeline. `wardyn_sso_refresh_total{outcome}` counts
+control-plane AWS SSO `CreateToken` renewal attempts (`awssso_refresh.go`), by
+`success` / `spent` / `transport_error` / `unavailable` — the same distinction
+the `harness.credential.refresh` audit row's `spent` field and expiry check
+already make, graphable without grepping the audit trail. `spent` increments
+ONCE per refresh token AWS retires, at the CreateToken call that discovers it
+(the `invalid_grant`/`expired_token`/`invalid_client`/`unauthorized_client`
+codes); every later dispatch on that same token exits at an earlier,
+UNCOUNTED short-circuit (the in-memory dead-mark check, before CreateToken is
+ever called again), so the series reads "how many distinct sessions AWS
+retired," not "how many times people hit a dead one." A climbing
+`transport_error`/`unavailable` series is the SSO-OIDC endpoint itself in
+trouble.
 
 The eBPF ground-truth sensor's cumulative counts scrape here too —
 `wardyn_groundtruth_observed_total`, `wardyn_groundtruth_dropped_total`,
@@ -2850,6 +2862,44 @@ leave whichever hop takes it. That is why the bottom-right cell — bypass AND
 lift — is the working private-endpoint configuration, and why the recipes below
 set both fields.
 
+### wardynd behind a corporate proxy
+
+Everything above this point in this section — `upstream_proxy_url`, `upstream_proxy_no_proxy`,
+`SiteConfig` — is the **sandbox's** egress hop: it governs what a run's own outbound traffic sees,
+compiled into the `wardyn-proxy` sidecar's config at dispatch. It has nothing to do with **wardynd's
+own** outbound calls: OIDC discovery/JWKS at boot, the audit webhook sink, GitHub App token minting,
+AWS SSO `CreateToken` renewal, and Entra directory sync. Those five calls all ride the process's shared
+`http.DefaultTransport`, and Go's `net/http` honors the standard `HTTP_PROXY` / `HTTPS_PROXY` /
+`NO_PROXY` variables **process-wide** — including inside the Kubernetes client, so a mistyped
+`NO_PROXY` on a k8s deployment can take the control plane's own API access down with it. That is why
+those three variables are documented as unsupported for wardynd's runtime environment (see `docs/ENV.md`'s
+`HTTP_PROXY` row) rather than a supported knob.
+
+`WARDYN_DAEMON_PROXY_URL` (+ `WARDYN_DAEMON_NO_PROXY`) is the supported, scoped replacement: it sets
+`http.DefaultTransport.Proxy` directly at boot (`installDaemonProxy`, beside the same-shaped
+`WARDYN_TRUSTED_CA_FILE` trust-tier knob), so it reaches exactly wardynd's five outbound consumers above
+and nothing else — the Kubernetes client builds its own transport (unaffected) and the Docker client
+speaks a unix socket (unaffected). Unset leaves the transport untouched, byte-identical to today
+(`ProxyFromEnvironment` still applies if you set the standard variables yourself — unsupported, not
+rejected).
+
+**The bypass list defends itself.** Wardynd auto-appends three hosts to `WARDYN_DAEMON_NO_PROXY` before
+applying it, because getting this wrong is exactly the outage this knob exists to prevent:
+`KUBERNETES_SERVICE_HOST` (the in-cluster API server address), the `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE`
+host when one is configured (a kind Service in a test walk must never be dialed through a corporate
+proxy), and the `WARDYN_OIDC_INTERNAL_ISSUER` host when one is configured (a cluster-internal issuer
+wardynd itself dials at boot, before SiteConfig or any other runtime read exists). Every boot that sets
+a proxy logs one line naming the proxy host (never any embedded
+credential — `WARDYN_DAEMON_PROXY_URL` refuses to start if the URL carries `user:pass@`) and the
+effective bypass list:
+
+```
+grep 'daemon egress proxy configured' <logs>
+```
+
+A malformed `WARDYN_DAEMON_PROXY_URL` (not `http://`/`https://`, no host, or an embedded credential)
+refuses boot rather than silently falling back to direct — same posture as `WARDYN_TRUSTED_CA_FILE`.
+
 ### Corporate TLS-inspection root
 
 A TLS-inspecting upstream proxy — one that terminates and re-signs TLS with its
@@ -3195,7 +3245,11 @@ tries. Anyone with a WRITABLE attach can answer — the console's sign-in pane,
 `wardyn attach`, an SSH attach, or the Runs list when they hold the terminal.
 A read-only viewer cannot; the prompt itself has no deadline, so it waits until
 a writable attach answers or the sandbox's own 30-minute idle cap ends the run.
-Pin the account and the role on the roster row and the question never comes up.
+Pin the account and the role on the roster row and the question never comes up. While the sandbox
+waits on the answer, the sign-in panel's own copy already narrates the sign-in as done
+(`CAPTURE_HANDOFF`) — the browser step finished — so the person reads "click or tab into the
+terminal, type the number, press Enter" rather than a claim that Wardyn is still waiting on them
+externally.
 
 **Signing in from Getting Started is still the path to prefer** — it watches for
 the helper's success marker, corroborates the capture with the server, and shuts
@@ -3453,7 +3507,9 @@ The pane polls the run while the sandbox comes up and says which of four states 
 | On screen | What Wardyn knows |
 |---|---|
 | "Starting the sign-in sandbox…" | Reads are healthy, OR have been failing for under 10 seconds (a blip); the sandbox is not up yet; less than a minute has passed since launch. |
-| "Still starting — Wardyn can read the sign-in sandbox, it just isn't up yet…" | Reads are healthy, past a minute since launch. Usually a first image pull on this node. Nothing on this path can *prove* a pull is what it is waiting on, which is why the sentence is hedged. |
+| "Still starting — Wardyn can read the sign-in sandbox, it just isn't up yet…" | Reads are healthy, past a minute since launch, and the run carries no `status_detail` (a pre-0.7.6 daemon, or a Docker warm image with nothing to report). Nothing on this path can *prove* a pull is what it is waiting on, which is why the sentence is hedged. |
+| the substrate's own reason (e.g. "Waiting for a machine with room for this sandbox.", "Downloading the image…") | Reads are healthy and the run's `status_detail` names a non-terminal reason ("What a starting run is waiting on", above) — since 0.7.6 this REPLACES the generic "Still starting" hedge; the clock budget is unchanged, only the sentence is more honest. |
+| the substrate's own reason, Cancel only, no clock | `status_detail`'s reason is TERMINAL (`ImagePullBackOff`, `CrashLoopBackOff`, …) — the wait ends in seconds, not after five minutes, because trying again gets the same answer until the cluster or the image changes. |
 | "Wardyn can't read the sign-in sandbox right now — still trying…" | The console's reads of the run have been failing for at least 10 seconds (a daemon restart, an ingress 5xx, a roster edit that made the read a 403). The sandbox itself may be perfectly fine. |
 | "Wardyn stopped being able to read the sign-in sandbox…" | Reads have been failing for at least five minutes AND at least 15 consecutive polls. The wait ends; the run id is kept, so Cancel still tears the sandbox down. |
 
@@ -3461,23 +3517,82 @@ The wait is graded on BOTH the clock and a poll-count floor, not on poll ticks a
 (five minutes of failing reads) says the outage is real, and the 15-failure floor — kept from the
 old tick budget — says it is not one hidden-tab poll pretending to be one (a backgrounded tab skips
 ticks entirely, so a single failed read after ten minutes away must not immediately read as
-unreadable). A healthy wait is never ended by the pane, however long the pull takes — what bounds
-it is the server, below.
+unreadable). A healthy wait with no reason to report is never ended by the pane, however long the
+pull takes; a healthy wait carrying a TERMINAL reason ends on the reason instead — what otherwise
+bounds it is the server, below.
 
-### The two server bounds a slow registry hits, and what to do about them
+### What a starting run is waiting on
+
+A run sits in `STARTING` for the whole of `CreateSandbox` — there is no sandbox reference until it
+returns, so nothing outside the runner could previously be asked what the substrate was doing. Since
+0.7.6 the runner reports it while it waits: every poll of the proxy pod and of the agent pod computes
+one line and, when that line CHANGES, writes it to `agent_runs.status_detail` (migration
+`0063_agent_runs_status_detail`). The console renders it on the run header, on the Runs board row and
+in the sign-in pane (below).
+
+The line is the substrate's own words, in the shape `<component>: <Reason>[: <message>]`:
+
+| line | what it means | does waiting fix it? |
+|---|---|---|
+| `agent: ContainerCreating` | the kubelet has the pod and is getting a container ready — which includes pulling the image | yes |
+| `agent: PodInitializing` | as above, init containers | yes |
+| `pod: Unschedulable: <scheduler's message>` | no node will take the pod (a taint, a full cluster, an unbound claim) — read the message | yes, if the cluster changes |
+| `pod: Pending` | the pod exists and nothing has claimed it yet | yes |
+| `image: Pulling: <ref>` | **Docker substrate only** — the host does not have this image and is downloading it now | yes |
+| `agent: ImagePullBackOff: <registry's message>` | the registry refused or the tag does not exist | **no** |
+| `agent: ErrImagePull: <registry's message>` | as above, first failure | **no** |
+| `agent: InvalidImageName: <message>` | the reference does not parse | **no** |
+| `agent: CreateContainerError: <message>` | the image exists; the kubelet would not make a container from it | **no** |
+| `agent: CreateContainerConfigError: <message>` | usually a missing Secret or ConfigMap key | **no** |
+| `agent: CrashLoopBackOff: <message>` | the container starts and exits, repeatedly | **no** |
+
+The six "no" reasons are terminal: the sign-in pane ends its wait on them in seconds rather than
+after five minutes, and offers only Cancel, because trying again gets the same answer until somebody
+changes the cluster or the image. They are the list in `internal/runner/waiting.go`
+(`TerminalWaitingReasons`), which the Kubernetes poll loops, the control plane's read projection and
+the console's mirror all read from.
+
+`status_detail` is display-only, never interpreted, and never cleared by a write: the API blanks it
+at READ for any run that is not `STARTING` — except a run that FAILED on one of the terminal reasons,
+where the reason IS the failure. The last reason therefore survives on the row for a `SELECT`
+postmortem without the console ever narrating a finished run's old wait. A run read from a pre-0.7.6
+daemon, or a run that started before this upgrade, simply carries no reason.
+
+### The two real bounds on a slow start
 
 The pane will wait; the **runner** will not wait forever, and those are the bounds an operator has to
 size:
 
-- `canaryWaitTimeout` = **3 minutes** (`internal/runner/k8s/canary.go`) bounds the wait for the
-  sandbox container to be running. A first pull of the `aws-sso` image was measured at **131 seconds**
+- `podIPWaitTimeout` = **90 seconds** (`internal/runner/k8s/canary.go`) is a SCHEDULING bound, not a
+  pull bound. It bounds the wait for the PROXY pod's CNI-assigned IP, and the CNI assigns that at
+  PodSandbox creation, *before* any application image is pulled. A cold pull can therefore never trip
+  it; an unschedulable pod trips it every time, which is why `pod: Unschedulable: …` is the line an
+  operator most often sees just before this error.
+- `canaryWaitTimeout` = **3 minutes** (same file) is the agent image's PULL bound. It bounds the wait
+  for the agent pod's main container to reach Running, which is where a genuine first pull of an
+  arbitrary agent image is spent. A first pull of the `aws-sso` image was measured at **131 seconds**
   on a reporting estate — 73% of this budget.
-- `podIPWaitTimeout` = **90 seconds** (same file) is the second, tighter bound.
 
-Neither is configurable in 0.7.5 and neither was moved: they bound every Kubernetes run on every
-estate, and finding 6 was about what the console SAYS, not about how long the runner waits. A pull
-slower than them fails the run honestly — the run carries a `failure_hint` naming the deadline and
-the pod's Pending state, and the pane shows that sentence rather than a guess.
+Neither is configurable in 0.7.6 and neither was moved: they bound every Kubernetes run on every
+estate. A pull slower than them fails the run honestly — the run carries a `failure_hint` naming the
+deadline and the pod's Pending state, and the pane shows that sentence rather than a guess.
+
+**A first pull after an upgrade does not fail a run.** Every image tag changes at a version bump, so
+the first start on each node after an upgrade re-pulls; that is a two-minute wait, not a fault. On
+Kubernetes the sentence stays conditional — the kubelet reports `ContainerCreating` for a pull and for
+everything else it does before a container runs, and Wardyn does not read the Events API (below) — so
+the console says a first start *can* take a couple of minutes while the image downloads. Only the
+Docker substrate asserts a download outright, because `ensureImage` has just checked and the host does
+not have the image.
+
+**No chart change, and why.** The reason comes from `pods: get`, which the chart already grants.
+There is no new RBAC verb in 0.7.6 and none is wanted. A `Pulling` reason on Kubernetes lives in an
+Event, and granting `events: get,list` would — under `k8s.allowRunsInReleaseNamespace=true` — let
+Wardyn read every co-tenant workload's event stream in that namespace (a `fieldSelector` is a client
+convenience, not something RBAC can enforce). `deploy/helm/wardyn/templates/rbac.yaml` states this in
+its own header paragraph: *"the kubelet's eviction verdict comes back through pods: get … never the
+Events API, so no 'events' verb belongs here."* Read that paragraph before "fixing" the conditional
+wording by granting the verb.
 
 **The fix for a slow registry is to pre-pull, not to wait longer.** Get the agent and `aws-sso`
 images onto every node at upgrade time — a DaemonSet that pulls the new tags, or the node cache of
@@ -3668,6 +3783,56 @@ point of the walk, not a caveat on it:
 - **The device-code step is pre-approved.** The fake approves every device
   code permanently, so the walk never exercises a human being slow, a code
   expiring before anyone attaches, or a browser leg that fails.
+
+### Where people are told about model access
+
+From 0.7.6 an actionable model-access state reaches a person on every console screen, not only on
+Getting Started. The console reads `model_access` from `GET /setup/status` once per session and then
+every five minutes (a hidden tab skips its ticks and a returning one refreshes at once), and renders a
+banner for the three states a person can act on — `not_configured`, `expired_signin`, `expiring` —
+plus `shared_expired`, which a member cannot. The banner carries the sign-in itself: the same AWS SSO
+login pane Settings mounts, in a dialog, on whatever screen they were on.
+
+Two suppressions are deliberate. On Getting Started the page IS the door. On Settings and the
+Providers screen the banner is withheld for an ADMIN only, because those pages already mount the same
+pane for the same states; a member keeps the banner there, because the Settings card's AWS button is
+admin-only and would otherwise strand them on the page they were sent to.
+
+`not_configured` (the first-run state) and, for a non-admin, `shared_expired` carry a "Not now" that
+hides the banner for that person in that browser session. A lapse — `expired_signin` or `expiring` —
+cannot be dismissed.
+
+Under a `shared` row the one credential is the admin's, and a member whose runs depend on it is told
+when it dies ("Your admin's model credential expired — ask them to reconnect it") with no button,
+because nobody but an admin can repair it. The ADMIN reading the same state sees the blast radius
+named — "The shared AWS sign-in no longer works — every Claude Code run needs it" — and gets the
+sign-in, which is the path `authorizeHarnessLogin` has always admitted for an operator. Wardyn has no
+way for that member to notify the admin; that gap is listed in the CHANGELOG.
+
+### A run refused for a model credential
+
+When an `AgentProviders` row says HOW an agent reaches its model and the credential that lane needs is
+dead at dispatch, the run is failed with the server's own sentence — and from 0.7.6 that refusal is
+also machine-readable: the `run.create` failure row it already wrote carries `reason:
+model_credential` and the run's DECLARED `mechanism`. The console grades that ending `credential` and
+renders the sentence with the AWS sign-in beside it, in a dialog, on the run page.
+
+The button is offered only where a sign-in the reader can complete would repair the state: the
+refused run's declared lane must still be the deployment's Claude Code lane, the reader's own
+`model_access` must be actionable, and the reader must be the person who created the run — an admin
+reading somebody else's failed run is shown the sentence alone, because their sign-in repairs nothing
+for that run. A refusal whose renewal merely did not complete ("launch again in a moment") grades
+`live` and gets no button either, correctly: nothing is wrong with that credential.
+
+Signing in from there does not restart anything. The run stays FAILED; relaunch is the run header's
+"Start a run like this one".
+
+**The refusal sentences' destination.** The refusals that name a destination — the dispatch refusal,
+its create-time 422 twin, the stored-AWS-identity refusal and the spent-renewal sentence — now name a
+door the reader can open. Under a `per_user` row that is the console's Getting started page or the
+model-access banner every screen carries; under a `shared` row it stays Settings → Model provider,
+which is the admin's own page. The CLI prints the same sentence, and Getting started is the
+destination that is true for its reader too.
 
 ### Internal model gateway
 
