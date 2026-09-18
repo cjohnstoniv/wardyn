@@ -465,6 +465,8 @@ The kind quickstart (`deploy/kind/quickstart.sh`) and the kind SSO walk
 | `WARDYN_LIVE_SEEN_URL` | URL | `http://127.0.0.1:8390/_seen` | Set by the walk for `ui/e2e/live/sso-member.spec.ts` (the port-forward above); the spec asserts the member's pinned account/role and the healed pin against it |
 | `WARDYN_KIND_SSO_ADMIN_TOKEN` | string (credential) | (unset = mint a random one) | Admin bearer token the walk authenticates its own site-config PUT with |
 | `WARDYN_KIND_SSO_NODE` | string | `<cluster>-control-plane` | The kind NODE the walk hands to `ui/e2e/live/sso-member-recovery.spec.ts`, whose cold-start case taints it to hold a run pod in `Pending`. Override it only on a multi-node kind cluster |
+| `WARDYN_KIND_SSO_TOKEN_TTL` | duration | `12m` | The fake's `AWSSSOFAKE_TOKEN_TTL`, set via `kubectl set env` before the walk's hold cases (finding 4): how long a captured AWS SSO access token lives before the SDK's role-credential refresh re-resolves and can discover it dead. Short enough (relative to the stock 1-hour default) that case K's hold opens inside a runnable window instead of ~55 minutes in |
+| `WARDYN_KIND_SSO_ROLE_CRED_TTL` | duration | `3m` | The fake's `AWSSSOFAKE_ROLE_CRED_TTL`, set alongside the token TTL above: how long each `GetRoleCredentials` answer lasts, stamped per call. Short enough that a prompt typed after the window opens forces a fresh fetch (the only way the proxy's injector is reached at all), long enough that an ordinary turn does not spend itself re-fetching |
 
 The walk also EXPORTS `WARDYN_LIVE_ADMIN_TOKEN`, `WARDYN_LIVE_FAKE_URL`,
 `WARDYN_LIVE_PIN_ACCOUNT`, `WARDYN_LIVE_PIN_ROLE`, `WARDYN_LIVE_SSO_START_URL`,
