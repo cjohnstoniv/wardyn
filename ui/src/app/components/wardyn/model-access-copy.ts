@@ -141,11 +141,13 @@ export const REAUTH_ROW = {
 // claiming the run is paused (Codex #5) — this names the NEED.
 export const REAUTH_HEADING = "AWS sign-in needed — sign in to let this run's model calls through";
 
-// The board card's and the cockpit header's chip. It keeps the COUNT (round-2
-// UX S8): a count-free string would hide a co-pending egress approval, and the
-// person would sign in and watch the run sit there.
-export const waitingReauth = (n: number): string =>
-  n > 1 ? `Waiting for your AWS sign-in · ${n - 1} more waiting` : "Waiting for your AWS sign-in";
+// The board card's and the cockpit header's chip, RE-EXPORTED from a leaf
+// module. It is defined in lib/reauth-waiting-copy.ts because the Runs board
+// carries it and the board is on the EAGER graph, while everything else in this
+// file is lazy-side: defining it here put this module — and, through its AGENTS
+// import, lib/workspace-providers-copy.ts — into the entry chunk. The re-export
+// keeps ONE definition and keeps this file the place a reader looks.
+export { waitingReauth } from "../../lib/reauth-waiting-copy";
 
 // LiveApprovals' toast when a re-auth row leaves PENDING as APPROVED — the
 // person's only "it worked" moment, since the row vanishes on the next 4s poll.

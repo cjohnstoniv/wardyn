@@ -20,7 +20,7 @@
 import * as React from "react";
 import { ShieldAlert, Clock, Check, ChevronDown, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
-import { canDecideApproval, decisionArgs, type ApprovalRequest, type ApprovalScope } from "../../lib/types";
+import { canDecideApproval, decisionArgs, isHeld, type ApprovalRequest, type ApprovalScope } from "../../lib/types";
 import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST } from "./model-access-copy";
 import { useModelAccessDoor, useClaimModelAccessDoor } from "./model-access-context";
 import { approvals as api } from "../../lib/api/approvals";
@@ -41,6 +41,10 @@ import {
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { cn } from "../ui/utils";
 import { Mono } from "./code-block";
+
+// isHeld now lives in lib/types/approvals.ts (see its doc there for why);
+// re-exported so this module stays the place a reader of the strip looks.
+export { isHeld };
 import { Chip, SectionLabel } from "./primitives";
 import { useOperator, useSecurityOperator } from "./operator-context";
 import { attentionRank } from "./run-state-glyph";
@@ -79,40 +83,6 @@ interface DenyTarget {
 // policy's first_use_hold_seconds CAN override it (configureHold), so under
 // a longer hold this chip stops flagging at 30s; wire the policy value
 // through if anyone ships a policy that sets it.
-const HOLD_TIMEOUT_MS = 30_000;
-
-// A held request is one the sandbox is still parked on. TWO shapes reach that
-// state and only one of them carries a mode:
-//
-//  - tool_call — wardyn-toolgate blocks the agent's tool call on the PENDING
-//    row itself and polls until it is decided (cmd/wardyn-toolgate/main.go's
-//    -deadline is a 24h ceiling for a control plane that stopped answering,
-//    not a hold timeout), and the scope it raises is {tool,cmd,env} with no
-//    mode at all (internal/egress/proxy/local_routes.go). PENDING alone IS the
-//    hold here, so nothing client-side bounds it the way HOLD_TIMEOUT_MS
-//    bounds the egress case — the row's own server-side expiry ends it.
-//  - egress wait_for_review — the proxy carries the mode in the approval's
-//    requested_scope so the UI can flag it, but PENDING alone doesn't mean
-//    "still holding the sandbox": the connection fails closed at
-//    HOLD_TIMEOUT_MS while the approval row itself stays PENDING for up to 24h
-//    afterward (W20-hold-fsm-2).
-//
-// Exported because the run cockpit's command bar and the board's card state
-// the same fact ("N waiting · sandbox held"). Two copies of this test would be
-// two truths that can disagree, and the disagreement would read as "nothing is
-// holding the sandbox" while the sandbox is, in fact, held.
-export function isHeld(a: ApprovalRequest): boolean {
-  if (a.kind === "tool_call") return true;
-  // A credential_reauth row is raised BECAUSE the proxy is holding a request.
-  // It carries no first_use mode of its own — the mode vocabulary belongs to
-  // the egress lane — so without this it would read as a passive pending and
-  // the run would show no hold while a model call was parked.
-  if (a.kind === "credential_reauth") return true;
-  if (String((a.requested_scope?.mode as string) ?? "") !== "wait_for_review") return false;
-  const requestedAt = Date.parse(a.requested_at);
-  if (Number.isNaN(requestedAt)) return true; // unparseable timestamp — fail toward showing the hold
-  return Date.now() - requestedAt < HOLD_TIMEOUT_MS;
-}
 
 // rowLabel is the row's identity line: the host for an egress hold, the tool
 // and its command for a tool hold. The full string is the Mono title; clip()

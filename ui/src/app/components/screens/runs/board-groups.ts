@@ -12,7 +12,10 @@
 // parks the sandbox while the run is still RUNNING, so the state says nothing
 // about it — the signal comes from the PENDING approvals list, joined here.
 import type { AgentRun, ApprovalRequest } from "../../../lib/types";
-import { isHeld } from "../../wardyn/live-approvals";
+// THE PREDICATE, not the strip: importing it from live-approvals.tsx hoisted
+// that whole module (and everything it imports) into the eager entry chunk —
+// see isHeld's own doc in lib/types/approvals.ts.
+import { isHeld } from "../../../lib/types";
 import {
   attentionFor,
   attentionRank,

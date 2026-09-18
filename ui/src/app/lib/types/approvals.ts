@@ -103,3 +103,58 @@ export interface DecisionOptions {
 export function decisionArgs(scope: ApprovalScope, until?: string): [] | [DecisionOptions] {
   return scope === "run" ? [] : [{ scope, until }];
 }
+
+// ─── isHeld ──────────────────────────────────────────────────────────────────
+//
+// MOVED HERE from wardyn/live-approvals.tsx, which is the move that module's own
+// ponytail note asked for: "move isHeld into lib/types/approvals.ts beside
+// decisionArgs (which lives there for a comparable reason) and have both callers
+// import it from there."
+//
+// Why it finally had to happen: screens/runs/board-groups.ts is EAGER (the board
+// is the landing route and App.tsx's attention badge shares the rule) and it
+// imported this one predicate from live-approvals.tsx. Rollup assigns chunks per
+// MODULE, so that single import hoisted the WHOLE strip — and, once the strip
+// grew the mid-run sign-in row, wardyn/model-access-copy.ts and through it
+// lib/workspace-providers-copy.ts — into the entry chunk, past
+// bundle-split.test.ts's budget. Here it costs the eager graph the predicate and
+// nothing else; live-approvals.tsx re-exports it so its own readers keep their
+// import path.
+//
+// This file is the right home for the same reason decisionArgs is: it is the
+// module both sides already depend on, and it is never mocked.
+
+const HOLD_TIMEOUT_MS = 30_000;
+
+// A held request is one the sandbox is still parked on. TWO shapes reach that
+// state and only one of them carries a mode:
+//
+//  - tool_call — wardyn-toolgate blocks the agent's tool call on the PENDING
+//    row itself and polls until it is decided (cmd/wardyn-toolgate/main.go's
+//    -deadline is a 24h ceiling for a control plane that stopped answering,
+//    not a hold timeout), and the scope it raises is {tool,cmd,env} with no
+//    mode at all (internal/egress/proxy/local_routes.go). PENDING alone IS the
+//    hold here, so nothing client-side bounds it the way HOLD_TIMEOUT_MS
+//    bounds the egress case — the row's own server-side expiry ends it.
+//  - egress wait_for_review — the proxy carries the mode in the approval's
+//    requested_scope so the UI can flag it, but PENDING alone doesn't mean
+//    "still holding the sandbox": the connection fails closed at
+//    HOLD_TIMEOUT_MS while the approval row itself stays PENDING for up to 24h
+//    afterward (W20-hold-fsm-2).
+//
+// Exported because the run cockpit's command bar and the board's card state
+// the same fact ("N waiting · sandbox held"). Two copies of this test would be
+// two truths that can disagree, and the disagreement would read as "nothing is
+// holding the sandbox" while the sandbox is, in fact, held.
+export function isHeld(a: ApprovalRequest): boolean {
+  if (a.kind === "tool_call") return true;
+  // A credential_reauth row is raised BECAUSE the proxy is holding a request.
+  // It carries no first_use mode of its own — the mode vocabulary belongs to
+  // the egress lane — so without this it would read as a passive pending and
+  // the run would show no hold while a model call was parked.
+  if (a.kind === "credential_reauth") return true;
+  if (String((a.requested_scope?.mode as string) ?? "") !== "wait_for_review") return false;
+  const requestedAt = Date.parse(a.requested_at);
+  if (Number.isNaN(requestedAt)) return true; // unparseable timestamp — fail toward showing the hold
+  return Date.now() - requestedAt < HOLD_TIMEOUT_MS;
+}

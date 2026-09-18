@@ -34,7 +34,9 @@ import { AgentBadge, ConfinementChip, RunStateBadge } from "../../wardyn/primiti
 import { RunStateGlyph } from "../../wardyn/run-state-glyph";
 import { KillRunDialog } from "../../wardyn/kill-run-dialog";
 import { RUN, RUN_COCKPIT } from "../../wardyn/copy";
-import { waitingReauth } from "../../wardyn/model-access-copy";
+// THE LEAF, not wardyn/model-access-copy: this card is on the eager graph and
+// that module is lazy-side (see lib/reauth-waiting-copy.ts).
+import { waitingReauth } from "../../../lib/reauth-waiting-copy";
 import { Mono } from "../../wardyn/code-block";
 import { cn } from "../../ui/utils";
 import { repoLabel, rowHeadline, runAttention, shortId, signalsFor, type RunSignals } from "./board-groups";
