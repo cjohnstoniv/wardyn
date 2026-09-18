@@ -31,6 +31,7 @@ import {
   DropdownMenuTrigger,
 } from "../../ui/dropdown-menu";
 import { AgentBadge, ConfinementChip, RunStateBadge } from "../../wardyn/primitives";
+import { usePrincipal } from "../../wardyn/operator-context";
 import { RunStateGlyph } from "../../wardyn/run-state-glyph";
 import { KillRunDialog } from "../../wardyn/kill-run-dialog";
 import { RUN, RUN_COCKPIT } from "../../wardyn/copy";
@@ -111,6 +112,10 @@ export function RunCard({
   onKill: (id: string) => void;
 }) {
   const s = signalsFor(run, signals);
+  // The viewer, for the one sentence on this card that is audience-dependent:
+  // whose AWS sign-in a held run is waiting on. usePrincipal()'s default is ""
+  // — "not mine" — which is the fail-closed direction for this comparison.
+  const principal = usePrincipal();
   const attention = runAttention(run, signals);
   const terminal = isTerminalRunState(run.state);
   const done = terminal;
@@ -218,7 +223,11 @@ export function RunCard({
         {s.pending > 0 && (
           <span className="whitespace-nowrap text-warning">
             {s.reauth
-              ? waitingReauth(s.pending)
+              ? /* Whose sign-in — the board shows an admin every run, and a
+                   member the shared-lane rows their own runs raised (W6-U
+                   SHOULD-1). An unresolved /me reads as "not mine", the same
+                   fail-closed direction the cockpit's door takes. */
+                waitingReauth(s.pending, !!principal && run.created_by === principal)
               : s.held
                 ? RUN_COCKPIT.waitingHeld(s.pending)
                 : RUN_COCKPIT.waiting(s.pending)}

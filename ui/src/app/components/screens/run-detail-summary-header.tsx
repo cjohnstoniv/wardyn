@@ -366,7 +366,9 @@ export function SummaryHeader({
             <ShieldAlert className="size-3 shrink-0" />
             <span className="block min-w-0 truncate">
               {awaitingReauth
-                ? waitingReauth(pendingApprovalCount)
+                ? /* `owned` — the chip says whose sign-in is awaited, and only
+                     the run's owner can give it (W6-U SHOULD-1). */
+                  waitingReauth(pendingApprovalCount, owned)
                 : sandboxHeld
                   ? RUN_COCKPIT.waitingHeld(pendingApprovalCount)
                   : RUN_COCKPIT.waiting(pendingApprovalCount)}

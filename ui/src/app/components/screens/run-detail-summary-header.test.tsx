@@ -261,7 +261,9 @@ describe("SummaryHeader — the who + what glyph pair", () => {
   // co-pending egress approval, so the person signs in and the run still sits.
   it("a held run waiting on an AWS sign-in says so, and still counts the others", () => {
     renderHeader(
-      <OperatorProvider operator>
+      // The run's OWNER (created_by "me") — "your sign-in" is true of them, and
+      // only of them.
+      <OperatorProvider operator principal="me">
         <SummaryHeader
           run={runningInteractive}
           terminal={false}
@@ -276,6 +278,30 @@ describe("SummaryHeader — the who + what glyph pair", () => {
     expect(screen.queryByText(/sandbox held/i)).not.toBeInTheDocument();
     expect(waitingReauth(2)).toMatch(/1 more waiting/);
     expect(waitingReauth(1)).toBe("Waiting for your AWS sign-in");
+  });
+
+  // W6-U SHOULD-1 — the same chip, read by somebody who is not the owner: an
+  // admin opening a member's held run, or a member under a shared-lane row
+  // whose own cockpit row says "ask your admin". Only the owner's sign-in
+  // clears the hold, so "your" was false on both.
+  it("…and says whose sign-in it is when the reader is NOT the owner", () => {
+    renderHeader(
+      <OperatorProvider operator principal="admin@corp">
+        <SummaryHeader
+          run={runningInteractive}
+          terminal={false}
+          pendingApprovalCount={1}
+          sandboxHeld
+          awaitingReauth
+          onKill={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText(waitingReauth(1, false))).toBeInTheDocument();
+    expect(waitingReauth(1, false)).toBe("Waiting for the owner's AWS sign-in");
+    expect(screen.queryByText(waitingReauth(1))).not.toBeInTheDocument();
+    // The count clause is unchanged by the audience (round-2 UX S8).
+    expect(waitingReauth(3, false)).toMatch(/2 more waiting/);
   });
 
   it("a pending approval that is NOT holding the sandbox reads as monitoring, not as a demand", () => {

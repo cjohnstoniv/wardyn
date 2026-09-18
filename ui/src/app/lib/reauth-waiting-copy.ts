@@ -24,5 +24,19 @@
 // DRAFT (M2 canon pending) — round-2 UX S8: the COUNT stays. A count-free
 // string would hide a co-pending egress approval, and the person would sign in
 // and watch the run sit there.
-export const waitingReauth = (n: number): string =>
-  n > 1 ? `Waiting for your AWS sign-in · ${n - 1} more waiting` : "Waiting for your AWS sign-in";
+//
+// `mine` is the VIEWER's relation to the run, and it is the difference between
+// a true sentence and a false one (W6-U SHOULD-1): the board and the cockpit
+// header addressed every reader as the owner, so a shared-lane member read
+// "Waiting for your AWS sign-in" on the same screen whose row told them to ask
+// their admin, and an admin opening a member's held run read it about a
+// sign-in of theirs that could never clear it. Only the run's owner can.
+//
+// Defaulted TRUE rather than required: the one caller this module cannot reach
+// is ui/e2e/live/sso-reauth-hold.spec.ts, which lane e2e-sso-path owns and
+// which asserts this string on the OWNER's own run. The two console callers
+// (run-detail-summary-header.tsx, runs/run-card.tsx) both pass it explicitly.
+export const waitingReauth = (n: number, mine = true): string => {
+  const head = mine ? "Waiting for your AWS sign-in" : "Waiting for the owner's AWS sign-in";
+  return n > 1 ? `${head} · ${n - 1} more waiting` : head;
+};
