@@ -157,7 +157,12 @@ const APPROVAL = { pending: "PENDING", approved: "APPROVED", cancelled: "CANCELL
 
 type RunRow = { id: string; state?: string; task?: string; created_at?: string };
 type ApprovalRow = { id: string; kind?: string; state?: string; requested_scope?: Record<string, unknown> };
-type AuditRow = { action?: string; result?: string; created_at?: string; data?: Record<string, unknown> };
+/** The audit row as the WIRE spells it (types.AuditEvent): `time`, not
+ *  `created_at`; `outcome`, not `result`. Both were wrong in the first draft —
+ *  the timestamp one made every "after the hold" filter empty (caught by the
+ *  guard below rather than passing vacuously), and the outcome one would have
+ *  made case J's search for the run.create FAILURE row match nothing at all. */
+type AuditRow = { id?: string; action?: string; outcome?: string; time?: string; data?: Record<string, unknown> };
 
 async function runRow(page: Page, id: string): Promise<RunRow> {
   return page.evaluate(async (rid: string) => {
@@ -383,7 +388,7 @@ test("K (credential-reauth-hold): a session retired mid-run HOLDS the model call
     const auditAtHold = await auditFor(page, run.id);
     const raised = auditAtHold.find((e) => e.action === "credential.reauth.requested");
     expect(raised, "no credential.reauth.requested row on the held run").toBeTruthy();
-    holdOpenedAt = Date.parse(raised?.created_at ?? "");
+    holdOpenedAt = Date.parse(raised?.time ?? "");
     expect(Number.isFinite(holdOpenedAt), "the raise row carries no readable timestamp").toBe(true);
     grantIDsAtHold = auditAtHold
       .filter((e) => e.action === "credential.mint")
@@ -495,7 +500,7 @@ test("K(resume) (credential-reauth-hold): the member signs in and the SAME run c
   // AFTER the raise row, which is the only honest form of "nothing new
   // happened": the run's own create and grant rows are all before it.
   const now = await auditFor(page, heldRunID);
-  const fresh = now.filter((e) => Date.parse(e.created_at ?? "") > holdOpenedAt);
+  const fresh = now.filter((e) => Date.parse(e.time ?? "") > holdOpenedAt);
   const freshActions = fresh.map((e) => e.action ?? "");
   expect(fresh.length, "no audit row at all arrived after the hold opened — the filter is wrong").toBeGreaterThan(0);
   expect(freshActions, "a second run.create landed on the held run").not.toContain("run.create");
@@ -558,7 +563,7 @@ test("J (run-credential-door): a run refused over the model credential carries t
     // The server's CLASS, on the wire: the console grades the ending from this
     // key, never from the sentence.
     const trail = await auditFor(page, runID);
-    const refusal = trail.find((e) => e.action === "run.create" && e.result === "failure");
+    const refusal = trail.find((e) => e.action === "run.create" && e.outcome === "failure");
     expect(refusal, "no run.create failure row on the refused run").toBeTruthy();
     expect(String(refusal?.data?.reason), "the refusal is not classed as a model-credential one").toBe(
       "model_credential",
