@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"net"
 	"net/http"
 	"strings"
 	"testing"
@@ -41,14 +42,34 @@ func ssoInjectServer(t *testing.T, proxyInject bool) *Server {
 	return s
 }
 
-func ssoInjectTransport(t *testing.T, s *Server) llmTransport {
+// dispatchLLM drives the REAL phase — resolveLLMInjections — which is what
+// dispatchRun calls: it resolves the transport (so the injectBedrockSSO
+// DERIVATION runs), provisions the MITM CA (so that condition runs) and executes
+// the authoring block. Nothing here re-types a predicate.
+//
+// The first shape of these tests built an llmTransport by hand with
+// `injectBedrockSSO: ba.ready && ba.ssoInject && ba.ssoProxyInject` and called
+// authorBedrockSSOInjection directly, so forcing the real derivation to false
+// and detaching the CA condition and the authoring block left every one of them
+// green (round-2 F3). A test that re-types the thing it pins pins nothing.
+func dispatchLLM(t *testing.T, s *Server, sso awsSSOScope) (dispatchLLMPlan, *captureGrantStore, map[string]string, bool) {
 	t.Helper()
-	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true /* modelRun */, false /* refresh */, nil, awsSSOScope{})
-	if !ba.ready || !ba.ssoInject {
-		t.Fatalf("ready=%v ssoInject=%v, want the captured-SSO lane", ba.ready, ba.ssoInject)
+	captured := &captureGrantStore{}
+	s.cfg.Store = captured
+	run := types.AgentRun{ID: uuid.New(), Agent: "claude-code", CreatedBy: "alice@example.com"}
+	policy := types.RunPolicySpec{}
+	sandboxEnv := map[string]string{}
+	site := types.SiteConfig{}
+	if sso.perUser {
+		site = agentRoster(types.AgentProvider{
+			ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
+			CredentialSource: types.CredentialSourcePerUser,
+		})
 	}
-	return llmTransport{bedrock: ba, bedrockReady: ba.ready,
-		injectBedrockSSO: ba.ready && ba.ssoInject && ba.ssoProxyInject}
+	plan, ok := s.resolveLLMInjections(context.Background(), run,
+		dispatchParams{Interactive: false, TaskMode: ""},
+		&policy, sandboxEnv, nil, "", artifactRedirectPlan{}, false, site, true)
+	return plan, captured, sandboxEnv, ok
 }
 
 
@@ -76,68 +97,87 @@ func decodeStagedCache(t *testing.T, env string) string {
 	return ""
 }
 
-// ON: the flag is DERIVED from the resolved lane, the sandbox cache holds the
-// placeholder, and the run's own portal host is authored for MITM.
+// ON: the real dispatch phase derives the flag, provisions the CA, authors
+// exactly one grant on the run's own portal host and the port-qualified MITM
+// entry, and stages a placeholder cache.
 func TestDispatchWiring_SwitchOnAuthorsThePhaseBLane(t *testing.T) {
 	s := ssoInjectServer(t, true)
-	llm := ssoInjectTransport(t, s)
-	if !llm.injectBedrockSSO {
-		t.Fatal("injectBedrockSSO is false on a resolved captured-SSO lane with the switch on")
+	plan, captured, sandboxEnv, ok := dispatchLLM(t, s, awsSSOScope{})
+	if !ok {
+		t.Fatal("the dispatch LLM phase refused an ssoInject run")
 	}
-	if !llm.bedrock.ssoProxyInject {
-		t.Error("the resolved posture did not carry the switch; a running sandbox would change lane under an operator's flip")
+	if !plan.llm.injectBedrockSSO {
+		t.Fatal("resolveLLMTransport did not derive injectBedrockSSO on a resolved captured-SSO lane with the switch on")
 	}
-	if llm.bedrock.env[awsSSOConfigEnvVar] == "" {
-		t.Fatal("no synthetic ~/.aws was staged")
+
+	// EXACTLY ONE api_key grant, on the BARE portal host.
+	if len(captured.grants) != 1 {
+		t.Fatalf("dispatch wrote %d grants, want exactly 1", len(captured.grants))
 	}
-	cache := decodeStagedCache(t, llm.bedrock.env[awsSSOConfigEnvVar])
+	if got := captured.grants[0].Spec.Kind; got != types.GrantAPIKey {
+		t.Errorf("grant kind = %q, want api_key", got)
+	}
+	var scope struct {
+		Host       string `json:"host"`
+		SecretName string `json:"secret_name"`
+	}
+	if err := json.Unmarshal(captured.grants[0].Spec.Scope, &scope); err != nil {
+		t.Fatalf("grant scope: %v", err)
+	}
+	if want := "portal.sso.eu-west-2.amazonaws.com"; scope.Host != want {
+		t.Errorf("grant host = %q, want the run's own portal %q", scope.Host, want)
+	}
+	if scope.SecretName != types.AWSSSOAccessTokenSecret {
+		t.Errorf("grant secret = %q, want the AWS SSO sentinel", scope.SecretName)
+	}
+
+	// The port-qualified MITM entry reached the PLAN, which is what the runner
+	// hands the sidecar.
+	wantMITM := net.JoinHostPort("portal.sso.eu-west-2.amazonaws.com", "443")
+	if len(plan.bedrockMITMHosts) != 1 || plan.bedrockMITMHosts[0] != wantMITM {
+		t.Errorf("plan MITM hosts = %v, want exactly %q", plan.bedrockMITMHosts, wantMITM)
+	}
+	// …and the CA condition fired, or the tunnel is never terminated.
+	if plan.mitmCACertPEM == "" || plan.mitmCAKeyPEM == "" {
+		t.Error("the per-run MITM CA was not provisioned for an ssoInject dispatch — the portal tunnel would stay opaque")
+	}
+	if sandboxEnv["WARDYN_MITM_CA_CERT"] == "" && len(sandboxEnv) == 0 {
+		t.Error("the dispatch staged no sandbox env at all")
+	}
+
+	// The staged cache holds the placeholder, never the session.
+	cache := decodeStagedCache(t, plan.llm.bedrock.env[awsSSOConfigEnvVar])
 	if strings.Contains(cache, liveSSOBlob().AccessToken) {
 		t.Errorf("the REAL access token is staged in the sandbox with the switch ON: %s", cache)
 	}
 	if !strings.Contains(cache, awsSSOPlaceholderToken) {
 		t.Errorf("the placeholder is not in the staged cache: %s", cache)
 	}
-
-	captured := &captureGrantStore{}
-	s.cfg.Store = captured
-	injections, mitmHosts, ok := s.authorBedrockSSOInjection(context.Background(),
-		types.AgentRun{ID: uuid.New()}, llm, awsSSOScope{perUser: true, owner: "alice@example.com"}, nil)
-	if !ok || len(injections) != 1 || len(mitmHosts) != 1 {
-		t.Fatalf("authoring: ok=%v injections=%d mitm=%d, want one of each", ok, len(injections), len(mitmHosts))
-	}
-	if want := "portal.sso.eu-west-2.amazonaws.com"; injections[0].Rule.Host != want {
-		t.Errorf("grant host = %q, want the run's own portal %q", injections[0].Rule.Host, want)
-	}
-	if len(captured.grants) != 1 {
-		t.Errorf("grants written = %d, want 1", len(captured.grants))
-	}
 }
 
-// OFF: byte-for-byte 0.7.5 for a NEW dispatch — the real token in the cache, no
-// grant, no MITM host, and nothing that could raise a row.
+// OFF: a NEW dispatch is the previous behaviour — the real token in the cache,
+// and no grant, no MITM entry, nothing that could raise a row.
 func TestDispatchWiring_SwitchOffIsThePreviousBehaviour(t *testing.T) {
 	s := ssoInjectServer(t, false)
-	llm := ssoInjectTransport(t, s)
-	if llm.injectBedrockSSO {
-		t.Fatal("injectBedrockSSO is true with the switch OFF — the lane would author a grant and a MITM host")
+	plan, captured, _, ok := dispatchLLM(t, s, awsSSOScope{})
+	if !ok {
+		t.Fatal("the dispatch LLM phase refused an ssoInject run with the switch off")
 	}
-	cache := decodeStagedCache(t, llm.bedrock.env[awsSSOConfigEnvVar])
+	if plan.llm.injectBedrockSSO {
+		t.Fatal("the derivation produced injectBedrockSSO with the switch OFF")
+	}
+	if len(captured.grants) != 0 {
+		t.Errorf("dispatch wrote %d grants with the switch off, want 0", len(captured.grants))
+	}
+	if len(plan.bedrockMITMHosts) != 0 {
+		t.Errorf("dispatch authored MITM hosts %v with the switch off, want none", plan.bedrockMITMHosts)
+	}
+	cache := decodeStagedCache(t, plan.llm.bedrock.env[awsSSOConfigEnvVar])
 	if !strings.Contains(cache, liveSSOBlob().AccessToken) {
 		t.Error("the switch is off but the sandbox did not receive the real token; `off` must be the previous behaviour")
 	}
 	if strings.Contains(cache, awsSSOPlaceholderToken) {
 		t.Error("the placeholder was staged with the switch off")
-	}
-	// The authoring block is gated on the flag, so with it false NOTHING is
-	// written: no grant row, no MITM entry, and therefore no injection to
-	// resolve and no request to raise.
-	captured := &captureGrantStore{}
-	s.cfg.Store = captured
-	if llm.injectBedrockSSO {
-		_, _, _ = s.authorBedrockSSOInjection(context.Background(), types.AgentRun{ID: uuid.New()}, llm, awsSSOScope{}, nil)
-	}
-	if len(captured.grants) != 0 {
-		t.Errorf("grants written = %d with the switch off, want 0", len(captured.grants))
 	}
 }
 
@@ -179,23 +219,51 @@ func TestDispatchWiring_AFlipDoesNotChangeALaneUnderARunningRun(t *testing.T) {
 	}
 }
 
-// THE OTHER LANES AUTHOR NOTHING (the plan's named pins): a bearer, a static-key
-// or a ~/.aws-mount run must not acquire a portal.sso injection.
+// THE OTHER LANES AUTHOR NOTHING, through the real dispatch: a bearer, a
+// static-key or a ~/.aws-mount run must acquire no portal.sso grant and no MITM
+// entry for it.
 func TestDispatchWiring_OtherBedrockLanesAuthorNoSSOInjection(t *testing.T) {
+	portal := "portal.sso.eu-west-2.amazonaws.com"
 	for _, tc := range []struct {
-		name string
-		ba   bedrockAuth
+		name  string
+		setup func(*Server)
 	}{
-		{"bearer", bedrockAuth{ready: true, bearer: true}},
-		{"resident static keys", bedrockAuth{ready: true}},
-		{"host ~/.aws mount", bedrockAuth{ready: true, awsMount: true}},
-		{"not ready at all", bedrockAuth{}},
+		{"bearer", func(s *Server) {
+			s.cfg.Secrets.(*memSecrets).m[bedrockAPIKeySecret] = []byte("bedrock-bearer-token-xyz")
+		}},
+		{"resident static keys", func(s *Server) {
+			delete(s.cfg.Secrets.(*memSecrets).m, harnessCredSecretName(awsSSOProvider))
+		}},
+		{"host ~/.aws mount", func(s *Server) {
+			delete(s.cfg.Secrets.(*memSecrets).m, harnessCredSecretName(awsSSOProvider))
+			dir := t.TempDir()
+			s.cfg.BedrockAWSConfigDir = dir
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			llm := llmTransport{bedrock: tc.ba, bedrockReady: tc.ba.ready,
-				injectBedrockSSO: tc.ba.ready && tc.ba.ssoInject && tc.ba.ssoProxyInject}
-			if llm.injectBedrockSSO {
-				t.Errorf("the %s lane derived injectBedrockSSO — it would author a portal.sso grant and MITM host", tc.name)
+			s := ssoInjectServer(t, true) // the switch is ON: only the LANE differs
+			tc.setup(s)
+			plan, captured, _, ok := dispatchLLM(t, s, awsSSOScope{})
+			if !ok {
+				t.Fatalf("the dispatch LLM phase refused the %s lane", tc.name)
+			}
+			if plan.llm.injectBedrockSSO {
+				t.Errorf("the %s lane derived injectBedrockSSO", tc.name)
+			}
+			for _, g := range captured.grants {
+				var sc struct {
+					Host       string `json:"host"`
+					SecretName string `json:"secret_name"`
+				}
+				_ = json.Unmarshal(g.Spec.Scope, &sc)
+				if sc.Host == portal || sc.SecretName == types.AWSSSOAccessTokenSecret {
+					t.Errorf("the %s lane authored an AWS SSO injection: %+v", tc.name, sc)
+				}
+			}
+			for _, h := range plan.bedrockMITMHosts {
+				if strings.HasPrefix(h, portal) {
+					t.Errorf("the %s lane authored a portal.sso MITM entry: %q", tc.name, h)
+				}
 			}
 		})
 	}
@@ -206,10 +274,11 @@ func TestDispatchWiring_OtherBedrockLanesAuthorNoSSOInjection(t *testing.T) {
 // for egress this run was just denied.
 func TestDispatchWiring_CeilingNarrowingClearsTheSSOFlag(t *testing.T) {
 	s := ssoInjectServer(t, true)
-	llm := ssoInjectTransport(t, s)
-	if !llm.injectBedrockSSO {
-		t.Fatal("precondition: the lane is on")
+	plan, _, _, ok := dispatchLLM(t, s, awsSSOScope{})
+	if !ok || !plan.llm.injectBedrockSSO {
+		t.Fatal("precondition: the real dispatch derived the lane")
 	}
+	llm := plan.llm
 	var mitm []string
 	lanes := narrowCeilingBedrockLane(
 		dispatchCeiling{deny: llm.bedrock.egressHosts}, &llm, &mitm, map[string]string{})

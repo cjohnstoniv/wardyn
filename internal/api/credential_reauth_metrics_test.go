@@ -73,23 +73,69 @@ func TestCredentialReauthMetrics_TimeoutIsNotAPolicyDenial(t *testing.T) {
 // …and it IS counted, on its own series, where the daemon learns of it: the
 // expiry happens in the sidecar and the approval row deliberately stays
 // PENDING, so this decision row is the only signal that reaches the daemon.
+//
+// DRIVEN THROUGH THE REAL INGEST (round-2 F2). The first shape called the
+// recorder directly and then re-implemented the ingest predicate in the test,
+// so deleting the wiring in handlePostDecision left it green — a pin that
+// cannot see the thing it pins.
 func TestCredentialReauthMetrics_TimeoutCountedAtTheDecisionIngest(t *testing.T) {
 	h := newHarness(t)
 	srv := h.srv
 	runID := uuid.New()
-	before := reauthCount(t, srv, "timeout")
+	tok := h.mintRunToken(t, runID)
 
-	srv.metrics.credentialReauthRecorded(credentialReauthOutcomeTimeout)
+	before := reauthCount(t, srv, "timeout")
+	beforeDenies := metricValue(t, srv, "wardyn_egress_denies_total")
+
+	post := func(ruleSource string) {
+		t.Helper()
+		body, err := json.Marshal(egress.DecisionLog{
+			Request:    egress.Request{Host: "portal.sso.eu-west-2.amazonaws.com", Port: 443, Method: http.MethodGet},
+			Decision:   egress.Deny,
+			RuleSource: ruleSource,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w := do(t, srv, http.MethodPost, "/api/v1/internal/decisions", tok, string(body)); w.Code >= 300 {
+			t.Fatalf("post decision %s: code = %d; body=%s", ruleSource, w.Code, w.Body.String())
+		}
+	}
+
+	post(ruleSourceCredentialReauthTimeout)
+
 	if after := reauthCount(t, srv, "timeout"); after == before {
-		t.Fatalf("the timeout label did not move (%s -> %s)", before, after)
+		t.Fatalf("a credential:reauth-timeout decision did not move the timeout label (%s -> %s) — "+
+			"the expiry happens in the SIDECAR, so this ingest is the only signal that reaches the daemon", before, after)
 	}
-	// The ingest predicate is what routes it: a deny on this rule_source must
-	// reach the reauth series and NOT the policy-denial series.
-	dl := egress.DecisionLog{Decision: egress.Deny, RuleSource: ruleSourceCredentialReauthTimeout}
-	if dl.Decision == egress.Deny && isPolicyDeny(dl.RuleSource) {
-		t.Error("the ingest would count a hold expiry as a policy denial")
+	// …and it did NOT move the policy-denial series, which is the one operators
+	// page on: a person who went to lunch is not a policy denial.
+	if got := metricValue(t, srv, "wardyn_egress_denies_total"); got != beforeDenies {
+		t.Errorf("wardyn_egress_denies_total moved %s -> %s on a hold expiry", beforeDenies, got)
 	}
-	_ = runID
+
+	// The control: an ORDINARY policy deny moves the denial series and not the
+	// re-auth one, so the routing above is a real discrimination.
+	reauthBefore := reauthCount(t, srv, "timeout")
+	post("policy:denied")
+	if got := metricValue(t, srv, "wardyn_egress_denies_total"); got == beforeDenies {
+		t.Error("an ordinary policy deny did not move wardyn_egress_denies_total — the exclusion is too wide")
+	}
+	if got := reauthCount(t, srv, "timeout"); got != reauthBefore {
+		t.Errorf("an ordinary policy deny moved the re-auth timeout label (%s -> %s)", reauthBefore, got)
+	}
+}
+
+// metricValue reads a single unlabelled counter out of the scrape.
+func metricValue(t *testing.T, s *Server, name string) string {
+	t.Helper()
+	for _, line := range strings.Split(metricsText(t, s), "\n") {
+		if strings.HasPrefix(line, name+" ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, name))
+		}
+	}
+	t.Fatalf("no %s series in the scrape", name)
+	return ""
 }
 
 // CANCELLED is counted where the RUN ends, not at a later resolve.
@@ -119,7 +165,15 @@ func TestCredentialReauthMetrics_CancelledCountedWhenTheRunEnds(t *testing.T) {
 
 // EXPIRED is counted where the sweeper acts. By then the sidecar gave up hours
 // ago, so no resolve will ever meet the row — counting at a resolve counts zero.
-func TestCredentialReauthMetrics_ExpiredCountedAtTheSweep(t *testing.T) {
+//
+// THE LOOP that calls this is pinned in cmd/wardynd by
+// TestRunApprovalSweeper_CountsCredentialReauthExpiriesAtTheTransition, which
+// drives runApprovalSweeper against a stale row and asserts BOTH that the row
+// becomes EXPIRED and that exactly one expiry is reported (round-2 F2). This
+// case is only the accumulator's own arithmetic — it is deliberately NOT the
+// pin for the wiring, because a test that calls the recorder cannot see the
+// wiring go.
+func TestCredentialReauthMetrics_ExpiredAccumulates(t *testing.T) {
 	srv := New(Config{})
 	before := reauthCount(t, srv, "expired")
 	srv.RecordCredentialReauthExpired(3)
@@ -129,6 +183,12 @@ func TestCredentialReauthMetrics_ExpiredCountedAtTheSweep(t *testing.T) {
 	}
 	if strings.TrimSpace(after) != "3" {
 		t.Errorf("expired = %s, want 3", after)
+	}
+	// A zero-count report is a no-op: an idle deployment's every tick must not
+	// move the series.
+	srv.RecordCredentialReauthExpired(0)
+	if got := reauthCount(t, srv, "expired"); strings.TrimSpace(got) != "3" {
+		t.Errorf("a zero report moved the series to %s", got)
 	}
 }
 

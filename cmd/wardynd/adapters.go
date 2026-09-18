@@ -737,7 +737,12 @@ type reauthExpiryCounter interface {
 	RecordCredentialReauthExpired(n int)
 }
 
-func runApprovalSweeper(ctx context.Context, st approvalStore, interval, after time.Duration, m reauthExpiryCounter) {
+// st is the INTERFACE the sweep already uses, not the concrete adapter: the
+// body only ever hands it to approval.ExpireStaleByKind. Widening it is what
+// lets the credential re-auth expiry counter be pinned against this loop with a
+// fake store instead of a live Postgres (round-2 F2) — the wiring it counts is
+// three lines here, and a metric nobody can test is a metric nobody can trust.
+func runApprovalSweeper(ctx context.Context, st approval.Store, interval, after time.Duration, m reauthExpiryCounter) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
