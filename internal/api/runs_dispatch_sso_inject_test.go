@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -128,8 +129,16 @@ func TestAuthorBedrockSSOInjection_EndpointOverrideDropsRequireTLS(t *testing.T)
 	// THE OVERRIDE'S OWN PORT (security NIT-2). Authored at 443 the tunnel is
 	// never terminated and the header is never injected — the fake lane would
 	// carry a placeholder to a 401 with nothing in the proxy to say why.
-	if len(mitmHosts) != 1 || mitmHosts[0] != net.JoinHostPort(theOverrideHost, "8090") {
-		t.Errorf("MITM hosts = %v, want the override host on ITS OWN port 8090", mitmHosts)
+	// …AND IN THE SCHEME THE OVERRIDE NAMES (walk-3). The proxy TERMINATES this
+	// tunnel — it has to, because the sandbox holds a placeholder and the real
+	// token can only be substituted into a request the proxy can see — and then
+	// re-originates upstream. Without the prefix that upstream leg dialled TLS
+	// at a server serving plain HTTP: builtin:dial-failed and a 502 on every one
+	// of the SDK's 36-69 CONNECTs, so no role credentials, no model call, and
+	// every case waiting on one timed out.
+	if len(mitmHosts) != 1 || mitmHosts[0] != "http://"+net.JoinHostPort(theOverrideHost, "8090") {
+		t.Errorf("MITM hosts = %v, want the override host on ITS OWN port 8090, prefixed http:// so the "+
+			"MITM's upstream leg does not dial TLS at a plain-HTTP origin", mitmHosts)
 	}
 	// …and the egress list authored the same port, or AuthoredPortFor would
 	// withhold the credential on it.
@@ -147,4 +156,36 @@ type captureGrantStore struct {
 func (c *captureGrantStore) CreateGrant(_ context.Context, g types.CredentialGrant) (types.CredentialGrant, error) {
 	c.grants = append(c.grants, g)
 	return g, nil
+}
+
+// PRODUCTION IS BYTE-FOR-BYTE UNCHANGED, and this is the pin for it. A real
+// portal serves TLS, so its entry must carry NO scheme prefix — the exact
+// spelling every deployment has today, parsed by a sidecar that predates the
+// prefix to exactly the same host and port.
+func TestSSOPortalMITMEntry_ProductionIsUnprefixedAndPlainHTTPIsExplicit(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		override string
+		want     string
+	}{
+		{"no override — the real portal", "", "portal.sso.eu-west-2.amazonaws.com:443"},
+		{"an https override", "https://portal.corp.example", "portal.corp.example:443"},
+		{"an https override on its own port", "https://portal.corp.example:9443", "portal.corp.example:9443"},
+		{"the plain-http fake", theOverride, "http://" + theOverrideHost + ":8090"},
+		{"a plain-http override on the default port", "http://fake.internal", "http://fake.internal:80"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ssoPortalMITMEntry("eu-west-2", tc.override)
+			if got != tc.want {
+				t.Errorf("ssoPortalMITMEntry(%q) = %q, want %q", tc.override, got, tc.want)
+			}
+			// Said the other way round, because this is the half that matters: the
+			// prefix appears for an http:// override and NOWHERE else. A prefix on
+			// a real portal would have the proxy dial cleartext at AWS.
+			if strings.HasPrefix(got, "http://") != strings.HasPrefix(strings.ToLower(tc.override), "http://") {
+				t.Errorf("ssoPortalMITMEntry(%q) = %q — the cleartext prefix does not follow the override's scheme",
+					tc.override, got)
+			}
+		})
+	}
 }

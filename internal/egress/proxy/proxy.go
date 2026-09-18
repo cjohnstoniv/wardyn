@@ -75,6 +75,10 @@ type Proxy struct {
 	// (W13-S1-5) — handleConnect enforces this alongside isCorpMITMHost so the
 	// allowlist stays as tight as isMITMHost's doc comment claims.
 	mitmPorts map[string]int
+	// mitmPlaintext marks the mitmHosts entries whose ORIGIN serves plain HTTP,
+	// so the MITM's upstream leg re-originates in cleartext. Absent = TLS, which
+	// is every entry unless an operator configured an http:// endpoint override.
+	mitmPlaintext map[string]bool
 	// mitmLLM gates TLS-MITM of the built-in LLM hosts on actual intent (subscription
 	// injection or intercept_tls) — a CA minted only for artifact token injection
 	// must NOT make Anthropic/OpenAI MITM-eligible. See isMITMHost / handleConnect.
@@ -300,30 +304,6 @@ type Options struct {
 // the hostname (TOCTOU / DNS-rebinding guard).
 type vettedIPKey struct{}
 
-// parseMITMHostPort normalizes one Options.MITMHosts entry (trim, lowercase,
-// drop a trailing dot) and splits its optional ":port" suffix. port==0 means
-// the entry carried none — the historical bare-host format, kept only for a
-// config written before the port suffix existed — and matches ANY port; a
-// malformed or out-of-range port suffix is treated the same as absent rather
-// than guessed. No live caller authors a bare entry any more: both
-// planArtifactRedirect (W13-S1-5) and authorBedrockBearerInjection (F037) join
-// the host to the port they actually configured, so the any-port arm is not a
-// default that a new lane can fall into by accident.
-// A clean "host:port" (what planArtifactRedirect now authors, W13-S1-5) scopes
-// the entry to exactly that port.
-func parseMITMHostPort(entry string) (host string, port int) {
-	entry = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(entry)), ".")
-	if entry == "" {
-		return "", 0
-	}
-	if h, ps, err := net.SplitHostPort(entry); err == nil {
-		if p, perr := strconv.Atoi(ps); perr == nil && p > 0 && p < 65536 {
-			return h, p
-		}
-	}
-	return entry, 0
-}
-
 // parseInternalHostCIDRs parses a SiteConfig.InternalHosts entry's CIDR
 // list, failing the WHOLE entry (ok=false) the moment one fails to parse —
 // never returning a partial list. liftInternalHost treats zero CIDRs as "no
@@ -361,16 +341,7 @@ func newProxy(opts Options) *Proxy {
 	if evaluator == nil {
 		evaluator = builtinEvaluator{p: opts.Policy} // default: builtin RunPolicySpec verdict
 	}
-	mitmHosts := make(map[string]bool, len(opts.MITMHosts))
-	mitmPorts := make(map[string]int, len(opts.MITMHosts))
-	for _, entry := range opts.MITMHosts {
-		h, port := parseMITMHostPort(entry)
-		if h == "" {
-			continue
-		}
-		mitmHosts[h] = true
-		mitmPorts[h] = port
-	}
+	mitmHosts, mitmPorts, mitmPlaintext := compileMITMHosts(opts.MITMHosts)
 	// Canonicalise git-broker allowlist keys to lowercase "<org>/<repo>" so lookups
 	// match regardless of the slug casing git sends (github owner/repo is
 	// case-insensitive).
@@ -441,6 +412,7 @@ func newProxy(opts Options) *Proxy {
 		ca:                   opts.CA,
 		mitmHosts:            mitmHosts,
 		mitmPorts:            mitmPorts,
+		mitmPlaintext:        mitmPlaintext,
 		mitmLLM:              opts.MITMLLM,
 		gitGrants:            gitGrants,
 		patGrants:            patGrants,

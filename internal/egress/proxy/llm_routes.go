@@ -365,8 +365,9 @@ func (p *Proxy) llmRouteTarget(host string, port int) (string, error) {
 // (scanSummary may be nil = quiet), and streams the response back. ruleSource
 // is the decision-log source.
 func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host string, port int, rest, target string, hdr *injectedHeader, ruleSource string, bodyReader io.Reader, scanSummary *egress.ScanSummary) {
+	scheme, defaultPort := p.upstreamSchemeFor(host)
 	hostport := host
-	if port != 443 {
+	if port != defaultPort {
 		hostport = net.JoinHostPort(host, strconv.Itoa(port))
 	}
 	// Build the upstream target as a STRUCTURED url.URL, never by concatenating
@@ -383,7 +384,7 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 	// request re-encode those bytes as %23/%3F, so the path the classifier
 	// judged is byte-for-byte the path that is sent.
 	upstreamURL := &url.URL{
-		Scheme:   "https",
+		Scheme:   scheme,
 		Host:     hostport,
 		Path:     "/" + rest,
 		RawQuery: r.URL.RawQuery,

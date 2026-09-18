@@ -348,12 +348,25 @@ func ssoEgressHosts(ssoRegion, endpointOverride string) []string {
 // (net.JoinHostPort, so a bare any-port entry cannot have some other port's
 // tunnel terminated with the Wardyn leaf) and the egress allowlist above.
 // ssoPortalPort is the port the sandbox actually reaches the portal on: the
-// override's when it names one, else 443. It is the MITM-eligibility entry's
-// port, and it must track ssoEgressHosts' own port entry — an entry authored at
-// a port the run never dials is a tunnel nobody terminates.
+// override's when it names one, else the override's SCHEME default (80 for
+// http://, 443 otherwise). It is the MITM-eligibility entry's port, and it must
+// track ssoEgressHosts' own port entry — an entry authored at a port the run
+// never dials is a tunnel nobody terminates.
 func ssoPortalPort(endpointOverride string) string {
-	if u, err := url.Parse(endpointOverride); err == nil && u.Port() != "" {
-		return u.Port()
+	u, err := url.Parse(endpointOverride)
+	if err != nil {
+		return "443"
+	}
+	if p := u.Port(); p != "" {
+		return p
+	}
+	// THE SCHEME'S OWN DEFAULT, not a flat 443. An http:// override with no port
+	// means port 80, and answering 443 there authored BOTH the allowlist entry
+	// and the TLS-MITM entry on a port nothing is listening on — the credential
+	// withheld on the port actually dialled, for a shape that reads correct in
+	// every config dump. No override at all stays 443, which is the real portal.
+	if strings.EqualFold(u.Scheme, "http") {
+		return "80"
 	}
 	return "443"
 }

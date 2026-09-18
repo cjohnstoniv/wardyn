@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"net/url"
 	"strings"
 	"time"
 
@@ -128,6 +129,31 @@ type awsSSOScopeSnapshot struct {
 	Region           string `json:"region"`
 }
 
+// ssoPortalMITMEntry is the ONE spelling of a Phase-B TLS-MITM entry, and the
+// only place the upstream SCHEME is decided.
+//
+// Bare "host:port" — today's format, byte-for-byte — for a real portal, which
+// is every deployment that has not set WARDYN_AWS_SSO_ENDPOINT_OVERRIDE. An
+// "http://" prefix only when the operator pointed the override at a PLAIN-HTTP
+// server, which is the SSO fake and already refuses to boot without
+// WARDYN_ALLOW_TEST_ENDPOINTS.
+//
+// The prefix is not cosmetic: the proxy TERMINATES this tunnel because Phase B's
+// sandbox holds a placeholder rather than a credential, so the request has to be
+// visible for the real token to be substituted. Terminating and then dialling
+// the origin in TLS — which is what a hard-coded https did — means every CONNECT
+// to a plain-HTTP portal ends in builtin:dial-failed and a 502, so no role
+// credentials ever reach the sandbox and every model call starves. NOT
+// terminating is not the alternative: a blind tunnel carries the placeholder
+// through untouched, which is Phase B not happening at all.
+func ssoPortalMITMEntry(ssoRegion, endpointOverride string) string {
+	entry := net.JoinHostPort(ssoPortalHost(ssoRegion, endpointOverride), ssoPortalPort(endpointOverride))
+	if u, err := url.Parse(endpointOverride); err == nil && strings.EqualFold(u.Scheme, "http") {
+		return "http://" + entry
+	}
+	return entry
+}
+
 // authorBedrockSSOInjection authors the captured-AWS-SSO injection: an api_key
 // grant whose x-amz-sso_bearer_token header injects the run's own SSO access
 // token into that run's own portal.sso host, and marks that host TLS-MITM
@@ -152,7 +178,7 @@ func (s *Server) authorBedrockSSOInjection(ctx context.Context, run types.AgentR
 	// never terminated, the header was never injected, and require_tls was off
 	// there too — a blind tunnel carrying a placeholder to a 401. That is the
 	// shape the plan's TLS-fake test needs.
-	mitmHosts := []string{net.JoinHostPort(portalHost, ssoPortalPort(s.cfg.AWSSSOEndpointOverride))}
+	mitmHosts := []string{ssoPortalMITMEntry(t.bedrock.ssoRegion, s.cfg.AWSSSOEndpointOverride)}
 	scope, _ := json.Marshal(map[string]any{
 		"host":        portalHost,
 		"header":      awsSSOInjectHeader,
