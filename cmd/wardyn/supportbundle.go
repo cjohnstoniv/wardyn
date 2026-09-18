@@ -13,6 +13,7 @@ import (
 	"maps"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -218,8 +219,8 @@ func writeTarGzWriter(w io.Writer, files map[string][]byte) error {
 // with `run recording`'s download) so a flush failure midway through never
 // leaves a truncated bundle sitting at path.
 func writeTarGz(path string, files map[string][]byte) error {
-	partPath := path + ".part"
-	f, err := os.Create(partPath)
+	// Keep diagnostic data private and leave existing .part paths untouched.
+	f, err := os.CreateTemp(filepath.Dir(path), ".wardyn-bundle-*.part")
 	if err != nil {
 		return err
 	}
@@ -227,5 +228,5 @@ func writeTarGz(path string, files map[string][]byte) error {
 	if closeErr := f.Close(); writeErr == nil {
 		writeErr = closeErr
 	}
-	return finalizePartFile(partPath, path, writeErr)
+	return finalizePartFile(f.Name(), path, writeErr)
 }

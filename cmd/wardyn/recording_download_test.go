@@ -60,6 +60,9 @@ func TestRunRecording_InterruptedDownloadLeavesNoFile(t *testing.T) {
 	} else if !os.IsNotExist(serr) {
 		t.Fatalf("stat %s: %v", out, serr)
 	}
+	if entries, err := os.ReadDir(filepath.Dir(out)); err != nil || len(entries) != 0 {
+		t.Errorf("interrupted download left temporary files: %v, %v", entries, err)
+	}
 }
 
 // B12a-F6 (review R-05): a RENAME failure is a distinct code path from the
