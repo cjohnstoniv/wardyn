@@ -97,32 +97,49 @@ func main() {
 		if *tlsCert == "" || *tlsKey == "" {
 			log.Fatalf("awsssofake: -tls-cert and -tls-key must be given together")
 		}
+		logEffective(*addr, *tokenTTL, *roleCredTTL, *reauthAfter, true)
 		log.Printf("awsssofake: serving sso-oidc + sso portal + bedrock-runtime stub over TLS on %s", *addr)
 		if err := srv.ListenAndServeTLS(*tlsCert, *tlsKey); err != nil {
 			log.Fatalf("awsssofake: %v", err)
 		}
 		return
 	}
+	logEffective(*addr, *tokenTTL, *roleCredTTL, *reauthAfter, false)
 	log.Printf("awsssofake: serving sso-oidc + sso portal + bedrock-runtime stub on %s", *addr)
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("awsssofake: %v", err)
 	}
 }
 
-// envDuration reads a duration knob; an unparseable value is 0 (the default),
-// because a test fake must not refuse to start over a typo in a manifest.
+// envDuration reads a duration knob. An ABSENT one is 0 (the default); a
+// MALFORMED one is fatal, naming the variable and the value.
+//
+// It used to swallow both alike, "because a test fake must not refuse to start
+// over a typo in a manifest" — which had it exactly backwards. A fake that
+// silently ignores the TTL it was given still serves, so the typo surfaces ten
+// minutes later as a walk case failing with "no hold" and nothing anywhere
+// saying the knob was never read. Refusing at startup costs one restart and
+// names the cause; the alternative costs a walk and a root-cause hunt.
 func envDuration(key string) time.Duration {
-	d, err := time.ParseDuration(os.Getenv(key))
-	if err != nil || d < 0 {
+	raw := os.Getenv(key)
+	if raw == "" {
 		return 0
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 0 {
+		log.Fatalf("awsssofake: %s=%q is not a non-negative duration (e.g. 90s, 5m): %v", key, raw, err)
 	}
 	return d
 }
 
 func envInt(key string) int {
-	n, err := strconv.Atoi(os.Getenv(key))
-	if err != nil || n < 0 {
+	raw := os.Getenv(key)
+	if raw == "" {
 		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		log.Fatalf("awsssofake: %s=%q is not a non-negative integer: %v", key, raw, err)
 	}
 	return n
 }
@@ -132,4 +149,14 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// logEffective prints the knobs this process ACTUALLY resolved, once, at
+// startup. Without it the only way to tell a knob that was read from one that
+// was ignored is to watch the behaviour it was supposed to change — which is
+// the ten-minute feedback loop this line replaces. 0 means "the built-in
+// default", which is what an absent knob resolves to.
+func logEffective(addr string, tokenTTL, roleCredTTL time.Duration, reauthAfter int, tls bool) {
+	log.Printf("awsssofake: effective knobs addr=%s tls=%t token_ttl=%s role_cred_ttl=%s reauth_after=%d "+
+		"(0 = the built-in default)", addr, tls, tokenTTL, roleCredTTL, reauthAfter)
 }
