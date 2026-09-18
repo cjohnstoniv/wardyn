@@ -194,6 +194,16 @@ result for them is evidence only for the tip somebody actually ran it on.
   measured. And the whole
   estate end to end by the kind walk itself.
 
+  **The timeout negative (a hold nobody answers) is deferred, with its measurements**
+  (`ui/e2e/live/sso-reauth-hold.spec.ts`, `test.fixme`). The decision row that names a spent
+  hold (`credential:reauth-timeout`) is written for the FIRST live observer of the expiry,
+  once per hold rather than once per retry; a hold that ends with no call in flight writes
+  nothing. On the walk the sandbox's SDK re-calls on its own ~30 s cadence and cannot be held
+  still, so two budgets (30 s and 90 s) both expired with nothing waiting: a real hold was
+  raised each time (a PENDING row and `credential.reauth.requested`) and no decision followed.
+  The other ending of a hold — killing the held run cancels its request — is live and green;
+  the timeout path is pinned by the proxy's `credhold` tests.
+
   Still NOT driven on this walk, each with its own reason:
 
   | not driven live | why |

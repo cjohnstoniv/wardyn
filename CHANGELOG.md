@@ -13,18 +13,21 @@ AWS SSO working and running a Claude Code agent — into eight findings. This re
 them; the eighth (a mid-run credential lapse holding the run instead of killing it) ships behind a
 kill switch, sequenced last — see Known gaps.
 
-<!-- W7: re-verify against walk-6/MANIFEST.json -->
 Verified on the kind AWS SSO walk against images rebuilt from the commit under
-test: a never-signed-in member is told on the Runs board and on New Run
-(findings 2 and 1), a lapsed member signs in from the strip itself without
-leaving the page or reloading it, and a start held unscheduled names
-scheduling rather than a pull while a start on an unpullable image ends in
-seconds with the registry's own words (finding 6) — all passed on the walk
-(tip `f78bd744`, `MANIFEST.json` present). The walk's third spec file
-exercises a session retired at the portal mid-run HOLDing the model call with
-the SAME run continuing after the sign-in (finding 4), and a dispatch refused
-over the model credential carrying the sign-in on the run's own page
-(finding 3); neither has yet passed a walk on this release's tip.
+test, on two fresh installs (walk-9 on the spec set that ships here, then walk-10 on
+the release tip `3eaa42db`; each walk's `MANIFEST.json` records the tip, zero dirty
+files, the rebuilt images with host and node digests agreeing, and the kill-switch
+posture, `on`). A never-signed-in member is told on the Runs board and on New Run
+(findings 2 and 1); a lapsed member signs in from the strip itself without leaving
+the page or reloading it; a start held unscheduled names scheduling rather than a
+pull, and a start on an unpullable image ends in seconds with the registry's own
+words (finding 6); a session retired at the portal mid-run HOLDS the model call and
+the SAME run continues after the sign-in (finding 4); a dispatch refused over the
+model credential carries the sign-in on the run's own page (finding 3); an admin
+whose own session is live sees no strip; killing a held run cancels its sign-in
+request. One live case is deferred with its measurements — a hold nobody answers
+timing out — because the walk cannot hold the sandbox's SDK still long enough to
+observe the expiry (the proxy's own tests pin that path); see TEST-GAPS.
 
 ### Added
 
