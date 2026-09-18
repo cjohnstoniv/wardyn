@@ -398,6 +398,7 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 			"provider": awsSSOProvider, "spent": spent, "error": err.Error(), "attempts": attempts,
 		})
 		if spent {
+			s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeSpent)
 			return blob, awsSSORefreshSpentSentence
 		}
 		// A TRANSIENT failure is not a reason to stop using a token we still hold.
@@ -409,10 +410,13 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 		// next dispatch renews it, and the failure is audited either way.
 		if !blob.expired(s.cfg.Now()) {
 			slog.WarnContext(ctx, "wardynd: renewing the captured AWS SSO credential failed, but the current token is still valid; serving it")
+			s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeTransportError)
 			return blob, ""
 		}
+		s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeUnavailable)
 		return blob, awsSSORefreshUnavailableSentence
 	}
+	s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeSuccess)
 
 	next := blob
 	next.AccessToken = resp.AccessToken

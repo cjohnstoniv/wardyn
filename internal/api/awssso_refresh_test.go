@@ -160,6 +160,9 @@ func TestAWSSSORefresh_RotatesAndRepersists(t *testing.T) {
 	if len(rows) != 1 || rows[0].Outcome != "success" {
 		t.Fatalf("audit rows = %+v; want one success harness.credential.refresh row", rows)
 	}
+	if got := s.metrics.ssoRefreshOutcomes[ssoRefreshOutcomeSuccess]; got != 1 {
+		t.Errorf("wardyn_sso_refresh_total{outcome=success} = %d, want 1", got)
+	}
 	var data map[string]any
 	if err := json.Unmarshal(rows[0].Data, &data); err != nil {
 		t.Fatalf("audit data: %v", err)
@@ -243,6 +246,9 @@ func TestAWSSSORefresh_InvalidGrantMarksDeadAndNeverFallsThroughToAPIKey(t *test
 	rows := audit.find("harness.credential.refresh")
 	if len(rows) != 1 || rows[0].Outcome != "failure" {
 		t.Fatalf("audit rows = %+v; want one failure harness.credential.refresh row", rows)
+	}
+	if got := s.metrics.ssoRefreshOutcomes[ssoRefreshOutcomeSpent]; got != 1 {
+		t.Errorf("wardyn_sso_refresh_total{outcome=spent} = %d, want 1", got)
 	}
 	// Dead-marked, keyed to the token: a SECOND dispatch does not redeem again.
 	if !s.awsSSOTokenSpent(awsSSOTokenFingerprint(blob.RefreshToken)) {
@@ -410,6 +416,9 @@ func TestAWSSSORefresh_SlowDownRetriesOnceAndNeverDeadMarks(t *testing.T) {
 	}
 	if rows := audit.find("harness.credential.refresh"); len(rows) != 1 || rows[0].Outcome != "failure" {
 		t.Fatalf("audit rows = %+v; want one failure row", rows)
+	}
+	if got := s.metrics.ssoRefreshOutcomes[ssoRefreshOutcomeUnavailable]; got != 1 {
+		t.Errorf("wardyn_sso_refresh_total{outcome=unavailable} = %d, want 1 (the access token was already expired)", got)
 	}
 
 	// The next dispatch redeems normally once AWS answers.
@@ -720,5 +729,8 @@ func TestAWSSSORefresh_TransientFailureServesAStillValidToken(t *testing.T) {
 	}
 	if rows := audit.find("harness.credential.refresh"); len(rows) != 1 || rows[0].Outcome != "failure" {
 		t.Fatalf("audit rows = %+v; want the failed renewal still audited", rows)
+	}
+	if got := s.metrics.ssoRefreshOutcomes[ssoRefreshOutcomeTransportError]; got != 1 {
+		t.Errorf("wardyn_sso_refresh_total{outcome=transport_error} = %d, want 1 (the access token was still valid)", got)
 	}
 }

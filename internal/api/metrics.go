@@ -75,6 +75,16 @@ type metrics struct {
 	// message. Never the drive, the subject or the path — those are the audit
 	// log's and the slog line's, both of which this counter points at.
 	driveRefusals map[string]int64
+	// ssoRefreshOutcomes counts each control-plane AWS SSO renewal attempt
+	// (refreshAWSSSOBlob), by outcome — the same four the harness.credential.refresh
+	// audit row's own branching already distinguishes (Finding 5): the rotated
+	// pair persisted (success), the refresh token is dead (spent), a transient
+	// failure that still served the run from a still-valid token (transport_error),
+	// or a transient failure with nothing left to serve (unavailable). BY OUTCOME,
+	// CLOSED set (ssoRefreshOutcomeValues): a graphable "how often does renewal
+	// fail, and which way" that the audit trail alone is not (nobody alerts on a
+	// log line they do not know to grep for).
+	ssoRefreshOutcomes map[string]int64
 }
 
 // driveRefused records one run refused its user drive, by reason.
@@ -85,6 +95,37 @@ func (m *metrics) driveRefused(reason string) {
 		m.driveRefusals = map[string]int64{}
 	}
 	m.driveRefusals[reason]++
+}
+
+// ssoRefreshOutcomeValues is the closed label set ssoRefreshRecorded accepts,
+// declared up front for the same reason driveRefusalReasons is: it seeds
+// every series at zero on the first scrape rather than waiting for the first
+// occurrence of each, and a caller passing anything outside this list is
+// dropped rather than starting a new, uncounted series (see ssoRefreshRecorded).
+var ssoRefreshOutcomeValues = []string{
+	ssoRefreshOutcomeSuccess, ssoRefreshOutcomeSpent, ssoRefreshOutcomeTransportError, ssoRefreshOutcomeUnavailable,
+}
+
+const (
+	ssoRefreshOutcomeSuccess        = "success"
+	ssoRefreshOutcomeSpent          = "spent"
+	ssoRefreshOutcomeTransportError = "transport_error"
+	ssoRefreshOutcomeUnavailable    = "unavailable"
+)
+
+// ssoRefreshRecorded records one control-plane AWS SSO renewal attempt's
+// outcome. Silently drops anything outside ssoRefreshOutcomeValues — a typo'd
+// label must not start an uncounted, un-zeroed series.
+func (m *metrics) ssoRefreshRecorded(outcome string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !slices.Contains(ssoRefreshOutcomeValues, outcome) {
+		return
+	}
+	if m.ssoRefreshOutcomes == nil {
+		m.ssoRefreshOutcomes = map[string]int64{}
+	}
+	m.ssoRefreshOutcomes[outcome]++
 }
 
 // authFailedSuppressedInc records one dropped auth.failed audit emit.
@@ -202,6 +243,11 @@ func (m *metrics) write(w io.Writer) {
 		"# TYPE wardyn_drive_refusals_total counter\n")
 	for _, reason := range driveRefusalReasons {
 		fmt.Fprintf(w, "wardyn_drive_refusals_total{reason=%q} %d\n", reason, m.driveRefusals[reason])
+	}
+	fmt.Fprint(w, "# HELP wardyn_sso_refresh_total Control-plane AWS SSO CreateToken renewal attempts, by outcome.\n"+
+		"# TYPE wardyn_sso_refresh_total counter\n")
+	for _, outcome := range ssoRefreshOutcomeValues {
+		fmt.Fprintf(w, "wardyn_sso_refresh_total{outcome=%q} %d\n", outcome, m.ssoRefreshOutcomes[outcome])
 	}
 	// HELP text: DRAFT (M2 canon pending) — R4-F065. M2 recommends the HELP-only
 	// remediation (this wording change) over the filed alternative that also
