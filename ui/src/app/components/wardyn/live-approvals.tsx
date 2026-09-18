@@ -21,7 +21,7 @@ import * as React from "react";
 import { ShieldAlert, Clock, Check, ChevronDown, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 import { canDecideApproval, decisionArgs, isHeld, type ApprovalRequest, type ApprovalScope } from "../../lib/types";
-import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST } from "./model-access-copy";
+import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST, reauthAudience, reauthRowHint } from "./model-access-copy";
 import { useModelAccessDoor, useClaimModelAccessDoor } from "./model-access-context";
 import { approvals as api } from "../../lib/api/approvals";
 import { getErrorMessage } from "../../lib/format";
@@ -46,7 +46,7 @@ import { Mono } from "./code-block";
 // re-exported so this module stays the place a reader of the strip looks.
 export { isHeld };
 import { Chip, SectionLabel } from "./primitives";
-import { useOperator, useSecurityOperator } from "./operator-context";
+import { useSecurityOperator } from "./operator-context";
 import { attentionRank } from "./run-state-glyph";
 import {
   ALWAYS_NEEDS_WORKSPACE,
@@ -669,17 +669,23 @@ function ScopeMenu({
  * keeps its sentence and drops its button on this page, so the cockpit offers
  * exactly one place to press.
  *
- * On the SHARED lane a member's run can raise a request only an admin can
- * satisfy, so an operator gets the door and a member gets the instruction —
- * never a button the server would refuse (Codex #7, risk (d)).
+ * WHO gets the door is reauthAudience's one rule, shared with the /approvals
+ * card and mirroring the server's own admission test: a per_user row is
+ * resolvable only by the subject it names, a shared row only by an operator.
+ * Everyone else gets a sentence — a shared-lane member "ask your admin", a
+ * non-owner (the admin reading a member's held run) the sentence that names
+ * whose sign-in is awaited — and no button the server would refuse (Codex #7
+ * risk (d); round-2 general S5).
  */
 function ReauthRow({ request }: { request: ApprovalRequest }) {
   const door = useModelAccessDoor();
-  const operator = useOperator();
-  const shared = String((request.requested_scope?.credential_source as string) ?? "") === "shared";
-  // A member under a SHARED row cannot repair this; nobody should claim the
-  // door for a control they are not rendering.
-  const canAct = operator || !shared;
+  // door.operator / door.principal, never useOperator() / usePrincipal():
+  // those answer the FAIL-OPEN default while /me is in flight, which is exactly
+  // the window in which this row would paint a door for the wrong audience.
+  // The door grades nothing until the viewer is known, and so does this.
+  const audience = reauthAudience(request, { operator: door.operator, principal: door.principal });
+  const canAct = audience.canAct;
+  // Nobody should claim the door for a control they are not rendering.
   useClaimModelAccessDoor(canAct);
   return (
     <div className="flex items-center gap-2" data-testid="live-approval-row">
@@ -689,7 +695,7 @@ function ReauthRow({ request }: { request: ApprovalRequest }) {
           {REAUTH_ROW.label}
         </Mono>
         <span className="text-meta font-normal normal-case text-muted-foreground">
-          {canAct ? REAUTH_ROW.hint : REAUTH_ROW.sharedMemberHint}
+          {reauthRowHint(audience)}
         </span>
       </div>
       {canAct && (

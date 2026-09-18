@@ -43,9 +43,13 @@ function reauthRow(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
   } as ApprovalRequest;
 }
 
-function mount(operator: boolean) {
+// The viewer, named: every row below is OWNED BY alice@corp, so the default
+// principal is alice's — the "owner" cell each of these cases was written for.
+// A case that means a different viewer passes one (W6-U BLOCKER-2: the door is
+// the VIEWER's own sign-in, and only the row's owner can resolve it).
+function mount(operator: boolean, principal = "alice@corp") {
   return render(
-    <OperatorProvider operator={operator} securityOperator={operator}>
+    <OperatorProvider operator={operator} securityOperator={operator} principal={principal}>
       <ModelAccessProvider status={null} onRefresh={() => {}}>
         <LiveApprovals runId="r1" />
       </ModelAccessProvider>
@@ -133,6 +137,45 @@ describe("LiveApprovals — the mid-run AWS sign-in row", () => {
     mount(true);
     const panel = await screen.findByTestId("live-approvals");
     expect(within(panel).getByRole("button", { name: REAUTH_ROW.ariaLabel })).toBeInTheDocument();
+  });
+
+  // THE FOUR CELLS OF THE ONE OWNERSHIP RULE (W6-U BLOCKER-1/BLOCKER-2). The
+  // door is the viewer's OWN sign-in: a capture lands in the capturer's scope,
+  // so reauthResolvableBy (internal/api's injection_awssso.go) admits only the
+  // subject the row names on the per_user lane, and only the operator — whose
+  // credential the shared one is — on the shared lane. The other two cells
+  // above pin the shared lane; these two pin the per_user one.
+  it("the OWNER gets the door, member or not — it is their own sign-in", async () => {
+    listApprovalsMock.mockResolvedValue([reauthRow()]);
+    mount(false, "alice@corp");
+    const panel = await screen.findByTestId("live-approvals");
+    expect(within(panel).getByRole("button", { name: REAUTH_ROW.ariaLabel })).toBeInTheDocument();
+    expect(within(panel).getByText(REAUTH_ROW.hint)).toBeInTheDocument();
+  });
+
+  it("an ADMIN reading a MEMBER's held run gets no door and a sentence naming whose sign-in it is", async () => {
+    listApprovalsMock.mockResolvedValue([reauthRow()]); // owner alice@corp
+    mount(true, "admin@corp");
+    const panel = await screen.findByTestId("live-approvals");
+    // The admin's own sign-in captures into the ADMIN's scope and can never
+    // resolve alice's row — the button would be a gesture the server refuses.
+    expect(within(panel).queryByRole("button", { name: REAUTH_ROW.ariaLabel })).not.toBeInTheDocument();
+    // …and "waiting on YOUR sign-in" is the false half of the same defect.
+    expect(within(panel).queryByText(REAUTH_ROW.hint)).not.toBeInTheDocument();
+    expect(within(panel).getByText(REAUTH_ROW.notYoursHint("alice@corp"))).toBeInTheDocument();
+  });
+
+  it("says nothing audience-dependent until /me has answered — no door on an unresolved viewer", async () => {
+    listApprovalsMock.mockResolvedValue([reauthRow()]);
+    render(
+      <OperatorProvider operator operatorResolved={false} securityOperator principal="alice@corp">
+        <ModelAccessProvider status={null} onRefresh={() => {}}>
+          <LiveApprovals runId="r1" />
+        </ModelAccessProvider>
+      </OperatorProvider>,
+    );
+    const panel = await screen.findByTestId("live-approvals");
+    expect(within(panel).queryByRole("button", { name: REAUTH_ROW.ariaLabel })).not.toBeInTheDocument();
   });
 
   it("toasts 'Signed in' — and nothing about the run — when the row is APPROVED", async () => {

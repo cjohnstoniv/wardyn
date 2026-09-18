@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type { ApprovalRequest } from "../../lib/types";
 import { AGENTS } from "../../lib/workspace-providers-copy";
 
 // The 0.7.6 model-access / re-authentication strings, in their OWN module.
@@ -61,6 +62,15 @@ export const MODEL_ACCESS_BANNER = {
   // credential for a non-operator. A lapse of something the person already had
   // is never dismissable.
   NOT_NOW: "Not now",
+  // The strip's button has a name of its own ON /settings, where a MEMBER sees
+  // it beside the Settings card's own disabled "Sign in to AWS" (the strip
+  // deliberately stays there — round-1 UX B1/S12 — so the collision is with a
+  // dead control rather than a live one). getByRole matches a disabled button,
+  // so without this one page carries two controls with one accessible name.
+  // The rail's precedent: RAIL_MODEL_ACCESS.SIGN_IN_ARIA. Elsewhere the strip
+  // is the only "Sign in to AWS" on the page and keeps the plain label, which
+  // is also what the live SSO walk locates it by.
+  SIGN_IN_ARIA_BANNER: "Sign in to AWS — from the banner",
 } as const;
 
 // DRAFT (M2 canon pending) — the rail's per-PERSON model-access lines. Distinct
@@ -134,7 +144,59 @@ export const REAUTH_ROW = {
   // satisfy, so the row states the instruction instead of offering a dead door
   // (Codex #7 — the audience decides which of the two renders).
   sharedMemberHint: "This run uses the shared AWS sign-in — ask your admin to sign in again.",
+  // The PER_USER lane's non-owner — an admin reading a member's held run is the
+  // case that made this exist (round-2 general S5, W6-U BLOCKER-2). The
+  // admin's own sign-in captures into the ADMIN's scope and can never resolve
+  // this row (reauthResolvableBy), so the sentence names whose sign-in is
+  // awaited and carries no button. "the run owner" stands in when the row
+  // names no owner — a sentence with an empty possessive is worse than a
+  // generic one.
+  notYoursHint: (owner: string) =>
+    `Waiting on ${owner || "the run owner"}'s AWS sign-in — only they can complete it.`,
 } as const;
+
+/** Who a held re-auth row is addressed to, for THIS viewer. */
+export interface ReauthAudience {
+  /** Whether this viewer's own sign-in can clear the row. */
+  canAct: boolean;
+  /** The SHARED lane: the credential is the operator's, not the row owner's. */
+  shared: boolean;
+  /** The subject a capture is matched against; "" on a shared row. */
+  owner: string;
+}
+
+/**
+ * reauthAudience — ONE ownership rule for the held-run sign-in door, mirroring
+ * the server's own admission test (reauthResolvableBy, internal/api's
+ * injection_awssso.go): a capture lands in the CAPTURER's scope, so a per_user
+ * row is resolvable only by the subject named on it, and a shared row only by
+ * an operator, whose sign-in is the one the shared credential holds.
+ *
+ * Both surfaces that render the door — the cockpit row and the /approvals card
+ * — call this, because two copies of the rule are two audiences that can
+ * disagree, and the disagreement reads as a button the server then refuses.
+ *
+ * `principal` must be the RESOLVED viewer subject (door.principal): "" while
+ * /me is in flight, which grades every per_user row as "not yours" — the
+ * fail-closed direction, and the same one failure-block.tsx's `!!principal`
+ * takes.
+ */
+export function reauthAudience(
+  request: Pick<ApprovalRequest, "requested_scope">,
+  viewer: { operator: boolean; principal: string },
+): ReauthAudience {
+  const shared = String((request.requested_scope?.credential_source as string) ?? "") === "shared";
+  const owner = String((request.requested_scope?.owner as string) ?? "");
+  const canAct = shared ? viewer.operator : !!viewer.principal && owner === viewer.principal;
+  return { canAct, shared, owner };
+}
+
+/** The row's sentence for that audience — the door's own hint, or the one
+ *  sentence that names who can actually clear it. */
+export function reauthRowHint(audience: ReauthAudience): string {
+  if (audience.canAct) return REAUTH_ROW.hint;
+  return audience.shared ? REAUTH_ROW.sharedMemberHint : REAUTH_ROW.notYoursHint(audience.owner);
+}
 
 // The strip's heading when every pending row is a re-auth. "approve to let it
 // through" is FALSE here (nobody approves this kind), and so is any sentence

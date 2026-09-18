@@ -53,7 +53,14 @@ vi.mock("../../lib/api/approvals", () => {
               id: "apr_1",
               run_id: "run_1",
               kind: mockPendingKind,
-              requested_scope: { host: "api.example.com" },
+              // A credential_reauth row carries the lane and the SUBJECT whose
+              // sign-in resolves it — the wire fields reauthAudience grades the
+              // viewer against (approvals-reauth.test.tsx owns the four cells;
+              // this case is the owner's).
+              requested_scope:
+                mockPendingKind === "credential_reauth"
+                  ? { mechanism: "bedrock_sso", credential_source: "per_user", owner: "you@corp" }
+                  : { host: "api.example.com" },
               state: "PENDING",
               requested_at: new Date().toISOString(),
             } satisfies ApprovalRequest,
@@ -145,11 +152,14 @@ describe("ApprovalsScreen — deny error handling", () => {
   it("renders the re-auth request as a door with its own title and no blast radius", async () => {
     mockPendingKind = "credential_reauth";
     render(
-      <MemoryRouter>
-        <ModelAccessProvider status={null} onRefresh={() => {}}>
-          <ApprovalsScreen />
-        </ModelAccessProvider>
-      </MemoryRouter>,
+      // The row's OWNER — the one viewer whose own sign-in clears it.
+      <OperatorProvider operator={false} securityOperator={false} principal="you@corp">
+        <MemoryRouter>
+          <ModelAccessProvider status={null} onRefresh={() => {}}>
+            <ApprovalsScreen />
+          </ModelAccessProvider>
+        </MemoryRouter>
+      </OperatorProvider>,
     );
     expect(await screen.findByText(REAUTH_TITLE)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Approve$/ })).not.toBeInTheDocument();

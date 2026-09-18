@@ -39,7 +39,7 @@ import * as React from "react";
 
 import { modelAccessDoor, NO_MODEL_ACCESS_DOOR, type ModelAccessDoor } from "../../lib/model-access";
 import type { SetupStatus } from "../../lib/types";
-import { useOperator, useOperatorResolved } from "./operator-context";
+import { useOperator, useOperatorResolved, usePrincipal } from "./operator-context";
 
 /** What a caller gets: the graded door, plus the three things only the shared
  *  instance can offer. */
@@ -58,6 +58,12 @@ export interface ModelAccessDoorHandle extends ModelAccessDoor {
    *  rather than calling useOperator() again: a second read would answer the
    *  fail-open default in exactly the window the door refuses to grade. */
   operator: boolean;
+  /** THIS viewer's resolved subject (GET /me's `principal`), "" until /me has
+   *  answered — the same window `operator` above reads as false. Consumers that
+   *  compare a row's owner against the viewer read it here rather than calling
+   *  usePrincipal() again, so the ownership answer and the tier answer can
+   *  never come from two different moments. */
+  principal: string;
   open: boolean;
   /** `returnTo` — the element focus should return to when the door closes and
    *  no better target exists. Callers whose OWN trigger unmounts before the
@@ -183,11 +189,13 @@ export function useModelAccessDoor(): ModelAccessDoorHandle {
   // the answer is audience-dependent and the audience is not known yet.
   const operator = useOperator();
   const resolved = useOperatorResolved();
+  const principal = usePrincipal();
   const door = React.useMemo(
     () => (ctx.status && resolved ? modelAccessDoor(ctx.status, { operator }) : NO_MODEL_ACCESS_DOOR),
     [ctx.status, operator, resolved],
   );
   const viewerOperator = resolved && operator;
+  const viewerPrincipal = resolved ? principal : "";
   return React.useMemo(
     () => ({
       ...door,
@@ -195,6 +203,7 @@ export function useModelAccessDoor(): ModelAccessDoorHandle {
       claim: ctx.claim,
       claimed: ctx.claimed,
       operator: viewerOperator,
+      principal: viewerPrincipal,
       open: ctx.open,
       openDoor: ctx.openDoor,
       closeDoor: ctx.closeDoor,
@@ -203,6 +212,7 @@ export function useModelAccessDoor(): ModelAccessDoorHandle {
     [
       door,
       viewerOperator,
+      viewerPrincipal,
       ctx.refresh,
       ctx.claim,
       ctx.claimed,
