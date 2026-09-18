@@ -10,7 +10,7 @@
 // because they lack access, not because the run is gone. This pins that the
 // description now names that reason too (without disambiguating which case
 // applies — preserves the anti-enumeration property).
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
