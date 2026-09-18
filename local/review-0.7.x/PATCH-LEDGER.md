@@ -298,14 +298,22 @@ same-commit window-0 re-cites; never the umbrella integration branches.
 | R076-027 | INCLUDE | `0bb4699b`; mechanism real, low in production (the proxy forwards a `bytes.Reader`); audit re-cite 125→119 verified |
 | R076-028 | INCLUDE as a 3-line fix | reproduced at base and tip; unlink the owned `.tmp-cast-*` on the rename error path + a test, applied by the 0.7.6 patches lane (no ledger commit) |
 
-## 0.7.6 cut (2026-09-19, the coordinator's record; the owner pushes/tags/releases)
+## 0.7.6 cut (2026-09-18, the coordinator's record; the owner granted push/tag/release for 0.7.6)
 
-`feature/0.7.6` cut tip **341614e0**; release commit **1bb9fbb2** (`release: 0.7.6`, `lane/v0.7.6-release`, dated 2026-09-18).
+`feature/0.7.6` cut tip **4904de82**; release commit **553ff267** (`release: 0.7.6`, `lane/v0.7.6-release`, dated 2026-09-18; the
+fourth cut — f647bf71, 1bb9fbb2 and 8512d0e9 were superseded by the three notes truth-checks; NOTES-REVIEW-4 on 553ff267 found no
+blocker and no should). Published 2026-09-18: tag `v0.7.6` = 553ff267 = `origin/main` = `origin/release/0.7`; https://github.com/cjohnstoniv/wardyn/releases/tag/v0.7.6 (pre-release).
 Shipped from this ledger: R076-005, 006, 009, 011, 012, 013, 014, 015, 016, 017, 018, 019, 020, 021, 023, 024, 025, 026, 027 (19
 bullets in CHANGELOG `[0.7.6]` under "From the 0.7.x readiness review") plus the R076-028 candidate as a three-line fix. Not shipped:
 R076-002 (race reproduced), 003, 004 (narrowed by 0.7.6) — carried as Known gaps for 0.7.7; 007, 008 (PR #71, merges independently),
 022 (re-derived per commit by the window-0 guard) rejected; 010 was already in the base. Evidence: the 0.7.6 campaign's
 `local/v076/evidence/patch-review/{A,B,C,D,E,SELECTION}.md` and `local/v076/release/RELEASE-0.7.6-RECORD.md`.
+
+Deferred to 0.7.7 from the notes truth-checks (docs and comments only, none ships a defect — `local/v076/evidence/release/NOTES-REVIEW-4.md`):
+N11 the lede of the timeout-negative comment in `ui/e2e/live/sso-reauth-hold.spec.ts` ("the walk cannot SEE it") contradicts the
+fixed sentence below it; N12 `docs/TEST-GAPS.md` "speaks inside the terminated tunnel" lacks the notes' "plain HTTP"; N13 the notes'
+"the plaintext walk" reads better as "the walk's plaintext client leg"; N14 four code comments (`mitm.go`, `mitm_plaintext_upstream_test.go`)
+cite `SDK-PATH.md`, campaign evidence that is not in the repo.
 
 ## Open findings, not implemented
 
