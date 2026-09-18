@@ -287,7 +287,7 @@ export interface SetupModelAccess {
   // carries a UTC stamp, and the surfaces that now render that state on EVERY
   // screen for 24 h have to show it on the reader's own clock (relativeTime in
   // the shell strip and the New Run rail, absoluteTime in the two card rows —
-  // lib/model-access.ts's modelAccessActionLine). Absent for every state that
+  // lib/workspace-providers-copy.ts's modelAccessActionLine). Absent for every state that
   // names no instant, and from a pre-0.7.6 daemon: render `action` verbatim
   // then. NEVER sent to a member under a `shared` row — memberModelAccess
   // builds a fresh struct that drops it, which is the leak that projection
