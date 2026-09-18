@@ -358,11 +358,21 @@ function ExpectList({ items }: { items: React.ReactNode[] }) {
   );
 }
 
+/** What a PARENT can make this pane do. One verb: the pane owns the login run's
+ *  id, so it is the only thing that can end that run — and a dialog's Escape /
+ *  overlay click closes the PARENT, which `onCancel` (child-to-parent) cannot
+ *  reach back into. Without this a dismissed dialog left a "wardyn: sign-in
+ *  running" run on the member's board for up to 30 minutes. */
+export interface HarnessLoginPaneHandle {
+  cancel: () => void;
+}
+
 export function HarnessLoginPane({
   provider = "anthropic",
   startURLManaged = false,
   onDone,
   onCancel,
+  paneRef,
 }: {
   provider?: string;
   // The ORG's access portal is already stored and the server will use it: this
@@ -380,6 +390,11 @@ export function HarnessLoginPane({
   onDone: () => void;
   // Called when the operator backs out before capturing.
   onCancel: () => void;
+  // Optional: a parent that can be dismissed from OUTSIDE the pane (the
+  // model-access door's dialog) holds this to route that dismissal through the
+  // pane's own cancellation. Omitted everywhere the pane's own Cancel is the
+  // only way out.
+  paneRef?: React.Ref<HarnessLoginPaneHandle>;
 }) {
   const flow = loginFlow(provider);
   const askStartUrl = !!flow.needsStartUrl && !startURLManaged;
@@ -411,6 +426,12 @@ export function HarnessLoginPane({
   // Rolling buffer of recent PTY output + latches so we act on each thing once.
   const outBufRef = React.useRef("");
   const savedRef = React.useRef(false);
+  // THE LAUNCH-AFTER-DISMISS RACE. harnessLogin's POST answers with the run id
+  // AFTER dispatch has already created the run, so a cancellation that lands
+  // while it is in flight sees `runId === null` and kills nothing — the run is
+  // born orphaned. Latched here on the way out and re-checked once the id
+  // exists.
+  const dismissedRef = React.useRef(false);
   const failedRef = React.useRef(false);
   const openedUrlRef = React.useRef(false);
   // Consecutive unreadable polls of the starting run, not a total: one blip must
@@ -436,6 +457,7 @@ export function HarnessLoginPane({
     setError("");
     outBufRef.current = "";
     savedRef.current = false;
+    dismissedRef.current = false;
     failedRef.current = false;
     openedUrlRef.current = false;
     setAutoCaptured(false);
@@ -456,6 +478,12 @@ export function HarnessLoginPane({
       // Cancel able to kill a sandbox that is still coming up — before P5 the
       // POST did not answer until dispatch was done, so a timed-out launch left
       // an orphan nobody could name.
+      // …and if the way out was taken WHILE that POST was in flight, this id is
+      // the only handle anybody will ever have on the run it created.
+      if (dismissedRef.current) {
+        runsApi.killRun(id).catch(() => {});
+        return;
+      }
       setRunId(id);
       setPhase("starting");
     } catch (e) {
@@ -688,9 +716,11 @@ function startingSentenceOf(run: AgentRun | undefined): string {
   }, [code]);
 
   const cancel = React.useCallback(() => {
+    dismissedRef.current = true;
     if (runId) runsApi.killRun(runId).catch(() => {});
     onCancel();
   }, [runId, onCancel]);
+  React.useImperativeHandle(paneRef, () => ({ cancel }), [cancel]);
 
   return (
     <div className="space-y-3 rounded-lg border border-border bg-surface-2/40 p-3" data-testid="harness-login-pane">

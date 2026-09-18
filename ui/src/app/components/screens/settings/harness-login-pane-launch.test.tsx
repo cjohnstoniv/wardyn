@@ -37,7 +37,7 @@ vi.mock("../../../lib/api/harness-auth", () => ({
 vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: vi.fn(), getRun: vi.fn() } }));
 vi.mock("../../../lib/api/setup", () => ({ setup: { getSetupStatus: vi.fn() } }));
 
-import { HarnessLoginPane } from "./harness-login-pane";
+import { HarnessLoginPane, type HarnessLoginPaneHandle } from "./harness-login-pane";
 import { AWS_BLURB_MANAGED_OPENING } from "./login-pane-copy";
 import { HttpError } from "../../../lib/api/core";
 import { runs as runsApiMocked } from "../../../lib/api/runs";
@@ -277,5 +277,50 @@ describe("a terminal ending that arrived only as a failure_hint", () => {
     const alertBox = await screen.findByRole("alert");
     expect(alertBox).toHaveTextContent("pull access denied");
     expect(alertBox.textContent ?? "").not.toMatch(new RegExp(`${LOGIN_SANDBOX_STUCK_LEAD_IN}\\s*$`));
+
+// THE LAUNCH-AFTER-DISMISS RACE, and the handle that makes a dismissal from
+// OUTSIDE the pane reach the run it created (0.7.6, Codex #15).
+//
+// The model-access door mounts this pane in a Dialog, whose Escape / overlay
+// click closes the PARENT — and `onCancel` is child-to-parent, so it cannot
+// reach back in to kill the login run. Worse, harnessLogin's POST answers with
+// the id AFTER dispatch has already created the run, so a cancellation landing
+// mid-flight used to see `runId === null`, kill nothing, and leave a "wardyn:
+// sign-in running" run on the member's board for up to 30 minutes.
+describe("a dismissal from outside the pane still ends the login run", () => {
+  beforeEach(() => {
+    harnessLoginMock.mockReset();
+    vi.mocked(runsApiMocked.killRun).mockReset().mockResolvedValue(undefined);
+    vi.mocked(runsApiMocked.getRun).mockReset().mockResolvedValue(undefined as unknown as AgentRun);
+  });
+
+  it("ref.cancel() kills the run the pane is holding", async () => {
+    harnessLoginMock.mockResolvedValue("run-abc");
+    const onCancel = vi.fn();
+    const ref = React.createRef<HarnessLoginPaneHandle>();
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={onCancel} paneRef={ref} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    await screen.findByTestId("login-sandbox-starting");
+
+    await act(async () => ref.current?.cancel());
+    expect(runsApiMocked.killRun).toHaveBeenCalledWith("run-abc");
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("a cancel DURING the launch POST kills the run that POST created", async () => {
+    let answer: (id: string) => void = () => {};
+    harnessLoginMock.mockReturnValue(new Promise<string>((resolve) => (answer = resolve)));
+    const ref = React.createRef<HarnessLoginPaneHandle>();
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} paneRef={ref} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+
+    // Dismissed while the POST is still in flight: nothing has an id yet.
+    await act(async () => ref.current?.cancel());
+    expect(runsApiMocked.killRun).not.toHaveBeenCalled();
+
+    await act(async () => {
+      answer("run-born-orphaned");
+    });
+    expect(runsApiMocked.killRun).toHaveBeenCalledWith("run-born-orphaned");
   });
 });
