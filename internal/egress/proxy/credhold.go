@@ -86,14 +86,24 @@ func (e errReauthPending) Error() string {
 	return "credential re-auth pending: approval " + e.approvalID.String()
 }
 
-// errReauthTimedOut ends a hold without a credential. It is DISTINCT from every
-// other resolve error because it alone earns the 401 UnauthorizedException body
-// (a modelled, non-retryable GetRoleCredentials error both SDKs map to a
-// credential failure) rather than the generic 502 — see writeSSOUnauthorized.
+// errReauthNoCredential is what EVERY hold that ends without a credential has in
+// common, and the only thing the sandbox needs to know: it earns the 401
+// UnauthorizedException body (a modelled, non-retryable GetRoleCredentials error
+// both SDKs map to a credential failure) rather than the generic 502 — see
+// writeSSOUnauthorized. It is never returned on its own; the sentinels below say
+// WHY, and only ONE of them is an expiry.
+var errReauthNoCredential = errors.New("credential re-auth hold ended without a credential")
+
+// errReauthTimedOut is the hold's BUDGET running out with nobody signed in —
+// and nothing else (security NIT-B). It alone earns the credential:reauth-timeout
+// decision row and the outcome=timeout count, because the plan's state table
+// reserves that row for "hold budget ends": a shutdown, a killed run or an
+// answered-but-not-approved request did not expire, and a trail that says they
+// did is a trail that lies about how long the owner had.
 //
 // It is handed to the FIRST live caller that observes the workflow's terminal
 // result. That caller writes the ONE credential:reauth-timeout decision row.
-var errReauthTimedOut = errors.New("credential re-auth hold expired")
+var errReauthTimedOut = fmt.Errorf("%w: the hold budget expired", errReauthNoCredential)
 
 // errReauthTimedOutAgain is the SAME expiry, already recorded: every later
 // caller of the same workflow gets it. errors.Is(errReauthTimedOutAgain,
@@ -103,10 +113,32 @@ var errReauthTimedOut = errors.New("credential re-auth hold expired")
 // the measured ~30 s SDK cadence the difference is one row versus twenty.
 var errReauthTimedOutAgain = fmt.Errorf("%w (already recorded)", errReauthTimedOut)
 
-// errReauthCapped is the per-run workflow cap refusing a NEW lifecycle. It is
-// its own sentinel so the cap reads as a cap in the decision trail rather than
-// as an expiry that never happened.
-var errReauthCapped = fmt.Errorf("%w (no further sign-in will be requested for this run)", errReauthTimedOut)
+// errReauthEnded is a hold that ended for a reason that is NOT its budget: the
+// proxy shutting down, a run that was killed, a request answered with anything
+// but "approved", a sign-in request that has gone, or a final re-resolve that
+// failed. The sandbox still gets the 401 — there is no credential either way —
+// but no credential:reauth-timeout row and no outcome=timeout count, because
+// none of these is an expiry (security NIT-B). The reason travels for the log
+// line; the run-kill path already leaves its own approval.cancelled row.
+type errReauthEnded struct{ reason string }
+
+func (e errReauthEnded) Error() string { return "credential re-auth hold ended: " + e.reason }
+func (e errReauthEnded) Unwrap() error { return errReauthNoCredential }
+
+// The reasons, named once so the log line and the tests agree.
+var (
+	reauthEndedShutdown    = errReauthEnded{reason: "the proxy is shutting down"}
+	reauthEndedRunGone     = errReauthEnded{reason: "the run has ended"}
+	reauthEndedAnswered    = errReauthEnded{reason: "the sign-in request was answered without an approval"}
+	reauthEndedRequestGone = errReauthEnded{reason: "the sign-in request is gone"}
+	reauthEndedResolve     = errReauthEnded{reason: "the credential could not be resolved after the sign-in"}
+)
+
+// errReauthCapped is the per-run workflow cap refusing a NEW lifecycle. Its own
+// sentinel so the cap reads as a cap rather than as an expiry that never
+// happened — and, being an errReauthEnded, it writes no timeout row at all,
+// which is also why it needs no per-retry dedupe (general N-new-3 / INFO-2).
+var errReauthCapped = errReauthEnded{reason: "no further sign-in will be requested for this run"}
 
 // reauthTimedOutSentence is what the sandbox's SDK is told. It says what was
 // done, what was not, and — because this is the one place a person could
@@ -115,6 +147,15 @@ var errReauthCapped = fmt.Errorf("%w (no further sign-in will be requested for t
 // DRAFT (M2 canon pending)
 const reauthTimedOutSentence = "wardyn held this AWS SSO credential request while its owner was " +
 	"asked to sign in again, and nobody signed in before the hold expired; nothing was substituted"
+
+// reauthEndedSentence is the same answer for a hold that did NOT expire. The
+// sentence above would be false for a killed run or a shut-down proxy — the
+// owner may have had seconds, not the whole budget — and an error body that
+// misstates why is the one place a person would look to find out.
+//
+// DRAFT (M2 canon pending)
+const reauthEndedSentence = "wardyn asked this AWS SSO credential request's owner to sign in again, and " +
+	"the request ended before a sign-in arrived; nothing was substituted"
 
 // reauthWorkflow is ONE bounded re-auth lifecycle, shared by every caller that
 // arrives for the same approval id.
@@ -278,8 +319,9 @@ func holdForReauth(ctx context.Context, poll time.Duration, stop <-chan struct{}
 		select {
 		case <-stop:
 			// The proxy is shutting down: end the hold rather than keep polling
-			// about a run that is going away.
-			return types.ResolvedInjection{}, errReauthTimedOut
+			// about a run that is going away. NOT an expiry — the budget may
+			// have had minutes left.
+			return types.ResolvedInjection{}, reauthEndedShutdown
 		case <-ctx.Done():
 			// Budget spent, or the SDK hung up. Either way there is no
 			// credential, and the sign-in is still wanted.
@@ -298,12 +340,12 @@ func holdForReauth(ctx context.Context, poll time.Duration, stop <-chan struct{}
 			// before the CANCELLED row is readable, and the generic poll treats
 			// every non-200 as "still pending" — so the hold used to run its
 			// whole budget against a run that had already ended.
-			return types.ResolvedInjection{}, errReauthTimedOut
+			return types.ResolvedInjection{}, reauthEndedRunGone
 		case status == http.StatusNotFound:
 			// A read racing the row's own insert answers 404 once; a row that
 			// has really gone answers it every time.
 			if notFound++; notFound >= reauth404Reads {
-				return types.ResolvedInjection{}, errReauthTimedOut
+				return types.ResolvedInjection{}, reauthEndedRequestGone
 			}
 			continue
 		}
@@ -323,11 +365,11 @@ func holdForReauth(ctx context.Context, poll time.Duration, stop <-chan struct{}
 			out, rerr := resolveInjection(rctx, base, token.Get(), grantID, client)
 			rcancel()
 			if rerr != nil {
-				return types.ResolvedInjection{}, errReauthTimedOut
+				return types.ResolvedInjection{}, reauthEndedResolve
 			}
 			return out, nil
 		case types.ApprovalDenied, types.ApprovalExpired, types.ApprovalCancelled:
-			return types.ResolvedInjection{}, errReauthTimedOut
+			return types.ResolvedInjection{}, reauthEndedAnswered
 		}
 	}
 }
@@ -373,13 +415,13 @@ func (a httpApprovalReader) readApproval(ctx context.Context, id uuid.UUID) (typ
 // where a 502 is a transport error they retry — three more full holds for one
 // lapse. The message is Wardyn's own sentence, so the person reading the
 // agent's output learns that a sign-in is what fixes this.
-func writeSSOUnauthorized(w http.ResponseWriter) {
+func writeSSOUnauthorized(w http.ResponseWriter, sentence string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("x-amzn-errortype", "UnauthorizedException")
 	w.WriteHeader(http.StatusUnauthorized)
 	body, _ := json.Marshal(map[string]string{
 		"__type":  "UnauthorizedException",
-		"message": reauthTimedOutSentence,
+		"message": sentence,
 	})
 	_, _ = w.Write(body)
 }

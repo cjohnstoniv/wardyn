@@ -481,23 +481,36 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 			// request — so the owner's sign-in still lands for whoever is left.
 			return
 		}
-		if errors.Is(ierr, errReauthTimedOut) {
-			// The hold ended with nobody signed in. 401 + a modelled
+		if errors.Is(ierr, errReauthNoCredential) {
+			// The hold ended with no credential. 401 + a modelled
 			// UnauthorizedException, NOT the 502 below: both AWS SDKs read that
 			// as a credential failure and stop, where a 502 is a transport
-			// error they retry — three more full holds for one lapse. The
-			// decision row names the hold, so the trail distinguishes "nobody
-			// signed in" from "the credential could not be refreshed".
-			// ONE decision row per hold, not one per retry: with the measured
-			// ~30 s SDK cadence a single ten-minute expiry would otherwise
-			// deny-log twenty times. The workflow hands errReauthTimedOut to the
-			// first live observer and errReauthTimedOutAgain to the rest; both
-			// answer the sandbox, only the first is recorded.
-			if !errors.Is(ierr, errReauthTimedOutAgain) {
+			// error they retry — three more full holds for one lapse.
+			//
+			// The DECISION ROW is narrower than the 401, and deliberately
+			// (security NIT-B): it is written only when the hold's own BUDGET
+			// expired, because that row is what the trail reads as "the owner
+			// had the whole window and did not sign in". A shut-down proxy, a
+			// killed run (which already leaves approval.cancelled), an answered
+			// request or the per-run cap did not expire, and each gets the
+			// honest sentence instead of the expiry one.
+			//
+			// ONE row per hold, not one per retry: with the measured ~30 s SDK
+			// cadence a single ten-minute expiry would otherwise deny-log
+			// twenty times. The workflow hands errReauthTimedOut to the first
+			// live observer and errReauthTimedOutAgain to the rest; both answer
+			// the sandbox, only the first is recorded.
+			switch {
+			case !errors.Is(ierr, errReauthTimedOut):
+				slog.Warn("proxy: a held AWS SSO credential request ended", "host", host, "err", reauthHoldError(ierr))
+				writeSSOUnauthorized(w, reauthEndedSentence)
+			case errors.Is(ierr, errReauthTimedOutAgain):
+				writeSSOUnauthorized(w, reauthTimedOutSentence)
+			default:
 				p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceCredentialReauthTimeout, nil)
 				slog.Warn("proxy: a held AWS SSO credential request expired", "host", host, "err", reauthHoldError(ierr))
+				writeSSOUnauthorized(w, reauthTimedOutSentence)
 			}
-			writeSSOUnauthorized(w)
 			return
 		}
 		p.emitLLMDecision(r, host, port, egress.Deny, mitmSource, nil)

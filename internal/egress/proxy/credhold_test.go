@@ -202,6 +202,12 @@ func TestResolveInjectionHolding_HoldsThenResolvesOnce(t *testing.T) {
 // returns immediately, with no hold, no poll and no second resolve.
 func TestResolveInjectionHolding_NonLockedErrorIsUnchanged(t *testing.T) {
 	fastPolls(t, 5*time.Millisecond)
+	// The budget is set even though this test must never reach it: without it a
+	// REGRESSION here (a 424 mistaken for a 423) parks for the 600 s default and
+	// reds as a ten-minute test-binary panic instead of an assertion. The clamp's
+	// floor makes the same regression fail in ~11 s with the message below
+	// (general N-new-2).
+	shortBudget(t, "10s")
 	is := &injectionServer{approvalID: uuid.New()}
 	is.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		is.hits.Add(1)
@@ -217,8 +223,11 @@ func TestResolveInjectionHolding_NonLockedErrorIsUnchanged(t *testing.T) {
 	if err == nil {
 		t.Fatal("want the resolve error")
 	}
-	if errors.Is(err, errReauthTimedOut) {
-		t.Fatal("a 424 was treated as a hold")
+	// errReauthNoCredential, not errReauthTimedOut: the sentinel split means a
+	// hold can now end in ways that are NOT an expiry, and a 424 mistaken for a
+	// 423 that then ended on a shutdown would slip past the narrower check.
+	if errors.Is(err, errReauthNoCredential) {
+		t.Fatalf("a 424 was treated as a hold: %v", err)
 	}
 	if reader.count() != 0 {
 		t.Errorf("approval reads = %d, want 0 — nothing but a 423 may poll", reader.count())
@@ -299,6 +308,26 @@ func TestResolveCtx_ACallerThatHangsUpIsReleasedAndTheHoldContinues(t *testing.T
 	}
 }
 
+// wantEndedNotExpired is the honest classification, asserted on both halves
+// (security NIT-B): the sandbox IS refused — errReauthNoCredential, so the
+// modelled 401 — but the hold did NOT expire, so errors.Is(err,
+// errReauthTimedOut) must be FALSE. That is what keeps the
+// credential:reauth-timeout decision row and outcome=timeout for a spent budget
+// and nothing else, so a trail reading "expired" never describes a killed run,
+// a shut-down proxy or an answered request.
+func wantEndedNotExpired(t *testing.T, err error, reason string) {
+	t.Helper()
+	if !errors.Is(err, errReauthNoCredential) {
+		t.Fatalf("err = %v, want errReauthNoCredential (the sandbox still gets the modelled 401)", err)
+	}
+	if errors.Is(err, errReauthTimedOut) {
+		t.Errorf("err = %v is classified as an EXPIRY — it would write a credential:reauth-timeout row and count outcome=timeout for a hold whose budget never ran out", err)
+	}
+	if !strings.Contains(err.Error(), reason) {
+		t.Errorf("err = %v does not name the reason %q", err, reason)
+	}
+}
+
 // Codex #4 — TERMINAL DENIAL IS CLASSIFIED. After a run is killed the internal
 // middleware can answer 401 before the CANCELLED row is readable; the hold must
 // end within one poll, not run its whole budget.
@@ -312,9 +341,7 @@ func TestResolveInjectionHolding_UnauthorizedPollIsTerminal(t *testing.T) {
 
 	start := time.Now()
 	_, _, err := holdInjectorCoord(t, is, reader).resolveCtx(context.Background(), holdHost)
-	if !errors.Is(err, errReauthTimedOut) {
-		t.Fatalf("err = %v, want errReauthTimedOut", err)
-	}
+	wantEndedNotExpired(t, err, "the run has ended")
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Errorf("a 401 from the approval read took %v to end the hold, want one poll", elapsed)
 	}
@@ -354,9 +381,8 @@ func TestResolveInjectionHolding_PersistentNotFoundIsTerminal(t *testing.T) {
 	tok.Set("t")
 
 	start := time.Now()
-	if _, _, err := holdInjectorCoord(t, is, reader).resolveCtx(context.Background(), holdHost); !errors.Is(err, errReauthTimedOut) {
-		t.Fatalf("err = %v, want errReauthTimedOut", err)
-	}
+	_, _, err := holdInjectorCoord(t, is, reader).resolveCtx(context.Background(), holdHost)
+	wantEndedNotExpired(t, err, "the sign-in request is gone")
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Errorf("a persistent 404 took %v to end the hold", elapsed)
 	}
@@ -376,9 +402,8 @@ func TestResolveInjectionHolding_TerminalRowGivesUpAtOnce(t *testing.T) {
 			tok := &tokenSource{}
 			tok.Set("t")
 			start := time.Now()
-			if _, _, err := holdInjectorCoord(t, is, reader).resolveCtx(context.Background(), holdHost); !errors.Is(err, errReauthTimedOut) {
-				t.Fatalf("err = %v, want errReauthTimedOut", err)
-			}
+			_, _, err := holdInjectorCoord(t, is, reader).resolveCtx(context.Background(), holdHost)
+			wantEndedNotExpired(t, err, "answered without an approval")
 			if elapsed := time.Since(start); elapsed > time.Second {
 				t.Errorf("a %s row took %v to end the hold", state, elapsed)
 			}
@@ -570,23 +595,43 @@ func TestReauthPendingFrom(t *testing.T) {
 // The 401 body is the modelled AWS error, and it carries Wardyn's sentence
 // rather than a bare status — and no credential.
 func TestWriteSSOUnauthorized_IsTheModelledAWSError(t *testing.T) {
-	w := httptest.NewRecorder()
-	writeSSOUnauthorized(w)
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("code = %d, want 401 — a 502 is a transport error both SDKs RETRY", w.Code)
+	// BOTH sentences: an expiry and an end-that-was-not-an-expiry get the same
+	// modelled shape, and each says only what is true of it (security NIT-B).
+	for _, tc := range []struct {
+		name     string
+		sentence string
+		says     string
+	}{
+		{"budget expired", reauthTimedOutSentence, "nobody signed in before the hold expired"},
+		{"ended, not expired", reauthEndedSentence, "the request ended before a sign-in arrived"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			writeSSOUnauthorized(w, tc.sentence)
+			if w.Code != http.StatusUnauthorized {
+				t.Errorf("code = %d, want 401 — a 502 is a transport error both SDKs RETRY", w.Code)
+			}
+			var body map[string]string
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatalf("body is not JSON: %v", err)
+			}
+			if body["__type"] != "UnauthorizedException" {
+				t.Errorf("__type = %q, want UnauthorizedException (modelled, non-retryable)", body["__type"])
+			}
+			if body["message"] != tc.sentence {
+				t.Errorf("message = %q, want the hold's own sentence", body["message"])
+			}
+			if !strings.Contains(body["message"], tc.says) {
+				t.Errorf("message = %q does not say %q — a body that misstates WHY is the one place a person would look", body["message"], tc.says)
+			}
+			if !strings.Contains(body["message"], "nothing was substituted") {
+				t.Error("the body does not say that nothing was substituted — it is the one place a reader could conclude otherwise")
+			}
+		})
 	}
-	var body map[string]string
-	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
-		t.Fatalf("body is not JSON: %v", err)
-	}
-	if body["__type"] != "UnauthorizedException" {
-		t.Errorf("__type = %q, want UnauthorizedException (modelled, non-retryable)", body["__type"])
-	}
-	if body["message"] != reauthTimedOutSentence {
-		t.Errorf("message = %q, want the hold's own sentence", body["message"])
-	}
-	if !strings.Contains(body["message"], "nothing was substituted") {
-		t.Error("the expiry body does not say that nothing was substituted — it is the one place a reader could conclude otherwise")
+	// The expiry sentence must not be reachable for a hold that did not expire.
+	if strings.Contains(reauthEndedSentence, "expired") {
+		t.Error("the ended sentence claims an expiry")
 	}
 }
 
@@ -671,6 +716,23 @@ func TestResolveCtx_LeaderDisconnectLeavesTheWorkflowAndItsDeadlineAlone(t *test
 		t.Fatal("the first caller's disconnect ended the workflow")
 	}
 	deadline := wf.deadline
+
+	// …AND IT IS STILL ON THE ENTRY (security NIT-A). The coordinator keeping it
+	// is not enough: the entry is what the next arrival reads first, and taking
+	// a LIVE workflow off it made that arrival call resolveInjection — a broker
+	// mint and a credential.mint audit row — and only then join, through the
+	// coordinator, the very workflow it should have joined without asking. One
+	// spare mint per disconnect, on a hash-chained log, at the measured ~30 s
+	// SDK cadence.
+	inj.mu.Lock()
+	e := inj.byHost[holdHost]
+	inj.mu.Unlock()
+	e.reMu.Lock()
+	onEntry := e.reauth
+	e.reMu.Unlock()
+	if onEntry != wf {
+		t.Fatalf("the entry's workflow after the disconnect = %v, want the live one — the next arrival re-mints before joining it", onEntry)
+	}
 
 	// A later arrival joins the SAME workflow — same deadline, no new count —
 	// and rides it to the credential.
@@ -768,5 +830,35 @@ func TestResolveCtx_ANewApprovalIDStartsASecondCountedWorkflow(t *testing.T) {
 	inj.reauth.mu.Unlock()
 	if after != first+1 {
 		t.Errorf("counted %d -> %d, want one more: a NEW approval id is a new lapse and gets its own budget", first, after)
+	}
+}
+
+// TWO STACKED JOINERS, and the SECOND hangs up. Adopted verbatim from
+// REVIEW-2-security's appendix (SHOULD-2), because the brief's own
+// counterfactual did not discriminate: with a fake that answers 423 once, the
+// follower in every other test re-resolves into a direct 200 and never joins
+// the workflow at all, so "a follower waits on its own ctx, not on reMu" was
+// asserted on a wait nobody made. A JOINER that blocks under reMu passes the
+// whole suite — and pins the mutex for the budget, so the joiner behind it is
+// not released when its SDK gives up. That is the half this case owns.
+//
+// Reviewer-executed: clean tree PASS 0.46 s; with a joiner made to wait under
+// reMu, FAIL "joiner 2 was not released by its own ctx (took 9.845s)".
+func TestResolveCtx_TwoJoinersTheSecondHangsUpAndIsReleased(t *testing.T) {
+	fastPolls(t, 5*time.Millisecond)
+	shortBudget(t, "10s")
+	is := newInjectionServer(t, 1_000_000) // 423 forever
+	inj := holdInjector(t, is, &fakeApprovalReader{steps: pending(1)})
+	go func() { _, _, _ = inj.resolveCtx(context.Background(), holdHost) }() // creator, parked
+	waitForWorkflowDeadline(t, inj.reauth)
+	time.Sleep(50 * time.Millisecond)
+	go func() { _, _, _ = inj.resolveCtx(context.Background(), holdHost) }() // joiner 1, patient
+	time.Sleep(100 * time.Millisecond)
+	fctx, fcancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer fcancel()
+	start := time.Now()
+	_, _, ferr := inj.resolveCtx(fctx, holdHost) // joiner 2, hangs up
+	if elapsed := time.Since(start); !errors.Is(ferr, context.DeadlineExceeded) || elapsed > 2*time.Second {
+		t.Errorf("joiner 2 was not released by its own ctx (took %v, err=%v)", elapsed.Round(time.Millisecond), ferr)
 	}
 }

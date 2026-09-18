@@ -104,7 +104,7 @@ func buildInjector(ctx context.Context, base string, token *tokenSource, pol *Po
 	}
 	inj := &injector{
 		byHost: make(map[string]*injEntry), base: base, token: token, client: client,
-		reauth: newReauthCoordinator(),
+		reauth:    newReauthCoordinator(),
 		approvals: httpApprovalReader{base: base, token: token, client: client},
 	}
 	for _, r := range rules {
@@ -210,11 +210,7 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 			e.reMu.Unlock()
 			resolved, err := wf.await(ctx)
 			if err != nil {
-				e.reMu.Lock()
-				if e.reauth == wf {
-					e.reauth = nil // the next caller re-resolves
-				}
-				e.reMu.Unlock()
+				e.dropIfFinished(wf)
 				return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, err)
 			}
 			return i.installHeader(e, wf, resolved), true, nil
@@ -241,7 +237,10 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 		// and release reMu before waiting.
 		if i.reauth == nil || i.approvals == nil {
 			e.reMu.Unlock()
-			return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, errReauthTimedOut)
+			// No hold lane on this injector: the 423 is a refusal the sandbox
+			// still has to be told about, but nothing expired.
+			return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key,
+				errReauthEnded{reason: "this proxy has no re-auth hold lane"})
 		}
 		wf, fresh, admitted := i.reauth.admit(pending.approvalID, credentialReauthBudget())
 		if !admitted {
@@ -260,15 +259,30 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 		// workflow takes ITS result, terminal or not.
 		held, herr := wf.await(ctx)
 		if herr != nil {
-			e.reMu.Lock()
-			if e.reauth == wf {
-				e.reauth = nil // the next caller re-resolves
-			}
-			e.reMu.Unlock()
+			e.dropIfFinished(wf)
 			return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, herr)
 		}
 		return i.installHeader(e, wf, held), true, nil
 	}
+}
+
+// dropIfFinished takes a workflow off the entry, but ONLY once it is terminal.
+//
+// A caller that hangs up must leave a LIVE hold in place (security NIT-A):
+// dropping it made the next retry call resolveInjection first — a broker mint
+// and a credential.mint audit row — and only THEN join, through the
+// coordinator, the very workflow it should have joined without asking. One
+// spare mint per disconnect, and the lane's own "two hits per lapse" property
+// broke on every one of them.
+func (e *injEntry) dropIfFinished(wf *reauthWorkflow) {
+	if !wf.finished() {
+		return
+	}
+	e.reMu.Lock()
+	if e.reauth == wf {
+		e.reauth = nil // the next caller re-resolves
+	}
+	e.reMu.Unlock()
 }
 
 // installHeader writes a hold's resolved credential onto the entry and returns

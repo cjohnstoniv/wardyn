@@ -45,7 +45,7 @@ func reviewInjector(t *testing.T, is *injectionServer, reader approvalReader) *i
 // a NEW counted workflow with a FRESH full budget.
 func TestReview_FollowerThroughResolveCtxQueuesOnReMuAndStartsASecondWorkflow(t *testing.T) {
 	fastPolls(t, 5*time.Millisecond)
-	shortBudget(t, "10s") // the clamp's floor
+	shortBudget(t, "10s")                  // the clamp's floor
 	is := newInjectionServer(t, 1_000_000) // the control plane answers 423 forever
 	reader := &fakeApprovalReader{steps: pending(1)}
 	inj := reviewInjector(t, is, reader)
