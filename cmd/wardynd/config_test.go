@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/cjohnstoniv/wardyn/internal/api"
 )
 
 // ─── validateConfig: DSN required + TLS both-or-neither + Secure-cookie posture ──
@@ -704,5 +706,43 @@ func TestValidateMemberModePosture(t *testing.T) {
 					tt.memberMode, tt.localMode, tt.oidcConfigured, err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// ─── the O-10 kill switch, end to end through the real boot path ────────────────
+
+// THE ONE CONSTANT (general N-new-1). `awsSSOProxyInjectDefaultOn` in
+// internal/api/runs_dispatch_sso_inject.go is the whole rollback for Phase B:
+// flipping it to false must turn a daemon booted with NOTHING set — no flag, no
+// env, which is every deployment that has not opted in — back to the pre-0.7.6
+// behaviour. Two pieces have to line up for that, and each was pinned alone:
+// api.ResolveAWSSSOProxyInject's parse (internal/api) and the flag's DEFAULT
+// string (boot_flags.go). Nothing ran the pair, so a boot default that had drifted
+// away from the constant would have left the switch flipped and the lane still on.
+func TestAWSSSOProxyInject_BootDefaultIsTheKillSwitchConstant(t *testing.T) {
+	ensureUnset(t, "WARDYN_AWS_SSO_PROXY_INJECT")
+	resetFlags(t)
+	oldArgs := os.Args
+	os.Args = []string{"wardynd-test"}
+	t.Cleanup(func() { os.Args = oldArgs })
+
+	f := parseBootFlags()
+	got := api.ResolveAWSSSOProxyInject(*f.awsSSOProxyInject)
+	// The constant itself is unexported and stays that way; ResolveAWSSSOProxyInject
+	// of a value nobody typed IS the constant, by its own documented rule, so this
+	// reads the switch through the one window the package already exports.
+	if want := api.ResolveAWSSSOProxyInject(""); got != want {
+		t.Errorf("a daemon booted with nothing set resolves AWSSSOProxyInject = %v, want %v — "+
+			"the flag default %q no longer follows the kill-switch constant", got, want, *f.awsSSOProxyInject)
+	}
+	// …and the switch is REACHABLE: an explicit value still wins over the default,
+	// so the constant is a default and not a hard-coding.
+	for _, tc := range []struct {
+		raw  string
+		want bool
+	}{{"off", false}, {"on", true}} {
+		if got := api.ResolveAWSSSOProxyInject(tc.raw); got != tc.want {
+			t.Errorf("WARDYN_AWS_SSO_PROXY_INJECT=%q resolves to %v, want %v", tc.raw, got, tc.want)
+		}
 	}
 }
