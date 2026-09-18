@@ -102,10 +102,11 @@ cards, run cards, icon wells. Exactly three elevation levels:
 | Floating | one `--shadow-floating` token | Popovers, dropdowns, selects, dialogs, sheets, floating toolbars |
 
 `--shadow-floating` is ONE shared value in `theme.css` (`@theme inline`), deliberately not
-per-theme — a floating surface reads the same way in light and dark. It replaced the two
-spellings that shipped one idea: `shadow-md` (`dropdown-menu.tsx:45`, `select.tsx:68`,
-`popover.tsx:37`) and `shadow-lg` (`dialog.tsx:68`, `alert-dialog.tsx:63`,
-`sheet.tsx:63`, L233). A floating surface is one thing; it gets one shadow. Anything
+per-theme — a floating surface reads the same way in light and dark. It replaced two other
+spellings that shipped one idea, both now consolidated onto it: `shadow-md` and `shadow-lg`
+used to be split across `dropdown-menu.tsx:45`, `select.tsx:68`, `popover.tsx:37`,
+`dialog.tsx:68`, `alert-dialog.tsx:63`, `sheet.tsx:63` and L233 — all seven sites now carry
+`shadow-floating`. A floating surface is one thing; it gets one shadow. Anything
 wanting a fourth level wants the focus ring.
 
 ## 5. Status vocabulary and glyph pairing

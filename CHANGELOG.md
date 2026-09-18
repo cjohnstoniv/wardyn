@@ -149,10 +149,23 @@ enforcement-default change).
 - Correct when OIDC email-verification restrictions are enforced.
 - Explain how a mismatched age key can prevent restored daemon startup.
 - Describe SSH shell masking and recording retention accurately.
-
-**PLACEHOLDER — pass 3b, lane `patches` (`canon/patches-code.md`).** The readiness review's
-code/console picks (R076-005, -009, -017, -018+-024, -021, -023) and their two Known-gaps sentences
-land here verbatim from that lane's own canon.
+- Correct the recording pane's permission hint to include security admins.
+- Reject oversized brokered uploads instead of forwarding truncated data.
+- Prevent multiline and aliased Compose credentials from leaking in
+  support bundles; omit comments/unparseable config and require review before sharing.
+- Preserve dialog and sheet backdrop exit animations by forwarding their DOM refs.
+- Make the run-detail test's lifecycle-hook import explicit.
+- Confine filesystem recording replay and metadata reads
+  to the configured recording directory, including symlink resolution.
+- `run recording -o` and `support-bundle` now write through a private temp file; the finished file is
+  owner-only (0600).
+- `--policy-file` / `policy create|update|render -f` reject a file with more than one YAML document (a
+  second `---`, including a trailing one) instead of silently applying only the first.
+- Mask uploads only while storage reads — pins masking/tail-before-error/no-leak-on-abort behavior;
+  no behavior change for the shipped upload path (only the brokered proxy path, which already reads the whole
+  body before forwarding, ever calls this handler in production).
+- Fixed: `FSStore.SaveCast` no longer leaves its own `.tmp-cast-*` temp file behind when the final rename fails
+  (disk-hygiene fix, no behavior change on any success path).
 
 ### Known gaps
 
@@ -163,6 +176,13 @@ land here verbatim from that lane's own canon.
   eleven minutes — the test's own ceiling, not the SDK's — so the 600 s default hold is the binding
   constraint, not the SDK; the docker-gated resume test
   (`TestDocker_TheSameRunResumesWhenTheHoldReleases`) is written and runs in W4 on the release tip.
+- **PLACEHOLDER — pass 3c, lane `credential-reauth-hold`.** The live kind SSO walk found that Phase B's
+  proxy-injection path fails every Bedrock run on a deployment using
+  `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` against a plain-HTTP SSO server: the TLS-MITM entry Phase B
+  authors for the portal host cannot serve a plaintext origin, so the SSO exchange 502s and no role
+  credential is ever minted. Production is unaffected — a real `portal.sso.<region>.amazonaws.com`
+  serves TLS — but this is the kind walk's own estate, i.e. the release's definition of done. The hold
+  lane is fixing it; its canon delta (and this bullet's final wording) arrives with that fix.
 - **A PENDING `credential_reauth` row is not proof a model call is still parked.** The row outlives
   the hold on purpose (the sign-in is still wanted), so it survives a hold that timed out, an SDK
   that disconnected and a final resolve that refused a roster drift. The console's copy says only
@@ -205,6 +225,22 @@ land here verbatim from that lane's own canon.
   SSO fake over plain HTTP, so the injection rides the cleartext path and the timeout's 401 body does
   not reach the SDK there. The production-shaped path — TLS CONNECT → MITM → header injection → CA
   trust → the timeout body — is proven by the docker-gated test, whose fake serves TLS.
+- **The support bundle's Compose entry is redacted for reading, not for re-use.** It is not a valid
+  `docker compose -f` input when marker-named structural keys exist (e.g. a `secrets:` section or a
+  `*_token`-named volume) — those keys are redacted whole rather than per-value, so the redacted
+  document parses as YAML but fails Compose interpolation/validation on that section.
+- **An ABSOLUTE symlink inside the recording root now refuses to read** — replay answers 500 and the
+  runs list degrades to "no recording" for that entry; hard links inside the root still read (an OS
+  boundary, not covered by this fix). NFS behavior of the underlying `os.OpenInRoot` is untested (no
+  NFS share available in review); no reason from the API contract to expect a difference from the
+  tested local/drvfs cases.
+- **Finished `run recording -o` and `support-bundle` exports are owner-only (mode 0600) on Linux
+  only** — on WSL drvfs (and likely native Windows) the filesystem ignores the mode bit, so the
+  tightening has no effect there (probed: files land `-rwxrwxrwx` regardless).
+- **A policy file ending in a bare `---`** (a legal, empty second YAML document) was silently accepted
+  on the first document alone; it is now rejected with "policy input must contain exactly one
+  document" — the one behavior change on previously-accepted input; no shipped example policy uses a
+  document separator.
 - A member under a dead SHARED model credential is told, and has nothing to do about it: Wardyn
   offers no way to notify the admin from that strip. The sentence names the admin because they are
   the only repair; "Not now" is the only control the member gets.
