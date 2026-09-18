@@ -35,35 +35,75 @@ type runStatusDetailSetter interface {
 	SetRunStatusDetail(ctx context.Context, id uuid.UUID, detail string) error
 }
 
-// runStatusDetailWriter builds this run's runner.SandboxSpec.OnWaiting, or
-// returns nil when the store cannot record one — in which case every driver sees
-// exactly the spec it saw before 0.7.6.
+// startWaitReasons is the CLOSED label set of wardyn_run_start_wait_seconds, in
+// exposition order: the reasons waiting resolves, then the six it does not
+// (runner.TerminalWaitingReasons), then the catch-all. A substrate reason is not
+// Wardyn's to enumerate — see the metrics field's own comment for why a
+// free-form label here would be one series per string a platform ever says.
+var startWaitReasons = []string{
+	"ContainerCreating", "PodInitializing", "Pulling", "Unschedulable", "Pending",
+	"ImagePullBackOff", "ErrImagePull", "CreateContainerError", "CreateContainerConfigError",
+	"InvalidImageName", "CrashLoopBackOff",
+	startWaitReasonOther,
+}
+
+const startWaitReasonOther = "other"
+
+// startWaitReasonLabel folds a raw substrate reason onto that closed set.
+func startWaitReasonLabel(reason string) string {
+	for _, known := range startWaitReasons {
+		if reason == known {
+			return reason
+		}
+	}
+	return startWaitReasonOther
+}
+
+// runStatusDetailWriter builds this run's runner.SandboxSpec.OnWaiting and the
+// closer that ends the last stretch it timed. OnWaiting is nil when the store
+// cannot record a detail — in which case every driver sees exactly the spec it
+// saw before 0.7.6 — but the closer is always safe to call.
 //
 // One scoped UPDATE per CHANGE of reason. The driver already dedupes per pod,
 // and this dedupes across the two pods CreateSandbox waits on in turn, so the
 // same reason arriving from the proxy's wait and then the agent's costs one
 // write rather than two. No mutex: the contract on OnWaiting is that it is
-// called synchronously on CreateSandbox's goroutine, one call at a time.
-func (s *Server) runStatusDetailWriter(ctx context.Context, runID uuid.UUID) func(string) {
+// called synchronously on CreateSandbox's goroutine, one call at a time, and
+// never after CreateSandbox returns — which is also what makes the closer the
+// only place the FINAL reason's duration can be recorded.
+func (s *Server) runStatusDetailWriter(ctx context.Context, runID uuid.UUID) (onWaiting func(string), done func()) {
 	setter, ok := s.cfg.Store.(runStatusDetailSetter)
 	if !ok {
-		return nil
+		return nil, func() {}
 	}
 	var last string
-	return func(detail string) {
-		if detail == "" || detail == last {
-			return
-		}
-		last = detail
-		wctx, cancel := context.WithTimeout(ctx, statusDetailWriteTimeout)
-		defer cancel()
-		if err := setter.SetRunStatusDetail(wctx, runID, detail); err != nil {
-			// Debug, and discarded: a lost status line is a lost sentence on a
-			// screen, never a reason to fail a dispatch.
-			slog.DebugContext(ctx, "wardynd: could not persist run status detail",
-				slog.String("run_id", runID.String()), slog.Any("err", err))
+	var since time.Time
+	// The metric measures how long each reason was the ANSWER, so a stretch is
+	// closed by the next reason or by the create finishing, never opened twice.
+	closeStretch := func(at time.Time) {
+		if last != "" {
+			s.metrics.startWaited(statusDetailReason(last), at.Sub(since))
 		}
 	}
+	return func(detail string) {
+			if detail == "" || detail == last {
+				return
+			}
+			now := time.Now()
+			closeStretch(now)
+			last, since = detail, now
+			wctx, cancel := context.WithTimeout(ctx, statusDetailWriteTimeout)
+			defer cancel()
+			if err := setter.SetRunStatusDetail(wctx, runID, detail); err != nil {
+				// Debug, and discarded: a lost status line is a lost sentence on
+				// a screen, never a reason to fail a dispatch.
+				slog.DebugContext(ctx, "wardynd: could not persist run status detail",
+					slog.String("run_id", runID.String()), slog.Any("err", err))
+			}
+		}, func() {
+			closeStretch(time.Now())
+			last = ""
+		}
 }
 
 // projectStatusDetail decides what a run's startup detail SAYS to a reader, on

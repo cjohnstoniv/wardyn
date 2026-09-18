@@ -95,6 +95,33 @@ type metrics struct {
 	// trail alone is not (nobody alerts on a log line they do not know to
 	// grep for).
 	ssoRefreshOutcomes map[string]int64
+
+	// startWaitSum / startWaitCount are how long a sandbox that was still being
+	// created spent on each SUBSTRATE reason — the series that turns finding 6's
+	// anecdote ("127s and 131s, on two occasions") into something an operator can
+	// graph. Same shape as launchSum/launchCount: sum and count, i.e. an average,
+	// and no histogram until someone needs a p99 (see this type's ponytail note).
+	//
+	// BY REASON, with a CLOSED label set (startWaitReasons), for exactly the
+	// argument driveRefusals makes: a substrate reason is not Wardyn's to
+	// enumerate — a future kubelet can invent one — and a free-form label here
+	// would be one series per string the platform ever says. Anything unknown
+	// lands on "other", which is itself the signal that the vocabulary needs a row.
+	startWaitSum   map[string]float64
+	startWaitCount map[string]int64
+}
+
+// startWaited records one stretch a starting sandbox spent on one reason.
+func (m *metrics) startWaited(reason string, d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.startWaitSum == nil {
+		m.startWaitSum = map[string]float64{}
+		m.startWaitCount = map[string]int64{}
+	}
+	label := startWaitReasonLabel(reason)
+	m.startWaitSum[label] += d.Seconds()
+	m.startWaitCount[label]++
 }
 
 // driveRefused records one run refused its user drive, by reason.
@@ -272,6 +299,12 @@ func (m *metrics) write(w io.Writer) {
 		"# TYPE wardyn_auth_failed_suppressed_total counter\nwardyn_auth_failed_suppressed_total %d\n", m.authFailedSuppressed)
 	fmt.Fprintf(w, "# HELP wardyn_auth_store_errors_total Requests an authentication lane could not decide because its store read failed (answered 500). Not covered by wardyn_store_up, which only pings.\n"+
 		"# TYPE wardyn_auth_store_errors_total counter\nwardyn_auth_store_errors_total %d\n", m.authStoreErrors)
+	fmt.Fprint(w, "# HELP wardyn_run_start_wait_seconds Time a sandbox still being created spent waiting on each substrate reason (pulling an image, waiting for a node, a reference that will not pull).\n"+
+		"# TYPE wardyn_run_start_wait_seconds summary\n")
+	for _, reason := range startWaitReasons {
+		fmt.Fprintf(w, "wardyn_run_start_wait_seconds_sum{reason=%q} %g\n", reason, m.startWaitSum[reason])
+		fmt.Fprintf(w, "wardyn_run_start_wait_seconds_count{reason=%q} %d\n", reason, m.startWaitCount[reason])
+	}
 	// A summary with no quantiles: sum/count only, i.e. an average launch time.
 	fmt.Fprintf(w, "# HELP wardyn_sandbox_launch_seconds Time from run creation to RUNNING.\n"+
 		"# TYPE wardyn_sandbox_launch_seconds summary\n"+

@@ -4,7 +4,9 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -193,5 +195,44 @@ func TestDispatch_StatusDetailIsOptional(t *testing.T) {
 
 	if st.State() == types.RunFailed {
 		t.Fatal("dispatch failed on a store that cannot record a status detail")
+	}
+}
+
+// TestDispatch_RecordsStartWaitByReason: finding 6's anecdote ("127s and 131s,
+// on two occasions") measured by hand, twice, and believed only because somebody
+// had written it down. wardyn_run_start_wait_seconds makes it a series — per
+// REASON, so "slow because it pulls" and "slow because nothing will schedule it"
+// are different lines on the graph rather than one number nobody can act on.
+//
+// The label set is CLOSED: a substrate can invent a reason, and a free-form
+// label would be one series per string it ever says.
+func TestDispatch_RecordsStartWaitByReason(t *testing.T) {
+	rn := &waitingRunner{fakeRunner: &fakeRunner{}, details: []string{
+		"agent: ContainerCreating",
+		"agent: ImagePullBackOff: rpc error: pull access denied",
+		"agent: SomeReasonNobodyHasSeen: what",
+	}}
+	srv, _, run := statusDetailDispatchFixture(t, rn)
+
+	dispatchOnce(srv, run)
+
+	var buf bytes.Buffer
+	srv.metrics.write(&buf)
+	out := buf.String()
+	for _, want := range []string{
+		`wardyn_run_start_wait_seconds_count{reason="ContainerCreating"} 1`,
+		`wardyn_run_start_wait_seconds_count{reason="ImagePullBackOff"} 1`,
+		// The unknown reason folds onto the catch-all rather than minting a series.
+		`wardyn_run_start_wait_seconds_count{reason="other"} 1`,
+		// The LAST reason is only closable by dispatch's own end-of-create call:
+		// OnWaiting is never called again after CreateSandbox returns.
+		`wardyn_run_start_wait_seconds_count{reason="Pulling"} 0`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("/metrics missing %q\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, `reason="SomeReasonNobodyHasSeen"`) {
+		t.Error("a substrate's own string became a metric label; the set must stay closed")
 	}
 }
