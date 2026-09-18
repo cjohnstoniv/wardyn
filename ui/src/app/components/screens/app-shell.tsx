@@ -55,7 +55,6 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { MemberModeBanner, MemberModeMenuItem } from "../wardyn/member-mode-banner";
-import { ModelAccessBanner } from "../wardyn/model-access-banner";
 import { ErrorBoundary } from "../wardyn/error-boundary";
 import {
   OperatorProvider,
@@ -368,6 +367,16 @@ export function useFocusMode(): FocusMode {
   return React.useContext(FocusContext);
 }
 
+// LAZY, like every route in App.tsx and for the same dependency: the strip
+// carries the AWS sign-in dialog and the whole AGENTS copy table behind it, and
+// this file is in the ENTRY chunk — imported statically it put 17 kB of copy
+// into the first paint of every screen (bundle-split.test.ts's entry budget).
+// `fallback={null}`: the band is a notification, so a frame without it reads as
+// "nothing to say", which is what it renders in the common case anyway.
+const ModelAccessBanner = React.lazy(() =>
+  import("../wardyn/model-access-banner").then((m) => ({ default: m.ModelAccessBanner })),
+);
+
 const navLinkClass = (isActive: boolean) =>
   cn(
     "relative flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors",
@@ -630,7 +639,9 @@ export function AppShell({
           one is the only band that carries its own repair, and 0.7.6's mid-run
           re-authentication needs exactly this surface on the cockpit. Renders
           nothing when there is nothing to say. */}
-            <ModelAccessBanner />
+            <React.Suspense fallback={null}>
+              <ModelAccessBanner />
+            </React.Suspense>
             <div className="flex min-h-0 flex-1">
               {!focus && (
                 <aside className="hidden w-[228px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar px-3 py-4 md:flex">

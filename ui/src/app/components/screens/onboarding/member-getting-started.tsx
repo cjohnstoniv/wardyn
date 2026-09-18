@@ -36,8 +36,12 @@ import {
   SectionLabel,
 } from "../../wardyn/primitives";
 import { EPISODES_COPY as EP, MEMBER_GETTING_STARTED as T } from "../../wardyn/copy";
-import { AGENTS, MODEL_ACCESS_ACTIONABLE, MODEL_ACCESS_CHIP_LABEL } from "../../../lib/workspace-providers-copy";
-import { modelAccessActionLine } from "../../../lib/model-access";
+import {
+  AGENTS,
+  MODEL_ACCESS_ACTIONABLE,
+  MODEL_ACCESS_CHIP_LABEL,
+  modelAccessActionLine,
+} from "../../../lib/workspace-providers-copy";
 import { HarnessLoginPane } from "../settings/harness-login-pane";
 import { CC_META } from "../../wardyn/cc-meta";
 import { strongestAvailable } from "../../wardyn/default-confinement";

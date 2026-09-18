@@ -24,18 +24,28 @@
 // read first.
 
 import * as React from "react";
-import { AlertTriangle, Clock } from "lucide-react";
+import { AlertTriangle, Clock, Loader2 } from "lucide-react";
 import { useLocation } from "react-router-dom";
 import { toast } from "sonner";
 
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "../ui/dialog";
-import { HarnessLoginPane, type HarnessLoginPaneHandle } from "../screens/settings/harness-login-pane";
+import type { HarnessLoginPaneHandle } from "../screens/settings/harness-login-pane";
 import { relativeTime, absoluteTime } from "../../lib/format";
 import type { ModelAccessDoor } from "../../lib/model-access";
 import { AGENTS } from "../../lib/workspace-providers-copy";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
 import { useModelAccessDoor } from "./model-access-context";
 import { useOperator, usePrincipal } from "./operator-context";
+
+// LAZY, and that is a gate rather than a nicety: this strip is mounted by
+// app-shell.tsx, which is in the ENTRY chunk, and the login pane drags xterm +
+// addon-fit + its stylesheet behind it. A static import put ~200 kB of terminal
+// into the first paint of every screen — bundle-split.test.ts fails on exactly
+// that. The chunk is fetched when somebody opens the door, which is the same
+// rule App.tsx's lazy routes already follow for the same dependency.
+const HarnessLoginPane = React.lazy(() =>
+  import("../screens/settings/harness-login-pane").then((m) => ({ default: m.HarnessLoginPane })),
+);
 
 /** What the strip says for one door, for one viewer. Pure, and exported for
  *  the tests: the audience/state table is the feature. */
@@ -242,6 +252,17 @@ function ModelAccessSignInDialog({
         </DialogDescription>
         {open && (
           <div className="min-w-0">
+            {/* The same mark + spinner App.tsx's RouteFallback shows for a lazy
+                route: a chunk in flight reads as the console still connecting,
+                never as a broken dialog. */}
+            <React.Suspense
+              fallback={
+                <div className="flex min-h-[8rem] items-center justify-center" role="status" aria-live="polite">
+                  <Loader2 className="size-5 animate-spin text-muted-foreground" />
+                  <span className="sr-only">Loading…</span>
+                </div>
+              }
+            >
             <HarnessLoginPane
               provider="aws"
               // The same rule agents-tab.tsx and connection-cards.tsx already
@@ -253,6 +274,7 @@ function ModelAccessSignInDialog({
               onDone={onDone}
               onCancel={onCancel}
             />
+            </React.Suspense>
           </div>
         )}
       </DialogContent>

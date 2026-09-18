@@ -17,9 +17,36 @@
 // is what makes it reachable without prop-drilling through screens that are at
 // the file-size gate.
 
-import { absoluteTime } from "./format";
-import type { SetupModelAccess, SetupStatus } from "./types";
-import { AGENTS, MODEL_ACCESS_ACTIONABLE, isPerUserSsoRow } from "./workspace-providers-copy";
+// NOTHING from workspace-providers-copy, deliberately: this module is reached
+// from the shell's EAGER graph (App.tsx -> the model-access context), and that
+// module carries the whole AGENTS copy table — one import of it from here put
+// 16 kB of copy into the entry chunk (bundle-split.test.ts). So the two POLICY
+// exports below live here, beside the predicate that reads them, and
+// workspace-providers-copy re-exports them for its existing callers. The one
+// copy decision this feature needs of that table — `expiring`'s action line,
+// re-composed on the reader's clock — lives THERE, beside its template.
+import type { SetupHarnessTool, SetupStatus } from "./types";
+
+// U-10: the per_user "something actionable to do" states — the member's own
+// sign-in. Defined once so the Agents tab (admin), member Getting Started
+// (member) and the shell strip share ONE policy instead of independently-typed
+// literal sets that could drift on a sixth state.
+export const MODEL_ACCESS_ACTIONABLE = new Set(["not_configured", "expired_signin", "expiring"]);
+
+// R-01 (fix-console-u review): the "is this harness row a per-person AWS SSO
+// lane" predicate — `h.enabled !== false` (not truthiness) is load-bearing, not
+// decorative: a DISABLED row still legally carries mechanism/credential_source
+// (validateAgentCredentialSource never looks at Disabled), but the server's
+// login predicate (perUserLoginRow) and its model_access scoping
+// (awsSSOScopeFor) both treat a disabled row as NOT per_user — grading it in
+// the operator's own namespace and rejecting an empty start URL with a 400 a
+// card would otherwise hide the field for. Absent `enabled` reads as unknown,
+// never false, so an older daemon that omits the field is unaffected. ONE
+// predicate, not two independently-typed copies (the U-03 recurrence this
+// fixes).
+export function isPerUserSsoRow(h: SetupHarnessTool): boolean {
+  return h.enabled !== false && h.mechanism === "bedrock_sso" && h.credential_source === "per_user";
+}
 
 // The agent whose model-access lane the server grades. Mirrors
 // internal/api/modelaccess.go's modelAccessAgent: bedrock_sso is claude-code's
@@ -31,8 +58,8 @@ export interface ModelAccessDoor {
    *  older daemon, or a status not fetched yet). */
   state: string;
   /** The server's own sentence, verbatim; "" when there is none. Never
-   *  reworded client-side — see modelAccessActionLine for the ONE exception
-   *  and why it is one. */
+   *  reworded client-side — see workspace-providers-copy.ts's modelAccessActionLine
+   *  for the ONE exception, and why it is one. */
   action: string;
   /** The instant `action` names, RFC3339 UTC; "" when the state carries none or
    *  the daemon predates the field. Rendered through the viewer's own clock,
@@ -96,24 +123,4 @@ export function modelAccessDoor(
     // their own sign-in.
     perUser: !!status?.harnesses?.some((h) => h.id === MODEL_ACCESS_AGENT && isPerUserSsoRow(h)),
   };
-}
-
-/**
- * modelAccessActionLine is the server's action line as a HUMAN's clock renders
- * it — the one place the console re-composes a server sentence, and only this
- * one: `expiring`'s action carries an RFC3339 UTC stamp ("Sign in again before
- * 2026-09-19T14:03:22Z"), which a member in another timezone misreads on every
- * screen for 24 hours. The template it is re-composed from is the SAME frozen
- * canon string the server formats (workspace-providers-prompt.md §7.7), so the
- * sentence is unchanged — only the instant is localised.
- *
- * Every other state, and an `expiring` from a daemon that sends no `deadline`,
- * renders verbatim.
- */
-export function modelAccessActionLine(access: SetupModelAccess | undefined | null): string {
-  if (!access?.action) return "";
-  if (access.state === "expiring" && access.deadline) {
-    return AGENTS.MODEL_ACCESS_EXPIRING_ACTION(absoluteTime(access.deadline));
-  }
-  return access.action;
 }

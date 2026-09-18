@@ -38,8 +38,8 @@ import {
   MODEL_ACCESS_CHIP_LABEL,
   PROVIDERS,
   PROVIDERS_DRAFT,
+  modelAccessActionLine,
 } from "../../../lib/workspace-providers-copy";
-import { modelAccessActionLine } from "../../../lib/model-access";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Field, Switch } from "../../wardyn/form-primitives";

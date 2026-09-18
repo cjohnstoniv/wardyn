@@ -5,8 +5,8 @@
 
 import { describe, expect, it } from "vitest";
 
-import { MODEL_ACCESS_AGENT, modelAccessActionLine, modelAccessDoor } from "./model-access";
-import { AGENTS } from "./workspace-providers-copy";
+import { MODEL_ACCESS_AGENT, modelAccessDoor } from "./model-access";
+import { AGENTS, modelAccessActionLine } from "./workspace-providers-copy";
 import { absoluteTime } from "./format";
 import { baseStatus } from "./test-fixtures";
 import type { SetupHarnessTool, SetupModelAccess, SetupStatus } from "./types";
