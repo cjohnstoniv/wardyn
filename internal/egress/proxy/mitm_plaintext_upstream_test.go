@@ -6,14 +6,13 @@ package proxy
 import (
 	"bufio"
 	"bytes"
-	"crypto/tls"
-	"crypto/x509"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -139,17 +138,23 @@ func TestForwardInspectedLLM_ReOriginatesInTheSchemeTheEntryNames(t *testing.T) 
 
 const plainMITMHost = "wardyn-awsssofake.wardyn.svc.cluster.local"
 
-// THE WHOLE LANE, THE WAY THE SANDBOX DRIVES IT: a real CONNECT through a real
-// proxy listener, a real TLS handshake against the Wardyn leaf, and a real
-// plain-HTTP origin behind it.
+// THE WHOLE LANE, THE WAY THE SANDBOX ACTUALLY DRIVES IT.
 //
-// This is the shape walk-3 found and no test had: the agent's SDK does not make
-// the plain absolute-URI request the lane's other tests make — it CONNECTs (36-69
-// times per failing run). Everything up to the termination was already right; the
-// leg AFTER it dialled TLS at a server with no TLS, so the sandbox got a 502 and
-// the run starved. Driving serveMITMRequest directly cannot see that, because it
-// starts after the tunnel is already terminated.
-func TestMITMConnect_PlaintextOriginIsReachedThroughTheTunnel(t *testing.T) {
+// An earlier version of this test drove a TLS client into the tunnel, because
+// that is what a MITM is "supposed" to see. It is not what happens, and the
+// assumption is what let walk-5 stay red after the upstream leg was fixed — see
+// the case below, and SDK-PATH.md for the measurement. A TLS client against a
+// TLS entry is production, and mitm_test.go's suite owns it.
+
+// THE CLIENT LEG, MEASURED (SDK-PATH.md). The test above drives the tunnel the
+// way a TLS client does. The agent's SDK does NOT: with a proxy configured it
+// reaches an `http://` endpoint by CONNECT and then sends PLAINTEXT inside the
+// tunnel — first byte 0x47, `G`, never 0x16. Reproduced offline against the real
+// wardyn/agent-claude-code:local, and it is why walk-5 was still red after the
+// upstream leg was fixed: mitmConnect handshook at that client, failed, and
+// dropped the connection, so the request was never seen, never injected and
+// never forwarded. The SDK retried 36-69 times a run and the portal saw nothing.
+func TestMITMConnect_PlaintextClientInsideTheTunnelIsServed(t *testing.T) {
 	var gotHeader, gotPath string
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotHeader, gotPath = r.Header.Get("x-amz-sso_bearer_token"), r.URL.Path
@@ -168,22 +173,18 @@ func TestMITMConnect_PlaintextOriginIsReachedThroughTheTunnel(t *testing.T) {
 	}}}
 	buf := &bytes.Buffer{}
 	p := newProxy(Options{
-		RunID:    uuid.New(),
-		Policy:   CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{plainMITMHost}}),
-		Injector: inj,
-		Sink:     &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
-		Resolver: publicResolver{},
-		Dial:     redirectDial(upstreamAddr(origin)),
-		// THE ENTRY, exactly as authorBedrockSSOInjection writes it for an
-		// http:// endpoint override.
+		RunID:     uuid.New(),
+		Policy:    CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{plainMITMHost}}),
+		Injector:  inj,
+		Sink:      &decisionSink{out: buf, ch: make(chan egress.DecisionLog, 64)},
+		Resolver:  publicResolver{},
+		Dial:      redirectDial(upstreamAddr(origin)),
 		MITMHosts: []string{"http://" + plainMITMHost + ":8090"},
 		CA:        ca,
 	})
 	proxySrv := httptest.NewServer(p)
 	defer proxySrv.Close()
 
-	// The sandbox: CONNECT, then TLS trusting the Wardyn CA — which is what the
-	// agent image does once AWS_CA_BUNDLE names it.
 	conn, err := net.Dial("tcp", strings.TrimPrefix(proxySrv.URL, "http://"))
 	if err != nil {
 		t.Fatal(err)
@@ -199,43 +200,33 @@ func TestMITMConnect_PlaintextOriginIsReachedThroughTheTunnel(t *testing.T) {
 		t.Fatalf("read CONNECT response: %v", rerr)
 	}
 	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("CONNECT status = %d, want 200 — the tunnel must be TERMINATED, not refused: a blind "+
-			"tunnel would carry the sandbox's placeholder straight through to the portal", resp.StatusCode)
+		t.Fatalf("CONNECT status = %d, want 200", resp.StatusCode)
 	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(certPEM) {
-		t.Fatal("could not trust the Wardyn CA")
-	}
-	tlsConn := tls.Client(conn, &tls.Config{ServerName: plainMITMHost, RootCAs: pool})
-	if herr := tlsConn.Handshake(); herr != nil {
-		t.Fatalf("TLS handshake against the Wardyn leaf: %v", herr)
-	}
-	defer func() { _ = tlsConn.Close() }()
 
+	// PLAINTEXT into the tunnel — no TLS handshake, which is the SDK's shape.
 	req, _ := http.NewRequest(http.MethodGet,
-		"https://"+plainMITMHost+":8090/federation/credentials?account_id=111111111111", nil)
-	// The sandbox's OWN placeholder, which the proxy must strip and replace.
+		"http://"+plainMITMHost+":8090/federation/credentials?account_id=111111111111", nil)
 	req.Header.Set("x-amz-sso_bearer_token", "wardyn-proxy-injected")
-	if werr := req.Write(tlsConn); werr != nil {
-		t.Fatalf("write the request into the tunnel: %v", werr)
+	if werr := req.Write(conn); werr != nil {
+		t.Fatalf("write the plaintext request into the tunnel: %v", werr)
 	}
-	got, gerr := http.ReadResponse(bufio.NewReader(tlsConn), req)
+	_ = conn.SetReadDeadline(time.Now().Add(20 * time.Second))
+	got, gerr := http.ReadResponse(br, req)
 	if gerr != nil {
-		t.Fatalf("read the response: %v", gerr)
+		t.Fatalf("a PLAINTEXT client inside the tunnel got no response (%v) — mitmConnect handshook TLS at "+
+			"it and dropped the connection, which is exactly what left the portal seeing nothing", gerr)
 	}
 	defer func() { _ = got.Body.Close() }()
 	body, _ := io.ReadAll(got.Body)
-
 	if got.StatusCode != http.StatusOK {
-		t.Fatalf("GetRoleCredentials through the tunnel = %d (%s), want 200. With the upstream leg hard-coded "+
-			"to https this is the 502 that starved every model call in walk-3.\n--- decisions ---\n%s",
+		t.Fatalf("status = %d (%s), want 200\n--- decisions ---\n%s",
 			got.StatusCode, strings.TrimSpace(string(body)), buf.String())
 	}
 	if gotPath != "/federation/credentials" {
 		t.Errorf("the origin saw path %q, want /federation/credentials", gotPath)
 	}
 	if gotHeader != "the-real-session-token" {
-		t.Errorf("the origin saw %q on the injected header, want the brokered token — the sandbox's "+
-			"placeholder must be stripped and replaced, which is the only reason to terminate at all", gotHeader)
+		t.Errorf("the origin saw %q on the injected header, want the brokered token — the tunnel is "+
+			"TERMINATED precisely so the sandbox's placeholder can be stripped and replaced", gotHeader)
 	}
 }

@@ -322,19 +322,41 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 		_ = clientConn.Close()
 		return
 	}
-	tlsConn := tls.Server(clientConn, &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			// Mint for the VALIDATED CONNECT host, NOT the agent-chosen SNI: this
-			// bounds the leaf cache to the few real LLM hosts and prevents an agent
-			// from forcing a fresh keygen+sign per request via unique SNIs. An agent
-			// that sends a mismatched SNI simply fails its own validation.
-			return p.ca.leafFor(host)
-		},
-	})
-	if err := tlsConn.Handshake(); err != nil {
-		_ = clientConn.Close()
-		return
+	// THE CLIENT LEG SPEAKS THE SCHEME THIS HOST'S ENTRY NAMES, exactly as the
+	// upstream leg does (upstreamSchemeFor). For every real portal and every corp
+	// artifact host that is TLS, byte for byte as before.
+	//
+	// It is not symmetry for its own sake — it is measured (SDK-PATH.md). With a
+	// proxy configured, aws-sdk-js reaches an `http://` endpoint by CONNECT and
+	// then sends PLAINTEXT inside the tunnel (first byte 0x47, `G`, not 0x16).
+	// Handshaking at that client fails and drops the connection, so the request
+	// was never seen, never injected and never forwarded: the SDK retried 36-69
+	// times per run and the portal saw nothing at all.
+	//
+	// STILL A TERMINATED TUNNEL, which is what Phase B needs — the sandbox holds
+	// a placeholder, so the proxy has to see the request to substitute the real
+	// token, and a blind tunnel carries the placeholder through untouched. No
+	// confidentiality is given up either: an entry only says `http://` when the
+	// operator pointed WARDYN_AWS_SSO_ENDPOINT_OVERRIDE at a plaintext origin, a
+	// deployment that already refuses to boot without WARDYN_ALLOW_TEST_ENDPOINTS,
+	// and that rule's require_tls is false for the same reason.
+	served := net.Conn(clientConn)
+	if !p.mitmPlaintextUpstream(host) {
+		tlsConn := tls.Server(clientConn, &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
+				// Mint for the VALIDATED CONNECT host, NOT the agent-chosen SNI: this
+				// bounds the leaf cache to the few real LLM hosts and prevents an agent
+				// from forcing a fresh keygen+sign per request via unique SNIs. An agent
+				// that sends a mismatched SNI simply fails its own validation.
+				return p.ca.leafFor(host)
+			},
+		})
+		if err := tlsConn.Handshake(); err != nil {
+			_ = clientConn.Close()
+			return
+		}
+		served = tlsConn
 	}
 	// Serve the decrypted connection with a real http.Server (correct HTTP/1.1
 	// framing + keep-alive + timeouts) over a one-shot listener. Serve returns
@@ -351,7 +373,7 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 		ReadTimeout: 5 * time.Minute,
 		IdleTimeout: 90 * time.Second,
 	}
-	_ = srv.Serve(&oneConnListener{conn: tlsConn})
+	_ = srv.Serve(&oneConnListener{conn: served})
 }
 
 // serveMITMRequest serves a MITM-terminated request. It inspects the plaintext
