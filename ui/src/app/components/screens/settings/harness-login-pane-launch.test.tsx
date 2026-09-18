@@ -12,17 +12,23 @@
 // terminal, no capture and no corroboration. What happens AFTER the sandbox is
 // up stays in the sibling file.
 import * as React from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type MockInstance } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+// lastAttachOutput captures the onOutput callback the pane hands AttachTerminal
+// on its most recent render — the only way to feed it a PTY chunk without a
+// real xterm (Finding 7a's tab-navigate case needs this; every other case in
+// this file never gets far enough to mount the terminal at all).
+let lastAttachOutput: ((chunk: string) => void) | undefined;
 // The pane reaches AttachTerminal (and through it xterm's stylesheet); no case
 // here gets far enough to mount it, but the import itself has to resolve.
 vi.mock("../../attach-terminal", () => ({
   AttachTerminal: React.forwardRef(function FakeTerminal(
-    _props: { onOutput?: (chunk: string) => void; autoRun?: string },
+    props: { onOutput?: (chunk: string) => void; autoRun?: string },
     ref: React.ForwardedRef<{ sendText: (t: string) => void }>,
   ) {
+    lastAttachOutput = props.onOutput;
     React.useImperativeHandle(ref, () => ({ sendText: () => {} }), []);
     return <div data-testid="fake-terminal" />;
   }),
@@ -325,5 +331,68 @@ describe("a dismissal from outside the pane still ends the login run", () => {
       answer("run-born-orphaned");
     });
     expect(runsApiMocked.killRun).toHaveBeenCalledWith("run-born-orphaned");
+  });
+});
+
+// Finding 7a (0.7.5 field report): the verification tab never opened — it was
+// opened from inside a PTY callback, never a user gesture. The fix opens it
+// on the CLICK and navigates it once the URL is known.
+describe("the verification tab opens on the click (Finding 7a)", () => {
+  let openSpy: MockInstance<typeof window.open>;
+  let fakeWindow: { opener: unknown; location: { href: string }; closed: boolean; close: ReturnType<typeof vi.fn>; document: { write: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> } };
+
+  beforeEach(() => {
+    harnessLoginMock.mockReset();
+    lastAttachOutput = undefined;
+    vi.mocked(runsApiMocked.killRun).mockReset().mockResolvedValue(undefined);
+    vi.mocked(runsApiMocked.getRun).mockReset().mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun);
+    fakeWindow = {
+      opener: {},
+      location: { href: "about:blank" },
+      closed: false,
+      close: vi.fn(),
+      document: { write: vi.fn(), close: vi.fn() },
+    };
+    openSpy = vi.spyOn(window, "open").mockReturnValue(fakeWindow as unknown as Window);
+  });
+
+  // THE RED CASE: goes red on any refactor that hoists an `await` above the
+  // tab-open line — `harnessLogin` never resolves here, so if the open moved
+  // below it, `window.open` would never be called at all.
+  it("opens the tab SYNCHRONOUSLY, before the launch POST resolves", async () => {
+    harnessLoginMock.mockReturnValue(new Promise<string>(() => {})); // never resolves
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    expect(openSpy).toHaveBeenCalledWith("", "_blank");
+  });
+
+  it("navigates the tab already open when the verification URL appears — never a second window.open", async () => {
+    harnessLoginMock.mockResolvedValue("run-123");
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    await screen.findByTestId("fake-terminal");
+    await act(async () => lastAttachOutput?.("https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH\n"));
+    expect(fakeWindow.location.href).toBe("https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH");
+    expect(openSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("a blocked popup still surfaces the header link and AUTH_TAB_BLOCKED_NOTE", async () => {
+    openSpy.mockReturnValue(null);
+    harnessLoginMock.mockResolvedValue("run-123");
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    await screen.findByTestId("fake-terminal");
+    await act(async () => lastAttachOutput?.("https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH\n"));
+    expect(await screen.findByTestId("auth-url-link")).toBeInTheDocument();
+    expect(screen.getByTestId("auth-tab-blocked-note")).toBeInTheDocument();
+  });
+
+  it("Cancel closes the tab", async () => {
+    harnessLoginMock.mockResolvedValue("run-123");
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    await screen.findByTestId("fake-terminal");
+    await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    expect(fakeWindow.close).toHaveBeenCalled();
   });
 });

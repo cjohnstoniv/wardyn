@@ -50,6 +50,9 @@ import {
 // sentence moved to capture-confirm.ts to keep this file under the size cap, and
 // every existing importer — this pane's tests, ui/e2e — keeps its import path.
 export { CAPTURE_NOT_CORROBORATED, serverConfirmsCapture } from "./capture-confirm";
+// Finding 7a: the verification tab's open/navigate/close lifecycle — a new
+// module, not inline, so this file stays under the size cap (COMMON.md).
+import { AUTH_TAB_BLOCKED_NOTE, openAuthTab, type AuthTab } from "./auth-tab-handle";
 import {
   AWS_BLURB_MANAGED_OPENING,
   LOGIN_SANDBOX_STARTING,
@@ -420,8 +423,20 @@ export function HarnessLoginPane({
   const [stuck, setStuck] = React.useState(false);
   const [authUrl, setAuthUrl] = React.useState("");
   const [code, setCode] = React.useState("");
+  // Finding 7a: the browser blocked even the click-backed tab (Safari strict
+  // / a managed popup policy) — 0.7.5's header link is the fallback either way.
+  const [tabBlocked, setTabBlocked] = React.useState(false);
 
   const termRef = React.useRef<AttachTerminalHandle>(null);
+  // The verification tab's own handle — opened on the click, navigated once
+  // the URL is known, closed on every exit path (cancel / error / unmount /
+  // success).
+  const authTabRef = React.useRef<AuthTab | null>(null);
+  // Stable identity (empty deps) so it is safe in any callback's dep array.
+  const closeAuthTab = React.useCallback(() => {
+    authTabRef.current?.close();
+    authTabRef.current = null;
+  }, []);
 
   // Rolling buffer of recent PTY output + latches so we act on each thing once.
   const outBufRef = React.useRef("");
@@ -453,6 +468,15 @@ export function HarnessLoginPane({
   const selfRunArmedRef = React.useRef(false);
 
   const launch = React.useCallback(async () => {
+    // LOUD COMMENT (Finding 7a) — MUST stay first, BEFORE any `await` below:
+    // Start-login's click is the only user gesture this flow ever gets, and a
+    // popup blocker only allows a tab while the call stack is still inside
+    // that gesture. Hoisting an `await` above this line silently reverts the
+    // lane — the tab reopens, but blocked, on every browser that enforces it.
+    authTabRef.current?.close();
+    const tab = openAuthTab();
+    authTabRef.current = tab;
+    setTabBlocked(!tab);
     setPhase("launching");
     setError("");
     outBufRef.current = "";
@@ -495,8 +519,9 @@ export function HarnessLoginPane({
       // which is the loop the preview walked an admin into.
       setRefused(e instanceof HttpError && e.status === 409);
       setPhase("error");
+      closeAuthTab();
     }
-  }, [provider, startUrl]);
+  }, [provider, startUrl, closeAuthTab]);
 
   // startingSentenceOf is the substrate's sentence for this read, or "". The lead-in
 // below promises the reader words after it, so BOTH arms that use it check for
@@ -540,6 +565,7 @@ function startingSentenceOf(run: AgentRun | undefined): string {
     if (verdict === "unreadable") {
       setError(LOGIN_SANDBOX_UNREADABLE);
       setPhase("error");
+      closeAuthTab();
       return;
     }
     // The wait ending on a REASON rather than a clock: the substrate has given
@@ -576,8 +602,9 @@ function startingSentenceOf(run: AgentRun | undefined): string {
       // pull, a ceiling that would not resolve); never a reworded guess.
       setError(run.failure_hint || LOGIN_SANDBOX_ENDED);
       setPhase("error");
+      closeAuthTab();
     }
-  }, [runId]);
+  }, [runId, closeAuthTab]);
 
   // usePoll drives BACKGROUND refreshes only (its own contract), so the first
   // ask is made here — otherwise every sign-in waits a full tick on a sandbox
@@ -617,6 +644,7 @@ function startingSentenceOf(run: AgentRun | undefined): string {
       try {
         await harnessAuthApi.harnessCredentialPaste(provider, t);
         if (runId) await runsApi.killRun(runId).catch(() => {});
+        closeAuthTab(); // Finding 7a: the tab must not outlive a completed sign-in.
         setPhase("done");
         onDone();
       } catch (e) {
@@ -625,7 +653,7 @@ function startingSentenceOf(run: AgentRun | undefined): string {
         savedRef.current = false; // allow another attempt (auto or manual)
       }
     },
-    [provider, token, runId, onDone],
+    [provider, token, runId, onDone, closeAuthTab],
   );
 
   // confirmCapture is the PHASE half of the corroboration; the rule and the
@@ -642,6 +670,7 @@ function startingSentenceOf(run: AgentRun | undefined): string {
     setPhase("saving");
     const { confirmed, unreachable } = await confirmCaptureWithServer(provider, runId);
     if (confirmed) {
+      closeAuthTab(); // Finding 7a: the tab must not outlive a completed sign-in.
       setAutoCaptured(true);
       setPhase("done");
       onDone();
@@ -650,7 +679,8 @@ function startingSentenceOf(run: AgentRun | undefined): string {
     failedRef.current = true;
     setError(unreachable ? CAPTURE_CHECK_UNREACHABLE : CAPTURE_NOT_CORROBORATED);
     setPhase("error");
-  }, [provider, runId, onDone]);
+    closeAuthTab();
+  }, [provider, runId, onDone, closeAuthTab]);
 
   // Watch the login terminal: open the OAuth URL in a new tab, then capture and
   // save the printed token — both automatically.
@@ -662,13 +692,11 @@ function startingSentenceOf(run: AgentRun | undefined): string {
         if (url) {
           openedUrlRef.current = true;
           setAuthUrl(url);
-          // Best-effort auto-open. A browser may block a popup not tied to a user
-          // gesture; the surfaced link below is the reliable one-click fallback.
-          try {
-            window.open(url, "_blank", "noopener,noreferrer");
-          } catch {
-            /* blocked — the visible link covers it */
-          }
+          // Finding 7a: NAVIGATE the tab opened on the click (launch(), top)
+          // rather than opening a fresh one from this PTY callback — a
+          // callback can never satisfy the gesture requirement a fresh
+          // window.open would need.
+          authTabRef.current?.navigate(url);
         }
       }
       if (savedRef.current || failedRef.current) return;
@@ -687,6 +715,7 @@ function startingSentenceOf(run: AgentRun | undefined): string {
             setError(`${SANDBOX_REFUSAL_LEAD_IN} ${sentence}`);
             setPhase("error");
             if (runId) void runsApi.killRun(runId).catch(() => {});
+            closeAuthTab();
             return;
           }
         }
@@ -703,7 +732,7 @@ function startingSentenceOf(run: AgentRun | undefined): string {
         void saveToken(tok);
       }
     },
-    [saveToken, confirmCapture, flow, runId, onDone],
+    [saveToken, confirmCapture, flow, runId, onDone, closeAuthTab],
   );
 
   // Bridge the pasted login code into the terminal's stdin, so the operator uses
@@ -718,9 +747,15 @@ function startingSentenceOf(run: AgentRun | undefined): string {
   const cancel = React.useCallback(() => {
     dismissedRef.current = true;
     if (runId) runsApi.killRun(runId).catch(() => {});
+    closeAuthTab();
     onCancel();
-  }, [runId, onCancel]);
+  }, [runId, onCancel, closeAuthTab]);
+
+  // Codex #15: the hosting dialog's Escape / overlay-close reaches `cancel` via `paneRef`.
   React.useImperativeHandle(paneRef, () => ({ cancel }), [cancel]);
+
+  // Finding 7a's fourth exit path: the tab must not outlive the pane.
+  React.useEffect(() => closeAuthTab, [closeAuthTab]);
 
   return (
     <div className="space-y-3 rounded-lg border border-border bg-surface-2/40 p-3" data-testid="harness-login-pane">
@@ -868,6 +903,14 @@ function startingSentenceOf(run: AgentRun | undefined): string {
               {flow.capture === "helper" ? "Open the AWS verification page ↗" : "Open the Claude login page ↗"}
             </a>
           )}
+          {/* Finding 7a: the automatic tab is the primary path now — this note
+              shows only once a link exists AND the browser refused even the
+              click-backed popup. */}
+          {authUrl && phase !== "error" && tabBlocked && (
+            <p className="text-xs text-muted-foreground" data-testid="auth-tab-blocked-note">
+              {AUTH_TAB_BLOCKED_NOTE}
+            </p>
+          )}
           <AttachTerminal
             ref={termRef}
             runId={runId}
@@ -908,8 +951,8 @@ function startingSentenceOf(run: AgentRun | undefined): string {
                helper — so there is no code field and nothing to paste here. */
             <div className="flex flex-wrap items-center gap-2">
               <p className="flex-1 text-xs leading-relaxed text-muted-foreground">
-                Open the verification link above, enter the user code shown in the terminal, and approve. Wardyn
-                captures the session automatically when the login completes.
+                In the tab that opened (or the link above), enter the user code shown in the terminal and approve.
+                Wardyn captures the session automatically when the login completes.
               </p>
               <Button size="sm" variant="outline" onClick={cancel}>
                 <Square className="size-3.5" /> Cancel
