@@ -212,7 +212,7 @@ func TestModelAccessDeadline_OnTheWireForItsOWNER_NeverForASharedMember(t *testi
 		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
 		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: "https://acme.awsapps.com/start",
 	}
-	own := setupModelAccess(agentRoster(row), blob, true,
+	own := setupModelAccess(agentRoster(row), blob, true, false,
 		awsSSOScope{perUser: true, owner: "member@corp.example"}, true, now)
 	if own.State != modelAccessExpiring || own.Deadline != deadline {
 		t.Fatalf("owner grading = %+v, want %q with deadline %q", own, modelAccessExpiring, deadline)
@@ -235,7 +235,7 @@ func TestModelAccessDeadline_OnTheWireForItsOWNER_NeverForASharedMember(t *testi
 	// (b) A MEMBER UNDER A SHARED ROW — the credential is the operator's, and
 	// nothing about its lifecycle is theirs to read. Not a field, not a
 	// timestamp anywhere in the bytes.
-	shared := setupModelAccess(sharedRoster(), blob, true, awsSSOScope{}, true, now)
+	shared := setupModelAccess(sharedRoster(), blob, true, false, awsSSOScope{}, true, now)
 	if shared.Deadline == "" {
 		t.Fatal("the operator's own grading must still carry a deadline (fixture no longer exercises the leak)")
 	}
