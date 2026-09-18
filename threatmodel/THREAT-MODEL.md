@@ -970,9 +970,11 @@ hiding them would repeat the failure mode we are designed to avoid.
     write is audited (`policy.create`/`update`/`delete`,
     `secret.write`/`secret.delete`, `site_config.write`,
     `harness.credential.captured`/`disconnected`) — plus optional narrowing to a
-    verified-email domain (`WARDYN_OIDC_EMAIL_DOMAINS`, empty = any verified email;
-    the `email` claim it matches is only forced IdP-VERIFIED when that var is also
-    set — set both, or trust your IdP). In local and admin-token mode the only
+    verified-email domain (`WARDYN_OIDC_EMAIL_DOMAINS`). When that list is empty,
+    `oidc.CallbackHandler` checks neither the email's domain nor `email_verified`;
+    email-based operator assignment then trusts the IdP's email claim. Set the
+    domain and operator lists together, or explicitly trust that claim.
+    In local and admin-token mode the only
     principal IS the admin, so the gap collapses into #9. The fix is `ROADMAP.md`'s
     v1.0 "separation of duty on the control plane".
 
