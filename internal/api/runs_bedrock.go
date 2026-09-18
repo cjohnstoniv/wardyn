@@ -815,11 +815,17 @@ func (s *Server) setupBedrock(ctx context.Context, present map[string]bool, sso 
 	// operator to re-login hourly for a credential that heals itself — and, once
 	// a declared mechanism can refuse a run, would refuse a run dispatch heals.
 	// Reading NO refresh is done here: this is a read-only probe.
+	//
+	// renewable(now) is not enough on its own (Finding 5 sibling drift): a
+	// refresh token AWS has already retired still reads renewable() == true
+	// (a refresh token is PRESENT and the registration has not lapsed) even
+	// though redeeming it will fail every time — awsSSOTokenSpentFor is the
+	// same spent-set consult setupModelAccess grades against.
 	ssoLive, ssoDead := false, false
 	ssoAccount, ssoRole := "", ""
 	if blob, found, err := s.readAWSSSOBlob(ctx, sso); err == nil && found {
 		now := s.cfg.Now()
-		ssoLive = blob.renewable(now) || !blob.expired(now)
+		ssoLive = (blob.renewable(now) && !s.awsSSOTokenSpentFor(blob)) || !blob.expired(now)
 		ssoDead = !ssoLive
 		ssoAccount, ssoRole = blob.AccountID, blob.RoleName
 	}

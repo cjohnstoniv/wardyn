@@ -379,6 +379,44 @@ func TestAWSSSORefresh_FirstAttemptSuccess_NoAttemptsFieldOnSuccessRow(t *testin
 	}
 }
 
+// TestAWSSSORefresh_RetriedSuccess_AttemptsTwoOnSuccessRow is N1: a success
+// row carries attempts:2 when the retry is what made it succeed — "took two
+// tries" is as much a network signal on a success row as on a failure one.
+func TestAWSSSORefresh_RetriedSuccess_AttemptsTwoOnSuccessRow(t *testing.T) {
+	s, audit, _ := ssoRefreshServer(t)
+	fakeOIDC(t, func(w http.ResponseWriter, _ map[string]string, call int) {
+		if call == 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "slow_down"})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"accessToken": "fresh-access-token-abcdefghij", "expiresIn": 3600,
+		})
+	})
+
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true, true, nil, awsSSOScope{})
+	if !ba.ssoInject {
+		t.Fatalf("ssoInject = false; want a clean renewal on the retry (failure=%q)", ba.ssoRefreshFailure)
+	}
+	rows := audit.find("harness.credential.refresh")
+	if len(rows) != 1 || rows[0].Outcome != "success" {
+		t.Fatalf("audit rows = %+v, want one success row", rows)
+	}
+	var data struct {
+		Attempts int `json:"attempts"`
+	}
+	if err := json.Unmarshal(rows[0].Data, &data); err != nil {
+		t.Fatalf("decode audit data: %v", err)
+	}
+	if data.Attempts != 2 {
+		t.Errorf("attempts = %d, want 2 (the retry is what succeeded)", data.Attempts)
+	}
+	if got := s.metrics.ssoRefreshOutcomes[ssoRefreshOutcomeSuccess]; got != 1 {
+		t.Errorf("wardyn_sso_refresh_total{outcome=success} = %d, want 1", got)
+	}
+}
+
 // TestAWSSSORefresh_SlowDownRetriesOnceAndNeverDeadMarks is the row a
 // status-code classifier fails: slow_down arrives as HTTP 400, exactly like
 // invalid_grant. It must get ONE retry, fail THIS run visibly, leave the stored
@@ -643,19 +681,28 @@ func TestSetupHarnessCreds_RenewableHonoursTheRegistration(t *testing.T) {
 		name          string
 		registration  time.Time
 		refreshToken  string
+		spent         bool
 		wantRenewable bool
 		wantSSOChip   bool
 	}{
-		{"live registration", awsSSOTestFixedNow.Add(30 * 24 * time.Hour), "sso-refresh-token-1234567890", true, true},
-		{"zero registration counts as live", time.Time{}, "sso-refresh-token-1234567890", true, true},
-		{"LAPSED registration renews nothing", awsSSOTestFixedNow.Add(-time.Hour), "sso-refresh-token-1234567890", false, false},
-		{"no refresh token at all", time.Time{}, "", false, false},
+		{"live registration", awsSSOTestFixedNow.Add(30 * 24 * time.Hour), "sso-refresh-token-1234567890", false, true, true},
+		{"zero registration counts as live", time.Time{}, "sso-refresh-token-1234567890", false, true, true},
+		{"LAPSED registration renews nothing", awsSSOTestFixedNow.Add(-time.Hour), "sso-refresh-token-1234567890", false, false, false},
+		{"no refresh token at all", time.Time{}, "", false, false, false},
+		// N2 (0.7.6 review): a LIVE registration alone must not win over a
+		// refresh token AWS has already retired — renewable(now) reads true
+		// for this blob (refresh token present, registration far out), but
+		// nothing redeems it. Both surfaces must consult the spent set.
+		{"spent, otherwise live registration", awsSSOTestFixedNow.Add(30 * 24 * time.Hour), "sso-refresh-token-1234567890", true, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _, blob := ssoRefreshServer(t) // blob's access token expired a minute ago
 			blob.RegistrationExpiresAt = tc.registration
 			blob.RefreshToken = tc.refreshToken
 			storeSSOBlob(t, s, blob)
+			if tc.spent {
+				s.markAWSSSOTokenSpent(awsSSOTokenFingerprint(tc.refreshToken))
+			}
 
 			rows, _, ma := s.setupHarnessCreds(context.Background(), types.SiteConfig{}, awsSSOScope{})
 			var row SetupHarness

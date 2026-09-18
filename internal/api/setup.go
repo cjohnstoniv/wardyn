@@ -941,7 +941,7 @@ func (s *Server) setupHarnessCreds(ctx context.Context, sc types.SiteConfig, sco
 			CapturedAt:  blob.CapturedAt.Format(time.RFC3339),
 			ExpiresAt:   blob.ExpiresAt.Format(time.RFC3339),
 			Expired:     blob.expired(s.cfg.Now().UTC()),
-			Renewable:   blob.renewable(s.cfg.Now().UTC()),
+			Renewable:   blob.renewable(s.cfg.Now().UTC()) && !s.awsSSOTokenSpentFor(blob),
 			SourceRunID: blob.SourceRunID,
 		})
 	}

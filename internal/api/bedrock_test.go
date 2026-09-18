@@ -403,6 +403,28 @@ func TestSetupBedrock_SSOLaneMatchesLaunchGate(t *testing.T) {
 	}
 }
 
+// TestSetupBedrock_SpentSSOReadsDead is N2 (0.7.6 review): renewable(now)
+// alone reads true for a refresh token AWS has already retired (it is
+// PRESENT and the registration has not lapsed) — SSOPresent must also consult
+// the spent set, the same one setupModelAccess grades against, or the wizard
+// and the launch gate read "present-and-renewable" for a shared session
+// nothing can actually renew.
+func TestSetupBedrock_SpentSSOReadsDead(t *testing.T) {
+	s := &Server{cfg: Config{
+		BedrockRegion: "us-east-1", BedrockModel: "m",
+		Secrets:      &memSecrets{m: map[string][]byte{}},
+		MaskRegistry: secretmask.NewRegistry(),
+		Now:          func() time.Time { return awsSSOTestFixedNow },
+	}}
+	blob := putAWSSSOBlob(t, s, awsSSOTestFixedNow.Add(-time.Minute)) // access token expired, refresh token present
+	s.markAWSSSOTokenSpent(awsSSOTokenFingerprint(blob.RefreshToken))
+
+	b := s.setupBedrock(context.Background(), nil, awsSSOScope{})
+	if b.SSOPresent || !b.SSOExpired {
+		t.Fatalf("spent shared session: SSOPresent = %v, SSOExpired = %v; want false/true — renewable(now) alone must not win over a known-spent token", b.SSOPresent, b.SSOExpired)
+	}
+}
+
 // bedrockOverrideBaseURL / bedrockOverrideHost are the shared PrivateLink
 // fixture for the two override tests below: a VPC-endpoint base URL and the
 // bare host every Bedrock consumer must derive from it.

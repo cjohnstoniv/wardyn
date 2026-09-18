@@ -436,6 +436,13 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 		"expires_at": next.ExpiresAt.Format(time.RFC3339),
 		"rotated":    rotated,
 	}
+	// attempts RIDES A SUCCESS ROW TOO when the retry is what made it succeed —
+	// a first-attempt success carries no field at all (the common case, no
+	// story to tell), but "took two tries" is as much a network signal on a
+	// success row as it is on a failure one.
+	if attempts == 2 {
+		data["attempts"] = attempts
+	}
 	// OMITTED WHEN ZERO (B2-F8), as awsSSOCacheFileContents already does for the
 	// same field: a zero RegistrationExpiresAt means the capturing helper saw no
 	// registration expiry, which registrationLapsed reads as LIVE. Formatting it

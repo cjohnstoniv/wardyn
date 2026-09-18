@@ -75,15 +75,25 @@ type metrics struct {
 	// message. Never the drive, the subject or the path — those are the audit
 	// log's and the slog line's, both of which this counter points at.
 	driveRefusals map[string]int64
-	// ssoRefreshOutcomes counts each control-plane AWS SSO renewal attempt
-	// (refreshAWSSSOBlob), by outcome — the same four the harness.credential.refresh
-	// audit row's own branching already distinguishes (Finding 5): the rotated
-	// pair persisted (success), the refresh token is dead (spent), a transient
-	// failure that still served the run from a still-valid token (transport_error),
-	// or a transient failure with nothing left to serve (unavailable). BY OUTCOME,
-	// CLOSED set (ssoRefreshOutcomeValues): a graphable "how often does renewal
-	// fail, and which way" that the audit trail alone is not (nobody alerts on a
-	// log line they do not know to grep for).
+	// ssoRefreshOutcomes counts each control-plane AWS SSO renewal ATTEMPT
+	// (refreshAWSSSOBlob's CreateToken call), by outcome — the same four the
+	// harness.credential.refresh audit row's own branching already
+	// distinguishes (Finding 5): success is "redeemed at AWS" — the increment
+	// fires the instant CreateToken succeeds, BEFORE the re-Put; a persist
+	// failure afterward is still audited failure/persist_error, but counts
+	// here too, since the run was served from the renewed pair either way.
+	// spent is the refresh token being newly discovered dead — it increments
+	// ONCE per token, at the CreateToken call that first sees invalid_grant et
+	// al.; every LATER dispatch on that same token exits at an earlier,
+	// uncounted short-circuit (the in-memory dead-mark check, before
+	// CreateToken is ever called again), so this series reads "how many
+	// distinct sessions AWS retired," not "how many times someone hit a dead
+	// one." transport_error is a transient failure that still served the run
+	// from a still-valid token; unavailable is a transient failure with
+	// nothing left to serve. BY OUTCOME, CLOSED set (ssoRefreshOutcomeValues):
+	// a graphable "how often does renewal fail, and which way" that the audit
+	// trail alone is not (nobody alerts on a log line they do not know to
+	// grep for).
 	ssoRefreshOutcomes map[string]int64
 }
 
