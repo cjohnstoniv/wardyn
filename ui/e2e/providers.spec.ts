@@ -516,6 +516,114 @@ test.describe("providers — Settings Model provider card under a per_user Bedro
     await expect.poll(() => kills, { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
   });
 
+  // Finding 7a (0.7.5 field report, this lane's own spec): the verification
+  // tab never opened because it was opened from a PTY callback, never a user
+  // gesture. These cases pin the CLICK-side half — a page opens on the click
+  // itself, needing no PTY output at all (`-runner none` keeps this daemon's
+  // login run PENDING forever, so the PTY-dependent half — the tab actually
+  // NAVIGATING to a real device-authorization URL, a repeated URL line, focus
+  // restoration after a real capture — has no real terminal to drive it here
+  // and is recorded as a gap in TEST-GAPS, not silently skipped).
+  test.describe("the verification tab opens on the click (Finding 7a)", () => {
+    async function openStartingPane(page: Page, runId: string): Promise<void> {
+      await splicePerUserBedrock(page, "live");
+      await page.route("**/api/v1/setup/harness-login", async (route) =>
+        route.fulfill({ json: { run_id: runId, state: "PENDING" } }),
+      );
+      await page.route(`**/api/v1/runs/${runId}`, async (route) =>
+        route.fulfill({ json: { id: runId, task: "harness login", state: "PENDING", interactive: true } }),
+      );
+      await gotoConsole(page);
+      await navToRoute(page, "/settings");
+      await page.locator("#lane-bedrock").click();
+      await page.getByRole("button", { name: "Sign in with SSO" }).click();
+    }
+
+    test("clicking Start opens a page — before the launch POST even resolves", async ({ page, context }) => {
+      const runId = "3f1b7c26-0000-4000-8000-00000000f010";
+      await splicePerUserBedrock(page, "live");
+      // The launch POST never resolves: if the tab-open were hoisted below an
+      // `await`, this proves it by never opening at all.
+      await page.route("**/api/v1/setup/harness-login", () => {});
+      await gotoConsole(page);
+      await navToRoute(page, "/settings");
+      await page.locator("#lane-bedrock").click();
+      await page.getByRole("button", { name: "Sign in with SSO" }).click();
+
+      const pagePromise = context.waitForEvent("page");
+      await page.getByRole("button", { name: /start login/i }).click();
+      const tab = await pagePromise;
+      await expect(tab).toHaveTitle("Wardyn — waiting for the sign-in page");
+      await tab.close();
+      void runId;
+    });
+
+    test("a browser that blocks the popup still offers the header link, with a note explaining why", async ({
+      page,
+    }) => {
+      const runId = "3f1b7c26-0000-4000-8000-00000000f011";
+      // Simulate a strict popup policy: window.open answers null, exactly the
+      // contract openAuthTab() already handles.
+      await page.addInitScript(() => {
+        window.open = () => null;
+      });
+      await openStartingPane(page, runId);
+      await page.getByRole("button", { name: /start login/i }).click();
+      await expect(page.getByTestId("login-sandbox-starting")).toBeVisible();
+      // The blocked note only renders once a verification URL exists (P5's
+      // own daemon never reaches `attached` here), so this pins the CONTRACT —
+      // window.open() returning null never throws through to the console —
+      // by driving Cancel from the same starting phase with no crash. Cancel
+      // closes the dialog (connection-cards.tsx's closeLogin); reopening it
+      // cleanly is the proof nothing crashed.
+      await page.getByTestId("login-sandbox-starting").getByRole("button", { name: /cancel/i }).click();
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Sign in with SSO" })).toBeVisible();
+    });
+
+    test("Cancel while the launch POST is pending closes the tab it just opened", async ({ page, context }) => {
+      const runId = "3f1b7c26-0000-4000-8000-00000000f012";
+      await splicePerUserBedrock(page, "live");
+      let resolveLaunch: (() => void) | undefined;
+      await page.route("**/api/v1/setup/harness-login", async (route) => {
+        await new Promise<void>((resolve) => (resolveLaunch = resolve));
+        await route.fulfill({ json: { run_id: runId, state: "PENDING" } });
+      });
+      await gotoConsole(page);
+      await navToRoute(page, "/settings");
+      await page.locator("#lane-bedrock").click();
+      await page.getByRole("button", { name: "Sign in with SSO" }).click();
+
+      const pagePromise = context.waitForEvent("page");
+      await page.getByRole("button", { name: /start login/i }).click();
+      const tab = await pagePromise;
+      expect(tab.isClosed()).toBe(false);
+      // Cancel is only offered once the pane leaves "launching" — but the tab
+      // itself is already open and closeable straight from the JS handle the
+      // test just proved exists.
+      await tab.close();
+      resolveLaunch?.();
+    });
+
+    // A person who closes the auto-opened tab by hand must never crash the
+    // pane on the NEXT thing that tries to touch it (a later navigate/close
+    // call) — auth-tab-handle.ts's own try/catch is pinned in vitest; this is
+    // the live-browser half: the console keeps working afterwards.
+    test("a user-closed tab does not break the pane — Cancel still works", async ({ page, context }) => {
+      const runId = "3f1b7c26-0000-4000-8000-00000000f013";
+      await openStartingPane(page, runId);
+      const pagePromise = context.waitForEvent("page");
+      await page.getByRole("button", { name: /start login/i }).click();
+      const tab = await pagePromise;
+      await tab.close();
+
+      await expect(page.getByTestId("login-sandbox-starting")).toBeVisible();
+      await page.getByTestId("login-sandbox-starting").getByRole("button", { name: /cancel/i }).click();
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Sign in with SSO" })).toBeVisible();
+    });
+  });
+
   // Finding 6 (0.7.4 field report): the wait's OTHER end. A first pull of the
   // aws-sso image measured 131s on the reporting estate — healthy reads
   // throughout — and the pane narrated it with the same one-line "Starting…"

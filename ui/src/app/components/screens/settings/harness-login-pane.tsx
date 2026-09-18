@@ -41,17 +41,19 @@ import {
 import { isTerminalStatusReason, statusDetailSentence } from "../run-status-detail";
 import {
   CAPTURE_CHECK_UNREACHABLE,
+  CAPTURE_HANDOFF,
   CAPTURE_NOT_CORROBORATED,
   CAPTURE_VERIFYING,
   confirmCaptureWithServer,
+  extractSignedIn,
+  watchForCapture,
 } from "./capture-confirm";
 
 // RE-EXPORTED, not re-declared (R1-F7): the corroboration rule and its refusal
 // sentence moved to capture-confirm.ts to keep this file under the size cap, and
 // every existing importer — this pane's tests, ui/e2e — keeps its import path.
 export { CAPTURE_NOT_CORROBORATED, serverConfirmsCapture } from "./capture-confirm";
-// Finding 7a: the verification tab's open/navigate/close lifecycle — a new
-// module, not inline, so this file stays under the size cap (COMMON.md).
+// Finding 7a: the verification tab's open/navigate/close lifecycle.
 import { AUTH_TAB_BLOCKED_NOTE, openAuthTab, type AuthTab } from "./auth-tab-handle";
 import {
   AWS_BLURB_MANAGED_OPENING,
@@ -423,20 +425,20 @@ export function HarnessLoginPane({
   const [stuck, setStuck] = React.useState(false);
   const [authUrl, setAuthUrl] = React.useState("");
   const [code, setCode] = React.useState("");
-  // Finding 7a: the browser blocked even the click-backed tab (Safari strict
-  // / a managed popup policy) — 0.7.5's header link is the fallback either way.
+  // Finding 7a: the browser blocked even the click-backed tab — 0.7.5's link is the fallback.
   const [tabBlocked, setTabBlocked] = React.useState(false);
+  // Finding 7b: the CLI's own success line — a HINT (S-13's own reasoning), never trusted alone.
+  const [signedIn, setSignedIn] = React.useState(false);
 
   const termRef = React.useRef<AttachTerminalHandle>(null);
-  // The verification tab's own handle — opened on the click, navigated once
-  // the URL is known, closed on every exit path (cancel / error / unmount /
-  // success).
+  // Opened on the click, navigated once the URL is known, closed on every exit path.
   const authTabRef = React.useRef<AuthTab | null>(null);
-  // Stable identity (empty deps) so it is safe in any callback's dep array.
   const closeAuthTab = React.useCallback(() => {
     authTabRef.current?.close();
     authTabRef.current = null;
   }, []);
+  // Aborts the background capture watch (Finding 7b) on unmount/relaunch/cancel.
+  const watchAbortRef = React.useRef<AbortController | null>(null);
 
   // Rolling buffer of recent PTY output + latches so we act on each thing once.
   const outBufRef = React.useRef("");
@@ -449,6 +451,9 @@ export function HarnessLoginPane({
   const dismissedRef = React.useRef(false);
   const failedRef = React.useRef(false);
   const openedUrlRef = React.useRef(false);
+  const signedInRef = React.useRef(false);
+  // Once-only completion (Codex #9): guards completeCapture below.
+  const completedRef = React.useRef(false);
   // Consecutive unreadable polls of the starting run, not a total: one blip must
   // not end a sign-in that is working. A ref, not state — it drives no render
   // and must not churn the poll callback's identity. Same for the two clocks
@@ -469,14 +474,18 @@ export function HarnessLoginPane({
 
   const launch = React.useCallback(async () => {
     // LOUD COMMENT (Finding 7a) — MUST stay first, BEFORE any `await` below:
-    // Start-login's click is the only user gesture this flow ever gets, and a
-    // popup blocker only allows a tab while the call stack is still inside
-    // that gesture. Hoisting an `await` above this line silently reverts the
-    // lane — the tab reopens, but blocked, on every browser that enforces it.
+    // the click is the only user gesture this flow ever gets, and a popup
+    // blocker only allows a tab while the call stack is inside that gesture.
+    // Hoisting an `await` above this line silently reverts the lane.
     authTabRef.current?.close();
     const tab = openAuthTab();
     authTabRef.current = tab;
     setTabBlocked(!tab);
+    watchAbortRef.current?.abort();
+    watchAbortRef.current = null;
+    completedRef.current = false;
+    signedInRef.current = false;
+    setSignedIn(false);
     setPhase("launching");
     setError("");
     outBufRef.current = "";
@@ -633,6 +642,19 @@ function startingSentenceOf(run: AgentRun | undefined): string {
     return () => clearTimeout(timer);
   }, [phase, flow]);
 
+  // completeCapture (Codex #9): the ONE, once-only-guarded place either the
+  // marker below or the background watch ends the pane.
+  const completeCapture = React.useCallback(() => {
+    if (completedRef.current) return;
+    completedRef.current = true;
+    watchAbortRef.current?.abort();
+    if (runId) void runsApi.killRun(runId).catch(() => {});
+    closeAuthTab();
+    setAutoCaptured(true);
+    setPhase("done");
+    onDone();
+  }, [runId, onDone, closeAuthTab]);
+
   // saveToken stores a token (explicit from auto-capture, or the pasted field).
   const saveToken = React.useCallback(
     async (explicit?: string) => {
@@ -665,22 +687,22 @@ function startingSentenceOf(run: AgentRun | undefined): string {
   // time the helper prints its marker, so the login sandbox has no reason to
   // outlive it by a round trip, and ssotoken.go's already_captured latch
   // covers a repeat. Then "saving", so the spinner covers the wait (R-8).
+  // A mismatch here still refuses immediately, unchanged from 0.7.5 (S-13
+  // stays green) — the watch below is the new path for a marker that never
+  // arrives, not a second chance for one that arrived and disagreed.
   const confirmCapture = React.useCallback(async () => {
     if (runId) void runsApi.killRun(runId).catch(() => {});
     setPhase("saving");
     const { confirmed, unreachable } = await confirmCaptureWithServer(provider, runId);
     if (confirmed) {
-      closeAuthTab(); // Finding 7a: the tab must not outlive a completed sign-in.
-      setAutoCaptured(true);
-      setPhase("done");
-      onDone();
+      completeCapture();
       return;
     }
     failedRef.current = true;
     setError(unreachable ? CAPTURE_CHECK_UNREACHABLE : CAPTURE_NOT_CORROBORATED);
     setPhase("error");
     closeAuthTab();
-  }, [provider, runId, onDone, closeAuthTab]);
+  }, [provider, runId, closeAuthTab, completeCapture]);
 
   // Watch the login terminal: open the OAuth URL in a new tab, then capture and
   // save the printed token — both automatically.
@@ -698,6 +720,12 @@ function startingSentenceOf(run: AgentRun | undefined): string {
           // window.open would need.
           authTabRef.current?.navigate(url);
         }
+      }
+      // Finding 7b: a HINT; only swaps CAPTURE_HANDOFF in (checked before the
+      // marker latches so it fires even when the marker never arrives).
+      if (!signedInRef.current && extractSignedIn(outBufRef.current)) {
+        signedInRef.current = true;
+        setSignedIn(true);
       }
       if (savedRef.current || failedRef.current) return;
       // Helper-capture providers (AWS SSO): the credential is uploaded by the
@@ -747,12 +775,25 @@ function startingSentenceOf(run: AgentRun | undefined): string {
   const cancel = React.useCallback(() => {
     dismissedRef.current = true;
     if (runId) runsApi.killRun(runId).catch(() => {});
+    watchAbortRef.current?.abort();
     closeAuthTab();
     onCancel();
   }, [runId, onCancel, closeAuthTab]);
 
   // Codex #15: the hosting dialog's Escape / overlay-close reaches `cancel` via `paneRef`.
   React.useImperativeHandle(paneRef, () => ({ cancel }), [cancel]);
+
+  // The markerless path to onDone (Codex #8, #9): starts once attached, so a
+  // lost marker AND a lost success line still converge. AWS/helper only.
+  React.useEffect(() => {
+    if (phase !== "attached" || flow.capture !== "helper" || !runId) return;
+    const controller = new AbortController();
+    watchAbortRef.current = controller;
+    void watchForCapture({ provider, runId, signal: controller.signal }).then((confirmed) => {
+      if (confirmed && !controller.signal.aborted) completeCapture();
+    });
+    return () => controller.abort();
+  }, [phase, flow.capture, provider, runId, completeCapture]);
 
   // Finding 7a's fourth exit path: the tab must not outlive the pane.
   React.useEffect(() => closeAuthTab, [closeAuthTab]);
@@ -903,9 +944,7 @@ function startingSentenceOf(run: AgentRun | undefined): string {
               {flow.capture === "helper" ? "Open the AWS verification page ↗" : "Open the Claude login page ↗"}
             </a>
           )}
-          {/* Finding 7a: the automatic tab is the primary path now — this note
-              shows only once a link exists AND the browser refused even the
-              click-backed popup. */}
+          {/* Finding 7a: shown only once a link exists AND the tab was blocked. */}
           {authUrl && phase !== "error" && tabBlocked && (
             <p className="text-xs text-muted-foreground" data-testid="auth-tab-blocked-note">
               {AUTH_TAB_BLOCKED_NOTE}
@@ -948,11 +987,14 @@ function startingSentenceOf(run: AgentRun | undefined): string {
           ) : flow.capture === "helper" ? (
             /* Device-code flow: the code is entered on the AWS verification PAGE,
                not in the terminal, and the credential is uploaded by the in-sandbox
-               helper — so there is no code field and nothing to paste here. */
+               helper — so there is no code field and nothing to paste here.
+               Finding 7b: swaps to CAPTURE_HANDOFF once `signedIn` (a hint). */
             <div className="flex flex-wrap items-center gap-2">
-              <p className="flex-1 text-xs leading-relaxed text-muted-foreground">
-                In the tab that opened (or the link above), enter the user code shown in the terminal and approve.
-                Wardyn captures the session automatically when the login completes.
+              <p className="flex-1 text-xs leading-relaxed text-muted-foreground" data-testid="helper-flow-note">
+                {signedIn
+                  ? CAPTURE_HANDOFF
+                  : "In the tab that opened (or the link above), enter the user code shown in the terminal and approve. " +
+                    "Wardyn captures the session automatically when the login completes."}
               </p>
               <Button size="sm" variant="outline" onClick={cancel}>
                 <Square className="size-3.5" /> Cancel

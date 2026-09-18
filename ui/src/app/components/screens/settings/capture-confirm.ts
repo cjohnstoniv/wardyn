@@ -13,8 +13,10 @@
 //
 // A pure module on purpose — no React, no component state — so the forgery rule
 // is exercisable as a function, which is how S-13's pins already read it.
+import { audit as auditApi } from "../../../lib/api/audit";
+import { runs as runsApi } from "../../../lib/api/runs";
 import { setup as setupApi } from "../../../lib/api/setup";
-import type { SetupStatus } from "../../../lib/types";
+import { isTerminalRunState, type SetupStatus } from "../../../lib/types";
 
 // DRAFT (M2 canon pending) — S-13 (blind security review, lens-S.md): the PTY
 // success marker is sandbox-forgeable by construction (a replaced/malicious
@@ -94,10 +96,24 @@ const CAPTURE_CONFIRM_RETRIES = 3;
 // TODAY ONLY THE aws FLOW REACHES THIS (R-5): it is the only flow with a
 // doneMarker. anthropic ends through saveToken (capture: "scrape"). Its
 // branch is kept because it is the right rule for the next helper flow.
+//
+// `strict` (Finding 7b, Codex #9): the background watch below is a
+// FREE-RUNNING poll with no marker to anchor it, so the presence fallbacks
+// below — right for the SHORT, marker-triggered round trip, where a marker
+// was at least seen — would be the one dangerous line in the lane if the
+// watch used them: a pre-existing credential would confirm a sign-in that
+// never happened. `strict` refuses them outright; every existing caller
+// (this file's own round trip, every S-13 pin) omits it and is unchanged.
 // Exported for tests.
-export function serverConfirmsCapture(status: SetupStatus, provider: string, runId?: string | null): boolean {
+export function serverConfirmsCapture(
+  status: SetupStatus,
+  provider: string,
+  runId?: string | null,
+  opts?: { strict?: boolean },
+): boolean {
   const rows = (status.harness ?? []).filter((h) => h.provider === provider);
   if (runId && rows.some((h) => h.captured && h.source_run_id === runId)) return true;
+  if (opts?.strict) return false;
   if (rows.some((h) => h.source_run_id)) return false; // someone else's sign-in
   if (provider === "aws") {
     const state = status.model_access?.state;
@@ -149,4 +165,135 @@ export async function confirmCaptureWithServer(
     return { confirmed: true, unreachable: false };
   }
   return { confirmed: false, unreachable: !!status?.unreachable };
+}
+
+// ─── Finding 7b: the pane sits on a sign-in that worked ─────────────────────
+//
+// What was actually missing (reconciled): the corroboration above already
+// shipped in 0.7.5. The gap is ONE STEP EARLIER — the window between the
+// CLI's own success line and the helper's marker, where the pane still showed
+// "open the link, enter the code, approve" — and a path to `onDone` that does
+// not depend on that marker byte reaching the browser at all.
+
+// extractSignedIn is a HINT, never a verdict — the CLI's own wording, not
+// Wardyn's, matched loosely (case-insensitive substring) so a version bump
+// does not silently stop it working. It authorises NOTHING: the caller may
+// swap one sentence (CAPTURE_HANDOFF) and start ONE background watch: the
+// watch below is what actually confirms anything.
+export function extractSignedIn(buf: string): boolean {
+  return /successfully logged into/i.test(buf);
+}
+
+// DRAFT (M2 canon pending) — round-2 UX S10 + nits: no "Signed in." verdict on
+// forgeable evidence (the CLI's line, like the done marker, is a PTY string —
+// S-13's own reasoning, applied one step earlier). chooseAccountRole prompts
+// TWICE when the roster row carries no account/role pin (`wardyn: account
+// [1-N]:` then `wardyn: role [1-N]:`, cmd/wardyn-aws-sso/main.go) — named here
+// so a person is not left staring at a terminal that "finished".
+export const CAPTURE_HANDOFF =
+  "The sign-in tool reports you are signed in. Wardyn is waiting for the sandbox to hand over your session. If the terminal above lists accounts or roles, click or tab into it, type the number you want and press Enter — it may ask twice, account then role.";
+
+// The audit action ssotoken.go emits synchronously after the store write
+// (handleUploadSSOToken) — a member can read their own run's trail, and this
+// is exact by construction: THIS run's capture, or nothing.
+const CAPTURE_AUDIT_ACTION = "harness.credential.captured";
+
+// Codex #9: the ceiling on the watch's OWN life, independent of the run's —
+// AutoStopAfterSec is an IDLE limit (attach keepalives extend it), not a
+// login lifetime, and an outage can keep the watch from ever observing a
+// terminal run.
+export const CAPTURE_WATCH_MAX_MS = 45 * 60_000;
+
+// Mirrors terminalUploadGrace (internal_live_run.go) — the same window the
+// server itself grants an upload after a run goes terminal.
+export const CAPTURE_POST_RUN_GRACE_MS = 5 * 60_000;
+
+// O-5 (round-1 ruling): the audit hint's own back-off — fast while a capture
+// is plausible soon, slower once it is not. `/setup/status` piggybacks on a
+// hit immediately; otherwise it falls back to its own slow cadence — see
+// CAPTURE_WATCH_STATUS_FALLBACK_MS in watchForCapture below.
+const CAPTURE_WATCH_HINT_SCHEDULE: ReadonlyArray<readonly [afterMs: number, everyMs: number]> = [
+  [0, 2_000],
+  [30_000, 3_000],
+  [2 * 60_000, 10_000],
+  [10 * 60_000, 30_000],
+];
+const CAPTURE_WATCH_STATUS_FALLBACK_MS = 30_000;
+
+function hintIntervalAt(elapsedMs: number): number {
+  let ms = CAPTURE_WATCH_HINT_SCHEDULE[0][1];
+  for (const [after, every] of CAPTURE_WATCH_HINT_SCHEDULE) {
+    if (elapsedMs >= after) ms = every;
+  }
+  return ms;
+}
+
+// Real setTimeout, abort-cancellable — the same clock every test in this lane
+// drives with vi.useFakeTimers, no injection needed.
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve();
+    const t = setTimeout(resolve, ms);
+    signal.addEventListener("abort", () => { clearTimeout(t); resolve(); }, { once: true });
+  });
+}
+
+// watchForCapture (Codex #8, #9) is the markerless path to `onDone`: a
+// background watch that starts the moment the pane attaches, independent of
+// any PTY hint, so a sign-in whose marker AND success line are both lost
+// still converges instead of waiting forever. Two reads, two jobs:
+//   · GET /audit?run_id=&action=harness.credential.captured — a WAKE-UP HINT
+//     ONLY (Codex #8): ssotoken.go emits this audit row best-effort AFTER the
+//     store write, so an audit-first watcher could miss a genuinely stored
+//     capture forever if it trusted silence. A hit only makes the
+//     authoritative check below run sooner.
+//   · GET /setup/status, read STRICT — the only thing that can end this loop
+//     successfully. Every read failure (either endpoint) is a TICK, never a
+//     verdict: the loop's only two exits are a strict confirmation (true) and
+//     running out of time (false).
+// Bounded by the run's own life (terminal + CAPTURE_POST_RUN_GRACE_MS) OR the
+// absolute CAPTURE_WATCH_MAX_MS, whichever comes first.
+export async function watchForCapture({
+  provider,
+  runId,
+  signal,
+}: {
+  provider: string;
+  runId: string;
+  signal: AbortSignal;
+}): Promise<boolean> {
+  const startedAt = Date.now();
+  let terminalAt: number | null = null;
+  let lastStatusCheck = startedAt; // the fallback's own clock starts at watch start, not at epoch 0
+  while (!signal.aborted) {
+    const now = Date.now();
+    if (now - startedAt >= CAPTURE_WATCH_MAX_MS) return false;
+    if (terminalAt !== null && now - terminalAt >= CAPTURE_POST_RUN_GRACE_MS) return false;
+
+    if (terminalAt === null) {
+      const run = await runsApi.getRun(runId).catch(() => undefined);
+      if (run && isTerminalRunState(run.state)) terminalAt = Date.now();
+    }
+
+    let hinted = false;
+    try {
+      hinted = (await auditApi.listAudit(runId, CAPTURE_AUDIT_ACTION)).length > 0;
+    } catch {
+      /* a read failure is a tick, never a verdict */
+    }
+
+    if (hinted || Date.now() - lastStatusCheck >= CAPTURE_WATCH_STATUS_FALLBACK_MS) {
+      lastStatusCheck = Date.now();
+      try {
+        const status = await setupApi.getSetupStatus();
+        if (!status.unreachable && serverConfirmsCapture(status, provider, runId, { strict: true })) return true;
+      } catch {
+        /* a read failure is a tick, never a verdict */
+      }
+    }
+
+    if (signal.aborted) return false;
+    await sleep(hintIntervalAt(Date.now() - startedAt), signal);
+  }
+  return false;
 }
