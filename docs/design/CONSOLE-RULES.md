@@ -105,7 +105,7 @@ cards, run cards, icon wells. Exactly three elevation levels:
 per-theme — a floating surface reads the same way in light and dark. It replaced the two
 spellings that shipped one idea: `shadow-md` (`dropdown-menu.tsx:45`, `select.tsx:68`,
 `popover.tsx:37`) and `shadow-lg` (`dialog.tsx:68`, `alert-dialog.tsx:63`,
-`sheet.tsx:61`, L233). A floating surface is one thing; it gets one shadow. Anything
+`sheet.tsx:63`, L233). A floating surface is one thing; it gets one shadow. Anything
 wanting a fourth level wants the focus ring.
 
 ## 5. Status vocabulary and glyph pairing
