@@ -1,0 +1,124 @@
+=== RUN   TestRedactSecretsMultilineValues
+=== RUN   TestRedactSecretsMultilineValues/|-_________first-sensitive-line_________second-sensitive-line
+    supportbundle_multiline_test.go:25: secret survives in support bundle: services:
+          app:
+            environment:
+              APP_PRIVATE_KEY: "<redacted>"
+                first-sensitive-line
+                second-sensitive-line
+              WARDYN_LISTEN: 127.0.0.1:8080
+    supportbundle_multiline_test.go:25: secret survives in support bundle: services:
+          app:
+            environment:
+              APP_PRIVATE_KEY: "<redacted>"
+                first-sensitive-line
+                second-sensitive-line
+              WARDYN_LISTEN: 127.0.0.1:8080
+    supportbundle_multiline_test.go:33: redacted YAML is invalid: yaml: line 3: did not find expected key
+=== RUN   TestRedactSecretsMultilineValues/>-_________first-sensitive-line_________second-sensitive-line
+    supportbundle_multiline_test.go:25: secret survives in support bundle: services:
+          app:
+            environment:
+              APP_PRIVATE_KEY: "<redacted>"
+                first-sensitive-line
+                second-sensitive-line
+              WARDYN_LISTEN: 127.0.0.1:8080
+    supportbundle_multiline_test.go:25: secret survives in support bundle: services:
+          app:
+            environment:
+              APP_PRIVATE_KEY: "<redacted>"
+                first-sensitive-line
+                second-sensitive-line
+              WARDYN_LISTEN: 127.0.0.1:8080
+    supportbundle_multiline_test.go:33: redacted YAML is invalid: yaml: line 3: did not find expected key
+=== RUN   TestRedactSecretsMultilineValues/"first-sensitive-line_________second-sensitive-line"
+    supportbundle_multiline_test.go:25: secret survives in support bundle: services:
+          app:
+            environment:
+              APP_PRIVATE_KEY: "<redacted>"
+                second-sensitive-line"
+              WARDYN_LISTEN: 127.0.0.1:8080
+    supportbundle_multiline_test.go:33: redacted YAML is invalid: yaml: line 3: did not find expected key
+=== RUN   TestRedactSecretsMultilineValues/'first-sensitive-line_________second-sensitive-line'
+    supportbundle_multiline_test.go:25: secret survives in support bundle: services:
+          app:
+            environment:
+              APP_PRIVATE_KEY: "<redacted>"
+                second-sensitive-line'
+              WARDYN_LISTEN: 127.0.0.1:8080
+    supportbundle_multiline_test.go:33: redacted YAML is invalid: yaml: line 3: did not find expected key
+--- FAIL: TestRedactSecretsMultilineValues (0.00s)
+    --- FAIL: TestRedactSecretsMultilineValues/|-_________first-sensitive-line_________second-sensitive-line (0.00s)
+    --- FAIL: TestRedactSecretsMultilineValues/>-_________first-sensitive-line_________second-sensitive-line (0.00s)
+    --- FAIL: TestRedactSecretsMultilineValues/"first-sensitive-line_________second-sensitive-line" (0.00s)
+    --- FAIL: TestRedactSecretsMultilineValues/'first-sensitive-line_________second-sensitive-line' (0.00s)
+=== RUN   TestRedactSecretsAliasedMultilineValue
+    supportbundle_multiline_test.go:43: anchor leaked a secret: x-value: &shared |
+          first-sensitive-line
+          second-sensitive-line
+        services:
+          app:
+            environment:
+              APP_PRIVATE_KEY: "<redacted>"
+              WARDYN_LISTEN: 127.0.0.1:8080
+--- FAIL: TestRedactSecretsAliasedMultilineValue (0.00s)
+=== RUN   TestRedactSecretsInvalidYAMLIsOmitted
+    supportbundle_multiline_test.go:58: unparseable config must be omitted: APP_PRIVATE_KEY: "<redacted>"
+          second-sensitive-line
+    supportbundle_multiline_test.go:58: unparseable config must be omitted: safe: yes
+        ---
+        APP_PRIVATE_KEY: "<redacted>"
+--- FAIL: TestRedactSecretsInvalidYAMLIsOmitted (0.00s)
+=== RUN   TestRedactSecretsMultilineEnvironmentList
+    supportbundle_multiline_test.go:67: environment list redaction failed: services:
+          app:
+            environment:
+              - |-
+                APP_PRIVATE_KEY="<redacted>"
+                second-sensitive-line
+              - WARDYN_LISTEN=127.0.0.1:8080
+--- FAIL: TestRedactSecretsMultilineEnvironmentList (0.00s)
+=== RUN   TestRedactSecretsStructuredValues
+=== RUN   TestRedactSecretsStructuredValues/commented_multiline
+    supportbundle_multiline_test.go:85: secret survived: # APP_PRIVATE_KEY: "<redacted>"
+        #   first-sensitive-line
+        #   second-sensitive-line
+        diagnostic: kept
+=== RUN   TestRedactSecretsStructuredValues/aliased_secret_key
+    supportbundle_multiline_test.go:85: secret survived: x-env-name: &env_name APP_PRIVATE_KEY
+        services:
+          app:
+            environment:
+              ? *env_name
+              : first-sensitive-line
+        diagnostic: kept
+=== RUN   TestRedactSecretsStructuredValues/secret_anchor
+    supportbundle_multiline_test.go:85: secret survived: APP_PRIVATE_KEY: "<redacted>"
+          first-sensitive-line
+          second-sensitive-line
+        copy: *shared
+        diagnostic: kept
+    supportbundle_multiline_test.go:92: redacted YAML is invalid: yaml: line 1: did not find expected key
+=== RUN   TestRedactSecretsStructuredValues/secret_mapping
+    supportbundle_multiline_test.go:85: secret survived: credentials:
+          first: first-sensitive-line
+          second: second-sensitive-line
+        diagnostic: kept
+=== RUN   TestRedactSecretsStructuredValues/folded_embedded_JSON
+    supportbundle_multiline_test.go:85: secret survived: WARDYN_AUDIT_SINKS: >-
+          [{"bearer_token": "<redacted>"
+          second-sensitive-line"}]
+        diagnostic: kept
+=== RUN   TestRedactSecretsStructuredValues/escaped_embedded_JSON
+    supportbundle_multiline_test.go:85: secret survived: WARDYN_AUDIT_SINKS: '{"bearer_token":"<redacted>"second-sensitive-line"}'
+        diagnostic: kept
+--- FAIL: TestRedactSecretsStructuredValues (0.00s)
+    --- FAIL: TestRedactSecretsStructuredValues/commented_multiline (0.00s)
+    --- FAIL: TestRedactSecretsStructuredValues/aliased_secret_key (0.00s)
+    --- FAIL: TestRedactSecretsStructuredValues/secret_anchor (0.00s)
+    --- FAIL: TestRedactSecretsStructuredValues/secret_mapping (0.00s)
+    --- FAIL: TestRedactSecretsStructuredValues/folded_embedded_JSON (0.00s)
+    --- FAIL: TestRedactSecretsStructuredValues/escaped_embedded_JSON (0.00s)
+FAIL
+FAIL	github.com/cjohnstoniv/wardyn/cmd/wardyn	0.007s
+FAIL

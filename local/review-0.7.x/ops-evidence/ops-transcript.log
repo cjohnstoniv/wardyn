@@ -1,0 +1,108 @@
+2026/09/18 00:58:59 INFO db: applied migration file=0001_init.sql elapsed=12.909445ms
+2026/09/18 00:58:59 INFO db: applied migration file=0002_approval_uniqueness.sql elapsed=2.110995ms
+2026/09/18 00:58:59 INFO db: applied migration file=0003_run_state_completed.sql elapsed=2.322261ms
+2026/09/18 00:58:59 INFO db: applied migration file=0004_audit_truncate_guard.sql elapsed=2.257472ms
+2026/09/18 00:58:59 INFO db: applied migration file=0005_run_interactive.sql elapsed=2.011477ms
+2026/09/18 00:58:59 INFO db: applied migration file=0006_run_workspace_path.sql elapsed=2.106313ms
+2026/09/18 00:58:59 INFO db: applied migration file=0007_audit_least_privilege.sql elapsed=1.846064ms
+2026/09/18 00:58:59 INFO db: applied migration file=0008_workspaces.sql elapsed=4.113774ms
+2026/09/18 00:58:59 INFO db: applied migration file=0009_run_workspace_id.sql elapsed=2.14879ms
+2026/09/18 00:58:59 INFO db: applied migration file=0010_workspace_approved_egress.sql elapsed=2.124654ms
+2026/09/18 00:58:59 INFO db: applied migration file=0011_workspace_import.sql elapsed=2.38253ms
+2026/09/18 00:58:59 INFO db: applied migration file=0012_workspace_record.sql elapsed=1.74949ms
+2026/09/18 00:58:59 INFO db: applied migration file=0013_site_config.sql elapsed=2.818397ms
+2026/09/18 00:58:59 INFO db: applied migration file=0014_runner_target_none.sql elapsed=1.917986ms
+2026/09/18 00:58:59 INFO db: applied migration file=0015_run_image.sql elapsed=2.0804ms
+2026/09/18 00:58:59 INFO db: applied migration file=0016_workspace_writable.sql elapsed=2.176662ms
+2026/09/18 00:58:59 INFO db: applied migration file=0017_audit_action_index.sql elapsed=2.213849ms
+2026/09/18 00:58:59 INFO db: applied migration file=0018_run_auto_stop.sql elapsed=1.883489ms
+2026/09/18 00:58:59 INFO db: applied migration file=0019_agent_exec_id.sql elapsed=1.924171ms
+2026/09/18 00:58:59 INFO db: applied migration file=0020_list_sort_indexes.sql elapsed=2.245993ms
+2026/09/18 00:58:59 INFO db: applied migration file=0021_sandbox_substrate.sql elapsed=2.535493ms
+2026/09/18 00:58:59 INFO db: applied migration file=0022_approval_uniqueness_all_kinds.sql elapsed=2.352029ms
+2026/09/18 00:58:59 INFO db: applied migration file=0023_pagination_indexes.sql elapsed=2.701763ms
+2026/09/18 00:58:59 INFO db: applied migration file=0024_workspace_llm_cred.sql elapsed=2.205612ms
+2026/09/18 00:58:59 INFO db: applied migration file=0025_approvals_grant_id_index.sql elapsed=2.098529ms
+2026/09/18 00:58:59 INFO db: applied migration file=0026_attach_tickets_compose_results.sql elapsed=3.207942ms
+2026/09/18 00:58:59 INFO db: applied migration file=0027_run_watcher_lease.sql elapsed=2.600315ms
+2026/09/18 00:58:59 INFO db: applied migration file=0028_recordings.sql elapsed=3.208426ms
+2026/09/18 00:58:59 INFO db: applied migration file=0029_workspace_sources.sql elapsed=4.382382ms
+2026/09/18 00:58:59 INFO db: applied migration file=0030_egress_redirects.sql elapsed=2.256037ms
+2026/09/18 00:58:59 INFO db: applied migration file=0031_source_library.sql elapsed=8.708443ms
+2026/09/18 00:58:59 INFO db: applied migration file=0032_attach_tickets_token_sha256.sql elapsed=1.74854ms
+2026/09/18 00:58:59 INFO db: applied migration file=0033_ssh_public_keys.sql elapsed=2.827313ms
+2026/09/18 00:58:59 INFO db: applied migration file=0034_attach_ticket_role.sql elapsed=1.932267ms
+2026/09/18 00:58:59 INFO db: applied migration file=0035_drop_compose_results.sql elapsed=2.28445ms
+2026/09/18 00:58:59 INFO db: applied migration file=0036_workspaces_usable_on_create.sql elapsed=1.84375ms
+2026/09/18 00:58:59 INFO db: applied migration file=0037_ui_layouts.sql elapsed=2.872337ms
+2026/09/18 00:58:59 INFO db: applied migration file=0038_run_title.sql elapsed=2.213118ms
+2026/09/18 00:58:59 INFO db: applied migration file=0039_approval_decision_scope.sql elapsed=2.145291ms
+2026/09/18 00:58:59 INFO db: applied migration file=0040_workspace_denied_egress.sql elapsed=1.833663ms
+2026/09/18 00:58:59 INFO db: applied migration file=0041_run_workspace_ids.sql elapsed=1.806435ms
+2026/09/18 00:58:59 INFO db: applied migration file=0042_capability_grants.sql elapsed=4.413925ms
+2026/09/18 00:58:59 INFO db: applied migration file=0043_ssh_key_role.sql elapsed=1.839995ms
+2026/09/18 00:58:59 INFO db: applied migration file=0044_run_failure_hint.sql elapsed=2.0171ms
+2026/09/18 00:58:59 INFO db: applied migration file=0045_api_tokens.sql elapsed=3.719883ms
+2026/09/18 00:58:59 INFO db: applied migration file=0046_ssh_key_role_checked_at.sql elapsed=1.966606ms
+2026/09/18 00:58:59 INFO db: applied migration file=0047_audit_hash_chain.sql elapsed=3.297715ms
+2026/09/18 00:58:59 INFO db: applied migration file=0048_workspace_owned_by.sql elapsed=2.778333ms
+2026/09/18 00:58:59 INFO db: applied migration file=0049_oidc_session_revocations.sql elapsed=3.432236ms
+2026/09/18 00:58:59 INFO db: applied migration file=0050_secret_owned_by.sql elapsed=2.98034ms
+2026/09/18 00:58:59 INFO db: applied migration file=0051_role_mappings.sql elapsed=3.185344ms
+2026/09/18 00:58:59 INFO db: applied migration file=0052_governance_profiles.sql elapsed=4.768513ms
+2026/09/18 00:58:59 INFO db: applied migration file=0053_role_mappings_security_admin.sql elapsed=2.051083ms
+2026/09/18 00:58:59 INFO db: applied migration file=0054_user_drives.sql elapsed=5.137611ms
+2026/09/18 00:58:59 INFO db: applied migration file=0055_workspace_egress_edited_at.sql elapsed=1.844342ms
+2026/09/18 00:58:59 INFO db: applied migration file=0056_audit_chain_serialize.sql elapsed=2.178135ms
+2026/09/18 00:58:59 INFO db: applied migration file=0057_audit_chain_security_definer.sql elapsed=2.064968ms
+2026/09/18 00:58:59 INFO db: applied migration file=0058_audit_chain_schema_qualified.sql elapsed=2.849617ms
+2026/09/18 00:58:59 INFO db: applied migration file=0059_user_drive_grants_home_override_unique.sql elapsed=2.224628ms
+2026/09/18 00:58:59 INFO db: applied migration file=0060_api_tokens_role_check.sql elapsed=2.244145ms
+2026/09/18 00:58:59 INFO db: applied migration file=0061_user_drives_name_slug_unique.sql elapsed=2.525226ms
+2026/09/18 00:58:59 INFO db: applied migration file=0062_approval_cancelled.sql elapsed=2.05453ms
+fresh_migrations=62 idempotent=true
+ set_config 
+------------
+ 
+(1 row)
+
+ setval 
+--------
+     10
+(1 row)
+
+{
+  "after_append": {
+    "ok": true,
+    "checked": 4,
+    "legacy": 0,
+    "first_seq": 6,
+    "head_seq": 14,
+    "head_hash": "16210fddbcf505da434cdf87d432a116fb5f4d32c130fdc390e2b016f8d33401"
+  },
+  "append_only_guards": true,
+  "before": {
+    "ok": true,
+    "checked": 3,
+    "legacy": 0,
+    "first_seq": 6,
+    "head_seq": 10,
+    "head_hash": "b29f015ba80eed94b31b8b9037126a31835431e4bc050094696fa6362a22268c"
+  },
+  "migration_count": 62,
+  "pg_recording_identical": true,
+  "restored": {
+    "ok": true,
+    "checked": 3,
+    "legacy": 0,
+    "first_seq": 6,
+    "head_seq": 10,
+    "head_hash": "b29f015ba80eed94b31b8b9037126a31835431e4bc050094696fa6362a22268c"
+  },
+  "restored_db": "wardyn_review_ops_restore_20260918",
+  "restored_migrate": true,
+  "secret_decrypt": true,
+  "source_db": "wardyn_review_ops_source_20260918",
+  "source_unchanged": true,
+  "wrong_key_refused": true
+}

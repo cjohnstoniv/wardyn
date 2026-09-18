@@ -1,0 +1,35 @@
+{
+  "after_append": {
+    "ok": true,
+    "checked": 4,
+    "legacy": 0,
+    "first_seq": 6,
+    "head_seq": 14,
+    "head_hash": "16210fddbcf505da434cdf87d432a116fb5f4d32c130fdc390e2b016f8d33401"
+  },
+  "append_only_guards": true,
+  "before": {
+    "ok": true,
+    "checked": 3,
+    "legacy": 0,
+    "first_seq": 6,
+    "head_seq": 10,
+    "head_hash": "b29f015ba80eed94b31b8b9037126a31835431e4bc050094696fa6362a22268c"
+  },
+  "migration_count": 62,
+  "pg_recording_identical": true,
+  "restored": {
+    "ok": true,
+    "checked": 3,
+    "legacy": 0,
+    "first_seq": 6,
+    "head_seq": 10,
+    "head_hash": "b29f015ba80eed94b31b8b9037126a31835431e4bc050094696fa6362a22268c"
+  },
+  "restored_db": "wardyn_review_ops_restore_20260918",
+  "restored_migrate": true,
+  "secret_decrypt": true,
+  "source_db": "wardyn_review_ops_source_20260918",
+  "source_unchanged": true,
+  "wrong_key_refused": true
+}

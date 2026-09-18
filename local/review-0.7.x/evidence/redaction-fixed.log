@@ -1,0 +1,90 @@
+=== RUN   TestRedactSecretsMultilineValues
+=== RUN   TestRedactSecretsMultilineValues/|-_________first-sensitive-line_________second-sensitive-line
+=== RUN   TestRedactSecretsMultilineValues/>-_________first-sensitive-line_________second-sensitive-line
+=== RUN   TestRedactSecretsMultilineValues/"first-sensitive-line_________second-sensitive-line"
+=== RUN   TestRedactSecretsMultilineValues/'first-sensitive-line_________second-sensitive-line'
+--- PASS: TestRedactSecretsMultilineValues (0.00s)
+    --- PASS: TestRedactSecretsMultilineValues/|-_________first-sensitive-line_________second-sensitive-line (0.00s)
+    --- PASS: TestRedactSecretsMultilineValues/>-_________first-sensitive-line_________second-sensitive-line (0.00s)
+    --- PASS: TestRedactSecretsMultilineValues/"first-sensitive-line_________second-sensitive-line" (0.00s)
+    --- PASS: TestRedactSecretsMultilineValues/'first-sensitive-line_________second-sensitive-line' (0.00s)
+=== RUN   TestRedactSecretsAliasedMultilineValue
+--- PASS: TestRedactSecretsAliasedMultilineValue (0.00s)
+=== RUN   TestRedactSecretsInvalidYAMLIsOmitted
+--- PASS: TestRedactSecretsInvalidYAMLIsOmitted (0.00s)
+=== RUN   TestRedactSecretsMultilineEnvironmentList
+--- PASS: TestRedactSecretsMultilineEnvironmentList (0.00s)
+=== RUN   TestRedactSecretsStructuredValues
+=== RUN   TestRedactSecretsStructuredValues/commented_multiline
+=== RUN   TestRedactSecretsStructuredValues/aliased_secret_key
+=== RUN   TestRedactSecretsStructuredValues/secret_anchor
+=== RUN   TestRedactSecretsStructuredValues/secret_mapping
+=== RUN   TestRedactSecretsStructuredValues/folded_embedded_JSON
+=== RUN   TestRedactSecretsStructuredValues/escaped_embedded_JSON
+--- PASS: TestRedactSecretsStructuredValues (0.00s)
+    --- PASS: TestRedactSecretsStructuredValues/commented_multiline (0.00s)
+    --- PASS: TestRedactSecretsStructuredValues/aliased_secret_key (0.00s)
+    --- PASS: TestRedactSecretsStructuredValues/secret_anchor (0.00s)
+    --- PASS: TestRedactSecretsStructuredValues/secret_mapping (0.00s)
+    --- PASS: TestRedactSecretsStructuredValues/folded_embedded_JSON (0.00s)
+    --- PASS: TestRedactSecretsStructuredValues/escaped_embedded_JSON (0.00s)
+=== RUN   TestRedactSecrets
+=== RUN   TestRedactSecrets/compose-style_DSN_with_embedded_credentials
+=== RUN   TestRedactSecrets/admin_token_with_a_shell-style_default
+=== RUN   TestRedactSecrets/oidc_client_secret
+=== RUN   TestRedactSecrets/postgres_password,_list-style_env_entry
+=== RUN   TestRedactSecrets/age_key
+=== RUN   TestRedactSecrets/non-secret_line_passes_through_untouched
+=== RUN   TestRedactSecrets/a_plain_hostname_env_var_is_not_touched
+=== RUN   TestRedactSecrets/defense-in-depth:_DSN_creds_on_a_line_with_no_matching_key_name
+=== RUN   TestRedactSecrets/commented-out_admin_token_(raw-file_fallback_path)
+=== RUN   TestRedactSecrets/double-hash-commented_postgres_password
+--- PASS: TestRedactSecrets (0.00s)
+    --- PASS: TestRedactSecrets/compose-style_DSN_with_embedded_credentials (0.00s)
+    --- PASS: TestRedactSecrets/admin_token_with_a_shell-style_default (0.00s)
+    --- PASS: TestRedactSecrets/oidc_client_secret (0.00s)
+    --- PASS: TestRedactSecrets/postgres_password,_list-style_env_entry (0.00s)
+    --- PASS: TestRedactSecrets/age_key (0.00s)
+    --- PASS: TestRedactSecrets/non-secret_line_passes_through_untouched (0.00s)
+    --- PASS: TestRedactSecrets/a_plain_hostname_env_var_is_not_touched (0.00s)
+    --- PASS: TestRedactSecrets/defense-in-depth:_DSN_creds_on_a_line_with_no_matching_key_name (0.00s)
+    --- PASS: TestRedactSecrets/commented-out_admin_token_(raw-file_fallback_path) (0.00s)
+    --- PASS: TestRedactSecrets/double-hash-commented_postgres_password (0.00s)
+=== RUN   TestRedactSecretsMultiLineDocument
+--- PASS: TestRedactSecretsMultiLineDocument (0.00s)
+=== RUN   TestRedactSecrets_KeyNamesAndNestedValues
+=== RUN   TestRedactSecrets_KeyNamesAndNestedValues/APIKEY,_no_underscore
+=== RUN   TestRedactSecrets_KeyNamesAndNestedValues/OPENAI_APIKEY
+=== RUN   TestRedactSecrets_KeyNamesAndNestedValues/bare_APIKEY
+=== RUN   TestRedactSecrets_KeyNamesAndNestedValues/PASSWD
+=== RUN   TestRedactSecrets_KeyNamesAndNestedValues/MYSQL_PASSWD
+=== RUN   TestRedactSecrets_KeyNamesAndNestedValues/PASSPHRASE_list_entry
+=== RUN   TestRedactSecrets_KeyNamesAndNestedValues/SSH_PASSPHRASE
+=== RUN   TestRedactSecrets_KeyNamesAndNestedValues/AUTH
+=== RUN   TestRedactSecrets_KeyNamesAndNestedValues/PROXY_AUTH
+=== RUN   TestRedactSecrets_KeyNamesAndNestedValues/AUTHORIZATION
+=== RUN   TestRedactSecrets_KeyNamesAndNestedValues/REGISTRY_AUTH
+=== RUN   TestRedactSecrets_KeyNamesAndNestedValues/COOKIE
+=== RUN   TestRedactSecrets_KeyNamesAndNestedValues/audit-sink_webhook_bearer
+=== RUN   TestRedactSecrets_KeyNamesAndNestedValues/nested_client_secret
+=== RUN   TestRedactSecrets_KeyNamesAndNestedValues/--flag=value_argv
+--- PASS: TestRedactSecrets_KeyNamesAndNestedValues (0.00s)
+    --- PASS: TestRedactSecrets_KeyNamesAndNestedValues/APIKEY,_no_underscore (0.00s)
+    --- PASS: TestRedactSecrets_KeyNamesAndNestedValues/OPENAI_APIKEY (0.00s)
+    --- PASS: TestRedactSecrets_KeyNamesAndNestedValues/bare_APIKEY (0.00s)
+    --- PASS: TestRedactSecrets_KeyNamesAndNestedValues/PASSWD (0.00s)
+    --- PASS: TestRedactSecrets_KeyNamesAndNestedValues/MYSQL_PASSWD (0.00s)
+    --- PASS: TestRedactSecrets_KeyNamesAndNestedValues/PASSPHRASE_list_entry (0.00s)
+    --- PASS: TestRedactSecrets_KeyNamesAndNestedValues/SSH_PASSPHRASE (0.00s)
+    --- PASS: TestRedactSecrets_KeyNamesAndNestedValues/AUTH (0.00s)
+    --- PASS: TestRedactSecrets_KeyNamesAndNestedValues/PROXY_AUTH (0.00s)
+    --- PASS: TestRedactSecrets_KeyNamesAndNestedValues/AUTHORIZATION (0.00s)
+    --- PASS: TestRedactSecrets_KeyNamesAndNestedValues/REGISTRY_AUTH (0.00s)
+    --- PASS: TestRedactSecrets_KeyNamesAndNestedValues/COOKIE (0.00s)
+    --- PASS: TestRedactSecrets_KeyNamesAndNestedValues/audit-sink_webhook_bearer (0.00s)
+    --- PASS: TestRedactSecrets_KeyNamesAndNestedValues/nested_client_secret (0.00s)
+    --- PASS: TestRedactSecrets_KeyNamesAndNestedValues/--flag=value_argv (0.00s)
+=== RUN   TestRedactSecrets_NonSecretLinesSurvive
+--- PASS: TestRedactSecrets_NonSecretLinesSurvive (0.00s)
+PASS
+ok  	github.com/cjohnstoniv/wardyn/cmd/wardyn	0.011s

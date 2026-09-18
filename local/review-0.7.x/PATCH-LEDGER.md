@@ -33,10 +33,10 @@ Feedback was copied to the owner's Windows clipboard and verified against the
 file's SHA-256. Main remained clean at the baseline; no product changes were made
 for the plan review. The feedback records integration overlaps and superseded commits.
 
-Additional completed independent documentation commits: `8da1885b` on
-`review/0.7x-sec-ssh-revocation-docs` and `b2042f52` on
-`review/0.7x-doc-audit-spool`. Support-bundle redaction and dialog-overlay ref
-changes remain uncommitted candidates, not handoff-ready patches.
+The owner subsequently resumed the original campaign. Support-bundle redaction,
+dialog-overlay refs, two additional operational docs fixes, and a test-import
+cleanup are now independently committed below. Final combined acceptance is in
+progress; the historical plan-review snapshot is not a current patch-status list.
 
 ## Status definitions
 
@@ -64,17 +64,25 @@ command, skipped suite, or passing mock is never a completed live verification.
 | R076-012 | Contributor/release docs conflate CI conformance, manual Kubernetes walks and service-dependent local gates. Low. | checks-passed (focused) | review/0.7x-doc-live-gates / 58557df6 | Compared workflows, scripts and targets; existing release-job and PG-race guards pass. Makefile comments only. |
 | R076-013 | Release checklist chooses a second patch number after version preparation and falsely claims concurrent tag safety. Medium operational. | checks-passed (focused) | review/0.7x-doc-release-order / 0a7e23ec | Choose before bumps, tag validated version; guards pass, provenance recorded in commit. No tags/releases created. |
 | R076-014 | OIDC threat model, config comment and CLI help promise verified email when empty domain list does not check it. Low documentation; existing trust assumption remains. | checks-passed (focused) | review/0.7x-doc-oidc-email / 117c9e04 | Callback branch, OPERATIONS and legacy tests agree. Four callback and 17 doc/citation tests pass; one rootless guard skipped. No enforcement/default change. |
+| R076-015 | SSH keys and existing connections outlive API-token/session revocation; incident-response docs blur the boundaries. | checks-passed (focused; combined citations repaired by R022) | review/0.7x-sec-ssh-revocation-docs / 8da1885b | SSH/OPERATIONS/threat-model wording checked against token/key/session lifecycles; lifecycle peer approved. See citation integration dependency below. |
+| R076-016 | Recovery docs treat undrained audit spool as disposable derived data. | checks-passed (focused; combined citations repaired by R022) | review/0.7x-doc-audit-spool / b2042f52 | Preserve spool, consumed cursor and quarantine with matching database backup; focused operational guards and lifecycle peer review passed. See ops-evidence/ for scoped restore rehearsal, not a full production DR claim. |
+| R076-017 | Support-bundle line redaction leaks multiline, aliased and embedded Compose credentials and can produce invalid YAML. | checks-passed (regression + package race) | review/0.7x-cli-bundle-redaction / c4c5fa16 | New cases fail against untouched baseline production and pass with parsed-YAML redaction; actual archive test covers multiline/embedded values. Complete CLI race suite passed (4.602 s); independent security reviewer found and verified alias-key fix. Comments/invalid or multi-document YAML omitted; opaque credential-shaped scalars fully redacted. No universal secret-detector guarantee. |
+| R076-018 | Dialog and AlertDialog overlay wrappers omit the ref needed for Radix exit-animation lifetime. | checks-passed (focused + browser + typecheck) | review/0.7x-alert-overlay-ref / 9ca33584 | Both wrappers forward the underlying ref; 4 focused and 101 related assertions passed. Full browser run: 347 tests, 30 specs, no failures/skips/flakes. Official typecheck passed; approved mock, actual Chromium lifetime/focus/reduced-motion proof, and independent docs-lane code review. No style/timing changes. |
+| R076-019 | Restore instructions say an incorrect age key fails only on first application-secret use, although persisted signing-key loading can refuse startup. | checks-passed (focused + citations) | review/0.7x-doc-age-key-boot / 7d155903 | 25 focused key/ops tests plus live audit-action citation guard passed; security peer approved. Keeps separate application-secret verification. |
+| R076-020 | Desktop/SSH docs call all shell recordings unmasked and permanently retained. | checks-passed (focused + citations) | review/0.7x-doc-desktop-masking / baa4611e | 15 tests cover registered/mid-session masking, retention and doc/citation guards; lifecycle peer approved. Preserves unregistered-output and restart-loss residuals. |
+| R076-021 | Run-detail test uses afterEach without an explicit import, breaking default/editor tsc configuration. | checks-passed (focused + both typechecks) | review/0.7x-ui-test-hook-import / 94c4fa84 | Baseline default tsc reproduced 3 TS2304 errors; one import fixes them; 36 run-detail tests and both typecheck configurations pass. Official repository typecheck already included Vitest globals, so this was NOT a failing merge/runtime gate. |
+| R076-022 | Selected operational docs move guarded audit citations. Integration dependency, not an independent product feature. | checks-passed (focused; final gate pending) | review/0.7x-doc-integration-citations / 5adf090c | Five citation-only replacements; original evidence and guards preserved. Depends on R015/R016/R019/R020 plus the initial eight-patch integration. Must re-point again if a release selects a different documentation combination. |
 
 ## Coverage matrix
 
 | Area | Inspected evidence | Current acceptance gaps |
 | --- | --- | --- |
-| Identity / authority | Router split, CSRF host guard, recording-pane tier split. | Cross-user runtime checks, revocation and session scenarios. |
-| Credentials / egress | Login launch/supersede/capture; shared-versus-personal onboarding. | Failure paths, concurrent users, SSO walk, broker/redirect checks. |
-| Lifecycle / storage | Completion watcher; Kubernetes scratch accounting and residuals. | Restart/eviction/reconcile and drive tests on dedicated substrates. |
-| Product / UX | Recording pane, reduced-motion guard, member onboarding. | Browser suite, mock reviews, complete role-aware journeys. |
-| Deployment / recovery | E2E isolation controls, release instructions, resource inventory. | Fresh Helm, upgrade, outage and backup/restore walk. |
-| Engineering / docs | DCO, gates, nightly overlap, test-gap inventory, console rules. | Full gate output and docs/SDK/supply-chain review. |
+| Identity / authority | Router split, CSRF host guard, recording-pane tier split; OIDC email claim and SSH revocation boundaries checked against code. | Cross-user runtime checks and broad revocation/session scenarios. |
+| Credentials / egress | Upload boundary/race tests; support-bundle baseline/fixed structured-redaction and archive tests; login launch/capture review. | Real SSO/concurrent-user walk and broader broker/redirect adversarial checks; other campaign owns SSO changes. |
+| Lifecycle / storage | Six terminal-status combinations; scoped live WaitExitCode and actual emptyDir eviction; synthetic PG audit/secret/recording restore. | Full API finalization, restart/reconcile, user-drive restore, healthy-proxy lifecycle proof. |
+| Product / UX | Approved mocks; recording-pane browser sweep; overlay 347-test browser suite plus DOM lifetime/focus proof. | Combined browser sweep running; complete real-identity recovery journeys remain separate. |
+| Deployment / recovery | Isolated PG dump/restore with append-only guards; corrected age-key and audit-spool runbooks. | Fresh Helm/upgrade, outage/full application recovery, split runtime roles and pending-spool replay. |
+| Engineering / docs | Independent DCO commits, nightly overlap check, guard-preserving citation repair, release/UI recipes. | Uninterrupted final combined make ci running; live deployment acceptance remains outside it. |
 
 ## Verification record
 
@@ -104,15 +112,42 @@ command, skipped suite, or passing mock is never a completed live verification.
 - Real PostgreSQL integration test-report-pg and test-race-pg both passed at
   a6c47ae5 (evidence/integration-pg.log): 69.5% PG report coverage; broker/store
   race tests passed. This does not certify later uncombined documentation patches.
+- Frozen dependency installation and notice regeneration restored the integration
+  worktree to HEAD-equivalent artifacts. A subsequent full gate at 43aa1dc1
+  correctly failed seven audit-action citation checks after SSH/OPERATIONS doc
+  line shifts (evidence/integration-ci-43aa1dc1-failed.log and failure-details).
+  The separate integration-dependent citation repair R022 subsequently passed its
+  focused guard; no guard was weakened or removed. The final uninterrupted gate
+  includes all selected patches and that repair.
+- Final selected batch frozen at `0d63ab2e3ade4302b9f51b08146965cf21655c46`
+  on `review/0.7x-integration`: 15 independent patches plus R022 (integrated as
+  `4640554c`). Uninterrupted make ci is running against this SHA. Combined browser
+  acceptance uses a separate worktree at the SAME SHA, with its own database and
+  ports so Vite builds cannot race the CI worktree. Neither gate is claimed passed
+  until its final exit status is captured.
+- Support-bundle red-first and fixed logs are evidence/redaction-baseline.log and
+  evidence/redaction-fixed.log. The detached baseline reproduction worktree has
+  only the new test file; its production source remains exactly dfa89f60.
 
 ## Patch compatibility and release notes
 
-Every product commit listed above is based independently on dfa89f60, signed off,
-and can be reviewed/cherry-picked separately. No schema, API, configured cap,
-deployment requirement or enforcement default changes. Rollback is an ordinary
+Every individual product/docs patch (excluding R022's explicit integration dependency)
+is based independently on dfa89f60, signed off,
+and can be reviewed/cherry-picked separately. No schema migration, new API surface,
+configured cap, deployment requirement or enforcement default changes. R009
+deliberately enforces the existing upload cap with HTTP 413 where oversized input
+previously received success after truncation. Rollback is an ordinary
 revert; no migration to undo. Docs patches touch distinct sections where files
 overlap. All four initial docs patches have an independent security-lane factual
 review. Selection still needs release-owner gates after any 0.7.6 integration.
+Line-number citation repairs depend on the selected documentation combination:
+re-point live references after combining docs, never remove the guarded citations.
+Do not cherry-pick an integration umbrella on top of the independent patches.
+Independent composition review verified all 15 patch IDs match their integrated
+copies, each original has the baseline as its sole parent and a DCO sign-off,
+and the 26-file combined diff contains no local mocks/evidence or dependency
+changes. R022's patch ID also matches its integrated copy. This is provenance
+and scope verification, not a substitute for runtime acceptance.
 
 - R076-005: Correct the recording pane's permission hint to include security admins.
 - R076-006: Document the console's existing reduced-motion support.
@@ -123,6 +158,14 @@ review. Selection still needs release-owner gates after any 0.7.6 integration.
 - R076-012: Clarify automated conformance versus manual live acceptance gates.
 - R076-013: Select a patch version before preparing and validating its release.
 - R076-014: Correct when OIDC email-verification restrictions are enforced.
+- R076-015: Document SSH key removal and run shutdown separately from token revocation.
+- R076-016: Preserve undrained audit fallback state during backup and recovery.
+- R076-017: Prevent multiline and aliased Compose credentials from leaking in
+  support bundles; omit comments/unparseable config and require review before sharing.
+- R076-018: Preserve dialog backdrop exit animations by forwarding their DOM refs.
+- R076-019: Explain how a mismatched age key can prevent restored daemon startup.
+- R076-020: Describe SSH shell masking and recording retention accurately.
+- R076-021: Make the run-detail test's lifecycle-hook import explicit.
 
 ## Open findings, not implemented
 
@@ -144,8 +187,12 @@ OIDC HTTP/HTTPS scheme support remains an unresolved compatibility question.
 
 - PostgreSQL: wardyn-review-07x-pg, unix:///var/run/docker.sock, loopback port 58432.
 - Browser database: wardyn_review_record; backend/gateway ports 18888/18889.
+- Overlay browser database: wardyn_review_overlay; ports 18890/18891; completed.
+- Combined browser acceptance: wardyn_review_combined; ports 18892/18893; isolated
+  from both prior runs and the other 0.7.6 campaign.
 - Operations check databases: wardyn_review_ops_* (documentation lane).
-- Dedicated Kubernetes acceptance cluster: wardyn-review-07x-life (lifecycle lane).
+- Dedicated Kubernetes acceptance cluster wardyn-review-07x-life was deleted
+  after scoped live tests; existing clusters were untouched. Review images remain.
 - No existing Wardyn databases, instances or clusters are used by these checks.
 
 ## Release owner
