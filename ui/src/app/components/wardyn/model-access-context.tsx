@@ -39,7 +39,7 @@ import * as React from "react";
 
 import { modelAccessDoor, NO_MODEL_ACCESS_DOOR, type ModelAccessDoor } from "../../lib/model-access";
 import type { SetupStatus } from "../../lib/types";
-import { useOperator } from "./operator-context";
+import { useOperator, useOperatorResolved } from "./operator-context";
 
 /** What a caller gets: the graded door, plus the three things only the shared
  *  instance can offer. */
@@ -53,9 +53,18 @@ export interface ModelAccessDoorHandle extends ModelAccessDoor {
   claim: () => () => void;
   /** Whether ANY surface currently owns the door. */
   claimed: boolean;
+  /** THIS viewer's resolved role — false until /me has answered, which is also
+   *  when every field above reads as "nothing to say". Consumers read it here
+   *  rather than calling useOperator() again: a second read would answer the
+   *  fail-open default in exactly the window the door refuses to grade. */
+  operator: boolean;
   open: boolean;
   openDoor: () => void;
   closeDoor: () => void;
+  /** Put focus back on the control that opened the door, and say whether it
+   *  could: false once a completed sign-in has taken that surface away, which
+   *  is exactly when restoring to it would drop focus on <body>. */
+  focusOpener: () => boolean;
 }
 
 interface ModelAccessContextValue {
@@ -66,6 +75,7 @@ interface ModelAccessContextValue {
   open: boolean;
   openDoor: () => void;
   closeDoor: () => void;
+  focusOpener: () => boolean;
 }
 
 // FAIL-OPEN DEFAULT — no provider above means no status, which grades to
@@ -81,6 +91,7 @@ const ModelAccessContext = React.createContext<ModelAccessContextValue>({
   open: false,
   openDoor: () => {},
   closeDoor: () => {},
+  focusOpener: () => false,
 });
 
 export function ModelAccessProvider({
@@ -114,8 +125,23 @@ export function ModelAccessProvider({
       setClaimed(claims.current > 0);
     };
   }, []);
-  const openDoor = React.useCallback(() => setOpen(true), []);
+  // WHO opened it, captured here because this is the one point every caller
+  // passes through (the strip's button, the rail's link, the failure block, a
+  // held-approval row). Radix returns focus to that element when the dialog
+  // closes — right after a cancellation, and wrong after a sign-in that took
+  // the control away with the state that justified it.
+  const opener = React.useRef<Element | null>(null);
+  const openDoor = React.useCallback(() => {
+    opener.current = typeof document === "undefined" ? null : document.activeElement;
+    setOpen(true);
+  }, []);
   const closeDoor = React.useCallback(() => setOpen(false), []);
+  const focusOpener = React.useCallback(() => {
+    const el = opener.current;
+    if (!el || !el.isConnected || typeof (el as HTMLElement).focus !== "function") return false;
+    (el as HTMLElement).focus();
+    return true;
+  }, []);
 
   const refreshRef = React.useRef(onRefresh);
   React.useEffect(() => {
@@ -124,8 +150,8 @@ export function ModelAccessProvider({
   const refresh = React.useCallback(() => refreshRef.current(), []);
 
   const value = React.useMemo<ModelAccessContextValue>(
-    () => ({ status, refresh, claim, claimed, open, openDoor, closeDoor }),
-    [status, refresh, claim, claimed, open, openDoor, closeDoor],
+    () => ({ status, refresh, claim, claimed, open, openDoor, closeDoor, focusOpener }),
+    [status, refresh, claim, claimed, open, openDoor, closeDoor, focusOpener],
   );
   return <ModelAccessContext.Provider value={value}>{children}</ModelAccessContext.Provider>;
 }
@@ -136,22 +162,47 @@ export function ModelAccessProvider({
  */
 export function useModelAccessDoor(): ModelAccessDoorHandle {
   const ctx = React.useContext(ModelAccessContext);
+  // useOperator()'s default is fail-OPEN (true) — right for a console that must
+  // never lock an admin out of their own controls, and wrong for this: while
+  // /me is in flight (or after it failed) a MEMBER under a dead shared row
+  // would read the ADMIN's sentence, "The shared AWS sign-in no longer works …
+  // sign in again", with a button the server then refuses — and usePrincipal()
+  // is "" in the same window, so a "Not now" there would write an unkeyed flag
+  // for whoever uses the tab next.
+  //
+  // So the door says NOTHING until the identity is known: the same rule the
+  // shell's own role chip follows (useOperatorResolved), and the honest one —
+  // the answer is audience-dependent and the audience is not known yet.
   const operator = useOperator();
+  const resolved = useOperatorResolved();
   const door = React.useMemo(
-    () => (ctx.status ? modelAccessDoor(ctx.status, { operator }) : NO_MODEL_ACCESS_DOOR),
-    [ctx.status, operator],
+    () => (ctx.status && resolved ? modelAccessDoor(ctx.status, { operator }) : NO_MODEL_ACCESS_DOOR),
+    [ctx.status, operator, resolved],
   );
+  const viewerOperator = resolved && operator;
   return React.useMemo(
     () => ({
       ...door,
       refresh: ctx.refresh,
       claim: ctx.claim,
       claimed: ctx.claimed,
+      operator: viewerOperator,
       open: ctx.open,
       openDoor: ctx.openDoor,
       closeDoor: ctx.closeDoor,
+      focusOpener: ctx.focusOpener,
     }),
-    [door, ctx.refresh, ctx.claim, ctx.claimed, ctx.open, ctx.openDoor, ctx.closeDoor],
+    [
+      door,
+      viewerOperator,
+      ctx.refresh,
+      ctx.claim,
+      ctx.claimed,
+      ctx.open,
+      ctx.openDoor,
+      ctx.closeDoor,
+      ctx.focusOpener,
+    ],
   );
 }
 

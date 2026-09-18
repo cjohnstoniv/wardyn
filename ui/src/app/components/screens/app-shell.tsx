@@ -639,9 +639,15 @@ export function AppShell({
           one is the only band that carries its own repair, and 0.7.6's mid-run
           re-authentication needs exactly this surface on the cockpit. Renders
           nothing when there is nothing to say. */}
-            <React.Suspense fallback={null}>
-              <ModelAccessBanner />
-            </React.Suspense>
+            {/* The live region is EAGER and the strip inside it is not: a
+          `role="status"` region announces CHANGES to its content, so a region
+          that arrives WITH its first sentence (as a lazy chunk does) announces
+          nothing. The wrapper is here from the first paint; the chunk fills it. */}
+            <div role="status">
+              <React.Suspense fallback={null}>
+                <ModelAccessBanner />
+              </React.Suspense>
+            </div>
             <div className="flex min-h-0 flex-1">
               {!focus && (
                 <aside className="hidden w-[228px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar px-3 py-4 md:flex">

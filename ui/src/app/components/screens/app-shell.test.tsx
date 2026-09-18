@@ -5,7 +5,7 @@
 
 import * as React from "react";
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
@@ -824,7 +824,9 @@ describe("AppShell (the model-access strip)", () => {
 
   afterEach(() => vi.unstubAllGlobals());
 
-  function renderShellAt(path: string, me: Record<string, unknown>) {
+  /** `me` as a promise lets a case hold /me open — the window where
+   *  useOperator() is still the fail-open default. */
+  function renderShellAt(path: string, me: Record<string, unknown> | Promise<Record<string, unknown>>) {
     vi.stubGlobal(
       "fetch",
       vi.fn((url: RequestInfo | URL) => {
@@ -834,7 +836,7 @@ describe("AppShell (the model-access strip)", () => {
             ok: true,
             json: async () => ({ trust_domain: "wardyn.local", identity_provider: "embedded" }),
           });
-        if (u.endsWith("/api/v1/me")) return Promise.resolve({ ok: true, json: async () => me });
+        if (u.endsWith("/api/v1/me")) return Promise.resolve({ ok: true, json: async () => await me });
         return Promise.resolve({ ok: true, json: async () => ({}) });
       }) as unknown as typeof fetch,
     );
@@ -899,5 +901,103 @@ describe("AppShell (the model-access strip)", () => {
   it("stays for a MEMBER on /settings", async () => {
     renderShellAt("/settings", MEMBER_WITH_DYING_SESSION);
     expect(await screen.findByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeInTheDocument();
+  });
+
+  // S4: the live region is the SHELL's and it is EAGER. role="status" announces
+  // CHANGES to a mounted region; a region that arrives together with its first
+  // sentence — which is what a lazy chunk does — announces nothing.
+  it("mounts its live region before the lazy strip, and with nothing to say", () => {
+    // No dying session and a live credential: this wrapper is then the only
+    // role=status region in the shell, and it is empty.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: RequestInfo | URL) => {
+        const u = String(url);
+        if (u.endsWith("/healthz"))
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ trust_domain: "wardyn.local", identity_provider: "embedded" }),
+          });
+        if (u.endsWith("/api/v1/me"))
+          return Promise.resolve({ ok: true, json: async () => ({ principal: "a@b", role: "member", operator: false }) });
+        return Promise.resolve({ ok: true, json: async () => ({}) });
+      }) as unknown as typeof fetch,
+    );
+    render(
+      <MemoryRouter initialEntries={["/runs"]}>
+        <ThemeProvider>
+          <ModelAccessProvider status={baseStatus({ model_access: { state: "live" } })} onRefresh={() => {}}>
+            <Routes>
+              <Route path="*" element={<AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />}>
+                <Route path="*" element={<div>screen</div>} />
+              </Route>
+            </Routes>
+          </ModelAccessProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
+  });
+
+  // S2: useOperator()'s fail-open default is TRUE, so until /me lands a member
+  // under a dead shared credential would read the ADMIN's sentence and be
+  // offered a sign-in the server refuses. The door says nothing until the
+  // identity is known.
+  it("says nothing about a shared-dead credential until /me answers, then the member's line", async () => {
+    let answer: (me: Record<string, unknown>) => void = () => {};
+    const pending = new Promise<Record<string, unknown>>((resolve) => (answer = resolve));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: RequestInfo | URL) => {
+        const u = String(url);
+        if (u.endsWith("/healthz"))
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ trust_domain: "wardyn.local", identity_provider: "embedded" }),
+          });
+        if (u.endsWith("/api/v1/me")) return Promise.resolve({ ok: true, json: async () => await pending });
+        return Promise.resolve({ ok: true, json: async () => ({}) });
+      }) as unknown as typeof fetch,
+    );
+    const SHARED_ACTION = "Your admin's model credential expired — ask them to reconnect it";
+    render(
+      <MemoryRouter initialEntries={["/runs"]}>
+        <ThemeProvider>
+          <ModelAccessProvider
+            status={baseStatus({
+              model_access: { state: "shared_expired", action: SHARED_ACTION },
+              harnesses: [{ ...PER_USER_ROW, credential_source: "shared" }],
+            })}
+            onRefresh={() => {}}
+          >
+            <Routes>
+              <Route path="*" element={<AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />}>
+                <Route path="*" element={<div>screen</div>} />
+              </Route>
+            </Routes>
+          </ModelAccessProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+
+    // While /me is in flight: no admin sentence, no button, no member line.
+    // Two macrotasks first, so the strip's own lazy chunk has certainly
+    // resolved and the silence below is the door's answer rather than a chunk
+    // that had not arrived yet.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(screen.getByRole("status")).toBeInTheDocument();
+    expect(screen.queryByText(MODEL_ACCESS_BANNER.SHARED_ADMIN_EXPIRED)).toBeNull();
+    expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeNull();
+    expect(screen.queryByText(SHARED_ACTION)).toBeNull();
+
+    answer({ principal: "member@corp.example", role: "member", operator: false, security_operator: false });
+    // …and once it lands, the member reads the server's instruction, with no
+    // button: nobody but their admin can repair it.
+    expect(await screen.findByText(SHARED_ACTION)).toBeInTheDocument();
+    expect(screen.queryByText(MODEL_ACCESS_BANNER.SHARED_ADMIN_EXPIRED)).toBeNull();
+    expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeNull();
   });
 });

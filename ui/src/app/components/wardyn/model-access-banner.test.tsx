@@ -4,7 +4,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { toast } from "sonner";
@@ -20,7 +20,7 @@ vi.mock("../screens/settings/harness-login-pane", () => ({
 
 import { ModelAccessBanner, modelAccessStripCopy } from "./model-access-banner";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
-import { ModelAccessProvider, useClaimModelAccessDoor } from "./model-access-context";
+import { ModelAccessProvider, useClaimModelAccessDoor, useModelAccessDoor } from "./model-access-context";
 import { OperatorProvider } from "./operator-context";
 import { AGENTS } from "../../lib/workspace-providers-copy";
 import { absoluteTime } from "../../lib/format";
@@ -74,7 +74,15 @@ function renderStrip({
       <ModelAccessProvider status={statusFor(access, row)} onRefresh={onRefresh}>
         <OperatorProvider operator={operator} securityOperator={operator} principal={principal}>
           {claimed && <Claimer />}
-          <ModelAccessBanner />
+          {/* The shell's own two pieces of context: the live region it mounts
+              EAGERLY around this lazy chunk, and the skip-to-main target focus
+              lands on when the strip that opened the door is gone. */}
+          <div role="status">
+            <ModelAccessBanner />
+          </div>
+          <main id="main-content" tabIndex={-1}>
+            screen
+          </main>
         </OperatorProvider>
       </ModelAccessProvider>
     </MemoryRouter>,
@@ -102,9 +110,13 @@ describe("the strip says nothing when there is nothing to say", () => {
     expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeNull();
   });
 
-  it("keeps its live region MOUNTED so a later state change is announced, not mounted", () => {
-    renderStrip({ access: { state: "live" } });
-    expect(screen.getByRole("status")).toBeInTheDocument();
+  // The live region itself is the SHELL's (app-shell.tsx mounts it eagerly
+  // around this lazy chunk, and app-shell.test.tsx pins that) — what this file
+  // owns is that the strip adds no second one of its own, which would make the
+  // first sentence mount content of a region role="status" never announces.
+  it("adds no live region of its own", () => {
+    const { container } = renderStrip({ access: { state: "not_configured" } });
+    expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
   });
 });
 
@@ -230,6 +242,71 @@ describe("the door itself", () => {
   });
 });
 
+// S1: focus after the door closes. Radix's FocusScope is still mounted while
+// onDone/onCancel run, so anything focused there is taken back and lands on
+// <body>; onCloseAutoFocus is the callback that fires after the trap releases,
+// and every assertion below has to wait a macrotask for it.
+const afterFocusSettles = () => act(() => new Promise((r) => setTimeout(r, 0)));
+
+describe("where focus goes when the door closes", () => {
+  it("a completed sign-in moves it to the main region — the strip it came from is gone", async () => {
+    renderStrip({ access: { state: "not_configured", action: AGENTS.SIGN_IN_AWS } });
+    await userEvent.click(screen.getByRole("button", { name: AGENTS.SIGN_IN_AWS }));
+    await userEvent.click(screen.getByRole("button", { name: "fake pane managed=true" }));
+    await afterFocusSettles();
+    expect(document.activeElement).toBe(document.getElementById("main-content"));
+    expect(document.activeElement).not.toBe(document.body);
+  });
+
+  it("Escape returns it to the control that opened the door", async () => {
+    renderStrip({ access: { state: "expired_signin", action: AGENTS.SIGN_IN_AWS } });
+    const button = screen.getByRole("button", { name: AGENTS.SIGN_IN_AWS });
+    await userEvent.click(button);
+    await userEvent.keyboard("{Escape}");
+    await afterFocusSettles();
+    // The state did not change, so the strip and its button are still there —
+    // the ordinary dialog contract, and never <body>.
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: AGENTS.SIGN_IN_AWS }));
+  });
+
+  it("a door opened by a PAGE control leaves focus to that page", async () => {
+    // The rail / failure block / held row own their own restore (Launch, on New
+    // Run). The strip must not yank focus to the top of the document.
+    function PageDoor() {
+      const door = useModelAccessDoor();
+      return (
+        <button type="button" onClick={door.openDoor}>
+          page door
+        </button>
+      );
+    }
+    render(
+      <MemoryRouter initialEntries={["/runs/new"]}>
+        <ModelAccessProvider
+          status={statusFor({ state: "not_configured", action: AGENTS.SIGN_IN_AWS })}
+          onRefresh={vi.fn()}
+        >
+          <OperatorProvider operator={false} securityOperator={false} principal="m@corp.example">
+            <div role="status">
+              <ModelAccessBanner />
+            </div>
+            <main id="main-content" tabIndex={-1}>
+              <PageDoor />
+            </main>
+          </OperatorProvider>
+        </ModelAccessProvider>
+      </MemoryRouter>,
+    );
+    const page = screen.getByRole("button", { name: "page door" });
+    await userEvent.click(page);
+    await userEvent.keyboard("{Escape}");
+    await afterFocusSettles();
+    // Back on the page's own control — never <body>, and never yanked to the
+    // top of the document.
+    expect(document.activeElement).toBe(page);
+  });
+});
+
 describe("'Not now' is per viewer, per browsing context", () => {
   it("hides the strip for this session and is keyed on the viewer's subject", async () => {
     const access: SetupModelAccess = { state: "not_configured", action: AGENTS.SIGN_IN_AWS };
@@ -242,6 +319,42 @@ describe("'Not now' is per viewer, per browsing context", () => {
     // would pre-dismiss the strip for the next person on this machine.
     renderStrip({ access, principal: "second@corp.example" });
     expect(screen.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeInTheDocument();
+  });
+});
+
+describe("before /me answers, the strip says nothing (S2)", () => {
+  // useOperator()'s default is fail-OPEN, so a MEMBER under a dead shared row
+  // would otherwise read the ADMIN's sentence with a button the server refuses
+  // — and usePrincipal() is "" in the same window, so a "Not now" there would
+  // write a flag for whoever uses this tab next.
+  it("an unresolved identity renders no sentence and no button", () => {
+    render(
+      <MemoryRouter initialEntries={["/runs"]}>
+        <ModelAccessProvider
+          status={statusFor({ state: "shared_expired", action: SHARED_EXPIRED_ACTION }, SHARED_ROW)}
+          onRefresh={vi.fn()}
+        >
+          <OperatorProvider operator operatorResolved={false} principal="">
+            <div role="status">
+              <ModelAccessBanner />
+            </div>
+          </OperatorProvider>
+        </ModelAccessProvider>
+      </MemoryRouter>,
+    );
+    expect(screen.queryByText(MODEL_ACCESS_BANNER.SHARED_ADMIN_EXPIRED)).toBeNull();
+    expect(screen.queryByText(SHARED_EXPIRED_ACTION)).toBeNull();
+    expect(screen.queryByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeNull();
+  });
+
+  it("a viewer with no subject never writes the dismissal flag", async () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    renderStrip({ access: { state: "not_configured", action: AGENTS.SIGN_IN_AWS }, principal: "" });
+    await userEvent.click(screen.getByRole("button", { name: MODEL_ACCESS_BANNER.NOT_NOW }));
+    // Honoured for this mount…
+    expect(screen.queryByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeNull();
+    // …and never persisted under an unkeyed name.
+    expect(setItem).not.toHaveBeenCalledWith("wardyn.modelAccessDismissed.", "1");
   });
 });
 

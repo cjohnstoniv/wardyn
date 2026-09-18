@@ -12,8 +12,9 @@
 // notification surface, so "not signed in", "lapsed" and "lapsing" reached a
 // person only if they happened to open Getting Started — or by a run failing.
 //
-// Structure mirrors member-mode-banner.tsx deliberately: one `role="status"`
-// band, `z-50` so the cockpit's focus-mode overlay (z-40) cannot paint over it,
+// Structure mirrors member-mode-banner.tsx deliberately: one band inside the
+// shell's `role="status"` region, `z-50` so the cockpit's focus-mode overlay
+// (z-40) cannot paint over it,
 // an UNDERLINED TEXT button rather than a teal one (CONSOLE-RULES §6 allows one
 // `default` Button per surface and this strip is on every surface), and no
 // hiding in focus mode — Finding 4's mid-run re-auth needs exactly this surface
@@ -35,7 +36,7 @@ import type { ModelAccessDoor } from "../../lib/model-access";
 import { AGENTS } from "../../lib/workspace-providers-copy";
 import { MODEL_ACCESS_BANNER } from "./model-access-copy";
 import { useModelAccessDoor } from "./model-access-context";
-import { useOperator, usePrincipal } from "./operator-context";
+import { usePrincipal } from "./operator-context";
 
 // LAZY, and that is a gate rather than a nicety: this strip is mounted by
 // app-shell.tsx, which is in the ENTRY chunk, and the login pane drags xterm +
@@ -183,22 +184,29 @@ function dismissKey(principal: string): string {
 function useSessionDismissal(principal: string): [boolean, () => void] {
   const key = dismissKey(principal);
   const read = React.useCallback(() => {
+    // NEVER read (or write) an unkeyed flag: "" is /me unresolved or failed,
+    // and a flag stored under it would belong to whoever sits at this tab next.
+    if (!principal) return false;
     try {
       return window.sessionStorage.getItem(key) === "1";
     } catch {
       return false;
     }
-  }, [key]);
+  }, [key, principal]);
   const [dismissed, setDismissed] = React.useState(read);
   React.useEffect(() => setDismissed(read()), [read]);
   const dismiss = React.useCallback(() => {
-    try {
-      window.sessionStorage.setItem(key, "1");
-    } catch {
-      /* a tab that cannot remember simply keeps the strip — never a failure */
+    if (principal) {
+      try {
+        window.sessionStorage.setItem(key, "1");
+      } catch {
+        /* a tab that cannot remember simply keeps the strip — never a failure */
+      }
     }
+    // The in-memory hide stands either way: the click was a person saying "not
+    // now", and honouring it for this mount costs nothing.
     setDismissed(true);
-  }, [key]);
+  }, [key, principal]);
   return [dismissed, dismiss];
 }
 
@@ -217,11 +225,18 @@ function ModelAccessSignInDialog({
   perUser,
   onCancel,
   onDone,
+  onCloseAutoFocus,
 }: {
   open: boolean;
   perUser: boolean;
   onCancel: () => void;
   onDone: () => void;
+  /** Where focus goes when the dialog closes. Radix's DEFAULT returns it to the
+   *  trigger, which after a successful sign-in no longer exists (the strip is
+   *  gone) — and focusing anything from an onDone/onCancel handler is too early:
+   *  the FocusScope trap is still mounted and takes focus back, landing it on
+   *  <body>. This is the one callback that fires after the trap is released. */
+  onCloseAutoFocus: (event: Event) => void;
 }) {
   const paneRef = React.useRef<HarnessLoginPaneHandle>(null);
   return (
@@ -238,6 +253,7 @@ function ModelAccessSignInDialog({
       }}
     >
       <DialogContent
+        onCloseAutoFocus={onCloseAutoFocus}
         className="scroll-thin inset-0 top-0 left-0 m-auto h-fit max-h-[92vh] overflow-y-auto"
         style={{
           width: "min(96vw, 72rem)",
@@ -290,7 +306,11 @@ function ModelAccessSignInDialog({
  */
 export function ModelAccessBanner() {
   const door = useModelAccessDoor();
-  const operator = useOperator();
+  // The door's own resolved answer, never a second useOperator(): that hook's
+  // default is fail-open, and a suppression computed from it would withhold the
+  // strip on /settings from the MEMBER it exists for, in exactly the window the
+  // door refuses to grade.
+  const operator = door.operator;
   const principal = usePrincipal();
   const { pathname } = useLocation();
   const [dismissed, dismiss] = useSessionDismissal(principal);
@@ -299,6 +319,10 @@ export function ModelAccessBanner() {
   // longer exists once the state clears, and Radix would return focus to a
   // trigger that is gone.
   const openedHere = React.useRef(false);
+  // Whether the door closed on a COMPLETED sign-in rather than a cancellation.
+  // The difference decides where focus goes: a cancellation leaves every
+  // control exactly where it was, a completion takes the surface away.
+  const completed = React.useRef(false);
 
   const copy = modelAccessStripCopy(door, { operator }, door.claimed);
   const under = (prefix: string) => pathname === prefix || pathname.startsWith(`${prefix}/`);
@@ -313,10 +337,12 @@ export function ModelAccessBanner() {
   const show = door.needsAttention && !suppressed && !(copy.dismissible && dismissed);
 
   return (
-    // The live region stays MOUNTED and its text is updated in place — never
-    // remounted by key (Codex #15): role="status" announces CHANGES, and a
-    // remount is a mount, which is the one thing it does not reliably announce.
-    <div role="status">
+    // NO live region of its own: app-shell.tsx mounts the `role="status"`
+    // wrapper EAGERLY around this lazy chunk, so the first state to arrive is a
+    // text change inside a region that was already there — role="status"
+    // announces changes, and mount content is the one thing it does not
+    // reliably announce (Codex #15).
+    <>
       {show && (copy.sentence || copy.action) && (
         <div
           className={
@@ -360,25 +386,40 @@ export function ModelAccessBanner() {
       <ModelAccessSignInDialog
         open={door.open}
         perUser={door.perUser}
-        onCancel={() => {
-          openedHere.current = false;
-          door.closeDoor();
-        }}
+        onCancel={door.closeDoor}
         onDone={() => {
+          completed.current = true;
           door.closeDoor();
           void door.refresh();
           // CONSOLE-RULES §9's transient case: the only other evidence is a
           // strip that disappears, and a surface vanishing is not a
           // confirmation (round-1 UX S5).
           toast.success(MODEL_ACCESS_BANNER.SIGNED_IN_TOAST);
-          if (openedHere.current) {
-            openedHere.current = false;
-            // The skip-to-main target the shell already carries
-            // (app-shell.tsx's <main id="main-content" tabIndex={-1}>).
-            document.getElementById("main-content")?.focus();
-          }
+        }}
+        onCloseAutoFocus={(event) => {
+          // THIS handler owns the restore, always: Radix's default focuses the
+          // element it remembered when the door opened, and by the time it runs
+          // that element may have been unmounted with the state that justified
+          // it — which lands focus on <body>, where a keyboard user's next Tab
+          // starts from the top of the document.
+          event.preventDefault();
+          const done = completed.current;
+          const fromStrip = openedHere.current;
+          completed.current = false;
+          openedHere.current = false;
+          // A CANCELLATION changes nothing on the page, and a sign-in started
+          // from a PAGE control leaves that page's own control to return to
+          // (the rail's Launch neighbour, the failure block's): go back to the
+          // control the person activated, which is the ordinary dialog
+          // contract. The one case that must not is the strip's own completed
+          // sign-in — the strip is unmounting with the state it described.
+          if ((!done || !fromStrip) && door.focusOpener()) return;
+          // The skip-to-main target the shell already carries — the nearest
+          // thing to what the person was reading (app-shell.tsx's
+          // <main id="main-content" tabIndex={-1}>).
+          document.getElementById("main-content")?.focus();
         }}
       />
-    </div>
+    </>
   );
 }
