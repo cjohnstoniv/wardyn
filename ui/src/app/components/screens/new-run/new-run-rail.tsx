@@ -15,7 +15,7 @@
 // side by side. Squeezing a 320px rail into a phone column is how the
 // consequences of a choice end up unreadable exactly where they are hardest to
 // scroll back to.
-import type * as React from "react";
+import * as React from "react";
 import { Link } from "react-router-dom";
 import { Loader2, TriangleAlert } from "lucide-react";
 import type {
@@ -33,6 +33,14 @@ import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
 import { RailSection } from "./new-run-primitives";
+import { MODEL_ACCESS_AGENT } from "../../../lib/model-access";
+import { absoluteTime, relativeTime } from "../../../lib/format";
+import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
+import {
+  useClaimModelAccessDoor,
+  useModelAccessDoor,
+  type ModelAccessDoorHandle,
+} from "../../wardyn/model-access-context";
 
 interface RunRailProps {
   /**
@@ -180,6 +188,89 @@ function credentialSentence(cred: ModelCredential): string {
   }
 }
 
+// ModelAccessLine — Finding 1: the rail states WHO (this launcher) needs to
+// sign in, a second and independent fact from showModelWarning above (a
+// DEPLOYMENT with no model path at all). RunRail withholds it entirely unless
+// the selected agent is the one model_access grades AND the door needs
+// attention (showModelAccess) — a codex row or a live session renders nothing.
+//
+// `// ponytail:` this reads useModelAccessDoor() itself rather than taking the
+// door as a prop threaded from new-run-screen.tsx: that screen is at its
+// 1000-line file-size gate and gets a ZERO-line diff (the context exists
+// exactly so a nested surface can reach the door with no prop-drilling).
+function ModelAccessLine({ door, onSignIn }: { door: ModelAccessDoorHandle; onSignIn: () => void }) {
+  const when = door.deadline ? relativeTime(door.deadline) : "";
+  let sentence = "";
+  // `expiring` is a STATE, not an alarm (round-1 UX S3, round-2 S14) — muted
+  // text, not the warning tint the other three states use.
+  let warning = true;
+  switch (door.state) {
+    case "not_configured":
+      sentence = RAIL_MODEL_ACCESS.NOT_SIGNED_IN;
+      break;
+    case "expired_signin":
+      sentence = RAIL_MODEL_ACCESS.EXPIRED;
+      break;
+    case "expiring":
+      warning = false;
+      sentence = when ? RAIL_MODEL_ACCESS.EXPIRING(when) : "";
+      break;
+    case "shared_expired":
+      sentence = RAIL_MODEL_ACCESS.SHARED_EXPIRED;
+      break;
+    default:
+      // live, not_applicable, "" — RunRail's showModelAccess gate already
+      // withholds this component for these, but a future daemon state this
+      // console does not know says nothing rather than inventing a sentence.
+      return null;
+  }
+  if (!sentence) return null;
+  // The server's action ONLY when it carries what the sentence cannot — the
+  // pin-contradicted account/role pair, or a member's shared_expired
+  // instruction — never the button's own label repeated as prose, and never
+  // for `expiring` (S1 / W0-mock ruling 1: the deadline is already IN the
+  // sentence, no separate action line).
+  const action =
+    door.state !== "expiring" && door.action && door.action !== AGENTS.SIGN_IN_AWS ? door.action : "";
+  return (
+    <p
+      className={
+        "mb-1.5 rounded-md px-2 py-1.5 text-xs " +
+        (warning ? "border border-warning/30 bg-warning-subtle text-foreground" : "text-muted-foreground")
+      }
+      title={door.deadline ? absoluteTime(door.deadline) : undefined}
+    >
+      {/* Two SEPARATE text nodes (mirrors model-access-banner.tsx's
+          modelAccessStripCopy rendering) — the server's action, when it
+          renders, is a second fact beside ours, never appended into the same
+          sentence. */}
+      <span>{sentence}</span>
+      {action && <span> {action}</span>}
+      {/* The rail's OWN sign-in, under a DISTINCT accessible name from the
+          strip's/Getting Started's "Sign in to AWS" (U-13's actual rule is two
+          controls with distinct names, not one hidden) — and hidden while the
+          door dialog is open, so there is never a live control pointing at a
+          dialog that is already on screen. Gated on door.actionable, not just
+          needsAttention: a non-operator's shared_expired has nothing this
+          viewer can repair (round-1 UX S13). */}
+      {door.actionable && !door.open && (
+        <>
+          {" "}
+          <Button
+            variant="link"
+            size="sm"
+            className="h-auto p-0 align-baseline text-xs"
+            aria-label={RAIL_MODEL_ACCESS.SIGN_IN_ARIA}
+            onClick={onSignIn}
+          >
+            {AGENTS.SIGN_IN_AWS}
+          </Button>
+        </>
+      )}
+    </p>
+  );
+}
+
 export function RunRail({
   governanceProfile,
   savedPolicy,
@@ -197,10 +288,36 @@ export function RunRail({
   // `recordingDisabled` is TRI-STATE — undefined until /healthz answers.
   const cred = preflight.result?.model_credential;
   const recordingDisabled = useRecordingDisabled();
+  // Finding 1: model_access grades the claude-code row alone, so a shell
+  // command or a different agent (codex) never reads this line whatever the
+  // door says.
+  const door = useModelAccessDoor();
+  const showModelAccess = agentRow?.id === MODEL_ACCESS_AGENT && door.needsAttention;
+  // Door ownership (round-2 UX B1/S2): the rail claims it for exactly as long
+  // as it renders its own sign-in control, so the shell strip drops its
+  // button here — no New Run exception — and keeps its sentence.
+  useClaimModelAccessDoor(showModelAccess && door.actionable);
+
+  // Focus returns to Launch, not to #main-content (which would drop the
+  // member at the top of the form they were mid-way through), when THIS
+  // rail's own control opened the door — never when some other surface
+  // (the shell strip, a run's failure block) happened to open it while this
+  // screen was mounted.
+  const launchRef = React.useRef<HTMLButtonElement>(null);
+  const openedFromRail = React.useRef(false);
+  const doorWasOpen = React.useRef(door.open);
+  React.useEffect(() => {
+    if (doorWasOpen.current && !door.open && openedFromRail.current) {
+      openedFromRail.current = false;
+      launchRef.current?.focus();
+    }
+    doorWasOpen.current = door.open;
+  }, [door.open]);
+
   // A run with no model credential to describe (a shell command — the screen
-  // withholds agentRow for one) and no warning to raise has no Credentials
-  // section at all, rather than a heading over a sentence about nothing.
-  const showCredentials = showModelWarning || !!cred || !!agentRow;
+  // withholds agentRow for one), no model-access line and no warning to raise
+  // has no Credentials section at all, rather than a heading over nothing.
+  const showCredentials = showModelWarning || !!cred || !!agentRow || showModelAccess;
   // U-5: with NO provider connected and nothing resolved, "Resolved at launch."
   // and the Preflight hint sat directly under "No model provider is connected.
   // This run launches; its first model call fails." Nothing resolves at launch
@@ -258,13 +375,25 @@ export function RunRail({
 
         {showCredentials && (
         <RailSection title="Credentials">
+          {/* Finding 1, above CredentialFacts: a per-PERSON fact ("do I have a
+              sign-in at all"), independent of showModelWarning below (a
+              DEPLOYMENT fact — some model path exists at all). */}
+          {showModelAccess && (
+            <ModelAccessLine
+              door={door}
+              onSignIn={() => {
+                openedFromRail.current = true;
+                door.openDoor();
+              }}
+            />
+          )}
           {showModelWarning && (
             <p className="mb-1.5 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-foreground">
-              No model provider is connected. This run launches; its first model call fails.{" "}
+              {RAIL_MODEL_ACCESS.NO_PROVIDER}{" "}
               {/* Rulebook §9: the action that fills the gap rides next to the
                   need, not only in a footer. Links are --info, never teal. */}
               <Link to="/settings" className="font-medium text-info hover:underline">
-                Connect →
+                {RAIL_MODEL_ACCESS.NO_PROVIDER_CTA}
               </Link>
             </p>
           )}
@@ -347,6 +476,7 @@ export function RunRail({
           </Button>
         ) : (
           <Button
+            ref={launchRef}
             type="button"
             className="flex-1"
             disabled={launch.disabled || !!launch.problem}

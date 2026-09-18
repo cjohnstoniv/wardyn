@@ -60,3 +60,26 @@ export const MODEL_ACCESS_BANNER = {
   // is never dismissable.
   NOT_NOW: "Not now",
 } as const;
+
+// DRAFT (M2 canon pending) — the rail's per-PERSON model-access lines. Distinct
+// from RAIL_CREDENTIAL, which states where the credential LANDS: these state
+// whether the person launching has one at all. "refused at launch" is the
+// server's word: create answers 422 for every model-calling shape while the
+// declared per-user lane is unsatisfied (enforceCreateLLMMechanism); a scan or
+// exec run needs no model credential and shows no line.
+export const RAIL_MODEL_ACCESS = {
+  // UX round S1: "This run is refused at launch." was a verdict on a run that does not exist yet.
+  // Codex #12: NON-VERDICT copy — "Launch is refused" over-claims for some composed shapes (a batch with a
+  // pure-ephemeral primary emits workspace_id in wizard-spec.ts; llmMechanismGateApplies exempts a
+  // non-interactive workspace-bound request at create while dispatch can refuse later); the rail states
+  // credential readiness, never the exact refusal stage, and never duplicates the server gate.
+  NOT_SIGNED_IN: "Sign in to AWS before you launch — Claude Code needs your AWS sign-in.",
+  EXPIRED: "Your AWS sign-in no longer works for Claude Code — sign in again before you launch.",   // true of a pin mismatch too (B5)
+  EXPIRING: (when: string) => `Your AWS sign-in lapses ${when} — sign in again soon.`,
+  SHARED_EXPIRED: "Your admin's AWS credential has expired — Claude Code runs need it reconnected.",
+  SIGN_IN_ARIA: "Sign in to AWS — from the New Run rail",
+  // The existing inline warning, lifted (strings law) — a DEPLOYMENT with no
+  // model path at all, a different fact from the four above.
+  NO_PROVIDER: "No model provider is connected. This run launches; its first model call fails.",
+  NO_PROVIDER_CTA: "Connect →",
+} as const;
