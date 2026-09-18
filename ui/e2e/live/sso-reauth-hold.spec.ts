@@ -92,9 +92,39 @@ test.describe.configure({ mode: "serial" });
 const REAUTH_CONTROL_URL = SEEN_URL.replace("/_seen", "/_control/reauth");
 
 async function setReauthAfter(n: number): Promise<void> {
-  const res = await fetch(`${REAUTH_CONTROL_URL}?after=${n}`, { method: "POST" });
-  if (!res.ok) throw new Error(`POST ${REAUTH_CONTROL_URL}?after=${n}: ${res.status}`);
+  // FIRST through the walk's own read-only port-forward, which is there for
+  // /_seen and costs nothing to reuse.
+  try {
+    const res = await fetch(`${REAUTH_CONTROL_URL}?after=${n}`, { method: "POST" });
+    if (res.ok) return;
+    throw new Error(`POST ${REAUTH_CONTROL_URL}?after=${n}: ${res.status}`);
+  } catch {
+    // …AND THEN THROUGH ONE OF OUR OWN, because two cases below RESTART the
+    // fake to re-time its session, and a `kubectl port-forward` picks its pod
+    // once: the walk's forward dies with that pod and never re-targets, so
+    // every later control call gets ECONNREFUSED on 127.0.0.1. That is not a
+    // flake, it is this file cutting its own lifeline — and the case that does
+    // it needs the control endpoint precisely AFTER the restart.
+    //
+    // A short-lived forward on a port of its own, opened and closed inside one
+    // shell, keeps the whole thing synchronous and leaves nothing running.
+    execFileSync(
+      "bash",
+      [
+        "-c",
+        `set -e
+         kubectl --context ${KUBE_CONTEXT} -n ${KUBE_RELEASE_NAMESPACE} port-forward svc/${KUBE_FAKE} ${CONTROL_PORT}:8090 >/dev/null 2>&1 &
+         PF=$!; trap "kill $PF 2>/dev/null" EXIT
+         for _ in $(seq 1 30); do curl -sf http://127.0.0.1:${CONTROL_PORT}/_seen >/dev/null 2>&1 && break; sleep 1; done
+         curl -sf -X POST "http://127.0.0.1:${CONTROL_PORT}/_control/reauth?after=${n}" >/dev/null`,
+      ],
+      { encoding: "utf8", stdio: "pipe" },
+    );
+  }
 }
+
+/** A port for this file's own short-lived forwards — never the walk's 8390. */
+const CONTROL_PORT = process.env.WARDYN_LIVE_FAKE_CONTROL_PORT || "8399";
 
 /** The RELEASE namespace and deployment — the hold's timeout knob is boot env
  *  on wardynd, forwarded into every proxy sidecar (runner.ProxySidecarEnvKnobs),
