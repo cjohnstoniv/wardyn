@@ -201,22 +201,41 @@ function credentialSentence(cred: ModelCredential): string {
 function ModelAccessLine({ door, onSignIn }: { door: ModelAccessDoorHandle; onSignIn: () => void }) {
   const when = door.deadline ? relativeTime(door.deadline) : "";
   let sentence = "";
+  let action = "";
+  let title = "";
   // `expiring` is a STATE, not an alarm (round-1 UX S3, round-2 S14) — muted
   // text, not the warning tint the other three states use.
   let warning = true;
+  // The server's action ONLY when it carries what the sentence and button
+  // cannot — the pin-contradicted account/role pair — never the button's own
+  // label repeated as prose (S1).
+  const serverAction = door.action && door.action !== AGENTS.SIGN_IN_AWS ? door.action : "";
   switch (door.state) {
     case "not_configured":
       sentence = RAIL_MODEL_ACCESS.NOT_SIGNED_IN;
+      action = serverAction;
       break;
     case "expired_signin":
       sentence = RAIL_MODEL_ACCESS.EXPIRED;
+      action = serverAction;
       break;
     case "expiring":
       warning = false;
+      title = door.deadline ? absoluteTime(door.deadline) : "";
+      // No separate action line — the deadline is IN the sentence (S1 / W0-mock
+      // ruling 1) — EXCEPT against a daemon that sends no `deadline` (review-1
+      // S3): an older daemon's `expiring` state would otherwise render NOTHING
+      // at all here while the rail still CLAIMS the door — zero sign-in
+      // controls on /runs/new. Mirrors the strip's own fallback.
       sentence = when ? RAIL_MODEL_ACCESS.EXPIRING(when) : "";
+      action = when ? "" : door.action;
       break;
     case "shared_expired":
-      sentence = RAIL_MODEL_ACCESS.SHARED_EXPIRED;
+      // The one credential every run rides. Its ADMIN reads their own repair
+      // sentence, never the member's "ask them" line about themselves
+      // (review-1 S2) — everybody else keeps the server's instruction.
+      sentence = door.operator ? RAIL_MODEL_ACCESS.SHARED_ADMIN_EXPIRED : RAIL_MODEL_ACCESS.SHARED_EXPIRED;
+      action = door.operator ? "" : door.action;
       break;
     default:
       // live, not_applicable, "" — RunRail's showModelAccess gate already
@@ -224,27 +243,20 @@ function ModelAccessLine({ door, onSignIn }: { door: ModelAccessDoorHandle; onSi
       // console does not know says nothing rather than inventing a sentence.
       return null;
   }
-  if (!sentence) return null;
-  // The server's action ONLY when it carries what the sentence cannot — the
-  // pin-contradicted account/role pair, or a member's shared_expired
-  // instruction — never the button's own label repeated as prose, and never
-  // for `expiring` (S1 / W0-mock ruling 1: the deadline is already IN the
-  // sentence, no separate action line).
-  const action =
-    door.state !== "expiring" && door.action && door.action !== AGENTS.SIGN_IN_AWS ? door.action : "";
+  if (!sentence && !action) return null;
   return (
     <p
       className={
         "mb-1.5 rounded-md px-2 py-1.5 text-xs " +
         (warning ? "border border-warning/30 bg-warning-subtle text-foreground" : "text-muted-foreground")
       }
-      title={door.deadline ? absoluteTime(door.deadline) : undefined}
+      title={title || undefined}
     >
       {/* Two SEPARATE text nodes (mirrors model-access-banner.tsx's
           modelAccessStripCopy rendering) — the server's action, when it
           renders, is a second fact beside ours, never appended into the same
           sentence. */}
-      <span>{sentence}</span>
+      {sentence && <span>{sentence}</span>}
       {action && <span> {action}</span>}
       {/* The rail's OWN sign-in, under a DISTINCT accessible name from the
           strip's/Getting Started's "Sign in to AWS" (U-13's actual rule is two
@@ -300,19 +312,15 @@ export function RunRail({
 
   // Focus returns to Launch, not to #main-content (which would drop the
   // member at the top of the form they were mid-way through), when THIS
-  // rail's own control opened the door — never when some other surface
-  // (the shell strip, a run's failure block) happened to open it while this
-  // screen was mounted.
+  // rail's own control opened the door. The DOOR owns the return target
+  // (review-1 S1): the rail's own sign-in control unmounts the moment the
+  // state it described clears (a completed sign-in), so by the time the
+  // dialog's onCloseAutoFocus runs, document.activeElement — what a bare
+  // openDoor() would have captured — is a DETACHED node and focusOpener()
+  // fails, falling through to #main-content; a separate effect here racing
+  // Radix's own FocusScope exit trap cannot reliably win either. Passing
+  // Launch explicitly as `returnTo` makes it the captured opener directly.
   const launchRef = React.useRef<HTMLButtonElement>(null);
-  const openedFromRail = React.useRef(false);
-  const doorWasOpen = React.useRef(door.open);
-  React.useEffect(() => {
-    if (doorWasOpen.current && !door.open && openedFromRail.current) {
-      openedFromRail.current = false;
-      launchRef.current?.focus();
-    }
-    doorWasOpen.current = door.open;
-  }, [door.open]);
 
   // A run with no model credential to describe (a shell command — the screen
   // withholds agentRow for one), no model-access line and no warning to raise
@@ -379,13 +387,7 @@ export function RunRail({
               sign-in at all"), independent of showModelWarning below (a
               DEPLOYMENT fact — some model path exists at all). */}
           {showModelAccess && (
-            <ModelAccessLine
-              door={door}
-              onSignIn={() => {
-                openedFromRail.current = true;
-                door.openDoor();
-              }}
-            />
+            <ModelAccessLine door={door} onSignIn={() => door.openDoor(launchRef.current)} />
           )}
           {showModelWarning && (
             <p className="mb-1.5 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-foreground">

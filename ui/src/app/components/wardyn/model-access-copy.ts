@@ -77,6 +77,11 @@ export const RAIL_MODEL_ACCESS = {
   EXPIRED: "Your AWS sign-in no longer works for Claude Code — sign in again before you launch.",   // true of a pin mismatch too (B5)
   EXPIRING: (when: string) => `Your AWS sign-in lapses ${when} — sign in again soon.`,
   SHARED_EXPIRED: "Your admin's AWS credential has expired — Claude Code runs need it reconnected.",
+  // The shared row's ADMIN reads their own repair sentence, never the
+  // member's "ask them" line about themselves (review-1 S2; mirrors
+  // MODEL_ACCESS_BANNER.SHARED_ADMIN_EXPIRED, reworded for the rail's
+  // "before you launch" voice).
+  SHARED_ADMIN_EXPIRED: "The shared AWS sign-in no longer works — sign in again before you launch.",
   SIGN_IN_ARIA: "Sign in to AWS — from the New Run rail",
   // The existing inline warning, lifted (strings law) — a DEPLOYMENT with no
   // model path at all, a different fact from the four above.
