@@ -7,6 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"net/http"
+	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -187,5 +190,63 @@ func TestSSOPortalMITMEntry_ProductionIsUnprefixedAndPlainHTTPIsExplicit(t *test
 					tc.override, got)
 			}
 		})
+	}
+}
+
+// THE PIN IS AUTHORED, AND IT IS AUTHORED FROM THE SNAPSHOT (docs REVIEW-3
+// coverage note). The proxy enforces it (internal/egress/proxy), and the proxy's
+// tests supply the rule by hand — so nothing checked that a real dispatch
+// actually writes one. A grant authored without it is a rule the sidecar reads
+// as unpinned, and the injected session goes back to riding every request to the
+// portal host, including the `POST /logout` that ends its owner's sign-in
+// session for every run they have.
+func TestAuthorBedrockSSOInjection_ScopeCarriesThePathPin(t *testing.T) {
+	s := fullyConfiguredBedrockServer()
+	captured := &captureGrantStore{}
+	s.cfg.Store = captured
+	llm := llmTransport{bedrock: ssoInjectAuth()}
+	if _, _, ok := s.authorBedrockSSOInjection(context.Background(), types.AgentRun{ID: uuid.New()}, llm,
+		awsSSOScope{perUser: true, owner: "member@corp.example"}, nil); !ok {
+		t.Fatal("authorBedrockSSOInjection failed; want ok")
+	}
+	if len(captured.grants) != 1 {
+		t.Fatalf("grants = %d, want 1", len(captured.grants))
+	}
+	var scope struct {
+		PinPath  string              `json:"pin_path"`
+		PinQuery map[string]string   `json:"pin_query"`
+		Snapshot awsSSOScopeSnapshot `json:"snapshot"`
+	}
+	if err := json.Unmarshal(captured.grants[0].Spec.Scope, &scope); err != nil {
+		t.Fatalf("grant scope is not JSON: %v", err)
+	}
+	if scope.PinPath != "/federation/credentials" {
+		t.Errorf("pin_path = %q, want /federation/credentials — GetRoleCredentials is the ONE call this "+
+			"session may ride", scope.PinPath)
+	}
+	// FROM THE SNAPSHOT, not from anywhere else: the snapshot is what the
+	// resolver re-compares against the roster, so pinning from the same value
+	// keeps the wire and the resolve talking about one pair.
+	want := map[string]string{"account_id": scope.Snapshot.SSOAccountID, "role_name": scope.Snapshot.SSORoleName}
+	if !reflect.DeepEqual(scope.PinQuery, want) {
+		t.Errorf("pin_query = %v, want the snapshot's pair %v", scope.PinQuery, want)
+	}
+	if scope.Snapshot.SSOAccountID == "" || scope.Snapshot.SSORoleName == "" {
+		t.Fatal("the snapshot carried no account/role, so this test proved nothing")
+	}
+	// …and it survives the decode the sidecar's config is built from.
+	rule, err := injectionRuleFromScope(captured.grants[0].Spec.Scope)
+	if err != nil {
+		t.Fatalf("injectionRuleFromScope: %v", err)
+	}
+	if !rule.Pinned() {
+		t.Error("the decoded rule is UNPINNED — the pin never reaches the sidecar")
+	}
+	if !rule.AllowsInjection(http.MethodGet, "/federation/credentials",
+		url.Values{"account_id": {want["account_id"]}, "role_name": {want["role_name"]}}) {
+		t.Error("the dispatched GetRoleCredentials is refused by its own pin")
+	}
+	if rule.AllowsInjection(http.MethodPost, "/logout", nil) {
+		t.Error("POST /logout is allowed the session — it ends the owner's sign-in for every run they have")
 	}
 }

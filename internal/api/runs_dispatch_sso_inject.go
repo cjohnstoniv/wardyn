@@ -217,12 +217,22 @@ func (s *Server) authorBedrockSSOInjection(ctx context.Context, run types.AgentR
 		// reach was the agent's. Proxy-side injection is the first point at which
 		// the admin-asserted pair becomes an ENFORCED one.
 		//
+		// THE PIN IS ALWAYS ON. An earlier version of this comment said a blob
+		// carrying neither field would leave the rule unpinned; that is not a
+		// state this lane can be in. The upload refuses a blob missing either
+		// (awsSSOBlob.missingFields, ssotoken.go — account_id and role_name are
+		// required fields, and a short capture is refused as blob_shape), so a
+		// STORED session always carries the pair and awsSSOPinQuery always
+		// answers one. pin_path is authored unconditionally besides, and
+		// InjectionRule.Pinned() reads PinPath alone — so the rule is pinned
+		// whatever the query turns out to be. The nil arm in awsSSOPinQuery is a
+		// fail-safe for a shape the upload door does not admit, not a supported
+		// configuration.
+		//
 		// The pair is the SNAPSHOT's, which is the same blob the sandbox's own
 		// ~/.aws/config is generated from (awsSSOConfigFileContents, one call
 		// apart), so it is byte-for-byte what the SDK will ask for — on a roster
-		// row that pins account/role AND on one that does not. Both empty (a blob
-		// that carried neither) leaves the rule unpinned, which is today's
-		// behaviour.
+		// row that pins account/role AND on one that does not.
 		"pin_path":  awsSSORoleCredentialsPath,
 		"pin_query": awsSSOPinQuery(t.bedrock.ssoAccountID, t.bedrock.ssoRoleName),
 	})
@@ -248,10 +258,14 @@ func (s *Server) authorBedrockSSOInjection(ctx context.Context, run types.AgentR
 // allowed on: the AWS SSO portal's GetRoleCredentials.
 const awsSSORoleCredentialsPath = "/federation/credentials"
 
-// awsSSOPinQuery is the query the pinned request must carry. Nil when the blob
-// named no account/role, which leaves the rule unpinned rather than pinning it
-// to the empty pair — a pin nothing could ever match would withhold the
-// credential from the one call that needs it.
+// awsSSOPinQuery is the query the pinned request must carry.
+//
+// Nil is UNREACHABLE for a stored session — the upload requires account_id and
+// role_name (awsSSOBlob.missingFields) — and it is here as a fail-safe rather
+// than as a configuration: pinning to an EMPTY pair would be a pin nothing could
+// ever match, withholding the credential from the one call that needs it. A
+// nil query still leaves pin_path set, so the rule stays pinned to
+// GET /federation/credentials and every other path is still refused the header.
 func awsSSOPinQuery(accountID, roleName string) map[string]string {
 	if accountID == "" || roleName == "" {
 		return nil

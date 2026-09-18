@@ -433,3 +433,84 @@ func TestMITMInjection_IsPinnedToTheDispatchedRoleCredentialsCall(t *testing.T) 
 		})
 	}
 }
+
+// THE PLAIN LANE HONOURS THE PIN TOO (docs REVIEW-3 coverage note).
+//
+// injector.apply is the cleartext path — an ordinary absolute-URI request that
+// never enters a tunnel — and it reaches the very same portal host. A pin
+// enforced only on the MITM lane would be bypassable by simply not using TLS:
+// `POST /logout` sent plainly would be injected while the tunnelled one was not.
+//
+// The STRIP runs on every arm: a host with an injection rule always has the
+// sandbox's own credential headers removed, including the one that rule
+// supplies, so a withheld injection never degrades into forwarding whatever the
+// sandbox chose to send.
+func TestInjectorApply_PlainLaneHonoursThePin(t *testing.T) {
+	const (
+		account = "111122223333"
+		role    = "WardynAgent"
+	)
+	for _, tc := range []struct {
+		name       string
+		method     string
+		target     string
+		wantHeader string
+	}{
+		{"the dispatched GetRoleCredentials", http.MethodGet,
+			"http://" + plainMITMHost + ":8090/federation/credentials?account_id=" + account + "&role_name=" + role,
+			"the-real-session-token"},
+		{"logout", http.MethodPost, "http://" + plainMITMHost + ":8090/logout", ""},
+		{"another account", http.MethodGet,
+			"http://" + plainMITMHost + ":8090/federation/credentials?account_id=999988887777&role_name=" + role, ""},
+		{"another role", http.MethodGet,
+			"http://" + plainMITMHost + ":8090/federation/credentials?account_id=" + account + "&role_name=AdministratorAccess", ""},
+		{"the session's account list", http.MethodGet,
+			"http://" + plainMITMHost + ":8090/assignment/accounts", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inj := &injector{byHost: map[string]*injEntry{plainMITMHost: {
+				grantID: uuid.New(),
+				header:  injectedHeader{name: "x-amz-sso_bearer_token", value: "the-real-session-token"},
+				rule: egress.InjectionRule{
+					Host: plainMITMHost, Header: "x-amz-sso_bearer_token", Format: "%s",
+					PinPath:  "/federation/credentials",
+					PinQuery: map[string]string{"account_id": account, "role_name": role},
+				},
+			}}}
+			req := httptest.NewRequest(tc.method, tc.target, nil)
+			// The sandbox's own placeholder, plus a credential header it has no
+			// business setting on a host Wardyn credentials.
+			req.Header.Set("x-amz-sso_bearer_token", "wardyn-proxy-injected")
+			req.Header.Set("Authorization", "Bearer the-sandboxs-own")
+
+			inj.apply(req, plainMITMHost, 8090)
+
+			if got := req.Header.Get("x-amz-sso_bearer_token"); got != tc.wantHeader {
+				t.Errorf("injected header = %q, want %q", got, tc.wantHeader)
+			}
+			if got := req.Header.Get("x-amz-sso_bearer_token"); got == "wardyn-proxy-injected" {
+				t.Error("the sandbox's own placeholder survived: the strip must run whatever the pin decides")
+			}
+			if got := req.Header.Get("Authorization"); got != "" {
+				t.Errorf("Authorization = %q, want it stripped on a host this rule credentials", got)
+			}
+		})
+	}
+}
+
+// …and an UNPINNED rule on the plain lane is unchanged, which is every other
+// injection lane in the product.
+func TestInjectorApply_PlainLaneUnpinnedRuleIsUnchanged(t *testing.T) {
+	inj := &injector{byHost: map[string]*injEntry{plainMITMHost: {
+		grantID: uuid.New(),
+		header:  injectedHeader{name: "Authorization", value: "Bearer brokered"},
+		rule:    egress.InjectionRule{Host: plainMITMHost, Header: "Authorization", Format: "Bearer %s"},
+	}}}
+	req := httptest.NewRequest(http.MethodPost, "http://"+plainMITMHost+":8090/anything", nil)
+	req.Header.Set("Authorization", "Bearer the-sandboxs-own")
+	inj.apply(req, plainMITMHost, 8090)
+	if got := req.Header.Get("Authorization"); got != "Bearer brokered" {
+		t.Errorf("Authorization = %q, want the brokered credential on every path — an unpinned rule "+
+			"narrows nothing", got)
+	}
+}
