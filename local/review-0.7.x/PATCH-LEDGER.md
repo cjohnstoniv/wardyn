@@ -52,8 +52,9 @@ below remain based on `dfa89f60`, not on the
 other agent's changing feature branch. Current overlap checks found its SSO,
 credential-hold, model-access and startup-detail work outside these new seams.
 The four newer patches are now independently committed. Their combined selection
-is frozen at `6a3dc8659ea7105ae81d127b5f3f1a198333f67d`; full CI and same-tip browser
-acceptance are running in separate worktrees. See ROUND2-HANDOFF.md for the delta.
+is frozen at `6a3dc8659ea7105ae81d127b5f3f1a198333f67d`; uninterrupted full CI,
+same-tip browser acceptance, both typechecks and real PostgreSQL report/race gates
+all passed in separate clean worktrees. See ROUND2-HANDOFF.md for the delta.
 
 ## Status definitions
 
@@ -91,7 +92,7 @@ command, skipped suite, or passing mock is never a completed live verification.
 | R076-022 | Selected operational docs move guarded audit citations. Integration dependency, not an independent product feature. | checks-passed (focused + combined make ci) | review/0.7x-doc-integration-citations / 5adf090c | Five citation-only replacements; original evidence and guards preserved. Depends on R015/R016/R019/R020 plus the initial eight-patch integration. Must re-point again if a release selects a different documentation combination. |
 | R076-023 | Filesystem recording reads follow shared-mount symlinks outside the recording root. Conditional security issue; default PostgreSQL unaffected. | checks-passed (full default Go tree + package race + peer + combined make ci) | review/0.7x-recording-root-read / 18fb91fd | Separate post-freeze patch, NOT in 0d63ab2e. Four synthetic escape cases fail on baseline; rooted reads pass them and compatibility checks. Full make ci passed in cd179c61; original package race/full default Go tree and independent peer review passed. See RECORDING-ROOT-READ.md for preconditions and residuals. |
 | R076-024 | SheetOverlay drops the backdrop before its existing exit animation finishes. Low UX. | checks-passed (focused + browser + typecheck + peer) | review/0.7x-sheet-overlay-ref / f6e787a5 | Four lifetime regressions fail on baseline; two focus tests pass. Mock approved before edits; actual Chromium verifies all sides/reduced motion. 50 focused tests, typecheck and full browser (347 tests/30 specs, no failures/skips/flakes) pass. Root peer approved. Existing styles, timing and focus preserved. Other owner may fold this into R018; do not apply twice. |
-| R076-025 | CLI recording/bundle exports reuse a predictable .part file, truncating unrelated files or colliding across simultaneous downloads. | checks-passed (regression + package race + peer) | review/0.7x-cli-private-temp / 2307b07c | Six regular/symlink/rename-failure cases and synchronized concurrent download fail on baseline. Both exporters now use unique same-directory 0600 files; full CLI race suite passed (5.033s), interruption cleanup checked. Final target replacement remains last successful rename wins. Full combined gate pending. |
+| R076-025 | CLI recording/bundle exports reuse a predictable .part file, truncating unrelated files or colliding across simultaneous downloads. | checks-passed (regression + package race + peer + combined gates) | review/0.7x-cli-private-temp / 2307b07c | Six regular/symlink/rename-failure cases and synchronized concurrent download fail on baseline. Both exporters now use unique same-directory 0600 files; full CLI race suite passed, interruption cleanup checked. Final target replacement remains last successful rename wins. Combined gates passed at 6a3dc865. |
 | R076-026 | CLI policy conversion silently ignores later YAML documents, including malformed ones and intended restrictions. | checks-passed (regression + package race + peer) | review/0.7x-cli-policy-document / f5fbb166 | Red-first converter and create/update/render/run policy-file regressions; shared converter rejects extra documents before API calls. Valid single JSON/YAML with markers/comments unchanged; full CLI race passed (4.844s). Independent docs peer approved. Ambiguous multi-document input intentionally becomes an error. |
 | R076-027 | Recording-upload masking cleanup can block on an upstream body read after filesystem storage has already failed. | checks-passed (full default Go tree + package race + peer) | review/0.7x-recording-upload-cancel / 0bb4699b | Real FSStore early-failure regression failed on baseline and passes with demand-driven bounded masking. Root peer approved; complete API/secretmask race passed (92.161s/1.019s), full Go tree including citation guards passed. Existing masking, cap and error/tail ordering preserved. Handler/masking lifetime fix, not a new HTTP transport deadline or PG-outage claim. |
 | R076-028 | FSStore SaveCast leaves its owned temporary file when the final rename fails. Low cleanup/disk accumulation risk; PostgreSQL unaffected. | candidate (code-reviewed; reproduction pending) | no product commit | Direct os.Rename return lacks the unlink used by copy/close failures; SaveCastNamed shares the seam. Optional age-based Sweep mitigates old orphans only when retention is enabled. Keep out of frozen round-two selection; next isolated patch needs deterministic bare/named rename-failure and replacement/cleanup tests. |
@@ -103,7 +104,7 @@ command, skipped suite, or passing mock is never a completed live verification.
 | Identity / authority | Router split, CSRF host guard, recording-pane tier split; OIDC email claim and SSH revocation boundaries checked against code; recording owner/tier and run-token checks inspected. | Broad live identity/revocation/session scenarios; no new live cross-user certification. |
 | Credentials / egress | Upload boundary/race tests; support-bundle baseline/fixed structured-redaction and archive tests; login launch/capture review. | Real SSO/concurrent-user walk and broader broker/redirect adversarial checks; other campaign owns SSO changes. |
 | Lifecycle / storage | Six terminal-status combinations; scoped live WaitExitCode and actual emptyDir eviction; synthetic PG audit/secret/recording restore; filesystem recording read-confinement regression, fix and combined make ci. | Full API finalization, restart/reconcile, user-drive restore, healthy-proxy lifecycle proof. |
-| Product / UX | Approved mocks; recording-pane browser sweep; overlay and SheetOverlay each passed full browser plus DOM lifetime/focus checks; original frozen combined batch's 347 browser tests passed. | Complete real-identity recovery journeys remain separate; new round-two combined browser gate running. |
+| Product / UX | Approved mocks; recording-pane browser sweep; overlay and SheetOverlay each passed full browser plus DOM lifetime/focus checks; original and round-two frozen combinations each passed all 347 browser tests. | Complete real-identity recovery journeys remain separate from hermetic acceptance. |
 | Deployment / recovery | Isolated PG dump/restore with append-only guards; corrected age-key and audit-spool runbooks. | Fresh Helm/upgrade, outage/full application recovery, split runtime roles and pending-spool replay. |
 | Engineering / docs | Independent DCO commits, nightly overlap check, guard-preserving citation repair, release/UI recipes; uninterrupted final combined make ci passed. | Live deployment acceptance remains outside make ci. |
 
@@ -180,6 +181,21 @@ command, skipped suite, or passing mock is never a completed live verification.
   UI 155 files / 2,880 tests passed. Evidence: evidence/round2-ci-recording-root.log,
   SHA-256 `94d1883e2140c2cb9dd1d2d9d09a67f1b98189d8baca67242ee94c24cebed948`.
   This is not yet acceptance for the four newer patches R024–R027.
+- Final round-two selection `6a3dc8659ea7105ae81d127b5f3f1a198333f67d` contains
+  all 20 independent product/docs patches plus the original R022 selection-specific
+  citation repair. One uninterrupted `make ci` passed, exit 0, clean worktree:
+  Go union coverage 78.5%, all three report/race configurations passed, and UI
+  156 files / 2,886 tests passed. Log: evidence/round2-ci-final.log; SHA-256
+  `ed717e2b34afcffaaa5e4b37b7688ea7c43a3959392aecf2c87ae7c75209db31`.
+  Same-tip separate browser acceptance passed all 347 tests / 30 specs with no
+  failures, skips or flakes; both TypeScript configurations passed and ports were
+  released. Same-tip real PostgreSQL report/race passed: 69.6% coverage, all nine
+  required probe parents executed, 5,525 passed / five skipped test events
+  including subtests, no failures; broker/store race 2.764s/16.772s. The skipped
+  cases are named in ROUND2-PG-ACCEPTANCE.md and are not fixture self-skips.
+  Exact commands, source isolation, counts, hashes and limits are in
+  ROUND2-HANDOFF.md, ROUND2-UI-ACCEPTANCE.md, ROUND2-PG-ACCEPTANCE.md and
+  evidence/ROUND2-FINAL-VERIFICATION.md. Original frozen checkpoints are unchanged.
 - Support-bundle red-first and fixed logs are evidence/redaction-baseline.log and
   evidence/redaction-fixed.log. The detached baseline reproduction worktree has
   only the new test file; its production source remains exactly dfa89f60.
@@ -237,6 +253,47 @@ and scope verification, not a substitute for runtime acceptance.
 - R076-027: Stop reading recording bodies when storage does not request more
   data; preserve masking and existing upload limits without an eager copy goroutine.
 
+## 0.7.6 release selection (2026-09-18, the release owner's ruling)
+
+The 0.7.6 campaign ran four blind reviewers over rows R076-001..024 (A security/proxy/CLI, B console, C docs/release,
+D open candidates; per-patch evidence at `local/v076/evidence/patch-review/{A,B,C,D,SELECTION}.md` in the campaign's
+`~/wt-v076` worktree) answering, per row: real issue? right fix? include in 0.7.6? The owner accepted every INCLUDE
+and deferred/rejected the rest. Rows R076-025..028 landed after those reviewers read the ledger; batch E is reviewing
+them now and this table is amended when it reports. Application: code/console picks are cherry-picked individually
+(`-x`) onto `lane/v0.7.6-patches` from `feature/0.7.6`; docs picks go through the 0.7.6 docs lane with their own
+same-commit window-0 re-cites; never the umbrella integration branches.
+
+| Finding | 0.7.6 decision | Notes from the review |
+|---|---|---|
+| R076-001 | n/a | ledger bookkeeping |
+| R076-002 | DEFER 0.7.7 | race REPRODUCED (two live sandboxes, neither KILLED); fix = per-actor advisory lock over quota → insert → supersede, ~1 session; 0.7.6 corrects the false "newest sandbox wins" sentence in its CHANGELOG Known gaps |
+| R076-003 | DEFER 0.7.7 | real (GOCACHE/npm/pip/rust outside both metered emptyDirs); needs a third scratch emptyDir + live eviction proof |
+| R076-004 | DEFER 0.7.7 | real but NARROWED by 0.7.6: the banner-mounted sign-in door survives navigation and kills the login run after server confirmation; only the three route-scoped pane mounts and a closed tab still orphan; 0.7.6 ships that narrower Known-gaps bullet |
+| R076-005 | INCLUDE | `6ee6f585`; never `a470804d` |
+| R076-006 | INCLUDE | `3f1f4c95` |
+| R076-007 | REJECT | rejection confirmed at the 0.7.6 tip; the stale 0.7.5 Known gap is retired with its citation |
+| R076-008 | REJECT (duplicate) | PR #71 merges independently; no overlap either order |
+| R076-009 | INCLUDE | `fe5c40a9`; low severity (only the scan 8 MiB == 8 MiB window); auto-merges with 0.7.6's proxy hold |
+| R076-010 | already in base | `46dbcf6d` == `ade005b2` (diff empty); the plan's eviction → `approval.cancelled` coverage was missing and is now a test at 79f206ab |
+| R076-011 | INCLUDE | `ed9a56d4` |
+| R076-012 | INCLUDE | `58557df6` |
+| R076-013 | INCLUDE | `0a7e23ec`; the 0.7.6 runbook gained the fetch-tags/collision prerequisite |
+| R076-014 | INCLUDE | `117c9e04` |
+| R076-015 | INCLUDE (landed) | `8da1885b` on the 0.7.6 docs lane with the guard's own re-cites |
+| R076-016 | INCLUDE (landed) | `b2042f52` on the 0.7.6 docs lane with the guard's own re-cites |
+| R076-017 | INCLUDE + Known gap | `c4c5fa16`; marker-named structural keys are redacted whole (Compose-invalid output, valid YAML); comments dropped |
+| R076-018 | INCLUDE with re-cites | `9ca33584`; CONSOLE-RULES L107 anchors dialog.tsx:66→68, alert-dialog.tsx:61→63 re-cited by hand |
+| R076-019 | INCLUDE | `7d155903` |
+| R076-020 | INCLUDE | `baa4611e` |
+| R076-021 | INCLUDE | `94c4fa84`; the only such file at the 0.7.6 tip |
+| R076-022 | REJECT | its OPERATIONS.md value is off by +2 on the 0.7.6 tree and the drift set is 7 not 5; the 0.7.6 docs lane re-derives every citation from the window-0 guard per commit |
+| R076-023 | INCLUDE + Known gap | `18fb91fd`; absolute symlinks INSIDE the root now refuse (replay 500 / list degrades); hard links still read; NFS untested |
+| R076-024 | INCLUDE | `f6e787a5` (the official patch; batch B had judged the same hunk before it was committed) with sheet.tsx:61→63 re-cited |
+| R076-025 | under review (batch E) | |
+| R076-026 | under review (batch E) | |
+| R076-027 | under review (batch E) | |
+| R076-028 | under review (batch E) | candidate |
+
 ## Open findings, not implemented
 
 R076-002 needs launch serialization across quota checks, row insertion and
@@ -282,7 +339,7 @@ source citations against their final selection.
 - Sheet browser acceptance: wardyn_review_sheet; ports 18894/18895; isolated from
   the other browser runs and the other 0.7.6 campaign; complete, ports released.
 - Round-two combined browser: wardyn_review_round2; ports 18896/18897; separate
-  worktree at the frozen round-two tip.
+  worktree at the frozen round-two tip; complete, ports released.
 - Operations check databases: wardyn_review_ops_* (documentation lane).
 - Dedicated Kubernetes acceptance cluster wardyn-review-07x-life was deleted
   after scoped live tests; existing clusters were untouched. Review images remain.
