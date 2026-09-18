@@ -10,7 +10,7 @@
 // drives it directly with a stub RoleProvider rather than the whole App, since
 // App's own auth/health polling has nothing to do with this decision.
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { act, render, screen, cleanup, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import App, { FirstRunLanding, roleCanReach } from "./App";
@@ -292,5 +292,163 @@ describe("roleCanReach — pure (M2)", () => {
   it("neg: an ungated route is reachable by admin and security_admin alike", () => {
     expect(roleCanReach("/policies", "admin")).toBe(true);
     expect(roleCanReach("/policies", "security_admin")).toBe(true);
+  });
+});
+
+// 0.7.6 — /setup/status is now POLLED (the model-access door rides it), so the
+// three things a poll can get wrong are pinned here: how often it asks, what a
+// failure does to the last good answer, and what happens to an answer that
+// arrives for a person who has since signed out.
+describe("App — the setup-status poll behind the model-access door", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    window.history.pushState({}, "", "/");
+    cleanup();
+  });
+
+  /** mockFetch, with /setup/status counted and — once `hold` is armed — held
+   *  open, so a tick that lands mid-flight can be observed being dropped. */
+  function statusFetch(): {
+    fetch: ReturnType<typeof vi.fn>;
+    calls: () => number;
+    hold: () => { resolve: (v: Response) => void };
+    fail: (on: boolean) => void;
+  } {
+    const base = mockFetch({}).fetch;
+    let count = 0;
+    let held: { promise: Promise<Response>; resolve: (v: Response) => void } | null = null;
+    let failing = false;
+    const fetch = vi.fn((url: RequestInfo | URL, init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes("/setup/status")) {
+        count += 1;
+        if (held) return held.promise;
+        if (failing) return Promise.reject(new Error("control plane unreachable"));
+      }
+      return base(url, init);
+    });
+    return {
+      fetch,
+      calls: () => count,
+      hold: () => {
+        held = deferred<Response>();
+        return held;
+      },
+      fail: (on: boolean) => {
+        failing = on;
+      },
+    };
+  }
+
+  it("asks once at sign-in, again on the interval and on returning to the tab — and never twice at once", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const s = statusFetch();
+    vi.stubGlobal("fetch", s.fetch);
+    renderApp();
+    await screen.findByText("runs screen stub");
+    expect(s.calls()).toBe(1);
+
+    // The interval (MODEL_ACCESS_POLL_MS, 5 min).
+    await act(async () => {
+      vi.advanceTimersByTime(300_000);
+    });
+    expect(s.calls()).toBe(2);
+
+    // Returning to the tab refreshes NOW rather than up to five minutes later.
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(s.calls()).toBe(3);
+
+    // …and a tick that lands while a read is still in flight is DROPPED, not
+    // queued: usePoll's guard is promise-based, which only works because
+    // refreshSetupStatus RETURNS its chain.
+    const held = s.hold();
+    await act(async () => {
+      vi.advanceTimersByTime(300_000);
+    });
+    expect(s.calls()).toBe(4);
+    await act(async () => {
+      vi.advanceTimersByTime(300_000);
+      vi.advanceTimersByTime(300_000);
+    });
+    expect(s.calls()).toBe(4);
+    held.resolve(jsonResponse(200, SETUP_STATUS_READY));
+  });
+
+  it("keeps the last known answer when a refresh fails", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const s = statusFetch();
+    vi.stubGlobal("fetch", s.fetch);
+    renderApp();
+    await screen.findByText("runs screen stub");
+
+    s.fail(true);
+    await act(async () => {
+      vi.advanceTimersByTime(300_000);
+    });
+    expect(s.calls()).toBe(2);
+    // Still on the screen the last good status routed to — a failed probe must
+    // never trap the console behind an empty snapshot.
+    expect(screen.getByText("runs screen stub")).toBeInTheDocument();
+  });
+
+  it("drops the previous person's snapshot on sign-out, and ignores a read that lands after it", async () => {
+    // The mount read is held open, so nothing has been stored yet when the
+    // session is cut; it then answers for a person who is no longer signed in.
+    const landingRead = deferred<Response>();
+    const reAuthWhoami = deferred<Response>();
+    const midSession401 = deferred<Response>();
+    const secondRead = deferred<Response>();
+    let statusCalls = 0;
+    let meCalls = 0;
+    let badgeCalls = 0;
+    const fetchMock = vi.fn((url: RequestInfo | URL) => {
+      const u = String(url);
+      if (u.includes("/setup/status")) {
+        statusCalls += 1;
+        return statusCalls === 1 ? landingRead.promise : secondRead.promise;
+      }
+      if (u.includes("/api/v1/me")) {
+        meCalls += 1;
+        return meCalls === 1 ? Promise.resolve(jsonResponse(200, ME_ADMIN)) : reAuthWhoami.promise;
+      }
+      if (u.includes("limit=1000")) {
+        badgeCalls += 1;
+        return badgeCalls === 1 ? midSession401.promise : Promise.resolve(jsonResponse(200, []));
+      }
+      if (u.includes("/runs?limit=1") && !u.includes("limit=1000")) return Promise.resolve(jsonResponse(200, []));
+      if (u.includes("/healthz")) return Promise.resolve(jsonResponse(200, { status: "ok", sso: false }));
+      if (u.includes("/readyz")) return Promise.resolve(jsonResponse(200, { status: "ok" }));
+      if (u.includes("/approvals")) return Promise.resolve(jsonResponse(200, []));
+      if (u.includes("/runs")) return Promise.resolve(jsonResponse(200, []));
+      return Promise.resolve(jsonResponse(200, {}));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderApp();
+
+    // Signed in, landing still waiting on its status read.
+    midSession401.resolve(jsonResponse(401, { error: "unauthorized" }));
+    await screen.findByText("Admin token", { exact: true });
+
+    // THE STALE COMPLETION: the first person's snapshot arrives after they are
+    // gone. It must not be stored.
+    await act(async () => {
+      landingRead.resolve(jsonResponse(200, SETUP_STATUS_READY));
+    });
+
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Admin token"), "any-token");
+    await user.click(screen.getByRole("button", { name: "Sign in" }));
+    reAuthWhoami.resolve(jsonResponse(200, ME_ADMIN));
+
+    // The next person's landing decision waits for THEIR OWN read: with the
+    // stale body stored, FirstRunLanding would have routed off it already.
+    await waitFor(() => expect(statusCalls).toBe(2));
+    expect(screen.queryByText("runs screen stub")).toBeNull();
+
+    secondRead.resolve(jsonResponse(200, SETUP_STATUS_READY));
+    await screen.findByText("runs screen stub");
   });
 });

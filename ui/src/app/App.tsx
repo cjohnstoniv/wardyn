@@ -466,7 +466,14 @@ export default function App() {
   const refreshSetupStatus = React.useCallback(() => {
     return setupApi
       .getSetupStatus()
-      .then(setSetupStatus)
+      .then((status) => {
+        // authRef, not a closed-over `auth` (the same ref H1's 401 handler
+        // reads): /setup/status is the expensive endpoint and can still be in
+        // flight across a sign-out, and its late answer describes the person
+        // who just left.
+        if (authRef.current !== "authed") return;
+        setSetupStatus(status);
+      })
       .catch(() => {
         /* leave the last-known status in place — never trap behind a failed probe */
       });
@@ -510,7 +517,15 @@ export default function App() {
     });
   }, []);
   React.useEffect(() => {
-    if (auth === "authed") void refreshSetupStatus();
+    if (auth === "authed") {
+      void refreshSetupStatus();
+      return;
+    }
+    // Signing out DROPS the snapshot. It is one person's model-access state,
+    // their harness roster and their readiness — and the next sign-in on this
+    // tab renders the shell (and the model-access strip in it) before the
+    // landing read answers, which would show them the last person's.
+    setSetupStatus(null);
   }, [auth, refreshSetupStatus]);
   // …and again every five minutes, because model_access is a per-person
   // credential LIFECYCLE: read once per session, a member who signed in at 09:00
