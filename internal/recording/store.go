@@ -139,7 +139,13 @@ func (s *FSStore) SaveCast(_ context.Context, runID string, r io.Reader) error {
 		_ = os.Remove(tmpName)
 		return err
 	}
-	return os.Rename(tmpName, dst)
+	if err := os.Rename(tmpName, dst); err != nil {
+		// The rename is the last step that can fail; without this unlink the
+		// store leaks its own .tmp-cast-* file (Sweep only sees it when retention is on).
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 // Sweep unlinks every cast (and every orphaned atomic-write temp file) directly
