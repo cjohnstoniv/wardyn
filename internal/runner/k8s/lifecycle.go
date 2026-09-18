@@ -47,13 +47,12 @@ func statusFromPod(pod *corev1.Pod) runner.Status {
 	case corev1.PodRunning:
 		st.State = types.RunRunning
 	case corev1.PodSucceeded:
-		code := containerExitCode(pod, mainContainerName)
+		code := 0
 		st.State = types.RunStopped
 		st.ExitCode = &code
 	case corev1.PodFailed:
-		code := containerExitCode(pod, mainContainerName)
 		st.State = types.RunFailed
-		st.ExitCode = &code
+		st.ExitCode = containerExitCode(pod, mainContainerName)
 		st.Message = failureDetail(pod)
 	default: // PodUnknown, or the phase hasn't been set yet
 		st.State = types.RunStarting
@@ -96,18 +95,18 @@ func waitingDetail(pod *corev1.Pod) string {
 	return ""
 }
 
-// containerExitCode returns the named container's terminated exit code, or 0
-// if it never terminated (should not happen for a Succeeded/Failed pod, but
-// zero is a safe fallback rather than a panic on an unexpected shape).
-func containerExitCode(pod *corev1.Pod, name string) int {
+// A lost node may never publish a container exit; nil keeps reconciliation
+// from treating that missing evidence as a successful exit.
+func containerExitCode(pod *corev1.Pod, name string) *int {
 	for _, cs := range pod.Status.ContainerStatuses {
 		if cs.Name == name {
 			if t := cs.State.Terminated; t != nil {
-				return int(t.ExitCode)
+				code := int(t.ExitCode)
+				return &code
 			}
 		}
 	}
-	return 0
+	return nil
 }
 
 // StopSandbox is the graceful teardown path (server-default grace period —
@@ -256,10 +255,10 @@ func (d *Driver) waitPodsGone(ctx context.Context, ns string, listOpts metav1.Li
 // the agent reaches it only since 0.7.5, which mounted the agent's /tmp and
 // workdir on metered emptyDirs (ephemeralScratchVolumes); before that the agent
 // wrote to an ephemeral container's unmetered layer and nothing was ever
-// evicted for it. Nothing then tears down the run's
-// siblings, and the credential-bearing ones are the point: the proxy pod stays
-// Running with its resolved upstream creds in memory, and the per-run Secret
-// (proxy config JSON + every SecretEnv value) stays in the namespace.
+// evicted for it. Normal finalization now attempts teardown when the pod ends;
+// this sweep retries abandoned or failed cleanup. The credential-bearing
+// siblings are the point: a proxy pod can retain resolved upstream creds in
+// memory, and the per-run Secret holds proxy config JSON and SecretEnv values.
 //
 // Keyed on the agent AND proxy pods, where docker keys on its agent container
 // alone: an evicted pod is Failed, and the kubelet's terminated-pod GC may

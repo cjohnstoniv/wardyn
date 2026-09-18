@@ -5176,16 +5176,20 @@ driver, not a guess:
   mechanism, precisely: (i) enforcement is by **eviction, not a
   quota** — the kubelet kills the POD once it exceeds the limit, in-flight work
   is lost, and the agent process never sees `ENOSPC`; it gets no chance to
-  flush or fail gracefully. An eviction is a kill path no Wardyn code is on, so
-  what reclaims the evicted run's SIBLINGS — the proxy pod still running with
+  flush or fail gracefully. The completion watcher and restart reconciler recognize a terminal
+  pod even if Kubernetes never publishes the agent container's exit status. An unknown agent
+  exit is a failed run, not a successful task; a recorded agent exit keeps its actual result.
+  Normal run finalization then revokes credentials and attempts to reclaim the run's siblings —
+  the proxy pod still running with
   its resolved upstream credentials, and the per-run Secret holding the run
-  token, the MITM CA key and any injected git token — is the control plane's
+  token, the MITM CA key and any injected git token. Failed cleanup can be retried by the
+  control plane's
   orphan sweep (`internal/api/reconcile.go`, implemented on this substrate by
   `internal/runner/k8s/lifecycle.go`'s `SweepOrphanedSandboxes`), on the next
-  boot and on its cadence after. It runs once the run is past
-  `undispatchedGrace`, so the window between the eviction and the sweep is real
-  and bounded by that grace, not by zero; a user drive's claim is never touched
-  by it. Two narrowings of that window since 0.7.3: an ordinary
+  boot and on its cadence after. Sweep candidates must be past `undispatchedGrace`;
+  cleanup is best-effort and can take longer when the Kubernetes API is unavailable.
+  A user drive's claim is never touched by it. Two narrowings of that window since 0.7.3: an
+  ordinary
   stop/kill of a run whose agent pod is ALREADY gone now reclaims the siblings
   itself (the sandbox ref is the agent pod name, so the run id needs no live pod
   to read it from), and the sweep lists the per-run Secret and both
