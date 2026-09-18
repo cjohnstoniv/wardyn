@@ -22,6 +22,22 @@ outside scope. Review resource names use `wardyn-review-07x`.
 Recover this ledger with `git show review/0.7x-ledger:local/review-0.7.x/PATCH-LEDGER.md`.
 The commits, rather than the temporary worktree directories, are the durable handoff.
 
+## 2026-09-18 plan-review checkpoint
+
+Product work paused for the owner's requested independent review of the other
+0.7.6 campaign. Three parallel reviewers checked security, lifecycle/integration,
+and UI/docs. `OTHER-076-PLAN-REVIEW.md` is the complete feedback; the exact reviewed
+plan is retained in `OTHER-076-PLAN-SNAPSHOT.md` (SHA-256
+`4fd2933a21c9c8870e62123f060a7d15e1830625a54176c71d0a8d088d6b5428`).
+Feedback was copied to the owner's Windows clipboard and verified against the
+file's SHA-256. Main remained clean at the baseline; no product changes were made
+for the plan review. The feedback records integration overlaps and superseded commits.
+
+Additional completed independent documentation commits: `8da1885b` on
+`review/0.7x-sec-ssh-revocation-docs` and `b2042f52` on
+`review/0.7x-doc-audit-spool`. Support-bundle redaction and dialog-overlay ref
+changes remain uncommitted candidates, not handoff-ready patches.
+
 ## Status definitions
 
 `candidate` → `confirmed` → `implemented` → `checks-passed` → `release-ready`.
@@ -38,12 +54,12 @@ command, skipped suite, or passing mock is never a completed live verification.
 | R076-002 | Concurrent login launches can leave two live sandboxes when timestamp and insert order disagree. Low, documented residual. | candidate | lifecycle lane | harnesscred_supersede.go, CHANGELOG 0.7.5. Reconcile ownership before fixing. |
 | R076-003 | Autonomous Kubernetes Go/npm caches can escape the two metered scratch paths. | candidate | lifecycle lane | ephemeralScratchVolumes, runs_dispatch_mounts.go. Requires compatibility and live proof. |
 | R076-004 | Successful AWS capture from Runs leaves the login sandbox alive to its idle cap. | candidate | lifecycle lane | handleUploadSSOToken. Stop must allow upload response to finish. |
-| R076-005 | Recording-pane member hint names admin only although its gate admits security admins. Low. | checks-passed (focused) | review/0.7x-record-tier-hint / 6ee6f585 | Red member assertion before fix; 51 component tests and typecheck pass. Independent mock review passed. Full browser suite pending. Supersedes unsigned a470804d; do not cherry-pick both. |
+| R076-005 | Recording-pane member hint names admin only although its gate admits security admins. Low. | checks-passed (focused + browser) | review/0.7x-record-tier-hint / 6ee6f585 | Red member assertion before fix; 51 component tests and typecheck pass. Independent mock review passed. Full browser suite passed: 30 spec files, no failures/skips/flakes; evidence/record-tier-ui-e2e.log. Supersedes unsigned a470804d; do not cherry-pick both. |
 | R076-006 | Console rules say reduced motion is unimplemented although global CSS guard and tests ship. Low. | checks-passed (focused) | review/0.7x-doc-motion / 3f1f4c95 | theme.css global guard predates rubric claim; existing theme suite 31 passed. |
 | R076-007 | Suspected personal-sign-in CTA for members with expiring shared Bedrock access. | rejected as current reachable bug | diagnostic worktree only; no product commit | Synthetic UI fixture reproduced it, but memberModelAccess maps shared expiring to live and strips action/deadline. Current normal server response cannot produce the alleged state. Existing CHANGELOG gap is stale; no historical rewrite. |
 | R076-008 | Nightly fixtures and proxy logger race already have fixes on another branch. | duplicate | fix/nightly-harness / 6a18f2b1 | Six owner commits beyond baseline. Do not duplicate their implementation. |
 | R076-009 | Brokered upload cap silently truncates oversized input; scan API can accept the truncated prefix as complete data. Medium integrity/correctness. | checks-passed (focused + race) | review/0.7x-sec-upload-cap / fe5c40a9 | Baseline oversize scan returns 204 and forwards; patched returns 413 with no upstream call and deny audit. Below/exact/unknown-length cases pass; independent lifecycle-lane review passed. |
-| R076-010 | Terminal Kubernetes pod with absent/stale agent status can strand a run; failed main-container unknown exit becomes false success. Medium operational correctness. | checks-passed (package + race) | review/0.7x-life-terminal-pod / 46dbcf6d | Six phase/status combinations and unknown-main-exit repro fail on baseline; full k8s package, race, vet, size guard pass. Independent security review passed. Dedicated live conformance pending. |
+| R076-010 | Terminal Kubernetes pod with absent/stale agent status can strand a run; failed main-container unknown exit becomes false success. Medium operational correctness. | checks-passed (package + race + scoped live) | review/0.7x-life-terminal-pod / 46dbcf6d | Six phase/status combinations and unknown-main-exit repro fail on baseline; full k8s package, race, vet, size guard pass. Independent security review passed. Dedicated live WaitExitCode/EphemeralDiskLimit passed (164.39 s); missing-status cases unit-only. Minimal-spec proxy lacked ControlPlaneURL, so this is NOT proxy/recording/full API-finalization proof. Dedicated cluster removed; existing clusters untouched. |
 | R076-011 | Contributor UI recipe leaves shell in ui/, breaking subsequent root commands. Low. | checks-passed (focused) | review/0.7x-doc-ui-recipe / ed9a56d4 | Original make target fails from ui; corrected root dry-runs resolve; local Playwright executable used. |
 | R076-012 | Contributor/release docs conflate CI conformance, manual Kubernetes walks and service-dependent local gates. Low. | checks-passed (focused) | review/0.7x-doc-live-gates / 58557df6 | Compared workflows, scripts and targets; existing release-job and PG-race guards pass. Makefile comments only. |
 | R076-013 | Release checklist chooses a second patch number after version preparation and falsely claims concurrent tag safety. Medium operational. | checks-passed (focused) | review/0.7x-doc-release-order / 0a7e23ec | Choose before bumps, tag validated version; guards pass, provenance recorded in commit. No tags/releases created. |
@@ -79,8 +95,15 @@ command, skipped suite, or passing mock is never a completed live verification.
   DOCKER_HOST=unix:///var/run/docker.sock addresses test-infrastructure selection.
 - review/0.7x-integration at a6c47ae5 combines the eight patches above from the
   baseline solely for checks; original patch branches remain independent. Full
-  make ci in progress (evidence/integration-ci.log). Do not cherry-pick integration
-  on top of individual patches.
+  make ci stopped at notices because this new worktree lacked node_modules;
+  prior build/report/race/staticcheck/vulnerability/license gates passed, but
+  later gates did not run (evidence/integration-ci.log). The notices check modified
+  generated files in that integration worktree; install frozen UI dependencies
+  and regenerate before resuming. Do not cherry-pick integration on top of
+  individual patches. No combined green make ci is claimed.
+- Real PostgreSQL integration test-report-pg and test-race-pg both passed at
+  a6c47ae5 (evidence/integration-pg.log): 69.5% PG report coverage; broker/store
+  race tests passed. This does not certify later uncombined documentation patches.
 
 ## Patch compatibility and release notes
 
