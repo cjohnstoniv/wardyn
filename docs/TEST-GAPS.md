@@ -131,6 +131,51 @@ actually ran it on.
   case is a node TAINT standing in for a slow start), a real IdP (Dex with two
   static passwords), concurrent members, and a device-code step that is anything
   other than pre-approved.
+
+  **0.7.6.** New live cases: **I** (the model-access banner — a never-signed-in
+  member sees it on `/runs` without visiting Getting Started) and **J** (the
+  run door — a run refused with a dead model credential carries the sign-in on
+  its own failure block), plus case **E**'s scheduling-vs-pull reason on the
+  existing `COLDPULL_TAINT` and new case **E2** (an unpullable image tag fails
+  in seconds with the registry's own words, not after five minutes). Case J
+  needs `credential-reauth-hold`'s test seam (a control-plane override that
+  marks the owner's blob spent, or the awsssofake `invalid_grant` switch) to
+  force a dispatch-time refusal; until that lands it is pinned only in
+  `ui/e2e/runs.spec.ts`'s fixture.
+
+  Three gaps the walk does NOT close, closed elsewhere instead:
+  - **The walk never extracts the AWS SSO device-authorization URL.**
+    `extractDeviceVerificationUrl` only ever matches
+    `https://device.sso.<region>.amazonaws.com/…` or `https://*.awsapps.com/…`;
+    the walk's own fake prints a plain-`http://wardyn-awsssofake:8090/verify?...`
+    URL, which the extractor deliberately never widens for (a test hatch in the
+    console is worse than the gap). So neither the auto-navigation (finding 7a)
+    nor the header link is exercised on the kind walk. Proven instead in
+    `ui/e2e/providers.spec.ts` (lane `login-pane`, on the `-runner none`
+    backend) via `page.routeWebSocket` standing in for the daemon's attach
+    socket and a route-intercepted device-authorization host inside the
+    extractor's own allowlist: the tab opens on the click, navigates to the
+    verification URL, a repeated URL line navigates once with no second tab,
+    and Cancel closes the tab from the `starting` phase.
+  - **The auto-opened tab's close is best-effort past navigation, and nothing
+    live proves the negative.** `AuthTab.close()` cannot close a cross-origin
+    tab once it has navigated to the provider's own page — the browser refuses
+    it, the same bound that makes severing `opener` correct in the first place
+    — so Wardyn closes the tab only while it is still the placeholder (Cancel,
+    an error, a completed sign-in); a tab that has already navigated stays open
+    as the provider's own page, which is its intended end state. `ui/e2e/providers.spec.ts`
+    pins this as "Cancel after navigation is a harmless best-effort no-op," but
+    no live case forces a real cross-origin navigation to prove the browser's
+    refusal — that would need a real external origin the kind walk cannot
+    reach. See `auth-tab-handle.test.ts` for the unit pin.
+  - **The markerless capture-confirm path (finding 7b) has no hook in the kind
+    walk or the non-live spec.** Both always produce a real terminal with a
+    real PTY marker, so the background watch's fallback — a capture that lands
+    with no marker byte reaching the browser at all — is pinned only in
+    `harness-login-pane-confirm.test.tsx` and `capture-confirm.test.ts`,
+    including the back-off schedule's "immediate tick" wake channel and the
+    once-only race between the marker path and the watch. Deferred to a future
+    live case; genuinely not covered anywhere live today.
 - `scripts/run-e2e-ssh-k8s.sh` (`make test-e2e-ssh-k8s`) — the SSH gateway over
   the k8s exec lane: `internal/runner/k8s`'s Attach/Close/ExecStream/Read/
   Resize/Write, every one of them listed in the K8S-gated bucket above.
