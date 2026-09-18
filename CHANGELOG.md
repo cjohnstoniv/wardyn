@@ -13,6 +13,18 @@ AWS SSO working and running a Claude Code agent — into eight findings. This re
 them; the eighth (a mid-run credential lapse holding the run instead of killing it) ships behind a
 kill switch, sequenced last — see Known gaps.
 
+Verified on the kind AWS SSO walk against images rebuilt from the commit under
+test, in three spec files and one cluster: a never-signed-in member is told on
+the Runs board and on New Run (findings 2 and 1), a lapsed member signs in from
+the strip itself without leaving the page or reloading it, a start held
+unscheduled names scheduling rather than a pull and a start on an unpullable
+image ends in seconds with the registry's own words (finding 6), a session
+retired at the portal mid-run HOLDS the model call and the SAME run continues
+after the sign-in (finding 4), and a dispatch refused over the model credential
+carries the sign-in on the run's own page (finding 3). Each walk carries a
+`MANIFEST.json` naming the git SHA and the five image digests as the NODE holds
+them.
+
 ### Added
 
 - **A global model-access banner.** An actionable model-access state — not signed in, lapsed, or

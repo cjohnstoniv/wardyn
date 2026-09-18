@@ -130,27 +130,49 @@ evidence only for the tip somebody actually ran it on.
   static passwords), concurrent members, and a device-code step that is anything
   other than pre-approved.
 
-  **0.7.6.** New live cases: **I** (the model-access banner — a never-signed-in
-  member sees it on `/runs` without visiting Getting Started) and **J** (the
-  run door — a run refused with a dead model credential carries the sign-in on
-  its own failure block), plus case **E**'s scheduling-vs-pull reason on the
-  existing `COLDPULL_TAINT` and new case **E2** (an unpullable image tag fails
-  in seconds with the registry's own words, not after five minutes). Case J
-  needs `credential-reauth-hold`'s test seam (a control-plane override that
-  marks the owner's blob spent, or the awsssofake `invalid_grant` switch) to
-  force a dispatch-time refusal; until that lands it is pinned only in
-  `ui/e2e/runs.spec.ts`'s fixture. Plus case **K** (~12 minutes; a member's
-  session dies mid-run, the run is HELD not killed, and `K(resume)` — the SAME
-  run resumes when the sign-in lands) and **K is a SIMULATED check of the
-  plaintext lane only**: the walk runs the fake over plain HTTP, so the
-  timeout's 401 body never reaches the SDK there; the production-shaped path
-  (TLS CONNECT → MITM → header injection → CA trust → the timeout body) is
-  proven by the docker-gated test, whose fake serves TLS, not by this walk.
+  **0.7.6.** The walk now runs THREE spec files in one invocation against one
+  cluster, on images rebuilt from the commit under test, and covers six of
+  0.7.6's eight findings end to end:
 
-  **PLACEHOLDER — pass 3, lane `e2e-sso-path`.** Case K/K(resume)'s exact
-  timeline, test ids and every un-drivable negative (what the walk's 12-minute
-  budget and plaintext fake cannot prove) land here verbatim from that lane's
-  own canon; this paragraph's SIMULATED framing is provisional until then.
+  - **the model-access strip, first-run** (`sso-member.spec.ts`, case I) — a
+    member who has never signed in sees the sentence and the sign-in on the
+    Runs board and on Workspaces, the door opens in place, the New Run rail
+    names the same state under its own distinct control name, and the
+    deployment-level "No model provider is connected" does NOT render beside
+    it;
+  - **the strip's own door** (`sso-member-recovery.spec.ts`, case I) — a
+    lapsed member signs in FROM the strip and it clears with the document
+    never reloaded;
+  - **a slow start that is not a pull** (case E) and **a start that will
+    never finish** (case E2) — the pane names scheduling for the first and
+    ends its wait on the REASON in seconds for the second;
+  - **the mid-run hold** (`sso-reauth-hold.spec.ts`, cases K and K(resume)) —
+    a session retired at the portal mid-run holds the model call instead of
+    killing the run, and the same run id continues after the member signs in;
+  - **the run door** (case J) — a dispatch refused over the model credential
+    carries the server's own sentence and a sign-in on the run's own page;
+  - **two ways a hold ends** — one nobody answers times out with the proxy's
+    `credential:reauth-timeout` decision while the request stays open, and one
+    whose run is killed has its request cancelled with it.
+
+  **Case K is labelled SIMULATED, deliberately.** The kind walk runs the fake
+  over plain HTTP, so the injection rides the cleartext lane and the hold's
+  timeout body does not reach the sandbox's SDK there (the plain lane
+  swallows injection errors and the SDK sees the fake's own 401). What the
+  walk proves is the control plane, the approval, the console and the resume
+  on a real cluster; the production-shaped path — TLS CONNECT → `mitm.go` →
+  header injection → CA trust → the timeout body — is proven by the
+  docker-gated `test/awsssofake/reauth_hold_docker_test.go`, whose fake
+  serves TLS.
+
+  Still NOT driven on this walk, each with its own reason:
+
+  | not driven live | why |
+  |---|---|
+  | I6 — a sign-in started BEFORE the request does not resolve it | The kind fake pre-approves every device code permanently, so a login run's capture lands within seconds of the run starting. There is no controllable window in which a sign-in is in flight ACROSS the raise: a login started before the hold has already captured before the hold opens, which prevents the hold instead of racing it. Pinned hermetically by the hold lane's own tests. |
+  | the `not_configured` strip for a member who has signed in before | Nothing in the product deletes a member's stored AWS session, and `DELETE /setup/harness-credential` is operator-only AND scoped to the caller's own subject. The walk asserts it in the one window it exists — before the member's first capture. |
+  | the hold's 401 body reaching the sandbox's SDK | Plain-HTTP lane; see SIMULATED above. |
+  | `awsMount` / bearer Bedrock lanes show no re-auth behaviour | The walk installs one estate (`bedrock_sso` + `per_user`); a second mechanism would need a second install. Pinned hermetically. |
 
   Three gaps the walk does NOT close, closed elsewhere instead:
   - **The walk never extracts the AWS SSO device-authorization URL.**
