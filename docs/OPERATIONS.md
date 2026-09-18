@@ -1814,6 +1814,13 @@ revokes every unrevoked token that principal holds — a token is their session 
 another form. The `all` arm is deployment-wide for tokens too: EVERY live token
 goes, the calling admin's own included — plan to re-mint after a global revoke.
 
+**Registered SSH keys are separate.** An API token can register one through
+`wardyn ssh-key ensure`. Neither deleting the token nor revoking sessions
+removes that key, and key deletion does not disconnect an established SSH
+connection. For incident response or offboarding, also follow
+[SSH access revocation](SSH.md#revoking-access-during-an-incident): remove the
+key registrations and terminate affected runs when existing access must end.
+
 **Name them by either identity.** `--sub` takes the OIDC `sub` **or** the email,
 and both halves of the revoke honour both — the session cutoff and the token
 sweep — so you do not have to know which one your IdP made authoritative. This
@@ -1835,7 +1842,7 @@ admin/member gate and capability grants all resolve to the owning human — so a
 member's token reaches exactly the routes their session reaches, and no more. A
 token is **never** the admin identity: minting one requires a verified SSO human,
 so neither the admin token nor local mode can mint one, and a token cannot mint a
-successor.
+second API token.
 
 Only `hex(sha256(token))` is stored, so a lost token is re-minted, never
 recovered, and a database reader (a reporting role, a hot standby, a `pg_dump` in

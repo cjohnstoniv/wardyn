@@ -1030,6 +1030,15 @@ hiding them would repeat the failure mode we are designed to avoid.
     with its own reason string). No in-place role-update endpoint exists; the
     re-register path is still immediate.
 
+    **Session/token revocation does not revoke SSH keys.** The supported
+    `wardyn ssh-key ensure` workflow may register a key using a per-user API
+    token. The registration has no link to that token's later revocation, and
+    `sshAuth` does not consult the session cutoff. The owner check has no role
+    TTL. Removing a key stops subsequent authentications but does not disconnect
+    established SSH connections, whose new channels remain usable while the
+    run is running. See [SSH incident response](../docs/SSH.md#revoking-access-during-an-incident)
+    for separate key removal and affected-run termination.
+
 16. **SSH key fingerprint squatting has no self-service remediation.** The
     `ssh_public_keys.fingerprint` primary key is GLOBAL by design — a key must
     authenticate to exactly one principal — so whoever `POST`s a public key FIRST

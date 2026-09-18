@@ -79,6 +79,36 @@ The freed fingerprint can then be re-registered by anyone — including,
 again, whoever squatted it — so pair this with actually identifying who the
 key belongs to, not just running the query.
 
+### Revoking access during an incident
+
+Registered SSH keys are independent credentials. A per-user API token can
+register one through `wardyn ssh-key ensure`; revoking that token, or running
+`wardyn sessions revoke --sub '<subject-or-email>'` (including its `--all`
+alternative), does **not** remove the key or prevent SSH authentication with
+it. The SSH gateway does not consult the session-revocation cutoff.
+`WARDYN_SSH_ROLE_TTL` bounds only the admin override, not access to runs the
+key's principal owns.
+
+Alongside the [session and API-token revocation procedure](OPERATIONS.md#per-user-api-tokens-stop-sharing-the-admin-token):
+
+- Prevent further sign-in or key registration through the deployment's
+  identity/access controls when offboarding or containing a compromised account.
+- Inspect the person's registered keys. `wardyn ssh-key list --json` lists
+  only the caller's keys; the owner can remove them in **Account → SSH keys**
+  or with `DELETE /api/v1/me/ssh-keys/{fingerprint}`. Percent-encode the
+  fingerprint as one path segment. There is no `ssh-key delete` command and
+  no admin API for another person's keys; an operator with database access
+  must identify that principal's keys and remove their registrations directly,
+  as in [the fingerprint-removal example](#reclaiming-a-squatted-fingerprint).
+- End access to affected sandboxes with `wardyn run kill <run-id>` and verify
+  teardown succeeded. Deleting a key prevents subsequent authentications;
+  it does not disconnect an already-authenticated SSH connection or stop it
+  opening more channels into the same running sandbox. Include foreign runs
+  reached through an admin override when determining which runs are affected.
+
+The `ssh_key.add`, `ssh_key.delete`, and `ssh.auth` events help identify the
+registered keys and accessed runs; see [Audit actions](AUDIT-ACTIONS.md).
+
 ## 2. Connect
 
 The run detail page's "Attach from your terminal" card shows the exact
