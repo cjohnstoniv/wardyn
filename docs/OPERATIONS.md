@@ -3931,9 +3931,9 @@ hold does — on expiry the call fails with the AWS `UnauthorizedException` it w
 Both container runners forward it from wardynd's environment into every proxy sidecar, and the
 compose stack forwards it from the operator's shell into wardynd. A docker-gated measurement against
 the reference agent's own SDK (`wardyn/agent-claude-code`) found it still waiting on a parked
-credential exchange at eleven minutes — the test's own ceiling, not the SDK's, retrying roughly every
-30 s — so the 600 s default is the binding constraint, not that SDK; a less patient SDK is what the
-"lower it" advice above is for.
+credential exchange at eleven minutes — the test's own ceiling, not the SDK's — having made 28
+`GetRoleCredentials` calls in that window, roughly every 30 s. So the 600 s default is the binding
+constraint, not that SDK; a less patient SDK is what the "lower it" advice above is for.
 
 **The PENDING row outlives the hold, deliberately.** When the budget ends, the model call fails and
 the row stays PENDING — the sign-in is still wanted, and the next run needs it too. So a PENDING
