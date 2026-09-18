@@ -110,6 +110,17 @@ RELEASE="wardyn"
 # The org default disk budget step 4b declares (MiB). Any positive size puts the
 # walk's runs on the scratch volumes; 2 GiB is comfortably more than either writes.
 DISK_MIB=2048
+# THE KILL-SWITCH POSTURE IS SET EXPLICITLY, EVERY WALK (W6-I SHOULD-4).
+# `--reuse-values` carries whatever the last upgrade left, so an out-of-band
+# diagnostic `off` (which is exactly how walk-4 was run) leaks silently into
+# every later walk — and with only the two 0.7.5 spec files the `off` posture is
+# GREEN, so a release walk could certify the posture nobody ships. Only case K
+# discriminates, and only if it runs. Default `on` = the daemon's own default =
+# what a release must certify; override for a diagnostic run and the record says
+# so. Set HERE, with the other configuration, so the provenance record can print
+# it before the upgrade that applies it.
+PROXY_INJECT="${WARDYN_KIND_SSO_PROXY_INJECT:-on}"
+
 HTTP_PORT="${WARDYN_QUICKSTART_HTTP_PORT:-8280}"
 BASE_URL="http://localhost:${HTTP_PORT}"
 
@@ -259,7 +270,7 @@ IMAGES_AGREE=1
   echo "walk tree dirty: $(git -C "${ROOT}" status --porcelain 2>/dev/null | wc -l) file(s)"
   git -C "${ROOT}" status --porcelain 2>/dev/null | head -20 | sed 's/^/                 /'
   echo "rebuilt:         ${WARDYN_KIND_SSO_REBUILD:-0}"
-  echo "proxy inject:    ${PROXY_INJECT:-(set at the helm upgrade below)}"
+  echo "proxy inject:    ${PROXY_INJECT} (intended; read back off the deployment in MANIFEST.json)"
   echo
   printf '%-34s %-72s %-72s %s\n' "image" "host daemon" "node ${KIND_NODE}" "agree"
   for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}" "${AWS_SSO_IMAGE}" "${FAKE_IMAGE}"; do
@@ -332,16 +343,6 @@ CUR_AGENT_IMAGES="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get deploym
 AGENT_IMAGES="$(jq -cn --argjson cur "${CUR_AGENT_IMAGES}" \
   '$cur + {"aws-sso": "wardyn/agent-aws-sso:local"}')" \
   || die "could not extend WARDYN_AGENT_IMAGES (read: ${CUR_AGENT_IMAGES:-<empty>})"
-
-# THE KILL-SWITCH POSTURE IS SET EXPLICITLY, EVERY WALK (W6-I SHOULD-4).
-# `--reuse-values` carries whatever the last upgrade left, so an out-of-band
-# diagnostic `off` (which is exactly how walk-4 was run) leaks silently into
-# every later walk — and with only the two 0.7.5 specs the `off` posture is
-# GREEN, so a release walk could certify the posture nobody ships. Only case K
-# discriminates, and only if it runs. Default `on` = the daemon's own default =
-# what a release must certify; override for a diagnostic run and the record says
-# so.
-PROXY_INJECT="${WARDYN_KIND_SSO_PROXY_INJECT:-on}"
 
 step "pointing wardynd at the fake AWS endpoints (helm upgrade --reuse-values; WARDYN_AWS_SSO_PROXY_INJECT=${PROXY_INJECT})"
 helm --kube-context "${CONTEXT}" upgrade "${RELEASE}" deploy/helm/wardyn \
