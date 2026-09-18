@@ -33,8 +33,8 @@ import (
 // evictedExitCode is what Wait reports at THIS package's boundary when a pod is
 // evicted: internal/runner/k8s/exec.go's terminalExecStatus sees PodFailed with
 // no terminated ephemeral-container status, so the main container's exit is
-// unknown (`ExitCode == nil`) and Wait answers notFoundExitCode (`exec.go:54`,
-// `:211`) with a NIL error — an authoritative, non-zero completion, never a
+// unknown (`ExitCode == nil`) and Wait answers notFoundExitCode (the constant
+// beside terminalExecStatus in exec.go) with a NIL error — an authoritative, non-zero completion, never a
 // probe error. The control plane's only job here is to read non-zero as FAILED
 // rather than invent a COMPLETED, and then run the terminal tail.
 //
