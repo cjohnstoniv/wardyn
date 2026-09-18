@@ -146,7 +146,7 @@ SSO_REGION="us-east-1"
 BEDROCK_MODEL="arn:aws:bedrock:${SSO_REGION}:${PIN_ACCOUNT}:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 SSO_START_URL="https://wardyn-dev.awsapps.com/start"
 
-EVIDENCE_DIR="${WARDYN_KIND_SSO_EVIDENCE:-${ROOT}/local/v075/evidence/kind-sso}"
+EVIDENCE_DIR="${WARDYN_KIND_SSO_EVIDENCE:-${ROOT}/local/v076/evidence/kind-sso}"
 mkdir -p "${EVIDENCE_DIR}"
 
 # ── 1. the cluster and the overlay are up ───────────────────────────────────
@@ -346,6 +346,31 @@ kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout status deployment/postg
   || die "postgres did not come back after the reset"
 kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout restart "deployment/${RELEASE}" >/dev/null \
   || die "could not restart the wardyn deployment"
+# THE FAKE'S TWO TTL KNOBS, and they are the walk's only behavioural setting on
+# it (0.7.6, the credential-reauth hold). Both numbers are load-bearing:
+#
+#   * AWSSSOFAKE_TOKEN_TTL=12m — the hold is reachable only when the INJECTOR
+#     re-resolves, which it does inside injectRefreshMargin (5 min) of the
+#     blob's ExpiresAt. A 12-minute token opens that window at T+7; the fake's
+#     stock one hour would open it at T+55 and the live case would be
+#     unrunnable. It also keeps every existing `live` assertion true: a blob
+#     with a refresh token and an unlapsed client registration (the fake's is 90
+#     days) grades `live` whatever its ACCESS token's TTL — modelaccess.go's
+#     renewable() arm — so nothing on the walk starts reading `expiring`.
+#   * AWSSSOFAKE_ROLE_CRED_TTL=3m — each GetRoleCredentials answer's lifetime,
+#     stamped per call. Short enough that a prompt typed after the window opens
+#     forces a fresh fetch (which is what reaches the injector at all), long
+#     enough that an ordinary turn does not spend itself re-fetching.
+#
+# `set env` writes them onto the Deployment, which rolls it; the restart below
+# is then the ordinary one. Set here rather than in awsssofake.yaml because the
+# manifest is `make kind-sso`'s and serves clusters this walk never runs on.
+step "setting the fake's session TTLs (the hold's live timeline)"
+kubectl --context "${CONTEXT}" -n "${NAMESPACE}" set env "deployment/${FAKE_SVC}" \
+  "AWSSSOFAKE_TOKEN_TTL=${WARDYN_KIND_SSO_TOKEN_TTL:-12m}" \
+  "AWSSSOFAKE_ROLE_CRED_TTL=${WARDYN_KIND_SSO_ROLE_CRED_TTL:-3m}" >/dev/null \
+  || die "could not set the fake's TTL knobs"
+
 # THE FAKE TOO, and for a third reason beyond the two above: /_seen is a
 # CUMULATIVE observable (the role-credential pair last minted, the call count,
 # the set of models). Left running across walks it carries the PREVIOUS walk's
@@ -526,11 +551,15 @@ export WARDYN_LIVE_KUBE_CONTEXT="${CONTEXT}"
 # that was there all along, one namespace over.
 export WARDYN_LIVE_KUBE_NAMESPACE="${RUNS_NAMESPACE}"
 export WARDYN_LIVE_KUBE_NODE="${KIND_NODE}"
-# BOTH specs, ONE invocation: run-ui-e2e.sh runs them sequentially against this
+# THREE specs, ONE invocation: run-ui-e2e.sh runs them sequentially against this
 # one cluster, and sso-member-recovery.spec.ts inherits the state
 # sso-member.spec.ts leaves (a `live` member under the contradicting pin, and
 # the Dex principals). Order is the argument order — never sort these.
-./scripts/run-ui-e2e.sh sso-member sso-member-recovery 2>&1 | tee "${EVIDENCE_DIR}/walk.log"
+# sso-reauth-hold.spec.ts is LAST: its case K spends about ten minutes of wall
+# clock waiting for the injector's own re-resolve window, and every case in it
+# makes its own capture, so nothing after it should depend on which session the
+# member is holding.
+./scripts/run-ui-e2e.sh sso-member sso-member-recovery sso-reauth-hold 2>&1 | tee "${EVIDENCE_DIR}/walk.log"
 walk_rc="${PIPESTATUS[0]}"
 
 # /_seen is the one observation that is not Wardyn asserting about itself: it is

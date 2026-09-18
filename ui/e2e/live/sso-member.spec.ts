@@ -170,28 +170,19 @@ test("I (model-access-banner): a never-signed-in member is told on every screen,
   await expect(page.getByText(RAIL_MODEL_ACCESS.NOT_SIGNED_IN)).toBeVisible({ timeout: 60_000 });
   await expect(page.getByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeVisible();
   await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true })).toHaveCount(0);
-  // THE FINDING-1 NEGATIVE IS *NOT* ASSERTED HERE, AND THAT IS A REPORTED
-  // FINDING, NOT AN OMISSION (lane e2e-sso-path, W3 REPORT — for the coordinator
-  // and the W6 copy lens).
+  // THE FINDING-1 NEGATIVE, and it is live evidence that came back as a fix.
   //
-  // The plan asserts `RAIL_MODEL_ACCESS.NO_PROVIDER` has count 0 in this state,
-  // on the premise that "`llm_ready` becomes true the moment the ADMIN saves the
-  // roster row, before any member has signed in, so showModelWarning is false
-  // for every member". THE CLUSTER SAYS OTHERWISE, and the source agrees:
-  // `setupBedrock` reads the AWS SSO blob through the caller's OWN per-user
-  // scope (`readAWSSSOBlob(ctx, sso)`), so for a member who has never signed in
-  // there is no blob, `SSOPresent` is false, `Ready` is false, `llmDetail` is
-  // "", `computeLLMReady` is false — and `showModelWarning = isAgent &&
-  // llmReady === false` is TRUE. On 0.7.6 this member therefore reads BOTH
-  // sentences, stacked: the new true one (asserted above) and the old
-  // deployment-level one, which on this deployment is false.
-  //
-  // Neither assertion is honest yet: `toHaveCount(0)` reds a walk over a
-  // pre-existing sentence no 0.7.6 lane changed, and `toHaveCount(1)` would pin
-  // the contradiction as intended. So the case asserts the FIX and leaves the
-  // ruling to the coordinator; the negative IS asserted in
-  // sso-member-recovery.spec.ts's A(rail)+, where the member has a capture and
-  // the plan's premise holds.
+  // Part 1 of this lane could not assert it: `setupBedrock` grades `llm_ready`
+  // through the CALLER's own per-user AWS scope, so a member who has never
+  // signed in reads SSOPresent=false -> Ready=false -> llm_ready=false ->
+  // showModelWarning=true, and the rail stacked "No model provider is
+  // connected" — false on a deployment whose admin row plainly exists — under
+  // the true new sentence. The walk found it, fc8e2860 fixed it (the
+  // per-person line SUPERSEDES the deployment one whenever both would render),
+  // and this is the assertion that keeps it fixed. The deployment sentence
+  // still covers every other no-model-path shape; it simply does not speak
+  // over a more specific true one.
+  await expect(page.getByText(RAIL_MODEL_ACCESS.NO_PROVIDER)).toHaveCount(0);
 
   // (5) THE ONE SUPPRESSION A MEMBER GETS, and the one they deliberately do
   // NOT. Getting Started IS the door, so the strip is withheld there — the card
