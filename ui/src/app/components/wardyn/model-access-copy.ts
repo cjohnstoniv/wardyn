@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import { AGENTS } from "../../lib/workspace-providers-copy";
+
 // The 0.7.6 model-access / re-authentication strings, in their OWN module.
 //
 // Not in wardyn/copy.ts, and that is a rule rather than a preference: copy.ts
@@ -106,3 +108,54 @@ export const MODEL_ACCESS_RUN_DOOR = {
   // visible label stays AGENTS.SIGN_IN_AWS — one spelling of one control.
   SIGN_IN_ARIA: "Sign in to AWS — for this failed run",
 } as const;
+
+// DRAFT (M2 canon pending) — the mid-run re-auth row (Finding 4), ruled by the
+// UX rounds (B2, B3, S6, S8) and Codex #5.
+//
+// THE RULE THESE STRINGS FOLLOW: say what the ROW PROVES, and nothing more. A
+// PENDING credential_reauth row is evidence a sign-in was ASKED FOR. It is not
+// evidence that a request is still parked — the hold may have timed out, the
+// SDK may have disconnected, or the final resolve may have refused a roster
+// drift — and the console has no way to tell. So nothing here promises that a
+// run will continue.
+export const REAUTH_ROW = {
+  // States the need, not the state of the request.
+  label: "AWS sign-in needed",
+  // Both branches, because the console cannot tell which one the person is in.
+  hint: "If a model call is waiting on your sign-in, the run continues after you sign in; if it already failed, relaunch it.",
+  // AGENTS.SIGN_IN_AWS BY REFERENCE, not a second copy of its letters (general
+  // N1): the comment used to claim reuse while the string was retyped, which is
+  // exactly how one control acquires four spellings.
+  action: AGENTS.SIGN_IN_AWS,
+  // The row's button has a name of its own, because a strip can carry several
+  // and "Sign in to AWS" three times is three identical accessible names.
+  ariaLabel: "Sign in to AWS — to resume this run",
+  // The shared lane: a MEMBER's run can raise a request only an admin can
+  // satisfy, so the row states the instruction instead of offering a dead door
+  // (Codex #7 — the audience decides which of the two renders).
+  sharedMemberHint: "This run uses the shared AWS sign-in — ask your admin to sign in again.",
+} as const;
+
+// The strip's heading when every pending row is a re-auth. "approve to let it
+// through" is FALSE here (nobody approves this kind), and so is any sentence
+// claiming the run is paused (Codex #5) — this names the NEED.
+export const REAUTH_HEADING = "AWS sign-in needed — sign in to let this run's model calls through";
+
+// The board card's and the cockpit header's chip. It keeps the COUNT (round-2
+// UX S8): a count-free string would hide a co-pending egress approval, and the
+// person would sign in and watch the run sit there.
+export const waitingReauth = (n: number): string =>
+  n > 1 ? `Waiting for your AWS sign-in · ${n - 1} more waiting` : "Waiting for your AWS sign-in";
+
+// LiveApprovals' toast when a re-auth row leaves PENDING as APPROVED — the
+// person's only "it worked" moment, since the row vanishes on the next 4s poll.
+// Two words, because APPROVED proves the sign-in landed and proves NOTHING
+// about the run (round-2 UX S10, Codex #5): "the run is continuing" would be a
+// claim on forgeable-to-the-console evidence.
+export const REAUTH_SIGNED_IN_TOAST = "Signed in";
+
+// The /approvals card's title for the kind (UX round B3): a request that mints
+// nothing must not be titled "Mint a scoped credential", and the card carries
+// no blast-radius claim. "paused" is the word for PEOPLE; "held" is the wire's
+// (round-2 UX S6).
+export const REAUTH_TITLE = "Sign in to AWS again — this run is paused";

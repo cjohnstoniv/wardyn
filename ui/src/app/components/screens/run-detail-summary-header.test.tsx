@@ -15,6 +15,7 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { SummaryHeader } from "./run-detail-summary-header";
 import { OperatorProvider } from "../wardyn/operator-context";
+import { waitingReauth } from "../wardyn/model-access-copy";
 import type { AgentRun, RunState } from "../../lib/types";
 import { TERMINAL_RUN_STATES } from "../../lib/types";
 import { RUN } from "../wardyn/copy";
@@ -252,6 +253,29 @@ describe("SummaryHeader — the who + what glyph pair", () => {
       </OperatorProvider>,
     );
     expect(glyph()).toHaveAttribute("data-attention", "permission");
+  });
+
+  // Finding 4 — "sandbox held" would send the person looking for an Approve
+  // button that does not exist for this kind. The chip names what they can do,
+  // and KEEPS THE COUNT (round-2 UX S8): a count-free string would hide a
+  // co-pending egress approval, so the person signs in and the run still sits.
+  it("a held run waiting on an AWS sign-in says so, and still counts the others", () => {
+    renderHeader(
+      <OperatorProvider operator>
+        <SummaryHeader
+          run={runningInteractive}
+          terminal={false}
+          pendingApprovalCount={2}
+          sandboxHeld
+          awaitingReauth
+          onKill={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText(waitingReauth(2))).toBeInTheDocument();
+    expect(screen.queryByText(/sandbox held/i)).not.toBeInTheDocument();
+    expect(waitingReauth(2)).toMatch(/1 more waiting/);
+    expect(waitingReauth(1)).toBe("Waiting for your AWS sign-in");
   });
 
   it("a pending approval that is NOT holding the sandbox reads as monitoring, not as a demand", () => {

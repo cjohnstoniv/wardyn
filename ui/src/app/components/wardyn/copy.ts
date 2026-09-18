@@ -141,7 +141,7 @@ export const VIEWER_APPROVAL_BLOCKS_NOTE =
 // Approval blast-radius banners (D1) — every approval kind gets two lines:
 // what you're approving, and the worst realistic outcome. The scope-specific
 // text is filled by the Approvals screen; these are the fixed labels + intents.
-export type ApprovalKind = "tool" | "credential" | "egress";
+export type ApprovalKind = "tool" | "credential" | "egress" | "reauth";
 export const APPROVAL_BANNER_LABEL = {
   what: "What you're approving:",
   blast: "Blast radius:",
@@ -150,6 +150,7 @@ export const APPROVAL_KIND_LABEL: Record<ApprovalKind, string> = {
   tool: "Tool call",
   credential: "Credential",
   egress: "Network egress",
+  reauth: "AWS sign-in",
 };
 
 // The ONE console label for the CANCELLED approval state (the run ended before
@@ -558,6 +559,10 @@ export const WIRE_TO_COPY: Record<WireApprovalKind, ApprovalKind> = {
   credential: "credential",
   egress_domain: "egress",
   tool_call: "tool",
+  // Its OWN kind, not "credential" (UX round B3): mapping it there made
+  // /approvals title the row "Mint a scoped credential" and paint the
+  // blast-radius banner over a request that mints nothing.
+  credential_reauth: "reauth",
 };
 
 // Hoisted from approvals.tsx (kept out of live-approvals.tsx's own module,

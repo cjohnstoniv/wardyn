@@ -19,6 +19,7 @@ import { Button } from "../ui/button";
 import { AgentBadge, Chip, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
 import { RunStateGlyph } from "../wardyn/run-state-glyph";
 import { RUN, RUN_COCKPIT } from "../wardyn/copy";
+import { waitingReauth } from "../wardyn/model-access-copy";
 import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { useOperator, usePrincipal } from "../wardyn/operator-context";
@@ -57,6 +58,7 @@ export function SummaryHeader({
   exitCode,
   pendingApprovalCount = 0,
   sandboxHeld = false,
+  awaitingReauth = false,
   onCopyLink,
   linkCopied = false,
   onKill,
@@ -75,6 +77,12 @@ export function SummaryHeader({
   // decides). Computed by the parent with live-approvals.tsx's own exported
   // isHeld, so this chip and the strip under the terminal can never disagree.
   sandboxHeld?: boolean;
+  // At least one of those pending approvals is a mid-run AWS SIGN-IN request.
+  // It gets its own chip because "sandbox held" sends the person looking for an
+  // Approve button that does not exist for this kind — and because this is the
+  // one hold they can clear themselves. The count rides the sentence (round-2
+  // UX S8), so a co-pending egress approval is not hidden behind the sign-in.
+  awaitingReauth?: boolean;
   // Copy this run's permalink. The old screen had a Copy-link button in a
   // breadcrumb row that the command bar replaced; the affordance survives the
   // row it lived in.
@@ -357,9 +365,11 @@ export function SummaryHeader({
           <Chip tone="warning" className="h-7 max-w-[130px] gap-1">
             <ShieldAlert className="size-3 shrink-0" />
             <span className="block min-w-0 truncate">
-              {sandboxHeld
-                ? RUN_COCKPIT.waitingHeld(pendingApprovalCount)
-                : RUN_COCKPIT.waiting(pendingApprovalCount)}
+              {awaitingReauth
+                ? waitingReauth(pendingApprovalCount)
+                : sandboxHeld
+                  ? RUN_COCKPIT.waitingHeld(pendingApprovalCount)
+                  : RUN_COCKPIT.waiting(pendingApprovalCount)}
             </span>
           </Chip>
         )}

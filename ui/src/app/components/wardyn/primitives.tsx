@@ -316,6 +316,9 @@ const kindTone: Record<ApprovalKind, Tone> = {
   credential: "info",
   egress_domain: "cyan",
   tool_call: "neutral",
+  // Warning, like the other rows that are WAITING on a person — a re-auth
+  // request is a held run, not an informational note.
+  credential_reauth: "warning",
 };
 export function ApprovalKindChip({ kind }: { kind: ApprovalKind }) {
   const tone = metaFor(kindTone, kind as string, "neutral" as Tone);

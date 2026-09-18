@@ -34,6 +34,7 @@ import { AgentBadge, ConfinementChip, RunStateBadge } from "../../wardyn/primiti
 import { RunStateGlyph } from "../../wardyn/run-state-glyph";
 import { KillRunDialog } from "../../wardyn/kill-run-dialog";
 import { RUN, RUN_COCKPIT } from "../../wardyn/copy";
+import { waitingReauth } from "../../wardyn/model-access-copy";
 import { Mono } from "../../wardyn/code-block";
 import { cn } from "../../ui/utils";
 import { repoLabel, rowHeadline, runAttention, shortId, signalsFor, type RunSignals } from "./board-groups";
@@ -214,7 +215,11 @@ export function RunCard({
             state was three words of noise on every attention card. */}
         {s.pending > 0 && (
           <span className="whitespace-nowrap text-warning">
-            {s.held ? RUN_COCKPIT.waitingHeld(s.pending) : RUN_COCKPIT.waiting(s.pending)}
+            {s.reauth
+              ? waitingReauth(s.pending)
+              : s.held
+                ? RUN_COCKPIT.waitingHeld(s.pending)
+                : RUN_COCKPIT.waiting(s.pending)}
           </span>
         )}
         <span className="ml-auto flex items-center gap-2.5">

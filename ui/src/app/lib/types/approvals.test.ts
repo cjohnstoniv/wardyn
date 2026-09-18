@@ -44,3 +44,21 @@ describe("decisionArgs", () => {
     ]);
   });
 });
+
+describe("canDecideApproval — the re-auth kind", () => {
+  it("is decidable by NOBODY, security operator included", () => {
+    // It is resolved by its owner signing in, and the server answers 409 to an
+    // approve or a deny (decide()'s rule 3b). A Deny would read as an act of
+    // governance and change nothing: findPendingDup matches PENDING only, so
+    // the sidecar's very next resolve would raise a fresh row.
+    expect(canDecideApproval(true, "credential_reauth")).toBe(false);
+    expect(canDecideApproval(false, "credential_reauth")).toBe(false);
+  });
+
+  it("leaves every other kind exactly as it was", () => {
+    expect(canDecideApproval(false, "egress_domain")).toBe(true);
+    expect(canDecideApproval(false, "credential")).toBe(false);
+    expect(canDecideApproval(true, "credential")).toBe(true);
+    expect(canDecideApproval(true, "tool_call")).toBe(true);
+  });
+});

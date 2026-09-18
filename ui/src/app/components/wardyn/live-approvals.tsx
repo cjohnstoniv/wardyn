@@ -21,6 +21,8 @@ import * as React from "react";
 import { ShieldAlert, Clock, Check, ChevronDown, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 import { canDecideApproval, decisionArgs, type ApprovalRequest, type ApprovalScope } from "../../lib/types";
+import { REAUTH_ROW, REAUTH_HEADING, REAUTH_SIGNED_IN_TOAST } from "./model-access-copy";
+import { useModelAccessDoor, useClaimModelAccessDoor } from "./model-access-context";
 import { approvals as api } from "../../lib/api/approvals";
 import { getErrorMessage } from "../../lib/format";
 import { usePoll } from "../../lib/use-poll";
@@ -40,7 +42,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "../ui/dr
 import { cn } from "../ui/utils";
 import { Mono } from "./code-block";
 import { Chip, SectionLabel } from "./primitives";
-import { useSecurityOperator } from "./operator-context";
+import { useOperator, useSecurityOperator } from "./operator-context";
 import { attentionRank } from "./run-state-glyph";
 import {
   ALWAYS_NEEDS_WORKSPACE,
@@ -101,6 +103,11 @@ const HOLD_TIMEOUT_MS = 30_000;
 // holding the sandbox" while the sandbox is, in fact, held.
 export function isHeld(a: ApprovalRequest): boolean {
   if (a.kind === "tool_call") return true;
+  // A credential_reauth row is raised BECAUSE the proxy is holding a request.
+  // It carries no first_use mode of its own — the mode vocabulary belongs to
+  // the egress lane — so without this it would read as a passive pending and
+  // the run would show no hold while a model call was parked.
+  if (a.kind === "credential_reauth") return true;
   if (String((a.requested_scope?.mode as string) ?? "") !== "wait_for_review") return false;
   const requestedAt = Date.parse(a.requested_at);
   if (Number.isNaN(requestedAt)) return true; // unparseable timestamp — fail toward showing the hold
@@ -111,6 +118,9 @@ export function isHeld(a: ApprovalRequest): boolean {
 // and its command for a tool hold. The full string is the Mono title; clip()
 // keeps the strip one line tall (the Approvals screen renders the whole scope).
 function rowLabel(a: ApprovalRequest): string {
+  // A re-auth row has no host and no tool: its scope is an identity. The label
+  // states the NEED, which is all the row proves.
+  if (a.kind === "credential_reauth") return REAUTH_ROW.label;
   if (a.kind !== "tool_call") return String((a.requested_scope?.host as string) ?? "unknown host");
   const parts = [a.requested_scope?.tool, a.requested_scope?.cmd]
     .map((v) => (typeof v === "string" ? v.trim() : ""))
@@ -199,6 +209,9 @@ export function LiveApprovals({
   const [pollError, setPollError] = React.useState(false);
   // The strip caps at STRIP_ROWS; this is the operator asking for the rest.
   const [showAll, setShowAll] = React.useState(false);
+  // A REF, not `pending`: refresh is a usePoll callback, and putting state in
+  // its dependency list would rebuild the poll on every tick that changed a row.
+  const lastReauthIDs = React.useRef<string[]>([]);
 
   const refresh = React.useCallback(async () => {
     try {
@@ -224,6 +237,31 @@ export function LiveApprovals({
       // there would be a regression. Those route via the run detail's "Waiting
       // for your confirmation" banner to the Approvals screen's kind-aware
       // card instead.
+      // THE ONE "IT WORKED" MOMENT for a re-auth row. The row simply VANISHES
+      // from the PENDING list on the next 4s poll — whether the person signed
+      // in, the run ended, or the 24h sweeper aged it out — so without this the
+      // person who just completed a device flow sees nothing at all.
+      //
+      // It says "Signed in" and NOTHING MORE (round-2 UX S10, Codex #5):
+      // APPROVED proves the sign-in landed and proves nothing about the run —
+      // the hold may have timed out first, the SDK may have disconnected, or
+      // the final resolve may have refused a roster drift. A "the run is
+      // continuing" here would be a claim on evidence the console does not have.
+      //
+      // Only APPROVED toasts: a CANCELLED row (the run ended) or an EXPIRED one
+      // is not a success, and the cockpit already says the run ended.
+      const vanishedReauth = lastReauthIDs.current.filter((id) => !all.some((a) => a.id === id));
+      lastReauthIDs.current = all.filter((a) => a.kind === "credential_reauth").map((a) => a.id);
+      if (vanishedReauth.length > 0) {
+        try {
+          const approved = await api.listApprovals("APPROVED", runId);
+          if (approved.some((a) => vanishedReauth.includes(a.id))) {
+            toast.success(REAUTH_SIGNED_IN_TOAST);
+          }
+        } catch {
+          // A failed read is not a reason to claim anything happened.
+        }
+      }
       setPending(
         all.filter(
           // run_id is a belt-and-braces no-op now that the fetch above carries
@@ -233,6 +271,11 @@ export function LiveApprovals({
             a.run_id === runId &&
             (a.kind === "egress_domain" ||
               a.kind === "tool_call" ||
+              // credential_reauth is raised MID-RUN, about THIS run's own model
+              // credential, and the surface the person is already watching is
+              // where the sign-in belongs — the same
+              // decision-visible-where-it-happens rule the rows above follow.
+              a.kind === "credential_reauth" ||
               (a.kind === "credential" && credentialKind(a.requested_scope) === "api_key")),
         ),
       );
@@ -312,11 +355,17 @@ export function LiveApprovals({
   const anyHeld = pending.some(isHeld);
   // Never claim "egress" over a set that holds a tool call, and never claim
   // "held" over one nothing is waiting on.
-  const heading = anyHeld
-    ? "Sandbox is waiting — approve to let it through"
-    : pending.every((a) => a.kind === "egress_domain")
-      ? "Approval needed — off-policy egress"
-      : "Approval needed — the agent is waiting on you";
+  // THE THREE SENTENCES THAT ARE FALSE FOR A RE-AUTH ROW (UX round B2).
+  // "approve to let it through" names a decision nobody makes for this kind;
+  // when every pending row is one, the heading names the need instead.
+  const allReauth = pending.length > 0 && pending.every((a) => a.kind === "credential_reauth");
+  const heading = allReauth
+    ? REAUTH_HEADING
+    : anyHeld
+      ? "Sandbox is waiting — approve to let it through"
+      : pending.every((a) => a.kind === "egress_domain")
+        ? "Approval needed — off-policy egress"
+        : "Approval needed — the agent is waiting on you";
 
   return (
     <div
@@ -332,7 +381,14 @@ export function LiveApprovals({
             over a strip the viewer can, in fact, act on. Inlined rather than
             OperatorOnlyHint (primitives.tsx): the gate here is
             isSecurityOperator, not isOperator — X3-F6. */}
-        {!securityOperator && pending.some((a) => !canDecideApproval(securityOperator, a.kind)) && (
+        {!securityOperator &&
+          pending.some(
+            // The re-auth kind is EXCLUDED: "requires the admin role" is false
+            // of a row the admin cannot decide either (canDecideApproval is
+            // false for it on every tier), and the person it is addressed to is
+            // the one who can fix it.
+            (a) => a.kind !== "credential_reauth" && !canDecideApproval(securityOperator, a.kind),
+          ) && (
           <span className="ml-auto text-meta font-normal normal-case text-muted-foreground">
             {SECURITY_ONLY_REASON}
           </span>
@@ -344,6 +400,9 @@ export function LiveApprovals({
         // Only egress decisions carry a scope (decide rule 4) — see decide().
         const scoped = a.kind === "egress_domain";
         const telemetry = scoped && isKnownTelemetryHost(label);
+        if (a.kind === "credential_reauth") {
+          return <ReauthRow key={a.id} request={a} />;
+        }
         return (
           <div key={a.id} className="flex items-center gap-2" data-testid="live-approval-row">
             {held ? (
@@ -623,5 +682,57 @@ function ScopeMenu({
         )}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/**
+ * ReauthRow — the strip's row for a mid-run AWS sign-in request.
+ *
+ * It is a DOOR, not a decision (UX round B2): the Approve/Deny pair is REMOVED
+ * for this kind, not disabled — a disabled pair would say "an admin can do
+ * this", and no tier can. The row's one control opens the SAME dialog the
+ * global strip and the New Run rail open, so a person never learns two ways to
+ * sign in to AWS.
+ *
+ * While it renders that control it CLAIMS the door (round-2 UX B1 / the
+ * one-primary-recovery-action-per-state-per-screen rule): the global strip
+ * keeps its sentence and drops its button on this page, so the cockpit offers
+ * exactly one place to press.
+ *
+ * On the SHARED lane a member's run can raise a request only an admin can
+ * satisfy, so an operator gets the door and a member gets the instruction —
+ * never a button the server would refuse (Codex #7, risk (d)).
+ */
+function ReauthRow({ request }: { request: ApprovalRequest }) {
+  const door = useModelAccessDoor();
+  const operator = useOperator();
+  const shared = String((request.requested_scope?.credential_source as string) ?? "") === "shared";
+  // A member under a SHARED row cannot repair this; nobody should claim the
+  // door for a control they are not rendering.
+  const canAct = operator || !shared;
+  useClaimModelAccessDoor(canAct);
+  return (
+    <div className="flex items-center gap-2" data-testid="live-approval-row">
+      <Clock className="size-3.5 shrink-0 text-warning" aria-label="request held live" />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <Mono className="text-foreground" title={REAUTH_ROW.label}>
+          {REAUTH_ROW.label}
+        </Mono>
+        <span className="text-meta font-normal normal-case text-muted-foreground">
+          {canAct ? REAUTH_ROW.hint : REAUTH_ROW.sharedMemberHint}
+        </span>
+      </div>
+      {canAct && (
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 shrink-0"
+          aria-label={REAUTH_ROW.ariaLabel}
+          onClick={() => door.openDoor()}
+        >
+          {REAUTH_ROW.action}
+        </Button>
+      )}
+    </div>
   );
 }

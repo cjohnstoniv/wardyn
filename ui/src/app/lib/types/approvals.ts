@@ -4,7 +4,11 @@
  */
 
 // Approval requests — human-gated credential/egress/tool decisions.
-export type ApprovalKind = "credential" | "egress_domain" | "tool_call";
+// credential_reauth (0.7.6): the run's OWN model credential lapsed mid-run and
+// the proxy is holding its next credential exchange while the credential's
+// owner signs in again. It is a REQUEST, never a decision — see
+// canDecideApproval below and internal/types/types.go ApprovalCredentialReauth.
+export type ApprovalKind = "credential" | "egress_domain" | "tool_call" | "credential_reauth";
 
 // CANCELLED is the terminal state a run's own end writes: the run reached
 // COMPLETED/FAILED/STOPPED/KILLED while this approval was still PENDING, so
@@ -61,6 +65,13 @@ export interface ApprovalRequest {
 // getRunAuthorized gate), so ownership is a precondition of the row existing
 // at all, not something this predicate needs to re-check.
 export function canDecideApproval(operator: boolean, kind: ApprovalKind): boolean {
+  // credential_reauth is NOT DECIDABLE BY ANYONE, security operator included:
+  // it is resolved by its owner signing in, and the server answers 409 to an
+  // approve or a deny (decide()'s rule 3b). A Deny would read as an act of
+  // governance and change nothing — findPendingDup matches PENDING only, so
+  // the sidecar's next resolve would raise a fresh row. The console renders a
+  // door for this kind instead of an Approve/Deny pair.
+  if (kind === "credential_reauth") return false;
   return operator || kind === "egress_domain";
 }
 

@@ -41,6 +41,8 @@ import { JsonBlock } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { ReasonDialog } from "../wardyn/reason-dialog";
+import { REAUTH_ROW, REAUTH_TITLE } from "../wardyn/model-access-copy";
+import { useClaimModelAccessDoor, useModelAccessDoor } from "../wardyn/model-access-context";
 import { useOperator, useRole, useSecurityOperator } from "../wardyn/operator-context";
 import {
   APPROVAL,
@@ -151,6 +153,11 @@ function deriveTitle(kind: ApprovalKind, scope: Scope): string {
       const cmd = str(scope, "cmd", "command", "tool");
       return cmd ? `Run ${cmd}` : "Run a tool call";
     }
+    // The re-auth request is not a mint and not a decision (UX round B3):
+    // mapping it to "credential" titled it "Mint a scoped credential" and
+    // painted a blast-radius banner over a row that grants nothing.
+    case "credential_reauth":
+      return REAUTH_TITLE;
     default:
       return kindLabel(kind);
   }
@@ -177,6 +184,12 @@ interface Banner {
 function deriveBanner(kind: ApprovalKind, scope: Scope): Banner {
   const ttl = ttlPhrase(scope);
   switch (kind) {
+    // NO BLAST RADIUS, because nothing is granted: this row asks its owner to
+    // sign in again to a credential the deployment already configured. The
+    // "what" states the need and the both-branches hint the row's own copy
+    // carries — never a promise that a run will continue (Codex #5).
+    case "credential_reauth":
+      return { what: REAUTH_ROW.label + ".", blast: REAUTH_ROW.hint };
     case "egress_domain": {
       const host = str(scope, "host", "domain");
       // egressBlastRadius (copy.ts) is scope-aware — honesty rule: "we only
@@ -562,8 +575,17 @@ function PendingCard({
         <p className="text-foreground">
           <span className="font-semibold">{APPROVAL_BANNER_LABEL.what}</span> {banner.what}
         </p>
+        {/* NO BLAST RADIUS for a re-auth request (UX ruling B3, general S4):
+            the row grants nothing — it asks its owner to sign in again to a
+            credential the deployment already configured — and "Blast radius:"
+            over the row's own both-branches hint claimed a capability that does
+            not exist. The hint still renders; only the label that made it a
+            capability claim is gone. */}
         <p className="text-muted-foreground">
-          <span className="font-semibold text-foreground/80">{APPROVAL_BANNER_LABEL.blast}</span> {banner.blast}
+          {item.kind !== "credential_reauth" && (
+            <span className="font-semibold text-foreground/80">{APPROVAL_BANNER_LABEL.blast}</span>
+          )}{" "}
+          {banner.blast}
         </p>
         {item.minted_jti && (
           <p className="pt-0.5 font-mono text-xs text-muted-foreground">minted jti: {item.minted_jti}</p>
@@ -596,6 +618,13 @@ function PendingCard({
         {runEnded ? (
           <p className="max-w-[72ch] text-xs text-muted-foreground">{APPROVAL.CANCELLED_BODY}</p>
         ) : (
+          item.kind === "credential_reauth" ? (
+          /* A DOOR, NOT A DECISION (UX round B3). The pair is REMOVED, not
+             disabled: a disabled Approve reads as "an admin can do this", and
+             no tier can — the server answers 409 to either verb. The one
+             control opens the same dialog every other sign-in surface opens. */
+          <ReauthAction />
+        ) : (
           <>
             <Button size="sm" variant="info" onClick={() => onAct("approve")} disabled={!canDecide}>
               <Check className="size-4" /> Approve
@@ -612,6 +641,7 @@ function PendingCard({
               <Chip tone="neutral">{hostUngranted ? DENIED.APPROVE_CHIP : SECURITY_ONLY_REASON}</Chip>
             )}
           </>
+          )
         )}
         <span className="ml-auto text-xs text-muted-foreground" title={item.requested_at}>
           requested {relativeTime(item.requested_at)}
@@ -670,3 +700,23 @@ function DecidedRow({ item }: { item: ApprovalRequest }) {
   );
 }
 
+
+/**
+ * ReauthAction — the /approvals card's control for a mid-run AWS sign-in
+ * request: ONE button, opening the same dialog every other sign-in surface
+ * opens, and claiming the door while it renders so the global strip drops its
+ * own button on this page.
+ *
+ * No Approve, no Deny, no disabled pair: the server answers 409 to either verb
+ * (decide()'s rule 3b), and a disabled control would name a role that could
+ * decide it — none can.
+ */
+function ReauthAction() {
+  const door = useModelAccessDoor();
+  useClaimModelAccessDoor(true);
+  return (
+    <Button size="sm" variant="info" aria-label={REAUTH_ROW.ariaLabel} onClick={() => door.openDoor()}>
+      {REAUTH_ROW.action}
+    </Button>
+  );
+}
