@@ -262,8 +262,8 @@ runtime acceptance.
 The 0.7.6 campaign ran four blind reviewers over rows R076-001..024 (A security/proxy/CLI, B console, C docs/release,
 D open candidates; per-patch evidence at `local/v076/evidence/patch-review/{A,B,C,D,SELECTION}.md` in the campaign's
 `~/wt-v076` worktree) answering, per row: real issue? right fix? include in 0.7.6? The owner accepted every INCLUDE
-and deferred/rejected the rest. Rows R076-025..028 landed after those reviewers read the ledger; batch E is reviewing
-them now and this table is amended when it reports. Application: code/console picks are cherry-picked individually
+and deferred/rejected the rest. Rows R076-025..028 landed after those reviewers read the ledger; batch E (evidence at
+`local/v076/evidence/patch-review/E.md`) reviewed them and the owner's ruling covers them too. Application: code/console picks are cherry-picked individually
 (`-x`) onto `lane/v0.7.6-patches` from `feature/0.7.6`; docs picks go through the 0.7.6 docs lane with their own
 same-commit window-0 re-cites; never the umbrella integration branches.
 
@@ -293,10 +293,10 @@ same-commit window-0 re-cites; never the umbrella integration branches.
 | R076-022 | REJECT | its OPERATIONS.md value is off by +2 on the 0.7.6 tree and the drift set is 7 not 5; the 0.7.6 docs lane re-derives every citation from the window-0 guard per commit |
 | R076-023 | INCLUDE + Known gap | `18fb91fd`; absolute symlinks INSIDE the root now refuse (replay 500 / list degrades); hard links still read; NFS untested |
 | R076-024 | INCLUDE | `f6e787a5` (the official patch; batch B had judged the same hunk before it was committed) with sheet.tsx:61→63 re-cited |
-| R076-025 | under review (batch E) | |
-| R076-026 | under review (batch E) | |
-| R076-027 | under review (batch E) | |
-| R076-028 | under review (batch E) | candidate |
+| R076-025 | INCLUDE + changelog note | `2307b07c`; low (shared `.part` inode / pre-existing-file follow); exports become owner-only 0600 on Linux (drvfs ignores it) |
+| R076-026 | INCLUDE + changelog note | `f5fbb166`; low-medium; one compat change: a file ending in a bare `---` is now rejected |
+| R076-027 | INCLUDE | `0bb4699b`; mechanism real, low in production (the proxy forwards a `bytes.Reader`); audit re-cite 125→119 verified |
+| R076-028 | INCLUDE as a 3-line fix | reproduced at base and tip; unlink the owned `.tmp-cast-*` on the rename error path + a test, applied by the 0.7.6 patches lane (no ledger commit) |
 
 ## Open findings, not implemented
 
