@@ -136,6 +136,24 @@ kill switch, sequenced last — see Known gaps.
   makes that explicit: the shared-dead state is audience-aware — the admin gets the sign-in that
   repairs it, a member gets the instruction and no button.
 
+### From the 0.7.x readiness review
+
+Independent documentation/security-lane patches from the owner's separate `review/0.7x-ledger`
+readiness campaign, cherry-picked individually onto this release (`local/review-0.7.x/PATCH-LEDGER.md`
+is the full ledger; none is a schema, API, configured-cap, deployment-requirement or
+enforcement-default change).
+
+- Keep contributor UI commands at repository root.
+- Clarify automated conformance versus manual live acceptance gates.
+- Select a patch version before preparing and validating its release.
+- Correct when OIDC email-verification restrictions are enforced.
+- Explain how a mismatched age key can prevent restored daemon startup.
+- Describe SSH shell masking and recording retention accurately.
+
+**PLACEHOLDER — pass 3b, lane `patches` (`canon/patches-code.md`).** The readiness review's
+code/console picks (R076-005, -009, -017, -018+-024, -021, -023) and their two Known-gaps sentences
+land here verbatim from that lane's own canon.
+
 ### Known gaps
 
 - **Finding 4 (a mid-run credential lapse holding the run instead of killing it) ships behind
