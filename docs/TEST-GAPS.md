@@ -87,11 +87,13 @@ per-PR run has." Classified by package (no cluster here to prove it).
 
 ### Manual cluster lanes no coverage profile can see at all
 
-No workflow runs these, and `-coverpkg` never observes them — not even as the
-K8S-gated bucket above, since they exercise code far beyond
-`internal/runner/k8s`. Listed here so the k8s surface is not read as
-untouched. All three self-skip without `WARDYN_TEST_K8S=1`; a green result is
-evidence only for the tip somebody actually ran it on.
+No workflow runs the first two, and `-coverpkg` never observes any of the
+three — not even as the K8S-gated bucket above, since they exercise code far
+beyond `internal/runner/k8s`. Listed here so the k8s surface is not read as
+untouched. `make test-conformance-k8s` is the exception: CI runs it on kind +
+Calico (the `conformance-k8s` job, busybox conformance-agent image, runc
+only) — the other two self-skip without `WARDYN_TEST_K8S=1` and a green
+result for them is evidence only for the tip somebody actually ran it on.
 
 - `scripts/kind-sso-walk.sh` — **the AWS SSO walk** (0.7.4). Two Dex principals
   on a kind cluster, the containerized `aws sso login` against an on-cluster
@@ -131,8 +133,10 @@ evidence only for the tip somebody actually ran it on.
   other than pre-approved.
 
   **0.7.6.** The walk now runs THREE spec files in one invocation against one
-  cluster, on images rebuilt from the commit under test, and covers six of
-  0.7.6's eight findings end to end:
+  cluster, on images rebuilt from the commit under test, and is written to
+  cover five of 0.7.6's eight findings end to end (1, 2, 3, 4, 6 — findings 5,
+  7 and 8 are proven elsewhere, see below); three of the five (1, 2, 6) have
+  passed on it, at tip `f78bd744`:
 
   - **the model-access strip, first-run** (`sso-member.spec.ts`, case I) — a
     member who has never signed in sees the sentence and the sign-in on the
@@ -239,7 +243,7 @@ modules on the Runs board (`runs/run-card.tsx`, `runs/board-groups.ts`) imported
 boundary, one of them a pre-existing edge that had been costing the entry chunk 15.7 kB since before
 this release. Fixing both left the entry 7,794 B smaller than the base, so the budget was not raised.
 
-The gap is the SCHEDULE, not the assertion: the guard works, nothing routine runs it. Either the
-per-lane vitest recipe in COMMON.md names `bundle-split.test.ts` explicitly, or the integration pass
-owns it as a merge gate. Until one of those is written down, a lane can be green on its own files and
-red on the tip through no fault it could have seen.
+The gap is the SCHEDULE, not the assertion: the guard works, nothing routine runs it. It needs an
+explicit home — a per-change vitest recipe that names `bundle-split.test.ts`, or a merge-time gate —
+neither of which exists yet. Until one does, a change can be green on its own files and red on the
+tip through no fault it could have seen.

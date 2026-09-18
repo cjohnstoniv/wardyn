@@ -13,25 +13,29 @@ AWS SSO working and running a Claude Code agent — into eight findings. This re
 them; the eighth (a mid-run credential lapse holding the run instead of killing it) ships behind a
 kill switch, sequenced last — see Known gaps.
 
+<!-- W7: re-verify against walk-6/MANIFEST.json -->
 Verified on the kind AWS SSO walk against images rebuilt from the commit under
-test, in three spec files and one cluster: a never-signed-in member is told on
-the Runs board and on New Run (findings 2 and 1), a lapsed member signs in from
-the strip itself without leaving the page or reloading it, a start held
-unscheduled names scheduling rather than a pull and a start on an unpullable
-image ends in seconds with the registry's own words (finding 6), a session
-retired at the portal mid-run HOLDS the model call and the SAME run continues
-after the sign-in (finding 4), and a dispatch refused over the model credential
-carries the sign-in on the run's own page (finding 3). Each walk carries a
-`MANIFEST.json` naming the git SHA and the five image digests as the NODE holds
-them.
+test: a never-signed-in member is told on the Runs board and on New Run
+(findings 2 and 1), a lapsed member signs in from the strip itself without
+leaving the page or reloading it, and a start held unscheduled names
+scheduling rather than a pull while a start on an unpullable image ends in
+seconds with the registry's own words (finding 6) — all passed on the walk
+(tip `f78bd744`, `MANIFEST.json` present). The walk's third spec file
+exercises a session retired at the portal mid-run HOLDing the model call with
+the SAME run continuing after the sign-in (finding 4), and a dispatch refused
+over the model credential carrying the sign-in on the run's own page
+(finding 3); neither has yet passed a walk on this release's tip.
 
 ### Added
 
 - **A global model-access banner.** An actionable model-access state — not signed in, lapsed, or
   lapsing within 24 h — now rides a strip on every screen, in focus mode and on the run cockpit,
-  carrying the sign-in itself in a dialog; a lapse cannot be dismissed, the first-run state and a
-  dead shared credential can be set aside for the session. Suppressed on Getting Started and
-  Settings, which already mount the sign-in. Read once per session plus a 5-minute
+  carrying the sign-in itself in a dialog; a lapse cannot be dismissed, and the first-run state and —
+  for a non-operator — a dead shared credential can be set aside for the session (an operator's own
+  dead shared credential is actionable and undismissable: their sign-in is the repair). Suppressed on
+  Getting Started, which is the door itself; withheld on Settings and Providers for an OPERATOR only,
+  since those pages already mount the same sign-in for them — a member keeps the strip there, because
+  the Settings card's AWS button is admin-only. Read once per session plus a 5-minute
   visibility-aware poll; no new endpoint; one new wire field, `deadline`. (Finding 2.)
 - **A run refused for a model credential now offers the sign-in, not directions to it.** The dispatch
   refusal's audit row carries `reason: model_credential` (and the run's declared `mechanism`), the
@@ -83,6 +87,8 @@ them.
   (`on` | `off`) — `off` restores the 0.7.5 behaviour for new dispatches.
   (Migration `0064_approval_credential_reauth` adds the approval kind; a
   downgrade to 0.7.5 with such rows present is unsupported.)
+<!-- PASS 4b: canon/ui-w6-fixes.md line -->
+<!-- PASS 4b: hold fix-pass-3 canon (legacy no-roster; injection pinned to the snapshot's account/role; plaintext-inside-tunnel client leg) -->
 
 ### Fixed
 
@@ -91,8 +97,9 @@ them.
   member who had never signed in filled in the whole form and was refused at the click, and the one
   sentence that would have warned them said *"No model provider is connected"*, which on that
   deployment is false. The rail now reads `model_access` when the selected agent is the one it grades
-  and states which of the four per-person states the launcher is in, in the server's own words. The
-  deployment-level warning is unchanged. (Finding 1.)
+  and states, in its own words, which of the four per-person states the launcher is in — carrying the
+  server's own action text alongside only where it says something the sentence and button cannot (a
+  pin-contradicted account/role pair). The deployment-level warning is unchanged. (Finding 1.)
 - **Signing in opens its own tab.** The tab is opened on the click that starts the sign-in — the only
   user gesture in the flow — and navigated to the verification page when it appears, so browsers no
   longer block it. If your browser blocks it anyway, the link on the panel still works and now says so.
@@ -152,8 +159,8 @@ them.
 
 Independent documentation/security-lane patches from the owner's separate `review/0.7x-ledger`
 readiness campaign, cherry-picked individually onto this release (`local/review-0.7.x/PATCH-LEDGER.md`
-is the full ledger; none is a schema, API, configured-cap, deployment-requirement or
-enforcement-default change).
+is the full ledger; none is a schema, API, configured-cap or deployment-requirement change, and one
+tightens an existing input check — see below).
 
 - Keep contributor UI commands at repository root.
 - Clarify automated conformance versus manual live acceptance gates.
@@ -161,6 +168,9 @@ enforcement-default change).
 - Correct when OIDC email-verification restrictions are enforced.
 - Explain how a mismatched age key can prevent restored daemon startup.
 - Describe SSH shell masking and recording retention accurately.
+- Document SSH key removal and run shutdown separately from token revocation.
+- Preserve undrained audit fallback state during backup and recovery.
+- Document the console's existing reduced-motion support.
 - Correct the recording pane's permission hint to include security admins.
 - Reject oversized brokered uploads instead of forwarding truncated data.
 - Prevent multiline and aliased Compose credentials from leaking in
@@ -187,7 +197,7 @@ enforcement-default change).
   against the reference agent's own SDK found it still waiting on a parked credential exchange at
   eleven minutes — the test's own ceiling, not the SDK's — so the 600 s default hold is the binding
   constraint, not the SDK; the docker-gated resume test
-  (`TestDocker_TheSameRunResumesWhenTheHoldReleases`) is written and runs in W4 on the release tip.
+  (`TestDocker_TheSameRunResumesWhenTheHoldReleases`) has run green on this release's tip (22 s).
   The live kind SSO walk found that Phase B's TLS-MITM entry for the portal host could not serve a
   plain-HTTP SSO endpoint (`WARDYN_AWS_SSO_ENDPOINT_OVERRIDE`, the kind test estate's own posture):
   terminating the CONNECT is mandatory — the sandbox holds only an inert placeholder, so the real
@@ -214,13 +224,6 @@ enforcement-default change).
   the capture itself still lands.** The sign-in opened from the model-access strip is unaffected —
   its pane outlives a route change and ends the sandbox once the server confirms the capture. There
   is no CLI sign-in path.
-- **The stale-capture guard (I6) compares two clocks.** A re-auth request's `requested_at` is
-  stamped on wardynd's clock; a login run's `created_at` is normalised to Postgres's. A database
-  clock running ahead therefore admits a sign-in started up to that skew before the request was
-  raised. Both clocks are on the same deployment (the skew is NTP drift, not an attacker input) and
-  the case needs a login sandbox already alive under the same principal, so the window is narrow —
-  but it is real, and closing it means re-timing `approvals.requested_at` for every kind, a
-  shared-column change and not this lane's to make. 0.7.7.
 - **A sticky terminal hold still costs one control-plane resolve per retry.** Once a hold has ended,
   the sidecar cannot know which approval id a later 423 names without asking, so each post-expiry
   retry makes one injection resolve — a broker mint and a `credential.mint` audit row — before the
@@ -261,7 +264,9 @@ enforcement-default change).
   document separator.
 - A member under a dead SHARED model credential is told, and has nothing to do about it: Wardyn
   offers no way to notify the admin from that strip. The sentence names the admin because they are
-  the only repair; "Not now" is the only control the member gets.
+  the only repair; "Not now" is the only control the member gets. The wire cannot distinguish "never
+  captured" from "captured and now dead" for a `shared` row, so the same "no longer works — sign in
+  again" sentence renders for both, including to the admin who never signed in at all.
 - The §7.4 frozen copy table (`docs/design/workspace-providers-prompt.md`) and its byte-parity twin
   `PROVIDER_MEMBER.LLM_MECHANISM_DEAD` still spell the single, admin-only destination. Nothing renders
   that key today and the Go sentence it mirrors already differed from it, but the table is canon: the
