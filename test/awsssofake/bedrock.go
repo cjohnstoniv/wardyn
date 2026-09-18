@@ -39,6 +39,15 @@ const bedrockStubBody = `{"output":{"message":{"role":"assistant","content":[{"t
 // data plane that way. The model id is read back off the path — it is what
 // proves the run carried the operator's configured model (and, via its ARN, the
 // pinned account) all the way to the data plane.
+// BedrockCalls is how many model calls the stub has answered — the
+// in-process counterpart of /_seen's bedrock_calls, for a test that holds the
+// Server rather than driving a pod.
+func (s *Server) BedrockCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bedrockCalls
+}
+
 func (s *Server) handleBedrockRuntime(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.NotFound(w, r)

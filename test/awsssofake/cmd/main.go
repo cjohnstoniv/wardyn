@@ -24,6 +24,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,6 +39,17 @@ func main() {
 	// be settable from the same place the manifest sets everything else.
 	accounts := flag.String("accounts", envOr("AWSSSOFAKE_ACCOUNTS", ""),
 		`entitlement fixture as JSON, e.g. [{"account_id":"222222222222","roles":["WardynDev"]}] (empty = the package default, one account 111111111111/AdministratorAccess)`)
+	// The 0.7.6 re-auth knobs. Durations, so a manifest can say "12m" rather
+	// than a second unit nobody can read back.
+	tokenTTL := flag.Duration("token-ttl", envDuration("AWSSSOFAKE_TOKEN_TTL"),
+		"lifetime CreateToken advertises for the access token (0 = the 3600s default). 12m is what the mid-run re-auth walk uses: the hold is reachable only when the proxy re-resolves, inside injectRefreshMargin of expiry")
+	roleCredTTL := flag.Duration("role-cred-ttl", envDuration("AWSSSOFAKE_ROLE_CRED_TTL"),
+		"lifetime of each GetRoleCredentials answer, stamped PER CALL (0 = one absolute expiry fixed at construction). 3m is what the walk uses: it makes the sandbox SDK re-call portal.sso at roughly T+3/6/9")
+	reauthAfter := flag.Int("reauth-after", envInt("AWSSSOFAKE_REAUTH_AFTER"),
+		"retire the session on the Nth REFRESH redemption: CreateToken then answers invalid_grant, the shape a consumed grant really has (0 = never). Also settable at runtime: POST /_control/reauth?after=N")
+	tlsCert := flag.String("tls-cert", envOr("AWSSSOFAKE_TLS_CERT", ""),
+		"serve HTTPS with this certificate (PEM). With -tls-key, it makes the fake's lane PRODUCTION-SHAPED: a TLS CONNECT the proxy terminates, so header injection, CA trust and the timeout body are exercised instead of simulated")
+	tlsKey := flag.String("tls-key", envOr("AWSSSOFAKE_TLS_KEY", ""), "private key (PEM) for -tls-cert")
 	flag.Parse()
 
 	s, h := awsssofake.NewHandler()
@@ -67,16 +79,52 @@ func main() {
 	// Nothing here is deciding anything security-relevant: an unsigned fake that
 	// mints fixture credentials has no approval to withhold.
 	s.Approve()
+	s.SetTokenTTL(*tokenTTL)
+	s.SetRoleCredTTL(*roleCredTTL)
+	s.SetReauthAfter(*reauthAfter)
 
 	srv := &http.Server{
 		Addr:              *addr,
 		Handler:           h,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	// TLS when the operator supplied a pair, because the PLAINTEXT lane cannot
+	// prove the production shape: injection errors are swallowed on the plain
+	// forward lane (the SDK sees the fake's own 401), so the timeout's 401
+	// UnauthorizedException body and the MITM path that writes it are only
+	// exercised over a TLS CONNECT the proxy terminates.
+	if *tlsCert != "" || *tlsKey != "" {
+		if *tlsCert == "" || *tlsKey == "" {
+			log.Fatalf("awsssofake: -tls-cert and -tls-key must be given together")
+		}
+		log.Printf("awsssofake: serving sso-oidc + sso portal + bedrock-runtime stub over TLS on %s", *addr)
+		if err := srv.ListenAndServeTLS(*tlsCert, *tlsKey); err != nil {
+			log.Fatalf("awsssofake: %v", err)
+		}
+		return
+	}
 	log.Printf("awsssofake: serving sso-oidc + sso portal + bedrock-runtime stub on %s", *addr)
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("awsssofake: %v", err)
 	}
+}
+
+// envDuration reads a duration knob; an unparseable value is 0 (the default),
+// because a test fake must not refuse to start over a typo in a manifest.
+func envDuration(key string) time.Duration {
+	d, err := time.ParseDuration(os.Getenv(key))
+	if err != nil || d < 0 {
+		return 0
+	}
+	return d
+}
+
+func envInt(key string) int {
+	n, err := strconv.Atoi(os.Getenv(key))
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
 }
 
 func envOr(key, def string) string {
