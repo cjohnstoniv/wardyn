@@ -94,16 +94,18 @@ func installDaemonProxy(tr *http.Transport, rawURL, noProxy string, autoBypass .
 	return u.String(), nil
 }
 
-// installBootTransport is run()'s single call site for both
-// http.DefaultTransport mutations (installTrustedCA, WARDYN_DAEMON_PROXY_URL)
-// — extracted so run() itself stays at ONE branch here (the error check)
-// instead of two (the type assertion's `ok` plus the proxy error), keeping it
-// under the gocyclo ratchet its doc comment already claims ("Low branching...
-// just long"). A DefaultTransport that is not a *http.Transport (never true
-// in this binary; only a test could swap it) is a silent no-op, matching
-// installTrustedCA's own existing behavior.
-func installBootTransport(trustedCAPool *x509.CertPool, f *bootFlags) error {
-	tr, ok := http.DefaultTransport.(*http.Transport)
+// installBootTransport is run()'s single call site for both transport
+// mutations (installTrustedCA, WARDYN_DAEMON_PROXY_URL) — extracted so run()
+// itself stays at ONE branch here (the error check) instead of two (the type
+// assertion's `ok` plus the proxy error), keeping it under the gocyclo
+// ratchet its doc comment already claims ("Low branching... just long"). rt
+// is http.DefaultTransport, passed in rather than read directly so a test can
+// drive both the *http.Transport and non-Transport paths without touching
+// process-global state. A DefaultTransport that is not a *http.Transport
+// (never true in this binary) is a silent no-op, matching installTrustedCA's
+// own existing behavior.
+func installBootTransport(rt http.RoundTripper, trustedCAPool *x509.CertPool, f *bootFlags) error {
+	tr, ok := rt.(*http.Transport)
 	if !ok {
 		return nil
 	}

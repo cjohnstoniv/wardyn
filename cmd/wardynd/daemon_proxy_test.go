@@ -4,6 +4,8 @@
 package main
 
 import (
+	"bytes"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -153,6 +155,98 @@ func TestInstallDaemonProxy_GarbageRefusesBoot(t *testing.T) {
 		}
 	}
 }
+
+// testBootFlags builds a *bootFlags carrying only the fields
+// bootDaemonProxy/installBootTransport read — same construction pattern as
+// bedrock_plaintext_warn_test.go's capture helper.
+func testBootFlags(proxyURL, noProxy, ssoOverride, oidcInternalIss string) *bootFlags {
+	return &bootFlags{
+		daemonProxyURL:         &proxyURL,
+		daemonNoProxy:          &noProxy,
+		awsSSOEndpointOverride: &ssoOverride,
+		oidcInternalIss:        &oidcInternalIss,
+	}
+}
+
+func TestBootDaemonProxy_UnsetIsNoop(t *testing.T) {
+	tr := freshTransport()
+	before := tr.Proxy
+	f := testBootFlags("", "", "", "")
+	if err := bootDaemonProxy(tr, f); err != nil {
+		t.Fatalf("bootDaemonProxy(unset): %v", err)
+	}
+	if !reflectSameFunc(before, tr.Proxy) {
+		t.Fatal("bootDaemonProxy reassigned tr.Proxy on an unset WARDYN_DAEMON_PROXY_URL")
+	}
+}
+
+func TestBootDaemonProxy_ConfiguredWiresAndLogsBypassList(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	tr := freshTransport()
+	f := testBootFlags("http://proxy.corp.example:3128", "internal.example", "http://wardyn-awsssofake:8090", "http://dex:5556")
+	if err := bootDaemonProxy(tr, f); err != nil {
+		t.Fatalf("bootDaemonProxy: %v", err)
+	}
+
+	// Wired: an external host is proxied, the SSO override host is not.
+	got, err := tr.Proxy(&http.Request{URL: mustParseURL(t, "https://sso-oidc.us-east-1.amazonaws.com/token")})
+	if err != nil || got == nil || got.Host != "proxy.corp.example:3128" {
+		t.Fatalf("Proxy(external) = %v, %v, want the configured proxy", got, err)
+	}
+	if got, _ := tr.Proxy(&http.Request{URL: mustParseURL(t, "http://wardyn-awsssofake:8090/token")}); got != nil {
+		t.Fatalf("Proxy(sso override host) = %v, want nil (auto-bypassed)", got)
+	}
+
+	// Logged: the proxy host and every bypass entry, never a raw credential
+	// (there is none here, but the log must still name what it bypassed).
+	logged := buf.String()
+	for _, want := range []string{"proxy.corp.example:3128", "internal.example", "wardyn-awsssofake", "dex"} {
+		if !strings.Contains(logged, want) {
+			t.Fatalf("boot log %q missing %q", logged, want)
+		}
+	}
+}
+
+func TestInstallBootTransport_NonTransportIsNoop(t *testing.T) {
+	f := testBootFlags("http://proxy.corp.example:3128", "", "", "")
+	if err := installBootTransport(stubRoundTripper{}, nil, f); err != nil {
+		t.Fatalf("installBootTransport(non-*http.Transport): %v, want nil (silent no-op)", err)
+	}
+}
+
+func TestInstallBootTransport_WiresTrustedCAAndProxy(t *testing.T) {
+	tr := freshTransport()
+	f := testBootFlags("http://proxy.corp.example:3128", "", "", "")
+	if err := installBootTransport(tr, nil, f); err != nil {
+		t.Fatalf("installBootTransport: %v", err)
+	}
+	if tr.Proxy == nil {
+		t.Fatal("tr.Proxy is nil, want installDaemonProxy to have wired it")
+	}
+	got, err := tr.Proxy(&http.Request{URL: mustParseURL(t, "https://sso-oidc.us-east-1.amazonaws.com/token")})
+	if err != nil || got == nil || got.Host != "proxy.corp.example:3128" {
+		t.Fatalf("Proxy(external) = %v, %v, want the configured proxy", got, err)
+	}
+}
+
+func TestInstallBootTransport_MalformedProxyRefusesBoot(t *testing.T) {
+	tr := freshTransport()
+	f := testBootFlags("not a url at all", "", "", "")
+	if err := installBootTransport(tr, nil, f); err == nil {
+		t.Fatal("installBootTransport(malformed proxy) succeeded, want a refusal")
+	}
+}
+
+// stubRoundTripper is a http.RoundTripper that is deliberately NOT a
+// *http.Transport, proving installBootTransport's type-assertion no-op path
+// without touching the process-global http.DefaultTransport.
+type stubRoundTripper struct{}
+
+func (stubRoundTripper) RoundTrip(*http.Request) (*http.Response, error) { return nil, nil }
 
 func mustParseURL(t *testing.T, raw string) *url.URL {
 	t.Helper()

@@ -19,6 +19,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"os/user"
@@ -155,7 +156,7 @@ func run() error {
 	// installTrustedCA + WARDYN_DAEMON_PROXY_URL, both mutating the shared
 	// http.DefaultTransport in place — see installBootTransport (kept out of
 	// run() itself, which is deliberately low-branching per its doc comment).
-	if err := installBootTransport(trustedCAPool, f); err != nil {
+	if err := installBootTransport(http.DefaultTransport, trustedCAPool, f); err != nil {
 		return err
 	}
 	// (Validated before the DB connect on purpose: a typo'd path fails in
