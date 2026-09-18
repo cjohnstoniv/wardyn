@@ -150,6 +150,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 				return nil, err
 			}
 			s.projectRecordingMeta(r, runs)
+			projectStatusDetail(runs)
 			return runs, nil
 		}, nil)
 		return
@@ -162,6 +163,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 				return nil, err
 			}
 			s.projectRecordingMeta(r, runs)
+			projectStatusDetail(runs)
 			return runs, nil
 		}
 	}
@@ -171,6 +173,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 			return nil, err
 		}
 		s.projectRecordingMeta(r, runs)
+		projectStatusDetail(runs)
 		return runs, nil
 	})
 }
@@ -191,6 +194,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	// a single run's own detail read must agree with what the list showed.
 	runs := []types.AgentRun{run}
 	s.projectRecordingMeta(r, runs)
+	projectStatusDetail(runs)
 	run = runs[0]
 	// ui_apps is a READ-ONLY denormalization of the run's EFFECTIVE policy onto
 	// the run payload — the console's UI-apps lane needs it, and the run row

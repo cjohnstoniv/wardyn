@@ -267,6 +267,23 @@ func (s PG) SetRunFailureHint(ctx context.Context, id uuid.UUID, hint string) er
 		`UPDATE agent_runs SET failure_hint=$1, updated_at=now() WHERE id=$2`, hint, id)
 }
 
+// SetRunStatusDetail scoped-writes ONLY the status_detail column — what the
+// substrate says a STARTING run is waiting on, in its own words (migration
+// 0063). Fed by runner.SandboxSpec.OnWaiting from inside CreateSandbox, once per
+// CHANGE of reason.
+//
+// IT DOES NOT BUMP updated_at, and that is load-bearing rather than an
+// oversight. agent_runs.updated_at is the clock the idle reaper measures
+// idleness by AND the clock the killed-run tail-upload grace is measured from
+// (see TouchRun, which exists to bump it, and api/internal_live_run.go). A
+// diagnostic line the kubelet triggers must never buy a run more life or hold a
+// terminal run's upload door open — so this write is invisible to both.
+// Best-effort at the call site; ErrNotFound when no row matched.
+func (s PG) SetRunStatusDetail(ctx context.Context, id uuid.UUID, detail string) error {
+	return s.execRun(ctx, "set run status detail",
+		`UPDATE agent_runs SET status_detail=$1 WHERE id=$2`, detail, id)
+}
+
 // TouchRun bumps a run's updated_at to now() without changing any other field.
 // It is the activity keepalive the interactive-attach handler calls so the idle
 // reaper (which measures idleness by agent_runs.updated_at) does not stop a run
@@ -302,7 +319,7 @@ func (s PG) TouchRun(ctx context.Context, id uuid.UUID) error {
 // (SetRunFailureHint) rather than by CreateRun is visible as exactly that, and
 // a column appended to runInsertCols reaches both lists at once.
 const runInsertCols = `id, created_at, updated_at, created_by, agent, repo, task, policy_id, confinement_class, state, spiffe_id, runner_target, sandbox_ref, interactive, workspace_path, workspace_id, source_id, image, auto_stop_after_sec, agent_exec_id, title, description, workspace_ids`
-const runCols = runInsertCols + `, failure_hint`
+const runCols = runInsertCols + `, failure_hint, status_detail`
 
 // scanRun is the ONE reader for runCols, which is now the ONE spelling of the
 // agent_runs column list. A new column is APPENDED to runInsertCols (or to
@@ -317,7 +334,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 		&r.ID, &r.CreatedAt, &r.UpdatedAt, &r.CreatedBy, &r.Agent, &r.Repo, &r.Task,
 		&r.PolicyID, &cc, &state,
 		&r.SPIFFEID, &r.RunnerTarget, &r.SandboxRef, &r.Interactive, &r.WorkspacePath, &r.WorkspaceID, &r.SourceID, &r.Image, &r.AutoStopAfterSec,
-		&r.AgentExecID, &r.Title, &r.Description, &r.WorkspaceIDs, &r.FailureHint,
+		&r.AgentExecID, &r.Title, &r.Description, &r.WorkspaceIDs, &r.FailureHint, &r.StatusDetail,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return types.AgentRun{}, ErrNotFound

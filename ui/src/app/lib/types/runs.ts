@@ -130,6 +130,23 @@ export interface AgentRun {
   // any non-FAILED run. Distinct from RecordRun.failure_hint in
   // ./workspaces.ts (a different failure arm on a different resource).
   failure_hint?: string;
+  // What the SUBSTRATE says this run is waiting on while it is STARTING, in the
+  // substrate's own "<component>: <Reason>[: <message>]" words
+  // ("agent: ImagePullBackOff: …", "pod: Unschedulable: …",
+  // "image: Pulling: <ref>") — internal/types/types.go's AgentRun.StatusDetail,
+  // migration 0063. The server BLANKS it for any run that is not STARTING,
+  // except a run that FAILED on a terminal reason (where the reason is the
+  // failure), so the console may render it whenever it is present without
+  // re-checking the state. Absent from a pre-0.7.6 daemon — every reader treats
+  // absence as "no reason to show", never as an error.
+  status_detail?: string;
+  // The bare reason token out of status_detail ("ContainerCreating",
+  // "ImagePullBackOff", "Unschedulable", "Pulling", "Pending"…), DERIVED at read
+  // and never stored — internal/api/runs_status_detail.go's projectStatusDetail.
+  // Read THIS to decide (is it terminal? which sentence?) and status_detail only
+  // for the platform's own message; parseStatusDetail falls back to parsing the
+  // string when a pre-0.7.6 daemon sends no token.
+  status_reason?: string;
 }
 
 // ============================================================

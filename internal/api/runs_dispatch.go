@@ -521,6 +521,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// no dependency on sb.Ref), so moving it earlier is safe.
 	s.stampRunWatcherLease(ctx, run.ID)
 
+	// What the substrate says it is waiting on, while it is still waiting —
+	// runStatusDetailWriter's doc has the contract and the reason the deadline
+	// is on each write rather than on the whole create.
+	spec.OnWaiting = s.runStatusDetailWriter(ctx, run.ID)
+
 	sb, err := s.cfg.Runner.CreateSandbox(ctx, spec)
 	if err != nil {
 		// Conditional: only mark FAILED if still STARTING. A kill landing between the

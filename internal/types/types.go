@@ -209,6 +209,32 @@ type AgentRun struct {
 	// carries its exit code instead, and success/terminal-by-kill carry nothing).
 	// Display-only; never interpreted by the control plane.
 	FailureHint string `json:"failure_hint,omitempty"`
+	// StatusDetail is what the SUBSTRATE says this run is waiting on while it is
+	// STARTING, in the substrate's own words — the
+	// `<component>: <Reason>[: <message>]` shape the kubelet's container status,
+	// the scheduler's PodScheduled condition and docker's first pull all render
+	// into ("agent: ImagePullBackOff: …", "pod: Unschedulable: …", "image:
+	// Pulling: <ref>"). Written from inside CreateSandbox (migration 0063,
+	// runner.SandboxSpec.OnWaiting), once per CHANGE of reason, because the whole
+	// STARTING window happens before the run has a sandbox_ref and nothing
+	// outside the driver can ask a substrate anything.
+	//
+	// DISPLAY-ONLY, and never interpreted by the control plane: it is whatever
+	// the platform said. It is also never CLEARED by a write — the read path
+	// blanks it for any run that is not STARTING (except a run that FAILED on a
+	// TERMINAL reason, where the reason IS the failure and a reader that missed
+	// the last STARTING poll would otherwise see a reason-less FAILED badge), so
+	// the last reason survives on the row for a postmortem without the console
+	// ever narrating a finished run's old wait.
+	StatusDetail string `json:"status_detail,omitempty"`
+	// StatusReason is the bare reason token out of StatusDetail
+	// (`ContainerCreating`, `ImagePullBackOff`, `Unschedulable`, `Pulling`,
+	// `Pending`…) — DERIVED at read and never stored, the same way HasRecording
+	// and its two siblings below are. It exists so that everything which is not a
+	// person (metrics, the live specs, later automation) reasons on a token while
+	// the console owns the sentence; the raw StatusDetail stays on the wire
+	// because only it carries the registry's or the scheduler's own message.
+	StatusReason string `json:"status_reason,omitempty"`
 	// HasRecording, RecordingBytes and RecordingDurationSec (R4-F077) are
 	// DERIVED, never stored: projected by handleListRuns/handleGetRun from
 	// RecordingStore.StatAndTail(id) after the store read — but ONLY when the

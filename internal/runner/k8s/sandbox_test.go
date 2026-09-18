@@ -11,7 +11,9 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1185,7 +1187,7 @@ func TestWaitContainerRunning_TimeoutNamesTheUnboundClaim(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	err := d.waitContainerRunning(ctx, pod.Name, mainContainerName)
+	err := d.waitContainerRunning(ctx, pod.Name, mainContainerName, nil)
 	if err == nil {
 		t.Fatal("waitContainerRunning: want a timeout on a pod that never starts")
 	}
@@ -1400,5 +1402,87 @@ func TestCreateSandbox_ProxyPodCarriesNoUnsetKnob(t *testing.T) {
 	if n := len(proxyPod.Spec.Containers[0].Env); n != 3 {
 		t.Errorf("proxy pod carries %d env vars, want the 3 it always has: %+v",
 			n, proxyPod.Spec.Containers[0].Env)
+	}
+}
+
+// TestWaitContainerRunning_OnWaitingFiresOncePerReasonChange pins finding 6's
+// write budget at the seam that produces it. The poll runs every 200ms for up
+// to canaryWaitTimeout, and the callback it feeds does a scoped UPDATE — so a
+// callback that fires per TICK is ~5 writes a second for three minutes on a
+// diagnostic nobody reads twice. It must fire on a CHANGE of reason and nothing
+// else: once for the whole ContainerCreating stretch, again the moment the
+// kubelet's answer actually changes.
+func TestWaitContainerRunning_OnWaitingFiresOncePerReasonChange(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	const podName = "wardyn-agent-reason-change"
+	// Five ticks of ContainerCreating, then ImagePullBackOff — which
+	// waitContainerRunning already treats as terminal, so the poll ends itself.
+	var gets atomic.Int32
+	cs.PrependReactor("get", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		ga, ok := action.(clienttesting.GetAction)
+		if !ok || ga.GetName() != podName {
+			return false, nil, nil
+		}
+		state := corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}}
+		if gets.Add(1) > 5 {
+			state = corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+				Reason: "ImagePullBackOff", Message: "rpc error: pull access denied",
+			}}
+		}
+		return true, &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: action.GetNamespace()},
+			Status: corev1.PodStatus{
+				Phase:             corev1.PodPending,
+				ContainerStatuses: []corev1.ContainerStatus{{Name: mainContainerName, State: state}},
+			},
+		}, nil
+	})
+
+	var seen []string
+	err := d.waitContainerRunning(context.Background(), podName, mainContainerName, func(detail string) {
+		seen = append(seen, detail)
+	})
+	if err == nil {
+		t.Fatal("waitContainerRunning: want the terminal ImagePullBackOff error")
+	}
+	want := []string{"agent: ContainerCreating", "agent: ImagePullBackOff: rpc error: pull access denied"}
+	if !slices.Equal(seen, want) {
+		t.Fatalf("OnWaiting calls = %q, want exactly %q — one per CHANGE, never one per tick", seen, want)
+	}
+}
+
+// TestWaitPodIP_ReportsTheProxyPodsReason is the other half of the seam: the
+// proxy pod's wait is where an UNSCHEDULABLE cluster is felt first (it is the
+// first pod CreateSandbox blocks on), and live case E's taint manufactures
+// exactly that shape.
+func TestWaitPodIP_ReportsTheProxyPodsReason(t *testing.T) {
+	d, cs := newTestDriver(t, Config{})
+	const podName = "wardyn-proxy-unschedulable"
+	taint := "0/1 nodes are available: 1 node(s) had untolerated taint {wardyn-coldpull: 1}"
+	cs.PrependReactor("get", "pods", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		ga, ok := action.(clienttesting.GetAction)
+		if !ok || ga.GetName() != podName {
+			return false, nil, nil
+		}
+		return true, &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: action.GetNamespace()},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodPending,
+				Conditions: []corev1.PodCondition{{
+					Type: corev1.PodScheduled, Status: corev1.ConditionFalse,
+					Reason: "Unschedulable", Message: taint,
+				}},
+			},
+		}, nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	defer cancel()
+	var seen []string
+	if _, err := d.waitPodIP(ctx, podName, func(detail string) { seen = append(seen, detail) }); err == nil {
+		t.Fatal("waitPodIP: want a timeout on a pod that never gets an IP")
+	}
+	if len(seen) != 1 || !strings.HasPrefix(seen[0], "pod: Unschedulable: ") || !strings.Contains(seen[0], taint) {
+		t.Fatalf("OnWaiting calls = %q, want exactly one carrying the scheduler's own verdict", seen)
 	}
 }

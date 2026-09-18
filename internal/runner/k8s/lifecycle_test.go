@@ -7,6 +7,7 @@ package k8s
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -298,4 +299,55 @@ func TestTeardown_AgentPodAlreadyGoneStillSweepsProxySecretAndNetPols(t *testing
 		t.Fatalf("KillSandbox with the agent pod already gone: %v, want nil", err)
 	}
 	assertRunObjectsGone(t, cs, spec.RunID)
+}
+
+// TestWaitingReason_FallsBackToScheduleCondition is finding 6's fallback: the
+// pod that never got a container status at all. waitingDetail walks
+// ContainerStatuses, so an UNSCHEDULED pod — no node took it, so no kubelet ever
+// wrote one — produced "" and the starting run said nothing, although the
+// scheduler had been explaining itself in the PodScheduled condition the whole
+// time. waitingReason reads that condition back in the same
+// "<component>: <Reason>[: <message>]" shape the container path speaks, so one
+// parser upstream covers both.
+func TestWaitingReason_FallsBackToScheduleCondition(t *testing.T) {
+	taint := "0/1 nodes are available: 1 node(s) had untolerated taint {wardyn-coldpull: 1}"
+	pod := &corev1.Pod{Status: corev1.PodStatus{
+		Phase: corev1.PodPending,
+		Conditions: []corev1.PodCondition{{
+			Type: corev1.PodScheduled, Status: corev1.ConditionFalse,
+			Reason: "Unschedulable", Message: taint,
+		}},
+	}}
+	if got := waitingDetail(pod); got != "" {
+		t.Fatalf("premise: waitingDetail = %q, want \"\" on a pod with no container status", got)
+	}
+	got := waitingReason(pod)
+	if !strings.HasPrefix(got, "pod: Unschedulable: ") {
+		t.Errorf("waitingReason = %q, want it to lead with %q", got, "pod: Unschedulable: ")
+	}
+	if !strings.Contains(got, taint) {
+		t.Errorf("waitingReason = %q, want the scheduler's own message", got)
+	}
+
+	// A container status still wins: it is the more specific answer, and it is
+	// the one the whole vocabulary was built around.
+	withContainer := &corev1.Pod{Status: corev1.PodStatus{
+		Phase: corev1.PodPending,
+		ContainerStatuses: []corev1.ContainerStatus{{
+			Name:  mainContainerName,
+			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}},
+		}},
+	}}
+	if got := waitingReason(withContainer); got != "agent: ContainerCreating" {
+		t.Errorf("waitingReason = %q, want the container's own reason", got)
+	}
+
+	// Scheduled, Pending, nothing else said: still a sentence, never "".
+	scheduled := &corev1.Pod{Status: corev1.PodStatus{
+		Phase:      corev1.PodPending,
+		Conditions: []corev1.PodCondition{{Type: corev1.PodScheduled, Status: corev1.ConditionTrue}},
+	}}
+	if got := waitingReason(scheduled); got != "pod: Pending" {
+		t.Errorf("waitingReason = %q, want %q", got, "pod: Pending")
+	}
 }

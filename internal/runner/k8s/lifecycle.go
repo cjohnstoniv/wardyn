@@ -43,7 +43,7 @@ func statusFromPod(pod *corev1.Pod) runner.Status {
 	switch pod.Status.Phase {
 	case corev1.PodPending:
 		st.State = types.RunStarting
-		st.Message = waitingDetail(pod)
+		st.Message = waitingReason(pod)
 	case corev1.PodRunning:
 		st.State = types.RunRunning
 	case corev1.PodSucceeded:
@@ -56,7 +56,7 @@ func statusFromPod(pod *corev1.Pod) runner.Status {
 		st.Message = failureDetail(pod)
 	default: // PodUnknown, or the phase hasn't been set yet
 		st.State = types.RunStarting
-		st.Message = waitingDetail(pod)
+		st.Message = waitingReason(pod)
 	}
 	return st
 }
@@ -93,6 +93,32 @@ func waitingDetail(pod *corev1.Pod) string {
 		return fmt.Sprintf("%s: %s", cs.Name, w.Reason)
 	}
 	return ""
+}
+
+// waitingReason is what a starting pod is waiting ON, in one line, and unlike
+// waitingDetail it always has an answer. waitingDetail walks ContainerStatuses,
+// so the pod NO NODE TOOK — no kubelet ever wrote one — produced "", which is
+// the case a person is most likely to be staring at: a taint, a full cluster, an
+// unbound claim. The scheduler has been explaining itself the whole time in the
+// PodScheduled condition, in a field nothing read.
+//
+// Same `<component>: <Reason>[: <message>]` shape either way, so one parser
+// upstream covers both; "pod" is the component for a POD-level verdict, since no
+// container is involved in not being scheduled. Never "": a bare "pod: Pending"
+// still says the pod exists and nothing has claimed it yet.
+func waitingReason(pod *corev1.Pod) string {
+	if pod == nil {
+		return ""
+	}
+	if detail := waitingDetail(pod); detail != "" {
+		return detail
+	}
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse {
+			return fmt.Sprintf("pod: %s: %s", c.Reason, c.Message)
+		}
+	}
+	return "pod: Pending"
 }
 
 // A lost node may never publish a container exit; nil keeps reconciliation

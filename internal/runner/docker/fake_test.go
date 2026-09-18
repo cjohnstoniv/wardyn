@@ -89,6 +89,11 @@ type fakeDocker struct {
 	// recorded) so a test can interleave another driver call with an in-flight
 	// create. Called without f.mu held.
 	onCreate func(name string)
+	// onPull, when set, runs INSIDE ImagePull so a test can prove the "this is
+	// downloading" report reached the caller BEFORE the call that blocks rather
+	// than after it, which is the whole value of the report. Called without
+	// f.mu held.
+	onPull func(ref string)
 	// execInspectErrs / waitErrs make the next N ExecInspect / ContainerWait
 	// probes fail with a transient (non-not-found) error, modelling a daemon blip.
 	execInspectErrs int
@@ -189,6 +194,9 @@ func (f *fakeDocker) ImageList(ctx context.Context, _ client.ImageListOptions) (
 }
 
 func (f *fakeDocker) ImagePull(ctx context.Context, ref string, _ client.ImagePullOptions) (client.ImagePullResponse, error) {
+	if f.onPull != nil {
+		f.onPull(ref)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.failImagePull {

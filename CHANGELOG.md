@@ -8,6 +8,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- **A run that is slow to start now says what it is waiting on.** The kubelet's
+  own reason (pulling an image, waiting for a node, a reference that will not
+  pull) reaches the run header, the Runs board and the sign-in pane, and a
+  terminal reason ends the wait immediately instead of after five minutes. The
+  sign-in pane no longer grades a start purely on a clock.
+  (`0063_agent_runs_status_detail` adds the `agent_runs.status_detail` column the
+  substrate's reason is written to; it is blanked at read for any run that is not
+  STARTING, except a run that FAILED on a terminal reason.)
+
 ## [0.7.5] — 2026-09-17
 
 ### Added

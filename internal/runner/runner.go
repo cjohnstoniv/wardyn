@@ -147,11 +147,38 @@ type SandboxSpec struct {
 	// (DriveTarget) with the given mode; the Docker driver still converts it to
 	// a Mount internally so the deny matrix runs on the host path.
 	Drive *types.DriveMount
+	// OnWaiting, when non-nil, reports WHY this sandbox is not up yet, in the
+	// substrate's own `<component>: <Reason>[: <message>]` words ("agent:
+	// ImagePullBackOff: …", "pod: Unschedulable: …", "image: Pulling: <ref>"),
+	// each time that reason CHANGES. It exists because the whole STARTING window
+	// is spent INSIDE CreateSandbox — there is no sandbox ref yet, so nothing
+	// outside the driver can ask a substrate what it is waiting on — and the
+	// answer is already in the driver's hand, read and discarded once per poll.
+	//
+	// CONTRACT, and the driver relies on every clause of it: called
+	// SYNCHRONOUSLY on CreateSandbox's own goroutine, so an implementation must
+	// not block (wardynd's does one scoped UPDATE under a 500ms deadline and
+	// drops an overdue one); called only while CreateSandbox is still running,
+	// never after it returns; only on a CHANGE, so a 200ms poll costs one call
+	// per distinct reason rather than five a second; DIAGNOSTIC, so a driver
+	// never fails a create because a report could not be delivered. Nil for every
+	// driver-level caller (the conformance suite, cmd/wardyn-runner), which is
+	// why NotifyWaiting rather than the field is what drivers call.
+	OnWaiting func(detail string) `json:"-"`
 	// Interactive marks a run that comes up idle for `wardyn attach` (no task is
 	// exec'd). Drivers use it to prepare the workspace on the idle main process —
 	// e.g. clone the repo into ~/work — so the attach shell isn't empty. A non-
 	// interactive run ignores it (its task exec does the preparation).
 	Interactive bool
+}
+
+// NotifyWaiting delivers one OnWaiting report, or does nothing when this spec
+// carries no callback. Drivers call THIS, never the field: a nil check at each
+// of the four report sites is four chances to forget one.
+func (s SandboxSpec) NotifyWaiting(detail string) {
+	if s.OnWaiting != nil {
+		s.OnWaiting(detail)
+	}
 }
 
 // Mount is one operator/policy-controlled host bind mount into the sandbox.
