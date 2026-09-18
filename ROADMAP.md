@@ -25,6 +25,7 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
 | **v0.7.3** | A second field report from the same estate: the per-user AWS SSO lane can no longer sign with the wrong identity (account/role pinned, enforced at three doors), the Bedrock check texts and admin sign-in door stopped conflating a deployment-wide fact with a per-person credential gap, and the CSRF Origin guard now applies in every mode (below) | **Shipped (pre-alpha)** — `v0.7.3`, 2026-09-15 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.7.4** | **Governance hardening over the whole surface a member or an operator's identity touches.** Per-run credential residency and revocation, the five findings of the 0.7.3 field report plus the owner's two testability asks, a kind-provable AWS SSO test path, an admin's own "view as member", and a repo-wide review campaign's fixes across the runner substrate, the egress proxy and the console (below) | **Shipped (pre-alpha)** — `v0.7.4`, 2026-09-16 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.7.5** | A third field report from the same private-endpoint Kubernetes estate (Entra SSO, one enabled roster row: `claude-code` / `bedrock_sso` / `per_user`): the console stops asserting things that are false on that deployment shape (the New Run rail's credential-residency and Recording claims, the member's "Your model key" card, and Getting Started's lede), an admin can preview the not-signed-in member state, the AWS sign-in sandbox now runs the sign-in itself with every attach path joining it, a slow sign-in start no longer reads as unreadable and a new sign-in supersedes an orphaned one, a rebuilt Claude Code image boots without parking approvals on the CLI's own bootstrap, and on Kubernetes an autonomous run's `/tmp` and `/home/agent/work` are now inside `disk_mib` (narrowed, not closed) (below) | **Shipped (pre-alpha)** — `v0.7.5`, 2026-09-17 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.7.6** | "The facts exist; connect them to the person" — a fourth field report from the same estate: an actionable model-access state now rides a banner on every screen instead of only Getting Started, a run refused for a dead model credential offers the sign-in instead of directions to it, a slow start says what it is waiting on instead of a poll-tick guess, the AWS sign-in tab opens and closes itself, a spent refresh token stops grading `live` for days, and wardynd's own outbound calls (OIDC, AWS SSO renewal, Entra sync) gain a scoped corporate-proxy knob that does not share `HTTPS_PROXY`'s process-wide blast radius; a mid-run credential lapse holding the run instead of killing it ships behind a kill switch (below) | **Shipped (pre-alpha)** — `v0.7.6` (see [CHANGELOG.md](CHANGELOG.md); tag/date filled in by the release lane) |
 
 ### What v0.4 shipped
 
@@ -608,6 +609,56 @@ the four harness defects that kept it red are fixed; and Claude Code's own
 *Bypass Permissions mode* confirmation, which a run launched with "let it use
 tools before I attach" still parks on until a human attaches and answers it.
 
+### What v0.7.6 shipped
+
+Shipped as `v0.7.6`; [CHANGELOG.md](CHANGELOG.md)'s entry is the full list. A
+fourth field report from the same private-endpoint Kubernetes estate
+consolidated one journey — a person getting AWS SSO working and running a
+Claude Code agent — into eight findings: the facts the deployment already
+computes (`model_access`, a starting run's own waiting reason, a dispatch
+refusal's cause) were not reaching the person who needed them. Seven of the
+eight are unconditional below; the eighth ships behind a kill switch.
+
+- **An actionable model-access state now rides a banner on every screen**
+  (finding 2), not only Getting Started — a strip in focus mode and on the run
+  cockpit, carrying the AWS sign-in itself in a dialog. Suppressed only where a
+  page already mounts the same sign-in.
+- **New Run's model warning is about the person, not the deployment**
+  (finding 1): the rail now reads the same per-person `model_access` state the
+  banner does, instead of a deployment-wide fact that was already true the
+  moment an admin saved a `per_user` roster row.
+- **A run refused for a dead model credential now offers the sign-in, not
+  directions to it** (finding 3), on the run page itself, and the refusal's
+  own destination clause now names a door the reader — not just an admin — can
+  open.
+- **A slow start says what it is waiting on** (finding 6): the kubelet's own
+  reason reaches the run header, the Runs board and the sign-in pane, and a
+  terminal reason (an unpullable image, a bad reference) ends the wait in
+  seconds instead of after five minutes of an unexplained clock.
+- **The AWS sign-in tab opens and closes itself** (finding 7): a tab opens on
+  the click that starts the sign-in rather than depending on a later
+  auto-navigation browsers block, and the sign-in panel closes itself the
+  moment the server confirms the session was stored rather than waiting on the
+  sandbox's own message to cross the wire.
+- **A spent AWS SSO refresh token stops grading `live` for days** (finding 5):
+  grading now consults the same in-memory spent-mark the refresher maintains,
+  instead of a registration timestamp a spent token can no longer redeem.
+- **wardynd's own outbound calls gain a scoped corporate-proxy knob**
+  (finding 8), `WARDYN_DAEMON_PROXY_URL`, that does not share `HTTPS_PROXY`'s
+  process-wide blast radius into the Kubernetes client's own API access.
+- **A mid-run AWS SSO credential lapse holds the run instead of killing it**
+  (finding 4) — the one finding shipped behind a kill switch
+  (`WARDYN_AWS_SSO_PROXY_INJECT`, off by default), pending a docker-gated
+  SDK-tolerance measurement and a dedicated security round on the release tip.
+
+What did **not** close this release, and what was deliberately deferred to
+0.7.7 — see the CHANGELOG's "Known gaps" for the full statement of each: the
+§7.4 frozen copy table's admin-only remedy clause, a credentialed-proxy form
+of the daemon proxy knob, the spent-token mark's in-memory (unpersisted)
+posture, the Runs board's group header, and the three items already promised
+after 0.7.5 (the per-person supersede lock, a third Kubernetes cache volume,
+the admin-tier 5xx driver-text sweep) — none bundled into this release (O-1).
+
 ## Planned
 
 Everything below is **planned, unbuilt, and undated**. Where a seam exists but no
@@ -615,7 +666,7 @@ implementation does, [docs/PLUGGABILITY.md](docs/PLUGGABILITY.md) says so per ro
 
 v0.8 is the remaining path to alpha. The cloud base and permissioning 0.6 owed
 are shipped, and so is 0.7's governance and desktop work (above, through
-`v0.7.5`), so what is left below is the alpha RC and beyond.
+`v0.7.6`), so what is left below is the alpha RC and beyond.
 
 **New for 0.8: posture-gated autonomy** — an org-defined rubric mapping a
 sandbox's containment posture (egress reach, secrets present, confinement class)
