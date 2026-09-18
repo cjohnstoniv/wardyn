@@ -296,9 +296,15 @@ func (p *Proxy) forwardBrokeredUpload(w http.ResponseWriter, r *http.Request, pr
 		http.Error(w, "invalid run id", http.StatusNotFound)
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxBody))
+	// Read past the cap to distinguish a complete body from a truncated prefix.
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxBody+1))
 	if err != nil {
 		http.Error(w, readErrMsg, http.StatusBadRequest)
+		return
+	}
+	if int64(len(body)) > maxBody {
+		p.emitLocalDecision(r, egress.Deny, ruleSource, nil)
+		http.Error(w, "upload exceeds size limit", http.StatusRequestEntityTooLarge)
 		return
 	}
 	p.relayControlPlane(w, r, http.MethodPut, cpPathPrefix+id, body,
