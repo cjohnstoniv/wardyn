@@ -281,6 +281,18 @@ export interface SetupModelAccess {
   mechanism?: string;
   // The one thing to do, already composed by the server ("" when nothing).
   action?: string;
+  // The instant `action` names, RFC3339 UTC — the registration's lapse, or the
+  // access token's expiry for a blob that cannot be renewed. ON THE WIRE since
+  // 0.7.6 (in-process only before) for one reason: `expiring`'s sentence
+  // carries a UTC stamp, and the surfaces that now render that state on EVERY
+  // screen for 24 h have to show it on the reader's own clock (relativeTime in
+  // the shell strip and the New Run rail, absoluteTime in the two card rows —
+  // lib/model-access.ts's modelAccessActionLine). Absent for every state that
+  // names no instant, and from a pre-0.7.6 daemon: render `action` verbatim
+  // then. NEVER sent to a member under a `shared` row — memberModelAccess
+  // builds a fresh struct that drops it, which is the leak that projection
+  // exists to close.
+  deadline?: string;
 }
 
 export interface SetupStatus {
