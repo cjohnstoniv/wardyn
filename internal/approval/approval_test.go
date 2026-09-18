@@ -604,3 +604,119 @@ func TestExpireStale_LeavesCancelledAlone(t *testing.T) {
 func isAlreadyDecided(err error) bool {
 	return err != nil && err == approval.ErrAlreadyDecided
 }
+
+// ─── the unique index's loser (patch-review batch E) ─────────────────────────
+
+// racyDupStore is the TOCTOU window itself, made deterministic.
+//
+// RequestApproval dedups by LISTING open rows and then INSERTING, and the two
+// are not one operation. This store hides the open row from the FIRST list —
+// which is exactly what a concurrent raise sees when it lists a microsecond
+// before the winner's insert commits — and then enforces the partial unique
+// index on the insert (migration 0022's approvals_pending_noncred_uniq,
+// `(run_id, kind, requested_scope) WHERE state='PENDING' AND kind <> 'credential'`,
+// which 0064 notes covers credential_reauth too). store.PG.CreateApproval maps
+// that 23505 to ErrDuplicatePending.
+//
+// The rejection key is the index's key, not a looser one: a store that refused
+// two raises differing in SCOPE would be refusing what the database allows, and
+// the re-read below would then be asked to find a row that does not exist.
+type racyDupStore struct {
+	*fakeStore
+	hidden bool // the first list pretends the winner's row is not visible yet
+}
+
+func (d *racyDupStore) ListApprovals(ctx context.Context, state types.ApprovalState) ([]types.ApprovalRequest, error) {
+	if !d.hidden {
+		d.hidden = true
+		return nil, nil
+	}
+	return d.fakeStore.ListApprovals(ctx, state)
+}
+
+func (d *racyDupStore) CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.ApprovalRequest, error) {
+	d.fakeStore.mu.Lock()
+	for _, existing := range d.fakeStore.records {
+		if existing.State == types.ApprovalPending && existing.RunID == a.RunID &&
+			existing.Kind == a.Kind && string(existing.RequestedScope) == string(a.RequestedScope) {
+			d.fakeStore.mu.Unlock()
+			return types.ApprovalRequest{}, types.ErrDuplicatePendingApproval
+		}
+	}
+	d.fakeStore.mu.Unlock()
+	return d.fakeStore.CreateApproval(ctx, a)
+}
+
+// TestRequestApproval_DuplicatePendingReturnsTheWinner is the half of the dedup
+// nothing drove until now, and the half that only exists under CONCURRENCY: the
+// pre-insert list runs BEFORE the insert, so a raise that slips into that window
+// reaches CreateApproval and is rejected by the index. What RequestApproval must
+// do then is re-read and hand back the WINNER'S ROW — and specifically not an error.
+//
+// The proxy is why the distinction is load-bearing. A follower whose raise loses
+// the race gets whatever this returns: the winner's row means a 423 naming the
+// approval id, which is what the hold waits on; an error means a 503, which the
+// sidecar reads as "the credential could not be refreshed" — the one non-423
+// answer that ENDS the run's model call instead of parking it, for a run whose
+// owner is at that moment being asked to sign in.
+func TestRequestApproval_DuplicatePendingReturnsTheWinner(t *testing.T) {
+	for _, kind := range []types.ApprovalKind{types.ApprovalCredentialReauth, types.ApprovalEgressDomain} {
+		t.Run(string(kind), func(t *testing.T) {
+			ctx := context.Background()
+			base := &fakeStore{}
+			runID := uuid.New()
+			scope := json.RawMessage(`{"owner":"alice@corp.example"}`)
+			req := types.ApprovalRequest{RunID: runID, Kind: kind, RequestedScope: scope}
+
+			// The winner, through an ordinary store.
+			winner, err := approval.RequestApproval(ctx, base, req)
+			if err != nil {
+				t.Fatalf("the first raise: %v", err)
+			}
+
+			// The loser: same run, same kind, same scope — the index's exact key —
+			// listing inside the window and inserting after it closed.
+			loser, err := approval.RequestApproval(ctx, &racyDupStore{fakeStore: base}, req)
+			if err != nil {
+				t.Fatalf("a raise the unique index rejected surfaced as an ERROR (%v); the proxy reads that "+
+					"as a 503 and ends the model call instead of parking it on the open request", err)
+			}
+			if loser.ID != winner.ID {
+				t.Errorf("the loser got approval %s, want the winner's %s — two callers, one question",
+					loser.ID, winner.ID)
+			}
+			if loser.State != types.ApprovalPending {
+				t.Errorf("the winner's row came back %q, want PENDING", loser.State)
+			}
+			if n := len(base.records); n != 1 {
+				t.Errorf("rows persisted = %d, want exactly 1", n)
+			}
+		})
+	}
+}
+
+// …and a rejection with NOTHING to dedup to is still an error. A store that
+// refuses the insert while no open row exists is a store fault, not a race, and
+// swallowing it would hand the caller a zero-valued approval whose id names no
+// row — a 423 pointing at nothing, which the hold would poll until its budget ran out.
+func TestRequestApproval_DuplicatePendingWithNoWinnerIsAnError(t *testing.T) {
+	ctx := context.Background()
+	st := alwaysDupStore{fakeStore: &fakeStore{}}
+	_, err := approval.RequestApproval(ctx, st, types.ApprovalRequest{
+		RunID: uuid.New(), Kind: types.ApprovalCredentialReauth,
+		RequestedScope: json.RawMessage(`{"owner":"alice@corp.example"}`),
+	})
+	if err == nil {
+		t.Fatal("a rejected insert with no open row to dedup to returned no error")
+	}
+	if !errors.Is(err, types.ErrDuplicatePendingApproval) {
+		t.Errorf("err = %v, want it to carry ErrDuplicatePendingApproval", err)
+	}
+}
+
+// alwaysDupStore rejects every insert and persists nothing.
+type alwaysDupStore struct{ *fakeStore }
+
+func (d alwaysDupStore) CreateApproval(context.Context, types.ApprovalRequest) (types.ApprovalRequest, error) {
+	return types.ApprovalRequest{}, types.ErrDuplicatePendingApproval
+}

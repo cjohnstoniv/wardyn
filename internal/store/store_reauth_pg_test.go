@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -171,5 +172,82 @@ func TestPG_ResolveReauthApproval_RefusesAnotherKind(t *testing.T) {
 			Action: "credential.reauth.resolved", Target: created.ID.String(), Outcome: "success",
 		}); !errors.Is(err, store.ErrAlreadyDecided) {
 		t.Fatalf("resolving an egress_domain row through the re-auth transition returned %v, want ErrAlreadyDecided", err)
+	}
+}
+
+// THE INDEX, UNDER CONCURRENCY (patch-review batch E). Migration 0064's own
+// comment claims the 0022 partial unique index "now also covers this kind ...
+// One lapsed credential per run is one request, however many of the sandbox's
+// concurrent calls discover it" — and nothing proved it. The index is
+// `(run_id, kind, requested_scope) WHERE state='PENDING' AND kind <> 'credential'`,
+// so the claim rests on `credential_reauth` being a kind OTHER than `credential`,
+// which is the kind of thing a reader agrees with and a database decides.
+//
+// It matters because it is the ONLY thing that makes the property true. The
+// application dedup above it is a LIST then an INSERT with a real window between
+// them: 16 concurrent resolvers for one run can and do all list an empty table.
+// Without this index the honest answer to "how many rows does a lapse raise" is
+// "as many as the scheduler allows", and the console would show a person the
+// same sign-in request four times.
+//
+// Eight raises, one row; every loser gets ErrDuplicatePending, which is the
+// signal approval.RequestApproval turns back into the winner's row.
+func TestPG_ConcurrentCredentialReauthRaisesLandOneRow(t *testing.T) {
+	pool := runsPGPool(t)
+	ctx := context.Background()
+	st := store.NewPG(pool)
+	runID := seedReauthRun(t, st)
+	scope := json.RawMessage(`{"mechanism":"bedrock_sso","credential_source":"per_user","owner":"alice@corp.example"}`)
+
+	const raisers = 8
+	var wg sync.WaitGroup
+	errs := make([]error, raisers)
+	ids := make([]uuid.UUID, raisers)
+	start := make(chan struct{})
+	for i := range errs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start // all eight at the index at once
+			out, err := st.CreateApproval(ctx, types.ApprovalRequest{
+				ID: uuid.New(), RunID: runID, Kind: types.ApprovalCredentialReauth,
+				State: types.ApprovalPending, RequestedAt: time.Now().UTC(), RequestedScope: scope,
+			})
+			errs[i], ids[i] = err, out.ID
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	winners, losers := 0, 0
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			winners++
+		case errors.Is(err, store.ErrDuplicatePending):
+			losers++
+		default:
+			t.Errorf("raiser %d failed with %v, want nil or ErrDuplicatePending — any other error reaches "+
+				"the sidecar as a 503 and ends the model call instead of parking it", i, err)
+		}
+		_ = ids[i]
+	}
+	if winners != 1 || losers != raisers-1 {
+		t.Fatalf("winners=%d losers=%d, want 1 and %d — the partial unique index is not covering "+
+			"credential_reauth, so one lapse raises one question per concurrent caller", winners, losers, raisers-1)
+	}
+
+	rows, err := st.ListApprovals(ctx, types.ApprovalPending)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	n := 0
+	for _, ap := range rows {
+		if ap.RunID == runID && ap.Kind == types.ApprovalCredentialReauth {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("pending credential_reauth rows for one run = %d, want exactly 1", n)
 	}
 }
