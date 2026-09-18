@@ -19,7 +19,6 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"os/user"
@@ -153,8 +152,11 @@ func run() error {
 		slog.Info("wardynd: corporate CA trust configured (WARDYN_TRUSTED_CA_FILE)",
 			slog.Int("cert_count", trustedCACount), slog.Any("subjects", certSubjects(trustedCAPEM)))
 	}
-	if tr, ok := http.DefaultTransport.(*http.Transport); ok {
-		installTrustedCA(tr, trustedCAPool)
+	// installTrustedCA + WARDYN_DAEMON_PROXY_URL, both mutating the shared
+	// http.DefaultTransport in place — see installBootTransport (kept out of
+	// run() itself, which is deliberately low-branching per its doc comment).
+	if err := installBootTransport(trustedCAPool, f); err != nil {
+		return err
 	}
 	// (Validated before the DB connect on purpose: a typo'd path fails in
 	// milliseconds instead of after a 30s connect budget.)

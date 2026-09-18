@@ -92,6 +92,18 @@ type bootFlags struct {
 	// value) — precedent WARDYN_DEFAULT_POLICY. Empty = unset = every outbound
 	// TLS client in this process trusts exactly the system roots, as today.
 	trustedCAFile *string
+	// daemonProxyURL / daemonNoProxy are WARDYN_DAEMON_PROXY_URL /
+	// WARDYN_DAEMON_NO_PROXY (see daemon_proxy.go): a forward proxy for
+	// wardynd's OWN outbound HTTP calls (OIDC discovery/JWKS, audit webhooks,
+	// GitHub App minting, AWS SSO CreateToken renewal, Entra sync) — the
+	// supported replacement for setting HTTPS_PROXY on wardynd, which stays
+	// unsupported (Go's net/http would also re-point the Kubernetes client and
+	// every http.ProxyFromEnvironment reader process-wide). Same posture class
+	// as trustedCAFile above: control-plane-authored only, never a SiteConfig
+	// field. Empty daemonProxyURL = the shared http.DefaultTransport is left
+	// untouched, byte-identical to today.
+	daemonProxyURL *string
+	daemonNoProxy  *string
 	// anthropicBaseURL / openaiBaseURL are WARDYN_ANTHROPIC_BASE_URL /
 	// WARDYN_OPENAI_BASE_URL (see internal/api/llm_gateway.go's
 	// ValidateLLMGateways): an operator-set internal model gateway base URL
@@ -269,6 +281,8 @@ func parseBootFlags() *bootFlags {
 		controlURL:              flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "http://wardynd:8080", "externally-reachable control plane URL for sidecars"),
 		policyPath:              flagEnv("default-policy", "WARDYN_DEFAULT_POLICY", "examples/policies/default.json", "path to the default RunPolicy spec JSON"),
 		trustedCAFile:           flagEnv("trusted-ca-file", "WARDYN_TRUSTED_CA_FILE", "", "path to a PEM bundle of additional trusted roots (e.g. a corporate TLS-inspecting middlebox's CA), added to the system roots for wardynd's own outbound TLS, the proxy sidecar's forwarding transport, and every sandbox's CA trust. Empty (default) = system roots only, byte-identical to today"),
+		daemonProxyURL:          flagEnv("daemon-proxy-url", "WARDYN_DAEMON_PROXY_URL", "", "forward proxy (http:// or https://, no user:pass@) wardynd's OWN outbound HTTP calls traverse: OIDC discovery/JWKS, audit webhooks, GitHub App token minting, AWS SSO CreateToken renewal, and Entra directory sync. Empty (default) = http.DefaultTransport is left untouched (today's ProxyFromEnvironment behavior). Malformed ⇒ boot refused. See docs/ENV.md"),
+		daemonNoProxy:           flagEnv("daemon-no-proxy", "WARDYN_DAEMON_NO_PROXY", "", "NO_PROXY-spelled bypass list for WARDYN_DAEMON_PROXY_URL (host, .suffix, CIDR, *). wardynd auto-appends KUBERNETES_SERVICE_HOST and the WARDYN_AWS_SSO_ENDPOINT_OVERRIDE host. Ignored when the proxy URL is unset"),
 		anthropicBaseURL:        flagEnv("anthropic-base-url", "WARDYN_ANTHROPIC_BASE_URL", "", "operator-set internal model gateway base URL (https://, RFC1918/CGNAT literal allowed) re-pointing the api-key lane's brokered upstream for Anthropic instead of api.anthropic.com. Empty (default) = the public host, byte-identical to today. Subscription/managed runs are unaffected — they still reach api.anthropic.com directly"),
 		openaiBaseURL:           flagEnv("openai-base-url", "WARDYN_OPENAI_BASE_URL", "", "same as -anthropic-base-url, for OpenAI's api-key lane (api.openai.com)"),
 		ageKey:                  flagEnv("age-key", "WARDYN_AGE_KEY", "", "age X25519 identity (AGE-SECRET-KEY-...) for the secret store; generated+logged if empty"),
