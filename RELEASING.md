@@ -60,6 +60,13 @@ before step 3.
 
 ## Steps
 
+For a patch release, choose `X.Y.Z` **before** updating version strings: refresh
+tags with `git fetch origin --tags`, then inspect
+`git tag -l "vX.Y.*" --sort=-v:refname` and select the next unused patch number
+in that minor line. Tags are repository-wide, not branch-local. Coordinate one
+release owner at a time: reading tags does not reserve the next number against
+another maintainer. Use the chosen version throughout this checklist.
+
 1. **Update the CHANGELOG.** Rename the working `## [Unreleased]` heading (or add the
    section) to `## [X.Y.Z] — YYYY-MM-DD` in [CHANGELOG.md](CHANGELOG.md), following the
    [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format already in use
@@ -136,20 +143,10 @@ before step 3.
    exception rather than as a rule change, and in the
    [CHANGELOG.md](CHANGELOG.md) section for 0.7.2 (`[Unreleased]` until step 1 of
    this checklist renames it). The rule above stands for every later line.
-4. **Tag** on the release branch: `git tag vX.Y.Z` (tags are `v`-prefixed —
-   `v0.1.0` … `v0.4.3`). For a patch release, compute the next patch number
-   from the branch's own tags rather than by hand — auto-increment, so two
-   people cutting patches never collide:
-
-   ```sh
-   git checkout release/X.Y
-   LAST=$(git tag -l "vX.Y.*" --sort=-v:refname | head -1)   # e.g. vX.Y.3
-   NEXT="vX.Y.$(( ${LAST##*.} + 1 ))"                        # -> vX.Y.4
-   git tag "$NEXT"
-   ```
-
-   (Bump `internal/version/version.go` + the CHANGELOG section on the release
-   branch in the same stroke — `make release-check` holds there too.)
+4. **Tag the prepared release commit** on `release/X.Y`: `git tag vX.Y.Z`.
+   Use the same `X.Y.Z` committed in step 2; do not recompute a patch number
+   here. The version and CHANGELOG updates must already be committed, with
+   `make release-check` and CI green on that commit, before creating the tag.
 5. **Push** the branch and the tag:
    `git push origin release/X.Y && git push origin vX.Y.Z`
    (and `git push origin main` if step 2's commit landed there).
