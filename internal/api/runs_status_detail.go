@@ -132,8 +132,23 @@ func projectStatusDetail(runs []types.AgentRun) {
 		case r.State == types.RunStarting:
 			r.StatusReason = reason
 		case r.State == types.RunFailed:
-			if reason == "" {
-				reason = stuckReasonFromFailureHint(r.FailureHint)
+			if !runner.IsTerminalWaitingReason(reason) {
+				// The row may be missing the ending, or holding a stale one.
+				// Dispatch marks the run FAILED the instant waitContainerRunning
+				// errors, and the status write that raced it is precisely the one
+				// a 500ms deadline is allowed to drop — so the row can carry
+				// nothing, or the ContainerCreating from one poll earlier, while
+				// failure_hint carries the SAME sentence the driver failed with.
+				// Rebuild BOTH wire fields from it rather than serving a reason
+				// with no words, which is 0.7.5's reason-less FAILED badge
+				// reached a new way.
+				if component, hintReason, message := stuckStartupFromFailureHint(r.FailureHint); runner.IsTerminalWaitingReason(hintReason) {
+					reason = hintReason
+					r.StatusDetail = component + ": " + hintReason
+					if message != "" {
+						r.StatusDetail += ": " + message
+					}
+				}
 			}
 			if !runner.IsTerminalWaitingReason(reason) {
 				r.StatusDetail = ""
@@ -162,20 +177,34 @@ func statusDetailReason(detail string) string {
 	return strings.TrimSpace(reason)
 }
 
-// stuckReasonFromFailureHint recovers the reason from the sentence
-// waitContainerRunning fails with ("agent container stuck waiting
-// (ImagePullBackOff): …"), which failAndRevoke stamps onto failure_hint. It is
+// stuckStartupFromFailureHint recovers the substrate's own component, reason and
+// message out of the sentence waitContainerRunning / waitPodIP fail with
+// ("agent container stuck waiting (ImagePullBackOff): rpc error: …"), which
+// failAndRevoke stamps onto failure_hint inside dispatch's own wrapper. It is
 // the fallback for the ordering race where the run is marked FAILED before the
 // last status write landed: the same fact, reached through the field that did
-// survive.
-func stuckReasonFromFailureHint(hint string) string {
-	_, rest, ok := strings.Cut(hint, "container stuck waiting (")
+// survive, in the same shape status_detail speaks.
+//
+// The component is read back rather than assumed: waitPodIP's copy of this
+// sentence says "proxy", and a rebuilt detail that claimed "agent" for a proxy
+// pod would be the one field on the wire that lies.
+func stuckStartupFromFailureHint(hint string) (component, reason, message string) {
+	before, rest, ok := strings.Cut(hint, "container stuck waiting (")
 	if !ok {
-		return ""
+		return "", "", ""
 	}
-	reason, _, ok := strings.Cut(rest, ")")
+	reason, message, ok = strings.Cut(rest, "): ")
 	if !ok {
-		return ""
+		// No message at all — take the reason up to its own closing paren.
+		reason, _, ok = strings.Cut(rest, ")")
+		if !ok {
+			return "", "", ""
+		}
+		message = ""
 	}
-	return reason
+	component = "agent"
+	if fields := strings.Fields(before); len(fields) > 0 && !strings.HasSuffix(fields[len(fields)-1], ":") {
+		component = fields[len(fields)-1]
+	}
+	return component, reason, strings.TrimSpace(message)
 }

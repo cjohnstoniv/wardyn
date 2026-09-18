@@ -112,8 +112,31 @@ func TestGetRun_TerminalStartupReasonSurvivesFailed(t *testing.T) {
 			wantReason: "InvalidImageName",
 		},
 		{
+			// S2: the terminal status write is the ONE a 500ms deadline is
+			// allowed to drop, and dispatch marks the run FAILED the instant
+			// waitContainerRunning errors — so the row can hold nothing at all
+			// while failure_hint holds the same sentence. Blanking here would
+			// hand every UI surface an empty string and a reason it cannot
+			// render: 0.7.5's reason-less FAILED badge, reached a new way.
+			name:       "the hint alone still puts the registry's words on the wire",
+			hint:       "the sandbox could not be created: k8s: agent pod's main container never started: agent container stuck waiting (ImagePullBackOff): rpc error: pull access denied",
+			wantDetail: "agent: ImagePullBackOff: rpc error: pull access denied",
+			wantReason: "ImagePullBackOff",
+		},
+		{
+			// The same race one tick earlier: ContainerCreating landed, the
+			// ImagePullBackOff that followed it did not. A STALE non-terminal
+			// detail must not out-rank the hint that names the real ending.
+			name:       "a stale non-terminal detail loses to a stuck hint",
+			detail:     "agent: ContainerCreating",
+			hint:       "the sandbox could not be created: agent container stuck waiting (CreateContainerConfigError): secret \"wardyn-run\" not found",
+			wantDetail: "agent: CreateContainerConfigError: secret \"wardyn-run\" not found",
+			wantReason: "CreateContainerConfigError",
+		},
+		{
 			name:   "an ordinary wait is not a cause of death",
 			detail: "agent: ContainerCreating",
+			hint:   "the sandbox could not be created: context deadline exceeded",
 		},
 		{
 			name:   "nothing was ever read",
