@@ -55,6 +55,7 @@ import {
   DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { MemberModeBanner, MemberModeMenuItem } from "../wardyn/member-mode-banner";
+import { ModelAccessBanner } from "../wardyn/model-access-banner";
 import { ErrorBoundary } from "../wardyn/error-boundary";
 import {
   OperatorProvider,
@@ -229,7 +230,9 @@ const SESSION_CHECK_MS = 15 * 1000;
 // the second.
 export type SessionExpiryState = "none" | "soon" | "expired";
 // DRAFT (M2 canon pending) — F3-F11's two new arms (was one string, "soon" only).
-const SESSION_EXPIRY_COPY = {
+// Exported so a suite asserting the banner STACK's order reads the shipped
+// sentence rather than a second, hand-copied one.
+export const SESSION_EXPIRY_COPY = {
   soon: ["Your session is expiring soon.", "to avoid losing your place."],
   expired: ["Your session has expired.", "to get back in."],
 } as const;
@@ -621,6 +624,13 @@ export function AppShell({
                 <span>{SESSION_EXPIRY_COPY[sessionExpiry][1]}</span>
               </div>
             )}
+            {/* LAST in the stack, and not hidden in focus mode: a dead control
+          plane, an unknown identity and a dying session are each the better
+          explanation of what you are looking at and are read first — but this
+          one is the only band that carries its own repair, and 0.7.6's mid-run
+          re-authentication needs exactly this surface on the cockpit. Renders
+          nothing when there is nothing to say. */}
+            <ModelAccessBanner />
             <div className="flex min-h-0 flex-1">
               {!focus && (
                 <aside className="hidden w-[228px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar px-3 py-4 md:flex">

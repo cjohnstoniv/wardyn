@@ -9,10 +9,13 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
-import { AppShell, MobileNav, TopBar, useFocusMode } from "./app-shell";
+import { AppShell, MobileNav, SESSION_EXPIRY_COPY, TopBar, useFocusMode } from "./app-shell";
+import { MODEL_ACCESS_BANNER } from "../wardyn/model-access-copy";
+import { ModelAccessProvider } from "../wardyn/model-access-context";
+import { AGENTS } from "../../lib/workspace-providers-copy";
 import { useUserDrive, type Role } from "../wardyn/operator-context";
 import { ThemeProvider } from "../wardyn/theme-provider";
-import { baseMeDrive } from "../../lib/test-fixtures";
+import { baseMeDrive, baseStatus } from "../../lib/test-fixtures";
 
 // below md the desktop aside is hidden, so this Sheet-based hamburger is
 // the ONLY navigation. These pins fail if the drawer stops opening, drops nav
@@ -799,5 +802,102 @@ describe("AppShell — /me's drive bits reach UserDriveContext", () => {
     expect(screen.getByTestId("drive-unavailable-probe")).toHaveTextContent(
       "[]",
     );
+  });
+});
+
+// 0.7.6, finding 2 — THE MODEL-ACCESS STRIP'S PLACE IN THE STACK.
+//
+// The band itself is pinned by model-access-banner.test.tsx; what only the
+// shell can prove is WHERE it sits and where it is withheld. It renders LAST:
+// a dying session, a dead control plane and an unknown identity are each the
+// better explanation of what you are looking at, and are read first.
+describe("AppShell (the model-access strip)", () => {
+  const PER_USER_ROW = {
+    id: "claude-code",
+    display: "claude-code",
+    has_gateway: false,
+    has_login: true,
+    enabled: true,
+    mechanism: "bedrock_sso",
+    credential_source: "per_user",
+  };
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  function renderShellAt(path: string, me: Record<string, unknown>) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: RequestInfo | URL) => {
+        const u = String(url);
+        if (u.endsWith("/healthz"))
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ trust_domain: "wardyn.local", identity_provider: "embedded" }),
+          });
+        if (u.endsWith("/api/v1/me")) return Promise.resolve({ ok: true, json: async () => me });
+        return Promise.resolve({ ok: true, json: async () => ({}) });
+      }) as unknown as typeof fetch,
+    );
+    return render(
+      <MemoryRouter initialEntries={[path]}>
+        <ThemeProvider>
+          <ModelAccessProvider
+            status={baseStatus({
+              model_access: { state: "not_configured", action: AGENTS.SIGN_IN_AWS },
+              harnesses: [PER_USER_ROW],
+            })}
+            onRefresh={() => {}}
+          >
+            <Routes>
+              <Route
+                path="*"
+                element={<AppShell pendingApprovals={0} attentionCount={0} onSignOut={() => {}} />}
+              >
+                <Route path="*" element={<div>screen</div>} />
+              </Route>
+            </Routes>
+          </ModelAccessProvider>
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  const MEMBER_WITH_DYING_SESSION = {
+    principal: "alice@corp.example",
+    method: "sso",
+    operator: false,
+    security_operator: false,
+    role: "member",
+    email: "alice@corp.example",
+    // Inside SESSION_WARN_MS, so the session strip is on screen too.
+    session_expires_at: new Date(Date.now() + 60_000).toISOString(),
+  };
+
+  it("renders BELOW the session-expiry banner", async () => {
+    renderShellAt("/runs", MEMBER_WITH_DYING_SESSION);
+    const session = await screen.findByText(SESSION_EXPIRY_COPY.soon[0]);
+    const model = await screen.findByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN);
+    // DOCUMENT_POSITION_FOLLOWING: `model` comes after `session` in the DOM.
+    expect(session.compareDocumentPosition(model) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("is withheld on /setup — that page IS the door", async () => {
+    renderShellAt("/setup", MEMBER_WITH_DYING_SESSION);
+    await screen.findByText(SESSION_EXPIRY_COPY.soon[0]);
+    expect(screen.queryByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeNull();
+  });
+
+  it("is withheld on /settings for an OPERATOR, which already mounts the same pane", async () => {
+    renderShellAt("/settings", { ...MEMBER_WITH_DYING_SESSION, operator: true, role: "admin" });
+    await screen.findByText(SESSION_EXPIRY_COPY.soon[0]);
+    await waitFor(() => expect(screen.queryByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeNull());
+  });
+
+  // …and the member it does not: the Settings card's AWS button is
+  // `disabled={!operator}` there, so hiding the strip would strand exactly the
+  // person the refusal sentence sends to that page.
+  it("stays for a MEMBER on /settings", async () => {
+    renderShellAt("/settings", MEMBER_WITH_DYING_SESSION);
+    expect(await screen.findByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeInTheDocument();
   });
 });

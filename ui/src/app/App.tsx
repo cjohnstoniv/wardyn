@@ -31,6 +31,7 @@ import { approvals as approvalsApi } from "./lib/api/approvals";
 import { runs as runsApi } from "./lib/api/runs";
 import { usePoll } from "./lib/use-poll";
 import { AttentionPublisherProvider, type AttentionCounts } from "./lib/attention-context";
+import { ModelAccessProvider } from "./components/wardyn/model-access-context";
 import type {
   AgentRun,
   ApprovalRequest,
@@ -299,6 +300,20 @@ function RequireSetup({ status }: { status: SetupStatus | null }) {
 // would leave the badge stale.
 const ATTENTION_POLL_MS = 5000;
 
+// How often the model-access door re-reads the status it rides on. FIVE
+// MINUTES — 12 requests an hour per tab, a sixtieth of either poller above —
+// because the thing it watches moves on the scale of an SSO session, not a run:
+// /setup/status is the expensive endpoint (a runner Capabilities call, a CLI
+// sweep, a secret listing, a platform/SCM detect, a site-config read and an AWS
+// SSO blob decrypt), and this is the poll that made it periodic at all.
+//
+// usePoll is what makes the cadence honest: a hidden tab skips its ticks
+// entirely and returning to the tab fires one immediately, which closes the
+// "left open for hours" hole without asking the daemon for a faster cadence.
+//
+// A named module constant on purpose: a field report moves one number here.
+const MODEL_ACCESS_POLL_MS = 300_000;
+
 // M2: can THIS role reach a captured return path? Scoped to the one place a
 // wrong answer is a dead end the plan named (restoring a mid-session-401
 // path after re-auth) — NOT a general client-side route guard (nav-hiding
@@ -445,8 +460,11 @@ export default function App() {
   const [setupStatus, setSetupStatus] = React.useState<SetupStatus | null>(
     null,
   );
+  // RETURNED, like refreshHealth below (Codex #12): usePoll's in-flight guard is
+  // promise-based, so a void return would let a slow /setup/status — the
+  // expensive endpoint — stack a second read on top of the first every tick.
   const refreshSetupStatus = React.useCallback(() => {
-    setupApi
+    return setupApi
       .getSetupStatus()
       .then(setSetupStatus)
       .catch(() => {
@@ -492,8 +510,14 @@ export default function App() {
     });
   }, []);
   React.useEffect(() => {
-    if (auth === "authed") refreshSetupStatus();
+    if (auth === "authed") void refreshSetupStatus();
   }, [auth, refreshSetupStatus]);
+  // …and again every five minutes, because model_access is a per-person
+  // credential LIFECYCLE: read once per session, a member who signed in at 09:00
+  // is told at 09:00 and never again, and the strip below would be as stale as
+  // the tab is old. Paused while unauthenticated — the endpoint 401s, and the
+  // landing read above is what re-arms it.
+  usePoll(refreshSetupStatus, MODEL_ACCESS_POLL_MS, auth !== "authed");
   // R4/F027: reachability is NOT gated on being signed in. /healthz is the one
   // unauthenticated endpoint the console has, and the state where it matters
   // most is the one this used to skip — an outage that sent the human to the
@@ -560,6 +584,11 @@ export default function App() {
   return (
     <ThemeProvider>
       <AttentionPublisherProvider value={publishAttention}>
+      {/* The door: one model-access answer and one sign-in dialog for the strip
+          in the shell, the New Run rail, a credential-failed run's failure
+          block and a held run's approval row — none of which can be reached by
+          prop-drilling through screens that are at the file-size gate. */}
+      <ModelAccessProvider status={setupStatus} onRefresh={refreshSetupStatus}>
       <Routes>
         <Route
           element={
@@ -770,6 +799,7 @@ export default function App() {
           </Route>
         </Route>
       </Routes>
+      </ModelAccessProvider>
       </AttentionPublisherProvider>
       <Toaster />
     </ThemeProvider>
