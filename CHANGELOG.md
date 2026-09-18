@@ -8,13 +8,52 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+The 0.7.5 field report (`HANDOFF-wardyn-076-sso-ux.md`) consolidated one journey — a person getting
+AWS SSO working and running a Claude Code agent — into eight findings. This release answers seven of
+them; the eighth (a mid-run credential lapse holding the run instead of killing it) ships behind a
+kill switch, sequenced last — see Known gaps.
+
 ### Added
 
+- **A global model-access banner.** An actionable model-access state — not signed in, lapsed, or
+  lapsing within 24 h — now rides a strip on every screen, in focus mode and on the run cockpit,
+  carrying the sign-in itself in a dialog; a lapse cannot be dismissed, the first-run state and a
+  dead shared credential can be set aside for the session. Suppressed on Getting Started and
+  Settings, which already mount the sign-in. Read once per session plus a 5-minute
+  visibility-aware poll; no new endpoint; one new wire field, `deadline`. (Finding 2.)
+- **A run refused for a model credential now offers the sign-in, not directions to it.** The dispatch
+  refusal's audit row carries `reason: model_credential` (and the run's declared `mechanism`), the
+  console grades that ending `credential`, and the run's failure block shows the server's own sentence
+  with the AWS sign-in beside it — in a dialog, on the run page. The button appears only where a
+  sign-in this person can complete repairs the state: a member under a shared credential gets the
+  sentence and no button, a refusal whose renewal merely did not complete ("launch again in a moment")
+  gets no button either, a refusal of a run declared on another provider's lane gets none, and a run
+  somebody else created gets none. Relaunch is the header's existing "Start a run like this one".
+  (Finding 3.)
+- wardynd's own outbound calls (OIDC discovery/JWKS, audit webhooks, GitHub App token minting, AWS SSO
+  `CreateToken` renewal, Entra directory sync) can now follow a corporate proxy through
+  `WARDYN_DAEMON_PROXY_URL` (+ `WARDYN_DAEMON_NO_PROXY`), without the process-wide blast radius of
+  `HTTPS_PROXY` — the standard variables also get read by the Kubernetes client and by every library
+  that calls `http.ProxyFromEnvironment`, so a wrong `NO_PROXY` there can take the control plane's own
+  API access with it. (Finding 8.) Unset leaves `http.DefaultTransport` untouched — byte-identical to
+  today. `KUBERNETES_SERVICE_HOST`, the `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` host, and the
+  `WARDYN_OIDC_INTERNAL_ISSUER` host are auto-bypassed. A malformed value, or one carrying
+  `user:pass@`, refuses boot rather than silently falling back. See `docs/ENV.md` and
+  `docs/OPERATIONS.md` "wardynd behind a corporate proxy".
+- A captured AWS SSO session whose refresh token AWS has already retired now grades `expiring` with a
+  sign-in action the moment Wardyn learns it, instead of reading `live` until the client registration
+  lapsed — days later, while every dispatch in between was already refusing the person's runs. (Finding
+  5.) The deadline named is the moment dispatch itself stops serving the access token (`ExpiresAt −
+  awsSSORefreshSkew`), not the registration's own lapse. Refresh failures now record how many attempts
+  were made (`attempts: 1` or `2`) beside the errors — two attempts failing is a network story, not a
+  credential one; the "one dropped packet" the field report described was actually two attempts, the
+  retry that already existed. `GET /metrics` gains `wardyn_sso_refresh_total{outcome}`
+  (`success`/`spent`/`transport_error`/`unavailable`).
 - **A run that is slow to start now says what it is waiting on.** The kubelet's
   own reason (pulling an image, waiting for a node, a reference that will not
   pull) reaches the run header, the Runs board and the sign-in pane, and a
   terminal reason ends the wait immediately instead of after five minutes. The
-  sign-in pane no longer grades a start purely on a clock.
+  sign-in pane no longer grades a start purely on a clock. (Finding 6.)
   (`0063_agent_runs_status_detail` adds the `agent_runs.status_detail` column the
   substrate's reason is written to; it is blanked at read for any run that is not
   STARTING, except a run that FAILED on a terminal reason.)
@@ -32,6 +71,106 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (`on` | `off`) — `off` restores the 0.7.5 behaviour for new dispatches.
   (Migration `0064_approval_credential_reauth` adds the approval kind; a
   downgrade to 0.7.5 with such rows present is unsupported.)
+
+### Fixed
+
+- **New Run's model warning is about the person, not the deployment.** It was keyed on a
+  deployment-wide integration count — true the moment an admin saves a `per_user` roster row — so a
+  member who had never signed in filled in the whole form and was refused at the click, and the one
+  sentence that would have warned them said *"No model provider is connected"*, which on that
+  deployment is false. The rail now reads `model_access` when the selected agent is the one it grades
+  and states which of the four per-person states the launcher is in, in the server's own words. The
+  deployment-level warning is unchanged. (Finding 1.)
+- **Signing in opens its own tab.** The tab is opened on the click that starts the sign-in — the only
+  user gesture in the flow — and navigated to the verification page when it appears, so browsers no
+  longer block it. If your browser blocks it anyway, the link on the panel still works and now says so.
+  Wardyn closes it while it is still the placeholder (Cancel, an error, a completed sign-in); once it
+  has navigated to the provider's own page, that page is the tab's end state — the browser will not let
+  Wardyn close a cross-origin tab it deliberately gave up its handle back into. (Finding 7a.)
+- **The sign-in panel now says when you are signed in** and Wardyn is waiting on the sandbox to hand
+  over the session — including when the sandbox is asking which AWS account or role to use, which it
+  does in the terminal on that panel. If the sandbox's own report and the server briefly disagree, the
+  panel keeps saying it is checking (with a way to cancel) instead of refusing on the spot — it only
+  refuses once a background check has genuinely given up. And the panel closes itself as soon as the
+  server confirms the session was stored, whether or not the sandbox's own success message reaches the
+  browser at all. (Finding 7b.)
+- **A sign-in dialog dismissed from outside no longer orphans its login run.** Escape or an overlay
+  click on the model-access door now routes through the login pane's own cancellation, and a
+  dismissal that lands while the launch POST is still in flight kills the run that POST created —
+  before, either left a "wardyn: sign-in running" sandbox on the person's board for up to 30 minutes.
+- **One spelling for the AWS sign-in.** The Settings dialog said "Sign in with AWS SSO" beside a
+  control named "Sign in to AWS"; both are now `MODEL_ACCESS_BANNER.DIALOG_TITLE`.
+- **Signing out drops the console's cached setup snapshot.** It held one person's readiness, harness
+  roster and model-access state until the next `/setup/status` answered, so the next sign-in on that
+  tab rendered the previous person's state for a beat — and a read still in flight across the
+  sign-out was stored afterwards.
+- **The model-access deadline is shown on the reader's clock.** `Sign in again before
+  2026-09-19T14:03:22Z` (RFC3339 UTC) is now rendered through the viewer's own locale on the
+  member's Getting Started and the admin's Agents tab, and as "in 3h" — with the absolute stamp as
+  the element's title — in the strip.
+
+### Changed
+
+- **The model-credential refusals now name a door the reader can actually open.** Under a `per_user`
+  row the dispatch refusal, the create-time 422, the stored-AWS-identity refusal and the
+  spent-renewal sentence all end on "sign in to AWS from Getting started in the console, or from the
+  sign-in banner the console shows on every page" instead of "sign in again under Settings → Model
+  provider" — that page's AWS button is admin-only, so the sentence had been sending the one person
+  who could repair their own captured session to the one page that will not let them. Under a
+  `shared` row the Settings destination stays (it is the admin's own door), and the arm where nothing
+  ever credentialed the run drops "again".
+
+### Retired (from 0.7.5's Known gaps)
+
+- *"The New Run rail still paints its credential chip from the ROSTER ROW alone"* — the rail now also
+  reads the shared `model_access` door for the selected claude-code agent; the roster-row credential
+  chip's own meaning (where the credential lands) is untouched.
+- *"A member on a shared Bedrock row whose ADMIN credential is expiring is still offered the
+  member-side sign-in CTA"* — this described a WORKING path, not a defect: `authorizeHarnessLogin`
+  (`internal/api/harnesscred.go:708-710`) returns early for ANY operator before the `!perUser`
+  refusal, and the Agents tab mounts the pane with `startURLManaged={false}` for a shared row. 0.7.6
+  makes that explicit: the shared-dead state is audience-aware — the admin gets the sign-in that
+  repairs it, a member gets the instruction and no button.
+
+### Known gaps
+
+- **Finding 4 (a mid-run credential lapse holding the run instead of killing it) ships behind
+  `WARDYN_AWS_SSO_PROXY_INJECT`**, off by default pending the docker-gated SDK-tolerance measurement
+  and the dedicated security round on the release tip. The flag exists and is the rollback either way.
+- A member under a dead SHARED model credential is told, and has nothing to do about it: Wardyn
+  offers no way to notify the admin from that strip. The sentence names the admin because they are
+  the only repair; "Not now" is the only control the member gets.
+- The §7.4 frozen copy table (`docs/design/workspace-providers-prompt.md`) and its byte-parity twin
+  `PROVIDER_MEMBER.LLM_MECHANISM_DEAD` still spell the single, admin-only destination. Nothing renders
+  that key today and the Go sentence it mirrors already differed from it, but the table is canon: the
+  doc's own **Q11** (recommend (a) — the sentence takes a `{remedy}`) has to be ruled in M2 before the
+  frozen row can take the third argument.
+- `WARDYN_DAEMON_PROXY_URL` has no credentialed-proxy form (a `WARDYN_DAEMON_PROXY_SECRET` secret-ref
+  knob mirroring `UpstreamProxySecretRef` is a follow-up, not built in 0.7.6).
+- The spent-token mark stays in-memory and unpersisted (the existing single-instance posture); a daemon
+  restart re-grades a spent-but-not-yet-refresh-window credential `live` until the next dispatch marks
+  it spent again. Persisting it is a follow-up, not built in 0.7.6.
+- **The Runs board's GROUP header still aggregates N runs under one badge** and
+  says nothing about what any of them is waiting on. Left out deliberately — one line cannot be true
+  of five runs waiting on different things.
+- **A run that never leaves STARTING keeps its last reason on the row.** It is
+  invisible in the console (the read path blanks it for every state but STARTING
+  and a terminal-reason FAILED) and exists for a SQL postmortem; nothing prunes
+  it.
+- **`status_detail` is the SUBSTRATE's words, not Wardyn's.** A reason Wardyn has
+  no sentence for renders as `Waiting: <the raw string>` — the same honest
+  degradation `failure_hint` already has.
+- **No new Kubernetes permission, and none is coming.** The reason comes from
+  `pods: get`, which the chart already grants; the Events API is deliberately NOT read — see
+  `deploy/helm/wardyn/templates/rbac.yaml`'s own paragraph before "fixing" it by
+  granting `events`. Only the Docker substrate can say "Downloading the image"
+  outright, because `ensureImage` has just proved the host does not have it.
+- **Carried forward from 0.7.5, still open (O-1: not bundled into 0.7.6, moved to 0.7.7):**
+  - a per-person advisory lock closing the sign-in supersede race that, rarely, leaves two live
+    sandboxes;
+  - a third Kubernetes cache volume (or `GOCACHE`/`GOTMPDIR`/`GOPATH`/npm cache pointed under the
+    metered workdir) closing the autonomous-run `disk_mib` residual;
+  - the admin-tier and run-token 5xx driver-text sweep (none of the sites is member-reachable).
 
 ## [0.7.5] — 2026-09-17
 
