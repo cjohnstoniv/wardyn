@@ -514,7 +514,16 @@ test("K(resume) (credential-reauth-hold): the member signs in and the SAME run c
       timeout: 4 * MINUTE,
     })
     .toBe(APPROVAL.approved);
-  await expect(page.getByText(REAUTH_SIGNED_IN_TOAST)).toBeVisible({ timeout: 60_000 });
+  // BOTH toasts, and EXACT on the short one. A completed sign-in from the row
+  // raises two: the row's own "Signed in" (LiveApprovals) and the door's
+  // "Signed in to AWS — your runs can use your session now"
+  // (model-access-banner). The first is a prefix of the second, so an unscoped
+  // getByText matched both and failed strict mode — on a walk, though not on
+  // the iteration before it, because whether the two are on screen together is
+  // a matter of toast timing. Asserting both, exactly, is the stronger claim:
+  // each surface says its own piece.
+  await expect(page.getByText(REAUTH_SIGNED_IN_TOAST, { exact: true })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(MODEL_ACCESS_BANNER.SIGNED_IN_TOAST)).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(waitingReauth(1))).toHaveCount(0, { timeout: 2 * MINUTE });
 
   // THE SAME RUN, and every clause of that.
