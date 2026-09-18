@@ -232,7 +232,7 @@ func TestAWSSSORefresh_InvalidGrantMarksDeadAndNeverFallsThroughToAPIKey(t *test
 	if ba.ready || ba.ssoInject {
 		t.Fatalf("ready=%v ssoInject=%v; want both false on a spent credential", ba.ready, ba.ssoInject)
 	}
-	if ba.ssoRefreshFailure != awsSSORefreshSpentSentence {
+	if ba.ssoRefreshFailure != awsSSORefreshSpentRefusal(false) {
 		t.Fatalf("ssoRefreshFailure = %q; want the spent sentence", ba.ssoRefreshFailure)
 	}
 	for k := range ba.env {
@@ -255,7 +255,7 @@ func TestAWSSSORefresh_InvalidGrantMarksDeadAndNeverFallsThroughToAPIKey(t *test
 		t.Fatal("the spent refresh token was not dead-marked")
 	}
 	ba2 := s.resolveBedrockAuth(context.Background(), "claude-code", false, true, true, nil, awsSSOScope{})
-	if ba2.ssoRefreshFailure != awsSSORefreshSpentSentence {
+	if ba2.ssoRefreshFailure != awsSSORefreshSpentRefusal(false) {
 		t.Errorf("second dispatch failure = %q; want the spent sentence", ba2.ssoRefreshFailure)
 	}
 	if got := calls.Load(); got != 1 {

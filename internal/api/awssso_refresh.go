@@ -134,8 +134,11 @@ const (
 	// does not quietly bill a different model provider instead.
 	//
 	// DRAFT (M2 canon pending)
+	// %s is the REMEDY clause (llmMechanismRemedy): under a per_user row the
+	// person who must sign in again is the member, and Settings → Model provider
+	// is the page whose AWS button is admin-only (UX round B1).
 	awsSSORefreshSpentSentence = "this run's model access is configured as Amazon Bedrock (captured AWS SSO session), " +
-		"and that session can no longer be renewed — sign in again under Settings → Model provider. " +
+		"and that session can no longer be renewed — %s " +
 		"Wardyn does not substitute a different model provider."
 
 	// awsSSORefreshUnavailableSentence: the renewal could not be completed
@@ -158,6 +161,13 @@ const (
 	// DRAFT (M2 canon pending)
 	credSourceSSODesc = "your captured AWS SSO session (container login; Wardyn renews it at launch while its refresh token lives)"
 )
+
+// awsSSORefreshSpentRefusal composes the sentence above for the scope whose
+// credential is spent. A captured session always existed here, so the remedy is
+// its audience's "again" arm.
+func awsSSORefreshSpentRefusal(perUser bool) string {
+	return fmt.Sprintf(awsSSORefreshSpentSentence, llmMechanismRemedy(perUser, true))
+}
 
 // harnessCredentialAWSRenewingDetail / Fix are the admin setup row for a
 // captured SSO session whose ACCESS token has lapsed but whose refresh token has
@@ -341,7 +351,7 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 		return blob, ""
 	}
 	if s.awsSSOTokenSpent(awsSSOTokenFingerprint(blob.RefreshToken)) {
-		return blob, awsSSORefreshSpentSentence
+		return blob, awsSSORefreshSpentRefusal(scope.perUser)
 	}
 
 	// SINGLE-FLIGHT, and non-blocking while the token in hand would still carry a
@@ -373,7 +383,7 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 	// per_user principal would renew — and re-persist — the wrong credential.
 	if cur, found, rerr := s.readAWSSSOBlob(ctx, scope); rerr == nil {
 		if !found {
-			return blob, awsSSORefreshSpentSentence
+			return blob, awsSSORefreshSpentRefusal(scope.perUser)
 		}
 		blob = cur
 	}
@@ -383,7 +393,7 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 	}
 	fingerprint := awsSSOTokenFingerprint(blob.RefreshToken)
 	if s.awsSSOTokenSpent(fingerprint) {
-		return blob, awsSSORefreshSpentSentence
+		return blob, awsSSORefreshSpentRefusal(scope.perUser)
 	}
 
 	resp, attempts, err := s.createAWSSSOTokenWithRetry(ctx, blob)
@@ -399,7 +409,7 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 		})
 		if spent {
 			s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeSpent)
-			return blob, awsSSORefreshSpentSentence
+			return blob, awsSSORefreshSpentRefusal(scope.perUser)
 		}
 		// A TRANSIENT failure is not a reason to stop using a token we still hold.
 		// needsRefresh fires a whole skew window (10 min) AHEAD of expiry, so most
