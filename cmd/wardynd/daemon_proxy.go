@@ -130,8 +130,15 @@ func bootDaemonProxy(tr *http.Transport, f *bootFlags) error {
 		return err
 	}
 	if effective != "" {
+		// scheme://host only — never u.String()'s full form, which could carry
+		// a query string (installDaemonProxy refuses userinfo, not a query) into
+		// the boot log.
+		display := effective
+		if u, perr := url.Parse(effective); perr == nil {
+			display = u.Scheme + "://" + u.Host
+		}
 		slog.Info("wardynd: daemon egress proxy configured (WARDYN_DAEMON_PROXY_URL)",
-			slog.String("proxy", effective),
+			slog.String("proxy", display),
 			slog.String("no_proxy", *f.daemonNoProxy),
 			slog.String("auto_bypass", strings.Join(filterEmpty(autoBypass), ",")))
 	}
