@@ -45,9 +45,9 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 
 ## State stores
 
-Three stores hold data that exists nowhere else on every deployment, and a fourth
-appears the moment you register a **user drive**. Lose any of them and the loss is
-permanent.
+These stores hold recovery state. User drives add each person's files, and the
+audit fallback holds events that have not reached Postgres. Losing their only
+copy is permanent.
 
 | Store | Where | Holds | If you lose it |
 |---|---|---|---|
@@ -55,6 +55,7 @@ permanent.
 | Recordings | volume `${WARDYN_NS:-wardyn}-recordings` (`WARDYN_RECORDING_DIR=/data/recordings`) | PTY asciicasts for Replay — **only with `WARDYN_RECORDING_STORE=fs`**; the shipped default (`pg`) keeps them in Postgres and leaves this volume empty | every session replay it holds; nothing reconstructs them |
 | Age key | `WARDYN_AGE_KEY` in `deploy/compose/.env` | the X25519 identity every stored secret is encrypted to | every secret in Postgres becomes undecryptable ciphertext |
 | User drives | one object per person, per drive, on a deployment that registered one — a Docker volume or a PVC, both named `wardyn-drive-<drive-slug>-<home>`, or a subdirectory of the share YOU mounted (`host_path` — `<host_root>/<home>`) | each person's own files, written by their own runs at `/home/agent/drive`. Postgres holds the drive rows and the allocations, never the bytes, so `pg_dump` never carried this | that person's work; nothing reconstructs it |
+| Audit fallback | `WARDYN_AUDIT_SPOOL` and its `.consumed` / `.quarantine` sidecars; Compose mounts their directory on `<project>_audit` | pending failed-Postgres writes, their replay cursor, and permanently refused events | audit events absent from the database backup |
 
 `postgres_data`, `registry_data` and `audit` carry no explicit `name:` in
 `deploy/compose/docker-compose.yaml`, so Docker prefixes them with the compose
@@ -75,15 +76,43 @@ stack teardown must not delete a person's files. It is also why a backup that
 walks the compose volumes misses them entirely; list them with `docker volume ls
 --filter label=wardyn.managed=true`.
 
-The `audit` volume is **derived**, not primary: the optional file sink
-(`WARDYN_AUDIT_SINKS`, [ENV.md](ENV.md)). Postgres is the source of truth for the
-audit log (`deploy/helm/wardyn/values.yaml` says the same about `persistence`);
-the file sink is a forwarding copy for a SIEM. Ground truth (`tetragon_export`)
-and the rotator's `groundtruth_token` are transient — regenerated on start.
+The optional audit **file sink** (`WARDYN_AUDIT_SINKS`, [ENV.md](ENV.md)) is a
+forwarding copy for a SIEM. The Compose `audit` volume also holds the **fallback
+spool**, whose pending events are not yet in Postgres, so the volume is not
+disposable derived data. Preserve that recovery state as described below.
+Ground truth (`tetragon_export`) and the rotator's `groundtruth_token` are
+transient — regenerated on start.
+
+### Audit fallback recovery
+
+Keep the spool, `<spool>.consumed`, and `<spool>.quarantine` with the database
+backup as one recovery set. Quiesce work and stop wardynd while taking the
+database dump and copying its durable spool directory, so a drain cannot retire
+events between the two snapshots. Preserve ownership and restrictive file modes.
+The spool holds failed primary writes until replay succeeds; quarantine holds
+rejected events requiring manual triage. Neither is reconstructed from Postgres.
+
+Restore the matching files at `WARDYN_AUDIT_SPOOL` before wardynd starts.
+`NewAuditSpool` resumes from the valid `.consumed` cursor, restores the backlog
+and quarantine counters, and the drain retries pending events. Quarantine is
+not replayed automatically. A missing or mismatched cursor restarts replay from
+the beginning and can duplicate events; replay is at-least-once. The cursor
+identifies spool bytes, **not a database snapshot**: never pair a newer cursor
+with an older database dump, because it can skip events absent from that dump.
+Unmatched recovery sets need manual reconciliation.
+
+On ephemeral storage, preserve pending files **before** deleting the container
+or pod; once its directory is gone there is nothing to restore. If possible,
+recover Postgres and let the backlog drain first, while retaining quarantine.
+Use durable spool storage for repeatable backup/restore.
 
 ### Back them up
 
 ```sh
+# 0. Quiesce active work, then stop the writer while taking the database
+#    and audit-fallback backups as one recovery set.
+docker compose -f deploy/compose/docker-compose.yaml stop wardynd
+
 # 1. Postgres (the container name is ${WARDYN_NS:-wardyn}-postgres)
 docker exec wardyn-postgres pg_dump -U wardyn wardyn > wardyn-$(date +%F).sql
 
@@ -107,6 +136,13 @@ docker run --rm -v wardyn-recordings:/from -v "$PWD":/to alpine \
 #    A `host_path` drive is a subtree of a share you already back up, and a PVC
 #    is a snapshot per claim — see "User drives on Docker" and "User drives on
 #    Kubernetes" for the per-substrate detail.
+
+# 5. Snapshot/copy the audit-fallback directory, including its .consumed and
+#    .quarantine sidecars (see "Audit fallback recovery"). On stock Compose
+#    it is /data/audit on <project>_audit, not the unprefixed volume "audit".
+
+# 6. Once both the database and fallback copies are complete:
+docker compose -f deploy/compose/docker-compose.yaml start wardynd
 ```
 
 ### Restore them
@@ -125,7 +161,8 @@ dump loads.
 #    database mid-restore. (Restoring onto a HOST THAT ALREADY HAS DATA?
 #    `docker compose -f deploy/compose/docker-compose.yaml down -v` first —
 #    pg_dump's plain-SQL output re-creates the schema from scratch and will
-#    collide with an existing one.)
+#    collide with an existing one. Preserve any current spool/quarantine
+#    before down -v deletes the audit volume.)
 docker compose -f deploy/compose/docker-compose.yaml up -d postgres
 
 # 3. Restore into it. -v ON_ERROR_STOP=1 makes the FIRST failed statement
@@ -157,6 +194,9 @@ docker run --rm -v wardyn-recordings:/to -v "$PWD":/from alpine \
 #    <drive id> is the `id` on GET /api/v1/drives (the drive row's id, not the
 #    volume name); a WRONG id makes Wardyn refuse the volume rather than adopt
 #    it. host_path drives need nothing here — you restore that share yourself.
+
+# 5b. Restore the matching audit-fallback directory and sidecars before
+#     wardynd starts, preserving ownership/modes ("Audit fallback recovery").
 
 # 6. Now bring up the rest of the stack.
 make setup
@@ -4654,7 +4694,7 @@ bad *release*, the dump is the rollback.
 
 The chart renders no database. `postgres.dsn` points at a Postgres you operate,
 so the backup is your Postgres's own backup story — Wardyn adds no mechanism.
-What it adds is three corrections to the compose recipe:
+The differences from the Compose recipe are:
 
 - **Recordings are NOT in the dump on a stock chart install.** The chart pins
   the recording store itself (`deploy/helm/wardyn/values.yaml`, the
@@ -4668,22 +4708,24 @@ What it adds is three corrections to the compose recipe:
 - **The age key is a Secret, not a `.env` line.** See below; still the item that
   makes the difference between a restorable dump and a file of undecryptable
   ciphertext.
-- **The audit spool is not a backup target.** `WARDYN_AUDIT_SPOOL` renders to
+- **Pending audit fallback is a backup target.** `WARDYN_AUDIT_SPOOL` renders to
   `/tmp/audit-spool.jsonl` on a stock install and onto the PVC beside the
   recordings once `persistence` is on (`templates/deployment.yaml`), so turning
-  persistence on sweeps the spool up too — neither needs restoring. Derived by
-  design (`internal/api/auditspool.go`): the fallback for a failed Postgres write,
-  draining back into the database. Postgres remains the source of truth for the
-  audit log on both substrates. The one file beside it that is NOT derived is
-  `<spool>.quarantine`: it holds events the store permanently refused, which are
-  by definition absent from the database, so keep it until you have re-fed or
-  triaged its lines.
+  persistence on includes the spool and its sidecars in that volume's snapshot.
+  Undrained events and quarantined lines can be absent from `pg_dump`; preserve
+  them with the matching database backup and restore them before startup. Follow
+  [Audit fallback recovery](#audit-fallback-recovery), including its cursor and
+  snapshot-consistency limits. On the default `emptyDir`, scaling to zero or
+  replacing the pod loses these files: drain or preserve them first.
 
 ### Restore: rehearse into a scratch database first
 
 Two steps are Wardyn's, and both are cheap:
 
-**1. Nothing may run against the database mid-restore.** The compose recipe's
+**1. Preserve any current fallback state, then stop the control plane.** On the
+default ephemeral spool, copy any pending spool/sidecars and quarantine before
+scaling to zero; deleting the pod discards them. Nothing may run against the
+database mid-restore. The compose recipe's
 "start Postgres alone" becomes a scale-to-zero, which on a chart install is the
 whole control plane:
 
