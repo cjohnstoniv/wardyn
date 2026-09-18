@@ -108,8 +108,8 @@ type Server struct {
 	// Zero means "the shipped default": 3600s for the token, and for role
 	// credentials the absolute Expiration New() fixed at construction, so a
 	// deployment that sets neither is byte-identical to before these existed.
-	tokenTTL     time.Duration
-	roleCredTTL  time.Duration
+	tokenTTL    time.Duration
+	roleCredTTL time.Duration
 	// reauthAfter makes CreateToken answer invalid_grant on demand — the
 	// control that KILLS a session mid-run. 0 = never. It counts REFRESH
 	// redemptions, not device-flow issuances: the walk signs in first and the

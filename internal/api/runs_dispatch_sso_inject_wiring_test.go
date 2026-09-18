@@ -72,7 +72,6 @@ func dispatchLLM(t *testing.T, s *Server, sso awsSSOScope) (dispatchLLMPlan, *ca
 	return plan, captured, sandboxEnv, ok
 }
 
-
 // decodeStagedCache pulls the SSO token-cache file out of the staged
 // WARDYN_AWS_SSO_CONFIG_B64 records.
 //

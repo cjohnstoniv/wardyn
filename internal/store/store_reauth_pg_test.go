@@ -26,7 +26,7 @@ func seedReauthRun(t *testing.T, st store.PG) uuid.UUID {
 		ID: runID, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
 		CreatedBy: "alice@corp.example", Agent: "claude-code", Repo: "test/repo", Task: "t",
 		ConfinementClass: types.CC2, State: types.RunPending,
-		SPIFFEID:         "spiffe://test/agent-run/" + runID.String(), RunnerTarget: "docker",
+		SPIFFEID: "spiffe://test/agent-run/" + runID.String(), RunnerTarget: "docker",
 	}); err != nil {
 		t.Fatalf("create run: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestPG_ResolveReauthApproval_IsAOneWayCASWithItsAuditRow(t *testing.T) {
 			ID: uuid.New(), Time: time.Now().UTC(), RunID: &runID,
 			ActorType: types.ActorHuman, Actor: "alice@corp.example",
 			Action: "credential.reauth.resolved", Target: created.ID.String(), Outcome: "success",
-			Data:   json.RawMessage(`{"owner":"alice@corp.example"}`),
+			Data: json.RawMessage(`{"owner":"alice@corp.example"}`),
 		}
 	}
 	decision := types.ApprovalDecision{State: types.ApprovalApproved, DecidedBy: "alice@corp.example", Reason: "signed in again"}
