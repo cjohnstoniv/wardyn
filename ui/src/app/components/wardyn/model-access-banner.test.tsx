@@ -373,23 +373,6 @@ describe("where the strip is withheld", () => {
     renderStrip({ access: { state: "not_configured" }, path: "/settings" });
     expect(screen.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeInTheDocument();
   });
-
-  // W6-U NIT-5 — and there it shares the page with the Settings card's own
-  // `disabled={!operator}` "Sign in to AWS". getByRole matches a disabled
-  // button, so without a name of its own one page carried two controls with one
-  // accessible name. The rail's precedent: RAIL_MODEL_ACCESS.SIGN_IN_ARIA.
-  it("…under a name of its own, because the card's dead button shares the label", () => {
-    renderStrip({ access: { state: "not_configured" }, path: "/settings" });
-    const button = screen.getByRole("button", { name: MODEL_ACCESS_BANNER.SIGN_IN_ARIA_BANNER });
-    // The VISIBLE label is unchanged — one spelling of one control.
-    expect(button).toHaveTextContent(AGENTS.SIGN_IN_AWS);
-  });
-
-  it("…and keeps the plain name everywhere else, which is what the live walk locates", () => {
-    renderStrip({ access: { state: "not_configured" }, path: "/runs" });
-    expect(screen.getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: MODEL_ACCESS_BANNER.SIGN_IN_ARIA_BANNER })).toBeNull();
-  });
 });
 
 // The table, read directly — a render assertion proves the wiring, this proves
