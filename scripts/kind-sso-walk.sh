@@ -45,13 +45,16 @@
 # Service name throughout and why this script reads the Service CIDR off the
 # apiserver rather than guessing it.
 #
-# The walk itself is a Playwright project (ui/e2e/live/sso-member.spec.ts and,
-# since 0.7.5, ui/e2e/live/sso-member-recovery.spec.ts), driven through
-# scripts/run-ui-e2e.sh in its LIVE mode — same runner, same per-spec reporting
+# The walk itself is a Playwright project — ui/e2e/live/sso-member.spec.ts,
+# ui/e2e/live/sso-member-recovery.spec.ts (0.7.5) and
+# ui/e2e/live/sso-reauth-hold.spec.ts (0.7.6) — driven through
+# scripts/run-ui-e2e.sh in its LIVE mode: same runner, same per-spec reporting
 # and the same zero-executed check, pointed at this cluster instead of the
-# hermetic backend it otherwise boots. The two files run in ONE invocation and
+# hermetic backend it otherwise boots. The THREE files run in ONE invocation and
 # in THAT order: the recovery file inherits a member who is already `live` and a
-# roster pin that already contradicts nothing.
+# roster pin that already contradicts nothing, and the hold file goes last
+# because its case K spends ten minutes of wall clock and every case in it makes
+# its own capture.
 #
 # WARDYN_KIND_SSO_REBUILD=1 rebuilds wardynd + the proxy from this tree and
 # reloads them before the walk — the flag a RELEASE walk sets, because the
@@ -146,7 +149,11 @@ SSO_REGION="us-east-1"
 BEDROCK_MODEL="arn:aws:bedrock:${SSO_REGION}:${PIN_ACCOUNT}:inference-profile/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 SSO_START_URL="https://wardyn-dev.awsapps.com/start"
 
-EVIDENCE_DIR="${WARDYN_KIND_SSO_EVIDENCE:-${ROOT}/local/v076/evidence/kind-sso}"
+# Version-FREE (W6-I NIT-2): the default was campaign-versioned and shipped one
+# release behind for the whole of 0.7.5→0.7.6. Every campaign passes
+# WARDYN_KIND_SSO_EVIDENCE explicitly anyway; this is only where an ad-hoc run
+# lands.
+EVIDENCE_DIR="${WARDYN_KIND_SSO_EVIDENCE:-${ROOT}/local/evidence/kind-sso}"
 mkdir -p "${EVIDENCE_DIR}"
 
 # ── 1. the cluster and the overlay are up ───────────────────────────────────
@@ -226,25 +233,52 @@ fi
 #
 # AND IT READS THE NODE, not just the host. `docker image inspect` answers about
 # the daemon this script talks to; what the walk is actually judged by is what
-# the kind node's containerd holds. Those two disagree exactly when the reload
-# was forgotten — which is the failure this record exists to catch — so the host
-# view alone would have printed fresh ids for a walk running stale images.
+# the kind node's containerd holds, and those two disagree exactly when the
+# reload was forgotten.
+#
+# THE TWO SIDES MUST BE THE SAME KIND OF DIGEST (W6-I SHOULD-1). This record used
+# to print docker's `.Id` beside `crictl images --no-trunc`, which are a MANIFEST
+# digest and a CONFIG digest: they differ for every image in every walk, reload
+# or not, so the comparison could never catch the failure it exists to catch —
+# and the comment claiming it could was false for two releases. `ctr -n k8s.io
+# images ls` prints the digest of what `kind load` imported, which IS the host
+# daemon's image id byte for byte, so `agree` below means what it says.
 step "recording the image provenance into ${EVIDENCE_DIR}/images.txt"
+# ONE read of the node's store, reused for all five (a `docker exec` per image
+# is five round trips for one question).
+NODE_IMAGES="$(docker exec "${KIND_NODE}" ctr -n k8s.io images ls 2>/dev/null || true)"
+node_digest() { # <repo:tag> -> the node's manifest digest, or ""
+  printf '%s\n' "${NODE_IMAGES}" | awk -v r="docker.io/$1" '$1==r {print $3}' | head -1
+}
+host_digest() { docker image inspect "$1" --format '{{.Id}}' 2>/dev/null; }
+IMAGES_AGREE=1
 {
   echo "walk tree:       $(git -C "${ROOT}" rev-parse HEAD 2>/dev/null || echo '(not a git tree)')"
+  # The PATHS, not a count (W6-I SHOULD-1): "dirty: 1 file(s)" names nothing a
+  # reader can judge. Bounded, because a stray build artefact must not bury it.
   echo "walk tree dirty: $(git -C "${ROOT}" status --porcelain 2>/dev/null | wc -l) file(s)"
+  git -C "${ROOT}" status --porcelain 2>/dev/null | head -20 | sed 's/^/                 /'
   echo "rebuilt:         ${WARDYN_KIND_SSO_REBUILD:-0}"
+  echo "proxy inject:    ${PROXY_INJECT:-(set at the helm upgrade below)}"
   echo
-  echo "--- host daemon ---"
+  printf '%-34s %-72s %-72s %s\n' "image" "host daemon" "node ${KIND_NODE}" "agree"
   for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}" "${AWS_SSO_IMAGE}" "${FAKE_IMAGE}"; do
-    printf '%-34s %s\n' "${img}" \
-      "$(docker image inspect "${img}" --format '{{.Id}} created={{.Created}}' 2>/dev/null || echo '(not present locally)')"
+    h="$(host_digest "${img}")"; n="$(node_digest "${img}")"
+    a="NO"; [[ -n "${h}" && "${h}" == "${n}" ]] && a="yes"
+    [[ "${a}" == "yes" ]] || IMAGES_AGREE=0
+    printf '%-34s %-72s %-72s %s\n' "${img}" "${h:-(absent)}" "${n:-(absent)}" "${a}"
   done
   echo
-  echo "--- node ${KIND_NODE} (containerd: what the pods actually run) ---"
-  docker exec "${KIND_NODE}" crictl images --no-trunc 2>/dev/null | grep 'wardyn/' \
-    || echo "(could not read the node's image store)"
+  echo "created (host):"
+  for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}" "${AWS_SSO_IMAGE}" "${FAKE_IMAGE}"; do
+    printf '  %-34s %s\n' "${img}" "$(docker image inspect "${img}" --format '{{.Created}}' 2>/dev/null || echo '(not present locally)')"
+  done
 } | tee "${EVIDENCE_DIR}/images.txt"
+if [[ "${IMAGES_AGREE}" != "1" ]]; then
+  echo "" >&2
+  echo "WARNING: an image the node runs is NOT the one this daemon holds (see ${EVIDENCE_DIR}/images.txt)." >&2
+  echo "         Re-run with WARDYN_KIND_SSO_REBUILD=1, which builds and kind-loads all five." >&2
+fi
 
 # A KILLED PLAYWRIGHT LEAVES THE NODE UNSCHEDULABLE. The recovery spec's
 # cold-start case taints this node to hold a run pod Pending and untaints it in
@@ -299,7 +333,17 @@ AGENT_IMAGES="$(jq -cn --argjson cur "${CUR_AGENT_IMAGES}" \
   '$cur + {"aws-sso": "wardyn/agent-aws-sso:local"}')" \
   || die "could not extend WARDYN_AGENT_IMAGES (read: ${CUR_AGENT_IMAGES:-<empty>})"
 
-step "pointing wardynd at the fake AWS endpoints (helm upgrade --reuse-values)"
+# THE KILL-SWITCH POSTURE IS SET EXPLICITLY, EVERY WALK (W6-I SHOULD-4).
+# `--reuse-values` carries whatever the last upgrade left, so an out-of-band
+# diagnostic `off` (which is exactly how walk-4 was run) leaks silently into
+# every later walk — and with only the two 0.7.5 specs the `off` posture is
+# GREEN, so a release walk could certify the posture nobody ships. Only case K
+# discriminates, and only if it runs. Default `on` = the daemon's own default =
+# what a release must certify; override for a diagnostic run and the record says
+# so.
+PROXY_INJECT="${WARDYN_KIND_SSO_PROXY_INJECT:-on}"
+
+step "pointing wardynd at the fake AWS endpoints (helm upgrade --reuse-values; WARDYN_AWS_SSO_PROXY_INJECT=${PROXY_INJECT})"
 helm --kube-context "${CONTEXT}" upgrade "${RELEASE}" deploy/helm/wardyn \
   -n "${NAMESPACE}" --reuse-values \
   --set "auth.adminToken.value=${ADMIN_TOKEN}" \
@@ -309,6 +353,7 @@ helm --kube-context "${CONTEXT}" upgrade "${RELEASE}" deploy/helm/wardyn \
   --set "env.WARDYN_BEDROCK_AWS_SSO_REGION=${SSO_REGION}" \
   --set "env.WARDYN_BEDROCK_BASE_URL=${FAKE_URL}" \
   --set "env.WARDYN_BEDROCK_MODEL=${BEDROCK_MODEL}" \
+  --set "env.WARDYN_AWS_SSO_PROXY_INJECT=${PROXY_INJECT}" \
   --set-json "env.WARDYN_AGENT_IMAGES=$(jq -Rn --arg v "${AGENT_IMAGES}" '$v')" \
   >"${EVIDENCE_DIR}/helm-upgrade.log" 2>&1 \
   || { tail -30 "${EVIDENCE_DIR}/helm-upgrade.log" >&2; die "helm upgrade failed (see ${EVIDENCE_DIR}/helm-upgrade.log)"; }
@@ -499,6 +544,73 @@ code="$(curl -s -o "${EVIDENCE_DIR}/workspace-providers-put.json" -w '%{http_cod
 # ── 5. the walk ─────────────────────────────────────────────────────────────
 # run-ui-e2e.sh in LIVE mode: it skips the hermetic backend entirely and points
 # the `live` Playwright project at this cluster. One spec file, as always.
+# ── 4c. THE PROVENANCE RECORD, IN TREE ──────────────────────────────────────
+#
+# W5 asks each walk to carry a MANIFEST.json naming the commit, the five image
+# digests as the NODE holds them, the chart, the daemon's own version and the
+# cluster, "so the walked artefact is provably the commit under test". That
+# writer lived in a campaign scratch directory for 0.7.6's first five walks,
+# which means the provenance of a release walk depended on a file no reviewer
+# could find from the tree (W6-I SHOULD-1). It lives here now.
+#
+# THE POSTURE IS PART OF THE ARTEFACT (W6-I SHOULD-4). A walk that does not
+# record which side of the Phase B kill switch it ran on cannot certify either
+# side: the two 0.7.5 spec files are green under `off`, and only case K tells
+# the difference. So the effective value is read back OFF THE DEPLOYMENT — not
+# off this script's own variable — and a disagreement stops the walk.
+step "reading back the kill-switch posture and writing ${EVIDENCE_DIR}/MANIFEST.json"
+EFFECTIVE_INJECT="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get deployment "${RELEASE}" \
+  -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="WARDYN_AWS_SSO_PROXY_INJECT")].value}' 2>/dev/null)"
+# STRICT, including against <unset>: this script SETS the variable on the
+# upgrade above, so an unset one means that upgrade never reached the pod — the
+# same class of failure as a stale admin token, and the same fix (look at
+# helm-upgrade.log). It is not "the daemon's default is also on": the point of
+# the record is that the walk can prove which posture it certified.
+[[ "${EFFECTIVE_INJECT}" == "${PROXY_INJECT}" ]] || die \
+  "the deployment runs WARDYN_AWS_SSO_PROXY_INJECT='${EFFECTIVE_INJECT:-<unset>}' but this walk intended '${PROXY_INJECT}' — the helm upgrade did not reach the pod (see ${EVIDENCE_DIR}/helm-upgrade.log); a walk that certifies the wrong posture is worse than no walk"
+echo "kill switch:     WARDYN_AWS_SSO_PROXY_INJECT=${EFFECTIVE_INJECT} (intended ${PROXY_INJECT})"
+
+manifest_images() {
+  local first=1
+  for img in "${WARDYND_IMAGE}" "${PROXY_IMAGE}" "${AGENT_IMAGE}" "${AWS_SSO_IMAGE}" "${FAKE_IMAGE}"; do
+    local h n
+    h="$(host_digest "${img}")"; n="$(node_digest "${img}")"
+    [[ ${first} -eq 1 ]] || printf ','
+    first=0
+    jq -cn --arg i "${img}" --arg h "${h}" --arg n "${n}" \
+      '{image:$i, host_id:$h, node_id:$n, agree:($h==$n and $h!="")}'
+  done
+}
+FAKE_ENV="$(kubectl --context "${CONTEXT}" -n "${NAMESPACE}" get deployment "${FAKE_SVC}" \
+  -o json 2>/dev/null | jq -c '[.spec.template.spec.containers[0].env[]? | select(.name|startswith("AWSSSOFAKE_")) | {(.name): .value}] | add // {}')"
+# An unreadable deployment must not make `--argjson` choke on an empty string.
+[[ -n "${FAKE_ENV}" ]] || FAKE_ENV='{}'
+
+jq -n \
+  --arg sha "$(git -C "${ROOT}" rev-parse HEAD 2>/dev/null)" \
+  --arg branch "$(git -C "${ROOT}" rev-parse --abbrev-ref HEAD 2>/dev/null)" \
+  --arg dirty "$(git -C "${ROOT}" status --porcelain 2>/dev/null | wc -l)" \
+  --arg dirty_files "$(git -C "${ROOT}" status --porcelain 2>/dev/null | head -20 | tr '\n' ';')" \
+  --arg cluster "${CLUSTER}" --arg ctx "${CONTEXT}" --arg node "${KIND_NODE}" \
+  --arg chart "$(helm --kube-context "${CONTEXT}" -n "${NAMESPACE}" list -o json 2>/dev/null | jq -r '.[]|select(.name=="'"${RELEASE}"'")|.chart')" \
+  --arg appver "$(helm --kube-context "${CONTEXT}" -n "${NAMESPACE}" list -o json 2>/dev/null | jq -r '.[]|select(.name=="'"${RELEASE}"'")|.app_version')" \
+  --arg inject "${EFFECTIVE_INJECT}" \
+  --arg rebuilt "${WARDYN_KIND_SSO_REBUILD:-0}" \
+  --argjson fake_env "${FAKE_ENV}" \
+  --argjson healthz "$(curl -s "${BASE_URL}/healthz" 2>/dev/null || echo '{}')" \
+  --argjson images "[$(manifest_images)]" \
+  --arg at "$(date -Is)" \
+  '{git_sha:$sha, git_branch:$branch, worktree_dirty_files:($dirty|tonumber), worktree_dirty:$dirty_files,
+    rebuilt:($rebuilt=="1"), cluster:$cluster, kube_context:$ctx, node:$node,
+    chart:$chart, chart_app_version:$appver,
+    aws_sso_proxy_inject:$inject, fake_env:$fake_env,
+    wardynd_healthz:$healthz, images:$images, recorded_at:$at,
+    note:"the test estate runs test/awsssofake, whose /_seen and /_control endpoints are UNAUTHENTICATED by design and reachable from any sandbox on this cluster through the internal_hosts lift — correct for a throwaway cluster, never a posture to copy"}' \
+  > "${EVIDENCE_DIR}/MANIFEST.json" \
+  || die "could not write ${EVIDENCE_DIR}/MANIFEST.json"
+jq -r '"manifest: \(.git_sha) dirty=\(.worktree_dirty_files) inject=\(.aws_sso_proxy_inject) images_agree=\([.images[].agree]|all)"' \
+  "${EVIDENCE_DIR}/MANIFEST.json"
+
 step "opening the read-only port-forward to the fake's /_seen (127.0.0.1:${SEEN_PORT})"
 seen_pf_pid=""
 pod_watch_pid=""
@@ -530,7 +642,7 @@ kubectl --context "${CONTEXT}" -n "${RUNS_NAMESPACE}" get pods -w \
   >"${EVIDENCE_DIR}/run-pod-volumes.txt" 2>/dev/null &
 pod_watch_pid=$!
 
-step "running the walk (ui/e2e/live/sso-member.spec.ts + sso-member-recovery.spec.ts)"
+step "running the walk (ui/e2e/live/sso-member + sso-member-recovery + sso-reauth-hold)"
 export WARDYN_LIVE_SEEN_URL="${SEEN_URL}"
 export WARDYN_E2E_LIVE_BASE_URL="${BASE_URL}"
 export WARDYN_TEST_K8S=1

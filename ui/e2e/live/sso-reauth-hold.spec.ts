@@ -13,14 +13,23 @@
  * and because every case here makes its OWN capture — nothing after it should
  * depend on which session the member is holding.
  *
- * ── SIMULATED, AND THE WORD IS THE HOLD LANE'S ──────────────────────────────
- * The kind walk runs the fake over PLAIN HTTP, so the injection rides the
- * cleartext lane and the timeout's 401 body does NOT reach the SDK there (the
- * plain lane swallows injection errors and the SDK sees the fake's own 401).
- * The walk's evidence must call case K a **SIMULATED** check of the production
- * path. The production-shaped path — TLS CONNECT -> mitm.go -> header injection
- * -> CA trust -> the timeout body — is proven by the docker-gated test, whose
- * fake serves TLS (test/awsssofake/reauth_hold_docker_test.go).
+ * ── WHAT IS SIMULATED HERE, AND WHAT IS NOT ─────────────────────────────────
+ * Corrected 2026-09-18 (W6-I SHOULD-3): the first version of this header said
+ * the walk's injection "rides the cleartext lane" and that the production path
+ * is "proven by the docker-gated test, whose fake serves TLS". Both are false.
+ * The SDK CONNECTs, so the walk exercises the MITM lane — terminate, strip,
+ * inject, re-originate — and `test/awsssofake` serves PLAIN HTTP
+ * (`httptest.NewServer`); the docker-gated tests point the agent straight at it
+ * with no proxy at all, deliberately, because what they measure is the SDK's
+ * patience. Nothing in them touches mitm.go.
+ *
+ * What is SIMULATED is exactly one thing: the timeout BODY. Over plain HTTP the
+ * sandbox's SDK still sees the fake's own 401 rather than the hold's sentence,
+ * so case K is a SIMULATED check of that. The terminate → strip → inject →
+ * re-originate path is pinned by internal/egress/proxy's own
+ * TestMITMConnect_PlaintextOriginIsReachedThroughTheTunnel, which drives a real
+ * CONNECT through a real proxy listener and a real TLS handshake against the
+ * Wardyn leaf into a real plain-HTTP origin — and by this walk, end to end.
  *
  * What IS real here, and is proven nowhere else: a real member, a real k8s
  * sandbox, a real agent process, a real session retired at the portal mid-run,
