@@ -7,6 +7,12 @@ import { randomUUID } from "node:crypto";
 import { test, expect, gotoConsole, navTo, sidebarLink, sql } from "./fixtures";
 import { RUN, RUN_COCKPIT } from "../src/app/components/wardyn/copy";
 import { LOGIN_SANDBOX_NOTE } from "../src/app/components/screens/run-detail/login-sandbox-note";
+import {
+  CHIP_IMAGE_PULL_FAILED,
+  CHIP_SETTING_UP,
+  STARTING_CONTAINER_CREATING,
+  STUCK_IMAGE_PULL,
+} from "../src/app/components/screens/run-status-detail";
 import type { Page, Locator } from "@playwright/test";
 
 // ============================================================================
@@ -417,6 +423,59 @@ test.describe("Run detail (/runs/:id)", () => {
 // well below the bar's floor (~1300px on a single-line row before the fix),
 // stressing the truncate/overflow-hidden path harder than the width loop above.
 test.describe("Run header — the failure-hint chip survives a narrow viewport (F1-F4)", () => {
+  // 0.7.6 finding 6: a STARTING run says what it is waiting ON. The seeded
+  // backend has no real substrate behind fixture 1, so the reason is injected on
+  // the read the console actually makes — the same route-intercept shape the
+  // failure_hint case above uses.
+  test("a STARTING run's header carries the substrate's reason, in the short register, with the sentence on its title", async ({
+    page,
+  }) => {
+    await page.route("**/api/v1/runs/*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      if (json.task === "e2e fixture 1") {
+        json.status_detail = "agent: ContainerCreating";
+        json.status_reason = "ContainerCreating";
+      }
+      await route.fulfill({ response, json });
+    });
+    await openRuns(page);
+    await page.getByText("e2e fixture 1").click();
+    await expect(page).toHaveURL(/\/runs\/.+/);
+
+    const header = page.getByTestId("run-summary-header");
+    await expect(header.getByText("Starting", { exact: true })).toBeVisible();
+    // The SHORT register on screen, the sentence on the title: at max-w-[160px]
+    // the sentence would truncate to a restatement of the badge beside it.
+    await expect(header.getByText(CHIP_SETTING_UP)).toBeVisible();
+    await expect(header.getByTitle(STARTING_CONTAINER_CREATING)).toBeVisible();
+  });
+
+  // The terminal arm, which is the one the 0.7.5 estate needed: the reason that
+  // will not resolve, in the register that survives the chip's width.
+  test("a terminal startup reason reads as a failure, not as progress", async ({ page }) => {
+    await page.route("**/api/v1/runs/*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      if (json.task === "e2e fixture 1") {
+        json.status_detail = "agent: ImagePullBackOff: rpc error: pull access denied";
+        json.status_reason = "ImagePullBackOff";
+      }
+      await route.fulfill({ response, json });
+    });
+    await openRuns(page);
+    await page.getByText("e2e fixture 1").click();
+    await expect(page).toHaveURL(/\/runs\/.+/);
+
+    const header = page.getByTestId("run-summary-header");
+    await expect(header.getByText(CHIP_IMAGE_PULL_FAILED)).toBeVisible();
+    // The registry's own words are what name the fix, so they must survive to
+    // the title even though the chip cannot hold them.
+    await expect(header.getByTitle(new RegExp(`${STUCK_IMAGE_PULL} .*pull access denied`))).toBeVisible();
+  });
+
   test("no horizontal overflow at 420px, Kill stays in the viewport, and the hint chip is still visible", async ({
     page,
   }) => {
