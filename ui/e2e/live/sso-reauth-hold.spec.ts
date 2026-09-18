@@ -186,6 +186,38 @@ async function freshCapture(page: Page, request: APIRequestContext): Promise<num
   return Date.now();
 }
 
+/** The ADMIN's own AWS sign-in, which is NOT on /setup — and NEVER a bare
+ *  `page.goto("/providers")`.
+ *
+ *  App.tsx's RequireSetup bounces the FIRST gated-route render of every full
+ *  document load into /setup while any setup check grades fail or warn, which a
+ *  fresh kind install always does, and only ONCE per load. So navigate
+ *  CLIENT-SIDE (pushState + popstate, what a <NavLink> click does) and let the
+ *  page say when it took: if the one bounce landed on top of this navigation,
+ *  the retry cannot be bounced again. Same reasoning, same shape, as
+ *  sso-member-recovery.spec.ts's gotoAgentsTab — 0.7.5's first green-looking
+ *  walk sat thirty minutes on the welcome page for exactly this.
+ *
+ *  The button itself is gated on MODEL_ACCESS_ACTIONABLE (agents-tab.tsx): a
+ *  LIVE admin is offered no sign-in at all, which is correct and is why every
+ *  caller below checks the state first rather than assuming the control. */
+async function openAdminLoginPane(page: Page): Promise<void> {
+  await page.goto("/runs");
+  await expect(async () => {
+    if (!/\/providers$/.test(page.url())) {
+      await page.evaluate((path) => {
+        window.history.pushState({}, "", path);
+        window.dispatchEvent(new PopStateEvent("popstate"));
+      }, "/providers");
+    }
+    await expect(page.getByRole("button", { name: AGENTS.AGENTS_TITLE })).toBeVisible({ timeout: 5_000 });
+  }).toPass({ timeout: 90_000 });
+  await page.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
+  await page.getByRole("button", { name: AGENTS.SIGN_IN_AWS }).first().click();
+  const start = page.getByRole("button", { name: "Start login" });
+  if (await start.isVisible().catch(() => false)) await start.click();
+}
+
 /** Case H's recipe, which this file needs for the one reason an autonomous run
  *  cannot serve: the hold is unreachable before T+7 (see the header), and an
  *  autonomous `claude -p` run is finished long before that. An INTERACTIVE run
@@ -336,13 +368,18 @@ test("K (credential-reauth-hold): a session retired mid-run HOLDS the model call
     const adminPage = await page.context().browser()!.newPage();
     try {
       await dexSignIn(adminPage, ADMIN_EMAIL);
-      await signInThroughPane(adminPage, async (p) => {
-        await p.goto("/providers");
-        await p.getByRole("button", { name: AGENTS.AGENTS_TITLE }).click();
-        await p.getByRole("button", { name: AGENTS.SIGN_IN_AWS }).first().click();
-        const start = p.getByRole("button", { name: "Start login" });
-        if (await start.isVisible().catch(() => false)) await start.click();
-      });
+      // THE ADMIN HAS A CTA HERE ONLY BECAUSE OF THE PIN, and that is worth
+      // stating: freshCapture() above flipped the roster pin, and the admin's
+      // own stored capture (made by the recovery file's case F, under the
+      // previous pair) now contradicts it — so they grade `expired_signin`,
+      // which is actionable, and agents-tab.tsx renders the sign-in. A LIVE
+      // admin would be offered nothing, correctly. Asserted rather than
+      // assumed: without the CTA this case would fail on a timeout that names
+      // a missing button instead of the fact under test.
+      await expect
+        .poll(async () => (await modelAccess(adminPage)).state, { timeout: 60_000 })
+        .not.toBe("live");
+      await signInThroughPane(adminPage, openAdminLoginPane);
       // …and the member's request is exactly where it was. Read twice, a poll
       // apart: "still pending" measured once is a snapshot, and the resolve
       // path this denies runs on the proxy's own 2 s poll.
@@ -498,10 +535,15 @@ test("negative (model-access-banner): an admin whose own session is live sees no
   // (the recovery file's case F signs them in, and case K's I2 does it again).
   await dexSignIn(page, ADMIN_EMAIL);
   expect((await me(page)).operator).toBe(true);
-  expect(
-    (await modelAccess(page)).state,
-    "this negative needs an admin with a LIVE session — case F should have left one",
-  ).toBe("live");
+  // SELF-SUFFICIENT, because "the admin is live" is not something this file can
+  // inherit: every case above flips the roster pin to make the MEMBER
+  // actionable, and the pin is one field on one row — an admin whose capture
+  // was minted under the other pair grades `expired_signin` too. So reach the
+  // state this case is about rather than asserting somebody else left it.
+  if ((await modelAccess(page)).state !== "live") {
+    await signInThroughPane(page, openAdminLoginPane);
+  }
+  await expect.poll(async () => (await modelAccess(page)).state, { timeout: LOGIN_DONE }).toBe("live");
 
   for (const path of ["/runs", "/workspaces", "/approvals"]) {
     await page.goto(path);
