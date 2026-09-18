@@ -678,8 +678,34 @@ walk_rc="${PIPESTATUS[0]}"
 # /_seen is the one observation that is not Wardyn asserting about itself: it is
 # what the AWS SDK actually asked the portal to mint. Read through the harness's
 # own port-forward (see SEEN_URL above for why not `kubectl exec`).
+# THROUGH A FRESH FORWARD IF THE WALK'S OWN HAS DIED, because two hold negatives
+# in sso-reauth-hold.spec.ts re-time the fake's session, which restarts its pod —
+# and `kubectl port-forward` picks its pod once and never re-targets. The
+# port-forward opened above is dead by the time the specs finish, so this read
+# returned nothing and seen.json shipped EMPTY: the walk's single most
+# independent observation (what the SDK actually asked the portal to mint) lost
+# to a plumbing detail. One retry through a forward of its own costs two seconds.
+#
+# AND READ THE RESULT FOR WHAT IT NOW IS. Those same negatives RESTART the fake,
+# which resets its in-memory counters — so from 0.7.6 this closing file is the
+# state after the LAST case, not a tally of the whole walk. The counters that
+# judge the walk are asserted inside the specs, while the runs that moved them
+# are alive (sso-member's pinned-identity case, recovery's G and H); a zeroed
+# file here is the expected shape of "the last case restarted the fake", never a
+# finding on its own.
 step "reading the fake's /_seen"
-curl -s "${SEEN_URL}" | tee "${EVIDENCE_DIR}/seen.json" || echo '(could not read /_seen)'
+if ! curl -sf "${SEEN_URL}" | tee "${EVIDENCE_DIR}/seen.json" | grep -q .; then
+  kubectl --context "${CONTEXT}" -n "${NAMESPACE}" port-forward "svc/${FAKE_SVC}" \
+    "${SEEN_RETRY_PORT:-8398}:${FAKE_PORT}" >/dev/null 2>&1 &
+  seen_retry_pf=$!
+  for _ in $(seq 1 30); do
+    curl -sf "http://127.0.0.1:${SEEN_RETRY_PORT:-8398}/_seen" >/dev/null 2>&1 && break
+    sleep 1
+  done
+  curl -s "http://127.0.0.1:${SEEN_RETRY_PORT:-8398}/_seen" | tee "${EVIDENCE_DIR}/seen.json" \
+    || echo '(could not read /_seen)'
+  kill "${seen_retry_pf}" 2>/dev/null
+fi
 echo
 
 if [[ "${walk_rc}" -ne 0 ]]; then
