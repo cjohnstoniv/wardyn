@@ -719,22 +719,43 @@ func TestDecide_RefusesACredentialReauthRow(t *testing.T) {
 		}
 	}
 
-	// THE MEMBER TIER, through a real OIDC session (security NIT-5). The kind
-	// rule now runs BEFORE authorizeMemberDecision, so a member is told the same
-	// thing the security operator is: the verb does not exist for this kind.
-	// Behind that gate the member got its refusal instead — refused either way,
-	// but "you may not use this verb" and "this verb applies to nobody" are
-	// different facts, and only the second one is true.
-	for _, verb := range []string{"approve", "deny"} {
-		w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+ap.ID.String()+"/"+verb,
-			ssoSession(t, "member-sub", "member@corp.example", oidc.RoleMember), "")
-		if w.Code != http.StatusConflict {
-			t.Errorf("member %s: code = %d, want 409; body=%s", verb, w.Code, w.Body.String())
-		}
-		if !strings.Contains(w.Body.String(), "signing in") {
-			t.Errorf("member %s: body = %s, want the not-decidable sentence", verb, w.Body.String())
+	// THE MEMBER TIER, through a real OIDC session — and the two halves of it
+	// (security round-2 SHOULD-1). The run's OWNER is told the same thing the
+	// security operator is: the verb does not exist for this kind. A member who
+	// does NOT own the run is told nothing at all, because a 409 there would
+	// answer "is this UUID a credential_reauth approval of somebody's run?" for
+	// any authenticated caller — the existence oracle routes.go, this file's own
+	// member gate and approvals_decide_test.go all exist to deny. The first fix
+	// for NIT-5 put the kind test ahead of ownership and opened exactly that.
+	for _, tc := range []struct {
+		name  string
+		sess  *http.Cookie
+		want  int
+		wantB string
+	}{
+		{"the run's owner", ssoSession(t, "alice@example.com", "alice@example.com", oidc.RoleMember), http.StatusConflict, "signing in"},
+		{"a foreign member", ssoSession(t, "member-sub", "member@corp.example", oidc.RoleMember), http.StatusNotFound, "approval not found"},
+	} {
+		for _, verb := range []string{"approve", "deny"} {
+			w := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+ap.ID.String()+"/"+verb, tc.sess, "")
+			if w.Code != tc.want {
+				t.Errorf("%s %s: code = %d, want %d; body=%s", tc.name, verb, w.Code, tc.want, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), tc.wantB) {
+				t.Errorf("%s %s: body = %s, want %q", tc.name, verb, w.Body.String(), tc.wantB)
+			}
 		}
 	}
+	// …and the foreign member's refusal is BYTE-IDENTICAL to the one a UUID that
+	// does not exist at all gets, so the two cannot be told apart.
+	foreignSess := func() *http.Cookie { return ssoSession(t, "member-sub", "member@corp.example", oidc.RoleMember) }
+	fresh := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+uuid.New().String()+"/approve", foreignSess(), "")
+	foreign := doSSO(t, f.srv, http.MethodPost, "/api/v1/approvals/"+ap.ID.String()+"/approve", foreignSess(), "")
+	if fresh.Code != foreign.Code || fresh.Body.String() != foreign.Body.String() {
+		t.Errorf("a foreign member can tell a real credential_reauth row (%d %s) from a nonexistent one (%d %s)",
+			foreign.Code, foreign.Body.String(), fresh.Code, fresh.Body.String())
+	}
+
 	got, _ := f.srv.cfg.Approvals.Get(context.Background(), ap.ID)
 	if got.State != types.ApprovalPending {
 		t.Fatalf("a refused decision still moved the row to %s", got.State)

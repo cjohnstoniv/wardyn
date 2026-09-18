@@ -265,16 +265,24 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// The gate loads BOTH rows or NEITHER, so its one flag seeds both here; they
 	// diverge below, where rule 4 may load the approval alone and leave the run
 	// unread for `always` to fetch.
-	// RULE 3b FIRST, BEFORE the member gate (security NIT-5). The plan's promise
-	// is 409 on EVERY tier; behind authorizeMemberDecision a MEMBER got that
-	// gate's own refusal instead, so the answer depended on who asked about a
-	// verb that applies to nobody. Refused either way — but "this verb does not
-	// exist for this kind" and "you are not allowed to use this verb" are
-	// different facts, and only one of them is true here.
+	// RULE 3b, BEFORE the member gate (security NIT-5) but AFTER ownership
+	// (security round-2 SHOULD-1). The plan's promise is 409 on every tier that
+	// can SEE the row; behind authorizeMemberDecision a member who owned the run
+	// got that gate's flat 404 instead, so the answer to "why was I refused"
+	// depended on who asked about a verb that applies to nobody.
+	//
+	// But the first fix moved the kind test ahead of ownership, which made it an
+	// EXISTENCE ORACLE: any authenticated member holding a UUID could learn it
+	// was a credential_reauth approval of somebody's run. This file's own gate
+	// (below), routes.go and approvals_decide_test.go all state the opposite
+	// invariant — a foreign approval 404s — so ownership is resolved FIRST here
+	// too, exactly as every other kind resolves it, and a foreign member falls
+	// through to the same byte-identical 404 it has always had.
 	//
 	// It costs one store read on a path that is about to do a write, and it is
 	// the same read the scope rules below need anyway.
-	if reauthAP, rerr := s.cfg.Approvals.Get(r.Context(), id); rerr == nil && reauthAP.Kind == types.ApprovalCredentialReauth {
+	if reauthAP, rerr := s.cfg.Approvals.Get(r.Context(), id); rerr == nil &&
+		reauthAP.Kind == types.ApprovalCredentialReauth && s.canSeeApproval(r, reauthAP) {
 		writeError(w, http.StatusConflict, credentialReauthNotDecidableBody)
 		return
 	}
@@ -561,6 +569,19 @@ func decodeDecisionRequest(w http.ResponseWriter, r *http.Request) (decisionRequ
 //
 // Then, and only then, the 0.6 egress_host capability: which hosts a member may
 // decide FOR THEMSELVES. Ordered last on purpose — see the block itself.
+// canSeeApproval reports whether this caller may be told that ap EXISTS — the
+// security tier, which decides any kind on any run, or a caller who owns ap's
+// run (or is an admin), which is the same ownership rule authorizeMemberDecision
+// applies below. Everyone else is told nothing, so no refusal above can become
+// the existence oracle the two 404s in that gate exist to deny.
+func (s *Server) canSeeApproval(r *http.Request, ap types.ApprovalRequest) bool {
+	if s.isSecurityOperator(r.Context()) {
+		return true
+	}
+	run, err := s.cfg.Store.GetRun(r.Context(), ap.RunID)
+	return err == nil && s.ownsRunOrAdmin(r, run)
+}
+
 func (s *Server) authorizeMemberDecision(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.ApprovalRequest, types.AgentRun, bool, bool) {
 	var (
 		ap  types.ApprovalRequest
