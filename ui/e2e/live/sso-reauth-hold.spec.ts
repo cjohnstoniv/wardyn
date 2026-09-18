@@ -385,17 +385,37 @@ test("K (credential-reauth-hold): a session retired mid-run HOLDS the model call
     const adminPage = await page.context().browser()!.newPage();
     try {
       await dexSignIn(adminPage, ADMIN_EMAIL);
-      // THE ADMIN HAS A CTA HERE ONLY BECAUSE OF THE PIN, and that is worth
-      // stating: freshCapture() above flipped the roster pin, and the admin's
-      // own stored capture (made by the recovery file's case F, under the
-      // previous pair) now contradicts it — so they grade `expired_signin`,
-      // which is actionable, and agents-tab.tsx renders the sign-in. A LIVE
-      // admin would be offered nothing, correctly. Asserted rather than
-      // assumed: without the CTA this case would fail on a timeout that names
-      // a missing button instead of the fact under test.
+      // THE ADMIN DISCONNECTS THEIR OWN CREDENTIAL, and that is the only lever
+      // that makes them actionable deterministically here.
+      //
+      // The obvious one — the roster pin — is forbidden twice over. A hold must
+      // never move the roster: a change mid-run is precisely the I3 scope-drift
+      // refusal (credentialReauthScopeChangedRefusal), so flipping the pin to
+      // give the admin a CTA would destroy the very hold this case is testing.
+      // And it does not even work: the pin OSCILLATES between the fixture's two
+      // valid pairs, so whether a flip leaves the ADMIN contradicted or matching
+      // is a question of parity with whichever pair they last captured under —
+      // walk-6 left them contradicted, walk-7 left them `live`, and this case
+      // waited sixty seconds for a button agents-tab.tsx correctly refuses to a
+      // live admin.
+      //
+      // DELETE /setup/harness-credential/aws is operator-only AND scoped to the
+      // CALLER's own subject (harnesscred.go's handleHarnessDisconnect), so the
+      // admin can only ever delete their own — the member's capture, the hold
+      // and the roster are all untouched. It is the same disconnect the Agents
+      // tab offers, and it leaves the admin `not_configured`: actionable, with
+      // a CTA, every time.
+      const disconnect = await adminPage.evaluate(async () => {
+        const r = await fetch("/api/v1/setup/harness-credential/aws", {
+          method: "DELETE",
+          credentials: "include",
+        });
+        return r.status;
+      });
+      expect(disconnect, "the admin could not disconnect their own AWS credential").toBe(200);
       await expect
         .poll(async () => (await modelAccess(adminPage)).state, { timeout: 60_000 })
-        .not.toBe("live");
+        .toBe("not_configured");
       await signInThroughPane(adminPage, openAdminLoginPane);
       // …and the member's request is exactly where it was. Read twice, a poll
       // apart: "still pending" measured once is a snapshot, and the resolve
