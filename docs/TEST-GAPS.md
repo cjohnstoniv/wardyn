@@ -155,15 +155,29 @@ evidence only for the tip somebody actually ran it on.
     `credential:reauth-timeout` decision while the request stays open, and one
     whose run is killed has its request cancelled with it.
 
-  **Case K is labelled SIMULATED, deliberately.** The kind walk runs the fake
-  over plain HTTP, so the injection rides the cleartext lane and the hold's
-  timeout body does not reach the sandbox's SDK there (the plain lane
-  swallows injection errors and the SDK sees the fake's own 401). What the
-  walk proves is the control plane, the approval, the console and the resume
-  on a real cluster; the production-shaped path — TLS CONNECT → `mitm.go` →
-  header injection → CA trust → the timeout body — is proven by the
-  docker-gated `test/awsssofake/reauth_hold_docker_test.go`, whose fake
-  serves TLS.
+  **Case K is labelled SIMULATED, deliberately — and its reason was corrected
+  after walk-3.** The kind fake serves plain HTTP, but the walk does NOT ride
+  a plaintext lane: the agent's SDK issues a CONNECT for the portal host (36–69
+  per run), Phase B marks that host:port TLS-MITM eligible, and the proxy
+  TERMINATES the tunnel — the sandbox holds only an inert placeholder, so the
+  real token can only be substituted into a request the proxy can see, and a
+  blind tunnel would carry the placeholder straight through. Terminating is
+  therefore mandatory, and the walk exercises that MITM lane, not a plain one
+  (a `curl` from inside the sandbox rides the plain lane instead and is
+  credentialed correctly, which is what made the earlier "rides the cleartext
+  lane" description look true). What stays SIMULATED is only the production
+  TIMEOUT BODY: over plain HTTP the SDK still sees the fake's own 401 rather
+  than the hold's sentence. What the walk DOES prove live: the control plane,
+  the approval, the console and the resume, on a real cluster. The
+  docker-gated `test/awsssofake/reauth_hold_docker_test.go` does NOT prove the
+  MITM path either — that fake serves plain HTTP too, and those tests point
+  the agent straight at it with no proxy at all, deliberately, to measure the
+  SDK's own patience. The terminate → strip → inject → re-originate path is
+  pinned instead by `internal/egress/proxy`'s own tests — a real CONNECT
+  through a real proxy listener and a real TLS handshake against the Wardyn
+  leaf into a real plain-HTTP origin
+  (`TestMITMConnect_PlaintextOriginIsReachedThroughTheTunnel`) — and the whole
+  estate end to end by the kind walk itself.
 
   Still NOT driven on this walk, each with its own reason:
 

@@ -188,13 +188,15 @@ enforcement-default change).
   eleven minutes — the test's own ceiling, not the SDK's — so the 600 s default hold is the binding
   constraint, not the SDK; the docker-gated resume test
   (`TestDocker_TheSameRunResumesWhenTheHoldReleases`) is written and runs in W4 on the release tip.
-- **PLACEHOLDER — pass 3c, lane `credential-reauth-hold`.** The live kind SSO walk found that Phase B's
-  proxy-injection path fails every Bedrock run on a deployment using
-  `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE` against a plain-HTTP SSO server: the TLS-MITM entry Phase B
-  authors for the portal host cannot serve a plaintext origin, so the SSO exchange 502s and no role
-  credential is ever minted. Production is unaffected — a real `portal.sso.<region>.amazonaws.com`
-  serves TLS — but this is the kind walk's own estate, i.e. the release's definition of done. The hold
-  lane is fixing it; its canon delta (and this bullet's final wording) arrives with that fix.
+  The live kind SSO walk found that Phase B's TLS-MITM entry for the portal host could not serve a
+  plain-HTTP SSO endpoint (`WARDYN_AWS_SSO_ENDPOINT_OVERRIDE`, the kind test estate's own posture):
+  terminating the CONNECT is mandatory — the sandbox holds only an inert placeholder, so the real
+  token can only be substituted into a request the proxy can see, and a blind tunnel carries the
+  placeholder through untouched — but the proxy re-originated every terminated tunnel as `https://`
+  regardless of the origin's own scheme. Fixed: a plain-HTTP SSO endpoint override now re-originates
+  the MITM'd tunnel in plain HTTP too; every other entry — including the real
+  `portal.sso.<region>.amazonaws.com` — stays unprefixed, i.e. TLS, byte-for-byte as before.
+  Production is unaffected: a real portal serves TLS and was never on the affected path.
 - **A PENDING `credential_reauth` row is not proof a model call is still parked.** The row outlives
   the hold on purpose (the sign-in is still wanted), so it survives a hold that timed out, an SDK
   that disconnected and a final resolve that refused a roster drift. The console's copy says only
@@ -233,10 +235,14 @@ enforcement-default change).
 - **Masking has no TTL.** Each resolve registers the session token in the run's own mask set (evicted
   for terminal runs past `RunSecretGrace`) and the renewal path keeps its global registration, which
   has no expiry. Unchanged from 0.7.5, restated because this lane adds a registration site.
-- **The kind SSO walk's case K is a SIMULATED check of the plaintext lane.** The walk runs the AWS
-  SSO fake over plain HTTP, so the injection rides the cleartext path and the timeout's 401 body does
-  not reach the SDK there. The production-shaped path — TLS CONNECT → MITM → header injection → CA
-  trust → the timeout body — is proven by the docker-gated test, whose fake serves TLS.
+- **The kind SSO walk's case K stays a SIMULATED check of the production timeout body only.** The
+  walk's fake serves plain HTTP, but the run still terminates a TLS CONNECT through the proxy's MITM
+  lane (the sandbox holds only a placeholder, so the real token can only be substituted into a
+  request the proxy can see) — over plain HTTP the SDK sees the fake's own 401 rather than the hold's
+  sentence, which is the one thing SIMULATED. The terminate → strip → inject → re-originate path
+  itself is pinned by `internal/egress/proxy`'s own tests
+  (`TestMITMConnect_PlaintextOriginIsReachedThroughTheTunnel`), not by the docker-gated SDK-tolerance
+  test, whose fake also serves plain HTTP with no proxy in the loop at all.
 - **The support bundle's Compose entry is redacted for reading, not for re-use.** It is not a valid
   `docker compose -f` input when marker-named structural keys exist (e.g. a `secrets:` section or a
   `*_token`-named volume) — those keys are redacted whole rather than per-value, so the redacted
