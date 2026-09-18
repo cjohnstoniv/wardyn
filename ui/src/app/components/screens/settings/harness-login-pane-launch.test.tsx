@@ -277,6 +277,9 @@ describe("a terminal ending that arrived only as a failure_hint", () => {
     const alertBox = await screen.findByRole("alert");
     expect(alertBox).toHaveTextContent("pull access denied");
     expect(alertBox.textContent ?? "").not.toMatch(new RegExp(`${LOGIN_SANDBOX_STUCK_LEAD_IN}\\s*$`));
+  });
+});
+
 
 // THE LAUNCH-AFTER-DISMISS RACE, and the handle that makes a dismissal from
 // OUTSIDE the pane reach the run it created (0.7.6, Codex #15).
