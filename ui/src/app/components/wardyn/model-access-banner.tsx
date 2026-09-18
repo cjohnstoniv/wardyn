@@ -363,6 +363,13 @@ export function ModelAccessBanner() {
           {door.actionable && !door.claimed && (
             <button
               type="button"
+              // On /settings a MEMBER reads this strip beside the Settings
+              // card's own `disabled={!operator}` "Sign in to AWS" — and a
+              // disabled button still has an accessible name, so the page
+              // carried two controls named the same thing. The strip keeps the
+              // plain label everywhere else, which is the name the live SSO
+              // walk locates it by; the visible text never changes.
+              aria-label={under("/settings") ? MODEL_ACCESS_BANNER.SIGN_IN_ARIA_BANNER : undefined}
               onClick={() => {
                 openedHere.current = true;
                 door.openDoor();
