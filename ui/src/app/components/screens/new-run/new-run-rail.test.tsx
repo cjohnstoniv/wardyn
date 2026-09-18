@@ -385,6 +385,24 @@ describe("Finding 1 — the rail states WHO needs to sign in, not just whether a
     expect(screen.getAllByText(AGENTS.SIGN_IN_AWS)).toHaveLength(1);
   });
 
+  // Live-walk finding (kind walk, case I): setupBedrock grades llm_ready
+  // through the CALLER's own AWS scope, so a never-signed-in per_user member
+  // reads SSOPresent=false -> llm_ready=false -> showModelWarning=true on a
+  // deployment that unambiguously HAS a model path — the admin's row exists.
+  // Before the fix, BOTH sentences rendered stacked: the true per-person line
+  // and the false "No model provider is connected." The per-person line
+  // supersedes the deployment one whenever it applies.
+  it("a never-signed-in per_user member sees the per-person line and NOT the no-provider sentence", async () => {
+    renderRail({
+      agentRow: modelAccessRow(),
+      modelAccess: { state: "not_configured", action: AGENTS.SIGN_IN_AWS },
+      showModelWarning: true,
+    });
+    expect(await screen.findByText(RAIL_MODEL_ACCESS.NOT_SIGNED_IN)).toBeInTheDocument();
+    expect(screen.queryByText(RAIL_MODEL_ACCESS.NO_PROVIDER)).toBeNull();
+    expect(screen.queryByText(RAIL_MODEL_ACCESS.NO_PROVIDER_CTA)).toBeNull();
+  });
+
   // N2: expired_signin's OTHER shape — a pin contradiction — carries a real
   // account/role pair the sentence cannot say, so unlike not_configured this
   // one DOES render the server's action beside the sentence and the control.

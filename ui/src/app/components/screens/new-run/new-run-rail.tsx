@@ -389,7 +389,19 @@ export function RunRail({
           {showModelAccess && (
             <ModelAccessLine door={door} onSignIn={() => door.openDoor(launchRef.current)} />
           )}
-          {showModelWarning && (
+          {/* The per-person line SUPERSEDES the deployment one when both would
+              otherwise render (live-walk finding): under a per_user row,
+              setupBedrock grades llm_ready through the CALLER's own AWS
+              scope, so a never-signed-in member reads SSOPresent=false ->
+              Ready=false -> llm_ready=false -> showModelWarning=true on a
+              deployment that unambiguously HAS a model path — the admin's
+              row exists, this person just has not signed in yet. Stacking
+              "No model provider is connected" under NOT_SIGNED_IN would be a
+              false claim beside a true one. showModelAccess is the more
+              specific fact whenever it applies; the deployment sentence
+              still covers every OTHER no-model-path shape (no per_user row
+              at all, a shared credential nobody set up, a legacy daemon). */}
+          {showModelWarning && !showModelAccess && (
             <p className="mb-1.5 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-foreground">
               {RAIL_MODEL_ACCESS.NO_PROVIDER}{" "}
               {/* Rulebook §9: the action that fills the gap rides next to the
