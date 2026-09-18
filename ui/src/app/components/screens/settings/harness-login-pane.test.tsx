@@ -24,6 +24,7 @@ import {
   LOGIN_SANDBOX_UNREADABLE,
 } from "./harness-login-pane";
 import { LOGIN_SANDBOX_READ_RETRYING, LOGIN_SANDBOX_SLOW_START } from "./login-start-wait";
+import { CAPTURE_POST_RUN_GRACE_MS } from "./capture-confirm";
 import { runs as runsApiMocked } from "../../../lib/api/runs";
 import type { AgentRun, SetupStatus } from "../../../lib/types";
 
@@ -216,6 +217,10 @@ vi.mock("../../../lib/api/harness-auth", () => ({
 vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: vi.fn(), getRun: vi.fn() } }));
 const getSetupStatusMock = vi.fn();
 vi.mock("../../../lib/api/setup", () => ({ setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) } }));
+// review-1 S1: the watch polls the run's audit trail as a hint; defaulted to
+// "no hint" so the 4 rewritten S-13 pins exercise its 30s STATUS fallback.
+const listAuditMock = vi.fn();
+vi.mock("../../../lib/api/audit", () => ({ audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) } }));
 
 describe("HarnessLoginPane — the consent gate", () => {
   beforeEach(() => {
@@ -232,6 +237,7 @@ describe("HarnessLoginPane — the consent gate", () => {
       .mockReset()
       .mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun);
     getSetupStatusMock.mockReset();
+    listAuditMock.mockReset().mockResolvedValue([]);
   });
 
   it("launches NOTHING on mount: the intro says what to expect and what's required", () => {
@@ -389,21 +395,48 @@ describe("HarnessLoginPane — the consent gate", () => {
       return { onDone, onCancel };
     }
 
-    // Red: a forged doneMarker with no server-side corroboration must NOT
-    // call onDone — it must land on the error phase with the mismatch
-    // sentence and kill the run, exactly like a real refusal would.
-    it("a forged marker with no server-side capture does not call onDone and shows the mismatch error", async () => {
-      getSetupStatusMock.mockResolvedValue({ harness: [], model_access: undefined } as unknown as SetupStatus);
-      const { onDone } = await attachAwsRun();
+    // review-1 S1: fake-timer-aware click (`attachedOnFakeTimers`'s pattern).
+    async function attachAwsRunUnderFakeTimers(onDone = vi.fn(), onCancel = vi.fn()) {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      render(<HarnessLoginPane provider="aws" startURLManaged onDone={onDone} onCancel={onCancel} />);
+      await user.click(screen.getByRole("button", { name: /start login/i }));
+      await screen.findByTestId("fake-terminal");
+      return { onDone, onCancel };
+    }
+    async function advanceUnderFakeTimers(ms: number) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+    }
+    // The watch's own bound: terminal, then the upload grace elapses.
+    async function watchGivesUp() {
+      vi.mocked(runsApiMocked.getRun).mockResolvedValue({ id: "run-123", state: "COMPLETED" } as AgentRun);
+      await advanceUnderFakeTimers(CAPTURE_POST_RUN_GRACE_MS + 60_000);
+    }
 
-      await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
-      await act(async () => {}); // flush the getSetupStatus microtask
+    // review-1 S1 (Codex #9): hands off to the watch instead of refusing
+    // alone — only WHEN the refusal lands changes, not the property.
+    it("a forged marker with no server-side capture keeps verifying, then ends in the mismatch error once the watch gives up", async () => {
+      const onDone = vi.fn();
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        getSetupStatusMock.mockResolvedValue({ harness: [], model_access: undefined } as unknown as SetupStatus);
+        await attachAwsRunUnderFakeTimers(onDone);
 
-      // The wait is the read-after-write tolerance (finding 7): a status that
-      // answers and never shows this run's row is re-read CAPTURE_CONFIRM_RETRIES
-      // times over 1.5s before the refusal. A forged marker never converges, so
-      // the assertion is unchanged — it just arrives a second and a half later.
-      const alertBox = await screen.findByRole("alert", {}, { timeout: 3000 });
+        await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
+        // The short round trip's re-read window, asserted BEFORE advancing further.
+        await advanceUnderFakeTimers(2_000);
+        expect(screen.getByTestId("capture-verifying-note")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
+        expect(screen.queryByRole("alert")).toBeNull();
+        expect(onDone).not.toHaveBeenCalled();
+
+        await watchGivesUp();
+      } finally {
+        vi.useRealTimers();
+      }
+
+      const alertBox = screen.getByRole("alert");
       expect(alertBox).toHaveTextContent(CAPTURE_NOT_CORROBORATED);
       expect(runsApiMocked.killRun).toHaveBeenCalledWith("run-123");
       expect(onDone).not.toHaveBeenCalled();
@@ -427,21 +460,30 @@ describe("HarnessLoginPane — the consent gate", () => {
       expect(screen.queryByRole("alert")).toBeNull();
     });
 
-    // R-1, the reconnect case the product's own "re-run the login" fix line
-    // creates: a PREVIOUS sign-in's credential is sitting there, so both
-    // presence legs agree — but it is not THIS run's capture, and a forged
-    // marker must not be re-admitted by it.
-    it("a forged marker over a PREVIOUS run's credential is refused", async () => {
-      getSetupStatusMock.mockResolvedValue({
-        harness: [{ provider: "aws", captured: true, source_run_id: "run-000-earlier" }],
-        model_access: { state: "live" },
-      } as unknown as SetupStatus);
-      const { onDone } = await attachAwsRun();
+    // R-1: a PREVIOUS sign-in's credential agrees on both presence legs but
+    // is not THIS run's capture — must not be re-admitted.
+    it("a forged marker over a PREVIOUS run's credential keeps verifying, then is refused once the watch gives up", async () => {
+      const onDone = vi.fn();
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        getSetupStatusMock.mockResolvedValue({
+          harness: [{ provider: "aws", captured: true, source_run_id: "run-000-earlier" }],
+          model_access: { state: "live" },
+        } as unknown as SetupStatus);
+        await attachAwsRunUnderFakeTimers(onDone);
 
-      await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
-      await act(async () => {});
+        await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
+        await advanceUnderFakeTimers(2_000);
+        expect(screen.getByTestId("capture-verifying-note")).toBeInTheDocument();
+        expect(screen.queryByRole("alert")).toBeNull();
+        expect(onDone).not.toHaveBeenCalled();
 
-      const alertBox = await screen.findByRole("alert", {}, { timeout: 3000 });
+        await watchGivesUp();
+      } finally {
+        vi.useRealTimers();
+      }
+
+      const alertBox = screen.getByRole("alert");
       expect(alertBox).toHaveTextContent(CAPTURE_NOT_CORROBORATED);
       expect(onDone).not.toHaveBeenCalled();
     });
@@ -462,44 +504,57 @@ describe("HarnessLoginPane — the consent gate", () => {
       expect(screen.queryByRole("alert")).toBeNull();
     });
 
-    // Fail-closed: a getSetupStatus rejection (network error, 401 propagated)
-    // is treated the same as a disagreement — never assume the marker was
-    // honest because the corroboration check itself failed.
-    it("fails closed when the status fetch itself rejects", async () => {
-      getSetupStatusMock.mockRejectedValue(new Error("network error"));
-      const { onDone } = await attachAwsRun();
+    // Fail-closed: a rejection is a disagreement, never an honest marker.
+    it("fails closed when the status fetch itself rejects — keeps verifying, refused once the watch gives up", async () => {
+      const onDone = vi.fn();
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        getSetupStatusMock.mockRejectedValue(new Error("network error"));
+        await attachAwsRunUnderFakeTimers(onDone);
 
-      await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
-      await act(async () => {});
+        await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
+        await advanceUnderFakeTimers(2_000);
+        // A THROW is an answer, not a blip: one read is all the short round
+        // trip makes, asserted before the watch's own 30s fallback is due.
+        expect(getSetupStatusMock).toHaveBeenCalledTimes(1);
+        expect(screen.getByTestId("capture-verifying-note")).toBeInTheDocument();
+        expect(screen.queryByRole("alert")).toBeNull();
+        expect(onDone).not.toHaveBeenCalled();
 
-      // No retry loop on this arm, deliberately: a THROW is an answer (a
-      // propagated 401), not the read-after-write gap, so the refusal is
-      // immediate and one read is all this case ever makes.
-      const alertBox = await screen.findByRole("alert");
+        await watchGivesUp();
+      } finally {
+        vi.useRealTimers();
+      }
+
+      const alertBox = screen.getByRole("alert");
       expect(alertBox).toHaveTextContent(CAPTURE_NOT_CORROBORATED);
-      expect(getSetupStatusMock).toHaveBeenCalledTimes(1);
       expect(onDone).not.toHaveBeenCalled();
     });
 
-    // R-9: this is how the real client behaves for a 5xx or a dropped socket —
-    // getSetupStatus RESOLVES the synthetic READY_FALLBACK (`unreachable:true`,
-    // no harness, no model_access), it does not throw. The rejection case above
-    // passes for the right reason only by accident, so the realistic transient
-    // path gets its own pin.
-    //
-    // R-3: an honest capture DID land; the check is what failed. The pane must
-    // not print the accusation — it retries once, then says it could not reach
-    // the server.
-    it("an unreachable status check retries once and then says SO — never that the server does not have it", async () => {
-      getSetupStatusMock.mockResolvedValue({ unreachable: true, ready: true } as unknown as SetupStatus);
-      const { onDone } = await attachAwsRun();
+    // R-9/R-3: unreachable RESOLVES (does not throw); an honest capture that
+    // DID land must not be accused — retry once, then say the check failed.
+    it("an unreachable status check retries once, keeps verifying, then says SO once the watch gives up", async () => {
+      const onDone = vi.fn();
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        getSetupStatusMock.mockResolvedValue({ unreachable: true, ready: true } as unknown as SetupStatus);
+        await attachAwsRunUnderFakeTimers(onDone);
 
-      await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
+        await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
+        await advanceUnderFakeTimers(2_000);
+        expect(getSetupStatusMock).toHaveBeenCalledTimes(2);
+        expect(screen.getByTestId("capture-verifying-note")).toBeInTheDocument();
+        expect(screen.queryByRole("alert")).toBeNull();
+        expect(onDone).not.toHaveBeenCalled();
 
-      const alertBox = await screen.findByRole("alert", {}, { timeout: 3000 });
+        await watchGivesUp();
+      } finally {
+        vi.useRealTimers();
+      }
+
+      const alertBox = screen.getByRole("alert");
       expect(alertBox).toHaveTextContent("Wardyn couldn't reach the server to verify this sign-in — try again.");
       expect(alertBox).not.toHaveTextContent("the server does not have");
-      expect(getSetupStatusMock).toHaveBeenCalledTimes(2);
       expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
       expect(onDone).not.toHaveBeenCalled();
     });

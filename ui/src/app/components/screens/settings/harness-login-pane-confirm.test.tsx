@@ -11,19 +11,15 @@
 // new cases (the lane brief, COMMON.md's regression law): every case here is
 // NEW behaviour, never a rewrite of what that file already pins.
 //
-// DEVIATION FROM THE PLAN, DISCLOSED (see this lane's REPORT): the plan's
-// design point 3 ("confirmCapture's {confirmed:false} at 1.5s hands back to
-// the watch") is NOT implemented — the marker path's own short round trip
-// (confirmCaptureWithServer) still refuses immediately, byte-identical to
-// 0.7.5, because the sibling file's pinned S-13 tests time that refusal at
-// ~1.5-3s of REAL wall clock with no fake timers, and the background watch's
-// own first authoritative check is deliberately deferred (see
-// capture-confirm.ts) so it cannot fire inside that window — making it fire
-// sooner would either reintroduce extra /setup/status reads into those
-// pinned call-count assertions or force rewriting a file the brief protects.
-// What IS delivered, in full: the watch is a genuinely INDEPENDENT,
-// ADDITIONAL path to onDone — a capture with NO marker at all (the
-// headline finding) now still closes the pane.
+// review-1 S1 — Codex #9 design point 3 STANDS (revised from this lane's
+// first pass, which had deferred it — see REVIEW-1.md): confirmCapture's own
+// short round trip (confirmCaptureWithServer, ~1.5s) no longer refuses a
+// mismatch by itself. It remembers the sentence and hands off to the
+// background watch (already running independently since `attached`), which
+// keeps CAPTURE_VERIFYING (+ Cancel) on screen and is what actually ends the
+// wait — at its own bound (terminal + 5 min grace, or 45 min absolute), not
+// at 1.5s. The sibling 944-line file's four S-13 timing pins were rewritten
+// under fake timers to match (see that file and this lane's REPORT).
 import * as React from "react";
 import { act } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -58,8 +54,11 @@ vi.mock("../../../lib/api/audit", () => ({ audit: { listAudit: (...a: unknown[])
 vi.spyOn(window, "open").mockReturnValue(null);
 
 import { HarnessLoginPane } from "./harness-login-pane";
-import { CAPTURE_HANDOFF } from "./capture-confirm";
+import { CAPTURE_HANDOFF, CAPTURE_NOT_CORROBORATED, CAPTURE_POST_RUN_GRACE_MS } from "./capture-confirm";
 import type { AgentRun, SetupStatus } from "../../../lib/types";
+
+// The aws-sso helper's own success marker (login-flows.tsx's `doneMarker`).
+const DONE_MARKER = "wardyn: aws sso credential captured";
 
 // A generous but bounded sample of the watch's own schedule — long enough for
 // its fast (2s) tier to have ticked several times, short enough to keep the
@@ -160,5 +159,63 @@ describe("HarnessLoginPane — the CLI's own success line (Finding 7b)", () => {
     });
 
     expect(onDone).not.toHaveBeenCalled();
+  });
+
+  // The two plan tests (Codex #9, design point 3).
+  it("a marker whose corroboration fails keeps verifying instead of refusing", async () => {
+    const { onDone } = await attachAwsRun();
+    getSetupStatusMock.mockResolvedValue(status({})); // never confirms
+
+    await act(async () => lastAttachOutput?.(`${DONE_MARKER}\n`));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+
+    expect(screen.getByTestId("capture-verifying-note")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
+  it("a forged marker ends in CAPTURE_NOT_CORROBORATED at the watch's expiry", async () => {
+    const { onDone } = await attachAwsRun();
+    getSetupStatusMock.mockResolvedValue(status({})); // never confirms
+    listAuditMock.mockResolvedValue([]); // never hinted
+
+    await act(async () => lastAttachOutput?.(`${DONE_MARKER}\n`));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    getRunMock.mockResolvedValue({ id: "run-123", state: "COMPLETED" } as AgentRun);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CAPTURE_POST_RUN_GRACE_MS + 60_000);
+    });
+
+    const alertBox = screen.getByRole("alert");
+    expect(alertBox).toHaveTextContent(CAPTURE_NOT_CORROBORATED);
+    expect(killRunMock).toHaveBeenCalledWith("run-123");
+    expect(onDone).not.toHaveBeenCalled();
+  });
+
+  // review-1 S5: both the marker path (confirmCapture) and the background
+  // watch can independently reach a confirming status around the same tick
+  // — `completedRef` inside completeCapture must let only the FIRST one act.
+  it("a race between the marker and the watch converges on exactly one cleanup and one onDone", async () => {
+    const { onDone } = await attachAwsRun();
+    listAuditMock.mockResolvedValue([{ id: "a1", action: "harness.credential.captured" }]);
+    getSetupStatusMock.mockResolvedValue(
+      status({ harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }] }),
+    );
+
+    // The CLI marker fires confirmCapture's own round trip; the watch,
+    // already running since `attached`, is independently hinted on the same
+    // tick and reads the SAME confirming status.
+    await act(async () => lastAttachOutput?.(`${DONE_MARKER}\n`));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+
+    expect(onDone).toHaveBeenCalledTimes(1);
+    expect(killRunMock).toHaveBeenCalledTimes(1);
   });
 });

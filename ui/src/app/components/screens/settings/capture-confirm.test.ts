@@ -189,4 +189,31 @@ describe("watchForCapture (Finding 7b, Codex #8/#9)", () => {
     expect(result).toBe(false);
     expect(getSetupStatusMock).not.toHaveBeenCalled();
   });
+
+  // review-1 S2: `wake` cuts the CURRENT back-off wait short — no fake-timer
+  // advance needed at all, because dispatching the event resolves the
+  // pending sleep synchronously (the caller wires this to the CLI-line hint
+  // and to `visibilitychange`; the run's own state transition needs no
+  // separate wiring, since the loop already re-reads `getRun` every tick).
+  it("a wake() tick ends the wait immediately, without advancing any timer", async () => {
+    getRunMock.mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun);
+    let auditCalls = 0;
+    listAuditMock.mockImplementation(async () => {
+      auditCalls += 1;
+      return auditCalls >= 2 ? [{ id: "a1" }] : []; // no hint on tick 1, hinted from tick 2
+    });
+    getSetupStatusMock.mockResolvedValue(
+      status({ harness: [{ provider: "aws", captured: true, source_run_id: "run-123" }] }),
+    );
+    const controller = new AbortController();
+    const wake = new EventTarget();
+    const promise = watchForCapture({ provider: "aws", runId: "run-123", signal: controller.signal, wake });
+
+    // Let the FIRST tick's reads settle (no hint yet, so it schedules a 2s
+    // sleep) without advancing time, then wake it.
+    await vi.advanceTimersByTimeAsync(0);
+    wake.dispatchEvent(new Event("tick"));
+
+    await expect(promise).resolves.toBe(true);
+  });
 });
