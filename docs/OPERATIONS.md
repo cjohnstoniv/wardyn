@@ -203,11 +203,11 @@ make setup
 
 # 7. Verify — row count first:
 docker exec -i wardyn-postgres psql -U wardyn -d wardyn -c "SELECT count(*) FROM audit_events;"
-#    then prove the age key actually decrypts what came back, which a row
-#    count alone can't: launch a run against any workspace/policy that
-#    depends on a previously-stored secret and confirm it starts instead of
-#    failing closed with a decrypt error (see "Rotating the age key" — the
-#    wrong key fails exactly here, not at boot):
+#    Startup already decrypts the persisted signing key and fails closed if
+#    the age key does not match. Also verify an application secret, which a
+#    row count cannot prove: launch a run against any workspace/policy that
+#    depends on a previously-stored secret and confirm it starts without a
+#    decrypt error (see "Rotating the age key"):
 wardyn run --agent claude-code --workspace <workspace-id>
 #    and, if this deployment allocates user drives, that a drive came back with
 #    its bytes rather than as a fresh empty volume — step 5 is the only thing
@@ -4338,8 +4338,10 @@ silently patched.
 
 The secret store binds **one** age identity for both encryption and decryption
 (`internal/secretstore/pg`), so simply changing `WARDYN_AGE_KEY` migrates nothing
-— it strands every existing ciphertext, and wardynd then fails closed on the
-first decrypt rather than starting.
+— it strands every existing ciphertext. Startup decrypts the persisted signing
+key through `loadOrCreateSigningKey` / `loadOrCreateSecret` and fails closed on
+a mismatch, before serving requests. A healthy start checks that boot key, not
+every application secret; verify a secret-dependent run after recovery too.
 
 `wardynd -rotate-age-key <key-file>` is the supported rotation, a **maintenance
 mode, not a server start**: it mints a new identity, re-encrypts every row of the
@@ -5375,10 +5377,11 @@ rather than a preference:
   failed Postgres write, each pod draining its own back into the database.
 - **the age identity, when `WARDYN_AGE_KEY` is unset** — each process mints its
   own ephemeral one at boot (`buildSecretStore`, `cmd/wardynd`), so a secret
-  written by one pod cannot be decrypted by any other. Fails closed (a decrypt
-  error, never a wrong plaintext) and surfaces on `Get`, not at boot, so the pod
-  starts healthy and the failure appears at first use. Setting the key removes
-  this one entirely.
+  written by one pod cannot be decrypted by any other. The signing-key `Get`
+  happens during startup: once that key exists, a process with a different age
+  identity fails closed before serving, rather than starting healthy. Persisting
+  the same `WARDYN_AGE_KEY` across restarts avoids this mismatch; replacing it
+  without re-encrypting the stored secrets does not.
 - **the docker driver's sandbox tracking maps** (`agentExecs`, `pending`,
   `mainProc`, `creating` in `internal/runner/docker/driver.go`) — the process that
   created a sandbox is the only one that can observe its agent exec (`Wait`), and
