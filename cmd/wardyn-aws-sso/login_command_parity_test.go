@@ -46,7 +46,7 @@ func TestLoginCommand_UIParity(t *testing.T) {
 	}
 	shell := m[1]
 
-	pane := repoFile(t, "ui", "src", "app", "components", "screens", "settings", "harness-login-pane.tsx")
+	pane := repoFile(t, "ui", "src", "app", "components", "screens", "settings", "login-flows.tsx")
 	var ui string
 	// LOGIN_FLOWS has one `cmd:` per provider; the AWS row is the one that runs
 	// the CLI this helper belongs to.
@@ -57,7 +57,7 @@ func TestLoginCommand_UIParity(t *testing.T) {
 		}
 	}
 	if ui == "" {
-		t.Fatal("no aws `cmd:` in harness-login-pane.tsx's LOGIN_FLOWS")
+		t.Fatal("no aws `cmd:` in login-flows.tsx's LOGIN_FLOWS")
 	}
 	if ui != shell {
 		t.Errorf("login command drift: console types %q, the sandbox's shell says %q", ui, shell)
