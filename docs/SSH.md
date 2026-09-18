@@ -19,9 +19,10 @@ surface: the daemon does not even generate a host key.
 > `ssh` **exec** output and **sftp** payloads are **not recorded** (and sftp
 > uploads are not byte-counted), so work done over those paths leaves no
 > session evidence — do not present Remote-SSH as the recommended developer
-> path without saying so. The interactive SSH **shell** *is* recorded, unmasked,
-> and there is **no delete-one route**: a secret pasted into it is stored in
-> cleartext, permanently.
+> path without saying so. The interactive SSH **shell** *is* recorded through
+> the browser terminal's same masking pipeline, but an unregistered secret can
+> remain in cleartext. There is **no delete-one route**; age-based retention
+> (default: keep forever) is the removal mechanism. See [Recording](#recording).
 
 ## 1. Register a public key
 
@@ -361,17 +362,16 @@ is binary protocol data, not terminal output, and is never recorded (masking
 and asciicast framing both assume text; recording binary transfer bytes
 would neither work nor mean anything).
 
-**Masking scope, stated plainly.** `internal/secretmask` masks values it was
-told about — platform-managed secrets and minted credentials registered into
-it at run start. A value a human **types** into the shell — pastes an API key,
-exports a token by hand — is not in that registry and is never masked: it
-lands in the recorded asciicast verbatim, permanently, subject to whatever
-retention window `WARDYN_RECORDING_RETENTION_DAYS` is set to (default:
+**Masking scope, stated plainly.** `internal/secretmask` masks values registered
+for the run, including credentials minted while a session is attached. An
+unregistered value a human **types** into the shell — pastes an API key,
+exports a token by hand — can appear verbatim in the recorded terminal output,
+subject to the retention window `WARDYN_RECORDING_RETENTION_DAYS` (default:
 forever). There is no route to delete or redact one recording in isolation
 once it exists; the only lever is the age-based retention sweep, which acts
-on all eligible recordings, not one. If a human types a secret into an SSH (or
-browser-attach) session, treat that recording as holding it in the clear until
-retention deletes it.
+on all eligible recordings, not one. If a human types an unregistered secret
+into an SSH (or browser-attach) session, treat that recording as holding it in
+the clear until retention deletes it.
 
 ## Bounds
 

@@ -154,9 +154,12 @@ auditor.
 - **"The session is still recorded" — the SHELL is; exec and sftp are not.**
   Turning on `WARDYN_SSH_LISTEN` makes both halves fleet-wide: `ssh` exec output
   and sftp payloads are **not** recorded and sftp uploads are not byte-counted,
-  while the interactive SSH shell **is** recorded, unmasked, with **no
-  delete-one route** — a secret pasted into a recorded terminal is stored in
-  cleartext, permanently. And a `wardynd` restart mid-run (an MDM upgrade
+  while the interactive SSH shell **is** recorded through the browser terminal's
+  same masking pipeline. Only registry-known secrets are masked: an unregistered
+  secret pasted into the terminal can remain in cleartext. There is **no
+  delete-one route**; the age-based retention sweep is the removal mechanism
+  (default: keep forever). See [SSH recording and masking scope](SSH.md#recording).
+  A `wardynd` restart mid-run (an MDM upgrade
   window, a crash, a laptop waking) wipes the in-memory masking snapshot, after
   which the stream passes through **unmasked** with a `success` audit event,
   because nothing in that path can tell "no secrets for this run" from "not my
