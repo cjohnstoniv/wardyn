@@ -569,19 +569,6 @@ func decodeDecisionRequest(w http.ResponseWriter, r *http.Request) (decisionRequ
 //
 // Then, and only then, the 0.6 egress_host capability: which hosts a member may
 // decide FOR THEMSELVES. Ordered last on purpose — see the block itself.
-// canSeeApproval reports whether this caller may be told that ap EXISTS — the
-// security tier, which decides any kind on any run, or a caller who owns ap's
-// run (or is an admin), which is the same ownership rule authorizeMemberDecision
-// applies below. Everyone else is told nothing, so no refusal above can become
-// the existence oracle the two 404s in that gate exist to deny.
-func (s *Server) canSeeApproval(r *http.Request, ap types.ApprovalRequest) bool {
-	if s.isSecurityOperator(r.Context()) {
-		return true
-	}
-	run, err := s.cfg.Store.GetRun(r.Context(), ap.RunID)
-	return err == nil && s.ownsRunOrAdmin(r, run)
-}
-
 func (s *Server) authorizeMemberDecision(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.ApprovalRequest, types.AgentRun, bool, bool) {
 	var (
 		ap  types.ApprovalRequest
