@@ -16,9 +16,10 @@
 // run with no model credential gets no sentence at all (F4), and an unread
 // /healthz makes no promise either way (F3).
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
+import { useState, type ReactNode } from "react";
 
 // undefined = /healthz has not answered (or carried no recording component).
 const recordingSelected = vi.hoisted(() => ({ value: "fs" as string | undefined }));
@@ -29,14 +30,26 @@ vi.mock("../../../lib/api/health", () => ({
   },
 }));
 
+// S1 (review-1): the focus-return cases below mount the REAL door dialog, so
+// its login pane is faked to one button — exactly as
+// model-access-banner.test.tsx fakes it, which owns the pane's own suite;
+// this file only needs "the sign-in completed".
+vi.mock("../settings/harness-login-pane", () => ({
+  HarnessLoginPane: ({ onDone }: { onDone: () => void }) => (
+    <button type="button" onClick={onDone}>
+      fake pane
+    </button>
+  ),
+}));
+
 import { RunRail } from "./new-run-rail";
 import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE } from "../../wardyn/copy";
 import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
+import { ModelAccessBanner } from "../../wardyn/model-access-banner";
 import { ModelAccessProvider, useModelAccessDoor } from "../../wardyn/model-access-context";
 import { OperatorProvider } from "../../wardyn/operator-context";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { baseStatus } from "../../../lib/test-fixtures";
-import type { ReactNode } from "react";
 import type {
   ModelCredential,
   PreflightResult,
@@ -79,9 +92,17 @@ function renderRail(props: {
   launchError?: string | null;
   /** Mounted as a sibling INSIDE the same ModelAccessProvider — a test-only
    *  stand-in for a surface elsewhere in the shell that can close the shared
-   *  door (the real dialog lives in model-access-banner.tsx, out of this
-   *  lane's files). */
+   *  door. */
   extra?: ReactNode;
+  /** Mount the REAL <ModelAccessBanner/> (its dialog + Radix's actual
+   *  onCloseAutoFocus/focusOpener contract) instead of nothing — S1's fix has
+   *  to survive that real path, not a test-only door-closer. Also mounts a
+   *  `#main-content` node, the banner's own fallback target. */
+  banner?: boolean;
+  /** What refresh() should answer with — simulates a completed sign-in
+   *  actually clearing /setup/status (and unmounting the rail's own control),
+   *  which is exactly the case S1's fix has to survive. */
+  refreshTo?: SetupModelAccess;
 }) {
   const rail = (
     <RunRail
@@ -107,19 +128,44 @@ function renderRail(props: {
   if (props.modelAccess === undefined) {
     return render(<MemoryRouter>{rail}</MemoryRouter>);
   }
-  const status = baseStatus({
-    model_access: props.modelAccess,
-    harnesses: props.agentRow ? [props.agentRow] : [],
-  });
   return render(
     <MemoryRouter>
-      <ModelAccessProvider status={status} onRefresh={() => {}}>
+      <StatusHost initial={props.modelAccess} refreshTo={props.refreshTo} agentRow={props.agentRow}>
         <OperatorProvider operator={!!props.operator} securityOperator={!!props.operator} principal="p@corp.example">
+          {props.banner && <ModelAccessBanner />}
           {props.extra}
           {rail}
+          {props.banner && (
+            <main id="main-content" tabIndex={-1}>
+              screen
+            </main>
+          )}
         </OperatorProvider>
-      </ModelAccessProvider>
+      </StatusHost>
     </MemoryRouter>,
+  );
+}
+
+/** The provider, with a status that can change on refresh() — every static
+ *  (non-`banner`) case passes no `refreshTo` and behaves exactly as the
+ *  fixed `baseStatus(...)` this replaces. */
+function StatusHost({
+  initial,
+  refreshTo,
+  agentRow,
+  children,
+}: {
+  initial: SetupModelAccess;
+  refreshTo?: SetupModelAccess;
+  agentRow?: SetupHarnessTool;
+  children: ReactNode;
+}) {
+  const [access, setAccess] = useState(initial);
+  const status = baseStatus({ model_access: access, harnesses: agentRow ? [agentRow] : [] });
+  return (
+    <ModelAccessProvider status={status} onRefresh={() => refreshTo && setAccess(refreshTo)}>
+      {children}
+    </ModelAccessProvider>
   );
 }
 
@@ -325,7 +371,9 @@ function DoorCloser() {
 }
 
 describe("Finding 1 — the rail states WHO needs to sign in, not just whether a provider is connected", () => {
-  it("not_configured states the person is not signed in and the server's action verbatim", async () => {
+  // N3: this pins that the action is NOT printed a second time — rename kept
+  // in step with what the assertion actually checks.
+  it("not_configured states the person is not signed in — the server's action, byte-identical to the button label, is not printed a second time", async () => {
     renderRail({
       agentRow: modelAccessRow(),
       modelAccess: { state: "not_configured", action: AGENTS.SIGN_IN_AWS },
@@ -335,6 +383,21 @@ describe("Finding 1 — the rail states WHO needs to sign in, not just whether a
     // it must not be printed a second time as prose (S1) — exactly one control
     // carries that name.
     expect(screen.getAllByText(AGENTS.SIGN_IN_AWS)).toHaveLength(1);
+  });
+
+  // N2: expired_signin's OTHER shape — a pin contradiction — carries a real
+  // account/role pair the sentence cannot say, so unlike not_configured this
+  // one DOES render the server's action beside the sentence and the control.
+  it("expired_signin with a pin-contradicted pair states EXPIRED, the server's pair, and offers the control", () => {
+    const pin =
+      "Your stored AWS session is for account 111111111111 / role Old; this row now allows 222222222222 / New — sign in again.";
+    renderRail({
+      agentRow: modelAccessRow(),
+      modelAccess: { state: "expired_signin", action: pin },
+    });
+    expect(screen.getByText(RAIL_MODEL_ACCESS.EXPIRED)).toBeInTheDocument();
+    expect(screen.getByText(pin)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeInTheDocument();
   });
 
   it("renders the rail's OWN sign-in control under a DISTINCT accessible name, hidden while the door is open", async () => {
@@ -366,7 +429,22 @@ describe("Finding 1 — the rail states WHO needs to sign in, not just whether a
     expect(screen.queryByText(`Sign in again before ${deadline}`)).toBeNull();
   });
 
-  it("a member's shared_expired states the admin's action and offers no CTA", () => {
+  // S3 (review-1): an older daemon sends `expiring` with no `deadline` field.
+  // The sentence needs `{when}` and cannot form, but the state is still
+  // needsAttention/actionable, so the rail still CLAIMS the door — without
+  // the fallback below that leaves zero sign-in controls on /runs/new.
+  it("expiring with no deadline on the wire falls back to the server's own action, not silence", () => {
+    const action = "Sign in again before 2026-09-19T14:03:22Z";
+    renderRail({
+      agentRow: modelAccessRow(),
+      modelAccess: { state: "expiring", action },
+    });
+    expect(screen.queryByText(/^Your AWS sign-in lapses/)).toBeNull();
+    expect(screen.getByText(action)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeInTheDocument();
+  });
+
+  it("a member's shared_expired states the member sentence and the admin's action, and offers no CTA", () => {
     const action = "Your admin's model credential expired — ask them to reconnect it";
     renderRail({
       agentRow: modelAccessRow({ credential_source: "shared" }),
@@ -375,6 +453,22 @@ describe("Finding 1 — the rail states WHO needs to sign in, not just whether a
     expect(screen.getByText(RAIL_MODEL_ACCESS.SHARED_EXPIRED)).toBeInTheDocument();
     expect(screen.getByText(action)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeNull();
+  });
+
+  // S2 (review-1): an OPERATOR under a dead SHARED row is the person who can
+  // repair it — they read their OWN sentence, never the member's "ask them to
+  // reconnect it" instruction about themselves, and no duplicate action line.
+  it("an operator's shared_expired states the admin sentence alone, never the member's instruction", () => {
+    const action = "Your admin's model credential expired — ask them to reconnect it";
+    renderRail({
+      agentRow: modelAccessRow({ credential_source: "shared" }),
+      modelAccess: { state: "shared_expired", action },
+      operator: true,
+    });
+    expect(screen.getByText(RAIL_MODEL_ACCESS.SHARED_ADMIN_EXPIRED)).toBeInTheDocument();
+    expect(screen.queryByText(RAIL_MODEL_ACCESS.SHARED_EXPIRED)).toBeNull();
+    expect(screen.queryByText(action)).toBeNull();
+    expect(screen.getByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeInTheDocument();
   });
 
   // CODEX-ROW NEGATIVE. model_access grades the claude-code row alone
@@ -409,45 +503,70 @@ describe("Finding 1 — the rail states WHO needs to sign in, not just whether a
     expect(screen.queryByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeNull();
   });
 
-  // A non-operator's shared_expired needsAttention but is NOT actionable
-  // (MODEL_ACCESS_ACTIONABLE excludes it; the door's shared_expired arm is
-  // audience-aware) — so no CTA is offered even though the line renders.
-  it("an operator's shared_expired IS actionable and offers the working repair path", () => {
-    renderRail({
-      agentRow: modelAccessRow({ credential_source: "shared" }),
-      modelAccess: { state: "shared_expired", action: "Your admin's model credential expired — ask them to reconnect it" },
-      operator: true,
-    });
-    expect(screen.getByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeInTheDocument();
-  });
+  // S1 (review-1): focus after the door closes. Radix's FocusScope is still
+  // mounted while onDone/onCancel run, so anything focused there is taken
+  // back; onCloseAutoFocus is the callback that fires after the trap
+  // releases, and every assertion below has to wait a macrotask for it —
+  // same pattern as model-access-banner.test.tsx's afterFocusSettles.
+  const afterFocusSettles = () => act(() => new Promise((r) => setTimeout(r, 0)));
 
-  // Focus discipline (round-2 nit): opening the dialog from the rail's OWN
-  // control returns focus to Launch when it closes — never to #main-content,
-  // which would drop the launcher at the top of the form they were mid-way
-  // through.
-  it("focus returns to Launch when the dialog opened from the rail's own control closes", async () => {
-    renderRail({
-      agentRow: modelAccessRow(),
-      modelAccess: { state: "not_configured", action: AGENTS.SIGN_IN_AWS },
-      extra: <DoorCloser />,
+  describe("where focus goes when the REAL door closes (S1 — review-1)", () => {
+    // Escape leaves the state (and the rail's own control) unchanged — the
+    // ordinary cancellation path — yet focus still lands on Launch, never on
+    // the control that happened to be document.activeElement: the rail
+    // always passes its own neighbour explicitly
+    // (`door.openDoor(launchRef.current)`), one code path for every close
+    // reason.
+    it("Escape closes the real dialog and focus lands on Launch, not #main-content", async () => {
+      renderRail({
+        agentRow: modelAccessRow(),
+        modelAccess: { state: "not_configured", action: AGENTS.SIGN_IN_AWS },
+        banner: true,
+      });
+      await userEvent.click(screen.getByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA }));
+      expect(screen.getByRole("button", { name: "fake pane" })).toBeInTheDocument();
+      await userEvent.keyboard("{Escape}");
+      await afterFocusSettles();
+      expect(screen.queryByRole("button", { name: "fake pane" })).toBeNull();
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Launch run" }));
+      expect(document.activeElement).not.toBe(document.getElementById("main-content"));
     });
-    await userEvent.click(screen.getByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA }));
-    await userEvent.click(screen.getByRole("button", { name: "close door (test only)" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "Launch run" })).toHaveFocus());
-  });
 
-  // NEGATIVE: a door someone ELSE opened (the rail never claimed it and never
-  // rendered its own control here — showModelAccess false) must not steal
-  // focus to Launch when it closes.
-  it("does not move focus when the door was never opened from this rail", async () => {
-    renderRail({
-      agentRow: harnessRow(),
-      modelAccess: { state: "live" },
-      extra: <DoorCloser />,
+    // The review's actual bug: a refresh that clears the state unmounts the
+    // rail's OWN control — the element a bare openDoor() would have captured
+    // as document.activeElement — before onCloseAutoFocus runs.
+    // focusOpener() on that detached node fails and the banner falls through
+    // to #main-content; passing Launch as `returnTo` makes it the captured
+    // opener directly, so it wins regardless of what unmounted.
+    it("a completed sign-in that clears the state still returns focus to Launch, not #main-content", async () => {
+      renderRail({
+        agentRow: modelAccessRow(),
+        modelAccess: { state: "not_configured", action: AGENTS.SIGN_IN_AWS },
+        refreshTo: { state: "live" },
+        banner: true,
+      });
+      await userEvent.click(screen.getByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA }));
+      await userEvent.click(screen.getByRole("button", { name: "fake pane" }));
+      await afterFocusSettles();
+      // The rail's own control is gone — the state it described cleared.
+      expect(screen.queryByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeNull();
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Launch run" }));
+      expect(document.activeElement).not.toBe(document.getElementById("main-content"));
     });
-    const launch = screen.getByRole("button", { name: "Launch run" });
-    launch.blur();
-    await userEvent.click(screen.getByRole("button", { name: "close door (test only)" }));
-    expect(launch).not.toHaveFocus();
+
+    // NEGATIVE: a door someone ELSE opened (the rail never claimed it and
+    // never rendered its own control here — showModelAccess false) must not
+    // steal focus to Launch when it closes.
+    it("does not move focus when the door was never opened from this rail", async () => {
+      renderRail({
+        agentRow: harnessRow(),
+        modelAccess: { state: "live" },
+        extra: <DoorCloser />,
+      });
+      const launch = screen.getByRole("button", { name: "Launch run" });
+      launch.blur();
+      await userEvent.click(screen.getByRole("button", { name: "close door (test only)" }));
+      expect(launch).not.toHaveFocus();
+    });
   });
 });
