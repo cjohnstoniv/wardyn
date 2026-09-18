@@ -1,0 +1,705 @@
+0d63ab2e3ade4302b9f51b08146965cf21655c46
+[1;34m[e2e-ui][0m Building backend + UI bundle once
+[1;34m[e2e][0m Building wardynd (none runner; no -tags docker needed) + wardyn CLI
+[1;34m[e2e][0m Building UI bundle (ui/dist)
+Lockfile is up to date, resolution step is skipped
+Already up to date
+
+Done in 1.1s
+
+> @wardyn/ui@0.7.5 build /tmp/wardyn-review-0.7x-acceptance-ui/ui
+> vite build
+
+vite v6.4.3 building for production...
+transforming...
+✓ 2165 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                                                   1.49 kB │ gzip:   0.80 kB
+dist/assets/jetbrains-mono-latin-ext-400-normal-Bc8Ftmh3.woff2    7.34 kB
+dist/assets/jetbrains-mono-latin-ext-600-normal-BfB_LPfz.woff2    7.51 kB
+dist/assets/jetbrains-mono-latin-ext-500-normal-Cut-4mMH.woff2    7.53 kB
+dist/assets/jetbrains-mono-latin-ext-400-normal-fXTG6kC5.woff    10.13 kB
+dist/assets/jetbrains-mono-latin-ext-600-normal-DObL3zCW.woff    10.32 kB
+dist/assets/jetbrains-mono-latin-ext-500-normal-ckzbgY84.woff    10.34 kB
+dist/assets/jetbrains-mono-latin-400-normal-V6pRDFza.woff2       21.17 kB
+dist/assets/jetbrains-mono-latin-500-normal-BWZEU5yA.woff2       21.83 kB
+dist/assets/jetbrains-mono-latin-600-normal-C8RAYTDA.woff2       21.86 kB
+dist/assets/inter-latin-400-normal-C38fXH4l.woff2                23.66 kB
+dist/assets/inter-latin-500-normal-Cerq10X2.woff2                24.27 kB
+dist/assets/inter-latin-700-normal-Yt3aPRUw.woff2                24.36 kB
+dist/assets/inter-latin-600-normal-LgqL8muc.woff2                24.45 kB
+dist/assets/jetbrains-mono-latin-400-normal-6-qcROiO.woff        27.50 kB
+dist/assets/jetbrains-mono-latin-600-normal-BfsvjouI.woff        28.18 kB
+dist/assets/jetbrains-mono-latin-500-normal-CJOVTJB7.woff        28.21 kB
+dist/assets/inter-latin-400-normal-CyCys3Eg.woff                 30.70 kB
+dist/assets/inter-latin-600-normal-CiBQ2DWP.woff                 31.26 kB
+dist/assets/inter-latin-500-normal-BL9OpVg8.woff                 31.28 kB
+dist/assets/inter-latin-700-normal-BLAVimhd.woff                 31.32 kB
+dist/assets/inter-latin-ext-400-normal-C1nco2VV.woff2            35.00 kB
+dist/assets/inter-latin-ext-500-normal-CV4jyFjo.woff2            36.02 kB
+dist/assets/inter-latin-ext-700-normal-Ca8adRJv.woff2            36.24 kB
+dist/assets/inter-latin-ext-600-normal-D2bJ5OIk.woff2            36.26 kB
+dist/assets/inter-latin-ext-400-normal-77YHD8bZ.woff             47.56 kB
+dist/assets/inter-latin-ext-500-normal-BxGbmqWO.woff             48.49 kB
+dist/assets/inter-latin-ext-700-normal-TidjK2hL.woff             48.63 kB
+dist/assets/inter-latin-ext-600-normal-CIVaiw4L.woff             48.67 kB
+dist/assets/run-detail-CgLZr6WS.css                               2.35 kB │ gzip:   0.57 kB
+dist/assets/attach-terminal-DzQ6E2lt.css                          5.74 kB │ gzip:   2.06 kB
+dist/assets/terminal-player-CUPz0fUZ.css                         16.12 kB │ gzip:   3.52 kB
+dist/assets/index-D2BzcAUl.css                                   84.75 kB │ gzip:  14.96 kB
+dist/assets/workspace-status-BE_TVPDd.js                          0.19 kB │ gzip:   0.14 kB
+dist/assets/user-drives-display-BR-PIdbF.js                       0.21 kB │ gzip:   0.19 kB
+dist/assets/use-recording-disabled-BOOoDImg.js                    0.29 kB │ gzip:   0.24 kB
+dist/assets/chevron-right-27aMlDRS.js                             0.30 kB │ gzip:   0.25 kB
+dist/assets/default-confinement-AeLMJZp6.js                       0.33 kB │ gzip:   0.24 kB
+dist/assets/info-Dx0Sn-Ug.js                                      0.38 kB │ gzip:   0.28 kB
+dist/assets/globe-TOVuslU3.js                                     0.42 kB │ gzip:   0.30 kB
+dist/assets/ssh-keys-B2gtT1iS.js                                  0.44 kB │ gzip:   0.30 kB
+dist/assets/pencil-FGaC5-An.js                                    0.45 kB │ gzip:   0.33 kB
+dist/assets/trash-2-mO_ZoMQ6.js                                   0.50 kB │ gzip:   0.32 kB
+dist/assets/textarea-D14DLkHX.js                                  0.63 kB │ gzip:   0.38 kB
+dist/assets/policies-Ce12oSiv.js                                  0.70 kB │ gzip:   0.36 kB
+dist/assets/audit-decision-HlIPF7TC.js                            0.70 kB │ gzip:   0.39 kB
+dist/assets/barrier-strength-strip-DSFd-cQl.js                    0.71 kB │ gzip:   0.49 kB
+dist/assets/secrets-DMUnuA9u.js                                   0.74 kB │ gzip:   0.37 kB
+dist/assets/use-workspace-list-6DtqQTwP.js                        0.74 kB │ gzip:   0.48 kB
+dist/assets/permissions-BwwKKDE3.js                               0.91 kB │ gzip:   0.43 kB
+dist/assets/display-BzQBIj1O.js                                   1.10 kB │ gzip:   0.68 kB
+dist/assets/capabilities-D2p3uhl7.js                              1.12 kB │ gzip:   0.61 kB
+dist/assets/delete-confirm-dialog-B5vAqyJL.js                     1.18 kB │ gzip:   0.70 kB
+dist/assets/drives-BvoNKY-G.js                                    1.44 kB │ gzip:   0.61 kB
+dist/assets/governance-fOPyaMF-.js                                1.44 kB │ gzip:   0.59 kB
+dist/assets/runs-first-run-demos-Jw06GWkM.js                      1.58 kB │ gzip:   0.69 kB
+dist/assets/form-primitives-CEngqd4O.js                           1.82 kB │ gzip:   0.84 kB
+dist/assets/dialog-CJ0lfWUy.js                                    2.22 kB │ gzip:   0.87 kB
+dist/assets/directory-combobox-DxhX4wkc.js                        2.39 kB │ gzip:   1.25 kB
+dist/assets/record-pane-chips-CLIYp3mP.js                         3.01 kB │ gzip:   1.32 kB
+dist/assets/reason-dialog-NzwxecUJ.js                             3.05 kB │ gzip:   1.49 kB
+dist/assets/tabs-Bh8ebQds.js                                      3.63 kB │ gzip:   1.55 kB
+dist/assets/settings-screen-C-Sro91_.js                           4.45 kB │ gzip:   1.99 kB
+dist/assets/popover-BUhiotE0.js                                   5.21 kB │ gzip:   1.95 kB
+dist/assets/ssh-keys-qolI15N2.js                                  5.30 kB │ gzip:   2.24 kB
+dist/assets/radio-group-D23FDrt8.js                               6.53 kB │ gzip:   2.65 kB
+dist/assets/workspaces-CP-QuVA3.js                                6.94 kB │ gzip:   3.00 kB
+dist/assets/recording-CRqncMeB.js                                 7.46 kB │ gzip:   2.75 kB
+dist/assets/permissions-copy-qGFk3-J6.js                          7.68 kB │ gzip:   2.91 kB
+dist/assets/add-workspace-dialog-DrOujzIQ.js                      9.07 kB │ gzip:   3.26 kB
+dist/assets/workspace-providers-copy-D5SmanQA.js                  9.09 kB │ gzip:   3.90 kB
+dist/assets/secrets-CQjYafFj.js                                   9.46 kB │ gzip:   3.68 kB
+dist/assets/user-drives-copy-C583uG5i.js                         10.09 kB │ gzip:   4.00 kB
+dist/assets/permissions-Bp0J2OZQ.js                              10.79 kB │ gzip:   3.72 kB
+dist/assets/policies-B49Ku-ub.js                                 10.89 kB │ gzip:   3.94 kB
+dist/assets/demos-step-D_Jdje39.js                               11.23 kB │ gzip:   3.95 kB
+dist/assets/profile-review-DPJUka07.js                           12.69 kB │ gzip:   4.05 kB
+dist/assets/approvals-CVxeALm5.js                                13.54 kB │ gzip:   4.99 kB
+dist/assets/audit-CZZHve3V.js                                    14.11 kB │ gzip:   4.93 kB
+dist/assets/governance-screen-BfEj0mMh.js                        16.52 kB │ gzip:   4.96 kB
+dist/assets/policy-panel-B1RnWEee.js                             18.21 kB │ gzip:   7.03 kB
+dist/assets/drives-screen-DwmO4ngQ.js                            20.12 kB │ gzip:   6.19 kB
+dist/assets/providers-screen-BO5Vq9l7.js                         26.27 kB │ gzip:   7.45 kB
+dist/assets/new-run-screen-C3UTp6gw.js                           28.98 kB │ gzip:   9.95 kB
+dist/assets/user-drives-card-CSx7FFQX.js                         30.08 kB │ gzip:   9.65 kB
+dist/assets/workspace-detail-2NK0pwUL.js                         34.17 kB │ gzip:  10.26 kB
+dist/assets/demo-catalog-BVjkPk3h.js                             39.80 kB │ gzip:  12.54 kB
+dist/assets/providers-card-PSt9WLZ9.js                           54.39 kB │ gzip:  16.14 kB
+dist/assets/onboarding-screen-DNYXUdlP.js                        76.40 kB │ gzip:  25.05 kB
+dist/assets/run-detail-2eDHm3wG.js                              125.61 kB │ gzip:  37.84 kB
+dist/assets/terminal-player-CtBPydf0.js                         192.98 kB │ gzip:  69.28 kB
+dist/assets/attach-terminal-B4s5vQqM.js                         346.65 kB │ gzip:  89.35 kB
+dist/assets/index-BlL2go8r.js                                   560.27 kB │ gzip: 180.77 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 5.09s
+[1;34m[e2e-ui][0m running agents.spec.ts against a fresh backend
+
+Running 16 tests using 1 worker
+
+(node:2710294) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 [chromium] › e2e/agents.spec.ts:89:3 › agents — legacy open mode (no agent_providers row saved yet) › both catalog agents render enabled, nothing marked unavailable in New Run's picker (852ms)
+  ✓   2 [chromium] › e2e/agents.spec.ts:107:3 › agents — the admin authoring walk (real writes, real reload) › enabling claude-code as bedrock_sso + per_user with a start URL persists (1.3s)
+  ✓   3 [chromium] › e2e/agents.spec.ts:134:3 › agents — the admin authoring walk (real writes, real reload) › disabling codex-cli renders it unavailable in the New Run picker, and refuses a real launch naming it (1.4s)
+  ✓   4 [chromium] › e2e/agents.spec.ts:164:3 › agents — the admin authoring walk (real writes, real reload) › a declared mechanism with nothing behind it refuses launch as 'not configured' (real, no Bedrock creds exist here) (972ms)
+  ✓   5 [chromium] › e2e/agents.spec.ts:196:3 › agents — a 201 carrying warnings holds the screen (no timer) › warnings render inline and Open run navigates only on click (1.0s)
+  ✓   6 [chromium] › e2e/agents.spec.ts:237:3 › agents — the roster-unknown and empty-roster states withhold Save › an absent `harnesses` field renders FETCH_FAILED_* with no Save (730ms)
+  ✓   7 [chromium] › e2e/agents.spec.ts:249:3 › agents — the roster-unknown and empty-roster states withhold Save › a genuinely empty roster ([]) shows the lead, no rows, and no Save (837ms)
+  ✓   8 [chromium] › e2e/agents.spec.ts:278:5 › agents — member Getting Started's Model access chip (spliced states) › model_access.state=live shows its chip, no action (508ms)
+  ✓   9 [chromium] › e2e/agents.spec.ts:278:5 › agents — member Getting Started's Model access chip (spliced states) › model_access.state=expiring shows its chip and the Sign in to AWS action (444ms)
+  ✓  10 [chromium] › e2e/agents.spec.ts:278:5 › agents — member Getting Started's Model access chip (spliced states) › model_access.state=expired_signin shows its chip and the Sign in to AWS action (452ms)
+  ✓  11 [chromium] › e2e/agents.spec.ts:278:5 › agents — member Getting Started's Model access chip (spliced states) › model_access.state=not_configured shows its chip and the Sign in to AWS action (431ms)
+  ✓  12 [chromium] › e2e/agents.spec.ts:278:5 › agents — member Getting Started's Model access chip (spliced states) › model_access.state=shared_expired shows its chip, no action (444ms)
+  ✓  13 [chromium] › e2e/agents.spec.ts:337:3 › agents — member Getting Started's Model access chip (spliced states) › model_access.state=not_applicable falls back to the deployment chip, never the sign-in CTA (457ms)
+  ✓  14 [chromium] › e2e/agents.spec.ts:399:3 › agents — the roster pin (sso_account_id / sso_role_name) › a per_user row saves an account/role pin and re-renders it after a reload (1.2s)
+  ✓  15 [chromium] › e2e/agents.spec.ts:428:3 › agents — the roster pin (sso_account_id / sso_role_name) › a pin whose account differs from the model ARN saves as the deliberate pin (960ms)
+  ✓  16 [chromium] › e2e/agents.spec.ts:510:3 › agents — the per_user sign-in affordance renders before the mechanism field › the banner renders before the mechanism field under an actionable per_user row (777ms)
+
+  16 passed (13.8s)
+[1;34m[e2e-ui][0m running approvals.spec.ts against a fresh backend
+
+Running 17 tests using 1 worker
+
+(node:2712166) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 [chromium] › e2e/approvals.spec.ts:147:3 › Approvals screen › renders the approvals page header and HITL copy (909ms)
+  ✓   2 [chromium] › e2e/approvals.spec.ts:158:3 › Approvals screen › Pending tab lists cards with kind, blast-radius banner, run context and actions (838ms)
+  ✓   3 [chromium] › e2e/approvals.spec.ts:180:3 › Approvals screen › credential pending card carries the honest broker blast copy (mint is authorized, not immediate) (814ms)
+  ✓   4 [chromium] › e2e/approvals.spec.ts:193:3 › Approvals screen › Approve dialog says "Approve" — NOT "Approve & mint" (over-claim fix) (1.5s)
+  ✓   5 [chromium] › e2e/approvals.spec.ts:212:3 › Approvals screen › Deny dialog requires a reason and is labelled "Confirm deny" (1.5s)
+  ✓   6 [chromium] › e2e/approvals.spec.ts:232:3 › Approvals screen › Decided tab surfaces APPROVED, DENIED and EXPIRED, with DENIED in the danger tone (908ms)
+  ✓   7 [chromium] › e2e/approvals.spec.ts:265:3 › Approvals — decision flows (mutating, self-seeded) › the credential Approve dialog frames approval as authorizing a later broker mint (1.7s)
+  ✓   8 [chromium] › e2e/approvals.spec.ts:291:3 › Approvals — decision flows (mutating, self-seeded) › approve commits and shows a success toast (1.8s)
+  ✓   9 [chromium] › e2e/approvals.spec.ts:323:3 › Approvals — decision flows (mutating, self-seeded) › picking a non-default decision scope keeps the confirm button honestly labelled "Approve", and the decided row picks up that scope's badge (1.8s)
+  ✓  10 [chromium] › e2e/approvals.spec.ts:383:3 › Approvals — decision flows (mutating, self-seeded) › deny commits with a reason and shows a success toast (1.7s)
+  ✓  11 [chromium] › e2e/approvals.spec.ts:411:3 › Approvals — decision flows (mutating, self-seeded) › a decision that can no longer commit surfaces an error toast (no infinite spinner) (1.6s)
+  ✓  12 [chromium] › e2e/approvals.spec.ts:445:3 › Approvals — decision flows (mutating, self-seeded) › empty pending queue renders the caught-up empty state (869ms)
+  ✓  13 [chromium] › e2e/approvals.spec.ts:469:3 › Approvals — decision-scope split button (run cockpit) › the LiveApprovals split button offers all four scopes via its caret, with Always disabled for a workspace-less run (2.0s)
+  ✓  14 [chromium] › e2e/approvals.spec.ts:553:3 › B3 — the egress widget's held chip and the Approvals tab badge count LIVE holds › 1 PENDING + 1 APPROVED on the same run reads '1 held', never 2 (1.4s)
+  ✓  15 [chromium] › e2e/approvals.spec.ts:594:3 › B4 — killing a run cancels its still-PENDING approvals › kill ⇒ the PENDING approval becomes CANCELLED with no decision buttons, and the nav badge returns to 0 (6.5s)
+  ✓  16 [chromium] › e2e/approvals.spec.ts:667:3 › F-12 — LiveApprovals row gate mirrors canDecideApproval, not a blanket operator check › a member's Approve/Deny are ENABLED on their own run's egress_domain approval, and a real decide round-trips (1.6s)
+  ✓  17 [chromium] › e2e/approvals.spec.ts:705:3 › F-12 — LiveApprovals row gate mirrors canDecideApproval, not a blanket operator check › negative: a non-egress kind (tool_call) stays disabled for a member on the SAME owned run (1.3s)
+
+  17 passed (29.9s)
+[1;34m[e2e-ui][0m running audit.spec.ts against a fresh backend
+
+Running 6 tests using 1 worker
+
+(node:2715073) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 [chromium] › e2e/audit.spec.ts:50:1 › renders the seeded, day-grouped audit trail with append-only framing (667ms)
+  ✓  2 [chromium] › e2e/audit.spec.ts:80:1 › the truncated indicator is ABSENT below the 500-event cap (593ms)
+  ✓  3 [chromium] › e2e/audit.spec.ts:87:1 › the Event facet narrows by kind (Credentials vs Lifecycle) (2.0s)
+  ✓  4 [chromium] › e2e/audit.spec.ts:107:1 › the Actor facet narrows: seeded events are all system; human/agent are empty (2.5s)
+  ✓  5 [chromium] › e2e/audit.spec.ts:132:1 › search filters by action / actor / target text (662ms)
+  ✓  6 [chromium] › e2e/audit.spec.ts:155:1 › clicking a run drills into that run's trail, and 'Show all events' restores the window (766ms)
+
+  6 passed (7.9s)
+[1;34m[e2e-ui][0m running auth.spec.ts against a fresh backend
+
+Running 18 tests using 1 worker
+
+(node:2715993) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 [chromium] › e2e/auth.spec.ts:86:3 › auth / sign-in gate › unauthenticated app shows the sign-in screen with the admin token field (436ms)
+  ✓   2 [chromium] › e2e/auth.spec.ts:110:3 › auth / sign-in gate › the token field is password-typed and the submit button is disabled while empty (426ms)
+  ✓   3 [chromium] › e2e/auth.spec.ts:125:3 › auth / sign-in gate › a WRONG token is rejected with the error message and clears the stored token (474ms)
+  ✓   4 [chromium] › e2e/auth.spec.ts:146:3 › auth / sign-in gate › typing again after a rejection dismisses the error (445ms)
+  ✓   5 [chromium] › e2e/auth.spec.ts:159:3 › auth / sign-in gate › the CORRECT token signs in and lands in the console (Runs sidebar visible) (480ms)
+  ✓   6 [chromium] › e2e/auth.spec.ts:176:3 › auth / sign-in gate › reload keeps the session (a stored token boots straight into the console) (598ms)
+  ✓   7 [chromium] › e2e/auth.spec.ts:191:3 › auth / sign-in gate › a stored but INVALID token boots to the sign-in gate, not the console (383ms)
+  ✓   8 [chromium] › e2e/auth.spec.ts:199:3 › auth / sign-in gate › sign-out returns to the sign-in gate and clears the token (/auth/logout HIGH fix) (819ms)
+  ✓   9 [chromium] › e2e/auth.spec.ts:223:3 › auth / sign-in gate › after sign-out a reload stays on the gate (token really gone) (936ms)
+  ✓  10 [chromium] › e2e/auth.spec.ts:259:3 › outage vs. rejection (R4/F027) › a 5xx mount probe does not clear a stored token the daemon never rejected (448ms)
+  ✓  11 [chromium] › e2e/auth.spec.ts:280:3 › outage vs. rejection (R4/F027) › the gate keeps asking /healthz, so an SSO-only deployment is not left with no way in (387ms)
+  ✓  12 [chromium] › e2e/auth.spec.ts:319:3 › a session revoked mid-run (R4/F116) › a 401 arriving on an ALREADY-authenticated console returns to the sign-in gate (3.8s)
+  ✓  13 [chromium] › e2e/auth.spec.ts:357:3 › a session revoked mid-run (R4/F116) › a 401 while on another screen shows why, and re-auth returns to that screen (X3-F7) (5.5s)
+  ✓  14 [chromium] › e2e/auth.spec.ts:388:3 › the restored path is checked against the re-authenticated role (M2) › a member re-authenticating over an admin's captured operator-only path lands on Runs, not a dead end (6.0s)
+  ✓  15 [chromium] › e2e/auth.spec.ts:421:3 › the restored path is checked against the re-authenticated role (M2) › neg: the SAME role re-authenticating restores to the captured operator-only path (6.0s)
+  ✓  16 [chromium] › e2e/auth.spec.ts:452:3 › B1 — settled-but-unknown identity (a failed /me renders no nav, not a guess) › a 500 on /me shows the identity-unknown banner, no admin nav and no member nav (590ms)
+  ✓  17 [chromium] › e2e/auth.spec.ts:487:3 › B1 — settled-but-unknown identity (a failed /me renders no nav, not a guess) › a 500 on /me shows the banner on /settings and /governance — no screen paints for an unknown identity (658ms)
+  ✓  18 [chromium] › e2e/auth.spec.ts:517:3 › R4-F107 — a failed sign-out is surfaced, not swallowed › POST /auth/logout failing still drops the local session, but toasts that the server wasn't confirmed (818ms)
+
+  18 passed (30.3s)
+[1;34m[e2e-ui][0m running demos.spec.ts against a fresh backend
+
+Running 8 tests using 1 worker
+
+(node:2718302) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 [chromium] › e2e/demos.spec.ts:53:3 › Demo sandboxes › /demos redirects into Getting Started (408ms)
+  ✓  2 [chromium] › e2e/demos.spec.ts:59:5 › Demo sandboxes › The sealed box renders at its deep link, Start gated on -runner none (470ms)
+  ✓  3 [chromium] › e2e/demos.spec.ts:59:5 › Demo sandboxes › Fail, then approve renders at its deep link, Start gated on -runner none (470ms)
+  ✓  4 [chromium] › e2e/demos.spec.ts:59:5 › Demo sandboxes › Held at the door renders at its deep link, Start gated on -runner none (451ms)
+  ✓  5 [chromium] › e2e/demos.spec.ts:59:5 › Demo sandboxes › Lines that can't be crossed renders at its deep link, Start gated on -runner none (479ms)
+  ✓  6 [chromium] › e2e/demos.spec.ts:59:5 › Demo sandboxes › Denied, however you spell it renders at its deep link, Start gated on -runner none (469ms)
+  ✓  7 [chromium] › e2e/demos.spec.ts:59:5 › Demo sandboxes › A token the sandbox never even sees renders at its deep link, Start gated on -runner none (470ms)
+  ✓  8 [chromium] › e2e/demos.spec.ts:59:5 › Demo sandboxes › No identity, no credential renders at its deep link, Start gated on -runner none (485ms)
+
+  8 passed (4.5s)
+[1;34m[e2e-ui][0m running drives.spec.ts against a fresh backend
+
+Running 44 tests using 1 worker
+
+(node:2719179) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 [chromium] › e2e/drives.spec.ts:214:3 › drives — an empty registry says what it is, not what went wrong › the empty registry is the header and its empty state — no allocations, no preview, ONE teal (837ms)
+  ✓   2 [chromium] › e2e/drives.spec.ts:273:3 › drives — an empty registry says what it is, not what went wrong › the deployment facts the console cannot derive come off the wire (224ms)
+  ✓   3 [chromium] › e2e/drives.spec.ts:296:3 › drives — the editor offers what this deployment can mount, and only that › it opens IN PLACE, under the list it edits — and Save is the screen's one teal (764ms)
+  ✓   4 [chromium] › e2e/drives.spec.ts:332:3 › drives — the editor offers what this deployment can mount, and only that › the picker is this runner's two backends — never the other target's, and never one it cannot bind (652ms)
+  ✓   5 [chromium] › e2e/drives.spec.ts:371:3 › drives — the editor offers what this deployment can mount, and only that › Save renders the SERVER's own refusal under the console's heading, and writes nothing (901ms)
+  ✓   6 [chromium] › e2e/drives.spec.ts:408:3 › drives — the editor offers what this deployment can mount, and only that › the OTHER target's backend is refused on the WIRE, where `wardyn drive apply` meets it (220ms)
+  ✓   7 [chromium] › e2e/drives.spec.ts:448:3 › drives — the door is a governance limit, not a drives control › the profile editor's third limit shuts it, and the profiles table chips it (1.1s)
+  ✓   8 [chromium] › e2e/drives.spec.ts:479:3 › drives — the door is a governance limit, not a drives control › the stored limit is the door: deny_user_drive on the profile itself (211ms)
+  ✓   9 [chromium] › e2e/drives.spec.ts:495:3 › drives — the registry is SUPER's, and it has no nav item for anyone › an admin reaches it from Workspaces and from the Settings card — and never from the sidebar (815ms)
+  ✓  10 [chromium] › e2e/drives.spec.ts:524:3 › drives — the registry is SUPER's, and it has no nav item for anyone › a security admin is offered neither door, and every write on the screen is parked (680ms)
+  ✓  11 [chromium] › e2e/drives.spec.ts:557:3 › drives — the registry is SUPER's, and it has no nav item for anyone › a member is offered neither door either (513ms)
+  ✓  12 [chromium] › e2e/drives.spec.ts:575:3 › drives — what the member is told at New run › NO allocation and an open door: today's card, with no drive block at all (554ms)
+  ✓  13 [chromium] › e2e/drives.spec.ts:592:3 › drives — what the member is told at New run › a WRITABLE allocation: the checkbox, its sentence, and the narrowing toggle (785ms)
+  ✓  14 [chromium] › e2e/drives.spec.ts:629:3 › drives — what the member is told at New run › a READ-ONLY allocation has no narrowing toggle — there is nothing to narrow (617ms)
+  ✓  15 [chromium] › e2e/drives.spec.ts:643:3 › drives — what the member is told at New run › a PAUSED allocation is one sentence where the checkbox would be (574ms)
+  ✓  16 [chromium] › e2e/drives.spec.ts:654:3 › drives — what the member is told at New run › the DOOR outranks the allocation, and names the profile that shut it (544ms)
+  ✓  17 [chromium] › e2e/drives.spec.ts:687:3 › drives — what the member is told at New run › user_drive_unavailable:governance_unavailable renders NR_GOVERNANCE_UNAVAILABLE (625ms)
+  ✓  18 [chromium] › e2e/drives.spec.ts:696:3 › drives — what the member is told at New run › user_drive_unavailable:unavailable and :unmountable both render NR_UNAVAILABLE (790ms)
+  ✓  19 [chromium] › e2e/drives.spec.ts:708:3 › drives — what the member is told at New run › user_drive_unavailable:groups_snapshot_stale renders MEMBER.DENIED_STALE_GROUPS (541ms)
+  ✓  20 [chromium] › e2e/drives.spec.ts:716:3 › drives — what the member is told at New run › Getting Started carries the chip and the sentence that a drive is not a workspace (546ms)
+  ✓  21 [chromium] › e2e/drives.spec.ts:728:3 › drives — what the member is told at New run › …and with no allocation, Getting Started grows no chip and no placeholder (500ms)
+  ✓  22 [chromium] › e2e/drives.spec.ts:747:3 › drives — ticking the box puts `drive` on the wire › mount ON sends drive.enabled, and the server answers the allocation refusal verbatim (750ms)
+  ✓  23 [chromium] › e2e/drives.spec.ts:770:3 › drives — ticking the box puts `drive` on the wire › narrowing to read-only rides the same flag, as read_only (786ms)
+  ✓  24 [chromium] › e2e/drives.spec.ts:785:3 › drives — ticking the box puts `drive` on the wire › untouched, the key is ABSENT — and the run launches, exactly as it did before 0.7 (902ms)
+  ✓  25 [chromium] › e2e/drives.spec.ts:810:3 › drives — an admin's New run says none of the member's sentences › no checkbox, no reason line, no chip — the admin's own /me has no allocation (744ms)
+  ✓  26 [chromium] › e2e/drives.spec.ts:850:3 › drives — the admin's authoring walk (needs a runner that can mount) › registering a drive: it lands in the table, allocated to nobody (1.2s)
+  ✓  27 [chromium] › e2e/drives.spec.ts:888:3 › drives — the admin's authoring walk (needs a runner that can mount) › with a drive to allocate, the add form takes the teal — and hands it back to the editor (874ms)
+  ✓  28 [chromium] › e2e/drives.spec.ts:925:3 › drives — the admin's authoring walk (needs a runner that can mount) › the preview is OFFERED with nothing allocated, and answers the honest none (754ms)
+  ✓  29 [chromium] › e2e/drives.spec.ts:951:3 › drives — the admin's authoring walk (needs a runner that can mount) › the editor reopens on the SAVED drive, and a rename persists (931ms)
+  ✓  30 [chromium] › e2e/drives.spec.ts:967:3 › drives — the admin's authoring walk (needs a runner that can mount) › a share cannot use the derived directory name — the refusal is avoided, not met (739ms)
+  ✓  31 [chromium] › e2e/drives.spec.ts:991:3 › drives — the admin's authoring walk (needs a runner that can mount) › allocating it to a person lands the row and the drive's new count (1.4s)
+  ✓  32 [chromium] › e2e/drives.spec.ts:1024:3 › drives — the admin's authoring walk (needs a runner that can mount) › delete is REFUSED while allocated: pre-filled from the count, confirm never enables (1.3s)
+  ✓  33 [chromium] › e2e/drives.spec.ts:1041:3 › drives — the admin's authoring walk (needs a runner that can mount) › the preview asks the SERVER, and its answer names the tier and the object to reclaim (832ms)
+  ✓  34 [chromium] › e2e/drives.spec.ts:1064:3 › drives — the admin's authoring walk (needs a runner that can mount) › claims nothing matches get the empty answer, not a guess (758ms)
+  ✓  35 [chromium] › e2e/drives.spec.ts:1074:3 › drives — the admin's authoring walk (needs a runner that can mount) › Remove the allocation, and only then does the drive delete (1.7s)
+  ✓  36 [chromium] › e2e/drives.spec.ts:1161:3 › allocations: a bounded page says so (R4/F092) › more allocations exist than this page carries: the table says it is a window (665ms)
+  ✓  37 [chromium] › e2e/drives.spec.ts:1170:3 › allocations: a bounded page says so (R4/F092) › a total that IS the page is not a truncation claim (714ms)
+  ✓  38 [chromium] › e2e/drives.spec.ts:1179:3 › allocations: a bounded page says so (R4/F092) › a pre-0.7 daemon that never sends grant_total claims nothing (674ms)
+  ✓  39 [chromium] › e2e/drives.spec.ts:1215:3 › drives — the launch-refusal resolver needs a real OIDC subject this harness has none of (D9, R4-F106-followup) › a real PAUSED allocation for 'admin-token' still answers REFUSED_NO_GRANT — pinning the ceiling above, not a gap (221ms)
+  ✓  40 [chromium] › e2e/drives.spec.ts:1279:3 › drives — the deployment drive ceiling refuses an over-limit write (§6.4) › size_mib over storage.user_drive.max_size_mib is a 422 naming both numbers (211ms)
+  ✓  41 [chromium] › e2e/drives.spec.ts:1327:3 › drives — the org-switch banner (storage.user_drive.disabled) › disabling drives deployment-wide renders DRIVES_OFF_BANNER over an otherwise-unchanged screen (745ms)
+  ✓  42 [chromium] › e2e/drives.spec.ts:1377:3 › run-detail — the SSH/CLI/UI-apps card is owner-or-admin, and nothing else (R4-F129) › a caller who neither owns the run nor is an operator sees no attach card at all (606ms)
+  ✓  43 [chromium] › e2e/drives.spec.ts:1393:3 › run-detail — the SSH/CLI/UI-apps card is owner-or-admin, and nothing else (R4-F129) › the run's own creator sees the card even without operator rights (657ms)
+  ✓  44 [chromium] › e2e/drives.spec.ts:1409:3 › run-detail — the SSH/CLI/UI-apps card is owner-or-admin, and nothing else (R4-F129) › an admin sees the card on a run they did not create (738ms)
+
+  44 passed (33.5s)
+[1;34m[e2e-ui][0m running episode-catalog.spec.ts against a fresh backend
+
+Running 2 tests using 1 worker
+
+(node:2722854) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 [chromium] › e2e/episode-catalog.spec.ts:33:3 › episode catalog — Shape C path grouping › single-user install: core leads, single-user path is the deployment group, multi collapses (738ms)
+  ✓  2 [chromium] › e2e/episode-catalog.spec.ts:51:3 › episode catalog — Shape C path grouping › multi-user (SSO) install: the deployment group swaps and member rows are chipped (565ms)
+
+  2 passed (2.2s)
+[1;34m[e2e-ui][0m running governance.spec.ts against a fresh backend
+
+Running 24 tests using 1 worker
+
+(node:2723395) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 [chromium] › e2e/governance.spec.ts:141:3 › governance — the security admin's authoring walk › a fresh install: no profiles, and the empty state carries the action that fills it (844ms)
+  ✓   2 [chromium] › e2e/governance.spec.ts:172:3 › governance — the security admin's authoring walk › creating a profile: the editor opens in place, and the save warns what it takes away (1.3s)
+  ✓   3 [chromium] › e2e/governance.spec.ts:225:3 › governance — the security admin's authoring walk › assigning it to a group lands the row, its precedence, and the profile's new count (1.5s)
+  ✓   4 [chromium] › e2e/governance.spec.ts:262:3 › governance — the security admin's authoring walk › the editor opens in place and the add form COLLAPSES while it is open (863ms)
+  ✓   5 [chromium] › e2e/governance.spec.ts:299:3 › governance — the security admin's authoring walk › delete is REFUSED while assigned: pre-filled from the count, and the confirm never enables (1.2s)
+  ✓   6 [chromium] › e2e/governance.spec.ts:331:3 › governance — the resolved preview › pasted claims resolve to the profile, named with the assignment that won (838ms)
+  ✓   7 [chromium] › e2e/governance.spec.ts:349:3 › governance — the resolved preview › claims nothing matches resolve to the deployment ceiling, not to a profile (781ms)
+  ✓   8 [chromium] › e2e/governance.spec.ts:365:3 › governance — a ceiling that would MINT credential eligibility is refused › the grant-bound refusal renders the server's message under the frozen heading (932ms)
+  ✓   9 [chromium] › e2e/governance.spec.ts:397:3 › governance — the security admin's console (mocked /me role) › Governance, Permissions and Audit are offered — and Governance is ACTIONABLE (1.3s)
+  ✓  10 [chromium] › e2e/governance.spec.ts:427:3 › governance — the security admin's console (mocked /me role) › the audit feed is the org-wide trail, not the admin-only stub (750ms)
+  ✓  11 [chromium] › e2e/governance.spec.ts:444:3 › governance — the security admin's console (mocked /me role) › an egress decision is theirs to make — Approve and Deny are both live (1.2s)
+  ✓  12 [chromium] › e2e/governance.spec.ts:463:3 › governance — the security admin's console (mocked /me role) › but NOT the super admin's surfaces: writing a secret is refused, and it says why (734ms)
+  ✓  13 [chromium] › e2e/governance.spec.ts:473:3 › governance — the security admin's console (mocked /me role) › nor reaching INTO a run they do not own: attach is not offered (1.2s)
+  ✓  14 [chromium] › e2e/governance.spec.ts:493:3 › governance — a member sees none of it (mocked /me role) › Governance is absent from the member nav, beside the rest of the admin set (562ms)
+  ✓  15 [chromium] › e2e/governance.spec.ts:511:3 › governance — admin (unmocked, the harness's real session): the negative control › the SAME screens the security admin was refused are live for a super admin (1.1s)
+  ✓  16 [chromium] › e2e/governance.spec.ts:548:3 › governance — the member is told which ceiling bounds them › the run rail names the assigned profile, above the policy it clamps (781ms)
+  ✓  17 [chromium] › e2e/governance.spec.ts:561:3 › governance — the member is told which ceiling bounds them › the member Getting Started card names it too — the chip and the line (573ms)
+  ✓  18 [chromium] › e2e/governance.spec.ts:572:3 › governance — the member is told which ceiling bounds them › with NO assignment there is no chip, no line and no placeholder (729ms)
+  ✓  19 [chromium] › e2e/governance.spec.ts:605:3 › governance — the walls, asserted where this harness can reach them › the stored ceiling IS the wall: hosts denied, barrier floored, zero grant kinds (198ms)
+  ✓  20 [chromium] › e2e/governance.spec.ts:625:3 › governance — the walls, asserted where this harness can reach them › the resolver binds the group to it — and a user assignment beats the group (291ms)
+  ✓  21 [chromium] › e2e/governance.spec.ts:670:3 › governance — the walls, asserted where this harness can reach them › the walls cannot be loosened: the grant bound refuses, and DELETE refuses too (252ms)
+  ✓  22 [chromium] › e2e/governance.spec.ts:702:3 › governance — a quota-only profile is not 'None' (R4/F032) › names the cap in the Limits column, and leaves an unlimited profile reading None (703ms)
+  ✓  23 [chromium] › e2e/governance.spec.ts:741:3 › governance — the two storage ceilings round-trip through the editor (0.7.2) › both LimitNumberRows write real integers, and 0 means unlimited on both (1.1s)
+  ✓  24 [chromium] › e2e/governance.spec.ts:802:3 › Governance — a member by URL is told the tier, not an outage › a 403 names the role and offers no Retry; a 500 still does (729ms)
+
+  24 passed (21.7s)
+[1;34m[e2e-ui][0m running member-console.spec.ts against a fresh backend
+
+Running 8 tests using 1 worker
+
+(node:2728605) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 [chromium] › e2e/member-console.spec.ts:17:3 › member console — nav absence (mocked /me role) › member nav is Runs · Approvals · Workspaces only — no admin-only items (698ms)
+  ✓  2 [chromium] › e2e/member-console.spec.ts:37:3 › member console — nav absence (mocked /me role) › the account menu shows a quiet 'member' chip (648ms)
+  ✓  3 [chromium] › e2e/member-console.spec.ts:49:3 › member console — nav absence (mocked /me role) › admin (unmocked, today's default): the full nine-item nav (549ms)
+  ✓  4 [chromium] › e2e/member-console.spec.ts:58:3 › foreign/unknown run — standard not-found (absence, not refusal) › a well-formed but nonexistent run id renders the SAME generic not-found state a bogus one would (631ms)
+  ✓  5 [chromium] › e2e/member-console.spec.ts:102:3 › member why-denied (mocked /me role, real enforcement) › an ungranted egress host: both decisions disable, with the reason and the Always caveat (1.0s)
+  ✓  6 [chromium] › e2e/member-console.spec.ts:125:3 › member why-denied (mocked /me role, real enforcement) › an ungranted workspace stays LISTED and annotated — visibility is not capability (951ms)
+  ✓  7 [chromium] › e2e/member-console.spec.ts:169:3 › member console — a redacted body is not a deployment fact › Settings claims neither a missing runner nor an off image builder (569ms)
+  ✓  8 [chromium] › e2e/member-console.spec.ts:187:3 › member console — a redacted body is not a deployment fact › an empty board offers the member's own next move, not the operator funnel (509ms)
+
+  8 passed (6.6s)
+[1;34m[e2e-ui][0m running member-getting-started.spec.ts against a fresh backend
+
+Running 14 tests using 1 worker
+
+(node:2729779) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 [chromium] › e2e/member-getting-started.spec.ts:33:3 › member Getting Started (mocked /me role) › shows the six member sections, never the admin funnel (705ms)
+  ✓   2 [chromium] › e2e/member-getting-started.spec.ts:44:3 › member Getting Started (mocked /me role) › the episode rail leads with the member's own path, then core (Shape C) (502ms)
+  ✓   3 [chromium] › e2e/member-getting-started.spec.ts:60:3 › member Getting Started (mocked /me role) › the account menu has no Demos entry (578ms)
+  ✓   4 [chromium] › e2e/member-getting-started.spec.ts:68:3 › member Getting Started (mocked /me role) › an episode streams nothing until Watch is pressed, then at least one request (985ms)
+  ✓   5 [chromium] › e2e/member-getting-started.spec.ts:103:3 › member Getting Started (mocked /me role) › a member under not_applicable is not offered a sign-in they cannot complete (530ms)
+  ✓   6 [chromium] › e2e/member-getting-started.spec.ts:127:3 › member Getting Started (mocked /me role) › a shared bedrock row's live credential is the ADMIN's on the chip row too (541ms)
+  ✓   7 [chromium] › e2e/member-getting-started.spec.ts:147:3 › member Getting Started (mocked /me role) › the two Sign in to AWS buttons are distinguishable to a screen reader (612ms)
+  ✓   8 [chromium] › e2e/member-getting-started.spec.ts:181:3 › member Getting Started (mocked /me role) › a codex-only roster asks for the codex provider's key, not anthropic's (497ms)
+  ✓   9 [chromium] › e2e/member-getting-started.spec.ts:211:3 › member Getting Started (mocked /me role) › a member's own sign-in reaches the terminal by asking the server for a ticket (733ms)
+  ✓  10 [chromium] › e2e/member-getting-started.spec.ts:262:3 › member Getting Started (mocked /me role) › a direct cold page.goto("/setup") fires no admin-only reads (1.1s)
+  ✓  11 [chromium] › e2e/member-getting-started.spec.ts:313:3 › admin session at /setup (unmocked — negative control) › the admin still sees the barrier step, Demos, and no member sections (794ms)
+  ✓  12 [chromium] › e2e/member-getting-started.spec.ts:336:3 › admin session at /setup (unmocked — negative control) › a plain admin cold page.goto("/setup") still requests /api/v1/site-config (518ms)
+  ✓  13 [chromium] › e2e/member-getting-started.spec.ts:361:3 › security admin at /setup (mocked /me role) — R4/F034 › lands on the member Getting Started, never the deployer funnel (668ms)
+  ✓  14 [chromium] › e2e/member-getting-started.spec.ts:378:3 › security admin at /setup (mocked /me role) — R4/F034 › the account menu has no Demos entry either — the deep link lands on a page that ignores ?step (607ms)
+
+  14 passed (10.4s)
+[1;34m[e2e-ui][0m running member-mode.spec.ts against a fresh backend
+
+Running 5 tests using 1 worker
+
+(node:2731566) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 [chromium] › e2e/member-mode.spec.ts:77:3 › member mode — the banner is the way out › the banner states the mode, names the ceilings, and Exit posts enabled:false (737ms)
+  ✓  2 [chromium] › e2e/member-mode.spec.ts:98:3 › member mode — the banner is the way out › the account menu offers 'View as member' to an admin, and posts enabled:true (933ms)
+  ✓  3 [chromium] › e2e/member-mode.spec.ts:119:3 › member mode — the banner is the way out › the account menu offers BOTH postures, and the new one posts no_credential:true (890ms)
+  ✓  4 [chromium] › e2e/member-mode.spec.ts:135:3 › member mode — the banner is the way out › the new-member preview paints its own banner and its own ceilings (413ms)
+  ✓  5 [chromium] › e2e/member-mode.spec.ts:152:3 › member mode — the banner is the way out › an admin NOT in member mode sees no banner (489ms)
+
+  5 passed (5.0s)
+[1;34m[e2e-ui][0m running navigation.spec.ts against a fresh backend
+
+Running 22 tests using 1 worker
+
+(node:2732792) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 [chromium] › e2e/navigation.spec.ts:79:3 › navigation + shell › boots into the Runs screen with the sidebar mounted (714ms)
+  ✓   2 [chromium] › e2e/navigation.spec.ts:88:3 › navigation + shell › every sidebar destination loads its screen heading + content (1.9s)
+  ✓   3 [chromium] › e2e/navigation.spec.ts:104:3 › navigation + shell › the app shell (sidebar) stays mounted across navigation (959ms)
+  ✓   4 [chromium] › e2e/navigation.spec.ts:126:3 › navigation + shell › navigating away from a screen and back re-renders it (813ms)
+  ✓   5 [chromium] › e2e/navigation.spec.ts:145:3 › navigation + shell › the active sidebar item reflects the current screen (686ms)
+  ✓   6 [chromium] › e2e/navigation.spec.ts:162:3 › navigation + shell › B1 — a settled-but-unknown /me renders no nav at all, admin or member (456ms)
+  ✓   7 [chromium] › e2e/navigation.spec.ts:187:3 › navigation + shell › /providers has no sidebar entry for an admin (478ms)
+  ✓   8 [chromium] › e2e/navigation.spec.ts:192:3 › navigation + shell › /providers has no sidebar entry for a member either (414ms)
+  ✓   9 [chromium] › e2e/navigation.spec.ts:205:3 › theme toggle › defaults to dark and the Toggle theme button is present (493ms)
+  ✓  10 [chromium] › e2e/navigation.spec.ts:215:3 › theme toggle › the Toggle theme button flips dark <-> light on documentElement (670ms)
+  ✓  11 [chromium] › e2e/navigation.spec.ts:248:3 › theme toggle › F7-F4: the served HTML carries class=dark and color-scheme=dark before any JS runs (211ms)
+  ✓  12 [chromium] › e2e/navigation.spec.ts:261:3 › theme toggle › F7-F4 neg: a stored light preference still renders light once the app mounts (460ms)
+  ✓  13 [chromium] › e2e/navigation.spec.ts:275:3 › theme toggle › theme choice persists across navigation (777ms)
+  ✓  14 [chromium] › e2e/navigation.spec.ts:302:3 › mobile navigation drawer (F3-F8/F7-F6) › 667x375: the drawer scrolls — Recordings (near the bottom of the list) is reachable (1.6s)
+  ✓  15 [chromium] › e2e/navigation.spec.ts:334:3 › header compaction at phone width (F7-F2) › 390x844 /runs: no horizontal overflow, and the user-menu trigger stays in the viewport (470ms)
+  ✓  16 [chromium] › e2e/navigation.spec.ts:352:3 › header compaction at phone width (F7-F2) › neg: >=1024 still shows the full wordmark text and the New run label (458ms)
+  ✓  17 [chromium] › e2e/navigation.spec.ts:365:3 › the header carries no posture chips (0.7.3 F6) › no barrier or NetworkPolicy chip, on an admin session (480ms)
+  ✓  18 [chromium] › e2e/navigation.spec.ts:378:3 › error boundary (no spurious fallback) › no screen renders the error-boundary fallback under healthy data (1.4s)
+  ✓  19 [chromium] › e2e/navigation.spec.ts:416:3 › the unreachable banner sees a store outage (R4/F066) › a live daemon with an unreachable store raises the banner (509ms)
+  ✓  20 [chromium] › e2e/navigation.spec.ts:432:3 › the unreachable banner sees a store outage (R4/F066) › …and it clears on its own when the store comes back (5.8s)
+  ✓  21 [chromium] › e2e/navigation.spec.ts:452:3 › the unreachable banner sees a store outage (R4/F066) › a healthy deployment shows no banner — the negative control (526ms)
+  ✓  22 [chromium] › e2e/navigation.spec.ts:474:3 › dead routes redirect › /integrations redirects to Settings (372ms)
+
+  22 passed (23.1s)
+[1;34m[e2e-ui][0m running new-run.spec.ts against a fresh backend
+
+Running 18 tests using 1 worker
+
+(node:2736267) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 [chromium] › e2e/new-run.spec.ts:45:3 › New run — one page › the top bar's New run navigates to the page, not a dialog (822ms)
+  ✓   2 [chromium] › e2e/new-run.spec.ts:55:3 › New run — one page › the fields follow the run mode (786ms)
+  ✓   3 [chromium] › e2e/new-run.spec.ts:68:3 › New run — one page › Shell command drops the agent picker and relabels the field (746ms)
+  ✓   4 [chromium] › e2e/new-run.spec.ts:81:3 › New run — one page › the panel's derivations track the spec as it changes (790ms)
+  ✓   5 [chromium] › e2e/new-run.spec.ts:108:3 › New run — one page › the allow-all template says block-list only, never 'unrestricted' (650ms)
+  ✓   6 [chromium] › e2e/new-run.spec.ts:119:3 › New run — one page › the Fields rail inserts a key into the spec, and the derivations follow (684ms)
+  ✓   7 [chromium] › e2e/new-run.spec.ts:135:3 › New run — one page › the mode row swaps the editor for the saved-policy picker (723ms)
+  ✓   8 [chromium] › e2e/new-run.spec.ts:162:3 › New run — one page › Launch waits for a title, and says what it is waiting for (667ms)
+  ✓   9 [chromium] › e2e/new-run.spec.ts:172:3 › New run — one page › launching creates a run and lands on its detail page (906ms)
+  ✓  10 [chromium] › e2e/new-run.spec.ts:187:3 › New run — Preflight sends the body Launch sends › POST /runs/preflight and POST /runs carry byte-identical bodies (924ms)
+  ✓  11 [chromium] › e2e/new-run.spec.ts:224:3 › New run — B4b clone from a killed run › clones task/agent/barrier from the killed run, and Launch enables once titled (839ms)
+  ✓  12 [chromium] › e2e/new-run.spec.ts:276:3 › New run — workspace-card 'not an enabled provider' state › a repo source with admitted:false shows PROVIDERS.CARD_NOT_ADMITTED under the picker (887ms)
+  ✓  13 [chromium] › e2e/new-run.spec.ts:322:3 › New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F2-F7/F3-F1) › Launch, then Open run, stay in viewport with every rail section showing at once (1.5s)
+  ✓  14 [chromium] › e2e/new-run.spec.ts:457:3 › New run rail — credentials and recording are read, not asserted › with NO Preflight click the rail says exactly what /setup/status and /healthz say (682ms)
+  ✓  15 [chromium] › e2e/new-run.spec.ts:490:3 › New run rail — credentials and recording are read, not asserted › after Preflight the rail states the verdict for the body it graded (830ms)
+  ✓  16 [chromium] › e2e/new-run.spec.ts:535:3 › New run rail — credentials and recording are read, not asserted › a preflight verdict with no model_credential drops the Run Preflight hint (703ms)
+  ✓  17 [chromium] › e2e/new-run.spec.ts:555:3 › New run rail — credentials and recording are read, not asserted › with no model provider connected the rail makes no residency promise at all (625ms)
+  ✓  18 [chromium] › e2e/new-run.spec.ts:584:3 › New run rail — credentials and recording are read, not asserted › a per_user Bedrock SSO row states residency with no click, and Launch stays reachable at 1280x650 (728ms)
+
+  18 passed (15.6s)
+[1;34m[e2e-ui][0m running people-access.spec.ts against a fresh backend
+
+Running 19 tests using 1 worker
+
+(node:2738510) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 [chromium] › e2e/people-access.spec.ts:76:3 › People step — role mappings editor (0.7 SSO Phase 3) › (a) the four filmed anchors: heading, rail badge (not the step-body chip), Open Permissions (559ms)
+  ✓   2 [chromium] › e2e/people-access.spec.ts:102:3 › People step — role mappings editor (0.7 SSO Phase 3) › (a) the SSO chip names the provider from /access (455ms)
+  ✓   3 [chromium] › e2e/people-access.spec.ts:114:3 › People step — role mappings editor (0.7 SSO Phase 3) › (b) merged table: a read-only chart row, a deletable console row, and Defaults with real addresses (475ms)
+  ✓   4 [chromium] › e2e/people-access.spec.ts:152:3 › People step — role mappings editor (0.7 SSO Phase 3) › (b) a shadowed row carries the right badge for both causes (517ms)
+  ✓   5 [chromium] › e2e/people-access.spec.ts:186:3 › People step — role mappings editor (0.7 SSO Phase 3) › (b) an email-shaped row gets no unverified-claim badge when email mappings are off (462ms)
+  ✓   6 [chromium] › e2e/people-access.spec.ts:211:3 › People step — role mappings editor (0.7 SSO Phase 3) › (b) the unverified-claim badge appears once email mappings are opted in (456ms)
+  ✓   7 [chromium] › e2e/people-access.spec.ts:241:3 › People step — role mappings editor (0.7 SSO Phase 3) › (c) add: a reactive posture-flip 400 flips into guard mode in-viewport; the ack retry sends acknowledge_access_change (1.2s)
+  ✓   8 [chromium] › e2e/people-access.spec.ts:311:3 › People step — role mappings editor (0.7 SSO Phase 3) › (d) delete: a structured 400 flips the open dialog into the reverse-guard copy in-viewport; ack retry sends the query param (1.2s)
+  ✓   9 [chromium] › e2e/people-access.spec.ts:383:3 › People step — role mappings editor (0.7 SSO Phase 3) › (d) delete: a plain delete (no posture flip) confirms directly (1.0s)
+  ✓  10 [chromium] › e2e/people-access.spec.ts:439:3 › People step — role mappings editor (0.7 SSO Phase 3) › (e) collision cause=chart renders the frozen COLLISION_ERROR_CHART string, in-viewport (532ms)
+  ✓  11 [chromium] › e2e/people-access.spec.ts:451:3 › People step — role mappings editor (0.7 SSO Phase 3) › (e) collision cause=operator_allowlist renders the DISTINCT COLLISION_ERROR_OPERATOR string, in-viewport (508ms)
+  ✓  12 [chromium] › e2e/people-access.spec.ts:464:3 › People step — role mappings editor (0.7 SSO Phase 3) › (e) a lockout 400 renders the frozen LOCKOUT_ERROR, in-viewport (588ms)
+  ✓  13 [chromium] › e2e/people-access.spec.ts:473:3 › People step — role mappings editor (0.7 SSO Phase 3) › (e) a stale-snapshot 400 renders STALE_SNAPSHOT_ERROR, DISTINCT from lockout, in-viewport (532ms)
+  ✓  14 [chromium] › e2e/people-access.spec.ts:482:3 › People step — role mappings editor (0.7 SSO Phase 3) › (e) EMAIL_KEY_REFUSED renders verbatim, in-viewport (602ms)
+  ✓  15 [chromium] › e2e/people-access.spec.ts:495:3 › People step — role mappings editor (0.7 SSO Phase 3) › (f) preview: matched, default, denied, and couldn't-check all render from the real POST response (755ms)
+  ✓  16 [chromium] › e2e/people-access.spec.ts:539:3 › People step — role mappings editor (0.7 SSO Phase 3) › (f2) preview: a security_admin verdict says so — never 'member' (R4/F033) (595ms)
+  ✓  17 [chromium] › e2e/people-access.spec.ts:568:3 › People step — role mappings editor (0.7 SSO Phase 3) › (g) real 503 from the OIDC-less harness renders the SSO-not-configured state (524ms)
+  ✓  18 [chromium] › e2e/people-access.spec.ts:578:3 › People step — role mappings editor (0.7 SSO Phase 3) › (g) an intercepted 500 renders fetch-failed — distinct from the real 503's SSO-not-configured state (453ms)
+  ✓  19 [chromium] › e2e/people-access.spec.ts:593:3 › People step — role mappings editor (0.7 SSO Phase 3) › (h) single-user: unchanged explainer, no editor mounted, and zero /access requests (532ms)
+
+  19 passed (13.0s)
+[1;34m[e2e-ui][0m running permissions.spec.ts against a fresh backend
+
+Running 14 tests using 1 worker
+
+(node:2740303) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 [chromium] › e2e/permissions.spec.ts:31:3 › permissions — the admin surface, end to end › a fresh install: nothing enforced, no grants, and it says so (671ms)
+  ✓   2 [chromium] › e2e/permissions.spec.ts:54:3 › permissions — the admin surface, end to end › adding a grant lands the row — amber, and advisory until the kind is enforced (638ms)
+  ✓   3 [chromium] › e2e/permissions.spec.ts:74:3 › permissions — the admin surface, end to end › enforcing a kind confirms first, then flips the chip and the consequence (1.0s)
+  ✓   4 [chromium] › e2e/permissions.spec.ts:97:3 › permissions — the admin surface, end to end › stop enforcing says denies still apply, and puts the off-state back (918ms)
+  ✓   5 [chromium] › e2e/permissions.spec.ts:110:3 › permissions — the admin surface, end to end › removing the grant names who loses it, then empties the table (839ms)
+  ✓   6 [chromium] › e2e/permissions.spec.ts:123:3 › permissions — the admin surface, end to end › enforcing with nothing granted is the lockout guard, and it is unmissable (907ms)
+  ✓   7 [chromium] › e2e/permissions.spec.ts:147:3 › permissions — the seventh kind (workspace_provider) round-trips like the others › granting a provider id lands the row under its own value column (1.1s)
+  ✓   8 [chromium] › e2e/permissions.spec.ts:166:3 › permissions — the seventh kind (workspace_provider) round-trips like the others › enforcing workspace_provider flips its own chip and consequence, independent of the others (1.0s)
+  ✓   9 [chromium] › e2e/permissions.spec.ts:186:3 › permissions — the seventh kind (workspace_provider) round-trips like the others › removing the grant returns workspace_provider to its unenforced consequence (1.5s)
+  ✓  10 [chromium] › e2e/permissions.spec.ts:211:3 › permissions — a snapshot, and a count, that never arrived › a failed GET /permissions paints no kind state at all — never six 'Not enforced' chips (587ms)
+  ✓  11 [chromium] › e2e/permissions.spec.ts:228:3 › permissions — a snapshot, and a count, that never arrived › a refused GET /runs leaves the enforce dialog without a count, never '0 members' (871ms)
+  ✓  12 [chromium] › e2e/permissions.spec.ts:258:3 › permissions — an inert grant renders neutral, never live (F4-F5) › a grant flagged inert renders the neutral Inert chip, never Allow/Deny (518ms)
+  ✓  13 [chromium] › e2e/permissions.spec.ts:297:3 › Permissions — a member by URL is told the tier, not an outage › a 403 names the role and offers no Retry; a 500 still does (596ms)
+  ✓  14 [chromium] › e2e/permissions.spec.ts:343:3 › Permissions — a security admin actually uses the write surface, not just sees the link (X2-F13) › adds a grant and enforces the kind as security_admin, then cleans up (2.3s)
+
+  14 passed (14.3s)
+[1;34m[e2e-ui][0m running policies.spec.ts against a fresh backend
+
+Running 15 tests using 1 worker
+
+(node:2741781) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 [chromium] › e2e/policies.spec.ts:138:1 › renders the Policies screen header, description and primary action (572ms)
+  ✓   2 [chromium] › e2e/policies.spec.ts:154:1 › shows the empty state when no policies are defined (660ms)
+  ✓   3 [chromium] › e2e/policies.spec.ts:168:1 › create form requires a name (client-side validation) (1.1s)
+  ✓   4 [chromium] › e2e/policies.spec.ts:185:1 › create form rejects malformed JSON spec client-side (907ms)
+  ✓   5 [chromium] › e2e/policies.spec.ts:199:1 › create form surfaces the server-side spec validation error (HTTP 400) (1.2s)
+  ✓   6 [chromium] › e2e/policies.spec.ts:221:1 › round-trip: create a policy, it appears in the list, then delete it (2.0s)
+  ✓   7 [chromium] › e2e/policies.spec.ts:257:1 › viewing a policy shows its fields: id, min confinement, egress and eligible grants (3.8s)
+  ✓   8 [chromium] › e2e/policies.spec.ts:296:1 › edit round-trip: open editor from the row menu, change the spec, see it reflected (3.0s)
+  ✓   9 [chromium] › e2e/policies.spec.ts:330:1 › search filters the table and renders the 'no matching' empty state (2.1s)
+  ✓  10 [chromium] › e2e/policies.spec.ts:356:1 › picking a template chip fills the spec, and an edit to it is reflected on save (2.1s)
+  ✓  11 [chromium] › e2e/policies.spec.ts:379:1 › the safety meter moves toward Weakest when allow_all_egress is flipped on (2.5s)
+  ✓  12 [chromium] › e2e/policies.spec.ts:420:1 › create form surfaces the server-side error for an unknown spec key (strict decode) (1.2s)
+  ✓  13 [chromium] › e2e/policies.spec.ts:470:1 › create form surfaces the reserved user-drive target refusal (HTTP 400) (1.2s)
+  ✓  14 [chromium] › e2e/policies.spec.ts:509:3 › Policies — member and security-admin reads (X2-F12) › a member reads the list, and every write is parked with the admin-only reason (662ms)
+  ✓  15 [chromium] › e2e/policies.spec.ts:518:3 › Policies — member and security-admin reads (X2-F12) › a security admin reads the list too, and gets the SAME parked writes — security is not operator here (764ms)
+
+  15 passed (24.7s)
+[1;34m[e2e-ui][0m running providers.spec.ts against a fresh backend
+
+Running 18 tests using 1 worker
+
+(node:2743483) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 [chromium] › e2e/providers.spec.ts:105:3 › providers — legacy open mode, with no rows at all › the empty registry is the legacy-open banner, and Settings/the funnel card say so too (781ms)
+  ✓   2 [chromium] › e2e/providers.spec.ts:131:3 › providers — the admin authoring walk (real writes, real reload) › enabling GitHub with a base URL persists across a reload (850ms)
+  ✓   3 [chromium] › e2e/providers.spec.ts:153:3 › providers — the admin authoring walk (real writes, real reload) › enabling Azure DevOps shows `app` disabled with its own reason (791ms)
+  ✓   4 [chromium] › e2e/providers.spec.ts:188:3 › providers — the admin authoring walk (real writes, real reload) › storing a PAT inside the GitHub row writes the secret, inline (780ms)
+  ✓   5 [chromium] › e2e/providers.spec.ts:205:3 › providers — the admin authoring walk (real writes, real reload) › a malformed base URL is flagged before any request, and a server-only refusal renders the SERVER's own PROVIDERS_400 body — writing nothing (720ms)
+  ✓   6 [chromium] › e2e/providers.spec.ts:240:3 › providers — the admin authoring walk (real writes, real reload) › a 412 keeps the edited textarea on screen, with exactly one banner control (938ms)
+  ✓   7 [chromium] › e2e/providers.spec.ts:275:3 › providers — the admin authoring walk (real writes, real reload) › the funnel step badge and Settings card both read the real enabled-provider count (582ms)
+  ✓   8 [chromium] › e2e/providers.spec.ts:295:3 › providers — the door is SUPER's alone › a security admin sees the tier refusal — OperatorOnlyHint, and no form at all (493ms)
+  ✓   9 [chromium] › e2e/providers.spec.ts:323:3 › providers — the door is SUPER's alone › a member sees no nav, no card, and a 403 door if they reach the URL directly (420ms)
+  ✓  10 [chromium] › e2e/providers.spec.ts:402:3 › providers — Settings Model provider card under a per_user Bedrock row › Connected for a live caller (527ms)
+  ✓  11 [chromium] › e2e/providers.spec.ts:409:3 › providers — Settings Model provider card under a per_user Bedrock row › not-Connected + Sign in with SSO for an expired caller (611ms)
+  ✓  12 [chromium] › e2e/providers.spec.ts:426:3 › providers — Settings Model provider card under a per_user Bedrock row › not_applicable: NOT connected, no borrowed badge — neutral per-person detail instead (601ms)
+  ✓  13 [chromium] › e2e/providers.spec.ts:445:3 › providers — Settings Model provider card under a per_user Bedrock row › not_applicable: the Sign in with SSO door is ABSENT, not merely disabled (619ms)
+  ✓  14 [chromium] › e2e/providers.spec.ts:455:3 › providers — Settings Model provider card under a per_user Bedrock row › opening the dialog shows the managed-portal note, never the dead start-URL prompt (767ms)
+  ✓  15 [chromium] › e2e/providers.spec.ts:468:3 › providers — Settings Model provider card under a per_user Bedrock row › unspliced control: the ordinary Settings sign-in still prompts for the start URL (685ms)
+  ✓  16 [chromium] › e2e/providers.spec.ts:491:3 › providers — Settings Model provider card under a per_user Bedrock row › the sign-in pane narrates the wait, and Cancel kills a sandbox still coming up (993ms)
+  ✓  17 [chromium] › e2e/providers.spec.ts:530:3 › providers — Settings Model provider card under a per_user Bedrock row › past a minute of healthy reads the sign-in pane says it is slow, never that it failed (1.1s)
+  ✓  18 [chromium] › e2e/providers.spec.ts:565:3 › providers — Settings Model provider card under a per_user Bedrock row › spliced control: an explicit shared row also still prompts for the start URL (756ms)
+
+  18 passed (14.0s)
+[1;34m[e2e-ui][0m running record-loop.spec.ts against a fresh backend
+
+Running 1 test using 1 worker
+
+(node:2745132) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 [chromium] › e2e/record-loop.spec.ts:63:1 › caught -> guided approve -> requirements PUT + confined re-POST -> clean chip + roll-up line (1.2s)
+
+  1 passed (1.9s)
+[1;34m[e2e-ui][0m running recording.spec.ts against a fresh backend
+
+Running 8 tests using 1 worker
+
+(node:2745824) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 [chromium] › e2e/recording.spec.ts:79:3 › Recordings library › renders the header, the run-list-alone description and a refresh action (577ms)
+  ✓  2 [chromium] › e2e/recording.spec.ts:90:3 › Recordings library › the none-runner backend genuinely has no recordings — no probe needed to know that (517ms)
+  ✓  3 [chromium] › e2e/recording.spec.ts:115:3 › Recordings library › a listRuns() failure renders its own error, and Retry recovers (541ms)
+  ✓  4 [chromium] › e2e/recording.spec.ts:139:3 › Recordings library › a library spliced onto the run list renders cards straight off its fields — no per-row fetch (538ms)
+  ✓  5 [chromium] › e2e/recording.spec.ts:168:3 › Recordings library › opening a card fetches that ONE run's cast, and only that one (656ms)
+  ✓  6 [chromium] › e2e/recording.spec.ts:201:3 › Recordings library › a getRecording() failure at play time surfaces its own error with Retry (600ms)
+  ✓  7 [chromium] › e2e/recording.spec.ts:214:3 › Recordings library › past four cards the filter bar's count reads the library, and search narrows it live (518ms)
+  ✓  8 [chromium] › e2e/recording.spec.ts:239:3 › Recordings library › opening the player instantiates its WASM core without a CSP violation (1.6s)
+
+  8 passed (6.4s)
+[1;34m[e2e-ui][0m running run-policy.spec.ts against a fresh backend
+
+Running 1 test using 1 worker
+
+(node:2746735) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 [chromium] › e2e/run-policy.spec.ts:34:3 › Run detail — Make a policy from this run (X2-F6) › saves a real policy that appears on /policies (2.6s)
+
+  1 passed (3.4s)
+[1;34m[e2e-ui][0m running runs.spec.ts against a fresh backend
+
+Running 24 tests using 1 worker
+
+(node:2747216) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 [chromium] › e2e/runs.spec.ts:91:3 › Runs board (default view) › boots into the board with runs grouped by title (642ms)
+  ✓   2 [chromium] › e2e/runs.spec.ts:117:3 › Runs board (default view) › the table view lists all nine runs with their state badges (685ms)
+  ✓   3 [chromium] › e2e/runs.spec.ts:146:3 › Runs board (default view) › search filters the board down to a single matching run (520ms)
+  ✓   4 [chromium] › e2e/runs.spec.ts:157:3 › Runs board (default view) › a non-matching search shows the empty state, then recovers when cleared (602ms)
+  ✓   5 [chromium] › e2e/runs.spec.ts:173:3 › Runs board (default view) › a COMPLETED run renders without crashing the console (494ms)
+  ✓   6 [chromium] › e2e/runs.spec.ts:188:3 › Run detail (/runs/:id) › clicking a run opens its addressable detail hub with identity + kill (758ms)
+  ✓   7 [chromium] › e2e/runs.spec.ts:236:3 › Run detail (/runs/:id) › detail of a COMPLETED run renders and has a disabled Kill button (735ms)
+  ✓   8 [chromium] › e2e/runs.spec.ts:253:3 › Run detail (/runs/:id) › a COMPLETED run's header offers the clone door, and it lands on /runs/new prefilled (819ms)
+  ✓   9 [chromium] › e2e/runs.spec.ts:281:3 › Run detail (/runs/:id) › the Runs list kebab clones a COMPLETED run into a prefilled wizard (992ms)
+  ✓  10 [chromium] › e2e/runs.spec.ts:317:3 › Run detail (/runs/:id) › a FAILED interactive run's task title is never squeezed to nothing, and the clone door keeps its label, at every width the bar renders at (1.1s)
+  ✓  11 [chromium] › e2e/runs.spec.ts:420:3 › Run header — the failure-hint chip survives a narrow viewport (F1-F4) › no horizontal overflow at 420px, Kill stays in the viewport, and the hint chip is still visible (708ms)
+  ✓  12 [chromium] › e2e/runs.spec.ts:466:3 › Run detail — a login sandbox says what it is › the AWS sign-in note renders for an AWS login run — not for an ordinary run, and not for the ANTHROPIC login (1.5s)
+  ✓  13 [chromium] › e2e/runs.spec.ts:532:3 › Run detail — a login sandbox says what it is › opening a harness-login run from /runs shows the running sign-in, not a bare prompt (709ms)
+  ✓  14 [chromium] › e2e/runs.spec.ts:566:3 › Run detail — a login sandbox says what it is › a harness-login run that is OVER says nothing about a terminal, a device code or an idle cap (1.1s)
+  ✓  15 [chromium] › e2e/runs.spec.ts:600:3 › Kill availability via the row dropdown (table) › Kill run is enabled in the menu for active runs (640ms)
+  ✓  16 [chromium] › e2e/runs.spec.ts:609:3 › Kill availability via the row dropdown (table) › Kill run is disabled in the menu for every terminal run (2.1s)
+  ✓  17 [chromium] › e2e/runs.spec.ts:641:3 › Killing an active run › killing an active run from its detail page surfaces a toast and reconciles (1.4s)
+  ✓  18 [chromium] › e2e/runs.spec.ts:684:3 › Killing an active run › the runs list still shows all nine runs after a kill + manual refresh (644ms)
+  ✓  19 [chromium] › e2e/runs.spec.ts:704:3 › Run detail — approvals are scoped on the wire › GET /approvals carries ?run_id= for the run being viewed (680ms)
+  ✓  20 [chromium] › e2e/runs.spec.ts:738:3 › Run cockpit — the layout catalog offers no dead controls › a finished run's catalog omits the ssh widget, and persists nothing (889ms)
+  ✓  21 [chromium] › e2e/runs.spec.ts:778:3 › Run detail — a failing side fetch is not an outage › keeps the cockpit when /audit and /approvals both 500 (781ms)
+  ✓  22 [chromium] › e2e/runs.spec.ts:815:3 › Run cockpit — the failure block sizes to its content, not to half the tile › a killed run keeps its replay pane (784ms)
+  ✓  23 [chromium] › e2e/runs.spec.ts:865:3 › Attach card — a failing /healthz claims nothing about the deployment › prints neither lane's OFF copy while /healthz 503s (844ms)
+  ✓  24 [chromium] › e2e/runs.spec.ts:896:3 › Focus mode — Escape inside a Deny confirm (F1-F3 repro) › Escape closes the Deny dialog without also exiting focus mode (1.7s)
+
+  24 passed (23.2s)
+[1;34m[e2e-ui][0m running secrets-demos.spec.ts against a fresh backend
+
+Running 3 tests using 1 worker
+
+(node:2751923) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 [chromium] › e2e/secrets-demos.spec.ts:83:3 › Secrets demos › write-only-by-design needs no secret and proves the negative from its own step copy (720ms)
+  ✓  2 [chromium] › e2e/secrets-demos.spec.ts:96:3 › Secrets demos › the two granted demos are dropped from the walk without their secret (732ms)
+  ✓  3 [chromium] › e2e/secrets-demos.spec.ts:112:3 › Secrets demos › storing the secret unlocks both granted demo steps, honestly gated on the runner (785ms)
+
+  3 passed (3.2s)
+[1;34m[e2e-ui][0m running secrets.spec.ts against a fresh backend
+
+Running 9 tests using 1 worker
+
+(node:2753243) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 [chromium] › e2e/secrets.spec.ts:70:3 › Secrets screen › lists the seeded secret name and renders the write-only header (768ms)
+  ✓  2 [chromium] › e2e/secrets.spec.ts:98:3 › Secrets screen › never exposes a secret value anywhere on the screen (781ms)
+  ✓  3 [chromium] › e2e/secrets.spec.ts:126:3 › Secrets screen › search filters the list and shows the no-match empty state (689ms)
+  ✓  4 [chromium] › e2e/secrets.spec.ts:144:3 › Secrets screen › validates the secret name before allowing a save (1.2s)
+  ✓  5 [chromium] › e2e/secrets.spec.ts:161:3 › Secrets screen › adds a new lowercase secret and it appears in the list (1.3s)
+  ✓  6 [chromium] › e2e/secrets.spec.ts:187:3 › Secrets screen › typing an existing name shows the overwrite warning and requires a two-step confirm (1.2s)
+  ✓  7 [chromium] › e2e/secrets.spec.ts:221:3 › Secrets screen › editing the name after acknowledging overwrite resets the confirm step (1.4s)
+  ✓  8 [chromium] › e2e/secrets.spec.ts:241:3 › Secrets screen › deleting a secret confirms via dialog and shows a success toast (1.2s)
+  ✓  9 [chromium] › e2e/secrets.spec.ts:269:3 › Secrets screen › a delete FAILURE surfaces toast.error and keeps the secret (the medium fix) (1.2s)
+
+  9 passed (10.8s)
+[1;34m[e2e-ui][0m running settings-connections.spec.ts against a fresh backend
+
+Running 5 tests using 1 worker
+
+(node:2757607) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 [chromium] › e2e/settings-connections.spec.ts:33:3 › Settings — Host card (X2-F1) › renders this host's deployment facts, operator-only rows included (667ms)
+  ✓  2 [chromium] › e2e/settings-connections.spec.ts:56:3 › Settings — Host card (X2-F1) › a member sees no Internet row and no Corporate proxy landing (964ms)
+  ✓  3 [chromium] › e2e/settings-connections.spec.ts:76:3 › Settings — the corp-proxy landing and its BYPASS verdict (X2-F1/F23) › the Host card's Corporate proxy & egress row lands on the Network step, and a bypassed redirect renders 'Redirect not enforced' (1.3s)
+  ✓  4 [chromium] › e2e/settings-connections.spec.ts:131:3 › Settings — Model provider Connect / Replace / Disconnect (X2-F3) › an API-key connect, a replace, and a disconnect all round-trip against GET /secrets (973ms)
+  ✓  5 [chromium] › e2e/settings-connections.spec.ts:186:3 › Settings — /integrations redirects (X2-F23) › both /integrations and /integrations/:id land on /settings (546ms)
+
+  5 passed (5.3s)
+[1;34m[e2e-ui][0m running setup-gate.spec.ts against a fresh backend
+
+Running 10 tests using 1 worker
+
+(node:2759170) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 [chromium] › e2e/setup-gate.spec.ts:71:3 › setup gate — forced on access, never a prison › a fresh access to a gated install force-lands in Getting Started (522ms)
+  ✓   2 [chromium] › e2e/setup-gate.spec.ts:78:3 › setup gate — forced on access, never a prison › the funnel can leave itself: People → Open Permissions lands on /permissions (657ms)
+  ✓   3 [chromium] › e2e/setup-gate.spec.ts:92:3 › setup gate — forced on access, never a prison › a cold load DIRECTLY on /setup still lets the funnel leave (the wrapper-unmount hole) (642ms)
+  ✓   4 [chromium] › e2e/setup-gate.spec.ts:108:3 › setup gate — forced on access, never a prison › a NEW document load re-arms the gate — once per load, not once per browser (696ms)
+  ✓   5 [chromium] › e2e/setup-gate.spec.ts:124:3 › setup gate — forced on access, never a prison › negative control: an ONBOARDED install with the same warn is never gated (441ms)
+  ✓   6 [chromium] › e2e/setup-gate.spec.ts:137:3 › setup gate — forced on access, never a prison › negative control: a member is never gated — their checks are redacted (5.2s)
+  ✓   7 [chromium] › e2e/setup-gate.spec.ts:153:3 › setup gate — forced on access, never a prison › Re-check asks the daemon to look again: the press carries recheck=1, the mount fetch does not (633ms)
+  ✓   8 [chromium] › e2e/setup-gate.spec.ts:190:3 › setup gate — forced on access, never a prison › Re-check changes the ANSWER: the host-proxy row shows the newly-configured proxy (683ms)
+  ✓   9 [chromium] › e2e/setup-gate.spec.ts:223:3 › setup gate — forced on access, never a prison › a forced Re-check that changes nothing claims no fresh check (the wedged host) (647ms)
+  ✓  10 [chromium] › e2e/setup-gate.spec.ts:257:3 › egress-redirect endpoint picker at 390px (F3-F8/F7-F7) › 390px: opening the From picker does not force horizontal scroll (580ms)
+
+  10 passed (11.6s)
+[1;34m[e2e-ui][0m running ssh-keys.spec.ts against a fresh backend
+
+Running 1 test using 1 worker
+
+(node:2761737) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 [chromium] › e2e/ssh-keys.spec.ts:27:3 › SSH keys — add, reload, delete (X2-F2) › a key added here persists across a reload and is truly gone after delete (2.0s)
+
+  1 passed (2.7s)
+[1;34m[e2e-ui][0m running ui-sandbox.spec.ts against a fresh backend
+
+Running 4 tests using 1 worker
+
+(node:2762264) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 [chromium] › e2e/ui-sandbox.spec.ts:67:3 › Run detail — UI apps lane › a declared app renders its row, its address and both honesty notices (966ms)
+  ✓  2 [chromium] › e2e/ui-sandbox.spec.ts:79:3 › Run detail — UI apps lane › Open mints a ticket and leaves for the gateway's own origin (1.1s)
+  ✓  3 [chromium] › e2e/ui-sandbox.spec.ts:103:3 › Run detail — UI apps lane › a run that declares nothing says so, and names the policy field (1.1s)
+  ✓  4 [chromium] › e2e/ui-sandbox.spec.ts:122:3 › Run detail — UI apps lane › with the gateway off the lane names the env var that turns it on (938ms)
+
+  4 passed (4.8s)
+[1;34m[e2e-ui][0m running workspace-detail.spec.ts against a fresh backend
+
+Running 3 tests using 1 worker
+
+(node:2763307) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 [chromium] › e2e/workspace-detail.spec.ts:47:3 › Workspace detail — the seeded workspace's real page (X2-F5) › payments renders its real name, source line, and Start-a-run CTA with no route intercept (688ms)
+  ✓  2 [chromium] › e2e/workspace-detail.spec.ts:70:3 › Workspace detail — the member delete gate (X2-F4) › Delete is enabled for a member's OWN workspace, and parked for another member's (673ms)
+  ✓  3 [chromium] › e2e/workspace-detail.spec.ts:118:3 › Workspace detail — delete round-trip (X2-F19) › Delete returns to the list, and GET /workspaces confirms it's gone (892ms)
+
+  3 passed (3.1s)
+[1;34m[e2e-ui][0m running workspace-egress-tiers.spec.ts against a fresh backend
+
+Running 3 tests using 1 worker
+
+(node:2763961) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 [chromium] › e2e/workspace-egress-tiers.spec.ts:80:3 › Workspace detail — the two egress tiers a security admin straddles (F030/F031) › a security admin keeps the one-write remove and loses the two-write one (699ms)
+  ✓  2 [chromium] › e2e/workspace-egress-tiers.spec.ts:90:3 › Workspace detail — the two egress tiers a security admin straddles (F030/F031) › a security admin sees the Record pane open but both Approve-host controls dead (555ms)
+  ✓  3 [chromium] › e2e/workspace-egress-tiers.spec.ts:103:3 › Workspace detail — the two egress tiers a security admin straddles (F030/F031) › an admin, who holds both tiers, sees every one of those controls live (559ms)
+
+  3 passed (2.6s)
+[1;34m[e2e-ui][0m running workspaces.spec.ts against a fresh backend
+
+Running 7 tests using 1 worker
+
+(node:2764919) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 [chromium] › e2e/workspaces.spec.ts:30:3 › Workspaces — the four-column list › shows Workspace / Source / Image / Model + the seeded fixture's row (604ms)
+  ✓  2 [chromium] › e2e/workspaces.spec.ts:53:3 › Add workspace dialog › Add workspace is disabled until a Repository URL is entered (780ms)
+  ✓  3 [chromium] › e2e/workspaces.spec.ts:67:3 › Add workspace dialog › Local directory mode gates the same way — a Path is required (964ms)
+  ✓  4 [chromium] › e2e/workspaces.spec.ts:80:3 › Add workspace dialog › Empty mode needs nothing typed — Add stays enabled, one click (894ms)
+  ✓  5 [chromium] › e2e/workspaces.spec.ts:89:3 › Add workspace dialog › submitting appends a usable row — no scan, no build, straight to the new workspace's page (1.1s)
+  ✓  6 [chromium] › e2e/workspaces.spec.ts:117:3 › Add workspace dialog › F3-F8: 400x640, Advanced expanded — Add workspace stays reachable, not clipped off-screen (1.0s)
+  ✓  7 [chromium] › e2e/workspaces.spec.ts:156:3 › Workspaces — a member deletes the row they own › their own row's Delete is live and lands; an operator-owned row stays parked (1.5s)
+
+  7 passed (7.7s)
+
+[1;34m[e2e-ui][0m UI e2e summary: 30 spec file(s) passed, 0 failed, 0 test(s) skipped, 0 test(s) flaky

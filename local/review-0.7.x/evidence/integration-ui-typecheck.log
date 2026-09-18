@@ -1,0 +1,5 @@
+0d63ab2e3ade4302b9f51b08146965cf21655c46
+
+> @wardyn/ui@0.7.5 typecheck /tmp/wardyn-review-0.7x-acceptance-ui/ui
+> tsc -p tsconfig.check.json
+

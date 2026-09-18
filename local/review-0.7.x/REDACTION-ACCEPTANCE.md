@@ -43,3 +43,25 @@ Provenance for replacing the old serialized-line regex is in the commit body:
 preserved. No local working note invoked that removed internal symbol.
 
 Final combined full-tree validation is recorded separately in PATCH-LEDGER.md.
+
+## Standalone CLI acceptance
+
+Built the actual CLI from `c4c5fa16` and ran `support-bundle` twice against one
+synthetic valid Compose fixture in `/tmp/wardyn-review-bundle-acceptance.wjeNCN`.
+One run used installed Docker Compose to resolve the config; the other used
+`PATH=/nonexistent` to force raw-file fallback. Both commands exited 0 and wrote
+tar.gz archives. Extracted Compose entries contained none of the six synthetic
+credential fragments (multiline, folded JSON, aliased key and commented secret),
+while retaining the image and listen address. Both exported YAML documents also
+passed `docker compose config --quiet`; no containers were launched or images pulled.
+
+The API URL intentionally pointed at unused loopback port 1, so health/setup/audit
+entries exercised existing best-effort error collection, not a live daemon. The
+unit archive test separately exercises a loopback fake control plane.
+
+- CLI SHA-256: `5bfc779a1376e1bb7ce528e54bae098b07db7bc4de192d48b9f00b33ee735197`.
+- Resolved archive: `8484ef43669d7dd8774f7c1e00a1062063a193f57963ce73c3dea97c390be6c1`.
+- Fallback archive: `7e9a815df9ab7c66aad9c763fb5fcaa494e9fd60e2dc6ec6d9cd7ae6c4f6e7a1`.
+
+Artifacts are temporary synthetic test data; the product commit and regression
+tests are the durable reproduction. No production credentials were used.

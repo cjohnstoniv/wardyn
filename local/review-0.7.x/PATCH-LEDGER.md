@@ -35,8 +35,11 @@ for the plan review. The feedback records integration overlaps and superseded co
 
 The owner subsequently resumed the original campaign. Support-bundle redaction,
 dialog-overlay refs, two additional operational docs fixes, and a test-import
-cleanup are now independently committed below. Final combined acceptance is in
-progress; the historical plan-review snapshot is not a current patch-status list.
+cleanup are now independently committed below. The frozen combined batch has
+passed make ci, the separate PostgreSQL report/race gate and all 347 browser
+tests. A sixteenth independent patch (R023) subsequently passed its full default
+Go tree and recording-package race tests; it is not in that frozen batch.
+The historical plan-review snapshot is not a current patch-status list.
 
 ## Status definitions
 
@@ -71,18 +74,20 @@ command, skipped suite, or passing mock is never a completed live verification.
 | R076-019 | Restore instructions say an incorrect age key fails only on first application-secret use, although persisted signing-key loading can refuse startup. | checks-passed (focused + citations) | review/0.7x-doc-age-key-boot / 7d155903 | 25 focused key/ops tests plus live audit-action citation guard passed; security peer approved. Keeps separate application-secret verification. |
 | R076-020 | Desktop/SSH docs call all shell recordings unmasked and permanently retained. | checks-passed (focused + citations) | review/0.7x-doc-desktop-masking / baa4611e | 15 tests cover registered/mid-session masking, retention and doc/citation guards; lifecycle peer approved. Preserves unregistered-output and restart-loss residuals. |
 | R076-021 | Run-detail test uses afterEach without an explicit import, breaking default/editor tsc configuration. | checks-passed (focused + both typechecks) | review/0.7x-ui-test-hook-import / 94c4fa84 | Baseline default tsc reproduced 3 TS2304 errors; one import fixes them; 36 run-detail tests and both typecheck configurations pass. Official repository typecheck already included Vitest globals, so this was NOT a failing merge/runtime gate. |
-| R076-022 | Selected operational docs move guarded audit citations. Integration dependency, not an independent product feature. | checks-passed (focused; final gate pending) | review/0.7x-doc-integration-citations / 5adf090c | Five citation-only replacements; original evidence and guards preserved. Depends on R015/R016/R019/R020 plus the initial eight-patch integration. Must re-point again if a release selects a different documentation combination. |
+| R076-022 | Selected operational docs move guarded audit citations. Integration dependency, not an independent product feature. | checks-passed (focused + combined make ci) | review/0.7x-doc-integration-citations / 5adf090c | Five citation-only replacements; original evidence and guards preserved. Depends on R015/R016/R019/R020 plus the initial eight-patch integration. Must re-point again if a release selects a different documentation combination. |
+| R076-023 | Filesystem recording reads follow shared-mount symlinks outside the recording root. Conditional security issue; default PostgreSQL unaffected. | checks-passed (full default Go tree + package race + peer) | review/0.7x-recording-root-read / 18fb91fd | Separate post-freeze patch, NOT in 0d63ab2e. Four synthetic escape cases fail on baseline; rooted reads pass them and compatibility checks. Complete recording race suite and full default Go tree passed; independent lifecycle peer approved. Full make ci on a release combination remains required. See RECORDING-ROOT-READ.md for preconditions and residuals. |
+| R076-024 | SheetOverlay has the same missing-ref pattern as the fixed Dialog/AlertDialog overlays. Low UX. | candidate; not implemented | no patch branch | MobileNav tests emit the ref warning; needs its own baseline regression, mock and browser lifetime checks. Not included in R018 or the frozen batch. |
 
 ## Coverage matrix
 
 | Area | Inspected evidence | Current acceptance gaps |
 | --- | --- | --- |
-| Identity / authority | Router split, CSRF host guard, recording-pane tier split; OIDC email claim and SSH revocation boundaries checked against code. | Cross-user runtime checks and broad revocation/session scenarios. |
+| Identity / authority | Router split, CSRF host guard, recording-pane tier split; OIDC email claim and SSH revocation boundaries checked against code; recording owner/tier and run-token checks inspected. | Broad live identity/revocation/session scenarios; no new live cross-user certification. |
 | Credentials / egress | Upload boundary/race tests; support-bundle baseline/fixed structured-redaction and archive tests; login launch/capture review. | Real SSO/concurrent-user walk and broader broker/redirect adversarial checks; other campaign owns SSO changes. |
-| Lifecycle / storage | Six terminal-status combinations; scoped live WaitExitCode and actual emptyDir eviction; synthetic PG audit/secret/recording restore. | Full API finalization, restart/reconcile, user-drive restore, healthy-proxy lifecycle proof. |
-| Product / UX | Approved mocks; recording-pane browser sweep; overlay 347-test browser suite plus DOM lifetime/focus proof. | Combined browser sweep running; complete real-identity recovery journeys remain separate. |
+| Lifecycle / storage | Six terminal-status combinations; scoped live WaitExitCode and actual emptyDir eviction; synthetic PG audit/secret/recording restore; filesystem recording read-confinement regression and fix. | Full API finalization, restart/reconcile, user-drive restore, healthy-proxy lifecycle proof; R023 needs release-combination CI. |
+| Product / UX | Approved mocks; recording-pane browser sweep; overlay 347-test browser suite plus DOM lifetime/focus proof; frozen combined batch's 347 browser tests passed. | Complete real-identity recovery journeys remain separate; SheetOverlay candidate not implemented. |
 | Deployment / recovery | Isolated PG dump/restore with append-only guards; corrected age-key and audit-spool runbooks. | Fresh Helm/upgrade, outage/full application recovery, split runtime roles and pending-spool replay. |
-| Engineering / docs | Independent DCO commits, nightly overlap check, guard-preserving citation repair, release/UI recipes. | Uninterrupted final combined make ci running; live deployment acceptance remains outside it. |
+| Engineering / docs | Independent DCO commits, nightly overlap check, guard-preserving citation repair, release/UI recipes; uninterrupted final combined make ci passed. | Live deployment acceptance remains outside make ci. |
 
 ## Verification record
 
@@ -108,7 +113,7 @@ command, skipped suite, or passing mock is never a completed live verification.
   later gates did not run (evidence/integration-ci.log). The notices check modified
   generated files in that integration worktree; install frozen UI dependencies
   and regenerate before resuming. Do not cherry-pick integration on top of
-  individual patches. No combined green make ci is claimed.
+  individual patches. That attempt did not establish a combined green make ci.
 - Real PostgreSQL integration test-report-pg and test-race-pg both passed at
   a6c47ae5 (evidence/integration-pg.log): 69.5% PG report coverage; broker/store
   race tests passed. This does not certify later uncombined documentation patches.
@@ -121,13 +126,44 @@ command, skipped suite, or passing mock is never a completed live verification.
   includes all selected patches and that repair.
 - Final selected batch frozen at `0d63ab2e3ade4302b9f51b08146965cf21655c46`
   on `review/0.7x-integration`: 15 independent patches plus R022 (integrated as
-  `4640554c`). Uninterrupted make ci is running against this SHA. Combined browser
-  acceptance uses a separate worktree at the SAME SHA, with its own database and
-  ports so Vite builds cannot race the CI worktree. Neither gate is claimed passed
-  until its final exit status is captured.
+  `4640554c`). Uninterrupted make ci passed (exit 0) against this SHA; its worktree
+  remained clean. Go report and race suites passed for default/Docker/Kubernetes;
+  required probe parents passed and coverage met the gate. UI unit tests passed:
+  155 files, 2,880 tests, 94.91% statements / 90.25% branches / 82.35% functions.
+  Log: evidence/integration-ci-final.log; SHA-256
+  `dbcbff0ff04d68e604f92a2cf3d875f40a8e29e48b229219e97fe3a6b6a0f080`.
+  Combined browser acceptance uses a separate worktree at the SAME SHA, with its
+  own database and ports so Vite builds cannot race the CI worktree. It passed
+  (exit 0): 30 spec files / 347 tests, zero failures, skips or flakes; tracked
+  worktree clean and isolated ports released. Same-tip PostgreSQL report/race
+  checks passed (exit 0):
+  69.5% report coverage, all nine required TestPG_ProbeF11 parents executed and
+  passed; broker race 2.684 s / store race 22.737 s. Log:
+  evidence/integration-pg-final.log. Both official and default UI typechecks also
+  passed at this SHA (evidence/integration-ui-typecheck.log).
+- The final govulncheck scans for all three shipped build-tag configurations
+  reported zero affected symbols and zero imported-package findings. Verbose
+  follow-up identifies the module-only advisory as GO-2026-5932 for the unused
+  golang.org/x/crypto/openpgp package in required x/crypto v0.56.0, fixed version
+  N/A (evidence/integration-govuln-verbose.log). This is not a blanket security
+  certification or a reason to silently change dependencies in the frozen batch.
+- BATCH-ACCEPTANCE.md, evidence/INTEGRATION-VERIFICATION.md and
+  evidence/integration-ui-acceptance.md consolidate the final commands, source
+  SHAs, counts, hashes and limits. The raw final CI/PG/browser/typecheck/scan logs
+  are preserved with this ledger rather than relying only on temporary reports.
+- Post-freeze R023 at 18fb91fd passed the complete default Go tree (including
+  cmd/wardynd guards), exit 0, clean worktree before/after; log
+  evidence/recording-root-full-tree.log. It also passed recording package race,
+  conformance, vet and size checks, with independent peer review. This does not
+  extend 0d63ab2e's combined make-ci/browser acceptance to R023.
 - Support-bundle red-first and fixed logs are evidence/redaction-baseline.log and
   evidence/redaction-fixed.log. The detached baseline reproduction worktree has
   only the new test file; its production source remains exactly dfa89f60.
+- The actual support-bundle CLI also passed both Docker-resolved and raw-file
+  fallback collection with synthetic multiline/embedded/aliased/commented
+  credentials. Both archives omitted all six test fragments and both exported
+  YAML documents passed Compose validation. See REDACTION-ACCEPTANCE.md for the
+  exact scope, artifacts and hashes; no live backend or production secrets used.
 
 ## Patch compatibility and release notes
 
@@ -166,6 +202,8 @@ and scope verification, not a substitute for runtime acceptance.
 - R076-019: Explain how a mismatched age key can prevent restored daemon startup.
 - R076-020: Describe SSH shell masking and recording retention accurately.
 - R076-021: Make the run-detail test's lifecycle-hook import explicit.
+- R076-023 (post-freeze): Confine filesystem recording replay and metadata reads
+  to the configured recording directory, including symlink resolution.
 
 ## Open findings, not implemented
 
@@ -175,6 +213,9 @@ storage-enforcement and toolchain-compatibility proof before relocating caches.
 R076-004 cannot tear down the login sandbox before the helper receives its upload
 response and emits the PTY marker the console uses to confirm success. These
 remain possible 0.7 follow-ups pending a safe design, not silently assigned to 0.8.
+The other active 0.7.6 campaign owns SSO/capture/lifecycle changes, including its
+capture-cleanup plan; reconcile that work before acting on R002/R004. No duplicate
+implementation or modification of its worktrees is authorized by this ledger.
 
 Security review also noted that supported API-token SSH registration outlives
 token revocation: incident response must remove SSH keys and stop affected runs.
@@ -182,6 +223,12 @@ Email-based OIDC role mapping without a configured domain allowlist trusts the
 provider's email claim without requiring email_verified; changing that would
 require an explicit compatibility decision, especially for Entra. Split-horizon
 OIDC HTTP/HTTPS scheme support remains an unresolved compatibility question.
+
+The final unit run still emits a SheetOverlay ref warning in MobileNav tests.
+The Sheet wrapper has the same missing ref forwarding pattern as the separately
+fixed Dialog/AlertDialog wrappers; it is not included in the frozen batch. A
+follow-up needs its own baseline regression, mock/actual-browser lifetime check
+and regression gate before claiming that the sheet animation issue is fixed.
 
 ## Review-owned test resources
 

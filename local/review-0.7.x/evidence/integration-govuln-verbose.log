@@ -1,0 +1,113 @@
+Fetching vulnerabilities from the database...
+
+Checking the code against the vulnerabilities...
+
+The package pattern matched the following 58 root packages:
+  github.com/cjohnstoniv/wardyn/internal/cliutil
+  github.com/cjohnstoniv/wardyn/internal/setup
+  github.com/cjohnstoniv/wardyn/internal/types
+  github.com/cjohnstoniv/wardyn/internal/version
+  github.com/cjohnstoniv/wardyn/pkg/client
+  github.com/cjohnstoniv/wardyn/cmd/wardyn
+  github.com/cjohnstoniv/wardyn/internal/sidecar
+  github.com/cjohnstoniv/wardyn/cmd/wardyn-aws-sso
+  github.com/cjohnstoniv/wardyn/cmd/wardyn-git-helper
+  github.com/cjohnstoniv/wardyn/internal/secretmask
+  github.com/cjohnstoniv/wardyn/internal/contentscan
+  github.com/cjohnstoniv/wardyn/internal/egress
+  github.com/cjohnstoniv/wardyn/internal/ipguard
+  github.com/cjohnstoniv/wardyn/internal/egress/proxy
+  github.com/cjohnstoniv/wardyn/cmd/wardyn-proxy
+  github.com/cjohnstoniv/wardyn/cmd/wardyn-rec
+  github.com/cjohnstoniv/wardyn/cmd/wardyn-runner
+  github.com/cjohnstoniv/wardyn/internal/gitremote
+  github.com/cjohnstoniv/wardyn/internal/hostrules
+  github.com/cjohnstoniv/wardyn/internal/workspacescan
+  github.com/cjohnstoniv/wardyn/cmd/wardyn-scan
+  github.com/cjohnstoniv/wardyn/internal/groundtruth
+  github.com/cjohnstoniv/wardyn/cmd/wardyn-tetragon-ingest
+  github.com/cjohnstoniv/wardyn/cmd/wardyn-toolgate
+  github.com/cjohnstoniv/wardyn/internal/audit
+  github.com/cjohnstoniv/wardyn/internal/approval
+  github.com/cjohnstoniv/wardyn/internal/auth/oidc
+  github.com/cjohnstoniv/wardyn/internal/db
+  github.com/cjohnstoniv/wardyn/internal/component
+  github.com/cjohnstoniv/wardyn/internal/identity
+  github.com/cjohnstoniv/wardyn/internal/secretstore
+  github.com/cjohnstoniv/wardyn/internal/broker
+  github.com/cjohnstoniv/wardyn/internal/runner
+  github.com/cjohnstoniv/wardyn/internal/composer
+  github.com/cjohnstoniv/wardyn/internal/directory
+  github.com/cjohnstoniv/wardyn/internal/lifecycle
+  github.com/cjohnstoniv/wardyn/internal/recording
+  github.com/cjohnstoniv/wardyn/internal/recordmode
+  github.com/cjohnstoniv/wardyn/internal/store
+  github.com/cjohnstoniv/wardyn/internal/subscription
+  github.com/cjohnstoniv/wardyn/internal/api
+  github.com/cjohnstoniv/wardyn/internal/audit/sinks
+  github.com/cjohnstoniv/wardyn/internal/identity/embedded
+  github.com/cjohnstoniv/wardyn/internal/runner/substrate
+  github.com/cjohnstoniv/wardyn/internal/runner/orchestrator
+  github.com/cjohnstoniv/wardyn/internal/secretstore/pg
+  github.com/cjohnstoniv/wardyn/cmd/wardynd
+  github.com/cjohnstoniv/wardyn/examples/workspaces/github-push
+  github.com/cjohnstoniv/wardyn/internal/egress/evaluatortest
+  github.com/cjohnstoniv/wardyn/internal/envbuild
+  github.com/cjohnstoniv/wardyn/internal/identity/identitytest
+  github.com/cjohnstoniv/wardyn/internal/recording/recordingtest
+  github.com/cjohnstoniv/wardyn/internal/runner/docker
+  github.com/cjohnstoniv/wardyn/internal/secretstore/secretstoretest
+  github.com/cjohnstoniv/wardyn/test/apie2e
+  github.com/cjohnstoniv/wardyn/test/awsssofake
+  github.com/cjohnstoniv/wardyn/test/awsssofake/cmd
+  github.com/cjohnstoniv/wardyn/test/conformance
+Govulncheck scanned the following 26 modules and the go1.26.6 standard library:
+  github.com/cjohnstoniv/wardyn
+  filippo.io/age@v1.3.1
+  filippo.io/hpke@v0.4.0
+  github.com/bradleyfalzon/ghinstallation/v2@v2.19.0
+  github.com/coder/websocket@v1.8.15
+  github.com/coreos/go-oidc/v3@v3.21.0
+  github.com/go-chi/chi/v5@v5.3.2
+  github.com/go-jose/go-jose/v4@v4.1.5
+  github.com/golang-jwt/jwt/v4@v4.5.2
+  github.com/google/go-github/v88@v88.0.0
+  github.com/google/go-querystring@v1.2.0
+  github.com/google/uuid@v1.6.0
+  github.com/jackc/pgpassfile@v1.0.0
+  github.com/jackc/pgservicefile@v0.0.0-20240606120523-5a60cdf6a761
+  github.com/jackc/pgx/v5@v5.10.0
+  github.com/jackc/puddle/v2@v2.2.2
+  github.com/spf13/cobra@v1.10.2
+  github.com/spf13/pflag@v1.0.9
+  github.com/spiffe/go-spiffe/v2@v2.8.1
+  golang.org/x/crypto@v0.56.0
+  golang.org/x/oauth2@v0.36.0
+  golang.org/x/sync@v0.22.0
+  golang.org/x/sys@v0.47.0
+  golang.org/x/term@v0.45.0
+  golang.org/x/text@v0.41.0
+  gopkg.in/yaml.v3@v3.0.1
+
+=== Symbol Results ===
+
+No vulnerabilities found.
+
+=== Package Results ===
+
+No other vulnerabilities found.
+
+=== Module Results ===
+
+Vulnerability #1: GO-2026-5932
+    The golang.org/x/crypto/openpgp package is unmaintained, unsafe by design,
+    and has known security issues
+  More info: https://pkg.go.dev/vuln/GO-2026-5932
+  Module: golang.org/x/crypto
+    Found in: golang.org/x/crypto@v0.56.0
+    Fixed in: N/A
+
+Your code is affected by 0 vulnerabilities.
+This scan also found 0 vulnerabilities in packages you import and 1
+vulnerability in modules you require, but your code doesn't appear to call these
+vulnerabilities.
