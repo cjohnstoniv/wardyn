@@ -575,13 +575,22 @@ test("J (run-credential-door): a run refused over the model credential carries t
     // spelling of a string lane run-credential-door owns.
     const sentence = String(refusal?.data?.error ?? "");
     expect(sentence, "the refusal row carries no sentence").not.toBe("");
-    await expect(page.getByText(sentence.slice(0, 80))).toBeVisible({ timeout: 2 * MINUTE });
+    // SCOPED TO THE FAILURE BLOCK, because the sentence is on this page TWICE —
+    // the run header's summary line carries it too (0.7.6's header states a
+    // terminal run's reason), and an unscoped locator is a strict-mode
+    // violation rather than a passing assertion. The failure block is the
+    // surface this case is about: it is the one that carries the door.
+    const failure = page.getByTestId("run-failure-block");
+    await expect(failure.getByText(sentence.slice(0, 80))).toBeVisible({ timeout: 2 * MINUTE });
+    // …and the header says it as well, which is the other half of "the refusal
+    // is where the person is" — asserted, not merely tolerated.
+    await expect(page.getByTestId("run-summary-header").getByText(sentence.slice(0, 40))).toBeVisible();
 
     // …and the door, under its own accessible name — distinct from the strip's
     // and the rail's, because this page can carry more than one.
-    const door = page.getByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA });
+    const door = failure.getByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA });
     await expect(door).toBeVisible({ timeout: 2 * MINUTE });
-    await expect(page.getByText(MODEL_ACCESS_RUN_DOOR.NOTE)).toBeVisible();
+    await expect(failure.getByText(MODEL_ACCESS_RUN_DOOR.NOTE)).toBeVisible();
     // The claim it makes about itself is the one the block must not break: this
     // run stays failed. No relaunch happens here.
     await door.click();
