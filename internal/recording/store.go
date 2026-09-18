@@ -9,6 +9,8 @@
 // Security constraints:
 //   - All path construction goes through safeRunPath, which rejects any runID
 //     containing path separators or dot-sequences (path-traversal prevention).
+//   - Reads use os.OpenInRoot because shared-mount writers can create symlinks;
+//     lexical validation alone cannot keep reads inside the recording directory.
 //   - OpenCast returns (nil, ErrNotFound) for absent recordings so callers can
 //     distinguish "never recorded" from storage errors.
 package recording
@@ -187,7 +189,7 @@ func (s *FSStore) OpenCast(_ context.Context, runID string) (io.ReadCloser, erro
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.Open(path)
+	f, err := os.OpenInRoot(s.root, filepath.Base(path))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, ErrNotFound
 	}
@@ -202,7 +204,7 @@ func (s *FSStore) StatAndTail(_ context.Context, key string, tailBytes int64) (i
 	if err != nil {
 		return 0, nil, err
 	}
-	f, err := os.Open(path)
+	f, err := os.OpenInRoot(s.root, filepath.Base(path))
 	if errors.Is(err, os.ErrNotExist) {
 		return 0, nil, ErrNotFound
 	}
