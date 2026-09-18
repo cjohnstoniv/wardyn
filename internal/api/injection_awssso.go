@@ -352,11 +352,29 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 		"credential_source": snapshot.CredentialSource,
 		"owner":             snapshot.OwnerSubject,
 	})
+	// THE ID IS MINTED HERE so this caller can tell whether it RAISED the request
+	// or merely found one (W6-S F4). RequestApproval's dedup — the pre-insert
+	// scan and the partial unique index's loser alike — answers with the WINNER'S
+	// row, and it answers silently by design; a caller that cannot tell the two
+	// apart audits `credential.reauth.requested` and counts outcome=requested for
+	// a request somebody else raised. With N concurrent resolvers for one lapse
+	// that is one row per resolver against a hash-chained log, all naming the same
+	// approval id, and a `requested` count that no longer means "requests raised".
+	//
+	// RequestApproval honours a supplied ID and only mints one when it is nil.
+	raisedID := uuid.New()
 	created, aerr := s.cfg.Approvals.Request(ctx, types.ApprovalRequest{
-		RunID: claims.RunID, Kind: types.ApprovalCredentialReauth, RequestedScope: reqScope,
+		ID: raisedID, RunID: claims.RunID, Kind: types.ApprovalCredentialReauth, RequestedScope: reqScope,
 	})
 	if aerr != nil {
 		writeError(w, http.StatusServiceUnavailable, credentialReauthRaiseFailedBody+aerr.Error())
+		return true
+	}
+	if created.ID != raisedID {
+		// We lost the race. The row is real, PENDING and ours to wait on — the
+		// 423 below is unchanged, and the hold joins the same workflow by id —
+		// but the trail and the counter belong to whoever raised it.
+		writeJSON(w, http.StatusLocked, reauthPendingResponse{State: reauthPendingState, ApprovalID: created.ID})
 		return true
 	}
 	// AUDITED AT THE RAISE, with the reason the scope deliberately omits.
@@ -428,6 +446,29 @@ func (sn awsSSOScopeSnapshot) driftFrom(sc types.SiteConfig, agentID string, sco
 	// A policy-authored grant naming another owner cannot pass this.
 	if scope.perUser && sn.OwnerSubject != subject {
 		return "owner_not_caller"
+	}
+	// LEGACY OPEN MODE HAS NO ROSTER TO DRIFT FROM (W6-S F1). When no roster
+	// governs this deployment at all, the three roster-derived arms below have
+	// nothing to compare against, and the two above them ARE the whole equality:
+	// awsSSOScopeFor answers the shared scope for that shape, so
+	// owner=="" + credential_source=="shared" is exactly what dispatch authored.
+	//
+	// Reading a MISSING roster as a WITHDRAWN row is what made this a blocker.
+	// Dispatch authors Phase B happily for a no-roster install — the lane's own
+	// TestDispatchWiring_SwitchOnAuthorsThePhaseBLane dispatches with
+	// SiteConfig{} — and then every resolve answered 403 scope_changed,
+	// including the sidecar's BOOT mint, which fails closed. So an upgraded
+	// 0.7.5 install that never wrote a roster could not launch a captured-SSO
+	// Bedrock run at all with the switch at its default, and the refusal's
+	// sentence ("the roster changed") was false for it: nothing had changed,
+	// because nothing was ever there. Every gate stayed green because every
+	// resolver test seeds a roster row and every no-roster test stops at
+	// dispatch — the two halves were never joined.
+	//
+	// agentProvidersConfigured is the ONE place legacy open mode is decided
+	// (agent_providers.go), so this asks it rather than inventing a second rule.
+	if !agentProvidersConfigured(sc) {
+		return ""
 	}
 	row, declared := agentProviderFor(sc, agentID)
 	if !declared || row.Disabled {

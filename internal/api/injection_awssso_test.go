@@ -231,7 +231,12 @@ func newReauthFixture(t *testing.T, opts func(*reauthFixture)) *reauthFixture {
 			Spec: types.GrantSpec{Kind: types.GrantAPIKey, Scope: reauthSnapshotScope(t, "alice@example.com", reauthRegion, true, "111122223333", "WardynAgent")},
 		}},
 	}
-	f.secrets = &memSecrets{owned: map[string]map[string][]byte{}}
+	// BOTH maps, initialised. memSecrets.For hands back a COPY that shares these
+	// maps, so a nil one means the copy allocates its own and the write is lost —
+	// silently, and only for the OPERATOR namespace (owner ""), which is the one
+	// the shared/legacy lane reads. A putBlob(t, "", …) then looks like a stored
+	// session and resolves as "no session at all".
+	f.secrets = &memSecrets{m: map[string][]byte{}, owned: map[string]map[string][]byte{}}
 	cfg := baseTestConfig(h, f.st)
 	// An OIDC authenticator so the member tier is reachable in this fixture:
 	// the kind rule must answer the same 409 to a member as to a security
@@ -653,6 +658,24 @@ func TestResolveAWSSSOInjection_ConcurrentResolversRaiseOneRequest(t *testing.T)
 	if n != 1 {
 		t.Fatalf("pending credential_reauth rows = %d, want exactly 1 for 16 concurrent resolvers", n)
 	}
+	// …AND ONE TRAIL ENTRY, AND ONE COUNT (W6-S F4). RequestApproval's dedup
+	// answers the loser with the WINNER'S row, silently, so a caller that cannot
+	// tell them apart audits and counts a request it did not raise — 16 rows
+	// naming one approval id on a hash-chained log, and a `requested` counter
+	// that no longer means "requests raised".
+	raised := 0
+	for _, ev := range f.audit.events() {
+		if ev.Action == "credential.reauth.requested" {
+			raised++
+		}
+	}
+	if raised != 1 {
+		t.Errorf("credential.reauth.requested rows = %d, want exactly 1 — the losers of the raise must "+
+			"not audit a request somebody else raised", raised)
+	}
+	if got := reauthCount(t, f.srv, "requested"); got != "1" {
+		t.Errorf("wardyn_credential_reauth_total{outcome=\"requested\"} = %s, want 1", got)
+	}
 }
 
 // The workflow cap: the ninth is refused, and nothing is substituted.
@@ -844,4 +867,152 @@ func TestResolveAWSSSOInjection_SpentSessionIsAuditedSpent(t *testing.T) {
 		return
 	}
 	t.Fatal("no credential.reauth.requested row")
+}
+
+// ─── legacy open mode: no roster (W6-S F1) ───────────────────────────────────
+
+// THE TWO HALVES, JOINED. Dispatch and resolve each had thorough tests and they
+// disagreed about the same deployment, because no test ever ran both: every
+// resolver case seeds a roster row (reauthRosterRow) and every no-roster case
+// stops at dispatch.
+//
+// The shape is an upgraded 0.7.5 install that never wrote a roster — legacy open
+// mode, which CHANGELOG and docs/MEMBERS.md both name as supported, and which
+// awsSSOScopeFor answers with the operator namespace. Dispatch authors Phase B
+// for it (TestDispatchWiring_SwitchOnAuthorsThePhaseBLane dispatches with
+// SiteConfig{} and asserts the grant, the MITM entry and the CA). Then every
+// resolve answered 403 scope_changed, because driftFrom read a MISSING roster as
+// a WITHDRAWN row — including the proxy sidecar's BOOT mint, which fails closed.
+// So the run could not launch at all with the switch at its default, and the
+// refusal said "the roster changed" about a deployment where nothing had ever
+// been there to change.
+func TestResolveAWSSSOInjection_LegacyNoRosterResolvesOnTheSharedLane(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		site types.SiteConfig
+	}{
+		{"no roster at all — legacy open mode", types.SiteConfig{}},
+		{"a shared roster row — the control", reauthRosterRow(false)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newReauthFixture(t, func(f *reauthFixture) {
+				f.st.site = tc.site
+				// The SHARED snapshot dispatch authors for this shape: owner "",
+				// credential_source "shared" (awsSSOScope{} → the operator namespace).
+				f.st.grants[0].Spec.Scope = reauthSnapshotScope(t, "", reauthRegion, false, "111122223333", "WardynAgent")
+			})
+			// The OPERATOR namespace holds the session, which is what the shared
+			// lane reads.
+			f.putBlob(t, "", liveSSOBlob())
+
+			w := f.resolve(t)
+			if w.Code != http.StatusOK {
+				t.Fatalf("resolve = %d, want 200 — a live operator session on the shared lane. "+
+					"body=%s", w.Code, w.Body.String())
+			}
+			if f.audit.hasReason("secret.read", "scope_changed") {
+				t.Error("audited as scope_changed: a deployment with no roster has nothing to have drifted from")
+			}
+			var got types.ResolvedInjection
+			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+				t.Fatalf("body is not a ResolvedInjection: %v", err)
+			}
+			if got.Value != reauthToken {
+				t.Errorf("resolved value = %q, want the stored session token", got.Value)
+			}
+		})
+	}
+}
+
+// …and legacy open mode does NOT disarm the checks that do not need a roster.
+// The owner/credential-source arms are the substitution hole itself, and they
+// still run: a snapshot claiming the PER-USER lane cannot resolve against a
+// deployment whose scope is shared, roster or no roster.
+func TestResolveAWSSSOInjection_LegacyNoRosterStillRefusesAScopeMismatch(t *testing.T) {
+	f := newReauthFixture(t, func(f *reauthFixture) {
+		f.st.site = types.SiteConfig{}
+		f.st.grants[0].Spec.Scope = reauthSnapshotScope(t, "alice@example.com", reauthRegion, true, "111122223333", "WardynAgent")
+	})
+	f.putBlob(t, "", liveSSOBlob())
+	f.putBlob(t, "alice@example.com", liveSSOBlob())
+
+	if w := f.resolve(t); w.Code != http.StatusForbidden {
+		t.Fatalf("a per_user snapshot on a no-roster (shared) deployment resolved %d, want 403 — "+
+			"skipping the ROSTER arms must not skip the scope ones. body=%s", w.Code, w.Body.String())
+	}
+}
+
+// dedupApprovals is the LOSER'S view of a concurrent raise: Request answers with
+// an already-existing row whose id is not the one this caller minted. That is
+// exactly what approval.RequestApproval does — for the pre-insert scan and for
+// the partial unique index's loser alike — and it does it SILENTLY, which is the
+// whole difficulty: without the minted id there is nothing in the answer to tell
+// "I raised this" from "somebody else did".
+type dedupApprovals struct {
+	ApprovalService
+	winner types.ApprovalRequest
+	calls  int
+}
+
+func (d *dedupApprovals) Request(_ context.Context, req types.ApprovalRequest) (types.ApprovalRequest, error) {
+	d.calls++
+	w := d.winner
+	w.RunID, w.Kind, w.RequestedScope = req.RunID, req.Kind, req.RequestedScope
+	return w, nil
+}
+
+func (d *dedupApprovals) Get(_ context.Context, id uuid.UUID) (types.ApprovalRequest, error) {
+	if id == d.winner.ID {
+		return d.winner, nil
+	}
+	return types.ApprovalRequest{}, errStoreNotFound
+}
+
+// THE LOSER AUDITS NOTHING AND COUNTS NOTHING (W6-S F4).
+//
+// It still gets its 423 naming the winner's approval id — the row is real, it is
+// PENDING, and the sidecar's hold joins the same workflow by that id — but
+// `credential.reauth.requested` and outcome=requested belong to whoever raised
+// it. With N resolvers for one lapse the alternative is N rows on a hash-chained
+// log all naming one approval, and a counter that no longer means "requests
+// raised".
+//
+// The concurrency test above cannot see this: its later resolvers meet the
+// PENDING row at the check ABOVE the raise and never reach it. This drives the
+// raise with a service that answers the way the real dedup answers.
+func TestResolveAWSSSOInjection_ARaiseThatLostTheRaceAuditsNothing(t *testing.T) {
+	f := newReauthFixture(t, nil)
+	f.putBlob(t, "alice@example.com", deadSSOBlob())
+
+	winner := types.ApprovalRequest{
+		ID: uuid.New(), RunID: f.runID, Kind: types.ApprovalCredentialReauth,
+		State: types.ApprovalPending, RequestedAt: time.Now().UTC(),
+	}
+	dedup := &dedupApprovals{ApprovalService: f.srv.cfg.Approvals, winner: winner}
+	f.srv.cfg.Approvals = dedup
+
+	before := reauthCount(t, f.srv, "requested")
+	w := f.resolve(t)
+	if w.Code != http.StatusLocked {
+		t.Fatalf("resolve = %d, want 423 — the loser still waits on the winner's row. body=%s", w.Code, w.Body.String())
+	}
+	if dedup.calls != 1 {
+		t.Fatalf("Request called %d times, want 1", dedup.calls)
+	}
+	var body reauthPendingResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body: %v", err)
+	}
+	if body.ApprovalID != winner.ID {
+		t.Errorf("the 423 names %s, want the WINNER's row %s — the hold polls whatever this says",
+			body.ApprovalID, winner.ID)
+	}
+	for _, ev := range f.audit.events() {
+		if ev.Action == "credential.reauth.requested" {
+			t.Errorf("the loser audited credential.reauth.requested for %s, a request it did not raise", ev.Target)
+		}
+	}
+	if after := reauthCount(t, f.srv, "requested"); after != before {
+		t.Errorf("outcome=requested moved %s -> %s for a request this caller did not raise", before, after)
+	}
 }
