@@ -23,7 +23,7 @@ import (
 // fakeRecordingStore is a hand-rolled recording.Store used by the upload tests.
 // SaveCast either drains the reader (default) or aborts the read side early to
 // simulate a store/path error after only a partial read — the leak path for the
-// masking pipe goroutine.
+// masked reader.
 type fakeRecordingStore struct {
 	// abortAfter, when > 0, makes SaveCast read at most abortAfter bytes then
 	// return saveErr WITHOUT draining the rest of r (the abort path).
@@ -111,19 +111,16 @@ func TestUploadRecording_SizeLimit(t *testing.T) {
 }
 
 // TestUploadRecording_SizeLimitWithRegisteredSecret drives the cap through the
-// MASKING PIPE — the branch buildMaskingBody takes whenever the run has any
+// MASKING READER — the branch buildMaskingBody takes whenever the run has any
 // registered secret, i.e. every run that minted a credential. TestUploadRecording_SizeLimit
 // above passes a nil registry and so only pins the pass-through branch.
 //
-// The copy goroutine must be able to stamp the *http.MaxBytesError onto the pipe;
-// if anything else closes the write end first, io.Pipe's once-only error store
-// keeps that first error and SaveCast reads a clean EOF instead — the handler
-// then persists the truncated prefix and audits `recording.upload success`, which
-// is an agent-controlled stop point for the recording audit stream.
+// A source MaxBytesError must not become a clean EOF after the retained masked
+// tail is flushed: that would persist a truncated prefix and audit success.
 func TestUploadRecording_SizeLimitWithRegisteredSecret(t *testing.T) {
 	runID := uuid.New()
 	reg := secretmask.NewRegistry()
-	reg.Add(runID, []byte("super-secret-token-value")) // forces the pipe branch
+	reg.Add(runID, []byte("super-secret-token-value")) // forces the masked branch
 	store := &fakeRecordingStore{}
 	h := newRecordingHarness(t, store, reg)
 
@@ -152,8 +149,7 @@ func TestBuildMaskingBody_CopyErrorReachesReader(t *testing.T) {
 	srcErr := errors.New("source blew up mid-read")
 	src := io.MultiReader(strings.NewReader("some output "), errReader{srcErr})
 
-	body, cleanup := buildMaskingBody(src, reg, runID)
-	defer cleanup()
+	body := buildMaskingBody(src, reg, runID)
 
 	_, err := io.ReadAll(body)
 	if !errors.Is(err, srcErr) {
@@ -192,8 +188,7 @@ func TestBuildMaskingBody_MasksMultiLineSecretInAsciicast(t *testing.T) {
 		`[0.5,"o",` + asciinemaEncode(t, sshKey) + "]\n" +
 		`[0.6,"o",` + asciinemaEncode(t, htmlSecret) + "]\n"
 
-	r, cleanup := buildMaskingBody(strings.NewReader(body), reg, runID)
-	defer cleanup()
+	r := buildMaskingBody(strings.NewReader(body), reg, runID)
 	out, err := io.ReadAll(r)
 	if err != nil {
 		t.Fatalf("read masked body: %v", err)
@@ -230,46 +225,39 @@ type errReader struct{ err error }
 func (e errReader) Read([]byte) (int, error) { return 0, e.err }
 
 // TestBuildMaskingBody_NoGoroutineLeakOnAbort (Finding 2): when SaveCast aborts
-// the read side (reads only part of the body then errors), the masking pipe's
-// copy goroutine must NOT leak — the handler must close the reader and await the
-// writer so the goroutine unblocks instead of blocking forever on pw.Write.
+// the read side (reads only part of the body then errors), masking must not leak
+// a goroutine. The former pipe needed cleanup; demand-driven masking does not.
 func TestBuildMaskingBody_NoGoroutineLeakOnAbort(t *testing.T) {
 	reg := secretmask.NewRegistry()
 	runID := uuid.New()
-	// Register a secret so buildMaskingBody takes the pipe/goroutine branch
-	// (a non-empty snapshot is what triggers the masking pipe).
+	// A non-empty snapshot forces masking instead of pass-through.
 	reg.Add(runID, []byte("super-secret-token-value"))
 
 	before := runtime.NumGoroutine()
 
-	// Large body so the copy goroutine is still trying to write when the reader
-	// is closed mid-stream (forces the blocked-write-on-no-reader scenario).
+	// This formerly stranded a pipe writer if its reader was abandoned.
 	src := strings.NewReader(strings.Repeat("x", 1<<20))
-	body, cleanup := buildMaskingBody(src, reg, runID)
+	body := buildMaskingBody(src, reg, runID)
 
 	// Read only a little, then abort like SaveCast would on an early error.
 	buf := make([]byte, 16)
 	if _, err := io.ReadFull(body, buf); err != nil {
 		t.Fatalf("partial read: %v", err)
 	}
-	// The handler's abort path: drain+close the reader and await the writer.
-	cleanup()
-
-	// The copy goroutine must have exited; poll briefly to avoid flakes.
+	// No cleanup is needed when the store abandons the reader.
 	deadline := time.Now().Add(2 * time.Second)
 	for runtime.NumGoroutine() > before {
 		if time.Now().After(deadline) {
-			t.Fatalf("goroutine leak: before=%d now=%d (copy goroutine did not exit after cleanup)", before, runtime.NumGoroutine())
+			t.Fatalf("goroutine leak after consumer stopped: before=%d now=%d", before, runtime.NumGoroutine())
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
 }
 
 // TestUploadRecording_AbortingStoreNoLeak (Finding 2, end-to-end): drive the
-// real handler with a MaskRegistry (so the pipe/goroutine masking path is taken)
+// real handler with a MaskRegistry (so the masking path is taken)
 // and a store that aborts mid-read. The handler must return (not hang) and leave
-// no leaked copy goroutine behind — proving handleUploadRecording's deferred
-// cleanup runs on the abort path.
+// no leaked copy goroutine behind, without requiring deferred reader cleanup.
 func TestUploadRecording_AbortingStoreNoLeak(t *testing.T) {
 	runID := uuid.New()
 	reg := secretmask.NewRegistry()

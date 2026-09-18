@@ -4,6 +4,8 @@
 package api
 
 import (
+	"bytes"
+	"cmp"
 	"errors"
 	"io"
 	"net/http"
@@ -81,13 +83,11 @@ func (s *Server) handleUploadRecording(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Finding 3 (DoS): cap the upload so an authenticated agent cannot exhaust
-	// disk with an unbounded cast. MaxBytesReader returns an *http.MaxBytesError
-	// once the cap is exceeded; the masking copy goroutine propagates it through
-	// the pipe so SaveCast fails, and we map it to 413 below.
+	// Cap the upload before masking; the reader preserves MaxBytesError so an
+	// over-cap upload remains a 413 rather than a successful truncated cast.
 	limited := http.MaxBytesReader(w, r.Body, maxRecordingUploadBytes)
 
-	// PRIMARY masking point: pipe the upload body through a MaskingWriter so
+	// PRIMARY masking point: read the upload body through a MaskingWriter so
 	// verbatim secret values are replaced with "<secret-hidden>" before the bytes
 	// reach the RecordingStore. A nil MaskRegistry is a safe no-op (pass-through).
 	//
@@ -96,15 +96,9 @@ func (s *Server) handleUploadRecording(w http.ResponseWriter, r *http.Request) {
 	// are NOT caught. This is intentional — masking catches the most likely
 	// accidental leakage vector (token printed to stdout/asciicast).
 	//
-	// Implementation: io.Pipe bridges the MaskingWriter (io.Writer) to SaveCast
-	// (io.Reader). The copy goroutine reads from the (size-limited) body, writes
-	// through the masker into pw, then closes pw so SaveCast's read returns
-	// io.EOF cleanly. cleanup() MUST run on every path (Finding 2): if SaveCast
-	// aborts the read side early it would otherwise leave the copy goroutine
-	// blocked forever on pw.Write (a goroutine + body leak). cleanup closes the
-	// read end (unblocking the writer) and awaits the goroutine.
-	body, cleanup := buildMaskingBody(limited, s.cfg.MaskRegistry, claims.RunID)
-	defer cleanup()
+	// Read only on the store's demand: an early storage failure must not leave
+	// an independent goroutine blocked reading the request body.
+	body := buildMaskingBody(limited, s.cfg.MaskRegistry, claims.RunID)
 
 	saveErr := s.cfg.RecordingStore.SaveCast(r.Context(), claims.RunID.String(), body)
 
@@ -129,7 +123,7 @@ func (s *Server) handleUploadRecording(w http.ResponseWriter, r *http.Request) {
 	))
 
 	if saveErr != nil {
-		// An over-cap upload surfaces as *http.MaxBytesError through the pipe.
+		// An over-cap upload surfaces as *http.MaxBytesError through the masker.
 		var maxErr *http.MaxBytesError
 		if errors.As(saveErr, &maxErr) {
 			writeError(w, http.StatusRequestEntityTooLarge, "recording exceeds size limit")
@@ -142,28 +136,13 @@ func (s *Server) handleUploadRecording(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// buildMaskingBody returns an io.Reader that transparently masks secrets from
-// src before its bytes are consumed by the caller, plus a cleanup func the
-// caller MUST always invoke (defer) once it is done reading.
-//
-// When reg is nil or has no secrets for runID, src is returned unchanged and
-// cleanup is a no-op (nil-safe, no goroutine cost).
-//
-// Otherwise a copy goroutine bridges a MaskingWriter to an io.Pipe. Finding 2:
-// if the consumer (SaveCast) aborts the read side early — e.g. a store/path
-// error after a partial read — the copy goroutine would block forever on
-// pw.Write (no reader) and leak the goroutine AND the underlying request body.
-// cleanup closes the read end (CloseWithError makes any pending/future pw.Write
-// return immediately) and then awaits the goroutine, guaranteeing it has
-// exited. Calling cleanup after a normal full read is safe and cheap (the
-// goroutine has already finished and pr.Close is idempotent).
-func buildMaskingBody(src io.Reader, reg *secretmask.Registry, runID uuid.UUID) (io.Reader, func()) {
+func buildMaskingBody(src io.Reader, reg *secretmask.Registry, runID uuid.UUID) io.Reader {
 	if reg == nil {
-		return src, func() {}
+		return src
 	}
 	snap := reg.Snapshot(runID)
 	if len(snap) == 0 {
-		return src, func() {}
+		return src
 	}
 	// The upload body is asciicast JSON: asciinema (which wardyn-rec execs)
 	// json-encodes each terminal-output chunk into an "o" event, so a secret containing any byte
@@ -179,35 +158,42 @@ func buildMaskingBody(src io.Reader, reg *secretmask.Registry, runID uuid.UUID) 
 	// caught — the `"],[t,"o","` event framing breaks the verbatim byte run,
 	// which no per-value match closes.
 	snap = secretmask.JSONEscapedVariants(snap)
-	m := secretmask.NewMasker(snap)
+	r := &recordingMaskReader{src: src}
+	r.masker = secretmask.NewMaskingWriter(&r.output, secretmask.NewMasker(snap))
+	return r
+}
 
-	// Bridge MaskingWriter (io.Writer) to SaveCast (io.Reader) via io.Pipe.
-	pr, pw := io.Pipe()
-	mw := secretmask.NewMaskingWriter(pw, m)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_, cpErr := io.Copy(mw, src)
-		// Always close the MaskingWriter to flush the retained tail. mw.Close()
-		// flushes only — it does NOT close pw (secretmask ownership invariant), so
-		// the CloseWithError below is the single authority on how the read side
-		// terminates and cpErr always reaches SaveCast. If mw ever starts closing
-		// its downstream again, io.Pipe's once-only error store would keep the EOF
-		// stamped here and discard cpErr — the 413 cap would go dead.
-		closeErr := mw.Close()
-		if cpErr != nil {
-			_ = pw.CloseWithError(cpErr)
-		} else if closeErr != nil {
-			_ = pw.CloseWithError(closeErr)
-		} else {
-			_ = pw.Close()
-		}
-	}()
-	cleanup := func() {
-		// Closing the read end unblocks any pw.Write the goroutine is parked on
-		// (it returns io.ErrClosedPipe), so the goroutine can run to completion.
-		_ = pr.CloseWithError(io.ErrClosedPipe)
-		<-done
+type recordingMaskReader struct {
+	src    io.Reader
+	output bytes.Buffer
+	masker *secretmask.MaskingWriter
+	chunk  [32 << 10]byte
+	err    error
+}
+
+func (r *recordingMaskReader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
 	}
-	return pr, cleanup
+	for r.output.Len() == 0 && r.err == nil {
+		n, readErr := r.src.Read(r.chunk[:])
+		_, maskErr := r.masker.Write(r.chunk[:n])
+		r.err = cmp.Or(maskErr, readErr)
+		if r.err != nil {
+			// Flush the retained masked tail before exposing EOF or the source
+			// error, including MaxBytesError. Neither may discard buffered bytes.
+			closeErr := r.masker.Close()
+			if r.err == io.EOF && closeErr != nil {
+				r.err = closeErr
+			}
+		}
+		if n == 0 && r.err == nil {
+			return 0, nil
+		}
+	}
+	n, _ := r.output.Read(p)
+	if r.output.Len() > 0 {
+		return n, nil
+	}
+	return n, r.err
 }
