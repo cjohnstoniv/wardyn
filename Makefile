@@ -257,11 +257,11 @@ cover-check: test-report test-report-docker test-report-k8s ## Enforce the COVER
 # always runs both; local runs say so loudly when they are skipped — X2-F24:
 # this used to add only test-report-pg, so a local release-check never ran the
 # race detector over the concurrency proofs CI gates on). Still not a full CI
-# replica: eight jobs need a
-# live daemon or service — conformance, conformance-k8s, envbuild-integration,
+# replica: the live-service jobs need a
+# daemon or service — conformance, conformance-k8s, envbuild-integration,
 # helm-install-test, the Playwright ui-e2e, desktop-envelope, buildx-smoke,
-# and trivy — and are CI-only. See
-# RELEASING.md.
+# and trivy — and run separately with those prerequisites. See RELEASING.md
+# and ci.yml for their local setup.
 release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 	@grep -q "## \[Unreleased\]" CHANGELOG.md || (echo "CHANGELOG missing [Unreleased]"; exit 1)
 	@if [ -n "$$WARDYN_TEST_PG" ]; then \

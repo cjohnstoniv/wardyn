@@ -34,14 +34,17 @@ WARDYN_TEST_PG=postgres://... make release-check   # runs `make ci`, plus the Po
                                                    # lane and the `## [Unreleased]` check
 ```
 
-Eight CI jobs cannot run locally at all, because they need a live daemon or
-service: `conformance` (`make test-conformance-docker`), `conformance-k8s`
-(`make test-conformance-k8s`, needs a local `kind` cluster + a registered
-`k8s`-tagged build), `envbuild-integration` (`make test-envbuild-integration`),
+The live-service jobs are outside `make release-check`: `conformance`
+(`make test-conformance-docker`), `conformance-k8s`
+(`make test-conformance-k8s`, needs a kind/Calico cluster and the test images
+from that CI job), `envbuild-integration` (`make test-envbuild-integration`),
 `helm-install-test` (`make helm-install-test`, also needs a local `kind`
 cluster), the Playwright `ui-e2e` job, `desktop-envelope` (compose build +
-up), `buildx-smoke`, and `trivy` (both docker builds). Without
-`WARDYN_TEST_PG` the Postgres suite prints a loud SKIPPED line.
+up), `buildx-smoke`, and `trivy` (both docker builds). Their checks can run
+locally with the required services; follow `.github/workflows/ci.yml` for
+image builds, cluster setup, and environment variables. Run the Playwright
+lane with `scripts/run-ui-e2e.sh`. Without `WARDYN_TEST_PG` the Postgres
+suite prints a loud SKIPPED line.
 
 Screenshot freshness is CI-only for a different reason: `ci.yml`'s
 `screenshots-fresh` job compares the PR diff, so it can tell "you changed the

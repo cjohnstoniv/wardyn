@@ -130,9 +130,11 @@ WARDYN_TEST_PG="postgres://user:pass@localhost/testdb" make test-report-pg
 WARDYN_TEST_PG="postgres://user:pass@localhost/testdb" make test-race-pg
 ```
 
-Cluster-dependent lanes need a real Kubernetes cluster and self-skip without
-`WARDYN_TEST_K8S=1`; no workflow runs them, so they are manual proofs you run
-against `make kind-quickstart`. Among them is the **AWS SSO walk**,
+Kubernetes conformance runs in `.github/workflows/ci.yml`'s `conformance-k8s`
+job against kind with Calico; see that job's setup for a local run. The additional
+cluster walks, including `scripts/run-e2e-ssh-k8s.sh` and the **AWS SSO walk**,
+are manual proofs against `make kind-quickstart` and self-skip without
+`WARDYN_TEST_K8S=1`. No workflow runs the AWS SSO walk,
 `scripts/kind-sso-walk.sh`: with `make kind-sso` it stands up Dex with two
 principals and an on-cluster fake of AWS IAM Identity Center, then proves that a
 MEMBER signing in from their own seat gets a credential that is theirs and not
