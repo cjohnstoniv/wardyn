@@ -147,6 +147,14 @@ function setFakeSessionTTLs(tokenTTL: string, roleCredTTL: string): void {
 const WALK_TOKEN_TTL = process.env.WARDYN_KIND_SSO_TOKEN_TTL || "12m";
 const WALK_ROLE_CRED_TTL = process.env.WARDYN_KIND_SSO_ROLE_CRED_TTL || "3m";
 
+/** The approval states, in the WIRE's own spelling — UPPERCASE
+ *  (`internal/types/types.go`'s ApprovalState constants). Named here because
+ *  walk-6 spent eight minutes raising a real hold and then failed on
+ *  `toBe("pending")` against a row that said `PENDING`: the mechanism was
+ *  perfect and the assertion was shouting the wrong case. One definition, so
+ *  the next reader cannot re-derive it wrong. */
+const APPROVAL = { pending: "PENDING", approved: "APPROVED", cancelled: "CANCELLED" } as const;
+
 type RunRow = { id: string; state?: string; task?: string; created_at?: string };
 type ApprovalRow = { id: string; kind?: string; state?: string; requested_scope?: Record<string, unknown> };
 type AuditRow = { action?: string; result?: string; created_at?: string; data?: Record<string, unknown> };
@@ -341,7 +349,7 @@ test("K (credential-reauth-hold): a session retired mid-run HOLDS the model call
       })
       .toBe(1);
     const held = (await approvalsFor(page, run.id)).find((a) => a.kind === "credential_reauth")!;
-    expect(held.state, "a raised re-auth request must be PENDING").toBe("pending");
+    expect(held.state, "a raised re-auth request must be PENDING").toBe(APPROVAL.pending);
 
     // THE RUN IS NOT DEAD. This is the whole of finding 4: the model call is
     // parked, the run is not.
@@ -394,7 +402,7 @@ test("K (credential-reauth-hold): a session retired mid-run HOLDS the model call
       // path this denies runs on the proxy's own 2 s poll.
       for (let i = 0; i < 3; i++) {
         const now = (await approvalsFor(page, run.id)).find((a) => a.kind === "credential_reauth");
-        expect(now?.state, "the ADMIN's capture resolved the MEMBER's hold (I2)").toBe("pending");
+        expect(now?.state, "the ADMIN's capture resolved the MEMBER's hold (I2)").toBe(APPROVAL.pending);
         await page.waitForTimeout(2_000);
       }
     } finally {
@@ -436,7 +444,7 @@ test("K(resume) (credential-reauth-hold): the member signs in and the SAME run c
     .poll(async () => (await approvalsFor(page, heldRunID)).find((a) => a.kind === "credential_reauth")?.state, {
       timeout: 4 * MINUTE,
     })
-    .toBe("approved");
+    .toBe(APPROVAL.approved);
   await expect(page.getByText(REAUTH_SIGNED_IN_TOAST)).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText(waitingReauth(1))).toHaveCount(0, { timeout: 2 * MINUTE });
 
@@ -633,7 +641,7 @@ test("negative (credential-reauth-hold): a hold nobody answers times out, and th
     // says so. A timeout that quietly closed the request would leave the person
     // with nothing to act on and no way to know.
     const still = (await approvalsFor(page, run.id)).find((a) => a.kind === "credential_reauth");
-    expect(still?.state, "the timeout closed the sign-in request").toBe("pending");
+    expect(still?.state, "the timeout closed the sign-in request").toBe(APPROVAL.pending);
     expect((await runRow(page, run.id)).state, "the timeout killed the run").toBe("RUNNING");
     await page.goto(`/runs/${run.id}`);
     await expect(page.getByTestId("live-approval-row").filter({ hasText: REAUTH_ROW.label })).toBeVisible({
@@ -666,7 +674,7 @@ test("negative (credential-reauth-hold): killing a held run cancels its sign-in 
       .poll(async () => (await approvalsFor(page, run.id)).find((a) => a.kind === "credential_reauth")?.state, {
         timeout: 3 * MINUTE,
       })
-      .toBe("cancelled");
+      .toBe(APPROVAL.cancelled);
     await expect.poll(async () => (await runRow(page, run.id)).state, { timeout: 3 * MINUTE }).not.toBe("RUNNING");
     // The cockpit stops asking for a sign-in that would now repair nothing.
     await page.goto(`/runs/${run.id}`);
