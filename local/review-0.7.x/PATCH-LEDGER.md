@@ -298,6 +298,15 @@ same-commit window-0 re-cites; never the umbrella integration branches.
 | R076-027 | INCLUDE | `0bb4699b`; mechanism real, low in production (the proxy forwards a `bytes.Reader`); audit re-cite 125→119 verified |
 | R076-028 | INCLUDE as a 3-line fix | reproduced at base and tip; unlink the owned `.tmp-cast-*` on the rename error path + a test, applied by the 0.7.6 patches lane (no ledger commit) |
 
+## 0.7.6 cut (2026-09-19, the coordinator's record; the owner pushes/tags/releases)
+
+`feature/0.7.6` cut tip **341614e0**; release commit **1bb9fbb2** (`release: 0.7.6`, `lane/v0.7.6-release`, dated 2026-09-18).
+Shipped from this ledger: R076-005, 006, 009, 011, 012, 013, 014, 015, 016, 017, 018, 019, 020, 021, 023, 024, 025, 026, 027 (19
+bullets in CHANGELOG `[0.7.6]` under "From the 0.7.x readiness review") plus the R076-028 candidate as a three-line fix. Not shipped:
+R076-002 (race reproduced), 003, 004 (narrowed by 0.7.6) — carried as Known gaps for 0.7.7; 007, 008 (PR #71, merges independently),
+022 (re-derived per commit by the window-0 guard) rejected; 010 was already in the base. Evidence: the 0.7.6 campaign's
+`local/v076/evidence/patch-review/{A,B,C,D,E,SELECTION}.md` and `local/v076/release/RELEASE-0.7.6-RECORD.md`.
+
 ## Open findings, not implemented
 
 R076-002 needs launch serialization across quota checks, row insertion and
