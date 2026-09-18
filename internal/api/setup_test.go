@@ -136,6 +136,54 @@ func TestSetupStatus_AdminTokenReadsNotApplicableEndToEnd(t *testing.T) {
 	}
 }
 
+// TestSetupStatus_SpentRefreshTokenFlipsLiveToExpiring is the 0.7.6 Finding 5
+// regression, named for it: after a dispatch marks a captured session's
+// refresh token spent (an earlier renewal saw invalid_grant, say), the NEXT
+// /setup/status read for that principal must flip live -> expiring WITHOUT
+// the access token itself having expired — not stay `live` until the client
+// registration lapses days later, while every dispatch refuses the person's
+// runs in the meantime.
+func TestSetupStatus_SpentRefreshTokenFlipsLiveToExpiring(t *testing.T) {
+	srv, _ := perUserLoginSrv(t) // claude-code/bedrock_sso/per_user row, OIDC configured
+	now := time.Now().UTC()
+	blob := awsSSOBlob{
+		AccessToken: "sso-access-token-1234567890", RefreshToken: "sso-refresh-token-1234567890",
+		ClientID: "sso-client-id", ClientSecret: "sso-client-secret-1234567890",
+		StartURL: perUserPortal, Region: "us-east-1", AccountID: "123456789012", RoleName: "WardynBedrockRole",
+		ExpiresAt: now.Add(2 * time.Hour), RegistrationExpiresAt: now.Add(90 * 24 * time.Hour),
+	}
+	scope := awsSSOScope{perUser: true, owner: "sub-member"}
+	if err := srv.storeAWSSSOBlob(context.Background(), scope, blob); err != nil {
+		t.Fatalf("store per-user aws sso blob: %v", err)
+	}
+	member := ssoSession(t, "sub-member", "member@corp.example", oidc.RoleMember)
+
+	code, before := decodeSetupSSO(t, srv, member)
+	if code != http.StatusOK {
+		t.Fatalf("before: code = %d, want 200", code)
+	}
+	if before.ModelAccess.State != modelAccessLive {
+		t.Fatalf("before: model_access.state = %q, want live", before.ModelAccess.State)
+	}
+
+	srv.markAWSSSOTokenSpent(awsSSOTokenFingerprint(blob.RefreshToken))
+
+	code, after := decodeSetupSSO(t, srv, member)
+	if code != http.StatusOK {
+		t.Fatalf("after: code = %d, want 200", code)
+	}
+	if after.ModelAccess.State != modelAccessExpiring {
+		t.Fatalf("after: model_access.state = %q, want expiring — a spent refresh token, access token still valid", after.ModelAccess.State)
+	}
+	if blob.expired(now) {
+		t.Fatal("test setup error: the access token must NOT be expired for this regression to mean anything")
+	}
+	wantDeadline := blob.ExpiresAt.Add(-awsSSORefreshSkew).UTC().Format(time.RFC3339)
+	if !strings.Contains(after.ModelAccess.Action, wantDeadline) {
+		t.Errorf("after: model_access.action = %q, want the ExpiresAt-skew deadline %q", after.ModelAccess.Action, wantDeadline)
+	}
+}
+
 // LocalMode bypasses auth; the handler must report auth.mode == "local".
 func TestSetupStatus_LocalMode(t *testing.T) {
 	srv := New(Config{LocalMode: true, LocalOperator: "local:test", LocalLoopback: true})

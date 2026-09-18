@@ -263,6 +263,116 @@ func TestAWSSSORefresh_InvalidGrantMarksDeadAndNeverFallsThroughToAPIKey(t *test
 	}
 }
 
+// TestAWSSSORefresh_TwoTransientFailures_AttemptsAndBothErrors is Finding 5:
+// the one retry already existed — make it LEGIBLE. Two transient failures (a
+// network story, not a credential one) must report attempts=2 with BOTH
+// attempts' errors in the failure row.
+func TestAWSSSORefresh_TwoTransientFailures_AttemptsAndBothErrors(t *testing.T) {
+	s, audit, _ := ssoRefreshServer(t)
+	calls := fakeOIDC(t, func(w http.ResponseWriter, _ map[string]string, call int) {
+		w.WriteHeader(http.StatusBadRequest)
+		code := "slow_down"
+		if call == 2 {
+			code = "internal_failure"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": code})
+	})
+
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true, true, nil, awsSSOScope{})
+	if ba.ssoInject {
+		t.Fatal("ssoInject = true after two transient failures; want the lane not ready")
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("CreateToken calls = %d, want 2", got)
+	}
+	rows := audit.find("harness.credential.refresh")
+	if len(rows) != 1 || rows[0].Outcome != "failure" {
+		t.Fatalf("audit rows = %+v, want one failure row", rows)
+	}
+	var data struct {
+		Attempts int    `json:"attempts"`
+		Error    string `json:"error"`
+		Spent    bool   `json:"spent"`
+	}
+	if err := json.Unmarshal(rows[0].Data, &data); err != nil {
+		t.Fatalf("decode audit data: %v", err)
+	}
+	if data.Attempts != 2 {
+		t.Errorf("attempts = %d, want 2", data.Attempts)
+	}
+	if data.Spent {
+		t.Error("two transient failures must not dead-mark the credential")
+	}
+	if !strings.Contains(data.Error, "slow_down") || !strings.Contains(data.Error, "internal_failure") {
+		t.Errorf("error = %q, want BOTH attempts' errors joined", data.Error)
+	}
+}
+
+// TestAWSSSORefresh_TransientThenInvalidGrant_SpentWithAttempts: an EOF then
+// invalid_grant already says spent:true — this pins attempts:2 sitting beside
+// it, so a reader can tell "one dropped packet, then AWS said no" from "AWS
+// said no twice".
+func TestAWSSSORefresh_TransientThenInvalidGrant_SpentWithAttempts(t *testing.T) {
+	s, audit, blob := ssoRefreshServer(t)
+	calls := fakeOIDC(t, func(w http.ResponseWriter, _ map[string]string, call int) {
+		w.WriteHeader(http.StatusBadRequest)
+		code := "slow_down"
+		if call == 2 {
+			code = "invalid_grant"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": code})
+	})
+
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true, true, nil, awsSSOScope{})
+	if ba.ready || ba.ssoInject {
+		t.Fatalf("ready=%v ssoInject=%v; want both false on a spent credential", ba.ready, ba.ssoInject)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("CreateToken calls = %d, want 2 (the retry ran before the token was known spent)", got)
+	}
+	if !s.awsSSOTokenSpent(awsSSOTokenFingerprint(blob.RefreshToken)) {
+		t.Fatal("the spent refresh token was not dead-marked")
+	}
+	rows := audit.find("harness.credential.refresh")
+	if len(rows) != 1 || rows[0].Outcome != "failure" {
+		t.Fatalf("audit rows = %+v, want one failure row", rows)
+	}
+	var data struct {
+		Attempts int  `json:"attempts"`
+		Spent    bool `json:"spent"`
+	}
+	if err := json.Unmarshal(rows[0].Data, &data); err != nil {
+		t.Fatalf("decode audit data: %v", err)
+	}
+	if data.Attempts != 2 || !data.Spent {
+		t.Errorf("data = %+v, want attempts=2 spent=true", data)
+	}
+}
+
+// TestAWSSSORefresh_FirstAttemptSuccess_NoAttemptsFieldOnSuccessRow pins the
+// other side of the same design decision: a first-attempt success carries NO
+// attempts field — only the failure row needs to say how many tries it took.
+func TestAWSSSORefresh_FirstAttemptSuccess_NoAttemptsFieldOnSuccessRow(t *testing.T) {
+	s, audit, _ := ssoRefreshServer(t)
+	fakeOIDC(t, func(w http.ResponseWriter, _ map[string]string, _ int) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"accessToken": "fresh-access-token-abcdefghij", "expiresIn": 3600,
+		})
+	})
+
+	ba := s.resolveBedrockAuth(context.Background(), "claude-code", false, true, true, nil, awsSSOScope{})
+	if !ba.ssoInject {
+		t.Fatalf("ssoInject = false; want a clean renewal (failure=%q)", ba.ssoRefreshFailure)
+	}
+	rows := audit.find("harness.credential.refresh")
+	if len(rows) != 1 || rows[0].Outcome != "success" {
+		t.Fatalf("audit rows = %+v, want one success row", rows)
+	}
+	if strings.Contains(string(rows[0].Data), "attempts") {
+		t.Errorf("a first-attempt success carries no attempts field; data=%s", rows[0].Data)
+	}
+}
+
 // TestAWSSSORefresh_SlowDownRetriesOnceAndNeverDeadMarks is the row a
 // status-code classifier fails: slow_down arrives as HTTP 400, exactly like
 // invalid_grant. It must get ONE retry, fail THIS run visibly, leave the stored
