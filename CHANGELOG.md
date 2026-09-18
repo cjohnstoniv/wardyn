@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.7.6] — 2026-09-18
+
 The 0.7.5 field report (an operator's handoff from running 0.7.1–0.7.5 on a private-endpoint Kubernetes estate) consolidated one journey — a person getting
 AWS SSO working and running a Claude Code agent — into eight findings. This release answers seven of
 them; the eighth (a mid-run credential lapse holding the run instead of killing it) ships behind a
