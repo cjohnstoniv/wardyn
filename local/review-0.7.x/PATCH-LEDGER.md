@@ -219,11 +219,15 @@ review. Selection still needs release-owner gates after any 0.7.6 integration.
 Line-number citation repairs depend on the selected documentation combination:
 re-point live references after combining docs, never remove the guarded citations.
 Do not cherry-pick an integration umbrella on top of the independent patches.
-Independent composition review verified all 15 patch IDs match their integrated
-copies, each original has the baseline as its sole parent and a DCO sign-off,
-and the 26-file combined diff contains no local mocks/evidence or dependency
-changes. R022's patch ID also matches its integrated copy. This is provenance
-and scope verification, not a substitute for runtime acceptance.
+For the original `0d63ab2e` selection, independent composition review verified
+all 15 patch IDs match their integrated copies, each original has the baseline
+as its sole parent and a DCO sign-off, and the 26-file combined diff contains no
+local mocks/evidence or dependency changes. R022's patch ID also matches its
+integrated copy. The round-two extension reviews the five additional originals
+and the full 41-file product diff at `6a3dc865`; see
+evidence/round2-composition-review.md for mappings and the R027 citation-context
+qualification. This is provenance and scope verification, not a substitute for
+runtime acceptance.
 
 - R076-005: Correct the recording pane's permission hint to include security admins.
 - R076-006: Document the console's existing reduced-motion support.

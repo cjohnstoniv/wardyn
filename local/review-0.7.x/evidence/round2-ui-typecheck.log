@@ -1,0 +1,6 @@
++ pnpm typecheck
+
+> @wardyn/ui@0.7.5 typecheck /tmp/wardyn-review-0.7x-round2-ui/ui
+> tsc -p tsconfig.check.json
+
++ pnpm exec tsc --noEmit

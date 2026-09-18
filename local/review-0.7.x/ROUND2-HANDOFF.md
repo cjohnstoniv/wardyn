@@ -64,12 +64,34 @@ Log: `evidence/round2-ci-recording-root.log`, SHA-256
 This closes R023's combined merge-gate gap; it does not cover R024–R027.
 
 The new `/tmp/wardyn-review-0.7x-round2-final` selection is frozen at
-`6a3dc8659ea7105ae81d127b5f3f1a198333f67d`, including all four new patches. Full CI
-and browser gates are running; no combined pass is claimed yet. Browser worktree
+`6a3dc8659ea7105ae81d127b5f3f1a198333f67d`, including all four new patches. All
+combined gates passed with clean source worktrees. Browser worktree
 `/tmp/wardyn-review-0.7x-round2-ui` uses the same SHA and its own build artifacts,
-database wardyn_review_round2 and ports 18896/18897. Real PostgreSQL acceptance is
-queued in a third same-tip worktree. Independent composition review passed; see
+database wardyn_review_round2 and ports 18896/18897 (released after completion).
+Real PostgreSQL acceptance used a third same-tip worktree. Composition review passed; see
 evidence/round2-composition-review.md for the exact original/integrated mappings.
+
+| Gate at the frozen SHA | Result | Evidence |
+| --- | --- | --- |
+| One uninterrupted `make ci` | Exit 0; Go reports/races for all three builds, union coverage 78.5%, all remaining merge gates passed | evidence/ROUND2-FINAL-VERIFICATION.md; evidence/round2-ci-final.log |
+| UI unit/component suite inside CI | 156 files / 2,886 tests passed; 94.91% statements, 90.25% branches, 82.35% functions | Same CI log |
+| Both official and default/editor TypeScript checks | Exit 0 | ROUND2-UI-ACCEPTANCE.md; evidence/round2-ui-typecheck.log |
+| Complete browser suite | Exit 0; 347 tests / 30 specs, zero failures/skips/flakes | ROUND2-UI-ACCEPTANCE.md; evidence/round2-ui-e2e.log |
+| Real PostgreSQL report and broker/store race gate | Exit 0; all nine required probes passed, 69.6% report coverage; race 2.764s / 16.772s | ROUND2-PG-ACCEPTANCE.md; evidence/round2-pg-final.log |
+
+The PG report has 2,245 top-level tests passed and five documented skips;
+including subtests, 5,525 pass / five skip / zero fail. These are not independent
+end-to-end scenarios. The same-tip worktrees stayed clean, and all earlier frozen
+trees remain unchanged. No gate was weakened, skipped wholesale or rerun to hide
+a failure. Existing environment warnings and live-acceptance gaps remain disclosed
+in the detailed reports.
+
+Final raw-log SHA-256 values:
+
+- CI: `ed717e2b34afcffaaa5e4b37b7688ea7c43a3959392aecf2c87ae7c75209db31`.
+- Browser: `d6b617f48eb4c1e9ab30be2134e67811be21050e34af6a259ecabb268c2698b6`.
+- Typechecks: `8c3ffd074da4a1e0fd6fb051e6cb7fe7d5b6b6e8b3a3fd8a3b31255351916bc9`.
+- PostgreSQL: `aea81e648723653464a909d301759cdb8ad1063e87b4453520c7976d4144fcf2`.
 
 ## Release integration
 
