@@ -11,8 +11,10 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/http"
@@ -184,6 +186,19 @@ func (a *certAuthority) leafFor(host string) (*tls.Certificate, error) {
 //  2. OPERATOR-CONFIGURED corp artifact hosts (p.mitmHosts, compiled at dispatch
 //     from the site-config artifact overrides) — so the operator's OWN corporate
 //     registry token can be injected on the wire and the sandbox never holds it.
+//  3. THE RUN'S OWN AWS IAM Identity Center portal host (portal.sso.<region>, or
+//     the test override's host), authored at DISPATCH from the run's own
+//     captured SSO credential — never from the sandbox, never from a run
+//     request, never from a policy — when that run is on the captured-SSO
+//     Bedrock lane and WARDYN_AWS_SSO_PROXY_INJECT is on. It rides p.mitmHosts
+//     with #2 and is bounded exactly as #2 is: exact host AND port
+//     (net.JoinHostPort, so a bare any-port entry cannot have some other port's
+//     tunnel terminated with the Wardyn leaf), a paired injection rule for that
+//     same host, the CA private key in proxy memory. It exists so the SSO access
+//     token can be set on the wire as x-amz-sso_bearer_token — an authtype:none
+//     call — instead of being written into the sandbox: the same trade #2 makes
+//     for a corp registry token, made here for the operator's own SSO session.
+//     Bedrock's own DATA plane stays excluded for the reason #1 gives.
 //
 // The expanded surface (#2) is bounded on every axis: the set is authored by an
 // admin via the site-config API (NOT the sandbox, NOT the agent, NOT the run
@@ -452,8 +467,39 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	// subscription OAuth token path); otherwise PRESERVE the agent's own resident
 	// credential (inspect-only, hdr==nil below). A rule whose rotating credential
 	// cannot be refreshed fails closed — never forward a stale token.
-	hdr, ok, ierr := p.inject.resolve(host)
+	// The caller's ctx, not the background one: a mid-run credential re-auth
+	// PARKS this request (credhold.go), and an SDK that disconnects must release
+	// the per-host single flight rather than pin it for the whole hold budget.
+	hdr, ok, ierr := p.inject.resolveCtx(r.Context(), host)
 	if ierr != nil {
+		if r.Context().Err() != nil {
+			// THE CLIENT IS GONE. A caller released from a re-auth wait by its
+			// own cancellation has not been refused anything: writing a 401 and
+			// a deny row here would record an expiry that did not happen, for a
+			// request nobody is listening to (security SHOULD-1). The hold
+			// itself continues — it belongs to the workflow, not to this
+			// request — so the owner's sign-in still lands for whoever is left.
+			return
+		}
+		if errors.Is(ierr, errReauthTimedOut) {
+			// The hold ended with nobody signed in. 401 + a modelled
+			// UnauthorizedException, NOT the 502 below: both AWS SDKs read that
+			// as a credential failure and stop, where a 502 is a transport
+			// error they retry — three more full holds for one lapse. The
+			// decision row names the hold, so the trail distinguishes "nobody
+			// signed in" from "the credential could not be refreshed".
+			// ONE decision row per hold, not one per retry: with the measured
+			// ~30 s SDK cadence a single ten-minute expiry would otherwise
+			// deny-log twenty times. The workflow hands errReauthTimedOut to the
+			// first live observer and errReauthTimedOutAgain to the rest; both
+			// answer the sandbox, only the first is recorded.
+			if !errors.Is(ierr, errReauthTimedOutAgain) {
+				p.emitLLMDecision(r, host, port, egress.Deny, ruleSourceCredentialReauthTimeout, nil)
+				slog.Warn("proxy: a held AWS SSO credential request expired", "host", host, "err", reauthHoldError(ierr))
+			}
+			writeSSOUnauthorized(w)
+			return
+		}
 		p.emitLLMDecision(r, host, port, egress.Deny, mitmSource, nil)
 		p.httpError(w, "llm credential refresh failed", ierr, http.StatusBadGateway)
 		return

@@ -404,3 +404,40 @@ func TestRequireTLSRefusalPreemptsInspection(t *testing.T) {
 		t.Errorf("decision log = %q, want exactly one row (no scan:blocked, no llm.scan.blind)", buf.String())
 	}
 }
+
+// NO HOLD AT BOOT. buildInjector runs under the proxy's 30s startupCtx, seconds
+// after dispatch refreshed the credential synchronously — a dead credential
+// THERE is a race measured in seconds, not a person who needs to sign in, and a
+// hold would fight the startup canary. A 423 at boot must fail closed exactly
+// as any other status does.
+func TestBuildInjectorFailsClosedOnAReauth423(t *testing.T) {
+	prevPoll := holdPollInterval
+	holdPollInterval = 5 * time.Millisecond
+	defer func() { holdPollInterval = prevPoll }()
+	t.Setenv(envCredentialReauthTimeout, "1800s")
+
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusLocked)
+		_, _ = w.Write([]byte(`{"state":"reauth_pending","approval_id":"` + uuid.NewString() + `"}`))
+	}))
+	defer cp.Close()
+
+	pol := CompilePolicy(types.RunPolicySpec{AllowedDomains: []string{"portal.sso.eu-west-2.amazonaws.com"}})
+	rules := []InjectionConfig{{
+		InjectionRule: egress.InjectionRule{Host: "portal.sso.eu-west-2.amazonaws.com", Header: "x-amz-sso_bearer_token"},
+		GrantID:       uuid.New(),
+	}}
+
+	start := time.Now()
+	inj, err := buildInjector(context.Background(), cp.URL, newTokenSource("tok"), pol, rules, cp.Client())
+	if err == nil {
+		t.Fatal("buildInjector succeeded on a 423; want a fail-closed startup error")
+	}
+	if inj != nil {
+		t.Error("buildInjector returned an injector alongside its error")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("boot took %v — buildInjector HELD instead of failing closed", elapsed)
+	}
+}

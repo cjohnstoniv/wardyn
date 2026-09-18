@@ -730,7 +730,14 @@ func (l lifecycleStopper) StopRun(ctx context.Context, runID uuid.UUID, notAfter
 // runApprovalSweeper periodically transitions PENDING approvals older than
 // `after` to EXPIRED via approval.ExpireStale, until ctx is cancelled. It mirrors
 // the lifecycle reaper's goroutine shape; the first sweep runs after one tick.
-func runApprovalSweeper(ctx context.Context, st approvalStore, interval, after time.Duration) {
+// reauthExpiryCounter is the ONE thing the sweeper reports upward: how many
+// credential_reauth rows it aged out. An interface rather than *api.Server so
+// the sweeper keeps taking only what it needs, and nil is a no-op.
+type reauthExpiryCounter interface {
+	RecordCredentialReauthExpired(n int)
+}
+
+func runApprovalSweeper(ctx context.Context, st approvalStore, interval, after time.Duration, m reauthExpiryCounter) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -738,7 +745,7 @@ func runApprovalSweeper(ctx context.Context, st approvalStore, interval, after t
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			n, err := approval.ExpireStale(ctx, st, after)
+			n, byKind, err := approval.ExpireStaleByKind(ctx, st, after)
 			if err != nil {
 				// NOT a `continue`: since the sweep collects per-row failures
 				// instead of aborting on the first one, a non-nil error and a
@@ -746,6 +753,13 @@ func runApprovalSweeper(ctx context.Context, st approvalStore, interval, after t
 				// the count here would hide the work the sweep DID do behind
 				// one wedged row.
 				slog.ErrorContext(ctx, "wardynd: approval sweep error", slog.Any("err", err))
+			}
+			// AT THE TRANSITION: this is where a credential re-auth request
+			// actually becomes EXPIRED, and the only place that can count it
+			// honestly — the sidecar holding for it has long since given up, so
+			// no later resolve will ever meet the row.
+			if m != nil && byKind[types.ApprovalCredentialReauth] > 0 {
+				m.RecordCredentialReauthExpired(byKind[types.ApprovalCredentialReauth])
 			}
 			if n > 0 {
 				slog.InfoContext(ctx, "wardynd: approval sweep expired stale PENDING approvals",

@@ -616,7 +616,7 @@ func TestAWSSSOCacheOmitsTheRefresherFields(t *testing.T) {
 		ExpiresAt: awsSSOTestFixedNow.Add(time.Hour),
 	}
 	var cache map[string]any
-	if err := json.Unmarshal([]byte(awsSSOCacheFileContents(blob)), &cache); err != nil {
+	if err := json.Unmarshal([]byte(awsSSOCacheFileContents(blob, false)), &cache); err != nil {
 		t.Fatalf("cache is not valid JSON: %v", err)
 	}
 	for _, k := range []string{"refreshToken", "clientId", "clientSecret"} {
@@ -632,7 +632,7 @@ func TestAWSSSOCacheOmitsTheRefresherFields(t *testing.T) {
 	// A blob with NOTHING to rotate keeps today's bytes: the registration fields
 	// are harmless where no refresh token exists.
 	blob.RefreshToken = ""
-	if err := json.Unmarshal([]byte(awsSSOCacheFileContents(blob)), &cache); err != nil {
+	if err := json.Unmarshal([]byte(awsSSOCacheFileContents(blob, false)), &cache); err != nil {
 		t.Fatalf("cache is not valid JSON: %v", err)
 	}
 	if cache["clientId"] != "sso-client-id" {

@@ -290,14 +290,17 @@ services:
       # UNREACHABLE, not "off" (docs/ENV.md WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS
       # / WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS / WARDYN_LLM_SCAN already
       # documents the container-runner forward; this is the missing host hop).
-      # Empty default in all three: each var's own reader (cmd/wardyn-proxy's
+      # Empty default in all of them: each var's own reader (cmd/wardyn-proxy's
       # WARDYN_LLM_SCAN switch, internal/egress/proxy.branchNSSwitch) treats an
-      # unset OR explicitly-empty value as "leave the compiled default", so
+      # unset OR explicitly-empty value as "leave the compiled default" — the
+      # re-auth hold's budget included (credentialReauthBudget clamps and falls
+      # back on anything it cannot parse) — so
       # `docker run -e VAR` / an unset host var / a compose `VAR=` passthrough
       # are indistinguishable and all resolve to the same safe default.
       WARDYN_LLM_SCAN: "${WARDYN_LLM_SCAN:-}"
       WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS: "${WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS:-}"
       WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS: "${WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS:-}"
+      WARDYN_CREDENTIAL_REAUTH_TIMEOUT: "${WARDYN_CREDENTIAL_REAUTH_TIMEOUT:-}"
       WARDYN_CONTROL_PLANE_URL: "http://wardynd:8080"
       # Devcontainer image builds — ON by default on the compose stack: the
       # wizard's DEFAULT card is "Recommended — built for this workspace", and a

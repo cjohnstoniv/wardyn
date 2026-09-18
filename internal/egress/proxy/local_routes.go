@@ -59,6 +59,19 @@ const (
 	// path, so the decision log reads honestly (no scan coverage implied).
 	ruleSourceArtifactMITM = "artifact:mitm"
 
+	// ruleSourceCredentialReauthTimeout names the ONE decision a spent re-auth
+	// hold writes: the proxy parked a sandbox's AWS SSO credential exchange
+	// while its owner was asked to sign in again, and nobody did before the
+	// budget ended. It is a DENY, and it is deliberately its own rule_source
+	// rather than folded into the credential-refresh failure beside it: "nobody
+	// signed in" and "the credential could not be refreshed" have different
+	// fixes, and only one of them is a person's to make.
+	//
+	// APPENDED, not slotted in beside its siblings: docs/AUDIT-ACTIONS.md cites
+	// each of these by LINE with a zero-line window, so inserting above them
+	// rots three citations for nothing.
+	ruleSourceCredentialReauthTimeout = "credential:reauth-timeout"
+
 	// maxBrokeredBody caps mint/approvals forward bodies. LLM bodies are
 	// unbounded (streamed) — Anthropic is the size authority there.
 	maxBrokeredBody = 10 << 20 // 10 MiB

@@ -402,6 +402,7 @@ func run() error {
 		BedrockModel:              *f.bedrockModel,
 		BedrockBaseURL:            bedrockBaseURL,
 		AWSSSOEndpointOverride:    awsSSOEndpointOverride,
+		AWSSSOProxyInject:         api.ResolveAWSSSOProxyInject(*f.awsSSOProxyInject),
 		BedrockAWSConfigDir:       *f.bedrockAWSDir,
 		BedrockAWSProfile:         *f.bedrockAWSProfile,
 		BedrockAWSSSORegion:       *f.bedrockAWSSSORegion,

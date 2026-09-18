@@ -265,6 +265,20 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// The gate loads BOTH rows or NEITHER, so its one flag seeds both here; they
 	// diverge below, where rule 4 may load the approval alone and leave the run
 	// unread for `always` to fetch.
+	// RULE 3b FIRST, BEFORE the member gate (security NIT-5). The plan's promise
+	// is 409 on EVERY tier; behind authorizeMemberDecision a MEMBER got that
+	// gate's own refusal instead, so the answer depended on who asked about a
+	// verb that applies to nobody. Refused either way — but "this verb does not
+	// exist for this kind" and "you are not allowed to use this verb" are
+	// different facts, and only one of them is true here.
+	//
+	// It costs one store read on a path that is about to do a write, and it is
+	// the same read the scope rules below need anyway.
+	if reauthAP, rerr := s.cfg.Approvals.Get(r.Context(), id); rerr == nil && reauthAP.Kind == types.ApprovalCredentialReauth {
+		writeError(w, http.StatusConflict, credentialReauthNotDecidableBody)
+		return
+	}
+
 	ap, run, loaded, ok := s.authorizeMemberDecision(w, r, id)
 	if !ok {
 		return
@@ -291,7 +305,12 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// was accepted and persisted before this, contradicting rule 4's own docs
 	// and the CLI's --scope help. Only the truly bodyless/default "" path
 	// skips the load.
-	needAP := scope != ""
+	// UNCONDITIONAL since 0.7.6, and the kind rule below is why: credential_reauth
+	// is not decidable by anyone, so the refusal cannot be gated on the caller
+	// having sent a scope. This costs the operator's bodyless Approve one store
+	// READ it did not used to make — the honest price of a rule that must hold on
+	// every path into Decide(), which is one-way.
+	needAP := true
 	if needAP && !haveAP {
 		var err error
 		if ap, err = s.cfg.Approvals.Get(r.Context(), id); err != nil {
@@ -302,6 +321,28 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		}
 		haveAP = true
 	}
+	// Rule 3b, the BELT to the brace above: the same refusal, after the loads,
+	// for the row this path may have re-read. Kept rather than deleted because
+	// it is the check every reader of this function looks for, and because the
+	// early read above is best-effort (a store blip there must not turn a
+	// not-decidable kind into a decidable one).
+	//
+	// A credential_reauth row is NOT A DECISION and is refused to
+	// every tier, security operator included (409, not 403: the request is real
+	// and readable, it is the VERB that does not apply).
+	//
+	// It exists because a Deny here would be worse than useless: the row is
+	// resolved by its owner signing in, findPendingDup matches PENDING only, and
+	// the sidecar's very next resolve would raise a FRESH PENDING row — so the
+	// deny would read as an act of governance while changing nothing except the
+	// trail. The console renders a door for this kind rather than an Approve/Deny
+	// pair, and this is the server-side half of that: the pair cannot be restored
+	// by a hand-rolled POST.
+	if ap.Kind == types.ApprovalCredentialReauth {
+		writeError(w, http.StatusConflict, credentialReauthNotDecidableBody)
+		return
+	}
+
 	// Rule 4 — a scope must MEAN something on the kind it is written to, and the
 	// two kinds differ in what "something" is.
 	//
@@ -321,7 +362,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// checking the kind would cost a load on the approval's grant_id for a rule
 	// the broker already enforces at the only place a lease can be spent. A `run`
 	// scope on another credential kind is recorded and simply leases nothing.
-	if needAP && ap.Kind != types.ApprovalEgressDomain {
+	if scope != "" && ap.Kind != types.ApprovalEgressDomain {
 		if !(ap.Kind == types.ApprovalCredential && scope == types.ScopeRun) {
 			writeError(w, http.StatusBadRequest,
 				"decision_scope is only valid on an egress_domain approval (or \"run\" on a credential approval, for a per-run lease)")

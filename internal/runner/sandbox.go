@@ -166,6 +166,12 @@ var proxySidecarEnvKnobNames = []string{
 	"WARDYN_LLM_SCAN",
 	"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS",
 	"WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS",
+	// The mid-run credential re-auth hold's budget. It MUST be here and not
+	// merely read by the sidecar: a managed docker or Kubernetes proxy inherits
+	// no arbitrary daemon environment, so a knob missing from this list is not
+	// "default", it is UNREACHABLE — the operator sets it, nothing refuses it,
+	// and the control silently never applies on that substrate.
+	"WARDYN_CREDENTIAL_REAUTH_TIMEOUT",
 }
 
 // ProxySidecarEnvKnobNames returns a COPY of the knob-name list: exported for the

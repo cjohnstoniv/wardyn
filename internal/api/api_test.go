@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -67,6 +68,13 @@ func (f *fakeApprovals) Request(_ context.Context, req types.ApprovalRequest) (t
 		req.ID = uuid.New()
 	}
 	req.State = types.ApprovalPending
+	// STAMPED, as approval.RequestApproval stamps it. Left unset, every
+	// generation check that compares a login run's created_at against this
+	// (the credential re-auth's I6) passed VACUOUSLY: any real timestamp is
+	// after the zero time, so a sign-in from before the request answered it.
+	if req.RequestedAt.IsZero() {
+		req.RequestedAt = time.Now().UTC()
+	}
 	f.requested = append(f.requested, req)
 	f.byID[req.ID] = req
 	return req, nil

@@ -190,6 +190,16 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// CAPTURED AWS SSO path (PHASE B): the third sentinel, and the only one that
+	// can answer 423. It re-derives the credential's scope from the live roster,
+	// requires equality with the grant's dispatch-time snapshot, and either
+	// injects the live session or raises a human-visible sign-in request. It is
+	// a separate file because it is a different KIND of resolve — see
+	// resolveAWSSSOInjection.
+	if s.resolveAWSSSOInjection(w, r, claims, minted, grantID) {
+		return
+	}
+
 	// Defense-in-depth at the SINK: never resolve a sink-reserved secret (signing/
 	// session key or a resident AWS Bedrock SigV4 credential) into an injectable header
 	// VALUE, regardless of how the grant was authored (stored policy, inline,

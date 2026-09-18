@@ -100,6 +100,13 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	if dl.Decision == egress.Deny && isPolicyDeny(dl.RuleSource) {
 		s.metrics.egressDenied()
 	}
+	// A hold that ran out is counted on its OWN series, at the one moment the
+	// control plane learns of it: the expiry happens in the sidecar, and the
+	// approval row deliberately stays PENDING (the sign-in is still wanted), so
+	// this decision row is the only signal that reaches here.
+	if dl.Decision == egress.Deny && dl.RuleSource == ruleSourceCredentialReauthTimeout {
+		s.metrics.credentialReauthRecorded(credentialReauthOutcomeTimeout)
+	}
 
 	// Optional outbound content-inspection summary rides the same decision. When
 	// present it becomes a SEPARATE, content-free llm.scan.* audit event so the
@@ -468,6 +475,15 @@ func (s *Server) handleInternalGetApproval(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusNotFound, "approval not found")
 		return
 	}
+	// RECONCILE-ON-READ for a mid-run credential re-auth: a PENDING row whose
+	// owner's stored credential was captured by a login run created after the
+	// raise IS resolved, it just has not been written down yet (the capture and
+	// the resolution are two writes, and a crash between them would otherwise
+	// strand a valid credential behind a PENDING row until the hold's budget
+	// ended, with no second human action able to repair it). Idempotent,
+	// derivable from capture provenance, and gated on exactly what the eager
+	// path checks. A no-op for every other kind and state.
+	ap = s.reconcileReauthOnRead(r.Context(), ap)
 	writeJSON(w, http.StatusOK, ap)
 }
 

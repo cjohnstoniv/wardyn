@@ -43,7 +43,10 @@ func TestSSOEgressHosts_OverrideUnsetIsByteIdentical(t *testing.T) {
 
 func TestSSOEgressHosts_OverrideReplacesBoth(t *testing.T) {
 	got := ssoEgressHosts("eu-west-2", theOverride)
-	want := []string{theOverrideHost}
+	// 0.7.6: the override's PORT rides beside the bare host, because
+	// injectableTransport asks Policy.AuthoredPortFor before it will carry a
+	// credential on a non-80 port — see ssoEgressHosts. Still ONE host.
+	want := []string{theOverrideHost, theOverrideHost + ":8090"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ssoEgressHosts with the override = %v, want exactly %v — ONE fake backs both services (their paths never collide), so both regional entries collapse to it", got, want)
 	}
@@ -76,9 +79,17 @@ func TestLoginEgress_FollowsTheOverride(t *testing.T) {
 	}
 
 	over := hl.loginEgress("eu-west-2", theOverride)
-	wantOver := []string{"*.awsapps.com", theOverrideHost}
+	// Still ONE host: all THREE regional entries (incl. device.sso) collapse to
+	// the one fake. 0.7.6 adds the override's authored PORT beside the bare
+	// entry (ssoEgressHosts) — additive, not a widening: a bare entry already
+	// matches any port (Policy.AllowedExactHost), and the port-qualified form is
+	// the operator's declared transport intent, which only the INJECTING
+	// dispatch lane reads (Proxy.injectableTransport). The login run carries no
+	// injection at all, so it is unaffected either way; deriving a second,
+	// port-less list for it would be a second definition of the same fake.
+	wantOver := []string{"*.awsapps.com", theOverrideHost, theOverrideHost + ":8090"}
 	if !reflect.DeepEqual(over, wantOver) {
-		t.Errorf("loginEgress with the override = %v, want %v — all THREE regional entries (incl. device.sso) collapse to the one fake", over, wantOver)
+		t.Errorf("loginEgress with the override = %v, want %v", over, wantOver)
 	}
 }
 
@@ -265,9 +276,9 @@ func TestSSOEndpointOverride_MountLaneMovesEnvAndEgressTogether(t *testing.T) {
 			wantEnv:   nil,
 		},
 		{
-			name:      "set: one fake host, and the SDK told to use it",
+			name:      "set: one fake host (bare + its authored port), and the SDK told to use it",
 			override:  theOverride,
-			wantHosts: []string{theOverrideHost},
+			wantHosts: []string{theOverrideHost, theOverrideHost + ":8090"},
 			wantEnv: map[string]string{
 				awsEndpointURLSSOEnv:     theOverride,
 				awsEndpointURLSSOOIDCEnv: theOverride,

@@ -96,6 +96,38 @@ type metrics struct {
 	// grep for).
 	ssoRefreshOutcomes map[string]int64
 
+	// credentialReauthOutcomes counts each mid-run credential re-auth WORKFLOW's
+	// outcome (Finding 4): requested when a lapsed credential opens a hold,
+	// resolved when a sign-in answers it, and expired/cancelled when the row was
+	// aged out or the run ended under it. timeout is the one the operator
+	// actually tunes on — it means the sandbox's SDK was told to fail because
+	// nobody signed in inside WARDYN_CREDENTIAL_REAUTH_TIMEOUT, and a series that
+	// is mostly timeouts is a deployment whose people are not seeing the request.
+	//
+	// BY OUTCOME, CLOSED set (credentialReauthOutcomeValues) for the reason
+	// driveRefusals gives: a label nobody enumerated is one series per string.
+	//
+	// EVERY label is counted AT ITS OWN TRANSITION, which is the whole
+	// correction: requested at the raise, resolved at the resolution, expired
+	// where the sweeper ages a row out, cancelled where a terminal run cancels
+	// one, timeout where the daemon ingests the sidecar's decision row. The
+	// first shape bumped expired/cancelled at a later RESOLVE that happened to
+	// meet a terminal row, which counts retries rather than outcomes (with the
+	// measured ~30 s cadence, dozens per row) and never fired at all once the
+	// sidecar had given up.
+	credentialReauthOutcomes map[string]int64
+	// credentialReauthWaitSum / Count are how long a re-auth request stayed
+	// open — raised to resolved. Sum and count, i.e. an average, and no
+	// histogram until someone needs a p99 (this type's ponytail note).
+	//
+	// It is the number an operator tunes the knob against: if the average wait
+	// approaches WARDYN_CREDENTIAL_REAUTH_TIMEOUT, people are only just making
+	// it, and the holds that DIDN'T make it are the timeouts beside them.
+	// Measured at the RESOLUTION, in the control plane, because that is the one
+	// party that sees both ends; the sidecar sees only its own budget.
+	credentialReauthWaitSum   float64
+	credentialReauthWaitCount int64
+
 	// startWaitSum / startWaitCount are how long a sandbox that was still being
 	// created spent on each SUBSTRATE reason — the series that turns finding 6's
 	// anecdote ("127s and 131s, on two occasions") into something an operator can
@@ -149,6 +181,58 @@ const (
 	ssoRefreshOutcomeTransportError = "transport_error"
 	ssoRefreshOutcomeUnavailable    = "unavailable"
 )
+
+// credentialReauthOutcomeValues is the closed label set
+// credentialReauthRecorded accepts.
+var credentialReauthOutcomeValues = []string{
+	credentialReauthOutcomeRequested, credentialReauthOutcomeResolved,
+	credentialReauthOutcomeExpired, credentialReauthOutcomeCancelled,
+	credentialReauthOutcomeTimeout,
+}
+
+const (
+	credentialReauthOutcomeRequested = "requested"
+	credentialReauthOutcomeResolved  = "resolved"
+	credentialReauthOutcomeExpired   = "expired"
+	credentialReauthOutcomeCancelled = "cancelled"
+	// timeout: the proxy's hold ran out and the sandbox's call was failed.
+	// Counted where the daemon INGESTS the sidecar's decision row for
+	// credential:reauth-timeout (handlePostDecision), which is the one place
+	// the control plane learns a hold expired — the expiry happens in the
+	// sidecar and the approval row deliberately stays PENDING.
+	credentialReauthOutcomeTimeout = "timeout"
+)
+
+// credentialReauthRecorded records one re-auth workflow transition. Silently
+// drops anything outside the closed set, exactly as ssoRefreshRecorded does.
+func (m *metrics) credentialReauthRecorded(outcome string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !slices.Contains(credentialReauthOutcomeValues, outcome) {
+		return
+	}
+	if m.credentialReauthOutcomes == nil {
+		m.credentialReauthOutcomes = map[string]int64{}
+	}
+	m.credentialReauthOutcomes[outcome]++
+}
+
+// credentialReauthResolved records one re-auth request answered, and how long
+// it was open. A negative or absurd duration (a clock step, a row with no
+// requested_at) is counted as an outcome but not as a wait.
+func (m *metrics) credentialReauthResolved(waited time.Duration) {
+	m.credentialReauthRecorded(credentialReauthOutcomeResolved)
+	if waited <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.credentialReauthWaitSum += waited.Seconds()
+	m.credentialReauthWaitCount++
+}
 
 // ssoRefreshRecorded records one control-plane AWS SSO renewal attempt's
 // outcome. Silently drops anything outside ssoRefreshOutcomeValues — a typo'd
@@ -228,9 +312,21 @@ func (m *metrics) egressDenied() {
 //     decision records the buffer had to drop. An audit-FIDELITY alert about a
 //     wedged control plane, not a denial of anything; the count rides in the
 //     rule_source, hence the prefix match.
+//   - credential:reauth-timeout — the proxy held a sandbox's AWS SSO credential
+//     exchange while its owner was asked to sign in again, and nobody signed in
+//     before the budget ended. Policy allowed that host and allowed that
+//     request; what ran out was a HUMAN's time. Counting it here would page
+//     security for a person who went to lunch, on the one series whose HELP
+//     promises "denial by policy". It keeps its egress.deny audit row and its
+//     own wardyn_credential_reauth_total{outcome="timeout"}, which is the
+//     series an operator actually wants for it.
 const (
 	ruleSourceDialFailed       = "builtin:dial-failed"
 	ruleSourceDroppedDecisions = "egress.decisions.dropped:"
+	// Mirrors internal/egress/proxy's ruleSourceCredentialReauthTimeout; the
+	// two packages do not import each other, and the decision arrives here as
+	// a string on the wire.
+	ruleSourceCredentialReauthTimeout = "credential:reauth-timeout"
 )
 
 // isPolicyDeny reports whether an egress.Deny with this rule_source is a DENIAL
@@ -244,7 +340,9 @@ const (
 // counter failing quiet — while this list fails toward counting: a source nobody
 // classified still moves the series, and only the two known non-denials do not.
 func isPolicyDeny(ruleSource string) bool {
-	return ruleSource != ruleSourceDialFailed && !strings.HasPrefix(ruleSource, ruleSourceDroppedDecisions)
+	return ruleSource != ruleSourceDialFailed &&
+		ruleSource != ruleSourceCredentialReauthTimeout &&
+		!strings.HasPrefix(ruleSource, ruleSourceDroppedDecisions)
 }
 
 func (m *metrics) credentialMinted() {
@@ -286,6 +384,15 @@ func (m *metrics) write(w io.Writer) {
 	for _, outcome := range ssoRefreshOutcomeValues {
 		fmt.Fprintf(w, "wardyn_sso_refresh_total{outcome=%q} %d\n", outcome, m.ssoRefreshOutcomes[outcome])
 	}
+	fmt.Fprint(w, "# HELP wardyn_credential_reauth_total Mid-run model-credential re-auth workflows, by outcome (a lapsed captured AWS SSO session held while its owner signs in again).\n"+
+		"# TYPE wardyn_credential_reauth_total counter\n")
+	for _, outcome := range credentialReauthOutcomeValues {
+		fmt.Fprintf(w, "wardyn_credential_reauth_total{outcome=%q} %d\n", outcome, m.credentialReauthOutcomes[outcome])
+	}
+	fmt.Fprintf(w, "# HELP wardyn_credential_reauth_wait_seconds Time a mid-run model-credential re-auth request stayed open, from the raise to the sign-in that answered it.\n"+
+		"# TYPE wardyn_credential_reauth_wait_seconds summary\n"+
+		"wardyn_credential_reauth_wait_seconds_sum %g\nwardyn_credential_reauth_wait_seconds_count %d\n",
+		m.credentialReauthWaitSum, m.credentialReauthWaitCount)
 	// HELP text: DRAFT (M2 canon pending) — R4-F065. M2 recommends the HELP-only
 	// remediation (this wording change) over the filed alternative that also
 	// splits the series into {reason="policy"|"dial_failed"|"decisions_dropped"};
@@ -383,5 +490,16 @@ func (s *Server) writeSinkDrops(w io.Writer) {
 		"# TYPE wardyn_audit_sink_drops_total counter\n")
 	for _, name := range names {
 		fmt.Fprintf(w, "wardyn_audit_sink_drops_total{sink=%q} %d\n", name, drops[name])
+	}
+}
+
+// RecordCredentialReauthExpired counts credential_reauth rows the approval
+// sweeper aged out. Exported for cmd/wardynd's sweeper goroutine, which is the
+// ONLY place this transition happens: by the time a row expires the sidecar
+// that held for it gave up hours ago, so no resolve will ever meet it and
+// counting at a resolve would count nothing at all (security NIT-3).
+func (s *Server) RecordCredentialReauthExpired(n int) {
+	for i := 0; i < n; i++ {
+		s.metrics.credentialReauthRecorded(credentialReauthOutcomeExpired)
 	}
 }

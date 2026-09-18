@@ -390,6 +390,19 @@ type Config struct {
 	// reason as BedrockBaseURL (PF-43): a runtime-writable spelling would let an
 	// admin re-point a credential exchange with no restart and no boot log.
 	AWSSSOEndpointOverride string
+
+	// AWSSSOProxyInject is the PHASE B kill switch (WARDYN_AWS_SSO_PROXY_INJECT,
+	// resolved by ResolveAWSSSOProxyInject at boot): when true a captured-AWS-SSO
+	// Bedrock dispatch stages an inert placeholder in the sandbox's token cache
+	// and authors a proxy-side injection of the real token onto that run's own
+	// portal.sso host, so the session is never resident; when false the 0.7.5
+	// bytes are restored for NEW dispatches (a run already dispatched keeps its
+	// authored lane until it ends).
+	//
+	// It is the rollback for an SDK or corporate-MITM surprise without a
+	// downgrade. See runs_dispatch_sso_inject.go for the default and docs/ENV.md
+	// for the operator-facing contract.
+	AWSSSOProxyInject bool
 	// BedrockAWSConfigDir, when set, bind-mounts a host AWS config directory
 	// (a `~/.aws`) READ-ONLY into the sandbox at /home/agent/.aws, so the AWS
 	// SDK inside the run resolves credentials itself — including short-lived AWS

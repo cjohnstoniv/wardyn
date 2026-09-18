@@ -624,6 +624,12 @@ func narrowCeilingBedrockLane(c dispatchCeiling, llm *llmTransport, mitmHosts *[
 	llm.bedrock = bedrockAuth{}
 	llm.bedrockReady = false
 	llm.injectBedrockBearer = false
+	// The captured-SSO lane is narrowed with its sibling, and it MUST be: its
+	// injection grant is authored AFTER this phase, so leaving the flag set
+	// would author a grant and a portal.sso MITM entry for a lane whose egress
+	// this ceiling just denied — a credential wired to a host the run cannot
+	// reach, and a MITM entry for it.
+	llm.injectBedrockSSO = false
 	llm.secretEnvKeys = nil
 	if mitmHosts != nil {
 		*mitmHosts = nil
