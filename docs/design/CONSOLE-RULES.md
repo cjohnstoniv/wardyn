@@ -104,7 +104,7 @@ cards, run cards, icon wells. Exactly three elevation levels:
 `--shadow-floating` is ONE shared value in `theme.css` (`@theme inline`), deliberately not
 per-theme — a floating surface reads the same way in light and dark. It replaced the two
 spellings that shipped one idea: `shadow-md` (`dropdown-menu.tsx:45`, `select.tsx:68`,
-`popover.tsx:37`) and `shadow-lg` (`dialog.tsx:66`, `alert-dialog.tsx:61`,
+`popover.tsx:37`) and `shadow-lg` (`dialog.tsx:68`, `alert-dialog.tsx:63`,
 `sheet.tsx:61`, L233). A floating surface is one thing; it gets one shadow. Anything
 wanting a fourth level wants the focus ring.
 
