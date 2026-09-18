@@ -255,9 +255,9 @@ Run this on any screen or mock before it ships:
 - [ ] **Density** — one rung per role, no fifth size sneaking in
 - [ ] **Cards** distinct from parent, never nested
 - [ ] **Row-by-row over side-by-side** unless comparison is the actual point
-- [ ] **Reduced motion honored** — `prefers-reduced-motion` is handled nowhere in
-      `ui/src`, so the `animate-ping` pulse and `animate-pulse` skeletons run
-      regardless. Gate them before adding motion
+- [ ] **Reduced motion honored** — preserve `theme.css`'s global
+      `prefers-reduced-motion` guard for CSS animations, transitions, and smooth
+      scrolling; check new motion with the preference enabled
 
 ## 12. Mock-first
 
