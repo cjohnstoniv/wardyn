@@ -3881,6 +3881,104 @@ model-access banner every screen carries; under a `shared` row it stays Settings
 which is the admin's own page. The CLI prints the same sentence, and Getting started is the
 destination that is true for its reader too.
 
+### A run is holding for a sign-in
+
+A run on the captured-AWS-SSO Bedrock lane can have its credential lapse **while it is working**.
+Before 0.7.6 that was terminal: the agent's next model call failed and a mid-task context was lost.
+Now the proxy **parks** the sandbox's next credential exchange while the credential's owner signs in
+again.
+
+**What the operator sees.**
+
+- The run stays RUNNING. Its header chip reads *Waiting for your AWS sign-in* (plus a count when
+  something else is pending too), and the cockpit's approvals strip carries one row, *AWS sign-in
+  needed*, whose single button opens the sign-in dialog. There is no Approve and no Deny: the request
+  is answered by signing in, and the API refuses a decision on it with `409` — to the security tier
+  and to the run's own owner or an admin. A caller who does not own the run gets the same
+  `404 approval not found` every other kind gives them, byte for byte, so the refusal cannot be
+  used to ask whether a UUID is somebody else's sign-in request.
+- The audit trail carries `credential.reauth.requested` at the raise — with `owner`,
+  `credential_source` and a `reason` from a closed set (`spent` the refresh token is gone at AWS,
+  `unavailable` renewal failed transiently with nothing left to serve, `not_found` there is no stored
+  session for that namespace) — and `credential.reauth.resolved` when a sign-in answers it, naming
+  `resolved_by` and the `capture_run_id` it landed from.
+- `/metrics` carries `wardyn_credential_reauth_total{outcome=requested|resolved|expired|cancelled|timeout}`
+  and `wardyn_credential_reauth_wait_seconds` (sum/count — the average time a request stayed open).
+  **Each label is counted at its own transition**: `requested` at the raise, `resolved` at the sign-in
+  that answered it, `expired` where the 24 h sweeper ages a row out, `cancelled` where a terminal run
+  cancels one, `timeout` where the daemon ingests the sidecar's `credential:reauth-timeout` decision.
+  That decision row is written for a spent BUDGET and nothing else: a hold ended by a proxy
+  shutdown, by a killed run (which leaves its own `approval.cancelled` row) or by a request
+  answered with anything but an approval refuses the sandbox with the same modelled 401 but is
+  neither counted nor logged as a timeout, so `timeout` always means "the owner had the whole
+  window".
+- **`timeout` is the label to alert on**, and the one to tune `WARDYN_CREDENTIAL_REAUTH_TIMEOUT`
+  against: it means a sandbox's model call was FAILED because nobody signed in inside the budget. A
+  rising `timeout` beside a `wait_seconds` average near the budget says people are only just making
+  it — lengthen the budget, or make the request more visible. A rising `timeout` with a LOW
+  `wait_seconds` says the opposite: the agent's SDK is giving up before the hold does, and the knob
+  should come DOWN below that SDK's own patience so the call fails fast instead of late.
+- A series that is mostly `expired` is a deployment whose people never see the request at all — check
+  that the console is reachable and that the roster names real principals. Mostly `cancelled` means
+  the runs are ending (killed, or finishing) before anyone answers.
+- **A hold expiry is deliberately NOT counted on `wardyn_egress_denies_total`.** Policy allowed the
+  host and allowed the request; what ran out was a person's time, and that series is the one whose
+  HELP promises "denial by policy" and which operators page on.
+
+**What the operator can change.** `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` (proxy sidecar, default `600s`,
+clamped `[10s, 1800s]`) is how long ONE hold waits. Lower it if your agent's SDK gives up before the
+hold does — on expiry the call fails with the AWS `UnauthorizedException` it would have got anyway.
+Both container runners forward it from wardynd's environment into every proxy sidecar, and the
+compose stack forwards it from the operator's shell into wardynd. A docker-gated measurement against
+the reference agent's own SDK (`wardyn/agent-claude-code`) found it still waiting on a parked
+credential exchange at eleven minutes — the test's own ceiling, not the SDK's, retrying roughly every
+30 s — so the 600 s default is the binding constraint, not that SDK; a less patient SDK is what the
+"lower it" advice above is for.
+
+**The PENDING row outlives the hold, deliberately.** When the budget ends, the model call fails and
+the row stays PENDING — the sign-in is still wanted, and the next run needs it too. So a PENDING
+`credential_reauth` row is evidence that a sign-in was **asked for**; it is not evidence that a
+request is still parked. The 24-hour approval sweeper (`WARDYN_APPROVAL_EXPIRY_AFTER`) or the run's
+own terminal cascade closes it. Read the pair of audit rows, or the `credential:reauth-timeout`
+decision row, to tell the three apart.
+
+**Bounds.** One hold per REQUEST, however many of the sandbox's concurrent calls discover the lapse —
+the hold belongs to the request rather than to whichever call opened it, so a client that gives up
+does not end it and a client that arrives later joins it instead of starting a second one;
+at most eight such workflows per run, after which the run is refused rather than asked again. A hold
+ends within one poll of a 401/403/410 on the approval read (which is what a killed run answers before
+its CANCELLED row is readable), after three consecutive 404s, and at its budget — never later.
+
+### Turning the lane off
+
+`WARDYN_AWS_SSO_PROXY_INJECT=off` restores the pre-0.7.6 behaviour: the SSO access token is written
+into the sandbox's token cache, `portal.sso` is not TLS-MITM'd, no injection grant is authored, and a
+lapsed session fails the run's model call as it used to.
+
+It applies to **new dispatches only**. The placeholder cache, the injection grant and the MITM entry
+are all authored at dispatch, so a run that is already running keeps the lane it was authored with
+until it ends — including a run that is currently HELD, which keeps holding to its budget and can
+still be resolved by a sign-in. After flipping the switch, relaunch the runs that matter or wait them
+out; do not expect a running sandbox to change lane under you. The default is `on` — set the
+environment variable to `off` to roll back; a run already dispatched under `on` is unaffected by a
+later flip either direction.
+
+**A downgrade to 0.7.5 with `credential_reauth` rows present is UNSUPPORTED.** Migration `0064` is
+additive (it widens a CHECK), so the upgrade needs nothing; the old CHECK would refuse the rows on
+the way back. The upgrade runbook's `pg_dump` is the rollback.
+
+### Version combinations
+
+`claimSingleInstance` excludes a second daemon. It does not exclude an old sidecar image, an old
+browser bundle or an old CLI, so:
+
+| combination | behaviour |
+|---|---|
+| 0.7.5 proxy sidecar, 0.7.6 daemon | No hold. The 423 is an unrecognised status, the re-resolve fails closed, and the run's model call fails as it did in 0.7.5. The approval row is still raised and still visible. |
+| 0.7.6 proxy sidecar, 0.7.5 daemon | No 423 is ever answered, so the hold never opens. Byte-identical to 0.7.5. |
+| 0.7.5 console, 0.7.6 daemon | The row renders through `WIRE_TO_COPY`'s fallback (the raw kind string in the chip) and the screen does not crash; the Approve/Deny pair is offered and the server answers 409. Tell people on an old bundle to reload. |
+| 0.7.5 CLI reading a `credential_reauth` row | The kind is a plain string on the wire; `wardyn approvals list` prints it verbatim. |
+
 ### Internal model gateway
 
 Point every run's model calls at an internal endpoint instead of
