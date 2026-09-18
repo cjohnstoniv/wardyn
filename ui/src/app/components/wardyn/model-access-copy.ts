@@ -70,7 +70,7 @@ export const MODEL_ACCESS_BANNER = {
   // The rail's precedent: RAIL_MODEL_ACCESS.SIGN_IN_ARIA. Elsewhere the strip
   // is the only "Sign in to AWS" on the page and keeps the plain label, which
   // is also what the live SSO walk locates it by.
-  SIGN_IN_ARIA_BANNER: "Sign in to AWS — from the banner",
+
 } as const;
 
 // DRAFT (M2 canon pending) — the rail's per-PERSON model-access lines. Distinct
