@@ -18,6 +18,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
   (`0063_agent_runs_status_detail` adds the `agent_runs.status_detail` column the
   substrate's reason is written to; it is blanked at read for any run that is not
   STARTING, except a run that FAILED on a terminal reason.)
+- **A captured AWS SSO session that lapses mid-run now HOLDS the agent's next
+  model call while its owner signs in again, instead of failing the run.** The
+  SSO access token is no longer written into the sandbox on that lane (Phase B):
+  the sandbox's token cache carries an inert placeholder and the proxy injects
+  the real token as `x-amz-sso_bearer_token` on the run's own
+  `portal.sso.<region>` host; the short-lived role credentials the SDK mints from
+  it still are resident. A lapsed session raises a visible `credential_reauth`
+  approval, the proxy parks the call for at most
+  `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` (default 600s, clamped `[10s, 1800s]`), and
+  the sign-in capture resolves it; on expiry the call fails exactly as it did
+  before this existed. The whole lane is behind `WARDYN_AWS_SSO_PROXY_INJECT`
+  (`on` | `off`) — `off` restores the 0.7.5 behaviour for new dispatches.
+  (Migration `0064_approval_credential_reauth` adds the approval kind; a
+  downgrade to 0.7.5 with such rows present is unsupported.)
 
 ## [0.7.5] — 2026-09-17
 
