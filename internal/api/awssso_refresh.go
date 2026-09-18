@@ -490,10 +490,14 @@ func (s *Server) createAWSSSOTokenWithRetry(ctx context.Context, blob awsSSOBlob
 // Hand-rolled over net/http on purpose: the call is `authtype:none` (unsigned,
 // no SigV4), the request and response are four JSON fields each, and the module
 // that would sign it is not a dependency of this repo. http.DefaultTransport is
-// the transport so the call honours the PROCESS proxy environment exactly as the
-// GitHub broker's client does — wardynd's own egress is a separate channel from
-// the sandbox proxy's, and a deployment behind a corporate proxy needs this hop
-// to follow it.
+// the transport, so the call follows WARDYN_DAEMON_PROXY_URL when set
+// (installDaemonProxy, cmd/wardynd/daemon_proxy.go, mutates that shared
+// transport at boot) — never the process HTTP_PROXY/HTTPS_PROXY/NO_PROXY
+// family, which stays unsupported for wardynd's own egress on purpose (see
+// docs/ENV.md). wardynd's own egress is a separate channel from the sandbox
+// proxy's; the same transport, and so the same knob, is what the other four
+// wardynd-side DefaultTransport consumers (OIDC discovery/JWKS, the audit
+// webhook sink, the GitHub App client, Entra sync) follow too.
 func (s *Server) createAWSSSOToken(ctx context.Context, blob awsSSOBlob) (awsSSOTokenResponse, error) {
 	var out awsSSOTokenResponse
 	// BEFORE the URL is composed, never after: a region that is not a region is
