@@ -135,8 +135,8 @@ result for them is evidence only for the tip somebody actually ran it on.
   **0.7.6.** The walk now runs THREE spec files in one invocation against one
   cluster, on images rebuilt from the commit under test, and is written to
   cover five of 0.7.6's eight findings end to end (1, 2, 3, 4, 6 — findings 5,
-  7 and 8 are proven elsewhere, see below); three of the five (1, 2, 6) have
-  passed on it, at tip `f78bd744`:
+  7 and 8 are proven elsewhere, see below); all five have passed on it — walk-10
+  on `3eaa42db` (23 cases green, one negative deferred):
 
   - **the model-access strip, first-run** (`sso-member.spec.ts`, case I) — a
     member who has never signed in sees the sentence and the sign-in on the
@@ -171,7 +171,7 @@ result for them is evidence only for the tip somebody actually ran it on.
   lane" description look true). Nothing in case K is simulated: the hold's own
   sentence reaches a client that speaks inside the terminated tunnel, which the
   walk's SDK does; only a client on the un-terminated plain lane would see the
-  origin's own 401 instead
+  origin's own 401 instead of the hold's sentence.
   than the hold's sentence. What the walk DOES prove live: the control plane,
   the approval, the console and the resume, on a real cluster. The
   docker-gated `test/awsssofake/reauth_hold_docker_test.go` does NOT prove the

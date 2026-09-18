@@ -15,7 +15,8 @@ kill switch, sequenced last — see Known gaps.
 
 Verified on the kind AWS SSO walk against images rebuilt from the commit under
 test, on two fresh installs (walk-9 on the spec set that ships here, then walk-10 on
-`3eaa42db`, the tree this release descends from with documentation-only changes after it; each walk's `MANIFEST.json` records the tip, zero dirty
+`3eaa42db`, the tree this release descends from — only documentation and the release commit's
+own version strings change after it; each walk's `MANIFEST.json` records the tip, zero dirty
 files, the rebuilt images with host and node digests agreeing, and the kill-switch
 posture, `on`). A never-signed-in member is told on the Runs board and on New Run
 (findings 2 and 1); a lapsed member signs in from the strip itself without leaving
@@ -26,8 +27,9 @@ the SAME run continues after the sign-in (finding 4); a dispatch refused over th
 model credential carries the sign-in on the run's own page (finding 3); an admin
 whose own session is live sees no strip; killing a held run cancels its sign-in
 request. One live case is deferred with its measurements — a hold nobody answers
-timing out — because the walk cannot hold the sandbox's SDK still long enough to
-observe the expiry (the proxy's own tests pin that path); see TEST-GAPS.
+timing out — because the two attempts on this release asserted the decision before the
+budget's next observer wrote it; the case is drivable with a post-expiry prompt and is deferred for
+walk time, not for a product limit (see TEST-GAPS). The proxy's own tests pin the timeout path.
 
 ### Added
 
@@ -260,12 +262,14 @@ tighten an existing input check and one turns a relayed oversized upload into a 
 - **Masking has no TTL.** Each resolve registers the session token in the run's own mask set (evicted
   for terminal runs past `RunSecretGrace`) and the renewal path keeps its global registration, which
   has no expiry. Unchanged from 0.7.5, restated because this lane adds a registration site.
-- **The kind SSO walk's case K exercises the real path end to end. The terminate → strip → inject → re-originate path
-  itself is pinned by `internal/egress/proxy`'s own tests
-  (`TestForwardInspectedLLM_ReOriginatesInTheSchemeTheEntryNames`), not by the docker-gated
-  SDK-tolerance test, whose fake also serves plain HTTP with no proxy in the loop at all.
-  The hold's own sentence reaches a client that speaks inside the terminated tunnel (the walk's
-  SDK does); only a client on the un-terminated plain lane would see the origin's own 401.
+- **The kind SSO walk's case K exercises the real path end to end — nothing in it is simulated.**
+  The terminate → strip → inject → re-originate path is pinned by `internal/egress/proxy`'s own
+  tests (`TestMITMConnect_PlaintextClientInsideTheTunnelIsServed` for the client leg,
+  `TestForwardInspectedLLM_ReOriginatesInTheSchemeTheEntryNames` for the origin leg), not by the
+  docker-gated SDK-tolerance test, whose fake also serves plain HTTP with no proxy in the loop at
+  all. The hold's own sentence reaches a client that speaks plain HTTP inside the terminated tunnel
+  (the walk's SDK does); only a client on the un-terminated plain lane would see the origin's own
+  401. Listed here because an earlier draft carried a SIMULATED label; it is retired.
 - **The support bundle's Compose entry is redacted for reading, not for re-use.** It is not a valid
   `docker compose -f` input when marker-named structural keys exist (e.g. a `secrets:` section or a
   `*_token`-named volume) — those keys are redacted whole rather than per-value, so the redacted
