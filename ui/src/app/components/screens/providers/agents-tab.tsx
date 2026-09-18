@@ -39,6 +39,7 @@ import {
   PROVIDERS,
   PROVIDERS_DRAFT,
 } from "../../../lib/workspace-providers-copy";
+import { modelAccessActionLine } from "../../../lib/model-access";
 import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Field, Switch } from "../../wardyn/form-primitives";
@@ -175,8 +176,12 @@ function ModelAccessNote({ access }: { access: SetupModelAccess }) {
   return (
     <div>
       {label && <Chip tone={MODEL_ACCESS_TONE[access.state] ?? "warning"}>{label}</Chip>}
-      {/* The server's own words, verbatim — never reworded client-side. */}
-      {access.action && <p className="mt-1 text-meta text-warning">{access.action}</p>}
+      {/* The server's own words, verbatim — never reworded client-side. The one
+          exception is `expiring`'s instant, re-composed through the SAME frozen
+          template on the reader's own clock (modelAccessActionLine): the server
+          formats RFC3339 UTC, and this row is read by people in other
+          timezones. */}
+      {access.action && <p className="mt-1 text-meta text-warning">{modelAccessActionLine(access)}</p>}
     </div>
   );
 }

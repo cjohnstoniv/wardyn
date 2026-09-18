@@ -188,3 +188,72 @@ func TestMemberModelAccess_PerUserKeepsItsOwnersDeadline(t *testing.T) {
 		t.Errorf("per_user first run = %+v, want not_configured + %q", got, modelAccessSignInAction)
 	}
 }
+
+// TestModelAccessDeadline_OnTheWireForItsOWNER_NeverForASharedMember is the
+// 0.7.6 half of the same rule.
+//
+// Deadline went ON the wire (json:"deadline,omitempty") because `expiring` is
+// now rendered on EVERY screen for 24 hours, and the sentence the server
+// composes carries an RFC3339 UTC stamp — which a member in another timezone
+// misreads. The console re-composes that one line through the frozen template
+// with the reader's own clock, and it needs the instant to do it.
+//
+// That is SAFE for exactly one reason, and this test is that reason written
+// down: memberModelAccess builds a FRESH struct for a member under a `shared`
+// row, so the operator's deadline cannot ride along in a new field the way it
+// once rode along inside a composed English sentence.
+func TestModelAccessDeadline_OnTheWireForItsOWNER_NeverForASharedMember(t *testing.T) {
+	now := awsSSOTestFixedNow
+	blob := sharedExpiringBlob(now)
+	deadline := blob.RegistrationExpiresAt.UTC().Format(time.RFC3339)
+
+	// (a) THE OWNER — a member under a per_user row grading their own session.
+	row := types.AgentProvider{
+		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
+		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: "https://acme.awsapps.com/start",
+	}
+	own := setupModelAccess(agentRoster(row), blob, true,
+		awsSSOScope{perUser: true, owner: "member@corp.example"}, true, now)
+	if own.State != modelAccessExpiring || own.Deadline != deadline {
+		t.Fatalf("owner grading = %+v, want %q with deadline %q", own, modelAccessExpiring, deadline)
+	}
+	raw, err := json.Marshal(redactSetupStatusForMember(SetupStatus{ModelAccess: own}, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire struct {
+		ModelAccess map[string]any `json:"model_access"`
+	}
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := wire.ModelAccess["deadline"]; !ok || got != deadline {
+		t.Errorf("the credential's OWNER must be told WHEN on the wire: model_access = %v, want deadline %q",
+			wire.ModelAccess, deadline)
+	}
+
+	// (b) A MEMBER UNDER A SHARED ROW — the credential is the operator's, and
+	// nothing about its lifecycle is theirs to read. Not a field, not a
+	// timestamp anywhere in the bytes.
+	shared := setupModelAccess(sharedRoster(), blob, true, awsSSOScope{}, true, now)
+	if shared.Deadline == "" {
+		t.Fatal("the operator's own grading must still carry a deadline (fixture no longer exercises the leak)")
+	}
+	_, sharedRaw := memberStatusFor(t, shared, blob, now)
+	if strings.Contains(sharedRaw, "deadline") {
+		t.Errorf("a member under a shared row was sent a deadline field: %s", sharedRaw)
+	}
+	if got := anyRFC3339.FindString(sharedRaw); got != "" {
+		t.Errorf("a member under a shared row was sent the instant %q: %s", got, sharedRaw)
+	}
+
+	// (c) …and the dead shared state the member CAN be shown carries none
+	// either, in either direction: no field, no sentence.
+	dead := memberModelAccess(SetupModelAccess{
+		State: modelAccessSharedExpired, Deadline: deadline,
+		Action: modelAccessAction(modelAccessSharedExpired, deadline),
+	})
+	if dead.Deadline != "" {
+		t.Errorf("shared_expired kept a deadline: %+v", dead)
+	}
+}

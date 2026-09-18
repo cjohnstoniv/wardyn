@@ -278,11 +278,26 @@ type SetupModelAccess struct {
 	// Action is the one thing to do, already composed by the server ("" when
 	// there is nothing).
 	Action string `json:"action,omitempty"`
-	// Deadline is the instant Action names, carried IN-PROCESS only (json:"-")
-	// so the admin's checklist row prints the same one the member's action line
-	// does. Not a second wire copy of a fact Action already states in the
-	// member's own words — the console never re-composes that sentence.
-	Deadline string `json:"-"`
+	// Deadline is the instant Action names — the registration's lapse, or the
+	// access token's expiry for a blob that cannot be renewed. It serves the
+	// admin's checklist row, which prints the same one the member's action line
+	// does, and since 0.7.6 it is ON THE WIRE.
+	//
+	// It was in-process only, on the reasoning that Action already states this
+	// fact in the member's own words and the console never re-composes that
+	// sentence. Finding 2 replaced that reasoning with LOCALISATION: `expiring`
+	// now rides a strip on every screen for the whole 24-hour window, and the
+	// sentence carries an RFC3339 UTC stamp, which a reader in another timezone
+	// misreads every time they see it. The console re-composes that ONE line
+	// through the same frozen template (AGENTS.MODEL_ACCESS_EXPIRING_ACTION) on
+	// the reader's own clock, and relativeTime in the strip; it needs the
+	// instant to do either.
+	//
+	// SAFE FOR A MEMBER only because memberModelAccess builds a FRESH struct
+	// that drops it — the leak that function exists to close was this same
+	// instant republished one field over. Pinned:
+	// TestModelAccessDeadline_OnTheWireForItsOWNER_NeverForASharedMember.
+	Deadline string `json:"deadline,omitempty"`
 	// PinMismatch says this answer's `expired_signin` is a CONTRADICTED identity
 	// rather than a lapsed session. IN-PROCESS only (json:"-"): the console
 	// renders Action verbatim and needs no second copy of what it says — this

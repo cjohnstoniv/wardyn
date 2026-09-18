@@ -48,6 +48,7 @@ import { useOperator } from "../../wardyn/operator-context";
 import { useRovingRadio } from "../../wardyn/use-roving-radio";
 import { cn } from "../../ui/utils";
 import { HarnessLoginPane } from "./harness-login-pane";
+import { MODEL_ACCESS_BANNER } from "../../wardyn/model-access-copy";
 
 // Canon strings (local/ux-0.5-mock/CANON-STRINGS.md § Settings). Kept here
 // rather than in lib/integrations.ts's T, which belongs to the page being
@@ -712,7 +713,12 @@ export function ModelProviderCard({
             transform: "none",
           }}
         >
-          <DialogTitle>{loginOpen === "aws" ? "Sign in with AWS SSO" : "Sign in to Claude"}</DialogTitle>
+          {/* ONE spelling with the button that opens it and with the shell
+              strip's own door (W0-mock ruling 5): this dialog used to say "Sign
+              in with AWS SSO" beside a control named "Sign in to AWS". */}
+          <DialogTitle>
+            {loginOpen === "aws" ? MODEL_ACCESS_BANNER.DIALOG_TITLE : "Sign in to Claude"}
+          </DialogTitle>
           {loginOpen && (
             <div className="min-w-0">
               <HarnessLoginPane
