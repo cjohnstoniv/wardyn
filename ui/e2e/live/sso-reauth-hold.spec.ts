@@ -725,10 +725,12 @@ async function fastHold(
 // (internal/egress/proxy/mitm.go) fires on the request-handling path, for the
 // FIRST live observer of the expiry (the other arm is errReauthTimedOutAgain,
 // which deliberately does not record). A hold that expires with no call in
-// flight writes nothing at all — correct for the product (one row per hold, not
-// one per retry) and invisible to a walk that cannot hold the sandbox's SDK
-// still. The sibling negative — killing a held run — needs no such timing and
-// is green, so the hold's OTHER ending is covered live.
+// flight writes nothing until the NEXT caller reads the terminal result; that
+// caller is the observer (credhold.go's CAS on `reported`), so the row is
+// drivable with a prompt sent after the budget — both attempts here asserted
+// it too early (docs/TEST-GAPS.md). The sibling negative — killing a held run
+// — needs no such timing and is green, so the hold's OTHER ending is covered
+// live.
 //
 // Pinned hermetically instead: the proxy's own credhold tests own this path.
 // Recorded in local/v076/canon/e2e-sso-path-docs.md -> docs/TEST-GAPS.md.

@@ -269,7 +269,7 @@ tighten an existing input check and one turns a relayed oversized upload into a 
   docker-gated SDK-tolerance test, whose fake also serves plain HTTP with no proxy in the loop at
   all. The hold's own sentence reaches a client that speaks plain HTTP inside the terminated tunnel
   (the walk's SDK does); only a client on the un-terminated plain lane would see the origin's own
-  401. Listed here because an earlier draft carried a SIMULATED label; it is retired.
+  401. Listed here so the plaintext walk is not mistaken for a simulated one.
 - **The support bundle's Compose entry is redacted for reading, not for re-use.** It is not a valid
   `docker compose -f` input when marker-named structural keys exist (e.g. a `secrets:` section or a
   `*_token`-named volume) — those keys are redacted whole rather than per-value, so the redacted

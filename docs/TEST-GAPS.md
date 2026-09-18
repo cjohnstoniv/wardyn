@@ -172,7 +172,7 @@ result for them is evidence only for the tip somebody actually ran it on.
   sentence reaches a client that speaks inside the terminated tunnel, which the
   walk's SDK does; only a client on the un-terminated plain lane would see the
   origin's own 401 instead of the hold's sentence.
-  than the hold's sentence. What the walk DOES prove live: the control plane,
+  What the walk DOES prove live: the control plane,
   the approval, the console and the resume, on a real cluster. The
   docker-gated `test/awsssofake/reauth_hold_docker_test.go` does NOT prove the
   MITM path either — that fake serves plain HTTP too, and those tests point
@@ -190,9 +190,7 @@ result for them is evidence only for the tip somebody actually ran it on.
   `TestMITMConnect_PlaintextClientInsideTheTunnelIsServed` (the SDK's own
   shape) and `TestMITMConnect_TLSClientAgainstAPlaintextEntryStillWorks` (a
   TLS-speaking client against the same plaintext entry keeps working too);
-  the origin leg by `TestForwardInspectedLLM_ReOriginatesInTheSchemeTheEntryNames`. See
-  `evidence/credential-reauth-hold/SDK-PATH.md` for how the client leg was
-  measured. And the whole
+  the origin leg by `TestForwardInspectedLLM_ReOriginatesInTheSchemeTheEntryNames`. And the whole
   estate end to end by the kind walk itself.
 
   **The timeout negative (a hold nobody answers) is deferred, with its measurements**
