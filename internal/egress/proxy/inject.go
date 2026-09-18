@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -592,7 +591,7 @@ func (i *injector) apply(req *http.Request, host string, port int) {
 	// ordinary absolute-URI request would have been injected while the tunnelled
 	// one was not.
 	stripSandboxCredentials(req.Header, h.name)
-	if !i.allowsInjection(host, req.Method, req.URL.Path, req.URL.Query()) {
+	if !i.allowsInjection(host, req.Method, req.URL.Path, req.URL.RawQuery) {
 		return
 	}
 	req.Header.Set(h.name, h.value)
@@ -660,7 +659,7 @@ func resolveInjection(ctx context.Context, base, token string, grantID uuid.UUID
 // allowsInjection reports whether host's rule lets THIS request carry the
 // credential. True for an unknown host (no rule, nothing to narrow) and for
 // every unpinned rule, so every lane but the captured-AWS-SSO one is unchanged.
-func (i *injector) allowsInjection(host, method, path string, query url.Values) bool {
+func (i *injector) allowsInjection(host, method, path, rawQuery string) bool {
 	if i == nil {
 		return true
 	}
@@ -671,7 +670,7 @@ func (i *injector) allowsInjection(host, method, path string, query url.Values) 
 	if !ok {
 		return true
 	}
-	return e.rule.AllowsInjection(method, path, query)
+	return e.rule.AllowsInjection(method, path, rawQuery)
 }
 
 // applyCredential puts a rule's credential on an upstream request.

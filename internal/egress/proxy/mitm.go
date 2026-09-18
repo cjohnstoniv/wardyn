@@ -606,7 +606,7 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	if ok {
 		ownedHeader = hdr.name
 	}
-	if injectHdr != nil && !p.inject.allowsInjection(host, r.Method, r.URL.Path, r.URL.Query()) {
+	if injectHdr != nil && !p.inject.allowsInjection(host, r.Method, r.URL.Path, r.URL.RawQuery) {
 		injectHdr = nil
 	}
 	// Forwards over the pinned transport; DialContext dials the vetted target from

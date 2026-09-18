@@ -379,6 +379,26 @@ func TestMITMInjection_IsPinnedToTheDispatchedRoleCredentialsCall(t *testing.T) 
 		{"the right path, the wrong verb", true, http.MethodPost, "/federation/credentials",
 			"account_id=" + account + "&role_name=" + role, ""},
 		{"listing the session's accounts", true, http.MethodGet, "/assignment/accounts", "", ""},
+		// THE AMBIGUOUS QUERIES (security re-round SHOULD-1). Each carries the
+		// pinned pair AND a second account or role. Matching on url.Values.Get
+		// accepted all four, with the credential attached and RawQuery forwarded
+		// verbatim — so whether a second account was honoured was the ORIGIN's
+		// decision, not Wardyn's. The real portal's duplicate-parameter and ';'
+		// semantics are undocumented, which is the reason to refuse rather than
+		// to reason.
+		{"a duplicated account_id", true, http.MethodGet, "/federation/credentials",
+			"account_id=" + account + "&account_id=999988887777&role_name=" + role, ""},
+		{"a duplicated role_name", true, http.MethodGet, "/federation/credentials",
+			"account_id=" + account + "&role_name=" + role + "&role_name=AdministratorAccess", ""},
+		// Go >= 1.17 DROPS a pair containing ';', so the pin never saw this one.
+		{"a semicolon-separated second account", true, http.MethodGet, "/federation/credentials",
+			"account_id=" + account + "&role_name=" + role + "&x=1;account_id=999988887777", ""},
+		{"a percent-encoded second spelling of the key", true, http.MethodGet, "/federation/credentials",
+			"account_id=" + account + "&account%5Fid=999988887777&role_name=" + role, ""},
+		// …and an unrelated extra key is still fine: the pin narrows WHICH
+		// account and role the session may be spent on, not what else may be asked.
+		{"an unrelated extra parameter", true, http.MethodGet, "/federation/credentials",
+			"account_id=" + account + "&role_name=" + role + "&debug=1", "the-real-session-token"},
 		// The UNPINNED rule is every other lane, and it is unchanged: the
 		// credential rides whatever the sandbox sends, exactly as before.
 		{"unpinned — logout still carries it, as it always did", false, http.MethodPost, "/logout", "", "the-real-session-token"},
@@ -466,6 +486,22 @@ func TestInjectorApply_PlainLaneHonoursThePin(t *testing.T) {
 			"http://" + plainMITMHost + ":8090/federation/credentials?account_id=" + account + "&role_name=AdministratorAccess", ""},
 		{"the session's account list", http.MethodGet,
 			"http://" + plainMITMHost + ":8090/assignment/accounts", ""},
+		// The same four ambiguous queries, on the lane that needs no tunnel.
+		{"a duplicated account_id", http.MethodGet,
+			"http://" + plainMITMHost + ":8090/federation/credentials?account_id=" + account +
+				"&account_id=999988887777&role_name=" + role, ""},
+		{"a duplicated role_name", http.MethodGet,
+			"http://" + plainMITMHost + ":8090/federation/credentials?account_id=" + account +
+				"&role_name=" + role + "&role_name=AdministratorAccess", ""},
+		{"a semicolon-separated second account", http.MethodGet,
+			"http://" + plainMITMHost + ":8090/federation/credentials?account_id=" + account +
+				"&role_name=" + role + "&x=1;account_id=999988887777", ""},
+		{"a percent-encoded second spelling of the key", http.MethodGet,
+			"http://" + plainMITMHost + ":8090/federation/credentials?account_id=" + account +
+				"&account%5Fid=999988887777&role_name=" + role, ""},
+		{"an unrelated extra parameter", http.MethodGet,
+			"http://" + plainMITMHost + ":8090/federation/credentials?account_id=" + account +
+				"&role_name=" + role + "&debug=1", "the-real-session-token"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			inj := &injector{byHost: map[string]*injEntry{plainMITMHost: {

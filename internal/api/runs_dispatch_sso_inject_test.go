@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
-	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -243,10 +242,10 @@ func TestAuthorBedrockSSOInjection_ScopeCarriesThePathPin(t *testing.T) {
 		t.Error("the decoded rule is UNPINNED — the pin never reaches the sidecar")
 	}
 	if !rule.AllowsInjection(http.MethodGet, "/federation/credentials",
-		url.Values{"account_id": {want["account_id"]}, "role_name": {want["role_name"]}}) {
+		"account_id="+want["account_id"]+"&role_name="+want["role_name"]) {
 		t.Error("the dispatched GetRoleCredentials is refused by its own pin")
 	}
-	if rule.AllowsInjection(http.MethodPost, "/logout", nil) {
+	if rule.AllowsInjection(http.MethodPost, "/logout", "") {
 		t.Error("POST /logout is allowed the session — it ends the owner's sign-in for every run they have")
 	}
 }
