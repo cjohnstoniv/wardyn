@@ -202,8 +202,10 @@ test.describe("providers — the admin authoring walk (real writes, real reload)
     // no SSH key stored yet — git-tab.tsx's credLane default).
     await row.getByLabel("Access token").fill("ghp_e2e0000000000000000000000000000");
     await row.getByRole("button", { name: "Save", exact: true }).click();
-    await expect(row.getByText(/Stored as/)).toBeVisible();
-    await expect(row.getByText("git-pat-github-com")).toBeVisible();
+    // The stored name appears twice in the row (the "Stored as" line AND the lane radio's
+    // connectedDetail "host · stored as <name>"), so an unscoped getByText is a strict-mode
+    // violation whenever both have rendered — a load-dependent flake. Assert the line itself.
+    await expect(row.getByText(/Stored as/)).toContainText("git-pat-github-com");
 
     // A real secret write — GET /setup/status reflects it after a reload.
     await page.reload();
