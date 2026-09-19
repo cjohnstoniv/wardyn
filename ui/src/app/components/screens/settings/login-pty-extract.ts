@@ -35,6 +35,15 @@ const ANSI_ESCAPES = /(?:\][^]*(?:|\\)?|\[[0-9;:?]*[ -/]*[@-~]|[@-Z\\-_])/g
 // SINGLE line, so these two single-line extractors are correct and need no
 // reassembly.
 
+// Owner field report (0.7.8): an escape sequence written immediately after a
+// URL — no whitespace between them — used to be captured as part of it (a
+// tmux redraw's cursor-addressed move doesn't use \r\n between rows, so a CSI
+// can butt right up against `user_code=…`). Control bytes are not `\s`, so
+// excluding them here is what a delimiter can't do. ONE shared class so
+// extractAuthUrl and extractDeviceVerificationUrl can't drift onto different
+// exclusion sets; each keeps its own quantifier (+/*) below.
+const URL_BODY_CHARS = "[^\\s'\"<>\\x00-\\x1f\\x7f]";
+
 // extractSetupToken pulls a COMPLETE `claude setup-token` token out of a chunk of
 // terminal output. Shape: `sk-ant-oat<2 digits>-<long url-safe body>`. We only
 // return a match followed by another character (newline, ANSI reset, …) — proof
@@ -72,7 +81,10 @@ export function extractFailSentence(s: string, marker: string): string | null {
 // not a user-facing page). Same trailing-boundary rule as the token so a
 // still-streaming URL isn't opened truncated. Exported for tests.
 export function extractAuthUrl(s: string): string | null {
-  const re = /https:\/\/(?:claude\.ai|claude\.com|console\.anthropic\.com|platform\.claude\.com)\/[^\s'"<>]+/gi;
+  const re = new RegExp(
+    `https://(?:claude\\.ai|claude\\.com|console\\.anthropic\\.com|platform\\.claude\\.com)/${URL_BODY_CHARS}+`,
+    "gi",
+  );
   let m: RegExpExecArray | null;
   while ((m = re.exec(s)) !== null) {
     if (m.index + m[0].length < s.length) return m[0].replace(/[.,)]+$/, "");
@@ -87,16 +99,34 @@ export function extractAuthUrl(s: string): string | null {
 // and we prefer the complete one since it pre-fills the code. Same
 // trailing-boundary rule as the others so a still-streaming URL isn't opened
 // truncated. Exported for tests.
+//
+// Owner field report (0.7.8): excluding control bytes from the URL class means
+// a CSI/OSC written mid-URL now ENDS the match instead of getting swallowed
+// into it — but a tmux redraw can repaint the same line more than once in the
+// buffer, so a CSI landing inside `user_code=…` would end a match early and
+// still pass the `user_code=` check: visible junk traded for an invisible,
+// silently truncated code. Chosen fix: keep every candidate seen (not just
+// the first) and prefer the LONGEST `user_code=` one — a genuine redraw
+// eventually reprints the same tail whole, and the untruncated capture is the
+// longer one. (The alternative — requiring a fixed code shape — ties this to
+// AWS's current `XXXX-XXXX` format; the buffer already holds the evidence to
+// pick correctly without assuming that.)
 export function extractDeviceVerificationUrl(s: string): string | null {
-  const re = /https:\/\/(?:device\.sso\.[a-z0-9-]+\.amazonaws\.com|[a-z0-9-]+\.awsapps\.com)\/[^\s'"<>]*/gi;
-  let best: string | null = null;
+  const re = new RegExp(
+    `https://(?:device\\.sso\\.[a-z0-9-]+\\.amazonaws\\.com|[a-z0-9-]+\\.awsapps\\.com)/${URL_BODY_CHARS}*`,
+    "gi",
+  );
+  let bestComplete: string | null = null; // longest user_code= candidate seen
+  let bestBare: string | null = null; // fallback: first complete match without one
   let m: RegExpExecArray | null;
   while ((m = re.exec(s)) !== null) {
     if (m.index + m[0].length >= s.length) continue; // still streaming
     const url = m[0].replace(/[.,)]+$/, "");
-    // Prefer the pre-filled variant so the operator doesn't retype the code.
-    if (url.includes("user_code=")) return url;
-    best = url;
+    if (url.includes("user_code=")) {
+      if (!bestComplete || url.length > bestComplete.length) bestComplete = url;
+    } else if (!bestBare) {
+      bestBare = url;
+    }
   }
-  return best;
+  return bestComplete ?? bestBare;
 }

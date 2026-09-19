@@ -10,9 +10,6 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import {
-  extractSetupToken,
-  extractAuthUrl,
-  extractFailSentence,
   SANDBOX_REFUSAL_LEAD_IN,
   isLikelyStartUrl,
   serverConfirmsCapture,
@@ -30,124 +27,6 @@ import type { AgentRun, SetupStatus } from "../../../lib/types";
 
 // A realistic setup-token body: sk-ant-oat<2 digits>-<long url-safe blob>.
 const TOKEN = "sk-ant-oat01-" + "A".repeat(60) + "-_" + "b3".repeat(10);
-
-describe("extractSetupToken", () => {
-  it("captures a complete token followed by a newline", () => {
-    expect(extractSetupToken(`Your token:\n${TOKEN}\n`)).toBe(TOKEN);
-  });
-
-  it("captures a token even when ANSI/reset codes follow it", () => {
-    expect(extractSetupToken(`${TOKEN}\x1b[0m\r\n`)).toBe(TOKEN);
-  });
-
-  it("does NOT capture a token still streaming at the buffer's end", () => {
-    // No trailing char yet → treat as truncated, wait for more output.
-    expect(extractSetupToken(`prefix ${TOKEN}`)).toBeNull();
-  });
-
-  it("returns null when there is no token", () => {
-    expect(extractSetupToken("just some\r\nterminal output\n")).toBeNull();
-  });
-
-  it("ignores a too-short lookalike (not a real token)", () => {
-    expect(extractSetupToken("sk-ant-oat01-short\n")).toBeNull();
-  });
-
-  it("finds the token embedded in noisy multi-line output", () => {
-    const out = `\x1b[32m✓\x1b[0m Authenticated\r\nCopy this token:\r\n  ${TOKEN}  \r\nDone.`;
-    expect(extractSetupToken(out)).toBe(TOKEN);
-  });
-});
-
-describe("extractAuthUrl", () => {
-  it("captures a claude.ai OAuth URL followed by a newline", () => {
-    const url = "https://claude.ai/oauth/authorize?code=true&client_id=abc123&scope=user";
-    expect(extractAuthUrl(`Visit:\r\n${url}\r\n`)).toBe(url);
-  });
-
-  it("captures a console.anthropic.com auth URL", () => {
-    const url = "https://console.anthropic.com/oauth/authorize?x=1";
-    expect(extractAuthUrl(`${url}\n`)).toBe(url);
-  });
-
-  it("strips trailing punctuation", () => {
-    const url = "https://claude.ai/oauth/authorize?code=true";
-    expect(extractAuthUrl(`Open (${url}).\n`)).toBe(url);
-  });
-
-  it("does NOT capture a URL still streaming at the buffer's end", () => {
-    expect(extractAuthUrl("go to https://claude.ai/oauth/authorize?code=tru")).toBeNull();
-  });
-
-  it("ignores the token-exchange host (api.anthropic.com) and unrelated URLs", () => {
-    expect(extractAuthUrl("POST https://api.anthropic.com/v1/oauth/token \n")).toBeNull();
-    expect(extractAuthUrl("see https://example.com/docs \n")).toBeNull();
-  });
-
-  it("captures a full ~200-char OAuth URL on one line (login PTY is forced wide so it never wraps)", () => {
-    // The login flow forces LOGIN_PTY_COLS so claude prints this on a single line;
-    // response_type=code (dropped by the old narrow-PTY wrap bug) survives intact.
-    const url =
-      "https://claude.ai/oauth/authorize?response_type=code&client_id=abcdef0123456789&redirect_uri=https%3A%2F%2Fconsole.anthropic.com%2Foauth%2Fcode%2Fcallback&scope=org%3Acreate_api_key+user%3Aprofile&code_challenge=Zm9vYmFyYmF6cXV4&code_challenge_method=S256&state=deadbeefcafef00d";
-    expect(extractAuthUrl(`Visit:\r\n${url}\r\nPaste the code here:\r\n`)).toBe(url);
-    expect(new URL(extractAuthUrl(`\r\n${url}\r\n`)!).searchParams.get("response_type")).toBe("code");
-  });
-});
-
-// wardyn-aws-sso prints `<failMarker> <sentence>\n` on a refused capture — a
-// wrong-account pin, a portal error — and never prints the doneMarker in that
-// case, so without this the pane just spins on "waiting" forever (Appendix A
-// finding 1's fail-fast ask, pane half).
-describe("extractFailSentence", () => {
-  const MARKER = "wardyn: aws sso credential rejected:";
-
-  it("returns the sentence once the line has finished printing", () => {
-    expect(extractFailSentence(`${MARKER} the pinned account is not entitled to this session.\n`, MARKER)).toBe(
-      "the pinned account is not entitled to this session.",
-    );
-  });
-
-  it("does NOT return a still-streaming line (no trailing newline yet)", () => {
-    expect(extractFailSentence(`${MARKER} the pinned acco`, MARKER)).toBeNull();
-  });
-
-  it("returns null when the marker never printed", () => {
-    expect(extractFailSentence("some other terminal output\n", MARKER)).toBeNull();
-  });
-
-  it("strips a trailing carriage return (PTY line endings)", () => {
-    expect(extractFailSentence(`${MARKER} refused.\r\n`, MARKER)).toBe("refused.");
-  });
-
-  // U2-05 (blind round 2, lens-U2): the 300-rune cap, the ANSI strip and the
-  // marker defang all live in cmd/wardyn-aws-sso — i.e. in the binary a forged
-  // login image REPLACES, which is the threat model S-13 hardened the success
-  // path against. The client keeps a bound of its own so a sandbox cannot
-  // paint a screenful of its own prose into Wardyn's alert.
-  it("caps the sentence at 300 characters, whatever the sandbox printed", () => {
-    const long = "x".repeat(5000);
-    expect(extractFailSentence(`${MARKER} ${long}\n`, MARKER)).toHaveLength(300);
-  });
-
-  it("leaves a sentence within the bound untouched", () => {
-    expect(extractFailSentence(`${MARKER} refused.\n`, MARKER)).toBe("refused.");
-  });
-
-  // RV-03 (review follow-up): the ANSI strip lived only in cmd/wardyn-aws-sso,
-  // beside the cap U2-05 already re-applied here — same argument, same place.
-  // Colour/cursor CSI and an OSC title-set are the shapes a PTY actually emits.
-  it("strips ANSI CSI and OSC sequences the sandbox printed", () => {
-    expect(extractFailSentence(`${MARKER} \u001b[1;31mrefused\u001b[0m.\n`, MARKER)).toBe("refused.");
-    expect(extractFailSentence(`${MARKER} \u001b]0;pwned title\u0007refused.\n`, MARKER)).toBe("refused.");
-  });
-
-  // The strip runs BEFORE the cap, so escape bytes cannot spend the 300-char
-  // budget on the operator's behalf.
-  it("caps on visible characters, not on escape bytes", () => {
-    const noisy = "\u001b[31mx\u001b[0m".repeat(400);
-    expect(extractFailSentence(`${MARKER} ${noisy}\n`, MARKER)).toBe("x".repeat(300));
-  });
-});
 
 describe("isLikelyStartUrl", () => {
   it("accepts a real AWS access portal URL", () => {
@@ -355,6 +234,17 @@ describe("HarnessLoginPane — the consent gate", () => {
       await act(async () => lastAttachOutput?.("wardyn: aws sso credential rejected: portal timeout.\n"));
       await screen.findByRole("alert");
       expect(screen.queryByText(/session captured/i)).not.toBeInTheDocument();
+    });
+
+    // Owner field report, end to end: the opened tab's href is the artifact
+    // the owner actually saw junk in. Pin it at the seam they hit — a
+    // colorized device URL through the same onOutput callback the real PTY
+    // drives — not just at extractDeviceVerificationUrl's own unit tests.
+    it("the AWS verification link's href is clean even when the PTY colorizes the device URL", async () => {
+      await attachAwsRun();
+      const clean = "https://d-1234567890.awsapps.com/start/#/device?user_code=ABCD-EFGH";
+      await act(async () => lastAttachOutput?.(`\x1b[32m${clean}\x1b[0m\r\n`));
+      expect(await screen.findByTestId("auth-url-link")).toHaveAttribute("href", clean);
     });
   });
 
