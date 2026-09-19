@@ -320,9 +320,10 @@ const tlsRecordHandshake = 0x16
 // A peek rather than a flag, because the entry's scheme says what the ORIGIN
 // speaks and this asks what the CLIENT speaks, and they are not the same
 // question: the AWS SDK sends plaintext into the tunnel for an http:// endpoint
-// (measured, SDK-PATH.md) while curl -k and every ordinary TLS client still send
-// a ClientHello to the same host. Answering the second question by reading the
-// first one's answer would have broken them.
+// (measured against a real agent SDK — TestMITMConnect_PlaintextClientInsideTheTunnelIsServed)
+// while curl -k and every ordinary TLS client still send a ClientHello to the
+// same host. Answering the second question by reading the first one's answer
+// would have broken them.
 //
 // A read error answers TLS, so the unchanged path handles it and reports the
 // failure exactly as before.
@@ -359,7 +360,8 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 	// upstream leg does (upstreamSchemeFor). For every real portal and every corp
 	// artifact host that is TLS, byte for byte as before.
 	//
-	// It is not symmetry for its own sake — it is measured (SDK-PATH.md). With a
+	// It is not symmetry for its own sake — it is measured
+	// (TestMITMConnect_PlaintextClientInsideTheTunnelIsServed). With a
 	// proxy configured, aws-sdk-js reaches an `http://` endpoint by CONNECT and
 	// then sends PLAINTEXT inside the tunnel (first byte 0x47, `G`, not 0x16).
 	// Handshaking at that client fails and drops the connection, so the request
@@ -476,7 +478,9 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	target, _, terr := p.egressTarget(host, port)
 	if terr != nil {
 		p.emitLLMDecision(r, host, port, egress.Deny, mitmSource, nil)
-		p.httpError(w, "llm upstream vet failed", terr, http.StatusBadGateway)
+		// AWS lane: a modelled, valid-JSON error body (see llm_routes.go's own
+		// vet-failed site for why — this is its MITM-terminated sibling).
+		p.httpErrorAWSAware(w, host, "llm upstream vet failed", terr, false, http.StatusInternalServerError, "InternalServerException")
 		return
 	}
 
@@ -581,7 +585,10 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 			return
 		}
 		p.emitLLMDecision(r, host, port, egress.Deny, mitmSource, nil)
-		p.httpError(w, "llm credential refresh failed", ierr, http.StatusBadGateway)
+		// AWS lane: 401 UnauthorizedException — writeSSOUnauthorized's own
+		// precedent three lines above (credhold.go), generalised: a credential
+		// resolve failure is non-retryable the same way a spent hold is.
+		p.httpErrorAWSAware(w, host, "llm credential refresh failed", ierr, false, http.StatusUnauthorized, "UnauthorizedException")
 		return
 	}
 	var injectHdr *injectedHeader

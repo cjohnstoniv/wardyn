@@ -120,7 +120,13 @@ describe("ruleSourceLabel", () => {
     for (const s of ["policy:denied", "policy:default-deny", "policy:method", "policy:evaluator-error"]) {
       expect(ruleSourceLabel(s), s).toEqual({ label: "Refused by policy", tone: "danger" });
     }
-    expect(ruleSourceLabel("builtin:upstream-proxy")).toEqual({ label: "Refused by the built-in guard", tone: "danger" });
+    // builtin:upstream-proxy is an ALLOW (recorded once per run at proxy
+    // construction), not a refusal — the one builtin:* value the generic
+    // "Refused by the built-in guard" bucket must not catch.
+    expect(ruleSourceLabel("builtin:upstream-proxy")).toEqual({
+      label: "Corp upstream proxy in path",
+      tone: "info",
+    });
     expect(ruleSourceLabel("site-config:internal-host")).toEqual({
       label: "Declared internal host",
       tone: "info",
@@ -173,6 +179,28 @@ describe("RuleSourceChip", () => {
   it("renders bare (no link) for a non-approval source", () => {
     renderChip({ data: { rule_source: "policy:allowed" } });
     expect(screen.queryByRole("link")).toBeNull();
+  });
+
+  // 0.7.8: data.cause (already masked+redacted proxy-side) renders beside the
+  // chip on a dial-shaped refusal, so "Refused by the built-in guard" is not
+  // the whole story an operator gets — the field report this lane answers
+  // cost an hour to a plain-text body naming neither the stage nor the error.
+  it("renders the cause beside the chip when the row carries one", () => {
+    renderChip({
+      data: {
+        rule_source: "builtin:dial-failed",
+        cause: "tcp dial: dial tcp 10.0.0.1:443: connect: connection refused",
+      },
+    });
+    expect(screen.getByText("Refused by the built-in guard")).toBeInTheDocument();
+    expect(
+      screen.getByText("tcp dial: dial tcp 10.0.0.1:443: connect: connection refused"),
+    ).toBeInTheDocument();
+  });
+
+  it("renders no cause text when the row carries none — every ordinary decision", () => {
+    renderChip({ data: { rule_source: "policy:allowed" } });
+    expect(screen.queryByTitle(/dial tcp/)).toBeNull();
   });
 
   // Negative control: an event with no rule_source renders no chip at all.

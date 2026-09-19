@@ -192,9 +192,7 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 		// over-report an allow. Emit a dial-failed deny (carrying any scan
 		// summary) instead.
 		if log != nil {
-			dl := decisionLog(log.Request, egress.Deny, "builtin:dial-failed")
-			dl.Scan = log.Scan
-			p.sink.emit(dl)
+			p.sink.emit(p.denyDialFailed("builtin:dial-failed", log.Request, host, err, log.Scan))
 		}
 		p.httpError(w, "upstream error", err, http.StatusBadGateway)
 		return

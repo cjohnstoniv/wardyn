@@ -66,6 +66,65 @@ and does not yet follow semantic versioning (interfaces are not stable).
     on its inner canvas, so a click on the container's padding or the space below the last row landed
     nowhere. A click anywhere in the terminal, or a socket becoming writable, now focuses it
     (`ui/src/app/components/attach-terminal.tsx`).
+An operator's blocking field report: on a private-endpoint Kubernetes estate reaching AWS through a
+corporate proxy, the first model call starved and the agent showed
+`API Error: SyntaxError: JSON Parse error: Unexpected identifier "llm"` — the giveaway that the
+proxy's own plain-text 502 body ("llm upstream vet failed: …") was handed straight to a JSON parser.
+The audit trail showed a tight loop of `policy:allowed` → `builtin:dial-failed`, with no way to tell
+*why* the dial failed. It cost the operator an hour.
+
+### Added
+
+- **Every `builtin:dial-failed` refusal now names why, and which hop.** `egress.DecisionLog` carries
+  two new fields: `cause` — the masked, topology-redacted sentence naming the failed STAGE (a TCP
+  dial, the origin's TLS handshake, the operator's own upstream-proxy CONNECT exchange) plus the
+  underlying error, so "dial failed" on an `x509: certificate signed by unknown authority` is no
+  longer the specific lie that cost this operator an hour — and `via`, the hop CLASS attempted
+  (`direct` or `upstream-proxy`, never an address). Both ride through the SAME mask + topology-redact
+  pass `Proxy.httpError` already applies to the sandbox-facing body, because `auditScope` hands a
+  run's own creator this whole row, not just the operator. Rendered beside the decision chip in the
+  run's Audit tab.
+- **The configured LLM gateway's own guard refusal is no longer misfiled as a dial failure.**
+  `vetTrustedHost`'s refusal of an operator-misconfigured internal model gateway (resolves to
+  loopback/link-local/this proxy's own control-plane network, or does not resolve at all) used to
+  share `builtin:dial-failed` with genuine network-lost-it dials, which also excluded it from
+  `wardyn_egress_denies_total` alongside failures the network actually caused (an accepted residual,
+  F065-gatewayvet). It now carries its own `builtin:gateway-vet-failed` rule_source and counts as an
+  ordinary denial, like any other guard refusal.
+- **A refusal on the run's own AWS SSO portal or a Bedrock endpoint now answers in a shape an AWS SDK
+  can parse.** `Proxy.httpError` writes `text/plain`; on a TERMINATED (MITM) connection that body *is*
+  the API response, so an AWS SDK hands it to its JSON parser — the operator's own
+  `JSON Parse error: Unexpected identifier "llm"` is literally the first token of `"llm upstream
+  error: …"`. The four sites this can happen at (`llm upstream vet failed` in `llm_routes.go` and
+  `mitm.go`, `llm upstream error` in `llm_routes.go`, `llm credential refresh failed` in `mitm.go`) now
+  detect the AWS lane (`isAWSLane`: the run's own `portal.sso.<region>.amazonaws.com` MITM entry, or a
+  Bedrock endpoint — never a configured LLM gateway, and never Anthropic/OpenAI/a corp artifact
+  mirror, which all keep today's plain-text body byte-for-byte) and answer with the modelled shape
+  `writeSSOUnauthorized` already proved for a spent credential hold: `application/json`,
+  `x-amzn-errortype`, `{"__type":…,"message":…}` carrying the same masked, topology-redacted sentence
+  the decision log's `cause` field carries.
+
+### Changed
+
+- **Compatibility: an AWS-lane refusal's HTTP status changed from 502 to 500 or 401.** A dial-shaped
+  or gateway-vet-shaped refusal on the run's own SSO portal or a Bedrock endpoint now answers 500
+  `InternalServerException` (a modelled, RETRYABLE server error — the same bounded, backed-off retry
+  either SDK already gives any 5xx, so a genuinely transient dial failure still gets retried, just
+  against a body it can parse instead of one that crashes its deserializer) rather than the flat 502
+  every refusal used to get. A credential-refresh failure on the same lane answers 401
+  `UnauthorizedException` instead — modelled and NON-retryable, `writeSSOUnauthorized`'s own precedent
+  for a spent hold — because retrying changes nothing when the credential itself cannot be resolved.
+  Keeping 502 (a generic transport error both SDKs retry on an unparseable body) is what produced the
+  reported operator's retry storm, ~20 attempts in seconds. Every non-AWS-lane host (Anthropic, OpenAI,
+  a corp artifact mirror, a configured LLM gateway) keeps the unchanged 502 plain-text body.
+
+### Fixed
+
+- **`builtin:upstream-proxy` is an allow, not a refusal.** The console's rule_source table folded it
+  into the generic "Refused by the built-in guard" bucket, which reads as a denial that never
+  happened — it is recorded once per run, at proxy construction, to audit the deliberate SSRF-guard
+  relaxation for the operator's configured upstream hop. It now renders as "Corp upstream proxy in
+  path" (an allow).
 
 ## [0.7.7] — 2026-09-18
 

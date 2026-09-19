@@ -85,6 +85,15 @@ export function ruleSourceLabel(source: string): RuleSourceLabel | null {
   // says deny; this names WHY at the same weight as the builtin refusals.
   if (source.startsWith("policy:")) return { label: "Refused by policy", tone: "danger" };
   if (source.startsWith("approval:")) return { label: "Released by approval", tone: "neutral" };
+  // builtin:upstream-proxy is the ONE builtin:* value that is an ALLOW, not a
+  // refusal: recorded once per run, at proxy construction, to audit the
+  // deliberate SSRF-guard relaxation for the operator's own configured
+  // upstream hop — never a per-request decision. Named BEFORE the generic
+  // builtin:* bucket below (which is refusals only), so it cannot fall into
+  // it and read as a denial that never happened.
+  if (source === "builtin:upstream-proxy") {
+    return { label: "Corp upstream proxy in path", tone: "info" };
+  }
   // builtin:private-ip is the address-range floor, and it is the one guard an
   // operator reliably misreads: a private endpoint (a VPC endpoint, an internal
   // gateway) refused here looks exactly like a policy or an entitlement gap, so
@@ -101,8 +110,9 @@ export function ruleSourceLabel(source: string): RuleSourceLabel | null {
   if (source === "builtin:resolve-failed") {
     return { label: "Refused because the name did not resolve, not by policy or the address rule", tone: "danger" };
   }
-  // builtin:* is the proxy's own guard family (dial-failed, upstream-proxy, …)
-  // — all refusals.
+  // builtin:* is the proxy's own guard family (dial-failed, gateway-vet-failed,
+  // …) — every remaining value here is a refusal (builtin:upstream-proxy, the
+  // one ALLOW in the family, is handled above and never reaches this line).
   if (source.startsWith("builtin:")) return { label: "Refused by the built-in guard", tone: "danger" };
   // brokered:* is every proxy-side brokered lane (git, mint, approvals,
   // recording, scan-result, llm, sso-token, and git's :branch-ns-off suffix).

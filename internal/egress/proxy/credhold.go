@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -406,6 +407,28 @@ func (a httpApprovalReader) readApproval(ctx context.Context, id uuid.UUID) (typ
 	return ar.State, resp.StatusCode, nil
 }
 
+// writeAWSSDKError answers an AWS-lane refusal with the shape both AWS SDKs
+// parse as a modelled service error, instead of the plain text every other
+// refusal gets — the exact fix this file's writeSSOUnauthorized proved once
+// for a spent credential hold, generalised (0.7.8) to every dial-shaped and
+// credential-shaped refusal on the run's own SSO portal or a Bedrock
+// endpoint. status/errType are a DELIBERATE per-class choice, never a
+// default: keeping 502 for everything is what let the reported operator's
+// SDK retry the same unparseable body ~20 times in seconds. message is the
+// SAME masked, topology-redacted sentence the decision log's Cause field
+// carries (Proxy.dialFailureCause) — never a raw error, and never a
+// credential.
+func writeAWSSDKError(w http.ResponseWriter, status int, errType, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("x-amzn-errortype", errType)
+	w.WriteHeader(status)
+	body, _ := json.Marshal(map[string]string{
+		"__type":  errType,
+		"message": message,
+	})
+	_, _ = w.Write(body)
+}
+
 // writeSSOUnauthorized answers a spent hold with the shape the AWS SDKs
 // understand.
 //
@@ -416,14 +439,67 @@ func (a httpApprovalReader) readApproval(ctx context.Context, id uuid.UUID) (typ
 // lapse. The message is Wardyn's own sentence, so the person reading the
 // agent's output learns that a sign-in is what fixes this.
 func writeSSOUnauthorized(w http.ResponseWriter, sentence string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("x-amzn-errortype", "UnauthorizedException")
-	w.WriteHeader(http.StatusUnauthorized)
-	body, _ := json.Marshal(map[string]string{
-		"__type":  "UnauthorizedException",
-		"message": sentence,
-	})
-	_, _ = w.Write(body)
+	writeAWSSDKError(w, http.StatusUnauthorized, "UnauthorizedException", sentence)
+}
+
+// isAWSSSOPortalHost matches ssoPortalHost's shape
+// (internal/api/runs_bedrock.go): portal.sso.<region>.amazonaws.com, the
+// run's own AWS IAM Identity Center portal, authored onto this run's MITM
+// entry at dispatch (mitm.go's isMITMHost doc comment, case 3). Anchored the
+// same way isBedrockHost is — a literal 5-label AWS-owned DNS shape, never a
+// substring match — because this decides whether a refusal earns the
+// MODELLED AWS error body instead of the plain-text one every other lane
+// keeps.
+func isAWSSSOPortalHost(h string) bool {
+	labels := strings.Split(h, ".")
+	return len(labels) == 5 && labels[0] == "portal" && labels[1] == "sso" &&
+		awsRegionLabel.MatchString(labels[2]) && labels[3] == "amazonaws" && labels[4] == "com"
+}
+
+// isAWSLane reports whether host is a genuine AWS SDK endpoint — the run's
+// own SSO portal or a Bedrock endpoint — so a dial-shaped, vet-shaped or
+// credential-shaped refusal on it earns writeAWSSDKError's modelled body.
+//
+// TRUST BOUNDARY (read before widening): this is NOT the MITM-eligibility set
+// (isMITMHost) and NOT the LLM-classification set (isLLMHost) — it is
+// NARROWER than both on purpose. Anthropic, OpenAI and an operator's corp
+// artifact mirror are MITM-eligible and/or LLM-classified, but they are not
+// AWS SDK endpoints and keep today's plain-text body; a configured LLM
+// gateway is LLM-classified (isLLMHost) but is not in this set either — a
+// gateway is the OPERATOR'S OWN endpoint, not AWS's, and folding it in here
+// would hand it an AWS error shape it never asked for. Conflating any of
+// these sets with this one is a body-shape bug, never a TLS-interception
+// widening (isMITMHost alone still decides whether a tunnel is terminated at
+// all).
+func isAWSLane(host string) bool {
+	h := strings.TrimSuffix(strings.ToLower(host), ".")
+	return isAWSSSOPortalHost(h) || isBedrockHost(h)
+}
+
+// httpErrorAWSAware is httpError's AWS-LANE-AWARE sibling: on the run's own
+// SSO portal or a Bedrock endpoint (isAWSLane) it answers with the modelled
+// AWS SDK error body (writeAWSSDKError) instead of httpError's plain text —
+// an AWS SDK hands that text straight to a JSON parser, which is the crash
+// this lane exists to fix (see the CHANGELOG). Every other host keeps
+// today's plain-text body, unchanged.
+//
+// withStage selects Cause's own composition (causeSentence, stage-prefixed)
+// for a genuinely dial-shaped err — forwardInspectedLLM's RoundTrip failure,
+// the one site this shares with the decision log's Cause field verbatim —
+// versus the bare masked sentence (dialFailureCause) for a resolve/vet or
+// credential-refresh failure, where "tcp dial"/"tls handshake" do not apply.
+// status/errType are the caller's per-class decision (never a shared
+// default): see each call site for why.
+func (p *Proxy) httpErrorAWSAware(w http.ResponseWriter, host, plainMsg string, err error, withStage bool, status int, errType string) {
+	if isAWSLane(host) {
+		msg := p.dialFailureCause(err)
+		if withStage {
+			msg = p.causeSentence(err)
+		}
+		writeAWSSDKError(w, status, errType, msg)
+		return
+	}
+	p.httpError(w, plainMsg, err, http.StatusBadGateway)
 }
 
 // reauthPendingFrom decodes the control plane's 423 body into the id to poll.

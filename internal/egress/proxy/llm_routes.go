@@ -297,15 +297,20 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 	// the gateway HOSTNAME on evaluate/serveMITMRequest as well).
 	target, err := p.llmRouteTarget(host, port)
 	if err != nil {
-		// A refused/unreachable configured gateway is a per-request dial
-		// failure, not an SSRF-shaped denial — distinguish it in the decision
-		// log so it reads as "the gateway didn't answer", not "brokered:llm".
+		// A refused/unreachable configured gateway is vetTrustedHost's OWN
+		// GUARD refusal, not an SSRF-shaped denial and not a lost dial —
+		// distinguish it in the decision log so it reads as "the gateway is
+		// misconfigured", not "brokered:llm" or a network fault the operator
+		// cannot fix by editing this gateway's own config.
 		source := ruleSourceLLM
 		if errors.Is(err, errGatewayVet) {
-			source = "builtin:dial-failed"
+			source = ruleSourceGatewayVetFailed
 		}
 		p.emitLLMDecision(r, host, port, egress.Deny, source, nil)
-		p.httpError(w, "llm upstream vet failed", err, http.StatusBadGateway)
+		// AWS lane (the run's own SSO portal, or Bedrock): a modelled, valid-JSON
+		// error body — an AWS SDK hands plain text straight to a JSON parser and
+		// crashes on it. Every other host keeps today's plain-text 502.
+		p.httpErrorAWSAware(w, host, "llm upstream vet failed", err, false, http.StatusInternalServerError, "InternalServerException")
 		return
 	}
 
@@ -409,8 +414,12 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 	// summary) instead.
 	resp, err := p.transport.RoundTrip(outReq)
 	if err != nil {
-		p.emitLLMDecision(r, host, port, egress.Deny, "builtin:dial-failed", scanSummary)
-		p.httpError(w, "llm upstream error", err, http.StatusBadGateway)
+		if p.sink != nil {
+			p.sink.emit(p.denyDialFailed("builtin:dial-failed", p.reqOf(r, host, port), host, err, scanSummary))
+		}
+		// AWS lane: withStage=true — this is the one site that shares its Cause
+		// with the decision log above, verbatim (both a genuine dial failure).
+		p.httpErrorAWSAware(w, host, "llm upstream error", err, true, http.StatusInternalServerError, "InternalServerException")
 		return
 	}
 	p.emitLLMDecision(r, host, port, egress.Allow, ruleSource, scanSummary)
