@@ -177,18 +177,8 @@ type SetupDeployment struct {
 // SetupBedrock (the Bedrock readiness snapshot) and its predicates live in
 // runs_bedrock.go, next to the resolveBedrockAuth gate they must mirror.
 
-// SetupCheck is one environment/readiness row. Status is ok|warn|fail|info;
-// "info" is a permanent, non-fixable condition (e.g. no /dev/kvm on macOS) that
-// must render as informational, not as a clearable warning. Platform lets the UI
-// show environment-appropriate copy (linux|darwin|windows|wsl|any).
-type SetupCheck struct {
-	ID       string `json:"id"`
-	Label    string `json:"label"`
-	Status   string `json:"status"`
-	Platform string `json:"platform,omitempty"`
-	Detail   string `json:"detail,omitempty"`
-	Fix      string `json:"fix,omitempty"`
-}
+// SetupCheck is defined in setup_checks.go — setup.go is at its allowlisted
+// line-count cap (scripts/check-file-size.sh).
 
 // SetupAuth is the active public-API auth mode: local (loopback bypass) | sso
 // (OIDC) | token (admin bearer) | disabled (no auth configured, API closed).
