@@ -15,6 +15,10 @@ import { render, act, screen, waitFor, within, fireEvent } from "@testing-librar
 // --- Mock xterm so we don't need real DOM measurement in jsdom -------------
 const writeln = vi.fn();
 const resizeCalls: Array<[number, number]> = [];
+// D3: how many times the component asked xterm to take focus — the fix under
+// test never touches real DOM focus (jsdom's own click-to-focus isn't
+// wired up by this mock), so a call counter is the only observable.
+const focusCalls = { n: 0 };
 // The handler AttachTerminal installs via attachCustomKeyEventHandler (F144).
 let keyHandler: ((e: KeyboardEvent) => boolean) | null = null;
 vi.mock("@xterm/xterm", () => {
@@ -31,6 +35,9 @@ vi.mock("@xterm/xterm", () => {
     write() {}
     writeln(...a: unknown[]) {
       writeln(...a);
+    }
+    focus() {
+      focusCalls.n++;
     }
     onData() {
       return { dispose() {} };
@@ -727,5 +734,104 @@ describe("AttachTerminal — the keyboard trap has an advertised exit (F144)", (
     act(() => FakeWebSocket.instances[0].open());
     const near = { ...chord(), shiftKey: true } as unknown as KeyboardEvent;
     expect(keyHandler!(near)).toBe(true);
+  });
+});
+
+// ── D3: nothing ever focuses the terminal ───────────────────────────────────
+// attach-terminal.tsx had no `.focus()` call at all; focus depended entirely
+// on xterm's own click-to-focus on its inner `.xterm-screen`. A click on the
+// container's padding, or the dead space below the last row, landed nowhere —
+// "click a specific area" — and a second click that happened to land on the
+// screen looked like a "needs a double click" requirement.
+describe("AttachTerminal — D3 focus", () => {
+  beforeEach(() => {
+    focusCalls.n = 0;
+    stubTerminalEnv();
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("a mousedown anywhere in the terminal container focuses the terminal", () => {
+    const { container } = render(<AttachTerminal runId="run_1" />);
+    act(() => FakeWebSocket.instances[0].open());
+    focusCalls.n = 0; // isolate from any focus() the connect/open sequence issued
+
+    // The container is the element the aria-description lives on (same query
+    // the F144 test above uses) — it is NOT the inner `.xterm-screen` xterm
+    // itself would focus, which is exactly the gap this fix closes: a click
+    // that never reaches that inner element must still focus the terminal.
+    const el = container.querySelector(`[aria-description="${TERMINAL.ESCAPE_CHORD_HINT}"]`);
+    expect(el).not.toBeNull();
+    fireEvent.mouseDown(el!);
+
+    expect(focusCalls.n).toBeGreaterThan(0);
+  });
+
+  it("a writable socket opening focuses the terminal without requiring a click", () => {
+    render(<AttachTerminal runId="run_1" />);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+    focusCalls.n = 0;
+
+    act(() => ws.message(attachModeFrame(false, "me@example.com")));
+
+    expect(focusCalls.n).toBeGreaterThan(0);
+  });
+
+  it("a read-only attach-mode frame does NOT steal focus (nothing to type into yet)", () => {
+    render(<AttachTerminal runId="run_1" />);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+    focusCalls.n = 0;
+
+    act(() => ws.message(attachModeFrame(true, "alice@example.com")));
+
+    expect(focusCalls.n).toBe(0);
+  });
+});
+
+// ── D1+D2 aggravator: promoted-in-place geometry ────────────────────────────
+// The attach-mode frame can, in principle, arrive more than once on the SAME
+// socket (the server pushes an update when the holder slot changes); when one
+// flips read_only true→false, this client inherited the departed holder's
+// tmux geometry (the server skips handshake geometry for a non-writer and
+// drops an observer's resize frames), and refit() never ran on a mode change
+// to correct it.
+describe("AttachTerminal — refit(true) when read_only flips true→false", () => {
+  beforeEach(stubTerminalEnv);
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("forces the resize nudge on the flip, the same shape Redraw sends", () => {
+    render(<AttachTerminal runId="run_1" />);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+    act(() => ws.message(attachModeFrame(true, "alice@example.com")));
+    ws.sent.length = 0; // isolate from connect-time sends
+
+    act(() => ws.message(attachModeFrame(false, "me@example.com")));
+
+    const resizes = ws.sent
+      .filter((m) => typeof m === "string" && m.includes('"resize"'))
+      .map((m) => JSON.parse(m as string));
+    expect(resizes.length).toBeGreaterThanOrEqual(2);
+    const [nudge, real] = resizes.slice(-2);
+    expect(nudge.cols).toBe(real.cols - 1);
+    expect(nudge.rows).toBe(real.rows);
+  });
+
+  it("does NOT force a nudge on the FIRST attach-mode frame (never was read-only)", () => {
+    render(<AttachTerminal runId="run_1" />);
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.open());
+    ws.sent.length = 0; // isolate from the connect-time refit(true) in onopen
+
+    act(() => ws.message(attachModeFrame(false, "me@example.com")));
+
+    // onopen's own unconditional refit(true) already ran before this frame;
+    // the flip-specific nudge must not ALSO fire for a connection that was
+    // never read-only in the first place.
+    const resizes = ws.sent
+      .filter((m) => typeof m === "string" && m.includes('"resize"'))
+      .map((m) => JSON.parse(m as string));
+    expect(resizes.length).toBe(0);
   });
 });

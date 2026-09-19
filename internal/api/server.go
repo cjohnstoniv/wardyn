@@ -680,6 +680,11 @@ type Server struct {
 	// constant" (attachKeepaliveEvery). Per-server rather than a package var so
 	// two tests running side by side cannot race on it.
 	keepaliveEvery time.Duration
+	// pingEvery overrides attachPingInterval for THIS server only (D1's
+	// liveness probe on an otherwise-idle attach socket) — same reason and same
+	// per-server shape as keepaliveEvery above: a test drives a dead-peer holder
+	// on a millisecond clock instead of the real 30s budget.
+	pingEvery time.Duration
 	// refRuleset caches the ONE outbound GitHub call the setup checklist makes,
 	// so polling /setup/status (which the wizard does) cannot turn into a
 	// per-poll API call or a rate-limit. Zero value is ready to use.

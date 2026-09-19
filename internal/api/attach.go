@@ -52,6 +52,45 @@ func (s *Server) attachKeepaliveEvery() time.Duration {
 // client socket cannot wedge the read pump forever.
 const attachWriteTimeout = 30 * time.Second
 
+// attachPingInterval is D1's liveness probe cadence for an otherwise-idle
+// attach socket.
+//
+// THE GAP THIS CLOSES: attachWriteTimeout already reaps a stuck peer once
+// server->client output is FLOWING — a Write blocks under the timeout and the
+// pump ends. It never engages on a SILENT PTY (no output => no Write is ever
+// attempted), and the client->server half blocks on c.Read with no deadline of
+// its own. MEASURED (attach_holder_test.go,
+// TestAttachWS_DeadPeerHolder...): with a quiet shell and a peer that stops
+// reading (a laptop lid closed, a network partition — indistinguishable at
+// this layer from a client that is merely idle), NOTHING in the existing pump
+// frees the holder; it is bounded only by whatever the OS/proxy eventually
+// notices about the TCP connection, which can be effectively unbounded. A
+// dead holder on a quiet run therefore reads "held" forever to every other
+// attacher (browser, `wardyn attach`, the SSH gateway) until the daemon
+// restarts.
+//
+// c.Ping requires a Read loop already running to observe the pong
+// (coder/websocket's own contract) — attachPump's client->server goroutine
+// provides exactly that, so this adds no second reader.
+//
+// DEADLINE: worst case ~2x this interval before a truly dead peer is reaped
+// (one tick to notice the idle window, one full interval waiting for the
+// pong). 30s reuses attachWriteTimeout's own budget rather than inventing a
+// second "how unresponsive is too unresponsive" number: tighter risks
+// evicting a live writer on a slow/lossy link (a mobile hotspot, a laggy
+// VPN); looser buys nothing a human notices, since the symptom this exists to
+// bound is "stuck read-only forever", not "instantly".
+const attachPingInterval = attachWriteTimeout
+
+// attachPingEvery is attachPingInterval unless THIS server was built with an
+// override (Server.pingEvery — tests only, mirroring attachKeepaliveEvery).
+func (s *Server) attachPingEvery() time.Duration {
+	if s.pingEvery > 0 {
+		return s.pingEvery
+	}
+	return attachPingInterval
+}
+
 // attachReadLimit bounds ONE client->server message. It must be set explicitly:
 // coder/websocket's default is 32 KiB, and exceeding the limit does not drop the
 // frame — it CLOSES the socket with StatusMessageTooBig. A terminal paste is a
@@ -278,9 +317,11 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 	readOnly, releaseHolder := s.registerAttachHolder(id, holder)
-	// DEFERRED, not inline beside the session.detach audit below: a panicking
-	// pump would otherwise strand a phantom holder that every later attach reads
-	// as "held" forever, curable only by a restart.
+	// DEFERRED as the crash backstop, NOT the release point (see the explicit
+	// call right after attachPump returns, below): a panicking pump would
+	// otherwise strand a phantom holder that every later attach reads as
+	// "held" forever, curable only by a restart. release is idempotent and
+	// identity-checked (attach_holder.go), so running it twice is safe.
 	defer releaseHolder()
 	if !readOnly && opts.Cols > 0 {
 		// We are the registered writer — apply the client's requested geometry.
@@ -334,6 +375,29 @@ func (s *Server) handleAttachWS(w http.ResponseWriter, r *http.Request) {
 	// masked PTY output for the asciicast. holder is nil for a read-only observer.
 	closeReason := s.attachPump(pumpCtx, c, sess, castTee, holder)
 	cancel()
+
+	// D2: FREE THE SLOT HERE, before the recording persist + the session.detach
+	// audit below — not after them, which is where the deferred call above
+	// would otherwise leave it (function return, i.e. the very end). A focus-
+	// mode remount closes the old attach socket and opens the new one in the
+	// same effect flush (canvas.tsx), and the new handshake's
+	// registerAttachHolder call was landing inside that old-pump-to-function-
+	// return window and being admitted READ-ONLY against its own vanishing
+	// self — the reported "sometimes I can never click back in". Releasing the
+	// instant the pump ends (persistence and audit are disk/DB I/O with no
+	// bound on the holder) shrinks that window to effectively nothing.
+	//
+	// Ordering this DOES accept: the successor's session.attach can now be
+	// recorded before THIS session's session.detach lands (finishRecording's
+	// I/O and the audit write below still have to happen). That is the
+	// opposite of handleAttachTakeover's "audit first, displace second" rule —
+	// deliberately: a take-over is one human forcibly ending another's
+	// session, so losing that event is the unacceptable failure. A remount is
+	// the SAME principal reclaiming a socket that was always theirs; the audit
+	// trail gains an attach slightly ahead of its own detach, never a lost or
+	// misattributed event. See TestAttachWS_RemountReleasesHolderBeforeAuditTail
+	// for the ordering this pins.
+	releaseHolder()
 
 	// Persist the recording (best-effort) and emit session.recording when one was
 	// actually written. finishRecording is a no-op when recording is disabled.
@@ -412,7 +476,36 @@ func (s *Server) attachPump(ctx context.Context, c *websocket.Conn, sess runner.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	reasonCh := make(chan string, 2)
+	reasonCh := make(chan string, 3)
+
+	// D1 liveness probe (attachPingInterval): a silent PTY produces no
+	// server->client Write for attachWriteTimeout to bound, so without this a
+	// dead peer holds its slot until the daemon restarts. Runs for every
+	// attach (holder or read-only observer) — cheap, and an observer's dead
+	// socket is worth reaping too.
+	go func() {
+		every := s.attachPingEvery()
+		t := time.NewTicker(every)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				pctx, pcancel := context.WithTimeout(ctx, every)
+				err := c.Ping(pctx)
+				pcancel()
+				if err != nil {
+					select {
+					case reasonCh <- "ping timeout":
+					default:
+					}
+					cancel()
+					return
+				}
+			}
+		}
+	}()
 
 	// Session.Read -> client (binary PTY frames). The blocking sess.Read is run
 	// on its own goroutine; cancelling ctx (via the writer half ending) closes
