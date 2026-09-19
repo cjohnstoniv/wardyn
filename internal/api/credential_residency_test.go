@@ -296,7 +296,9 @@ func TestSetupStatusResidency_PerUserSSOReachesTheWireSignedInOrNot(t *testing.T
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("preflight = %d, want 422; body=%s", w.Code, w.Body.String())
 	}
-	if strings.Contains(w.Body.String(), "model_credential") {
+	// The KEY, not the bare word: since 0.7.7 the refusal names its class as
+	// `"reason":"model_credential"`, which is not a verdict.
+	if strings.Contains(w.Body.String(), `"model_credential":`) {
 		t.Errorf("the 422 carries a model_credential: %s", w.Body.String())
 	}
 }

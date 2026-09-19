@@ -3248,6 +3248,18 @@ declared `per_user` AND they hold the `agent` capability for that row's agent �
 an admin always reaches it, and under a `per_user` row captures their own
 session exactly as anyone else does.
 
+**Launch with a lapsed session.** `POST /runs` refuses a run whose per-person
+session is missing or spent BEFORE any run exists (`422`; since 0.7.7 the body
+also carries `"reason":"model_credential"`, the failure audit row's own class —
+no other error body changes). New Run answers that refusal with the sign-in
+dialog itself and launches the same run again once the capture lands, so a
+lapsed session is one dialog, not a trip to Getting Started; a member under a
+shared row reads the sentence and no dialog, because the repair is the admin's.
+Launch is never pre-checked on the console's cached status — the server is the
+gate. The setup funnel does not confiscate the console over that lapse: the
+`llm_provider` check is graded per person and is not one of the checks that
+redirect an admin into the funnel.
+
 **What the sign-in sandbox is, and what it is not.** It is the AWS CLI and
 nothing else: no LLM harness, no repo, no mounts. Its run is labelled `harness
 login` server-side, and the run page names it, so opening it from `/runs` is not

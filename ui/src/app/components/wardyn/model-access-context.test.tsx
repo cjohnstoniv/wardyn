@@ -105,6 +105,60 @@ describe("ModelAccessProvider grades the shell's status for the CONSUMER's viewe
   });
 });
 
+/** The rail's shape: opens the door with what to do on a COMPLETED sign-in. */
+function Relauncher({ onSignedIn, label = "relauncher" }: { onSignedIn: () => void; label?: string }) {
+  const door = useModelAccessDoor();
+  return (
+    <div>
+      <span data-testid={`${label}-open`}>{String(door.open)}</span>
+      <button type="button" onClick={() => door.openDoor(null, onSignedIn)}>{`${label} open`}</button>
+      <button type="button" onClick={door.signedIn}>{`${label} signed in`}</button>
+      <button type="button" onClick={door.closeDoor}>{`${label} cancel`}</button>
+    </div>
+  );
+}
+
+// openDoor(returnTo, onSignedIn): the New Run rail opens the door on the
+// server's model-credential refusal and must launch again when — and only
+// when — the sign-in COMPLETES. `open` falls the same way on Escape, so the
+// completion is reported through signedIn(), which the dialog's onDone calls.
+describe("openDoor(returnTo, onSignedIn) — a completed sign-in reaches the surface that opened the door", () => {
+  it("signedIn() closes the door and calls the callback exactly once", async () => {
+    const relaunch = vi.fn();
+    render(
+      <ModelAccessProvider status={statusWith({ state: "expired_signin" })} onRefresh={vi.fn()}>
+        <Relauncher onSignedIn={relaunch} />
+      </ModelAccessProvider>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "relauncher open" }));
+    expect(screen.getByTestId("relauncher-open")).toHaveTextContent("true");
+    await userEvent.click(screen.getByRole("button", { name: "relauncher signed in" }));
+    expect(screen.getByTestId("relauncher-open")).toHaveTextContent("false");
+    expect(relaunch).toHaveBeenCalledTimes(1);
+    // Spent: a second completion (another opener, later) never replays it.
+    await userEvent.click(screen.getByRole("button", { name: "relauncher signed in" }));
+    expect(relaunch).toHaveBeenCalledTimes(1);
+  });
+
+  it("a cancellation drops the callback — a sign-in completed later from another opener never launches the run the person walked away from", async () => {
+    const relaunch = vi.fn();
+    render(
+      <ModelAccessProvider status={statusWith({ state: "expired_signin" })} onRefresh={vi.fn()}>
+        <Relauncher onSignedIn={relaunch} />
+        <Probe label="strip" />
+      </ModelAccessProvider>,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "relauncher open" }));
+    await userEvent.click(screen.getByRole("button", { name: "relauncher cancel" }));
+    expect(screen.getByTestId("relauncher-open")).toHaveTextContent("false");
+    // The strip opens the same door with no callback; its completion relaunches nothing.
+    await userEvent.click(screen.getByRole("button", { name: "strip open" }));
+    await userEvent.click(screen.getByRole("button", { name: "relauncher signed in" }));
+    expect(screen.getByTestId("strip-open")).toHaveTextContent("false");
+    expect(relaunch).not.toHaveBeenCalled();
+  });
+});
+
 describe("ONE dialog instance — the open state is shared, never per caller", () => {
   it("a second caller's openDoor opens the same door, and either can close it", async () => {
     render(

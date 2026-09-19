@@ -236,6 +236,11 @@ func TestCreateRun_StoredBlobContradictingThePinIs422(t *testing.T) {
 			t.Errorf("422 body = %q, want it to name %q", rec.Body.String(), want)
 		}
 	}
+	// A new sign-in under the current pin is the repair, so this arm carries
+	// the class the console's launch door acts on too.
+	if !strings.Contains(rec.Body.String(), `"reason":"model_credential"`) {
+		t.Errorf("422 body = %q, want reason model_credential", rec.Body.String())
+	}
 }
 
 // TestSetupStatus_StoredBlobContradictingThePinGradesExpiredSignin is the

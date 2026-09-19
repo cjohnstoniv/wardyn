@@ -43,16 +43,32 @@ vi.mock("react-router-dom", async () => {
 });
 const preflightRunMock = vi.fn();
 const createRunMock = vi.fn();
-vi.mock("../../../lib/api/runs", () => ({
-  runs: {
-    createRun: (...a: unknown[]) => createRunMock(...a),
-    listRuns: () => Promise.resolve([]),
-    preflightRun: (...a: unknown[]) => preflightRunMock(...a),
-    // The PolicyPanel's SafetyMeter debounces a grade of the current spec; stub
-    // it so the panel's meter has a resolvable call instead of hitting the net.
-    gradePolicy: () => Promise.resolve({ risk_assessment: [], overall_risk: "low" }),
-  },
-}));
+vi.mock("../../../lib/api/runs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../lib/api/runs")>();
+  return {
+    isCredentialRefusal: actual.isCredentialRefusal,
+    runs: {
+      createRun: (...a: unknown[]) => createRunMock(...a),
+      listRuns: () => Promise.resolve([]),
+      preflightRun: (...a: unknown[]) => preflightRunMock(...a),
+      // The PolicyPanel's SafetyMeter debounces a grade of the current spec; stub
+      // it so the panel's meter has a resolvable call instead of hitting the net.
+      gradePolicy: () => Promise.resolve({ risk_assessment: [], overall_risk: "low" }),
+    },
+  };
+});
+// The REAL rail with its props recorded — this file pins only what the screen hands it.
+const railProps: Array<{ launch: { credentialRefused: boolean } }> = [];
+vi.mock("./new-run-rail", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./new-run-rail")>();
+  return {
+    ...actual,
+    RunRail: (props: Parameters<typeof actual.RunRail>[0]) => {
+      railProps.push(props);
+      return actual.RunRail(props);
+    },
+  };
+});
 const listWorkspacesMock = vi.fn();
 vi.mock("../../../lib/api/workspaces", () => ({
   workspaces: { listWorkspaces: (...a: unknown[]) => listWorkspacesMock(...a) },
@@ -77,6 +93,7 @@ import { GOVERNANCE as GOV, MEMBER } from "../../../lib/governance-copy";
 import { DRIVE_MEMBER as DM } from "../../../lib/user-drives-copy";
 import { RUN } from "../../wardyn/copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
+import { HttpError } from "../../../lib/api/core";
 import { setDefaultCc } from "../../wardyn/default-confinement";
 import { lsSet } from "../../../lib/storage";
 
@@ -946,5 +963,37 @@ describe("NewRunScreen — the 201's warnings hold the screen, no timer", () => 
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// 0.7.6 field report: the server's credential refusal (422, reason model_credential) reaches
+// the rail as `credentialRefused` — what opens the door — and no other failure does.
+describe("NewRunScreen — the server's credential refusal reaches the rail", () => {
+  const lastRail = () => railProps[railProps.length - 1];
+  async function titled() {
+    renderScreen();
+    await user.type(await screen.findByLabelText("Title"), "Refund flow");
+    return screen.getByRole("button", { name: /Launch run/ });
+  }
+
+  it("a 422 carrying reason model_credential sets credentialRefused, keeps the sentence, and the next Launch clears it", async () => {
+    createRunMock.mockRejectedValueOnce(new HttpError(422, "sign in to AWS first", "model_credential"));
+    const launch = await titled();
+    await user.click(launch);
+    expect(await screen.findByText("sign in to AWS first")).toBeInTheDocument();
+    expect(lastRail().launch.credentialRefused).toBe(true);
+
+    createRunMock.mockResolvedValueOnce({ id: "run_2" });
+    await user.click(launch);
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/runs/run_2"));
+    expect(lastRail().launch.credentialRefused).toBe(false);
+  });
+
+  it("a 422 without a reason — a policy error — never sets it", async () => {
+    createRunMock.mockRejectedValueOnce(new HttpError(422, 'workspaces[0]: unknown secret "prod-db"'));
+    const launch = await titled();
+    await user.click(launch);
+    expect(await screen.findByText('workspaces[0]: unknown secret "prod-db"')).toBeInTheDocument();
+    expect(lastRail().launch.credentialRefused).toBe(false);
   });
 });

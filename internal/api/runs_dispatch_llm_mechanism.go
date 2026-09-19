@@ -545,15 +545,26 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 	// exists so a run dispatch would refuse never boots at all, and a run whose
 	// stored AWS sign-in the roster no longer allows is one of them.
 	if msg := pinContradictionRefusal(sc, lanes.bedrock, row.CredentialSource == types.CredentialSourcePerUser); msg != "" {
-		writeError(w, http.StatusUnprocessableEntity, msg)
+		writeLLMRefusal(w, msg)
 		return false
 	}
 	if mechanismSatisfied(row, selected, ok) {
 		return true
 	}
 	// No ssoRefreshFailure at create: nothing here redeems a refresh token.
-	writeError(w, http.StatusUnprocessableEntity, llmMechanismRefusal(row, selected, ok, ""))
+	writeLLMRefusal(w, llmMechanismRefusal(row, selected, ok, ""))
 	return false
+}
+
+// writeLLMRefusal is the create-time model-credential refusal: the same 422 and
+// sentence as before, plus the class the console acts on — the New Run rail
+// opens the AWS sign-in on it and launches again once the capture lands, so a
+// lapsed session costs one dialog rather than a trip to Getting started by hand.
+// The class is the failure audit row's own word (llmRefusalAuditReason), not a
+// second vocabulary; it never names WHICH lane — the console reads the current
+// roster row for that, exactly as the failure block does.
+func writeLLMRefusal(w http.ResponseWriter, msg string) {
+	writeJSON(w, http.StatusUnprocessableEntity, errorBody{Error: msg, Reason: llmRefusalAuditReason})
 }
 
 // llmUnavailableDetail is what the proxy's brokered-LLM 404 says when this run

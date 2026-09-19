@@ -25,7 +25,7 @@
  * ── EXECUTION ORDER IS LOAD-BEARING ─────────────────────────────────────────
  * The letters below are the REPORT's topics, not the order. The order is:
  *
- *   B → A → A(rail) → C → D → E → G → H → I → E2 → F
+ *   B → A → A(rail) → C → D → E → G → H → I → E2 → L0 → F → L
  *
  * B runs FIRST because it reads the member's SIGNED-IN card while the member is
  * still `live` from the previous file — case A's console save is what flips the
@@ -45,6 +45,11 @@
  * A leaves the member ACTIONABLE (expired_signin) and C consumes that window;
  * C heals the member back to `live`, and D and E each call
  * makeMemberActionable() for their own.
+ *
+ * 0.7.7 adds L0 and L. L0 reads the ADMIN while they still have no capture of
+ * their own (F takes that state away), so it sits right before F. L makes its
+ * own lapse (makeMemberActionable) and ends by HEALING the member through a
+ * completed sign-in, so it goes where nothing after it needs the member lapsed.
  *
  * ── NOTHING IS SKIPPED HERE ─────────────────────────────────────────────────
  * Every case runs live (D and E were flipped when lane `login-pane` merged).
@@ -1003,6 +1008,37 @@ test("E2 (starting-detail): a sign-in on an unpullable image fails in seconds wi
 
 // ── F — the no-credential member preview (LAST: it signs the ADMIN in) ──────
 
+// ── L0 — 0.7.7: the setup gate never confiscates the console over a person ──
+
+test("L0 (setup gate): an admin with no usable AWS sign-in of their own opens New Run and stays there", async ({ page }) => {
+  // The 0.7.6 field report's exact shape, on the walk: a per_user roster, an
+  // install that never marked onboarding complete, and an admin whose OWN
+  // session is not usable — here never captured at all (sso-member.spec.ts pins
+  // that the member's capture is the member's alone). /setup/status grades
+  // that admin's llm_provider check `warn`, and before 0.7.7 RequireSetup read
+  // it as an install defect and landed every page load in the funnel (the reason gotoAgentsTab retries after a bounce).
+  // BEFORE F, which signs the admin in and takes this state away.
+  await dexSignIn(page, ADMIN_EMAIL);
+  const status = await page.evaluate(async () => {
+    const r = await fetch("/api/v1/setup/status", { credentials: "include" });
+    return (await r.json()) as { onboarding_complete?: boolean; checks?: Array<{ id: string; status: string }> };
+  });
+  expect(status.onboarding_complete, "the walk's fresh install never marks onboarding complete").toBeFalsy();
+  expect(
+    status.checks?.find((c) => c.id === "llm_provider")?.status,
+    "the admin's own half of the per_user lane is missing — the row the gate used to read",
+  ).toBe("warn");
+
+  // A full LOAD of a gated route: the once-per-load gate evaluates the landing
+  // /setup/status read. The rail's per-person line renders off that same read,
+  // so once it is on screen the answer that used to bounce us has landed — and
+  // the page is still New Run.
+  await page.goto("/runs/new");
+  await expect(page.getByRole("heading", { name: "New run" })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(RAIL_MODEL_ACCESS.NOT_SIGNED_IN)).toBeVisible({ timeout: 60_000 });
+  await expect(page).toHaveURL(/\/runs\/new$/);
+});
+
 test("F (member-preview): an admin previews the state a member is in before they sign in", async ({ page }) => {
   // LAST IN THE FILE, and it must stay last: it signs the ADMIN in to AWS,
   // which breaks sso-member.spec.ts's "the capture belongs to the member alone"
@@ -1057,4 +1093,65 @@ test("F (member-preview): an admin previews the state a member is in before they
   await page.getByRole("button", { name: MEMBER_MODE.EXIT }).click();
   await expect(page.getByText(MEMBER_MODE.BANNER_NEW)).toBeHidden({ timeout: 60_000 });
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 60_000 }).toBe("live");
+});
+
+// ── L — 0.7.7: Launch with a lapsed sign-in is one dialog, then the run ─────
+
+test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself, and the same run launches after it", async ({
+  page,
+  request,
+}) => {
+  // The 0.7.6 field report, driven end to end: the member's session is lapsed
+  // (a pin flip — helpers.ts's makeMemberActionable, the same lapse every
+  // sign-in case here drives), they fill in New Run and click Launch. The
+  // server refuses the run before any row exists (422, reason
+  // model_credential); the rail opens the AWS sign-in dialog ITSELF; the
+  // device flow completes on the fake; the SAME click's run launches. No trip
+  // to Getting started, no second click.
+  await dexSignIn(page, MEMBER_EMAIL);
+  await makeMemberActionable(request);
+  await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("expired_signin");
+
+  await page.goto("/runs/new");
+  await page.getByRole("combobox", { name: "Title" }).fill("L launch door");
+  await page.getByRole("radio", { name: /^Autonomous/ }).click();
+  await page.locator("#nr-task").fill("Reply with the single word: ready.");
+  const urlBefore = page.url();
+
+  // THE CLICK IS THE CHECK. Nothing on the console pre-grades the cached
+  // status; the server's refusal is what opens the door. Driven through
+  // signInThroughPane so the witness is the server's MOVED capture, not the
+  // terminal node (helpers.ts explains why the DOM cannot be the witness).
+  await signInThroughPane(page, async (p: Page) => {
+    await p.getByRole("button", { name: /^Launch/ }).click();
+    await expect(p.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible({ timeout: 60_000 });
+    await expect(p.getByTestId("harness-login-pane")).toBeVisible({ timeout: 60_000 });
+    const start = p.getByRole("button", { name: "Start login" });
+    if (await start.isVisible().catch(() => false)) await start.click();
+  });
+
+  // The relaunch fired from the door's completion: this deployment's launch
+  // carries advisories (egress narrowed, resources capped), so the screen
+  // HOLDS with "Open run" exactly as a hand launch does (helpers.ts's
+  // launchAgentRun) — a run that launched with no advisories would have
+  // navigated already. Either way the run exists and is the member's.
+  const openRun = page.getByRole("button", { name: "Open run" });
+  await expect(openRun.or(page.getByText("Running").first())).toBeVisible({ timeout: SANDBOX_UP });
+  if (await openRun.isVisible().catch(() => false)) await openRun.click();
+  await expect(page.getByText("Running").first()).toBeVisible({ timeout: SANDBOX_UP });
+  const runID = runIDFromURL(page);
+  expect(page.url(), "the run page, not New Run or Getting started").not.toBe(urlBefore);
+  expect(new URL(page.url()).pathname, "never the setup funnel").not.toMatch(/^\/setup/);
+
+  // The server agrees on both halves: the member is live again, and the run
+  // that launched is the ONE this click created (a second create would mean the
+  // door relaunched twice).
+  await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
+  const mine = (await page.evaluate(async () => {
+    const r = await fetch("/api/v1/runs?limit=1000", { credentials: "include" });
+    const body = (await r.json()) as { items?: Array<{ id: string; task?: string; title?: string }> } | Array<{ id: string; task?: string; title?: string }>;
+    return Array.isArray(body) ? body : (body.items ?? []);
+  })) as Array<{ id: string; task?: string; title?: string }>;
+  const created = mine.filter((r) => r.id === runID || r.title === "L launch door");
+  expect(created.map((r) => r.id), "exactly one run for this click").toEqual([runID]);
 });

@@ -453,6 +453,14 @@ func TestEnforceCreateLLMMechanism_RefusesBeforeARunExists(t *testing.T) {
 			if !strings.Contains(rec.Body.String(), "does not substitute a different model provider") {
 				t.Errorf("body = %q, want the declared-mechanism refusal", rec.Body.String())
 			}
+			// The class the console acts on: the New Run rail opens the AWS
+			// sign-in on it and launches again once the capture lands.
+			var body struct {
+				Reason string `json:"reason"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body.Reason != llmRefusalAuditReason {
+				t.Errorf("reason = %q (err %v), want %q", body.Reason, err, llmRefusalAuditReason)
+			}
 		})
 	}
 }

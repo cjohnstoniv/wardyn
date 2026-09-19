@@ -21,7 +21,7 @@
 // below is unconditionally absent, not merely an environment fact.
 import { test, expect, gotoConsole, ADMIN_TOKEN, launchRun } from "./fixtures";
 import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../src/app/components/wardyn/copy";
-import { RAIL_MODEL_ACCESS } from "../src/app/components/wardyn/model-access-copy";
+import { MODEL_ACCESS_BANNER, RAIL_MODEL_ACCESS } from "../src/app/components/wardyn/model-access-copy";
 import { CC_META } from "../src/app/components/wardyn/cc-meta";
 import { AGENTS, PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import type { Page } from "@playwright/test";
@@ -625,9 +625,8 @@ test.describe("New run rail — credentials and recording are read, not asserted
   // state is faked at the wire the same way the height case above fakes
   // credential_residency — the LIVE proof against a real captured/lapsed
   // session is e2e-sso-path's case A(rail)+.
-  test("a not_configured claude-code row states the rail's own sign-in, and a Launch 422 shows the server's sentence", async ({
-    page,
-  }) => {
+  // The per_user claude-code row every launch-door case below runs under.
+  async function perUserRow(page: Page) {
     await page.route("**/api/v1/setup/status*", async (route) => {
       const response = await route.fetch();
       const body = await response.json();
@@ -639,14 +638,25 @@ test.describe("New run rail — credentials and recording are read, not asserted
       );
       await route.fulfill({ response, json: body });
     });
-    // The exact refusal is dispatch's own (llmMechanismRefusal) — this pins the
-    // WIRING (create's 422 lands untruncated in the rail, launch.error), not
-    // the server's wording, which the door/dispatch lanes own.
-    const refusal = "this deployment gives each person their own AWS sign-in; sign in before launching.";
+  }
+  // The exact refusal is dispatch's own (llmMechanismRefusal) — these pin the
+  // WIRING (create's 422 lands untruncated in the rail, launch.error), not
+  // the server's wording, which the door/dispatch lanes own.
+  const refusal = "this deployment gives each person their own AWS sign-in; sign in before launching.";
+  async function refuseLaunch(page: Page, body: Record<string, string>) {
     await page.route("**/api/v1/runs", async (route) => {
       if (route.request().method() !== "POST") return route.fallback();
-      await route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ error: refusal }) });
+      await route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify(body) });
     });
+  }
+
+  test("a not_configured claude-code row states the rail's own sign-in, and a Launch 422 carrying reason model_credential opens the sign-in itself", async ({
+    page,
+  }) => {
+    await perUserRow(page);
+    // 0.7.7: the create-time credential refusal names its class; the rail
+    // answers it with the door, with no click on any sign-in control.
+    await refuseLaunch(page, { error: refusal, reason: "model_credential" });
 
     await openNewRun(page);
     await expect(page.getByText(RAIL_MODEL_ACCESS.NOT_SIGNED_IN)).toBeVisible();
@@ -661,5 +671,26 @@ test.describe("New run rail — credentials and recording are read, not asserted
     await page.getByLabel("Title").fill("e2e model access refusal");
     await page.getByRole("button", { name: "Launch run" }).click();
     await expect(page.getByText(refusal)).toBeVisible();
+    // The door opened itself: the dialog, with the real pane in it.
+    await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible();
+    await expect(page.getByTestId("harness-login-pane")).toBeVisible();
+    // Escape: nothing launched, the sentence stays, the rail's own control
+    // (there throughout under not_configured) is usable, and the page never left.
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("harness-login-pane")).toHaveCount(0);
+    await expect(page.getByText(refusal)).toBeVisible();
+    await expect(page.getByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeVisible();
+    await expect(page).toHaveURL(/\/runs\/new$/);
+  });
+
+  test("a Launch 422 with no reason — a policy error — shows the sentence and opens nothing", async ({ page }) => {
+    await perUserRow(page);
+    await refuseLaunch(page, { error: refusal });
+    await openNewRun(page);
+    await page.getByLabel("Title").fill("e2e plain refusal");
+    await page.getByRole("button", { name: "Launch run" }).click();
+    await expect(page.getByText(refusal)).toBeVisible();
+    await expect(page.getByTestId("harness-login-pane")).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toHaveCount(0);
   });
 });

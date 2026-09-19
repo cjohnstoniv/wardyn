@@ -34,7 +34,7 @@ import { Link } from "react-router-dom";
 import { ccRank as rank, SectionCard, Seg } from "./new-run-primitives";
 import { RunRail } from "./new-run-rail";
 import { AgentPicker } from "./agent-picker";
-import { runs as runsApi } from "../../../lib/api/runs";
+import { isCredentialRefusal, runs as runsApi } from "../../../lib/api/runs";
 import { policies as policiesApi } from "../../../lib/api/policies";
 import { health as healthApi } from "../../../lib/api/health";
 import { setup as setupApi } from "../../../lib/api/setup";
@@ -127,6 +127,7 @@ export function NewRunScreen() {
   // spinner once the request has been running long enough to need one.
   const { disabled: launchDisabled, showSpinner: launchSpinning } = useDeferredBusy(launching);
   const [error, setError] = React.useState<string | null>(null);
+  const [credentialRefused, setCredentialRefused] = React.useState(false);
   // The 201's advisory `warnings[]` (§5c.8) — inline in the rail, not a toast.
   const [launchWarnings, setLaunchWarnings] = React.useState<string[]>([]);
   // Set ONLY while a launched run's advisories are on screen — the rail's
@@ -441,6 +442,7 @@ export function NewRunScreen() {
 
   const launch = async () => {
     setError(null);
+    setCredentialRefused(false);
     setLaunching(true);
     setLaunchWarnings([]);
     setLaunchedRunId(null);
@@ -466,6 +468,7 @@ export function NewRunScreen() {
       }
     } catch (e) {
       setError(getErrorMessage(e) || "Failed to launch run.");
+      setCredentialRefused(isCredentialRefusal(e));
       setLaunching(false);
     }
   };
@@ -965,6 +968,7 @@ export function NewRunScreen() {
             inFlight: launching,
             problem,
             error,
+            credentialRefused,
             warnings: launchWarnings,
             onOpenRun: launchedRunId
               ? () => navigate(`/runs/${encodeURIComponent(launchedRunId)}`)

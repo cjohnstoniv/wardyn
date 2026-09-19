@@ -86,9 +86,14 @@ export function onUnauthorized(fn: (reason: string, path: string) => void): void
 
 export class HttpError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** The envelope's machine-readable class, "" when the body carries none.
+   *  Today only `model_credential`: the create-time refusal the New Run rail
+   *  answers with the AWS sign-in dialog (runs.ts's isCredentialRefusal). */
+  reason: string;
+  constructor(status: number, message: string, reason = "") {
     super(message);
     this.status = status;
+    this.reason = reason;
     this.name = "HttpError";
   }
 }
@@ -233,7 +238,10 @@ export async function wfetch(
 }
 
 export async function asJson<T>(res: Response): Promise<T> {
-  if (!res.ok) throw new HttpError(res.status, await errText(res));
+  if (!res.ok) {
+    const { message, reason } = await errEnvelope(res);
+    throw new HttpError(res.status, message, reason);
+  }
   return (await res.json()) as T;
 }
 
@@ -242,7 +250,9 @@ export async function asJson<T>(res: Response): Promise<T> {
 // the raw body, then the status text. It returns rather than throws, so it serves
 // both the paths where a non-2xx is an EXPECTED, actionable outcome the caller
 // renders inline (e.g. verifyWorkspace's 422/503/409) and asJson, which wraps it
-// in an HttpError. Change the envelope here and both follow.
+// in an HttpError. Change the envelope here and both follow. `reason` is the
+// envelope's optional machine-readable class ("" when absent or not a string),
+// carried only on the envelope path — a raw body has no class to read.
 // F6-F7: readability/DoS, not injection — React escapes whatever this
 // returns either way. But a misrouted request can land on a web server or
 // proxy in front of wardynd instead of the daemon itself, and that answer's
@@ -257,20 +267,26 @@ function isRawBodyDisplayable(body: string): boolean {
   return body.length <= RAW_BODY_MAX_CHARS && !/^\s*</.test(body);
 }
 
-export async function errText(res: Response): Promise<string> {
+export async function errEnvelope(res: Response): Promise<{ message: string; reason: string }> {
   try {
     const body = await res.text();
-    if (!body) return res.statusText;
+    if (!body) return { message: res.statusText, reason: "" };
     try {
-      const j = JSON.parse(body) as { error?: unknown };
-      if (typeof j.error === "string" && j.error) return j.error;
+      const j = JSON.parse(body) as { error?: unknown; reason?: unknown };
+      if (typeof j.error === "string" && j.error) {
+        return { message: j.error, reason: typeof j.reason === "string" ? j.reason : "" };
+      }
     } catch {
       // not JSON — fall through to the raw-body guard below
     }
-    return isRawBodyDisplayable(body) ? body : res.statusText;
+    return { message: isRawBodyDisplayable(body) ? body : res.statusText, reason: "" };
   } catch {
-    return res.statusText;
+    return { message: res.statusText, reason: "" };
   }
+}
+
+export async function errText(res: Response): Promise<string> {
+  return (await errEnvelope(res)).message;
 }
 
 // Explicit page size for the console's list polls. wardynd paginates every list
