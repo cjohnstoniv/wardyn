@@ -267,3 +267,39 @@ describe("SettingsScreen — a redacted checks list is not an Off image builder"
     expect(screen.getByText(/devcontainer builds and --image wraps are unavailable/)).toBeInTheDocument();
   });
 });
+
+// 0.7.8 — the Host card mounts the SAME picker (EnvironmentStep) Getting
+// Started does, and until now had NO coverage of its own: the private
+// per-mount override state this card used to own (and persist to
+// localStorage) is gone, so this pins what is left — a read-only statement
+// of the server's own default, gated on installed availability exactly like
+// every other selector. DONE WHEN: a test fails if an unavailable class
+// becomes selectable again.
+describe("SettingsScreen — the Host card's barrier picker offers only what's installed", () => {
+  it("checks the strongest installed tier and disables the rest, read-only", async () => {
+    // baseStatus: CC1+CC2 installed, CC3 not — Wall is the strongest.
+    renderScreen();
+    expect(
+      await screen.findByRole("radio", { name: /Wall/, checked: true }),
+    ).toBeInTheDocument();
+    const vault = screen.getByRole("radio", { name: /Vault/ });
+    expect(vault).toBeDisabled();
+    // A click changes nothing: the card is a read-only statement of the
+    // server's own default, never a second place that picks one.
+    await userEvent.click(vault);
+    expect(screen.getByRole("radio", { name: /Wall/, checked: true })).toBeInTheDocument();
+    expect(vault).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("disables Wall and Vault on a CC1-only host, and checks Fence", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ runner: { driver: "docker", confinement_classes: ["CC1"] } }),
+    );
+    renderScreen();
+    expect(
+      await screen.findByRole("radio", { name: /Fence/, checked: true }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Wall/ })).toBeDisabled();
+    expect(screen.getByRole("radio", { name: /Vault/ })).toBeDisabled();
+  });
+});

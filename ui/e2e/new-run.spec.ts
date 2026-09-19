@@ -13,9 +13,10 @@
 // preset stack and a dialog; the spec JSON is the envelope now.
 //
 // Notes on the seeded backend (scripts/e2e-backend.sh): wardynd runs with
-// -runner none, so /healthz advertises NO confinement_classes — unknown, not
-// confirmed-absent, so all three barrier tiers stay selectable and the runner
-// capability gate (runs_create.go) is skipped entirely. There IS an
+// -runner none, so /setup/status reports runner.driver:"none" — no runner AT
+// ALL, which new-run-screen.tsx treats as unknown availability, not
+// confirmed-absent (0.7.8), so all three barrier tiers stay selectable and the
+// runner capability gate (runs_create.go) is skipped entirely. There IS an
 // ai_provider integration now (console-agents, 0.7.3: a Bedrock region+model
 // are configured for the roster-pin e2e), so the model-provider warning
 // below is unconditionally absent, not merely an environment fact.

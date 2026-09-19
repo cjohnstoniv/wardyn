@@ -861,6 +861,14 @@ export const RUN = {
   // silently contradicted.
   SAVED_POLICY_GOVERNS: (barrier: string, egress: string) =>
     `The stored spec governs this run — barrier floor ${barrier}, ${egress}. Your attached workspace mounts into it; nothing else on this page is merged.`,
+  // 0.7.8, item 3 — exactly one installed class meets the floor: nothing to
+  // ask, so the Seg collapses to this sentence instead (new-run-screen.tsx).
+  BARRIER_ONLY_QUALIFIER: "— the only barrier this run can use.",
+  // 0.7.8, item 2 — an inconclusive host probe never blocks launch and no
+  // longer leaves every tier guessably selectable either: an untouched pick
+  // sends no confinement_class at all, so the server's own read decides.
+  BARRIER_UNKNOWN:
+    "Couldn't check which barriers this host has — leave this alone and Wardyn will use the strongest one it can, or pick one yourself.",
 } as const;
 
 // DRAFT (M2 canon pending) — R4-F144, WCAG 2.1.2: the cockpit terminal takes

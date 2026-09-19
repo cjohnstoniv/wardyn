@@ -103,7 +103,7 @@ export function RecordPane({
   // The last successful launch's own warnings + REAL confinement class
   // (handleRecordWorkspace's 202 body) — W20-S1-2: never dropped, and the
   // authoritative source for the CC1 banner below once a session has
-  // actually launched (getDefaultCc() is only a pre-launch guess).
+  // actually launched (`tier` below is only a pre-launch guess).
   launch?: { warnings?: string[]; confinementClass?: string } | null;
   // The record_results key currently being kicked — a plain session key for an
   // open (re-)record, or verifyKeyOf(key) for a confined (re-)replay. Disables
@@ -115,9 +115,10 @@ export function RecordPane({
   modelReady: boolean;
   // The runner's declared confinement classes (setup status). A recording
   // launches under the STRONGEST of these (workspace_run.go's bestClass), so
-  // the banner's tier line derives from it pre-launch — never from the
-  // operator's persisted New-Run default, which is an unrelated preference
-  // and once printed "Fence" under a Vault capture, on camera.
+  // the banner's tier line derives from it pre-launch — never from New Run's
+  // OWN pre-launch preview (an unrelated screen's guess) or, before 0.7.8, a
+  // browser-persisted default that once printed "Fence" under a Vault
+  // capture, on camera.
   hostClasses?: ConfinementClass[] | null;
   // Start (or re-start) an OPEN session by name; the server slugs it to the
   // record key.

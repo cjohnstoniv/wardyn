@@ -8,8 +8,8 @@
 // piece of NEW logic this lane adds lands here instead, as a pure function the
 // screen calls. React state stays in the screen; this only answers questions
 // about it.
-import type { ConfinementClass } from "../../../lib/types";
-import { getDefaultCc } from "../../wardyn/default-confinement";
+import { CC_ORDER, type ConfinementClass } from "../../../lib/types";
+import { ccRank } from "./new-run-primitives";
 import { POLICY_TEMPLATES } from "../../wardyn/policy-panel";
 import type { WizardAgent, WizardState } from "./wizard-types";
 
@@ -17,8 +17,12 @@ const MINIMAL = POLICY_TEMPLATES.find((t) => t.id === "minimal")!;
 
 // The body a fresh Custom policy opens with: a valid, editable floor rather
 // than a blank document nobody can start from. Also what F2-F1 resets TO.
-export function defaultSpecText(cc: ConfinementClass | null): string {
-  return JSON.stringify({ ...MINIMAL.spec, min_confinement_class: cc ?? "CC1" }, null, 2);
+// Always CC1 (0.7.8): there is no persisted operator default left to seed
+// this from (the server now picks the strongest installed class at or above
+// the floor), and CC1 is the one floor every host can build, so the document
+// this opens with is never itself the reason a fresh Custom edit can't launch.
+export function defaultSpecText(): string {
+  return JSON.stringify({ ...MINIMAL.spec, min_confinement_class: "CC1" }, null, 2);
 }
 
 // F2-F1 — a saved-policy body comes back REDACTED for anyone who is NOT
@@ -42,7 +46,7 @@ export function clearedSpecOnCustomSwitch(
   hadSelection: boolean,
 ): string | undefined {
   if (active || keepsRealBody || !hadSelection) return undefined;
-  return defaultSpecText(getDefaultCc());
+  return defaultSpecText();
 }
 
 // F2-F4 — codex-cli has no external tool-approval contract (buildSpec already
@@ -55,6 +59,32 @@ export function effectiveToolApprovals(
   toolApprovals: WizardState["toolApprovals"],
 ): WizardState["toolApprovals"] {
   return agent === "codex-cli" ? "auto" : toolApprovals;
+}
+
+// The Barrier control's per-tier state (item 3, 0.7.8): which classes
+// actually qualify for THIS run (installed AND at or above the active
+// floor), which are merely uninstalled, and which are installed but below
+// the floor — one reason per tier, never two. `qualifying` is null, never
+// [], when availability itself is unknown, so a caller can tell "nothing
+// qualifies" (fail-closed, floor above every buildable tier) apart from
+// "we don't know yet" (never renders the single-qualifier sentence, and
+// never disables a tier on a guess).
+export interface BarrierReasons {
+  qualifying: ConfinementClass[] | null;
+  unavailable: ConfinementClass[];
+  belowFloor: ConfinementClass[];
+}
+
+export function barrierReasons(
+  available: ConfinementClass[] | null,
+  floor: ConfinementClass | undefined,
+): BarrierReasons {
+  if (!available) return { qualifying: null, unavailable: [], belowFloor: [] };
+  return {
+    qualifying: CC_ORDER.filter((c) => available.includes(c) && (!floor || ccRank(c) >= ccRank(floor))),
+    unavailable: CC_ORDER.filter((c) => !available.includes(c)),
+    belowFloor: floor ? CC_ORDER.filter((c) => available.includes(c) && ccRank(c) < ccRank(floor)) : [],
+  };
 }
 
 // F2-F5 — a saved-policy id that no longer resolves (the policy was deleted
