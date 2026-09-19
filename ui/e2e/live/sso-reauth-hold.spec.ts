@@ -577,8 +577,9 @@ test("J (launch door, spent session): a session retired at the portal is refused
   //
   // 0.7.6 forced this at DISPATCH: create passed (no renewal there), the run
   // existed, and its own page carried the door. 0.7.7 redeems at the CLICK
-  // (the 0.7.6 field report: an expired session whose refresh token AWS had
-  // retired was told "launched" and failed on its page), so the same lever now
+  // (the 0.7.6 field report's likeliest shape — walk-2 reproduced it: an
+  // expired session whose refresh token AWS had retired was told "launched"
+  // and failed on its page), so the same lever now
   // yields a 422 before any run exists, carrying the class the New Run rail
   // answers by opening the dialog itself. The run-page door of 0.7.6 stays for
   // a session that lapses between the click and the sandbox — not forceable.
