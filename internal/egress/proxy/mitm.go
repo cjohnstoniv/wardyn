@@ -320,9 +320,10 @@ const tlsRecordHandshake = 0x16
 // A peek rather than a flag, because the entry's scheme says what the ORIGIN
 // speaks and this asks what the CLIENT speaks, and they are not the same
 // question: the AWS SDK sends plaintext into the tunnel for an http:// endpoint
-// (measured, SDK-PATH.md) while curl -k and every ordinary TLS client still send
-// a ClientHello to the same host. Answering the second question by reading the
-// first one's answer would have broken them.
+// (measured against a real agent SDK — TestMITMConnect_PlaintextClientInsideTheTunnelIsServed)
+// while curl -k and every ordinary TLS client still send a ClientHello to the
+// same host. Answering the second question by reading the first one's answer
+// would have broken them.
 //
 // A read error answers TLS, so the unchanged path handles it and reports the
 // failure exactly as before.
@@ -359,7 +360,8 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 	// upstream leg does (upstreamSchemeFor). For every real portal and every corp
 	// artifact host that is TLS, byte for byte as before.
 	//
-	// It is not symmetry for its own sake — it is measured (SDK-PATH.md). With a
+	// It is not symmetry for its own sake — it is measured
+	// (TestMITMConnect_PlaintextClientInsideTheTunnelIsServed). With a
 	// proxy configured, aws-sdk-js reaches an `http://` endpoint by CONNECT and
 	// then sends PLAINTEXT inside the tunnel (first byte 0x47, `G`, not 0x16).
 	// Handshaking at that client fails and drops the connection, so the request
