@@ -235,7 +235,10 @@ func (s *Server) authorizeSpecWorkspaceSources(ctx context.Context, r *http.Requ
 // 422 body both callers send (the wizard test hardcodes that string), and
 // preflight deliberately skips the caller-side gates that follow it.
 func enforcedConfinement(spec types.RunPolicySpec, reqCC types.ConfinementClass, advertised []types.ConfinementClass) (types.ConfinementClass, error) {
-	enforced := spec.MinConfinementClass
+	// Assigned in BOTH branches below — declared without a value so the dead
+	// store staticcheck flags (SA4006) cannot come back: the floor is no longer
+	// the default, it is only the lower bound the default is chosen at or above.
+	var enforced types.ConfinementClass
 	if reqCC != "" {
 		if !confinementGE(reqCC, spec.MinConfinementClass) {
 			return "", fmt.Errorf("confinement_class %s is weaker than the policy minimum %s",
