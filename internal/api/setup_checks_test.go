@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cjohnstoniv/wardyn/internal/setup"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -681,4 +682,193 @@ func TestLLMProviderCheck_MechanismPrincipalIsInfo(t *testing.T) {
 	if got.Detail != llmProviderMechanismDetail {
 		t.Errorf("detail = %q, want the mechanism DRAFT sentence verbatim", got.Detail)
 	}
+}
+
+// ------------------------------------------------------------------------
+// Blocking — 0.7.8: the daemon marks the console-confiscating rows itself
+// (SetupCheck.Blocking) instead of the console guessing from a hard-coded id
+// set. Exactly three arms may ever set it; every other row, at every status
+// it can carry, must not.
+// ------------------------------------------------------------------------
+
+// setupCheckBlockingStatus names, for each of the three ids that can ever set
+// Blocking, the ONE status that does. The same id at any OTHER status
+// (sso_rbac's "ok", runner's "info"/"ok") must read Blocking=false, exactly
+// like every id in setupCheckNeverBlocks below — there is no id-level
+// exemption, only a (id, status) one.
+var setupCheckBlockingStatus = map[string]string{
+	"runner":            "fail", // no live confinement class: runs cannot launch at all
+	"confinement_floor": "warn", // every run on the default policy refused before launch
+	"sso_rbac":          "warn", // no role mapping: every SSO user is an admin
+}
+
+// setupCheckNeverBlocks is every OTHER id /setup/status can emit. NOT the
+// golden fixture's 14 ids (setup_check_ids_golden.json's six fixtures never
+// set DefaultPolicy, so confinement_floor never appears there at all) — this
+// is the full inventory, read off every `ID: "..."` literal in setup.go,
+// setup_checks.go and modelaccess.go. assertSetupCheckBlocking is strict
+// about an id in NEITHER table on purpose: a check added later with no
+// Blocking decision recorded here must fail the build, not default quietly
+// to non-blocking.
+var setupCheckNeverBlocks = map[string]bool{
+	"env_builder": true, "k8s_egress_containment": true, "age_key": true,
+	"site_config": true, "internal_hosts": true, "tls_cookie_posture": true,
+	"scm_provider": true, "host_proxy": true, "artifact_repo": true,
+	"permissions_posture": true, "llm_provider": true, "bedrock_provider": true,
+	"claude_subscription_staging": true, "agent_image": true,
+	"harness_credential": true, "harness_credential_aws": true,
+	"github_ref_ruleset": true,
+}
+
+// assertSetupCheckBlocking is the one gate every case in TestSetupCheckBlocking
+// runs through.
+func assertSetupCheckBlocking(t *testing.T, chk SetupCheck) {
+	t.Helper()
+	if wantStatus, known := setupCheckBlockingStatus[chk.ID]; known {
+		want := chk.Status == wantStatus
+		if chk.Blocking != want {
+			t.Errorf("%s (status=%s): Blocking = %v, want %v", chk.ID, chk.Status, chk.Blocking, want)
+		}
+		return
+	}
+	if !setupCheckNeverBlocks[chk.ID] {
+		t.Fatalf("check id %q is in neither setupCheckBlockingStatus nor setupCheckNeverBlocks — "+
+			"record a Blocking decision for it in one of those two tables, don't let it default silently", chk.ID)
+	}
+	if chk.Blocking {
+		t.Errorf("%s (status=%s): Blocking = true, want false — only the three console-confiscating arms may set it", chk.ID, chk.Status)
+	}
+}
+
+// TestSetupCheckBlocking calls the pure check constructors directly (not a
+// golden-style HTTP fixture matrix — that route can't reach confinement_floor,
+// which needs a DefaultPolicy no golden fixture sets) across every arm/status
+// each one can produce, and asserts Blocking through assertSetupCheckBlocking.
+func TestSetupCheckBlocking(t *testing.T) {
+	// The three blocking-capable ids: the blocking arm, and their other arms.
+	assertSetupCheckBlocking(t, runnerCheck(SetupRunner{Driver: "none"}))
+	assertSetupCheckBlocking(t, runnerCheck(SetupRunner{Driver: "docker", ConfinementClasses: []string{"CC1"}}))
+	assertSetupCheckBlocking(t, runnerCheck(SetupRunner{Driver: "docker", ConfinementClasses: []string{"CC1", "CC2"}}))
+
+	if chk, ok := confinementFloorCheck(SetupRunner{Driver: "docker", ConfinementClasses: []string{"CC1"}}, types.CC2); ok {
+		assertSetupCheckBlocking(t, chk)
+	} else {
+		t.Fatal("confinementFloorCheck absent, want a floor-mismatch row")
+	}
+
+	if chk, ok := ssoRBACCheck(true, false, false); ok {
+		assertSetupCheckBlocking(t, chk)
+	} else {
+		t.Fatal("ssoRBACCheck absent")
+	}
+	if chk, ok := ssoRBACCheck(true, true, false); ok {
+		assertSetupCheckBlocking(t, chk)
+	} else {
+		t.Fatal("ssoRBACCheck absent")
+	}
+
+	// Every remaining id: false at every status it can carry.
+	assertSetupCheckBlocking(t, envBuilderCheck(true))
+	assertSetupCheckBlocking(t, envBuilderCheck(false))
+
+	for _, netpol := range []string{"enforced", "acknowledged", "unenforced", ""} {
+		chk, ok := k8sEgressContainmentCheck("k8s", netpol)
+		if !ok {
+			t.Fatalf("k8sEgressContainmentCheck(%q) absent", netpol)
+		}
+		assertSetupCheckBlocking(t, chk)
+	}
+
+	assertSetupCheckBlocking(t, ageKeyCheck(true))
+	assertSetupCheckBlocking(t, ageKeyCheck(false))
+
+	assertSetupCheckBlocking(t, siteConfigCheck(types.SiteConfig{}, nil))
+	assertSetupCheckBlocking(t, siteConfigCheck(types.SiteConfig{UpstreamProxySecretRef: "x"}, map[string]bool{}))
+
+	if chk, ok := internalHostsCheck(types.SiteConfig{InternalHosts: []types.InternalHost{{HostSuffix: "svc.cluster.local"}}}); ok {
+		assertSetupCheckBlocking(t, chk)
+	} else {
+		t.Fatal("internalHostsCheck absent")
+	}
+
+	if chk, ok := tlsCookiePostureCheck(true, "https://wardyn.example.com/auth/callback", false); ok {
+		assertSetupCheckBlocking(t, chk)
+	} else {
+		t.Fatal("tlsCookiePostureCheck absent")
+	}
+	if chk, ok := tlsCookiePostureCheck(true, "https://wardyn.example.com/auth/callback", true); ok {
+		assertSetupCheckBlocking(t, chk)
+	} else {
+		t.Fatal("tlsCookiePostureCheck absent")
+	}
+
+	assertSetupCheckBlocking(t, scmProviderCheck(false, nil, setup.SCMPosture{}))
+	assertSetupCheckBlocking(t, scmProviderCheck(true, nil, setup.SCMPosture{}))
+	assertSetupCheckBlocking(t, scmProviderCheck(false, []string{"ssh-key-github-com"}, setup.SCMPosture{}))
+
+	assertSetupCheckBlocking(t, hostProxyCheck(setup.HostProxyDetection{}, false))
+	assertSetupCheckBlocking(t, hostProxyCheck(setup.HostProxyDetection{}, true))
+
+	assertSetupCheckBlocking(t, artifactRepoCheck(types.SiteConfig{}))
+
+	assertSetupCheckBlocking(t, permissionsPostureCheck(nil))
+
+	assertSetupCheckBlocking(t, llmProviderCheck("a model provider is connected", SetupBedrock{}))
+	assertSetupCheckBlocking(t, llmProviderCheck("", SetupBedrock{}))
+	// per_user warn — one of the four per-person rows; must stay non-blocking.
+	assertSetupCheckBlocking(t, llmProviderCheck("", SetupBedrock{Region: "us-east-1", Model: "m", PerUser: true}))
+
+	if chk, ok := bedrockProviderRow(SetupBedrock{Region: "us-east-1", Model: "m", CredsPresent: true}); ok {
+		assertSetupCheckBlocking(t, chk)
+	} else {
+		t.Fatal("bedrockProviderRow absent")
+	}
+	// per_user warn — the other of the four per-person rows.
+	if chk, ok := bedrockProviderRow(SetupBedrock{Region: "us-east-1", Model: "m", PerUser: true}); ok {
+		assertSetupCheckBlocking(t, chk)
+	} else {
+		t.Fatal("bedrockProviderRow absent")
+	}
+	if chk, ok := bedrockProviderRow(SetupBedrock{Region: "us-east-1", Model: "m", Mechanism: true}); ok {
+		assertSetupCheckBlocking(t, chk)
+	} else {
+		t.Fatal("bedrockProviderRow absent")
+	}
+
+	if chk, ok := claudeSubscriptionStagingCheck(true, false, "~/.claude/.credentials.json"); ok {
+		assertSetupCheckBlocking(t, chk)
+	} else {
+		t.Fatal("claudeSubscriptionStagingCheck absent")
+	}
+	if chk, ok := claudeSubscriptionStagingCheck(true, true, ""); ok {
+		assertSetupCheckBlocking(t, chk)
+	} else {
+		t.Fatal("claudeSubscriptionStagingCheck absent")
+	}
+
+	assertSetupCheckBlocking(t, agentImageCheck(nil))
+
+	if chk, ok := harnessCredentialCheck(SetupHarness{Captured: true, Provider: "anthropic", Aging: true}, SetupModelAccess{}); ok {
+		assertSetupCheckBlocking(t, chk)
+	} else {
+		t.Fatal("harnessCredentialCheck absent")
+	}
+	if chk, ok := harnessCredentialCheck(SetupHarness{Captured: true, Provider: "anthropic"}, SetupModelAccess{}); ok {
+		assertSetupCheckBlocking(t, chk)
+	} else {
+		t.Fatal("harnessCredentialCheck absent")
+	}
+	// harness_credential_aws — the 0.7.6 field report's own row: a lapsed
+	// admin AWS SSO session grades warn here and must never gate.
+	if chk, ok := harnessCredentialCheck(
+		SetupHarness{Captured: true, Provider: awsSSOProvider, ExpiresAt: "2020-01-01T00:00:00Z"},
+		SetupModelAccess{State: modelAccessExpiredSignin},
+	); ok {
+		assertSetupCheckBlocking(t, chk)
+	} else {
+		t.Fatal("harnessCredentialCheck (aws) absent")
+	}
+
+	assertSetupCheckBlocking(t, refRulesetCheck("acme/widgets", false, "detail", nil))
+	assertSetupCheckBlocking(t, refRulesetCheck("acme/widgets", true, "detail", nil))
 }

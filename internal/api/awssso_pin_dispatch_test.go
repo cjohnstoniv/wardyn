@@ -296,6 +296,12 @@ func TestSetupStatus_StoredBlobContradictingThePinGradesExpiredSignin(t *testing
 	if awsRow.Fix != ma.Action {
 		t.Errorf("harness_credential_aws fix = %q, want the same action line the member reads (%q)", awsRow.Fix, ma.Action)
 	}
+	// 0.7.8: the grade stays warn, but the row must never confiscate the
+	// console over ONE person's lapsed credential — Blocking is server-marked
+	// now, and this is exactly the row the 0.7.6 field report was about.
+	if awsRow.Blocking {
+		t.Error("harness_credential_aws must never be Blocking — it is graded through the CALLER's own session, not the install")
+	}
 
 	// THE ADMIN'S OWN STATUS IS UNTOUCHED: their capture agrees with the pin, so
 	// the grading is the one it always was.
