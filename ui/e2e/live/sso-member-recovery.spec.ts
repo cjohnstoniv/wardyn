@@ -1148,14 +1148,28 @@ test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself
   // carries advisories (egress narrowed, resources capped), so the screen
   // HOLDS with "Open run" exactly as a hand launch does (helpers.ts's
   // launchAgentRun) — a run that launched with no advisories would have
-  // navigated already. Either way the run exists and is the member's.
+  // navigated already. NOT "Running" (walk-3): the fake answers inference in
+  // seconds and the agent exits, so the run can be FINISHED before this spec
+  // — which reaches the page only after signInThroughPane's capture poll — ever
+  // looks; the witness is the run ROW and its trail below, never a state chip.
   const openRun = page.getByRole("button", { name: "Open run" });
-  await expect(openRun.or(page.getByText("Running").first())).toBeVisible({ timeout: SANDBOX_UP });
+  await expect(openRun.or(page.getByRole("heading", { name: "L launch door" }))).toBeVisible({ timeout: SANDBOX_UP });
   if (await openRun.isVisible().catch(() => false)) await openRun.click();
-  await expect(page.getByText("Running").first()).toBeVisible({ timeout: SANDBOX_UP });
+  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/, { timeout: SANDBOX_UP });
   const runID = runIDFromURL(page);
   expect(page.url(), "the run page, not New Run or Getting started").not.toBe(urlBefore);
   expect(new URL(page.url()).pathname, "never the setup funnel").not.toMatch(/^\/setup/);
+
+  // The server's own story of THIS click: created (never refused), credentialed
+  // on the fresh capture, and executed. A member reads their own run's trail.
+  const actions = (await page.evaluate(async (id: string) => {
+    const r = await fetch(`/api/v1/audit?run_id=${encodeURIComponent(id)}&limit=200`, { credentials: "include" });
+    const body = (await r.json()) as { items?: Array<{ action: string; outcome?: string }> } | Array<{ action: string; outcome?: string }>;
+    return (Array.isArray(body) ? body : (body.items ?? [])).map((e) => `${e.action}:${e.outcome ?? ""}`);
+  }, runID)) as string[];
+  expect(actions, "the relaunch created the run").toContain("run.create:success");
+  expect(actions, "the run was dispatched on the fresh capture and executed").toContain("run.exec:success");
+  expect(actions.filter((a) => a.startsWith("run.create:failure")), "never refused for its credential").toEqual([]);
 
   // The server agrees on both halves: the member is live again, and the run
   // that launched is the ONE this click created (a second create would mean the
