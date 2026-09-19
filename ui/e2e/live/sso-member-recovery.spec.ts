@@ -1131,6 +1131,7 @@ test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself
   await page.getByRole("radio", { name: /^Autonomous/ }).click();
   await page.locator("#nr-task").fill("Reply with the single word: ready.");
   const urlBefore = page.url();
+  const clickedAt = new Date().toISOString();
 
   // THE CLICK IS THE CHECK. Nothing on the console pre-grades the cached
   // status; the server's refusal is what opens the door. Driven through
@@ -1177,9 +1178,15 @@ test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
   const mine = (await page.evaluate(async () => {
     const r = await fetch("/api/v1/runs?limit=1000", { credentials: "include" });
-    const body = (await r.json()) as { items?: Array<{ id: string; task?: string; title?: string }> } | Array<{ id: string; task?: string; title?: string }>;
+    const body = (await r.json()) as
+      | { items?: Array<{ id: string; title?: string; created_at?: string }> }
+      | Array<{ id: string; title?: string; created_at?: string }>;
     return Array.isArray(body) ? body : (body.items ?? []);
-  })) as Array<{ id: string; task?: string; title?: string }>;
-  const created = mine.filter((r) => r.id === runID || r.title === "L launch door");
+  })) as Array<{ id: string; title?: string; created_at?: string }>;
+  // Scoped to THIS click: an iteration against a cluster an earlier walk left
+  // behind sees that walk's run of the same title too.
+  const created = mine.filter(
+    (r) => r.id === runID || (r.title === "L launch door" && (r.created_at ?? "") >= clickedAt),
+  );
   expect(created.map((r) => r.id), "exactly one run for this click").toEqual([runID]);
 });
