@@ -8,6 +8,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+The 0.7.6 field report, in one journey: an admin on a private-endpoint Kubernetes estate whose AWS SSO
+session had lapsed clicked Launch on New Run, the server refused the run (right), and the console
+loaded Getting started. This release answers both halves.
+
+Verified on the kind AWS SSO walk against images rebuilt from the commit under test (walk-4 on
+`e73f2c3d`, the tree this release descends from — only one live spec, case J, and this changelog change
+after it; the walk's `MANIFEST.json` records the tip and the rebuilt images): a member whose own sign-in
+has lapsed clicks Launch, the sign-in dialog opens itself over New Run, and the same click's run
+launches after the device flow (live case L); an admin with no usable session of their own loads New
+Run and stays there (L0); a session retired at the portal is refused at the click with no run created,
+and the dialog opens where the person is (J, rewritten for the click-time refusal and re-run with the
+two hold negatives against the same install); the mid-run hold and its resume are unchanged (K,
+K(resume)).
+
 ### Fixed
 
 - **A lapsed AWS SSO session no longer sends an admin to Getting started.** The setup funnel's
