@@ -36,6 +36,10 @@ async function mockGatedStatus(
         label: "e2e gate probe",
         status: "warn",
         detail: "forced by setup-gate.spec.ts",
+        // 0.7.8: setupGateActive gates on `blocking`, not on grade/id — a
+        // probe with no flag would silently stop testing anything this spec
+        // exists to cover.
+        blocking: true,
       },
     ];
     await route.fulfill({ response, json });
@@ -141,6 +145,43 @@ test.describe("setup gate — forced on access, never a prison", () => {
     await mockMemberRole(page);
     await page.goto("/runs");
     await expect(page).toHaveURL(/\/runs/);
+  });
+
+  // The path the owner actually walked (0.7.6): the gate fires once per PAGE
+  // LOAD (gateFiredThisLoad in setup-gate.ts), so a live goto() only ever
+  // exercises the LANDING read — every other case above lands already gated.
+  // What sent the owner's admin to Getting started mid-session was a
+  // BACKGROUND refresh (App.tsx's status poll) handing back a newly-blocking
+  // check while they sat on New Run. usePoll refetches on tab refocus
+  // ("coming back to the tab refreshes now" — its own comment) rather than
+  // waiting out its 5-minute interval, so that refocus tick — not a timer —
+  // is what this case drives, by dispatching the same `visibilitychange`
+  // event the real return-to-tab does.
+  test("a status that turns blocking on a BACKGROUND refresh gates too, not just the landing read", async ({
+    page,
+  }) => {
+    let blocking = false;
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.onboarding_complete = false;
+      if (blocking) {
+        json.checks = [
+          ...(json.checks ?? []),
+          { id: "e2e_gate_probe", label: "e2e gate probe", status: "warn", blocking: true },
+        ];
+      }
+      await route.fulfill({ response, json });
+    });
+
+    await page.goto("/runs/new");
+    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+
+    // The install now fails a blocking check — as it would seconds after the
+    // owner clicked Launch — and the NEXT read must carry it.
+    blocking = true;
+    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await page.waitForURL(/\/setup/);
   });
 
   // Re-check means "look at the HOST again", and only the daemon can do that:
