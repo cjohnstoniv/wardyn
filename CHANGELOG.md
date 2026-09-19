@@ -8,6 +8,26 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Changed
+
+- **The shipped confinement floor is CC1, and an unspecified run now defaults to the strongest
+  installed class, not the floor.** `examples/policies/default.json`'s `min_confinement_class` moved
+  CC2 -> CC1: on a stock, CC1-only install the old CC2 floor refused every default-policy run before
+  it launched (`runner "docker" cannot enforce confinement_class CC2 (available: CC1)`), and the k8s
+  Helm chart carried a render-time guard (B12b-F7) purely to catch the same trap early — both existed
+  because the floor doubled as the default. They no longer need to: a run naming no `confinement_class`
+  now resolves to the strongest class the runner actually advertises at or above whatever floor
+  applies (the admin floor, when one is set, is unchanged and still fails closed exactly as before).
+  The admin-set floor path, the CC3 blast-radius override, and every explicit request are unchanged
+  to the byte. **Residual:** on a host with gVisor or Kata installed, a person may now deliberately
+  request a weaker installed class than the old CC2 floor allowed — an explicit choice only, never the
+  default, which still always resolves to the strongest available. And because the advertised set is
+  live-probed rather than read from a static field, a runtime that disappears between two runs lowers
+  the *default* for the next unspecified request rather than refusing it — which is why the
+  `run.create` audit row now carries `confinement_source` (`requested`/`defaulted`), the one place that
+  distinguishes "the caller asked for this class" from "this is what today's runner had to offer." See
+  `threatmodel/THREAT-MODEL.md` residual #47.
+
 ## [0.7.7] — 2026-09-18
 
 The 0.7.6 field report, in one journey: an admin on a Kubernetes estate whose AWS SSO session had
