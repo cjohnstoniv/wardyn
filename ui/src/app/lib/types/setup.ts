@@ -15,6 +15,11 @@ export type SetupCheckPlatform = "linux" | "darwin" | "windows" | "wsl" | "any";
 // One environment/readiness row. status "info" is a permanent, non-fixable
 // condition (e.g. no /dev/kvm on macOS) — render it informationally, never as a
 // clearable warning.
+//
+// blocking (0.7.8): the DAEMON's own decision that this row must confiscate
+// the console (setup-gate.ts's setupGateActive reads it, and nothing else —
+// no id list lives on this side any more). Internal/api/setup_checks.go's
+// SetupCheck.Blocking doc names the three rows that ever carry it.
 export interface SetupCheck {
   id: string;
   label: string;
@@ -22,6 +27,7 @@ export interface SetupCheck {
   platform?: SetupCheckPlatform;
   detail?: string;
   fix?: string;
+  blocking?: boolean;
 }
 
 // A resident coding-agent CLI detected on the wardynd host PATH. logged_in is

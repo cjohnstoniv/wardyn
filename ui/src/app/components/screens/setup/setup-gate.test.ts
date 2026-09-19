@@ -192,52 +192,57 @@ describe("firstRunLanding — the INSTALL's onboarding mark decides for an admin
 // ------------------------------------------------------------
 // setupGateActive — the server-derived hard gate.
 // ------------------------------------------------------------
-// The bar is the DAEMON's own severity vocabulary, so a new check participates
-// without touching this file. `info` never gates: setup_checks.go reserves it
-// for permanent/optional rows, and the absent-model-provider row is exactly
-// that — Wardyn governs non-agent runs, so a model is optional.
+// 0.7.8: the bar is the DAEMON's own `blocking` flag (SetupCheck.Blocking,
+// internal/api/setup_checks.go), not a status/id guess made here. A `warn`/
+// `fail` grade is necessary but NOT sufficient — most of the checklist can
+// carry either without ever confiscating the console.
 describe("setupGateActive", () => {
   const ok = { id: "runner", status: "ok" as const };
   const info = { id: "env_builder", status: "info" as const };
-  const warn = { id: "runner", status: "warn" as const };
-  const fail = { id: "runner", status: "fail" as const };
+  // A row graded warn/fail but NOT marked blocking — most of the checklist,
+  // post-0.7.8: optional rows, and rows read through the CALLER's own
+  // credential (llm_provider, bedrock_provider, harness_credential,
+  // harness_credential_aws) all look exactly like this on the wire.
+  const warnNonBlocking = { id: "site_config", status: "warn" as const };
+  const failNonBlocking = { id: "k8s_egress_containment", status: "fail" as const };
+  // A row the daemon marked blocking. Not necessarily one of the three real
+  // ids that ever carry it (runner/confinement_floor/sso_rbac) — the function
+  // trusts the flag alone, so the fixture only needs to carry it.
+  const blocking = { id: "runner", status: "fail" as const, blocking: true };
 
-  // 0.7.6 field report: the model-provider check is OPTIONAL (its own row says
-  // so) and, under a per_user Bedrock row, graded through the CALLER's own AWS
-  // session — so one admin's lapsed sign-in read as an install defect and the
-  // 5-minute status poll yanked them off New Run into the funnel. A sign-in
-  // lives on the strip and on New Run; the funnel is not where it is repaired.
-  it("never gates on the model-provider rows — optional, and graded per person under per_user", () => {
-    expect(setupGateActive({ checks: [ok, { id: "llm_provider", status: "warn" }] })).toBe(false);
-    expect(setupGateActive({ checks: [ok, { id: "llm_provider", status: "fail" }] })).toBe(false);
-    // The Bedrock row too: the kind walk's never-captured admin reads BOTH
-    // rows warn (bedrock_provider's per_user "credential missing" arm), and
-    // one row excused is no fix at all (live case L0, walk-1).
-    expect(setupGateActive({ checks: [ok, { id: "bedrock_provider", status: "warn" }] })).toBe(false);
-    expect(
-      setupGateActive({ checks: [{ id: "llm_provider", status: "warn" }, { id: "bedrock_provider", status: "warn" }] }),
-    ).toBe(false);
-    // …while an INSTALL check at the same grade still does.
-    expect(setupGateActive({ checks: [{ id: "llm_provider", status: "warn" }, warn] })).toBe(true);
-    expect(setupGateActive({ checks: [{ id: "bedrock_provider", status: "warn" }, fail] })).toBe(true);
+  // 0.7.8: this replaces the old "never gates on the model-provider rows"
+  // case. That was the SECOND id list here (the first was one id, wardyn
+  // 0.7.6) — the 0.7.6 field report was a THIRD id (harness_credential_aws)
+  // nobody had added to it yet, because the console was enumerating a family
+  // instead of naming the property that matters. There is no id list left to
+  // outgrow: a row gates on `blocking`, whatever its id or status.
+  it("never gates on a row the daemon did not mark blocking, however it is graded", () => {
+    expect(setupGateActive({ checks: [ok, warnNonBlocking] })).toBe(false);
+    expect(setupGateActive({ checks: [ok, failNonBlocking] })).toBe(false);
+    expect(setupGateActive({ checks: [warnNonBlocking, failNonBlocking] })).toBe(false);
+    // The exact field-report shape: a lapsed admin AWS SSO session, graded
+    // warn, carries no `blocking` — the daemon never sets it on this id.
+    expect(setupGateActive({ checks: [{ id: "harness_credential_aws", status: "warn" }] })).toBe(false);
+  });
+
+  it("gates on a row the daemon marked blocking", () => {
+    expect(setupGateActive({ checks: [ok, blocking] })).toBe(true);
+    // A non-blocking warn/fail beside it changes nothing — one blocking row
+    // is sufficient regardless of what else is on the list.
+    expect(setupGateActive({ checks: [warnNonBlocking, blocking] })).toBe(true);
   });
 
   it("does not gate when every check is ok or info", () => {
     expect(setupGateActive({ checks: [ok, info, ok] })).toBe(false);
   });
 
-  it("gates on a warn, and on a fail", () => {
-    expect(setupGateActive({ checks: [ok, warn] })).toBe(true);
-    expect(setupGateActive({ checks: [ok, fail] })).toBe(true);
-  });
-
   it("never gates a member — their checks are redacted, so the gate would have no exit", () => {
-    expect(setupGateActive({ checks: [fail] }, "member")).toBe(false);
-    expect(setupGateActive({ checks: [fail] }, "admin")).toBe(true);
+    expect(setupGateActive({ checks: [blocking] }, "member")).toBe(false);
+    expect(setupGateActive({ checks: [blocking] }, "admin")).toBe(true);
   });
 
   it("never gates an unreachable daemon — a synthetic status proves nothing", () => {
-    expect(setupGateActive({ unreachable: true, checks: [fail] })).toBe(false);
+    expect(setupGateActive({ unreachable: true, checks: [blocking] })).toBe(false);
   });
 
   it("never gates on absent evidence (no checks, or the field missing)", () => {
@@ -250,7 +255,7 @@ describe("setupGateActive", () => {
   it("ignores the per-browser dismiss flag entirely", () => {
     dismissSetup();
     expect(setupDismissed()).toBe(true);
-    expect(setupGateActive({ checks: [warn] })).toBe(true);
+    expect(setupGateActive({ checks: [blocking] })).toBe(true);
   });
 
   // "A place you go, not a wall you are trapped behind": once the INSTALL has
@@ -260,14 +265,14 @@ describe("setupGateActive", () => {
   // a deliberately runner-less deployment (the e2e harness is one) could
   // never leave the funnel at all.
   it("never gates an install that has completed onboarding", () => {
-    expect(setupGateActive({ checks: [fail], onboarding_complete: true })).toBe(
+    expect(setupGateActive({ checks: [blocking], onboarding_complete: true })).toBe(
       false,
     );
-    expect(setupGateActive({ checks: [warn], onboarding_complete: true })).toBe(
+    expect(setupGateActive({ checks: [warnNonBlocking], onboarding_complete: true })).toBe(
       false,
     );
     expect(
-      setupGateActive({ checks: [fail], onboarding_complete: false }),
+      setupGateActive({ checks: [blocking], onboarding_complete: false }),
     ).toBe(true);
   });
 });
