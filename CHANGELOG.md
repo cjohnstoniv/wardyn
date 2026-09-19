@@ -50,6 +50,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
   reason to believe the command would work for them at all. It now names both `WARDYN_TOKEN`
   (a member's own) and `WARDYN_ADMIN_TOKEN`, and that it mints the same one-time ticket the
   page's own terminal does. (`ui/src/app/components/screens/run-detail-ssh.tsx`)
+- **The browser terminal sometimes needed a double click to type, sometimes only accepted a click in
+  one area, and sometimes never let you click back in.** Three separate causes, each with a pinning
+  test:
+  - A holder whose socket died silently (a dead peer on a quiet shell) could hold the writer slot
+    forever — nothing in the attach pump bounded it, since the existing 30s write timeout only ever
+    engages while output is flowing. The attach WebSocket now probes an otherwise-idle connection with
+    a WebSocket ping and frees the slot if the peer never answers (`internal/api/attach.go`).
+  - Toggling focus mode remounts the terminal (by design), and the old socket's holder slot was
+    released only after its recording was persisted and its `session.detach` audit was written — a
+    window in which the new socket's handshake was admitted read-only against its own vanishing
+    predecessor. The slot now frees the instant the old pump ends, before that tail
+    (`internal/api/attach.go`).
+  - The terminal never called `.focus()` at all; focus depended entirely on xterm's own click-to-focus
+    on its inner canvas, so a click on the container's padding or the space below the last row landed
+    nowhere. A click anywhere in the terminal, or a socket becoming writable, now focuses it
+    (`ui/src/app/components/attach-terminal.tsx`).
 
 ## [0.7.7] — 2026-09-18
 

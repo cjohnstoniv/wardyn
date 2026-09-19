@@ -52,7 +52,7 @@ import { Button } from "./ui/button";
 import { TakeoverConfirmDialog } from "./attach-takeover-dialog";
 import { RUN_COCKPIT, TERMINAL } from "./wardyn/copy";
 import { useOperator, useOperatorResolved, usePrincipal } from "./wardyn/operator-context";
-import { modalLayerOpen } from "../lib/modal-layer-open";
+import { useTerminalFullscreen } from "./use-attach-terminal-fullscreen";
 
 // ---------------------------------------------------------------------------
 // Auth-mode detection
@@ -202,7 +202,6 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   const wsRef = React.useRef<WebSocket | null>(null);
   const [connState, setConnState] = React.useState<ConnState>("connecting");
   const [errorMsg, setErrorMsg] = React.useState<string>("");
-  const [fullscreen, setFullscreen] = React.useState(false);
   // What the server told us this socket is (attach-mode frame). null = it has
   // not told us yet: the frame arrives on EVERY connect, so silence means "not
   // yet", never "you are driving" — an assumed-writer UI is how a spectator
@@ -380,6 +379,13 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     let autoRunSent = false;
     let autoRunTimer: ReturnType<typeof setTimeout> | null = null;
     let connectTimer: ReturnType<typeof setTimeout> | null = null;
+    // D1+D2 aggravator: an observer PROMOTED in place (read_only true→false on
+    // the same socket, no reconnect) inherits the departed holder's tmux
+    // geometry — the server skips handshake geometry for a non-writer and
+    // drops an observer's resize frames, so refit() never ran for this
+    // client's real size. null on the first frame so an initial writer
+    // connect (never "was read-only") does not spuriously force-refit.
+    let lastReadOnly: boolean | null = null;
 
     const send = (payload: ArrayBufferView | string) => {
       const cur = wsRef.current;
@@ -509,7 +515,24 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
         try {
           const msg = JSON.parse(ev.data) as AttachModeMsg;
           if (msg?.type === "attach-mode") {
-            setMode({ readOnly: !!msg.read_only, holder: msg.holder });
+            const nowReadOnly = !!msg.read_only;
+            if (lastReadOnly === true && !nowReadOnly) {
+              // Promoted in place: force the resize nudge (refit's own doc)
+              // so THIS client's size wins over the geometry it inherited.
+              // Called directly, not deferred to a rAF like the connect-time
+              // refit below — the terminal is already mounted and measured by
+              // the time a mode change can arrive, same as the Redraw button's
+              // own direct call.
+              refit(true);
+            }
+            if (!nowReadOnly) {
+              // D3: a writable socket opening (initial connect, reconnect, or
+              // a promotion) is exactly when an operator expects to be able to
+              // type — do not make them click first.
+              term.focus();
+            }
+            lastReadOnly = nowReadOnly;
+            setMode({ readOnly: nowReadOnly, holder: msg.holder });
           }
         } catch {
           /* not JSON — nothing to do, same as before */
@@ -710,77 +733,10 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     // re-decided against the answer.
   }, [runId, tokenOnlyMode, refit, operator, operatorResolved, owned]);
 
-  // Refit shortly after entering/leaving fullscreen (the box just changed).
-  React.useEffect(() => {
-    const id = requestAnimationFrame(() => refit());
-    const t = setTimeout(() => refit(), 60);
-    return () => {
-      cancelAnimationFrame(id);
-      clearTimeout(t);
-    };
-  }, [fullscreen, refit]);
-
-  // Fullscreen uses the NATIVE Fullscreen API, not a `fixed inset-0` overlay.
-  //
-  // The CSS approach cannot be made reliable: `position: fixed` is resolved
-  // against the nearest ancestor that establishes a containing block, and the
-  // list of things that do is long and growing — transform, filter,
-  // backdrop-filter, perspective, contain, will-change, and (Tailwind v4's
-  // default for translate-x-*) the INDIVIDUAL `translate` property, which
-  // `transform: none` does not reset. Measured on the login dialog: computed
-  // `transform: none` yet `translate: -50% -50%`, and a `fixed inset-0` child
-  // still sized to the dialog rather than the viewport.
-  //
-  // requestFullscreen promotes the element to the browser's TOP LAYER, which
-  // sits outside the whole containing-block question, so this works identically
-  // inside a dialog, a card, or a page. It also gives real fullscreen — over the
-  // browser chrome, not just the page — and the browser handles Escape itself
-  // (WCAG 2.1.2), so there is no key handler to fight xterm's textarea for.
-  const toggleFullscreen = React.useCallback(() => {
-    const el = panelRef.current;
-    if (!el) return;
-    if (document.fullscreenElement === el) {
-      void document.exitFullscreen().catch(() => {});
-      return;
-    }
-    const req = el.requestFullscreen?.bind(el);
-    if (!req) {
-      // No API (very old browser, or a sandboxed iframe without
-      // allow-fullscreen): fall back to the in-page overlay. It is still
-      // subject to the containing-block rules above, so it may only fill an
-      // ancestor — degraded, never broken.
-      setFullscreen((f) => !f);
-      return;
-    }
-    void req().catch(() => setFullscreen((f) => !f));
-  }, []);
-
-  // The browser owns the truth: Escape, F11 and the OS window chrome can all
-  // leave fullscreen without going through our button.
-  React.useEffect(() => {
-    const sync = () => setFullscreen(document.fullscreenElement === panelRef.current);
-    document.addEventListener("fullscreenchange", sync);
-    return () => document.removeEventListener("fullscreenchange", sync);
-  }, []);
-
-  // Escape exits the FALLBACK overlay (WCAG 2.1.2, no keyboard trap). Native
-  // fullscreen needs no help — the browser exits on Escape before the page sees
-  // the key — so this only binds when we are overlaying rather than promoted.
-  // Capture phase, so it runs before xterm's textarea swallows the key and
-  // sends it to the PTY as literal input.
-  React.useEffect(() => {
-    if (!fullscreen || document.fullscreenElement) return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      // R-4: yield to a dialog's own Escape-dismiss (F1-F3's sibling here).
-      if (e.key === "Escape" && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && !modalLayerOpen()) {
-        e.preventDefault();
-        e.stopPropagation();
-        setFullscreen(false);
-      }
-    };
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, [fullscreen]);
+  // Fullscreen (native API, Escape fallback, refit-on-toggle) — see
+  // use-attach-terminal-fullscreen.ts for the reasoning; split into its own
+  // hook purely to keep this file under its line cap.
+  const { fullscreen, toggleFullscreen } = useTerminalFullscreen(panelRef, refit);
 
   // --- Holder / take-over ---------------------------------------------------
   // Spectator: the server admitted us read-only because someone else holds the
@@ -938,8 +894,22 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
           // cannot see it — 2.1.2's "advised on entry" has to hold for a screen
           // reader landing in the grid, not only for a sighted user.
           aria-description={TERMINAL.ESCAPE_CHORD_HINT}
-          // Keep clicks on the terminal from bubbling to the outer shell (focus).
-          onMouseDown={(e) => e.stopPropagation()}
+          // D3: xterm only focuses itself on a click that lands exactly on its
+          // own `.xterm-screen` canvas layer — a click on this container's
+          // padding, or in the dead space below the last row, lands nowhere,
+          // which reads as "needs a double click" (the first click was wasted
+          // here) or "only works in one area". Focusing on ANY mousedown in
+          // this container covers the whole clickable surface; xterm's own
+          // click-to-focus still fires too (harmless — focusing twice is a
+          // no-op). Kept on THIS container, deliberately NOT the panel root:
+          // the root also renders the title-bar Redraw/Fullscreen buttons and
+          // the footer's Take-over button, and stealing focus back from a
+          // just-pressed button on every click would be its own bug; the root
+          // also owns the tabIndex={-1} landing pad the Ctrl+] chord targets.
+          onMouseDown={(e) => {
+            e.stopPropagation();
+            termRef.current?.focus();
+          }}
         />
         {readOnly && (
           // pointer-events-none: this is a label, not a shield. The input it
