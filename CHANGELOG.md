@@ -8,6 +8,20 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`WARDYN_AWS_SSO_PROXY_INJECT` (the Phase B kill switch) is now reachable the way
+  `docs/OPERATIONS.md`'s "Turning the lane off" already told operators to use it.** It was a named env
+  var read at boot, but reachable only through the Helm chart's generic `.Values.env` passthrough (no
+  `values.yaml` entry of its own) and absent from the Compose stack's explicit `WARDYN_*` env list
+  entirely — an operator following either install path's own documented rollback recipe for a corp-MITM
+  or SDK surprise had no chart value or compose var to set. The chart gains `awsSSOProxyInject`
+  (`deploy/helm/wardyn/values.yaml`), wired into the Deployment behind the same precedence `trustedCA`
+  already established: a raw `env.WARDYN_AWS_SSO_PROXY_INJECT` still wins, so
+  `scripts/kind-sso-walk.sh`'s existing `--set env.WARDYN_AWS_SSO_PROXY_INJECT=…` posture pin needed no
+  change. Compose gains the `WARDYN_AWS_SSO_PROXY_INJECT` passthrough beside its sibling `WARDYN_*`
+  vars. Both empty by default — byte-identical to today, wardynd's own compiled default (`on`) applies.
+
 ## [0.7.7] — 2026-09-18
 
 The 0.7.6 field report, in one journey: an admin on a Kubernetes estate whose AWS SSO session had

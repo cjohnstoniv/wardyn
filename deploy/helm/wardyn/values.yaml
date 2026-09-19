@@ -230,6 +230,17 @@ defaultPolicy: ""
 # pointing at a path your own volume mounts). See README "Corporate CA trust".
 trustedCA: ""
 
+# Phase B kill switch (WARDYN_AWS_SSO_PROXY_INJECT): "on" (proxy-side AWS SSO
+# session injection, the daemon's own default) or "off" (the pre-0.7.6
+# behaviour — the SSO token is written into the sandbox). See
+# docs/OPERATIONS.md "Turning the lane off". Empty (default) => no named env
+# entry rendered, so wardynd's own compiled default ("on") applies — byte-
+# identical to today. Wires WARDYN_AWS_SSO_PROXY_INJECT unless
+# env.WARDYN_AWS_SSO_PROXY_INJECT is already set (which always wins) —
+# `scripts/kind-sso-walk.sh` pins its posture that way and keeps working
+# untouched.
+awsSSOProxyInject: ""
+
 # Kubernetes runner substrate (internal/runner/k8s, `-tags k8s`, v0.5+). Off by
 # default — the Docker Compose stack (deploy/compose/) remains a fully
 # separate, independent path. Enabling this makes wardynd itself create/manage

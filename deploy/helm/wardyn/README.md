@@ -999,6 +999,10 @@ See `values.yaml` for all options. Key settings:
 - `trustedCA`: PEM text baking a corporate CA bundle into a ConfigMap,
   mounted read-only — see [Corporate CA trust](#corporate-ca-trust) above.
   Empty (default) => no ConfigMap, system roots only.
+- `awsSSOProxyInject`: `"on"`/`"off"`, the Phase B kill switch — see
+  [docs/OPERATIONS.md "Turning the lane
+  off"](../../../docs/OPERATIONS.md#turning-the-lane-off). Empty (default) =>
+  no named env entry rendered, wardynd's own default (`on`) applies.
 - `readinessProbe.path`: readiness probe path, default `/readyz` (which pings
   Postgres — liveness and startup stay on `/healthz` regardless). The chart's
   own default image serves `/readyz` from 0.6.0 on, so leave this alone unless
