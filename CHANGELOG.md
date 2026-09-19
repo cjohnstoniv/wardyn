@@ -22,9 +22,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **Launch with a lapsed sign-in is one dialog, then the run.** `POST /runs` still refuses a run whose
   per-person session is missing or spent before any run exists, and the refusal now names its class
   on the wire — `"reason":"model_credential"`, the failure audit row's own word; every other error
-  body is byte-identical. New Run answers that refusal by opening the AWS sign-in dialog itself and
-  launching the run again — the form as it then stands — the moment the capture lands: no trip to
-  Getting started, no second click. Escape leaves the sentence and the rail's own sign-in control; a member under a shared row
+  body is byte-identical. The real launch now also REDEEMS an expired session whose refresh token
+  still lives, right there at the click (Review's preflight stays a dry run): a renewal AWS refuses is
+  refused before any run exists, with the class — it used to be admitted and fail at dispatch, on the
+  run's own page, after the person had been told it launched. New Run answers that refusal by opening
+  the AWS sign-in dialog itself and launching the run again — the form as it then stands — the moment
+  the capture lands: no trip to Getting started, no second click. Escape leaves the sentence and the rail's own sign-in control; a member under a shared row
   reads the sentence and no dialog, because the repair is the admin's; a relaunch refused again (a
   pin contradiction the same identity cannot repair) shows the sentence and waits. Launch stays a
   server decision — nothing is pre-checked on the console's cached status. Review's preflight 422
@@ -32,10 +35,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Known gaps
 
-- **A session that is expired but still renewable is admitted at create, by design** (dispatch redeems
-  the refresh token). If the portal then refuses the refresh, the run fails on its own page and carries
-  the 0.7.6 sign-in door there; it does not launch itself again from that page — "Start a run like this
-  one" in the run header does.
+- **A renewal AWS does not answer is refused without the dialog.** When the token in hand has lapsed
+  and the portal is throttled or unreachable at the click, the launch is refused with *"launch again in
+  a moment"* and no sign-in dialog — the sign-in is still good, and a device flow repairs nothing about
+  an outage. A run whose renewal fails at dispatch (a token that lapses between the click and the
+  sandbox) still fails on its own page with the 0.7.6 sign-in door; it does not launch itself again
+  from there — "Start a run like this one" in the run header does.
 - **A relaunch armed by the dialog survives leaving New Run with the dialog open** (the dialog is the
   shell's, so Back does not close it): a sign-in completed afterwards launches the run that click asked
   for. It lands on that run only when the launch carries no advisories; a launch WITH advisories holds

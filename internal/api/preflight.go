@@ -303,7 +303,7 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 	// secret-store read and let the rail describe a lane the gate did not judge.
 	ssoSubject := runIdentitySubject(ctx, principalFromRequest(r))
 	var modelCred modelCredentialFacts
-	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred) {
+	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, &modelCred, false) {
 		return
 	}
 

@@ -233,7 +233,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// their own per_user capture here while dispatch, reading run.CreatedBy,
 	// resolved it fine.
 	ssoSubject := runIdentitySubject(ctx, principalFromRequest(r))
-	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, nil) {
+	// refresh=true: the real launch redeems an expired-but-renewable session
+	// here, so a spent one is refused before any run exists (0.7.7).
+	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, nil, true) {
 		return
 	}
 
@@ -628,7 +630,7 @@ func (s *Server) resolveRunLLMAccess(ctx context.Context, req createRunRequest, 
 	// decide where a credential is written, deleted or SERVED take ok
 	// (harnesscred.go, ssotoken.go, enforceReadableRosterForCredential).
 	ssoScope, _ := s.awsSSOScopeForAgent(ctx, req.Agent, subject)
-	lanes := s.resolveRunLLMLanes(ctx, req, &llmSpec, bedrockRef, ssoScope)
+	lanes := s.resolveRunLLMLanes(ctx, req, &llmSpec, bedrockRef, ssoScope, false)
 	var llmAccess *composeLLMAccess
 	if note, provisioned := s.reconcileLLMAccess(&llmSpec, req.Agent, presentSecrets, s.subscriptionInjectEnabled(), lanes.managed); note != "" {
 		llmAccess = &composeLLMAccess{Provisioned: provisioned, Note: note}

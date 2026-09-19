@@ -224,7 +224,7 @@ func TestCreateRun_StoredBlobContradictingThePinIs422(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := createRunRequest{Agent: modelAccessAgent, Task: "ship it"}
-	ok := srv.enforceCreateLLMMechanism(context.Background(), rec, req, types.RunPolicySpec{}, nil, pinTestMember, nil)
+	ok := srv.enforceCreateLLMMechanism(context.Background(), rec, req, types.RunPolicySpec{}, nil, pinTestMember, nil, true)
 	if ok {
 		t.Fatal("create admitted a run whose stored AWS session contradicts the roster pin")
 	}

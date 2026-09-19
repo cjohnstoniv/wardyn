@@ -440,7 +440,7 @@ func TestEnforceCreateLLMMechanism_RefusesBeforeARunExists(t *testing.T) {
 			srv := New(cfg)
 			rec := httptest.NewRecorder()
 
-			ok := srv.enforceCreateLLMMechanism(context.Background(), rec, c.req, types.RunPolicySpec{}, nil, "", nil)
+			ok := srv.enforceCreateLLMMechanism(context.Background(), rec, c.req, types.RunPolicySpec{}, nil, "", nil, true)
 			if ok == c.wantRefused {
 				t.Fatalf("admitted = %v, want refused = %v (body %q)", ok, c.wantRefused, rec.Body.String())
 			}
@@ -767,7 +767,7 @@ func TestEnforceCreateLLMMechanism_AuditsNothing(t *testing.T) {
 	rec := httptest.NewRecorder()
 
 	if srv.enforceCreateLLMMechanism(context.Background(), rec, createRunRequest{Agent: "claude-code", Task: "ship it"},
-		types.RunPolicySpec{}, nil, "member@corp.example", nil) {
+		types.RunPolicySpec{}, nil, "member@corp.example", nil, true) {
 		t.Fatal("a per_user row with no captured session must refuse at create")
 	}
 	if rec.Code != http.StatusUnprocessableEntity {

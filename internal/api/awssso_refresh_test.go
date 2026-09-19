@@ -640,14 +640,16 @@ func TestAWSSSOCacheOmitsTheRefresherFields(t *testing.T) {
 	}
 }
 
-// TestAWSSSORefresh_CreateAndPreflightNeverRedeem: the dry-run passes must not
-// spend a one-use token. resolveRunLLMAccess (the create path) resolves Bedrock
+// TestAWSSSORefresh_AdvisoryNeverRedeems: the dry-run passes must not spend a
+// one-use token. resolveRunLLMAccess (the create-path ADVISORY) resolves Bedrock
 // with refresh=false, so no CreateToken call is made and the stored blob is
-// untouched — while the verdict is still READY.
-func TestAWSSSORefresh_CreateAndPreflightNeverRedeem(t *testing.T) {
+// untouched — while the verdict is still READY. The real launch's gate is the
+// one pass at create that DOES redeem (runs_create_sso_refresh_test.go);
+// preflight's gate is pinned there too.
+func TestAWSSSORefresh_AdvisoryNeverRedeems(t *testing.T) {
 	s, _, blob := ssoRefreshServer(t)
 	calls := fakeOIDC(t, func(w http.ResponseWriter, _ map[string]string, _ int) {
-		t.Error("create/preflight redeemed the refresh token — a dry run must never spend a rotating credential")
+		t.Error("the advisory redeemed the refresh token — a dry run must never spend a rotating credential")
 		w.WriteHeader(http.StatusInternalServerError)
 	})
 
