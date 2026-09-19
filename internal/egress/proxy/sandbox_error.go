@@ -4,12 +4,16 @@
 package proxy
 
 import (
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
 	"regexp"
 	"slices"
+	"strings"
+
+	"github.com/cjohnstoniv/wardyn/internal/egress"
 )
 
 // This file is ONE subject: what a proxy error may say to the SANDBOX.
@@ -117,4 +121,84 @@ func topologyPatterns(controlPlaneURL string, up *upstreamProxy) []*regexp.Regex
 		out = append(out, regexp.MustCompile(regexp.QuoteMeta(v)+`[^"\s]*`))
 	}
 	return out
+}
+
+// THE DIAL-FAILED SHAPE: a request policy ALLOWED, where the network then
+// lost it. Every emitting site needs the SAME two things httpError already
+// gives the sandbox body — the secret mask and the topology redaction — in
+// the DECISION LOG too (egress.DecisionLog.Cause), because auditScope hands a
+// run's own CREATOR that whole row, not just the operator. One helper for
+// both fields (Cause, Via) so a fifth call site cannot forget either pass.
+
+// viaDirect and viaUpstreamProxy are egress.DecisionLog.Via's two class
+// tokens — never an address (see that field's doc comment).
+const (
+	viaDirect        = "direct"
+	viaUpstreamProxy = "upstream-proxy"
+)
+
+// dialFailureCause returns the MASKED, TOPOLOGY-REDACTED sentence naming why a
+// dial-shaped refusal happened — the same two passes httpError applies to the
+// sandbox-facing body, run here too because this text also lands in
+// egress.DecisionLog.Cause.
+func (p *Proxy) dialFailureCause(err error) string {
+	masked := string(maskDecisionBytes([]byte(err.Error())))
+	return p.redactTopology(masked)
+}
+
+// viaHop classifies which hop CLASS a forward-egress dial to host attempted —
+// see egress.DecisionLog.Via's doc comment for why this is a class token and
+// never the operator's corp-proxy address.
+func (p *Proxy) viaHop(host string) string {
+	if p.upstream != nil && !p.bypassUpstream(host) {
+		return viaUpstreamProxy
+	}
+	return viaDirect
+}
+
+// dialStage names WHICH LEG of a dial-shaped failure produced err, so Cause
+// says what actually failed instead of a blanket "dial failed" — an x509
+// handshake failure read as a network dial failure is the specific lie that
+// cost the reported operator an hour.
+//
+// A heuristic over the error TEXT, not a type switch: dialThroughUpstream's
+// own stages (resolve/dial/CONNECT-handshake, upstream.go) and crypto/tls's
+// handshake failures ("tls: ...", "x509: ...", a bare protocol alert) do not
+// share one error type to switch on, and http.Transport re-wraps both behind
+// a *url.Error before RoundTrip ever returns them to a caller here.
+//
+// ponytail: string-matching over the wrapped error text, not an exhaustive
+// errors.As classification of every net/crypto-tls error shape — upgrade to
+// typed matching if a stage this misclassifies turns up.
+func dialStage(err error) string {
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "upstream proxy"), strings.Contains(msg, "upstream CONNECT"), strings.Contains(msg, "upstream buffer"):
+		return "upstream proxy connect"
+	case strings.Contains(msg, "tls:"), strings.Contains(msg, "x509:"), strings.Contains(msg, "remote error:"):
+		return "tls handshake"
+	default:
+		var opErr *net.OpError
+		if errors.As(err, &opErr) && opErr.Op == "dial" {
+			return "tcp dial"
+		}
+		return "dial"
+	}
+}
+
+// denyDialFailed builds a dial-shaped deny decision: req is the request the
+// earlier ALLOW was computed for (superseded here rather than over-reported,
+// E3); scan carries forward any scan summary the superseded allow already
+// attached (nil when there is none). ruleSource is taken as an argument, not
+// hardcoded, so each real emitting site keeps "builtin:dial-failed" written
+// out in full on ITS OWN line — docs/AUDIT-ACTIONS.md's rule_source table
+// cites every one of them by exact line, which a shared symbol would hide
+// this behind. This is still the sole construction point for the Cause/Via
+// pair — see this file's header comment.
+func (p *Proxy) denyDialFailed(ruleSource string, req egress.Request, host string, err error, scan *egress.ScanSummary) egress.DecisionLog {
+	dl := decisionLog(req, egress.Deny, ruleSource)
+	dl.Cause = dialStage(err) + ": " + p.dialFailureCause(err)
+	dl.Via = p.viaHop(host)
+	dl.Scan = scan
+	return dl
 }

@@ -856,8 +856,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		// Dial failed: report a DENY (not the earlier-computed allow) so a failed
 		// tunnel is never logged as allowed egress (E3).
 		if log != nil {
-			dl := decisionLog(log.Request, egress.Deny, "builtin:dial-failed")
-			p.sink.emit(dl)
+			p.sink.emit(p.denyDialFailed("builtin:dial-failed", log.Request, host, err, nil))
 		}
 		p.httpError(w, "upstream dial failed", err, http.StatusBadGateway)
 		return

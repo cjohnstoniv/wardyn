@@ -8,6 +8,40 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+An operator's blocking field report: on a private-endpoint Kubernetes estate reaching AWS through a
+corporate proxy, the first model call starved and the agent showed
+`API Error: SyntaxError: JSON Parse error: Unexpected identifier "llm"` — the giveaway that the
+proxy's own plain-text 502 body ("llm upstream vet failed: …") was handed straight to a JSON parser.
+The audit trail showed a tight loop of `policy:allowed` → `builtin:dial-failed`, with no way to tell
+*why* the dial failed. It cost the operator an hour.
+
+### Added
+
+- **Every `builtin:dial-failed` refusal now names why, and which hop.** `egress.DecisionLog` carries
+  two new fields: `cause` — the masked, topology-redacted sentence naming the failed STAGE (a TCP
+  dial, the origin's TLS handshake, the operator's own upstream-proxy CONNECT exchange) plus the
+  underlying error, so "dial failed" on an `x509: certificate signed by unknown authority` is no
+  longer the specific lie that cost this operator an hour — and `via`, the hop CLASS attempted
+  (`direct` or `upstream-proxy`, never an address). Both ride through the SAME mask + topology-redact
+  pass `Proxy.httpError` already applies to the sandbox-facing body, because `auditScope` hands a
+  run's own creator this whole row, not just the operator. Rendered beside the decision chip in the
+  run's Audit tab.
+- **The configured LLM gateway's own guard refusal is no longer misfiled as a dial failure.**
+  `vetTrustedHost`'s refusal of an operator-misconfigured internal model gateway (resolves to
+  loopback/link-local/this proxy's own control-plane network, or does not resolve at all) used to
+  share `builtin:dial-failed` with genuine network-lost-it dials, which also excluded it from
+  `wardyn_egress_denies_total` alongside failures the network actually caused (an accepted residual,
+  F065-gatewayvet). It now carries its own `builtin:gateway-vet-failed` rule_source and counts as an
+  ordinary denial, like any other guard refusal.
+
+### Fixed
+
+- **`builtin:upstream-proxy` is an allow, not a refusal.** The console's rule_source table folded it
+  into the generic "Refused by the built-in guard" bucket, which reads as a denial that never
+  happened — it is recorded once per run, at proxy construction, to audit the deliberate SSRF-guard
+  relaxation for the operator's configured upstream hop. It now renders as "Corp upstream proxy in
+  path" (an allow).
+
 ## [0.7.7] — 2026-09-18
 
 The 0.7.6 field report, in one journey: an admin on a Kubernetes estate whose AWS SSO session had

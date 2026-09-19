@@ -380,10 +380,23 @@ func (p *Proxy) llmUpstream(vendor string) (host string, port int, prefix string
 }
 
 // errGatewayVet is vetTrustedHost's sentinel refusal — distinguished from an
-// ordinary SSRF denial so the brokered LLM route can log "builtin:dial-failed"
-// (a per-request resolve failure) instead of the misleading "brokered:llm"
-// allow-shaped source.
+// ordinary SSRF denial so the brokered LLM route can log
+// ruleSourceGatewayVetFailed (a GUARD refusal of the operator's own configured
+// gateway host) instead of the misleading "brokered:llm" allow-shaped source.
 var errGatewayVet = errors.New("proxy: configured gateway host refused")
+
+const (
+	// ruleSourceGatewayVetFailed marks llmRouteTarget's refusal of the
+	// OPERATOR'S OWN configured LLM gateway — vetTrustedHost's errGatewayVet,
+	// above: the gateway host resolved to loopback/link-local/this proxy's own
+	// control-plane network, or did not resolve at all. It USED TO share
+	// "builtin:dial-failed" with three genuine network-lost-it dials, which
+	// excluded a config problem the operator's own gateway can never satisfy
+	// from wardyn_egress_denies_total alongside failures the network caused —
+	// see isPolicyDeny (internal/api/metrics.go), now closed rather than
+	// accepted as a residual.
+	ruleSourceGatewayVetFailed = "builtin:gateway-vet-failed"
+)
 
 // gatewayTarget resolves the dial target for the BROKERED LLM route only
 // (proxyLLMRequest) — never for evaluate/serveMITMRequest/the git+PAT

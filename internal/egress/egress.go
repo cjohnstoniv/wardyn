@@ -51,6 +51,25 @@ type DecisionLog struct {
 	Decision   Decision   `json:"decision"`
 	RuleSource string     `json:"rule_source"` // "policy" | "approval:<id>" | "builtin:private-ip" | "builtin:resolve-failed" | ...
 	ApprovalID *uuid.UUID `json:"approval_id,omitempty"`
+	// Cause is the masked, topology-redacted sentence naming WHY a builtin
+	// dial-shaped refusal happened and at what STAGE (a TCP dial, the origin's
+	// TLS handshake, the operator's own upstream-proxy CONNECT exchange) —
+	// never just "dial failed", which is the one lie that cost a reported
+	// operator an hour tracing a corp-proxy 502 back to its cause. It runs
+	// through the SAME two passes a sandbox-facing error body already does
+	// (maskDecisionBytes, then Proxy.redactTopology) before it ever reaches
+	// this field: auditScope (internal/api/audit.go) hands a run's OWN CREATOR
+	// this whole row, not just the operator (docs/AUDIT-ACTIONS.md), so the
+	// full unredacted text stays on the sidecar's own slog.Warn line and never
+	// rides the wire twice. Empty on every decision that is not a dial-shaped
+	// refusal.
+	Cause string `json:"cause,omitempty"`
+	// Via names the CLASS of hop a dial-shaped refusal attempted —
+	// "upstream-proxy" or "direct" — and NEVER an address: an address is
+	// exactly the topology Cause's redaction pass exists to strip, and Via
+	// must not reopen that hole beside it. Empty on every decision that is not
+	// a dial-shaped refusal.
+	Via string `json:"via,omitempty"`
 	// Scan, when non-nil, carries the OUTBOUND content-inspection summary for an
 	// LLM route decision (off-by-default; nil when inspection is disabled). It
 	// makes per-decision coverage honest: a tunneled-opaque LLM CONNECT is

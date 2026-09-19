@@ -295,19 +295,18 @@ func (m *metrics) egressDenied() {
 // Non-policy DENY rule_sources. An egress.Deny decision log carries one of these
 // when nothing was denied by policy at all:
 //
-//   - builtin:dial-failed — emitted from four sites in internal/egress/proxy.
-//     THREE are genuine dial failures on a request policy ALLOWED, where the
-//     network lost it: proxy.go's forward-path round trip, proxy.go's CONNECT
-//     tunnel dial, and llm_routes.go's brokered-LLM round trip. The FOURTH is
-//     NOT a dial failure — llm_routes.go's gatewayTarget arm reuses this source
-//     when gatewayTarget returns errGatewayVet, which is vetTrustedHost's GUARD
-//     refusal of the configured model gateway (it resolved to loopback /
-//     link-local / this proxy's own control-plane network, or did not resolve at
-//     all). That request was REFUSED, not lost, and this exclusion stops it
-//     moving the counter too. ACCEPTED RESIDUAL (F065-gatewayvet): the class is
-//     not separable HERE — rule_source is all handlePostDecision sees — and it
-//     still records its full egress.deny AUDIT row. Separating it needs a
-//     distinct rule_source at the emitting site, which is the egress lane's file.
+//   - builtin:dial-failed — emitted from exactly three sites in
+//     internal/egress/proxy, all genuine dial failures on a request policy
+//     ALLOWED, where the network lost it: proxy.go's forward-path round trip,
+//     proxy.go's CONNECT tunnel dial, and llm_routes.go's brokered-LLM round
+//     trip. RESOLVED (F065-gatewayvet, was an ACCEPTED RESIDUAL): a fourth
+//     site — llm_routes.go's gatewayTarget arm, on errGatewayVet, vetTrustedHost's
+//     GUARD refusal of the configured model gateway — USED TO reuse this same
+//     source, which excluded a config problem the operator's own gateway can
+//     never satisfy from the counter alongside failures the network actually
+//     caused. It now carries its own rule_source (ruleSourceGatewayVetFailed,
+//     egress lane) and is DELIBERATELY absent from this exclusion list below —
+//     a guard refusal counts as a denial like any other.
 //   - egress.decisions.dropped:<n> — decisions.go's synthetic summary for
 //     decision records the buffer had to drop. An audit-FIDELITY alert about a
 //     wedged control plane, not a denial of anything; the count rides in the

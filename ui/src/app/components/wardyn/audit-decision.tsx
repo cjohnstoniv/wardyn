@@ -18,6 +18,7 @@
 // Shared because two screens show the same trail: the Audit screen and the run
 // page's Audit tab.
 import { Link } from "react-router-dom";
+import { cn } from "../ui/utils";
 import { ruleSourceLabel, toolRuleDecision, type AuditEvent } from "../../lib/types";
 import { Chip } from "./primitives";
 
@@ -71,12 +72,31 @@ export function RuleSourceChip({ event, className }: { event: AuditEvent; classN
       {label.label}
     </Chip>
   );
+  // Cause (0.7.8): a dial-shaped builtin:dial-failed/builtin:gateway-vet-failed
+  // row otherwise reads only as "Refused by the built-in guard" — the generic
+  // chip a field report traced back an hour to a plain-text 502 body. data.cause
+  // is already masked+redacted proxy-side (egress.DecisionLog.Cause), so it is
+  // safe to render verbatim beside the chip rather than only on hover.
+  const cause = event.data?.cause;
+  const causeSpan =
+    typeof cause === "string" && cause !== "" ? (
+      <span className="min-w-0 truncate text-meta text-muted-foreground" title={cause}>
+        {cause}
+      </span>
+    ) : null;
+  const wrapperClassName = cn("inline-flex min-w-0 items-center gap-2", className);
   if (source.startsWith("approval:")) {
     return (
-      <Link to="/approvals?tab=decided" className={className}>
-        {chip}
-      </Link>
+      <span className={wrapperClassName}>
+        <Link to="/approvals?tab=decided">{chip}</Link>
+        {causeSpan}
+      </span>
     );
   }
-  return <span className={className}>{chip}</span>;
+  return (
+    <span className={wrapperClassName}>
+      {chip}
+      {causeSpan}
+    </span>
+  );
 }

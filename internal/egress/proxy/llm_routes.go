@@ -297,12 +297,14 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 	// the gateway HOSTNAME on evaluate/serveMITMRequest as well).
 	target, err := p.llmRouteTarget(host, port)
 	if err != nil {
-		// A refused/unreachable configured gateway is a per-request dial
-		// failure, not an SSRF-shaped denial — distinguish it in the decision
-		// log so it reads as "the gateway didn't answer", not "brokered:llm".
+		// A refused/unreachable configured gateway is vetTrustedHost's OWN
+		// GUARD refusal, not an SSRF-shaped denial and not a lost dial —
+		// distinguish it in the decision log so it reads as "the gateway is
+		// misconfigured", not "brokered:llm" or a network fault the operator
+		// cannot fix by editing this gateway's own config.
 		source := ruleSourceLLM
 		if errors.Is(err, errGatewayVet) {
-			source = "builtin:dial-failed"
+			source = ruleSourceGatewayVetFailed
 		}
 		p.emitLLMDecision(r, host, port, egress.Deny, source, nil)
 		p.httpError(w, "llm upstream vet failed", err, http.StatusBadGateway)
@@ -409,7 +411,9 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 	// summary) instead.
 	resp, err := p.transport.RoundTrip(outReq)
 	if err != nil {
-		p.emitLLMDecision(r, host, port, egress.Deny, "builtin:dial-failed", scanSummary)
+		if p.sink != nil {
+			p.sink.emit(p.denyDialFailed("builtin:dial-failed", p.reqOf(r, host, port), host, err, scanSummary))
+		}
 		p.httpError(w, "llm upstream error", err, http.StatusBadGateway)
 		return
 	}
