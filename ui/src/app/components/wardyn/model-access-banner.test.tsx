@@ -98,6 +98,13 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+// aheadByHours is the deadline fixture for every "lapses in …" case: a stamp
+// the reader's clock will always see as the future. A hardcoded one cannot be —
+// it is a future date only until it isn't.
+function aheadByHours(h: number): string {
+  return new Date(Date.now() + h * 60 * 60 * 1000).toISOString();
+}
+
 describe("the strip says nothing when there is nothing to say", () => {
   it.each([["live"], ["not_applicable"]])("state %s renders no sentence", (state) => {
     renderStrip({ access: { state } });
@@ -142,7 +149,12 @@ describe("the per-person states", () => {
   });
 
   it("expiring: the deadline on the reader's clock, the absolute stamp as its title, the info tone", () => {
-    const deadline = "2026-09-19T14:03:22Z";
+    // RELATIVE to the test's own clock, not a fixed stamp. This read
+    // "2026-09-19T14:03:22Z" until that moment actually arrived, at which point
+    // the strip correctly said "lapses 1h ago" and the assertion below — which
+    // is about the FUTURE phrasing — started failing for a reason that had
+    // nothing to do with the code under test.
+    const deadline = aheadByHours(3);
     renderStrip({
       access: { state: "expiring", action: `Sign in again before ${deadline}`, deadline },
     });
@@ -190,7 +202,7 @@ describe("the shared row — one credential, two audiences (Codex #7)", () => {
   });
 
   it("the ADMIN's expiring names the shared credential, not a personal one", () => {
-    const deadline = "2026-09-19T14:03:22Z";
+    const deadline = aheadByHours(3); // see the per-person case above
     renderStrip({
       access: { state: "expiring", action: `Sign in again before ${deadline}`, deadline },
       row: SHARED_ROW,
