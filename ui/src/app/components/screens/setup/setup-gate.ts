@@ -16,13 +16,11 @@
 // firstRunLanding() decides where "/" alone lands, and an operator can dismiss
 // it for good. That is a convenience, not a gate.
 //
-// setupGateActive() IS a gate: while the daemon reports a setup check it grades
-// `fail` or `warn`, every route redirects to the funnel. It is NOT the old
-// funnel-completion gate that was deleted in 0.5 — that one demanded you FINISH
-// the tour, which is why it was obnoxious. This one asks only that the install
-// actually works: the daemon's own severity vocabulary decides, `info` never
-// gates (that is what info MEANS here — optional or permanent, e.g. no model
-// provider, which is optional because Wardyn governs non-agent runs too), and
+// setupGateActive() IS a gate: while the daemon marks a setup check `blocking`,
+// every route redirects to the funnel. It is NOT the old funnel-completion gate
+// that was deleted in 0.5 — that one demanded you FINISH the tour, which is why
+// it was obnoxious. This one asks only that the install can work at all: the
+// DAEMON decides which rows mean that (0.7.8), a grade alone never gates, and
 // demos and optional steps stay skippable throughout.
 //
 // It is deliberately SERVER-DERIVED with no browser flag. The dismiss flag
@@ -102,11 +100,13 @@ export function firstRunLanding(
 // ------------------------------------------------------------
 // The hard gate (server-derived).
 // ------------------------------------------------------------
-// True while this install has a setup check the DAEMON grades `fail` or
-// `warn`. `ok` and `info` never gate: setup_checks.go uses `info` for
-// "permanent / non-fixable or purely-optional", which is why an absent model
-// provider (llmProviderCheck: "a model provider is OPTIONAL — needed only for
-// agent-harness runs") does not hold anyone here.
+// True while this install has a setup check the DAEMON marks `blocking`
+// (internal/api/setup_checks.go's SetupCheck.Blocking doc names the three
+// rows that ever carry it — a dead runner, an unenforceable confinement
+// floor, or SSO with no role mapping). A `warn`/`fail` grade alone does NOT
+// gate: most of this checklist is either optional (an absent model provider)
+// or a fact about the CALLER's own credential (a lapsed AWS sign-in), never
+// an install defect the funnel exists to fix.
 //
 // Three deliberate non-gates:
 //   - a MEMBER is never gated. `checks` is redacted for members (types/setup.ts),
@@ -148,7 +148,7 @@ export function resetGateForTests(): void {
 export function setupGateActive(
   status: {
     unreachable?: boolean;
-    checks?: { id: string; status: SetupCheckStatus }[];
+    checks?: { id: string; status: SetupCheckStatus; blocking?: boolean }[];
     onboarding_complete?: boolean;
   },
   role: Role = "admin",
@@ -171,20 +171,15 @@ export function setupGateActive(
   if (status.onboarding_complete) return false;
   const checks = status.checks ?? [];
   if (checks.length === 0) return false;
-  return checks.some((c) => !MODEL_PROVIDER_CHECKS.has(c.id) && (c.status === "fail" || c.status === "warn"));
+  return checks.some((c) => c.blocking);
 }
 
-// NEVER the model-provider rows. The provider is OPTIONAL (llmProviderCheck's
-// own words, internal/api/setup_checks.go) and, under a per_user Bedrock row,
-// BOTH rows are graded through the CALLER's own AWS session — llm_provider's
-// per_user arm and bedrock_provider's "credential missing" / stored-pin
-// arms — so one admin's lapsed sign-in read as an install defect and the
-// shell's status poll (immediate on returning to the tab) yanked them off New
-// Run into the funnel: the 0.7.6 field report, and the kind walk's admin on
-// every load before 0.7.7 (live case L0). A sign-in is repaired on the strip
-// and on New Run; the funnel is for the install. Both rows keep their grade
-// everywhere they are rendered.
-const MODEL_PROVIDER_CHECKS = new Set(["llm_provider", "bedrock_provider"]);
+// 0.7.8: the decision moved server-side. This was an id list here — 0.7.7 added
+// llm_provider, then bedrock_provider — and each version guessed at which ids
+// are install defects rather than facts about one person's own credential. The
+// next lapsed AWS sign-in graded harness_credential_aws, an id nobody had added
+// yet, because a list enumerates a family instead of naming the property. The
+// daemon marks the property now; there is no list here to keep in sync.
 
 // Integrations-skip flag — the operator explicitly chose to move past the
 // Integrations step with nothing connected (no model/harness, SCM host,

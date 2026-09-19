@@ -46,10 +46,13 @@
  * C heals the member back to `live`, and D and E each call
  * makeMemberActionable() for their own.
  *
- * 0.7.7 adds L0 and L. L0 reads the ADMIN while they still have no capture of
- * their own (F takes that state away), so it sits right before F. L makes its
- * own lapse (makeMemberActionable) and ends by HEALING the member through a
- * completed sign-in, so it goes where nothing after it needs the member lapsed.
+ * 0.7.7 adds L0 and L. L0 CAPTURES the admin's own AWS session and then lapses
+ * it (ensureActionable's roster-pin flip — 0.7.8: a never-captured admin never
+ * emitted harness_credential_aws at all, so the case proved nothing about the
+ * row it was named for), so it sits right before F, which re-signs the admin
+ * in from whatever L0 left them at. L makes its own lapse (makeMemberActionable)
+ * and ends by HEALING the member through a completed sign-in, so it goes where
+ * nothing after it needs the member lapsed.
  *
  * ── NOTHING IS SKIPPED HERE ─────────────────────────────────────────────────
  * Every case runs live (D and E were flipped when lane `login-pane` merged).
@@ -1010,33 +1013,53 @@ test("E2 (starting-detail): a sign-in on an unpullable image fails in seconds wi
 
 // ── L0 — 0.7.7: the setup gate never confiscates the console over a person ──
 
-test("L0 (setup gate): an admin with no usable AWS sign-in of their own opens New Run and stays there", async ({ page }) => {
+test("L0 (setup gate): an admin with a lapsed AWS sign-in of their own opens New Run and stays there", async ({
+  page,
+  request,
+}) => {
   // The 0.7.6 field report's exact shape, on the walk: a per_user roster, an
   // install that never marked onboarding complete, and an admin whose OWN
-  // session is not usable — here never captured at all (sso-member.spec.ts pins
-  // that the member's capture is the member's alone). /setup/status grades
-  // that admin's llm_provider check `warn`, and before 0.7.7 RequireSetup read
-  // it as an install defect and landed every page load in the funnel (the reason gotoAgentsTab retries after a bounce).
-  // BEFORE F, which signs the admin in and takes this state away.
+  // session has lapsed. 0.7.8 rewrote this case: the ORIGINAL 0.7.7 version
+  // never captured the admin's own AWS session at all, so harness_credential_aws
+  // (h.Captured-gated — internal/api/modelaccess.go's harnessCredentialCheck)
+  // never appeared and the case exercised llm_provider/bedrock_provider's
+  // per_user arms instead — real rows, but not the one the 0.7.6 field report
+  // was actually about. This version captures the admin's own session first,
+  // through the SAME pane F uses below, then lapses it exactly the way the
+  // owner's did in the field: a roster-pin flip (ensureActionable, the shared
+  // helper C/D/E/L all use).
+  //
+  // ensureActionable's flip is the ROSTER's one shared pin — it lapses EVERY
+  // captured session under the old pair, not just this admin's. Nothing
+  // downstream in this file depends on a live admin session surviving into F
+  // (F re-signs one in itself), so the side effect is harmless here — but it
+  // is real, and stated rather than silently relied on.
   await dexSignIn(page, ADMIN_EMAIL);
+  await signInThroughPane(page, openAdminLoginPane);
+  await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
+  await ensureActionable(page, request);
+  await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("expired_signin");
+
   const status = await page.evaluate(async () => {
     const r = await fetch("/api/v1/setup/status", { credentials: "include" });
-    return (await r.json()) as { onboarding_complete?: boolean; checks?: Array<{ id: string; status: string }> };
+    return (await r.json()) as {
+      onboarding_complete?: boolean;
+      checks?: Array<{ id: string; status: string; blocking?: boolean }>;
+    };
   });
   expect(status.onboarding_complete, "the walk's fresh install never marks onboarding complete").toBeFalsy();
   expect(
-    status.checks?.find((c) => c.id === "llm_provider")?.status,
-    "the admin's own half of the per_user lane is missing — the row the gate used to read",
+    status.checks?.find((c) => c.id === "harness_credential_aws")?.status,
+    "the admin's own captured AWS session was just lapsed by the pin flip — the row the 0.7.6 field report's gate misread",
   ).toBe("warn");
-  // …and NOTHING ELSE on this install is warn/fail except the model-provider
-  // family (walk-1 found bedrock_provider warn beside it: its per_user
-  // "credential missing" arm is this admin's too). An install-level warn here
-  // would gate legitimately and make the assertion below meaningless, so it
-  // is a precondition, stated.
-  const gating = (status.checks ?? []).filter((c) => c.status === "warn" || c.status === "fail").map((c) => c.id);
-  expect(gating, "only model-provider rows may be warn/fail for this case to mean anything").toEqual(
-    gating.filter((id) => id === "llm_provider" || id === "bedrock_provider"),
-  );
+  // The non-vacuity guard, restated against the 0.7.8 contract: every
+  // warn/fail row present must be non-blocking, or the assertion below (New
+  // Run stays put) would be meaningless — a truly blocking row SHOULD gate.
+  const gating = (status.checks ?? []).filter((c) => c.status === "warn" || c.status === "fail");
+  expect(
+    gating.filter((c) => c.blocking).map((c) => c.id),
+    "no warn/fail row on this install may be blocking, or this case proves nothing",
+  ).toEqual([]);
 
   // A full LOAD of a gated route: the once-per-load gate evaluates the landing
   // /setup/status read. The rail's per-person line renders off that same read,
@@ -1044,7 +1067,10 @@ test("L0 (setup gate): an admin with no usable AWS sign-in of their own opens Ne
   // the page is still New Run.
   await page.goto("/runs/new");
   await expect(page.getByRole("heading", { name: "New run" })).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByText(RAIL_MODEL_ACCESS.NOT_SIGNED_IN)).toBeVisible({ timeout: 60_000 });
+  // EXPIRED, not NOT_SIGNED_IN: new-run-rail.tsx's ModelAccessLine reads
+  // `expired_signin` to RAIL_MODEL_ACCESS.EXPIRED — a captured-then-lapsed
+  // session, not "never signed in".
+  await expect(page.getByText(RAIL_MODEL_ACCESS.EXPIRED)).toBeVisible({ timeout: 60_000 });
   await expect(page).toHaveURL(/\/runs\/new$/);
 });
 

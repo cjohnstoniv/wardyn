@@ -125,6 +125,28 @@ The audit trail showed a tight loop of `policy:allowed` → `builtin:dial-failed
   happened — it is recorded once per run, at proxy construction, to audit the deliberate SSRF-guard
   relaxation for the operator's configured upstream hop. It now renders as "Corp upstream proxy in
   path" (an allow).
+- **The setup gate is a daemon decision now, not a console id list.** `/setup/status` rows carry a new
+  `blocking` bool (`SetupCheck.Blocking`), and the console's hard gate (`setupGateActive`) redirects into
+  the funnel only when a row is marked, never on grade or id alone. 0.7.7 twice tried to name the rows
+  that must not gate — first `llm_provider`, then `bedrock_provider` — and both times it was enumerating
+  a family rather than naming the property: the next lapsed sign-in graded `harness_credential_aws`, an
+  id neither list contained, and an admin whose own AWS SSO session had expired was pulled off New Run
+  onto Getting started in the middle of repairing it. A console cannot know which rows describe the
+  install and which describe the person reading them; the daemon can, and now says so.
+  Exactly three rows are marked: `runner`'s `fail` (no live confinement class — runs cannot launch),
+  `confinement_floor`'s `warn` (every run on the default policy refused before it launches), and
+  `sso_rbac`'s `warn` (OIDC configured with no role mapping — every SSO user is an admin, and the
+  funnel's People step is where that is fixed). Every other row — `age_key`, `tls_cookie_posture`,
+  `site_config`, `scm_provider`, `host_proxy`, `claude_subscription_staging`, `github_ref_ruleset`,
+  `k8s_egress_containment` (its `warn` **and** both `fail` arms), the install-wide
+  `harness_credential`, and the per-person `llm_provider`, `bedrock_provider` and
+  `harness_credential_aws` — keeps its grade on every surface that renders it, and never confiscates
+  the console again, whatever status it carries.
+  Two consequences worth stating plainly: a `fail` row now stops gating (the unenforced-CNI arm of
+  `k8s_egress_containment`, a posture an operator turns on deliberately), and an install that has a
+  runner, a meetable floor and a role mapping sets none of the three — so on a healthy Kubernetes
+  install the funnel gate no longer fires at all, where before 0.7.8 any `warn` held it. The rows are
+  still there to read; what they stopped doing is taking the console away.
 
 ## [0.7.7] — 2026-09-18
 
