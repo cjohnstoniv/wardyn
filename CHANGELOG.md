@@ -8,6 +8,40 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`wardyn attach` no longer needs the shared admin token for a member's own run.**
+  It dialed the attach WebSocket directly with whatever bearer was configured, and that
+  route falls through to `requireOperator` for a bare bearer — so a member got a blanket
+  **403** and the shared admin token was the only credential that ever worked. The CLI now
+  mints a single-use, 30s-TTL attach ticket first (`POST /runs/{id}/attach-ticket`,
+  owner-or-admin — the same door the console's own embedded terminal already uses) and
+  dials with `?ticket=` instead, so a member's own token (`WARDYN_TOKEN`) now works for a
+  run they created. The ticket is minted immediately before the one dial and never cached:
+  a fresh mint per attach attempt, matching the ticket's single-use, 30s TTL contract
+  (`internal/api/attach_ticket.go`). An admin-token caller (e.g. CI) is unaffected — the
+  mint endpoint authorizes an admin on any run — and when no ticket can be minted at all
+  (an older control plane with no `attach-ticket` route to answer), the CLI falls back to
+  dialing directly with the configured token exactly as before this ticket lane existed.
+  (`cmd/wardyn/attach.go`; no server change — `internal/api`'s ticket lane already served
+  the browser.)
+
+  **Audit shape change:** a non-owning member's `wardyn attach` used to be refused by the
+  WS route's `requireOperator` gate with a blanket **403** (`authz.denied`), before the run
+  was even loaded — no existence check at all. It now mints first, through the same
+  owner-or-admin door the browser uses, and for a run the caller does not own that mint
+  itself now refuses with the byte-identical **404** `authz.denied` (reason `not_owner`) a
+  nonexistent run would (`getRunAuthorized`'s no-existence-oracle rule) — the WS is never
+  dialed. Anyone alerting on the old blanket-403 `authz.denied` row for CLI attach should
+  also watch for this 404 shape.
+
+- **The run-detail "Attach from your terminal" card no longer claims the CLI needs the
+  admin token.** Its copy said `wardyn attach` "needs your admin token in
+  `WARDYN_ADMIN_TOKEN`" — false as of the fix above, and a member reading that card had no
+  reason to believe the command would work for them at all. It now names both `WARDYN_TOKEN`
+  (a member's own) and `WARDYN_ADMIN_TOKEN`, and that it mints the same one-time ticket the
+  page's own terminal does. (`ui/src/app/components/screens/run-detail-ssh.tsx`)
+
 ## [0.7.7] — 2026-09-18
 
 The 0.7.6 field report, in one journey: an admin on a Kubernetes estate whose AWS SSO session had

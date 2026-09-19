@@ -195,8 +195,10 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
 
       <p className="text-xs font-medium text-foreground">Wardyn CLI</p>
       <p className="mt-0.5 mb-1.5 text-meta leading-relaxed text-muted-foreground">
-        Works on every deployment — no gateway to enable, no key to register. Needs your admin token in{" "}
-        <Mono className="text-foreground">WARDYN_ADMIN_TOKEN</Mono>. Ctrl-C or closing the session detaches.
+        Works on every deployment — no gateway to enable, no key to register. Mints a one-time ticket with{" "}
+        <Mono className="text-foreground">WARDYN_TOKEN</Mono> (your own token) or{" "}
+        <Mono className="text-foreground">WARDYN_ADMIN_TOKEN</Mono>, same as this page's own terminal. Ctrl-C or
+        closing the session detaches.
       </p>
       <CodeBlock text={cliCommand} />
       <p className="mt-1.5 text-meta leading-relaxed text-muted-foreground">
