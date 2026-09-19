@@ -14,8 +14,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   redirect read every `warn` on `/setup/status` as an install defect — including the two
   model-provider rows, `llm_provider` and `bedrock_provider`, which under a `per_user` Bedrock row are
   graded through the CALLER's own session — so an admin whose own sign-in had lapsed was pulled off
-  New Run (or any page) the moment the shell's status poll landed, seconds after they had clicked
-  Launch, on an install that had never marked onboarding complete. The model provider is optional and
+  New Run (or any page) the moment the shell's next status read landed (on the owner's estate, seconds
+  after they had clicked Launch), on an install that had never marked onboarding complete. The model provider is optional and
   per person; the gate no longer reads either row. Both keep their grade everywhere they are
   rendered. (The 0.7.6 field report; the kind walk's admin had been landing in the funnel on every
   load for the same reason.)
@@ -23,8 +23,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
   per-person session is missing or spent before any run exists, and the refusal now names its class
   on the wire — `"reason":"model_credential"`, the failure audit row's own word; every other error
   body is byte-identical. New Run answers that refusal by opening the AWS sign-in dialog itself and
-  launching the same run again the moment the capture lands: no trip to Getting started, no second
-  click. Escape leaves the sentence and the rail's own sign-in control; a member under a shared row
+  launching the run again — the form as it then stands — the moment the capture lands: no trip to
+  Getting started, no second click. Escape leaves the sentence and the rail's own sign-in control; a member under a shared row
   reads the sentence and no dialog, because the repair is the admin's; a relaunch refused again (a
   pin contradiction the same identity cannot repair) shows the sentence and waits. Launch stays a
   server decision — nothing is pre-checked on the console's cached status. Review's preflight 422
@@ -38,9 +38,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
   one" in the run header does.
 - **A relaunch armed by the dialog survives leaving New Run with the dialog open** (the dialog is the
   shell's, so Back does not close it): a sign-in completed afterwards launches the run that click asked
-  for and lands on it.
-- **The hermetic Playwright suite proves the dialog opens itself and that Escape leaves the run
-  unlaunched; the relaunch after a completed sign-in is proven on the kind AWS SSO walk only** (live
+  for. It lands on that run only when the launch carries no advisories; a launch WITH advisories holds
+  for an "Open run" nobody is there to click, so the run is on the Runs board and nothing says so.
+- **The hermetic suites prove the dialog opens itself (Playwright) and that Escape launches nothing
+  (vitest); the relaunch after a completed sign-in is proven on the kind AWS SSO walk only** (live
   case L) — no mocked spec completes a device flow.
 
 ## [0.7.6] — 2026-09-18
