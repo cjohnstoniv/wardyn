@@ -8,6 +8,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The AWS sign-in tab's URL no longer carries junk after the device code.** Clicking "open AWS
+  sign-in" opened a tab whose `user_code=` had escape bytes appended — the login PTY's extractors
+  excluded whitespace and quote/bracket characters from a URL but not control bytes, and a tmux
+  redraw's cursor-addressed escapes butt directly against the URL with no delimiter between them.
+  Both `extractAuthUrl` and `extractDeviceVerificationUrl`
+  (`ui/src/app/components/screens/settings/login-pty-extract.ts`) now exclude C0/DEL control bytes
+  from the URL body, and the device-URL extractor prefers the longest `user_code=` candidate seen in
+  the buffer rather than the first, so a CSI landing mid-code (now itself a match boundary) can no
+  longer return a silently truncated code instead of visible junk.
+
 ## [0.7.7] — 2026-09-18
 
 The 0.7.6 field report, in one journey: an admin on a Kubernetes estate whose AWS SSO session had
