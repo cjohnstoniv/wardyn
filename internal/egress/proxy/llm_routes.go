@@ -307,7 +307,10 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 			source = ruleSourceGatewayVetFailed
 		}
 		p.emitLLMDecision(r, host, port, egress.Deny, source, nil)
-		p.httpError(w, "llm upstream vet failed", err, http.StatusBadGateway)
+		// AWS lane (the run's own SSO portal, or Bedrock): a modelled, valid-JSON
+		// error body — an AWS SDK hands plain text straight to a JSON parser and
+		// crashes on it. Every other host keeps today's plain-text 502.
+		p.httpErrorAWSAware(w, host, "llm upstream vet failed", err, false, http.StatusInternalServerError, "InternalServerException")
 		return
 	}
 
@@ -414,7 +417,9 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 		if p.sink != nil {
 			p.sink.emit(p.denyDialFailed("builtin:dial-failed", p.reqOf(r, host, port), host, err, scanSummary))
 		}
-		p.httpError(w, "llm upstream error", err, http.StatusBadGateway)
+		// AWS lane: withStage=true — this is the one site that shares its Cause
+		// with the decision log above, verbatim (both a genuine dial failure).
+		p.httpErrorAWSAware(w, host, "llm upstream error", err, true, http.StatusInternalServerError, "InternalServerException")
 		return
 	}
 	p.emitLLMDecision(r, host, port, egress.Allow, ruleSource, scanSummary)

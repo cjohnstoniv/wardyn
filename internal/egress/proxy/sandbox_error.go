@@ -186,6 +186,21 @@ func dialStage(err error) string {
 	}
 }
 
+// causeSentence builds the STAGE-PREFIXED, masked, topology-redacted sentence
+// naming why a genuinely DIAL-shaped refusal happened — what
+// egress.DecisionLog.Cause carries, and (0.7.8) the same text an AWS-lane
+// sandbox error body's "message" carries on the ONE site that shares both
+// (forwardInspectedLLM's RoundTrip failure — see httpErrorAWSAware), so the
+// audited cause and what the agent's own SDK is told are the same words.
+//
+// Callers for a non-dial refusal (a credential resolve failure, a gateway's
+// own guard refusal) want dialFailureCause alone: dialStage's TCP-dial/
+// TLS-handshake/upstream-proxy vocabulary does not apply to those and would
+// mislabel a refusal as a "dial" it never attempted.
+func (p *Proxy) causeSentence(err error) string {
+	return dialStage(err) + ": " + p.dialFailureCause(err)
+}
+
 // denyDialFailed builds a dial-shaped deny decision: req is the request the
 // earlier ALLOW was computed for (superseded here rather than over-reported,
 // E3); scan carries forward any scan summary the superseded allow already
@@ -197,7 +212,7 @@ func dialStage(err error) string {
 // pair — see this file's header comment.
 func (p *Proxy) denyDialFailed(ruleSource string, req egress.Request, host string, err error, scan *egress.ScanSummary) egress.DecisionLog {
 	dl := decisionLog(req, egress.Deny, ruleSource)
-	dl.Cause = dialStage(err) + ": " + p.dialFailureCause(err)
+	dl.Cause = p.causeSentence(err)
 	dl.Via = p.viaHop(host)
 	dl.Scan = scan
 	return dl

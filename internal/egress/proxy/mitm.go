@@ -476,7 +476,9 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	target, _, terr := p.egressTarget(host, port)
 	if terr != nil {
 		p.emitLLMDecision(r, host, port, egress.Deny, mitmSource, nil)
-		p.httpError(w, "llm upstream vet failed", terr, http.StatusBadGateway)
+		// AWS lane: a modelled, valid-JSON error body (see llm_routes.go's own
+		// vet-failed site for why — this is its MITM-terminated sibling).
+		p.httpErrorAWSAware(w, host, "llm upstream vet failed", terr, false, http.StatusInternalServerError, "InternalServerException")
 		return
 	}
 
@@ -581,7 +583,10 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 			return
 		}
 		p.emitLLMDecision(r, host, port, egress.Deny, mitmSource, nil)
-		p.httpError(w, "llm credential refresh failed", ierr, http.StatusBadGateway)
+		// AWS lane: 401 UnauthorizedException — writeSSOUnauthorized's own
+		// precedent three lines above (credhold.go), generalised: a credential
+		// resolve failure is non-retryable the same way a spent hold is.
+		p.httpErrorAWSAware(w, host, "llm credential refresh failed", ierr, false, http.StatusUnauthorized, "UnauthorizedException")
 		return
 	}
 	var injectHdr *injectedHeader
