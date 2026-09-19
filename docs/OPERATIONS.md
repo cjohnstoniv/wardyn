@@ -2909,13 +2909,41 @@ leave whichever hop takes it. That is why the bottom-right cell — bypass AND
 lift — is the working private-endpoint configuration, and why the recipes below
 set both fields.
 
+### Phase B: the SSO/Bedrock MITM lane and the upstream proxy
+
+Phase B (`WARDYN_AWS_SSO_PROXY_INJECT=on`, the default — see [ENV.md](ENV.md) and "Turning the
+lane off" below) terminates and re-originates `portal.sso.<region>.amazonaws.com` inside the
+`wardyn-proxy` sidecar to inject a captured AWS SSO session on the wire. That re-origination is a
+forward dial like any other in this section, not a separate lane with its own rules: it is governed
+by `upstream_proxy_url`, `upstream_proxy_no_proxy` and `internal_hosts` exactly as above, and on a
+private-endpoint estate it needs the same bypass-plus-lift configuration a VPC-endpoint Bedrock
+deployment already does (see "Bedrock on a private endpoint" below).
+
+**The invariant, stated once:** the sandbox's dials — and the sidecar's forward dials on the
+sandbox's behalf, MITM re-origination included — follow `SiteConfig.upstream_proxy_url`; wardynd's
+own dials follow `WARDYN_DAEMON_PROXY_URL` ("wardynd behind a corporate proxy", next); every
+outbound path belongs to exactly one of those two. An operator field report found this class of bug
+reported three separate times because nothing said so in one place: "Each time a NEW outbound path
+was added, it did not inherit the operator's proxy configuration. A checklist item for anything that
+dials — 'does this path honour `upstream_proxy_url`?' — would have caught all three." See
+[docs/adoption/aws-sso-mitm-upstream-proxy.md](adoption/aws-sso-mitm-upstream-proxy.md) for the full
+report and the maintainer's analysis of what the code actually does today.
+
+**A TLS-intercepting corporate proxy needs its CA on both sides of this lane, asymmetrically.**
+Every sandbox image bakes `corp-ca.pem` at build (`install_mitm_ca`, "Corporate TLS-inspection root"
+below), but the `wardyn-proxy` image carries a corporate CA only if one was staged at its own build —
+otherwise it trusts one only through `WARDYN_TRUSTED_CA_FILE` ([ENV.md](ENV.md)). Unset, the
+re-origination's re-dial fails `x509: certificate signed by unknown authority`, filed as the same
+bare `builtin:dial-failed` as every other dial failure in this section.
+
 ### wardynd behind a corporate proxy
 
 Everything above this point in this section — `upstream_proxy_url`, `upstream_proxy_no_proxy`,
-`SiteConfig` — is the **sandbox's** egress hop: it governs what a run's own outbound traffic sees,
-compiled into the `wardyn-proxy` sidecar's config at dispatch. It has nothing to do with **wardynd's
-own** outbound calls: OIDC discovery/JWKS at boot, the audit webhook sink, GitHub App token minting,
-AWS SSO `CreateToken` renewal, and Entra directory sync. Those five calls all ride the process's shared
+`SiteConfig`, the Phase B MITM re-origination just above — is the **sandbox's** egress hop: it
+governs what a run's own outbound traffic sees, compiled into the `wardyn-proxy` sidecar's config at
+dispatch. It has nothing to do with **wardynd's own** outbound calls: OIDC discovery/JWKS at boot,
+the audit webhook sink, GitHub App token minting, AWS SSO `CreateToken` renewal, and Entra directory
+sync. Those five calls all ride the process's shared
 `http.DefaultTransport`, and Go's `net/http` honors the standard `HTTP_PROXY` / `HTTPS_PROXY` /
 `NO_PROXY` variables **process-wide** — including inside the Kubernetes client, so a mistyped
 `NO_PROXY` on a k8s deployment can take the control plane's own API access down with it. That is why
@@ -3977,7 +4005,10 @@ its CANCELLED row is readable), after three consecutive 404s, and at its budget 
 
 `WARDYN_AWS_SSO_PROXY_INJECT=off` restores the pre-0.7.6 behaviour: the SSO access token is written
 into the sandbox's token cache, `portal.sso` is not TLS-MITM'd, no injection grant is authored, and a
-lapsed session fails the run's model call as it used to.
+lapsed session fails the run's model call as it used to. It is also the sanctioned stopgap for the
+corporate-proxy interaction described in ["Phase B: the SSO/Bedrock MITM lane and the upstream
+proxy"](#phase-b-the-ssobedrock-mitm-lane-and-the-upstream-proxy) above — reachable now as a named
+Helm value and a Compose env line, not only through the raw env passthrough.
 
 It applies to **new dispatches only**. The placeholder cache, the injection grant and the MITM entry
 are all authored at dispatch, so a run that is already running keeps the lane it was authored with

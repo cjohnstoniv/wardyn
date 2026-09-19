@@ -159,6 +159,25 @@ Bedrock lanes (the host `~/.aws` mount, static keys, the bearer token) have noth
 and create-time refusals are still refusals — Finding 3 gives those a door instead. See
 `docs/OPERATIONS.md` "A run is holding for a sign-in" and `threatmodel/THREAT-MODEL.md` residual #46.
 
+### A8. Per-user AWS SSO behind a corporate proxy: the Phase B MITM lane was undocumented, not unproxied
+
+A private-endpoint Kubernetes estate reported every per-user Bedrock run hanging on its first model
+call on 0.7.6/0.7.7 (`portal.sso.<region>` allowed by policy, then `builtin:dial-failed`, in a tight
+loop) and read the pattern as the Phase B MITM lane refusing to honour `SiteConfig.upstream_proxy_url`
+— the lane worked on 0.7.5, before Phase B replaced a blind CONNECT tunnel with terminate-and-re-originate.
+
+**Investigated: it isn't.** `serveMITMRequest` resolves its dial target through the same
+`egressTarget` / shared-transport path every other forward dial uses, so the re-origination already
+traverses the configured upstream proxy — nothing operator-facing said so, which is what let this
+join `WARDYN_DAEMON_PROXY_URL` (A5) and `upstream_proxy_no_proxy`'s own origin story as the third
+report of one class of bug: a new outbound path that does not visibly inherit the operator's proxy
+configuration. **Fixed:** `docs/OPERATIONS.md` now names the lane and states the sandbox/wardynd
+proxy-scope invariant once; the corp-CA asymmetry the report's likely root cause traces to (sandbox
+images bake `corp-ca.pem`, the proxy image does not unless staged at its own build) is recorded there
+and in `docs/ENV.md`. See `docs/adoption/aws-sso-mitm-upstream-proxy.md` for the full report and the
+maintainer's analysis of the remaining candidates — the proxy-pod logs that would confirm which one
+were never in the operator's hands (Ask 2 of that report).
+
 ---
 
 ## B. Structural gaps

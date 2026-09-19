@@ -173,6 +173,17 @@ The audit trail showed a tight loop of `policy:allowed` → `builtin:dial-failed
   `run.create` audit row now carries `confinement_source` (`requested`/`defaulted`), the one place that
   distinguishes "the caller asked for this class" from "this is what today's runner had to offer." See
   `threatmodel/THREAT-MODEL.md` residual #47.
+- **`WARDYN_AWS_SSO_PROXY_INJECT` (the Phase B kill switch) is now reachable the way
+  `docs/OPERATIONS.md`'s "Turning the lane off" already told operators to use it.** It was a named env
+  var read at boot, but reachable only through the Helm chart's generic `.Values.env` passthrough (no
+  `values.yaml` entry of its own) and absent from the Compose stack's explicit `WARDYN_*` env list
+  entirely — an operator following either install path's own documented rollback recipe for a corp-MITM
+  or SDK surprise had no chart value or compose var to set. The chart gains `awsSSOProxyInject`
+  (`deploy/helm/wardyn/values.yaml`), wired into the Deployment behind the same precedence `trustedCA`
+  already established: a raw `env.WARDYN_AWS_SSO_PROXY_INJECT` still wins, so
+  `scripts/kind-sso-walk.sh`'s existing `--set env.WARDYN_AWS_SSO_PROXY_INJECT=…` posture pin needed no
+  change. Compose gains the `WARDYN_AWS_SSO_PROXY_INJECT` passthrough beside its sibling `WARDYN_*`
+  vars. Both empty by default — byte-identical to today, wardynd's own compiled default (`on`) applies.
 
 ## [0.7.7] — 2026-09-18
 
@@ -497,7 +508,7 @@ tighten an existing input check and one turns a relayed oversized upload into a 
   docker-gated SDK-tolerance test, whose fake also serves plain HTTP with no proxy in the loop at
   all. The hold's own sentence reaches a client that speaks plain HTTP inside the terminated tunnel
   (the walk's SDK does); only a client on the un-terminated plain lane would see the origin's own
-  401. Listed here so the plaintext walk is not mistaken for a simulated one.
+  401. Listed here so the walk's plaintext client leg is not mistaken for a simulated one.
 - **The support bundle's Compose entry is redacted for reading, not for re-use.** It is not a valid
   `docker compose -f` input when marker-named structural keys exist (e.g. a `secrets:` section or a
   `*_token`-named volume) — those keys are redacted whole rather than per-value, so the redacted

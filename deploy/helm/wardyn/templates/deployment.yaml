@@ -257,6 +257,14 @@ spec:
             - name: WARDYN_TRUSTED_CA_FILE
               value: {{ "/etc/wardyn/trusted-ca/ca.pem" | quote }}
             {{- end }}
+            {{- if and .Values.awsSSOProxyInject (not (hasKey .Values.env "WARDYN_AWS_SSO_PROXY_INJECT")) }}
+            # Phase B kill switch (docs/OPERATIONS.md "Turning the lane off").
+            # An .Values.env entry overrides — scripts/kind-sso-walk.sh pins
+            # its posture with `--set env.WARDYN_AWS_SSO_PROXY_INJECT=...`,
+            # which must keep winning over this named value.
+            - name: WARDYN_AWS_SSO_PROXY_INJECT
+              value: {{ .Values.awsSSOProxyInject | quote }}
+            {{- end }}
             {{- range $k, $v := .Values.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}
