@@ -30,6 +30,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
   server decision — nothing is pre-checked on the console's cached status. Review's preflight 422
   carries the same class.
 
+### Known gaps
+
+- **A session that is expired but still renewable is admitted at create, by design** (dispatch redeems
+  the refresh token). If the portal then refuses the refresh, the run fails on its own page and carries
+  the 0.7.6 sign-in door there; it does not launch itself again from that page — "Start a run like this
+  one" in the run header does.
+- **A relaunch armed by the dialog survives leaving New Run with the dialog open** (the dialog is the
+  shell's, so Back does not close it): a sign-in completed afterwards launches the run that click asked
+  for and lands on it.
+- **The hermetic Playwright suite proves the dialog opens itself and that Escape leaves the run
+  unlaunched; the relaunch after a completed sign-in is proven on the kind AWS SSO walk only** (live
+  case L) — no mocked spec completes a device flow.
+
 ## [0.7.6] — 2026-09-18
 
 The 0.7.5 field report (an operator's handoff from running 0.7.1–0.7.5 on a private-endpoint Kubernetes estate) consolidated one journey — a person getting
