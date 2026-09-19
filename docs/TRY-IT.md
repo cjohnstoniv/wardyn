@@ -49,17 +49,21 @@ integration only when its workspace requires it by name (see
 A couple of config facts before you customize:
 
 - **Policy defaults are launch-path-specific.** A bare hand-launched `wardynd`
-  loads `examples/policies/default.json` (CC2, no `api_key` grant — an agent run
-  can't reach a model under it); `make setup` / `scripts/up.sh` auto-pick one:
-  containerized picks `demo.json` (CC1) on a runc-only host, `default.json` (CC2)
-  when gVisor is registered, and `claude-llm.json` once a real model path is
-  configured; host mode picks `claude-llm.json` or your staged subscription
-  ceiling. The Getting Started **Review** step warns when your stored credential
-  and the live `WARDYN_DEFAULT_POLICY` disagree — and separately, when the
-  policy's confinement floor names a tier this host's runner can't actually
-  enforce (a CC2 floor with no gVisor RuntimeClass registered, say): every run
-  on that policy would otherwise be refused before it launches, with the
-  first symptom an opaque error on the first real attempt.
+  loads `examples/policies/default.json` (`min_confinement_class` **CC1** as of
+  0.7.8, no `api_key` grant — an agent run can't reach a model under it);
+  `make setup` / `scripts/up.sh` auto-pick one: containerized picks `demo.json`
+  on a runc-only host, `default.json` when gVisor is registered (the two now
+  differ only in allowed-domains breadth, not confinement), and
+  `claude-llm.json` once a real model path is configured; host mode picks
+  `claude-llm.json` or your staged subscription ceiling. Either way, an
+  unspecified run now defaults to the STRONGEST class the host's runner
+  actually advertises at or above the policy floor — CC2/CC3 need no policy
+  switch, just the runtime installed. The Getting Started **Review** step
+  warns when your stored credential and the live `WARDYN_DEFAULT_POLICY`
+  disagree — and separately, when the policy's confinement floor (an admin
+  override above CC1, say) names a tier this host's runner can't actually
+  enforce: every run on that policy would otherwise be refused before it
+  launches, with the first symptom an opaque error on the first real attempt.
 - **Secret-store durability.** `make setup` / `scripts/up.sh` mint and persist a
   `WARDYN_AGE_KEY`; only a hand-launched bare `wardynd` runs on an EPHEMERAL age
   key (secrets unreadable after restart) — run `wardynd -gen-age-key` to mint a

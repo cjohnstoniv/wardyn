@@ -1831,6 +1831,30 @@ hiding them would repeat the failure mode we are designed to avoid.
     Contained by `WARDYN_AWS_SSO_PROXY_INJECT=off`, which restores the 0.7.5 behaviour for new
     dispatches (a run already dispatched keeps the lane it was authored with until it ends).
 
+47. **0.7.8: the shipped default policy floor moved CC2 -> CC1, and an unspecified
+    run's confinement class is now live-probed rather than a static policy field.**
+    Before 0.7.8 every default-policy run enforced CC2 unconditionally (or refused
+    to launch at all on a CC1-only host — the trap `examples/policies/default.json`
+    and the k8s chart's B12b-F7 render guard both existed to route around). Now a
+    run naming no `confinement_class` resolves to the STRONGEST class the runner
+    actually advertises at or above the policy floor (`strongestAdvertisedAtOrAbove`,
+    `internal/api/runs_policy.go`), and — the residual — **a person on a host with
+    gVisor or Kata installed may deliberately REQUEST a weaker installed class than
+    the old CC2 floor would have allowed**, down to CC1, provided it still clears
+    the deployment's own floor (unchanged: an explicit request below the policy
+    minimum or an admin-set floor still 422s byte-identically). This is an explicit,
+    per-run choice, never the default — the default always resolves to the
+    strongest advertised class, never merely the floor. The second half: because
+    the advertised set is live-probed (`Runner.Capabilities`) rather than read from
+    a static field, **a runtime that disappears between two runs (a gVisor package
+    removed, a RuntimeClass unregistered) silently LOWERS the default for the next
+    unspecified request rather than refusing it** — the run still launches, just at
+    a weaker class than the previous one got, with no error to notice. This is why
+    `run.create`'s audit row (`docs/AUDIT-ACTIONS.md`) carries `confinement_source`
+    (`requested`/`defaulted`): it is the one place that distinguishes "the caller
+    asked for CC1" from "CC1 is what today's runner had to offer," which an
+    `enforced` value of CC1 alone cannot say on its own.
+
 ### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
 
 Residual #46 above named what the proxy injects; this narrows WHICH requests it injects onto. Raised

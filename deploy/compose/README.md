@@ -140,11 +140,15 @@ the plain-HTTP localhost demo — the `Secure` cookie flag silently breaks login
 
 ## Confinement classes on plain Docker
 
-The stack defaults to `examples/policies/demo.json`, whose
-`min_confinement_class` is **CC1** (hardened runc). Plain Docker hosts without
-gVisor cannot enforce **CC2** (the `default.json` policy's requirement), and
-Wardyn **fails closed** — it refuses to launch a run it cannot confine
-(invariant 5). To use the stricter default policy on a CC2-capable host:
+The stack defaults to `examples/policies/demo.json`. As of 0.7.8 both example
+policies (`demo.json` and `default.json`) float `min_confinement_class` at
+**CC1** (hardened runc) — the strongest class every install can enforce — and
+an unspecified run defaults to the STRONGEST class the host actually
+advertises at or above that floor, not a bare CC2 a plain Docker host (no
+gVisor/Kata runtime registered) could never enforce. A host with gVisor (or
+Kata) registered gets CC2 (or CC3) automatically; nothing to switch. The two
+policies now differ only in their allowed-domains list (`default.json` is
+wider); switch to it for that:
 
 ```sh
 WARDYN_DEFAULT_POLICY=/examples/policies/default.json make demo

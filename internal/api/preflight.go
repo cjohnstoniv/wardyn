@@ -250,7 +250,20 @@ func (s *Server) handlePreflightRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("unknown confinement_class %q", req.ConfinementClass))
 		return
 	}
-	enforced, err := enforcedConfinement(spec, reqCC)
+	// BEST-EFFORT capabilities read for the same reason enforcedConfinement now
+	// needs them: an unspecified request's default is the strongest advertised
+	// class, not the bare policy minimum (0.7.8). Never refused on here — a nil
+	// Runner or a Capabilities error just leaves the default at the policy
+	// minimum, matching this handler's "advisory only, never blocks Review"
+	// contract; the runner-capability REFUSAL stays un-reproduced (doc comment
+	// above), reported by the checklist's backend row instead.
+	var advertised []types.ConfinementClass
+	if s.cfg.Runner != nil {
+		if caps, cerr := s.cfg.Runner.Capabilities(ctx); cerr == nil {
+			advertised = caps.ConfinementClasses
+		}
+	}
+	enforced, err := enforcedConfinement(spec, reqCC, advertised)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return

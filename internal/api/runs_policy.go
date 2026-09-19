@@ -302,6 +302,31 @@ func bestClass(classes []types.ConfinementClass) types.ConfinementClass {
 	return best
 }
 
+// strongestAdvertisedAtOrAbove is the DEFAULT confinement rule (0.7.8): the
+// strongest advertised class that meets floor — MEMBERSHIP, not rank (M8: a
+// Kata-only host advertises [CC1, CC3], no CC2, so a rank check could pick a
+// class the runner never declared). It reduces to bestClass over the
+// membership-filtered subset rather than a second "strongest of a set"
+// implementation.
+//
+// Falls back to floor UNCHANGED when nothing advertised meets it (including an
+// empty/nil classes) — never "" — so a caller that follows this with its own
+// runner-capability membership check (resolveEnforcedConfinement) still fails
+// closed exactly as an unenforceable floor did before this rule existed,
+// instead of silently dispatching an unenforceable class.
+func strongestAdvertisedAtOrAbove(classes []types.ConfinementClass, floor types.ConfinementClass) types.ConfinementClass {
+	var eligible []types.ConfinementClass
+	for _, c := range classes {
+		if confinementGE(c, floor) {
+			eligible = append(eligible, c)
+		}
+	}
+	if best := bestClass(eligible); best != "" {
+		return best
+	}
+	return floor
+}
+
 // classesOrNone renders an advertised confinement set for error messages, or
 // "none" when the runner advertises no class.
 func classesOrNone(classes []types.ConfinementClass) string {

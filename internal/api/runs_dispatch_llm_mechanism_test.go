@@ -470,13 +470,28 @@ func TestEnforceCreateLLMMechanism_RefusesBeforeARunExists(t *testing.T) {
 // widget's only join key), and it is absent — not empty — when nothing narrowed.
 func TestCreateRunAuditData_CarriesClampWarnings(t *testing.T) {
 	warns := []string{"resources capped to operator maximum", `dropped 1 egress domain(s) not in operator allowlist: ["evil.example"]`}
-	data := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), "jti", warns)
+	data := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), types.ConfinementClass("CC2"), "jti", warns)
 	got, ok := data["clamp_warnings"].([]string)
 	if !ok || len(got) != len(warns) || got[0] != warns[0] {
 		t.Fatalf("clamp_warnings = %#v, want %#v", data["clamp_warnings"], warns)
 	}
-	if _, present := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), "jti", nil)["clamp_warnings"]; present {
+	if _, present := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), types.ConfinementClass("CC2"), "jti", nil)["clamp_warnings"]; present {
 		t.Error("clamp_warnings must be absent when launch narrowed nothing")
+	}
+}
+
+// TestCreateRunAuditData_ConfinementSource is 0.7.8: reqCC ("" for an
+// unspecified request) is what decides confinement_source, never enforced —
+// enforced alone cannot tell a caller who asked for CC1 apart from a runner
+// that only had CC1 to offer, and the audit row is the one place that
+// distinction survives (docs/AUDIT-ACTIONS.md's run.create row).
+func TestCreateRunAuditData_ConfinementSource(t *testing.T) {
+	req := createRunRequest{Agent: "claude-code"}
+	if got := createRunAuditData(req, nil, types.CC1, "", "jti", nil)["confinement_source"]; got != "defaulted" {
+		t.Errorf("confinement_source = %v, want \"defaulted\" for an empty reqCC", got)
+	}
+	if got := createRunAuditData(req, nil, types.CC1, types.CC1, "jti", nil)["confinement_source"]; got != "requested" {
+		t.Errorf("confinement_source = %v, want \"requested\" when the caller named CC1 explicitly", got)
 	}
 }
 

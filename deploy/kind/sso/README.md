@@ -30,9 +30,9 @@ By hand, it is:
 WARDYN_QUICKSTART_HTTP_PORT=8280 WARDYN_QUICKSTART_SSH_PORT=2322 make kind-quickstart
 
 # 2. Dex + the SSO overlay (the default policy rides along, floored to CC1 —
-#    the baked default's CC2 floor would refuse every MEMBER run on this
-#    Fence-only cluster: members' inline policies are clamped to the default
-#    policy, the chart's own "confinement-floor trap")
+#    redundant since 0.7.8, when the baked default's own floor became CC1;
+#    kept because it states this Fence-only cluster's floor explicitly rather
+#    than inheriting whatever the image ships)
 #    awsssofake.yaml rides along: fake AWS IAM Identity Center + a
 #    bedrock-runtime stub, so the AWS SSO login and a per-user Bedrock run are
 #    exercisable with no AWS tenant (docs/OPERATIONS.md, "Testing AWS SSO

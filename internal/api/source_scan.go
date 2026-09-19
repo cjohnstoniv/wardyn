@@ -226,7 +226,17 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	if cerr != nil {
 		return types.AgentRun{}, release(cerr)
 	}
-	cc := ceilingFloorClass(ceiling)
+	// STRONGEST ADVERTISED AT OR ABOVE THE FLOOR (0.7.8), not the bare floor: a
+	// scan used to dispatch AT the floor unconditionally, so a gVisor/Kata host
+	// running under a CC1 floor (the new shipped default) would otherwise scan
+	// every source at the weakest tier despite a stronger one being available.
+	// handleScanSource already refused a nil s.cfg.Runner above this call, so
+	// Capabilities is safe to read here.
+	caps, caperr := s.cfg.Runner.Capabilities(ctx)
+	if caperr != nil {
+		return types.AgentRun{}, release(fmt.Errorf("runner capabilities unavailable: %w", caperr))
+	}
+	cc := strongestAdvertisedAtOrAbove(caps.ConfinementClasses, ceilingFloorClass(ceiling))
 	srcID := src.ID
 	// THE LIMITS AXIS (F153). This lane creates a run FOR the acting member, so
 	// max_concurrent_runs binds it; a scan run is server-authored and

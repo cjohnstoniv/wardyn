@@ -439,12 +439,13 @@ helm install wardyn oci://ghcr.io/cjohnstoniv/charts/wardyn --version "$WARDYN_V
   (the substrate drives the API server directly via client-go, which needs
   the pod's own projected ServiceAccount token; `automount=false` is the
   chart's own default, since a non-k8s wardynd calls no API server at all).
-  **Also requires either `k8s.runtimeClasses.CC2` (or `.CC3`) pinned, or a
-  `defaultPolicy`/`env.WARDYN_DEFAULT_POLICY` override whose
-  `min_confinement_class` is CC1** — the substrate advertises only `[CC1]`
-  until a RuntimeClass is pinned, and the image's baked-in default policy
-  floors at CC2, so a stock install with neither refuses to render.
-  `examples/policies/demo.json` above is the safe CC1 reference.
+  The substrate advertises only `[CC1]` until a RuntimeClass is pinned, and
+  since 0.7.8 the image's baked-in default policy floors at **CC1**, so a stock
+  install renders and runs with no override at all — it simply runs at Fence.
+  Pin `k8s.runtimeClasses.CC2` (or `.CC3`) to make a stronger class available;
+  runs then take the strongest one installed by default. (Before 0.7.8 the
+  baked floor was CC2 and the chart refused to render this shape rather than
+  let every run be refused at launch; both the floor and that refusal are gone.)
 - `k8s.rbac.create`: render the RBAC objects below. Default `true`. Set
   `false` when a platform team provisions equivalent RBAC out-of-band (e.g.
   GitOps-managed roles on a managed cluster) and would rather this chart
