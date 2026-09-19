@@ -4141,8 +4141,9 @@ normal egress, which dispatch already chains to the configured upstream. It
 dispatches the published `agent-base` image (a plain curl task) at the STRONGEST
 confinement class this host's runner actually advertises — never the operator's
 configured floor, because the question is whether egress works, not whether the
-floor is enforceable (a CC2 floor with no RuntimeClass registered otherwise fails
-the probe before it reaches the network, reading as a proxy problem it is not; see
+floor is enforceable (an admin floor above what this host's runner advertises —
+CC2 with no RuntimeClass registered, say — otherwise fails the probe before it
+reaches the network, reading as a proxy problem it is not; see
 `not_run` below and the setup checklist's confinement-floor warning row).
 
 It also accepts an optional `{"url": "https://…"}`:

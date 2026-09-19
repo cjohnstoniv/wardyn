@@ -345,9 +345,11 @@ services:
       # Runner tools the finalize stage layers onto built images — shipped IN
       # the wardynd image (Dockerfile.wardynd), so this is zero-config too.
       WARDYN_ENVBUILD_TOOLS_DIR: "${WARDYN_ENVBUILD_TOOLS_DIR:-/wardyn-tools}"
-      # CC1 (runc) demo policy: plain Docker hosts without gVisor (CC2) can still
-      # launch runs. Override with WARDYN_DEFAULT_POLICY=/examples/policies/default.json
-      # on a CC2-capable host (the default.json policy demands CC2).
+      # CC1 (runc) demo policy — both example policies float at CC1 as of
+      # 0.7.8, so a run now defaults to the strongest class the host actually
+      # advertises regardless of which one is loaded. Override with
+      # WARDYN_DEFAULT_POLICY=/examples/policies/default.json for its wider
+      # allowed-domains list, not for confinement.
       WARDYN_DEFAULT_POLICY: "${WARDYN_DEFAULT_POLICY:-/examples/policies/demo.json}"
       # Corporate CA trust (docs/ENV.md): a PATH to a PEM bundle of additional
       # trusted roots — e.g. a file under the WARDYN_MANAGED_DIR mount below.

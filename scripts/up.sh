@@ -55,8 +55,10 @@ compose() { docker compose -f "${COMPOSE_FILE}" "$@"; }
 # pick_policy RUNTIMES_JSON [WANTS_LLM] -> a WARDYN_DEFAULT_POLICY path.
 # RUNTIMES_JSON is the output of `docker info --format '{{json .Runtimes}}'`.
 # runc (CC1) is always assumed present (every Docker install ships it); a
-# "runsc" key means gVisor (CC2) is available, so the stricter default.json
-# (min_confinement_class CC2) can be used instead of the CC1 demo.json.
+# "runsc" key means gVisor (CC2) is available. Both example policies float
+# min_confinement_class at CC1 as of 0.7.8 (a run defaults to the strongest
+# class the runner actually advertises regardless of which is loaded), so this
+# branch now picks default.json purely for its wider allowed-domains list.
 # WANTS_LLM="1" (the operator has opted into a real model path — see
 # wants_llm) upgrades to claude-llm.json, the shipped ceiling that admits the
 # api_key grant + LLM egress an AGENT run needs. Without it BOTH demo.json and
