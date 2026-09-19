@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.7.7] — 2026-09-18
+
 The 0.7.6 field report, in one journey: an admin on a Kubernetes estate whose AWS SSO session had
 lapsed clicked Launch on New Run, the run never started (the walk found both shapes: refused at the
 click, or launched and failed at dispatch when the refresh token was already retired), and the console
