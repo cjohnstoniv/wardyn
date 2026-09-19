@@ -11,12 +11,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 ### Fixed
 
 - **A lapsed AWS SSO session no longer sends an admin to Getting started.** The setup funnel's
-  redirect read every `warn` on `/setup/status` as an install defect — including `llm_provider`,
-  which under a `per_user` Bedrock row is graded through the CALLER's own session — so an admin whose
-  own sign-in had lapsed was pulled off New Run (or any page) the moment the shell's status poll
-  landed, seconds after they had clicked Launch, on an install that had never marked onboarding
-  complete. The model-provider row is optional and per person; the gate no longer reads it. The row
-  keeps its grade everywhere it is rendered. (The 0.7.6 field report.)
+  redirect read every `warn` on `/setup/status` as an install defect — including the two
+  model-provider rows, `llm_provider` and `bedrock_provider`, which under a `per_user` Bedrock row are
+  graded through the CALLER's own session — so an admin whose own sign-in had lapsed was pulled off
+  New Run (or any page) the moment the shell's status poll landed, seconds after they had clicked
+  Launch, on an install that had never marked onboarding complete. The model provider is optional and
+  per person; the gate no longer reads either row. Both keep their grade everywhere they are
+  rendered. (The 0.7.6 field report; the kind walk's admin had been landing in the funnel on every
+  load for the same reason.)
 - **Launch with a lapsed sign-in is one dialog, then the run.** `POST /runs` still refuses a run whose
   per-person session is missing or spent before any run exists, and the refusal now names its class
   on the wire — `"reason":"model_credential"`, the failure audit row's own word; every other error

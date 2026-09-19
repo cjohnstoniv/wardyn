@@ -207,11 +207,19 @@ describe("setupGateActive", () => {
   // session — so one admin's lapsed sign-in read as an install defect and the
   // 5-minute status poll yanked them off New Run into the funnel. A sign-in
   // lives on the strip and on New Run; the funnel is not where it is repaired.
-  it("never gates on the model-provider check — it is optional and graded per person", () => {
+  it("never gates on the model-provider rows — optional, and graded per person under per_user", () => {
     expect(setupGateActive({ checks: [ok, { id: "llm_provider", status: "warn" }] })).toBe(false);
     expect(setupGateActive({ checks: [ok, { id: "llm_provider", status: "fail" }] })).toBe(false);
+    // The Bedrock row too: the kind walk's never-captured admin reads BOTH
+    // rows warn (bedrock_provider's per_user "credential missing" arm), and
+    // one row excused is no fix at all (live case L0, walk-1).
+    expect(setupGateActive({ checks: [ok, { id: "bedrock_provider", status: "warn" }] })).toBe(false);
+    expect(
+      setupGateActive({ checks: [{ id: "llm_provider", status: "warn" }, { id: "bedrock_provider", status: "warn" }] }),
+    ).toBe(false);
     // …while an INSTALL check at the same grade still does.
     expect(setupGateActive({ checks: [{ id: "llm_provider", status: "warn" }, warn] })).toBe(true);
+    expect(setupGateActive({ checks: [{ id: "bedrock_provider", status: "warn" }, fail] })).toBe(true);
   });
 
   it("does not gate when every check is ok or info", () => {

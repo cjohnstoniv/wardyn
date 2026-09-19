@@ -3257,8 +3257,8 @@ lapsed session is one dialog, not a trip to Getting Started; a member under a
 shared row reads the sentence and no dialog, because the repair is the admin's.
 Launch is never pre-checked on the console's cached status — the server is the
 gate. The setup funnel does not confiscate the console over that lapse: the
-`llm_provider` check is graded per person and is not one of the checks that
-redirect an admin into the funnel.
+`llm_provider` and `bedrock_provider` rows are graded per person under
+`per_user` and are not among the checks that redirect an admin into the funnel.
 
 **What the sign-in sandbox is, and what it is not.** It is the AWS CLI and
 nothing else: no LLM harness, no repo, no mounts. Its run is labelled `harness

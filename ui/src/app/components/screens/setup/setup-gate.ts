@@ -171,16 +171,20 @@ export function setupGateActive(
   if (status.onboarding_complete) return false;
   const checks = status.checks ?? [];
   if (checks.length === 0) return false;
-  // NEVER the model-provider row: it is OPTIONAL (its own check says so —
-  // internal/api/setup_checks.go's llmProviderCheck) and, under a per_user
-  // Bedrock row, graded through the CALLER's own AWS session, so one admin's
-  // lapsed sign-in read as an install defect and the shell's status poll
-  // (immediate on returning to the tab) yanked them off New Run into the
-  // funnel — the 0.7.6 field report. A sign-in is repaired on the strip and on
-  // New Run; the funnel is for the install. The row itself keeps its grade
-  // everywhere it is rendered.
-  return checks.some((c) => c.id !== "llm_provider" && (c.status === "fail" || c.status === "warn"));
+  return checks.some((c) => !MODEL_PROVIDER_CHECKS.has(c.id) && (c.status === "fail" || c.status === "warn"));
 }
+
+// NEVER the model-provider rows. The provider is OPTIONAL (llmProviderCheck's
+// own words, internal/api/setup_checks.go) and, under a per_user Bedrock row,
+// BOTH rows are graded through the CALLER's own AWS session — llm_provider's
+// per_user arm and bedrock_provider's "credential missing" / stored-pin
+// arms — so one admin's lapsed sign-in read as an install defect and the
+// shell's status poll (immediate on returning to the tab) yanked them off New
+// Run into the funnel: the 0.7.6 field report, and the kind walk's admin on
+// every load before 0.7.7 (live case L0). A sign-in is repaired on the strip
+// and on New Run; the funnel is for the install. Both rows keep their grade
+// everywhere they are rendered.
+const MODEL_PROVIDER_CHECKS = new Set(["llm_provider", "bedrock_provider"]);
 
 // Integrations-skip flag — the operator explicitly chose to move past the
 // Integrations step with nothing connected (no model/harness, SCM host,

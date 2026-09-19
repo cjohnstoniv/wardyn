@@ -1028,6 +1028,15 @@ test("L0 (setup gate): an admin with no usable AWS sign-in of their own opens Ne
     status.checks?.find((c) => c.id === "llm_provider")?.status,
     "the admin's own half of the per_user lane is missing — the row the gate used to read",
   ).toBe("warn");
+  // …and NOTHING ELSE on this install is warn/fail except the model-provider
+  // family (walk-1 found bedrock_provider warn beside it: its per_user
+  // "credential missing" arm is this admin's too). An install-level warn here
+  // would gate legitimately and make the assertion below meaningless, so it
+  // is a precondition, stated.
+  const gating = (status.checks ?? []).filter((c) => c.status === "warn" || c.status === "fail").map((c) => c.id);
+  expect(gating, "only model-provider rows may be warn/fail for this case to mean anything").toEqual(
+    gating.filter((id) => id === "llm_provider" || id === "bedrock_provider"),
+  );
 
   // A full LOAD of a gated route: the once-per-load gate evaluates the landing
   // /setup/status read. The rail's per-person line renders off that same read,
