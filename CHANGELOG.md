@@ -8,6 +8,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.7.8] — 2026-09-19
+
 ### Added
 
 - **Every `builtin:dial-failed` refusal now names why, and which hop.** `egress.DecisionLog` carries
