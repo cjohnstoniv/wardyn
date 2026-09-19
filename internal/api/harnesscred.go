@@ -430,8 +430,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	if cerr != nil {
 		return types.AgentRun{}, harnessLoginDispatch{}, fmt.Errorf("runner capabilities unavailable: %w", cerr)
 	}
-	cc := bestClass(caps.ConfinementClasses)
-	if cc == "" {
+	if len(caps.ConfinementClasses) == 0 {
 		return types.AgentRun{}, harnessLoginDispatch{}, fmt.Errorf("runner declares no confinement class")
 	}
 
@@ -447,6 +446,12 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	if cerr != nil {
 		return types.AgentRun{}, harnessLoginDispatch{}, cerr
 	}
+	// STRONGEST ADVERTISED AT OR ABOVE THE FLOOR (0.7.8): this used to be
+	// bestClass alone (never the floor — a ~1yr credential deserves the best
+	// available isolation), which under an admin floor ABOVE what a CC1-only
+	// host advertises silently ran the capture weaker than the floor demanded.
+	// ceilingFloorClass is the same admin floor source_scan.go's scan lane uses.
+	cc := strongestAdvertisedAtOrAbove(caps.ConfinementClasses, ceilingFloorClass(ceiling))
 	// ONE LIVE SIGN-IN SANDBOX PER PERSON, and it happens HERE — before
 	// newStepRun, where the concurrency quota is counted — so a member capped at
 	// one run is never refused by their own abandoned sign-in. See

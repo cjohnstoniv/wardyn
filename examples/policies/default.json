@@ -15,7 +15,7 @@
   "denied_domains": [],
   "first_use_approval": "deny_with_review",
   "allowed_methods": [],
-  "min_confinement_class": "CC2",
+  "min_confinement_class": "CC1",
   "eligible_grants": [
     {
       "kind": "github_token",
