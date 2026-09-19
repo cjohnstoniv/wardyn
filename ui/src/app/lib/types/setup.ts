@@ -407,8 +407,8 @@ export interface SetupStatus {
   // UI-ONLY, never on the wire: set by api.getSetupStatus()'s fallback when the
   // daemon couldn't answer (network error / non-ok). The Go contract does not
   // emit it. Consumers must treat the rest of the payload as UNTRUSTWORTHY —
-  // e.g. app-shell.tsx's barrier chip and runs.tsx's no-barrier blocker both
-  // skip repainting from it rather than reading empty confinement_classes as
-  // "no barrier installed".
+  // e.g. runs.tsx's no-barrier blocker and new-run-screen.tsx's Barrier
+  // control both skip repainting from it rather than reading empty
+  // confinement_classes as "no barrier installed".
   unreachable?: boolean;
 }

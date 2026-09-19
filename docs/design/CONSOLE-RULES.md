@@ -35,7 +35,7 @@ Teal is the only loud color, and it means *"press this."* Everything else is gre
 | Active nav item | `--sidebar-accent` fill + `--sidebar-primary` rail | `navLinkClass` (`app-shell.tsx:380–386`) and the active rail (`app-shell.tsx:425`) | A third active treatment — use the shipped one |
 | Barrier tier | METALS: `--fence-*` bronze, `--wall-*` silver, `--vault-*` gold | `ConfinementChip` (`primitives.tsx:246–267`), `BarrierStrengthStrip`, `tier-illustration.tsx:70–72`, the tier matrix (`setup/environment-step.tsx:53–55`) | Card borders, run state, buttons, section headers |
 | Run / approval / health state | `--success` `--warning` `--danger` `--info` `--cyan` + their `-subtle` fills | `Chip` tones (`primitives.tsx:51–60`), shell banners (`app-shell.tsx:582`), `TruncatedNote` | Decoration. Always paired with a glyph or word — never color alone |
-| Agent identity | `--agent-claude` and the per-agent badge colors | `AgentBadge` monogram (`primitives.tsx:400–406`) | Anything but the WHO badge |
+| Agent identity | `--agent-claude` and the per-agent badge colors | `AgentBadge` monogram (`primitives.tsx:400–407`) | Anything but the WHO badge |
 | Destructive | `--destructive` (= `--danger`) | `destructive` Button, delete confirmations | Deny, Cancel, or any reversible action |
 | Everything else | `--muted`, `--muted-foreground`, `--accent`, `--border`, `--border-strong`, `--surface-2` | Surfaces, rows, hairlines, secondary text | — |
 
@@ -113,7 +113,7 @@ wanting a fourth level wants the focus ring.
 ## 5. Status vocabulary and glyph pairing
 
 **Every actor on a row is two adjacent glyphs, never fused:** WHO (the `AgentBadge`
-monogram, `primitives.tsx:400–406`) and WHAT (the state). Fusing them means neither can
+monogram, `primitives.tsx:400–407`) and WHAT (the state). Fusing them means neither can
 change independently. State is an 8px dot (`size-2`) or an icon, **plus a text label** —
 6px in a `Chip` or dense row, which `Chip` renders (`size-1.5`, `primitives.tsx:98–103`).
 A live state adds `pulse`; a terminal state swaps the dot for an icon. `RunStateBadge`

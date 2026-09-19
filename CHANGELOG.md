@@ -8,6 +8,28 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Changed
+
+- **The console offers only the barrier classes a run can actually use, and an untouched pick
+  defers to the server instead of guessing one.** Availability now comes from `/setup/status`'s
+  `runner.confinement_classes` everywhere — New Run's Barrier control moved off `/healthz` (a wire
+  mirror with no other consumer), matching the Getting-started/Settings barrier matrix it already
+  shared. Every selector disables an installed-but-below-floor or plain-uninstalled class with its
+  own reason, and where exactly one class qualifies for a run there is nothing to ask, so the control
+  collapses to a sentence rather than a picker. An inconclusive read (`unreachable`) never blocks
+  launch and no longer leaves every tier guessably selectable either. The per-browser
+  `wardyn-default-confinement` localStorage default is gone (its HIGH-4 downgrade guard was already
+  inert): the default is a server fact now, so New Run resolves its own from the host instead of
+  reading a stale browser preference, and Settings' Host card lost the private per-mount override
+  state that used to write to it.
+- **A console launch now records `confinement_source: defaulted` when the Barrier control was never
+  touched.** New Run used to send an explicit `confinement_class` on every launch — including runs
+  where the person never touched the Barrier control — so the server's own strongest-installed-
+  at-or-above-the-floor default (`runs_policy.go`'s `strongestAdvertisedAtOrAbove`) never actually
+  applied to a console launch, and the run-create audit's `confinement_source` field could only ever
+  read `requested` from this surface. An untouched pick (a clone's carried-over class still counts as
+  touched, B4b) now omits `confinement_class` from the request entirely.
+
 ## [0.7.7] — 2026-09-18
 
 The 0.7.6 field report, in one journey: an admin on a Kubernetes estate whose AWS SSO session had

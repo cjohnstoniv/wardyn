@@ -36,7 +36,6 @@ import { RunRail } from "./new-run-rail";
 import { AgentPicker } from "./agent-picker";
 import { isCredentialRefusal, runs as runsApi } from "../../../lib/api/runs";
 import { policies as policiesApi } from "../../../lib/api/policies";
-import { health as healthApi } from "../../../lib/api/health";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { hasLlmPath } from "../../../lib/readiness";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
@@ -55,11 +54,17 @@ import { useOperator, useOperatorResolved, useSecurityOperator, useUserDrive } f
 import { CC_META } from "../../wardyn/cc-meta";
 import { RUN, RUN_MODE } from "../../wardyn/copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
-import { getDefaultCc, resolveDefaultCc } from "../../wardyn/default-confinement";
+import { strongestAvailable } from "../../wardyn/default-confinement";
 import { PolicyPanel, parseSpec, toolRulesSummary, unparseableFloorClass } from "../../wardyn/policy-panel";
 import { AddWorkspaceDialog } from "../add-workspace-dialog";
 import { WorkspaceCard } from "./workspace-card";
-import { clearedSpecOnCustomSwitch, defaultSpecText, effectiveToolApprovals, savedPolicyGone } from "./policy-lane";
+import {
+  barrierReasons,
+  clearedSpecOnCustomSwitch,
+  defaultSpecText,
+  effectiveToolApprovals,
+  savedPolicyGone,
+} from "./policy-lane";
 import { buildSpec, mergeRunSelections } from "./wizard-spec";
 import {
   agentLabel,
@@ -86,12 +91,12 @@ export function NewRunScreen() {
   // run stays the server's getRunAuthorized question, answered before the
   // cockpit rendered at all.
   const prefill = (useLocation().state as { prefill?: RunPrefill } | null)?.prefill;
-  // Seed with the PERSISTED default (Settings' promise); the health probe
-  // below re-resolves it against what this host actually enforces. The old
-  // resolveDefaultCc(…, ["CC1"]) hardcoded the availability list, so a saved
-  // Wall/Vault default could never win — Settings' promise was untrue here.
+  // Seed with CC1 — a harmless placeholder the /setup/status effect below
+  // replaces within a tick with the server's own default (0.7.8: the
+  // strongest installed class), the moment it resolves. There is no
+  // per-browser default left to seed this from (see default-confinement.ts).
   const [state, setState] = React.useState<WizardState>(() =>
-    initialWizardState(getDefaultCc() ?? "CC1", prefill?.state),
+    initialWizardState("CC1", prefill?.state),
   );
   // The policy this run ships, as the operator wrote it. `useSaved` is the mode
   // row: reuse a stored policy by REFERENCE (policy_id) or author one here.
@@ -99,20 +104,18 @@ export function NewRunScreen() {
   // the picker would hold the id while the panel showed an authored document
   // nobody wrote.
   const [useSaved, setUseSaved] = React.useState(!!prefill?.state.selectedPolicyId);
-  // The DEFAULT body floors at the operator's own default barrier (persisted
-  // pick, else CC1) — NOT Minimal's authored CC2. The pre-panel screen was
-  // launchable by construction (its composed floor was the selected tier); a
-  // hardcoded CC2 default would open every fresh /runs/new on a Fence-only
-  // host fail-closed, all tiers dead, before the operator authored anything.
-  // Clicking the Minimal CHIP afterwards is an authored act and still floors
-  // CC2 — that corner stays, with its reason line and preflight naming it.
-  const [specText, setSpecText] = React.useState(() => defaultSpecText(getDefaultCc()));
+  // The DEFAULT body floors at CC1 — NOT Minimal's authored CC2. The
+  // pre-panel screen was launchable by construction (its composed floor was
+  // the selected tier); a hardcoded CC2 default would open every fresh
+  // /runs/new on a Fence-only host fail-closed, all tiers dead, before the
+  // operator authored anything. Clicking the Minimal CHIP afterwards is an
+  // authored act and still floors CC2 — that corner stays, with its reason
+  // line and preflight naming it.
+  const [specText, setSpecText] = React.useState(() => defaultSpecText());
   // The floor the LAST SUCCESSFUL parse authored — deliberately sticky across a
   // broken edit: a half-typed document must not momentarily drop the floor and
   // re-open a barrier tier the operator's own policy forbids.
-  const [parsedFloor, setParsedFloor] = React.useState<ConfinementClass | undefined>(
-    () => getDefaultCc() ?? "CC1",
-  );
+  const [parsedFloor, setParsedFloor] = React.useState<ConfinementClass | undefined>("CC1");
   // The form as the MACHINE left it — what `dirty` below compares against.
   // specText's baseline is fixed, but the barrier is the one field the machine
   // writes on its own (the health probe re-resolves it, the policy floor
@@ -120,6 +123,11 @@ export function NewRunScreen() {
   // constant would call an untouched form dirty and break Esc entirely.
   const pristineSpec = React.useRef(specText);
   const pristineCc = React.useRef(state.confinementClass);
+  // Whether the Barrier control carries an EXPLICIT pick (a clone's
+  // carried-over class counts, B4b). Untouched, buildRunInput omits
+  // confinement_class so the server's own default decides, and its audit
+  // trail reads `defaulted` rather than `requested` (confinement_source).
+  const [ccTouched, setCcTouched] = React.useState(!!prefill?.state.confinementClass);
   const [addWsOpen, setAddWsOpen] = React.useState(false);
   const [availableClasses, setAvailableClasses] = React.useState<ConfinementClass[] | null>(null);
   const [launching, setLaunching] = React.useState(false);
@@ -196,16 +204,48 @@ export function NewRunScreen() {
       });
   }, []);
 
+  // ONE /setup/status read for everything this screen needs: model-access
+  // readiness, the harness catalog, and (0.7.8) which barriers this host can
+  // build — runner.confinement_classes, the same field every other surface
+  // reads, not the /healthz mirror this screen used to poll. `unreachable`
+  // already distinguishes "couldn't check" from a real empty list, so there
+  // is no retry-on-empty heuristic to reimplement.
   React.useEffect(() => {
+    let alive = true;
     setupApi
       .getSetupStatus()
       .then((st) => {
+        if (!alive) return;
         setLlmReady(st.unreachable ? null : hasLlmPath(st));
         setHarnesses(st.harnesses);
+        if (st.unreachable) return;
+        const classes = (st.runner.confinement_classes ?? []).filter(Boolean);
+        // No runner AT ALL (environment-step.tsx's own noDriver fold — a
+        // member's redacted Driver:"" WITH classes is a withheld NAME, not
+        // no-driver) is UNKNOWN here, not "nothing installed": the capability
+        // gate (runs_create.go) is skipped entirely with no runner configured.
+        const noDriver = st.runner.driver === "none" || (st.runner.driver === "" && classes.length === 0);
+        if (noDriver) return;
+        setAvailableClasses(classes);
+        setProbeSettled(true);
+        // B4b: a CLONE's barrier is the SOURCE RUN's — kept explicit
+        // (ccTouched) as long as this host can build it. A vanished tier
+        // falls back like any fresh run and stops counting as explicit.
+        const cloned = prefill?.state.confinementClass;
+        const cloneStillAvailable = !!cloned && classes.includes(cloned);
+        const resolved = cloneStillAvailable ? cloned : strongestAvailable(classes) ?? "CC1";
+        pristineCc.current = resolved;
+        setState((s) => ({ ...s, confinementClass: resolved }));
+        if (!cloneStillAvailable) setCcTouched(false);
       })
       .catch(() => {
-        /* unknown stays unknown — never claim a missing model path on a blip */
+        /* unknown stays unknown — never claim a missing model path, or a
+           confirmed-absent barrier, on a blip */
       });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   React.useEffect(() => {
@@ -249,56 +289,6 @@ export function NewRunScreen() {
   // inline paths) the moment the operator lowered the Seg afterwards. Detach
   // now has exactly one trigger: editing the spec text (see onSpecChange).
   const patch = React.useCallback((p: Partial<WizardState>) => setState((s) => ({ ...s, ...p })), []);
-
-  // Which barriers this host can actually build. Empty means UNKNOWN, not
-  // confirmed-absent (healthApi.health swallows a failure into {}), so an empty
-  // result retries once before settling — the wizard learned this the hard way.
-  React.useEffect(() => {
-    let alive = true;
-    let retried = false;
-    const probe = () =>
-      healthApi.health().then((h) => {
-        if (!alive) return;
-        const classes = ((h.confinement_classes ?? []) as ConfinementClass[]).filter(Boolean);
-        if (classes.length === 0 && !retried) {
-          retried = true;
-          probe();
-          return;
-        }
-        // Empty after the retry stays null: unknown, never "confirmed absent".
-        // "CC1-only" was a positive claim manufactured from an absence, and it
-        // disabled Wall/Vault with copy asserting they aren't installed.
-        setAvailableClasses(classes.length ? classes : null);
-        setProbeSettled(true);
-        if (classes.length) {
-          // Re-resolve the persisted default against real availability —
-          // this, not the seed above, is where Settings' promise comes true.
-          //
-          // B4b: …except for a CLONE, whose barrier is the SOURCE RUN's and not
-          // the operator's persisted default. This effect ran a tick AFTER
-          // initialWizardState applied the prefill and overwrote it — and moved
-          // pristineCc with it, so the change did not even register as dirty.
-          // A CC3 run cloned on a machine defaulting to CC1 launched at CC1
-          // while CLONE_NOTE promised the barrier carried: silently weaker than
-          // the run it copies, which is the one direction this must never err.
-          //
-          // Fall back to the persisted default only when this host cannot BUILD
-          // the cloned tier — and that is not silent either: the picker already
-          // states it in its own words ("Vault isn't installed on this host.")
-          // beside a disabled option. The policy floor still up-clamps from
-          // here exactly as it does for a hand-authored run.
-          const cloned = prefill?.state.confinementClass;
-          const resolved =
-            cloned && classes.includes(cloned) ? cloned : resolveDefaultCc(getDefaultCc(), classes);
-          pristineCc.current = resolved;
-          setState((s) => ({ ...s, confinementClass: resolved }));
-        }
-      });
-    probe();
-    return () => {
-      alive = false;
-    };
-  }, []);
 
   const isAgent = state.runType === "agent";
   const cc = state.confinementClass;
@@ -352,11 +342,14 @@ export function NewRunScreen() {
   // successful parse's. Both paths refuse to launch below it server-side.
   const floor = useSaved ? (selectedPolicy?.spec.min_confinement_class as ConfinementClass | undefined) : parsedFloor;
 
+  // The Barrier control's per-tier state (item 3, 0.7.8) — see barrierReasons.
+  const { qualifying, unavailable, belowFloor } = barrierReasons(availableClasses, floor);
+
   // UP-CLAMP the Barrier Seg to the active floor. `cc` is in the deps on
-  // purpose: the health probe resolves ASYNCHRONOUSLY and re-seeds
-  // confinementClass from the persisted default, which can land BELOW a floor
-  // this already clamped to. Watching the value, not just the floor, makes
-  // "never below the floor" an invariant instead of a one-shot.
+  // purpose: the /setup/status read resolves ASYNCHRONOUSLY and re-seeds
+  // confinementClass from the server's own default, which can land BELOW a
+  // floor this already clamped to. Watching the value, not just the floor,
+  // makes "never below the floor" an invariant instead of a one-shot.
   React.useEffect(() => {
     if (!floor || !ORDERED_CLASSES.includes(floor)) return;
     if (rank(floor) > rank(cc)) {
@@ -421,7 +414,10 @@ export function NewRunScreen() {
   // the same body, since preflight's verdict is only true if it is a dry-run
   // of what Launch actually does. A second builder here is how the two drift.
   const buildRunInput = () => {
-    const { run } = buildSpec(state, workspaces);
+    const { run: built } = buildSpec(state, workspaces);
+    // Untouched Barrier control (ccTouched): OMIT confinement_class so the
+    // server's own default decides and its audit trail reads `defaulted`.
+    const run = ccTouched ? built : { ...built, confinement_class: undefined };
     // The MODE ROW is the discriminator: a policy id that somehow survives a
     // switch back to Custom still must not launch by reference. And the
     // workspace_id override must never OVERWRITE buildSpec's deliberate
@@ -902,48 +898,53 @@ export function NewRunScreen() {
               )}
 
               {/* The run's REQUESTED barrier — a separate wire field from the
-                  spec's min_confinement_class floor, which is why it keeps its
-                  own control here rather than living in the JSON. */}
+                  spec's min_confinement_class floor. Exactly one qualifying
+                  class leaves nothing to ask — a sentence, not a picker. */}
               <div className="border-t border-border pt-3">
-                <Seg
-                  label="Barrier"
-                  value={cc}
-                  onChange={(id) => patch({ confinementClass: id as ConfinementClass })}
-                  options={ORDERED_CLASSES.map((c) => ({
-                    id: c,
-                    label: CC_META[c].label,
-                    // Two independent reasons, each with its own line below:
-                    // the host can't build this tier, or the policy forbids it.
-                    disabled:
-                      (!!availableClasses && !availableClasses.includes(c)) ||
-                      (!!floor && rank(c) < rank(floor)),
-                  }))}
-                />
-                {availableClasses &&
-                  ORDERED_CLASSES.filter((c) => !availableClasses.includes(c)).map((c) => (
-                    <p key={c} className="mt-2 text-xs text-muted-foreground">
-                      {CC_META[c].label} isn&apos;t installed on this host.
+                {qualifying && qualifying.length === 1 ? (
+                  <div className="space-y-1">
+                    <div className="text-sm font-medium text-foreground">Barrier</div>
+                    <p className="text-body text-foreground">
+                      <Chip tone="neutral">{CC_META[qualifying[0]].label}</Chip>{" "}
+                      {RUN.BARRIER_ONLY_QUALIFIER}
                     </p>
-                  ))}
-                {/* Floor-disabled tiers get their OWN reason — the line above
-                    keys off availability alone, and "isn't installed" would be
-                    a lie about a tier this host builds fine. Skipped for a tier
-                    already named as uninstalled: one reason per tier, not two.
-                    A floor above every buildable tier leaves the Seg entirely
-                    disabled — fail-closed on purpose, with preflight and launch
-                    naming the cause. */}
+                  </div>
+                ) : (
+                  <Seg
+                    label="Barrier"
+                    value={cc}
+                    onChange={(id) => {
+                      setCcTouched(true);
+                      patch({ confinementClass: id as ConfinementClass });
+                    }}
+                    options={ORDERED_CLASSES.map((c) => ({
+                      id: c,
+                      label: CC_META[c].label,
+                      // Two independent reasons, each with its own line below:
+                      // the host can't build this tier, or the policy forbids it.
+                      disabled: unavailable.includes(c) || belowFloor.includes(c),
+                    }))}
+                  />
+                )}
+                {unavailable.map((c) => (
+                  <p key={c} className="mt-2 text-xs text-muted-foreground">
+                    {CC_META[c].label} isn&apos;t installed on this host.
+                  </p>
+                ))}
+                {/* Floor-disabled tiers get their OWN reason (barrierReasons
+                    keeps the two lists disjoint — one reason per tier). A
+                    floor above every buildable tier disables the Seg
+                    entirely — fail-closed, with preflight/launch naming why. */}
                 {floor &&
-                  ORDERED_CLASSES.filter(
-                    (c) => rank(c) < rank(floor) && (!availableClasses || availableClasses.includes(c)),
-                  ).map((c) => (
+                  belowFloor.map((c) => (
                     <p key={c} className="mt-2 text-xs text-muted-foreground">
                       {CC_META[c].label} is below the policy&apos;s floor ({CC_META[floor].label}).
                     </p>
                   ))}
+                {/* Unknown never blocks launch: an untouched pick sends no
+                    confinement_class (ccTouched), so the server decides. */}
                 {probeSettled && !availableClasses && (
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    Couldn&apos;t check which barriers this host has — all three stay selectable.
-                  </p>
+                  <p className="mt-2 text-xs text-muted-foreground">{RUN.BARRIER_UNKNOWN}</p>
                 )}
               </div>
             </div>
