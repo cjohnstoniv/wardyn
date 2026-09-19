@@ -1118,7 +1118,12 @@ test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself
   // device flow completes on the fake; the SAME click's run launches. No trip
   // to Getting started, no second click.
   await dexSignIn(page, MEMBER_EMAIL);
-  await makeMemberActionable(request);
+  // ensureActionable, not a blind flip: the pin is handed back and forth by
+  // every case before this one and E2 leaves the member ALREADY actionable, so
+  // an unconditional makeMemberActionable() healed them (walk-2, L red on the
+  // opening poll). The lapse here is the pin contradiction — the create-time
+  // refusal's stored-identity arm, reason model_credential like the spent one.
+  await ensureActionable(page, request);
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("expired_signin");
 
   await page.goto("/runs/new");

@@ -39,7 +39,8 @@ and does not yet follow semantic versioning (interfaces are not stable).
 - **A relaunch armed by the dialog survives leaving New Run with the dialog open** (the dialog is the
   shell's, so Back does not close it): a sign-in completed afterwards launches the run that click asked
   for. It lands on that run only when the launch carries no advisories; a launch WITH advisories holds
-  for an "Open run" nobody is there to click, so the run is on the Runs board and nothing says so.
+  for an "Open run" nobody is there to click, so the run is on the Runs board and nothing says so — and
+  a relaunch refused again after leaving shows its sentence nowhere.
 - **The hermetic suites prove the dialog opens itself (Playwright) and that Escape launches nothing
   (vitest); the relaunch after a completed sign-in is proven on the kind AWS SSO walk only** (live
   case L) — no mocked spec completes a device flow.
