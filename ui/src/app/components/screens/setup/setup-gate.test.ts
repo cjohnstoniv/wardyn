@@ -197,10 +197,22 @@ describe("firstRunLanding — the INSTALL's onboarding mark decides for an admin
 // for permanent/optional rows, and the absent-model-provider row is exactly
 // that — Wardyn governs non-agent runs, so a model is optional.
 describe("setupGateActive", () => {
-  const ok = { status: "ok" as const };
-  const info = { status: "info" as const };
-  const warn = { status: "warn" as const };
-  const fail = { status: "fail" as const };
+  const ok = { id: "runner", status: "ok" as const };
+  const info = { id: "env_builder", status: "info" as const };
+  const warn = { id: "runner", status: "warn" as const };
+  const fail = { id: "runner", status: "fail" as const };
+
+  // 0.7.6 field report: the model-provider check is OPTIONAL (its own row says
+  // so) and, under a per_user Bedrock row, graded through the CALLER's own AWS
+  // session — so one admin's lapsed sign-in read as an install defect and the
+  // 5-minute status poll yanked them off New Run into the funnel. A sign-in
+  // lives on the strip and on New Run; the funnel is not where it is repaired.
+  it("never gates on the model-provider check — it is optional and graded per person", () => {
+    expect(setupGateActive({ checks: [ok, { id: "llm_provider", status: "warn" }] })).toBe(false);
+    expect(setupGateActive({ checks: [ok, { id: "llm_provider", status: "fail" }] })).toBe(false);
+    // …while an INSTALL check at the same grade still does.
+    expect(setupGateActive({ checks: [{ id: "llm_provider", status: "warn" }, warn] })).toBe(true);
+  });
 
   it("does not gate when every check is ok or info", () => {
     expect(setupGateActive({ checks: [ok, info, ok] })).toBe(false);
