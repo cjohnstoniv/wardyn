@@ -717,7 +717,7 @@ var setupCheckNeverBlocks = map[string]bool{
 	"permissions_posture": true, "llm_provider": true, "bedrock_provider": true,
 	"claude_subscription_staging": true, "agent_image": true,
 	"harness_credential": true, "harness_credential_aws": true,
-	"github_ref_ruleset": true,
+	"github_ref_ruleset": true, "platform_wsl": true, "platform_macos": true,
 }
 
 // assertSetupCheckBlocking is the one gate every case in TestSetupCheckBlocking

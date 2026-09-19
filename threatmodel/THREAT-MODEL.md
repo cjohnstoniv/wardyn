@@ -2353,11 +2353,22 @@ document: the acceptance is loud (an env var an operator must set on purpose, an
 audited boot-time canary result) and visible everywhere the row renders, not hidden by
 this change.
 
+That arm's sibling, the `""` INDETERMINATE fail — a control plane reporting a Kubernetes
+runner but no canary verdict — carries no acceptance behind it, and is not marked
+`blocking` either. It stays covered in practice rather than by this flag: a live daemon
+reaches that arm only when `Capabilities()` errors, which leaves the confinement-class
+list empty, and an empty list is exactly what makes `runner` fail — which IS blocking. The
+gate still fires; it fires on the row that means "this install cannot run anything", not
+on the row that means "this install cannot tell you about its network".
+
 **On a healthy Helm install, none of the three blocking rows is ever set — the gate is
 effectively inert there.** `runner` fails only with no live confinement class at all;
 `confinement_floor` warns only when the configured floor is a class the runner does
-not advertise; `sso_rbac` warns only with OIDC configured and no role mapping. A
-correctly configured Kubernetes deployment (a registered RuntimeClass, a floor the
+not advertise; `sso_rbac` warns only with OIDC configured and no role mapping — though that
+last one is not merely a misconfiguration: a single-operator deployment, or one whose
+operator allowlist already separates admins from members, is a perfectly fine install
+that this row still holds in the funnel until onboarding completes. A correctly
+configured multi-user Kubernetes deployment (a registered RuntimeClass, a floor the
 chart's values actually advertise, `WARDYN_OIDC_ROLE_MAP` or a People-step mapping set)
 never trips any of the three, so the funnel exists for the FIRST-run and
 misconfiguration cases this gate was built for, and simply never fires again once an

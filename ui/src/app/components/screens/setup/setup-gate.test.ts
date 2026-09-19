@@ -211,11 +211,11 @@ describe("setupGateActive", () => {
   const blocking = { id: "runner", status: "fail" as const, blocking: true };
 
   // 0.7.8: this replaces the old "never gates on the model-provider rows"
-  // case. That was the SECOND id list here (the first was one id, wardyn
-  // 0.7.6) — the 0.7.6 field report was a THIRD id (harness_credential_aws)
-  // nobody had added to it yet, because the console was enumerating a family
-  // instead of naming the property that matters. There is no id list left to
-  // outgrow: a row gates on `blocking`, whatever its id or status.
+  // case. That was the second shape of an id list 0.7.7 added (llm_provider,
+  // then bedrock_provider) — and the next lapsed sign-in graded a third id,
+  // harness_credential_aws, nobody had added to it, because the console was
+  // enumerating a family instead of naming the property that matters. There is
+  // no id list left to outgrow: a row gates on `blocking`, whatever its id.
   it("never gates on a row the daemon did not mark blocking, however it is graded", () => {
     expect(setupGateActive({ checks: [ok, warnNonBlocking] })).toBe(false);
     expect(setupGateActive({ checks: [ok, failNonBlocking] })).toBe(false);

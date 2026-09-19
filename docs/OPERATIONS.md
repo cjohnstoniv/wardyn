@@ -3261,9 +3261,14 @@ dialog itself and launches the same run again once the capture lands, so a
 lapsed session is one dialog, not a trip to Getting Started; a member under a
 shared row reads the sentence and no dialog, because the repair is the admin's.
 Launch is never pre-checked on the console's cached status — the server is the
-gate. The setup funnel does not confiscate the console over that lapse: the
-`llm_provider` and `bedrock_provider` rows are graded per person under
-`per_user` and are not among the checks that redirect an admin into the funnel.
+gate. The setup funnel does not confiscate the console over that lapse. Since 0.7.8 the
+daemon decides which rows redirect an admin into the funnel — it marks them
+`blocking` on `/setup/status`, and only three are: a dead runner, a confinement
+floor the runner cannot meet, and OIDC with no role mapping. Every row graded
+through the caller's own credential — `llm_provider` and `bedrock_provider`
+under `per_user`, and `harness_credential_aws`, the row an expired AWS SSO
+session actually produces — keeps its grade wherever it renders and never moves
+anyone off the page they are on.
 
 **What the sign-in sandbox is, and what it is not.** It is the AWS CLI and
 nothing else: no LLM harness, no repo, no mounts. Its run is labelled `harness

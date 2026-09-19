@@ -244,8 +244,8 @@ export function FirstRunLanding({ status }: { status: SetupStatus | null }) {
   return <Navigate to={firstRunLanding(status, role)} replace />;
 }
 
-// The hard gate: while the daemon grades any setup check `fail` or `warn`,
-// every route below redirects into the funnel. `/setup` and `/demos` sit
+// The hard gate: while the daemon marks any setup check `blocking`, every route
+// below redirects into the funnel. `/setup` and `/demos` sit
 // OUTSIDE this wrapper, so the way to satisfy the gate is always reachable and
 // this can never trap anyone (the funnel configures environment, network and
 // secrets in place). Waits for the first /setup/status and the real role before
@@ -254,8 +254,10 @@ export function FirstRunLanding({ status }: { status: SetupStatus | null }) {
 // which would gate a member on checks their console cannot even see.
 //
 // Not the 0.5 gate this file's header warns about: that one demanded the funnel
-// be FINISHED. This asks only that the install works, and `info` checks — the
-// optional ones, model provider included — never hold it.
+// be FINISHED. This asks only that the install can work at all, and since 0.7.8
+// the DAEMON names the rows that mean it (a dead runner, an unenforceable
+// confinement floor, SSO with no role mapping) — a grade alone never holds it,
+// and a row about the caller's own credential never can.
 function RequireSetup({ status }: { status: SetupStatus | null }) {
   const role = useRole();
   const roleResolved = useRoleResolved();

@@ -29,18 +29,25 @@ import (
 // show environment-appropriate copy (linux|darwin|windows|wsl|any).
 //
 // Blocking (0.7.8) decides ONE thing: whether the console must not open on
-// this install at all — setupGateActive (ui/src/app/components/screens/setup/
-// setup-gate.ts) redirects every route into the funnel while any row carries
-// it. It is not "this needs fixing" (nearly every warn/fail row does) and not
-// "the daemon considers this severe" — plenty of severe-sounding rows have a
-// Fix that is someone ELSE's problem to run (runnerCheck's own Fix is a daemon
-// restart; confinementFloorCheck's is a Helm upgrade) or belong to the
-// CALLER's own credential, not the install (llmProviderCheck/
-// bedrockProviderCheck's per_user arms, harnessCredentialCheck,
-// awsSSOCredentialRow) — none of those may ever confiscate the console over a
-// fact about one person. Sparingly true: only a row that means runs
-// categorically cannot happen, or a security default this install is silently
-// failing, sets it.
+// this install at all — setupGateActive (the console's setup gate) redirects
+// every route into the funnel while any row carries it, until onboarding
+// completes. It is set on exactly three arms: runnerCheck's fail (no runner, so
+// no run can happen), confinementFloorCheck's warn (a floor the runner cannot
+// meet refuses every run before it launches), and ssoRBACCheck's warn (OIDC
+// with no role mapping makes every signed-in human an admin, and the funnel's
+// People step is where that is fixed).
+//
+// It is NOT "this needs fixing" — nearly every warn/fail row does — and NOT a
+// severity ranking. Two families must never carry it. Rows graded through the
+// CALLER's own credential rather than the install: llmProviderCheck's and
+// bedrockProviderCheck's per_user arms, and awsSSOCredentialRow, which grades
+// the caller's own AWS SSO session. Confiscating the console over a fact about
+// one person is the 0.7.6 field report this flag exists to end. And advisory
+// install rows, whose grade belongs on every surface that renders them but
+// whose fix is nobody's emergency: the SCM safest-path ladder, an ephemeral age
+// key, TLS cookie posture, an acknowledged egress canary. (harnessCredential-
+// Check is install-wide, not per-person — its managed-subscription arm reads an
+// unscoped blob — and is advisory for the second reason, not the first.)
 type SetupCheck struct {
 	ID       string `json:"id"`
 	Label    string `json:"label"`
