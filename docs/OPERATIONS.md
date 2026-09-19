@@ -3255,7 +3255,8 @@ no other error body changes). Since 0.7.7 the real launch is also the one pass
 at create that REDEEMS an expired session whose refresh token still lives
 (Review's preflight never does): a renewal AWS refuses as spent is refused at
 the click with that class; one AWS does not answer is refused with *"launch
-again in a moment"* and no class. New Run answers the classed refusal with the sign-in
+again in a moment"* and no class — only once the token in hand has itself
+lapsed; a still-valid one carries the run. New Run answers the classed refusal with the sign-in
 dialog itself and launches the same run again once the capture lands, so a
 lapsed session is one dialog, not a trip to Getting Started; a member under a
 shared row reads the sentence and no dialog, because the repair is the admin's.

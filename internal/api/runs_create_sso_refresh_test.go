@@ -114,7 +114,9 @@ func TestCreateRun_AnUnansweredRenewalIsRefusedWithoutTheClass(t *testing.T) {
 	}
 }
 
-func TestCreateRun_PreflightNeverRedeems(t *testing.T) {
+// The GATE with refresh=false — the value preflight.go's handler and the
+// create-path advisory pass by construction (a literal at each call site).
+func TestCreateRun_GateWithRefreshFalseNeverRedeems(t *testing.T) {
 	srv, sec, st, _ := pinDispatchSrv(t)
 	st.sc = pinnedPerUserRoster("111111111111", "BedrockRunner")
 	expiredRenewableMemberBlob(t, sec, "111111111111", "BedrockRunner")

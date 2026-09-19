@@ -440,8 +440,8 @@ type llmLanes struct {
 	// apiKey: the resolved spec already brokers an api_key grant for this
 	// agent's provider host — the operator's explicit api-key choice.
 	apiKey bool
-	// bedrock is the operator Bedrock posture resolved WITHOUT refresh: create is
-	// a dry run over a one-use rotating token.
+	// bedrock is the operator Bedrock posture; resolved WITH refresh only for the
+	// real launch (a dry run — preflight, the advisory — never spends the token).
 	bedrock bedrockAuth
 }
 
@@ -560,7 +560,7 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 	// carries no class: the console's launch door must not open over "launch
 	// again in a moment".
 	msg := llmMechanismRefusal(row, selected, ok, lanes.bedrock.ssoRefreshFailure)
-	if lanes.bedrock.ssoRefreshFailure == awsSSORefreshUnavailableSentence {
+	if lanes.bedrock.ssoRefreshFailure == awsSSORefreshUnavailableSentence && row.Mechanism == types.AgentMechanismBedrockSSO {
 		writeError(w, http.StatusUnprocessableEntity, msg)
 		return false
 	}
