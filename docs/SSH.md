@@ -124,9 +124,12 @@ address off `/healthz` and execs your local `ssh(1)` against it, so there is
 no connect string to copy. `wardyn ssh --print <run-id>` emits that command
 instead of running it (for a script or a demo) and `--config` emits the
 `ssh_config` block below — both byte-identical to what the card renders. It
-is a separate command from `wardyn attach`, deliberately: `attach` carries
-the admin bearer over a WebSocket, `ssh` carries your registered public key
-over the real SSH protocol.
+is a separate command from `wardyn attach`, deliberately: `attach` mints a
+single-use ticket with your configured token (`WARDYN_TOKEN` or
+`WARDYN_ADMIN_TOKEN`) and carries it over a WebSocket — the same door the
+console's own terminal uses, so a member needs no admin credential to attach
+to a run they own — `ssh` carries your registered public key over the real
+SSH protocol instead.
 
 `<run-id>` **is** the SSH username — the gateway has no session cookie to
 carry it any other way, so the run id is the addressing, the same way a
