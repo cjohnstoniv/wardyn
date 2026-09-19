@@ -452,6 +452,20 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 	// host advertises silently ran the capture weaker than the floor demanded.
 	// ceilingFloorClass is the same admin floor source_scan.go's scan lane uses.
 	cc := strongestAdvertisedAtOrAbove(caps.ConfinementClasses, ceilingFloorClass(ceiling))
+	// REFUSE BEFORE SUPERSEDING, not after. strongestAdvertisedAtOrAbove falls
+	// back to the floor itself when nothing advertised meets it, so a CC1-only
+	// host under an admin floor of CC2 lands here holding a class this runner
+	// cannot enforce. The dispatch would fail anyway — deep in the driver, as a
+	// raw runtime error on a created run — but supersedeCallerLoginRuns is five
+	// lines below, so failing late would first kill the person's existing
+	// sign-in sandbox and then refuse to give them a new one. The same sentence
+	// resolveEnforcedConfinement answers a run request with, before anything is
+	// destroyed.
+	if !slices.Contains(caps.ConfinementClasses, cc) {
+		return types.AgentRun{}, harnessLoginDispatch{}, fmt.Errorf(
+			"runner %q cannot enforce confinement_class %s (available: %s)",
+			s.cfg.Runner.Name(), cc, classesOrNone(caps.ConfinementClasses))
+	}
 	// ONE LIVE SIGN-IN SANDBOX PER PERSON, and it happens HERE — before
 	// newStepRun, where the concurrency quota is counted — so a member capped at
 	// one run is never refused by their own abandoned sign-in. See

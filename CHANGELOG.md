@@ -18,10 +18,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
   because the floor doubled as the default. They no longer need to: a run naming no `confinement_class`
   now resolves to the strongest class the runner actually advertises at or above whatever floor
   applies (the admin floor, when one is set, is unchanged and still fails closed exactly as before).
-  The admin-set floor path, the CC3 blast-radius override, and every explicit request are unchanged
-  to the byte. **Residual:** on a host with gVisor or Kata installed, a person may now deliberately
+  An explicit request, the refusal path and the CC3 blast-radius override are unchanged to the byte.
+  An *unspecified* request under an admin floor is not: it now resolves to the strongest installed
+  class at or above that floor, where before it took the floor itself. Two server-authored lanes move
+  with it — a source scan and an AWS SSO sign-in capture now dispatch at that same class rather than
+  below the floor, and on a host that cannot meet an admin floor the sign-in is refused up front
+  instead of failing in the driver after superseding the person's existing sandbox.
+  **Residual:** on a host with gVisor or Kata installed, a person may now deliberately
   request a weaker installed class than the old CC2 floor allowed — an explicit choice only, never the
-  default, which still always resolves to the strongest available. And because the advertised set is
+  default, which still always resolves to the strongest available. Note the console today always sends
+  an explicit class, so a console launch records `requested`; the `defaulted` row is what an API or CLI
+  launch that names no class produces. And because the advertised set is
   live-probed rather than read from a static field, a runtime that disappears between two runs lowers
   the *default* for the next unspecified request rather than refusing it — which is why the
   `run.create` audit row now carries `confinement_source` (`requested`/`defaulted`), the one place that

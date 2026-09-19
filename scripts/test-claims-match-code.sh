@@ -543,14 +543,6 @@ for relpath in ${helm_recipe_docs}; do
     if grep -qE 'k8s\.enabled=true' "${b}"; then
       grep -qE 'k8s\.(runsNamespace|allowRunsInReleaseNamespace)' "${b}" \
         || fail "${relpath} has a fenced k8s.enabled=true 'helm install wardyn' block with no runs-namespace choice (k8s.runsNamespace or k8s.allowRunsInReleaseNamespace) — templates/rbac.yaml fails this render (C9): $(head -1 "${b}")"
-      # D-1 (v0.7.4 review): deploy-scripts' B12b-F7 guard also fails a
-      # k8s.enabled=true render with no CC2/CC3 RuntimeClass pinned AND no
-      # default-policy override (templates/deployment.yaml) — the substrate
-      # then advertises only [CC1] while the image's baked-in default policy
-      # floors at CC2. C9 checked the runs-namespace refusal above but not
-      # this one, so a block failing only this arm still passed.
-      grep -qE 'k8s\.runtimeClasses\.CC[23]|defaultPolicy|WARDYN_DEFAULT_POLICY' "${b}" \
-        || fail "${relpath} has a fenced k8s.enabled=true 'helm install wardyn' block with no CC2/CC3 RuntimeClass pin and no defaultPolicy/WARDYN_DEFAULT_POLICY override — templates/deployment.yaml fails this render (C9): $(head -1 "${b}")"
     fi
   done
 done

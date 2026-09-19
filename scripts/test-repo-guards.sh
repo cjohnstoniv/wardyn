@@ -20,8 +20,8 @@
 #   6. every `docker run`/`docker create` publish under scripts/ (-p, -p=, or
 #      --publish) binds loopback-only — wardyn-test-pg (scripts/up.sh cmd_pg)
 #      was the one 0.0.0.0 publish in the repo (B12b-F5).
-#   7. deploy/kind/quickstart.sh's generated values carry the B12b-F7
-#      CC2/CC3-guard escape (R-01).
+#   7. deploy/kind/quickstart.sh's generated values state their own
+#      confinement floor rather than inheriting the image's (R-01).
 #   8. docker-compose.yaml's WARDYN_OIDC_ROLE_MAP stays a plain passthrough,
 #      and deploy/compose/.env.example still seeds the demo/member pair for a
 #      fresh install (R-03).
@@ -212,18 +212,19 @@ EOF
 done
 if [ "$port_bind_fail" = 0 ]; then ok "every docker run/create publish in scripts/ binds loopback only"; fi
 
-# ── 8. deploy/kind/quickstart.sh's generated values carry a CC2/CC3-guard
-#      escape — R-01: the B12b-F7 helm guard (k8s.enabled with no
-#      CC2/CC3 RuntimeClass pinned AND no default-policy override refuses to
-#      render) now refuses `make kind-quickstart`'s own generated values
-#      unless its heredoc sets one of the two escapes. Grepping the SCRIPT
-#      SOURCE (not a render) so a future edit that strips the line fails here,
-#      before CI ever spins up a cluster to discover it.
+# ── 8. deploy/kind/quickstart.sh's generated values still state a floor —
+#      R-01, rewritten for 0.7.8. The B12b-F7 helm guard this originally
+#      enforced is gone (the baked default floors at CC1 now, so the render it
+#      refused is legal), but the quickstart should still say which floor its
+#      cluster runs under rather than inheriting whatever the image ships — a
+#      Fence-only kind cluster reading its floor from a future image change is
+#      how the original trap was born. Grepping the SCRIPT SOURCE, not a
+#      render, so an edit that strips the line fails here rather than in CI.
 quickstart_values_heredoc="$(awk '/values\.yaml" <<EOF/{f=1;next} f&&/^EOF$/{exit} f{print}' deploy/kind/quickstart.sh)"
 if printf '%s' "$quickstart_values_heredoc" | grep -qE 'WARDYN_DEFAULT_POLICY|(CC2|CC3): *"?[A-Za-z0-9]' ; then
-    ok "deploy/kind/quickstart.sh's generated values carry the CC2/CC3-guard escape"
+    ok "deploy/kind/quickstart.sh's generated values state their own confinement floor"
 else
-    bad "deploy/kind/quickstart.sh's generated values.yaml heredoc names neither WARDYN_DEFAULT_POLICY nor a runtimeClasses pin — the B12b-F7 helm guard now refuses this exact render (R-01); see deploy/compose/docker-compose.yaml's WARDYN_DEFAULT_POLICY override for the byte-matching fix"
+    bad "deploy/kind/quickstart.sh's generated values.yaml heredoc names neither WARDYN_DEFAULT_POLICY nor a runtimeClasses pin — the cluster then inherits the image's floor instead of stating its own (R-01); see deploy/compose/docker-compose.yaml's WARDYN_DEFAULT_POLICY override for the shape"
 fi
 
 # ── 9. compose WARDYN_OIDC_ROLE_MAP stays a plain passthrough, and
