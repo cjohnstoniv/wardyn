@@ -92,6 +92,27 @@ and does not yet follow semantic versioning (interfaces are not stable).
   change. Compose gains the `WARDYN_AWS_SSO_PROXY_INJECT` passthrough beside its sibling `WARDYN_*`
   vars. Both empty by default — byte-identical to today, wardynd's own compiled default (`on`) applies.
 
+- **The console offers only the barrier classes a run can actually use, and an untouched pick
+  defers to the server instead of guessing one.** Availability now comes from `/setup/status`'s
+  `runner.confinement_classes` everywhere — New Run's Barrier control moved off `/healthz` (a wire
+  mirror with no other consumer), matching the Getting-started/Settings barrier matrix it already
+  shared. Every selector disables an installed-but-below-floor or plain-uninstalled class with its
+  own reason, and where exactly one class qualifies for a run there is nothing to ask, so the control
+  collapses to a sentence rather than a picker. An inconclusive read (`unreachable`) never blocks
+  launch and no longer leaves every tier guessably selectable either. The per-browser
+  `wardyn-default-confinement` localStorage default is gone (its HIGH-4 downgrade guard was already
+  inert): the default is a server fact now, so New Run resolves its own from the host instead of
+  reading a stale browser preference, and Settings' Host card lost the private per-mount override
+  state that used to write to it.
+
+- **A console launch now records `confinement_source: defaulted` when the Barrier control was never
+  touched.** New Run used to send an explicit `confinement_class` on every launch — including runs
+  where the person never touched the Barrier control — so the server's own strongest-installed-
+  at-or-above-the-floor default (`runs_policy.go`'s `strongestAdvertisedAtOrAbove`) never actually
+  applied to a console launch, and the run-create audit's `confinement_source` field could only ever
+  read `requested` from this surface. An untouched pick (a clone's carried-over class still counts as
+  touched, B4b) now omits `confinement_class` from the request entirely.
+
 ### Fixed
 
 - **The AWS sign-in tab's URL no longer carries junk after the device code.** Clicking "open AWS
@@ -187,27 +208,36 @@ The audit trail showed a tight loop of `policy:allowed` → `builtin:dial-failed
   runner, a meetable floor and a role mapping sets none of the three — so on a healthy Kubernetes
   install the funnel gate no longer fires at all, where before 0.7.8 any `warn` held it. The rows are
   still there to read; what they stopped doing is taking the console away.
-### Changed
 
-- **The console offers only the barrier classes a run can actually use, and an untouched pick
-  defers to the server instead of guessing one.** Availability now comes from `/setup/status`'s
-  `runner.confinement_classes` everywhere — New Run's Barrier control moved off `/healthz` (a wire
-  mirror with no other consumer), matching the Getting-started/Settings barrier matrix it already
-  shared. Every selector disables an installed-but-below-floor or plain-uninstalled class with its
-  own reason, and where exactly one class qualifies for a run there is nothing to ask, so the control
-  collapses to a sentence rather than a picker. An inconclusive read (`unreachable`) never blocks
-  launch and no longer leaves every tier guessably selectable either. The per-browser
-  `wardyn-default-confinement` localStorage default is gone (its HIGH-4 downgrade guard was already
-  inert): the default is a server fact now, so New Run resolves its own from the host instead of
-  reading a stale browser preference, and Settings' Host card lost the private per-mount override
-  state that used to write to it.
-- **A console launch now records `confinement_source: defaulted` when the Barrier control was never
-  touched.** New Run used to send an explicit `confinement_class` on every launch — including runs
-  where the person never touched the Barrier control — so the server's own strongest-installed-
-  at-or-above-the-floor default (`runs_policy.go`'s `strongestAdvertisedAtOrAbove`) never actually
-  applied to a console launch, and the run-create audit's `confinement_source` field could only ever
-  read `requested` from this surface. An untouched pick (a clone's carried-over class still counts as
-  touched, B4b) now omits `confinement_class` from the request entirely.
+### Known gaps
+
+- **The corp-proxy estate's actual cause is still unidentified, and this release does not claim to fix
+  it.** The field report diagnosed Phase B's MITM lane as ignoring `SiteConfig.upstream_proxy_url`;
+  a new test now proves that lane *does* CONNECT through the corporate proxy, by hostname, and that a
+  `upstream_proxy_no_proxy` entry is the one thing that sends it direct. So the premise is disproven
+  and the real cause is one of: a bypass entry covering the AWS suffixes, the corp proxy refusing
+  `CONNECT portal.sso…:443`, or the proxy image lacking that estate's TLS-intercept CA
+  (`WARDYN_TRUSTED_CA_FILE` — the sandbox images bake one, the proxy image does not unless staged).
+  What 0.7.8 ships is the instrument: every `builtin:dial-failed` now carries the failed stage, the
+  underlying error and which hop was attempted, so the next run names its own cause instead of costing
+  an operator an hour. `WARDYN_AWS_SSO_PROXY_INJECT=off` remains the sanctioned stopgap.
+
+- **An observer learns it may type on reconnect, not in place.** A holder whose socket dies is now
+  reaped within the ping budget instead of holding the writer slot indefinitely, and a remount no
+  longer collides with its own release — so the next attach gets the slot. But the `attach-mode` frame
+  is still sent once per connect: a terminal already sitting open as a read-only observer does not
+  flip to writable live, it flips when it reconnects. True in-place promotion needs the holder registry
+  to track observer sinks rather than one writer, which is a larger change than this release took.
+
+- **The terminal's ordinary-use test corpus is not written.** The three reported faults ship with pins
+  that fail without their fix, but the wider corpus this campaign scoped — paste, selection, two tabs
+  on one run, a reconnect after a daemon bounce, the SSH lane joining the same session — is deferred,
+  as is k8s `Driver.Attach`, which has no test at all.
+
+- **Two console surfaces still describe the old setup gate.** The Getting-started Review step groups
+  rows by grade rather than by the new `blocking` flag, so a blocking `warn` reads under "Worth a
+  look" while a non-blocking `fail` reads under "Blocking"; and demo 02c's narration still says every
+  door leads to Getting started, which a healthy install no longer does.
 
 ## [0.7.7] — 2026-09-18
 
