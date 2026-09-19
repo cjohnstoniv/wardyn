@@ -8,6 +8,26 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The setup gate is a daemon decision now, not a console id list.** `/setup/status` rows carry a new
+  `blocking` bool (`SetupCheck.Blocking`), and the console's hard gate (`setupGateActive`) redirects into
+  the funnel only when a row is marked, never on grade or id alone. This is the THIRD time the console
+  guessed at "which ids are install defects" — first one id, then two (0.7.7's `MODEL_PROVIDER_CHECKS`) —
+  and each guess was a family that kept growing: 0.7.7 fixed `llm_provider`/`bedrock_provider` reading an
+  admin's own lapsed session as an install defect, and the very same shape was still live on
+  `harness_credential_aws` (an admin's own AWS SSO session lapsing), `harness_credential` and
+  `bedrock_provider`'s roster-posture arms — none of them excluded, all of them graded through the
+  CALLER's own credential rather than the install. The daemon now marks the property directly, on exactly
+  three rows: `runner`'s `fail` (no live confinement class — runs cannot launch), `confinement_floor`'s
+  `warn` (every run on the default policy refused before it launches), and `sso_rbac`'s `warn` (OIDC
+  configured with no role mapping — every SSO user is an admin). Every other row on the checklist —
+  `age_key`, `tls_cookie_posture`, `site_config`, `scm_provider`, `host_proxy`,
+  `claude_subscription_staging`, `github_ref_ruleset`, `k8s_egress_containment` (its `warn` AND both
+  `fail` arms), and the four per-person rows `llm_provider`, `bedrock_provider`, `harness_credential`,
+  `harness_credential_aws` — keeps its grade everywhere it renders, but never confiscates the console
+  again, whatever status it carries.
+
 ## [0.7.7] — 2026-09-18
 
 The 0.7.6 field report, in one journey: an admin on a Kubernetes estate whose AWS SSO session had

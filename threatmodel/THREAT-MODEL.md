@@ -2334,6 +2334,39 @@ visible as a count on a periodic row rather than as one row per attempt. An
 operator who wants row-per-attempt on the public lane sets the window to `0`, at
 the cost the limiter's own residual already names.
 
+### The setup gate trusts a daemon-marked flag, and is inert on a healthy install
+
+0.7.8 moved the console's setup-funnel gate (`setupGateActive`) off a hard-coded id
+list and onto a `blocking` bool the daemon sets on individual `/setup/status` rows
+(`SetupCheck.Blocking`). Two consequences worth stating rather than leaving implicit.
+
+**A `fail` row can now stop gating.** `k8s_egress_containment`'s `unenforced` arm — the
+cluster's CNI does not enforce `NetworkPolicy`, and the operator accepted that with
+`WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` — is graded `fail` and was never marked
+`blocking`: it is a fact about the SUBSTRATE's confinement (every sandbox this runner
+creates has unconfined egress), which the checklist, the banner and Audit all keep
+showing, but which the operator has already, explicitly, accepted. Confiscating the
+console over an accepted risk would not make the risk smaller; it would just make the
+accepting operator's own install harder to operate while they live with the choice
+they made. The bound is the same one that arm already carries elsewhere in this
+document: the acceptance is loud (an env var an operator must set on purpose, an
+audited boot-time canary result) and visible everywhere the row renders, not hidden by
+this change.
+
+**On a healthy Helm install, none of the three blocking rows is ever set — the gate is
+effectively inert there.** `runner` fails only with no live confinement class at all;
+`confinement_floor` warns only when the configured floor is a class the runner does
+not advertise; `sso_rbac` warns only with OIDC configured and no role mapping. A
+correctly configured Kubernetes deployment (a registered RuntimeClass, a floor the
+chart's values actually advertise, `WARDYN_OIDC_ROLE_MAP` or a People-step mapping set)
+never trips any of the three, so the funnel exists for the FIRST-run and
+misconfiguration cases this gate was built for, and simply never fires again once an
+install is healthy — which is the intended shape (the same "a place you go, not a wall
+you are trapped behind" principle `setup-gate.ts` already documents), stated here as a
+residual because it means the gate's absence is not, by itself, evidence the install
+is fine: an operator who wants that assurance still reads the checklist, not just
+whether the funnel opened.
+
 ### Known latent vulnerabilities
 
 We publish known-uncalled findings here rather than let them sit in a scanner's
