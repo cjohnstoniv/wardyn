@@ -697,7 +697,8 @@ async function fastHold(
 }
 
 // DEFERRED, with the measurements, not quietly dropped: a hold nobody answers
-// does time out — the product does it — but the walk cannot SEE it.
+// does time out — the product does it — but neither attempt on this release
+// drove it in time to see it.
 //
 // Two attempts, both of which raised a REAL hold (a PENDING credential_reauth
 // row and a credential.reauth.requested audit row, every time) and neither of
