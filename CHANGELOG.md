@@ -18,6 +18,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **`vscode/` and `novnc/` now default `FROM wardyn/agent-base:local`, not `wardyn/agent-claude-code:local`.**
+  Both Dockerfiles take a `BASE_IMAGE` build arg (`deploy/images/{vscode,novnc}/Dockerfile`); their
+  launchers only exec `code-server`/the X stack and never call a coding-agent CLI, so the vendor base
+  was never actually needed. `deploy/images/vscode/Dockerfile` also drops the
+  `LicenseRef-Anthropic-Terms` OCI licence label it no longer carries. `agent-image-vscode` and
+  `agent-image-novnc` now depend on a new `agent-image-base` target instead of `agent-images-core`, so
+  neither build touches the vendor CLI image at all. **Upgrading:** a developer checkout that wants
+  `claude` available in the vscode terminal restores the vendor base explicitly — build it first with
+  `make agent-images-core`, then `make agent-image-vscode BASE_IMAGE=wardyn/agent-claude-code:local`
+  (same knob for `agent-image-novnc`).
 - **`resolveCreateRunImage` no longer writes the HTTP response.** It now returns
   `(image string, failed bool)` instead of writing the 201 itself on a BYOI/devcontainer build
   failure, so it can be called from a background worker. `internal/api/runs.go`'s
