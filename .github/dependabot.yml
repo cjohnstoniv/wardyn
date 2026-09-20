@@ -54,8 +54,14 @@ updates:
     ignore:
       # Agent images ship on Node LTS lines only — odd-numbered majors are
       # non-LTS. Extend this list when the next odd major appears.
+      #
+      # Docker's ignore.versions is a requirement-range string, not a glob:
+      # "25.*" parses but its ends never resolve to a version, so Dependabot
+      # rejects it (the ".github/dependabot.yml" config check failed on this
+      # exact line before the fix). ">= N, < N+1" is the range syntax that
+      # validates.
       - dependency-name: node
-        versions: ["25.*", "27.*"]
+        versions: [">= 25, < 26", ">= 27, < 28"]
       # 26 enters LTS on 2026-10-28 (nodejs/Release schedule.json); remove after that date.
       - dependency-name: node
-        versions: ["26.*"]
+        versions: [">= 26, < 27"]
