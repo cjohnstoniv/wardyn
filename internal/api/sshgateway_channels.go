@@ -665,19 +665,19 @@ func (s *Server) bridgeSSHExec(ctx context.Context, runID uuid.UUID, principal s
 		return
 	}
 	exit, _ := s.sshBridgeExecSession(ctx, runID, channel, sess, true)
-	// FINDING (medium, fixed — caught by the live SSH e2e's -L forward step,
-	// scripts/run-e2e-ssh.sh): every trailing write in this file that follows
-	// sshBridgeExecSession (here, bridgeSSHSFTP, handleSSHDirectTCPIP) used to
-	// run on ctx — handleSSHConn's connCtx, cancelled the INSTANT the whole
-	// SSH connection tears down. A client that kills its session mid-flight
-	// races that cancellation against this exact line; lose the race and the
-	// write is attempted on an already-cancelled context. The primary store
+	// Every trailing write in this file that follows
+	// sshBridgeExecSession (here, bridgeSSHSFTP, handleSSHDirectTCPIP) must
+	// run on s.cfg.BaseCtx, never ctx — handleSSHConn's connCtx, cancelled the
+	// INSTANT the whole SSH connection tears down. A client that kills its
+	// session mid-flight races that cancellation against this exact line; on
+	// ctx, losing that race attempts the write on an already-cancelled
+	// context. The primary store
 	// write then fails fast (context.Canceled, no query even sent) and
 	// recordAudit swallows that error — the row surfaces only after the audit
 	// spool's own drain cycle (auditSpoolDrainInterval later — invisible to a
 	// poll right after the kill) if a spool is configured at all, or is
-	// dropped outright if it isn't. Same fix as bridgeSSHShell's
-	// session.detach write above / attach.go's identical FINDING: use
+	// dropped outright if it isn't. Same rule as bridgeSSHShell's
+	// session.detach write above / attach.go's identical seam: use
 	// s.cfg.BaseCtx (daemon-lifetime) for a write that must outlive the
 	// connection it is reporting the end of.
 	s.recordAudit(s.cfg.BaseCtx, s.auditEvent(&runID, types.ActorHuman, principal, "ssh.exec",

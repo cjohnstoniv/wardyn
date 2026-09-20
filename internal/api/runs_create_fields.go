@@ -23,7 +23,7 @@ import (
 //
 // title/description were already capped; repo, task and agent were bounded only
 // by the 1 MiB body, so a 1 MiB "repo" reached the run row, every list payload
-// and the audit trail (B1-F6). localPrincipalOverride's doc comment
+// and the audit trail. localPrincipalOverride's doc comment
 // (runs_policy.go) claims every other caller-supplied string on this path is
 // capped and control-character-checked — these were the exceptions it did not
 // know about.
@@ -70,10 +70,10 @@ type runTextField struct {
 // A METHOD ON Server, although it reads nothing from the receiver: preflight
 // parity is enforced structurally over `s.<Gate>(…)` calls
 // (TestPreflightMirrorsLaunchGates), so a package-level function would be a gate
-// that guard cannot see — which is exactly how B1-F3's gap survived. Both doors
+// that guard cannot see — which is exactly how the gap survived. Both doors
 // call this one; neither can drift.
 //
-// RUNES, NOT BYTES, for the reason the title cap already gives: the message says
+// Runes, not bytes, for the reason the title cap already gives: the message says
 // "chars", and a CJK or emoji value well under the limit was refused with a byte
 // count the operator could not reconcile with what they typed.
 func (s *Server) validateRunTextFields(w http.ResponseWriter, req createRunRequest) bool {
@@ -136,7 +136,7 @@ func (s *Server) recordCreateFolds(ctx context.Context, runID uuid.UUID,
 // handleCreateRun goes through: it fails the persisted run PENDING->FAILED with
 // an operator-facing hint and runs the revoke cascade, so a 500 answered after
 // the run row exists cannot leave a ghost PENDING run holding a live run token
-// until the undispatched sweep reaps it (B1-F1).
+// until the undispatched sweep reaps it.
 //
 // context.WithoutCancel is applied INSIDE the returned closure, not at the
 // client-disconnect detach further down handleCreateRun: the compensator runs on
@@ -153,9 +153,9 @@ func (s *Server) abortHalfBuiltRun(ctx context.Context, runID uuid.UUID) func(hi
 // appendDevcontainerNoBuilderWarning says on the 201 what resolveCreateRunImage
 // does silently: with no ImageBuilder wired a devcontainer_repo run falls
 // through to the convention image, so the sandbox is not the one the caller
-// asked for (B1-F9). The fall-through itself stays — a hard refusal would break
+// asked for. The fall-through itself stays — a hard refusal would break
 // every no-builder deployment that has been launching this way — and a workspace
-// base_image still fails CLOSED there (PARITY-4), which is the difference this
+// base_image still fails CLOSED there, which is the difference this
 // sentence exists to make visible.
 func (s *Server) appendDevcontainerNoBuilderWarning(warnings []string, req createRunRequest) []string {
 	if req.DevcontainerRepo != "" && s.cfg.ImageBuilder == nil {

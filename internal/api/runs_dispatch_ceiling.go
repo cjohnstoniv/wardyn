@@ -20,7 +20,7 @@ import (
 // The dispatch-time half of a governance profile: the phase that re-asserts an
 // ASSIGNED ceiling's DENY set over a run dispatch has finished composing.
 //
-// WHY THIS EXISTS, in one sentence: a create-time deny is not sufficient,
+// Why this exists, in one sentence: a create-time deny is not sufficient,
 // because dispatch legitimately WIDENS the run after create returned. The
 // artifact-redirect phase substitutes a corporate mirror into the allowlist and
 // authors a token injection for it (runs_dispatch.go, artifact_redirect.go);
@@ -38,15 +38,10 @@ import (
 // rather than a field on dispatchParams. That is the fix for the defect class,
 // not a style preference.
 //
-// It used to be two optional dispatchParams fields (CeilingDeny, CeilingProfile),
-// and reassertCeilingDenies returns immediately on an empty deny list — so a
-// dispatch lane that simply did not populate them ran with NO ceiling
-// enforcement at all and no run.ceiling.reassert row to say so. Three of the
-// five lanes did not populate them; two of those three are reachable by a
-// principal effectiveCeiling does NOT short-circuit (a member owning a workspace
-// reaches the source scan, a security admin reaches the site-config probes), so
-// the enforcement default for an unconverted lane was fail-OPEN, and a SIXTH
-// lane added later would have inherited that default silently.
+// A silently-unset optional field is exactly the failure a positional
+// argument forecloses: dispatchRun cannot compile without a caller deciding
+// what ceiling to pass, so a lane can no longer run with no enforcement and
+// no run.ceiling.reassert row to say so.
 //
 // Two properties make forgetting impossible now:
 //
@@ -75,7 +70,7 @@ type dispatchCeiling struct {
 	// the same reason deny does: applyEphemeralDisk is a dispatch phase, and the
 	// ceiling is already this function's argument.
 	//
-	// A CLAMP, NOT A DENY, so it shares nothing with the deny machinery below: no
+	// A clamp, not a deny, so it shares nothing with the deny machinery below: no
 	// lane is withheld and no run is refused, which is forced by disk_mib being
 	// authored on POLICIES (a refusal would break every stored policy the day an
 	// admin first writes a limit — internal/types/governance.go says so).
@@ -87,12 +82,12 @@ type dispatchCeiling struct {
 // call site.
 //
 // It carries denies only for an ASSIGNED profile. That is the whole scoping
-// rule (§A): a member with no assignment resolves to Config.DefaultPolicy, whose
+// rule: a member with no assignment resolves to Config.DefaultPolicy, whose
 // denies are ALREADY in their run's policy by every ordinary path — re-asserting
 // them would be a no-op on a good day and a behaviour change on a bad one, on
 // deployments that have never authored a profile. An operator short-circuits
 // earlier still, at effectiveCeiling's step 1. Either way the result is
-// RESOLVED: "this principal has no profile" is an answer, and the zero value is
+// resolved: "this principal has no profile" is an answer, and the zero value is
 // not.
 func ceilingForDispatch(c governanceCeiling) dispatchCeiling {
 	if c.Profile == nil {
@@ -134,7 +129,7 @@ type effectivePolicyDatum struct {
 // min(storage.ephemeral.max_disk_mib, the profile's MaxEphemeralDiskMiB), zeros
 // meaning "no bound" on either side.
 //
-// A ZERO REQUEST WITH NO ORG DEFAULT STAYS ZERO — unbounded scratch, byte-for-byte
+// A zero request with no org default stays zero — unbounded scratch, byte-for-byte
 // today. A maximum bounds a REQUEST; it never invents one, and this is not
 // composer.Clamp's capField idiom (which does fill a zero up to a SPEC cap):
 // filling from a maximum would give every request-less run a non-zero DiskMiB, and
@@ -152,7 +147,7 @@ type effectivePolicyDatum struct {
 // effective number to every caller. A profile's own clamp is additionally
 // disclosed in run.ceiling.reassert below.
 //
-// SCOPE, which differs per ceiling on purpose: storage.ephemeral.max_disk_mib is
+// Scope, which differs per ceiling on purpose: storage.ephemeral.max_disk_mib is
 // the ORG's number and binds EVERY caller, operators and unassigned members
 // included; MaxEphemeralDiskMiB binds ASSIGNED MEMBERS ONLY, because
 // ceilingForDispatch above returns no limits at all for Profile == nil (an
@@ -160,11 +155,9 @@ type effectivePolicyDatum struct {
 //
 // The WHOLE expression is ephemeralDiskFor below, which POST /runs/preflight
 // also calls (previewEphemeralDisk): the preview reports the number this run
-// will get, org fill and both ceilings included. It used to share only the
-// min() (composer.CapDiskMiB), and the preview applied the profile half alone —
-// so a member with a 100000 MiB policy under a 4096 MiB org maximum previewed
-// 100000 and ran on 4096. TestPreflightAndDispatchAgreeOnEphemeralDisk is the
-// pin; a comment claiming the two "cannot disagree" is not one.
+// will get, org fill and both ceilings included.
+// TestPreflightAndDispatchAgreeOnEphemeralDisk is the pin; a comment claiming
+// the two "cannot disagree" is not one.
 func applyEphemeralDisk(ctx context.Context, run types.AgentRun, policy *types.RunPolicySpec,
 	siteCfg types.SiteConfig, c dispatchCeiling,
 ) bool {
@@ -238,7 +231,7 @@ func orgEphemeralOf(siteCfg types.SiteConfig) types.EphemeralProvider {
 // identically from its inline arm and its stored/default arm (the drift that
 // let one of them preview a size the other did not).
 //
-// SCOPE, per ceiling: the profile's MaxEphemeralDiskMiB binds an ASSIGNED MEMBER
+// Scope, per ceiling: the profile's MaxEphemeralDiskMiB binds an ASSIGNED MEMBER
 // only — an operator short-circuits at effectiveCeiling's step 1 and an
 // unassigned member resolves no limits — so it is ZEROED for anyone else rather
 // than the block being skipped, because the ORG's numbers bind every caller.
@@ -274,7 +267,7 @@ func (s *Server) boundEphemeralDisk(ctx context.Context, r *http.Request, spec *
 // spec and reports whether that was a CLAMP (a fill is a difference, but it is
 // not "capped to operator maximum" and must not borrow that sentence).
 //
-// PREVIEW ONLY — resolveRunPolicy calls it on the dryRun arm alone. A fill
+// Preview only — resolveRunPolicy calls it on the dryRun arm alone. A fill
 // written into a spec that goes on to LAUNCH would reach the driver as a
 // POLICY-AUTHORED size and be refused at create on every overlay2-over-ext4
 // host; the fill is dispatch's precisely so DiskMiBFilled can carry the
@@ -367,7 +360,7 @@ func ceilingDeniesAny(deny []string, hosts []string) bool {
 // unionCeilingDenies appends the ceiling's denies the run does not already
 // carry and returns what it added.
 //
-// A MEET, NOT A REPLACE. The run's own denies survive untouched (they are the
+// A meet, not a replace. The run's own denies survive untouched (they are the
 // operator's, or the broker phase's, and both are narrower-is-better), and no
 // ALLOW is re-intersected — an operator-declared workspace widening still works,
 // it simply cannot cross a wall the profile put up. Deny beats allow AND beats
@@ -412,17 +405,17 @@ func unionCeilingDenies(policy *types.RunPolicySpec, deny []string) []string {
 //     egress and a sidecar boot error. Five lines convert that into a disclosed
 //     drop.
 //
-//  3. DROP the BROKERED CREDENTIAL LANES the ceiling denies (PF-1b) — the one a
+//  3. DROP the BROKERED CREDENTIAL LANES the ceiling denies — the one a
 //     naive implementation misses. The proxy's /wardyn/gh/ and /wardyn/git/
 //     routes mint proxy-side and re-originate WITHOUT consulting DeniedDomains;
 //     confineGitBrokerEgress makes "github.com denied at evalHost while broker
 //     traffic flows" the DESIGNED norm (runs_dispatch_gitbroker.go). So a denied
 //     corporate forge still receives a brokered credential unless the lane
-//     itself is dropped here, and §A's "credential injection to company hosts is
+//     itself is dropped here, and "credential injection to company hosts is
 //     structurally impossible" would be false at exactly the hosts holding the
 //     company's code.
 //
-// WHERE IT RUNS, AND WHY THERE. Immediately AFTER confineGitBrokerEgress and
+// Where it runs, and why there. Immediately AFTER confineGitBrokerEgress and
 // before buildRunMounts / the ProxyConfig snapshot. Every phase that can WIDEN
 // the run is above it — the artifact substitution and its injections
 // (substituteArtifactEgress / planArtifactRedirect), the LLM transport's Bedrock
@@ -437,7 +430,7 @@ func unionCeilingDenies(policy *types.RunPolicySpec, deny []string) []string {
 // only adds DENIES and only removes credentials. It never touches AllowedDomains
 // and can therefore not un-confine anything.
 //
-// NO CONFINEMENT FLOOR-RAISE (PF-6): SandboxSpec.ConfinementClass comes from
+// No confinement floor-raise: SandboxSpec.ConfinementClass comes from
 // run.ConfinementClass, fixed at create — raising policy.MinConfinementClass
 // here would be decoration that looks enforced and is not.
 //
@@ -480,7 +473,7 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 				slog.Any("injection_hosts", droppedInjection), slog.Any("broker_lanes", droppedLane))
 		}
 	}
-	// NO ASSIGNED PROFILE — an operator (effectiveCeiling short-circuits at step
+	// No assigned profile — an operator (effectiveCeiling short-circuits at step
 	// 1) or an unassigned member: no run.ceiling.reassert row, which is what
 	// makes the row's ABSENCE mean "no profile applies" rather than "this door
 	// skipped the ceiling". ceilingForDispatch leaves deny and profile empty
@@ -525,14 +518,14 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 // dropBrokeredLanes withholds the git-broker and PAT-broker grants whose
 // upstream host the ceiling denies, returning what it dropped (sorted).
 //
-// GIT: the /wardyn/gh/ route re-originates to gitBrokerManagedHosts, so a
+// Git: the /wardyn/gh/ route re-originates to gitBrokerManagedHosts, so a
 // ceiling denying ANY of them walls off the traffic this lane exists to carry
 // and the whole map goes. Deliberately the re-origination set and not just the
 // forge: the route dials all of them on the sandbox's behalf and consults no
 // deny list while doing it, so a partial deny would otherwise be a lane that
 // routes around exactly the host it names.
 //
-// AND THE ENV VAR WITH IT, which is the half that turns a fix into a hole if it
+// And the env var with it, which is the half that turns a fix into a hole if it
 // is left out. WARDYN_GITHUB_GRANT_ID was written into the sandbox env long
 // before this phase (applyDispatchModeEnv), and the proxy's mint refusal keys on
 // a NON-EMPTY broker map — isBrokeredGitGrant returns false the moment
@@ -552,8 +545,9 @@ func (s *Server) reassertCeilingDenies(ctx context.Context, run types.AgentRun,
 // name-keyed deny alone — WARDYN_GIT_PAT_GRANTS (PATBroker off) and
 // WARDYN_SSH_GRANTS are marshalled into env at applyDispatchModeEnv, above this
 // phase, and re-deriving them here would duplicate dropBrokeredGrants' own
-// filtering. PF-1b is about the lanes that BYPASS denied_domains; a resident
-// credential for a denied host still meets that deny on every named dial.
+// filtering. This phase is about the lanes that BYPASS denied_domains; a
+// resident credential for a denied host still meets that deny on every named
+// dial.
 func (s *Server) dropBrokeredLanes(c dispatchCeiling, p *dispatchParams, sandboxEnv map[string]string) []string {
 	var dropped []string
 	if len(p.GitGrants) > 0 && ceilingDeniesAny(c.deny, gitBrokerManagedHosts) {
@@ -587,7 +581,7 @@ const bedrockCeilingLane = "bedrock"
 // acting principal's profile denies a host that lane's traffic goes to, and
 // reports whether it did.
 //
-// WHY THIS EXISTS ALONGSIDE dropBrokeredLanes (B2-F4). The re-assertion already
+// WHY THIS EXISTS ALONGSIDE dropBrokeredLanes. The re-assertion already
 // dropped the Bedrock BEARER injection, because a bearer token rides an
 // injection rule and injection rules are filtered by host. But the bearer is the
 // one Bedrock mode that is NEVER RESIDENT. The resident modes were untouched:

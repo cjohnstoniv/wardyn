@@ -33,7 +33,7 @@ const terminalUploadGrace = 5 * time.Minute
 // route pattern because this runs as middleware, before the sub-router has
 // bound one.
 //
-// THE EXEMPTION IS EXPLICIT AND SHORT BY DESIGN (B2-F3). Every one of these is
+// The exemption is explicit and short by design. Every one of these is
 // an UPLOAD of something the run produced and nothing else can produce: the
 // asciicast, the scan facts, the captured SSO cache. None of them mints,
 // injects or decides anything, so a terminal run walking through one cannot
@@ -63,7 +63,7 @@ var internalSelfGatedRoutes = []string{"/internal/token/renew"}
 // authenticated this call must still be non-terminal. It writes its own refusal
 // and returns false once it has.
 //
-// WHY IT LIVES IN THE MIDDLEWARE AND NOT IN THE HANDLERS (B2-F3). Exactly one
+// Why it lives in the middleware and not in the handlers. Exactly one
 // /internal/* door re-checked run state — handleInternalTokenRenew — and its own
 // doc comment explains why that check is not redundant with token verification:
 // revokeRunCascade is best-effort, Identity.RevokeRun's error is audited and
@@ -75,7 +75,7 @@ var internalSelfGatedRoutes = []string{"/internal/token/renew"}
 // to tokenTTL after the run was killed. One gate in the one place every door
 // passes through.
 //
-// NO STORE CONFIGURED IS ADMITTED, deliberately and the same way
+// No store configured is admitted, deliberately and the same way
 // handleInternalTokenRenew does NOT do it: renew answers 503 there, because a
 // renewal is a fresh grant of authority that must never be issued on an
 // unverifiable one. This gate is a different question — it is asked of every
@@ -85,7 +85,7 @@ var internalSelfGatedRoutes = []string{"/internal/token/renew"}
 // for every test double and every store-less embedding, none of which has a run
 // that can die.
 //
-// A TRANSIENT READ FAILURE IS 503, not 403: renew's own reasoning applies
+// A transient read failure is 503, not 403: renew's own reasoning applies
 // unchanged — a Postgres blip must cost a retry, never a run's credentials.
 //
 // CALLED FROM internalAuth, immediately after Verify and AFTER the claims are on
@@ -94,7 +94,7 @@ var internalSelfGatedRoutes = []string{"/internal/token/renew"}
 // here, deliberately: http.go is at the file-size gate and the reasoning belongs
 // with the function that acts on it, not with the middleware that calls it.
 //
-// LIVENESS IS NOT AUTHENTICITY. Verify answers "was this token minted by us, for
+// Liveness is not authenticity. Verify answers "was this token minted by us, for
 // this audience, unexpired and unrevoked". It cannot answer "is the run behind
 // it still running", and a run that went terminal while its revocation write
 // failed is exactly the case where those two answers differ.
@@ -109,7 +109,7 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 			writeError(w, http.StatusForbidden, "run not found")
 			return false
 		}
-		// R7: the error goes to the LOG, never to the caller. This runs on every
+		// The error goes to the LOG, never to the caller. This runs on every
 		// /internal/* door, so the caller is the in-sandbox proxy — and raw pgx
 		// text carries the database host, port, user and database name from a
 		// dial failure. Same rule and same shape as writeServerError
@@ -136,15 +136,15 @@ func (s *Server) refuseTerminalRun(w http.ResponseWriter, r *http.Request, claim
 // AND the run's row was written recently enough for its own tail to still be
 // arriving.
 //
-// UpdatedAt IS NOT A TERMINAL TIMESTAMP, and the distinction is the honest
-// caveat here (R4). types.AgentRun carries only CreatedAt and UpdatedAt, and
+// UpdatedAt is not a terminal timestamp, and the distinction is the honest
+// caveat here. types.AgentRun carries only CreatedAt and UpdatedAt, and
 // every terminal transition does bump UpdatedAt — but so does any LATER
 // non-state write to the row. The boot reconciler clearing a dead run's
 // sandbox_ref is the real example: it re-opens this window hours after the run
 // died, for a run whose revocation write failed, which is exactly the case this
 // gate exists for.
 //
-// What is NO LONGER an example is the activity keepalive (W6-S1). The UI relay,
+// What is no longer an example is the activity keepalive. The UI relay,
 // both attach pumps and the SSH channel keepalives all called Store.TouchRun
 // before the door that refuses a non-RUNNING run, so an authenticated caller
 // could re-open this window on a cadence for as long as they liked — the one

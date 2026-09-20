@@ -37,7 +37,7 @@ const (
 	// on a deployment with no image builder wired: the build silently fell
 	// through to the convention image, which is a different sandbox from the one
 	// the caller asked for. Not a refusal — a hard fail would break every
-	// no-builder deployment that has been launching this way (B1-F9).
+	// no-builder deployment that has been launching this way.
 	devcontainerNoBuilderWarning = "devcontainer_repo was ignored: no image builder is wired, so this run launches on the convention agent image instead of a devcontainer build"
 )
 
@@ -71,21 +71,20 @@ func parseConfinementClass(s string) (types.ConfinementClass, bool) {
 // audit event. Best-effort: an empty path, a store list error, or no collision
 // yields no warning and the run still launches.
 //
-// THE READ IS THE QUESTION, not the whole table. This used to call ListRuns,
-// which is documented "all runs in reverse creation order (unbounded)" — a Seq
-// Scan plus a full sort of agent_runs, on EVERY run create, over a table
-// nothing prunes and no retention policy bounds, to produce a sentence that is
-// usually not printed. The predicate is two columns and Postgres can answer it
-// with a WHERE, so it does (ActiveRunsAtPathReader). The in-Go fallback below
-// is the old behaviour, kept for the test doubles that are not PG: the answer
-// is identical either way, which is what makes an unconditional fallback safe
-// here and not on the ownership-scoped list.
+// The read is the question, not the whole table: the predicate is two
+// columns, and Postgres can answer it with a WHERE (ActiveRunsAtPathReader)
+// rather than a Seq Scan plus a full sort of agent_runs on EVERY run create,
+// over a table nothing prunes and no retention policy bounds, to produce a
+// sentence that is usually not printed. The in-Go fallback below exists for
+// the test doubles that are not PG: the answer is identical either way, which
+// is what makes an unconditional fallback safe here and not on the
+// ownership-scoped list.
 func (s *Server) warnWorkspaceCollision(r *http.Request, runID uuid.UUID, workspacePath string) []string {
 	if workspacePath == "" {
 		return nil
 	}
 	ctx := r.Context()
-	// TWO LISTS, and the split is the point. `others` is every colliding run and
+	// Two lists, and the split is the point. `others` is every colliding run and
 	// belongs to the AUDIT row: an operator investigating two agents that fought
 	// over a directory needs all of them, and that row is written by wardynd
 	// (ActorSystem) for operators, not returned to the caller. `visible` is what
@@ -93,9 +92,9 @@ func (s *Server) warnWorkspaceCollision(r *http.Request, runID uuid.UUID, worksp
 	// applies to the same class of cross-user run telemetry — and it is the only
 	// half that reaches the response.
 	//
-	// Before this, the 201 body enumerated every active run id at the path,
-	// so any member could learn another principal's run ids (and, by repeating
-	// the create, watch them come and go) from an ADVISORY sentence.
+	// This response must never enumerate every active run id at the path: any
+	// member could otherwise learn another principal's run ids (and, by
+	// repeating the create, watch them come and go) from an ADVISORY sentence.
 	var others, visible []string
 	note := func(e types.AgentRun) {
 		others = append(others, e.ID.String())
@@ -130,7 +129,7 @@ func (s *Server) warnWorkspaceCollision(r *http.Request, runID uuid.UUID, worksp
 	if len(others) == 0 {
 		return nil
 	}
-	// AUDITED WHENEVER IT HAPPENS, not only when it is said out loud: the
+	// Audited whenever it happens, not only when it is said out loud: the
 	// operator's record of a collision must not shrink because the caller who
 	// caused it owns none of the runs it collided with.
 	s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.collision",
@@ -190,12 +189,11 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 
 	// Fold the run's model-access binding AND each referenced workspace's
 	// requirements contract into the spec BEFORE the confinement floor + risk
-	// grade read it (SPINE-2/SPINE-6). The deterministic CC3 blast-radius floor is
+	// grade read it. The deterministic CC3 blast-radius floor is
 	// computed from spec.EligibleGrants, so a workspace's integration:<id>
 	// requirement — a third-party/production api_key grant — must be present when
 	// the floor is computed, or invariant 5's "powerful credentials run in the
-	// strongest sandbox" is silently bypassed (the grant used to land AFTER the
-	// class was already fixed at CC1/CC2). wsRefs is derived from the seeded spec's
+	// strongest sandbox" is silently bypassed. wsRefs is derived from the seeded spec's
 	// mounts/repos, which nothing below mutates, so it is equally valid here and is
 	// reused for the egress union + image resolution. Both folds are the AUDIT-FREE
 	// halves (foldRunIntegration; applyWorkspaceRequirements returns its events) —
@@ -221,7 +219,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// NO CROSS-MECHANISM FALLBACK, at the door: when the org declared how this
+	// No cross-mechanism fallback, at the door: when the org declared how this
 	// agent reaches its model and the lane that would carry this run is not that
 	// one, refuse HERE — before a run row, an identity or a grant exists — rather
 	// than let the person watch a sandbox boot and die. With no declaration the
@@ -234,14 +232,14 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// resolved it fine.
 	ssoSubject := runIdentitySubject(ctx, principalFromRequest(r))
 	// refresh=true: the real launch redeems an expired-but-renewable session
-	// here, so a spent one is refused before any run exists (0.7.7).
+	// here, so a spent one is refused before any run exists.
 	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, nil, true) {
 		return
 	}
 
 	createdByType, createdBy := actorFromRequest(r)
 	runID := uuid.New()
-	// SUBJECT vs ATTRIBUTION (F099): createdBy is the ATTRIBUTION — the run row's
+	// Subject vs attribution: createdBy is the ATTRIBUTION — the run row's
 	// CreatedBy, the sponsor claim, every audit actor — and in LocalMode it may be
 	// the DEV-ONLY X-Wardyn-Principal header. The SUBJECT is what selects the
 	// secret namespace at mint/inject time, so it comes from runIdentitySubject,
@@ -279,12 +277,12 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// FROM HERE ON A RUN ROW EXISTS, so no early return may simply answer and
+	// From here on a run row exists, so no early return may simply answer and
 	// walk away: the row is PENDING, the identity minted above is live, and
 	// nothing downstream will notice — finalizeUndispatchedRuns only reaps it
-	// after undispatchedGrace (B1-F1). Every post-CreateRun early return goes
+	// after undispatchedGrace. Every post-CreateRun early return goes
 	// through abort, which is the same compensation launchRecordRun's own
-	// abort() has made since 0.6 (workspace_run_launch.go, pinned by
+	// abort() has made (workspace_run_launch.go, pinned by
 	// TestLaunchRecordRun_CreateGrantFailureFinalizesRun).
 	//
 	// WithoutCancel lives INSIDE the closure, not at the client-disconnect
@@ -298,11 +296,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	abort := s.abortHalfBuiltRun(ctx, runID)
 
 	// resolveRunPolicy's own notes come FIRST: they are the ones that say the
-	// run is narrower than what the caller asked for. Launch used to drop them
-	// on the floor, leaving only preflight (which the console never calls) to
-	// tell a member their egress host or secret grant had been dropped — so
-	// three shipped claims about drops "surfacing as a warning before launch"
-	// were true of nothing a member ever saw. The strings are
+	// run is narrower than what the caller asked for, and launch is the ONLY
+	// place a member sees that — preflight, which carries the same notes, is
+	// never called by the console. The strings are
 	// narrowMemberInlinePolicy's/filterMemberGrants' own: they name the kind
 	// and the dropped VALUE (a host, a secret NAME), never a secret value.
 	warnings := withUnpublishedImageWarning(append(policyWarns, s.warnWorkspaceCollision(r, runID, workspacePath)...), req.Agent, s.cfg.AgentImages)
@@ -321,7 +317,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		append(repoLocatorsOf(spec.WorkspaceRepos), req.Repo, req.DevcontainerRepo)...)...)
 	// …and the other outcome admission cannot state in a refusal: an SSH clone
 	// URL carries no path, so a row scoped to one org admitted it for the WHOLE
-	// host. Wider than the policy reads, and therefore never silent (V1 lens A).
+	// host. Wider than the policy reads, and therefore never silent.
 	warnings = append(warnings, s.sshHostLevelWarnings(ctx, runID,
 		append(repoLocatorsOf(spec.WorkspaceRepos), req.Repo, req.DevcontainerRepo)...)...)
 
@@ -354,7 +350,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
 		runID.String(), "success", mustJSON(createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns))))
 
-	// Model-resolution fail-fast (AGT4-2): a non-interactive harness run whose agent
+	// Model-resolution fail-fast: a non-interactive harness run whose agent
 	// needs a model but has NO resolvable credential boots and 404s on its FIRST model
 	// call — classically a codex-cli run whose only model access is a claude-code-only
 	// managed subscription. WARN (never hard-reject: edge cases); the CLI already prints
@@ -379,16 +375,17 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 
 	// …and the LATE drop nothing else says: a STORED policy is handed to dispatch
 	// verbatim (resolvePolicy), so a workspace_repos target the write door now
-	// refuses — /home/agent/drive, reserved since 0.7.2 — still reaches
-	// buildRepoRecords, which drops the repo. Until now that produced a 201, an
-	// empty WARDYN_REPOS and an agent hunting for a repo that was never cloned.
+	// refuses — /home/agent/drive, a reserved path — still reaches
+	// buildRepoRecords, which drops the repo. Without this, that would produce
+	// a 201, an empty WARDYN_REPOS and an agent hunting for a repo that was
+	// never cloned.
 	// Same inputs dispatch will use (run.Repo is req.Repo), so the sentence and
 	// the drop cannot disagree. Inline policies are unaffected: they still 400.
 	if _, repoDrops := buildRepoRecords(req.Repo, spec.WorkspaceRepos); len(repoDrops) > 0 {
 		warnings = append(warnings, repoDrops...)
 	}
 
-	// CLIENT-DISCONNECT ISOLATION, same rationale as dispatchRun's own
+	// Client-disconnect isolation, same rationale as dispatchRun's own
 	// detach — which sits AFTER this block and so never covered it. From here on the
 	// run row exists and MUST be driven to a terminal state or dispatched. An image
 	// build is a multi-minute docker pull+build that honours cancellation, so a
@@ -403,10 +400,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// Resolve the sandbox image (BYOI wrap > devcontainer build > workspace
 	// profile > convention image) and persist it for provenance. A failed
 	// BYOI/devcontainer build has already marked the run FAILED and answered 201.
-	// B1-F9: the one image lane that DEGRADES rather than refusing. With no
-	// ImageBuilder wired a workspace base_image fails closed (PARITY-4, inside
+	// The one image lane that DEGRADES rather than refusing. With no
+	// ImageBuilder wired a workspace base_image fails closed (inside
 	// resolveCreateRunImage) but a devcontainer_repo silently falls through to
-	// the convention image — visible until now only as an INFO setup row no CLI
+	// the convention image — otherwise visible only as an INFO setup row no CLI
 	// or API caller ever reads. Said on the 201 instead, which is the only
 	// channel this door has. Appended BEFORE the call so the warning is already
 	// on the list the build-failed arm answers 201 with.
@@ -469,14 +466,14 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 //
 // The ORDER is the whole point, and it is why these four live together rather
 // than inline among a dozen unrelated steps. Seeding can set req.Image from a
-// workspace's base_image, so the capability answer (G3/PF-34) and the
+// workspace's base_image, so the capability answer and the
 // image/devcontainer XOR must both run AFTER it — an explicit --image was
 // already checked before workspace_id was even resolved, which is exactly the
-// gap a member-owned workspace used to walk through. The onboarding gate runs
+// gap a member-owned workspace could otherwise walk through. The onboarding gate runs
 // LAST because it is the single chokepoint on the RESOLVED spec, which is what
 // makes it un-bypassable by a hand-authored stored policy.
 func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWriter, r *http.Request, spec *types.RunPolicySpec, req *createRunRequest) ([]string, bool) {
-	// FIRST, before a single source is folded: authorize the SELECTION against
+	// First, before a single source is folded: authorize the SELECTION against
 	// the CALLER. Everything below this line reasons about host paths that are
 	// about to become binds, and until now nothing on the path asked whose
 	// workspace they came from — the only member-mount check downstream is
@@ -546,7 +543,7 @@ func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWrite
 // confinement_source ("requested"/"defaulted", from reqCC, the pre-resolution
 // request value — never re-derive it from enforced, which cannot tell a
 // defaulted class from one the caller happened to name explicitly) is what
-// makes `enforced` legible after 0.7.8: an unspecified request's default is now
+// makes `enforced` legible: an unspecified request's default is
 // live-probed (the strongest class the runner advertises at or above the
 // floor), so the SAME enforced value can mean "the caller asked for this" one
 // day and "this is what today's runner offered" the next if a runtime
@@ -635,7 +632,7 @@ func (s *Server) resolveRunLLMAccess(ctx context.Context, req createRunRequest, 
 	// create-time mechanism refusal uses (resolveRunLLMLanes), so the advisory
 	// below and that refusal can never disagree about what would credential this
 	// run.
-	// THE CREATE-PATH ADVISORY, not a credential door: this scope feeds
+	// The create-path advisory, not a credential door: this scope feeds
 	// resolveRunLLMAccess's reply Note and the preflight checklist row — what a
 	// run WOULD dispatch on. ok is ignored on purpose: an unreadable roster
 	// degrades the ADVICE to the legacy operator answer exactly as it always
@@ -650,7 +647,7 @@ func (s *Server) resolveRunLLMAccess(ctx context.Context, req createRunRequest, 
 	}
 	// Operator-configured Bedrock credentials the run automatically: dispatch's
 	// resolveBedrockAuth OVERRIDES the per-run api-key selection at launch. Thread the
-	// picked workspace/container's bedrockRef (SPINE-5) so a per-run region/model
+	// picked workspace/container's bedrockRef so a per-run region/model
 	// override is honored here too — a workspace can only narrow region/model, never
 	// supply credentials — matching what launch enforces.
 	if llmAccess == nil || !llmAccess.Provisioned {
@@ -679,7 +676,7 @@ func runNeedsModelWarning(req createRunRequest) bool {
 
 // noModelAccessWarning is the create-time advisory for a run whose agent needs a
 // model but has no resolvable credential: it will boot and 404 on its first model
-// call. managedClaudePresent on a non-claude agent is the canonical trap (AGT4-2) — a
+// call. managedClaudePresent on a non-claude agent is the canonical trap — a
 // managed Claude subscription credentials claude-code only — so the copy names it and
 // steers to --agent claude-code.
 func noModelAccessWarning(agent string, p llmProvider, managedClaudePresent bool) string {

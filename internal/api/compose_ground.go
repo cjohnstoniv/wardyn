@@ -12,8 +12,8 @@ import (
 
 // widenCeilingRepoAllowlist returns a ceiling copy whose github_token grant's
 // repo scope is widened to repos when the ceiling's OWN grant sets none.
-// composer.Clamp treats an empty ceiling repo list as DENY-ALL (W23-S1-3's
-// RBAC floor for a hand-authored/ungrounded proposal) — but profile.go
+// composer.Clamp treats an empty ceiling repo list as DENY-ALL (the RBAC
+// floor for a hand-authored/ungrounded proposal) — but profile.go
 // (Record Mode's policy synthesis, the sole caller) has ALREADY grounded its
 // own proposal's repos to something provably real (a prior run's already-
 // clamped grant) before calling Clamp, so widening the ceiling copy here

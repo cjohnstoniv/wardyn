@@ -13,10 +13,9 @@ import (
 // handleSetupOnboardingComplete marks THIS INSTALL as having been through the
 // Getting Started funnel, by stamping SiteConfig.OnboardingCompletedAt.
 //
-// Why this is a server call and not a browser flag: the console kept this state
-// in localStorage three different ways, and each was wrong in a way that
-// shipped. A browser flag outlives the install it describes, so a wiped
-// database went on skipping its own funnel; and localStorage is ORIGIN-scoped,
+// Why this is a server call and not a browser flag: a browser flag outlives
+// the install it describes, so a wiped database went on skipping its own
+// funnel; and localStorage is ORIGIN-scoped,
 // so one console reached at 127.0.0.1 and at localhost disagreed about whether
 // onboarding had happened at all. Onboarding is a fact about the install, so
 // the install stores it.
@@ -54,7 +53,7 @@ func (s *Server) handleSetupOnboardingComplete(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusServiceUnavailable, "no store configured")
 		return
 	}
-	// SEAM-1: the same mutex PUT /site-config and the integration writers take,
+	// The same mutex PUT /site-config and the integration writers take,
 	// for the same reason — this is a read-modify-write on the one site-config
 	// document, and a concurrent integration write would otherwise clobber it.
 	s.siteConfigMu.Lock()

@@ -77,7 +77,7 @@ func validateWorkspaceRequirement(key string, req types.WorkspaceRequirement) st
 	}
 	switch typ {
 	case "secret":
-		// sinkReservedSecret, not validSecretRef (WSPIPE-6): this key feeds
+		// sinkReservedSecret, not validSecretRef: this key feeds
 		// applyRequiredSecretGrant, a real credential SINK (runs_create.go),
 		// which every other sink (policy.go, inline_policy.go) guards with
 		// sinkReservedSecret — validSecretRef's plain reservedSecret misses the
@@ -158,7 +158,7 @@ func (s *Server) handleSetWorkspaceRequirements(w http.ResponseWriter, r *http.R
 
 // dropSourceContributedScanSeeded strips provenance:"scan_seeded" rows from
 // reqs whose key an ATTACHED SOURCE already contributes to this workspace's
-// fold — WSPIPE-3's server-side belt. The overlay this endpoint writes is
+// fold — the server-side belt. The overlay this endpoint writes is
 // meant to carry only the OPERATOR's own edits (setRequirementLane always
 // stamps operator_set); a scan_seeded row here can only be the wizard's
 // client-side seeding, which FoldWorkspaceContract's rule 6 makes win over
@@ -167,7 +167,7 @@ func (s *Server) handleSetWorkspaceRequirements(w http.ResponseWriter, r *http.R
 // Dropped silently, never rejected: the wizard still sends these until its
 // own fix lands (source_scan.go's design note), and a dropped row is
 // provably redundant — the source already contributes it — never a lost
-// operator intent, unlike WSPIPE-8's identity-hit case. Best-effort: a store
+// operator intent. Best-effort: a store
 // read error leaves reqs untouched (fail OPEN on the belt; the write itself
 // must not become unavailable because of it).
 func (s *Server) dropSourceContributedScanSeeded(ctx context.Context, id uuid.UUID, reqs map[string]types.WorkspaceRequirement) map[string]types.WorkspaceRequirement {

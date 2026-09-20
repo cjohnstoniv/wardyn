@@ -16,10 +16,11 @@ import (
 )
 
 // ReconcileWorkspaceEgressDecisions re-applies decided `always`-scoped egress
-// decisions to their run's primary workspace, healing D28: the post-Decide
-// write-back (persistWorkspaceEgressDecision) is not atomic with Decide, so a PG
-// blip there dropped a permanent allow/deny behind a 200 with only a failure
-// audit row — future runs then never inherited the operator's decision.
+// decisions to their run's primary workspace, healing a durability gap: the
+// post-Decide write-back (persistWorkspaceEgressDecision) is not atomic with
+// Decide, so a PG blip there dropped a permanent allow/deny behind a 200 with
+// only a failure audit row — future runs then never inherited the operator's
+// decision.
 // AddWorkspaceEgressDecision is idempotent (an upsert that also clears the mirror
 // list), so re-applying an already-persisted decision is a no-op and a dropped one
 // is recreated. Returns the count re-applied, for the boot log.
@@ -31,7 +32,7 @@ import (
 // tick would heal sooner on a laptop that rarely reboots — add one if that window
 // proves too wide.
 //
-// A HEAL MUST NOT OUTRANK THE OPERATOR, and two ordering bugs made it do exactly
+// A heal must not outrank the operator, and two ordering bugs made it do exactly
 // that. Both are about the same question — whose word is NEWEST — so both are
 // answered here rather than at the write:
 //
@@ -56,7 +57,7 @@ import (
 // decision was applied successfully — marking it would not stop the resurrection;
 // only knowing that something NEWER happened to the list does. It also keeps the
 // heal intact: a decision made after the last manual edit is still re-applied,
-// which is the whole point of D28.
+// which is the whole point of the heal.
 //
 // The scan reads all decided egress approvals; decided rows are never deleted, so
 // on a very long-lived deployment cap this with an incremental scan keyed off the
@@ -71,10 +72,10 @@ func (s *Server) ReconcileWorkspaceEgressDecisions(ctx context.Context) (int, er
 	}
 	reconciled := 0
 	for _, d := range decisions {
-		// RE-RUN THE LIVE PATH'S DIRECTION-SPECIFIC REJECTS against the CURRENT
-		// workspace row, which alwaysEgressDecision's "same predicates, in the
-		// same order, the live write-back applies" claimed and did not do. The
-		// heal replays a verdict recorded at t0 against a workspace as it is at
+		// Re-run the live path's direction-specific rejects against the CURRENT
+		// workspace row: alwaysEgressDecision itself checks only the predicates
+		// that need the approval, not the two that need the current workspace
+		// row. The heal replays a verdict recorded at t0 against a workspace as it is at
 		// boot, so the two can have diverged: mark `egress:<host>` REQUIRED after
 		// an older deny-always on that host and every restart re-wrote a deny the
 		// live API answers 400 for — "the workspace declares a need it can never
@@ -82,7 +83,7 @@ func (s *Server) ReconcileWorkspaceEgressDecisions(ctx context.Context) (int, er
 		// saying why. The heal's only newer-action guard is EgressEditedAt, which
 		// the requirements PUT does not stamp.
 		//
-		// SKIPPED AND AUDITED, not skipped silently: "how did this host get onto
+		// Skipped and audited, not skipped silently: "how did this host get onto
 		// this workspace's list" has to have an answer, and so does "why did it
 		// not".
 		ws, werr := s.cfg.Store.GetWorkspace(ctx, d.workspace)
@@ -178,10 +179,9 @@ func (s *Server) egressDecisionsToReconcile(ctx context.Context) ([]egressDecisi
 // applies two more that need the CURRENT WORKSPACE ROW — approveAlwaysRejects
 // and denyAlwaysReject — and this function deliberately does not: it is called
 // per approval, while the workspace is read once per decision in the caller's
-// loop, which is where healRejects asks them. This comment used to claim "same
-// predicates, in the same order, the live write-back applies"; it was false in
-// exactly that gap, which is what let the heal re-write, on every boot, a deny
-// the live API answers 400 for.
+// loop, which is where healRejects asks them. Skipping these two predicates
+// here is deliberate, not an oversight: getting it wrong lets the heal
+// re-write, on every boot, a deny the live API answers 400 for.
 func (s *Server) alwaysEgressDecision(ctx context.Context, ap types.ApprovalRequest, allow bool) (egressDecision, bool) {
 	if ap.Kind != types.ApprovalEgressDomain || ap.DecisionScope.Normalize() != types.ScopeAlways {
 		return egressDecision{}, false

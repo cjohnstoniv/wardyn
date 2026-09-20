@@ -61,8 +61,8 @@ func startWaitReasonLabel(reason string) string {
 
 // runStatusDetailWriter builds this run's runner.SandboxSpec.OnWaiting and the
 // closer that ends the last stretch it timed. OnWaiting is nil when the store
-// cannot record a detail — in which case every driver sees exactly the spec it
-// saw before 0.7.6 — but the closer is always safe to call.
+// cannot record a detail — in which case every driver sees exactly the
+// unmodified spec — but the closer is always safe to call.
 //
 // One scoped UPDATE per CHANGE of reason. The driver already dedupes per pod,
 // and this dedupes across the two pods CreateSandbox waits on in turn, so the
@@ -140,8 +140,8 @@ func projectStatusDetail(runs []types.AgentRun) {
 				// nothing, or the ContainerCreating from one poll earlier, while
 				// failure_hint carries the SAME sentence the driver failed with.
 				// Rebuild BOTH wire fields from it rather than serving a reason
-				// with no words, which is 0.7.5's reason-less FAILED badge
-				// reached a new way.
+				// with no words — a reason-less FAILED badge is exactly what
+				// this rebuild guards against.
 				if component, hintReason, message := stuckStartupFromFailureHint(r.FailureHint); runner.IsTerminalWaitingReason(hintReason) {
 					reason = hintReason
 					r.StatusDetail = component + ": " + hintReason

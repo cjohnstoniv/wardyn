@@ -64,12 +64,12 @@ func gitBrokerSSHHosts() []string {
 // SSH-over-443 endpoint from the allowlist, denies all of them outright, and
 // returns what it removed (nil = nothing to do).
 //
-// SCOPE, exactly. Two sets, deliberately separate (see gitBrokerForges above).
+// Scope, exactly. Two sets, deliberately separate (see gitBrokerForges above).
 // The SSH deny added is the BARE host, not the ":443" endpoint, so it covers
 // every port — a ":443"-only deny would leave ssh.github.com:22 reachable under
 // allow_all_egress once the subtraction has removed the allowlist entry.
 //
-// WHY THE SSH LANE IS NOW CLOSED. This REVERSES an earlier decision of this same
+// Why the SSH lane is now closed. This REVERSES an earlier decision of this same
 // campaign, on the owner's call; do not restore it. The old rule left
 // ssh.github.com:443 allowed on a brokered run holding an ssh_key grant
 // (unionRunEgress adds it at create time), reasoning that an ssh_key is an
@@ -97,13 +97,13 @@ func gitBrokerSSHHosts() []string {
 // agent that POSTs the mint route directly never meets the helper, and
 // isBrokeredGitGrant (the proxy's mint refusal) matches github_token grant ids
 // only — so the PAT minted. The one real barrier was the name-keyed deny below,
-// which does not bind a raw-IP CONNECT under allow_all_egress (see "WHAT 'ONLY
-// ROUTE' MEANS" below). SSH additionally has no credential-helper chokepoint at
+// which does not bind a raw-IP CONNECT under allow_all_egress (see "what 'only
+// route' means" below). SSH additionally has no credential-helper chokepoint at
 // all — git's seam is HTTP-only — which is why agent-run writes the key file
 // itself; that difference is about where a refusal could sit, not about whether
 // the credential should be resident.
 //
-// WHY BOTH. The subtraction keeps the effective allowlist honest — it stops
+// Why both. The subtraction keeps the effective allowlist honest — it stops
 // claiming a host the run is not meant to dial. The deny is the load-bearing half:
 // deny beats allow AND beats allow_all_egress (proxy.Policy.evalHost), so an
 // allow-all policy cannot leave the direct route open. Without it the confinement
@@ -118,7 +118,7 @@ func gitBrokerSSHHosts() []string {
 // dials through the proxy transport after vetURL (the SSRF/private-IP guard),
 // never through the policy evaluator.
 //
-// WHAT "ONLY ROUTE" MEANS, EXACTLY — the same caveat the four HTTPS denies carry
+// What "only route" means, exactly — the same caveat the four HTTPS denies carry
 // in docs/POLICIES.md, and it applies verbatim to the SSH deny: these are
 // NAME-based denies, and a name-based deny does not bind an IP LITERAL. Under
 // allow_all_egress a CONNECT straight to 140.82.114.4:22 is still allowed
@@ -230,7 +230,7 @@ func (s *Server) auditBrokeredGrantDrop(ctx context.Context, runID uuid.UUID, ki
 // nothing to drop. brokeredHost is the per-kind same-forge test
 // (brokeredForgeSSHHost for ssh_key, brokeredForgeHost for git_pat).
 //
-// WHY THE CREDENTIAL AND NOT JUST THE LANE. confineGitBrokerEgress closes the
+// Why the credential and not just the lane. confineGitBrokerEgress closes the
 // NETWORK path; on its own that leaves the KEY (or the PAT). A pre-existing
 // stored policy can still hold both grants — validateGrantLaneExclusivity
 // refuses new WRITES, and resolveRunPolicy deliberately does not re-validate what
@@ -244,20 +244,20 @@ func (s *Server) auditBrokeredGrantDrop(ctx context.Context, runID uuid.UUID, ki
 // other egress the run is allowed. A capability that cannot be used is not a
 // capability, it is only a liability.
 //
-// GIT_PAT IS THE SAME LIABILITY, and used to be exempt on a justification that
-// did not hold. The old reasoning counted two deaths: wardyn-git-helper refuses
-// on isGitHubHost before the PAT fallback whenever WARDYN_GIT_BROKER_REPOS is
-// set, and github.com is one of confineGitBrokerEgress's denies. The first is not
-// a barrier against the threat this exists for — the helper is a convenience for
-// git, and nothing makes an agent go through it; the mint route takes a POST with
-// a grant id, and isBrokeredGitGrant only matches github_token grant ids, so the
-// PAT minted straight out. That leaves ONE barrier, the name-keyed deny, which
+// git_pat is the same liability. The old reasoning counted two deaths:
+// wardyn-git-helper refuses on isGitHubHost before the PAT fallback whenever
+// WARDYN_GIT_BROKER_REPOS is set, and github.com is one of
+// confineGitBrokerEgress's denies. The first is not a barrier against the
+// threat this exists for — the helper is a convenience for git, and nothing
+// makes an agent go through it; the mint route takes a POST with a grant id,
+// and isBrokeredGitGrant only matches github_token grant ids, so the PAT
+// minted straight out. That leaves ONE barrier, the name-keyed deny, which
 // this file already documents as not binding a raw-IP CONNECT under
-// allow_all_egress (confineGitBrokerEgress, "WHAT 'ONLY ROUTE' MEANS"). And a
+// allow_all_egress (confineGitBrokerEgress, "what 'only route' means"). And a
 // GitHub git_pat is typically a USER PAT: broader than the repo-scoped
 // installation token it sits beside, and bound by no branch namespace.
 //
-// AT DISPATCH, NOT CREATE, for the same reason confineGitBrokerEgress is here:
+// At dispatch, not create, for the same reason confineGitBrokerEgress is here:
 // "brokered" is a RUN-time fact (augmentGitBrokerGrants seeds the broker map from
 // the run's declared clone set, not just the grant scope), so create cannot know
 // it. The two halves therefore key on the SAME map and cannot disagree.

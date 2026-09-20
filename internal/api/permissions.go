@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Permissioning CRUD (0.6 pillar 2, stage A-C): the admin-facing surface over
+// Permissioning CRUD: the admin-facing surface over
 // capability_grants + capability_enforcement (migration 0042) and the
 // member-safe read of a caller's own effective set. The resolver these routes
 // feed lives in capabilities.go; this file is only validation + persistence +
@@ -44,7 +44,7 @@ type permissionsResponse struct {
 // and the CLI keep working byte for byte and a client that wants the signal
 // reads one more key.
 //
-// WHY IT EXISTS. capability_grants shipped in v0.6.0 and the per-kind value
+// Why it exists. capability_grants shipped in v0.6.0 and the per-kind value
 // rule (canonicalGrantValue) is a WRITE-boundary rule, so every non-canonical
 // row written before it — an uppercase workspace uuid, an uppercase secret
 // name, a free-text value where a uuid was meant — survives the upgrade
@@ -156,7 +156,7 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 	if len(g.Value) > maxCapabilityGrantFieldLen || !controlCharFree(g.Value) {
 		return fmt.Errorf("value: invalid")
 	}
-	// THE VALUE, canonicalized per kind by the ONE function the read side also
+	// The value, canonicalized per kind by the ONE function the read side also
 	// asks (canonicalGrantValue below): a value that can never match anything
 	// the resolver will be asked about is refused or folded here, never stored
 	// 201-Created to render as an active rule that protects nothing.
@@ -217,14 +217,14 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 // returns the exact string the resolver will be asked to match, or an error
 // when the given value can never match anything at all.
 //
-// TWO CALLERS, WHICH IS THE POINT. validateCapabilityGrant applies it at the
+// Two callers, which is the point. validateCapabilityGrant applies it at the
 // write boundary, and handleGetPermissions asks it about a STORED row to mark
 // the rows an older Wardyn accepted before this rule existed (grantView.Inert).
 // A row is inert exactly when this function refuses it or would have stored
 // something else — so the marker cannot drift from the rule, and a new kind
 // gets both behaviours from one place.
 //
-// PER KIND, and each arm states what the resolver is actually asked about:
+// Per kind, and each arm states what the resolver is actually asked about:
 //
 //   - egress_host: the proxy's own entry grammar (proxy.ValidDomainEntry), the
 //     same check every allowed_domains ingest runs. Without it "*example.com"
@@ -246,12 +246,10 @@ func validateCapabilityGrant(g *types.CapabilityGrant) error {
 //     grammar their own rows are held to (secretNameRE, integrationRefRE — both
 //     lowercase-only; a git provider row's id is validated by integrationRefRE
 //     too, in validateWorkspaceProviders, so the two spellings cannot drift).
-//     This arm's comment used to say the opposite ("lowercasing a secret name
-//     here would stop it matching the row secrets.go stores"), and the premise
-//     was inverted: secrets.go cannot store an uppercase name at all, so an
-//     uppercase capSecret DENY was byte-for-byte the same inert row the
-//     workspace arm exists to prevent, and folding can only ever make the grant
-//     match the row the author meant. The ASCII guard runs BEFORE the fold, the
+//     secrets.go cannot store an uppercase name at all, so an uppercase
+//     capSecret DENY would be byte-for-byte the same inert row the workspace
+//     arm exists to prevent, and folding can only ever make the grant match
+//     the row the author meant. The ASCII guard runs BEFORE the fold, the
 //     same order canonicalUserSubject and oidc.CanonicalGroupSubject use: a
 //     non-ASCII value can never name one of these rows, and folding first would
 //     let U+212A land on an ASCII name the author never typed.

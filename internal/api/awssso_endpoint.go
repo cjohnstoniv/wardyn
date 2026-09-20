@@ -26,7 +26,7 @@ import (
 // proxy. Anything short of moving all five leaves the walk failing somewhere
 // that says nothing about the code under test.
 //
-// WHY IT EXISTS AT ALL. Without it, "a member signs in on Kubernetes and their
+// Why it exists at all. Without it, "a member signs in on Kubernetes and their
 // Bedrock run gets per-user credentials" is unprovable outside a real AWS
 // tenant on the owner's hardware: `aws sso login` and the SDK both dial
 // oidc.<region>.amazonaws.com / portal.sso.<region>.amazonaws.com, and nothing
@@ -40,17 +40,15 @@ import (
 // PLANE (a real, supported PrivateLink posture); SSO is a different service,
 // and one knob meaning both would make a production PrivateLink setting also
 // re-point the credential exchange. It is equally not the GLOBAL
-// AWS_ENDPOINT_URL (PF-45), which re-points every AWS service at once.
+// AWS_ENDPOINT_URL, which re-points every AWS service at once.
 
-// ── DRAFT (M2 canon pending) ────────────────────────────────────────────────
+// DRAFT (M2 canon pending)
 
 const (
 	// AWSSSOEndpointOverrideRefusal is the BOOT REFUSAL when the override is set
 	// without the acknowledgement. It names both vars because the operator
 	// reading it on a crash-looping pod has to decide which one they meant. %q is
 	// the offending value.
-	//
-	// DRAFT (M2 canon pending)
 	AWSSSOEndpointOverrideRefusal = "refusing to start: WARDYN_AWS_SSO_ENDPOINT_OVERRIDE is set to %q — " +
 		"it re-points AWS IAM Identity Center at a server of your choosing for the containerized login " +
 		"AND for every Bedrock run's credential exchange, which is a TEST hatch and never a production posture; " +
@@ -59,8 +57,6 @@ const (
 	// logs. It opens with a literal an operator (and scripts/kind-sso-walk.sh)
 	// can grep for, because the thing that must never happen is this posture
 	// going unnoticed in an inherited values file.
-	//
-	// DRAFT (M2 canon pending)
 	AWSSSOEndpointOverrideWarn = "wardynd: TEST HATCH ACTIVE — WARDYN_AWS_SSO_ENDPOINT_OVERRIDE re-points " +
 		"AWS IAM Identity Center (sso-oidc AND the sso portal) at this URL for the containerized login, " +
 		"for every Bedrock run's credential exchange and for dispatch-time token renewal. " +
@@ -137,8 +133,8 @@ func ValidateAWSSSOEndpointOverride(raw string, allowTestEndpoints bool) (string
 // two SDK variables, or NOTHING when the override is unset. nil rather than an
 // empty map so a caller merging it adds no key at all on a real deployment.
 //
-// NEVER AWS_ENDPOINT_URL: that is the global knob resolveBedrockAuth already
-// refuses to set (PF-45), because it would also re-point STS, S3 and everything
+// Never AWS_ENDPOINT_URL: that is the global knob resolveBedrockAuth already
+// refuses to set, because it would also re-point STS, S3 and everything
 // else the sandbox can reach.
 func ssoInjectEndpointEnv(override string) map[string]string {
 	if override == "" {

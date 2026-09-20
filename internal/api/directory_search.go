@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Directory autocomplete (0.7 §I / PF-29): the HTTP half of internal/directory.
+// Directory autocomplete: the HTTP half of internal/directory.
 //
 // One route, GET /access/directory/search, proxying the configured connector so
 // the console can offer a picker for every "who" field instead of a free-text
@@ -11,7 +11,7 @@
 // unassigned default is. The picker renders Entry.DisplayName and stores
 // Entry.ClaimValue, which is the whole point of the two fields.
 //
-// TIER: securityOps, not an open read (routes.go). A directory search discloses
+// Tier: securityOps, not an open read (routes.go). A directory search discloses
 // org structure — who exists, which groups they are in — and while a security
 // admin assigns governance to these very people (so the disclosure is
 // acceptable and stated), it is not something every authenticated member should
@@ -47,7 +47,7 @@ type directorySearchResponse struct {
 
 // handleDirectorySearch answers GET /access/directory/search?q=&type=.
 //
-// AUDIT, decided (§I): the connector's FAILURES are audited (below); individual
+// Audit, decided: the connector's FAILURES are audited (below); individual
 // searches are NOT. Auditing a search would write one row per KEYSTROKE, which
 // is both noise on a read that changes no state and, worse, a record of every
 // name an admin typed while looking someone up — turning the append-only
@@ -126,7 +126,7 @@ func writeDirectoryUnconfigured(w http.ResponseWriter) {
 }
 
 // auditDirectoryFailure records that the connector could not answer. This is the
-// audited half of §I's decision: an operator who enabled a directory read needs
+// audited half of the decision above: an operator who enabled a directory read needs
 // to see it failing (a lapsed secret, a revoked consent, an unreachable tenant)
 // without an admin having to report "the picker is empty".
 //
@@ -158,7 +158,7 @@ func (s *Server) auditDirectoryFailure(r *http.Request, err error) {
 // selection itself is boot config; internal/api never chooses it.
 const directoryProviderName = "directory"
 
-// ─── per-principal rate limit ────────────────────────────────────────────────
+// per-principal rate limit
 
 const (
 	// dirRatePerSec / dirBurst bound one principal's directory searches. ~5/sec

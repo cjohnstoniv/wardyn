@@ -31,7 +31,7 @@ const auditExportPageSize = 1000
 // run_id is parsed BEFORE the role is consulted, so a malformed run_id is a 400
 // regardless of who asks (an input-shape error, never an authz one).
 //
-// Members are then scoped to ?run_id= of a run THEY created (item 2). No
+// Members are then scoped to ?run_id= of a run THEY created. No
 // run_id, a well-formed but unowned run_id, and an unknown run_id ALL collapse
 // to the SAME empty success — /audit is a collection endpoint, so the
 // no-existence-oracle property here is an empty 200, never the 404 the
@@ -85,9 +85,8 @@ const (
 // handleQueryAudit returns audit events. The route is AUTHENTICATED (it sits
 // inside the humanOrAdminAuth group) and ROW-SCOPED: auditScope narrows a
 // member to their own runs, so member-reachable here means "reachable by a
-// member", not "readable by anyone". This comment used to claim the log was
-// ungated, which was wrong on both counts; what is free forever is the WRITE
-// side — no audit emit is gated or sampled.
+// member", not "readable by anyone". The WRITE side is free forever — no
+// audit emit is gated or sampled.
 //
 // With no run_id it returns the global
 // SIEM-style feed (newest first across all runs) that the Audit view renders;
@@ -99,7 +98,7 @@ const (
 //
 // Session history is v1 audit-feed-only — a client filters THIS response on
 // `data.session_id` itself; there is no server-side query param for it. (The
-// `data.compose_session_id` half went with the AI Run Composer in 0.5.) If that
+// `data.compose_session_id` half went with the AI Run Composer.) If that
 // ever gets
 // slow, the upgrade path is a store method (e.g. QueryAuditEventsBySession)
 // backed by a `(data->>'session_id')` expression index, not a new table — the
@@ -155,8 +154,8 @@ func (s *Server) handleQueryAudit(w http.ResponseWriter, r *http.Request) {
 // per line, application/x-ndjson), applying the SAME filters (parseAuditFilter,
 // incl. ?actor=) and member scoping as handleQueryAudit but with NO offset cap:
 // it pages the store until exhausted, so a per-principal evidence pull —
-// "everything alice@corp did in Q3", the vendor/compliance question the finding
-// names (D6) — is ONE request no matter how many events it spans. handleQueryAudit
+// "everything alice@corp did in Q3", the vendor/compliance question — is ONE
+// request no matter how many events it spans. handleQueryAudit
 // stays the capped, paginated, UI-facing read; this is the bulk export beside it.
 //
 // A member is scoped exactly as in handleQueryAudit: only ?run_id= of a run they
@@ -214,8 +213,7 @@ func (s *Server) handleExportAudit(w http.ResponseWriter, r *http.Request) {
 // handleVerifyAuditChain runs the audit hash-chain sweep (migration 0047) and
 // reports what it found. Registered on routes.go's securityOps group, i.e.
 // admin OR security_admin — the tamper-evidence verdict over the audit chain is
-// the evidence the security tier's whole job rests on. (This comment used to
-// name the narrower admin tier, which the route has not been on since 0.7.)
+// the evidence the security tier's whole job rests on.
 //
 // It is gated at all because a member reading it would learn the deployment's
 // total audit volume across every other user's runs — the same disclosure that
@@ -237,7 +235,7 @@ func (s *Server) handleVerifyAuditChain(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusNotImplemented, "audit chain verification requires the Postgres store backend")
 		return
 	}
-	// ONE SWEEP AT A TIME. The sweep re-hashes every row of a table that can
+	// One sweep at a time. The sweep re-hashes every row of a table that can
 	// never be pruned, so N concurrent GETs are N full passes, each pinning a
 	// pool connection for the duration — and a cron or a retrying client stacks
 	// them without anyone deciding to. Refusing the second is better than
@@ -274,7 +272,7 @@ func (s *Server) handleVerifyAuditChain(w http.ResponseWriter, r *http.Request) 
 
 // parseAuditFilter reads the optional narrowing predicates off the query string
 // (?since=&until=&action=&action_prefix=&actor=&actor_type=&outcome=), writing a
-// 400 and returning ok=false on a malformed value. ?actor= (D6) is the exact
+// 400 and returning ok=false on a malformed value. ?actor= is the exact
 // principal ("everything developer X did"). All are additive and optional; none
 // set is the zero filter, which changes nothing about the query taken.
 // Timestamps are RFC3339, the same encoding the audit rows are served in.

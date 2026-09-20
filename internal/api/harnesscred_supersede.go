@@ -13,7 +13,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ONE LIVE SIGN-IN SANDBOX PER PERSON (0.7.4 field report, finding 7).
+// One live sign-in sandbox per person.
 //
 // The report: a person whose first sign-in died half-way starts a second one,
 // completes it, and is told "The sandbox reported a capture the server does not
@@ -22,8 +22,8 @@ import (
 // arms only the unreadable one leaves a run alive, and the pane unmounting
 // without Cancel leaves one every time (harness-login-pane.tsx has no cleanup
 // effect). That orphan lives to harnessLoginIdleCap — thirty minutes — with
-// `aws sso login` still polling the device code, and since 0.7.5's self-running
-// image it finishes its sign-in UNATTENDED: when the human approves in the old
+// `aws sso login` still polling the device code, and the self-running
+// image finishes its sign-in UNATTENDED: when the human approves in the old
 // tab (or in both), the old run's helper PUTs its capture, legitimately, and
 // possibly after the new run's. The new run's own status read then sees a row
 // stamped with SOMEONE ELSE'S run id and refuses a credential that works.
@@ -58,7 +58,7 @@ const (
 // kill wins the KILLED state change synchronously, so the slot the orphan held
 // is free by the time the new run asks for one.
 //
-// BEST EFFORT BY DESIGN — it never returns an error and never blocks the launch.
+// Best effort by design — it never returns an error and never blocks the launch.
 // A person who cannot reach their own sign-in because a store read failed is
 // worse off than one whose stale sandbox outlives the retry, and the capture PUT
 // has its own belt: handleUploadSSOToken refuses a KILLED run
@@ -156,8 +156,8 @@ func (s *Server) supersedeOneLoginRun(ctx context.Context, run types.AgentRun, a
 //     sees both, but Y does not PRECEDE X, so it kills nothing. Two live
 //     sign-ins survive — and neither is KILLED, so the capture PUT's guard does
 //     not apply to that pair either. A third sign-in clears it. Closing it needs
-//     a per-actor advisory lock around insert + pass; that is 0.7.6's, and it is
-//     a LOW residual of a LOW finding.
+//     a per-actor advisory lock around insert + pass; that is not built, and it
+//     is a LOW residual of a LOW finding.
 //   - NEVER ZERO. A launch's own run can only be ended by a pass that ran after
 //     its insert, and the LAST insert is followed only by its own pass, which
 //     never takes itself. There is always a survivor. The one shape that could
@@ -214,7 +214,7 @@ func loginRunPrecedes(a, b types.AgentRun) bool {
 // liveLoginRunsBy answers "which of this person's login sandboxes are still
 // live", through the optional store seam.
 //
-// THE SEAM, not the core Store interface: widening Store would make every test
+// The seam, not the core Store interface: widening Store would make every test
 // double and embedding in the tree implement a query none of them are about
 // (the RunsByCreatorPager rule). A store WITHOUT it is simply not superseded —
 // no unbounded-ListRuns fallback, deliberately: this runs on a route every
@@ -223,7 +223,7 @@ func loginRunPrecedes(a, b types.AgentRun) bool {
 // was written to stop paying. The real store is PG, which implements it; the
 // capture PUT's KILLED guard is the belt either way.
 //
-// SELECTED BY creator + task + agent: `provider` is not a column on a run (it
+// Selected by creator + task + agent: `provider` is not a column on a run (it
 // lives only in the harness.login.started audit datum), and the agent is what
 // separates the AWS SSO login box from the subscription one.
 func (s *Server) liveLoginRunsBy(ctx context.Context, actor, agent string) ([]types.AgentRun, error) {

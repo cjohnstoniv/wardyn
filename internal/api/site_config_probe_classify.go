@@ -172,9 +172,9 @@ func classifyProxyProbe(res probeRunResult, subj proxyProbeSubject, controlPlane
 				subj.endpoints, subj.upstream, elapsed)
 		case subj.resolveFailReason != "":
 			// A proxy WAS configured but did not resolve to something dispatch can
-			// use — the probe went direct exactly like a real run would (W13-S1-4 /
-			// W12-W12-C-2), and must say so rather than reading like an
-			// unconfigured proxy (the branch below).
+			// use — the probe went direct exactly like a real run would, and must
+			// say so rather than reading like an unconfigured proxy (the branch
+			// below).
 			resp.Detail = fmt.Sprintf("Reached %s directly in %s — payloads matched, but the configured upstream proxy was NOT used: %s. A run would go direct too, not through the chain you configured.",
 				subj.endpoints, elapsed, upstreamFailDetail(subj.resolveFailReason))
 		default:

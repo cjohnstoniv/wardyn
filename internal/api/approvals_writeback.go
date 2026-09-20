@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// THE DURABLE WRITE-BACK: what a decided approval leaves behind on a WORKSPACE,
+// The durable write-back: what a decided approval leaves behind on a WORKSPACE,
 // as opposed to on the approval row itself. Split out of approvals.go for the
 // 1000-line file-size gate (scripts/check-file-size.sh).
 //
@@ -73,7 +73,7 @@ func approvalHost(ap types.ApprovalRequest) string {
 // handleSetApprovedEgress's inline static set carries. controlPlaneHost already
 // lowercases, matching how that set inserts it raw.
 //
-// ALLOW-SHAPED ONLY — do not reuse this for the deny direction. A deny entry for
+// Allow-shaped only — do not reuse this for the deny direction. A deny entry for
 // a git-broker host IS consulted (runs_dispatch_gitbroker.go reads and extends
 // policy.DeniedDomains), so the "never consulted" rationale does not transfer,
 // and the deny direction's real hazard is the opposite one (see
@@ -110,7 +110,7 @@ func (s *Server) denyAlwaysReject(ctx context.Context, ws types.Workspace, host 
 	// bedrock-runtime.<region> (and the WARDYN_BEDROCK_BASE_URL override host)
 	// carries proxy-side bearer injection too, and this guard consulted the
 	// anthropic/openai-only predicate, so a workspace-bricking deny·always on it
-	// was accepted (F019).
+	// was accepted.
 	if s.isModelProviderRejectHost(ctx, ws, host) {
 		return "deny always on " + host + " would permanently break model access for this workspace: " +
 			"proxy-side credential injection refuses a denied host" + caveat
@@ -121,7 +121,7 @@ func (s *Server) denyAlwaysReject(ctx context.Context, ws types.Workspace, host 
 				"its credential is injected at that host" + caveat
 		}
 	}
-	// M1 — a permanent deny must not contradict the workspace's own contract.
+	// A permanent deny must not contradict the workspace's own contract.
 	if requiredEgressHost(ws, host) {
 		return "deny always on " + host + " contradicts this workspace's requirements contract, which marks " +
 			"egress:" + host + " required — a confined replay unions every required egress row into its own " +
@@ -132,7 +132,7 @@ func (s *Server) denyAlwaysReject(ctx context.Context, ws types.Workspace, host 
 }
 
 // requiredEgressHost reports whether ws's EFFECTIVE contract marks
-// egress:<host> required — the M1 self-contradiction check behind
+// egress:<host> required — the self-contradiction check behind
 // denyAlwaysReject. confinedEgressDomains unions exactly these rows into a
 // confined replay's AllowedDomains, so a workspace that both requires and
 // permanently denies one host fails every replay on it. The path is reachable,
@@ -185,8 +185,8 @@ func (s *Server) persistWorkspaceEgressDecision(ctx context.Context, ap types.Ap
 	}
 	host := approvalHost(ap)
 	data := map[string]any{"domains": []string{host}, "source": "approval:" + ap.ID.String()}
-	// AUDIT the give-up paths too — this function's contract is fail-SILENT-BUT-
-	// AUDITED, and a bare `return` here delivered only the first half. Both are
+	// Audit the give-up paths too — this function's contract is fail-SILENT-BUT-
+	// AUDITED, and a bare `return` here would deliver only the first half. Both are
 	// reachable and neither is cosmetic: a nil Store means the decision stands
 	// with nothing durable behind it, and an empty host means we re-derived it
 	// from the post-Decide RETURNING row rather than the `ap` rule 7 validated —
@@ -196,7 +196,7 @@ func (s *Server) persistWorkspaceEgressDecision(ctx context.Context, ap types.Ap
 	// operator who clicked Always and got a green UI must be able to find out
 	// from the audit stream that nothing was written.
 	//
-	// Every emit below stamps the O5 cross-user marker (auditWorkspaceDataFor).
+	// Every emit below stamps the cross-user marker (auditWorkspaceDataFor).
 	// Deciding an approval is owner-OR-ADMIN (routes.go), so this is the most
 	// common path on which an admin durably rewrites a MEMBER-owned workspace —
 	// an `always` on someone else's run — and "which member's data did this
@@ -282,14 +282,12 @@ func (s *Server) learnVerifyEgress(ctx context.Context, ap types.ApprovalRequest
 	if run.WorkspaceID == nil || run.Task != "workspace record" {
 		return
 	}
-	// FOLDED WITH THE HOST CHECK BELOW, because they are one give-up with two
-	// causes. W19-W19b-5 made "empty or malformed host" audit its miss, and the
-	// UNMARSHAL failure four lines above it kept failing silent — so a
-	// requested_scope that is valid JSON but not an OBJECT (an array, a string, a
-	// number) still produced the exact symptom that fix was written to eliminate:
-	// HTTP 200, an empty requirements map, and nothing in the audit stream saying
-	// why. The two are indistinguishable to the operator and now answer the same
-	// way, with the detail naming which of them it was.
+	// Folded with the host check below, because they are one give-up with two
+	// causes: a requested_scope that is valid JSON but not an OBJECT (an array, a
+	// string, a number) would otherwise produce the same symptom as an empty or
+	// malformed host — HTTP 200, an empty requirements map, and nothing in the
+	// audit stream saying why. The two are indistinguishable to the operator and
+	// answer the same way here, with the detail naming which of them it was.
 	var scope struct {
 		Host string `json:"host"`
 	}
@@ -307,7 +305,7 @@ func (s *Server) learnVerifyEgress(ctx context.Context, ap types.ApprovalRequest
 		return
 	}
 	key := "egress:" + host
-	// Same O5 marker as the deny·always write-back beside it, and reachable the
+	// Same cross-user marker as the deny·always write-back beside it, and reachable the
 	// same way: a record run an ADMIN launched on a member-owned workspace ends
 	// with the admin approving a host into that member's requirements contract.
 	ws, err := s.cfg.Store.MergeWorkspaceRequirements(ctx, *run.WorkspaceID, map[string]types.WorkspaceRequirement{

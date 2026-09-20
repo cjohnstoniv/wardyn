@@ -26,7 +26,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ── DRAFT (M2 canon pending) ────────────────────────────────────────────────
+// DRAFT (M2 canon pending)
 // The refusal copy this gate introduces, held in ONE block so the canon swap is
 // a single-file diff, and asserted THROUGH the constants by every test.
 const (
@@ -42,7 +42,6 @@ const (
 	// renewal half of this same promise). Re-deriving a timestamp for it here
 	// would be a second spelling of a sentence that exists.
 	//
-	// DRAFT (M2 canon pending)
 	// The third %s is the REMEDY clause (llmMechanismRemedy): the destination is
 	// the one part of this sentence that depends on who is reading it.
 	llmMechanismDeadSentence = "this run's model access is configured as %s, and that credential %s — %s " +
@@ -60,15 +59,11 @@ const (
 	// again, and a sign-in is genuinely all it takes — a new login run stamps
 	// the CURRENT pin and its capture replaces the stored blob. %s = the stored
 	// account, role; then the allowed account, role.
-	//
-	// DRAFT (M2 canon pending)
 	llmMechanismPinContradictedSentence = "this run's stored AWS sign-in is for account %s / role %s, but this agent now pins AWS sign-ins to account %s / role %s — " +
 		"nothing was started. To replace it, %s Wardyn does not rewrite a stored sign-in."
 
 	// llmMechanismStateNotConfigured is the state above when NOTHING credentials
 	// the run: the declared lane did not fire and no other one did either.
-	//
-	// DRAFT (M2 canon pending)
 	llmMechanismStateNotConfigured = "is not configured"
 
 	// llmMechanismStateNotTheLane is the state above when a DIFFERENT lane fired.
@@ -77,51 +72,41 @@ const (
 	// key is missing, on a deployment where Bedrock quietly took the run, goes
 	// looking for the wrong problem. %s is the lane that won. This is the sentence
 	// the whole gate exists to be able to say.
-	//
-	// DRAFT (M2 canon pending)
 	llmMechanismStateNotTheLane = "is not the lane this run resolved to, which is %s"
 
-	// ── the REMEDY clause the three refusals above end on ──────────────────
+	// the REMEDY clause the three refusals above end on
 	//
 	// The destination is the one part of a refusal that depends on WHO is
-	// reading it, and until 0.7.6 there was one: "sign in again under Settings →
-	// Model provider". Under a per_user row that page's AWS button is
-	// admin-only (connection-cards.tsx's disabled={!operator}), so the sentence
-	// sent the member it was talking to — the only person who CAN repair their
-	// own captured session — to the one page that will not let them (UX round
-	// B1). The member's two real doors are the console's Getting started page
+	// reading it, so it must not be a single fixed destination such as "sign in
+	// again under Settings → Model provider". Under a per_user row that page's AWS
+	// button is admin-only (connection-cards.tsx's disabled={!operator}), so that
+	// sentence would send the member it is talking to — the only person who CAN
+	// repair their own captured session — to the one page that will not let them.
+	// The
+	// member's two real doors are the console's Getting started page
 	// and the model-access banner every screen now carries.
 
 	// llmMechanismRemedyPerUser is that member's destination. It names Getting
 	// started FIRST because that is the one door true on all three surfaces this
-	// sentence reaches (round-2 UX S5): the rail's 422, the failed run's block
+	// sentence reaches: the rail's 422, the failed run's block
 	// in focus mode — where the block owns the sign-in and the banner has no
 	// button — and the CLI, whose reader has no console banner at all. Sentence
 	// case, as the nav item and the page title are.
-	//
-	// DRAFT (M2 canon pending)
 	llmMechanismRemedyPerUser = "sign in to AWS from Getting started in the console, or from the sign-in banner the console shows on every page."
 
 	// llmMechanismRemedyShared is the ADMIN's destination, unchanged: under a
 	// shared row the one credential is theirs and Settings → Model provider is
 	// where they replace it.
-	//
-	// DRAFT (M2 canon pending)
 	llmMechanismRemedyShared = "sign in again under Settings → Model provider."
 
 	// llmMechanismRemedySharedFirst is the same destination without "again":
 	// "again" is a claim about the reader's past, and the not-configured arm is
-	// the one state that says nothing ever fired here (UX round B1's second
-	// half).
-	//
-	// DRAFT (M2 canon pending)
+	// the one state that says nothing ever fired here.
 	llmMechanismRemedySharedFirst = "sign in under Settings → Model provider."
 
 	// llmDetailBedrockExpired is the brokered-LLM 404's detail for a
 	// half-configured Bedrock deployment (see llmUnavailableDetail). %s = the
 	// captured session's expiry.
-	//
-	// DRAFT (M2 canon pending)
 	llmDetailBedrockExpired = "Bedrock is configured but its credential expired at %s; reconnect it"
 )
 
@@ -291,7 +276,7 @@ func pinContradictionRefusal(sc types.SiteConfig, b bedrockAuth, perUser bool) s
 // enforceConfiguredLLMMechanism fails a run CLOSED when the org declared HOW this
 // agent reaches its model and the lane that actually fired is not that one.
 //
-// THE WHOLE LANE IS THIS: a credential must never silently change mechanism or
+// The whole lane is this: a credential must never silently change mechanism or
 // source. resolveLLMTransport picks by a FIXED precedence that knows nothing
 // about an admin's declaration, so a deployment whose row says "Anthropic API
 // key" dispatches BEDROCK the moment a region, a model and a bearer secret exist
@@ -299,7 +284,7 @@ func pinContradictionRefusal(sc types.SiteConfig, b bedrockAuth, perUser bool) s
 // readiness check would not catch that: the declared lane IS ready, it just is
 // not the one that won. So the gate compares what was SELECTED.
 //
-// WHAT IT DOES NOT DO, deliberately:
+// What it does not do, deliberately:
 //   - LEGACY MODE (no AgentProviders block, or no row for this agent) refuses
 //     NOTHING. A no-credential run dispatches today carrying only the create-time
 //     advisory, and the corpus depends on it (dispatch fixtures seed no model
@@ -342,11 +327,11 @@ func (s *Server) enforceConfiguredLLMMechanism(ctx context.Context, run types.Ag
 	selected, ok := s.selectedMechanism(run.Agent,
 		llm.subscription, llm.bedrock, llm.injectManaged,
 		s.hasAnthropicAPIKeyInjection(run.Agent, injections))
-	// THE STORED IDENTITY, before the lane itself is judged. The declared lane
+	// The stored identity, before the lane itself is judged. The declared lane
 	// IS the one that fired here, so mechanismSatisfied is about to admit a run
 	// carrying an account/role the roster no longer allows — the pin is checked
 	// at capture time and nowhere else, so a capture that predates a pin is the
-	// one identity nothing compares (P4). Refused rather than rewritten, for the
+	// one identity nothing compares. Refused rather than rewritten, for the
 	// reason awssso_pin.go opens with: the blob is baked verbatim into the
 	// sandbox's ~/.aws/config, so rewriting it would record a session nobody saw
 	// and merely move the IAM 403 back to run time.
@@ -360,7 +345,7 @@ func (s *Server) enforceConfiguredLLMMechanism(ctx context.Context, run types.Ag
 	s.failAndRevoke(ctx, run.ID, types.RunStarting, msg)
 	// `reason` is what makes this refusal readable by a machine — the console
 	// grades the ending `credential` from it and offers the sign-in instead of
-	// directions to it (Finding 3). `mechanism` is the DECLARED lane, so that
+	// directions to it. `mechanism` is the DECLARED lane, so that
 	// door binds to THIS run's lane: the reason covers every declared mechanism
 	// (an OpenAI row's refusal included), while the console's model_access
 	// grades Claude Code alone, and without the lane key a failed Codex run
@@ -381,16 +366,16 @@ func (s *Server) enforceConfiguredLLMMechanism(ctx context.Context, run types.Ag
 // bearer key is reachable at all (resolveBedrockAuth's !sso.perUser guard). A
 // failed read yields perUser=false, owner="" — the OPERATOR namespace — so a
 // store blip credentialed a per_user MEMBER's run with the deployment-wide
-// session, unaudited. It is S2-01/S2-08's fail-open on the SERVING door, which
-// their words ("written or deleted") did not reach.
+// session, unaudited. That is a fail-open on the SERVING door, which the
+// write-door rules ("written or deleted") do not reach.
 //
-// REFUSED, not degraded to the caller's own namespace: a credential must never
+// Refused, not degraded to the caller's own namespace: a credential must never
 // silently change source — the law enforceConfiguredLLMMechanism above exists
 // for — and a run that fails to start carrying its reason is the smaller outage
 // than one served somebody else's credential. The next dispatch after the store
 // recovers is byte-identical to today's.
 //
-// SCOPED TO THE RUNS THAT WOULD ACTUALLY SELECT ONE, through the credential
+// Scoped to the runs that would actually select one, through the credential
 // code's own predicate (bedrockLaneSelectable, runs_bedrock.go): a deployment
 // with no Bedrock region/model, a non-model run, a login box, a subscription
 // run and every non-claude-code agent dispatch exactly as before, blip or no.
@@ -455,7 +440,7 @@ func (s *Server) resolveRunLLMLanes(ctx context.Context, req createRunRequest, s
 	llmProv, _ := s.llmProviderFor(req.Agent)
 	_, l.apiKey = apiKeyGrantForHost(spec, llmProv.host)
 	l.subscription = specHasMountTarget(spec, claudeCredTarget)
-	// BEDROCK FIRST, because managed is the fallback BELOW it: dispatch computes
+	// Bedrock first, because managed is the fallback BELOW it: dispatch computes
 	// managed with !bedrockReady, so resolving managed before Bedrock here would
 	// make create fold a Bedrock run onto the subscription lane (selectedMechanism
 	// tests subscription/managed before Bedrock) and refuse a run dispatch would
@@ -465,15 +450,15 @@ func (s *Server) resolveRunLLMLanes(ctx context.Context, req createRunRequest, s
 	// captured SSO session right here, so the click is the check — a renewal
 	// AWS refuses is refused at create, before any run exists, instead of
 	// failing the run at dispatch after the person was told it launched (the
-	// 0.7.6 field report). Review's preflight and the create-path advisory pass
+	// field report). Review's preflight and the create-path advisory pass
 	// false: dry runs over a ONE-USE rotating token, where an expired-but-
 	// renewable session still reads READY (dispatch renews it).
 	//
 	// modelRun is THIS RUN's own answer, hoisted so the Bedrock probe and the
-	// managed lane below cannot disagree (B2-F7). It used to be hard-coded true
-	// here, so a scan run (workspace_id + non-interactive) or a task_mode=exec
+	// managed lane below cannot disagree. Hard-coding it true here would make a
+	// scan run (workspace_id + non-interactive) or a task_mode=exec
 	// run — the two shapes isModelRun exists to exclude — read as a ready Bedrock
-	// lane at create and at Review, and the 201 said "Amazon Bedrock … this run
+	// lane at create and at Review, with the 201 saying "Amazon Bedrock … this run
 	// uses it automatically" about a run dispatch hands no model credential at
 	// all. Source id is nil by construction on this door (a source-bound run is
 	// launched by newStepRun, never decoded from a create body) — the same term
@@ -620,7 +605,7 @@ func (s *Server) llmUnavailableDetail(ctx context.Context, run types.AgentRun, l
 // siteConfigForDispatch reads the operator-wide site config for ONE dispatch,
 // retrying a failed read exactly once.
 //
-// WHY A RETRY BELONGS HERE AND NOWHERE ELSE (B2-F1, owner decision 3). This one
+// Why a retry belongs here and nowhere else. This one
 // read decides three things at once: which artifact redirects apply, which
 // upstream proxy the run gets, and — the one that matters — WHOSE model
 // credential the run may use (awsSSOScopeFor over the roster). A failed read

@@ -63,8 +63,8 @@ func ValidateLLMGateways(anthropicRaw, openaiRaw string) (map[string]string, err
 // (bedrock-runtime.<region>.amazonaws.com). It is the deployment's GLOBAL
 // region: a workspace's per-run region override cannot be known at boot, and
 // pointing this at the public host of some other region is not an escape —
-// the value is the operator's own either way, and PF-44's ceiling already says
-// one data-plane host per deployment.
+// the value is the operator's own either way, and the ceiling is already one
+// data-plane host per deployment.
 //
 // allowTestEndpoints (WARDYN_ALLOW_TEST_ENDPOINTS) relaxes RULE 1 AND NOTHING
 // ELSE: a plain http:// data-plane host becomes acceptable. It exists for one
@@ -80,7 +80,7 @@ func ValidateLLMGateways(anthropicRaw, openaiRaw string) (map[string]string, err
 // real deployment — this function is byte-identical to before the parameter
 // existed.
 // BedrockPlainHTTPWarn is the BOOT WARN every boot that actually TAKES the
-// plain-http relaxation logs (W6-S7). WARDYN_ALLOW_TEST_ENDPOINTS unlocks two
+// plain-http relaxation logs. WARDYN_ALLOW_TEST_ENDPOINTS unlocks two
 // relaxations and only the AWS SSO one was audible; this one re-points the
 // BEARER-mode injection target, so the Bedrock API key rides
 // `Authorization: Bearer` in cleartext on every model call — and it said

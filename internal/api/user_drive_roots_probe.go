@@ -3,15 +3,15 @@
 
 // THE ADMIN DOORS' HALF OF THE SHARE BOUND.
 //
-// The member doors have run their filesystem questions through driveShareProbe
-// since F295: a 5-second bound, a strand memory so a read never queues behind a
+// The member doors have run their filesystem questions through driveShareProbe:
+// a 5-second bound, a strand memory so a read never queues behind a
 // syscall that is already overdue, and one WARN per strand. The ADMIN doors —
 // GET /drives, the host_root ceiling on a drive write, and the nesting gate's
 // symlink resolution — ran the SAME uncancellable EvalSymlinks/stat calls
 // unbounded, on a server that deliberately sets no WriteTimeout. A hard-mounted
 // NAS that stops answering therefore hung every /drives read and every drive
-// write for as long as the mount took, leaking one kernel thread per attempt
-// (B5-F1).
+// write for as long as the mount took, leaking one kernel thread per
+// attempt.
 //
 // Split out of user_drive_roots.go rather than added to it because user_drives.go
 // is at the file-size ceiling and this is new logic, not an edit of the ceiling's
@@ -85,7 +85,7 @@ func (s *Server) userDriveHostRootCheckBounded(ctx context.Context) types.UserDr
 //
 // EMPTY ROOTS ANSWER false, unchanged: the loop does not run.
 //
-// A ROOT THAT DID NOT ANSWER IS NOT USABLE, which is the fail-closed direction
+// A root that did not answer is not usable, which is the fail-closed direction
 // and the honest one: the console enables the host_path option on this bit, and
 // offering a backend whose write door is currently answering 503 is the
 // offer-and-refuse the field exists to prevent. It is also self-correcting — the
@@ -95,7 +95,7 @@ func (s *Server) userDriveHostRootCheckBounded(ctx context.Context) types.UserDr
 // on the FIRST request after a mount hangs — the strand marks only short-circuit
 // the SECOND request. A deadline on the loop's own context makes every probe
 // after the first strand return at once (driveShareProbe selects on ctx.Done),
-// so the request's cost is the bound this file's header promises (R-03).
+// so the request's cost is the bound this file's header promises.
 func (s *Server) userDriveHostRootsUsableWithin(ctx context.Context) bool {
 	ctx, cancel := context.WithTimeout(ctx, driveShareProbeTimeout)
 	defer cancel()
@@ -147,7 +147,7 @@ func driveRootCeilingRefusal(root string, err error) (int, string) {
 // it is the host tree this row authorized binding into other people's
 // sandboxes), plus what the re-home guard decided.
 //
-// THE RE-HOME DETAIL IS OMITTED WHEN THERE IS NONE (B5-F6). `rehomed:true` says
+// The re-home detail is omitted when there is none. `rehomed:true` says
 // a move happened; the refusal the admin overrode to get here said WHICH
 // identity fields moved and HOW MANY allocations went with them, and the row
 // discarded both — so the log could not answer "which objects were orphaned",

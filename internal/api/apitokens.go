@@ -108,7 +108,7 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 			return
 		}
 		if err != nil {
-			// VISIBLE SERVER-SIDE, because this 500s an entire authentication
+			// Visible server-side, because this 500s an entire authentication
 			// lane — every CI job and script holding a wdn_ token — and the
 			// only other evidence is a client complaint. writeError does not
 			// log, no audit row is written (there is no authenticated principal
@@ -127,7 +127,7 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 			writeError(w, http.StatusServiceUnavailable, "api token lookup failed")
 			return
 		}
-		// THE SAME CUTOFF THE SESSION LANE OBEYS, applied to the token's
+		// The same cutoff the session lane obeys, applied to the token's
 		// created_at. Without it POST /sessions/revoke was a race the sweep
 		// could lose FOREVER: revokeAPITokensFor takes a ListAPITokens snapshot,
 		// and a mint whose INSERT commits after that snapshot is never reachable
@@ -141,13 +141,13 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 		// minted AFTER it is, which is correct — that is a new credential the
 		// principal minted from a session that itself cleared the cutoff.
 		//
-		// FALLS THROUGH rather than 401ing here, for the reason the not-found
+		// Falls through rather than 401ing here, for the reason the not-found
 		// arm above does: unknown, revoked and cut-off collapse into one 401
 		// from one place, and no branch here becomes an existence oracle.
 		//
 		// A store FAILURE fails closed with the same 503 the lookup failure
 		// gives, and for the same reason — an unanswerable revocation check must
-		// never read as "not revoked". 503 rather than 500 (B6-F2): the token may
+		// never read as "not revoked". 503 rather than 500: the token may
 		// be perfectly good, this deployment simply cannot decide, and the SSO
 		// lane now answers the identical condition the identical way.
 		if s.cfg.SessionRevocations != nil {
@@ -175,7 +175,7 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 		// human with no token-specific code anywhere downstream.
 		//
 		// A NULL groups_truncated — a token minted before 0.7, when nothing
-		// recorded the bit — reads as TRUNCATED (PF-26). Its snapshot's
+		// recorded the bit — reads as TRUNCATED. Its snapshot's
 		// completeness is genuinely unknown, and the fail-OPEN reading would let
 		// a legacy token shed a group-assigned governance profile the cookie lane
 		// already refuses to shed. The cost is one re-mint, and only on a
@@ -216,7 +216,7 @@ type createAPITokenRequest struct {
 const apiTokenNoHumanRefusal = "an API token belongs to a signed-in human — sign in to the console and create one from Account, or keep using the admin token directly"
 
 func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
-	// THE CREDENTIAL'S AUTHORITY TIME, stamped HERE — before a single byte of
+	// The credential's authority time, stamped HERE — before a single byte of
 	// the request body is read.
 	//
 	// created_at is not a display field: apiTokenAuth compares it against the
@@ -250,7 +250,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 			"an API token cannot create another API token — sign in to the console to mint one")
 		return
 	}
-	// MEMBER MODE REFUSES, it does not clamp (0.7.4, P2). store.RefreshAPITokenRoles
+	// Member mode refuses, it does not clamp. store.RefreshAPITokenRoles
 	// (fired by OnLogin) re-stamps EVERY token of a principal with their freshly
 	// derived role at the next sign-in, so a wdn_ token minted "as a member"
 	// would silently become an admin one — a credential outliving the mode that
@@ -289,14 +289,14 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	plaintext := apiTokenPrefix + hex.EncodeToString(raw)
 
 	// The identity SNAPSHOT. Role is the caller's REAL session role, copied
-	// verbatim — NOT a two-valued isOperator re-derivation (PF-19). This token
+	// verbatim — NOT a two-valued isOperator re-derivation. This token
 	// replays the human's WHOLE session identity through withHumanIdentity
 	// (see the middleware above), not merely their foreign-run reach, so
 	// collapsing a security_admin session to "member" here would make every
 	// security-governance route unreachable by API or CLI for exactly the
 	// persona whose surfaces ship API-first.
 	//
-	// SAFE, and not by accident: the three consumers that turn a stamped role
+	// Safe, and not by accident: the three consumers that turn a stamped role
 	// into REACH INTO SOMEONE ELSE'S RUN all require == oidc.RoleAdmin
 	// (attach.go's ticket lane, uigateway.go, sshgateway.go), so a
 	// security_admin stamp grants precisely zero run reach. The SSH-key and
@@ -311,7 +311,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	if role == "" {
 		role = oidc.RoleMember
 	}
-	// The group snapshot's PF-26 completeness marker, stamped from the MINTING
+	// The group snapshot's completeness marker, stamped from the MINTING
 	// session's own bit (migration 0052's api_tokens.groups_truncated). The
 	// token replays this snapshot into the very same capabilitySubjects the
 	// ceiling resolver reads (apiTokenAuth above), so without the marker the
@@ -324,7 +324,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	// say "known complete" (false) distinctly from a pre-0.7 row's "nobody
 	// recorded it" (NULL). See types.APIToken.GroupsTruncated.
 	groupsTruncated := oidcGroupsTruncatedFromContext(ctx)
-	// THE LEVER MAY HAVE FIRED WHILE THIS REQUEST WAS IN FLIGHT. The gate that
+	// The lever may have fired while this request was in flight. The gate that
 	// admitted it ran in oidc.Middleware before the handler was entered, and
 	// everything since — the body read, the quota list — is time an attacker
 	// can stretch. Ask the same question the gate asked, as late as possible
@@ -423,7 +423,7 @@ func (s *Server) handleRevokeAPIToken(w http.ResponseWriter, r *http.Request) {
 // ceiling migration 0045 documents — a demoted admin's outstanding tokens keep
 // the role they were minted under until their owner's next login re-stamps it
 // (store.RefreshAPITokenRoles, fired from the same OnLogin hook that has
-// refreshed SSH keys since 0.6) or until they are revoked here. This route is
+// refreshed SSH keys) or until they are revoked here. This route is
 // the path that takes effect IMMEDIATELY, and the only one that helps for an
 // owner who never signs in again — and for a token
 // whose owner has left.
@@ -459,42 +459,42 @@ func (s *Server) revokeAPIToken(w http.ResponseWriter, r *http.Request, principa
 // staleRoleSnapshotCount reports how many UNREVOKED wdn_ tokens still carry a
 // frozen role snapshot that a role-mapping edit naming `value` cannot reach.
 //
-// WHY THIS EXISTS. An api_token's role is stamped at mint (handleCreateAPIToken)
-// and read verbatim on every request (apiTokenAuth) — since 0.7 that stamp can
+// Why this exists. An api_token's role is stamped at mint (handleCreateAPIToken)
+// and read verbatim on every request (apiTokenAuth) — that stamp can
 // be security_admin. The stamp is BOUNDED-STALE, NOT FROZEN, and the ceiling is
 // the owner's own next login: store.RefreshAPITokenRoles re-stamps role on
 // every unrevoked token that principal holds, fired from the same OnLogin hook
-// that has refreshed SSH keys since 0.6 (the SSH lane's bound is a TTL instead
+// that has refreshed SSH keys (the SSH lane's bound is a TTL instead
 // — sshgateway.go's sshRoleFresh against WARDYN_SSH_ROLE_TTL). What the login
 // hook does NOT refresh is the GROUP snapshot, and what it cannot bound at all
 // is a human who is demoted and never signs in again. Both are why this count,
 // and the revoke beside it, exist.
 //
-// WHAT IT IS NOT: it is not a TTL. It is the INFORMATIONAL half — how many
+// What it is not: it is not a TTL. It is the INFORMATIONAL half — how many
 // mint-time snapshots name this value at all, elevated or not — and it revokes
 // nothing itself. The acting half is revokeDemotedRoleSnapshots below, which
-// the owner adjudication for F112 requires: a demotion must be effective
+// the owner adjudication requires: a demotion must be effective
 // IMMEDIATELY, not merely announced and not deferred to whenever the demoted
-// human happens to sign in next. Telling the admin was this counter's whole
-// remedy and it was the wrong one — the login refresh is a real bound, but it
+// human happens to sign in next. Counting alone is not the remedy
+// — the login refresh is a real bound, but it
 // is the owner's schedule, not the operator's, and it never arrives for someone
 // who has left.
 //
-// The self-DoS this used to fear is answered by SCOPE, not by inaction: the
+// The self-DoS risk is answered by SCOPE, not by inaction: the
 // revoke fires only when the edit actually takes a tier away from the edited
 // value, and then only for snapshots that lose one, so an ordinary member CI
 // credential naming the same group is never touched. See
 // revokeDemotedRoleSnapshots.
 //
-// THE MATCH IS THE SNAPSHOT'S OWN VOCABULARY. api_tokens carries the principal,
-// the email and the login-time GROUP snapshot (migration 0045 + the 0.7 groups
+// The match is the snapshot's own vocabulary. api_tokens carries the principal,
+// the email and the login-time GROUP snapshot (migration 0045 + the groups
 // column), and a role-mapping value is a group/App-Role key or — where the org
 // opted in — an email. Both are canonicalized lowercase at their write
 // boundaries (canonicalRoleMapValue, oidc.CanonicalGroupSubject), so groups
 // compare exactly and the email compares case-insensitively, exactly as
 // IsSessionRevoked's email arm does.
 //
-// BEST EFFORT BY CONTRACT: a store failure returns the error for the caller to
+// Best effort by contract: a store failure returns the error for the caller to
 // log, never to fail the write with — the mapping edit is already durable by the
 // time this runs, and refusing it afterwards would be a lie about what happened.
 func (s *Server) staleRoleSnapshotCount(ctx context.Context, value string) (int, error) {
@@ -519,7 +519,7 @@ func (s *Server) staleRoleSnapshotCount(ctx context.Context, value string) (int,
 
 // apiTokenSnapshotAnswerable reports whether a token's login-time GROUP snapshot
 // can be re-derived from at all. NULL groups_truncated reads as TRUNCATED, the
-// same PF-26 rule apiTokenAuth applies: a pre-0.7 row's completeness was never
+// same rule apiTokenAuth applies: a pre-0.7 row's completeness was never
 // recorded, so "no groups" and "the groups we kept" are indistinguishable.
 func apiTokenSnapshotAnswerable(t types.APIToken) bool {
 	return t.Groups != nil && t.GroupsTruncated != nil && !*t.GroupsTruncated
@@ -535,12 +535,12 @@ func roleSnapshotCtx(role string) context.Context {
 // roleSnapshotDrops reports whether re-deriving a human's role as `derived`
 // takes authority AWAY from a frozen snapshot that says `stamped`.
 //
-// THE TIERS ARE ASKED, NEVER RE-DERIVED. This builds the context each predicate
+// The tiers are asked, NEVER RE-DERIVED. This builds the context each predicate
 // reads and calls s.isOperator / s.isSecurityOperator themselves, because
 // http.go states that a predicate there is the tier's ONLY definition and
 // nothing in this package may re-derive one from a role comparison of its own.
 //
-// BOTH are asked because the tiers DO NOT NEST — RoleSecurityAdmin is beside
+// Both are asked because the tiers DO NOT NEST — RoleSecurityAdmin is beside
 // RoleAdmin, not below it. security_admin ⇒ admin takes nothing away (a super
 // admin is a security admin too); admin ⇒ security_admin takes away the run
 // reach an admin stamp carries and IS a drop. A ladder would get exactly one of
@@ -555,7 +555,7 @@ func (s *Server) roleSnapshotDrops(stamped, derived string) bool {
 // revokes the outstanding wdn_ tokens of every principal whose derived role
 // this edit takes a tier away from. Returns how many rows it revoked.
 //
-// WHY IT REVOKES AT ALL (owner adjudication, F112). An api_token's role is
+// Why it revokes at all (owner adjudication). An api_token's role is
 // stamped at mint and read verbatim on every request until something re-stamps
 // it, and the only thing that does is the owner's own next login
 // (store.RefreshAPITokenRoles). So removing someone's admin through the People
@@ -564,31 +564,30 @@ func (s *Server) roleSnapshotDrops(stamped, derived string) bool {
 // removes admin" is the contract; a bound that waits for the demoted human to
 // come back is not it, and neither is a count in an audit row.
 //
-// TWO SCOPES KEEP THE BLAST RADIUS AT THE DEMOTION, which is what makes this
+// Two scopes keep the blast radius at the demotion, which is what makes this
 // safe where a blanket sweep would not be:
 //
-//  1. THE EDIT ITSELF must take a tier away. before/after are the real merged
+//  1. The edit itself must take a tier away. before/after are the real merged
 //     derivations for the edited value (PreviewRoleAgainst over the same
 //     candidate row set the posture-flip guard uses), so a promotion, a
 //     no-op re-save, and a delete of a row the chart still grants revoke
 //     nothing.
-//  2. THIS EDIT must be what takes it. Each live token is re-derived from its
+//  2. This edit must be what takes it. Each live token is re-derived from its
 //     OWN login-time claims TWICE — against the pre-edit rows and the post-edit
 //     rows — so a snapshot the edit does not move is left alone even if it is
 //     stale for some other reason. An admin-stamped token naming a different
 //     group is untouched.
-//  3. THE STAMP must still carry what was lost. A member-stamped CI credential
+//  3. The stamp must still carry what was lost. A member-stamped CI credential
 //     that names the demoted group keeps working: member ⇒ member drops
 //     nothing, so there is nothing stale to revoke.
 //
-// AN UNANSWERABLE SNAPSHOT FAILS CLOSED, and this is the count's old
-// undercount corrected: a token whose group snapshot is nil or PARTIAL (PF-26)
-// cannot be re-derived, so it cannot be shown to have kept its tier. Elevated
-// stamps in that state are revoked; member stamps are not, since there is
-// nothing for them to lose. The old slices.Contains(t.Groups, value) test
-// reported 1 of 3 live admin-stamped tokens for exactly this reason.
+// An unanswerable snapshot fails closed: a token whose group snapshot is nil
+// or PARTIAL cannot be re-derived, so it cannot be shown to have kept its
+// tier. Elevated stamps in that state are revoked; member stamps are not,
+// since there is nothing for them to lose. A bare slices.Contains(t.Groups,
+// value) test would undercount for exactly this reason.
 //
-// BEST EFFORT BY CONTRACT, like the counter: the mapping edit is already
+// Best effort by contract, like the counter: the mapping edit is already
 // durable when this runs, so a store failure is logged at WARN and reported as
 // zero — never turned into a 500 that would misdescribe what happened.
 func (s *Server) revokeDemotedRoleSnapshots(r *http.Request, value string, before, after []oidc.RoleMapping) int {
@@ -643,13 +642,12 @@ func (s *Server) revokeDemotedRoleSnapshots(r *http.Request, value string, befor
 
 // roleSnapshotWarnNote / roleSnapshotWarnRemedy are the operator-facing halves
 // of the role-mapping WARN, kept as named constants because they are a CLAIM
-// about system behaviour that has now drifted twice.
+// about system behaviour that must stay accurate.
 //
-// The line used to end "a token's role is frozen at mint and no sign-in
-// refreshes it", which the same release had already made false: the token lane
-// gained the login hook the key lane had since 0046 (store.RefreshAPITokenRoles,
-// and CHANGELOG 0.7 says so in plain words). Then the demotion path itself began
-// revoking what it demotes (F112). An operator acting on a stale remedy line
+// A token's role is not frozen at mint forever: the token lane has the same
+// login hook the key lane has since migration 0046 (store.RefreshAPITokenRoles),
+// and the demotion path itself
+// revokes what it demotes. An operator acting on a stale remedy line
 // either does unnecessary work or assumes a bound that is not there, so the two
 // strings say exactly the three things that are true at once: what this edit
 // already did, what the owner's next login will do, and when the human still has

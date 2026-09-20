@@ -28,10 +28,9 @@ import (
 // handleWriteEnvAsCode generates committable env-as-code from the workspace's
 // CURRENT scanned profile (base + language features + artifact-registry
 // redirects, plus an AGENTS.md documenting the detected toolchain/commands) and
-// writes it into the host source dir — the host-write half of what used to be
-// handleFinalizeWorkspace's optional emit, extracted on its own now that there
-// is no more "finalize to ready" step. LOCAL-DIR ONLY: a repo-only workspace
-// has no host path to write into (regenerate + commit yourself via
+// writes it into the host source dir — the host-write half of env-as-code
+// generation. LOCAL-DIR ONLY: a repo-only workspace has no host path to
+// write into (regenerate + commit yourself via
 // GET /workspaces/{id}/env-as-code, which stays the read path regardless of
 // composition). Writes to the FIRST local_dir source when the workspace has
 // more than one.
@@ -95,7 +94,7 @@ func (s *Server) envAsCodeFor(w http.ResponseWriter, r *http.Request, ws types.W
 	// baseRef: the SAME "explicit non-recommended choice" predicate
 	// resolveWorkspaceImage uses (workspace_run.go) — WITHOUT it every export
 	// described the generic devcontainer base regardless of what this
-	// workspace's own registry/custom/byo pick actually boots (WSPIPE-9).
+	// workspace's own registry/custom/byo pick actually boots.
 	var baseRef string
 	if b := ws.BaseImage; b != nil && b.Kind != "recommended" && strings.TrimSpace(b.Image) != "" {
 		baseRef = b.Image
@@ -115,12 +114,12 @@ func (s *Server) envAsCodeFor(w http.ResponseWriter, r *http.Request, ws types.W
 // persisted: the files are deterministic from stored state, so this reflects a
 // later re-scan or setup-command edit rather than a finalize-time snapshot.
 //
-// OWNER-OR-SUPER, not member-readable, and it is the emitted CONTENT that
+// Owner-or-super, not member-readable, and it is the emitted CONTENT that
 // decides it. These files are the operator's authored environment rendered
 // whole: a `FROM <base_image.image>` line naming the internal registry
 // coordinate redactWorkspaceForRead blanks on GET /workspaces{,/{id}}, plus the
-// site-config artifact-registry redirects (artifactBaseURLs) that R1 narrowed
-// GET /site-config to admin-only to withhold, plus the scanned profile's setup
+// site-config artifact-registry redirects (artifactBaseURLs) that narrowing
+// GET /site-config to admin-only withholds, plus the scanned profile's setup
 // commands. There is no per-field projection that leaves this route useful —
 // the whole point of the response is that it is committable — so the tier moves
 // instead, joining its own write twin (POST .../env-as-code/write, operatorOnly)

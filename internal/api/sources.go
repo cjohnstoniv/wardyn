@@ -42,7 +42,7 @@ import (
 // discard-on-conflict handler that route used to be (handleUpdateSource) and
 // its base-image GET-by-id twin (handleGetBaseImage, whose only caller was
 // its own now-removed route) are gone, not stubbed.
-// THE READS ARE operatorOnly TOO, matching their writes. They were the member
+// The reads are operatorOnly too, matching their writes. They were the member
 // group's, and the split was made by VERB rather than by what the document
 // carries: a Source row carries Locator — the HOST FILESYSTEM PATH of a
 // local_dir source — and Requirements keyed `secret:<name>` / `egress:<host>`,
@@ -149,11 +149,11 @@ func validateSourceWrite(src types.Source) string {
 		if !repoFieldSafe(src.Locator) {
 			return fmt.Sprintf(repoField400Charset, "locator")
 		}
-		// B4-F8: the ref's half of the same rule — see validateWorkspaceSource.
+		// The ref's half of the same rule — see validateWorkspaceSource.
 		if src.Ref != "" && !repoFieldSafe(src.Ref) {
 			return fmt.Sprintf(repoField400Charset, "ref")
 		}
-		// The write-door half of the traversal guard (V1 lens A): refused here as
+		// The write-door half of the traversal guard: refused here as
 		// a 400 regardless of provider mode, so a never-clonable locator cannot be
 		// AUTHORED and sit in the library waiting for a provider row to widen.
 		if !repoLocatorPathSafe(src.Locator) {
@@ -169,8 +169,8 @@ func validateSourceWrite(src types.Source) string {
 	// caller didn't set one (handleCreateSource), so an empty Name is a
 	// SYMPTOM of a missing/invalid locator, not an independent error — put
 	// the kind/locator checks first so a missing --locator reports itself,
-	// not the misleading "name is required" every missing-locator request
-	// used to surface instead (W6-S1-6).
+	// not the misleading "name is required" a missing-locator request would
+	// surface instead.
 	if strings.TrimSpace(src.Name) == "" {
 		return "name is required"
 	}
@@ -236,7 +236,7 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 	locator, ref := canonicalSourceIdentity(req.Kind, req.Locator, req.Ref)
 	// explicitName is captured BEFORE the lastPathSegment default below fills
 	// req.Name in — the identity-hit branch needs to tell "the operator typed
-	// a name" from "nothing was typed" (W7-S1-3, mirrored from
+	// a name" from "nothing was typed" (mirrored from
 	// handleCreateBaseImage): once req.Name has its default, an omitted name
 	// is indistinguishable from one that happens to equal the locator's tail.
 	explicitName := strings.TrimSpace(req.Name)
@@ -252,7 +252,7 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	// PROVIDER ADMISSION on the LIBRARY door, not only the workspace one. This is
+	// Provider admission on the LIBRARY door, not only the workspace one. This is
 	// the other way a repo locator is onboarded: a source added here clones
 	// through the scan launcher, and attaching it to a workspace re-enters the
 	// workspace door (upsertAndAttach). Refusing at CREATE, while the caller can
@@ -269,7 +269,7 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 	status := http.StatusCreated
 	if created.ID != src.ID {
 		status = http.StatusOK // identity already in the library — that IS the feature
-		// W7-S1-3 (bug-ops-1): an identity hit is the ONLY re-add/edit route
+		// An identity hit is the ONLY re-add/edit route
 		// (no separate PUT /sources/{id} — see this file's DEADCODE-1
 		// comment), so it must apply BOTH an explicitly-typed rename AND a
 		// requirements edit, never just the latter. UpdateSourceConfig
@@ -297,7 +297,7 @@ func (s *Server) handleCreateSource(w http.ResponseWriter, r *http.Request) {
 		"source.write", created.ID.String(), "success", mustJSON(map[string]any{
 			"kind": string(created.Kind), "locator": created.Locator, "ref": created.Ref,
 		})))
-	// The legacy-host grace on the LIBRARY door too (V2/F1): admission admitted it
+	// The legacy-host grace on the LIBRARY door too: admission admitted it
 	// on sufferance and audited that, and this is the other surface an admin
 	// onboards a repository through. Gated on the same kind the admission call is
 	// — a local_dir locator names no host to grace.
@@ -330,7 +330,7 @@ func (s *Server) handleGetSource(w http.ResponseWriter, r *http.Request) {
 
 // deleteSourceResponse is handleDeleteSource's 200 body: the workspaces the
 // delete detached the source from (empty when it wasn't attached to any).
-// W6-S1-2: force silently narrows those workspaces down to their remaining
+// Force silently narrows those workspaces down to their remaining
 // sources — nothing 422s, so this is the operator's only visibility into
 // which workspaces just lost a mount; a bare 204 gave them none.
 type deleteSourceResponse struct {
@@ -340,7 +340,7 @@ type deleteSourceResponse struct {
 // handleDeleteSource removes a library source — LOUDLY refusing while
 // workspaces attach it: in-use is a 409 naming every attaching workspace;
 // ?force=1 is the explicit detach-everywhere escape. Forcing does NOT make a
-// workspace's next run fail loudly (W6-S1-2 — the mount gate has no check for
+// workspace's next run fail loudly (the mount gate has no check for
 // a source that used to be there): it un-mounts the source and the workspace's
 // remaining sources mount as normal, so DetachedFrom above is the only signal
 // the operator gets that anything changed. The in-use gate and the delete are

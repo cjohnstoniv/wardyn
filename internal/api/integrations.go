@@ -118,7 +118,7 @@ func capabilitiesFor(in types.Integration, env capEnv) []Capability {
 	// secret delivery (genericCaps), never by code — checked FIRST; the closed
 	// kinds fall through to the bespoke matrices below.
 	//
-	// 0.5 refuses to WRITE a generic kind (validateIntegrationWrite), but a row
+	// validateIntegrationWrite refuses to WRITE a generic kind, but a row
 	// stored under an earlier release still deserializes and is still injected
 	// by integrations_run.go, so this branch stays: a legacy row has to keep
 	// reporting its real capabilities on GET rather than falling through to a
@@ -183,7 +183,7 @@ func genericCaps(in types.Integration, env capEnv) []Capability {
 		reach = Capability{ID: "egress_host", State: CapNeedsSetup, Reason: "No hosts named yet — nothing becomes reachable."}
 	}
 	cred := Capability{ID: "credential", State: CapImpossible, Reason: reasonNoDeliveryLane}
-	// ROLE-AGNOSTIC (base-component model): the row's proxy_header-delivered
+	// Role-agnostic (base-component model): the row's proxy_header-delivered
 	// secret IS its credential, whatever role name it carries — delivery is the
 	// contract, the role is a label. Same rule the two runtime seams follow
 	// (applyIntegrationInjection, resolveRedirectToken).
@@ -239,7 +239,7 @@ func subscriptionCaps(in types.Integration, env capEnv) []Capability {
 	// would default Wardyn's own calls onto the operator's personal login. The
 	// managed lane has no such caveat: it sends Claude-Code-shaped requests
 	// through the sandbox wire — but ONLY once a managed token is actually
-	// connected (PLATFORM-API-4): without this gate the cell read "available"
+	// connected: without this gate the cell read "available"
 	// for a lane that is not — the exact drift bedrockCaps below refuses to
 	// tell — because tool:claude-code (right below) already needs the SAME
 	// managed-blob signal to leave needs_setup.
@@ -403,7 +403,7 @@ func gatedCap(id, ref string, env capEnv, residency string) Capability {
 	return Capability{ID: id, State: CapAvailable, Residency: residency}
 }
 
-// ─── effectiveIntegrations: stored ∪ derived legacy rows ────────────────────
+// effectiveIntegrations: stored ∪ derived legacy rows
 //
 // The killer feature of the Integrations entity is that an operator who never
 // opens the surface keeps byte-identical behavior forever: nothing is seeded
@@ -450,11 +450,11 @@ func (r *integrationRow) UnmarshalJSON(b []byte) error {
 // this is a read surface, never a gate.
 //
 // present/bedrock are legacyIntegrations' two live signals, taken as
-// parameters (PLATFORM-API-7) rather than recomputed here: a caller resolving
+// parameters rather than recomputed here: a caller resolving
 // several refs in one request (resolveIntegrationRef, launchRecordRun)
 // computes each ONCE and reuses it, instead of paying a full secret listing +
-// Bedrock age-decrypt probe per call — /setup/status, the endpoint the wizard
-// polls, used to redo both 2-3x per request this way.
+// Bedrock age-decrypt probe per call — the cost /setup/status, the endpoint
+// the wizard polls, would otherwise pay 2-3x per request.
 func (s *Server) effectiveIntegrations(ctx context.Context, present map[string]bool, bedrock SetupBedrock) []integrationRow {
 	var sc types.SiteConfig
 	if s.cfg.Store != nil {
@@ -504,7 +504,7 @@ func integrationGroup(kind string) int {
 // alongside these untouched. present is the ONE present-secret map every
 // other verdict is computed from (secrets.go); bedrock is setupBedrock's own
 // "is Bedrock touched at all" verdict — both taken as parameters, not
-// recomputed (PLATFORM-API-7; see effectiveIntegrations' doc).
+// recomputed (see effectiveIntegrations' doc).
 func (s *Server) legacyIntegrations(ctx context.Context, sc types.SiteConfig, stored map[string]bool, present map[string]bool, bedrock SetupBedrock) []integrationRow {
 	var rows []integrationRow
 	add := func(id string, in types.Integration) {
@@ -585,7 +585,7 @@ func (s *Server) legacyIntegrations(ctx context.Context, sc types.SiteConfig, st
 	// applies the same stored-wins gate per row.
 	rows = append(rows, gitHostRows(present, effectiveScmHosts(sc), stored)...)
 
-	// NOT DERIVED (deliberate): artifact_mirror + host_proxy. Both are network
+	// Not derived (deliberate): artifact_mirror + host_proxy. Both are network
 	// TOPOLOGY, not connections — their config already lives, and stays, under
 	// Corporate network (SiteConfig.EgressRedirects / UpstreamProxy*), and the
 	// read-time fold drops legacy-stored rows of those two categories from this

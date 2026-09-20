@@ -25,7 +25,7 @@ import (
 //     api_key grant already rides. Wardyn holds the secret, the proxy adds the
 //     header, the sandbox never holds it.
 //
-// NOTHING IS AMBIENT. A run gets an integration when the workspace it runs in
+// Nothing is ambient. A run gets an integration when the workspace it runs in
 // requires it (a `integration:<id>` requirement key, folded by
 // applyWorkspaceRequirements) — never because the integration merely exists.
 // An operator with fifty integrations configured and a workspace that names
@@ -40,7 +40,7 @@ import (
 // request (applyWorkspaceRequirements, launchRecordRun) computes it ONCE and
 // passes it to every call, instead of resolveIntegrationRef silently
 // recomputing it (a full secret listing + subscription/Bedrock peek) once per
-// requirement (PLATFORM-API-8).
+// requirement.
 //
 // ok=false — no grant, no mutation, nothing audited — when the row cannot
 // deliver anything: the id names nothing in rows, the row is Disabled, or it
@@ -48,7 +48,7 @@ import (
 // own rule that a missing/unusable credential must never brick a run — the
 // Integrations surface is where the gap is visible.
 //
-// A per-capability off switch (DisabledCapabilities, PLATFORM-API-1) narrows
+// A per-capability off switch (DisabledCapabilities) narrows
 // which half applies: "egress_host" skips the host union, "credential" skips
 // the injection — matching what the read matrix (applyDisabled,
 // integrations.go) already reports for those cells, so an operator who turned
@@ -101,7 +101,7 @@ func (s *Server) applyIntegrationRequirement(ctx context.Context, present map[st
 // hosts it granted. Empty (and a no-op) for a row that delivers no header, which
 // is the honest state for every system that authenticates outside HTTP.
 //
-// ROLE-AGNOSTIC, DELIBERATELY (base-component model): the row's
+// Role-agnostic, deliberately (base-component model): the row's
 // proxy_header-delivered secret is its credential whatever ROLE it carries —
 // "token", "pat", "api_key" alike. Delivery is the contract; the role is a
 // label for humans. So an AI-provider row that also names egress injects its
@@ -115,7 +115,7 @@ func (s *Server) applyIntegrationRequirement(ctx context.Context, present map[st
 // proxy_header secret can exist per row (validateIntegrationWrite), so
 // HeaderSecret's "first match" IS every match.
 //
-// HONEST CEILING (pre-existing, not introduced here): the proxy injects a
+// Honest ceiling (pre-existing, not introduced here): the proxy injects a
 // header on a plain-HTTP forward, or inside a TLS-MITM'd tunnel — and dispatch
 // populates ProxyConfig.MITMHosts from the artifact-redirect plan and the
 // Bedrock bearer host ONLY (runs_dispatch.go), never from an integration's

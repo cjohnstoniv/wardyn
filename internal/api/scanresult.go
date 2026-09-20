@@ -110,7 +110,7 @@ func (s *Server) uploadSourceScanResult(w http.ResponseWriter, r *http.Request, 
 // fail because of it. aiChanged reports whether it actually flipped Source to
 // SourceAIAssisted (the audit discriminator every caller records).
 //
-// Shared by every scan LANE (W9-S1-6): the sandboxed repo-scan upload
+// Shared by every scan LANE: the sandboxed repo-scan upload
 // (uploadSourceScanResult) and the host-side local_dir scan
 // (scanLocalDirSource) both derive a profile from ScanFacts, so both get the
 // SAME advisory gap-fill on the SAME gate — a local_dir source is not a

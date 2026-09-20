@@ -215,10 +215,10 @@ func (s *Server) execRunResourcesScript(ctx context.Context, run types.AgentRun)
 		return nil, err
 	}
 	// The runner contract's worst LEGAL answer: no error AND no session. The
-	// sibling widget (run_files.go) has carried this guard since it was found
-	// there; this one dereferenced sess one line below, and the HTTP chain has
-	// no recover middleware — so a driver answering (nil, nil) took the daemon
-	// down rather than answering 500 (B1-F8).
+	// sibling widget (run_files.go) carries the same guard: this one
+	// dereferences sess one line below, and the HTTP chain has no recover
+	// middleware — so a driver answering (nil, nil) takes the daemon down
+	// rather than answering 500.
 	if sess == nil {
 		return nil, errors.New("runner returned no exec session")
 	}
@@ -243,7 +243,7 @@ func (s *Server) execRunResourcesScript(ctx context.Context, run types.AgentRun)
 		// SKIPPED when the cap cut the stream short: the in-sandbox writer is
 		// then still blocked on an undrained unbuffered pipe, so Wait cannot
 		// return and Close below is what frees it. Same shape, same fix as the
-		// Files widget's own byte cap (B1-F4, run_exec_read.go). The key set is
+		// Files widget's own byte cap (run_exec_read.go). The key set is
 		// already parsed from what we did read.
 		_, _ = sess.Wait()
 	}

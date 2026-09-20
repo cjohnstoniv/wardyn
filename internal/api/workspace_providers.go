@@ -65,7 +65,7 @@ const maxProviderBaseURLPathSegments = 2
 
 // mountWorkspaceProviderRoutes registers the two provider endpoints. They are a
 // mount function rather than two lines in routes() for the reason every other
-// 0.7 family is: routes() is at its funlen ratchet, and the file's own route-tier
+// route family is: routes() is at its funlen ratchet, and the file's own route-tier
 // map lists mounts, not individual routes.
 //
 // operatorOnly for BOTH, for the identical reason the /site-config pair is: a
@@ -393,7 +393,7 @@ func parseCloneTarget(cloneURL string) (cloneTarget, bool) {
 	if raw == "" {
 		return cloneTarget{}, false
 	}
-	// THE TRAVERSAL GUARD, before either form is read: a path the server and the
+	// The traversal guard, before either form is read: a path the server and the
 	// sandbox's git read differently is not a target this function can reduce
 	// honestly, so it is UNREADABLE and therefore refused — with the same
 	// operator/member sentences every other unreadable target earns. See
@@ -606,7 +606,7 @@ func providerFor(sc types.SiteConfig, cloneURL string) (types.GitProvider, bool)
 // for https://acme.visualstudio.com would union dev.azure.com while the kind-wide
 // claim refused every dev.azure.com repo.
 //
-// READ-SIDE ONLY. Nothing folds this back into ScmHosts: that list stays legacy,
+// Read-side only. Nothing folds this back into ScmHosts: that list stays legacy,
 // keeps its own validator and audit count, and is never written by this feature —
 // a fold would turn github.com entries into provider rows and flip
 // providersConfigured on the first PUT with no admin action at all.
@@ -652,15 +652,15 @@ func effectiveScmHosts(sc types.SiteConfig) []string {
 // plus every repo in the source library, through the same providerFor the
 // admission sites use.
 //
-// NARROWING IS NEVER SILENT: this number rides the PUT's response body (the
+// Narrowing is never silent: this number rides the PUT's response body (the
 // console shows it in the save toast) and the audit datum, so an admin who
 // tightens a base URL learns what they just cut off. An error here FAILS the
 // write rather than reporting a comforting 0 — a false "nothing was affected" is
 // the one answer this function must never give.
 func (s *Server) sourcesNoLongerAdmitted(ctx context.Context, candidate types.SiteConfig) (int, error) {
-	// DEDUPED BY CLONE URL: one repository attached to a workspace AND sitting in
+	// Deduped by clone URL: one repository attached to a workspace AND sitting in
 	// the source library is ONE repo the admin is about to cut off, and counting
-	// it twice overstates the blast radius of their own narrowing (V1 lens A).
+	// it twice overstates the blast radius of their own narrowing.
 	refused := map[string]bool{}
 	count := func(locator string) {
 		cloneURL := repoCloneURL(locator)
@@ -845,7 +845,7 @@ func storageProvidersConfigured(sc types.SiteConfig) bool {
 		(sc.WorkspaceProviders.Storage.Ephemeral != nil || sc.WorkspaceProviders.Storage.UserDrive != nil)
 }
 
-// ─── the member capability gate ───────────────────────────────────────────────
+// the member capability gate
 
 // capProvider403 is the member's refusal when a git provider row this
 // deployment admits is one they hold no capability grant for.

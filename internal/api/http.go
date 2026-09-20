@@ -88,7 +88,7 @@ func oidcNameFromContext(ctx context.Context) string {
 	return n
 }
 
-// oidcRoleCtxKey carries the Wardyn role (oidc.RoleAdmin / oidc.RoleMember) B1
+// oidcRoleCtxKey carries the Wardyn role (oidc.RoleAdmin / oidc.RoleMember)
 // derived for the same verified OIDC session, published by humanOrAdminAuth next
 // to the principal/email for the same reason those two keys exist: isOperator
 // reads this (never oidc's own context key) so the auth middleware stays the
@@ -130,7 +130,7 @@ func oidcGroupsFromContext(ctx context.Context) []string {
 	return g
 }
 
-// oidcGroupsTruncatedCtxKey carries the PF-26 truncation bit of that same
+// oidcGroupsTruncatedCtxKey carries the truncation bit of that same
 // snapshot: sessionGroups sorts the group union and drops the
 // alphabetically-last entries once it hits the cookie byte cap, so a human in
 // enough groups holds a snapshot that is present, non-nil, and INCOMPLETE.
@@ -159,7 +159,7 @@ func oidcGroupsTruncatedFromContext(ctx context.Context) bool {
 // oidcExpiryCtxKey carries the same verified OIDC session's expiry, published
 // by humanOrAdminAuth next to the principal/email/role for the same reason
 // those keys exist: the auth middleware stays the single place that trusts the
-// oidc package, and /me (W31-S1-7's session-expiry warning) is unit-testable
+// oidc package, and /me (the session-expiry warning) is unit-testable
 // without minting a signed session cookie. Zero when there is no SSO session.
 type oidcExpiryCtxKey struct{}
 
@@ -259,7 +259,7 @@ func isLoopbackRemoteAddr(remoteAddr string) bool {
 }
 
 // isLoopbackHost reports whether the request Host header names a loopback
-// destination. FIX #8: it gates the LOCAL-MODE no-auth surface (REST + the attach
+// destination. It gates the LOCAL-MODE no-auth surface (REST + the attach
 // WebSocket) against DNS rebinding. A page served from attacker.com
 // (Origin==Host==attacker.com) whose DNS is rebound to 127.0.0.1 passes the
 // browser's same-origin check but still sends Host: attacker.com — so restricting
@@ -300,14 +300,14 @@ func isLoopbackHost(host string) bool {
 // adminAuth. Fail closed: an absent/invalid session AND an absent/invalid token
 // is rejected by adminAuth.
 func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
-	// ONE CEILING PER REQUEST. This middleware wraps every routed public-API
+	// One ceiling per request. This middleware wraps every routed public-API
 	// call exactly once, which makes it the only place that can install the
 	// per-request memo effectiveCeiling reads (governance.go). Installed for
 	// EVERY caller, not just members: an operator short-circuits the resolve
 	// anyway, so the memo costs a pointer and removes the case where two sites
 	// in one request disagree about who the caller is bounded by.
 	next = ceilingMemoMiddleware(next)
-	// LOCAL HOST MODE: no SSO/token. Attribute every admin-gated action to the
+	// Local host mode: no SSO/token. Attribute every admin-gated action to the
 	// local operator and skip auth entirely. This bypasses ONLY the public-API
 	// human/admin gate — internalAuth (sidecar/run-token verification) is a
 	// separate middleware and is unaffected, so the sidecar callback path still
@@ -337,7 +337,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 				writeError(w, http.StatusForbidden, "local mode: request peer is not loopback (bind wardynd to 127.0.0.1, set WARDYN_LOCAL_TRUST_FORWARDER when behind a loopback-only publish, or configure auth)")
 				return
 			}
-			// FIX #8 (DNS-rebinding defense): the no-auth local surface must answer
+			// DNS-rebinding defense: the no-auth local surface must answer
 			// ONLY to a loopback Host. Without this a rebinding page
 			// (Origin==Host==attacker.com, DNS rebound to 127.0.0.1) passes the
 			// browser's same-origin check yet carries no credential, so it would
@@ -358,7 +358,7 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			// mutating method, reject a PRESENT Origin that is not THIS listener —
 			// closing the direct blind-CSRF the DNS-rebinding guard leaves open.
 			//
-			// HOST *AND* PORT, not merely "is it loopback": ports are not part of a
+			// Host *and* port, not merely "is it loopback": ports are not part of a
 			// SITE, so a page another process serves at http://127.0.0.1:<other-port>
 			// carries a loopback Origin AND is labelled same-site, and a
 			// loopback-only rule admitted it — unauthenticated, on every mutating
@@ -420,12 +420,12 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 			// actorFromRequest attributes the action to the real SSO human
 			// (and IGNORES any X-Wardyn-Principal header — a real identity won).
 			// The session email rides along for /me and audit attribution; the
-			// session role rides along for isOperator (B1's derived admin/member
-			// role is now the sole source of the admin tier — see isOperator).
+			// session role rides along for isOperator (the session's derived
+			// admin/member role is now the sole source of the admin tier — see isOperator).
 			//
 			// The group snapshot rides along for the capability resolver, copied
 			// verbatim, nil included: nil is the pre-0.6-cookie signal, not an
-			// empty set (see oidcGroupsCtxKey). Its PF-26 truncation bit comes
+			// empty set (see oidcGroupsCtxKey). Its truncation bit comes
 			// with it — a partial snapshot is as unanswerable as a nil one, and
 			// only the cookie knows which it is.
 			ctx := withHumanIdentity(r.Context(), sub,
@@ -433,12 +433,12 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 				oidc.RoleFromContext(r.Context()),
 				oidc.GroupsFromContext(r.Context()),
 				oidc.GroupsTruncatedFromContext(r.Context()))
-			// The display name rides along for /me only (0.7.1) — outside
+			// The display name rides along for /me only — outside
 			// withHumanIdentity on purpose: the token lane, which shares that
 			// function, has no name to publish and must not grow a fake one.
 			ctx = withOIDCName(ctx, oidc.NameFromContext(r.Context()))
 			// The session expiry rides along so /me can warn ahead of it —
-			// W31-S1-7: there is no refresh, so the alternative is a silent 401
+			// There is no refresh, so the alternative is a silent 401
 			// that wipes mid-work console state back to the sign-in gate.
 			ctx = withOIDCExpiry(ctx, oidc.ExpiryFromContext(r.Context()))
 			next.ServeHTTP(w, r.WithContext(ctx))
@@ -465,12 +465,12 @@ func (s *Server) humanOrAdminAuth(next http.Handler) http.Handler {
 // material, or reach another user's run (see getRunAuthorized elsewhere in this
 // package for the owner-or-admin tier that sits BETWEEN member and admin).
 //
-// The name predates B1's Session.Role and is kept (rather than renamed to
+// The name predates Session.Role and is kept (rather than renamed to
 // requireAdmin) as the smallest honest diff — every existing call site and
 // comment already reads "operator" to mean "admin", and the two are now exactly
 // the same tier.
 //
-// isOperator reads the caller's ROLE (B1's oidc.RoleAdmin / oidc.RoleMember,
+// isOperator reads the caller's ROLE (oidc.RoleAdmin / oidc.RoleMember,
 // derived at OIDC login by internal/auth/oidc's deriveRole and carried on the
 // session cookie) — never the OperatorEmails list directly. Config.OperatorEmails
 // (WARDYN_OIDC_OPERATOR_EMAILS) still matters: cmd/wardynd feeds the SAME list
@@ -506,7 +506,7 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 }
 
 // isOperator reports whether the authenticated caller on ctx is a SUPER ADMIN
-// — exactly oidc.RoleAdmin. Since 0.7's third tier this is the NARROWER of two
+// — exactly oidc.RoleAdmin. This is the NARROWER of two
 // named predicates, and the distinction is load-bearing:
 //
 //   - isOperator (here): binds credentials, writes the host, administers users,
@@ -527,7 +527,7 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 // single shared credential carries no per-human role to demote. Otherwise the
 // caller's role is authoritative and admin-only when it is exactly
 // oidc.RoleAdmin (fail closed on any other value, including an unexpectedly
-// empty one — B1's decodeSession already refuses to hand out a session with an
+// empty one — decodeSession already refuses to hand out a session with an
 // empty role, so this is defense-in-depth, not a real path).
 func (s *Server) isOperator(ctx context.Context) bool {
 	if oidcHumanFromContext(ctx) == "" {
@@ -543,7 +543,7 @@ func (s *Server) isOperator(ctx context.Context) bool {
 // this surface, they merely do not nest on the run-reach one) and for
 // oidc.RoleSecurityAdmin.
 //
-// SAME no-OIDC-human arm as isOperator, deliberately: the admin token and local
+// Same no-OIDC-human arm as isOperator, deliberately: the admin token and local
 // mode are one shared credential with no human to demote, and the break-glass
 // recovery path both tiers already depend on. Any drift between the two arms
 // would mean an admin-token deployment could reach one tier and not the other.
@@ -715,15 +715,16 @@ const (
 
 // auditAuthFailedAs is the ONE rate-bound emit every authentication refusal
 // funnels through, public and internal alike. actor names the boundary that
-// refused (see the *Actor constants); reason is that boundary's bounded enum. Split out of auditAuthFailed so the internal (sandbox/host-sensor) lane
-// gets the SAME limiter, the SAME suppressed counter and the SAME content-free
-// row shape instead of a second, divergent copy — before F068 that lane answered
-// 401/400 and recorded nothing anywhere, so a process inside a sandbox
+// refused (see the *Actor constants); reason is that boundary's bounded enum.
+// Split out of auditAuthFailed so the internal (sandbox/host-sensor) lane gets
+// the SAME limiter, the SAME suppressed counter and the SAME content-free row
+// shape instead of a second, divergent copy. Without it that lane answers
+// 401/400 and records nothing anywhere, so a process inside a sandbox
 // brute-forcing run tokens against /api/v1/internal/*, or a sidecar probing for
 // the credential-approval path its own handler comment says must never come from
-// an untrusted sidecar, left no trace at all.
+// an untrusted sidecar, leaves no trace at all.
 func (s *Server) auditAuthFailedAs(r *http.Request, actor, reason string) {
-	// RESOLVED BEFORE THE LIMITER, not after. The row's content is unchanged by
+	// Resolved before the limiter, not after. The row's content is unchanged by
 	// the move — but the store-outage arm below has to count every REQUEST, and
 	// the limiter drops most of them: measured, 50 requests during a revocation
 	// outage produced 5 audit rows and 45 suppressions, so a counter reached
@@ -731,7 +732,7 @@ func (s *Server) auditAuthFailedAs(r *http.Request, actor, reason string) {
 	if sr := oidc.SessionRejectedFromContext(r.Context()); sr != "" {
 		reason = sr
 	}
-	// THE SSO LANE'S STORE OUTAGE, counted in the SAME series the api-token lane
+	// The SSO lane's store outage, counted in the SAME series the api-token lane
 	// uses (apitokens.go). Both lanes abandon an authentication because a store
 	// read failed; only one of them said so.
 	//
@@ -744,7 +745,7 @@ func (s *Server) auditAuthFailedAs(r *http.Request, actor, reason string) {
 	// the credential-stuffing signature. An operator following their own runbook
 	// was looking for an attacker during a database incident.
 	//
-	// ERROR level by internal/audit/sink.go's own rule and by the sibling lane's
+	// Error level by internal/audit/sink.go's own rule and by the sibling lane's
 	// precedent: an authentication that could not be DECIDED is an ERROR-level
 	// fact an operator can alert on, and the client-side symptom names the wrong
 	// cause.
@@ -753,7 +754,7 @@ func (s *Server) auditAuthFailedAs(r *http.Request, actor, reason string) {
 			"path", r.URL.Path)
 		s.metrics.authStoreErrorInc()
 	}
-	// COALESCE BEFORE THE LIMITER (B5). The limiter bounds the RATE; it does
+	// Coalesce before the limiter. The limiter bounds the RATE; it does
 	// nothing about a slow, permanent drip — the field report's flood was one row
 	// a minute from a single retrying sidecar, which a 1/sec limiter never trips,
 	// and it still evicted every real security event out of the console's
@@ -784,7 +785,7 @@ func (s *Server) auditAuthFailedAs(r *http.Request, actor, reason string) {
 		return
 	}
 	if !s.authFailedLimiter.allow(s.cfg.Now()) {
-		// COUNTED, NOT JUST DROPPED. The limiter caps the audit trail at ~1
+		// Counted, not just dropped. The limiter caps the audit trail at ~1
 		// row/sec, so past the burst the trail stops describing the volume it
 		// is bounding: a credential-stuffing run and a handful of typos look
 		// identical in the audit log, and the attack looks QUIETER the harder
@@ -805,16 +806,16 @@ func (s *Server) auditAuthFailedAs(r *http.Request, actor, reason string) {
 // auditRunIdentityExpired records run.identity.expired ONCE per run when a
 // NON-TERMINAL run presents an expired identity on the internal lane.
 //
-// This is the half of B5 that keeps quieting the sidecar from hiding a real
-// failure. The proxy's renew loop now backs off and gives up instead of retrying
-// a refused renew once a minute forever (internal/egress/proxy/renew.go), which
-// is what stopped the audit flood — but the case underneath it can be a perfectly
+// This keeps quieting the sidecar from hiding a real failure. The proxy's
+// renew loop backs off and gives up instead of retrying a refused renew once
+// a minute forever (internal/egress/proxy/renew.go), which stops the audit
+// flood — but the case underneath it can be a perfectly
 // HEALTHY run: the renewer sleeps half the token's life, so a run that misses
 // renewal through more than 30 minutes of control-plane outage (a wardynd
 // rollout) holds a dead identity for the rest of its life, and every /internal/*
-// call it makes 401s. Before this, that fact existed in the trail only as an
-// undifferentiated pile of auth.failed rows. Now it is one row, keyed to the run,
-// which the cockpit's evidence rail already renders.
+// call it makes 401s. That fact surfaces as one row, keyed to the run, which
+// the cockpit's evidence rail already renders — never an undifferentiated
+// pile of auth.failed rows.
 //
 // The run is LEFT RUNNING: mid-flight work is the owner's to abandon, and the
 // remedy the docs give is kill + start a new run. Deliberately quiet otherwise:
@@ -834,7 +835,7 @@ func (s *Server) auditRunIdentityExpired(r *http.Request, verifyErr error) {
 	if !errors.As(verifyErr, &exp) || s.cfg.Store == nil {
 		return
 	}
-	// THE ONCE-GUARD RUNS BEFORE THE STORE READ, and that ordering is the point.
+	// The once-guard runs before the store read, and that ordering is the point.
 	// The internal lane carries no rate limiter (routes.go), so a sidecar — or
 	// anything replaying a captured token — can present the same dead identity as
 	// often as it likes; with the read first, every one of those refusals bought a
@@ -845,7 +846,7 @@ func (s *Server) auditRunIdentityExpired(r *http.Request, verifyErr error) {
 	}
 	run, gerr := s.cfg.Store.GetRun(r.Context(), exp.RunID)
 	if gerr != nil {
-		// RELEASED on a store error only. "We could not tell whether this run is
+		// Released on a store error only. "We could not tell whether this run is
 		// live" must not consume the one row the run gets — a control-plane blip
 		// is exactly when this evidence matters. A TERMINAL run keeps its claim
 		// (it is never going to deserve a row), so the quiet case stays at one

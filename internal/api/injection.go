@@ -34,7 +34,7 @@ const subscriptionOAuthSecret = types.SubscriptionOAuthSecret
 // subscriptionInjectionHost is the ONLY host the subscription/managed OAuth
 // sentinels may target. They resolve to a LIVE Anthropic OAuth access token,
 // which has exactly one correct destination; injecting it anywhere else would
-// exfiltrate a long-lived operator credential (H2).
+// exfiltrate a long-lived operator credential.
 const subscriptionInjectionHost = "api.anthropic.com"
 
 // oauthProviderForSentinel maps a grant's secret name to the OAuth token
@@ -64,7 +64,7 @@ type injectionResponse = types.ResolvedInjection
 // handleInternalInjection resolves an api_key grant to its injectable header
 // value for the run's wardyn-proxy sidecar (startup mint).
 //
-// SECURITY: this endpoint returns a secret VALUE to a run-token-authed caller.
+// Security: this endpoint returns a secret VALUE to a run-token-authed caller.
 // That is safe ONLY because the sandbox can never reach it: the sandbox holds
 // no run token (the proxy injects it on brokered forwards), and the proxy's
 // brokered local routes forward exclusively mint/approvals/recordings — this
@@ -106,7 +106,7 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 	// proxy memory (masked from streams); the sandbox holds an inert sentinel.
 	if provider, source, isSentinel := s.oauthProviderForSentinel(minted.Injection.SecretName); isSentinel {
 		sentinel := minted.Injection.SecretName
-		// HOST PIN (H2): fail closed unless the grant targets Anthropic. An
+		// Host pin: fail closed unless the grant targets Anthropic. An
 		// authored/inline/recorded grant could set this sentinel's host to any
 		// egress-allowlisted host; because we force Authorization: Bearer <token>
 		// below with a LIVE OAuth token, a non-Anthropic host would exfiltrate that
@@ -120,7 +120,7 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusForbidden, "the subscription OAuth token may only be injected to "+subscriptionInjectionHost)
 			return
 		}
-		// POSTURE PIN: refuse to resolve a SHARED subscription credential unless this
+		// Posture pin: refuse to resolve a SHARED subscription credential unless this
 		// deployment is single-user (subscriptionInjectPosture, cmd/wardynd). Sits on
 		// the same chokepoint as the host pin above and for the same reason — this is
 		// the ONE place every producer of a sentinel grant converges. Dispatch-time

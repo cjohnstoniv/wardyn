@@ -78,9 +78,9 @@ func securityHeaders(next http.Handler) http.Handler {
 
 // cspConnectSrc builds the connect-src source list for ONE request. The console's
 // only outbound channel is the PTY-attach WebSocket, and it goes to this
-// deployment and nowhere else; the bare ws:/wss: SCHEMES this used to emit match
-// ANY host, so the one directive bounding where an injected script on the
-// admin-bearing origin may ship data was not bounding anything.
+// deployment and nowhere else; the bare ws:/wss: SCHEMES match ANY host, so the
+// one directive bounding where an injected script on the admin-bearing origin
+// may ship data would not bound anything if it emitted them.
 //
 // 'self' is always granted and is the whole answer on a modern browser. The
 // host form is added only as the legacy-WebKit fallback described above.

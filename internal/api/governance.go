@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Governance-profile CRUD (0.7, migration 0052): the admin-facing surface over
+// Governance-profile CRUD (migration 0052): the admin-facing surface over
 // governance_profiles + governance_assignments — named, assignable ceilings and
 // the rows binding them to a user, a group, or everyone.
 //
@@ -59,7 +59,7 @@ func (s *Server) mountGovernanceRoutes(operatorOnly chi.Router) {
 	operatorOnly.Post("/governance/preview", s.handlePreviewGovernanceProfile)
 }
 
-// ─── GET /governance ───────────────────────────────────────────────────────
+// GET /governance
 
 // governanceResponse is GET /governance's body: every profile plus every
 // assignment, in ONE call — the console's whole Governance screen, the same
@@ -96,7 +96,7 @@ func (s *Server) handleGetGovernance(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, governanceResponse{Profiles: profiles, Assignments: assignments})
 }
 
-// ─── profile writes ────────────────────────────────────────────────────────
+// profile writes
 
 // governanceProfileRequest is the POST/PUT body. ID/CreatedAt/UpdatedAt/
 // CreatedBy are never accepted from the wire: the id comes from the path (PUT)
@@ -144,9 +144,8 @@ func decodeGovernanceProfileRequest(w http.ResponseWriter, r *http.Request) (gov
 	if err := validatePolicySpec(req.Ceiling); err != nil {
 		return governanceProfileRequest{}, "invalid ceiling: " + err.Error()
 	}
-	// THE LIMITS, which had no write boundary at all: req.Limits decoded straight
-	// into the stored row while the sibling ORG block refused the identical shape
-	// by name (validateStorageProviders, providers400Negative). Nothing downstream
+	// The limits get their own write boundary, matching the sibling ORG block's
+	// identical shape (validateStorageProviders, providers400Negative). Nothing downstream
 	// mis-enforces a negative — every reader treats <= 0 as unlimited — but this is
 	// the door the console's own nonNegativeInt does not cover, and a stored -5
 	// renders on the profile editor as a cap that binds nothing. 0 stays
@@ -189,7 +188,7 @@ func (s *Server) writeGovernanceProfile(w http.ResponseWriter, r *http.Request, 
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	// THE structural bound (governance_grantbound.go). A profile may narrow the
+	// The structural bound (governance_grantbound.go). A profile may narrow the
 	// deployment's credential eligibility; it may never mint eligibility the
 	// deployer never provisioned. Refused at write, and re-checked at resolve
 	// time because Config.DefaultPolicy is env-borne and a redeploy that drops
@@ -282,7 +281,7 @@ func (s *Server) handleDeleteGovernanceProfile(w http.ResponseWriter, r *http.Re
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ─── assignment writes ─────────────────────────────────────────────────────
+// assignment writes
 
 // governanceAssignmentRequest is POST /governance/assignments's body. The
 // natural key (subject_type, subject) is what a caller names; the row's id and
@@ -418,7 +417,7 @@ func (s *Server) handleDeleteGovernanceAssignment(w http.ResponseWriter, r *http
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ─── POST /governance/preview ──────────────────────────────────────────────
+// POST /governance/preview
 
 // maxGovernancePreviewClaims bounds ONE preview's claim lists. The body cap
 // (decodeStrict's maxJSONBody) already bounds the request, but a 1 MiB body of
@@ -431,7 +430,7 @@ const maxGovernancePreviewClaims = 256
 // claim lists ResolveGovernanceProfile itself takes, so this endpoint has
 // nothing to derive and nothing to re-order.
 //
-// THE AMBIGUITY, AND HOW THIS ENDPOINT TREATS IT. The console's preview field
+// The ambiguity, and how this endpoint treats it. The console's preview field
 // is one kind-LESS claims box (the People step's own, PREVIEW.FIELD_CLAIMS) —
 // a pasted line may be a sign-in subject, an email, or a group, and the wire
 // cannot tell. So the console sends EVERY typed claim in BOTH lists, and this
@@ -477,16 +476,16 @@ type governancePreviewResponse struct {
 // Store.ResolveGovernanceProfile call effectiveCeiling takes on the enforcement
 // path. securityOps (routes.go).
 //
-// THAT SINGLE CALL IS THE WHOLE POINT. The console's first cut resolved the
-// preview client-side, re-reading GET /governance and re-implementing the
-// ORDER BY in TypeScript — tier, sub-over-email, priority DESC, name ASC. A
+// That single call is the whole point: the ranking order — tier,
+// sub-over-email, priority DESC, name ASC — must not be re-implemented
+// anywhere else. A
 // second implementation of the precedence rule is a second implementation of
 // the answer, and a preview that drifts from enforcement is worse than no
 // preview: it is confidently wrong at the moment an admin is deciding whether a
 // ceiling is right. So there is no ORDER BY in Go here and none in TS; the
 // ranking exists once, as the indexed read in internal/store/governance.go.
 //
-// NOT AUDITED, for the reason handleDirectorySearch states about searches: this
+// Not audited, for the reason handleDirectorySearch states about searches: this
 // is typed into, mints nothing and changes nothing, and a row per keystroke
 // would turn the append-only log into a record of every claim an admin tried.
 //
@@ -527,18 +526,14 @@ func (s *Server) handlePreviewGovernanceProfile(w http.ResponseWriter, r *http.R
 // claim list, preserving ORDER — which matters, because order is the user
 // tier's tie-break (array_position).
 //
-// USER SUBJECTS ONLY. The normalization is not a nicety: assignments are stored
+// User subjects only. The normalization is not a nicety: assignments are stored
 // lowercased (validateGovernanceAssignment) and the enforcement path's user
 // input arrives already folded — capabilitySubjects lowercases the sub and the
 // email. A preview that skipped it would answer "no assignment matches" for a
 // claim typed `Eng` against a row the real run matches, which is the drift this
 // endpoint exists to remove.
 //
-// NEITHER half is a plain ToLower, and this comment used to say both were. It
-// first said "sessionGroups lowercases every group" — the premise a real group
-// divergence rested on — and then, once corrected, that "a plain ToLower is the
-// WHOLE rule for a user subject", which was the premise the USER divergence
-// rested on. It is the whole rule for an ASCII subject only: strings.ToLower is
+// Neither half is a plain ToLower. It is the whole rule for an ASCII subject only: strings.ToLower is
 // a UNICODE fold, so U+212A becomes ASCII 'k' and U+0130 becomes 'i', and a
 // preview claim typed in either spelling would answer for a DIFFERENT human's
 // row than the run resolves. Both halves therefore ask the match surface's own
@@ -561,7 +556,7 @@ func normalizeGovernancePreviewClaims(in []string, field string) ([]string, stri
 // normalizeGovernancePreviewGroups is the GROUP half, and it calls the snapshot's
 // own normalizer rather than restating it.
 //
-// THE DIVERGENCE THIS CLOSES. The preview answers one question — "which profile
+// The divergence this closes. The preview answers one question — "which profile
 // would bind a principal presenting this claim" — and there has to be one
 // answer. A plain ToLower with no ASCII guard FOLDS: U+212A KELVIN SIGN becomes
 // ASCII 'k', so a crafted "Kubernetes-admins" normalized onto the real,
@@ -570,12 +565,12 @@ func normalizeGovernancePreviewClaims(in []string, field string) ([]string, stri
 // (CanonicalGroupSubject ok=false), drops it from the snapshot and stamps the
 // snapshot truncated. Preview said yes; enforcement said no.
 //
-// DROPPED, not refused with a 400, because dropping is exactly what the
+// Dropped, not refused with a 400, because dropping is exactly what the
 // enforcement path does with the same claim — a preview that 400s where a login
 // silently drops would be a second, different answer rather than the same one.
 // The count cap and the de-duplication stay identical to the user half.
 //
-// RESIDUAL, named rather than hidden: enforcement ALSO stamps the snapshot
+// Residual, named rather than hidden: enforcement ALSO stamps the snapshot
 // truncated when it drops a group, and a truncated snapshot makes
 // effectiveCeiling answer errGroupsSnapshotStale (403) for that member whenever
 // a group-tier assignment exists. The preview has no field for "and this claim
@@ -599,7 +594,7 @@ func normalizeGovernancePreviewGroups(in []string) ([]string, string) {
 	return out, ""
 }
 
-// ─── the resolver ──────────────────────────────────────────────────────────
+// the resolver
 
 // governanceCeiling is ONE principal's resolved ceiling: the RunPolicySpec they
 // are bounded by, the request-shape limits beside it, and the profile it came
@@ -621,7 +616,7 @@ type governanceCeiling struct {
 // to them, and no user-tier row settles the question. Serving them ANY ceiling
 // would be a guess, and the only wrong guess is the widening one.
 //
-// ITS Error() TEXT IS THE FULL MESSAGE, not the bare sentinel, and that is the
+// Its Error() text is the full message, not the bare sentinel, and that is the
 // fix rather than a flourish: governance.go names ONE mapping for a resolver
 // failure (writeCeilingError below) "so a resolver failure cannot answer 403 at
 // one site and 500 at the next for the same cause" — but a site that takes only
@@ -662,7 +657,7 @@ func writeCeilingError(w http.ResponseWriter, err error) {
 // writeCeilingErrorPrefixed is writeCeilingError for a seam that has its own
 // error prefix ("list secrets: ", "policy: ", …).
 //
-// THE STALE ARM DROPS THE PREFIX ON PURPOSE. groupsSnapshotStaleMsg exists
+// The stale arm drops the prefix on purpose. groupsSnapshotStaleMsg exists
 // because the remedy is one the human can actually perform — sign in again, or
 // re-mint the API token — and the alternative is a support ticket. A seam that
 // pastes its prefix onto err.Error() instead publishes the bare
@@ -700,27 +695,27 @@ func ceilingErrorStatus(err error) int {
 // ceiling", and those six now come through here instead. Resolution order
 // mirrors capAllowed's, and each step is a decision rather than a fallback:
 //
-//  1. OPERATOR ⇒ DefaultPolicy, with NO store read. A super admin IS the
+//  1. Operator ⇒ DefaultPolicy, with NO store read. A super admin IS the
 //     ceiling-setting authority, so there is nothing to bound them by — and the
 //     short-circuit is also what keeps the ~30 nil-store test doubles in this
 //     package alive. DELIBERATELY isOperator and not isSecurityOperator: a
 //     security admin authors profiles and is BOUNDED by their own, which is the
 //     single assumption governance_grantbound.go's monotone-⊆ bound rests on.
-//  2. NO STORE ⇒ DefaultPolicy. A build with no store holds no assignments, so
-//     there is nothing to resolve and the answer is 0.6's answer. (Distinct
+//  2. No store ⇒ DefaultPolicy. A build with no store holds no assignments, so
+//     there is nothing to resolve, and the answer is the one it has always
+//     been. (Distinct
 //     from capAllowed, which errors on a nil store: that resolver is asked
 //     about a deployment that HAS capability state and cannot reach it, while
 //     this arm is a build with none at all — the capSeamAllowed split, same
 //     reasoning.)
-//  3. STORE ERROR ⇒ ERROR, and the caller 500s. NEVER fall open to
+//  3. Store error ⇒ error, and the caller 500s. NEVER fall open to
 //     DefaultPolicy: a database hiccup would silently widen every walled
 //     principal back to the deployment ceiling, with the run proceeding
 //     normally and nothing in the audit saying which ceiling it ran under.
-//  4. UNANSWERABLE GROUP SNAPSHOT ⇒ 403, but only in one shape (PF-21/PF-25/
-//     PF-26 — see below).
+//  4. Unanswerable group snapshot ⇒ 403, but only in one shape (see below).
 //  5. ErrNotFound ⇒ DefaultPolicy. No assignment matched: absent row, absent
 //     behaviour change, the 0042 doctrine.
-//  6. ALWAYS Clone. The resolved spec is handed to callers that append to its
+//  6. Always Clone. The resolved spec is handed to callers that append to its
 //     slices (unionAllowedDomains, the workspace/SCM egress unions); a shallow
 //     copy shares the backing array, which is the exact race resolvePolicy's
 //     own Clone comment documents — and here the shared value would be a row
@@ -732,31 +727,29 @@ func ceilingErrorStatus(err error) int {
 // (see the memo below), which is a different claim: the request is the unit the
 // answer must be consistent over.
 //
-// That memo replaced "PF-13's accepted double resolution", which defended the
-// repeated reads on latency grounds — "the alternative buys latency at the cost
-// of the one property that matters here, which is that no site can forget to
-// ask". The premise was wrong in two ways. Latency was never the cost that
-// mattered: three independent, untransacted reads per member create
-// (denyMemberGovernance, resolveRunPolicy, filterMemberGrants) plus dispatch's
-// fourth can return DIFFERENT ANSWERS if a security admin narrows a profile
-// mid-request, and resolveRunPolicy asserts the opposite in words ("a create
-// must never resolve two different ceilings for one request"). And the property
-// is not lost: every site still asks — the memo just answers.
+// The repeated reads this memo replaces defended themselves on latency
+// grounds — "the alternative buys latency at the cost of the one property
+// that matters here, which is that no site can forget to ask." Latency was
+// never the real cost: three independent, untransacted reads per member
+// create (denyMemberGovernance, resolveRunPolicy, filterMemberGrants) plus
+// dispatch's fourth can return DIFFERENT ANSWERS if a security admin narrows
+// a profile mid-request, and resolveRunPolicy asserts the opposite in words
+// ("a create must never resolve two different ceilings for one request").
+// The property is not lost: every site still asks — the memo just answers.
 func (s *Server) effectiveCeiling(ctx context.Context) (governanceCeiling, error) {
-	// ONE CEILING PER REQUEST. The memo is checked first and filled on the way
-	// out, so every site in one request sees the SAME answer — which is what
-	// "a create must never resolve two different ceilings for one request"
-	// (resolveRunPolicy) claimed and nothing implemented. A member create alone
-	// took THREE independent, uncached, untransacted reads (denyMemberGovernance
-	// -> resolveRunPolicy -> filterMemberGrants) and dispatch a fourth, so a
-	// security admin narrowing a profile mid-flight — the incident-response
+	// One ceiling per request. The memo is checked first and filled on the way
+	// out, so every site in one request sees the SAME answer. A member create
+	// alone takes THREE independent, uncached, untransacted reads
+	// (denyMemberGovernance -> resolveRunPolicy -> filterMemberGrants) plus
+	// dispatch a fourth, so without the memo a security admin narrowing a
+	// profile mid-flight — the incident-response
 	// action — could land a run whose egress was clamped under the PRE-narrowing
 	// ceiling while its grants were filtered under the post-narrowing one.
 	//
 	// It preserves the property the repeated reads were defended for ("no site
 	// can forget to ask"): every site still asks. It just asks the memo first.
 	//
-	// NOT A CACHE ACROSS REQUESTS, which is the HA blocker effectiveCeiling's own
+	// Not a cache across requests, which is the HA blocker effectiveCeiling's own
 	// note names: the memo lives on the request context, so it dies with the
 	// request and the next one resolves afresh. A background caller (reconcile,
 	// the boot heal) carries no memo and resolves normally.
@@ -776,7 +769,7 @@ func (s *Server) resolveEffectiveCeiling(ctx context.Context) (governanceCeiling
 	}
 
 	users, groups, stale := capabilitySubjects(ctx)
-	// TRUNCATED COUNTS AS STALE (PF-26). sessionGroups sorts the snapshot and
+	// Truncated counts as stale. sessionGroups sorts the snapshot and
 	// drops its alphabetically-last entries at the cookie byte cap, so a member
 	// in enough groups holds a snapshot that is present, non-nil and INCOMPLETE
 	// — and the group whose assignment walls them is exactly as likely to be
@@ -804,13 +797,13 @@ func (s *Server) resolveEffectiveCeiling(ctx context.Context) (governanceCeiling
 // (a blanket 403 here would lock out every pre-0.6 cookie on every deployment,
 // including the ones that have never heard of governance profiles):
 //
-//   - A USER-TIER row matched (PF-25). user > group > all, so an explicitly
+//   - A user-tier row matched. user > group > all, so an explicitly
 //     named principal's ceiling is FULLY determined no matter what their groups
 //     are; refusing would lock out precisely the people an admin took the
 //     trouble to name. The tier comes from the resolver's own ORDER BY rather
 //     than being re-derived here — a user-tier and an all-tier match are
 //     otherwise indistinguishable, including when both name the same profile.
-//   - NO GROUP-TIER ROW EXISTS AT ALL (PF-21). Nothing an unknown group could
+//   - No group-tier row exists at all. Nothing an unknown group could
 //     have matched, so nothing a nil snapshot could be hiding; refusing would
 //     break "no assignment ⇒ byte-for-byte today" for every pre-upgrade
 //     session on every deployment that never adopted group profiles.
@@ -831,7 +824,7 @@ func (s *Server) ceilingWithUnusableGroups(ctx context.Context, users []string, 
 		return governanceCeiling{}, fmt.Errorf("api: resolve governance profile: %w", herr)
 	}
 	if hasGroupTier {
-		// AUDITED, at the ONE site that produces this refusal.
+		// Audited, at the ONE site that produces this refusal.
 		//
 		// docs/OPERATIONS.md's "Every denial that isn't a 404" makes
 		// authz.denied the record of every member denial that is not a plain
@@ -841,7 +834,7 @@ func (s *Server) ceilingWithUnusableGroups(ctx context.Context, users []string, 
 		// reading the denial stream saw nothing at all for a member who cannot
 		// use the product.
 		//
-		// HERE rather than in writeCeilingError, and that placement is the fix
+		// Here rather than in writeCeilingError, and that placement is the fix
 		// rather than an implementation detail: writeCeilingError is a free
 		// function with no server and no context, and there are three of them
 		// (writeCeilingError, writeCeilingErrorPrefixed, ceilingErrorStatus) —
@@ -850,7 +843,7 @@ func (s *Server) ceilingWithUnusableGroups(ctx context.Context, users []string, 
 		// This is the only place the refusal is DECIDED, so it is the only place
 		// it can be recorded once.
 		//
-		// ONCE PER REQUEST, not once per seam, because effectiveCeiling memoizes
+		// Once per request, not once per seam, because effectiveCeiling memoizes
 		// (ceilingMemo): a create that asks three times is one denial, which is
 		// what an operator counting denials means.
 		// Guarded on the SINK, not merely handed to recordAudit's own nil check:
@@ -859,10 +852,10 @@ func (s *Server) ceilingWithUnusableGroups(ctx context.Context, users []string, 
 		// which a Server assembled without New() does not have. Nothing records
 		// on such a build by definition, so the cheapest correct thing is not to
 		// build the row at all.
-		// NOT FOR A DISPLAY READ (isDisplayRead, user_drives_resolve.go). GET
-		// /me resolves the ceiling to answer user_drive_denied_by_profile, so
-		// this row was being written once per console poll for a member who
-		// never asked for a run — a denial count that grew with page views.
+		// Not for a display read (isDisplayRead, user_drives_resolve.go). GET
+		// /me resolves the ceiling to answer user_drive_denied_by_profile, which
+		// would otherwise write this row once per console poll for a member who
+		// never asked for a run — a denial count that grows with page views.
 		// Every enforcement caller reaches here unmarked and still records.
 		if s.cfg.Audit != nil && !isDisplayRead(ctx) {
 			s.recordAudit(ctx, s.auditEvent(nil, types.ActorHuman, oidcHumanFromContext(ctx),
@@ -878,7 +871,7 @@ func (s *Server) ceilingWithUnusableGroups(ctx context.Context, users []string, 
 // a nil profile) is the deployment's, anything else is the profile's — cloned,
 // and re-intersected against the deployment's eligible grants.
 //
-// ORDER MATTERS AND IT IS THE WHOLE FUNCTION. The REAL-ERROR check runs FIRST,
+// Order matters and it is the whole function. The REAL-ERROR check runs FIRST,
 // ahead of the nil-profile one, because a failed resolve also returns a nil
 // profile: checking nil first would turn every store failure into "no
 // assignment matched" and hand the caller the DEPLOYMENT ceiling — the
@@ -899,8 +892,8 @@ func (s *Server) ceilingFromProfile(p *types.GovernanceProfile, err error, deplo
 	return governanceCeiling{Spec: spec, Limits: p.Limits, Profile: p, Warnings: warns}, nil
 }
 
-// reintersectGovernanceGrants re-applies the monotone-⊆ bound at RESOLVE time
-// (PF-22's second half), dropping any profile grant the deployment ceiling no
+// reintersectGovernanceGrants re-applies the monotone-⊆ bound at RESOLVE time,
+// dropping any profile grant the deployment ceiling no
 // longer dominates.
 //
 // The write-time check is not enough on its own because Config.DefaultPolicy is
@@ -911,7 +904,7 @@ func (s *Server) ceilingFromProfile(p *types.GovernanceProfile, err error, deplo
 // profile-authoring surface would have become a way to pin credential
 // eligibility past the deployer's own revocation.
 //
-// DROPS WITH A WARNING, never a 500 or a refusal, and the asymmetry is
+// Drops with a warning, never a 500 or a refusal, and the asymmetry is
 // deliberate: a write is a caller's own act and can be sent back for
 // correction, but a redeploy is somebody ELSE's act arriving between a member's
 // two runs. Failing their run for it would turn one operator's env edit into an

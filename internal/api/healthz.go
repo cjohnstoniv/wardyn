@@ -194,19 +194,18 @@ func (s *Server) ebpfGroundtruthStatus(ctx context.Context) map[string]any {
 		//
 		// The two idle causes are NOT the same failure and must not read the
 		// same: dropped_unmapped>0 means the sensor saw kernel events and could
-		// not bind ANY of them to a run (correlation broken — the 0.6 frozen-
-		// counter defect), which no amount of waiting fixes.
+		// not bind ANY of them to a run — a broken correlation, which no amount
+		// of waiting fixes.
 		out["state"] = "idle"
 		out["reason"] = "no kernel events observed"
 		if hb.DroppedUnmapped > 0 {
 			out["reason"] = fmt.Sprintf("kernel events observed but none correlated to a run (%d dropped as unmapped)", hb.DroppedUnmapped)
 		}
 	default:
-		// W20-W20-groundtruth-mapper-4: "healthy" used to be one aggregate over
-		// every kernel event kind — a sensor seeing only process.exec (a
-		// mis-scoped TracingPolicy that never fires for network.connect or
-		// file.write, say) reported healthy identically to one seeing all
-		// three. When the sensor publishes the per-kind breakdown, require
+		// A single aggregate over every kernel event kind would let a sensor
+		// seeing only process.exec (a mis-scoped TracingPolicy that never fires
+		// for network.connect or file.write, say) report healthy identically to
+		// one seeing all three. When the sensor publishes the per-kind breakdown, require
 		// EVERY known kind to have arrived at least once; report "partial"
 		// (not the "healthy" overclaim) and name what's missing otherwise. An
 		// older sensor build that has not upgraded to publish
@@ -230,8 +229,8 @@ func (s *Server) ebpfGroundtruthStatus(ctx context.Context) map[string]any {
 // The cumulative counters (observed_total, dropped_total, dropped_unmapped,
 // observed_by_kind) are deliberately NOT here. /metrics is operator-gated with
 // the reason "a member … would learn operational volumes", and this endpoint is
-// reachable with no credential at all — it was publishing the fleet's kernel
-// event volume to anyone who could open the port. The counters stay on the
+// reachable with no credential at all — publishing them here would hand the
+// fleet's kernel event volume to anyone who could open the port. The counters stay on the
 // gated scrape; the dropped_unmapped COUNT still reaches an operator here
 // inside the idle `reason` sentence, which is the form deploy/compose/README.md
 // points them at.
@@ -252,10 +251,10 @@ func ebpfGroundtruthPublic(status map[string]any) map[string]any {
 }
 
 // writeEbpfGroundtruthCounters emits the sensor's cumulative counts on the
-// OPERATOR-GATED scrape — the half of B6-F6 that keeps them reachable. They
-// used to live on the anonymous /healthz, which is the fleet-volume disclosure
-// /metrics is gated to prevent; moving them here loses nobody anything, it just
-// requires the credential every other volume series already requires.
+// OPERATOR-GATED scrape rather than the anonymous /healthz: publishing them
+// there would be the fleet-volume disclosure /metrics is gated to prevent;
+// keeping them here loses nobody anything, it just requires the credential
+// every other volume series already requires.
 //
 // Read off the same heartbeat /healthz reads, so the two can never disagree.
 // Omitted entirely when no sensor has ever beaten (state "unavailable"): a
@@ -275,7 +274,7 @@ func (s *Server) writeEbpfGroundtruthCounters(ctx context.Context, w io.Writer) 
 		"# TYPE wardyn_groundtruth_dropped_total counter\nwardyn_groundtruth_dropped_total %d\n", num("dropped_total"))
 	fmt.Fprintf(w, "# HELP wardyn_groundtruth_dropped_unmapped_total Kernel events the sensor saw but could bind to no run — a broken correlation, not a blind sensor.\n"+
 		"# TYPE wardyn_groundtruth_dropped_unmapped_total counter\nwardyn_groundtruth_dropped_unmapped_total %d\n", num("dropped_unmapped"))
-	// CLOSED SET, filtered BEFORE the header so the family is emitted only when
+	// Closed set, filtered BEFORE the header so the family is emitted only when
 	// it has samples. This is a correctness guard, not tidiness: the map keys
 	// come straight out of the sensor's heartbeat audit row — a component that
 	// is not the control plane — and %q escapes a tab as \t, a control byte as
@@ -311,7 +310,7 @@ func (s *Server) writeEbpfGroundtruthCounters(ctx context.Context, w io.Writer) 
 // (~/.ssh, ~/.aws, ...), so a normal capture that never happens to touch one
 // is not a coverage gap — requiring it made "healthy" chronically unreachable
 // and stamped a spurious "partial coverage" caveat on nearly every Record
-// Mode capture (bug-audit-1). observed_by_kind still reports its count when
+// Mode capture. observed_by_kind still reports its count when
 // the sensor does see one; it just never gates the health verdict.
 var groundtruthKinds = []string{
 	groundtruth.ActionProcessExec,

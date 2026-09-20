@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// User-drive resolution (0.7, migration 0054): which drive — if any — belongs
+// User-drive resolution (migration 0054): which drive — if any — belongs
 // to the caller, what its per-user object is called, and what the size beside
 // it actually means.
 //
@@ -12,7 +12,7 @@
 // keeps a drive from becoming the one governed surface that quietly falls open
 // when the database hiccups.
 //
-// THE MEMBER NEVER NAMES A PATH. A run request carries only
+// The member never names a path. A run request carries only
 // `drive: {enabled, read_only}`; everything below is derived from the
 // authenticated identity, so "mount /home/someone-else" is not a request this
 // surface can express.
@@ -48,7 +48,7 @@ var errDriveUnmountable = errors.New("drive_unmountable")
 // resolver, so the three surfaces a drive is answered on cannot disagree about
 // whether this deployment offers drives at all.
 //
-// IT IS A SENTINEL RATHER THAN A THIRD READ OF provider.Disabled because the
+// It is a sentinel rather than a third read of provider.Disabled because the
 // switch was already read in three places and asked at only two of them: the
 // launch door (seedRequestDrive) and the admin write boundary
 // (userDriveWriteRefusal). GET /me shipped an affirmative allocation — name,
@@ -60,7 +60,7 @@ var errDriveUnmountable = errors.New("drive_unmountable")
 // passes through — is what makes forgetting it impossible rather than
 // discouraged.
 //
-// THE LAUNCH DOOR STILL ASKS FIRST, and must: the org switch is a 422 in the
+// The launch door still asks first, and must: the org switch is a 422 in the
 // REFUSED_BACKEND family while the profile door is a 403 with an authz.denied
 // row, so the switch has to be settled BEFORE the door or a deployment with
 // drives switched off would log a denial naming a member nobody denied. The
@@ -81,7 +81,7 @@ var errDrivesDisabled = errors.New("drives_disabled")
 // driveUnavailableReason names WHY /me could not answer for a caller's drive, in
 // the one shape a wire field may carry it: a closed token, never a sentence.
 //
-// IT IS writeDriveError'S SWITCH, in the same order and over the same sentinels,
+// It is writeDriveError's switch, in the same order and over the same sentinels,
 // because the two answer ONE question at two doors. writeDriveError is what a
 // member meets when they launch; this is what /me says before they try. A
 // deployment where those two disagree is one where the console shows a member a
@@ -97,7 +97,7 @@ func driveUnavailableReason(err error) string {
 	case err == nil:
 		return ""
 	case errors.Is(err, errDrivesDisabled):
-		// THE EXISTING CLOSED TOKEN, deliberately not a fifth one. `unavailable`
+		// The existing closed token, deliberately not a fifth one. `unavailable`
 		// is what the default arm would have answered anyway, and the console
 		// already renders it (NR_UNAVAILABLE) — a new member sentence is a copy
 		// change that belongs to the canon sitting, not to this switch, and
@@ -117,17 +117,16 @@ func driveUnavailableReason(err error) string {
 // ceilingUnavailableReason is driveUnavailableReason's twin for the OTHER half
 // of /me's answer: why the DOOR could not be decided.
 //
-// It exists because userDriveDeniedByProfile used to hand back a bare bool, and
-// R1 F273's residue is exactly what that bool discarded. A truncated group
-// snapshot fails BOTH resolves, and on a deployment that assigns governance by
-// group while allocating drives per USER the drive resolver succeeds — so the
-// only component that knows the remedy is the member's own ("sign in again") is
-// the ceiling error, and a bool cannot carry it. /me then said
-// governance_unavailable (wait for an operator) while POST /runs said 403
-// groups_snapshot_stale (sign in again): the member was shown the one remedy
-// that is not theirs, which is the whole finding.
+// It exists because a bare bool cannot carry which remedy applies. A truncated
+// group snapshot fails BOTH resolves, and on a deployment that assigns
+// governance by group while allocating drives per USER the drive resolver
+// succeeds — so only the ceiling error knows the remedy is the member's own
+// ("sign in again"), and a bool cannot express that. Collapsing the two would
+// have /me say governance_unavailable (wait for an operator) while POST /runs
+// says 403 groups_snapshot_stale (sign in again) — showing the member the one
+// remedy that is not theirs.
 //
-// TWO ARMS ONLY, and deliberately not driveUnavailableReason's three: what
+// Two arms only, and deliberately not driveUnavailableReason's three: what
 // failed here is the CEILING, so "the allocation could not be read" is not one
 // of the answers. Everything that is not the stale snapshot is
 // governance_unavailable — the token whose documented meaning is "nothing is
@@ -161,7 +160,7 @@ const (
 func writeDriveError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, errDrivesDisabled):
-		// THE SAME BYTES the launch door refuses with (seedRequestDrive composes
+		// The same bytes the launch door refuses with (seedRequestDrive composes
 		// driveRefusedBackendMsg over driveDisabledMsg), not a paraphrase: an
 		// admin previewing why a member cannot mount a drive reads the sentence
 		// that member reads. 422, never a 403 — nobody was denied by a profile.
@@ -181,14 +180,14 @@ func writeDriveError(w http.ResponseWriter, err error) {
 	}
 }
 
-// ─── the resolver ──────────────────────────────────────────────────────────
+// the resolver
 
 // resolveUserDrive returns the drive that applies to the caller on ctx, or nil
 // when they have none. Resolution order, and each step is a decision rather
 // than a fallback:
 //
 //  1. NO STORE ⇒ no drive. A build with no store holds no grants, so there is
-//     nothing to resolve and the answer is 0.6's answer: no mount.
+//     nothing to resolve and the answer is the pre-feature answer: no mount.
 //  2. NO SUBJECTS ⇒ no drive. An admin token and local mode carry no per-human
 //     identity, so there is no principal to name a home after and an `all`-tier
 //     grant would hand every identity-less caller ONE shared directory. An SSO
@@ -221,7 +220,7 @@ func (s *Server) resolveUserDrive(ctx context.Context, profileMaxDriveMiB int) (
 	if err != nil {
 		return nil, err
 	}
-	// TRUNCATED COUNTS AS STALE, the same PF-26 rule effectiveCeiling applies:
+	// Truncated counts as stale, the same rule effectiveCeiling applies:
 	// the group snapshot is sorted and cut at the cookie byte cap, so a member
 	// in enough groups holds one that is present, non-nil and INCOMPLETE — and
 	// the group whose grant carries their drive is exactly as likely to be
@@ -269,7 +268,7 @@ func (s *Server) driveWithUnusableGroups(ctx context.Context, users []string, ce
 		return nil, fmt.Errorf("api: resolve user drive: %w", herr)
 	}
 	if hasGroupTier {
-		// AUDITED, at the SECOND site that decides this refusal (R1 F317).
+		// Audited, at the SECOND site that decides this refusal.
 		//
 		// This branch is the mirror image of ceilingWithUnusableGroups' own, and
 		// it was the silent one: docs/AUDIT-ACTIONS.md and OPERATIONS.md both
@@ -325,7 +324,7 @@ func (s *Server) driveWithUnusableGroups(ctx context.Context, users []string, ce
 // it is the operator's count of who was refused, and page views are not
 // refusals.
 //
-// SET BY THE DISPLAY CALLERS, never by a middleware, so the default is
+// Set by the display callers, never by a middleware, so the default is
 // "enforcing" and a new enforcement seam cannot silently inherit the
 // suppression: seedRequestDrive, the launch and preflight paths and every other
 // caller reach the deciding sites unmarked and keep recording. There are two
@@ -351,7 +350,7 @@ func isDisplayRead(ctx context.Context) bool {
 // the enforcement path above and by the preview endpoint below so the two
 // cannot answer differently for the same claims.
 //
-// ORDER MATTERS, and it is the same rule ceilingFromProfile states: the
+// Order matters, and it is the same rule ceilingFromProfile states: the
 // REAL-ERROR check runs FIRST, ahead of the nil-row one, because a failed
 // resolve also returns nil rows — checking nil first would turn every store
 // failure into "no grant matched" and mount nothing, which is the fail-quiet
@@ -394,7 +393,7 @@ func (s *Server) resolveUserDriveFor(ctx context.Context, users, groups []string
 // subject is claims-resolved and unreadable from the grant row. This resolver is
 // the only scope holding both facts, which is why the clamp lives here.
 //
-// A CLAMP, NEVER A REFUSAL: the size is an allocation an admin already made, and
+// A clamp, never a refusal: the size is an allocation an admin already made, and
 // refusing the mount would take a member's storage away over a number. And it
 // clamps a NUMBER — on `external` backends (a share, a static claim) that number
 // binds no bytes at all, which is what the frozen honesty sentence says.
@@ -443,7 +442,7 @@ const (
 // not be read is not "no ceiling", and treating it as one is the fail-open this
 // file's ordering rules exist to refuse.
 //
-// AND THE SWITCH IS ANSWERED HERE (errDrivesDisabled), because this is the one
+// And the switch is answered HERE (errDrivesDisabled), because this is the one
 // read of the org half every surface passes through. The block it reads carries
 // two facts, not one — `disabled` and `max_size_mib` — and a function that took
 // the number while dropping the switch is how /me and the preview came to offer
@@ -508,7 +507,7 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 	if g.SizeMiBOverride > 0 {
 		size = g.SizeMiBOverride
 	}
-	// ONE LINE, naming which ceiling bit: the member's number is bounded, and the
+	// One line, naming which ceiling bit: the member's number is bounded, and the
 	// operator's log says which of the two to edit. Not an audit row — nobody was
 	// denied anything (composer.Clamp's own doctrine for the sibling ephemeral
 	// cap), and not a refusal, for the reason driveSizeCeiling states.
@@ -535,7 +534,7 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 		resolved.Paused = true
 		return resolved, nil
 	}
-	// THE MANAGED NON-HASH REFUSAL, REPEATED — and repeated for the same reason
+	// The managed non-hash refusal, repeated — and repeated for the same reason
 	// the home-override tier gate below is, on a row written by an older binary
 	// or by hand. A managed object is named by the HOME alone, and neither
 	// non-hash template can safely name one: under `email_local` two principals
@@ -571,7 +570,7 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 			"(its directory name is derived from your sign-in identity, which cannot safely name one %s object per person — "+
 			"ask an admin to change how this drive names directories)", errDriveUnmountable, d.Backend)
 	}
-	// THE MIRROR REFUSAL, and repeated here for the same reason and on the same
+	// The mirror refusal, and repeated here for the same reason and on the same
 	// class of row: a share's directories are named by whoever owns the share
 	// and Wardyn never mkdir's on one, so a `hash` home names a directory that
 	// cannot exist. The write boundary has refused that shape since it was
@@ -584,8 +583,8 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 	//
 	// BEFORE the derivation, like the managed arm above: the home it would
 	// derive is exactly the unmakeable one, and a check downstream of it would
-	// be reasoning about a value it had already accepted. Since R1 F294 the
-	// share rule keys on who NAMES the object (types.DriveObjectNamedByWardyn):
+	// be reasoning about a value it had already accepted. The share rule keys
+	// on who NAMES the object (types.DriveObjectNamedByWardyn):
 	// host_path refuses `hash`, and k8s_pvc_static — a share Wardyn names —
 	// refuses `email_local` instead, so this arm fires for both share backends.
 	if types.ShareBackendRejectsTemplate(d.Backend, d.HomeTemplate) {
@@ -615,7 +614,7 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 		// to the LOG, where the operator who has to act on it already looks —
 		// and the member's 422 stays byte-identical to the mock.
 		//
-		// WHOSE VALUE FAILED IS IN THE LOG, because the log is where the person
+		// Whose value failed is in the log, because the log is where the person
 		// who can fix it looks. DriveHomeName SHORT-CIRCUITS on the override —
 		// a non-empty one is checked and returned before any template is read —
 		// so home_override_set true means the invalid value is the ADMIN's
@@ -631,8 +630,8 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 			slog.String("home_template", string(d.HomeTemplate)),
 			slog.Bool("home_override_set", strings.TrimSpace(override) != ""),
 			slog.String("err", err.Error()))
-		// FILED, NOT FIXED HERE — THE SENTENCE BLAMES THE MEMBER FOR AN ADMIN'S
-		// VALUE. When an override is set it is the ONLY thing that can have
+		// Filed, not fixed here — the sentence blames the member for an admin's
+		// value. When an override is set it is the ONLY thing that can have
 		// failed (see the short-circuit above), yet this interpolates
 		// d.HomeTemplate unconditionally, so a member is told "your hash cannot
 		// name a directory" about a machine-generated name they never supplied
@@ -686,7 +685,7 @@ func newResolvedDrive(d *types.UserDrive, g *types.UserDriveGrant,
 // the LAST entry is the email whenever the caller presented both, and the first
 // is their stable primary identity.
 //
-// DELIBERATELY NOT a shape guess. There is no "an @ makes it an email" rule
+// Deliberately not a shape guess. There is no "an @ makes it an email" rule
 // here for the same reason the governance preview refuses one: a second opinion
 // about which claim is which, living beside the ordering the resolver already
 // ranks by, is how two surfaces start disagreeing about one person. A caller

@@ -108,7 +108,7 @@ func decodeWorkspaceRequest(w http.ResponseWriter, r *http.Request) (workspaceRe
 		if msg := validateWorkspaceSource(src); msg != "" {
 			return workspaceRequest{}, fmt.Sprintf("sources[%d]: %s", i, msg)
 		}
-		// W8-S1-3 (mirrors validatePolicyWorkspaces' own unique-target
+		// (Mirrors validatePolicyWorkspaces' own unique-target
 		// invariant, policy.go): an EXPLICIT target shared by two sources
 		// resolves to the same in-sandbox mount/clone path, which
 		// validatePolicyWorkspaces then 422s on every subsequent run — an
@@ -190,7 +190,7 @@ func validateWorkspaceSource(src types.WorkspaceSource) string {
 		if !repoFieldSafe(src.Source) {
 			return fmt.Sprintf(repoField400Charset, "source")
 		}
-		// B4-F8: the REF was validated at neither authoring door, and
+		// The REF was validated at neither authoring door, and
 		// buildRepoRecords (runs_scm.go) drops a repo whose ref is not
 		// repoFieldSafe by a bare return — the agent then starts in a workspace
 		// missing that clone, with no warning on the run and nothing in the
@@ -215,7 +215,7 @@ func validateWorkspaceSource(src types.WorkspaceSource) string {
 			return "invalid target: " + err.Error()
 		}
 	}
-	// WSPIPE-7: Overrides' three values are a closed set (workspace_contract.go);
+	// Overrides' three values are a closed set (workspace_contract.go);
 	// a key the source doesn't (yet) declare is a harmless no-op by construction
 	// (FoldWorkspaceContract only ever consults Overrides against ITS source's
 	// own requirement keys), so only the VALUE is worth rejecting — a garbage
@@ -250,7 +250,7 @@ func validateWorkspaceBaseImage(b *types.WorkspaceBaseImage) string {
 			return fmt.Sprintf(repoField400Charset, "base_image.image")
 		}
 	}
-	// D3: base_image.steps validation is GONE, because the thing it validated is
+	// base_image.steps validation is GONE, because the thing it validated is
 	// never executed. See types.BaseImageEntry.Steps — operator RUN lines would
 	// run on the HOST daemon during the wrap, outside every confinement tier, so
 	// they must never be wired. Validating the length of instructions nobody runs
@@ -262,7 +262,7 @@ func validateWorkspaceBaseImage(b *types.WorkspaceBaseImage) string {
 // handleListWorkspaces returns onboarded workspaces in reverse creation order,
 // paginated by ?limit=&offset= (see parseListPage).
 //
-// OWNER SCOPING (0048): a MEMBER sees their own owned workspaces plus every
+// Owner scoping (0048): a MEMBER sees their own owned workspaces plus every
 // operator-owned one (owned_by = ” — every pre-0.6 row and everything an admin
 // creates), never another member's. An admin sees all of them. The narrowing is
 // applied INSIDE the page closure — at the database when the store implements
@@ -285,22 +285,16 @@ func (s *Server) handleListWorkspaces(w http.ResponseWriter, r *http.Request) {
 	// AGAINST workspaces and their egress, so a security admin must see the
 	// whole inventory to govern it.
 	//
-	// THIS COMMENT USED TO SAY "READ only — every workspace WRITE route ...
-	// stays on the super-admin predicate", and that was false of the routes it
-	// was describing. The egress-decision lane — approved-egress,
-	// denied-egress, record/{task}/promote-egress — is securityOps by design
-	// (routes.go), so the tier reading this inventory can also REWRITE the
-	// egress of anything in it. The old sentence omitted exactly the writes the
-	// tier actually has, which is worse than saying nothing: a reader deciding
-	// who to trust with RoleSecurityAdmin would have concluded the opposite.
-	//
-	// What is true: this tier reads the whole inventory (here), reads any row
-	// in it (getWorkspaceReadable, via ownsWorkspaceOrSecurityAdmin) and writes
-	// the EGRESS DECISION on any row — and nothing else. Every other workspace
+	// The egress-decision lane — approved-egress, denied-egress,
+	// record/{task}/promote-egress — is securityOps by design (routes.go), so
+	// the tier reading this inventory can also REWRITE the egress of anything
+	// in it: this tier reads the whole inventory (here), reads any row in it
+	// (getWorkspaceReadable, via ownsWorkspaceOrSecurityAdmin) and writes the
+	// EGRESS DECISION on any row — and nothing else. Every other workspace
 	// write (llm-cred, requirements, reassign, env-as-code/write, record,
 	// update, delete) stays on the super-admin predicate, through
 	// getWorkspaceAuthorized and ownsWorkspaceOrAdmin.
-	// EVERY ROW THIS ROUTE RETURNS goes through the same per-reader projection
+	// Every row this route returns goes through the same per-reader projection
 	// the detail route applies (redactWorkspaceForRead) — the list hands out the
 	// identical document, so redacting only the detail read would have moved the
 	// disclosure one route sideways rather than closing it.
@@ -376,7 +370,7 @@ func (s *Server) handleGetWorkspace(w http.ResponseWriter, r *http.Request) {
 	// The import panel renders Record Mode from the workspace's own record_results
 	// map (per-session state); sessions are user-named, not a derived taxonomy.
 	//
-	// PROJECTED AT THE RESPONSE, per the reader's tier. getWorkspaceReadable
+	// Projected at the response, per the reader's tier. getWorkspaceReadable
 	// decides WHO may read this row; redactWorkspaceForRead decides WHAT of it
 	// they see, and the two are separate because the same getter feeds
 	// workspace_build.go and workspace_envcode.go, which need the real host
@@ -455,22 +449,22 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 	if s.denyMemberWorkspaceProviders(w, r, "workspaces.source_provider", repoSourceLocators(req.Sources)...) {
 		return
 	}
-	// OWNERSHIP STAMP (0048). A MEMBER's workspace is owner-stamped from the
+	// Ownership stamp (0048). A MEMBER's workspace is owner-stamped from the
 	// authenticated session — never from the body, which carries no owned_by
 	// field at all (strict decoding refuses one). An OPERATOR-created workspace
 	// stays owned_by="" (operator-owned), which is exactly today's behavior for
 	// every row, so an admin-only deployment is unchanged by this milestone.
 	// secretOwnerFromRequest is the same "" when isOperator else principal
-	// rule, generalized (0.7) beyond its original secret-store name.
+	// rule, generalized beyond its original secret-store name.
 	owner := s.secretOwnerFromRequest(r)
-	// G4 (PF-35): llm_cred is an OPERATOR field on a member-reachable door. The
+	// llm_cred is an OPERATOR field on a member-reachable door. The
 	// dedicated PUT /workspaces/{id}/llm-cred is operatorOnly (routes.go) — create
 	// was the one unguarded way in, and the binding it writes folds through
 	// resolveRunIntegration's TIER 2, which deliberately carries NO resident_host
 	// guard precisely because "a workspace pin is operator consent" (llmcred.go).
 	// A member-authored pin makes that sentence false.
 	//
-	// REFUSED, never silently dropped: "a field accepted and thrown away is worse
+	// Refused, never silently dropped: "a field accepted and thrown away is worse
 	// than one refused" (interactiveToolApprovalsError) — a member who sees a 201
 	// believes the workspace is bound to the integration they named.
 	// owner != "" IS the member test (secretOwnerFromRequest is "" for an
@@ -497,12 +491,10 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		BaseImage: normalizeRecommended(req.BaseImage),
 		LLMCred:   req.LLMCred,
 		OwnedBy:   owner,
-		// USABLE ON CREATE. A workspace used to be born pending_scan and a scan
-		// run promoted it; the 0.5 dialog does one POST and no scan, so nothing
-		// promotes it any more (see migration 0036). Creating it pending_scan
-		// meant a permanent "Setting up" chip for work that would never happen,
-		// while a run could attach it perfectly well the whole time —
-		// resolveCreateRunImage is fail-open by design.
+		// Created scanned, not pending_scan: nothing promotes a row out of
+		// pending_scan any more (see migration 0036), and a run can attach it
+		// perfectly well without one — resolveCreateRunImage is fail-open by
+		// design.
 		Status:    types.WorkspaceScanned,
 		CreatedAt: now,
 		UpdatedAt: now,
@@ -528,7 +520,7 @@ func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
 		"workspace.create", id.String(), "success", mustJSON(map[string]any{
 			"name": created.Name, "sources": len(created.Sources), "owned_by": created.OwnedBy,
 		})))
-	// The legacy-host grace, said out loud at the door the ADMIN uses (V2/F1).
+	// The legacy-host grace, said out loud at the door the ADMIN uses.
 	// admitRepoSources already refused everything outside the enabled rows and
 	// audited what it admitted on sufferance; onboarding is where the person who
 	// can enable a provider row actually is, so this is the sentence that has to
@@ -574,7 +566,7 @@ func (s *Server) memberSourcesAllowed(r *http.Request, owner string, sources []t
 // (profile/image/status), the requirements contract, and the operator's
 // egress approvals are reset: all were reviewed against the OLD content and
 // must be re-earned. LLMCred is CREATE-ONLY (see workspaceRequest.LLMCred) and
-// is deliberately left untouched here — and since G4 (PF-35) create now REFUSES
+// is deliberately left untouched here — and since create now REFUSES
 // a member-authored llm_cred outright, the field is operator-settable on exactly
 // one door (create) and operator-changeable on exactly one more (the operatorOnly
 // PUT /workspaces/{id}/llm-cred); this handler's silent ignore is unchanged.
@@ -584,7 +576,7 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// AUTHORIZE FIRST, then parse (0048): the ownership answer must not depend
+	// Authorize first, then parse (0048): the ownership answer must not depend
 	// on the body. Decoding first would leak a foreign workspace's existence
 	// through the response CODE — a malformed body 400s where a well-formed one
 	// 404s — which is exactly the oracle denyForeignWorkspace exists to close.
@@ -626,7 +618,7 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 	// exactly as create does — the hydrated read makes attachments
 	// authoritative, so they must track every composition edit. existing
 	// (the PRE-edit attachments) carries any per-source Overrides forward by
-	// SourceID (WSPIPE-7) — must be read before the next line overwrites
+	// SourceID — must be read before the next line overwrites
 	// ws.Attachments.
 	atts, baseImageID, aerr := s.upsertAndAttach(r, req.Sources, req.BaseImage, ws.Attachments)
 	if aerr != nil {
@@ -638,7 +630,7 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		// New CONTENT: everything reviewed against the old sources is stale.
 		// (Tier-1 contracts are untouched — they live on the sources.)
 		//
-		// Profile and Status are NOT reset here (STORE-4): every workspace
+		// Profile and Status are NOT reset here: every workspace
 		// reaching this handler now has a non-empty Attachments (upsertAndAttach
 		// always attaches at least the composition floor's ephemeral source), so
 		// hydrate's attachment-backed branch unconditionally RE-DERIVES both from
@@ -647,20 +639,20 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		ws.ApprovedEgress = nil
 		ws.Requirements = nil
 		ws.RecordResults = nil
-		// STAMP THE CLEAR (0055) — asked for here, WRITTEN BY THE DATABASE. This
+		// Stamp the clear (0055) — asked for here, WRITTEN BY THE DATABASE. This
 		// handler is the THIRD durable writer of approved_egress, beside the two
 		// scoped setters migration 0055 named. The boot heal
 		// (ReconcileWorkspaceEgressDecisions) re-applies every decided `always`
 		// approval and its ONLY newer-action guard is egress_edited_at — so a
 		// clear that leaves the stamp untouched is re-widened on the next
-		// restart, silently and fail-OPEN, exactly the D28 loss the column exists
+		// restart, silently and fail-OPEN, exactly the loss the column exists
 		// to prevent. The operator changing the composition IS the newer action;
 		// record that it happened.
 		//
 		// The stamp was taken from wardynd's clock here and compared against
 		// approvals.decided_at; both are now the database's own now(), because a
 		// guard that is an inequality between two clocks fails open by exactly
-		// the skew (B8-F3). UpdateWorkspace writes it when told to.
+		// the skew. UpdateWorkspace writes it when told to.
 		stampEgressEdit = true
 	}
 	if sourcesChanged || imageChanged {
@@ -670,14 +662,14 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		// and the wizard persists its step-② image choice through here — a
 		// first-time pick must not destroy the overlay it just helped shape.
 		//
-		// bug-workspace-1: the docker tag this row was pointing at is about
+		// The docker tag this row was pointing at is about
 		// to become unreachable from the store (no run will ever resolve
 		// this ref again — resolveWorkspaceImage rebuilds fresh next launch)
 		// — reclaim it now rather than leaking it forever.
 		s.removeStaleImage(r.Context(), ws.ImageRef, "")
 		ws.ImageRef = ""
 		ws.BuiltProfileHash = ""
-		// And forget what this process remembers about that build (B4-F2): the
+		// And forget what this process remembers about that build: the
 		// cleared row already stops the tracker claiming `done`, but its Error
 		// arm is consulted BEFORE the row, so an edit after a failed build
 		// otherwise reported that build's reason against a composition it never
@@ -708,7 +700,7 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 // reads back (store_sources.go: ws.BaseImage=nil unless BaseImageID is set;
 // upsertAndAttach deliberately leaves BaseImageID nil for kind "recommended").
 // Without this, write and hydrated-read disagreed on one spelling of
-// "recommended" (WSPIPE-2): baseImageEqual saw the wizard's explicit form as
+// "recommended": baseImageEqual saw the wizard's explicit form as
 // different from the hydrated nil on every edit and threw away the built
 // image, and the legacy embedded base_image column stored a non-NULL blob a
 // pre-split row would never have carried.
@@ -722,7 +714,7 @@ func normalizeRecommended(b *types.WorkspaceBaseImage) *types.WorkspaceBaseImage
 // baseImageEqual reports whether two base-image choices are equivalent
 // (nil-safe; Steps compared by content; "recommended" normalized to nil on
 // both sides first, so the wizard's explicit form and the hydrated nil never
-// read as a change — WSPIPE-2).
+// read as a change).
 func baseImageEqual(a, b *types.WorkspaceBaseImage) bool {
 	a, b = normalizeRecommended(a), normalizeRecommended(b)
 	if a == nil || b == nil {
@@ -746,7 +738,7 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 	type body struct {
 		Domains []string `json:"domains"`
 	}
-	// W19-W19b-3: a host the git broker (or the control plane itself) already
+	// A host the git broker (or the control plane itself) already
 	// owns is DEAD BY CONSTRUCTION as a direct ApprovedEgress entry — dispatch
 	// routes it through the broker/proxy specially, never as a plain allowlist
 	// host, so "approving" one here writes a row a real run's proxy will never
@@ -787,9 +779,9 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 // handleSetDeniedEgress replaces the workspace's operator-owned denied-egress
 // list (PUT semantics: the body is the FULL list; un-deny by omission — same
 // idempotent, no-per-host-delete shape as handleSetApprovedEgress). Backs
-// Phase 4's revocation surface (SetWorkspaceDeniedEgress, store.go): this is
-// the ONLY way to undo a `deny · always` decision once made — including the
-// one H5 warns about, where a deny on a model-provider host permanently
+// the revocation surface (SetWorkspaceDeniedEgress, store.go): this is
+// the ONLY way to undo a `deny · always` decision once made — including a
+// deny on a model-provider host, which permanently
 // defeats that workspace's credential injection (deny beats allow at the
 // proxy, policy.go), because api.anthropic.com/similar can only ever reach
 // AllowedDomains through modelProviderEgress, never through this handler's own
@@ -801,7 +793,7 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 // ALLOW-shaped — git-broker/control-plane hosts a real run's proxy never
 // consults as a plain ApprovedEgress entry, so promoting one is dead weight —
 // and it carries no model-provider guard. Copying it would make this PUT a
-// SECOND, unguarded door to H5's brick, on the one route whose entire job is
+// SECOND, unguarded door to that brick, on the one route whose entire job is
 // to be the escape hatch FROM that brick. So this validates only
 // hostrules.ValidApprovedHost (plain lowercase dotted host, no scheme/port/
 // wildcard) and nothing else — deliberately unguarded, on purpose, because a
@@ -870,13 +862,13 @@ func (s *Server) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 	}
 	// Owner-or-admin (0048): a member may delete a workspace THEY own; another
 	// member's owned workspace answers the byte-identical 404. The same read
-	// serves bug-workspace-1 — the row's built image ref must be read BEFORE the
+	// also reclaims the row's built image ref, which must be read BEFORE the
 	// delete drops the only pointer to it.
 	ws, ok := s.getWorkspaceAuthorized(w, r, id)
 	if !ok {
 		return
 	}
-	// B4-F7: agent_runs.workspace_id carries no foreign key (migration 0009), so
+	// agent_runs.workspace_id carries no foreign key (migration 0009), so
 	// nothing below refuses a delete while a session still holds this workspace
 	// — and deleting mid record-session strands an AllowAllEgress sandbox whose
 	// reconcileRecordRun then 404s before recordmode.Capture ever runs, losing

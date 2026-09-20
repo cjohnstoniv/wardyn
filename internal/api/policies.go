@@ -106,7 +106,7 @@ type defaultPolicyResponse struct {
 
 // handleGetDefaultPolicy returns THE CALLER'S ceiling — the spec a run created
 // without a policy_id gets, and (per composer.Clamp / inline_policy.go) the
-// same ceiling their inline policy is clamped against. W14-S1-6: previously
+// same ceiling their inline policy is clamped against. Previously
 // unexposed by UI, CLI or API — policies.tsx's own comment said so.
 // Member-reachable like the other policy reads (routes.go), since members are
 // the ones actually clamped by it.
@@ -135,7 +135,7 @@ func (s *Server) handleGetDefaultPolicy(w http.ResponseWriter, r *http.Request) 
 
 // redactPolicyForRead returns p with any llm_inspection.workspace_secret_values
 // replaced by a count before it is ever serialized back to a caller. Belt-and-
-// braces (W12-S1-1): validatePolicySpec already refuses a WRITE that sets a raw
+// braces: validatePolicySpec already refuses a WRITE that sets a raw
 // value (an operator authors workspace_secret_names instead — see
 // types.LLMInspectionSpec), so a stored row should never carry one — but a READ
 // path must never re-expose it if that invariant is ever violated (a migration,
@@ -248,7 +248,7 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 	// Authoring fail-fast: a policy's user-workspace mounts/repos must be onboarded
 	// (the run-create chokepoint is the load-bearing gate; this surfaces the error
 	// at author time instead of at launch).
-	// NOT the workspace-provider admission verdict, deliberately (0.7.2): that one
+	// Not the workspace-provider admission verdict, deliberately: that one
 	// lives at run create, so a policy naming a repo no provider admits can still be
 	// WRITTEN — and is then refused at every door that would clone it. Authoring is
 	// not cloning, and narrowing the provider rows must not retroactively make a
@@ -275,7 +275,7 @@ func (s *Server) handleCreatePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 	created, err := s.cfg.Store.CreatePolicy(r.Context(), p)
 	if errors.Is(err, store.ErrConflict) {
-		// W20-S1-3: run_policies.name is UNIQUE — a duplicate name is a
+		// run_policies.name is UNIQUE — a duplicate name is a
 		// caller-fixable 409, not a raw Postgres 500 (contrast CreateApproval's
 		// existing 23505 sentinel for approvals).
 		writeError(w, http.StatusConflict, fmt.Sprintf("a policy named %q already exists", req.Name))
@@ -317,7 +317,7 @@ func (s *Server) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if errors.Is(err, store.ErrConflict) {
-		// B1-F5, the RENAME half of W20-S1-3. run_policies.name is UNIQUE, so
+		// The rename half of the same rule above: run_policies.name is UNIQUE, so
 		// moving a policy ONTO a taken name raises the same 23505 an insert under
 		// one does: a caller-fixable 409, never the blanket 500 below carrying the
 		// raw Postgres constraint string. Sited after notFoundIf so an unknown id

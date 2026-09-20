@@ -23,12 +23,12 @@ import (
 // the boundary that refused, its bounded reason, the request path, and the peer
 // IP.
 //
-// THE PEER IP, WITHOUT THE EPHEMERAL PORT (V1-r2-lensS #3). r.RemoteAddr is
+// The peer IP, without the ephemeral port. r.RemoteAddr is
 // host:port, and the port is a fresh number on every TCP connection — so keying
 // on it made the whole fold a no-op for exactly the clients that matter: a
 // scanner, an ingress, or any HTTP client without keep-alive opens a connection
 // per request, every request lands under its own key, and nothing coalesces. The
-// drip B5 was built for (one sidecar, one long-lived connection) folded; the
+// drip this coalescer was built for (one sidecar, one long-lived connection) folded; the
 // flood did not.
 //
 // sourceIP is in the key because on a single-tenant or loopback deployment it
@@ -144,7 +144,7 @@ func (s *Server) coalesceAuthFailed(actor, reason, target, remoteAddr string) (b
 // context.WithoutCancel(BaseCtx) — the daemon's values (the audit recorder reads
 // them), none of its cancellation.
 //
-// CEILING, stated rather than implied, same as the memo's: this is the ORDERLY
+// Ceiling, stated rather than implied, same as the memo's: this is the ORDERLY
 // stop. A SIGKILL, an OOM kill or a pod deleted out from under the process drops
 // the open streak's count — never the refusals themselves, each of which opened
 // its streak with a row that is already recorded. So does a shutdown that lands
@@ -166,13 +166,14 @@ func (s *Server) FlushAuthFailedStreak() {
 }
 
 // recordAuthFailedSummary is the ONE way a closing streak's summary row reaches
-// the trail, and it is CHARGED TO THE SAME RATE LIMITER a first row pays
-// (V1-r2-lensS #1). Before this the summary went straight to recordAudit: the
-// coalescer closes a streak on every KEY CHANGE and summarises any streak of 2 or
-// more, so an unauthenticated client alternating two paths on one connection
-// produced one unmetered row per two requests — 400 refusals at a single frozen
-// instant recorded 204 rows against the limiter's ceiling of 5. A structural
-// bound that ADDS an unbounded emit path is not a bound.
+// the trail, and it is CHARGED TO THE SAME RATE LIMITER a first row pays.
+// Going straight to recordAudit instead would let the coalescer's own closing
+// behavior — a streak closes on every KEY CHANGE and summarises any streak of 2
+// or more — become an unbounded emit path: an unauthenticated client
+// alternating two paths on one connection would produce one unmetered row per
+// two requests, so 400 refusals at a single frozen instant would record 204
+// rows against the limiter's ceiling of 5. A structural bound that ADDS an
+// unbounded emit path is not a bound.
 //
 // A refused summary is DROPPED and counted in the same suppressed series every
 // other dropped auth.failed row is (the folded ones, the rate-limited ones): the

@@ -25,10 +25,9 @@ const (
 	// stored secret on a deployment with no secret store wired. Reachable from
 	// four doors (create, preflight, policy create, policy update).
 	//
-	// ARTICLE-FREE on purpose: the grant KIND is interpolated (B1-F7 — the
-	// sentence used to say "api_key" for a git_pat or ssh_key grant too), and
-	// "a %s" reads as "a api_key". The kind is the first grant that needs a
-	// store, which is the one the author has to look at first.
+	// Article-free on purpose: the grant KIND is interpolated, and "a %s" reads
+	// as "a api_key". The kind is the first grant that needs a store, which is
+	// the one the author has to look at first.
 	inlineSecretStoreMissingRefusal = "the %s grant requires a secret store, but none is configured"
 )
 
@@ -56,8 +55,8 @@ const (
 //
 // It is ONE function because the inline branch and the stored branch must bound
 // identically: "member-selected content is bounded by the member's ceiling
-// whether it arrived as a body or as a row id" (PF-1) is only true while both
-// run THIS, and two hand-copied pipelines could drift into a member smuggling
+// whether it arrived as a body or as a row id" is only true while both run
+// THIS, and two hand-copied pipelines could drift into a member smuggling
 // through one what the other refuses.
 //
 // errPrefix is the ONLY thing the two callers differ on, and it stays theirs —
@@ -103,7 +102,7 @@ func (s *Server) boundMemberSpec(ctx context.Context, w http.ResponseWriter, r *
 // handlePreflightRun dry-run, so a member's preview can never disagree with
 // what launch actually does):
 //   - inline_policy AND policy_id both set  => 400 (mutually exclusive).
-//   - inline_policy set                     => for a MEMBER caller (item 5),
+//   - inline_policy set                     => for a MEMBER caller,
 //     clamp to composer.Clamp(spec, THEIR CEILING) FIRST — an admin-authored
 //     ceiling a member's own inline_policy can never exceed. An admin is
 //     UNCLAMPED (they ARE the ceiling-setting authority). Only THEN validate
@@ -125,7 +124,7 @@ func (s *Server) boundMemberSpec(ctx context.Context, w http.ResponseWriter, r *
 //     does, when and only when a governance profile applies to them — see that
 //     branch for the scoping and for why a bare Clamp is not enough.
 //
-// THE CEILING IS RESOLVED ONCE, HERE, and is this PRINCIPAL's rather than the
+// The ceiling is resolved once, here, and is this PRINCIPAL's rather than the
 // deployment's (effectiveCeiling). For a member with no governance assignment
 // it IS Config.DefaultPolicy, so every path below is byte-for-byte today for
 // them; for an assigned member it is the profile an admin bound to them.
@@ -174,14 +173,14 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	// Inline path: validate structurally (same validator as a stored policy) then
 	// validate any inline secret references. On success attach with a nil id.
 	if req.InlinePolicy != nil {
-		// A member MAY author an inline_policy (item 5) — it is not refused,
-		// it is CLAMPED below to the ceiling an admin set FOR THEM, so
-		// a member can never smuggle wider egress/grants/confinement than the
-		// operator already allows. An admin is the ceiling-setting authority
-		// and is left unclamped. (This supersedes the earlier operator-only
-		// SECMODEL-1 gate: a clamp bounds a member without blocking them.)
+		// A member MAY author an inline_policy — it is not refused, it is
+		// CLAMPED below to the ceiling an admin set FOR THEM, so a member can
+		// never smuggle wider egress/grants/confinement than the operator
+		// already allows. An admin is the ceiling-setting authority and is
+		// left unclamped. (This supersedes the earlier operator-only gate: a
+		// clamp bounds a member without blocking them.)
 		spec := *req.InlinePolicy
-		// COUNT-CAPPED FIRST, before any narrowing. validatePolicySpec below
+		// Count-capped first, before any narrowing. validatePolicySpec below
 		// applies the same cap, but it runs AFTER boundMemberSpec, and
 		// boundMemberSpec's narrowing is the per-entry work an unbounded
 		// allowed_domains buys with a single request body (see
@@ -198,12 +197,12 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 		// memberEnvSecretIsAdminOnly).
 		spec, envWarns := s.boundEnvSecretPosture(ctx, r, spec, dryRun)
 		clampWarnings = append(clampWarnings, envWarns...)
-		// DELIBERATELY isOperator (three-tier doctrine, internal/auth/oidc's
+		// Deliberately isOperator (three-tier doctrine, internal/auth/oidc's
 		// RoleSecurityAdmin), in lockstep with denyMemberRequest: a security
 		// admin's OWN run is clamped like anyone else's. They author the
 		// ceiling; they do not stand outside it.
 		if !s.isOperator(r.Context()) {
-			// Item 5: a member's inline_policy can never smuggle wider grants/
+			// A member's inline_policy can never smuggle wider grants/
 			// egress/confinement than THEIR ceiling allows — the governance
 			// profile an admin assigned them, or Config.DefaultPolicy when
 			// nobody assigned one.
@@ -228,7 +227,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 			writeError(w, code, "invalid inline_policy: "+err.Error())
 			return types.RunPolicySpec{}, nil, nil, false
 		}
-		// THE SIZE HALF for the inline arm, the same helper the stored arm calls
+		// The size half for the inline arm, the same helper the stored arm calls
 		// below: composer.Clamp bounds a member's disk_mib by the PROFILE, but
 		// the org's default_disk_mib/max_disk_mib are dispatch's and reach no
 		// preview at all without this. A no-op on launch (see the helper).
@@ -250,7 +249,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	}
 
 	// Stored/default path: resolve, then validate secret references the SAME way
-	// the inline branch does (one call, no duplicated logic — H1). The no-policy
+	// the inline branch does (one call, no duplicated logic). The no-policy
 	// default is now the CALLER's ceiling rather than the deployment's
 	// (resolvePolicy), and a member-SELECTED stored row is bounded below.
 	spec, policyID, err := s.resolvePolicy(ctx, req.PolicyID, ceiling)
@@ -264,7 +263,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	}
 	storedWarns := append([]string(nil), ceiling.Warnings...)
 	// Same unconditional env_secret posture the inline branch applies, in the
-	// same position, and it is the half PF-1's scoping below CANNOT carry: the
+	// same position, and it is the half the scoped clamp below CANNOT carry: the
 	// clamp fires only for an ASSIGNED member selecting a row, while this rule
 	// binds every non-operator on every stored AND default resolution. Without
 	// it an unassigned member — the default posture — selected a stored row (or
@@ -274,7 +273,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	// without qualification.
 	spec, envWarns := s.boundEnvSecretPosture(ctx, r, spec, dryRun)
 	storedWarns = append(storedWarns, envWarns...)
-	// PF-1, the central escape: a stored policy row is admin-authored CONTENT,
+	// The central escape: a stored policy row is admin-authored CONTENT,
 	// but ANY signed-in caller may put one on their own run (policy_id is
 	// ungated, and it has to stay that way — gating it removes a legitimate
 	// feature and pushes members onto hand-authored inline specs). So a member
@@ -283,13 +282,13 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 	// is bounded by the member's ceiling whether it arrived as a body or as a
 	// row id.
 	//
-	// SCOPED to policyID != nil && ceiling.Profile != nil, and both halves are
+	// Scoped to policyID != nil && ceiling.Profile != nil, and both halves are
 	// load-bearing:
 	//
 	//   - policyID != nil: the no-policy default is already the ceiling itself
 	//     (resolvePolicy above), and clamping a spec against itself is at best a
 	//     no-op and at worst order-dependent — composer.Clamp is not a lattice
-	//     meet (PF-3).
+	//     meet.
 	//   - Profile != nil: the UNCONDITIONAL variant is deliberately not chosen.
 	//     Stored policies are routinely wider than a minimal DefaultPolicy, so
 	//     clamping every member's selection to it would shred deployments that
@@ -316,7 +315,7 @@ func (s *Server) resolveRunPolicy(ctx context.Context, w http.ResponseWriter, r 
 		}
 		storedWarns = append(storedWarns, warns...)
 	}
-	// THE SIZE HALF, for the arm composer.Clamp never reaches. The block above
+	// The size half, for the arm composer.Clamp never reaches. The block above
 	// runs only for a member who SELECTED a stored row (policyID != nil), but the
 	// commonest member request there is carries no policy at all — and its spec is
 	// then the profile's OWN ceiling, which an admin may well have written wider
@@ -383,7 +382,7 @@ func envSecretAdminOnlyWarning(secretRef string) string {
 // non-operator is putting on their own run, and returns the warnings + audit
 // drops the removal owes.
 //
-// UNCONDITIONAL on every member path, which is the whole fix: the other kinds a
+// Unconditional on every member path, which is the whole fix: the other kinds a
 // member may reuse are bounded after delivery (an api_key value never leaves the
 // broker, a git_pat reaches git through the helper, an ssh_key is wiped after
 // the clone), while an env_secret is a raw value in the process environment for
@@ -472,7 +471,7 @@ type capDrop struct{ reason, detail string }
 // already authorized would brick workspace runs at scale, and a member who
 // cannot be trusted with a workspace should not be granted the workspace.
 //
-// DROPS, never rejects, exactly as filterMemberGrants does — with a warning per
+// Drops, never rejects, exactly as filterMemberGrants does — with a warning per
 // drop, so preflight/Review names what will not be there before launch, and a
 // capDrop so the audit stream records it. A member whose whole allowlist is
 // ungranted gets a run with no member-authored egress, not a 403: the run's
@@ -487,16 +486,14 @@ func (s *Server) narrowMemberInlinePolicy(ctx context.Context, owner string, spe
 	var warns []string
 	var drops []capDrop
 
-	// ONE resolution for the whole spec, not one per value. The egress loop
+	// One resolution for the whole spec, not one per value. The egress loop
 	// below walks spec.AllowedDomains, which is the REQUEST BODY's list —
-	// uncapped and un-deduplicated on this path — so the per-value
-	// capSeamAllowed this used to call made a member's own body decide how many
-	// sequential Postgres round trips the handler performed: measured at ~505µs
-	// each, 104,850 of them (27.0s, or 45.3s on a stale snapshot) for the most
-	// entries that fit under maxJSONBody. See capBatch.
+	// uncapped and un-deduplicated on this path — so a per-value resolution
+	// would let a member's own body decide how many sequential Postgres round
+	// trips the handler performs. See capBatch.
 	cap := s.newCapBatch(ctx)
 
-	// ONE resolution per DISTINCT host, not per entry. The list is the request
+	// One resolution per DISTINCT host, not per entry. The list is the request
 	// body's, and nothing on this path de-duplicates it: validatePolicySpec has
 	// no allowed_domains arm and composer.Clamp's intersection keeps every
 	// duplicate that passes (and is skipped outright under an allow_all_egress
@@ -551,7 +548,7 @@ func (s *Server) narrowMemberInlinePolicy(ctx context.Context, owner string, spe
 				continue
 			}
 		}
-		// BOTH refs, because an ssh_key grant's known_hosts_secret_ref resolves
+		// Both refs, because an ssh_key grant's known_hosts_secret_ref resolves
 		// a stored secret whose raw value the broker hands back (see
 		// storedSecretPairingInCeiling) — gating only the key would leave the
 		// smaller half of the same door open.
@@ -650,8 +647,8 @@ func (s *Server) auditMemberPolicyDrops(ctx context.Context, r *http.Request, dr
 // validateInlineSecretRefs fails a policy spec closed when any of its api_key
 // OR git_pat eligible grants names a secret that does not actually exist, is a
 // reserved platform-internal key, or when no secret store is configured at all.
-// Despite the name (kept for the inline call site it was written for — H1 now
-// also calls it from the stored/default branch, same check either way) it takes
+// Despite the name (kept for the inline call site it was written for — the
+// stored/default branch now also calls it, same check either way) it takes
 // a plain types.RunPolicySpec, not anything inline-specific.
 // It NEVER reads a secret VALUE — it consults Secrets.List (names only). The
 // returned status code is 422 (Unprocessable Entity) for every failure so the
@@ -694,12 +691,9 @@ func (s *Server) auditMemberPolicyDrops(ctx context.Context, r *http.Request, dr
 // list here would have left that narrowing unenforced at the one seam where a
 // pairing actually becomes an injected credential. Resolved INSIDE rather than
 // threaded in from resolveRunPolicy — ponytail: it buys a signature no caller,
-// present or future, can pass the wrong ceiling to. It used to cost an extra
-// indexed read per member create ("PF-13's accepted double resolution") and,
-// worse, a second ANSWER: two reads of governance_assignments in one request can
-// straddle a profile edit, so this seam could filter grants under a ceiling the
-// caller's own clamp never saw. Both are gone — effectiveCeiling memoizes per
-// request (governance.go), so asking here is free AND cannot disagree.
+// present or future, can pass the wrong ceiling to. effectiveCeiling memoizes
+// per request (governance.go), so asking here is free AND cannot disagree with
+// the caller's own clamp.
 func (s *Server) filterMemberGrants(ctx context.Context, owner string, allowedDomains []string, grants []types.GrantSpec) (kept []types.GrantSpec, warns []string, code int, err error) {
 	resolved, cerr := s.effectiveCeiling(ctx)
 	if cerr != nil {
@@ -769,14 +763,10 @@ func (s *Server) filterMemberGrants(ctx context.Context, owner string, allowedDo
 // stored-secret grant is rejected, never skipped).
 //
 // The switch is CLOSED — every types.GrantKind is named, and the default arm
-// REFUSES rather than falling through. That arm used to return covered=false,
-// which reads as "this kind names no stored secret" and is the answer both
-// callers give a free pass: filterMemberGrants `kept = append(kept, g)` and
-// narrowMemberInlinePolicy `keptGrants = append(keptGrants, g)`. So a grant kind
-// added to types.GrantKind and wired to a stored secret — env_secret is exactly
-// that — was member-authorable, unclamped by the operator's eligible-grant
-// pairing and unchecked against capSecret, until somebody remembered to come
-// back here. The kind set is small and closed; a compiler-visible list plus a
+// REFUSES rather than falling through: a grant kind added to types.GrantKind
+// and wired to a stored secret — env_secret is exactly that — must be named
+// here before it can be member-authorable and clamped/checked against
+// capSecret. The kind set is small and closed; a compiler-visible list plus a
 // refusing default makes forgetting fail shut instead of open.
 // (TestStoredSecretGrantPairing_UnknownKindIsRefused is the regression.)
 func storedSecretGrantPairing(g types.GrantSpec) (host, secretRef, knownHostsRef string, covered bool, err error) {
@@ -818,16 +808,15 @@ func storedSecretGrantPairing(g types.GrantSpec) (host, secretRef, knownHostsRef
 // member may only reuse a pairing the operator explicitly listed, never invent
 // one.
 //
-// header/format joined the match in F097: without them a member grant that kept
+// header/format joined the match too: without them a member grant that kept
 // the operator's blessed (host, secret) pairing but moved the secret under an
 // arbitrary header matched the ceiling and was kept, and the proxy writes that
 // header verbatim onto the forwarded request while relaying the upstream
 // response to the sandbox verbatim — so an upstream that echoes the offending
 // header hands the operator's key back to the sandbox.
 //
-// known_hosts_secret_ref is part of this match (W12-B-2): before this it was
-// left out of the comparison entirely, so a member could reuse an
-// operator-approved (host, key_secret_ref) pairing while attaching ANY
+// known_hosts_secret_ref is part of this match: without it, a member could
+// pair an operator-approved (host, key_secret_ref) pairing with ANY
 // known_hosts_secret_ref of their own choosing — including one naming a stored
 // secret with no relation to SSH host keys — and mintSSHKey (broker.go) would
 // return that secret's raw value as Minted.KnownHosts, an rbac-bypass escaping
@@ -841,25 +830,20 @@ func storedSecretGrantPairing(g types.GrantSpec) (host, secretRef, knownHostsRef
 // composer's own (sentinel, host-pinned) grants without empowering a member to
 // pick the secret and host.
 //
-// FORWARDS to composer.PairingInCeiling, which is THE comparator. It used to be
-// a second implementation, and its sibling in composer (clampGrants' kind-keyed
-// map) answered a DIFFERENT question — "the last same-kind ceiling grant" rather
-// than "the one that names this pairing" — so the runtime clamp bounded a
-// proposal's approval posture and TTL by an arbitrary same-kind grant while this
-// gate and governanceGrantWithinCeiling bounded it by the right one. Two
-// implementations of one rule drift; one implementation with two callers cannot.
-// The pairing DECODE here (storedSecretGrantPairing) stays, because it answers a
-// different question: whether a grant is well-formed enough to DELIVER, which
-// fails a malformed scope closed rather than merely declining to match it.
+// FORWARDS to composer.PairingInCeiling, which is THE comparator: two
+// implementations of one rule drift; one implementation with two callers
+// cannot. The pairing DECODE here (storedSecretGrantPairing) stays, because
+// it answers a different question: whether a grant is well-formed enough to
+// DELIVER, which fails a malformed scope closed rather than merely declining
+// to match it.
 func storedSecretPairingInCeiling(g types.GrantSpec, ceiling []types.GrantSpec) bool {
 	return composer.PairingInCeiling(g, ceiling)
 }
 
 // neededSecret is one secret name a spec references AND the grant kind that
-// references it. The kind is the whole point (B1-F7): `needed` was a []string
-// filled from all three arms, so every refusal on this path said "api_key" —
-// including for a git_pat or ssh_key grant, which sent the policy author
-// looking at a grant that was never the problem. Reachable from four doors.
+// references it. The kind is the whole point: without it, a refusal on this
+// path cannot say which grant is the problem — git_pat and ssh_key grants
+// would be named "api_key" too. Reachable from four doors.
 type neededSecret struct {
 	name string
 	kind types.GrantKind
@@ -895,7 +879,7 @@ func (s *Server) validateInlineSecretRefs(ctx context.Context, owner string, spe
 					return http.StatusUnprocessableEntity, fmt.Errorf(
 						"policy uses %s LLM auth, but no %s token provider is configured", source, source)
 				}
-				// Host pin (H2, write-time defense): the sentinel resolves to a LIVE
+				// Host pin (write-time defense): the sentinel resolves to a LIVE
 				// OAuth token and may only ever target Anthropic. Reject an authored
 				// grant that points it elsewhere (the inject sink also enforces this,
 				// fail-closed).

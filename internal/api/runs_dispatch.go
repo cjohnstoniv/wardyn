@@ -34,18 +34,15 @@ type dispatchParams struct {
 	// PATBroker reports whether the never-resident git_pat lane is on: the PAT is
 	// minted PROXY-SIDE and no grant id reaches the sandbox env.
 	//
-	// SET BY dispatchRun, NEVER BY A CALLER — it overwrites whatever arrives here
+	// Set by dispatchRun, never by a caller — it overwrites whatever arrives here
 	// from Config.DisableGitPATBroker (WARDYN_GIT_PAT_BROKER), because the
 	// posture is a DEPLOYMENT-wide operator escape hatch rather than a per-run
 	// choice. It lives on the struct only because applyDispatchModeEnv takes the
 	// whole parameter object; a value a lane sets is ignored.
 	//
-	// That overwrite IS the fix. This was an ordinary optional field, and no
-	// production literal ever set it, so every real dispatch ran with it false:
-	// patBrokerGrants returned nil, ProxyConfig.PATGrants stayed empty, and
-	// WARDYN_GIT_PAT_GRANTS rode into the sandbox — the pre-0.7 resident posture
-	// docs/ENV.md and docs/POLICIES.md say only `off` restores, while
-	// Config.DisableGitPATBroker was read by nothing at all. A per-lane opt-in
+	// That overwrite IS the fix: PATBroker must never be a per-lane opt-in whose
+	// default silently reverts to the resident WARDYN_GIT_PAT_GRANTS posture
+	// (docs/ENV.md, docs/POLICIES.md: only `off` restores it). A per-lane opt-in
 	// that defaults to the weaker posture is a control whose default is "off by
 	// omission", and the omission is invisible.
 	PATBroker        bool
@@ -102,7 +99,7 @@ type dispatchParams struct {
 	// ResolvedManaged, when non-nil, is filled in by dispatchRun with whether
 	// the ACTUAL resolved llmTransport used the Wardyn-managed subscription
 	// lane (llm.injectManaged — resolveLLMTransport's MANAGED subscription
-	// section). W20-llm-transport-matrix-2: launchRecordRun's pre-dispatch
+	// section). launchRecordRun's pre-dispatch
 	// llm_mode guess for the session entry is a mount/integration check that
 	// cannot see this lane at all (it resolves only here, inside dispatch,
 	// gated on s.managedInjectReady) — that guess would otherwise say "none"
@@ -126,7 +123,7 @@ type dispatchParams struct {
 // FAILED (non-zero) and tears the sandbox down — but only if the run is still
 // RUNNING, so a concurrent kill/stop is never clobbered.
 //
-// INTERACTIVE MODE: when p.Interactive is true, dispatchRun does CreateSandbox +
+// Interactive mode: when p.Interactive is true, dispatchRun does CreateSandbox +
 // set RUNNING but SKIPS the agent Exec entirely (no `claude -p`) and does NOT
 // start the completion watcher (there is no agent process to wait on — the
 // watcher would otherwise mark the idle run COMPLETED the moment Wait failed).
@@ -135,7 +132,7 @@ type dispatchParams struct {
 // unchanged. Pair an interactive run with a never-reap policy (AutoStopAfterSec
 // < 0) or the idle reaper will stop the idle sandbox.
 //
-// PHASE ORDER IS THE CONTRACT: the policy phases below narrow `policy` in
+// Phase order is the contract: the policy phases below narrow `policy` in
 // sequence, and confineGitBrokerEgress runs LAST of the phases that touch the
 // ALLOWLIST so nothing above it can re-add a broker-managed host;
 // reassertCeilingDenies then runs after it (it only adds denies and only
@@ -147,7 +144,7 @@ type dispatchParams struct {
 //
 //nolint:funlen // Deliberate: one linear provision → CAS → compensate sequence whose phase ORDER is the security contract (see above). Each phase already lives in its own helper; splitting the sequence would hide the ordering behind a call graph and make it unauditable in one scope. Low branching — passes gocyclo/gocognit, just long.
 func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling dispatchCeiling, p dispatchParams) {
-	// FAIL CLOSED on a ceiling nobody resolved. The compiler already forces a
+	// Fail closed on a ceiling nobody resolved. The compiler already forces a
 	// lane to pass SOMETHING; this refuses the one thing it could pass without
 	// deciding — the zero value — so "a new dispatch lane forgot the ceiling"
 	// surfaces as a failed run with an audit row rather than as a sandbox that
@@ -221,7 +218,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// a credential and is not getting it, so say why — same shape as the codex-cli
 	// drop (applySSHLaneWarnings, runs_create.go), minus the response warning,
 	// which dispatch has no caller to return one to.
-	// THE NEVER-RESIDENT git_pat LANE, derived from the deployment's own flag and
+	// The never-resident git_pat lane, derived from the deployment's own flag and
 	// stamped onto p before the call rather than taken from whatever a lane
 	// happened to pass. See PATBroker's field doc for what the caller-supplied
 	// version cost: a documented security posture that no code path delivered.
@@ -231,7 +228,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// shape: one authoritative write, read by both the env half below and the
 	// ProxyConfig half further down, with no second variable to fall out of step.
 	p.PATBroker = !s.cfg.DisableGitPATBroker
-	// AND THE SAME STAMP FOR THE GRANTS THEMSELVES, for the same reason. A
+	// And the same stamp for the grants themselves, for the same reason. A
 	// git_pat grant for a BROKERED forge is withheld from the sandbox and audited
 	// as withheld (dropBrokeredGrants, below) — but ProxyConfig.PATGrants was
 	// built further down from the UNFILTERED p.GitPATGrants, so the /wardyn/git/
@@ -290,8 +287,8 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// a single run from two different snapshots (e.g. new SCM hosts with stale
 	// artifact overrides). Store is guaranteed non-nil in dispatch (the run-state
 	// CAS transitions below are called unconditionally).
-	// ONE retry on a failed read (siteConfigForDispatch, owner decision 3 /
-	// B2-F1): this read decides WHOSE model credential the run may use, and a
+	// ONE retry on a failed read (siteConfigForDispatch): this read decides WHOSE
+	// model credential the run may use, and a
 	// failed read is refused downstream rather than degraded — correct for an
 	// unreadable roster, needlessly harsh for one dropped pool connection.
 	siteCfg, siteCfgErr := s.siteConfigForDispatch(ctx)
@@ -321,7 +318,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// Bedrock > api-key gateway): sets the sandbox auth env (+ the codex-cli
 	// OpenAI gateway route), may widen policy egress for Bedrock, and reports
 	// which proxy-side injections / TLS-MITM this run needs.
-	// LLM TRANSPORT + EVERY INJECTION THAT FOLLOWS FROM IT — resolved as one
+	// LLM transport + every injection that follows from it — resolved as one
 	// named phase (resolveLLMInjections, runs_dispatch_llm.go). It is a phase
 	// rather than a split chosen to satisfy a counter: the transport decides
 	// which proxy-side credentials this run needs, and the MITM CA, the
@@ -334,7 +331,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	}
 	llm, injections := plan.llm, plan.injections
 
-	// BROKERED GIT: make the broker route the only route to the managed host names.
+	// Brokered git: make the broker route the only route to the managed host names.
 	// Last of the policy
 	// phases so nothing above can re-add a managed host. See
 	// confineGitBrokerEgress; the run.policy.effective audit below records the
@@ -344,7 +341,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			slog.String("run_id", run.ID.String()), slog.Any("hosts", confined))
 	}
 
-	// GOVERNANCE CEILING RE-ASSERTION: union the acting principal's assigned
+	// Governance ceiling re-assertion: union the acting principal's assigned
 	// profile's denies into the policy, drop every injection rule and BROKERED
 	// credential lane that reaches a denied host. Placed here, after
 	// confineGitBrokerEgress and after every widening phase above, because a
@@ -356,10 +353,10 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// entries, because the bearer injection was only ever the never-resident half
 	// of that lane: the resident SigV4 keys in sandboxEnv, the secretEnvKeys that
 	// move them onto SandboxSpec.SecretEnv, and the operator's host ~/.aws
-	// bind-mount all survived a profile that walls off Bedrock (B2-F4). Narrowed
+	// bind-mount all survived a profile that walls off Bedrock. Narrowed
 	// here, before buildRunMounts and splitSecretEnv read them below.
 	//
-	// EPHEMERAL DISK — the ONE fill + clamp, immediately above the re-assertion so
+	// Ephemeral disk — the ONE fill + clamp, immediately above the re-assertion so
 	// the row that phase writes carries the effective size. See applyEphemeralDisk:
 	// the policy's own disk_mib, else the org's default_disk_mib, clamped to
 	// min(provider maximum, this profile's maximum). Never a refusal, and a zero
@@ -487,7 +484,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		},
 	}
 
-	// AUTHORIZATION ENVELOPE — the append-only answer to "what was this agent
+	// Authorization envelope — the append-only answer to "what was this agent
 	// actually allowed to do?". The run row cannot answer it: agent_runs.policy_id
 	// has no FK and no spec column, run_policies.spec is overwritten in place, and
 	// an inline/default policy has no stored row at all. Recorded HERE, at the one
@@ -507,18 +504,16 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			RunPolicySpec: auditablePolicy(policy), DiskMiBFilled: diskFilled,
 		})))
 
-	// Stamped BEFORE CreateSandbox, not after (review round 2, L7): the row
-	// still carries the heartbeat it was born with, which any image
-	// build/pull longer than the stale window has already let expire — so
-	// without an early stamp the next reconcile sweep on any replica can
-	// adopt a run this dispatch is still setting up (reconcile.go). It used
-	// to be stamped once CreateSandbox returned ("the run now has something
-	// to watch"), but CreateSandbox itself can now block for
-	// canaryWaitTimeout (the k8s substrate's agent-pod readiness wait, on
-	// top of whatever image pull it was already doing) — stamping first
-	// covers that latency too instead of leaving it entirely un-leased.
-	// stampRunWatcherLease only touches run.ID (idempotent heartbeat write;
-	// no dependency on sb.Ref), so moving it earlier is safe.
+	// Stamped BEFORE CreateSandbox, not after: the row still carries the
+	// heartbeat it was born with, which any image build/pull longer than the
+	// stale window has already let expire — so without an early stamp the next
+	// reconcile sweep on any replica can adopt a run this dispatch is still
+	// setting up (reconcile.go). CreateSandbox can block for canaryWaitTimeout
+	// (the k8s substrate's agent-pod readiness wait, on top of whatever image
+	// pull it was already doing), so stamping first covers that latency too
+	// instead of leaving the run entirely un-leased while it waits.
+	// stampRunWatcherLease only touches run.ID (idempotent heartbeat write; no
+	// dependency on sb.Ref), so moving it earlier is safe.
 	s.stampRunWatcherLease(ctx, run.ID)
 
 	// What the substrate says it is waiting on, while it is still waiting; the
@@ -538,7 +533,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 		return
 	}
 
-	// USER DRIVE ATTACHED — a no-op for the runs (most of them) that carry
+	// User drive attached — a no-op for the runs (most of them) that carry
 	// none. See auditDriveMount.
 	//
 	// AFTER CreateSandbox, not beside the spec that carries the drive: the
@@ -554,11 +549,11 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// HOLD the run's watcher lease for the rest of dispatch — starting the moment
 	// there is a sandbox to watch and BEFORE SetSandboxRef publishes its ref, so a
 	// run whose sandbox_ref is set is ALWAYS backed by a fresh lease while its
-	// dispatcher lives. A single stamp (the old behavior) went stale after
-	// watcherLeaseStaleAfter if the SetSandboxRef→completion-watcher window ran long
-	// (a slow BYOI selftest before Exec), and a stale lease on a still-dispatching
-	// run is what let another replica's sweep adopt — and, with the strand guard's
-	// age gate now removed, FINALIZE — a run this dispatch was still setting up.
+	// dispatcher lives. A single stamp would go stale after watcherLeaseStaleAfter
+	// if the SetSandboxRef→completion-watcher window ran long (a slow BYOI
+	// selftest before Exec), and a stale lease on a still-dispatching run is what
+	// lets another replica's sweep adopt — and, with the strand guard's age gate
+	// removed, FINALIZE — a run this dispatch is still setting up.
 	// Holding it continuously makes a stale lease UNAMBIGUOUS: the dispatcher is
 	// gone. That is exactly what lets sweepRunWatchers' strand guard finalize a
 	// never-exec'd run with NO age gate — closing the fast-crash/multi-replica C3
@@ -579,7 +574,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 			run.ID.String(), "failure", mustJSON(map[string]any{"sandbox_ref": sb.Ref, "set_sandbox_ref_error": err.Error()})))
 	}
 
-	// KILL-RACE GUARD: advance STARTING->RUNNING CONDITIONALLY. CreateSandbox can
+	// Kill-race guard: advance STARTING->RUNNING CONDITIONALLY. CreateSandbox can
 	// be slow (image pull); a concurrent POST /runs/{id}/kill may have moved the
 	// run out of STARTING (to KILLED/STOPPED) and already torn down identity +
 	// broker while we were creating the sandbox. An unconditional RUNNING write
@@ -618,7 +613,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 
 // startAgentOrIdle is dispatch's final phase, after the run is RUNNING.
 //
-// INTERACTIVE MODE: skip the agent Exec AND the completion watcher. The
+// Interactive mode: skip the agent Exec AND the completion watcher. The
 // sandbox is RUNNING and idle (the container holds open), ready for a human to
 // `wardyn attach`. There is no agent process, so there is nothing for the
 // watcher to Wait on — starting it would have it observe an immediate Wait
@@ -640,13 +635,12 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 // workload runs as the container's own main process, so container Status is
 // already authoritative and there is no separate exec to track.
 //
-// W15-c: a bare "" used to be persisted for this case, but reconcile.go's
-// watcher-sweep strand guard also reads "" as "never exec'd, no agent will
-// ever run" — one crash-recovery signal doing two jobs — so it finalized
-// FAILED and tore down healthy exec-less runs the moment their watcher lease
-// went stale. The sentinel gives each meaning its own value: "" now means
-// ONLY "SetRunAgentExecID was never called" (genuinely stranded); this
-// constant means "called, deliberately empty". The docker driver's
+// The sentinel exists because reconcile.go's watcher-sweep strand guard also
+// reads a bare "" as "never exec'd, no agent will ever run" — one
+// crash-recovery signal cannot do both jobs, or it finalizes FAILED and tears
+// down a healthy exec-less run the moment its watcher lease goes stale. ""
+// now means ONLY "SetRunAgentExecID was never called" (genuinely stranded);
+// this constant means "called, deliberately empty". The docker driver's
 // AgentStatus (internal/runner/docker/driver.go) maps the sentinel back onto
 // container Status exactly like "" always has — duplicated there (same
 // literal) rather than imported, because internal/api sits above the
@@ -703,7 +697,7 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 		// Best-effort like SetSandboxRef. execID=="" (no error) is the exec-less
 		// substrate (container==agent) — persist the mainProcessExecID sentinel
 		// instead of the bare "" reconcile.go's strand guard reserves for a run
-		// that never got this far (see mainProcessExecID's doc comment, W15-c).
+		// that never got this far (see mainProcessExecID's doc comment).
 		persistExecID := execID
 		if persistExecID == "" {
 			persistExecID = mainProcessExecID
@@ -813,9 +807,9 @@ func (s *Server) hasAnthropicAPIKeyInjection(agent string, injections []runner.I
 	return false
 }
 
-// byoiExecLessRefused is the W15-W15f-exec-lane-runtime-4 guard: a BYOI image
-// on an exec-less (krun microVM) substrate must never even ATTEMPT the
-// selftest. runAsMainProcess (internal/runner/docker/driver.go) makes the
+// byoiExecLessRefused refuses a BYOI image outright, before it can even
+// ATTEMPT the selftest, on an exec-less (krun microVM) substrate.
+// runAsMainProcess (internal/runner/docker/driver.go) makes the
 // sandbox's container process ITSELF the agent on that substrate — there is
 // no separate exec slot — so byoiSelftest's own Exec would consume the
 // sandbox's one process, guaranteeing the task Exec that follows it fails

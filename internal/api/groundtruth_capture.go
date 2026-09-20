@@ -4,13 +4,13 @@
 // groundtruth_capture.go — what a REVIEWER is told about how much of a
 // capture the kernel actually corroborated.
 //
-// Two different facts used to be one sentence (B11b-F7). The eBPF sensor is
-// host-wide and its heartbeat is global; the caveat read the newest one AS OF
-// NOW and then said "for this run" / "this capture" about it. So a capture
-// recorded while the sensor was down, reviewed after it recovered, carried no
-// caveat at all — and a well-corroborated capture reviewed during an idle
-// patch was told it had "no kernel-level corroboration". The sentence was
-// about the host and pretended to be about the run.
+// Two different facts get separate caveats, not one shared sentence: the
+// eBPF sensor is host-wide and its heartbeat is global, so folding it into a
+// per-run caveat mislabels the run. A capture recorded while the sensor was
+// down, reviewed after it recovered, would carry no caveat at all — and a
+// well-corroborated capture reviewed during an idle patch would be told it
+// had "no kernel-level corroboration". The host's state would stand in for
+// the run's.
 //
 // They are separated here. The capture's own claim comes from the capture's
 // own evidence — the exec/connect/file-write lines the sensor bound to THIS
@@ -26,16 +26,16 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ── DRAFT (M2 canon pending) ────────────────────────────────────────────────
+// DRAFT (M2 canon pending)
 
 // The kernel-ground-truth notes a reviewer reads on a capture
 // (RecordTaskResult.Caveats) and on a synthesized profile
 // (profileResponse.Warnings).
 const (
-	// DRAFT (M2 canon pending) — the capture's OWN claim, from its own events.
+	// The capture's OWN claim, from its own events.
 	captureNoCorroborationCaveat = "kernel corroboration: none for this capture — no exec, connect or file-write was " +
 		"bound to this run by the kernel sensor, so the proxy's own egress decisions are the whole of the evidence here"
-	// DRAFT (M2 canon pending) — the four host-sensor states, as REVIEW-TIME
+	// The four host-sensor states, as REVIEW-TIME
 	// state about the host rather than a claim about this capture.
 	hostSensorUnavailableCaveat = "kernel ground truth (host sensor, as of this review): unavailable — no eBPF sensor " +
 		"heartbeat has ever been observed on this host"
@@ -95,16 +95,14 @@ func (s *Server) hostSensorCaveat(ctx context.Context) string {
 }
 
 // kernelWindow reports what the sensor said about itself WHILE run was being
-// captured — the one input Capture cannot derive from the run's own events
-// (B11b-F4).
+// captured — the one input Capture cannot derive from the run's own events.
 //
 // The window is [run.CreatedAt, run.UpdatedAt] — the run's own row, which for
 // the production caller (reconcileRecordRun, at the terminal transition) is the
 // capture. `now` stands in for the end only when UpdatedAt is unusable: before
 // CreatedAt, or in the future. A still-recording run reviewed mid-flight
 // therefore gets the NARROWER window ending at its last row update, which fails
-// silent rather than false — the direction this whole pair of findings is about
-// (SR-3: the comment used to promise `now` for a live run; the code never did).
+// silent rather than false.
 //
 // Only the LATEST heartbeat is consulted, because that is the only one the
 // store can answer without a new query shape. So this is a conservative
@@ -135,7 +133,7 @@ func (s *Server) kernelWindow(ctx context.Context, run types.AgentRun) recordmod
 	if at.Before(run.CreatedAt.Add(-time.Second)) || at.After(end.Add(time.Second)) {
 		return recordmode.KernelWindow{}
 	}
-	// BOTH counters, because neither means anything alone (SR-1): drops are
+	// BOTH counters, because neither means anything alone: drops are
 	// cumulative and count every host event outside a sandbox, so only "drops
 	// with nothing correlated" is a fact about correlation rather than about
 	// the host being busy. Capture applies that pairing.

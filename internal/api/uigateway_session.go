@@ -43,7 +43,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ── DRAFT (M2 canon pending) ────────────────────────────────────────────────
+// DRAFT (M2 canon pending)
 //
 // The two refusals a re-checked session can hit. Both are deliberately the
 // SAME sentence a stale cookie already gets ("open the app again from its run
@@ -231,7 +231,7 @@ func (s *Server) decodeUISession(r *http.Request, now time.Time) (uiSession, boo
 //
 // The cookie is valid for up to the session TTL, which is long enough for a
 // human to lose the run or be revoked outright inside one session. The console
-// session stops on its very next request when an admin revokes it (D16), attach
+// session stops on its very next request when an admin revokes it, attach
 // re-checks per connect behind a 30s ticket, and SSH bounds a stale admin
 // override with WARDYN_SSH_ROLE_TTL — the relay was the one lane where
 // "authorized at enter" meant "authorized until the cookie expires", while

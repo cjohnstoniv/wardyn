@@ -23,7 +23,7 @@ import (
 // workspace_providers.go and is never re-implemented here (admitRepoURL is the
 // only opinion about what a base URL admits; there is exactly one).
 //
-// THE TEN ADMISSION SITES, and why each one is a door rather than a duplicate:
+// The ten admission sites, and why each one is a door rather than a duplicate:
 //
 //	 1. POST   /workspaces                 handleCreateWorkspace
 //	 2. PUT    /workspaces/{id}            handleUpdateWorkspace  (over the INCOMING sources)
@@ -41,10 +41,10 @@ import (
 // caller census in the tests is what keeps that list honest as launchers are
 // added.
 //
-// LEGACY OPEN MODE IS THE FIRST QUESTION EVERYWHERE. providersConfigured(sc) is
+// Legacy open mode is the first question everywhere. providersConfigured(sc) is
 // false on every install that has authored no provider row, and every entry
 // point below returns "nothing to say" before reading anything else, so an
-// upgraded 0.7.1 deployment answers byte-for-byte what it answered before this
+// upgraded deployment answers byte-for-byte what it answered before this
 // file existed.
 
 // The ADMIT.* strings — DRAFT (M2 canon pending). Frozen in
@@ -275,14 +275,13 @@ func legacyHostAdmittedHosts(sc types.SiteConfig, repos []string) []string {
 // until 0.8 to close, and the only admission outcome that is neither a refusal
 // nor ordinary.
 //
-// AUDIT AT EVERY DOOR, warn wherever there is a channel: run create's 201 and
+// Audit at every door, warn wherever there is a channel: run create's 201 and
 // the three ONBOARDING doors that answer a body — POST/PUT /workspaces and POST
-// /sources — all carry the sentence now (V2/F1). Onboarding a GitLab workspace
-// through the wizard used to succeed in complete silence, so the admin who must
-// close the state first heard about the host when 0.8 stopped admitting it: the
-// wrong person, one release late. The two launchers have only this row. Called
-// from admitRepoSources and admitLauncherRepo, so a door added later inherits
-// the audit half by construction.
+// /sources — all carry the sentence now. Silent onboarding would leave the
+// admin who must close the state first hearing about the host only when 0.8
+// stops admitting it: the wrong person, one release late. The two launchers
+// have only this row. Called from admitRepoSources and admitLauncherRepo, so
+// a door added later inherits the audit half by construction.
 //
 // Deliberately no run id: eight of the ten doors have none, and one action with
 // one shape reads better in the trail than two that differ by their target.
@@ -587,7 +586,7 @@ func (s *Server) siteConfigForLaneVeto(ctx context.Context, spec types.RunPolicy
 // no warnings channel: the drop is audited and the wiring is skipped. A read
 // failure FAILS CLOSED — the same call the launchers make about their ceiling.
 //
-// BY REPOSITORY, not by host, and here it matters most: these two sites are
+// By repository, not by host, and here it matters most: these two sites are
 // handed the workspace source's own clone URL, and a wrong answer is invisible —
 // a record or scan clone that should have carried a credential just fails inside
 // the sandbox with no warning anywhere.
@@ -610,7 +609,7 @@ func (s *Server) laneVetoedForLauncher(ctx context.Context, runID uuid.UUID,
 
 // admissionStamper is the per-request projection that fills WorkspaceSource's
 // server-owned `admitted` flag, or nil in legacy open mode — where the key is
-// ABSENT from every response, which is what keeps an upgraded 0.7.1 install's
+// ABSENT from every response, which is what keeps an upgraded install's
 // workspace documents byte-identical.
 //
 // Fed by the server, never mirrored by the console: the match rule has exactly
@@ -632,7 +631,7 @@ func (s *Server) admissionStamper(ctx context.Context) func(types.Workspace) typ
 // flag on them would invite the console to render a provider state for a
 // directory.
 func stampSourceAdmission(sc types.SiteConfig, ws types.Workspace) types.Workspace {
-	// CLONE BEFORE MUTATING, redactWorkspaceForRead's rule and for its reason:
+	// Clone before mutating, redactWorkspaceForRead's rule and for its reason:
 	// the store's row shares its slices with everything else that read it in
 	// this request.
 	ws.Sources = slices.Clone(ws.Sources)
@@ -646,7 +645,7 @@ func stampSourceAdmission(sc types.SiteConfig, ws types.Workspace) types.Workspa
 	return ws
 }
 
-// ─── the onboarding doors' warning channels ───────────────────────────────────
+// the onboarding doors' warning channels
 //
 // An admission WARNING needs a response that can carry one, and the three
 // onboarding doors answered a bare row. Both envelopes embed that row, so the

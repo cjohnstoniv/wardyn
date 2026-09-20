@@ -21,7 +21,7 @@ type revokeSessionsRequest struct {
 	All bool   `json:"all"`
 }
 
-// handleRevokeSessions is D16's admin surface for "revoke a human now" — the
+// handleRevokeSessions is the admin surface for "revoke a human now" — the
 // OIDC session cookie is stateless (see internal/auth/oidc's package doc), so
 // there is no session row to delete; instead this stamps a CUTOFF
 // (Config.SessionRevocations) that oidc.Authenticator.Middleware checks on
@@ -36,17 +36,15 @@ type revokeSessionsRequest struct {
 // the session cutoff, so leaving it alive would make "revoke a human now" a
 // half-measure the operator has to know to finish by hand.
 //
-// "sub" NAMES EITHER IDENTITY — the OIDC sub or the email — and both halves
+// "sub" names either identity — the OIDC sub or the email — and both halves
 // below honour that: the cutoff is matched against both by IsSessionRevoked,
 // and the token sweep falls back to api_tokens.email. It is the rule every
 // other user-addressing surface already follows (a subject_type=user capability
 // grant matches the sub OR the email, precisely so an admin need not guess
-// which the IdP made authoritative). Keyed on sub ALONE, this was a security
-// action that reported success and did nothing on any IdP where the two differ:
-// Entra, whose sub is an opaque per-app identifier, is the deployment shape the
-// SSO work targets. The responder saw 204, the CLI printed "revoked active
-// sessions for ...", the append-only log recorded outcome=success, and the
-// compromised human's console session and every wdn_ token stayed live.
+// which the IdP made authoritative). Keyed on sub alone, this silently fails on
+// any IdP where the two differ — Entra, whose sub is an opaque per-app
+// identifier, is the deployment shape the SSO work targets — reporting success
+// while the compromised human's console session and every wdn_ token stay live.
 //
 // What CANNOT be answered here is "did that name anybody" — sessions are
 // stateless signed cookies with no row to count, so a target that matches
@@ -58,7 +56,7 @@ type revokeSessionsRequest struct {
 // Mounted only when OIDC + SessionRevocations are both wired (see routes.go)
 // — with no OIDC session mechanism there is nothing to revoke.
 //
-// NO TARGET-ROLE GUARD, DELIBERATELY — and this is the SECURITY_ADMIN tier
+// No target-role guard, deliberately — and this is the SECURITY_ADMIN tier
 // (securityOps, routes.go), so a security admin may cut a SUPER ADMIN's
 // sessions and tokens, and the All arm below cuts every principal's. Asked
 // directly: should a security admin be refused a target in the tier above?
@@ -156,27 +154,22 @@ func (s *Server) handleRevokeSessions(w http.ResponseWriter, r *http.Request) {
 // 0045), so an email-form target has to be matched on the email column or the
 // sweep silently finds nothing.
 //
-// ONE UNCONDITIONAL UNION, not a fallback. The email arm used to run only when
-// the principal lookup came back EMPTY, which made the two halves of one revoke
-// disagree about who was named: a human whose tokens straddle two principals —
-// one row minted under the email form, one under the IdP's opaque sub, which is
-// the ordinary Entra shape — had the literal match found, the email arm skipped,
-// and their other rows left live. The request answered 204 and the audit row
-// reported a NON-ZERO tokens_revoked, so the doc's own detection heuristic ("a
-// zero there is the signal") never fired for the case it exists to catch. The
+// One unconditional union, not a fallback: the email arm must run regardless of
+// whether the principal lookup found anything, or a human whose tokens straddle
+// both principal forms — one row minted under the email form, one under the
+// IdP's opaque sub, the ordinary Entra shape — would have the other form's rows
+// silently left live while the response and audit row both read success. The
 // session cutoff has always matched sub OR email (IsSessionRevoked); this is the
 // token half agreeing with it.
 //
 // ListAPITokensByPrincipal is UNFILTERED (handleCreateAPIToken's own
 // `t.RevokedAt == nil` loop is the proof), so a target with nothing but revoked
-// rows returned a non-empty list and suppressed the email arm too.
+// rows would otherwise suppress the email arm too.
 //
-// COST: the one ListAPITokens the fallback already paid in the common
-// email-form case, now paid in the sub-form case as well. The gate saved a
-// single indexed read on an incident-response lever; it cost correctness on the
-// shape the lever exists for.
+// Cost: one extra ListAPITokens call in the sub-form case, buying correctness
+// on the identity-straddling shape this lever exists to cover.
 //
-// THE SWEEP IS NO LONGER THE ONLY CLOSURE. api_tokens still has no expiry, but
+// The sweep is not the only closure. api_tokens still has no expiry, but
 // apiTokenAuth now compares each row's created_at against the SAME cutoff this
 // handler stamps, so a mint whose INSERT commits after this snapshot is taken —
 // unreachable by this sweep forever, since nothing ever re-listed — stops
@@ -226,14 +219,12 @@ func (s *Server) revokeAPITokensFor(r *http.Request, principal string) (int, err
 		if err != nil {
 			return n, err
 		}
-		// ONE ROW PER CREDENTIAL, naming its owner (B5-F3 residual). The sweep
-		// used to record only an aggregate `tokens_revoked` on the caller's own
-		// event — and on the role-mapping lane that aggregate covers an
-		// unanswerable-snapshot arm that revokes EVERY elevated-stamp token in
-		// the deployment, whoever holds it. "Which credentials did that edit
-		// kill" then had no answer in the log at all: the rows are marked revoked
-		// in the table, and a table is a state, not a record of who did it or
-		// when. Same action and same two keys as the single-token door
+		// One row per credential, naming its owner: an aggregate `tokens_revoked`
+		// on the caller's own event alone cannot answer "which credentials did
+		// that edit kill" for the role-mapping lane's unanswerable-snapshot arm,
+		// which revokes EVERY elevated-stamp token in the deployment, whoever
+		// holds it — a table is a state, not a record of who did it or when.
+		// Same action and same two keys as the single-token door
 		// (handleRevokeAPIToken), plus the scope that says this was a sweep, so
 		// one query answers the question across both doors.
 		s.recordAudit(ctx, s.auditEvent(nil, actorTypeFromRequest(r), principalFromRequest(r),

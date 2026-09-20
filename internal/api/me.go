@@ -12,7 +12,7 @@ import (
 )
 
 // handleMe reports the authenticated principal, how they authenticated, their
-// B1-derived role, their session email, and whether they hold the admin role,
+// session-derived role, their session email, and whether they hold the admin role,
 // so the UI can show the real signed-in user instead of a placeholder AND hide
 // the admin-only actions instead of letting a member discover them as raw
 // 403s. It sits behind humanOrAdminAuth, so reaching it already proves
@@ -26,8 +26,8 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		method = "sso"
 	}
 	principal := principalFromRequest(r)
-	// The REAL session role, not a two-valued re-derivation of it: since 0.7
-	// the tier set is three-valued (admin / security_admin / member) and
+	// The REAL session role, not a two-valued re-derivation of it: the tier
+	// set is three-valued (admin / security_admin / member) and
 	// collapsing it through isOperator here would report a security admin as a
 	// plain member — the console's own account chip, and every consumer of this
 	// field, would then contradict what the server actually enforces.
@@ -65,7 +65,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// never-a-second-copy rule as "operator" directly above. True for an
 		// admin too: the tiers overlap on this surface.
 		"security_operator": s.isSecurityOperator(r.Context()),
-		// "View as member" (0.7.4, P2): this admin has asked to be treated as a
+		// "View as member": this admin has asked to be treated as a
 		// member for the rest of the session, so the console can say so in a
 		// persistent banner. Every field ABOVE is already clamped — role reads
 		// "member", both predicates read false — which is the point: the console
@@ -75,13 +75,13 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// false for a real member and for every non-SSO caller, so an older
 		// client reading an absent key and a newer one reading false agree.
 		"member_mode": oidc.MemberModeFromContext(r.Context()),
-		// WHICH POSTURE of that mode (0.7.5, finding 3): the no-credential
+		// WHICH POSTURE of that mode: the no-credential
 		// preview, in which this caller's own per-user model credential reads as
 		// absent. It implies member_mode above, so the console reads it only to
 		// choose which banner sentence to paint — the ceilings differ, and the
 		// one nobody may misread is that sign-in is refused until they exit.
 		"member_mode_no_credential": oidc.MemberPreviewNoCredential(r.Context()),
-		// WHETHER THE PREVIEW IS WORTH OFFERING on this deployment (0.7.5): the
+		// WHETHER THE PREVIEW IS WORTH OFFERING on this deployment: the
 		// posture hides something only where the model-access agent's roster row
 		// is per_user, so on a `shared` install the console must not offer an
 		// entry whose banner would assert a state that deployment contradicts.
@@ -93,7 +93,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// the console still applies the "SSO session" half of the rule, the same
 		// predicate that hides the plain entry.
 		//
-		// THE TIERS ARE THE LEFT OPERAND, deliberately. They are context reads;
+		// The tiers are the left operand, deliberately. They are context reads;
 		// memberPreviewApplies is a GetSiteConfig. In this order the roster is read
 		// only for the tier the key exists for — the other way round it put a store
 		// read on EVERY caller of the console's most-polled route, members included,
@@ -101,7 +101,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		"member_preview_available": (s.isOperator(r.Context()) || s.isSecurityOperator(r.Context())) &&
 			s.memberPreviewApplies(r.Context(), r),
 	}
-	// M3: the AddWorkspaceDialog root-constraint hint (member-role-desktop.md
+	// The AddWorkspaceDialog root-constraint hint (member-role-desktop.md
 	// §DECISIONS O1, ui-batch2-mock.md's "New wire this mock assumes"). null for
 	// an operator (the dialog never renders the hint for one) and for a member
 	// with no configured root either way (RootsFor's own empty-means-unavailable
@@ -118,7 +118,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	if !s.isOperator(r.Context()) {
 		body["member_local_dir_root"] = memberLocalDirRootLabel(s.cfg.MemberMounts.RootsFor(principal))
 	}
-	// The caller's USER DRIVE (0.7, migration 0054), nil-means-none — the same
+	// The caller's USER DRIVE (migration 0054), nil-means-none — the same
 	// convention member_local_dir_root above uses, so the console's "you have
 	// none" state needs no sentinel value to special-case.
 	//
@@ -158,9 +158,9 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	// is told "I cannot answer", never "yes" to a question nobody answered.
 	if doorReason != "" {
 		body["user_drive"] = nil
-		// THE WIDENING YIELDS TO A DIFFERENT REMEDY, and only to that.
+		// The widening yields to a different remedy, and only to that.
 		//
-		// PF-26's own motivating case is a TRUNCATED group snapshot, which fails
+		// The motivating case here is a TRUNCATED group snapshot, which fails
 		// BOTH resolves: the drive resolver names it groups_snapshot_stale — the
 		// same token the launch path's 403 carries — and the ceiling resolve
 		// then fails for the identical reason. Overwriting unconditionally
@@ -180,7 +180,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// The SUPPRESSION above stays unconditional: an unknown door must never
 		// ship beside an allocation, whichever reason names it.
 		//
-		// FROM EITHER HALF (R1 F273's residue). The earlier form asked only
+		// From either half. The earlier form asked only
 		// whether the DRIVE resolver had said groups_snapshot_stale, which is
 		// true when the drive is allocated by group — and silently false on a
 		// deployment that assigns governance by group while allocating drives
@@ -194,7 +194,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 			unavailable = driveUnavailableGovernance
 		}
 	}
-	// THE THIRD KEY, and the reason there are three rather than two. The door
+	// The third key, and the reason there are three rather than two. The door
 	// needed its own key because four states do not fit in one; this is the same
 	// argument one layer up. `user_drive: null` means "you have no allocation",
 	// which is ADVICE ("ask an admin for one") — and it was also what a member
@@ -202,13 +202,13 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	// name a directory, and when the store was down. Three states whose remedies
 	// differ, wearing the answer whose remedy is wrong for all of them.
 	//
-	// ALWAYS PRESENT, for the reason the door key is: an older daemon's missing
+	// Always present, for the reason the door key is: an older daemon's missing
 	// key has to be distinguishable from a daemon that answered "nothing is
 	// wrong". "" is that answer; every other value is a token from the closed
 	// set beside writeDriveError, which composes the sentence a member meets if
 	// they launch anyway.
 	body["user_drive_unavailable"] = unavailable
-	// W31-S1-7: an SSO session dies outright at this instant (no refresh) — the
+	// An SSO session dies outright at this instant (no refresh) — the
 	// console polls this and warns ahead of it, rather than the human learning
 	// about it from a sudden 401 that wipes mid-work state back to the gate.
 	// Omitted (zero) for local/token auth, which has no session to expire.

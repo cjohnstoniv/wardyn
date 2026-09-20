@@ -28,20 +28,18 @@ import (
 // snapshot, can RAISE a human-visible request and can answer 423, none of which
 // the generic sink does.
 //
-// THE ONE RULE THIS FILE EXISTS TO ENFORCE (I3/I5): a recovery event may refresh
+// The one rule this file exists to enforce (I3/I5): a recovery event may refresh
 // credential MATERIAL; it must never re-authorize the operation against a
 // different principal, credential source, mechanism, account, role, region or
 // host. Everything below is that sentence, spelled out.
 
-// ── DRAFT (M2 canon pending) ────────────────────────────────────────────────
+// DRAFT (M2 canon pending)
 
 const (
 	// credentialReauthRaisedSentence is what the person is told when a run's
 	// captured AWS SSO session has lapsed mid-run and the request is being held.
 	// It names the mechanism, says what is happening to the run, and closes the
 	// substitution question before it is asked.
-	//
-	// DRAFT (M2 canon pending)
 	credentialReauthRaisedSentence = "this run's model access is configured as Amazon Bedrock " +
 		"(captured AWS SSO session), and that session can no longer be renewed — the run is HELD while " +
 		"you sign in again. It resumes by itself when the sign-in lands. Wardyn does not substitute a " +
@@ -49,37 +47,27 @@ const (
 	// credentialReauthHostPinRefusal is the host pin (I4), the exact shape of
 	// the subscription sentinel's own pin one file over: a grant could name any
 	// egress-allowlisted host, and this sink hands back a LIVE session token.
-	//
-	// DRAFT (M2 canon pending)
 	credentialReauthHostPinRefusal = "the AWS SSO access token may only be injected to this " +
 		"credential's own sso portal host"
 	// credentialReauthScopeChangedRefusal is the I3 drift refusal. It is
 	// deliberately vague about WHICH field drifted: the caller is a sidecar, the
 	// reader is an audit row, and the field names are identity.
-	//
-	// DRAFT (M2 canon pending)
 	credentialReauthScopeChangedRefusal = "this run's model credential is no longer the one it was " +
 		"dispatched with — the roster changed while the run was working, and Wardyn will not resolve a " +
 		"different principal's credential for a run already in flight. Relaunch the run."
 	// credentialReauthTooManyRefusal bounds the raise path. A run that has
 	// already asked its owner to sign in eight times is not going to be fixed by
 	// a ninth row.
-	//
-	// DRAFT (M2 canon pending)
 	credentialReauthTooManyRefusal = "this run has already asked for an AWS sign-in too many times; " +
 		"nothing was substituted and no further sign-in will be requested for it"
 	// credentialReauthClosedBody is the 403 a resolve gets when this run's
 	// sign-in request is no longer open. %s is the row's terminal state, which
 	// is a closed Wardyn enum and never caller input.
-	//
-	// DRAFT (M2 canon pending)
 	credentialReauthClosedBody = "this run's AWS sign-in request is closed: %s"
 	// credentialReauthRunUnreadableBody / credentialReauthStoreErrorBody /
 	// credentialReauthApprovalsUnreadableBody are the three fail-closed 503s.
 	// Machine-facing (the caller is a sidecar), but named rather than inlined so
 	// every sentence this lane puts on a wire has one definition and a canon row.
-	//
-	// DRAFT (M2 canon pending)
 	credentialReauthRunUnreadableBody = "could not read this run"
 	// DRAFT (M2 canon pending)
 	credentialReauthStoreErrorBody = "could not read this run's AWS SSO credential"
@@ -89,8 +77,6 @@ const (
 	credentialReauthRaiseFailedBody = "could not raise the AWS sign-in request: "
 	// credentialReauthNotDecidableBody is the 409 Server.decide answers for this
 	// kind, on every tier.
-	//
-	// DRAFT (M2 canon pending)
 	credentialReauthNotDecidableBody = "an AWS sign-in request is resolved by signing in, not by a " +
 		"decision: approving or denying it would change nothing, because the next credential resolve " +
 		"raises the request again"
@@ -332,7 +318,7 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 		}
 	}
 	if terminal != nil {
-		// NO METRIC HERE (security NIT-3). This is a RESOLVE meeting a row that
+		// No metric here. This is a RESOLVE meeting a row that
 		// was already terminal, not the transition that made it terminal: with
 		// the measured ~30 s SDK cadence one cancelled row would score dozens of
 		// "outcomes". expired and cancelled are counted where the state changes
@@ -352,8 +338,8 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 		"credential_source": snapshot.CredentialSource,
 		"owner":             snapshot.OwnerSubject,
 	})
-	// THE ID IS MINTED HERE so this caller can tell whether it RAISED the request
-	// or merely found one (W6-S F4). RequestApproval's dedup — the pre-insert
+	// The id is minted HERE so this caller can tell whether it RAISED the request
+	// or merely found one. RequestApproval's dedup — the pre-insert
 	// scan and the partial unique index's loser alike — answers with the WINNER'S
 	// row, and it answers silently by design; a caller that cannot tell the two
 	// apart audits `credential.reauth.requested` and counts outcome=requested for
@@ -377,7 +363,7 @@ func (s *Server) holdOrRefuseCredentialReauth(w http.ResponseWriter, r *http.Req
 		writeJSON(w, http.StatusLocked, reauthPendingResponse{State: reauthPendingState, ApprovalID: created.ID})
 		return true
 	}
-	// AUDITED AT THE RAISE, with the reason the scope deliberately omits.
+	// Audited at the raise, with the reason the scope deliberately omits.
 	// RequestApproval itself emits nothing (its dedup is silent by design), so
 	// without this row "whose credential, held how long, resolved by whom" is
 	// unanswerable from the trail.
@@ -447,23 +433,15 @@ func (sn awsSSOScopeSnapshot) driftFrom(sc types.SiteConfig, agentID string, sco
 	if scope.perUser && sn.OwnerSubject != subject {
 		return "owner_not_caller"
 	}
-	// LEGACY OPEN MODE HAS NO ROSTER TO DRIFT FROM (W6-S F1). When no roster
+	// Legacy open mode has no roster to drift from. When no roster
 	// governs this deployment at all, the three roster-derived arms below have
 	// nothing to compare against, and the two above them ARE the whole equality:
 	// awsSSOScopeFor answers the shared scope for that shape, so
 	// owner=="" + credential_source=="shared" is exactly what dispatch authored.
 	//
-	// Reading a MISSING roster as a WITHDRAWN row is what made this a blocker.
-	// Dispatch authors Phase B happily for a no-roster install — the lane's own
-	// TestDispatchWiring_SwitchOnAuthorsThePhaseBLane dispatches with
-	// SiteConfig{} — and then every resolve answered 403 scope_changed,
-	// including the sidecar's BOOT mint, which fails closed. So an upgraded
-	// 0.7.5 install that never wrote a roster could not launch a captured-SSO
-	// Bedrock run at all with the switch at its default, and the refusal's
-	// sentence ("the roster changed") was false for it: nothing had changed,
-	// because nothing was ever there. Every gate stayed green because every
-	// resolver test seeds a roster row and every no-roster test stops at
-	// dispatch — the two halves were never joined.
+	// Reading a MISSING roster as a WITHDRAWN row would refuse every no-roster
+	// deployment: the refusal's sentence ("the roster changed") would be false
+	// for it — nothing changed, because nothing was ever there.
 	//
 	// agentProvidersConfigured is the ONE place legacy open mode is decided
 	// (agent_providers.go), so this asks it rather than inventing a second rule.
@@ -486,7 +464,7 @@ func (sn awsSSOScopeSnapshot) driftFrom(sc types.SiteConfig, agentID string, sco
 	return ""
 }
 
-// ── the resolution side: a sign-in answers the request ───────────────────────
+// the resolution side: a sign-in answers the request
 
 // resolvePendingReauth moves every PENDING credential_reauth this capture
 // satisfies to APPROVED. Best-effort and never fatal to the capture: the

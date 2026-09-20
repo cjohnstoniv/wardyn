@@ -24,7 +24,7 @@ package api
 // redeeming it here narrows residency rather than adding a new exposure — see
 // the Bedrock captured-AWS-SSO row of threatmodel/THREAT-MODEL.md.
 //
-// No background renewer in 0.7.2: dispatch-time refresh with the skew window
+// No background renewer: dispatch-time refresh with the skew window
 // below covers every run a timer could have saved, and a timer adds a scheduler,
 // a lock and an unwatched failure mode. A run that outlives its refreshed access
 // token fails visibly at its first model call; a mid-run renewal channel is a
@@ -114,7 +114,7 @@ var awsSSOTokenURL = func(ssoRegion string) string {
 // whitespace, ssotoken.go) — which admits `/` and `@`, so a region of
 // `x.attacker.com/` yields the host `oidc.x.attacker.com` and POSTs the client
 // secret and the refresh token to it. Not reachable from a sandbox today (the
-// F006 binding pins an uploaded blob's region to the operator's own boot
+// binding pins an uploaded blob's region to the operator's own boot
 // config), so this is defence in depth for a pre-0.7.2 blob, a direct store
 // write, or an operator typo. Covers the commercial, GovCloud and ISO
 // partitions (us-east-1, us-gov-west-1, us-iso-east-1, us-isob-east-1).
@@ -125,7 +125,7 @@ var awsSSORegionPattern = regexp.MustCompile(`^[a-z]{2}(-gov|-iso[a-z]?)?-[a-z]+
 // so a log line still names which code said so.
 var errAWSSSOCredentialSpent = errors.New("aws sso refresh credential is spent")
 
-// ── DRAFT (M2 canon pending) ────────────────────────────────────────────────
+// DRAFT (M2 canon pending)
 // The three sentences below are the user-facing copy this lane introduces. They
 // are held in ONE block so the canon swap is a single-file diff, and every test
 // asserts through the constants rather than the literals.
@@ -134,10 +134,9 @@ const (
 	// sign in again; nothing Wardyn can do renews this credential, and Wardyn
 	// does not quietly bill a different model provider instead.
 	//
-	// DRAFT (M2 canon pending)
 	// %s is the REMEDY clause (llmMechanismRemedy): under a per_user row the
 	// person who must sign in again is the member, and Settings → Model provider
-	// is the page whose AWS button is admin-only (UX round B1).
+	// is the page whose AWS button is admin-only.
 	awsSSORefreshSpentSentence = "this run's model access is configured as Amazon Bedrock (captured AWS SSO session), " +
 		"and that session can no longer be renewed — %s " +
 		"Wardyn does not substitute a different model provider."
@@ -149,8 +148,6 @@ const (
 	// copy says "try again", never "sign in again". A renewal that fails while
 	// the access token is still valid never reaches this sentence at all: that
 	// run is served from the token in hand.
-	//
-	// DRAFT (M2 canon pending)
 	awsSSORefreshUnavailableSentence = "this run's model access is configured as Amazon Bedrock (captured AWS SSO session), " +
 		"and renewing that session did not complete — AWS did not answer the token request. " +
 		"Your sign-in is still good; launch again in a moment. Wardyn does not substitute a different model provider."
@@ -158,8 +155,6 @@ const (
 	// credSourceSSODesc names the captured-SSO lane in setup copy. It replaces
 	// "re-login when it expires", which stopped being true the moment dispatch
 	// started renewing the credential itself.
-	//
-	// DRAFT (M2 canon pending)
 	credSourceSSODesc = "your captured AWS SSO session (container login; Wardyn renews it at launch while its refresh token lives)"
 )
 
@@ -271,7 +266,7 @@ func (s *Server) lockAWSSSOOwner(owner string) func() {
 // tryLockAWSSSOOwner is lockAWSSSOOwner's NON-BLOCKING form: it returns
 // ok=false rather than queueing behind a renewal that is already in flight.
 //
-// WHY THAT IS A DIFFERENT QUESTION FROM "who renews" (B2-F6). Dispatch is
+// Why that is a different question from "who renews". Dispatch is
 // synchronous with POST /runs, and the renewal starts a whole skew window
 // (awsSSORefreshSkew, 10 min) AHEAD of expiry — so the common case is N people
 // launching runs against a token that still works perfectly well. When the
@@ -335,7 +330,7 @@ func (s *Server) markAWSSSOTokenSpent(fingerprint string) {
 // renewable/expired predicate then decides), or an access token still comfortably
 // inside the skew window.
 //
-// READ-CHECK-ACT under the owner lock: the expiry re-check and the CreateToken
+// Read-check-act under the owner lock: the expiry re-check and the CreateToken
 // are both INSIDE the lock, and the blob is re-read there, because a second
 // dispatch of the same principal may have read the pre-refresh blob before the
 // first flight even started. Without the re-read it would redeem the stale token,
@@ -357,10 +352,11 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 		return blob, awsSSORefreshSpentRefusal(scope.perUser)
 	}
 
-	// SINGLE-FLIGHT, and non-blocking while the token in hand would still carry a
-	// run (B2-F6, tryLockAWSSSOOwner): every queued create used to pay the stalled
-	// renewal's full 2 x 10s budget again, serially, inside its own POST /runs —
-	// for a token that had minutes of validity left and needed nothing.
+	// Single-flight, and non-blocking while the token in hand would still carry a
+	// run (tryLockAWSSSOOwner): a blocking lock here would have every queued
+	// create pay the stalled renewal's full 2 x 10s budget again, serially,
+	// inside its own POST /runs — for a token that had minutes of validity left
+	// and needed nothing.
 	//
 	// The predicate is servableFor, NOT "not expired": every caller here is
 	// already inside the skew window, so "not expired" admits a token with
@@ -456,7 +452,7 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 	if attempts == 2 {
 		data["attempts"] = attempts
 	}
-	// OMITTED WHEN ZERO (B2-F8), as awsSSOCacheFileContents already does for the
+	// Omitted when zero, as awsSSOCacheFileContents already does for the
 	// same field: a zero RegistrationExpiresAt means the capturing helper saw no
 	// registration expiry, which registrationLapsed reads as LIVE. Formatting it
 	// rendered 0001-01-01T00:00:00Z into the trail — a date that reads as
@@ -502,8 +498,8 @@ func (s *Server) auditAWSSSORefresh(ctx context.Context, scope awsSSOScope, outc
 // not change, and hammering it is how a throttle becomes a fleet outage.
 //
 // Returns attempts (1 or 2) so the failure audit row can say whether a dropped
-// packet was one flaky call or two (Finding 5 — the retry already existed; this
-// makes it LEGIBLE rather than adding a second one). On a second failure the two
+// packet was one flaky call or two (the retry already existed; this makes it
+// LEGIBLE rather than adding a second one). On a second failure the two
 // errors are errors.Join'd so BOTH are in the row: two EOFs read as a network
 // story, an EOF then invalid_grant already says spent, now with attempts:2
 // beside it.
@@ -539,7 +535,7 @@ func (s *Server) createAWSSSOTokenWithRetry(ctx context.Context, blob awsSSOBlob
 // webhook sink, the GitHub App client, Entra sync) follow too.
 func (s *Server) createAWSSSOToken(ctx context.Context, blob awsSSOBlob) (awsSSOTokenResponse, error) {
 	var out awsSSOTokenResponse
-	// BEFORE the URL is composed, never after: a region that is not a region is
+	// Before the URL is composed, never after: a region that is not a region is
 	// a hostname, and this request body carries the client secret and the refresh
 	// token. Returned as an ordinary (non-spent) error, so the credential is left
 	// intact and the failure surfaces on the existing visible-failure path rather

@@ -28,7 +28,7 @@ import (
 // must render as informational, not as a clearable warning. Platform lets the UI
 // show environment-appropriate copy (linux|darwin|windows|wsl|any).
 //
-// Blocking (0.7.8) decides ONE thing: whether the console must not open on
+// Blocking decides ONE thing: whether the console must not open on
 // this install at all — setupGateActive (the console's setup gate) redirects
 // every route into the funnel while any row carries it, until onboarding
 // completes. It is set on exactly three arms: runnerCheck's fail (no runner, so
@@ -42,7 +42,7 @@ import (
 // CALLER's own credential rather than the install: llmProviderCheck's and
 // bedrockProviderCheck's per_user arms, and awsSSOCredentialRow, which grades
 // the caller's own AWS SSO session. Confiscating the console over a fact about
-// one person is the 0.7.6 field report this flag exists to end. And advisory
+// one person is exactly what this flag exists to prevent. And advisory
 // install rows, whose grade belongs on every surface that renders them but
 // whose fix is nobody's emergency: the SCM safest-path ladder, an ephemeral age
 // key, TLS cookie posture, an acknowledged egress canary. (harnessCredential-
@@ -80,14 +80,14 @@ func runnerCheck(rnr SetupRunner) SetupCheck {
 	}
 	if !hasCC2Plus {
 		fix := "Unlock the Wall or Vault tier: run `wardyn setup wall` (or `wardyn setup vault`) on the host — it detects your OS/Docker setup and prints the exact steps."
-		// W4-S1-5/W27-S1-4: `wardyn setup wall`/`vault` probe and configure a
+		// `wardyn setup wall`/`vault` probe and configure a
 		// DOCKER host — meaningless advice on a k8s runner, where the lever is
 		// pinning a cluster-registered RuntimeClass via Helm (README.md's
 		// k8s.runtimeClasses.CC2/.CC3), not a command wardynd's own host runs.
 		//
-		// R5 F236/ADV3-05: that Helm command has to be RUNNABLE, and it wasn't.
-		// `helm upgrade --set …` exits "requires 2 arguments" — no release, no
-		// chart — and the shape it teaches (a bare --set, no -f) is the one
+		// That Helm command has to be RUNNABLE: `helm upgrade --set …` exits
+		// "requires 2 arguments" — no release, no chart — and the shape it
+		// teaches (a bare --set, no -f) is the one
 		// docs/OPERATIONS.md documents as resetting every OTHER value to chart
 		// defaults, dropping exactly the values a Wardyn install cannot run
 		// without. Name the release and chart, and re-pass the values file.
@@ -130,7 +130,7 @@ func confinementFloorCheck(rnr SetupRunner, floor types.ConfinementClass) (Setup
 	fix := fmt.Sprintf(
 		"Lower the floor to a class this runner advertises (%s) — set WARDYN_DEFAULT_POLICY (or the Helm chart's defaultPolicy) to a policy JSON with that min_confinement_class; examples/policies/demo.json is a CC1 reference.",
 		advertised)
-	// Same R5 F236/ADV3-05 shape as runnerCheck's: release, chart, and the
+	// Same shape as runnerCheck's: release, chart, and the
 	// values file re-passed, or the pin lands as the only value the release has.
 	if rnr.Driver == "k8s" {
 		fix += fmt.Sprintf(" Or register the floor's RuntimeClass in the cluster and pin it: helm -n <namespace> upgrade <release> ./deploy/helm/wardyn -f your-values.yaml --set k8s.runtimeClasses.%s=<name> (pass your values file — a bare --set resets everything else to chart defaults).", floor)
@@ -203,7 +203,7 @@ func k8sEgressContainmentCheck(driver, netpolProven string) (SetupCheck, bool) {
 			Detail: "Enforcing · NetworkPolicy (the boot-time canary proved a deny-all policy actually blocks egress).",
 		}, true
 	case "acknowledged":
-		// B1: never "ok" — an acknowledgment is not the canary proving
+		// Never "ok" — an acknowledgment is not the canary proving
 		// anything (phase B never even ran, see runEgressCanary's comment on
 		// why running it would be theater behind an existing ambient deny).
 		return SetupCheck{
@@ -256,7 +256,7 @@ const (
 	llmProviderPerUserFix = "Sign in to AWS on the provider step (Settings → Model provider)."
 	// DRAFT (M2 canon pending)
 	llmProviderMechanismDetail = "This deployment reaches models through AWS Bedrock with a sign-in per person. This request arrived on the shared admin token, which owns no sign-in — a person's own console session answers this row."
-	// bedrockUnenforcedPinDetail/Fix: the residual of finding 1 made audible
+	// bedrockUnenforcedPinDetail/Fix: the residual of the roster pin gap made audible
 	// (BedrockSSOPinUnenforced). Nothing server-side says WHICH account and role
 	// a sign-in may store, so the in-sandbox chooser is the only thing deciding
 	// — and that is code the sandbox controls.
@@ -270,8 +270,8 @@ const (
 	bedrockUnenforcedPinDetail = "Nothing here says WHICH AWS account and role a sign-in may store, so whatever the sign-in names is what every later run uses."
 	// DRAFT (M2 canon pending)
 	bedrockUnenforcedPinFix = "Optional, and the fix if your people reach more than one account: set sso_account_id + sso_role_name on the agent's roster row (Settings → Agents), or give WARDYN_BEDROCK_MODEL the full model ARN so its account is checked."
-	// bedrockPinModelAccountDetail/Fix: the OTHER roster posture, and the one
-	// S2-09 created — a pin the save door now TAKES even though it names an
+	// bedrockPinModelAccountDetail/Fix: the OTHER roster posture — a pin
+	// the save door now TAKES even though it names an
 	// account the configured model does not live in. Legal (a resource-shared
 	// application inference profile really does live elsewhere), and therefore
 	// exactly the kind of deliberate choice that has to be visible where an
@@ -284,8 +284,8 @@ const (
 	bedrockPinModelAccountDetail = "This agent's roster row pins AWS sign-ins to account %s, but the configured Bedrock model lives in account %s — runs will only work if that model is shared with the pinned account."
 	// DRAFT (M2 canon pending)
 	bedrockPinModelAccountFix = "Deliberate (a model shared across accounts)? Nothing to do — Wardyn takes the pin as written. Otherwise re-point sso_account_id on the agent's roster row (Settings → Agents), or WARDYN_BEDROCK_MODEL at a model in the pinned account."
-	// bedrockPinContradictedDetail/Fix: the THIRD roster posture, and the one
-	// P4 is about — a session captured BEFORE the pin existed, naming an
+	// bedrockPinContradictedDetail/Fix: the THIRD roster posture — a session
+	// captured BEFORE the pin existed, naming an
 	// account/role the row no longer allows. The pin is bound at capture time
 	// and nowhere else, so setting one leaves the stored blob untouched; worse,
 	// the unenforced-pin warning above DISAPPEARS on the save, and the estate
@@ -301,8 +301,8 @@ const (
 	bedrockPinContradictedDetail = "Your captured AWS SSO session is for account %s / role %s, which this agent's roster row no longer allows (it pins %s / %s) — runs on that session are refused before they start."
 	// DRAFT (M2 canon pending)
 	bedrockPinContradictedFix = "Sign in to AWS again (Settings → Model provider) and choose the pinned account and role; the new sign-in replaces the stored one. Wardyn never rewrites a stored session."
-	// internalHostsCheckLabel names internalHostsCheck's dedicated row
-	// (B7-F5) — new in 0.7.4. Detail is internalHostsDeclaredSentence
+	// internalHostsCheckLabel names internalHostsCheck's dedicated row.
+	// Detail is internalHostsDeclaredSentence
 	// (site_config.go), reused verbatim from the write-time log, so it is
 	// not repeated here.
 	//
@@ -321,7 +321,7 @@ const (
 // signal always outranks it (unchanged), and the "no provider configured"
 // text below stays byte-for-byte for an install with no Bedrock row at all.
 // A configured-but-not-ready per_user/mechanism Bedrock row is a DIFFERENT
-// fact than "nothing is configured" (finding 3's cross-row contradiction:
+// fact than "nothing is configured" (a cross-row contradiction:
 // bedrock_provider says Bedrock IS configured two rows down), so it gets its
 // own per-principal sentence instead of the generic optional-provider one.
 func llmProviderCheck(llmDetail string, bedrock SetupBedrock) SetupCheck {
@@ -352,9 +352,9 @@ func llmProviderCheck(llmDetail string, bedrock SetupBedrock) SetupCheck {
 // the callsite already holds (scOK=false — an unreadable roster — asserts
 // none): BedrockSSOPinUnenforced (nothing constrains the account/role at all),
 // bedrockPinDisagreement (a pin the save door takes although the configured
-// model lives in another account, S2-09/R-04), and awsSSOPinContradiction (a
+// model lives in another account), and awsSSOPinContradiction (a
 // session captured BEFORE the pin, naming an identity the row no longer
-// allows — P4). Each is a posture fact about the
+// allows). Each is a posture fact about the
 // ROSTER, not about readiness, so it is
 // folded into WHATEVER row bedrockProviderRow produced rather than nested under
 // the ready arm: nested, the warning arrived only after the first unchecked
@@ -366,7 +366,7 @@ func bedrockProviderCheck(bedrock SetupBedrock, sc types.SiteConfig, scOK bool) 
 	if !ok || !scOK {
 		return chk, ok
 	}
-	// NOTHING PINNED AT ALL, and it returns: the second posture below is about a
+	// Nothing pinned at all, and it returns: the second posture below is about a
 	// pin that disagrees, so the two can never both be true and neither may
 	// append over the other.
 	if BedrockSSOPinUnenforced(sc, bedrock.Model) {
@@ -376,13 +376,13 @@ func bedrockProviderCheck(bedrock SetupBedrock, sc types.SiteConfig, scOK bool) 
 		return chk, true
 	}
 	// A PIN THE SAVE DOOR TOOK although the configured model lives in another
-	// account (S2-09/R-04) — asked only here, where something is pinned.
+	// account — asked only here, where something is pinned.
 	if pinAccount, modelAccount := bedrockPinDisagreement(sc, bedrock.Model); pinAccount != "" {
 		chk.Status = "warn"
 		chk.Detail = strings.TrimSpace(chk.Detail + " " + fmt.Sprintf(bedrockPinModelAccountDetail, pinAccount, modelAccount))
 		chk.Fix = strings.TrimSpace(chk.Fix + " " + bedrockPinModelAccountFix)
 	}
-	// A STORED CAPTURE THE PIN NO LONGER ALLOWS (P4). Asked last and appended,
+	// A stored capture the pin no longer allows. Asked last and appended,
 	// never substituted, so a row already carrying the pin-vs-model posture
 	// keeps it: the two are about different halves (what the roster pins vs the
 	// model's account; what the roster pins vs what is stored) and both can be
@@ -406,7 +406,7 @@ func bedrockProviderCheck(bedrock SetupBedrock, sc types.SiteConfig, scOK bool) 
 // below; only the CREDENTIAL sentence differs per caller, because that is the
 // one thing per_user resolution actually changes (it "skips the bearer,
 // host-~/.aws-mount and static-key arms outright, because all three are
-// operator reads" — finding 3).
+// operator reads".
 func bedrockProviderRow(bedrock SetupBedrock) (SetupCheck, bool) {
 	if !bedrock.configured() {
 		return SetupCheck{}, false
@@ -454,8 +454,8 @@ func bedrockProviderRow(bedrock SetupBedrock) (SetupCheck, bool) {
 // ageKeyCheck warns when the secret store's age key is EPHEMERAL: stored secrets
 // become unreadable after a restart.
 //
-// R5 F159/F190: the Fix used to offer `helm: env.WARDYN_AGE_KEY` as the cluster
-// answer, which renders the secret store's MASTER key as a plaintext literal in
+// The Fix must never offer `helm: env.WARDYN_AGE_KEY` as the cluster
+// answer: it renders the secret store's MASTER key as a plaintext literal in
 // the Deployment object — readable by anything with `get deploy`, and captured
 // in every `helm get manifest`. The chart has two Secret-backed doors
 // (secrets.ageKeyFromSecret over the postgres.dsn.secretRef Secret's `age-key`
@@ -502,10 +502,11 @@ func siteConfigCheck(sc types.SiteConfig, present map[string]bool) SetupCheck {
 	// for one whose only legacy entry is a host a disabled row has claimed
 	// (workspace_providers.go).
 	//
-	// B7-F5: InternalHosts and UpstreamProxyNoProxy used to be INVISIBLE here —
-	// a document declaring ONLY InternalHosts (the one override that LIFTS the
+	// InternalHosts and UpstreamProxyNoProxy must be checked here too: a
+	// document declaring ONLY InternalHosts (the one override that LIFTS the
 	// proxy's private/reserved-IP SSRF guard, loud-warned at write time by
-	// logWarnInternalHostsDeclared) read as "No operator-wide site config yet".
+	// logWarnInternalHostsDeclared) would otherwise read as "No operator-wide
+	// site config yet".
 	// WorkspaceProviders is included too: an operator who explicitly configured
 	// (even all-disabled) git provider rows has touched this surface, whatever
 	// effectiveScmHosts currently derives from that state.
@@ -535,8 +536,8 @@ func siteConfigCheck(sc types.SiteConfig, present map[string]bool) SetupCheck {
 	}
 }
 
-// internalHostsCheck is the dedicated row for an InternalHosts declaration
-// (B7-F5) — the ONE operator override that LIFTS the proxy's private/
+// internalHostsCheck is the dedicated row for an InternalHosts declaration —
+// the ONE operator override that LIFTS the proxy's private/
 // reserved-IP SSRF guard, and until now visible only as a boot-time log line
 // (logWarnInternalHostsDeclared, site_config.go) plus a bare count folded
 // into siteConfigCheck's generic sentence. Reuses that same sentence
@@ -909,7 +910,7 @@ func artifactRepoCheck(sc types.SiteConfig) SetupCheck {
 			tokened++
 		}
 	}
-	// B7-F10: the "ecosystems: " clause is OMITTED, not rendered empty, when
+	// The "ecosystems: " clause is OMITTED, not rendered empty, when
 	// every redirect is network-only — a bare "(ecosystems: ; 2 network-only)"
 	// read as a truncated/broken row rather than "there are no ecosystem rows".
 	parts := make([]string, 0, 2)
@@ -925,7 +926,7 @@ func artifactRepoCheck(sc types.SiteConfig) SetupCheck {
 	return SetupCheck{ID: "artifact_repo", Label: "Egress redirection", Status: "info", Detail: detail}
 }
 
-// permissionsPostureCheck (#19b) grades the four capability-enforcement
+// permissionsPostureCheck grades the four capability-enforcement
 // switches (capabilityKinds — egress_host, secret, workspace, image;
 // capabilities.go) that gate member-narrowing/widening grants. An absent
 // switch is capEnforced's own documented default: FAIL-OPEN, i.e. that kind

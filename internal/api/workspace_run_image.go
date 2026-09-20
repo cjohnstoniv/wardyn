@@ -41,14 +41,14 @@ func workspaceProfile(ws types.Workspace) (workspacescan.WorkspaceProfile, bool)
 // image always busts the cache (the hash's own lane prefix differs), rather
 // than one lane reading a stale image built by a different lane.
 
-// byoiCacheKey keys the FinalizeBase wrap on (kind, base ref) — W20-W20-record-image-3.
+// byoiCacheKey keys the FinalizeBase wrap on (kind, base ref).
 func byoiCacheKey(kind, image string) string {
 	sum := sha256.Sum256([]byte("byoi|" + kind + "|" + image))
 	return hex.EncodeToString(sum[:])
 }
 
 // repoDevcontainerCacheKey keys a repo's own devcontainer build on (clone URL,
-// ref) — W20-W20-record-image-3. Like the generated-devcontainer lane, this
+// ref). Like the generated-devcontainer lane, this
 // does not detect the repo's CONTENT changing at a fixed ref (a branch head
 // moving) — the same honesty ceiling profile-hash caching already accepts.
 func repoDevcontainerCacheKey(url, ref string) string {
@@ -56,10 +56,10 @@ func repoDevcontainerCacheKey(url, ref string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// repoDevcontainerImageCaveats is W20-W20-record-image-6: when the session's
-// image comes from the repo's OWN devcontainer (resolveWorkspaceImage's
-// repo-own-devcontainer lane, source="repo-devcontainer"), that image was
-// built AS-IS from the repo's devcontainer file — it never bakes claude-code
+// repoDevcontainerImageCaveats fires when the session's image comes from the
+// repo's OWN devcontainer (resolveWorkspaceImage's repo-own-devcontainer
+// lane, source="repo-devcontainer"), which is built AS-IS from the repo's
+// devcontainer file — it never bakes claude-code
 // (resolveWorkspaceImage's own doc comment: "deliberate, not an oversight").
 // The Record pane tells the operator to drive the agent in this sandbox and
 // wires model credentials for it regardless, so a silent absence reads as a
@@ -85,17 +85,16 @@ func repoDevcontainerImageCaveats(ws types.Workspace) []string {
 	}
 }
 
-// cachedImageStillPresent guards every cache-hit branch below
-// (W20-W20-record-image-5): a cached image_ref the daemon no longer actually
-// has (pruned, host replaced, a different daemon this control plane now
-// talks to) used to be a PERMANENT dead end — every launch "hit" the cache,
-// dispatched the missing ref, and failed at "no such image" with no
-// automatic recovery; the only reset was clearing the row by hand. When the
-// wired Runner can answer (runner.ImageChecker — the docker substrate),
-// consult it and treat "not present" as a cache MISS so resolveWorkspaceImage
-// falls through to a rebuild. A Runner that cannot answer (unwired, or a
-// substrate with no local cache notion) is the SAME "unknown" this function
-// already treated as true before this fix existed — fail-open, matching
+// cachedImageStillPresent guards every cache-hit branch below: a cached
+// image_ref the daemon no longer actually has (pruned, host replaced, a
+// different daemon this control plane now talks to) would otherwise be a
+// PERMANENT dead end — every launch would "hit" the cache, dispatch the
+// missing ref, and fail at "no such image" with no automatic recovery short
+// of clearing the row by hand. When the wired Runner can answer
+// (runner.ImageChecker — the docker substrate), consult it and treat "not
+// present" as a cache MISS so resolveWorkspaceImage falls through to a
+// rebuild. A Runner that cannot answer (unwired, or a substrate with no
+// local cache notion) is treated as "unknown" — fail-open, matching
 // resolveWorkspaceImage's posture everywhere else.
 func (s *Server) cachedImageStillPresent(ctx context.Context, ref string) bool {
 	ic, ok := s.cfg.Runner.(runner.ImageChecker)
@@ -110,7 +109,7 @@ func (s *Server) cachedImageStillPresent(ctx context.Context, ref string) bool {
 }
 
 // removeStaleImage best-effort reclaims a workspace-built image tag a
-// caller is about to supersede (bug-workspace-1): every resolveWorkspaceImage
+// caller is about to supersede: every resolveWorkspaceImage
 // build lane mints a fresh, uniquely-named local tag on every cache miss, and
 // nothing ever removed the tag it replaced — a rescan, an image-choice edit,
 // or a workspace delete each leaked a full docker image forever. No-op when
@@ -164,7 +163,7 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 	// instead of a fixed ref.
 	if b := primary.BaseImage; b != nil && b.Kind != "recommended" && strings.TrimSpace(b.Image) != "" {
 		if s.cfg.ImageBuilder == nil {
-			// PARITY-4: the workspace_id door hard-400s a base_image with no builder
+			// The workspace_id door hard-400s a base_image with no builder
 			// wired (validateImageBuildRequest, re-run after the seed); the UI door has
 			// no such gate, so at minimum AUDIT that the operator's chosen base image
 			// was DROPPED for the convention image rather than swapping it silently.
@@ -175,11 +174,11 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 			})
 			return "", false
 		}
-		// Cache the wrap PER (workspace, base ref) — W20-W20-record-image-3: a
-		// record/replay session used to re-wrap the SAME base image on every
-		// single session launch (the old tag embedded runID, guaranteeing a
-		// cache miss even when nothing about the base image changed), turning
-		// every record/verify click into a multi-minute rebuild. byoiCacheKey
+		// Cache the wrap PER (workspace, base ref): without it, a record/replay
+		// session would re-wrap the SAME base image on every single session
+		// launch (a tag embedding runID guarantees a cache miss even when
+		// nothing about the base image changed), turning every record/verify
+		// click into a multi-minute rebuild. byoiCacheKey
 		// namespaces the shared ImageRef/BuiltProfileHash cache columns so a
 		// workspace switching FROM a byoi/repo-devcontainer/generated lane (or
 		// to a different base ref) always busts the cache instead of reading a
@@ -189,12 +188,12 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 			buildAudit("success", map[string]any{"source": "base_image:" + b.Kind, "base": b.Image, "image": primary.ImageRef, "cache_hit": true})
 			return primary.ImageRef, true
 		}
-		// Wrap the operator's base image the SAME way the workspace_id door does
-		// (PARITY-4): FinalizeBase copies the runner tools + agent-run in and tags it
+		// Wrap the operator's base image the SAME way the workspace_id door does:
+		// FinalizeBase copies the runner tools + agent-run in and tags it
 		// wardyn-byoi/<runid>, which ALSO arms dispatch's fail-closed harness selftest
-		// (runs_dispatch.go keys it off the wardyn-byoi/ prefix). Before this a UI-door
-		// run launched the raw image with no agent-run and failed with an opaque exec
-		// error, while the CLI wrapped + selftest-gated the identical workspace.
+		// (runs_dispatch.go keys it off the wardyn-byoi/ prefix). Skipping this would
+		// let a UI-door run launch the raw image with no agent-run, failing with an
+		// opaque exec error, while the CLI path stays wrapped + selftest-gated.
 		// "custom" Steps are not layered here (no builder method layers Dockerfile
 		// lines on a base yet) — same as the req.Image path's own verbatim wrap.
 		outTag := "wardyn-byoi/" + runID.String() + ":latest"
@@ -243,9 +242,9 @@ func (s *Server) resolveWorkspaceImage(ctx context.Context, runID uuid.UUID, pri
 	// happens to install it — deliberate, not an oversight.
 	if url := repoOwnDevcontainerURL(primary, p); url != "" {
 		repoSrc := primary.Sources[0]
-		// Cache per (repo URL, ref) — the same W20-W20-record-image-3 fix as the
-		// byoi branch above: this lane used to rebuild the repo's OWN devcontainer
-		// on every session (a fixed tag, but no cache-hit check before building
+		// Cache per (repo URL, ref), the same fix as the byoi branch above:
+		// without it, this lane would rebuild the repo's OWN devcontainer on
+		// every session (a fixed tag, but no cache-hit check before building
 		// it), even though nothing about the repo ref had changed between sessions.
 		repoHash := repoDevcontainerCacheKey(url, repoSrc.Ref)
 		if primary.ImageRef != "" && primary.BuiltProfileHash == repoHash && s.cachedImageStillPresent(ctx, primary.ImageRef) {
@@ -331,7 +330,7 @@ func repoOwnDevcontainerURL(ws types.Workspace, p workspacescan.WorkspaceProfile
 // workspace's BUILT devcontainer image (built now if needed), falling back to
 // the convention agent image when no builder is configured.
 func (s *Server) workspaceRunImage(ctx context.Context, runID uuid.UUID, ws types.Workspace) string {
-	// W20-W20-record-image-4: bound the build the same way the other three
+	// Bound the build the same way the other three
 	// doors do (runs_create.go) — the record/verify launch callers detach
 	// from request cancellation before reaching here (context.WithoutCancel),
 	// so without its OWN deadline this build could run indefinitely, holding

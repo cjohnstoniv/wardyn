@@ -75,7 +75,7 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 		"rule_source": dl.RuleSource,
 		"approval_id": dl.ApprovalID,
 	}
-	// B6 streak summary only: an ordinary decision's data column stays as it was.
+	// Streak-summary only: an ordinary decision's data column stays as it was.
 	if dl.Repeat > 0 {
 		fields["repeat"] = dl.Repeat
 	}
@@ -93,17 +93,16 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 		"egress."+string(dl.Decision), dl.Request.Host, outcome, data)
 	ev.SourceIP = r.RemoteAddr
 	s.recordAudit(r.Context(), ev)
-	// F065: wardyn_egress_denies_total is exposed as "denied by policy", and it
+	// wardyn_egress_denies_total is exposed as "denied by policy", and it
 	// is the only egress counter Wardyn has. A builtin:dial-failed (a flaky
 	// upstream, on a request policy ALLOWED) and the synthetic
 	// egress.decisions.dropped:<n> audit-fidelity summary both arrive here as
-	// egress.Deny; counting them paged operators for policy denials that never
-	// happened and made the true deny rate unreadable off the series. Both still
-	// record their egress.deny AUDIT row unchanged — only the counter is scoped.
-	// See isPolicyDeny (metrics.go): llm_routes.go's gatewayTarget GUARD refusal
-	// used to share builtin:dial-failed and ride this same exclusion (the
-	// F065-gatewayvet residual) — closed by giving it its own rule_source, so it
-	// now counts here like any other guard denial.
+	// egress.Deny; counting them would page operators for policy denials that
+	// never happened and make the true deny rate unreadable off the series. Both
+	// still record their egress.deny AUDIT row unchanged — only the counter is
+	// scoped. See isPolicyDeny (metrics.go): llm_routes.go's gatewayTarget GUARD
+	// refusal has its own rule_source, so it counts here like any other guard
+	// denial.
 	if dl.Decision == egress.Deny && isPolicyDeny(dl.RuleSource) {
 		s.metrics.egressDenied()
 	}
@@ -152,7 +151,7 @@ func (s *Server) recordLLMScanAudit(ctx context.Context, runID uuid.UUID, actor,
 		outcome = "failure"
 	}
 	// finding_count is the number of findings the scan PRODUCED before the cap
-	// truncated the list (F075), which the proxy counts as it produces them and
+	// truncated the list, which the proxy counts as it produces them and
 	// sends as findings_total: the proxy caps how many findings it REPORTS, so
 	// len(sc.Findings) is the reported count, and an audit row that states it as
 	// the finding count makes a truncated scan indistinguishable from one that
@@ -206,7 +205,7 @@ const (
 // code, keyed on run_id and discriminated by the kernel.* action prefix +
 // data.stream="ebpf".
 //
-// SECURITY MODEL (deliberate deviation, commented):
+// Security model (deliberate deviation, commented):
 //   - Unlike handlePostDecision, the run_id is taken from the BODY, not from
 //     token claims. This is the one intentional deviation from the
 //     token-derived pattern: the sensor is HOST-scoped, not per-run, so it has
@@ -246,7 +245,7 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// PHASE 1 — VALIDATE THE WHOLE BATCH BEFORE COMMITTING ANY EVENT.
+	// Phase 1 — validate the whole batch before committing any event.
 	//
 	// FINDING (medium, fixed): the old loop validated-and-committed interleaved,
 	// so a single bad event (non-kernel action or a run_id naming no real run)
@@ -288,7 +287,7 @@ func (s *Server) handleGroundtruthEvents(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	// PHASE 2 — COMMIT. Every event in the batch is now known-valid.
+	// Phase 2 — commit. Every event in the batch is now known-valid.
 	//
 	// FINDING (medium, fixed): a write failure on this "tamper-proof" stream used
 	// to be SWALLOWED (recordAudit ignores the Recorder error) yet the endpoint
@@ -375,7 +374,7 @@ func (s *Server) recordGroundtruthAudit(ctx context.Context, ev types.AuditEvent
 // refusal is a rate bound, not a security event — the 4096 rows it already
 // raised are the trail, and inventing an action here would mean a run that
 // hits the cap floods the audit log with the refusal instead, which is the same
-// mistake one wave over (B5).
+// mistake one wave over.
 const maxApprovalsPerRun = 4096
 
 // internalApprovalRequest is the proxy's POST /internal/approvals body.
@@ -383,14 +382,14 @@ const maxApprovalsPerRun = 4096
 // RequestedScope is stored VERBATIM and is what the approver is shown, so its
 // shape is a contract with the console rather than an internal detail — see
 // docs/AUDIT-ACTIONS.md and the per-kind scopes in internal/egress/proxy
-// (egressScope) and the toolgate. For an `egress_domain` scope specifically
-// (P0.3 — R3-F001/F108/F145): the host it carries is a BARE host and the
-// decision it records is HOST-WIDE, reaching every port of that host for
+// (egressScope) and the toolgate. For an `egress_domain` scope specifically:
+// the host it carries is a BARE host and the decision it records is
+// HOST-WIDE, reaching every port of that host for
 // whatever span its decision_scope names. The sidecar guarantees the bare host
 // (approvalHostKey, which is also what it keys its own approval cache on), and
 // hostrules.ValidApprovedHost refuses a port by construction on the durable
-// always-write. Port scoping is the 0.8 change and moves all three of those at
-// once; it is deliberately NOT a field added here alone.
+// always-write. Port scoping is a planned change that moves all three of those
+// at once; it is deliberately NOT a field added here alone.
 type internalApprovalRequest struct {
 	Kind           types.ApprovalKind `json:"kind"`
 	RequestedScope json.RawMessage    `json:"requested_scope"`
@@ -415,10 +414,9 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		// Sidecars may only raise egress/tool approvals. credential approvals are
 		// created by the broker mint path, never by an untrusted sidecar.
 	default:
-		// RECORDED (F068): this refusal is the forgery the case above exists to
-		// stop — a sidecar asking Wardyn to raise a `credential` approval — and it
-		// used to answer 400 and write nothing anywhere, so probing for that path
-		// left no trace. Same rate-bound auth.failed row, limiter and suppressed
+		// Recorded: this refusal is the forgery the case above exists to
+		// stop — a sidecar asking Wardyn to raise a `credential` approval. Same
+		// rate-bound auth.failed row, limiter and suppressed
 		// counter as every other refusal; the KIND is a closed enum of our own
 		// types, never echoed from the body.
 		s.auditAuthFailedAs(r, internalApprovalActor, "unsupported_internal_approval_kind")
@@ -431,7 +429,7 @@ func (s *Server) handleInternalRequestApproval(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// Per-run cap (R3-F071), checked BEFORE the raise. Fail CLOSED on a count
+	// Per-run cap, checked BEFORE the raise. Fail CLOSED on a count
 	// error: an unbounded raise path is the thing being bounded, so "we could not
 	// tell how many this run has" must not read as "allow another one".
 	n, cerr := s.cfg.Approvals.CountForRun(r.Context(), claims.RunID)
@@ -482,7 +480,7 @@ func (s *Server) handleInternalGetApproval(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusNotFound, "approval not found")
 		return
 	}
-	// RECONCILE-ON-READ for a mid-run credential re-auth: a PENDING row whose
+	// Reconcile-on-read for a mid-run credential re-auth: a PENDING row whose
 	// owner's stored credential was captured by a login run created after the
 	// raise IS resolved, it just has not been written down yet (the capture and
 	// the resolution are two writes, and a crash between them would otherwise
@@ -556,7 +554,7 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 	// return either credential.
 	if kind, host, refuse := s.brokeredForgeMintKind(r.Context(), claims.RunID, body.GrantID); refuse {
 		// kind == "" is the UNVERIFIABLE refusal: the grant list could not be
-		// read, so the check could not run at all (F098). It gets its own audit
+		// read, so the check could not run at all. It gets its own audit
 		// reason and its own status — 503, because nothing about this run is
 		// known to be wrong and the caller should retry — rather than the
 		// single-lane 403, whose message asserts a github_token grant this
@@ -624,17 +622,13 @@ func (s *Server) handleInternalMint(w http.ResponseWriter, r *http.Request) {
 // one); a LIST ERROR fails CLOSED, signalled to the caller as refuse=true with an
 // EMPTY kind, which the handler answers 503 rather than the single-lane 403.
 //
-// F098 corrected that second arm. It used to fail open too, on the argument that
-// the mint's authority checks (ownership, approval, no-widening) all live in the
-// broker transaction below, so a transient list error costs the belt, not the
-// braces. But the braces do not cover the case this check exists for — a policy
+// The broker transaction's own authority checks (ownership, approval,
+// no-widening) do not cover the case this check exists for — a policy
 // STORED BEFORE validateGrantLaneExclusivity, whose ssh_key/git_pat grant row for
 // a brokered forge is still mintable by anyone who learns the grant id (see the
 // handler's own comment above). For exactly that residual, this check IS the only
-// belt, and answering it with the raw credential whenever one SELECT fails made
-// the residual re-openable for the length of a store hiccup. The brief's stated
-// acceptance criterion ("brokeredForgeMintKind fails CLOSED on a store error")
-// and the security direction agree; the code now matches both.
+// belt: answering it with the raw credential whenever one SELECT fails would make
+// the residual re-openable for the length of a store hiccup.
 //
 // The nil-Store arm stays open because it is not a failure at all — it is the
 // configuration in which there is no grant store to consult, and no persisted
@@ -688,7 +682,7 @@ func (s *Server) brokeredForgeMintKind(ctx context.Context, runID, grantID uuid.
 // Mint 409-conflict "code" values, bound to the ONE home both sides of the wire
 // contract read (types.MintConflict*, internal/types/mint_wire.go). These are
 // bindings, not a second declaration: the literal strings live in exactly one
-// place, so this block and cmd/wardyn-git-helper's cannot drift (F134).
+// place, so this block and cmd/wardyn-git-helper's cannot drift.
 const (
 	mintConflictPending       = types.MintConflictPending
 	mintConflictDenied        = types.MintConflictDenied
@@ -698,16 +692,13 @@ const (
 
 // writeMintError maps broker errors to the documented fail-closed HTTP shape.
 //
-// W19-W19a-2: every 409 here now carries an explicit "code" field
+// Every 409 here carries an explicit "code" field
 // (mintConflictCode*) alongside the historical shape (approval_id/denied/
-// reason kept for the two callers that already read them) — pending,
-// denied, scope_mismatch, and already_minted used to share the bare 409
-// status with no way to tell them apart. cmd/wardyn-git-helper's callMint
-// decoded EVERY one of them as pendingResponse and treated a missing
-// approval_id as "mint returned 409 without approval_id", so the SECOND git
-// operation of an approval-gated run (which legitimately 409s with
-// ErrAlreadyMinted, docs/adoption/corp-network-onboarding-findings.md B2)
-// surfaced that confusing message instead of naming single-use as the cause.
+// reason kept for the two callers that already read them), so
+// cmd/wardyn-git-helper's callMint can tell pending, denied, scope_mismatch,
+// and already_minted apart — including the SECOND git operation of an
+// approval-gated run, which legitimately 409s with ErrAlreadyMinted
+// (docs/adoption/corp-network-onboarding-findings.md B2).
 func (s *Server) writeMintError(w http.ResponseWriter, err error) {
 	var pending broker.ErrApprovalPending
 	if errors.As(err, &pending) {
@@ -750,7 +741,7 @@ type tokenRenewResponse struct {
 // still-valid one for the same run — the missing producer for the per-run
 // internal-audience token.
 //
-// WHY THIS EXISTS: a run token is minted ONCE at dispatch with a 1h TTL and
+// Why this exists: a run token is minted ONCE at dispatch with a 1h TTL and
 // handed to the per-run proxy sidecar in its config env. A process env is fixed
 // after exec, so with no renew producer EVERY run outliving that TTL began
 // getting 401s on /internal/* — silently losing credential mints, approvals,
@@ -758,19 +749,19 @@ type tokenRenewResponse struct {
 // ground-truth sensor already had a producer — see wardynd's token rotator —
 // but the per-run internal token had no counterpart.)
 //
-// THE FIX IS A RENEW ROUTE, NOT A LONGER TTL. The short TTL is the security
+// The fix is a renew route, not a longer TTL. The short TTL is the security
 // property, not the bug: it forces a re-authorization checkpoint roughly every
 // half-life, at which revocation and run state are re-checked. Raising it would
 // trade away exactly the invariant the design rests on, so tokenTTL stays put
 // and the token is instead re-issued while authority still holds.
 //
-// NO NEW CREDENTIAL: renewal is authenticated by the CURRENT, still-valid run
+// No new credential: renewal is authenticated by the CURRENT, still-valid run
 // token, so the caller (the out-of-sandbox proxy, already the token's sole
 // holder) needs no additional long-lived secret. The sandbox never holds a run
 // token at all and gains nothing here: the brokered local routes forward only
 // mint/approvals/recordings, never this route.
 //
-// FAIL CLOSED, TWICE OVER:
+// Fail closed, twice over:
 //  1. internalAuth has already verified signature, expiry, audience AND the
 //     identity revocation list (a RevocationStore error is itself treated as
 //     revoked). Revocation is RUN-scoped: the kill cascade's Identity.RevokeRun
@@ -822,7 +813,7 @@ func (s *Server) handleInternalTokenRenew(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// HONEST TRAIL: the provider records its own identity.mint for the new token;
+	// Honest trail: the provider records its own identity.mint for the new token;
 	// this SEPARATE identity.renew names the run, the retiring jti and the fresh
 	// one, so a long run reads as an explicit chain of re-authorized ~1h segments
 	// rather than as an unexplained second mint out of nowhere.

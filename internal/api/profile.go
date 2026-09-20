@@ -110,7 +110,7 @@ func (s *Server) handleSynthesizeProfile(w http.ResponseWriter, r *http.Request)
 	// recording can never mint a profile beyond operator policy and the grade
 	// is spec-derived.
 	//
-	// W23-S1-3: composer.Clamp now treats an EMPTY ceiling github_token repo
+	// composer.Clamp treats an EMPTY ceiling github_token repo
 	// list as deny-all (the RBAC floor a hand-authored/member inline_policy
 	// needs). synth's own github_token grant repos, if any, are already
 	// provably real (recordmode.Synthesize derives them from grants the
@@ -158,11 +158,11 @@ func (s *Server) handleSynthesizeProfile(w http.ResponseWriter, r *http.Request)
 	if len(events) >= maxCaptureAuditEvents {
 		warnings = append(warnings, captureAuditTruncatedNote)
 	}
-	// W20-W20-groundtruth-mapper-4: the same eBPF sensor notes reconcileRecordRun
-	// stamps onto RecordTaskResult.Caveats — a synthesized profile is reviewed on
-	// this SAME evidence, so it carries the same honesty note about how much of
-	// it is kernel-corroborated (and, since B11b-F7, the same split between what
-	// this capture shows and what the host sensor is doing at review time).
+	// The same eBPF sensor notes reconcileRecordRun stamps onto
+	// RecordTaskResult.Caveats — a synthesized profile is reviewed on this SAME
+	// evidence, so it carries the same honesty note about how much of it is
+	// kernel-corroborated (and the same split between what this capture shows
+	// and what the host sensor is doing at review time).
 	warnings = append(warnings, s.groundtruthCaveats(ctx, obs)...)
 
 	s.recordAudit(ctx, s.auditEvent(&id, actorTypeFromRequest(r), principalFromRequest(r), "run.record.synthesize",

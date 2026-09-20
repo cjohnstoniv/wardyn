@@ -14,7 +14,7 @@
 // read, so there is exactly ONE spelling of "is this agent offered" — the call
 // sites (run create, the record launcher, the setup roster) only ask.
 //
-// WHAT THIS FILE DOES NOT DO, so the seams are findable: it never enforces a
+// What this file does not do, so the seams are findable: it never enforces a
 // row's Mechanism at dispatch (that is enforceConfiguredLLMMechanism's, which
 // reads these rows), never captures a per-user credential, and never renders a
 // console surface.
@@ -35,7 +35,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// AGENT_400 / AGENT_422 — the refusal bodies this file writes.
+// agent400 / agent422 — the refusal bodies this file writes.
 //
 // DRAFT (M2 canon pending): every string here is provisional until the owner's
 // canon sitting freezes it. They are constants, and the tests assert THROUGH the
@@ -47,13 +47,13 @@ const (
 	agent400SSOStartURL       = "agents: %q: sso_start_url is required when mechanism is bedrock_sso and credential_source is per_user"
 	agent400SSOStartURLUnused = "agents: %q: sso_start_url applies only when mechanism is bedrock_sso and credential_source is per_user"
 
-	// The account/role PIN — finding 1, ask 1. Admin-owned beside the start URL
+	// The account/role PIN. Admin-owned beside the start URL
 	// and for the same reason: the sign-in proposes, the roster disposes.
 	agent400SSOPinUnused = "agents: %q: sso_account_id and sso_role_name apply only when mechanism is bedrock_sso and credential_source is per_user"
 	agent400SSOPinPair   = "agents: %q: sso_account_id and sso_role_name are set together or not at all — pinning the account alone still leaves the role picked for whoever signs in"
 	agent400SSOAccountID = "agents: %q: sso_account_id must be a 12-digit AWS account id"
 	agent400SSORoleName  = "agents: %q: sso_role_name must be an IAM role name — letters, digits and +=,.@_- , at most 64 characters"
-	// agentWarnSSOPinModelAccount is a WARNING now, not a refusal body (S2-09):
+	// agentWarnSSOPinModelAccount is a WARNING now, not a refusal body:
 	// the pin outranks the model's account, and this is how the disagreement is
 	// spoken once rather than silently.
 	agentWarnSSOPinModelAccount = "agents: %q: sso_account_id %s is not the account the configured Bedrock model lives in (%s) — the pin is taken as written, so runs will only work if that model is shared with the pinned account"
@@ -77,7 +77,7 @@ const (
 var errAgentNotEnabled = errors.New("agent not enabled")
 
 // mountAgentProviderRoutes registers the two agent-roster endpoints. A mount
-// rather than two lines in routes() for the reason every other 0.7 family is:
+// rather than two lines in routes() for the reason every other route family is:
 // routes() sits at its funlen ratchet and the file's own route-tier map lists
 // mounts, not individual routes.
 //
@@ -104,7 +104,7 @@ func agentProviderRows(sc types.SiteConfig) []types.AgentProvider {
 // agentProvidersConfigured reports whether this install has an agent roster at
 // all — the ONE place "legacy open mode" is decided for agents.
 //
-// CONFIGURED == A NON-NIL BLOCK, not "has rows", and the two cannot diverge:
+// Configured == a non-nil block, not "has rows", and the two cannot diverge:
 // normalizeAgentProviders turns an empty block back into nil on every write
 // (the {} clear form), so a stored block always carries at least one row. A
 // caller therefore never has to decide what a present-but-rowless block means —
@@ -257,13 +257,13 @@ func validateAgentProviders(p *types.AgentProviders, images map[string]string, b
 //
 // Three cases, in the order they are decided:
 //
-//  1. NOT IN THE CATALOG (a WARDYN_AGENT_IMAGES key) — the only valid mechanism
+//  1. Not in the catalog (a WARDYN_AGENT_IMAGES key) — the only valid mechanism
 //     is none. No code path can honour another: resolveBedrockAuth is not-ready
 //     for a non-claude-code agent, managedInjectReady is claude-code-only, and
 //     hasAnthropicAPIKeyInjection is false without a catalog Gateway.
-//  2. THE BYOA CATALOG ROW (NoManagedAuth) — mechanism none, for the same reason
+//  2. The BYOA catalog row (NoManagedAuth) — mechanism none, for the same reason
 //     stated as the catalog's own flag rather than as an id literal.
-//  3. A CATALOG ROW WITH LANES — the mechanism FOLDS to the coarse provider type
+//  3. A catalog row with lanes — the mechanism FOLDS to the coarse provider type
 //     harnessDef.ProviderTypes is keyed by ("bedrock" for all four sub-lanes),
 //     and an impossible pair is refused with that map's EXISTING verbatim reason,
 //     which is reviewed user-facing copy (harness.go's reasonX* constants). Never
@@ -295,7 +295,7 @@ func validateAgentMechanism(row types.AgentProvider, images map[string]string) e
 }
 
 // validateAgentCredentialSource holds the per-user half: per_user is bedrock_sso
-// only (the one mechanism with a per-principal capture path in 0.7.2), and a
+// only (the one mechanism with a per-principal capture path), and a
 // per-user bedrock_sso row MUST carry the admin-owned start URL every principal
 // signs in against — validated by the same gate the login request's own URL
 // passes, so the two cannot disagree about what an access-portal URL is.
@@ -336,7 +336,7 @@ func validateAgentCredentialSource(row types.AgentProvider, bedrockModel string)
 // somebody's 403.
 var iamRoleName = regexp.MustCompile(`^[A-Za-z0-9+=,.@_-]{1,64}$`)
 
-// validateAgentSSOPin is finding 1's SAVE-time door, and it is the EARLIEST of
+// validateAgentSSOPin is the SAVE-time door, and it is the EARLIEST of
 // the three places a wrong identity is refused (roster save, sign-in, capture).
 //
 // The pin is OPTIONAL — a single-account deployment never had this problem and
@@ -344,7 +344,7 @@ var iamRoleName = regexp.MustCompile(`^[A-Za-z0-9+=,.@_-]{1,64}$`)
 // pinning the account alone leaves the role picked for whoever signs in, which
 // is the same defect one level down.
 //
-// The model check is a WARNING, not a refusal (S2-09). Wardyn holds both halves
+// The model check is a WARNING, not a refusal. Wardyn holds both halves
 // already, so an admin pinning an account the configured model does not live in
 // hears about it here rather than from a member three sign-ins later — but a
 // resource-shared application inference profile owned by another account is a
@@ -452,7 +452,7 @@ func (s *Server) handlePutAgentProviders(w http.ResponseWriter, r *http.Request)
 // actually needs — how many rows, which agents, which lanes, whose credential,
 // and which rows are off.
 //
-// THE START URL IS NEVER HERE. It is the one field of this block that names an
+// The start URL is never here. It is the one field of this block that names an
 // organisation's identity provider, the audit log is read by more people than the
 // providers page is, and no review question needs it: "which agents, on which
 // lane, whose credential" is answered without it.
@@ -490,7 +490,7 @@ func agentProviderAuditData(block types.AgentProviders) map[string]any {
 	return map[string]any{
 		"agent_count": len(block.Agents), "ids": ids,
 		"mechanisms": mechanisms, "credential_sources": sources, "disabled": disabled,
-		// UNLIKE the start URL: an account id and a role name are not an
+		// Unlike the start URL: an account id and a role name are not an
 		// organisation's identity provider, and "which identity was this
 		// deployment pinned to when that capture was refused" has no other
 		// answer in the trail.

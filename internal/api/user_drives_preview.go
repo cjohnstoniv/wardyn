@@ -22,7 +22,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── POST /drives/preview ──────────────────────────────────────────────────
+// POST /drives/preview
 
 // userDrivePreviewResponse names the drive a principal carrying those claims
 // would mount, the TIER of the grant that won, and — the field an admin
@@ -90,7 +90,7 @@ func drivePreviewWarning(tmpl types.HomeTemplate, users []string) string {
 // claims mount, and what would it be called" by running THE resolver — the
 // identical resolveUserDriveFor call the enforcement path takes.
 //
-// THAT SINGLE CALL IS THE WHOLE POINT, and it is the lesson the governance
+// That single call is the whole point, and it is the lesson the governance
 // preview already paid for: its first cut re-implemented the ORDER BY in
 // TypeScript, and a second implementation of the precedence rule is a second
 // implementation of the answer. A preview that drifts from enforcement is worse
@@ -104,7 +104,7 @@ func drivePreviewWarning(tmpl types.HomeTemplate, users []string) string {
 // enforcement inputs arrive already folded), so a second struct and a second
 // normalizer would be two chances to differ by one strings.ToLower.
 //
-// NOT AUDITED, for the reason the governance preview states: it is typed into,
+// Not audited, for the reason the governance preview states: it is typed into,
 // mints nothing and changes nothing, and a row per keystroke would turn the
 // append-only log into a record of every claim an admin tried.
 //
@@ -113,12 +113,11 @@ func drivePreviewWarning(tmpl types.HomeTemplate, users []string) string {
 // because that IS the answer the admin needs (their template does not fit this
 // person's claims); only a real store failure is a 500.
 //
-// ─── THE RESOLVER IS NOT THE WHOLE ENFORCEMENT PATH ────────────────────────
+// The resolver is not the whole enforcement path.
 //
-// It used to be only resolveUserDriveFor, which is the store read and the fold
-// — and three of the launch path's gates lived above and below it, so a claim
-// set that WOULD be refused at launch previewed green. Each is now run here, in
-// the enforcement path's own order and with the enforcement path's own words:
+// resolveUserDriveFor alone is the store read and the fold. Three of the
+// launch path's gates run above and below it, so each is run here too — in
+// the enforcement path's own order and words:
 //
 //  0. THE ORG SWITCH (storage.user_drive.disabled), raised by
 //     driveSizeCeilingFor as errDrivesDisabled and answered 422 in the
@@ -148,11 +147,11 @@ func drivePreviewWarning(tmpl types.HomeTemplate, users []string) string {
 // The NARROWING arm of driveMountFor has no counterpart and is deliberately
 // absent: it folds a run request's read_only, and a preview has no run request.
 //
-// STILL NOT AUDITED. Running the door here does not make this an authorization
+// Still not audited. Running the door here does not make this an authorization
 // event: nothing is minted and nothing changes, and denyMemberDrive's
 // authz.denied row is about a member's own attempt to launch.
 //
-// AND THAT IS ENFORCED, not merely stated (R1 F227). Both of this handler's
+// And that is enforced, not merely stated. Both of this handler's
 // steps reach a site that DOES record — drivePreviewDoorIsOpen calls
 // ceilingWithUnusableGroups, previewResolveUserDrive calls
 // driveWithUnusableGroups — so once those sites began emitting authz.denied for
@@ -160,14 +159,14 @@ func drivePreviewWarning(tmpl types.HomeTemplate, users []string) string {
 // denial row of their own. Executed: one preview of carol's drive produced
 // `authz.denied target=governance.ceiling actor="sub-admin-alice"` — the ADMIN
 // named as the refused principal, for a question they merely asked about
-// somebody else. That is worse than the silence F227 set out to fix: a denial
+// somebody else. That is worse than the silence before this fix: a denial
 // stream with the wrong person in it cannot be read at all.
 //
 // The whole request is marked as a DISPLAY READ, once, here rather than at each
 // step: every line of this endpoint is a display, so a step added later inherits
 // the right posture instead of having to remember it.
 //
-// Routing is D2's (SUPER-only, beside the /drives CRUD family); this handler is
+// Routing is SUPER-only, beside the /drives CRUD family; this handler is
 // deliberately complete so that registration is one line.
 func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) {
 	r = r.WithContext(withDisplayRead(r.Context()))
@@ -240,12 +239,12 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 	// name to stat and nothing would mount anyway, which is the answer the
 	// response already carries.
 	//
-	// THE DECISION, NOT THE REFUSAL, and this was the last unconverted caller of
-	// the F269 split. A preview is a DISPLAY READ by an admin about somebody
-	// else: routing it through refuseDrive counted wardyn_drive_refusals_total
-	// and logged "a run was refused its drive" for a run that never existed, so
-	// an operator reading either one saw members being turned away from their
-	// drives whenever an admin opened the drives screen. The BODY is unchanged —
+	// The decision, not the refusal, and this was the last unconverted caller of
+	// that split. A preview is a DISPLAY READ by an admin about somebody else:
+	// routing it through refuseDrive counted wardyn_drive_refusals_total and
+	// logged "a run was refused its drive" for a run that never existed, so an
+	// operator reading either one saw members being turned away from their drives
+	// whenever an admin opened the drives screen. The BODY is unchanged —
 	// driveBindFailure.body() is the one spelling both audiences write — because
 	// an admin checking why a member cannot mount a drive must read the sentence
 	// that member reads.
@@ -308,7 +307,7 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 // the moment an admin is deciding whether an allocation is right. Same function
 // as the launch, so the two cannot drift.
 //
-// IT HANDS THE CEILING BACK, and that is the whole reason it returns two values:
+// It hands the ceiling back, and that is the whole reason it returns two values:
 // it resolves the PREVIEWED principal's ceiling already, and the preview's size
 // has to be clamped to the same MaxDriveSizeMiB the launch path applies
 // (driveSizeCeiling). Discarding it here and resolving a second time is how the

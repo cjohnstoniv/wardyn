@@ -14,7 +14,7 @@ import (
 // reservedRunTasks are run.Task discriminators the SERVER sets, on their own
 // separately-authorized launch paths, to switch on privileged downstream
 // behavior — never legitimate input on the general POST /runs door. Rejected
-// wholesale in decodeAndValidateCreateRun (W15-d) so "server-side only" is
+// wholesale in decodeAndValidateCreateRun so "server-side only" is
 // enforced once, for every consumer, rather than trusted per-callsite.
 //
 //   - harnessLoginTask (harnesscred.go): the sharpest case — its consumers
@@ -89,7 +89,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// path answers. Operators and members alike, because the roster is the ORG's
 	// statement of what this install runs, not a per-principal ceiling. With NO
 	// block nothing is refused: agentRosterRefusal short-circuits to "" and this
-	// path is byte-for-byte 0.7.1.
+	// path is byte-for-byte unchanged.
 	if msg, err := s.agentRosterRefusal(r.Context(), req.Agent); err != nil {
 		writeServerError(w, r, "get site config", err)
 		return req, noCeiling, "", "", false
@@ -98,7 +98,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		return req, noCeiling, "", "", false
 	}
 
-	// W15-d (CRIT, rbac-bypass): reject a client-supplied task that forges a
+	// Reject a client-supplied task that forges a
 	// server-set discriminator (reservedRunTasks below) — e.g. a plain member
 	// POSTing task="harness login" used to reach every consumer that trusts
 	// run.Task == harnessLoginTask alone (handleUploadSSOToken lets the run
@@ -114,8 +114,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		return req, noCeiling, "", "", false
 	}
 
-	// Item 5 + HIGH-3 review fix, plus the 0.6 image/workspace capabilities:
-	// the request-level fields a member does not get to choose freely (see
+	// The request-level fields a member does not get to choose freely (see
 	// denyMemberRequest) — checked before the XOR/builder validation below so a
 	// member's request is refused with 403, never a 400 that implies the shape
 	// alone is the problem.
@@ -143,9 +142,8 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// all are operators — members are refused it by denyMemberRequest above. So
 	// the check belongs HERE, after that return and UNCONDITIONAL on req.Image,
 	// not beside the member refusal (unreachable for the field's only callers) and
-	// not in validateImageBuildRequest (gated on req.Image != ""). Before today
-	// there was no operator-side devcontainer_repo validator at all.
-	// ONE call for both provider questions over both fields (see
+	// not in validateImageBuildRequest (gated on req.Image != "").
+	// One call for both provider questions over both fields (see
 	// requestRepoProviderRefusals): this function is at the gocyclo ratchet, and a
 	// second branch here is what tipped it over.
 	if s.requestRepoProviderRefusals(w, r, req) {
@@ -214,7 +212,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 	// were bounded only by the 1 MiB body, so a megabyte "repo" reached the run
 	// row, every list payload and the hash-chained audit row — and a NUL in a
 	// title was a Postgres 500 instead of a 400 naming the field the caller can
-	// fix (B1-F6). Preflight calls the SAME helper, so Review cannot preview a
+	// fix. Preflight calls the SAME helper, so Review cannot preview a
 	// request launch would refuse.
 	if !s.validateRunTextFields(w, req) {
 		return req, noCeiling, "", "", false
@@ -232,7 +230,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	// W15-S1-2: a non-interactive request with no task would dispatch a sandbox
+	// A non-interactive request with no task would dispatch a sandbox
 	// that execs nothing and never reaches a terminal state on its own —
 	// coerce to interactive (idle, attachable, reapable) instead of silently
 	// launching a run that just sits there unexplained.
@@ -245,7 +243,7 @@ func (s *Server) decodeAndValidateCreateRun(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, msg)
 		return req, noCeiling, "", "", false
 	}
-	// LAST, after the coercion above and after every refusal: a governance
+	// Last, after the coercion above and after every refusal: a governance
 	// profile whose tool_rules hold or deny puts this run in the hold lane even
 	// though the caller asked for nothing (or asked for `auto`). Sited here so
 	// the two shapes a derived hold could contradict are already settled — the
@@ -274,8 +272,8 @@ func requestIsInteractive(req createRunRequest) bool {
 // governanceHoldRules reports whether an ASSIGNED profile's ceiling demands
 // supervision — any resolved tool rule that holds or denies.
 //
-// SCOPED TO AN ASSIGNED PROFILE, and that is the whole safety of the mechanism
-// (§A, PF-27). `tool_rules` already lives in Config.DefaultPolicy on real
+// Scoped to an assigned profile, and that is the whole safety of the mechanism.
+// `tool_rules` already lives in Config.DefaultPolicy on real
 // deployments, where it is consulted only when a request explicitly asks for
 // `hold`; keying derivation on the RULES rather than on the assignment would
 // flip every run on such a deployment into the hold lane and fire the codex
@@ -302,7 +300,7 @@ func governanceHoldRules(ceiling governanceCeiling) bool {
 // one field would make the profile advisory, and `tool_approvals` is the only
 // switch between "every gated call is answered" and "none are".
 //
-// NON-INTERACTIVE ONLY (PF-27). An interactive run's tool use is already
+// Non-interactive only. An interactive run's tool use is already
 // supervised by the human at the attach pane — that is exactly why
 // interactiveToolApprovalsError REFUSES an explicit hold there — and dispatch
 // writes WARDYN_TOOL_APPROVALS for non-interactive runs alone, so deriving on
@@ -319,13 +317,13 @@ func effectiveToolApprovals(req createRunRequest, ceiling governanceCeiling) str
 // agentRequirementError reports why a request may not omit `agent`, or "" when
 // it may.
 //
-// D1: exec mode runs the task as a plain shell command — no agent harness, no
+// Exec mode runs the task as a plain shell command — no agent harness, no
 // model call — so naming an agent there was a formality that made the CLI read
 // AI-first to someone who wanted a governed shell. docs/CI.md documented the
 // workaround it forced: an exec run naming an agent it never uses, in the
 // document whose entire audience is exec.
 //
-// NOT A BLANKET DEFAULT, for two reasons that are easy to get wrong:
+// Not a blanket default, for two reasons that are easy to get wrong:
 //
 //  1. Defaulting to "claude-code" would be a SECURITY decision, not a
 //     convenience: the agent feeds the managed-subscription eligibility test, so
@@ -354,9 +352,10 @@ func agentRequirementError(req createRunRequest) string {
 }
 
 // interactiveToolApprovalsError refuses tool_approvals=hold on an interactive
-// run, which used to be accepted and silently discarded: applyDispatchModeEnv
-// writes WARDYN_TOOL_APPROVALS only when !interactive, so the caller got a 201
-// and none of the supervision they asked for. A field accepted and thrown away
+// run: applyDispatchModeEnv
+// writes WARDYN_TOOL_APPROVALS only when !interactive, so accepting the field
+// here would answer 201 while delivering none of the supervision the caller
+// asked for. A field accepted and thrown away
 // is worse than one refused — the caller believes the run is gated.
 //
 // The run does NOT become unsupervised: interactive tool use is supervised by
@@ -390,7 +389,7 @@ func interactiveToolApprovalsError(req createRunRequest) string {
 //     capability kind at all. It hands attacker-authored build configuration
 //     (the devcontainer.json plus whatever Dockerfile/setup steps it points at)
 //     to the image builder, which is not a power to hand out one row at a time.
-//   - image WIDENS: 0.5 refused every member outright, and a grant of the exact
+//   - image WIDENS: it is refused to every member by default, and a grant of the exact
 //     ref is what makes one nameable (capGranted — a grant AND the switch, see
 //     its own comment). Same build path as devcontainer_repo, but a pinned ref
 //     an admin wrote down is a bounded thing; a repo whose contents change
@@ -452,7 +451,7 @@ func (s *Server) denyMemberRequest(w http.ResponseWriter, r *http.Request, req c
 		"you are not granted agent "+req.Agent+" — ask an admin to grant it, or launch one you hold") {
 		return governanceCeiling{}, true
 	}
-	// TIER 1 ONLY (PF-33, capIntegration's own comment): the run-explicit
+	// Tier 1 only (capIntegration's own comment): the run-explicit
 	// integration_id is the sole member-authored tier. A workspace's pin and the
 	// operator's site default fold on untouched.
 	if req.IntegrationID != "" && s.denyMemberCapability(w, r, capIntegration, req.IntegrationID, "runs.integration",
@@ -476,7 +475,7 @@ func (s *Server) denyMemberRequest(w http.ResponseWriter, r *http.Request, req c
 //
 // One helper, not one block per kind, so the three narrowing gates cannot drift
 // apart on the thing that matters — capSeamAllowed, NEVER capGranted. Every kind
-// routed here is one a member could already use in 0.5, so an unenforced kind
+// routed here is one a member could already use before enforcement, so an unenforced kind
 // must stay allowed; capGranted answers the opposite (widening) question and
 // refuses on !enforced, which is why capImage keeps its own call site above.
 func (s *Server) denyMemberCapability(w http.ResponseWriter, r *http.Request, kind, value, target, msg string) bool {
@@ -497,7 +496,7 @@ func (s *Server) denyMemberCapability(w http.ResponseWriter, r *http.Request, ki
 // clampOperatorSwitches is split out of Clamp.
 //
 // Every one keys on `ceiling.Profile != nil`, never on the ceiling's contents —
-// an UNASSIGNED member is byte-for-byte today here (PF-1's stated residual), and
+// an UNASSIGNED member is byte-for-byte today here, and
 // the deployment default carrying hold/deny tool_rules must not refuse anything
 // deployment-wide on an upgrade that changed no configuration.
 //
@@ -516,7 +515,7 @@ func (s *Server) denyMemberGovernance(w http.ResponseWriter, r *http.Request, re
 		return s.denyMemberField(w, r, "runs.task_mode", "governance_profile", fmt.Sprintf(
 			"`task_mode=exec` is not allowed by your governance profile %q — an exec run carries no agent and no tool approvals, so nothing supervises it. Launch with an agent instead.", name))
 	}
-	// POST-COERCION, and that is the whole gate. req.Interactive is still the RAW
+	// Post-coercion, and that is the whole gate. req.Interactive is still the RAW
 	// field here — this function runs before the empty-task→interactive coercion
 	// — so reading it directly would be evaded by simply omitting the task, which
 	// is the one request shape a deny_interactive profile most needs to refuse.
@@ -530,15 +529,15 @@ func (s *Server) denyMemberGovernance(w http.ResponseWriter, r *http.Request, re
 	if !governanceHoldRules(ceiling) {
 		return false
 	}
-	// PF-31. The pre-attach seed span runs skip-permissions with no toolgate and
-	// no human at the pane yet, so PF-27's "interactive is human-supervised"
-	// rationale is explicitly false for it — which is why this refusal is NOT
+	// The pre-attach seed span runs skip-permissions with no toolgate and
+	// no human at the pane yet, so the "interactive is human-supervised"
+	// rationale above is explicitly false for it — which is why this refusal is NOT
 	// scoped to the derivation's non-interactive lane the way the codex one is.
 	if req.SeedAutoTools {
 		return s.denyMemberField(w, r, "runs.seed_auto_tools", "governance_profile", fmt.Sprintf(
 			"`seed_auto_tools` is not allowed by your governance profile %q: its tool rules hold or deny, and the pre-attach seed runs before any human is at the pane. Launch without it.", name))
 	}
-	// PF-18. Scoped to exactly the case where effectiveToolApprovals WOULD derive
+	// Scoped to exactly the case where effectiveToolApprovals WOULD derive
 	// hold: codex-cli has no external tool-approval contract, so a derived hold
 	// there would silently ship the unsupervised run the explicit-hold refusal
 	// above (:152) exists to reject — the same contradiction, arriving through a
@@ -554,7 +553,7 @@ func (s *Server) denyMemberGovernance(w http.ResponseWriter, r *http.Request, re
 // request shape: MaxConcurrentRuns caps how many non-terminal runs one assigned
 // member may hold at once.
 //
-// 422 AND NO AUDIT, deliberately — the two shape limits above are 403s with an
+// 422 and no audit, deliberately — the two shape limits above are 403s with an
 // authz.denied row because the caller asked for something they may not have;
 // this caller IS authorized and is simply at a quota. Both existing per-principal
 // caps say it exactly this way (apiTokenMaxPerPrincipal, sshMaxKeysPerPrincipal:
@@ -565,8 +564,8 @@ func (s *Server) denyMemberGovernance(w http.ResponseWriter, r *http.Request, re
 // 0 (the zero value, and any negative) is UNLIMITED, matching the two booleans'
 // rule: a profile that omits limits behaves exactly as one written before this
 // field existed. ASSIGNED SUBJECTS ONLY — an unassigned member has no profile,
-// so there is no cap to read and no global default one to fall back to (PF-36:
-// the `all` assignment IS the opt-in for a deployment-wide cap).
+// so there is no cap to read and no global default one to fall back to (the
+// `all` assignment IS the opt-in for a deployment-wide cap).
 //
 // ponytail: count-then-create, so two simultaneous creates can both see N-1 and
 // both land. Accepted, exactly as the two 20-caps above accept it — the cap is a
@@ -591,7 +590,7 @@ func (s *Server) denyMemberRunQuota(w http.ResponseWriter, r *http.Request, ceil
 	return true
 }
 
-// denyMemberSeededImage closes G3 (PF-34, live since 0.6.0): a MEMBER-OWNED
+// denyMemberSeededImage closes a gap: a MEMBER-OWNED
 // workspace's base_image is copied into req.Image by seedRequestWorkspace AFTER
 // denyMemberRequest has already run, and the follow-up re-validation
 // (validateImageBuildRequest) only re-checks the XOR and the builder — never
@@ -599,13 +598,13 @@ func (s *Server) denyMemberRunQuota(w http.ResponseWriter, r *http.Request, ceil
 // any ref they like, launches against it, and reaches the one WIDENING
 // capability the product has without holding a grant for it.
 //
-// OWNERSHIP-SCOPED, and the scoping is not a nicety. seededOwner is non-empty
+// Ownership-scoped, and the scoping is not a nicety. seededOwner is non-empty
 // only when the seed actually set req.Image AND the seeding workspace was
 // member-owned; an operator-authored workspace's base_image stays exactly what
 // denyMemberRequest's own doc says it is — operator config, not a member's
 // free-text choice — and this function no-ops on it, byte-for-byte today.
 //
-// THE TRAP, named because the next refactor will reach for it: an UNCONDITIONAL
+// The trap, named because the next refactor will reach for it: an UNCONDITIONAL
 // re-check here is a catastrophic regression, not a stricter version of this
 // one. capGranted answers the WIDENING question, so it REFUSES on !enforced
 // (capabilities.go) — which means an unconditional call would 403 every member

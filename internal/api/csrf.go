@@ -12,7 +12,7 @@ import (
 
 // csrf.go — the same-origin guard for a COOKIE-authenticated mutating request.
 //
-// WHY A COOKIE NEEDS THIS AND A BEARER DOES NOT. A session cookie is AMBIENT
+// Why a cookie needs this and a bearer does not. A session cookie is AMBIENT
 // authority: the browser attaches it to a request any page can cause, so
 // `fetch("https://wardyn.example/api/v1/...", {method:"POST", credentials:
 // "include"})` from evil.example runs as the signed-in human. A bearer token is
@@ -30,9 +30,9 @@ import (
 // This lives in its own file because internal/api/http.go sits at 959 lines
 // against the 1000-line file-size gate (scripts/check-file-size.sh).
 //
-// OUT OF SCOPE — the per-run UI-sandbox gateway cookie (`wardyn_ui_sess`,
+// Out of scope — the per-run UI-sandbox gateway cookie (`wardyn_ui_sess`,
 // uigateway.go). That is a DIFFERENT credential on a DIFFERENT listener and
-// origin (boundary B10), reached through its own middleware which never calls
+// origin, reached through its own middleware which never calls
 // this guard; widening to it is its own change with its own threat model, and
 // this file deliberately does not pretend to cover it.
 
@@ -72,7 +72,7 @@ var errCrossOriginRefused = errors.New(csrfRefusedBody)
 //     ⇒ refuse. Fetch Metadata is set by the BROWSER and cannot be written by
 //     page script, so its label is trustworthy evidence about where the request
 //     came from — whatever the Origin header says. Checked FIRST for that
-//     reason. `same-site` refuses too (S2-02): it is a sibling host on a shared
+//     reason. `same-site` refuses too: it is a sibling host on a shared
 //     registrable domain, the exact case SameSite=Lax does not bind, and the
 //     Origin rule below cannot judge it when the browser sent no Origin at all.
 //  3. No Origin AND no Sec-Fetch-Site ⇒ allow. That is a CLI/API client (curl,
@@ -87,7 +87,7 @@ var errCrossOriginRefused = errors.New(csrfRefusedBody)
 //     closed on every unparseable input, exactly like originIsRequestHost (the
 //     LocalMode arm's own comparison, which reads the same parse).
 //
-// WHY TWO ACCEPTED HOSTS. Behind a TLS-terminating ingress the browser's Origin
+// Why two accepted hosts. Behind a TLS-terminating ingress the browser's Origin
 // is the public console name while r.Host is whatever the proxy forwards
 // (a service name, an internal FQDN). s.cfg.OIDCRedirectURL is the browser's
 // own view of this deployment — the IdP redirects a real human back to it, so
@@ -98,7 +98,7 @@ var errCrossOriginRefused = errors.New(csrfRefusedBody)
 // configured it is empty and only r.Host is accepted, which is correct: there
 // is no session cookie there at all.
 //
-// WHY SCHEME IS NOT COMPARED. Same reason: that same ingress terminates TLS, so
+// Why scheme is not compared. Same reason: that same ingress terminates TLS, so
 // the browser sends `Origin: https://console.example` while wardynd serves
 // plain HTTP behind it. Comparing schemes would refuse every TLS-fronted
 // deployment; the host is what identifies the origin we care about, and an
@@ -189,11 +189,11 @@ func lowerASCII(c byte) byte {
 // client, or an older browser) and is never treated as a pass on its own; the
 // Origin rule still runs.
 //
-// ONLY "same-origin" and "none" (a user-initiated navigation) pass. It used to
-// refuse "cross-site" alone, which left "same-site" — a sibling host on a
+// ONLY "same-origin" and "none" (a user-initiated navigation) pass. Refusing
+// "cross-site" alone would leave "same-site" — a sibling host on a
 // shared registrable domain — to the Origin rule, and a browser that omits
-// Origin on a top-level form POST gave that rule nothing to judge: the request
-// fell through the CLI/API arm and mutated state (S2-02). An unknown future
+// Origin on a top-level form POST gives that rule nothing to judge: the request
+// would fall through the CLI/API arm and mutate state. An unknown future
 // label refuses for the same reason: this is the fail-closed half of the guard.
 func isForeignSiteFetch(r *http.Request) bool {
 	fs := strings.TrimSpace(r.Header.Get("Sec-Fetch-Site"))
@@ -242,7 +242,7 @@ func OriginHostReadable(raw string) bool {
 // attachOriginRefused decides the PTY-attach WebSocket's ORIGIN, in place of
 // coder/websocket's OriginPatterns.
 //
-// WHY NOT OriginPatterns. They are path.Match GLOBS, not literals
+// Why not OriginPatterns. They are path.Match GLOBS, not literals
 // (authenticateOrigin: `path.Match(lower(pattern), lower(u.Host))`), so every
 // `*`, `?` and `[` in the configured redirect host is a metacharacter — and an
 // IPv6-literal redirect URL always carries `[…]`. `https://[2001:db8::1]:8443`
@@ -260,7 +260,7 @@ func (s *Server) attachOriginRefused(r *http.Request) bool {
 	if origin == "" {
 		return false
 	}
-	// ONE PREDICATE PER MODE, the same split the REST surface makes: LocalMode
+	// One predicate per mode, the same split the REST surface makes: LocalMode
 	// has no second name (there is no ingress and no IdP in front of a
 	// single-developer daemon), so it compares r.Host alone. Without this the
 	// two surfaces diverge on a deployment that runs LocalMode WITH OIDC
