@@ -174,7 +174,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `get-nonce` | 1.0.1 | MIT |
 | `js-tokens` | 4.0.0 | MIT |
 | `loose-envify` | 1.4.0 | MIT |
-| `lucide-react` | 1.34.0 | ISC |
+| `lucide-react` | 1.46.0 | ISC |
 | `object-assign` | 4.1.1 | MIT |
 | `prop-types` | 15.8.1 | MIT |
 | `react` | 18.3.1 | MIT |
@@ -185,8 +185,8 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `react-remove-scroll` | 2.7.2 | MIT |
 | `react-remove-scroll-bar` | 2.3.8 | MIT |
 | `react-resizable` | 3.2.0 | MIT |
-| `react-router` | 7.18.2 | MIT |
-| `react-router-dom` | 7.18.2 | MIT |
+| `react-router` | 7.18.4 | MIT |
+| `react-router-dom` | 7.18.4 | MIT |
 | `react-style-singleton` | 2.2.3 | MIT |
 | `resize-observer-polyfill` | 1.5.1 | MIT |
 | `scheduler` | 0.23.2 | MIT |
@@ -196,7 +196,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `solid-js` | 1.9.13 | MIT |
 | `solid-transition-group` | 0.2.3 | MIT |
 | `sonner` | 2.0.8 | MIT |
-| `tailwind-merge` | 3.6.0 | MIT |
+| `tailwind-merge` | 3.7.0 | MIT |
 | `tslib` | 2.8.1 | 0BSD |
 | `tw-animate-css` | 1.4.0 | MIT |
 | `use-callback-ref` | 1.3.3 | MIT |
