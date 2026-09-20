@@ -164,6 +164,12 @@ func decodeGovernanceProfileRequest(w http.ResponseWriter, r *http.Request) (gov
 //
 // MaxConcurrentRuns takes its own wording because it is a COUNT and not MiB —
 // the one place the shared sentence would be a lie.
+//
+// AutonomyRubric gets its own leg, calling AutonomyRubric.Validate rather than
+// a range check: it is nine string fields, not a number, so "negative" has no
+// meaning here — the boundary is "every set field is one of the four defined
+// levels". Validate names which of the nine is bad; this prefixes "limits." so
+// the 400 reads like every other field's.
 func governanceLimitsRefusal(l types.GovernanceLimits) string {
 	if l.MaxConcurrentRuns < 0 {
 		return fmt.Sprintf("limits.max_concurrent_runs: %d is not a count of runs — use 0 for unlimited",
@@ -174,6 +180,11 @@ func governanceLimitsRefusal(l types.GovernanceLimits) string {
 	}
 	if l.MaxDriveSizeMiB < 0 {
 		return fmt.Sprintf(providers400Negative, "limits.max_drive_size_mib", l.MaxDriveSizeMiB)
+	}
+	if l.AutonomyRubric != nil {
+		if err := l.AutonomyRubric.Validate(); err != nil {
+			return "limits.autonomy_rubric." + err.Error()
+		}
 	}
 	return ""
 }
