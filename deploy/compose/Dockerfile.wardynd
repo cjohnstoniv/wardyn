@@ -33,7 +33,7 @@ ARG UI_STAGE=ui-build
 # stage runs NATIVELY on the builder even for a linux/arm64 target — no QEMU,
 # no emulated pnpm. Same reason applies to every other stage in this file that
 # carries the flag.
-FROM --platform=$BUILDPLATFORM node:26-bookworm-slim@sha256:cd9f682fa2885cd1056e830424764158570061c59736a1da836bc3d73df095ae AS ui-build
+FROM --platform=$BUILDPLATFORM node:24-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS ui-build
 WORKDIR /ui
 
 # Corporate build support (no-ops on an OSS build): stage the optional corp CA so

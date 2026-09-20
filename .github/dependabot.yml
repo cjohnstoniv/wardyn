@@ -56,3 +56,6 @@ updates:
       # non-LTS. Extend this list when the next odd major appears.
       - dependency-name: node
         versions: ["25.*", "27.*"]
+      # 26 enters LTS on 2026-10-28 (nodejs/Release schedule.json); remove after that date.
+      - dependency-name: node
+        versions: ["26.*"]
