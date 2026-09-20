@@ -35,6 +35,20 @@ import { usePoll } from "../../lib/use-poll";
 // daemon that came up after the gate rendered.
 const SSO_POLL_MS = 10000;
 
+// Unreachable (#212, design/first-contact-prototype) — was "Could not reach
+// the control plane.", which named the product nothing and gave no next
+// step. Now names Wardyn and names one thing to check.
+export const UNREACHABLE_ERROR =
+  "Wardyn isn't answering at this address. Check that the wardynd daemon is running, then try again.";
+
+// Token hint (#212, design/first-contact-prototype) — was "Paste the token
+// this control plane was started with (WARDYN_ADMIN_TOKEN; the compose demo
+// uses demo-admin-token).": it named an env var and a working demo
+// credential on a screen reachable by anyone, authenticated or not. Says
+// what belongs in the field and where the person saw it instead.
+export const TOKEN_HINT =
+  "The token this Wardyn daemon was started with. Your install printed it when it finished.";
+
 // W31-S1-5: the OIDC callback (internal/auth/oidc/oidc.go's CallbackHandler)
 // redirects a user-actionable login denial to "/?auth_error=<code>" instead
 // of dead-ending the browser on a bare http.Error text page — but a redirect
@@ -53,6 +67,14 @@ const SSO_POLL_MS = 10000;
 // step's preview panel and this screen share the same "couldn't check"
 // language). All three come from lib/people-access-copy.ts's SIGNIN table —
 // every other arm below is unchanged and out of scope this round.
+//
+// email_domain (#212, design/first-contact-prototype) — was "Ask an operator
+// to add it to WARDYN_OIDC_EMAIL_DOMAINS": an environment variable this
+// reader, who is not signed in, cannot reach, on a screen that must not
+// advertise a deployment's internals to someone unauthenticated. The remedy
+// belongs to the admin, not this person.
+export const EMAIL_DOMAIN_REFUSAL =
+  "This email's domain isn't allowed to sign in to this console. Ask your Wardyn admin to allow it.";
 function authErrorMessage(code: string): string {
   switch (code) {
     case "email_unverified":
@@ -60,7 +82,7 @@ function authErrorMessage(code: string): string {
     case "email_verified_absent":
       return SIGNIN.EMAIL_VERIFIED_ABSENT;
     case "email_domain":
-      return "This email's domain isn't allowed to sign in to this console. Ask an operator to add it to WARDYN_OIDC_EMAIL_DOMAINS.";
+      return EMAIL_DOMAIN_REFUSAL;
     case "no_role":
       return SIGNIN.NO_ROLE;
     case "role_check_unavailable":
@@ -186,7 +208,7 @@ export function SignIn({
           "That admin token was rejected. Check the value and try again.",
         );
       } else {
-        setError("Could not reach the control plane.");
+        setError(UNREACHABLE_ERROR);
       }
     } finally {
       setLoading(null);
@@ -281,7 +303,6 @@ export function SignIn({
                 <Input
                   id="token"
                   type="password"
-                  placeholder="demo-admin-token"
                   value={token}
                   onChange={(e) => {
                     setTokenValue(e.target.value);
@@ -291,10 +312,7 @@ export function SignIn({
                   autoComplete="off"
                 />
               </div>
-              <p className="text-xs text-muted-foreground">
-                Paste the token this control plane was started with
-                (WARDYN_ADMIN_TOKEN; the compose demo uses demo-admin-token).
-              </p>
+              <p className="text-xs text-muted-foreground">{TOKEN_HINT}</p>
               <label className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                 <Checkbox
                   checked={remember}
