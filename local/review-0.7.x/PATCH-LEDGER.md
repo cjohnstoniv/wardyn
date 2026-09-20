@@ -373,3 +373,21 @@ compatibility, rollback and dependencies will accompany completed findings here.
 Release numbers and historical changelog entries belong to integration.
 Real Entra/AWS, private endpoints and owner hardware remain manual acceptance gaps
 until exercised. This ledger does not declare Wardyn ready.
+
+## 0.8 dispositions (2026-09-19, the 0.8 campaign's record)
+
+Every item this ledger raised that 0.7 did not close is planned, deferred with its
+reason, or rejected in the 0.8 plan (`docs/design/0.8/PLAN.md` § J on `main` once
+its PR merges; tracked as issues on the `0.8.0`/`0.8.1` milestones).
+
+| Item | 0.8 disposition |
+|---|---|
+| R076-002 (two live sign-in sandboxes; race reproduced) | PLANNED — plan lane G L-identity-1: a per-actor session advisory lock spanning quota → insert → supersede, taken by the capture too |
+| R076-003 (autonomous k8s caches outside the metered emptyDirs) | PLANNED — plan lane I L-drives-2, amended with R003-K8S-CACHE-ASSESSMENT.md's constraints: `GOMODCACHE` under metered scratch, never a `GOPATH` move; the full image's login profile re-export must change in the image; live eviction proof required |
+| R076-004 (login sandbox orphaned by a route-scoped pane mount) | PLANNED — plan lane G L-identity-4: consolidate the sign-in mounts onto the shell-owned pane that already kills after server confirmation; a post-response server belt for the closed-tab case; never a kill before the helper's upload response and PTY marker |
+| R076-007, 008 (PR #71 still OPEN — now a prerequisite of the nightly SSO lane), 022 | stay rejected as ruled for 0.7.6 |
+| Security note: SSH registration outlives token/session revocation | 0.8.1 candidate lane G L-identity-9 (revoke cascades to SSH keys; channel open re-checks the key) |
+| Security note: email role mapping without `email_verified` | 0.8.1 candidate lane G L-identity-10 (opt-in knob, default off) — owner decision |
+| Security note: split-horizon OIDC scheme | 0.8.1 candidate lane G L-identity-11 (WARN on a plaintext internal issuer outside loopback/compose; refuse in 0.9) |
+| R017 residual (support bundle Compose entry not re-usable), R023 residuals (absolute in-root symlink, hard links, NFS), R025 (0600 on Linux only) | deferred as documented ceilings |
+| OTHER-076-PLAN-REVIEW #1–#15 | 13 SHIPPED in 0.7.6–0.7.8 (evidence per finding in PLAN.md § J.4); #5 (the `/approvals` reauth card title) and #14 (the New Run auto-open is not bound to the refused launch's mechanism) are single-predicate defects → plan lane G L-console-7; REQ-1 (no canon mock for the 0.7.6/0.7.7 surfaces) → plan lane H L-mock-7; REQ-5 (the rerun rule) → written into RELEASING.md by the 0.8 practice PR |
