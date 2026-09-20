@@ -11,7 +11,7 @@ package proxy
 // (this is the ONE decision every forward-egress caller shares), not a size
 // dodge.
 //
-// THE COMPOSITION worth holding in one place: the guard runs on BOTH branches
+// The composition worth holding in one place: the guard runs on BOTH branches
 // and InternalHosts is what lifts it on either. Under the corp upstream this
 // file resolves the name for the guard alone, denies an answer in a blocked
 // range, and on a lift stamps site-config:internal-host on the HOSTNAME it then
@@ -110,9 +110,9 @@ func blockKindOf(err error) blockKind {
 // gatewayTarget (proxyLLMRequest's own resolver) is the ONLY place a gateway
 // gets vetTrustedHost's relaxed per-request vet, and only for the brokered
 // /wardyn/llm/* route the proxy itself dials. Folding that branch in here
-// used to lift the private-IP guard for the gateway HOSTNAME on every
+// would lift the private-IP guard for the gateway HOSTNAME on every
 // forward-egress path (evaluate, serveMITMRequest), not just the brokered
-// route — fixed by removing it.
+// route.
 //
 // ruleSource is "" except "site-config:internal-host" when the address was
 // admitted only via the internal-host lift, or "site-config:egress-redirect"
@@ -127,14 +127,14 @@ func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, 
 	// allowed_domains for exactly the runs the redirect covers) has no hostname
 	// behind it to rebind.
 	//
-	// ABOVE the upstream branch (B10-F2), not below it: that branch returned
-	// early, so on a corp-proxy estate with no bypass entry — the normal
-	// private-endpoint shape — evaluate() ALLOWED the redirect's literal and every
-	// re-vet path that reaches here without going through evaluate
-	// (serveMITMRequest, i.e. the token-injecting redirect lane itself, plus the
-	// two brokers) re-derived the same address and hard-denied it: an `allow` row
-	// followed by "vet failed" on the same tunnel, the operator's own mirror
-	// audited as reachable and never reached.
+	// ABOVE the upstream branch, not below it: that branch returns early, so on
+	// a corp-proxy estate with no bypass entry — the normal private-endpoint
+	// shape — placing this check below would let evaluate() ALLOW the
+	// redirect's literal while every re-vet path that reaches here without
+	// going through evaluate (serveMITMRequest, i.e. the token-injecting
+	// redirect lane itself, plus the two brokers) re-derives the same address
+	// and hard-denies it: an `allow` row followed by "vet failed" on the same
+	// tunnel, the operator's own mirror audited as reachable and never reached.
 	//
 	// It only ADDS an admission, on either side of the branch: a literal that is
 	// not an exactly-allowed blockPrivate address falls through unchanged, and
@@ -171,7 +171,7 @@ func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, 
 		// proxy verbatim — where inet_aton (or the dialer's own zone-aware
 		// parser) turns it back into loopback/link-local/metadata.
 		// Checked HERE as well as at step 0 because serveMITMRequest and the two
-		// brokers reach this function without going through evaluate (F105).
+		// brokers reach this function without going through evaluate.
 		// Canonical literals are deliberately NOT re-vetted here: evaluate has
 		// already decided them, including the operator's egress-redirect trust.
 		if ip := nonCanonicalLiteralIP(host); ip != nil {
@@ -389,12 +389,11 @@ const (
 	// ruleSourceGatewayVetFailed marks llmRouteTarget's refusal of the
 	// OPERATOR'S OWN configured LLM gateway — vetTrustedHost's errGatewayVet,
 	// above: the gateway host resolved to loopback/link-local/this proxy's own
-	// control-plane network, or did not resolve at all. It USED TO share
-	// "builtin:dial-failed" with three genuine network-lost-it dials, which
-	// excluded a config problem the operator's own gateway can never satisfy
+	// control-plane network, or did not resolve at all. Kept separate from
+	// "builtin:dial-failed" (the three genuine network-lost-it dials) so a
+	// config problem the operator's own gateway can never satisfy is excluded
 	// from wardyn_egress_denies_total alongside failures the network caused —
-	// see isPolicyDeny (internal/api/metrics.go), now closed rather than
-	// accepted as a residual.
+	// see isPolicyDeny (internal/api/metrics.go).
 	ruleSourceGatewayVetFailed = "builtin:gateway-vet-failed"
 )
 
@@ -511,8 +510,7 @@ func (p *Proxy) liftInternalHost(host string, ip net.IP) bool {
 // ClusterIP, so there the control-plane answers are the ONLY thing standing
 // between a declared internal host (or a redirect literal) and the control
 // plane. exclusionUnknown therefore answers "yes" for every address — refusing
-// every lift and every trust — which is the fail-closed direction NewServer's
-// comment always claimed and the code did not have.
+// every lift and every trust — the fail-closed direction this clamp requires.
 func (p *Proxy) onOwnSubnetOrControlPlane(ip net.IP) bool {
 	if p.exclusionUnknown {
 		return true

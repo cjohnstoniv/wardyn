@@ -5,7 +5,7 @@ package db
 
 import "time"
 
-// ONE CLOCK FOR THE REVOCATION CUTOFF AND EVERYTHING COMPARED AGAINST IT.
+// One clock for the revocation cutoff and everything compared against it.
 //
 // oidc_session_revocations.revoked_at is stamped by POSTGRES (`VALUES ($1,
 // now())`). The two things compared against it were stamped by WARDYND: an API
@@ -52,13 +52,13 @@ const maxAppClockAge = 100 * 365 * 24 * time.Hour
 // AppClockAgeMicros returns how long ago the app-clock instant t was, as of the
 // app-clock instant now, in microseconds — clamped to [0, maxAppClockAge].
 //
-// BOTH ARGUMENTS MUST COME FROM THE SAME CLOCK. That is the whole point: a
+// Both arguments must come from the same clock. That is the whole point: a
 // difference of two readings of one clock is a duration, and a duration carries
 // no skew, so it can be handed to a different clock without carrying an offset
 // across. Passing a value that was read back from the DATABASE as t would put
 // the skew straight back in, in the unsafe direction when the app is behind.
 //
-// CLAMPED AT ZERO, so a value stamped in the future (the app clock stepped
+// Clamped at zero, so a value stamped in the future (the app clock stepped
 // backwards between the stamp and this call) becomes "now" rather than a
 // negative interval that would push a row's timestamp forward of the database's
 // clock — which is the exact shape of the defect this function exists to close.

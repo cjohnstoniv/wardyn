@@ -60,12 +60,10 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	// to wardyn-internal before this process starts.
 	//
 	// A lookup failure for either is non-fatal but NOT free: the exclusion is a
-	// CLAMP on the lift, so an empty clamp widens the lift instead of narrowing
-	// it. This comment used to claim the opposite ("fail closed toward the
-	// ORIGINAL unconditional deny") of what the code did, and nothing logged
-	// the failure. Both are fixed here: the failure is carried into the Proxy as
-	// ExclusionUnknown, which makes the clamp refuse every lift/trust, and it is
-	// logged (F002).
+	// CLAMP on the lift, so an empty clamp would widen the lift instead of
+	// narrowing it. The failure is carried into the Proxy as ExclusionUnknown,
+	// which makes the clamp refuse every lift/trust instead, and it is logged
+	// (F002).
 	localSubnets, subnetsOK := localInterfaceSubnets()
 	cpIPs, cpOK := resolveControlPlaneIPs(cfg.ControlPlaneURL)
 	exclusionUnknown := !subnetsOK || !cpOK
@@ -98,18 +96,18 @@ func NewServer(ctx context.Context, cfg *Config, client *http.Client, stdout io.
 	}
 	// The four control-plane clients below — the decision sink, the injector, the
 	// approval client and the token renewer — all ride THIS client. A caller-supplied
-	// client with no Transport rides http.DefaultTransport, so it saw neither the
-	// corp CA pool above nor, more importantly, the Proxy: nil the proxy's OWN
-	// transports set ("keeps the run token off the corp-proxy wire"): it rode
+	// client with no Transport rides http.DefaultTransport, so it would see neither
+	// the corp CA pool above nor, more importantly, the Proxy: nil the proxy's OWN
+	// transports set ("keeps the run token off the corp-proxy wire"): it would ride
 	// ProxyFromEnvironment instead. With HTTP(S)_PROXY visible to the sidecar
 	// (dockerd-level proxy injection, a host-run or custom proxy image) the run
-	// token, approvals, decisions and MINTED CREDENTIAL VALUES transited the
-	// corporate proxy and skipped resolveTrustedURL's pin (B10-F3).
+	// token, approvals, decisions and MINTED CREDENTIAL VALUES would transit the
+	// corporate proxy and skip resolveTrustedURL's pin.
 	//
 	// So the transport is owned UNCONDITIONALLY, not only on the corp-CA branch,
 	// and Proxy is cleared explicitly: Transport.Clone() PRESERVES the proxy
-	// function, which is why the one branch that did build a transport carried the
-	// bug too. Everything else about DefaultTransport (timeouts, HTTP/2, keep-alives)
+	// function, so a transport built on only one branch would carry the same risk.
+	// Everything else about DefaultTransport (timeouts, HTTP/2, keep-alives)
 	// is kept, and the CA pool rides along when there is one.
 	if client != nil && client.Transport == nil {
 		tr := http.DefaultTransport.(*http.Transport).Clone()

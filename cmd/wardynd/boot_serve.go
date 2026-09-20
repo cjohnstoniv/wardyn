@@ -202,8 +202,8 @@ func startUISandboxGateway(rootCtx context.Context, f *bootFlags, posture tlsPos
 // serveAndShutdown runs the HTTP(S) server until a shutdown signal or a serve
 // error, then drains: graceful HTTP shutdown first, audit sinks last (after the
 // server has stopped accepting requests, so no further audit events are
-// produced — previously sinks were never Closed on shutdown, abandoning the
-// final batch). Extracted verbatim from run(); fan may be nil.
+// produced). Every exit path must Close the sinks, or the final batch is
+// abandoned. Extracted verbatim from run(); fan may be nil.
 func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture, srv *api.Server, idpName string, fan *sinks.Fanout) error {
 	httpSrv := &http.Server{
 		Addr:              *f.listen,
@@ -248,13 +248,12 @@ func serveAndShutdown(rootCtx context.Context, f *bootFlags, posture tlsPosture,
 		}
 	}()
 
-	// EVERY exit path from here on drains the audit sinks. It used to be only the
-	// signal path's tail: a ListenAndServe error returned below (and a Shutdown
-	// error) skipped fan.Close() entirely, so whatever the webhook batcher still
-	// held went to the garbage collector instead of the SIEM — on precisely the
-	// exit an operator is most likely to be investigating. Deferred rather than
-	// repeated at three returns, and it still runs AFTER FlushAuthFailedStreak on
-	// the normal path (defers run last).
+	// EVERY exit path from here on drains the audit sinks: a ListenAndServe or
+	// Shutdown error must close the fanout too, or whatever the webhook batcher
+	// still holds goes to the garbage collector instead of the SIEM — on
+	// precisely the exit an operator is most likely to be investigating.
+	// Deferred rather than repeated at three returns, and it still runs AFTER
+	// FlushAuthFailedStreak on the normal path (defers run last).
 	defer func() {
 		if fan == nil {
 			return

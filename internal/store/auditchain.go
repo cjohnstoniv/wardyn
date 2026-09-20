@@ -98,7 +98,7 @@ type auditChainLink struct {
 //     the very first chained row may have none — catches a DELETED or REORDERED
 //     row, which rule 1 alone cannot see, since splicing one row out leaves
 //     both neighbours internally consistent.
-//  3. HASHLESS ROWS ARE A PREFIX. A row with no row_hash is legacy only while
+//  3. hashless rows are a prefix. A row with no row_hash is legacy only while
 //     no chained row has been seen yet; one that appears AFTER the chain has
 //     started is a break naming that row's seq. Without this rule the sweep
 //     stepped over every hashless row (the old query filtered them out and the
@@ -162,11 +162,9 @@ func (w *auditChainWalk) fail(seq int64, reason string) {
 // trigger used to write it, so there is no second implementation to drift out
 // of agreement with the first.
 //
-// THE SWEEP IS PAGED, and that is a correctness property before it is a cost
-// one. The comment here used to say "rows are STREAMED, not buffered", which
-// described the Go side (pgx iteration with an early break) and not the
-// database side: whether an unbounded `ORDER BY seq` streams or materializes is
-// a PLANNER decision, and review observed it planning as Seq Scan -> Sort on a
+// The sweep is paged, which is a correctness property before it is a cost
+// one: whether an unbounded `ORDER BY seq` streams or materializes is a
+// PLANNER decision, not a Go-side one, and it can plan as Seq Scan -> Sort on a
 // real audit_events, which buffers the entire table before returning row one.
 // Under that plan the early break below saves nothing (the sort has already
 // finished), the memory is the whole table, and an audit log cannot be pruned —
@@ -179,7 +177,7 @@ func (w *auditChainWalk) fail(seq int64, reason string) {
 // with a bound, so memory is one page whatever the table's statistics say, and
 // the early break genuinely stops the work.
 //
-// PAGING DOES NOT VERIFY LESS, which is the only thing that would make this a
+// Paging does not verify less, which is the only thing that would make this a
 // bad trade. Each page is its own snapshot, so the question is whether a row can
 // appear BELOW the cursor after the walk has passed it. It cannot: since 0056
 // the trigger allocates seq while holding the chain lock and releases it at
@@ -193,7 +191,7 @@ func (w *auditChainWalk) fail(seq int64, reason string) {
 // is carried across pages by one auditChainWalk, so a chain longer than a page
 // is one continuous chain and not a sequence of independent ones.
 func (s PG) VerifyAuditChain(ctx context.Context) (AuditChainStatus, error) {
-	// EVERY row, hashless ones included, in seq order — rule 3 is a statement
+	// Every row, hashless ones included, is read in seq order — rule 3 is a statement
 	// about where the hashless rows SIT, so the walk has to see them in place.
 	// (This also retires the separate `count(*) WHERE row_hash IS NULL` query:
 	// Legacy is now counted by the same pass that decides the verdict, so the

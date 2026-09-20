@@ -318,7 +318,7 @@ func UserDriveMountSourceCheck(roots []string) func(source string) (string, erro
 // a host_path drive is about to be bound from — is a STRICT SUBDIRECTORY of
 // hostRoot, THIS drive's own root, resolved the same way.
 //
-// ─── WHY THE DEPLOYMENT CEILING IS NOT ENOUGH ──────────────────────────────
+// Why the deployment ceiling is not enough.
 //
 // UserDriveMountSourceCheck bounds the bind to the union of every root in
 // WARDYN_USER_DRIVE_HOST_ROOTS, which is the OPERATOR's outer bound and stays
@@ -335,14 +335,13 @@ func UserDriveMountSourceCheck(roots []string) func(source string) (string, erro
 // compromise cannot widen it) and the root is the row's (admin-authored, and
 // therefore not allowed to be the outer bound). A drive must satisfy both.
 //
-// ─── FAIL CLOSED ON AN ABSENT ROOT ─────────────────────────────────────────
+// Fail closed on an absent root.
 //
 // An empty hostRoot is a REFUSAL, not a skip. types.DriveMount.HostRoot is set
 // from the resolved row for every host_path drive, so "" means the mount was
 // built by something that does not know about this field — an older control
 // plane, or an in-process caller that assembled a runner.SandboxSpec itself —
-// and the one thing that must not happen then is the pre-fix behaviour silently
-// returning. NOT the standalone runner's -spec JSON: cmd/wardyn-runner's
+// and it must refuse rather than silently succeed. NOT the standalone runner's -spec JSON: cmd/wardyn-runner's
 // fileSpec decodes no drive field and loadSpec never sets SandboxSpec.Drive, so
 // a hand-written spec cannot produce a drive at all
 // (TestLoadSpec_CannotProduceADrive pins that).
@@ -352,7 +351,7 @@ func UserDriveMountSourceCheck(roots []string) func(source string) (string, erro
 // other member's home, and a check that is only stated once is a check a
 // refactor can drop.
 //
-// ─── THE REFUSAL NAMES THE DRIVE, THE LOG NAMES THE PATHS ───────────────────
+// The refusal names the drive, the log names the paths.
 //
 // Every driver refusal on this path becomes the run's failure_hint, which the
 // run's CREATOR reads — the same reader driveShareIsBindable already refuses to

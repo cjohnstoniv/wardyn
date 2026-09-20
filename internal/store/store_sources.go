@@ -24,7 +24,7 @@ import (
 // consumer keeps reading (Sources/BaseImage/Profile/Status), and the folded
 // EffectiveRequirements the run path consumes.
 
-// ─── Sources (tier 1) ────────────────────────────────────────────────────────
+// Sources (tier 1)
 
 const sourceCols = `id, kind, locator, ref, name, requirements, profile, status, ` +
 	`active_run_id, created_at, updated_at`
@@ -327,7 +327,7 @@ func (s PG) SetSourceScanResultUnfenced(ctx context.Context, id uuid.UUID, profi
 		profile, string(status), id, sourceRequirementsParam(seed)))
 }
 
-// ─── Base images (tier 2) ───────────────────────────────────────────────────
+// Base images (tier 2)
 
 const baseImageCols = `id, kind, name, image, steps, created_at, updated_at`
 
@@ -490,7 +490,7 @@ func (s PG) DeleteBaseImage(ctx context.Context, id uuid.UUID, detach bool) erro
 	return nil
 }
 
-// ─── The verify-approve merge writer ─────────────────────────────────────────
+// The verify-approve merge writer
 
 // MergeWorkspaceRequirements ADDS rows to a workspace's requirements overlay
 // atomically — the `jsonb ||` idiom SetWorkspaceRecordResult established — so
@@ -527,7 +527,7 @@ func (s PG) MergeWorkspaceRequirements(ctx context.Context, id uuid.UUID, add ma
 	return s.hydrated(ctx, ws)
 }
 
-// ─── Hydration: attachments → the derived view ──────────────────────────────
+// Hydration: attachments → the derived view
 
 // hydrated materializes a workspace's derived read-only view. For a row whose
 // composition lives in ATTACHMENTS (post-split), Sources/BaseImage/Profile/

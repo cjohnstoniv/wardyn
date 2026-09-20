@@ -138,14 +138,14 @@ var lookupListenIPs = net.DefaultResolver.LookupIPAddr
 // literal for an IP, and the RESOLVED set for a hostname. ok=false means "cannot
 // be classified", which both callers read as "do not refuse".
 //
-// RESOLVING THE HOSTNAME is the fix. Both callers ask the same question — does
+// RESOLVING THE HOSTNAME matters. Both callers ask the same question — does
 // this address bind a specific non-loopback interface a LAN peer can reach —
 // and the answer for `lan-host.corp:8080` is yes, identically to the literal it
-// resolves to. The classifier used to return false for ANY hostname ("a
-// hostname we can't classify — don't refuse"), so the -local-trust-forwarder
-// refusal, whose entire job is catching a LAN bind with the loopback-peer gate
-// disabled, was skipped by naming the interface instead of numbering it. The
-// plaintext-listen refusal had the same hole.
+// resolves to. Treating every hostname as unclassifiable ("a hostname we can't
+// classify — don't refuse") would let the -local-trust-forwarder refusal,
+// whose entire job is catching a LAN bind with the loopback-peer gate
+// disabled, be skipped by naming the interface instead of numbering it. The
+// plaintext-listen refusal has the same hole.
 //
 // A FAILED LOOKUP STAYS QUIET, deliberately, and this is where the line is
 // drawn: an unresolvable name is not a broken configuration this can diagnose —

@@ -45,14 +45,14 @@ func (s PG) CreateAPIToken(ctx context.Context, t types.APIToken, raw string) (t
 	if err != nil {
 		return types.APIToken{}, err
 	}
-	// created_at IS WRITTEN ON THE DATABASE'S CLOCK, back-dated by the request's
-	// own AGE. It used to bind t.CreatedAt straight through, so the row's
-	// timestamp came from wardynd while the value it is compared against —
-	// oidc_session_revocations.revoked_at — comes from Postgres. Two clocks, one
-	// inequality, and the failing direction is the security one: with wardynd
-	// ahead of the database, a token minted BEFORE a revoke carries a created_at
-	// AFTER the cutoff and survives it, so "revoke every session for this human"
-	// silently does not.
+	// created_at is written on the database's clock, back-dated by the request's
+	// own age, rather than binding t.CreatedAt straight through: the row's
+	// timestamp must not come from wardynd's clock while the value it is compared
+	// against — oidc_session_revocations.revoked_at — comes from Postgres. Two
+	// clocks, one inequality, and the failing direction is the security one: with
+	// wardynd ahead of the database, a token minted BEFORE a revoke would carry a
+	// created_at AFTER the cutoff and survive it, so "revoke every session for
+	// this human" would silently not.
 	//
 	// The age, not now(), because plain now() would re-open F143: the API stamps
 	// t.CreatedAt at request ADMISSION, before it reads the body, precisely so a
@@ -147,13 +147,12 @@ func (s PG) ListAPITokens(ctx context.Context) ([]types.APIToken, error) {
 // the api-token twin of RefreshSSHKeyRoles: the OIDC callback's OnLogin hook
 // fires both, so one login bounds both frozen credentials at once.
 //
-// It exists because a token's role was frozen at mint with nothing anywhere
-// able to refresh it. Only two statements ever touched this table —
-// last_used_at and revoked_at — so demoting a human from admin left every
-// outstanding wdn_ token of theirs authenticating AS AN ADMIN until somebody
-// separately remembered DELETE /api/v1/tokens/{id}, and 0.7 widened that stamp
-// to carry security_admin. The sibling credential got this bound in migration
-// 0046; the token lane did not.
+// It exists because a token's role is frozen at mint, with nothing else able
+// to refresh it: demoting a human from admin otherwise leaves every
+// outstanding wdn_ token of theirs authenticating AS AN ADMIN until it is
+// explicitly revoked (DELETE /api/v1/tokens/{id}). The sibling credential is
+// bound the same way, in migration 0046; this is the token lane's
+// counterpart.
 //
 // role only — NOT groups. The hook carries the freshly derived role and nothing
 // else, and the group snapshot is a separate frozen field with its own
@@ -162,7 +161,7 @@ func (s PG) ListAPITokens(ctx context.Context) ([]types.APIToken, error) {
 // needs, and re-stamping a snapshot without also re-stamping its completeness
 // bit would be worse than leaving it alone.
 //
-// STILL BOUNDED-STALE, NOT LIVE, and the ceiling is the owner's next login —
+// It is still bounded-stale, not live, and the ceiling is the owner's next login —
 // exactly what docs/SSH.md §Bounds already documents for the key lane. A human
 // who never signs in again keeps the stamp; narrowing THAT needs the other half
 // of 0046 (a role_checked_at column plus a TTL the auth path enforces), which

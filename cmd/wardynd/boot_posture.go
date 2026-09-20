@@ -104,8 +104,8 @@ const directoryProviderEntra = "entra"
 // internal/directory reads NO environment by design: NewEntra can only answer
 // ErrUnconfigured, which surfaces as a lazy 503 at the first keystroke — a
 // misconfiguration discovered by an admin typing into a combobox, not by the
-// operator who set the variable. PF-10 says a config that cannot work is refused
-// at boot, where the message can name what to set.
+// operator who set the variable. A config that cannot work is refused at boot
+// instead, where the message can name what to set.
 //
 // Two credential sources, in order:
 //

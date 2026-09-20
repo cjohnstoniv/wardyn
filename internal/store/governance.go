@@ -204,11 +204,11 @@ const governanceTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' T
 // second implementation in Go for a caller to skip, mis-order, or forget.
 // Ranked, in order:
 //
-//  1. TIER — user > group > all. An assignment is one admin explicitly naming
+//  1. tier — user > group > all. An assignment is one admin explicitly naming
 //     one principal, so the more specific naming wins outright; no priority in
 //     the group tier can beat a user-tier row.
 //
-//  2. WITHIN THE USER TIER, a sub-keyed match beats an email-keyed one.
+//  2. within the user tier, a sub-keyed match beats an email-keyed one.
 //     capabilitySubjects returns up to TWO user subjects (lowercased sub, then
 //     email) and an admin may legitimately have written an assignment against
 //     either, so dueling rows on the two are reachable and LIMIT 1 must not

@@ -306,9 +306,9 @@ func parseRootList(name, raw string) ([]string, error) {
 //     Saying it is bounded only by the deny-list states the opposite of what
 //     the code does.
 //
-// Fail-closed is the right behaviour for "/" and stays; only the sentence was
-// wrong. internal/runner/member_mount_test.go drives both against withinAnyRoot
-// so the wording cannot drift from the behaviour again.
+// Fail-closed is the right behaviour for "/". internal/runner/member_mount_test.go
+// drives both against withinAnyRoot so the wording cannot drift from the
+// behaviour.
 func (p MemberMountPolicy) bootWarnings() []string {
 	home := filepath.Clean(strings.TrimSpace(os.Getenv("HOME")))
 	seen := map[string]bool{}

@@ -16,7 +16,7 @@ import (
 const deadDomainEntryWarning = "wardyn-proxy: policy entry can never match any request and is DEAD"
 
 // warnDeadDomainEntries runs ValidDomainEntry over the run's two domain lists at
-// sidecar boot and names every entry that can never match (W6-S6).
+// sidecar boot and names every entry that can never match.
 //
 // ValidDomainEntry guards the API WRITE doors, so it refuses a malformed entry
 // on the way IN and has nothing to say about one that is already stored.
@@ -27,7 +27,7 @@ const deadDomainEntryWarning = "wardyn-proxy: policy entry can never match any r
 // carry (a request arrives punycode-encoded), so the deny denies nothing and
 // nothing anywhere says so.
 //
-// WARN, never fail. Refusing the run would take every sandbox on an estate down
+// Warn, never fail. Refusing the run would take every sandbox on an estate down
 // on upgrade day over an entry that has been inert since it was written — a
 // strictly worse outcome than the deny it is reporting. The compiled policy is
 // byte-identical either way; this adds the signal, not a refusal.

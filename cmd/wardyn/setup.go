@@ -160,9 +160,7 @@ func setupTierCmd(use string) *cobra.Command {
 	return cmd
 }
 
-// ---------------------------------------------------------------------------
 // Detection
-// ---------------------------------------------------------------------------
 
 type dockerEnv struct {
 	goos       string // runtime.GOOS
@@ -298,9 +296,7 @@ func parseOSFamily(id, idLike string) string {
 	return "other"
 }
 
-// ---------------------------------------------------------------------------
 // Planning
-// ---------------------------------------------------------------------------
 
 type action int
 
@@ -440,16 +436,14 @@ func planVault(e dockerEnv) plan {
 	}
 }
 
-// ---------------------------------------------------------------------------
 // Execution
-// ---------------------------------------------------------------------------
 
 // executePlan prints p and, when run allows it, executes its script. use
 // ("wall" | "vault") names which tier this is FOR, so a non-enabling outcome
 // (unsupported host, plan-only, declined, or an install that ran but left
 // Docker without the runtime registered) can say so on stderr and exit
-// non-zero — not the previous blanket exit 0, which gave a script/CI caller
-// no way to branch on whether the tier actually ended up available.
+// non-zero, letting a script/CI caller branch on whether the tier actually
+// ended up available.
 func executePlan(use string, p plan, run, yes bool) error {
 	fmt.Printf("%s\n\n%s\n", p.title, p.why)
 
@@ -500,10 +494,8 @@ func executePlan(use string, p plan, run, yes bool) error {
 	return &exitError{code: 1, err: fmt.Errorf("%s tier not enabled: runtime %q not visible in `docker info` after install", use, rtName)}
 }
 
-// ---------------------------------------------------------------------------
 // Scripts (trusted constants — no user input is interpolated; the only variable
 // parts are fixed branch selections like the restart line.)
-// ---------------------------------------------------------------------------
 
 // restartDocker returns the init-appropriate reload/restart. reload picks up new
 // runtimes without killing running containers; restart is the fallback.
@@ -727,9 +719,7 @@ func dockerHostHint(sock string) string {
 		"and the tier would stay off."
 }
 
-// ---------------------------------------------------------------------------
 // Small helpers
-// ---------------------------------------------------------------------------
 
 // runScript executes an install script via bash -c. Callers pass only the
 // compile-time-constant scripts above (the only variable parts are fixed branch

@@ -6,7 +6,7 @@ package proxy
 // The git_pat broker: git-over-HTTPS to a NON-GitHub forge with the PAT held
 // proxy-side and never resident in the sandbox.
 //
-// WHY THIS EXISTS. The GitHub lane already keeps its credential out of the
+// Why this exists: the GitHub lane already keeps its credential out of the
 // sandbox — /wardyn/gh/<org>/<repo> mints an installation token server-side and
 // injects it. Every other forge fell to the git_pat grant, whose own type doc
 // calls it "the OPPOSITE of api_key": git-over-HTTPS is an opaque CONNECT tunnel
@@ -17,14 +17,14 @@ package proxy
 // ref-confined token that never touched the sandbox; GitLab and Azure DevOps
 // users got a long-lived operator PAT sitting in the agent's process.
 //
-// THE MECHANISM removes the tunnel rather than trying to inject into it.
+// The mechanism removes the tunnel rather than trying to inject into it.
 // agent-run rewrites the granted hosts to a PLAIN-HTTP broker path
 // (url.<broker>/git/<host>/.insteadOf https://<host>/), so the proxy terminates
 // the request itself, mints server-side, and sets Basic auth on the outbound
 // leg. The sandbox speaks cleartext HTTP to its own sidecar over a loopback-
 // equivalent hop and never holds the credential.
 //
-// WHAT THIS DOES NOT DO. A PAT carries whatever scope the operator issued it
+// What this does not do: a PAT carries whatever scope the operator issued it
 // with, and Wardyn cannot narrow it — there is no ADO/GitLab equivalent of a
 // scoped installation token. So this makes the credential NON-RESIDENT; it does
 // not make it least-privilege. The allowlist here is per-HOST for exactly that
@@ -286,7 +286,7 @@ func (p *Proxy) patToken(ctx context.Context, g PATGrant) (token, username strin
 	// ":" + tok) that SetBasicAuth puts on the wire, under the username THIS
 	// lane sends (which may differ from the mint's).
 	//
-	// TRUST BOUNDARY (F155, same root cause as the git lane's): procRegistry is
+	// Trust boundary (F155, same root cause as the git lane's): procRegistry is
 	// what maskDecisionBytes consults for every sandbox-facing error body
 	// (Proxy.httpError) and every decision-log line, and the mask is exact-bytes
 	// per RENDERING. registerBasicAuthCredential (inject.go) is the one definition.

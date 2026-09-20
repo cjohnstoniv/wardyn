@@ -17,11 +17,11 @@ import (
 
 // siteConfigFieldsAfter066 names the SiteConfig keys added after 0.6.6 (mirrors
 // internal/api/site_config.go's siteConfigFieldsAfter066 — kept as a separate
-// literal because this package cannot import an internal/api unexported var,
-// and the two lists drift no worse than any other doc/code pair the R3 guards
-// don't cover). A key here that this file's JSON does not MENTION is exactly
-// the shape carryForwardUnnamedSiteConfigFields preserves server-side; add a
-// key here when you add one to internal/api's list.
+// literal because this package cannot import an internal/api unexported var;
+// nothing enforces the two lists staying in sync beyond this comment). A key
+// here that this file's JSON does not MENTION is exactly the shape
+// carryForwardUnnamedSiteConfigFields preserves server-side; add a key here
+// when you add one to internal/api's list.
 var siteConfigFieldsAfter066 = []string{"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers"}
 
 // omittedPostV066Fields reports which of siteConfigFieldsAfter066 raw (the
@@ -61,8 +61,8 @@ func omittedPostV066Fields(raw []byte) ([]string, error) {
 // wizard. `get` before a reset and `apply` after makes it a two-command
 // round-trip that scripts/up.sh can automate.
 //
-// SECRET VALUES NEVER LIVE HERE — the document holds secret NAMES (refs) only,
-// so a captured site-config is safe to keep beside the repo. Restore the secrets
+// This document never holds secret values — only secret NAMES (refs), so a
+// captured site-config is safe to keep beside the repo. Restore the secrets
 // themselves with `wardyn secret set`, which reads the value on stdin.
 
 func siteConfigCmd(client clientFn) *cobra.Command {

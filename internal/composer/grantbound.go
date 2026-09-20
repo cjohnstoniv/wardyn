@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// THE comparator for "which ceiling grant bounds this proposed grant".
+// The comparator for "which ceiling grant bounds this proposed grant".
 //
 // It lives here, in composer, because this package holds the RUNTIME clamp
 // (clampGrants) and internal/api — which holds the WRITE-TIME comparator
@@ -11,17 +11,16 @@
 // grant to the bound of the ceiling grant that covers it, and both ask THIS file
 // which ceiling grant that is.
 //
-// They used to ask differently, and disagreed on the axis that matters. The
-// comparator searched per-grant ("some single ceiling grant dominates on every
-// axis"); the clamp built `map[GrantKind]GrantSpec` and let the LAST same-kind
-// ceiling grant win, then took RequiresApproval and TTL from that arbitrary
-// grant. A ceiling listing two ssh_key grants — the normal shape for two forges,
-// and equally normal for api_key and git_pat — therefore clamped a proposal
-// naming the STRICT forge's pairing to the PERMISSIVE forge's approval posture
-// and TTL, and returned different answers for the same ceiling SET depending on
-// slice order. A stripped requires_approval auto-mints the injection at proxy
-// boot with no human in the loop, which is the widening the write-time
-// comparator was written to refuse and the runtime clamp was quietly allowing.
+// Both callers must ask it the same way: some single ceiling grant must
+// dominate the proposal on every axis. A per-kind map (e.g.
+// `map[GrantKind]GrantSpec`) must never supply the bound instead — the LAST
+// same-kind ceiling grant would win, so a ceiling listing two ssh_key grants
+// (the normal shape for two forges, and equally normal for api_key and
+// git_pat) could clamp a proposal naming the STRICT forge's pairing to the
+// PERMISSIVE forge's approval posture and TTL, and answer differently for the
+// same ceiling SET depending on slice order. A stripped requires_approval
+// auto-mints the injection at proxy boot with no human in the loop — exactly
+// the widening the write-time comparator exists to refuse.
 package composer
 
 import (
@@ -37,10 +36,10 @@ import (
 // F110-residual: require_tls rides the same rule for the same reason (see the
 // field below).
 //
-// F097: header/format are part of that IDENTITY for api_key, not a bound. The
-// pairing used to be (host, secret, known_hosts) only, so a member or profile
-// grant that kept the operator's blessed (host, secret) pairing but named a
-// DIFFERENT header — or a different format — matched the ceiling and was kept.
+// F097: header/format are part of that IDENTITY for api_key, not a bound.
+// Matching only on (host, secret, known_hosts) would let a member or profile
+// grant that keeps the operator's blessed (host, secret) pairing but names a
+// DIFFERENT header — or a different format — match the ceiling regardless.
 // The proxy writes the authored header verbatim onto the forwarded request
 // (internal/egress/proxy/inject.go; the brokered LLM lane strips the four known
 // credential headers and then sets the authored one) and relays the upstream
@@ -179,9 +178,9 @@ func samePairing(a, b grantPairing) bool {
 // into three answers for one question.
 //
 // It takes the whole proposed grant rather than a destructured pairing so the
-// pairing rule lives in exactly ONE decoder (grantPairingOf). It used to take
-// (kind, host, secretRef, knownHostsRef), which is why an api_key axis added to
-// the pairing — header/format, F097 — could not reach this caller at all.
+// pairing rule lives in exactly ONE decoder (grantPairingOf) — a destructured
+// (kind, host, secretRef, knownHostsRef) signature cannot carry an api_key
+// axis added to the pairing later (header/format, F097).
 // A grant whose kind names no stored secret, or whose scope does not decode,
 // is in no pairing (fail closed); its kind-level ceiling membership is the
 // caller's question (CeilingGrantsCovering).

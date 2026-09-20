@@ -6,7 +6,7 @@
 // (default-deny domain allowlist, method rules, first-use approval),
 // streams decision logs, and injects credentials proxy-side.
 //
-// SECURITY INVARIANTS (mirror ARCHITECTURE.md and internal/egress):
+// Security invariants (mirror ARCHITECTURE.md and internal/egress):
 //   - Default deny: an empty allowlist allows nothing.
 //   - DeniedDomains always beats AllowedDomains.
 //   - Private/loopback/link-local/metadata IP ranges are unconditionally
@@ -342,7 +342,7 @@ func ValidDomainEntry(d string) error {
 	// to reject, and it was slipping through the branch the exact case guards.
 	case strings.Contains(wild, ":"):
 		return bad(`the ":port" qualifier must be a number in 1..65535`)
-	// CHARSET (B10-F7). See domain_charset.go.
+	// Charset (B10-F7). See domain_charset.go.
 	case deadCharsetEntry(exact, wild):
 		return bad(charsetWhy)
 	}
@@ -542,12 +542,12 @@ const (
 	// egressPrivateRangeCause is today's sentence, unchanged.
 	egressPrivateRangeCause = "this host resolves into a private/reserved address range, " +
 		"which the built-in guard denies regardless of policy"
-	// egressInternalHostsRemedy is B7's remedy. The parenthetical used to read
-	// "host_suffix plus the cidrs it may resolve into" — advice that cost the
-	// field report two runs, because the ranges an operator can see from their
-	// own machine are a corporate resolver's, not the ones the SANDBOX resolves
-	// into, and a cidrs list drawn from the wrong side excludes the address the
-	// guard actually refuses. Empty cidrs is the full liftable set, still
+	// egressInternalHostsRemedy is B7's remedy: it tells the operator to leave
+	// cidrs empty unless they know the ranges the SANDBOX resolves into, because
+	// the ranges visible from an operator's own machine are a corporate
+	// resolver's, not the sandbox's — a cidrs list drawn from the wrong side
+	// excludes the address the guard actually refuses (the field report cost two
+	// runs on exactly this). Empty cidrs is the full liftable set, still
 	// suffix-scoped (types.InternalHost).
 	egressInternalHostsRemedy = "declare it in site config under internal_hosts " +
 		"(host_suffix; leave cidrs empty unless you know the ranges the SANDBOX resolves into) " +
@@ -639,7 +639,7 @@ func literalIPDenialDetail(host string, port int, pol *Policy, kind blockKind) s
 		if never := neverLiftableDetail("this host's address", kind); never != "" {
 			return never
 		}
-		// THE join site for the four DRAFT sentences above: cause, remedy, hint,
+		// The join site for the four DRAFT sentences above: cause, remedy, hint,
 		// lifetime. The owner's ruling on any of them — reword one, drop the
 		// hint, drop the remedy's parenthetical — is an edit to this one
 		// expression and to the constant it names, nowhere else.
@@ -673,10 +673,10 @@ func literalIPDenialDetail(host string, port int, pol *Policy, kind blockKind) s
 // deny. It is a FIXED sentence like the ones above and never echoes the host —
 // X-Wardyn-Host already carries that.
 //
-// It exists because the deny used to arrive labelled builtin:private-ip with
+// It exists so a resolver outage is never labelled builtin:private-ip with
 // literalIPDenialDetail's "declare it under internal_hosts" advice attached
-// (F055): advice that cannot fix a resolver outage, pointed at loosening an
-// SSRF control, for a fault that is neither.
+// (F055): that advice cannot fix a resolver outage, and it points at loosening
+// an SSRF control for a fault that is neither.
 const resolveFailedDetail = "this host did not resolve (DNS failure, no such name, or no address records), so no address " +
 	"could be vetted; this is a name-resolution fault, not the private-address guard — check the sandbox's resolver, " +
 	"not the allowlist"
@@ -874,7 +874,7 @@ var v4CompatiblePrefix = netip.MustParsePrefix("::/96")
 // including an IPv4-mapped ::ffff:/96 address, which Unmap turns back into the
 // IPv4 the canonical path already judges.
 //
-// TRUST BOUNDARY: deny-only, like nonCanonicalLiteralIP. Its one consumer
+// Trust boundary: deny-only, like nonCanonicalLiteralIP. Its one consumer
 // (isBlockedIP) uses it to DENY; the extracted address is never offered to
 // trustsExactLiteralIP, so a spelling the operator did not type inherits no
 // allowed_domains grant.
@@ -926,7 +926,7 @@ func isBlockedIP(ip net.IP) (blockKind, string) {
 	// real IPv4, so 64:ff9b::a9fe:a9fe reaches 169.254.169.254 while To4()==nil.
 	// Block the prefix wholesale (fail closed) and re-run the embedded v4 through
 	// the v4 block check so the reason names the real target.
-	// HONEST RESIDUAL: only well-known + local-use NAT64 prefixes are covered; a
+	// Honest residual: only well-known + local-use NAT64 prefixes are covered; a
 	// network-specific RFC 6052 prefix is unknowable here without config. The
 	// embedded check is scoped to NAT64 prefixes on purpose — running it on every
 	// IPv6 would false-positive legit addresses whose low 32 bits happen to fall

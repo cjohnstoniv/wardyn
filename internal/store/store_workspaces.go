@@ -31,7 +31,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── Workspace ───────────────────────────────────────────────────────────────
+// Workspace
 
 // jsonOrNull is the one body the nullable-JSONB param helpers below share:
 // isEmpty ⇒ SQL NULL (never the literal JSON "null"), otherwise the marshalled
@@ -195,13 +195,14 @@ func (s PG) ListWorkspaces(ctx context.Context) ([]types.Workspace, error) {
 // it, so ReconcileWorkspaceEgressDecisions re-widened the list on the next
 // restart.
 //
-// THE STAMP IS now(), FROM THE DATABASE, for the reason the two scoped setters
+// The stamp is now(), from the database, for the reason the two scoped setters
 // stamp that way: the value's whole job is to be compared against
 // approvals.decided_at in ReconcileWorkspaceEgressDecisions, and a value from
 // wardynd's clock puts a skew straight into that inequality — in the fail-OPEN
 // direction when the daemon runs behind, which re-applies a decision the
-// operator had already undone. handleUpdateWorkspace used to stamp it in Go;
-// it now passes the flag and the column is written here, on one clock (B8-F3).
+// operator had already undone. That is why handleUpdateWorkspace passes a
+// flag rather than stamping the column itself: the write has to happen here,
+// on one clock (B8-F3).
 func (s PG) UpdateWorkspace(ctx context.Context, id uuid.UUID, ws types.Workspace, stampEgressEdit bool) (types.Workspace, error) {
 	q := `
 		UPDATE workspaces
@@ -469,14 +470,14 @@ func (s PG) SetWorkspaceBuiltImage(ctx context.Context, id uuid.UUID, imageRef, 
 // advance status + the in-flight run pointer without a full-row read-modify-
 // write.
 //
-// FENCED (same shape as ClaimSourceActiveRun / SetSourceScanResult): the write is conditional on the
+// Fenced (same shape as ClaimSourceActiveRun / SetSourceScanResult): the write is conditional on the
 // import-step slot still holding expectedActive, so a caller that decided what
 // to write from a STALE read cannot land it. Every caller here does check-then-
 // act (read the workspace, decide, write), and this was the only unfenced
 // workspace writer — a finalize/update racing a live scan/record run could
-// overwrite the fresher state the concurrent run had just written, which is
-// exactly the class of race the C001 finalize guard closed at one call site
-// only. Pass expectedActive = the active_run_id observed in the read the
+// overwrite the fresher state the concurrent run had just written — the same
+// class of race a finalize guard closes at one call site only. Pass
+// expectedActive = the active_run_id observed in the read the
 // decision came from (nil means "expected no in-flight run"); applied=false
 // means the slot moved under the caller, which must then re-read rather than
 // retry blindly. Returns ErrNotFound only when the workspace does not exist.

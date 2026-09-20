@@ -86,7 +86,7 @@ func stripDangerousKataAnnotations(ann map[string]string) map[string]string {
 //     runsc (CC2). That plug-in shape sidesteps the shim-version coupling that
 //     makes Kata brittle against a very new containerd.
 //
-// Probed in this order; the first installed one wins. NOTE: bare "crun" (no
+// Probed in this order; the first installed one wins. Bare "crun" (no
 // libkrun) is a shared-kernel runtime and is deliberately NOT accepted for CC3.
 var cc3Runtimes = []string{runtimeKata, runtimeKrun}
 
@@ -545,12 +545,10 @@ func applyDiskQuota(hc *container.HostConfig, res runner.Resources, info system.
 //     option "is only available if the backing filesystem is xfs and mounted
 //     with the pquota mount option", and moby's overlay2 driver sets its
 //     projectQuotaSupported flag only when the backing filesystem is xfs. ext4
-//     is NOT supported by that driver's size option — an earlier comment here
-//     claimed "or ext4 with the project feature" and it was simply wrong, which
-//     mattered because overlay2 over ext4 is the default on Docker Desktop /
-//     WSL2 and on stock Ubuntu/Debian. (moby is not vendored here — the client
-//     is — so this states the driver's contract rather than citing a local
-//     line.)
+//     is NOT supported by that driver's size option — significant because
+//     overlay2 over ext4 is the default on Docker Desktop / WSL2 and on stock
+//     Ubuntu/Debian. (moby is not vendored here — the client is — so this
+//     states the driver's contract rather than citing a local line.)
 //   - btrfs and zfs support the size opt natively (subvolume/dataset quotas).
 //   - every other driver (vfs, devicemapper on loopback, fuse-overlayfs, ...)
 //     cannot, so we report false and the caller warns + runs uncapped.

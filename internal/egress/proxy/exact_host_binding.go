@@ -3,7 +3,7 @@
 
 package proxy
 
-// The CREDENTIAL-INJECTION host binding — the one policy question that is asked
+// The credential-injection host binding — the one policy question that is asked
 // without a port, by the one caller that has no port to offer (buildInjector,
 // inject.go). It lives beside the matcher rather than inside it because it is a
 // different question: evalHost decides what the sandbox may REACH, this decides
@@ -15,18 +15,18 @@ package proxy
 // stricter match so an injection rule can never widen egress nor leak a
 // secret to a wildcard-matched host.
 //
-// PORT-LESS BY CONTRACT, and it consults allowedExactAnyPort for that reason
+// Port-less by contract, and it consults allowedExactAnyPort for that reason
 // (B10-F1): its one caller (buildInjector) holds a rule host and no port, while
 // the producer that authors both halves writes the allowlist entry
 // PORT-QUALIFIED ("m.corp:443", F106) and the injection rule BARE. Reading only
-// the port-less map made those two contradict, so buildInjector — and therefore
-// NewServer, and therefore the sidecar of every run on an estate with a
-// corporate artifact mirror — failed closed at boot. An entry the operator
+// the port-less map would make those two contradict, so buildInjector — and
+// therefore NewServer, and therefore the sidecar of every run on an estate with
+// a corporate artifact mirror — would fail closed at boot. An entry the operator
 // port-qualified is the same host named in writing; the port clamps that guard
 // the CREDENTIAL live where a port exists to check (injectableTransport,
 // mitmPortAllowed), and egress itself is unchanged (evalHost never reads this).
 //
-// DENY STAYS SYMMETRIC WITH ALLOW. The two port-less deny checks below cannot see
+// Deny stays symmetric with allow. The two port-less deny checks below cannot see
 // a port-qualified deny (CompilePolicy routes those to deniedExactPort alone), so
 // widening the allow side to "any authored port" without widening the deny side
 // would have made "allow m.corp:443 + deny m.corp:443" BUILD an injector that the
@@ -50,13 +50,13 @@ func (p *Policy) AllowedExactHost(host string) bool {
 		if _, denied := p.deniedExactPort[hostPortKey(host, port)]; denied {
 			continue
 		}
-		// W6-S5: the WILDCARD port-qualified denies too, exactly as
+		// This also matches WILDCARD port-qualified denies, exactly as
 		// AuthoredPortFor reads them. CompilePolicy routes "*.corp:8443" to
 		// deniedWildPort alone, which neither the port-less checks above nor the
 		// exact-port lookup on the line before can see — so without this a
 		// blanket "deny *.corp:8443" could not cancel the one port the operator
-		// authored for m.corp, and the credential stayed bound to a host whose
-		// every authored port had been taken back in writing.
+		// authored for m.corp, and the credential would stay bound to a host
+		// whose every authored port had been taken back in writing.
 		if matchWildPort(host, port, p.deniedWildPort) {
 			continue
 		}

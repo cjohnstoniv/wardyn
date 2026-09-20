@@ -141,8 +141,7 @@ func (f *Fanout) DropsByName() map[string]int64 {
 // error encountered (after attempting to close all of them). Buffering sinks
 // (webhook, syslog) block in Close until their final batch has been flushed, so
 // calling Fanout.Close on graceful shutdown ensures the last events are drained
-// and awaited rather than abandoned (finding: sinks were never Closed on
-// shutdown, so the webhook drain goroutine was never awaited).
+// and awaited rather than abandoned.
 func (f *Fanout) Close() error {
 	var firstErr error
 	for _, cs := range f.children {
@@ -163,10 +162,10 @@ func (f *Fanout) Close() error {
 // panicErr converts a recovered panic value to an error: one that is already an
 // error is returned as-is, anything else is wrapped with its %v rendering.
 //
-// The assertion is on error itself. The local `interface{ Error() string }` this
-// used to declare IS error — same method, same set — so nothing could satisfy
-// the one and not the other, and the second `e.(error)` it then performed could
-// never fail. One assertion says what two did.
+// The assertion is on error itself, not a local `interface{ Error() string }` —
+// same method, same set as error, so nothing can satisfy the one and not the
+// other, and a second `e.(error)` assertion after it could never fail. One
+// assertion says what two would do.
 func panicErr(v any) error {
 	if e, ok := v.(error); ok {
 		return e

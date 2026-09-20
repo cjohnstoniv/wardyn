@@ -67,7 +67,7 @@ const (
 	// signed in" and "the credential could not be refreshed" have different
 	// fixes, and only one of them is a person's to make.
 	//
-	// APPENDED, not slotted in beside its siblings: docs/AUDIT-ACTIONS.md cites
+	// Appended, not slotted in beside its siblings: docs/AUDIT-ACTIONS.md cites
 	// each of these by LINE with a zero-line window, so inserting above them
 	// rots three citations for nothing.
 	ruleSourceCredentialReauthTimeout = "credential:reauth-timeout"

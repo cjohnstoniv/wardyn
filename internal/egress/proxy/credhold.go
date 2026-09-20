@@ -21,20 +21,20 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// THE HOLD — the second caller of the ResolveWait shape.
+// The hold — the second caller of the ResolveWait shape.
 //
-// A captured AWS SSO session can lapse WHILE a run is working. Before 0.7.6 that
-// was terminal: the sandbox's next GetRoleCredentials failed, and an agent
-// mid-task lost its context. Now the control plane answers 423 with the id of a
-// visible sign-in request, and this file PARKS that one request while its owner
-// signs in, bounded by one knob.
+// A captured AWS SSO session can lapse WHILE a run is working. Without this
+// hold, a lapse is terminal: the sandbox's next GetRoleCredentials fails, and
+// an agent mid-task loses its context. Instead, the control plane answers 423
+// with the id of a visible sign-in request, and this file PARKS that one
+// request while its owner signs in, bounded by one knob.
 //
-// WHAT IT DOES NOT CLAIM. A parked request is not a paused agent: the agent's
+// What it does not claim. A parked request is not a paused agent: the agent's
 // tool call is simply slow, and a client that gives up first loses the turn
 // exactly as it does today. The knob exists to be lowered below an SDK that is
 // less patient than the hold.
 //
-// WHAT IT NEVER DOES. It never re-polls the INJECTION url: every resolve there
+// What it never does. It never re-polls the INJECTION url: every resolve there
 // re-MINTS through the broker and commits a credential.mint audit row in the
 // same transaction, so a one-second poll would write three hundred rows per
 // ten-minute hold onto a hash-chained log. It polls the APPROVAL instead, by id,
@@ -138,7 +138,7 @@ var (
 // errReauthCapped is the per-run workflow cap refusing a NEW lifecycle. Its own
 // sentinel so the cap reads as a cap rather than as an expiry that never
 // happened — and, being an errReauthEnded, it writes no timeout row at all,
-// which is also why it needs no per-retry dedupe (general N-new-3 / INFO-2).
+// which is also why it needs no per-retry dedupe.
 var errReauthCapped = errReauthEnded{reason: "no further sign-in will be requested for this run"}
 
 // reauthTimedOutSentence is what the sandbox's SDK is told. It says what was
@@ -161,13 +161,12 @@ const reauthEndedSentence = "wardyn asked this AWS SSO credential request's owne
 // reauthWorkflow is ONE bounded re-auth lifecycle, shared by every caller that
 // arrives for the same approval id.
 //
-// IT OWNS ITS OWN GOROUTINE, and that is the whole correction (security
-// BLOCKER-1 / general B1). The first shape ran the poll loop on the LEADER's
-// goroutine under the entry's reMu, which made every clause of Codex #2's
-// contract unreachable in production: followers queued on an uncancellable
-// mutex instead of a ctx-cancellable wait, a disconnected SDK was not released,
-// and when the leader's budget ended the workflow was deleted so the next mutex
-// holder re-resolved, got the same 423 for the same PENDING row, and opened a
+// It owns its own goroutine — running the poll loop on a caller's goroutine
+// under the entry's reMu instead would make the contract below unreachable in
+// production: followers would queue on an uncancellable mutex instead of a
+// ctx-cancellable wait, a disconnected SDK would not be released, and when
+// that caller's budget ended the workflow would be deleted so the next mutex
+// holder re-resolves, gets the same 423 for the same PENDING row, and opens a
 // NEW counted workflow with a FULL fresh budget — up to maxReauthHolds serial
 // budgets for ONE lapse, with the measured ~30 s retry cadence feeding it.
 //
@@ -332,15 +331,15 @@ func holdForReauth(ctx context.Context, poll time.Duration, stop <-chan struct{}
 		state, status, err := approvals.readApproval(ctx, approvalID)
 		switch {
 		case err != nil, status >= 500:
-			// TRANSIENT. A control plane that is down is not a decision; keep
+			// Transient. A control plane that is down is not a decision; keep
 			// waiting, bounded by the budget.
 			continue
 		case status == http.StatusUnauthorized, status == http.StatusForbidden, status == http.StatusGone:
-			// TERMINAL, AND CLASSIFIED ON PURPOSE (Codex #4). After a run is
-			// killed the internal auth/liveness middleware can answer 401/403
-			// before the CANCELLED row is readable, and the generic poll treats
-			// every non-200 as "still pending" — so the hold used to run its
-			// whole budget against a run that had already ended.
+			// Terminal, and classified on purpose: after a run is killed the
+			// internal auth/liveness middleware can answer 401/403 before the
+			// CANCELLED row is readable. Treating that like the generic poll
+			// treats every other non-200 — "still pending" — would run the
+			// hold's whole budget against a run that has already ended.
 			return types.ResolvedInjection{}, reauthEndedRunGone
 		case status == http.StatusNotFound:
 			// A read racing the row's own insert answers 404 once; a row that
@@ -355,7 +354,7 @@ func holdForReauth(ctx context.Context, poll time.Duration, stop <-chan struct{}
 		case types.ApprovalApproved:
 			// ONE re-resolve, on the CURRENT run token.
 			//
-			// NOT under the budget ctx (security NIT-4): a deadline landing
+			// NOT under the budget ctx: a deadline landing
 			// mid-call leaves the control plane with a credential.mint, a
 			// secret.read success and a per-run mask registration for a retry
 			// the proxy then discards as expired — a trail saying the retry
@@ -410,11 +409,11 @@ func (a httpApprovalReader) readApproval(ctx context.Context, id uuid.UUID) (typ
 // writeAWSSDKError answers an AWS-lane refusal with the shape both AWS SDKs
 // parse as a modelled service error, instead of the plain text every other
 // refusal gets — the exact fix this file's writeSSOUnauthorized proved once
-// for a spent credential hold, generalised (0.7.8) to every dial-shaped and
+// for a spent credential hold, generalised to every dial-shaped and
 // credential-shaped refusal on the run's own SSO portal or a Bedrock
 // endpoint. status/errType are a DELIBERATE per-class choice, never a
-// default: keeping 502 for everything is what let the reported operator's
-// SDK retry the same unparseable body ~20 times in seconds. message is the
+// default: keeping 502 for everything lets an SDK retry the same unparseable
+// body ~20 times in seconds. message is the
 // SAME masked, topology-redacted sentence the decision log's Cause field
 // carries (Proxy.dialFailureCause) — never a raw error, and never a
 // credential.

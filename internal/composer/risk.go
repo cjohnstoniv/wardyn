@@ -73,7 +73,7 @@ var safeBaselineDomains = map[string]bool{
 	// an onboarded workspace legitimately unions into a run, so a scan-derived
 	// egress addition never reads as "custom" medium-risk egress.
 	//
-	// NOTE (Option C): GitHub is now reached via the git-broker (routed through
+	// (Option C): GitHub is now reached via the git-broker (routed through
 	// wardyn-proxy, never in a run's allowed_domains), so the github entries below
 	// are effectively dead for scoring — a GitHub clone no longer surfaces as a
 	// proposed egress domain. They are retained as a defensive low-risk baseline in
@@ -115,7 +115,7 @@ func Grade(run RunInput, spec types.RunPolicySpec) []RiskItem {
 		items = append(items, RiskItem{Field: field, Value: value, Level: lvl, Rationale: rationale, InvariantRef: inv})
 	}
 
-	// ── Confinement class: CC1 weakest (runc) → CC2 (gVisor) → CC3 (Kata). ──
+	// Confinement class: CC1 weakest (runc) → CC2 (gVisor) → CC3 (Kata).
 	switch strings.ToUpper(strings.TrimSpace(string(spec.MinConfinementClass))) {
 	case string(types.CC1):
 		add("min_confinement_class", "CC1", RiskHigh,
@@ -131,7 +131,7 @@ func Grade(run RunInput, spec types.RunPolicySpec) []RiskItem {
 			"Unrecognized confinement class; treated as medium pending validation.", "5")
 	}
 
-	// ── Egress posture. ──
+	// Egress posture.
 	switch {
 	case spec.AllowAllEgress:
 		add("allow_all_egress", "true", RiskHigh,
@@ -161,12 +161,12 @@ func Grade(run RunInput, spec types.RunPolicySpec) []RiskItem {
 		}
 	}
 
-	// ── Credential grants. ──
+	// Credential grants.
 	for i, g := range spec.EligibleGrants {
 		gradeGrant(add, i, g)
 	}
 
-	// ── Workspace mounts: read-write host bind = host writes persist. ──
+	// Workspace mounts: read-write host bind = host writes persist.
 	for i, m := range spec.WorkspaceMounts {
 		ro := m.ReadOnlyOrDefault()
 		field := fmt.Sprintf("workspace_mounts[%d]", i)
@@ -179,13 +179,13 @@ func Grade(run RunInput, spec types.RunPolicySpec) []RiskItem {
 		}
 	}
 
-	// ── Brokered git: branch-namespace confinement. ON by default, and the
+	// Brokered git: branch-namespace confinement. ON by default, and the
 	// reason an agent cannot rewrite main — the broker forwards a push only
 	// when every ref it updates lives under refs/heads/wardyn/<run-id>/.
 	// Turning it off is an unambiguous widening that Clamp already treats as a
-	// privilege (it is forced false unless the operator's ceiling sets it), yet
-	// it was graded nowhere: invisible on the one surface built to show a human
-	// what a run may do (B11b-F11). ──
+	// privilege (it is forced false unless the operator's ceiling sets it), so
+	// it must be graded here too — the one surface built to show a human what
+	// a run may do.
 	if spec.GitPushAnyBranch {
 		add("git_push_any_branch", "true", RiskHigh,
 			"Branch-namespace confinement is OFF: this run's brokered pushes may update ANY branch the granted "+
@@ -193,9 +193,9 @@ func Grade(run RunInput, spec types.RunPolicySpec) []RiskItem {
 				"The grant's own GitHub ruleset is what still bounds which repos it can touch.", "2")
 	}
 
-	// ── Idle reaping. The reaper skips on <= 0 (internal/lifecycle: "0 DISABLED"),
+	// Idle reaping. The reaper skips on <= 0 (internal/lifecycle: "0 DISABLED"),
 	// so an omitted field — which the store COALESCEs to 0 — is just as unbounded
-	// as an explicit -1 and must grade the same. Only the rationale differs. ──
+	// as an explicit -1 and must grade the same. Only the rationale differs.
 	if spec.AutoStopAfterSec <= 0 {
 		val := fmt.Sprintf("%d", spec.AutoStopAfterSec)
 		switch {

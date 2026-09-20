@@ -30,11 +30,11 @@ package proxy
 // (2) net.ParseIP returns nil for a ZONE-SUFFIXED IPv6 literal ("fe80::1%eth0",
 // and the RFC 6874 authority spelling "fe80::1%25eth0" a URI carries it in),
 // while netip.ParseAddr parses it and net.Dial dials it. The canonical spelling
-// of that same address is denied at step 0, so the zone id alone used to decide
-// the verdict.
+// of that same address is denied at step 0, so without this check the zone id
+// alone would decide the verdict.
 //
-// Left unvetted those spellings walked straight past step 0 as ordinary
-// "hostnames" and, with a corp upstream configured, were handed to the
+// Left unvetted those spellings walk straight past step 0 as ordinary
+// "hostnames" and, with a corp upstream configured, are handed to the
 // operator's proxy verbatim — SSRF to loopback/metadata through the one hop
 // the threat model says the guard still covers.
 
@@ -107,7 +107,7 @@ func (p *Proxy) literalIPGuard(req egress.Request, host string, port int) (net.I
 // net.ParseIP already accepts and for an ordinary hostname, so it can never
 // change what the canonical path decides.
 //
-// TRUST BOUNDARY: this widens nothing. Both consumers — evaluate's step 0 and
+// Trust boundary: this widens nothing. Both consumers — evaluate's step 0 and
 // egressTarget's upstream branch — DENY on it and nothing else reads it, so a
 // spelling the operator did not type is never offered to trustsExactLiteralIP
 // or to any allow path.
@@ -123,13 +123,13 @@ func nonCanonicalLiteralIP(host string) net.IP {
 // URI (and therefore a CONNECT authority) carries the zone id in — and nil for
 // anything else.
 //
-// net.ParseIP has no zone syntax and returns nil for both, so the literal-IP
-// guard read them as ordinary hostnames: "fe80::1" denied at step 0 with
-// builtin:private-ip while "fe80::1%eth0" went to policy, could raise a
-// first-use approval for a link-local address (which invariant 3 says must
-// never be raisable), and under a corp upstream was handed over verbatim.
-// netip.ParseAddr does parse them and net.Dial does dial them, so that is the
-// parser this guard has to agree with.
+// net.ParseIP has no zone syntax and returns nil for both, so without this
+// check the literal-IP guard reads them as ordinary hostnames: "fe80::1"
+// denied at step 0 with builtin:private-ip while "fe80::1%eth0" goes to
+// policy, could raise a first-use approval for a link-local address (which
+// invariant 3 says must never be raisable), and under a corp upstream is
+// handed over verbatim. netip.ParseAddr does parse them and net.Dial does
+// dial them, so that is the parser this guard has to agree with.
 //
 // The zone is dropped from the returned address on purpose: a zone selects
 // which INTERFACE an address is reached on, never a different address, and
@@ -156,7 +156,7 @@ func zonedIPv6Literal(host string) net.IP {
 // is purely the gap-filler beside an existing net.ParseIP check and can never
 // change what the canonical path does.
 //
-// TRUST BOUNDARY: this widens nothing. It is read only through
+// Trust boundary: this widens nothing. It is read only through
 // nonCanonicalLiteralIP, whose two consumers deny; a non-canonical spelling is
 // never offered to trustsExactLiteralIP or to any allow path, because an
 // operator authors allowed_domains entries in canonical form (AllowsLiteralIP

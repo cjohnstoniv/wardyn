@@ -915,8 +915,8 @@ func buildGitHubMinter(secrets secretstore.Store) broker.GitHubMinter {
 }
 
 // flagEnv/flagBool/flagDuration/flagIntEnv/splitCSV are shared with
-// cmd/wardyn-tetragon-ingest via internal/cliutil (mirrored duplicates there
-// previously).
+// cmd/wardyn-tetragon-ingest via internal/cliutil — the single source, not a
+// per-binary copy.
 var (
 	flagEnv      = cliutil.FlagEnv
 	envOr        = cliutil.EnvOr

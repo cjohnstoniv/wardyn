@@ -40,7 +40,7 @@ const (
 	// rather than re-typed, so renaming the volume cannot leave the annotation
 	// naming a mount that no longer exists.
 	//
-	// IT IS INERT TODAY, and nothing depends on it working. runsc keeps a mount
+	// It is inert today, and nothing depends on it working. runsc keeps a mount
 	// hint only when it carries `share`, `source` AND `type` alongside the
 	// option — one missing any of them is discarded ("ignoring mount
 	// annotations for ... because of missing required field(s)",
@@ -240,7 +240,7 @@ func driveClaimIdentity(claim *corev1.PersistentVolumeClaim, drive *types.DriveM
 			return refuseForeignDriveClaim(claim, drive, labelManaged, "true",
 				"an administrator's share, which carries none of Wardyn's labels")
 		}
-		// AND THE SAME SUBJECT CHECK THE MANAGED ARM MAKES, presence-guarded for
+		// And the same subject check the managed arm makes, presence-guarded for
 		// the same reason. A static claim's NAME is minted by Wardyn
 		// (types.DriveObjectNamedByWardyn), so a template that folds two
 		// principals onto one home folds them onto one claim — and this arm,
@@ -346,7 +346,7 @@ func ensureDrivePVC(ctx context.Context, client kubernetes.Interface, ns string,
 	case !apierrors.IsNotFound(err):
 		return fmt.Errorf("k8s: drive: look up claim %q: %w", drive.ObjectName, err)
 	case drive.Backend == types.DriveBackendK8sPVCStatic:
-		// THE CLAIM AND THE NAMESPACE GO TO THE OPERATOR, not into the member's
+		// The claim and the namespace go to the operator, not into the member's
 		// failure hint — the audience split refuseForbiddenDriveClaim makes two
 		// cases up, for the same reason: this error IS the hint, verbatim.
 		slog.Warn("wardynd: k8s substrate: a share drive's claim is not provisioned",
@@ -410,7 +410,7 @@ func ensureDrivePVC(ctx context.Context, client kubernetes.Interface, ns string,
 // wins; a loser that treated AlreadyExists as success would mount the winner's
 // storage at the drive target inside its own member's agent — the exact
 // cross-mount reuseDriveClaim exists to refuse, arriving through the one door
-// that used to skip it. The same window swallows a Terminating claim: an
+// that would otherwise skip it. The same window swallows a Terminating claim: an
 // operator's `kubectl delete pvc` between the Get and the Create leaves a
 // finalizer-pinned object whose AlreadyExists reads identical from here.
 //
@@ -490,12 +490,12 @@ func drivePVCForbiddenRemedy(err error) string {
 // reuseDriveClaim decides whether a claim that already exists may back this run.
 // Two states refuse it and everything else is a warning.
 //
-// IDENTITY IS A REFUSAL, and it is checked FIRST because it is the only one of
+// Identity is a refusal, and it is checked FIRST because it is the only one of
 // the three whose wrong answer hands one member another member's files. See
 // driveClaimIdentity for what the labels decide and errDriveClaimForeign for why
 // the object name cannot.
 //
-// TERMINATING IS A REFUSAL, the one existing-claim state that cannot be a
+// Terminating is a refusal, the one existing-claim state that cannot be a
 // warning even for a claim that IS this member's. A claim with a
 // DeletionTimestamp is finalizer-pinned until the
 // last pod using it goes away; a NEW pod mounting it is never admitted (the
@@ -534,7 +534,7 @@ func reuseDriveClaim(claim *corev1.PersistentVolumeClaim, drive *types.DriveMoun
 // substrate ever sets, and — on a gVisor pod only — the per-mount directfs
 // annotation below.
 //
-// APPEND AND SET, NEVER ASSIGN OVER, on all four. This is the only code in the
+// Append and set, never assign over, on all four. This is the only code in the
 // package that gives the agent pod a Volume, a VolumeMount, a pod-level
 // SecurityContext or an annotation today — so a wholesale assignment is correct
 // right now and silently wrong the first time anything else adds one (a
@@ -549,7 +549,7 @@ func reuseDriveClaim(claim *corev1.PersistentVolumeClaim, drive *types.DriveMoun
 // reader of the pod spec (and an admission policy) sees — disagreeing halves are
 // how a read-only allocation comes up writable.
 //
-// FSGROUP IS A MANAGED-CLAIM FIELD, AND THE BACKEND DECIDES. A
+// FSGroup is a managed-claim field, and the backend decides. A
 // dynamically-provisioned k8s_pvc comes up EMPTY and belongs to ONE principal,
 // so group-owning its root to the gid every agent image runs as is both
 // necessary (a root-owned volume root is EACCES for uid 1000, and the control
@@ -558,10 +558,9 @@ func reuseDriveClaim(claim *corev1.PersistentVolumeClaim, drive *types.DriveMoun
 //
 // A SHARE (k8s_pvc_static) is the opposite object: an admin-precreated claim
 // over an export whose files are owned by whatever the export says, with
-// several principals' homes among them. This function used to set fsGroup on it
-// too, justified by a claim that the kubelet does not apply fsGroup to an
-// NFS-type volume. THAT CLAIM IS FALSE for the upstream CSI NFS driver
-// (kubernetes-csi/csi-driver-nfs), which ships `fsGroupPolicy: File` — and File
+// several principals' homes among them. fsGroup must never be set on it:
+// the kubelet DOES apply fsGroup to an NFS-type volume via the upstream CSI
+// NFS driver (kubernetes-csi/csi-driver-nfs), which ships `fsGroupPolicy: File` — and File
 // means, verbatim, that Kubernetes may use fsGroup to change permissions and
 // ownership of the volume "regardless of fstype or access mode".
 // ReadWriteOnceWithFSType, the policy that really is limited to block storage,
@@ -586,7 +585,7 @@ func reuseDriveClaim(claim *corev1.PersistentVolumeClaim, drive *types.DriveMoun
 // `hostPath` under Baseline and Restricted alike. No drive backend on this
 // substrate offers a host path, so nothing here has to refuse one.
 //
-// GVISOR (the CC2/CC3 RuntimeClasses resolveRuntimeClassName pins): a
+// gVisor (the CC2/CC3 RuntimeClasses resolveRuntimeClassName pins): a
 // network-backed volume under runsc wants `directfs` OFF — the gofer donates a
 // file descriptor per mount point and the sandbox then operates on it directly,
 // which a 9p/NFS-backed export does not reliably support. This function stamps
@@ -598,7 +597,7 @@ func reuseDriveClaim(claim *corev1.PersistentVolumeClaim, drive *types.DriveMoun
 // stamped here because this is the only place in the tree where a drive volume
 // and a RuntimeClass meet.
 //
-// THE ANNOTATION DOES NOT DELIVER IT: runsc discards this hint outright (see
+// The annotation does not deliver it: runsc discards this hint outright (see
 // driveDirectfsAnnotation for why, with the upstream reference). The node flag
 // `--directfs=false` is therefore not one remedy among two — it is the only
 // one, and docs/OPERATIONS.md "User drives on Kubernetes" carries that recipe

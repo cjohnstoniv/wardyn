@@ -22,7 +22,7 @@ import (
 // operator can find it. Empty when every shipped trigger is the one Wardyn
 // created, and when the table does not exist.
 //
-// THE SCHEMA IS PART OF THE COMPARISON, not decoration in the message. Matching
+// The schema is part of the comparison, not decoration in the message. Matching
 // on proname alone would accept a forger's own `audit_events_chain()` created in
 // a schema earlier on the search_path — the same shadowing 0058 exists to stop
 // on the resolution side, arriving here through the catalog instead. The
@@ -31,7 +31,7 @@ import (
 // audit_events_chain` from the table's own namespace), so that is the identity
 // tested.
 //
-// WHAT THIS DOES NOT CATCH, stated so nobody reads it as more than it is: the
+// What this does not catch, stated so nobody reads it as more than it is: the
 // shipped function's BODY, replaced in place with CREATE OR REPLACE FUNCTION.
 // The name and the schema still match and the catalog looks identical. That is a
 // behavioural question, not a catalog one, and it is what the boot canary answers
@@ -98,7 +98,7 @@ func auditImpostorTriggers(ctx context.Context, db migrationExecutor) (map[strin
 // actor=Y outcome=success, InsertAuditEvent returned nil, this boot check
 // returned nil, and the sweep returned ok=true.
 //
-// NAME ORDER IS NOT THE TEST, and reasoning that it is would have left the
+// Name order is not the test, and reasoning that it is would have left the
 // easier attack open. AuditDDLProtected's doc comment and docs/OPERATIONS.md
 // both describe this bypass as a trigger sorting AFTER audit_events_chain
 // (same-event row triggers fire in name order, so it runs last and overwrites
@@ -114,9 +114,9 @@ func auditImpostorTriggers(ctx context.Context, db migrationExecutor) (map[strin
 // notify trigger off this table, and bricking that boot would be a worse
 // failure than naming it.
 //
-// TGENABLED IS NOT auditTriggerNames' FILTER, and reusing that one left the
-// state that matters most invisible. auditTriggerNames asks whether one of
-// WARDYN'S OWN triggers is firing for ORDINARY writes, so it reads 'O' and 'A'
+// tgenabled is not auditTriggerNames' filter, and reusing that one would leave
+// the state that matters most invisible. auditTriggerNames asks whether one of
+// Wardyn's own triggers is firing for ORDINARY writes, so it reads 'O' and 'A'
 // and correctly treats 'R' (replica-only) as absent. Asking the same question of
 // a FOREIGN trigger inverts the answer: 'R' means dormant for ordinary traffic
 // and ARMED for exactly the `session_replication_role = replica` session the
@@ -130,7 +130,7 @@ func auditImpostorTriggers(ctx context.Context, db migrationExecutor) (map[strin
 // reporting the log clean. So the predicate is stated in ITS OWN terms rather
 // than borrowed: any state except 'D'.
 //
-// 'D' STAYS OUT, deliberately and narrowly. A disabled trigger fires for
+// 'D' stays out, deliberately and narrowly. A disabled trigger fires for
 // nothing at all, so a catalog row parked at 'D' cannot rewrite a row; arming it
 // is an ALTER TABLE ... ENABLE, which needs the very TRIGGER privilege
 // AuditDDLProtected exists to report on, and a boot that refused over a trigger

@@ -93,16 +93,13 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 			return nil, fmt.Errorf("verify the audit chain on the app role: %w", cerr)
 		}
 
-		// THE ROUTES, not a bool, because the remedy differs per route. This
-		// warning used to assert the cause — "still owns audit_events or is a
-		// superuser" — and prescribe "connect wardynd as a distinct non-owner
-		// role", which is the wrong remedy for two of the four routes the check
-		// counts and actively misleading for the fourth: a role that owns
-		// nothing and is nobody's superuser, but was GRANTed SET on the
-		// session_replication_role parameter, can silence every simply-enabled
-		// trigger with no DDL at all and was handed a warning naming two things
-		// it is not. db.AuditDDLBypassRoutes answers the same question the bool
-		// did and says WHICH.
+		// THE ROUTES, not a bool, because the remedy differs per route: a role
+		// that owns nothing and is nobody's superuser, but was GRANTed SET on
+		// the session_replication_role parameter, can silence every
+		// simply-enabled trigger with no DDL at all — "connect wardynd as a
+		// distinct non-owner role" is the wrong remedy for that route, and
+		// misleading about what the role actually holds. db.AuditDDLBypassRoutes
+		// answers the same question a bool would and says WHICH.
 		routes, perr := db.AuditDDLBypassRoutes(connectCtx, pool)
 		if perr != nil {
 			pool.Close()
@@ -267,8 +264,7 @@ func knownRunnerTargets() []string {
 // optionalFeatures groups the off-by-default subsystems run() wires into
 // api.Config: recording replay, human SSO, devcontainer builds, the
 // subscription/managed LLM credential providers, and the advisory AI scan
-// fallback. Each is nil/zero when unconfigured (fail closed / feature off),
-// exactly as before the extraction.
+// fallback. Each is nil/zero when unconfigured (fail closed / feature off).
 type optionalFeatures struct {
 	recStore         recording.Store
 	authn            *oidc.Authenticator
@@ -341,9 +337,9 @@ func buildOptionalFeatures(rootCtx, bootCtx context.Context, f *bootFlags, pool 
 			return of, fmt.Errorf("invalid WARDYN_OIDC_DEFAULT_ROLE %q: want %q or %q (%q is a MAPPED tier only — name the App Role, group or email that should hold it in WARDYN_OIDC_ROLE_MAP; it is refused as a fallthrough default)",
 				defaultRole, oidc.RoleAdmin, oidc.RoleMember, oidc.RoleSecurityAdmin)
 		}
-		// The redirect URL is TWO things since 0.7.3, and only one of them was
-		// ever validated: the IdP callback target (oidc.New checks it is
-		// non-empty, nothing more) AND the second origin the console's CSRF
+		// The redirect URL is TWO things, and oidc.New only validates one of
+		// them: the IdP callback target (it checks non-empty, nothing more)
+		// AND the second origin the console's CSRF
 		// guard accepts as same-origin (internal/api/csrf.go). A value that
 		// parses to no host silently kills that second arm, and the symptom
 		// lands on the operator as a 403 reading "CSRF guard" at their first
@@ -754,9 +750,9 @@ type loginStampStore interface {
 // so a demoted human's outstanding wdn_ tokens kept authenticating as an admin
 // until someone remembered to revoke them by hand). One login bounds both.
 //
-// It is a NAMED FUNCTION over an INTERFACE, not the closure it used to be, and
-// that is the whole of F257. The only thing guarding this bound was
-// apitoken_stamp_doc_test.go's strings.Contains(boot_deps.go,
+// It is a NAMED FUNCTION over an INTERFACE, so a grep for its method name can
+// see the call site but not argument order. The only thing guarding this bound
+// was apitoken_stamp_doc_test.go's strings.Contains(boot_deps.go,
 // "RefreshAPITokenRoles") — a grep for the method NAME. Transposing the two
 // string arguments (`st.RefreshAPITokenRoles(ctx, role, sub)`) silently stamps
 // the role column of whatever principal is literally named "member" and leaves
@@ -820,10 +816,11 @@ func warnBedrockSSOPinPosture(ctx context.Context, st bedrockPinRosterStore, bed
 // console-wide 403 whose message names no configuration at all.
 //
 // It asks internal/api's OWN parse (originHost), so ONE parse decides both.
-// They used to disagree: originHost additionally refuses USERINFO — the host is
-// not where a reader looks — so `https://u@console.example/cb` booted clean and
-// then silently killed both the CSRF guard's second host and the PTY-attach
-// socket's, which is the exact symptom this check was added to prevent.
+// A second, disagreeing parse is the risk: originHost additionally refuses
+// USERINFO — the host is not where a reader looks — so a value like
+// `https://u@console.example/cb` could boot clean under a laxer parse and
+// then silently kill both the CSRF guard's second host and the PTY-attach
+// socket's.
 func validateOIDCRedirectURL(raw string) error {
 	if !api.OriginHostReadable(raw) {
 		return fmt.Errorf("invalid WARDYN_OIDC_REDIRECT_URL %q: want an absolute URL with a scheme and host, e.g. https://wardyn.example.com/auth/callback — its HOST is also the second origin the console's CSRF guard accepts as same-origin, so a value without one refuses every console write behind a TLS-terminating ingress", raw)

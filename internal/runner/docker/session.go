@@ -62,7 +62,7 @@ var attachShell = []string{"/bin/sh", "-c",
 //   - Closing the returned Session tears down only this exec stream (resp.Close)
 //     — it never touches the sandbox, the agent, or the sidecars.
 //
-// SECURITY (invariant 3): the shell runs inside the already-confined sandbox, so
+// Security (invariant 3): the shell runs inside the already-confined sandbox, so
 // it inherits the same L0 structural-egress + confinement envelope as the agent.
 // No new network path is opened: the PTY bytes flow control-plane -> dockerd ->
 // container over the Docker exec hijack, never through the sandbox's HTTP_PROXY

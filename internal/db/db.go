@@ -73,7 +73,7 @@ const GroundTruthRotatorLockKey int64 = 0x5741524459_475452 // ASCII "WARDYGTR"
 // lifetime: a second instance against the same database refuses to start
 // instead of quietly serving.
 //
-// WHY IT IS A SAFETY CONTROL, not modesty: wardynd keeps state per-process that
+// Why it is a safety control, not modesty: wardynd keeps state per-process that
 // a second instance cannot see, the sharpest being the secret-masking registry
 // (internal/secretmask) — an in-memory, process-local map that FAILS OPEN.
 // Secrets are registered on whichever instance served the run's proxy
@@ -82,7 +82,7 @@ const GroundTruthRotatorLockKey int64 = 0x5741524459_475452 // ASCII "WARDYGTR"
 // `success` audit event. The chart's refusal is render-time only, so
 // `kubectl scale`, an HPA, or a non-Helm replica edit defeated it silently.
 //
-// HONEST CEILING — AT MOST ONE STEADY-STATE INSTANCE, NOT MUTUAL EXCLUSION,
+// HONEST CEILING — at most one steady-state instance, not mutual exclusion,
 // exactly as GroundTruthRotatorLockKey documents for the same mechanism. An
 // advisory lock dies with its SESSION, not with the process, and the holder
 // never re-verifies it: a Postgres restart, a failover, pg_terminate_backend or
@@ -113,7 +113,7 @@ const SecretRekeyLockKey int64 = 0x5741524459_524B59 // ASCII "WARDYRKY"
 // -scoped pg_advisory_xact_lock, never the session-scoped form: it is released
 // by the commit that makes the new row visible, so the next writer's head read
 // cannot miss it, and no code path can leak it by forgetting a release.
-// SINCE 0056_audit_chain_serialize.sql THE TRIGGER TAKES IT TOO, and that is
+// Since 0056_audit_chain_serialize.sql the trigger takes it too, and that is
 // what binds writers this package does not know about. 0047 could not: the
 // identity default had already assigned seq by the time a BEFORE INSERT trigger
 // ran, so two racing writers could take the lock there in the opposite order to
@@ -146,7 +146,7 @@ const AuditChainLockKey int64 = 0x5741524459_434841 // ASCII "WARDYCHA"
 // documented minimum of 3, a handful of stuck audit writes exhausts the pool and
 // every other query in the process starts blocking behind them.
 //
-// BOTH DIRECTIONS OF THE CHOICE, because a bound on a synchronous path can fail
+// Both directions of the choice matter, because a bound on a synchronous path can fail
 // either way. Too short and a healthy-but-loaded deployment refuses audit writes
 // it could have completed; too long and the request path stalls exactly when the
 // database is already in trouble. 5s is chosen against measured shapes rather
@@ -158,7 +158,7 @@ const AuditChainLockKey int64 = 0x5741524459_434841 // ASCII "WARDYCHA"
 // before the background drain does, which is the right order: the drain is the
 // thing built to absorb a backlog.
 //
-// WHAT HAPPENS TO THE WRITE THAT LOSES THE RACE decides whether this is a fix or
+// What happens to the write that loses the race decides whether this is a fix or
 // a relocation of the failure, so it is stated here. On the request path, the
 // error travels back through spoolingRecorder, which fsyncs the event to the
 // local spool and logs AUDIT WRITE FAILED; the drain replays it once the lock
@@ -300,7 +300,7 @@ func migrateOn(ctx context.Context, db migrationExecutor) error {
 	// function's restore path replays the trigger-defining migrations and
 	// re-creates the trigger as plain 'O' for the same reason the loop does.
 	//
-	// AND ON A CONTEXT THE CALLER CANNOT CANCEL, which is what makes the
+	// And on a context the caller cannot cancel, which is what makes the
 	// "cancelled ctx" claim above true rather than aspirational. wardynd gives
 	// the whole connect-and-migrate step a deadline (cmd/wardynd/boot_deps.go),
 	// and the loop deliberately logs each file's elapsed time so a slow one is
@@ -371,7 +371,7 @@ func migrateOn(ctx context.Context, db migrationExecutor) error {
 // prev_hash equal to the head read under the same lock. It is the FUNCTIONAL
 // half of the boot check.
 //
-// WHY CATALOG SHAPE IS NOT ENOUGH, and the release has the receipt. Everything
+// Catalog shape is not enough, and the release has the receipt. Everything
 // above this asks the catalog: is the trigger there, is it enabled, is it the
 // function we ship. 0057 shipped a trigger that was all three and did not work
 // — a SECURITY DEFINER pinned to `pg_catalog, public` while its body named
@@ -383,13 +383,13 @@ func migrateOn(ctx context.Context, db migrationExecutor) error {
 // A single round trip does, and it converts the class from post-hoc to
 // boot-time.
 //
-// NEVER COMMITTED, so there is no synthetic row in anybody's audit log and no
+// Never committed, so there is no synthetic row in anybody's audit log and no
 // question about what an operator is looking at. The cost is one burned seq per
 // boot — which the sweep already tolerates by design: auditChainWalk's own
 // doc records that seq gaps below the chain come from rolled-back inserts and
 // that seq is not hashed.
 //
-// WHAT REFUSES AND WHAT ONLY REPORTS. A chain that demonstrably does not chain
+// What refuses and what only reports. A chain that demonstrably does not chain
 // — the insert succeeded and the row came back with no row_hash, or with a
 // prev_hash that is not the head — refuses the boot: that is the 0057 state, and
 // a wardynd serving over it writes an audit log the verify sweep will report as
@@ -401,7 +401,7 @@ func migrateOn(ctx context.Context, db migrationExecutor) error {
 // AuditChainCanary runs the boot canary against an arbitrary pool, for the ONE
 // caller that needs it on a pool Migrate never touched.
 //
-// WHY THE SPLIT-ROLE POSTURE NEEDS IT. Migrate — and so the canary at its tail —
+// Why the split-role posture needs it. Migrate — and so the canary at its tail —
 // runs on the MIGRATE pool when WARDYN_PG_MIGRATE_DSN is set, and that is the
 // posture the daemon's own boot log recommends. But the migrate role is not the
 // role that writes audit rows: every real audit write goes through the APP pool,
@@ -411,7 +411,7 @@ func migrateOn(ctx context.Context, db migrationExecutor) error {
 // the app pool's very next audit write came back unchained — the exact failure
 // class this check exists to convert from post-hoc to boot-time.
 //
-// SAME FUNCTION, not a second copy: the refusal rules, the rolled-back
+// Same function, not a second copy: the refusal rules, the rolled-back
 // transaction, the READ COMMITTED pin and the transient-error treatment are the
 // ones documented on auditChainCanary below, so the two boot paths cannot come
 // to different conclusions about what a working chain is.
@@ -473,7 +473,7 @@ func auditChainCanary(ctx context.Context, db migrationExecutor) error {
 // does not inherit default_transaction_isolation — a USERSET GUC any role can
 // set per-role or per-database, which nothing in this tree pinned or checked.
 //
-// SAME CLASS AS store.InsertAuditEvent's pinned Begin, and here for the same
+// Same class as store.InsertAuditEvent's pinned Begin, and here for the same
 // reason: a transaction that touches the audit chain must not have its snapshot
 // semantics decided by a deployment setting. The canary reads the chain head and
 // then INSERTs, and the trigger reads the head again inside that INSERT; at
@@ -540,9 +540,9 @@ func auditAlwaysTriggers(ctx context.Context, db migrationExecutor) ([]string, e
 // no longer 'A'. docs/OPERATIONS.md promises a hardened trigger is left "exactly
 // as it is"; auditTriggerNames keeps that promise on the READ side by counting
 // 'A' as firing, and this keeps it on the WRITE side, for the whole of Migrate.
-// Without it the promise held only for a database with nothing left to apply:
-// a 0.6.x deployment that had hardened the chain trigger lost the hardening the
-// moment it upgraded, with nothing logged, and the next boot then read the
+// Without it the promise would hold only for a database with nothing left to
+// apply: an already-hardened deployment would lose the hardening the moment it
+// upgraded, with nothing logged, and the next boot would then read the
 // resulting 'O' as the normal shipped state.
 //
 // Idempotent, and deliberately narrow: it re-reads the catalog and issues the
@@ -561,7 +561,7 @@ func restoreAlwaysTriggers(ctx context.Context, db migrationExecutor, want []str
 	}
 	still, err := auditAlwaysTriggers(ctx, db)
 	if err != nil {
-		// NAMING THE STATEMENTS, not just the trigger names: this branch is
+		// Naming the statements, not just the trigger names: this branch is
 		// reached exactly when the connection or the context is no longer good
 		// enough to read the catalog (a boot whose deadline expired mid-loop is
 		// the live case), so it is the last chance the operator gets to be told
@@ -667,7 +667,7 @@ func ensureAuditTriggers(ctx context.Context, db migrationExecutor) error {
 	if present == nil { // no audit_events table at all
 		return nil
 	}
-	// A NAME IS NOT AN IDENTITY, and every check above this line was keyed on
+	// A name is not an identity, and every check above this line was keyed on
 	// one. auditTriggerNames reports a trigger PRESENT when the catalog holds
 	// its name; auditForeignTriggers excludes the three shipped names from the
 	// foreign set by that same name. So the one shape neither can see is a
@@ -753,7 +753,7 @@ func ensureAuditTriggers(ctx context.Context, db migrationExecutor) error {
 // READ COMMITTED, at ERROR, with the statement to fix it — the same "never
 // continue silently" treatment a missing guard gets.
 //
-// WHY THE CHAIN CARES AT ALL. Since 0056 the head read that decides prev_hash
+// Why the chain cares at all: since 0056 the head read that decides prev_hash
 // runs INSIDE the trigger, i.e. inside the inserting transaction. Under
 // REPEATABLE READ that read uses the transaction's snapshot, which the advisory
 // -lock statement takes BEFORE the lock is granted — so a writer that queued
@@ -762,7 +762,7 @@ func ensureAuditTriggers(ctx context.Context, db migrationExecutor) error {
 // default_transaction_isolation is a USERSET GUC: any role can set it, per role
 // or per database, with no superuser involved.
 //
-// REPORT, NOT REFUSE, and the two halves are deliberate. Wardyn's OWN writers no
+// Report, not refuse, and the two halves are deliberate. Wardyn's OWN writers no
 // longer depend on it — store.InsertAuditEvent and the broker's mint transaction
 // pin pgx.ReadCommitted on their Begin, and a transaction-level isolation level
 // overrides the GUC — so this is about writers this package knows nothing about,
@@ -800,14 +800,14 @@ func replayTriggerMigrations(ctx context.Context, db migrationExecutor, trigger 
 	if err != nil {
 		return err
 	}
-	// ONE TRANSACTION AROUND THE WHOLE SET, for the reason applyMigration wraps
+	// One transaction around the whole set, for the reason applyMigration wraps
 	// each forward file: a replay that stops partway leaves the database bound to
 	// a definition NOBODY SHIPPED AS FINAL. The set is ordered, and each file
 	// REPLACES the previous function body — 0047's chain function reads the head
 	// with no advisory lock, and 0056 replaced it precisely because of that — so
 	// a failure after the first file commits the superseded version.
 	//
-	// AND IT NEVER SELF-HEALS, which is what separates this from the forward
+	// And it never self-heals, which is what separates this from the forward
 	// path. The entry condition is "the trigger is missing or wears an impostor
 	// body", and 0047 alone satisfies neither: the next boot finds the shipped
 	// name executing the shipped function (auditImpostorTriggers cannot see a

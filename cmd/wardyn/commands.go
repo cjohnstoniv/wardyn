@@ -44,7 +44,7 @@ type clientFn func() *sdk.Client
 // Applied at every grouping constructor rather than at the AddCommand site so
 // the contract is visible in the file that defines the group.
 //
-// NOT FOR THE ROOT COMMAND. The root already refuses an unknown verb, and it
+// Does not apply to the root command: it already refuses an unknown verb, and
 // does so through legacyArgs — which cobra's Find() consults only while Args is
 // nil. Setting Args on the root would disable that path and leave the root
 // non-Runnable, i.e. back to help-and-exit-0. Root's refusal is pinned by the
@@ -794,10 +794,10 @@ func logLine(e types.AuditEvent) string {
 }
 
 // logsCmd tails a run's audit-event trail as a live, human-readable log
-// stream — the CLI's answer to W22-S1-4: a batch/headless run's live
-// progress was otherwise unreachable from the CLI (`attach` opens a
-// SEPARATE interactive exec, not a tail of the agent — see Runner.Attach's
-// doc; `run --wait` only polls terminal state, printing nothing in between).
+// stream: a batch/headless run's live progress is otherwise unreachable from
+// the CLI (`attach` opens a SEPARATE interactive exec, not a tail of the
+// agent — see Runner.Attach's doc; `run --wait` only polls terminal state,
+// printing nothing in between).
 //
 // Honesty note: this reuses the existing audit-event pipeline rather than
 // adding a new server-side stdout/stderr capture (no such capture exists for
@@ -828,8 +828,8 @@ only at the end.`,
 			c := client()
 			// GetRun FIRST, in BOTH modes: an unknown/typo'd id 404s here and an
 			// unauthorized caller 401/403s, while the audit endpoint happily
-			// answers 200 [] for either — so --follow=false used to print
-			// nothing and exit 0 for a run that does not exist.
+			// answers 200 [] for either — without this check, --follow=false
+			// would print nothing and exit 0 for a run that does not exist.
 			if _, err := c.GetRun(cmd.Context(), id); err != nil {
 				return err
 			}
@@ -921,13 +921,8 @@ func warnListTruncated(cmd *cobra.Command, truncated bool, kind string, shown, o
 // Both unset sends nothing, so the server applies its default page and the
 // output is byte-identical to the unparameterised call it replaced.
 //
-// It is now the ONLY form. It used to sit beside a limit-only listPageOpts and
-// say why — "policy.go, workspace.go have no offset flag of their own yet" —
-// which was an accurate note about a gap rather than a reason: those two
-// commands printed a truncated list at exit 0 with nothing on stderr, exactly
-// the finding the offset-carrying form was added to close for `run` and
-// `approvals`. They carry --offset now, the limit-only helper had no callers
-// left, and there is one way to page a list.
+// This is the one way to page a list: every list command carries --offset, so
+// none of them can truncate silently at exit 0 with nothing on stderr.
 func listPageOptsAt(limit, offset int) []sdk.ListOpts {
 	if limit <= 0 && offset <= 0 {
 		return nil

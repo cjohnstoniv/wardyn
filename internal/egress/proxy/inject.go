@@ -64,7 +64,7 @@ type injector struct {
 	client *http.Client
 	// reauth owns the bounded mid-run credential re-auth workflows (credhold.go).
 	// Nil is safe and means "no hold" — a resolve that would have held fails
-	// closed instead, which is the pre-0.7.6 behaviour.
+	// closed instead.
 	reauth    *reauthCoordinator
 	approvals approvalReader
 }
@@ -122,7 +122,7 @@ func buildInjector(ctx context.Context, base string, token *tokenSource, pol *Po
 		if r.GrantID == uuid.Nil {
 			return nil, fmt.Errorf("injection rule for %q missing grant_id", host)
 		}
-		// NO HOLD AT BOOT, deliberately (round-2 general B3). This runs under the
+		// No hold at boot, deliberately. This runs under the
 		// proxy's 30s startupCtx, seconds after dispatch refreshed the credential
 		// synchronously — a dead credential HERE is a race measured in seconds,
 		// not a person who needs to sign in, and holding would fight the canary.
@@ -182,11 +182,11 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 	// refresh) exactly as it always has: concurrent requests for one host make
 	// ONE control-plane call and the rest read the refreshed value.
 	//
-	// WHAT IT NO LONGER DOES is span a HOLD. Holding it across a re-auth wait
-	// made every later caller queue on an uncancellable mutex for up to the
-	// whole budget, so a hung-up SDK was never released and, when the budget
-	// ended, each queued caller in turn opened a NEW full-budget workflow for
-	// the SAME lapse (security BLOCKER-1 / general B1). The wait now belongs to
+	// What it no longer does is span a HOLD: holding it across a re-auth wait
+	// would make every later caller queue on an uncancellable mutex for up to
+	// the whole budget, so a hung-up SDK would never be released and, when the
+	// budget ended, each queued caller in turn would open a NEW full-budget
+	// workflow for the SAME lapse. The wait instead belongs to
 	// the workflow, which owns its own goroutine and deadline; reMu is taken
 	// only to read freshness, to publish or drop the in-flight workflow, and to
 	// install a refreshed header — never across a network call that can block
@@ -257,7 +257,7 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 		if fresh {
 			go wf.run(i.base, i.token, e.grantID, i.client, i.approvals)
 		}
-		// WAIT HERE, not around the loop. Looping back would re-read the entry,
+		// Wait here, not around the loop. Looping back would re-read the entry,
 		// see a workflow that is ALREADY terminal (the sticky one this approval
 		// id just returned), drop it and re-resolve — round and round until the
 		// control plane's answer changed. A caller that has just been handed a
@@ -273,12 +273,11 @@ func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader,
 
 // dropIfFinished takes a workflow off the entry, but ONLY once it is terminal.
 //
-// A caller that hangs up must leave a LIVE hold in place (security NIT-A):
-// dropping it made the next retry call resolveInjection first — a broker mint
-// and a credential.mint audit row — and only THEN join, through the
-// coordinator, the very workflow it should have joined without asking. One
-// spare mint per disconnect, and the lane's own "two hits per lapse" property
-// broke on every one of them.
+// A caller that hangs up must leave a LIVE hold in place: dropping it would
+// make the next retry call resolveInjection first — a broker mint and a
+// credential.mint audit row — and only THEN join, through the coordinator,
+// the very workflow it should join without asking. That is one spare mint per
+// disconnect, breaking the lane's own "two hits per lapse" property.
 func (e *injEntry) dropIfFinished(wf *reauthWorkflow) {
 	if !wf.finished() {
 		return
@@ -324,7 +323,7 @@ func (i *injector) requiresTLS(host string) bool {
 	return ok && e.requireTLS
 }
 
-// ─── credential mask renderings ──────────────────────────────────────────────
+// Credential mask renderings
 
 // registerHeaderCredential registers, with the process-global mask registry,
 // every rendering of ONE header credential the proxy holds — not merely the
@@ -354,7 +353,7 @@ func (i *injector) requiresTLS(host string) bool {
 // proxy error messages; the raw value covers direct leakage"). One definition,
 // every proxy-side site.
 //
-// HONEST RESIDUAL, narrowed but not closed: masking still catches only the
+// Honest residual, narrowed but not closed: masking still catches only the
 // renderings listed above, verbatim. A credential the proxy never sees in a
 // given rendering (an arbitrary Format string that glues the secret to a
 // suffix, e.g. "%s;v=1") cannot be derived here, and a hex-encoded or
@@ -493,8 +492,8 @@ func stripSandboxCredentials(h http.Header, owned string) {
 //     That is the ONLY shape plain-lane injection has ever meaningfully worked
 //     in (a CONNECT tunnel cannot be injected into) and the default port of the
 //     plaintext connector an operator authors on purpose. "Bare" carries the
-//     whole justification and is checked explicitly (W6-S3,
-//     Policy.AllowedBareExactHost): the entry is SILENT about the port, so port
+//     whole justification and is checked explicitly
+//     (Policy.AllowedBareExactHost): the entry is SILENT about the port, so port
 //     80 is the operator's default rather than the sandbox's choice.
 //   - cleartext to any OTHER port: only when the operator authored that port in
 //     the allowlist ("connector.internal:8080" rather than a bare
@@ -528,7 +527,7 @@ func (p *Proxy) injectableTransport(scheme, host string, port int) bool {
 	if p.isLLMHost(host) {
 		return false
 	}
-	// Port 80 asks the BARE question (W6-S3). The arm's premise is an entry that
+	// Port 80 asks the BARE question. The arm's premise is an entry that
 	// is silent about the port; B10-F1 made AllowedExactHost — the binding
 	// question buildInjector asks — accept a port-QUALIFIED-only entry, which
 	// silently turned "the operator said nothing about the port" into "the
@@ -542,7 +541,7 @@ func (p *Proxy) injectableTransport(scheme, host string, port int) bool {
 // tlsConventionalPorts is the set of ports the industry reads as "TLS lives
 // here": 443 and the two alternates every appliance, registry and app server
 // ships as its HTTPS port. Cleartext credential injection is refused to ALL of
-// them regardless of authoring (B10-F5).
+// them regardless of authoring.
 //
 // 443 alone was the F110 leak one port over: AuthoredPortFor deliberately reads
 // a port-qualified entry as the operator declaring the transport, so
@@ -584,7 +583,7 @@ func (i *injector) apply(req *http.Request, host string, port int) {
 	if err != nil || !ok {
 		return
 	}
-	// STRIP ALWAYS, INJECT ONLY WHERE THE RULE'S PIN ALLOWS — the same two
+	// Strip always, inject only where the rule's PIN allows — the same two
 	// decisions the MITM lane makes (forwardInspectedLLM), and they have to be
 	// made here too or the pin is bypassable by simply not using TLS: the plain
 	// lane reaches the very same portal host, and a `POST /logout` sent as an
@@ -675,7 +674,7 @@ func (i *injector) allowsInjection(host, method, path, rawQuery string) bool {
 
 // applyCredential puts a rule's credential on an upstream request.
 //
-// STRIP AND INJECT ARE TWO DECISIONS, not one. A host with an injection rule
+// Strip and inject are two decisions, not one. A host with an injection rule
 // always has the sandbox's own credential headers removed — including the header
 // that rule supplies — because the rule says this host's credential is Wardyn's
 // to provide. Whether one is then provided is the rule's PIN (W6-S F3): a

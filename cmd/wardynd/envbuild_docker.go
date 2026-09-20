@@ -83,7 +83,7 @@ func (e envBuilderAdapter) tee(logSink io.Writer) io.Writer {
 // fails closed.
 // slogLineWriter forwards build output lines to slog so a failed build's
 // reason lands in wardynd's own logs instead of vanishing with the removed
-// container (the old behavior left only "exit code 1"). One instance is
+// container (without it, only "exit code 1" survives). One instance is
 // shared as Builder.DefaultLogSink for the process lifetime (see
 // newEnvBuilder below), and concurrent builds (two workspace builds, or a
 // build plus a BYOI FinalizeBase) both write through it, so buf is guarded by
