@@ -30,4 +30,3 @@ assignees: cjohnstoniv
 
 <!-- Epic, design record, related issues or PRs. -->
 
-- [ ] owner sign-off

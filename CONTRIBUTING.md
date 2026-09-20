@@ -97,12 +97,12 @@ request, and reviewed before it reaches `main`.
 
 - Every change starts as an issue on a milestone (`0.8.0`, `0.8.1`, …). A large
   feature is an **epic** issue whose task list links the issues that deliver it.
-- A maintainer signs an issue off by adding the `approved` label. Work on an
+- A maintainer approves an issue by adding the `approved` label. Work on an
   unapproved issue is not merged.
 - Questions about scope or design are asked on the epic, so the ruling is
   recorded where the work is.
 - Labels: `kind/*` (`feature`, `bug`, `docs`, `chore`, `security`, `test`) ·
-  `area/*` · `epic` · `approved` · `needs-mock` · `needs-owner-ruling` ·
+  `area/*` · `epic` · `approved` · `needs-mock` · `needs-decision` ·
   `security-review` · `blocked` · `deferred`.
 
 ### Branches
