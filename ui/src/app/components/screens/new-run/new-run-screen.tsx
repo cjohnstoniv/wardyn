@@ -29,21 +29,17 @@ import * as React from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
-import { CC_ORDER as ORDERED_CLASSES, type ConfinementClass, type CreateRunResult, type PreflightResult, type RunPolicySpec, type SetupHarnessTool, type Workspace } from "../../../lib/types";
+import { CC_ORDER as ORDERED_CLASSES, type ConfinementClass, type RunPolicySpec, type SetupHarnessTool, type Workspace } from "../../../lib/types";
 import { Link } from "react-router-dom";
 import { ccRank as rank, SectionCard, Seg } from "./new-run-primitives";
 import { RunRail } from "./new-run-rail";
-import { AgentPicker } from "./agent-picker";
-import { isCredentialRefusal, runs as runsApi } from "../../../lib/api/runs";
 import { policies as policiesApi } from "../../../lib/api/policies";
+import { runs as runsApi } from "../../../lib/api/runs";
 import { setup as setupApi } from "../../../lib/api/setup";
 import { hasLlmPath } from "../../../lib/readiness";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import { useMyCapabilities } from "../../../lib/capabilities";
-import { getErrorMessage } from "../../../lib/format";
-import { useDeferredBusy } from "../../../lib/use-deferred-busy";
 import { Button } from "../../ui/button";
-import { Checkbox } from "../../ui/checkbox";
 import { Input } from "../../ui/input";
 import { Textarea } from "../../ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
@@ -52,27 +48,17 @@ import { Mono } from "../../wardyn/code-block";
 import { Chip } from "../../wardyn/primitives";
 import { useOperator, useOperatorResolved, useSecurityOperator, useUserDrive } from "../../wardyn/operator-context";
 import { CC_META } from "../../wardyn/cc-meta";
-import { RUN, RUN_MODE } from "../../wardyn/copy";
+import { RUN } from "../../wardyn/copy";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { strongestAvailable } from "../../wardyn/default-confinement";
 import { PolicyPanel, parseSpec, toolRulesSummary, unparseableFloorClass } from "../../wardyn/policy-panel";
 import { AddWorkspaceDialog } from "../add-workspace-dialog";
 import { WorkspaceCard } from "./workspace-card";
-import {
-  barrierReasons,
-  clearedSpecOnCustomSwitch,
-  defaultSpecText,
-  effectiveToolApprovals,
-  savedPolicyGone,
-} from "./policy-lane";
-import { buildSpec, mergeRunSelections } from "./wizard-spec";
-import {
-  agentLabel,
-  initialWizardState,
-  primaryWorkspaceId,
-  type RunPrefill,
-  type WizardState,
-} from "./wizard-types";
+import { barrierReasons, clearedSpecOnCustomSwitch, defaultSpecText, savedPolicyGone } from "./policy-lane";
+import { mergeRunSelections } from "./wizard-spec";
+import { agentLabel, initialWizardState, type RunPrefill, type WizardState } from "./wizard-types";
+import { useLaunch } from "./use-launch";
+import { WhatToRunStep } from "./step-bodies";
 
 export function NewRunScreen() {
   const navigate = useNavigate();
@@ -130,31 +116,6 @@ export function NewRunScreen() {
   const [ccTouched, setCcTouched] = React.useState(!!prefill?.state.confinementClass);
   const [addWsOpen, setAddWsOpen] = React.useState(false);
   const [availableClasses, setAvailableClasses] = React.useState<ConfinementClass[] | null>(null);
-  const [launching, setLaunching] = React.useState(false);
-  // Rulebook §7: disable Launch the instant it fires, but only show the
-  // spinner once the request has been running long enough to need one.
-  const { disabled: launchDisabled, showSpinner: launchSpinning } = useDeferredBusy(launching);
-  const [error, setError] = React.useState<string | null>(null);
-  const [credentialRefused, setCredentialRefused] = React.useState(false);
-  // The 201's advisory `warnings[]` (§5c.8) — inline in the rail, not a toast.
-  const [launchWarnings, setLaunchWarnings] = React.useState<string[]>([]);
-  // Set ONLY while a launched run's advisories are on screen — the rail's
-  // "Open run" is what carries the member there, at their own pace.
-  const [launchedRunId, setLaunchedRunId] = React.useState<string | null>(null);
-  // Preflight is a dry-run of the SAME request Launch sends — see buildRunInput
-  // below. Independent loading/result/error state from Launch's: the two
-  // actions can be in flight or have failed independently of one another.
-  const [preflighting, setPreflighting] = React.useState(false);
-  const [preflightResult, setPreflightResult] = React.useState<PreflightResult | null>(null);
-  const [preflightError, setPreflightError] = React.useState<string | null>(null);
-  // The request body the verdict on screen was graded FROM. A preflight result
-  // is a statement about one body, and the rail renders it directly above
-  // Launch as "the last thing read before committing" — so the moment the body
-  // stops matching (policy document, confinement pick, workspace, drive, any
-  // wizard field at all), the verdict stops being about the run that is about
-  // to launch and must not be shown. Held as state, not a ref, so an edit made
-  // WHILE a preflight is in flight also invalidates the answer when it lands.
-  const [preflightedBody, setPreflightedBody] = React.useState<string | null>(null);
   const [savedPolicies, setSavedPolicies] = React.useState<{ id: string; name: string; spec: RunPolicySpec }[]>([]);
   const [policiesLoaded, setPoliciesLoaded] = React.useState(false); // F2-F5: has listPolicies() answered?
   // Whether the barrier probe has SETTLED (null availableClasses after settle
@@ -368,6 +329,25 @@ export function NewRunScreen() {
     [specText, state, workspaces],
   );
   const added = merged?.added;
+
+  // Launch + preflight state and actions — see use-launch.ts's header for why
+  // this lane is a hook rather than a pure function like policy-lane.ts's.
+  const {
+    launching,
+    launchDisabled,
+    launchSpinning,
+    error,
+    credentialRefused,
+    launchWarnings,
+    launchedRunId,
+    launch,
+    preflighting,
+    preflightResult,
+    preflightError,
+    preflightIsCurrent,
+    preflight,
+  } = useLaunch({ state, workspaces, useSaved, ccTouched, merged });
+
   // What happens the moment this launches, in one sentence. Derived HERE and
   // handed to the rail, so the rail cannot describe one run while Launch sends
   // another.
@@ -408,106 +388,6 @@ export function NewRunScreen() {
     const p = savedPolicies.find((x) => x.id === id);
     if (p) setSpecText(JSON.stringify(p.spec, null, 2));
     patch({ selectedPolicyId: id });
-  };
-
-  // The ONE request-payload builder — Launch and Preflight must send EXACTLY
-  // the same body, since preflight's verdict is only true if it is a dry-run
-  // of what Launch actually does. A second builder here is how the two drift.
-  const buildRunInput = () => {
-    const { run: built } = buildSpec(state, workspaces);
-    // Untouched Barrier control (ccTouched): OMIT confinement_class so the
-    // server's own default decides and its audit trail reads `defaulted`.
-    const run = ccTouched ? built : { ...built, confinement_class: undefined };
-    // The MODE ROW is the discriminator: a policy id that somehow survives a
-    // switch back to Custom still must not launch by reference. And the
-    // workspace_id override must never OVERWRITE buildSpec's deliberate
-    // ephemeral-workspace fallback with undefined — that silently launched a
-    // workspace-less run.
-    if (useSaved && state.selectedPolicyId) {
-      return {
-        ...run,
-        policy_id: state.selectedPolicyId,
-        workspace_id: primaryWorkspaceId(state.workspaces, workspaces) ?? run.workspace_id,
-      };
-    }
-    // Unreachable: `problem` disables both actions while the document is
-    // broken. Throwing beats substituting a composed fallback nobody wrote.
-    if (!merged) throw new Error("The policy spec isn't valid JSON.");
-    return { ...run, inline_policy: merged.spec };
-  };
-
-  const launch = async () => {
-    setError(null);
-    setCredentialRefused(false);
-    setLaunching(true);
-    setLaunchWarnings([]);
-    setLaunchedRunId(null);
-    try {
-      const created: CreateRunResult = await runsApi.createRun(buildRunInput());
-      // (A best-effort "save this as a policy" write used to live here, gated on
-      // state.saveAsProfile — a flag no control on this screen has ever set. It
-      // was unreachable from the moment the five-step wizard was replaced.)
-      const warnings = created.warnings ?? [];
-      // §5c.8: a run that launched WITH advisories is never navigated away from
-      // on a clock. A 1.6s timer both raced every other way off this screen
-      // (Esc and the ghost "Runs" button each landed on /runs, then the timer
-      // yanked the member to /runs/:id) and gave a multi-line advisory a fixed
-      // beat nobody can finish reading. The screen HOLDS instead: the warnings
-      // stay listed in the rail and Launch becomes OPEN_RUN_CTA, which is the
-      // only thing that navigates. No timer.
-      if (warnings.length > 0) {
-        setLaunchWarnings(warnings);
-        setLaunchedRunId(created.id);
-        setLaunching(false); // F2-F10 hygiene: nothing reads it once onOpenRun is set.
-      } else {
-        navigate(`/runs/${encodeURIComponent(created.id)}`);
-      }
-    } catch (e) {
-      setError(getErrorMessage(e) || "Failed to launch run.");
-      setCredentialRefused(isCredentialRefusal(e));
-      setLaunching(false);
-    }
-  };
-
-  // A dry-run of launch's own resolution: same body, same 4xx surface, but
-  // mints/dispatches nothing. Renders the member-clamp warnings, the risk
-  // grade, and the confinement class the run will actually be enforced at.
-  // The identity of the request Launch would send right now. buildRunInput
-  // throws while the policy document is unparseable (`problem` disables both
-  // actions in that state), which is itself a body change — hence the catch.
-  const currentBody = (() => {
-    try {
-      return JSON.stringify(buildRunInput());
-    } catch {
-      return null;
-    }
-  })();
-  // Stale BY CONSTRUCTION rather than by operator discipline: nothing has to
-  // remember to clear the verdict, because a verdict graded from a different
-  // body is never rendered in the first place.
-  const preflightIsCurrent = preflightedBody !== null && preflightedBody === currentBody;
-
-  const preflight = async () => {
-    // The saved lane with nothing picked has NO body to dry-run — falling
-    // through would preflight the leftover Custom document this lane will
-    // never launch, breaking buildRunInput's same-body invariant. (The panel
-    // disables the button in this state too; this guards the race.)
-    if (useSaved && !state.selectedPolicyId) return;
-    setPreflightError(null);
-    setPreflightResult(null);
-    setPreflightedBody(null);
-    setPreflighting(true);
-    // Grade the body we actually send, and remember exactly that one.
-    const body = buildRunInput();
-    const key = JSON.stringify(body);
-    try {
-      setPreflightResult(await runsApi.preflightRun(body));
-    } catch (e) {
-      setPreflightError(getErrorMessage(e) || "Preflight failed.");
-    } finally {
-      setPreflightedBody(key);
-      setPreflighting(false);
-    }
   };
 
   // Rulebook §8: Esc backs out quietly, with no prompt for an untouched form.
@@ -629,162 +509,14 @@ export function NewRunScreen() {
             </div>
           </SectionCard>
 
-          <SectionCard title="What to run">
-            <div className="space-y-4">
-              {/* The choice that proves a run needn't involve AI at all. */}
-              <Seg
-                label="Run type"
-                value={state.runType}
-                onChange={(id) => patch({ runType: id as WizardState["runType"] })}
-                options={[
-                  { id: "agent", label: "Agent task" },
-                  { id: "command", label: "Shell command" },
-                ]}
-              />
-
-              {isAgent && <AgentPicker value={state.agent} harnesses={harnesses} onChange={(agent) => patch({ agent })} />}
-
-              {/* The mode comes BEFORE the field it selects: an interactive run
-                  is configured by a startup choice, an autonomous run by a prompt, and
-                  a shell command by the command — never all three at once.
-                  Hidden for Shell command, which is unattended by definition. */}
-              {isAgent && (
-                <Seg
-                  label="Run mode"
-                  value={state.mode}
-                  onChange={(id) => patch({ mode: id as WizardState["mode"] })}
-                  options={[
-                    // Label from copy.ts's RUN_MODE canon, not spelled here: the
-                    // internal id stays "batch" (it is wire-adjacent and renaming
-                    // it reaches the spec builder and its tests), but the word a
-                    // human reads is "Autonomous" everywhere else in the product.
-                    // The two had drifted, and this radio was the last place the
-                    // console still said "Batch" out loud.
-                    { id: "batch", label: `${RUN_MODE.autonomous.label} — run it unattended` },
-                    { id: "interactive", label: "Interactive — I drive the terminal" },
-                  ]}
-                />
-              )}
-
-              {isInteractive ? (
-                // What an interactive run actually configures is what greets you
-                // when you attach — plus, now, an OPTIONAL boot seed (Part A1):
-                // the same task text a batch run would use as a prompt, fired
-                // once at sandbox boot instead of discarded. Left blank, it's
-                // exactly today's idle-until-attach run.
-                <>
-                  <Seg
-                    label="Start with"
-                    hint="The workspace is prepared before you land in it. Same barrier, same recording either way."
-                    value={state.interactiveStart}
-                    onChange={(id) => patch({ interactiveStart: id as WizardState["interactiveStart"] })}
-                    options={[
-                      { id: "agent", label: `${agentName} — launch it in the workspace` },
-                      { id: "shell", label: "Terminal — a shell in the workspace dir" },
-                    ]}
-                  />
-                  {state.interactiveStart === "agent" ? (
-                    <Field
-                      label="Initial prompt (optional)"
-                      htmlFor="nr-seed"
-                      hint={`Starts ${agentName} on this at boot, in the same session you attach to. Leave it blank to come up idle instead.`}
-                    >
-                      <Textarea
-                        id="nr-seed"
-                        rows={3}
-                        placeholder="Start by reviewing the failing tests in payments/"
-                        value={state.task}
-                        onChange={(e) => patch({ task: e.target.value })}
-                      />
-                    </Field>
-                  ) : (
-                    <Field
-                      label="Startup command (optional)"
-                      htmlFor="nr-seed"
-                      hint="Runs at boot, before you attach. Leave it blank to come up idle instead."
-                    >
-                      <Textarea
-                        id="nr-seed"
-                        rows={2}
-                        className="font-mono"
-                        placeholder="npm ci && npm run dev"
-                        value={state.task}
-                        onChange={(e) => patch({ task: e.target.value })}
-                      />
-                    </Field>
-                  )}
-                  {/* Only an agent-started seed has a tool-approval prompt to
-                      auto-approve; a bare shell command has none, and an empty
-                      seed has nothing to run unsupervised in the first place. */}
-                  {state.interactiveStart === "agent" && state.task.trim() && (
-                    <div className="space-y-2">
-                      <label
-                        htmlFor="nr-seed-auto-tools"
-                        className="flex items-center gap-2 text-xs text-foreground"
-                      >
-                        <Checkbox
-                          id="nr-seed-auto-tools"
-                          checked={state.seedAutoTools}
-                          onCheckedChange={(v) => patch({ seedAutoTools: v === true })}
-                        />
-                        Let it use tools before I attach
-                      </label>
-                      <p className="text-xs leading-snug text-muted-foreground">
-                        Auto-approves the agent&apos;s own tool use until you join. The sandbox and
-                        egress policy still apply.
-                      </p>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <>
-                  <Field
-                    label={isAgent ? "Task" : "Command"}
-                    htmlFor="nr-task"
-                    required
-                    hint={
-                      isAgent
-                        ? "Described in plain English. The agent decides how to do it."
-                        : "Run verbatim in the sandbox. No agent, no model — the same governance either way."
-                    }
-                  >
-                    <Textarea
-                      id="nr-task"
-                      rows={4}
-                      required
-                      className={isAgent ? undefined : "font-mono"}
-                      placeholder={isAgent ? "Fix the flaky test in payments/refund_test.go" : "make test"}
-                      value={state.task}
-                      onChange={(e) => patch({ task: e.target.value })}
-                    />
-                  </Field>
-                  {/* Autonomous agent runs only — a shell command has no tool
-                      calls to approve, and codex has no external approval
-                      contract to route them through (disabled below, honestly). */}
-                  {isAgent && (
-                    <Seg
-                      label="Tool approvals"
-                      value={effectiveToolApprovals(state.agent, state.toolApprovals)}
-                      onChange={(id) => patch({ toolApprovals: id as WizardState["toolApprovals"] })}
-                      hint={
-                        state.agent === "codex-cli"
-                          ? "Codex CLI has no external tool-approval contract — this run always keeps the sandbox as its only boundary."
-                          : undefined
-                      }
-                      options={[
-                        { id: "auto", label: "Auto — the sandbox is the boundary" },
-                        {
-                          id: "hold",
-                          label: "Hold in Wardyn — every tool call parks as an approval",
-                          disabled: state.agent === "codex-cli",
-                        },
-                      ]}
-                    />
-                  )}
-                </>
-              )}
-            </div>
-          </SectionCard>
+          <WhatToRunStep
+            state={state}
+            patch={patch}
+            isAgent={isAgent}
+            isInteractive={isInteractive}
+            agentName={agentName}
+            harnesses={harnesses}
+          />
 
           {/* The Select, the ungranted-selection reason and the member's own
               drive block — see workspace-card.tsx for why the drive lives

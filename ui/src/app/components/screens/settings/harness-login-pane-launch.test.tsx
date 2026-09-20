@@ -353,7 +353,11 @@ describe("the verification tab opens on the click (Finding 7a)", () => {
       close: vi.fn(),
       document: { write: vi.fn(), close: vi.fn() },
     };
-    openSpy = vi.spyOn(window, "open").mockReturnValue(fakeWindow as unknown as Window);
+    // vitest 4: re-spying an already-spied global (`window.open` here, spied by
+    // every test in this block) returns the SAME mock instance rather than a
+    // fresh wrapper, so its call history otherwise leaks across tests — clear
+    // it so each test's assertion covers only what IT triggered.
+    openSpy = vi.spyOn(window, "open").mockClear().mockReturnValue(fakeWindow as unknown as Window);
   });
 
   // THE RED CASE: goes red on any refactor that hoists an `await` above the
