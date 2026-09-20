@@ -1,0 +1,15 @@
+#!/bin/sh
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The e2e FIXTURE's wardyn-rec: records nothing, runs the wrapped argv. With
+# recording on (the compose default) the docker driver wraps every task exec as
+# `wardyn-rec <flags> -- <argv>` (runner.RecorderArgv); a fixture without this
+# binary fails that exec with 127 exactly like a missing agent-run. The REAL
+# recorder is exercised by this suite's claude-code run (section (i)), not here.
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--" ]; then shift; break; fi
+  shift
+done
+[ "$#" -gt 0 ] || { echo "e2e fixture wardyn-rec: nothing after --" >&2; exit 64; }
+exec "$@"
