@@ -79,7 +79,7 @@ const groundtruthRotatorLockBackoff = 30 * time.Second
 // groundtruthRotatorLockBackoff and retries, taking over automatically once
 // the holder's Postgres session ends.
 //
-// AT MOST ONE STEADY-STATE LEADER — not exactly one, and NOT a fencing
+// At most one steady-state leader — not exactly one, and NOT a fencing
 // primitive. The advisory lock is SESSION-scoped and this loop never
 // re-verifies it after the acquire, so any session loss short of process death
 // (a Postgres restart, an RDS failover, pg_terminate_backend, an idle-session

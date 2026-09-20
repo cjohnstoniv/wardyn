@@ -21,10 +21,10 @@ import (
 // config written before the port suffix existed — and matches ANY port; a
 // malformed or out-of-range port suffix is treated the same as absent rather
 // than guessed. No live caller authors a bare entry any more: both
-// planArtifactRedirect (W13-S1-5) and authorBedrockBearerInjection (F037) join
+// planArtifactRedirect and authorBedrockBearerInjection (F037) join
 // the host to the port they actually configured, so the any-port arm is not a
 // default that a new lane can fall into by accident.
-// A clean "host:port" (what planArtifactRedirect now authors, W13-S1-5) scopes
+// A clean "host:port" (what planArtifactRedirect now authors) scopes
 // the entry to exactly that port.
 //
 // An optional "http://" prefix says the origin behind this entry speaks plain
@@ -65,7 +65,7 @@ func parseMITMHostPort(entry string) (host string, port int, plaintext bool) {
 // mitmPlaintextUpstream reports whether the MITM'd origin for host serves plain
 // HTTP, so forwardInspectedLLM re-originates in cleartext instead of TLS.
 //
-// EXPLICIT AND POSITIVE, never derived from the injection rule's require_tls:
+// Explicit and positive, never derived from the injection rule's require_tls:
 // that field is a Go bool whose zero value is false, so "does not require TLS"
 // silently covers every rule that never set it, and inverting it would have
 // started dialling cleartext at real TLS origins. This map holds only what an
@@ -100,7 +100,7 @@ func compileMITMHosts(entries []string) (hosts map[string]bool, ports map[string
 		hosts[h] = true
 		ports[h] = port
 		if plain {
-			// KEYED BY host:port, not by host (W6-S F2). The scheme is a property
+			// KEYED BY host:port, not by host (F2). The scheme is a property
 			// of the ENTRY, and entries are port-scoped; a host-keyed flag is
 			// sticky while ports[h] is last-writer-wins, so
 			// {"http://h:8090", "h:443"} re-originated the :443 TLS entry in

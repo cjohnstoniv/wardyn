@@ -583,8 +583,8 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 			// claimed the slot. Writing here would resurrect apApproved onto a fresh
 			// PENDING id — the next Resolve serves it from the fast path, and
 			// evaluate stamps that PENDING id onto the ALLOW log, attributing an
-			// allow to an approval nobody decided (breaks the W20-hold-fsm-1 audit
-			// join). It would also let `until` fail open, by re-stamping apApproved
+			// allow to an approval nobody decided (breaks the audit join). It
+			// would also let `until` fail open, by re-stamping apApproved
 			// plus a past expiresAt onto an entry a sibling just expired. So write
 			// NOTHING and report pending. None of this was reachable before scopes:
 			// state only moved pending->terminal, so the stale write was idempotent.

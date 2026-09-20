@@ -289,7 +289,7 @@ func (s PG) SetRunStatusDetail(ctx context.Context, id uuid.UUID, detail string)
 // reaper (which measures idleness by agent_runs.updated_at) does not stop a run
 // that a human is actively attached to. Returns ErrNotFound when no row matched.
 //
-// A TERMINAL run is never touched (W6-S1), and the guard is HERE rather than at
+// A TERMINAL run is never touched, and the guard is HERE rather than at
 // the four callers (the UI relay, both attach pumps, the SSH channel keepalives)
 // because they share one reason and one bug. Each of them touches BEFORE the
 // door that refuses a non-RUNNING run, and updated_at is also the clock the
@@ -351,7 +351,7 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 
 // CreatePolicy inserts a policy and returns the persisted row. Returns
 // ErrConflict when the name's UNIQUE constraint (run_policies.name) rejects a
-// duplicate — the caller maps that to 409, never the raw driver error (W20-S1-3).
+// duplicate — the caller maps that to 409, never the raw driver error.
 func (s PG) CreatePolicy(ctx context.Context, p types.RunPolicy) (types.RunPolicy, error) {
 	specJSON, err := json.Marshal(p.Spec)
 	if err != nil {
@@ -387,7 +387,7 @@ func (s PG) ListPolicies(ctx context.Context) ([]types.RunPolicy, error) {
 // UpdatePolicy replaces a policy's name and spec and bumps updated_at, returning
 // the persisted row. Returns ErrNotFound when no policy has the given id, and
 // ErrConflict when the rename collides with run_policies.name's UNIQUE
-// constraint — the SAME mapping CreatePolicy has made since W20-S1-3, because
+// constraint — the SAME mapping CreatePolicy has made, because
 // the constraint is the same one and a rename onto a taken name is the same
 // caller-fixable mistake as an insert under one (B1-F5). Without it the API's
 // blanket 500 handed an admin the raw driver text.

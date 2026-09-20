@@ -43,7 +43,7 @@ import (
 // behavior is EXACTLY single-DSN mode, with an honest notice that audit_events is
 // not DDL-protected without the role split. Extracted verbatim from run().
 //
-// W28-S1-4: connect and migrate get SEPARATE budgets, not one shared deadline.
+// Connect and migrate get SEPARATE budgets, not one shared deadline.
 // connectTimeout bounds the (fast) pool-open + ping calls; migrateTimeout bounds
 // db.Migrate alone, on its own context derived from rootCtx — a slow migration
 // (a new index on the unbounded audit_events table, say) gets minutes to finish
@@ -78,7 +78,7 @@ func connectAndMigrate(rootCtx context.Context, dsn, migrateDSN string, connectT
 		// An operator who pointed WARDYN_PG_MIGRATE_DSN at the same (or another
 		// owner/superuser) role gets no protection — logging "protected"
 		// unconditionally would be an overclaim (invariant 5).
-		// AND THE CANARY ON THE POOL THAT ACTUALLY AUDITS. db.Migrate ran on
+		// And the canary on the pool that actually audits. db.Migrate ran on
 		// mpool, so its tail canary proved the chain works for the MIGRATOR —
 		// a different role, a different search_path, different privileges, and
 		// not the connection a single audit row is ever written on. Every real
@@ -225,7 +225,7 @@ func buildRunnerFromFlags(f *bootFlags, refs orchestrator.RefStore, driveHostRoo
 		UserDriveHostRoots:  driveHostRoots,
 	})
 	if err != nil {
-		// W27-S1-3: discriminate WHY substrate.New failed before printing the
+		// Discriminate WHY substrate.New failed before printing the
 		// same headline for both. A typo'd -runner or a substrate not compiled
 		// into this build (e.g. "docker" without -tags docker) never reaches the
 		// registry at all — Resolve's error is the right one for that. But a

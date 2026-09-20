@@ -226,7 +226,7 @@ func (d *Driver) teardownByRunID(ctx context.Context, runID uuid.UUID, gracePeri
 		return fmt.Errorf("k8s: teardown: waiting for pods to terminate before dropping NetworkPolicies: %w", err)
 	}
 
-	// Secret FIRST, NetworkPolicies after (W6-S4, the mirror of CreateSandbox's
+	// Secret FIRST, NetworkPolicies after (the mirror of CreateSandbox's
 	// order): the netpols are what the orphan sweep keys the Secret on, since
 	// listing Secrets needs a verb that returns their bodies. Dropping them
 	// before the Secret would leave a crash window whose survivor is exactly the
@@ -357,7 +357,7 @@ type sweepCandidate struct {
 // NetworkPolicies. Any fix that leaves the Secret reachable only via a pod
 // label repeats the bug.
 //
-// The Secret is reached WITHOUT being listed (W6-S4). `list` on secrets returns
+// The Secret is reached WITHOUT being listed. `list` on secrets returns
 // every Secret's body and RBAC cannot scope a list by label, so granting it
 // would hand this ServiceAccount plaintext read of every Secret in the
 // namespace — the control plane's own, with k8s.runsNamespace unset. No

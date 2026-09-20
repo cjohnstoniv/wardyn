@@ -67,7 +67,7 @@ const selectLiveCredentialApproval = `
 // NOTHING; a racing double-insert loses harmlessly and the re-select returns
 // the single winner.
 //
-// EXPIRED rows are SKIPPED by the lookup (W19-W19c-2), which the pre-insert read
+// EXPIRED rows are SKIPPED by the lookup, which the pre-insert read
 // and the post-insert re-select run as ONE const, so the winner it returns is a
 // PENDING row by predicate rather than by relying on requested_at ordering to
 // sort the swept row below it. The approval sweeper (approval.ExpireStale) ages

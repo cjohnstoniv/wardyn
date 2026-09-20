@@ -173,7 +173,7 @@ func Clamp(proposed, ceiling types.RunPolicySpec, maxEphemeralDiskMiB int) (type
 	// inherit, not a merge: this is a visibility/detection control, not
 	// something a member's own choice should ever weaken.
 	//
-	// W12-A-1: the mirror case matters just as much — a ceiling that sets NONE
+	// The mirror case matters just as much — a ceiling that sets NONE
 	// (the shipped default.json's own posture) is the FLOOR for this field
 	// too, not "no opinion". A nil ceiling must still clamp a member's own
 	// hand-authored inline_policy.llm_inspection, which could otherwise point
@@ -608,7 +608,7 @@ func clampGitHubScope(proposed, ceiling json.RawMessage, warns *[]string) json.R
 	if len(ceiling) > 0 {
 		_ = json.Unmarshal(ceiling, &c)
 	}
-	// Repos: intersect to the ceiling. W23-S1-3 (RBAC-bypass): an EMPTY
+	// Repos: intersect to the ceiling (RBAC-bypass): an EMPTY
 	// ceiling repo list is DENY-ALL, not "any repo". Skipping this block when
 	// the ceiling is empty relies on the theory that the proposal's repos are
 	// already grounded to the workspace's ACTUAL detected remote by
@@ -658,7 +658,7 @@ func clampGitHubScope(proposed, ceiling json.RawMessage, warns *[]string) json.R
 
 // GitHubScopeWithin reports whether a PROPOSED github_token scope stays inside a
 // CEILING's, by the exact rules clampGitHubScope enforces above: the ceiling's
-// repo list is an ALLOWLIST (an empty one is deny-all, W23-S1-3), a permission
+// repo list is an ALLOWLIST (an empty one is deny-all), a permission
 // absent from the ceiling map is not grantable at any level (M6), and a present
 // one bounds the level by permRank.
 //

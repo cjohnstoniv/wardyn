@@ -19,7 +19,7 @@ import (
 // place in this package that creates a volume, and deliberately the only shape
 // of volume Wardyn will ever create.
 //
-// WHY A NAMED VOLUME AND NOT A BIND: a docker_volume drive is MANAGED — the
+// Why a named volume and not a bind: a docker_volume drive is MANAGED — the
 // operator has told Wardyn "allocate the storage", not "bind this tree" — so
 // there is no host path at all. That is a security property, not an
 // implementation detail: with no host path there is nothing for the bind
@@ -27,7 +27,7 @@ import (
 // WARDYN_USER_DRIVE_HOST_ROOTS ceiling to be outside of. The host_path backend
 // is the one that binds, and it runs the full deny matrix (driver_mounts.go).
 //
-// OWNERSHIP IS THE IMAGE'S JOB, NOT wardynd's. A fresh named volume mounted
+// Ownership is the image's job, not wardynd's. A fresh named volume mounted
 // over a directory that exists in the image inherits that directory's contents
 // AND its uid/gid (Docker's copy-up). EVERY agent image therefore `mkdir -p
 // /home/agent/drive` owned by agent (uid 1000) — the ones that build on a
@@ -88,7 +88,7 @@ const (
 	// (types.ValidateUserDrive) and the resolver refuses it again for a row an
 	// older binary wrote; this is the third layer, at the object itself.
 	//
-	// A DIGEST, NEVER THE CLAIM. `docker volume inspect` echoes labels verbatim
+	// A digest, never the claim. `docker volume inspect` echoes labels verbatim
 	// to anybody who can reach the daemon, so the subject — routinely an email
 	// address — must not be written here. The digest answers the one question
 	// the driver asks ("was this object allocated to THIS principal") and no
@@ -188,7 +188,7 @@ func ensureDriveVolume(ctx context.Context, cli dockerAPI, drive *types.DriveMou
 // THREE REFUSALS, each of which hands a member somebody else's bytes if it is
 // missing:
 //
-//  1. NOT WARDYN'S SHAPE. The volume was not necessarily created by this
+//  1. Not Wardyn's shape. The volume was not necessarily created by this
 //     driver: an operator can precreate one by hand, and `docker volume create
 //     --opt type=cifs --opt o=username=…,password=…` is the documented way to do
 //     it. Mounting that into a member's sandbox because the names happened to
@@ -197,12 +197,12 @@ func ensureDriveVolume(ctx context.Context, cli dockerAPI, drive *types.DriveMou
 //     driveVolumeDriver's no-DriverOpts rule exists to prevent, arrived at
 //     through the back door. So adopt only the local driver with no options.
 //
-//  2. ANOTHER DRIVE'S ID. Two managed drives whose home templates collide
+//  2. Another drive's id. Two managed drives whose home templates collide
 //     resolve to a single volume name (DriveObjectName is per-principal, not
 //     per-drive), and without this the second drive would silently adopt the
 //     first drive's storage.
 //
-//  3. ANOTHER PRINCIPAL'S SUBJECT. The case #2 cannot see, because the id
+//  3. Another principal's subject. The case #2 cannot see, because the id
 //     matches: ONE drive templated on `email_local` derives one home for two
 //     people whose addresses share a local part. Refused here, at the object,
 //     after the write boundary and the resolver have both already refused the

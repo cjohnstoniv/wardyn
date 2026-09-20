@@ -196,7 +196,7 @@ type toolCallScope struct {
 // sandbox-facing alias the tool-approval gate uses to park a tool call for a
 // human decision.
 //
-// The RUN IDENTITY IS NEVER SANDBOX INPUT: it rides the run token this proxy
+// The run identity is never sandbox input: it rides the run token this proxy
 // holds (forwardToControlPlane), which the control plane binds from its
 // verified claims — the same derivation the approvals GET and the recording PUT
 // use, and the reason the sandbox itself stays tokenless.

@@ -79,7 +79,7 @@ func (p *Policy) exactHostDenied(host string) bool {
 // AllowedBareExactHost is the STRICTER half of the same question: did the
 // operator name this exact host in writing WITHOUT qualifying a port — the
 // "silent about the port" entry the cleartext port-80 injection arm has always
-// been written under (W6-S3).
+// been written under.
 //
 // AllowedExactHost answers "may a credential bind to this host at all", and
 // since B10-F1 a port-qualified-only entry answers yes. That is right for the

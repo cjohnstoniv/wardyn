@@ -137,7 +137,7 @@ func Decide(ctx context.Context, st Store, id uuid.UUID, decidedByType types.Act
 		"decision":    string(decision.State),
 		"reason":      decision.Reason,
 	}
-	// Self-joining SIEM stream (W20-hold-fsm-1's companion): surface the
+	// Self-joining SIEM stream: surface the
 	// approval's own requested-scope host at the top level, when it has one, so
 	// a consumer of this event never has to parse the nested requested_scope
 	// JSON to learn which host a human just approved/denied. Best-effort — a

@@ -63,7 +63,7 @@ import (
 // non-nil it also skips VetHost at step 4 (which would otherwise re-derive and
 // re-deny the same address), so the operator's own configured destination is
 // actually reachable instead of always denied with "the customer's network is
-// at fault" (W13-S1-3). Only blockPrivate OFF the proxy's own subnets and
+// at fault". Only blockPrivate OFF the proxy's own subnets and
 // control-plane host qualifies: a declared loopback, link-local/metadata or
 // NAT64 literal — or one of the sidecar's own docker-network neighbours — is
 // still denied, so the operator can hand the sandbox neither 169.254.169.254

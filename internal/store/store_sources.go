@@ -360,7 +360,7 @@ func scanBaseImage(row pgx.Row) (types.BaseImageEntry, error) {
 // whatsoever; if this conflict clause applied EXCLUDED.name unconditionally,
 // every such passthrough call would silently rename an operator's
 // custom-named catalog row back to that placeholder. See
-// UpdateBaseImageName for the actual rename path (W7-S1-3).
+// UpdateBaseImageName for the actual rename path.
 func (s PG) UpsertBaseImage(ctx context.Context, b types.BaseImageEntry) (types.BaseImageEntry, error) {
 	var steps []byte
 	if len(b.Steps) > 0 {
@@ -376,7 +376,7 @@ func (s PG) UpsertBaseImage(ctx context.Context, b types.BaseImageEntry) (types.
 }
 
 // UpdateBaseImageName renames a catalog base-image row — the explicit, scoped
-// rename path (W7-S1-3), mirroring UpdateSourceConfig above. handleCreateBaseImage
+// rename path, mirroring UpdateSourceConfig above. handleCreateBaseImage
 // is the only caller: on an identity hit where the REQUEST carried an explicit
 // name (the Add dialog's re-POST-to-rename shape), never from UpsertBaseImage's
 // own conflict clause, which passthrough callers share and must never let rename

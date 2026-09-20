@@ -96,7 +96,7 @@ func blockKindOf(err error) blockKind {
 // every forward-egress caller (evaluate, serveMITMRequest, handleGitBroker,
 // handleGitPATBroker) makes the SAME choice instead of each re-deriving it. A
 // site that forgot the branch (the brokered LLM routes and the git broker
-// both did, W19-W19d-3 / W23-S1-4) unconditionally required local DNS +ran the
+// both did) unconditionally required local DNS +ran the
 // full private-IP guard even under an operator upstream — where the sandbox
 // host frequently CANNOT resolve external names at all — and then handed the
 // corp proxy a resolved IP LITERAL to CONNECT instead of the real hostname.
@@ -188,7 +188,7 @@ func (p *Proxy) egressTarget(host string, port int) (target, ruleSource string, 
 		// that resolves to 169.254.169.254 was handed to the corp proxy to resolve
 		// and dial for it. So resolve HERE for the guard only, and keep sending
 		// the HOSTNAME onward — an upstream that was handed a resolved literal
-		// refuses it (W23-S1-4 / W19-W19d-3), which is what this branch exists for.
+		// refuses it, which is what this branch exists for.
 		//
 		// Unresolved is the one denial that does NOT bite: on a private-endpoint
 		// estate the sandbox host frequently cannot resolve external names at all,

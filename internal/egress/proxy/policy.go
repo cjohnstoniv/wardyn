@@ -442,7 +442,7 @@ func (p *Policy) methodAllowed(method string) bool {
 // on RFC1918 space, per SiteConfig.EgressRedirects) carries none of the
 // DNS-rebinding risk the unconditional private-IP guard exists to catch —
 // there is no hostname to rebind — so evaluate() treats it as trusted
-// instead of hard-denying it (W13-S1-3). Deny still beats allow.
+// instead of hard-denying it. Deny still beats allow.
 func (p *Policy) AllowsLiteralIP(host string, port int) bool {
 	// Its callers already pass ip.String(); canonHost is idempotent on that and
 	// keeps all four policy lookups reading the same normalizer rather than

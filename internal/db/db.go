@@ -348,7 +348,7 @@ func migrateOn(ctx context.Context, db migrationExecutor) error {
 			return fmt.Errorf("db: read migration %s: %w", name, err)
 		}
 
-		// W28-S1-4: log elapsed time per applied migration so a slow one (e.g. an
+		// Log elapsed time per applied migration so a slow one (e.g. an
 		// index build on an unbounded table) is VISIBLE in the boot log before its
 		// caller's timeout turns it fatal, rather than the boot just going silent
 		// for however long the timeout allows.

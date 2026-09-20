@@ -70,8 +70,8 @@ type Proxy struct {
 	// bare-host format every existing caller sends — Bedrock's runtimeHost, an
 	// un-migrated redirect) and stays eligible on ANY port. A positive value (an
 	// artifact-redirect entry now authors "host:port") is EXACT: a CONNECT to
-	// the same host on a DIFFERENT port is never MITM'd or token-injected
-	// (W13-S1-5) — handleConnect enforces this alongside isCorpMITMHost so the
+	// the same host on a DIFFERENT port is never MITM'd or token-injected —
+	// handleConnect enforces this alongside isCorpMITMHost so the
 	// allowlist stays as tight as isMITMHost's doc comment claims.
 	mitmPorts map[string]int
 	// mitmPlaintext marks the mitmHosts entries whose ORIGIN serves plain HTTP,
@@ -598,7 +598,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	// below can attribute to "approval:<id>" instead of "policy:allowed" — a
 	// released request otherwise logs indistinguishably from a standing policy
 	// allow, with no approval_id, breaking the audit join from decision back to
-	// who approved the egress (W20-hold-fsm-1). Zero == this request never went
+	// who approved the egress. Zero == this request never went
 	// through approval (a direct policy allow).
 	var approvalID uuid.UUID
 
@@ -786,7 +786,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// BEFORE the LLM branch so it stays clear of the LLM-specific blind-coverage
 	// bookkeeping; these hosts are not model APIs and are never content-scanned.
 	//
-	// Port-scoped (W13-S1-5): mitmHosts is host-only, so also require the CONNECT
+	// Port-scoped: mitmHosts is host-only, so also require the CONNECT
 	// port to match what was actually configured (mitmPortAllowed; 0 == the
 	// entry carried no port and stays any-port, for backward compat with a bare
 	// legacy entry). Without this a CONNECT to the same hostname on a port the

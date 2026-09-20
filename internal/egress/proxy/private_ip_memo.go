@@ -184,7 +184,7 @@ func (p *Proxy) privateIPRefused(req egress.Request, kind blockKind) {
 
 // privateIPMemoHit answers an identical repeat from the memo, counting it.
 //
-// CALLED BEFORE THE FIRST-USE APPROVAL FLOW, not after it: calling it after
+// Called before the first-use approval flow, not after it: calling it after
 // would let a memoed host carrying an `unknown` policy verdict re-enter
 // Resolve/ResolveWait on every one of the CLI's ten retries — spending a
 // scope=once grant, POSTing a fresh egress_domain question to a human, or

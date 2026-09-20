@@ -574,7 +574,7 @@ func resolveLocalMode(f *bootFlags) (localModeState, error) {
 	// operator who set both learns that when their FIRST approval hangs — a 503
 	// per decision, forever. Say it at boot instead.
 	//
-	// SCOPED TO THE COMBINATION THAT IS ACTUALLY BROKEN, and only that one: local
+	// Scoped to the combination that is actually broken, and only that one: local
 	// mode authenticates nobody, so both the decider and the run's created_by
 	// come from the same client-supplied source and no request in that mode can
 	// prove a second human decided (requireSecondHuman refuses outright). With

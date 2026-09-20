@@ -13,7 +13,7 @@
 // table the product itself writes. A console compromise then widens nothing,
 // because the widening it would need is not in the database.
 //
-// UNSET FAILS CLOSED. With no roots configured, NO host_path drive may be
+// Unset fails closed. With no roots configured, NO host_path drive may be
 // authored at all — byte-for-byte the WARDYN_MEMBER_WORKSPACE_ROOTS posture,
 // and for the same reason: the safe default for "the operator has not said
 // where" is "nowhere", not "anywhere".
@@ -211,7 +211,7 @@ func UserDriveHostRootCheck(roots []string) func(hostRoot string) error {
 		// instead. The driver still re-checks at bind time — this is the policy
 		// half of the two-layer guardrail, exactly as validatePolicySpec is.
 		//
-		// THE LIST IS SHARED, THE SENTENCE IS NOT. Returned unwrapped, the
+		// The list is shared, the sentence is not. Returned unwrapped, the
 		// deny-list speaks bind-mount: `mount source "/etc/homes" is under
 		// denied host path "/etc"`. An admin reads that on the DRIVE EDITOR,
 		// which has no "mount source" field — the field they filled in is

@@ -291,8 +291,7 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 	// CONTROL-PLANE-authored gateway gets gatewayTarget's relaxed per-request
 	// vet (vetTrustedHost); every other host — including the PUBLIC vendor host
 	// when no gateway is configured at all — gets egressTarget's SSRF-guarded
-	// p.vetHost, exactly as on every other forward-egress path
-	// (W23-S1-4 / W19-W19d-3 covered the corp-upstream branch; folding the
+	// p.vetHost, exactly as on every other forward-egress path (folding the
 	// gateway vet into egressTarget instead would also lift the private-IP
 	// guard for the gateway HOSTNAME on evaluate/serveMITMRequest — the reason
 	// the two vets stay separate).

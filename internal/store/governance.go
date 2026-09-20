@@ -43,7 +43,7 @@ const governanceAssignmentCols = `id, subject_type, subject, profile_id, priorit
 // Returns ErrConflict when the UNIQUE(name) index rejects the write — a NEW
 // profile taking a taken name, or a rename onto another row's name. The caller
 // maps that to 409 with the name in the message, never a raw driver error
-// (the CreatePolicy contract, W20-S1-3).
+// (the CreatePolicy contract).
 //
 // created_by and created_at are NOT touched on the update path: creation
 // provenance stays with whoever authored the profile, even after a later edit

@@ -182,7 +182,7 @@ func (r InjectionRule) Pinned() bool { return r.PinPath != "" }
 // An UNPINNED rule allows every request, which is what every rule but the
 // captured-AWS-SSO one does today.
 //
-// IT TAKES THE RAW QUERY, NOT url.Values, and that is the whole correctness of
+// It takes the raw query, not url.Values, and that is the whole correctness of
 // the query arm (security re-round SHOULD-1). Matching on a parsed
 // url.Values.Get accepted four shapes that carry a SECOND account or role
 // alongside the pinned one, with the credential attached and RawQuery forwarded
@@ -216,7 +216,7 @@ func (r InjectionRule) AllowsInjection(method, path, rawQuery string) bool {
 	if len(r.PinQuery) == 0 {
 		return true
 	}
-	// ';' is refused on the RAW query, before any parse. DEFENCE IN DEPTH, and
+	// ';' is refused on the RAW query, before any parse. Defence in depth, and
 	// labelled as such: on this Go, url.ParseQuery already answers
 	// "invalid semicolon separator in query" and the err arm below refuses it —
 	// verified, not assumed. It is spelled out anyway because that behaviour is
@@ -230,7 +230,7 @@ func (r InjectionRule) AllowsInjection(method, path, rawQuery string) bool {
 	if err != nil {
 		return false
 	}
-	// ONE SPELLING PER KEY. A key whose literal bytes differ from its decoded
+	// One spelling per key. A key whose literal bytes differ from its decoded
 	// form (account%5Fid, account+id, ...) is a second way to write a name this
 	// rule pins, and the origin may read it as the first.
 	//

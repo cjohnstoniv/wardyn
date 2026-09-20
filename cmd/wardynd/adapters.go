@@ -154,7 +154,7 @@ func (r *pgSessionRevocations) appNow() time.Time {
 // (folding at write time) cannot work, since the writer does not know whether
 // the caller named a sub or an email.
 func (r *pgSessionRevocations) IsSessionRevoked(ctx context.Context, sub, email string, issuedAt time.Time) (bool, error) {
-	// ASKED ON BOTH CLOCKS, AND EITHER ANSWER OF "REVOKED" WINS.
+	// Asked on both clocks, and either answer of "revoked" wins.
 	//
 	// revoked_at is stamped by POSTGRES. issuedAt is stamped by WARDYND — and by
 	// wardynd in two different senses, which is why this cannot simply pick one
@@ -446,7 +446,7 @@ type maskingRecorder struct {
 var _ audit.Recorder = maskingRecorder{}
 
 func (m maskingRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
-	// CAPPED AT THE TOP OF THE CHAIN as well as at the INSERT (B6-F1): this
+	// Capped at the top of the chain as well as at the INSERT (B6-F1): this
 	// recorder is outermost, so capping here is what bounds the SPOOL and the
 	// SIEM SINKS too — store.InsertAuditEvent's own cap only protects the
 	// database. The target is `r.URL.Path` on the authz.denied lane, which the
@@ -456,7 +456,7 @@ func (m maskingRecorder) Record(ctx context.Context, ev types.AuditEvent) error 
 	// is work nobody asked for, and the mask is per-byte either way.
 	ev.Target = store.CapAuditTarget(ev.Target)
 	if m.reg != nil {
-		// W20-groundtruth-mapper-2: a run-less event (ev.RunID == nil —
+		// A run-less event (ev.RunID == nil —
 		// policy.inline, secret.*, an admin action) must still fall back to the
 		// PROCESS-GLOBAL corpus (Bedrock SSO / subscription creds registered
 		// via AddGlobal) rather than bypass masking entirely — the guard here
@@ -553,7 +553,7 @@ type lifecycleStore struct {
 var _ lifecycle.Store = lifecycleStore{}
 
 func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.RunSummary, time.Time, error) {
-	// now() COMES BACK WITH THE ROWS, and it is the same instant on every one of
+	// now() comes back with the rows, and it is the same instant on every one of
 	// them: now() is the transaction's start time, so a single statement reads
 	// one clock for the whole scan. updated_at is stamped by that same clock, so
 	// the reaper's subtraction is finally two readings of ONE clock — wardynd's
@@ -759,7 +759,7 @@ func runApprovalSweeper(ctx context.Context, st approval.Store, interval, after 
 				// one wedged row.
 				slog.ErrorContext(ctx, "wardynd: approval sweep error", slog.Any("err", err))
 			}
-			// AT THE TRANSITION: this is where a credential re-auth request
+			// At the transition: this is where a credential re-auth request
 			// actually becomes EXPIRED, and the only place that can count it
 			// honestly — the sidecar holding for it has long since given up, so
 			// no later resolve will ever meet the row.

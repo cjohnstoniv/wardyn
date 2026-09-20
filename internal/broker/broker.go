@@ -153,8 +153,8 @@ type Minted struct {
 	// KnownHosts is the OpenSSH known_hosts material for an ssh_key grant whose
 	// scope named a known_hosts_secret_ref. Empty otherwise (ssh_key runs fall back
 	// to the image-baked /etc/ssh/ssh_known_hosts for github.com / ADO). Nominally
-	// public host-key data, not a secret — but mask-registered by mint() anyway
-	// (W12-B-2), as defense in depth: storedSecretGrantPairing (internal/api)
+	// public host-key data, not a secret — but mask-registered by mint() anyway,
+	// as defense in depth: storedSecretGrantPairing (internal/api)
 	// now pins a MEMBER's known_hosts_secret_ref to exactly the operator's own
 	// ceiling pairing, but an unclamped (operator-authored) grant could still
 	// name an unexpected secret here, and this was the one mint output never
@@ -609,8 +609,8 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 	// in the mask registry so PTY/asciicast streams can mask verbatim
 	// occurrences of the credential. A nil registry is a no-op; only
 	// value-bearing kinds (github_token, git_pat, ssh_key) set Token — api_key
-	// never does (its value stays proxy-side). KnownHosts is mask-registered too
-	// (W12-B-2): see the Minted.KnownHosts doc comment for why a nominally
+	// never does (its value stays proxy-side). KnownHosts is mask-registered too:
+	// see the Minted.KnownHosts doc comment for why a nominally
 	// public field still gets this treatment.
 	if b.maskReg != nil {
 		if minted.Token != "" {
@@ -827,8 +827,7 @@ type gitPATScope struct {
 // so a git_pat/ssh_key grant naming one is only an exfil attempt) — PLUS names
 // that are safe at the api_key sink (never sandbox-visible: resolved proxy-side
 // by name, or for bedrock-api-key, legitimately injected as a header by the
-// host-pinned Bedrock BEARER grant) but NOT safe as a raw git_pat/ssh_key VALUE
-// (W12-B-1):
+// host-pinned Bedrock BEARER grant) but NOT safe as a raw git_pat/ssh_key VALUE:
 //   - github-app-id / github-app-key: the GitHub App's numeric id and PEM
 //     private key (cmd/wardynd's secretGitHubAppID / secretGitHubAppKey), read
 //     server-side ONLY by githubMinter.client (github.go) to mint short-lived

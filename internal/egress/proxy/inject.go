@@ -436,7 +436,7 @@ func registerBasicAuthCredential(user, tok string) {
 // (the captured-AWS-SSO lane uses x-amz-sso_bearer_token, which is on no generic
 // credential list), and while an INJECTED request overwrites it anyway, a
 // request whose injection the rule's pin withholds does not — so the sandbox's
-// own value rode exactly the requests the pin exists to narrow (W6-S F3).
+// own value rode exactly the requests the pin exists to narrow.
 func stripSandboxCredentials(h http.Header, owned string) {
 	if owned != "" {
 		h.Del(owned)
@@ -632,7 +632,7 @@ func resolveInjection(ctx context.Context, base, token string, grantID uuid.UUID
 		// amplifier for control-plane text. Enough to diagnose a fail-closed
 		// startup, not a 4 KiB relay. (The mask still covers it — see httpError.)
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		// 423 IS NOT A REFUSAL: the control plane is asking for a human. It is
+		// 423 is not a refusal: the control plane is asking for a human. It is
 		// answered by exactly one resolve (the captured-AWS-SSO session, whose
 		// owner has to sign in again) and becomes a typed error the re-resolve
 		// path can HOLD on — see credhold.go. Checked BEFORE the generic
@@ -677,7 +677,7 @@ func (i *injector) allowsInjection(host, method, path, rawQuery string) bool {
 // Strip and inject are two decisions, not one. A host with an injection rule
 // always has the sandbox's own credential headers removed — including the header
 // that rule supplies — because the rule says this host's credential is Wardyn's
-// to provide. Whether one is then provided is the rule's PIN (W6-S F3): a
+// to provide. Whether one is then provided is the rule's pin: a
 // request the pin does not cover is forwarded with NEITHER the sandbox's header
 // nor Wardyn's, and the origin answers it unauthenticated.
 //

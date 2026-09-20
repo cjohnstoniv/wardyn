@@ -138,7 +138,7 @@ var lookupListenIPs = net.DefaultResolver.LookupIPAddr
 // literal for an IP, and the RESOLVED set for a hostname. ok=false means "cannot
 // be classified", which both callers read as "do not refuse".
 //
-// RESOLVING THE HOSTNAME matters. Both callers ask the same question — does
+// Resolving the hostname matters. Both callers ask the same question — does
 // this address bind a specific non-loopback interface a LAN peer can reach —
 // and the answer for `lan-host.corp:8080` is yes, identically to the literal it
 // resolves to. Treating every hostname as unclassifiable ("a hostname we can't
@@ -147,7 +147,7 @@ var lookupListenIPs = net.DefaultResolver.LookupIPAddr
 // disabled, be skipped by naming the interface instead of numbering it. The
 // plaintext-listen refusal has the same hole.
 //
-// A FAILED LOOKUP STAYS QUIET, deliberately, and this is where the line is
+// A failed lookup stays quiet, deliberately, and this is where the line is
 // drawn: an unresolvable name is not a broken configuration this can diagnose —
 // the bind itself will fail seconds later with a better message — and refusing
 // boot on a transient resolver blip would be the false alarm that gets a boot

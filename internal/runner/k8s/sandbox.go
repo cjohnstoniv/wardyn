@@ -92,7 +92,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 
 	// (2) BOTH NetworkPolicies, BEFORE any pod exists AND before the Secret.
 	//
-	// Before the SECRET is W6-S4: these two objects carry no credential, so the
+	// Before the SECRET: these two objects carry no credential, so the
 	// orphan sweep may list THEM (the Role withholds every Secret-body
 	// read verb, and `list` is one — RBAC cannot scope a list by label, so it
 	// returns every Secret in the namespace, which with an unset k8s.runsNamespace

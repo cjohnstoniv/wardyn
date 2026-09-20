@@ -225,9 +225,8 @@ func (p *Proxy) handleGitBroker(w http.ResponseWriter, r *http.Request) {
 	// proxy this sends the CONNECT to github.com BY NAME (the corp proxy does
 	// the outbound DNS+dial) instead of requiring local DNS resolution the
 	// sandbox host frequently cannot do at all, and instead of handing the
-	// corp proxy a resolved IP LITERAL it would refuse (W23-S1-4 / W19-W19d-3)
-	// — the one governed git lane must work on exactly the network it exists
-	// for.
+	// corp proxy a resolved IP LITERAL it would refuse — the one governed git
+	// lane must work on exactly the network it exists for.
 	target, _, err := p.egressTarget(githubHost, 443)
 	if err != nil {
 		p.emitGitDecision(r, egress.Deny, ruleSourceGit)
@@ -417,7 +416,7 @@ func (p *Proxy) brokeredToken(ctx context.Context, grantID uuid.UUID, wireUser f
 // mintWithApproval loop for the git_pat lane), the broker mints server-side
 // with no caller able to retry — so it polls the SAME approval itself here
 // (the proxy already holds the run token) rather than 502ing the clone before
-// any human could possibly have approved it (W23-S1-1 / W19-W19a-1).
+// any human could possibly have approved it.
 func (p *Proxy) mintGitToken(ctx context.Context, grantID uuid.UUID) (token, username string, expMs int64, err error) {
 	tok, user, exp, status, body, err := p.callMintGit(ctx, grantID)
 	if err != nil {

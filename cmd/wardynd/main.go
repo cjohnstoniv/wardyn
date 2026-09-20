@@ -164,7 +164,7 @@ func run() error {
 
 	// Connect + migrate (Postgres is the only required dependency). See
 	// connectAndMigrate for the WARDYN_PG_MIGRATE_DSN role-split (DDL protection)
-	// and the separate connect/migrate timeout budgets (W28-S1-4) — a fixed 30s
+	// and the separate connect/migrate timeout budgets — a fixed 30s
 	// bounds the connect, -migrate-timeout/WARDYN_MIGRATE_TIMEOUT (default 5m)
 	// bounds db.Migrate so a slow migration doesn't crash-loop the upgrade.
 	pool, err := connectAndMigrate(rootCtx, *f.dsn, *f.migrateDSN, 30*time.Second, *f.migrateTimeout)
@@ -268,7 +268,7 @@ func run() error {
 	// its one-level-up sibling). Parsed at boot so a malformed root fails closed
 	// here rather than at a member's first onboarding. O4: a root of "/" or
 	// $HOME is permitted but WARNED about, matching the LocalMode
-	// unspecified-bind warn precedent. AHEAD OF THE RUNNER because the drive
+	// unspecified-bind warn precedent. Ahead of the runner because the drive
 	// roots are substrate config — the docker driver re-checks a host_path
 	// drive's resolved real path against them at bind time.
 	memberMounts, driveHostRoots, err := parseMountCeilings(f)

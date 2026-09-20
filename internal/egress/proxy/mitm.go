@@ -203,7 +203,7 @@ func (a *certAuthority) leafFor(host string) (*tls.Certificate, error) {
 // The expanded surface (#2) is bounded on every axis: the set is authored by an
 // admin via the site-config API (NOT the sandbox, NOT the agent, NOT the run
 // request — a prompt-injected agent cannot add a host); it is an EXACT-hostname
-// allowlist, never a wildcard or suffix match — and, since W13-S1-5, exact on
+// allowlist, never a wildcard or suffix match — and exact on
 // PORT too when the authored entry names one (mitmPorts; see handleConnect's
 // corp-MITM branch) so a mirror configured at a non-443 port cannot have its
 // tunnel matched by hostname alone and then dialed at the wrong port; a host
@@ -236,7 +236,7 @@ func (p *Proxy) mitmLLMHost(host string, port int) bool {
 }
 
 // mitmPortAllowed reports whether an authored mitmHosts entry for host covers
-// port. It is the W13-S1-5 clamp itself, and it lives HERE — beside the
+// port. It is the clamp itself, and it lives HERE — beside the
 // membership predicates — rather than inline in one branch of handleConnect.
 //
 // TRUST BOUNDARY: eligibility must never be decidable without the port. Both
@@ -306,7 +306,7 @@ func (p *Proxy) channelForHost(host string) contentscan.Channel {
 // opaque subscription-OAuth path inspectable. The caller has already evaluated +
 // allowed the CONNECT (its egress.allow decision is recorded); per-request scan
 // decisions are emitted inside. port is the REAL CONNECT port (handleConnect's
-// parsed target) carried through to serveMITMRequest's dial (W13-S1-5) — never
+// parsed target) carried through to serveMITMRequest's dial — never
 // assume 443, a corp artifact mirror may listen elsewhere.
 // tlsRecordHandshake is the first byte of a TLS ClientHello (content type 22,
 // "handshake"). It is the ONE byte that tells a terminated tunnel's two possible
@@ -433,7 +433,7 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 // fails closed rather than forwarding a stale token. port is the REAL CONNECT
 // port (from mitmConnect) — the dial below MUST use it rather than assume 443:
 // a tokened tunnel dialed to the wrong port presents the operator's credential
-// to whatever answers there instead of the intended mirror (W13-S1-5).
+// to whatever answers there instead of the intended mirror.
 func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host string, port int) {
 	// allowed_methods applies to the inner requests too, not just the CONNECT
 	// that opened this tunnel: the CONNECT is evaluated as method "CONNECT", but
@@ -593,7 +593,7 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	if ok {
 		injectHdr = &hdr
 	}
-	// The pin (W6-S F3). A rule may narrow its credential to ONE request shape;
+	// The pin (F3). A rule may narrow its credential to ONE request shape;
 	// anything else to the same host is forwarded WITHOUT it and the origin
 	// answers as it answers any unauthenticated call. For the captured-AWS-SSO
 	// lane that is what stops the injected session riding `POST /logout` — which

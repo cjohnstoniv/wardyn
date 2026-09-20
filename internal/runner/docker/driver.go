@@ -928,7 +928,7 @@ func (d *Driver) Status(ctx context.Context, ref string) (runner.Status, error) 
 // exec — see runAsMainProcess). Duplicated here (same literal) rather than
 // imported: internal/api sits above this concrete substrate and must stay
 // target-agnostic, so it cannot import internal/runner/docker. MUST match the
-// literal in runs_dispatch.go — see that constant's doc comment (W15-c) for
+// literal in runs_dispatch.go — see that constant's doc comment for
 // why a bare "" can no longer double for this case.
 const mainProcessExecID = "main-process"
 
@@ -1177,7 +1177,7 @@ func (d *Driver) ensureImage(ctx context.Context, ref string, onPulling func()) 
 	return nil
 }
 
-// ImagePresent implements runner.ImageChecker (W20-W20-record-image-5): the
+// ImagePresent implements runner.ImageChecker: the
 // exported form of imagePresent, so a caller holding only a runner.Runner can
 // verify a cached image ref is still real before trusting it.
 func (d *Driver) ImagePresent(ctx context.Context, ref string) (bool, error) {
