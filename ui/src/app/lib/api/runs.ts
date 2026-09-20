@@ -15,6 +15,7 @@ import type {
   PolicyGrade,
   PreflightResult,
   ProfileProposal,
+  RunDetail,
   RunFilesResult,
   RunPolicySpec,
   RunResources,
@@ -155,11 +156,11 @@ export const runs = {
     return unwrapList<AgentRun>(await asJson<unknown>(res));
   },
 
-  // GET /api/v1/runs/{id}
-  async getRun(id: string): Promise<AgentRun | undefined> {
+  // GET /api/v1/runs/{id} — the ONE endpoint that sends ui_apps (RunDetail).
+  async getRun(id: string): Promise<RunDetail | undefined> {
     const res = await wfetch(`/runs/${encodeURIComponent(id)}`, { method: "GET" });
     if (res.status === 404) return undefined;
-    return asJson<AgentRun>(res);
+    return asJson<RunDetail>(res);
   },
 
   // POST /api/v1/runs/{id}/attach-ticket — mint a single-use, short-TTL ticket

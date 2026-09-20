@@ -47,6 +47,7 @@ import { AttentionPublisherProvider } from "../../lib/attention-context";
 import { baseStatus } from "../../lib/test-fixtures";
 import { DEMOS } from "./demos/demo-catalog";
 import { STARTING_UNSCHEDULABLE } from "./run-status-detail";
+import { HttpError } from "../../lib/api/core";
 
 const run: AgentRun = {
   id: "run-1",
@@ -773,5 +774,26 @@ describe("RunsScreen — what a starting run is waiting on", () => {
     expect(await screen.findByText("Fix flaky auth tests")).toBeInTheDocument();
     expect(screen.queryByText(STARTING_UNSCHEDULABLE)).toBeNull();
     expect(screen.queryByText(/^Waiting:/)).toBeNull();
+  });
+});
+
+// getSetupStatus only ever rejects on a real 401 (setup.ts's own contract) —
+// a lapsed session while this screen is mounted. loadSetupStatus used to have
+// no .catch, so that rejection floated as an unhandled promise rejection
+// right on the landing screen; vitest fails a run on an unhandled rejection
+// on its own, so this test's whole job is to prove the mount survives the
+// reject without one.
+describe("RunsScreen — a lapsed session's 401 never floats unhandled (loadSetupStatus)", () => {
+  it("mounts and boards the runs it already has when getSetupStatus rejects", async () => {
+    getSetupStatusMock.mockRejectedValue(new HttpError(401, "Unauthorized"));
+    renderScreen();
+
+    // The board itself never depended on setup status to render runs it
+    // already has — a rejected read must not blank it.
+    expect(await screen.findByText("Fix flaky auth tests")).toBeInTheDocument();
+    await waitFor(() => expect(getSetupStatusMock).toHaveBeenCalled());
+    // setupStatus stays null on a reject, same as "not answered yet" — never
+    // the no-barrier banner off a read that never actually answered.
+    expect(screen.queryByText(/no sandbox barrier/i)).toBeNull();
   });
 });
