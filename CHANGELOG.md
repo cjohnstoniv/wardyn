@@ -8,6 +8,17 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- **`WARDYN_DAEMON_PROXY_SECRET`** lets an estate whose egress proxy requires a
+  credential run the daemon behind it. `WARDYN_DAEMON_PROXY_URL` keeps refusing a
+  `user:pass@` URL (a credential in the process environment is visible to
+  diagnostics and logs); the new var is a **file path** instead, read once at
+  boot — the daemon's proxy transport is installed before the database connects
+  and before the secret store exists, so a secret-store reference cannot be
+  resolved here. The file's mode must be `0600` or tighter, and boot refuses if
+  both vars are set rather than picking one silently. See `docs/ENV.md`.
+
 ### Fixed
 
 - **A reaped never-dispatched run now carries a failure reason, not a blank chip.** `reconcileFinalize`
@@ -616,8 +627,6 @@ tighten an existing input check and one turns a relayed oversized upload into a 
   that key today and the Go sentence it mirrors already differed from it, but the table is canon: the
   doc's own **Q11** (recommend (a) — the sentence takes a `{remedy}`) has to be ruled in M2 before the
   frozen row can take the third argument.
-- `WARDYN_DAEMON_PROXY_URL` has no credentialed-proxy form (a `WARDYN_DAEMON_PROXY_SECRET` secret-ref
-  knob mirroring `UpstreamProxySecretRef` is a follow-up, not built in 0.7.6).
 - The spent-token mark stays in-memory and unpersisted (the existing single-instance posture); a daemon
   restart re-grades a spent-but-not-yet-refresh-window credential `live` until the next dispatch marks
   it spent again. Persisting it is a follow-up, not built in 0.7.6.
