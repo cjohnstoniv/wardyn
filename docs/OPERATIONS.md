@@ -1889,22 +1889,22 @@ recovered, and a database reader (a reporting role, a hot standby, a `pg_dump` i
 a backup bucket) cannot lift a usable credential off a row. `last_used_at` is best
 effort and is the signal for "which of these are dead"; revoke those.
 
-**The role is a stamp re-checked at login; the GROUP SNAPSHOT is not checked at
-all.** A token carries the role AND the group snapshot its owner held when they
-minted it, and every request it authenticates republishes them, so downstream it
-is that human as they were at mint time.
+**Both halves are stamps re-checked at login.** A token carries the role AND
+the group snapshot its owner held when they minted it, and every request it
+authenticates republishes them, so downstream it is that human as they were at
+mint time, or at their most recent sign-in since — whichever is later.
 
-The two halves age differently, and only one of them ages. Their next successful
-sign-in **re-stamps the role** on every unrevoked token they hold — the same
-`OnLogin` hook that has re-stamped their SSH keys since 0.6 — so a demotion does
-reach outstanding tokens, at that human's own next login rather than
-immediately. **The group snapshot is never refreshed**, by that hook or anything
-else. And nothing ages either half out on its own: `api_tokens` has
+Their next successful sign-in **re-stamps the role, the group snapshot, and the
+snapshot's own completeness bit** on every unrevoked token they hold — the same
+`OnLogin` hook that has re-stamped their SSH keys since 0.6, now widened to
+carry groups too — so a demotion, or a group membership change, reaches
+outstanding tokens at that human's own next login rather than immediately. And
+nothing ages either half out on its own short of that sign-in: `api_tokens` has
 `created_at`, `last_used_at` and `revoked_at` and **no expiry column**, there is
 no TTL on the stamp the way `WARDYN_SSH_ROLE_TTL` bounds an SSH key, and a human
-who is demoted and never signs in again keeps the role their tokens were minted
-with indefinitely. **Explicit revocation is the only thing that ends it on your
-schedule.**
+who is demoted and never signs in again keeps the role and groups their tokens
+were minted with indefinitely. **Explicit revocation is the only thing that
+ends it on your schedule** rather than waiting for that next login.
 
 A demotion made on the People page is now one of those explicit revocations:
 when a role-mapping write or delete takes a tier away from a value, Wardyn
@@ -1950,10 +1950,11 @@ matched nobody, not that there was nothing to revoke — sessions are stateless,
 that half cannot be counted, and only this half can tell you. Both
 `token.create` and `token.revoke` are audited
 ([`docs/AUDIT-ACTIONS.md`](AUDIT-ACTIONS.md)); the revoke row names the token's
-owner. Offboarding a person means revoking their tokens explicitly — the row
-outlives their access to your IdP, and it is published as a residual
-(`threatmodel/THREAT-MODEL.md` §5, "A per-user API token's role and group
-snapshot are frozen at mint").
+owner. Offboarding a person means revoking their tokens explicitly — a demoted
+or departed human who never signs in again is not caught by the login-time
+re-stamp, and the row outlives their access to your IdP either way. It is
+published as a residual (`threatmodel/THREAT-MODEL.md` §5, "A per-user API
+token's role AND group snapshot are bounded-stale, not frozen").
 
 ### Three roles, and who sets the walls
 

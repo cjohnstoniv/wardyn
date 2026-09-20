@@ -12,13 +12,13 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/store"
 )
 
-// refreshAPITokenRolesExists is the COMPILE-TIME anchor for every claim this
+// refreshAPITokenIdentityExists is the COMPILE-TIME anchor for every claim this
 // file pins: the store contract really does re-stamp an api_token's role, so a
 // comment or an operator-facing line saying no sign-in refreshes it is not a
 // stylistic quibble but a false statement about the system. If the refresh is
 // ever removed, this stops compiling and the claims below are re-opened for
 // review rather than silently inverted a second time.
-var refreshAPITokenRolesExists func(store.Store, context.Context, string, string) error = store.Store.RefreshAPITokenRoles
+var refreshAPITokenIdentityExists func(store.Store, context.Context, string, string, []string, bool) error = store.Store.RefreshAPITokenIdentity
 
 // TestRoleSnapshotClaimsMatchTheRefreshThatShipped is F281.
 //
@@ -34,7 +34,7 @@ var refreshAPITokenRolesExists func(store.Store, context.Context, string, string
 // revokes what it demotes), so the line now has THREE true things to keep
 // straight at once. This pins all three rather than banning one sentence.
 func TestRoleSnapshotClaimsMatchTheRefreshThatShipped(t *testing.T) {
-	_ = refreshAPITokenRolesExists
+	_ = refreshAPITokenIdentityExists
 
 	t.Run("the operator-facing remedy names what actually happens", func(t *testing.T) {
 		for _, want := range []struct{ frag, why string }{

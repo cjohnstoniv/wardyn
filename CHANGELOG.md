@@ -10,6 +10,14 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **A per-user API token's group snapshot now refreshes at login, alongside its role.**
+  `store.RefreshAPITokenRoles` is now `RefreshAPITokenIdentity(ctx, principal, role, groups,
+  truncated)`: the `OnLogin` hook re-stamps `role`, `groups` and `groups_truncated` together, so a
+  human whose group memberships changed no longer authorizes forever against the snapshot their
+  token was minted with. `truncated` is bound exactly from the login's own session-completeness
+  signal, never defaulted — a snapshot this build could not fully enumerate still reads as
+  incomplete downstream. The residual narrows to the same shape the SSH-key analogue already has: a
+  human who never signs in again.
 - **A reaped never-dispatched run now carries a failure reason, not a blank chip.** `reconcileFinalize`
   finalizes stranded runs that were never dispatched, but only `failAndRevoke` used to write a
   `failure_hint` — so a reaped run rendered a FAILED badge with no reason. It now writes the
