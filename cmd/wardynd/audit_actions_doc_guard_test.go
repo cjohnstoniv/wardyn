@@ -4,106 +4,222 @@
 package main
 
 import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 )
 
-// auditActionCitationWindow is how many lines of slack a citation gets around
-// its cited line(s) before the guard calls it stale. It is ZERO: a citation
-// must name the line that actually carries the action literal (or one of its
-// own cell's cited symbols), not a line near it.
+// symbolCitation is what a citation in docs/AUDIT-ACTIONS.md looks like now: a
+// path ending .go or .md, a "#", and the SYMBOL the claim is about — a
+// top-level func (`resolveRunUpstreamProxy`), a method spelled
+// `Type.Method` (`Server.reconcileOrphanedSandbox`), a package-level
+// const/var/type, or, for a markdown file, the GitHub slug of the heading whose
+// section carries the claim. Several symbols in one file are comma-separated,
+// the way the old form comma-separated its line numbers.
 //
-// It was 6 for as long as the table had never been re-cited exactly. Six lines
-// of slack is enough to hold a citation that points at the comment or the
-// closing brace ABOVE an emit, which is what most of them did — and a stale
-// citation that has drifted four lines is indistinguishable from a
-// deliberately approximate one, so the window was also six lines of cover for
-// real rot. Flipping it to 0 named 60 such rows at once (the 0.7.2 insertions
-// plus ~45 inherited ones); all 60 were re-pointed at their exact emit line in
-// the same commit, so the slack has nothing left to protect.
+// This replaced a line-anchored form, and the replacement is the whole point of
+// the shape. The old citations were checked at a window of ZERO — a citation had
+// to name the exact line carrying the action literal — which made the required
+// build check a hostage of every insertion anywhere above any of 209 cited
+// lines: a one-line comment added at the top of a heavily-cited file reddened a
+// gate that had nothing to do with the change, and the repair was to re-point
+// citations by hand in the same PR. Meanwhile the tree's own rule for Go
+// comments and for threatmodel/ (TestCommentsCiteSymbolsNotLineNumbers,
+// TestSecurityDocsCiteSymbolsNotLineNumbers) BANS pinning a claim to a line
+// number, for the reason a refactor proves every time: a symbol name survives a
+// move, a line number does not. This table was the one place in the tree that
+// mandated the banned shape. It no longer does.
 //
-// What zero costs, and why it is still the right setting: ANY edit above a
-// cited line now reds this guard. That is the point — the citation is a claim
-// about a line, and a claim about a line is either true or it is not. The
-// repair is mechanical (run this test; it names the row, the file and the
-// line) and the alternative is a table that is approximately right forever.
-//
-// The one shape zero forbids is a citation to an emit whose action arrives as a
-// named constant rather than a literal (`ruleSourceGit`,
-// `ruleSourcePATDenied`): nothing on that line spells the action. Those rows
-// name the constant in the same cell, which is the (`symbolName`,
-// `file.go:N`) shape the anchor rule below already exists for.
-const auditActionCitationWindow = 0
+// What the gate loses, stated plainly: the claim weakens from "this exact LINE
+// emits this action" to "this SYMBOL emits this action". What it keeps is the
+// part that was load-bearing — the literal must appear INSIDE the cited
+// symbol's own body, never merely somewhere in the file — so a citation that
+// has drifted onto the wrong function still fails, which is the drift that
+// actually happened (see the ssh.auth/authz.denied repairs this guard's
+// line-anchored ancestor made). What it stops punishing is an edit that moved
+// the symbol without changing it.
+var symbolCitation = regexp.MustCompile(`^([A-Za-z0-9_./-]+\.(?:go|md))#([A-Za-z0-9_.-]+(?:,[A-Za-z0-9_.-]+)*)$`)
 
 // backtickSpan pulls every `...`-quoted token out of one table row, in order.
 var backtickSpan = regexp.MustCompile("`([^`]+)`")
 
-// fileLineCitation is what a citation span looks like: a path ending .go or
-// .md, a colon, and one or more line numbers/ranges (comma-separated) — e.g. a
-// bare "some/file.go", colon, line 267; or a comma list like SSH.md's
-// 239,281,316; or a range like groundtruth.go's 44-64. A bare backtick span
-// that doesn't match this (a symbol name, a constant, a plain doc-section
-// reference with no line number) is never a citation — see anchors below.
-// (Deliberately not written as a real "file.go:NNN" example in this comment —
-// TestCommentsCiteSymbolsNotLineNumbers, citation_guard_test.go, bans exactly
-// that shape tree-wide, and this file is no exception to its own neighbor.)
-var fileLineCitation = regexp.MustCompile(`^([A-Za-z0-9_./-]+\.(?:go|md)):([0-9]+(?:-[0-9]+)?(?:,[0-9]+(?:-[0-9]+)?)*)$`)
-
-// barePathCitation is the SAME claim with the ":line" left off — "this action is
-// emitted in this file" — and it was invisible to this guard. The `:N` suffix
+// barePathCitation is the SAME claim with the "#symbol" left off — "this action is
+// emitted in this file" — and it was invisible to this guard once. The suffix
 // above is REQUIRED, so a backtick span holding a bare path matched nothing,
 // cellCitations stayed empty and the whole row was `continue`d past: it counted
 // in neither the rows nor the citations the guard reports, so a doc where EVERY
-// citation lost its line number would pass while claiming to check citations.
-// Thirteen rows cite this way today, and one had already rotted.
+// citation lost its suffix would pass while claiming to check citations.
+// Twenty-one rows cite this way today, 34 citations in all, and one had
+// already rotted.
 //
-// It is checked in the only way a line-less citation can be: the file must
+// It is checked in the only way a symbol-less citation can be: the file must
 // EXIST, and the row's action literal (or one of that cell's other cited
-// symbols) must appear SOMEWHERE in it — no window, because there is no line to
-// window around. Weaker than the line-checked path by construction, and still
-// the difference between "resolved" and "never looked at".
+// symbols) must appear SOMEWHERE in it — no symbol scoping, because there is no
+// symbol to scope to. Weaker than the symbol-checked path by construction, and
+// still the difference between "resolved" and "never looked at".
 var barePathCitation = regexp.MustCompile(`^[A-Za-z0-9_./-]+\.(?:go|md)$`)
 
-// lineGroup is one cited line or line range, expanded from a citation's line
-// spec ("135" or "44-64").
-type lineGroup struct{ lo, hi int }
+// mdHeading matches one markdown heading line, capturing its level and text.
+var mdHeading = regexp.MustCompile(`^(#{1,6})\s+(.*)$`)
 
-// expandLineSpec turns a citation's line spec into the groups it names — a
-// comma-separated citation ("239,281,316") makes three independent
-// single-line groups, each checked in its own small window, so three
-// unrelated mentions in the same doc are each held to the window rather than
-// one wide OR across all three that a genuinely stale citation could hide in.
-// A range ("44-64") makes ONE group spanning the whole range plus padding.
-func expandLineSpec(spec string) []lineGroup {
-	var out []lineGroup
-	for _, part := range strings.Split(spec, ",") {
-		if lo, hi, ok := strings.Cut(part, "-"); ok {
-			a, err1 := strconv.Atoi(lo)
-			b, err2 := strconv.Atoi(hi)
-			if err1 == nil && err2 == nil {
-				out = append(out, lineGroup{a, b})
-				continue
-			}
-		}
-		if n, err := strconv.Atoi(part); err == nil {
-			out = append(out, lineGroup{n, n})
+// headingSlug renders a markdown heading the way GitHub anchors it: lower-cased,
+// everything but letters, digits, spaces and hyphens dropped, spaces to hyphens.
+// So `## ` + "`wardynd` (control plane)" anchors as wardynd-control-plane, and a
+// citation to it is a link a reader can actually follow.
+func headingSlug(text string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(strings.TrimSpace(text)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
+			b.WriteRune(r)
+		case r == ' ' || r == '_':
+			b.WriteRune('-')
 		}
 	}
-	return out
+	out := b.String()
+	for strings.Contains(out, "--") {
+		out = strings.ReplaceAll(out, "--", "-")
+	}
+	return strings.Trim(out, "-")
+}
+
+// citedSymbolBodies returns, for one cited file, the source text a citation into
+// it is allowed to look at, keyed by symbol.
+//
+// For Go that is the symbol's OWN BODY and nothing else: the braces of a func or
+// method, or the spec of a package-level const/var/type. Deliberately not the
+// doc comment and not the signature — a comment that mentions an action is not
+// an emit of it, and the file-wide search this replaces is exactly how a
+// citation could name the wrong function and still resolve.
+//
+// For markdown the unit is the heading's SECTION: the heading line down to the
+// next heading of the same or a higher level. A doc has no symbols, and the
+// section is the smallest thing a reader can be sent to that still contains the
+// claim.
+func citedSymbolBodies(rel string, src []byte) (map[string]string, error) {
+	out := map[string]string{}
+	if strings.HasSuffix(rel, ".md") {
+		lines := strings.Split(string(src), "\n")
+		for i, line := range lines {
+			m := mdHeading.FindStringSubmatch(line)
+			if m == nil {
+				continue
+			}
+			level := len(m[1])
+			end := len(lines)
+			for j := i + 1; j < len(lines); j++ {
+				if h := mdHeading.FindStringSubmatch(lines[j]); h != nil && len(h[1]) <= level {
+					end = j
+					break
+				}
+			}
+			slug := headingSlug(m[2])
+			if slug != "" {
+				if _, dup := out[slug]; !dup {
+					out[slug] = strings.Join(lines[i:end], "\n")
+				}
+			}
+		}
+		return out, nil
+	}
+
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, rel, src, 0)
+	if err != nil {
+		return nil, err
+	}
+	span := func(from, to token.Pos) string {
+		a, b := fset.Position(from).Offset, fset.Position(to).Offset
+		if a < 0 || b > len(src) || a >= b {
+			return ""
+		}
+		return string(src[a:b])
+	}
+	for _, d := range f.Decls {
+		switch v := d.(type) {
+		case *ast.FuncDecl:
+			name := v.Name.Name
+			if v.Recv != nil && len(v.Recv.List) > 0 {
+				name = receiverTypeName(v.Recv.List[0].Type) + "." + name
+			}
+			if v.Body == nil {
+				out[name] = "" // declared without a body: resolvable, never evidence
+				continue
+			}
+			out[name] = span(v.Body.Lbrace, v.Body.Rbrace)
+		case *ast.GenDecl:
+			for _, sp := range v.Specs {
+				switch s := sp.(type) {
+				case *ast.ValueSpec:
+					for _, n := range s.Names {
+						out[n.Name] = span(s.Pos(), s.End())
+					}
+				case *ast.TypeSpec:
+					out[s.Name.Name] = span(s.Pos(), s.End())
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
+// receiverTypeName is the bare type name a method hangs off — the `Server` in
+// `func (s *Server) foo()`, so the citation reads `Server.foo` whether the
+// receiver is a pointer, a value or generic.
+func receiverTypeName(e ast.Expr) string {
+	switch v := e.(type) {
+	case *ast.StarExpr:
+		return receiverTypeName(v.X)
+	case *ast.Ident:
+		return v.Name
+	case *ast.IndexExpr:
+		return receiverTypeName(v.X)
+	case *ast.IndexListExpr:
+		return receiverTypeName(v.X)
+	}
+	return ""
+}
+
+// constNamesFor inverts the tree's package-level string constants: action value
+// -> the names that hold it. An emit whose action arrives as a named constant
+// (`ruleSourceGit`, `ruleSourcePATDenied`) spells nothing of the action at the
+// emit site, so "the literal is in the body" would be false for a perfectly
+// honest citation. The constant standing in for it is the same claim.
+func constNamesFor(tr auditTree) map[string][]string {
+	byValue := map[string][]string{}
+	for name, values := range tr.consts {
+		for _, v := range values {
+			byValue[v] = append(byValue[v], name)
+		}
+	}
+	return byValue
 }
 
 // TestAuditActionsDocCitationsAreLive parses every table row of
-// docs/AUDIT-ACTIONS.md, extracts each backtick `file:line` citation the row
-// makes, and asserts the row's action literal — or another backtick-quoted
-// symbol from the SAME CELL as the citation, the (`symbolName`,
-// `file.go:N`) shape several rows use for a helper the action literal itself
-// never appears next to (e.g. `sandbox.orphan_sweep`'s `stopSandboxOrAudit`
-// citation) — appears within auditActionCitationWindow lines of the cited
-// line, in the cited file.
+// docs/AUDIT-ACTIONS.md, extracts each backtick `file#symbol` citation the row
+// makes, resolves the symbol with go/parser (or, in a markdown file, by heading
+// slug), and asserts the row's action literal — or a constant holding it, or
+// another backtick-quoted symbol from the SAME CELL as the citation, the
+// (`symbolName`, `file.go#Symbol`) shape several rows use for a helper the
+// action literal itself never appears next to — occurs INSIDE that symbol's
+// body.
+//
+// Inside the body, not anywhere in the file, is the whole of what makes this a
+// check rather than a formality: "some function in runs_dispatch.go emits
+// run.dispatch" is true of the file no matter which function the citation
+// names, and a citation that survives naming the wrong function is a citation
+// nobody can use.
+//
+// An anchor that merely repeats the cited symbol's own name is NOT evidence —
+// resolving the citation already proved that symbol exists — so it is dropped
+// from the anchor set before the body is searched. Otherwise every
+// (`fooHelper`, `pkg/f.go#fooHelper`) row would satisfy itself.
 //
 // Anchors are scoped to the citation's OWN table cell, not the whole row: the
 // Data-fields cell's `dropped`/`host`/`reason`-style field names are common
@@ -116,13 +232,9 @@ func expandLineSpec(spec string) []lineGroup {
 //
 // This closes the gap the doc's own header names ("There is no CI check
 // tying this file to the source... a new action can go undocumented — that
-// is a known gap"): a citation rots silently the moment the cited file grows
-// or shrinks above the cited line, and nothing before this caught it (an
-// integration verify caught 22 such instances by hand). The matcher is
-// exact about the window, so a citation whose line has genuinely drifted out
-// from under it still fails — which is what caught (and this file then
-// fixed) the `ssh.auth`/`ssh.exec`/`ssh.sftp` and `authz.denied` citations
-// into docs/SSH.md and docs/OPERATIONS.md at HEAD.
+// is a known gap"): a citation rots silently the moment the symbol it names
+// stops emitting the action, and nothing before this caught it (an
+// integration verify caught 22 such instances by hand).
 func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 	root := repoRoot(t)
 	raw, err := os.ReadFile(filepath.Join(root, "docs", "AUDIT-ACTIONS.md"))
@@ -130,19 +242,24 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 		t.Fatalf("read docs/AUDIT-ACTIONS.md: %v", err)
 	}
 	docLines := strings.Split(string(raw), "\n")
+	constHolders := constNamesFor(parseAuditTree(t, root))
 
-	fileCache := map[string][]string{} // cited path -> its lines, loaded once
-	getLines := func(rel string) ([]string, error) {
-		if ls, ok := fileCache[rel]; ok {
-			return ls, nil
+	srcCache := map[string]string{}             // cited path -> whole file
+	bodyCache := map[string]map[string]string{} // cited path -> symbol -> body
+	load := func(rel string) (string, map[string]string, error) {
+		if s, ok := srcCache[rel]; ok {
+			return s, bodyCache[rel], nil
 		}
 		b, rerr := os.ReadFile(filepath.Join(root, rel))
 		if rerr != nil {
-			return nil, rerr
+			return "", nil, rerr
 		}
-		ls := strings.Split(string(b), "\n")
-		fileCache[rel] = ls
-		return ls, nil
+		bodies, perr := citedSymbolBodies(rel, b)
+		if perr != nil {
+			return "", nil, fmt.Errorf("parse %s: %w", rel, perr)
+		}
+		srcCache[rel], bodyCache[rel] = string(b), bodies
+		return srcCache[rel], bodies, nil
 	}
 
 	rowsChecked, citationsChecked := 0, 0
@@ -170,6 +287,9 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 		// string on the wire — the real Action is "kind."+suffix — so match the
 		// prefix, not the asterisk.
 		searchTerm := strings.TrimSuffix(actionLiteral, "*")
+		// The names any constant holding this action goes by, so an emit that
+		// passes `ruleSourcePrivateIP` counts as spelling builtin:private-ip.
+		holders := constHolders[searchTerm]
 
 		rowHasCitation := false
 		for _, cell := range cells {
@@ -178,48 +298,66 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 				continue
 			}
 			var cellAnchors []string
-			var cellCitations [][2]string // {path, lineSpec}
+			var cellCitations [][2]string // {path, symbolSpec}
 			var cellBarePaths []string
 			for _, sp := range spans {
 				switch {
-				case fileLineCitation.MatchString(sp[1]):
-					m := fileLineCitation.FindStringSubmatch(sp[1])
+				case symbolCitation.MatchString(sp[1]):
+					m := symbolCitation.FindStringSubmatch(sp[1])
 					cellCitations = append(cellCitations, [2]string{m[1], m[2]})
 				case barePathCitation.MatchString(sp[1]):
 					cellBarePaths = append(cellBarePaths, sp[1])
 					// ALSO an anchor: a bare path names a file, and the
-					// line-checked branch already treats a path-shaped anchor
+					// symbol-checked branch already treats a path-shaped anchor
 					// as a resolvable name rather than a symbol.
 					cellAnchors = append(cellAnchors, sp[1])
 				default:
 					cellAnchors = append(cellAnchors, sp[1])
 				}
 			}
+			// An anchor that just re-states a cited symbol proves nothing the
+			// resolution has not already proved. Drop it (and its bare tail,
+			// since `Server.foo` is cited and written `foo` in prose).
+			cited := map[string]bool{}
+			for _, c := range cellCitations {
+				for _, sym := range strings.Split(c[1], ",") {
+					cited[sym] = true
+					if idx := strings.LastIndex(sym, "."); idx >= 0 {
+						cited[sym[idx+1:]] = true
+					}
+				}
+			}
+			evidence := cellAnchors[:0:0]
+			for _, a := range cellAnchors {
+				if !cited[a] {
+					evidence = append(evidence, a)
+				}
+			}
+
 			for _, path := range cellBarePaths {
 				rowHasCitation = true
 				citationsChecked++
-				cited, gerr := getLines(path)
+				body, _, gerr := load(path)
 				if gerr != nil {
-					t.Errorf("docs/AUDIT-ACTIONS.md:%d: row %q cites %s, but %s does not exist: %v",
+					t.Errorf("docs/AUDIT-ACTIONS.md:%d: row %q cites %s, but %s could not be read: %v",
 						docLineNo, actionLiteral, path, path, gerr)
 					continue
 				}
-				body := strings.Join(cited, "\n")
 				if strings.Contains(body, searchTerm) {
 					continue
 				}
 				found := false
-				for _, a := range cellAnchors {
+				for _, a := range evidence {
 					if a != path && strings.Contains(body, a) {
 						found = true
 						break
 					}
 				}
 				if !found {
-					t.Errorf("docs/AUDIT-ACTIONS.md:%d: row %q cites %s (no line), but neither the action literal %q "+
+					t.Errorf("docs/AUDIT-ACTIONS.md:%d: row %q cites %s (no symbol), but neither the action literal %q "+
 						"nor any of that cell's other cited symbols %v appear ANYWHERE in it — the citation has rotted "+
-						"(re-point it at the real emit site, with its line)",
-						docLineNo, actionLiteral, path, actionLiteral, cellAnchors)
+						"(re-point it at the real emit site, and name the symbol)",
+						docLineNo, actionLiteral, path, actionLiteral, evidence)
 				}
 			}
 			if len(cellCitations) == 0 {
@@ -228,67 +366,68 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 			rowHasCitation = true
 
 			for _, c := range cellCitations {
-				path, lineSpec := c[0], c[1]
-				cited, gerr := getLines(path)
+				path, spec := c[0], c[1]
+				_, bodies, gerr := load(path)
 				if gerr != nil {
-					t.Errorf("docs/AUDIT-ACTIONS.md:%d: row %q cites %s:%s, but %s does not exist: %v",
-						docLineNo, actionLiteral, path, lineSpec, path, gerr)
+					t.Errorf("docs/AUDIT-ACTIONS.md:%d: row %q cites %s#%s, but %s could not be read: %v",
+						docLineNo, actionLiteral, path, spec, path, gerr)
 					continue
 				}
-				for _, g := range expandLineSpec(lineSpec) {
+				for _, sym := range strings.Split(spec, ",") {
 					citationsChecked++
-					lo, hi := g.lo-auditActionCitationWindow, g.hi+auditActionCitationWindow
-					if lo < 1 {
-						lo = 1
-					}
-					if hi > len(cited) {
-						hi = len(cited)
-					}
-					if lo > len(cited) {
-						t.Errorf("docs/AUDIT-ACTIONS.md:%d: row %q cites %s:%d, past the end of %s (%d lines)",
-							docLineNo, actionLiteral, path, g.lo, path, len(cited))
+					body, ok := bodies[sym]
+					if !ok {
+						t.Errorf("docs/AUDIT-ACTIONS.md:%d: row %q cites %s#%s, but %s declares no such top-level "+
+							"symbol — a method is cited as Type.Method; re-point the citation at the symbol that "+
+							"emits the action now",
+							docLineNo, actionLiteral, path, sym, path)
 						continue
 					}
-					window := strings.Join(cited[lo-1:hi], "\n")
-					if strings.Contains(window, searchTerm) {
+					if strings.Contains(body, searchTerm) {
 						continue
 					}
 					found := false
-					for _, a := range cellAnchors {
+					for _, h := range holders {
+						if strings.Contains(body, h) {
+							found = true
+							break
+						}
+					}
+					for _, a := range evidence {
+						if found {
+							break
+						}
+						if strings.Contains(body, a) {
+							found = true
+							break
+						}
 						// A dotted anchor (`egress.Decision`) is written
 						// package-qualified in the doc's prose, but a symbol
 						// defined IN that package never repeats its own
 						// package name at the definition site — so the bare
 						// tail after the last "." is accepted too.
-						if strings.Contains(window, a) {
-							found = true
-							break
-						}
+						//
 						// A file-path anchor (`docs/ENV.md`, `internal/foo/bar.go`)
 						// is not a dotted symbol -- its "tail after the last dot" is
 						// just an extension ("md", "go"), which matches almost any
-						// window and would let a merge-shifted citation on a
-						// file-path anchor evade the guard entirely. Skip the
-						// bare-tail fallback for anything that looks like a path.
+						// body and would let a drifted citation on a file-path
+						// anchor evade the guard entirely. Skip the bare-tail
+						// fallback for anything that looks like a path.
 						if strings.Contains(a, "/") || strings.HasSuffix(a, ".go") || strings.HasSuffix(a, ".md") {
 							continue
 						}
-						if idx := strings.LastIndex(a, "."); idx >= 0 && strings.Contains(window, a[idx+1:]) {
+						if idx := strings.LastIndex(a, "."); idx >= 0 && strings.Contains(body, a[idx+1:]) {
 							found = true
-							break
 						}
 					}
 					if found {
 						continue
 					}
-					spec := strconv.Itoa(g.lo)
-					if g.hi != g.lo {
-						spec = strconv.Itoa(g.lo) + "-" + strconv.Itoa(g.hi)
-					}
-					t.Errorf("docs/AUDIT-ACTIONS.md:%d: row %q cites %s:%s, but neither the action literal "+
-						"%q nor any of that cell's other cited symbols %v appear within %d lines of it in %s — "+
-						"the citation has rotted (re-point it at the real emit site)",
-						docLineNo, actionLiteral, path, spec, actionLiteral, cellAnchors, auditActionCitationWindow, path)
+					t.Errorf("docs/AUDIT-ACTIONS.md:%d: row %q cites %s#%s, but neither the action literal %q, "+
+						"nor a constant holding it %v, nor any of that cell's other cited symbols %v appears "+
+						"inside that symbol's own body — the citation names a symbol that does not emit this "+
+						"action (re-point it at the one that does)",
+						docLineNo, actionLiteral, path, sym, actionLiteral, holders, evidence)
 				}
 			}
 		}
@@ -297,9 +436,48 @@ func TestAuditActionsDocCitationsAreLive(t *testing.T) {
 		}
 	}
 	if rowsChecked == 0 {
-		t.Fatal("checked 0 rows with a file:line citation — the parser or the doc's table shape changed")
+		t.Fatal("checked 0 rows with a file#symbol citation — the parser or the doc's table shape changed")
+	}
+	// Guard the guard: 251 citations resolve today — 217 through a symbol (210
+	// of them on the action literal itself inside that symbol's body, 3 on a
+	// constant holding it, 4 on a cell anchor) and 34 through a bare path. A
+	// floor far below that, and
+	// far above zero, catches a doc whose citation shape drifted out from under
+	// the matcher (which is how a guard comes to pass on nothing) without making
+	// the deliberate deletion of a row's citation a test failure.
+	if citationsChecked < 150 {
+		t.Fatalf("resolved only %d citations across %d rows — the citation shape changed; teach the guard the new one rather than letting it pass on nearly nothing",
+			citationsChecked, rowsChecked)
 	}
 	t.Logf("checked %d citations across %d rows", citationsChecked, rowsChecked)
+}
+
+// TestAuditActionsDocCitesSymbolsNotLineNumbers holds docs/AUDIT-ACTIONS.md to
+// the rule its neighbours already enforce on Go comments, threatmodel/*.md and
+// docs/MEMBERS.md (TestCommentsCiteSymbolsNotLineNumbers,
+// TestSecurityDocsCiteSymbolsNotLineNumbers,
+// TestMembersDocCitesSymbolsNotLineNumbers): a claim about code is pinned to a
+// SYMBOL, never to a line number.
+//
+// This table was the one place in the tree that mandated the shape the rest of
+// the tree bans, and the contradiction had a cost the ban was written to avoid:
+// every insertion above a cited line reddened the required build check. The
+// citation form is now `file#symbol`, so the ban applies here too — and this is
+// the test that stops the old form from creeping back one row at a time.
+func TestAuditActionsDocCitesSymbolsNotLineNumbers(t *testing.T) {
+	raw := readRepoFile(t, "docs/AUDIT-ACTIONS.md")
+	// Not anchored on a backtick: the shape is wrong in prose too, and this is
+	// the same claim TestCommentsCiteSymbolsNotLineNumbers's lineCitation makes
+	// about Go comments, widened to cover a cited .md as well as a cited .go.
+	lineAnchored := regexp.MustCompile(`[A-Za-z0-9_./-]+\.(?:go|md):[0-9]`)
+	for i, line := range strings.Split(raw, "\n") {
+		if m := lineAnchored.FindString(line); m != "" {
+			t.Errorf("docs/AUDIT-ACTIONS.md:%d pins a citation to a line number (%s…) — cite the symbol "+
+				"instead (path/file.go#Symbol, path/file.go#Type.Method, or path/doc.md#heading-slug); a line "+
+				"number is stale the moment anything above it moves, and every one of them is a hostage the "+
+				"required build check does not need", i+1, m)
+		}
+	}
 }
 
 // dataFieldsCell returns docs/AUDIT-ACTIONS.md's Data-fields cell (the third
