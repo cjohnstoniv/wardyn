@@ -25,6 +25,8 @@ wizard — with its built-in demo steps — is the first-run path. Everything he
 | Swap a component (identity, secret store, recording, substrate) | [PLUGGABILITY.md](PLUGGABILITY.md) |
 | Design or review a console screen (color budget, type rungs, elevation, status glyphs) | [design/CONSOLE-RULES.md](design/CONSOLE-RULES.md) |
 | Understand the design, or contribute | [../ARCHITECTURE.md](../ARCHITECTURE.md), [../CONTRIBUTING.md](../CONTRIBUTING.md) |
+| Plan a change — issues, branches, pull requests, what "done" means | [../CONTRIBUTING.md](../CONTRIBUTING.md#branching-issues-and-pull-requests) |
+| Prepare or cut a release (milestone → PRs → release branch → tag) | [../RELEASING.md](../RELEASING.md#how-a-release-is-prepared) |
 | Answer a vendor security questionnaire — what leaves the box, what never does | [DATA-FLOW.md](DATA-FLOW.md) |
 | Verify a release artifact (cosign signatures, SBOM attestations) | [VERIFY.md](VERIFY.md) |
 | Answer a data-subject request — what Wardyn retains, and why there is no selective erasure | [OPERATIONS.md](OPERATIONS.md#retention-erasure-and-gdpr--a-residual-not-a-solved-problem) |

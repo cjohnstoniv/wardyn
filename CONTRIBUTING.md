@@ -25,7 +25,7 @@ All contributions to Wardyn are made under the Apache License 2.0. By contributi
 
 ## Security Invariants
 
-All contributors and subagents MUST preserve the six security invariants documented in [ARCHITECTURE.md](./ARCHITECTURE.md). These are non-negotiable and form the foundation of Wardyn's security model:
+All contributors MUST preserve the six security invariants documented in [ARCHITECTURE.md](./ARCHITECTURE.md). These are non-negotiable and form the foundation of Wardyn's security model:
 
 1. **Secrets never enter the sandbox** — Late binding via the broker; no secrets in env, disk, or args, except the named, bounded exceptions ARCHITECTURE.md invariant 1 enumerates (credentials that structurally cannot be proxy-injected). That enumeration is authoritative — do not restate a count here, it is what drifts.
 2. **Approval mints the credential** — Credential scope is verified atomically in the same transaction.
@@ -88,19 +88,78 @@ Individual pieces: `make build` (Go binaries), `make ui` (the console bundle),
 deliberately never published because it bundles a proprietary vendor CLI — see
 `deploy/images/THIRD-PARTY-TERMS.md`).
 
+## Branching, issues and pull requests
+
+Wardyn has users. Every change is planned as an issue, delivered as a pull
+request, and reviewed before it reaches `main`.
+
+### Issues first
+
+- Every change starts as an issue on a milestone (`0.8.0`, `0.8.1`, …). A large
+  feature is an **epic** issue whose task list links the issues that deliver it.
+- A maintainer approves an issue by adding the `approved` label. Work on an
+  unapproved issue is not merged.
+- Questions about scope or design are asked on the epic, so the ruling is
+  recorded where the work is.
+- Labels: `kind/*` (`feature`, `bug`, `docs`, `chore`, `security`, `test`) ·
+  `area/*` · `epic` · `approved` · `needs-mock` · `needs-decision` ·
+  `security-review` · `blocked` · `deferred`.
+
+### Branches
+
+- Branch from `main`, keep it short-lived, name it `<kind>/<issue#>-<slug>`:
+  `feat/57-push-content-rules-deny`, `fix/123-comparable-mount`,
+  `docs/73-working-practice`.
+- `main` is always releasable and is protected: required CI contexts plus a
+  review. Nobody pushes to it directly except the maintainer's release commit
+  (see [RELEASING.md](./RELEASING.md)).
+- Dependent work stacks: branch from the previous PR's branch, write
+  `Depends on #N` in the PR body, retarget to `main` after #N merges.
+- A database migration takes the next free number at rebase time, never a
+  number reserved in advance.
+
+### Pull requests
+
+- **One issue per PR.** Mixing is allowed only for tightly coupled changes that
+  cannot be reviewed apart — at most three issues, each named in the body.
+- Title in conventional-commit form (`feat(broker): …`, `fix(console): …`,
+  `docs: …`, `chore(deps): …`). The body links the issue: `Closes #N` on the PR
+  that finishes it, `Refs #N` on the others.
+- Every commit is DCO-signed (`git commit -s`) and authored by the person who
+  submits it.
+- Docs land in the same PR as the code they describe: the CHANGELOG
+  `[Unreleased]` entry, `docs/AUDIT-ACTIONS.md` rows for new audit actions,
+  `docs/ENV.md` rows for new variables.
+- Console changes: a mock or canon round precedes implementation unless a
+  maintainer waives it on the issue (`needs-mock`), and every solidified UI path
+  gets a Playwright pin (`scripts/run-ui-e2e.sh <spec>`).
+- Quote the check you ran in the PR body — the command and the test names it
+  executed (`go test -count=1 -v …`), not a summary line.
+- Merge when the required CI contexts are green and a maintainer has approved;
+  a `security-review` PR gets that review before approval. Multi-commit feature
+  PRs merge with a merge commit so the reviewed commits stay in history;
+  single-commit chores squash.
+
+### What "done" means
+
+An issue closes when its PR merged with the check it promised, its docs in the
+same PR, and — for anything a live gate covers (conformance on both substrates,
+the kind SSO walk, the Playwright suite) — that gate quoted in the PR body.
+
 ## Getting Started
 
 1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/your-feature`
-3. Make your changes, ensuring:
+2. Pick an `approved` issue, or file one and wait for the label
+3. Create a branch: `git checkout -b <kind>/<issue#>-<slug>`
+4. Make your changes, ensuring:
    - Code is idiomatic Go (sparse comments on constraints only)
    - Errors are wrapped with `%w`
    - No panics in library code
    - Security decisions fail closed
    - Audit events use dotted action names
-4. Run the gate: `make ci` (the daemon-free merge gate, and the widest gate a contributor needs — build, lint, Go tests, UI, diagrams, supply chain). Maintainers run the strict superset `make release-check` before a tag.
-5. Commit with sign-off: `git commit -s`
-6. Push and create a pull request
+5. Run the gate: `make ci` (the daemon-free merge gate, and the widest gate a contributor needs — build, lint, Go tests, UI, diagrams, supply chain). Maintainers run the strict superset `make release-check` before a tag.
+6. Commit with sign-off: `git commit -s`
+7. Push and open a pull request that closes the issue
 
 ## Testing
 
