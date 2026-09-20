@@ -1,0 +1,15 @@
+#!/bin/sh
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+#
+# The e2e FIXTURE's agent-run: it holds the run open. test/e2e/e2e.sh probes this
+# sandbox from outside with `docker exec`; nothing here is an agent. Without this
+# file the dispatcher's task exec (/usr/local/bin/agent-run <task>) exits 127 and
+# the run completes FAILED a second after it was created — and every assertion
+# after that measures a terminal run (token refused at every /internal/* door,
+# no egress audit, 409 on kill). The hosted nightly was red on exactly that.
+case "${1:-}" in
+  --selftest) echo "e2e fixture agent-run: selftest ok"; exit 0 ;;
+esac
+echo "wardyn e2e fixture: holding the run open for docker-exec probes"
+exec sleep infinity

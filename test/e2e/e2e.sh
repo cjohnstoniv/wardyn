@@ -158,6 +158,13 @@ ok "stack healthy ($(hc "${BASE}/healthz"))"
 
 # ── 2. create a governed run against the fixture image ─────────────────────--
 log "Creating a governed run (agent=${FIXTURE_AGENT})"
+# A TASK run, against a fixture that can hold one open. The fixture is a bare
+# alpine probed with `docker exec`; test/e2e/fixtures ships stub agent-run and
+# wardyn-rec so the dispatcher's task exec stays alive instead of exiting 127
+# (which completed this run FAILED a second after creation, and every assertion
+# below then measured a TERMINAL run). Not --interactive: an interactive run's
+# MAIN PROCESS is the image's real agent-run --idle contract, which a stub
+# fixture does not implement.
 CREATE="$("${COMPOSE[@]}" exec -T -e WARDYN_URL="${BASE}" -e WARDYN_ADMIN_TOKEN="${ADMIN_TOKEN}" \
   wardynd /usr/local/bin/wardyn run --agent "${FIXTURE_AGENT}" --repo octocat/Hello-World --task "wardyn e2e")"
 echo "${CREATE}"
@@ -167,7 +174,18 @@ sleep 1
 STATE="$(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/runs/${RUN_ID}" \
   | python3 -c 'import sys,json;print(json.load(sys.stdin)["state"])')"
 if [[ "${STATE}" == "RUNNING" ]]; then ok "run dispatched to RUNNING (live sandbox created)"; else
-  bad "run state=${STATE}, expected RUNNING (sandbox dispatch failed)"; fi
+  bad "run state=${STATE}, expected RUNNING (sandbox dispatch failed)"
+  # Name the cause HERE: the run row's own reason, the run's failure audit rows
+  # and the daemon's last warnings. On a CI runner all three are gone with the VM.
+  hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/runs/${RUN_ID}" \
+    | python3 -c 'import sys,json;r=json.load(sys.stdin);print("  run:",{k:r.get(k) for k in ("state","failure_reason","exit_code","task_mode","interactive")})' || true
+  hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/audit?run_id=${RUN_ID}&limit=50" \
+    | python3 -c 'import sys,json
+d=json.load(sys.stdin); ev=d if isinstance(d,list) else d.get("events",[])
+for e in ev:
+    if e.get("outcome")!="success": print("  audit:",e.get("action"),e.get("outcome"),json.dumps(e.get("data"))[:300])' || true
+  "${COMPOSE[@]}" logs --tail 200 wardynd 2>/dev/null | grep -Ei 'level=(warn|error)|"level":"(warn|error)"' | tail -15 || true
+fi
 AGENT="wardyn-agent-${RUN_ID}"
 
 # (h) GAP-1 closure: the auto-launched proxy sidecar must be RUNNING (it used
@@ -203,7 +221,11 @@ log "(b) metadata IP 169.254.169.254 unreachable from sandbox"
 # host had accepted the sandbox's connection. %{num_connects} is 1 whenever a
 # connection was actually made and 0 when none was. stderr is dropped so stdout
 # carries the -w output and nothing else.
-MD="$(docker exec "${AGENT}" curl -sS -o /dev/null -m 6 --connect-timeout 5 -w '%{http_code} %{num_connects}' \
+# --noproxy '*': the agent's env carries http_proxy, so a bare curl is answered
+# by wardyn-proxy's builtin-deny 403 (rc 0) and this check then called the proxy
+# doing its job "REACHABLE". That is what (c) below measures; THIS probe is the
+# no-route one and has to leave the proxy out of it.
+MD="$(docker exec "${AGENT}" curl -sS -o /dev/null -m 6 --connect-timeout 5 --noproxy '*' -w '%{http_code} %{num_connects}' \
        http://169.254.169.254/latest/meta-data/ 2>/dev/null)"; MRC=$?
 MD_CODE="${MD%% *}"; MD_CONNS="${MD##* }"
 if [[ ${MRC} -eq 0 ]]; then bad "metadata IP REACHABLE (http_code=${MD_CODE}) — invariant 3 violated";
@@ -229,13 +251,30 @@ log "(c/d) probing allow/pending/metadata through the auto-launched sidecar"
 # confinement (a deny beats allow_all_egress, a promoted ApprovedEgress entry,
 # and first-use review alike). Asserted both ways: refused AND no approval.
 log "(d) brokered github.com is HARD-DENIED on the direct route (deny beats first-use review)"
-GH_DIRECT_CODE="$(docker exec "${AGENT}" curl -sS -o /dev/null -m 20 --connect-timeout 10 -w '%{http_code}' \
-          -x http://wardyn-proxy:3128 https://github.com/ 2>&1 || true)"
+# %{http_connect}, stderr dropped. github.com is HTTPS, so the proxy refuses it
+# at CONNECT: curl exits 56, %{http_code} stays 000 (no response from the ORIGIN
+# ever existed) and the 403 lives in %{http_connect}. Capturing 2>&1 on top of
+# that made the compared value "curl: (56) CONNECT tunnel failed, response 403
+# 000" — a refusal, read as "NOT refused".
+GH_DIRECT_CODE="$(docker exec "${AGENT}" curl -sS -o /dev/null -m 20 --connect-timeout 10 -w '%{http_connect}' \
+          -x http://wardyn-proxy:3128 https://github.com/ 2>/dev/null || true)"
 if [[ "${GH_DIRECT_CODE}" == "403" ]]; then
   ok "(d) direct github.com refused by the proxy (403) — only /wardyn/gh/ remains for that name"
 else
   bad "(d) direct github.com was NOT refused (http_code=${GH_DIRECT_CODE}) — git-broker confinement not in force"
 fi
+
+# (d) THE ALLOW HALF, which this script stopped dialling without noticing. The
+# allowed probe used to BE github.com; when --repo made github broker-managed the
+# probe above became a hard-deny assertion and nothing was left that dials an
+# ALLOW-LISTED name — so "expected >=1 egress.allow audit event" further down could
+# only ever read 0. proxy.golang.org is the one name examples/policies/demo.json
+# allows. The tunnel being ESTABLISHED (%{http_connect}=200) is the fact; what the
+# origin then answers is not this suite's business.
+ALLOW_CODE="$(docker exec "${AGENT}" curl -sS -o /dev/null -m 20 --connect-timeout 10 -w '%{http_connect}' \
+          -x http://wardyn-proxy:3128 https://proxy.golang.org/ 2>/dev/null || true)"
+if [[ "${ALLOW_CODE}" == "200" ]]; then ok "(d) allow-listed proxy.golang.org tunnelled by the proxy (CONNECT 200)";
+else bad "(d) allow-listed proxy.golang.org was not tunnelled (http_connect=${ALLOW_CODE})"; fi
 
 DENY="$(docker exec "${AGENT}" curl -sS -m 12 --connect-timeout 8 \
          -x http://wardyn-proxy:3128 https://evil.example.com/ 2>&1)"
@@ -390,6 +429,17 @@ if [[ "${CC_REC}" == "200" ]]; then
 else
   bad "(i) recording not auto-delivered (GET=${CC_REC}); agent-run/wardyn-rec/-out-dir chain"
   note "(i) last cast dir listing on the agent: $(docker exec "${CC_AGENT_CTR}" ls -la /wardyn/recordings 2>&1 | tr '\n' ' ' || echo '<exec failed>')"
+  # WHY, not just THAT. A cast lands only after the agent process EXITS (wardyn-rec
+  # uploads on exit), so the first question is whether it has: the run's state, what
+  # is still running in the sandbox, and what the agent last printed. On a CI
+  # runner none of this survives the job.
+  note "(i) run state: $(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/runs/${CC_RUN_ID}" | python3 -c 'import sys,json;r=json.load(sys.stdin);print(r.get("state"),"exit_code=",r.get("exit_code"))' 2>&1 || true)"
+  note "(i) processes in the agent: $(docker exec "${CC_AGENT_CTR}" sh -c 'ps -eo pid,etime,args 2>/dev/null | head -15' 2>&1 | tr '\n' '|' || echo '<exec failed>')"
+  note "(i) recorder staging: $(docker exec "${CC_AGENT_CTR}" sh -c 'ls -la /var/log/wardyn /tmp/wardyn-rec 2>&1 | head -12' 2>&1 | tr '\n' '|' || echo '<exec failed>')"
+  hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/audit?run_id=${CC_RUN_ID}&limit=50" \
+    | python3 -c 'import sys,json
+d=json.load(sys.stdin); ev=d if isinstance(d,list) else d.get("events",[])
+for e in ev[-12:]: print("  NOTE (i) audit:",e.get("action"),e.get("outcome"),json.dumps(e.get("data"))[:200])' 2>/dev/null || true
 fi
 
 # (ii) brokered git-credential chain, LIVE, from inside the real sandbox.
@@ -590,6 +640,10 @@ PROXY_NAME=""
 PRE="$(hc -o /dev/null -w '%{http_code}' -X POST "${BASE}/api/v1/internal/decisions" \
         -H "Authorization: Bearer ${TOKEN}" -H 'Content-Type: application/json' \
         -d '{"request":{"host":"prekill.example","port":443,"method":"CONNECT"},"decision":"deny","rule_source":"e2e:prekill"}')"
+# The kill is made with the ADMIN TOKEN, which actorFromRequest audits as
+# actor_type `system` (principal admin-token); a local-mode or OIDC session
+# audits `human`. The audit check below accepts both — pinning `human` kept this
+# section red on every stack driven by the token, i.e. every CI stack.
 KILL="$(hc -o /dev/null -w '%{http_code}' -X POST "${BASE}/api/v1/runs/${RUN_ID}/kill" -H "Authorization: Bearer ${ADMIN_TOKEN}")"
 sleep 2
 GONE="$(docker ps -a --filter "name=${AGENT}" --format '{{.Names}}')"
@@ -599,7 +653,7 @@ POST="$(hc -o /dev/null -w '%{http_code}' -X POST "${BASE}/api/v1/internal/decis
 KSTATE="$(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/runs/${RUN_ID}" \
   | python3 -c 'import sys,json;print(json.load(sys.stdin)["state"])')"
 KILL_AUDIT="$(hc -H "Authorization: Bearer ${ADMIN_TOKEN}" "${BASE}/api/v1/audit?run_id=${RUN_ID}" \
-  | python3 -c 'import sys,json;print(sum(1 for e in json.load(sys.stdin) if e["action"]=="run.kill" and e["actor_type"]=="human"))')"
+  | python3 -c 'import sys,json;print(sum(1 for e in json.load(sys.stdin) if e["action"]=="run.kill" and e["actor_type"] in ("human","system")))')"
 echo "pre-kill token=${PRE} kill=${KILL} agent_gone=$([[ -z "${GONE}" ]] && echo yes || echo no) post-kill token=${POST} state=${KSTATE} run.kill_audit=${KILL_AUDIT}"
 if [[ "${PRE}" == "202" && "${KILL}" == "202" && -z "${GONE}" && "${POST}" == "401" && "${KSTATE}" == "KILLED" && "${KILL_AUDIT}" -ge 1 ]]; then
   ok "(e) kill cascade: container gone + run token revoked (401) + state KILLED + run.kill audit"
