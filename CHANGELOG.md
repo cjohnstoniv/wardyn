@@ -8,6 +8,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Changed
+
+- **Setup counts only the steps that block a run, and recommends what the host actually has.**
+  The Getting-started counter read "Step 1 of 17" with ten of those steps optional demos; it now
+  reads "Step 1 of 4" (Environment, People, Network, Review), with the honest count of what
+  follows named underneath. Three categories, not two: Secrets, Workspace providers and
+  Workspaces are real configuration that blocks nothing, kept apart in the rail and on Review
+  from the ten demos that change nothing — collapsing them into one list is what put Secrets
+  behind a "Start the demo" button. `recommendedTier` now reads only what the host reports
+  installed (`runner.confinement_classes`), never inferring from the operating system or from
+  hardware compatibility — a host reporting nothing gets no Recommended chip and a line saying
+  so, and a note names what's stronger when the recommendation isn't the strongest class that
+  exists. The `Recommended` chip is `tone="neutral"`, not the teal `"primary"` CONSOLE-RULES
+  already flagged as a violation, and its row is fixed-height so the barrier matrix can't shift
+  when the chip appears.
+
 ### Fixed
 
 - **A reaped never-dispatched run now carries a failure reason, not a blank chip.** `reconcileFinalize`
