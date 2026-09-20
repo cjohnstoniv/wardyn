@@ -871,30 +871,10 @@ export const RUN = {
     "Couldn't check which barriers this host has — leave this alone and Wardyn will use the strongest one it can, or pick one yourself.",
 } as const;
 
-// DRAFT (M2 canon pending) — R4-F144, WCAG 2.1.2: the cockpit terminal takes
-// Tab, Shift+Tab and Escape into the PTY, so a keyboard user needs an advertised
-// way out and 2.1.2 requires it be advised ON ENTRY.
-//
-// Chord: Ctrl+] — the M2 sheet's alternative, taken over the filed proposal's
-// Ctrl+Shift+Esc because Windows intercepts that at OS level (Task Manager)
-// before the browser ever sees it, and Esc/Shift+Tab are already spoken for.
-// Ctrl+] collides only with vim's tag-jump, inside the PTY, where the chord
-// deliberately does not reach the shell.
-// ONE spelling of the chord, composed into the sentence rather than typed
-// twice. The owner may yet rule a different one (a filed note: Ctrl+] needs
-// AltGr on DE/FR/ES layouts, where the browser then sees altKey and the binding
-// does not fire), and a hint that disagreed with the binding would be worse
-// than no hint at all — 2.1.2 is satisfied by an exit that WORKS, not by a
-// sentence about one.
-const ESCAPE_CHORD = "Ctrl+]";
-export const TERMINAL = {
-  ESCAPE_CHORD,
-  // DRAFT (M2) — DIVERGES from the §7.6 staging, which spells this
-  // `TERMINAL_ESCAPE_HINT(chord)` = "{chord} moves focus out of the terminal."
-  // This is the M2 sitting sheet's §2 wording; the chord is that sheet's ruled
-  // alternative to the filed Ctrl+Shift+Esc.
-  ESCAPE_CHORD_HINT: `${ESCAPE_CHORD} leaves the terminal`,
-} as const;
+// Moved to copy/terminal.ts (the target path for the later barrel split of
+// this file) — re-exported here so every existing `from "./copy"` import
+// keeps working unchanged.
+export { TERMINAL } from "./copy/terminal";
 
 // ── DRAFT (M2 canon pending) — the New Run rail's TRUTH block ────────────────
 // Appendix A finding 1: the rail rendered two unconditional security claims —
