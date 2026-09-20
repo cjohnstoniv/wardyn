@@ -8,10 +8,10 @@ theme lacks names the token to add — it never invents a value.
 
 | Layer | Lives in | Owns |
 |---|---|---|
-| Tokens | `ui/src/styles/theme.css` — `:root` light (L14–119), `.dark` (L121–204) | Every color, radius, font family, weight |
-| Utility bindings | `theme.css` `@theme inline` (L206–285) | Token → utility class (`--color-primary` → `bg-primary`) |
-| Element defaults | `theme.css` `@layer base` (L287–316) | `body`, `h1`–`h4`, `label`, `button`, `input` |
-| Utilities | `theme.css` `@layer utilities` (L319–338) | `.scroll-thin`, `.label-eyebrow` |
+| Tokens | `ui/src/styles/theme.css` — `:root` light, `.dark` | Every color, radius, font family, weight |
+| Utility bindings | `theme.css` `@theme inline` | Token → utility class (`--color-primary` → `bg-primary`) |
+| Element defaults | `theme.css` `@layer base` | `body`, `h1`–`h4`, `label`, `button`, `input` |
+| Utilities | `theme.css` `@layer utilities` | `.scroll-thin`, `.label-eyebrow` |
 | Primitives | `ui/src/app/components/ui/` | Role shells: `Button`, `Input`, `Dialog`, `DropdownMenu`, … |
 | Pattern layer | `ui/src/app/components/wardyn/` | Wardyn's vocabulary: `Chip`, `RunStateBadge`, `ConfinementChip`, `Field`, `OptionCard`, `EmptyState` |
 
@@ -29,31 +29,31 @@ Teal is the only loud color, and it means *"press this."* Everything else is gre
 
 | Role | Token(s) | May appear on | Never on |
 |---|---|---|---|
-| Affirmative action | `--primary` / `--primary-foreground` | The **one** `default` Button per surface (`button.tsx:12`) | Hover backgrounds, decoration, headings, ornamental icons |
-| Selected state | `--primary` at low alpha | `OptionCard` selected (`form-primitives.tsx:80`), `Checkbox`/`RadioGroup` checked, text `selection:` (`input.tsx:11`) | Anything not actually selected |
-| Focus ring | `--ring` | `focus-visible:border-ring focus-visible:ring-ring focus-visible:ring-[3px]` (`button.tsx:8`, `input.tsx:12`) — full alpha; a `/50` ring never met the 3:1 floor | Anything merely selected — the ring stays neutral so focus and selection read differently |
-| Active nav item | `--sidebar-accent` fill + `--sidebar-primary` rail | `navLinkClass` (`app-shell.tsx:380–386`) and the active rail (`app-shell.tsx:425`) | A third active treatment — use the shipped one |
-| Barrier tier | METALS: `--fence-*` bronze, `--wall-*` silver, `--vault-*` gold | `ConfinementChip` (`primitives.tsx:246–267`), `BarrierStrengthStrip`, `tier-illustration.tsx:70–72`, the tier matrix (`setup/environment-step.tsx:53–55`) | Card borders, run state, buttons, section headers |
-| Run / approval / health state | `--success` `--warning` `--danger` `--info` `--cyan` + their `-subtle` fills | `Chip` tones (`primitives.tsx:51–60`), shell banners (`app-shell.tsx:582`), `TruncatedNote` | Decoration. Always paired with a glyph or word — never color alone |
-| Agent identity | `--agent-claude` and the per-agent badge colors | `AgentBadge` monogram (`primitives.tsx:400–407`) | Anything but the WHO badge |
+| Affirmative action | `--primary` / `--primary-foreground` | The **one** `default` Button per surface (`button.tsx#buttonVariants`) | Hover backgrounds, decoration, headings, ornamental icons |
+| Selected state | `--primary` at low alpha | `OptionCard` selected (`form-primitives.tsx#OptionCard`), `Checkbox`/`RadioGroup` checked, text `selection:` (`input.tsx#Input`) | Anything not actually selected |
+| Focus ring | `--ring` | `focus-visible:border-ring focus-visible:ring-ring focus-visible:ring-[3px]` (`button.tsx#buttonVariants`, `input.tsx#Input`) — full alpha; a `/50` ring never met the 3:1 floor | Anything merely selected — the ring stays neutral so focus and selection read differently |
+| Active nav item | `--sidebar-accent` fill + `--sidebar-primary` rail | `navLinkClass` (`app-shell.tsx#navLinkClass`) and the active rail (`app-shell.tsx#SidebarNav`) | A third active treatment — use the shipped one |
+| Barrier tier | METALS: `--fence-*` bronze, `--wall-*` silver, `--vault-*` gold | `ConfinementChip` (`primitives.tsx#ConfinementChip`), `BarrierStrengthStrip`, `tier-illustration.tsx#WASH`, the tier matrix (`setup/environment-step.tsx#TIER_NAME_TINT`) | Card borders, run state, buttons, section headers |
+| Run / approval / health state | `--success` `--warning` `--danger` `--info` `--cyan` + their `-subtle` fills | `Chip` tones (`primitives.tsx#toneClass`), shell banners (`app-shell.tsx#AppShell`), `TruncatedNote` | Decoration. Always paired with a glyph or word — never color alone |
+| Agent identity | `--agent-claude` and the per-agent badge colors | `AgentBadge` monogram (`primitives.tsx#AgentBadge`) | Anything but the WHO badge |
 | Destructive | `--destructive` (= `--danger`) | `destructive` Button, delete confirmations | Deny, Cancel, or any reversible action |
 | Everything else | `--muted`, `--muted-foreground`, `--accent`, `--border`, `--border-strong`, `--surface-2` | Surfaces, rows, hairlines, secondary text | — |
 
 - **Risk grade is semantic, not metal.** `SafetyMeter` grades a *policy*, so it uses
-  `--success/--warning/--danger` (`safety-meter.tsx:41–45`). Metals say how separated
+  `--success/--warning/--danger` (`safety-meter.tsx#META`). Metals say how separated
   the agent is; semantics say how it went.
-- **Text links are `--info`, not teal** (`button.tsx:27`'s `link` variant already says
+- **Text links are `--info`, not teal** (`button.tsx#buttonVariants`'s `link` variant already says
   so). Teal underlined text reads as a button that failed.
 
 Known violations, cited as what the rule forbids:
 
 | Site | What it does | Why it is out of budget |
 |---|---|---|
-| `setup/environment-step.tsx:558` | `<Chip tone="primary">Recommended</Chip>` | Decorative teal. A recommendation is not an action — `tone="neutral"`, or let the default selection carry it |
-| `run-context-row.tsx:86` | `text-primary` on "Open run" | Teal on a disclosure control. It is a link: `--info`, or a `ghost` Button |
+| `setup/environment-step.tsx#ColumnState` | `<Chip tone="primary">Recommended</Chip>` | Decorative teal. A recommendation is not an action — `tone="neutral"`, or let the default selection carry it |
+| `run-context-row.tsx#RunContextRow` | `text-primary` on "Open run" | Teal on a disclosure control. It is a link: `--info`, or a `ghost` Button |
 
 `runs.tsx`'s two former violations at this same class ("Show all N" and "Load N more")
-are fixed: both now render `text-info` (`runs.tsx:590`, `runs.tsx:726`).
+are fixed: both now render `text-info` (`runs.tsx#TitleGroup`, `runs.tsx#RunsTable`).
 
 ## 3. Type scale
 
@@ -61,10 +61,10 @@ Four body rungs. Nothing between them.
 
 | Rung | Size | Weight | Use | Today |
 |---|---|---|---|---|
-| 11px | `0.6875rem` = `text-meta` | 600 uppercase for meta labels, 400 for captions | Section eyebrows, trailing metadata, captions, hints | `.label-eyebrow` (`theme.css:376`) — 600, `0.06em`, uppercase, `--muted-foreground` |
-| 12px | `0.75rem` = `text-xs` | 400 | Helper text, paths, secondary content, chips | `Chip` is `text-xs` (`primitives.tsx:90`) |
+| 11px | `0.6875rem` = `text-meta` | 600 uppercase for meta labels, 400 for captions | Section eyebrows, trailing metadata, captions, hints | `.label-eyebrow` (`theme.css#.label-eyebrow`) — 600, `0.06em`, uppercase, `--muted-foreground` |
+| 12px | `0.75rem` = `text-xs` | 400 | Helper text, paths, secondary content, chips | `Chip` is `text-xs` (`primitives.tsx#Chip`) |
 | 13px | `0.8125rem` = `text-body` | 400–500 | Dense table rows, sidebar items | `--text-body` (`theme.css`, `@theme inline`) |
-| 14px | `0.875rem` = `text-sm` | 400 body, 500 row titles | Body copy, button text, labels | `button`/`label` are 500 by base rule (`theme.css:334–335`) |
+| 14px | `0.875rem` = `text-sm` | 400 body, 500 row titles | Body copy, button text, labels | `button`/`label` are 500 by base rule (`theme.css#label,button`) |
 
 Headings come from `@layer base`, used as-is: `h1` `1.5rem`/600/1.3/`-0.01em` · `h2`
 `1.125rem`/600/1.35/`-0.005em` · `h3` `1rem`/600/1.4 · `h4` `0.875rem`/500/1.4.
@@ -75,7 +75,7 @@ Headings come from `@layer base`, used as-is: `h1` `1.5rem`/600/1.3/`-0.01em` ·
   `letter-spacing` there, not `tracking-*` at call sites.
 - **Mono (`--font-mono`) is for literals only:** run ids, paths, commands, fingerprints,
   exit codes, URLs, wire values — never prose, labels, or emphasis (`Chip` takes `mono`
-  for this, `primitives.tsx:92`).
+  for this, `primitives.tsx#Chip`).
 - **No ad-hoc sizes.** The rungs have named homes: `--text-meta` (11px) and
   `--text-body` (13px) sit in `@theme inline` beside `text-xs` and `text-sm`, and the
   polish tier swept every `text-[…]` size onto one of them — a new `text-[…]` size is a
@@ -85,12 +85,12 @@ Headings come from `@layer base`, used as-is: `h1` `1.5rem`/600/1.3/`-0.01em` ·
   tile-size pill), which sits at the 11px rung today; give it its own token if it ever
   needs to be smaller than text.
 - Two 11px uppercase labels disagree on tracking: `.label-eyebrow` is `0.06em`,
-  `SectionCard`'s `h2` is `tracking-wider` (`primitives.tsx:443`). Use `.label-eyebrow`,
-  as `WidgetCard` does (`primitives.tsx:505`).
+  `SectionCard`'s `h2` is `tracking-wider` (`primitives.tsx#SectionCard`). Use `.label-eyebrow`,
+  as `WidgetCard` does (`primitives.tsx#WidgetCard`).
 
 ## 4. Radius and elevation
 
-`--radius: 0.625rem` (10px) is the base; the rest derive from it (`theme.css:129`, `theme.css:296–299`):
+`--radius: 0.625rem` (10px) is the base; the rest derive from it (`theme.css#--radius`, `theme.css#--radius-sm`):
 `rounded-sm` (6px) chip dots · `rounded-md` (8px) inputs, chips, small buttons, menus ·
 `rounded-lg` (10px) buttons, option cards, widget cards · `rounded-xl` (14px) document
 cards, run cards, icon wells. Exactly three elevation levels:
@@ -98,14 +98,14 @@ cards, run cards, icon wells. Exactly three elevation levels:
 | Level | How | Where |
 |---|---|---|
 | Hairline | `border-border` only | Rows, dividers, banners, table cells |
-| Lift | `shadow-xs` + border | Cards, `outline` buttons. Only `checkbox.tsx:17` and `radio-group.tsx:30` carry it today — the cards are border-only, which is in budget |
+| Lift | `shadow-xs` + border | Cards, `outline` buttons. Only `checkbox.tsx#Checkbox` and `radio-group.tsx#RadioGroupItem` carry it today — the cards are border-only, which is in budget |
 | Floating | one `--shadow-floating` token | Popovers, dropdowns, selects, dialogs, sheets, floating toolbars |
 
 `--shadow-floating` is ONE shared value in `theme.css` (`@theme inline`), deliberately not
 per-theme — a floating surface reads the same way in light and dark. It replaced two other
 spellings that shipped one idea, both now consolidated onto it: `shadow-md` and `shadow-lg`
-used to be split across `dropdown-menu.tsx:45`, `select.tsx:68`, `popover.tsx:37`,
-`dialog.tsx:68`, `alert-dialog.tsx:63`, `sheet.tsx:63` and `dropdown-menu.tsx:233` (its
+used to be split across `dropdown-menu.tsx#DropdownMenuContent`, `select.tsx#SelectContent`, `popover.tsx#PopoverContent`,
+`dialog.tsx#DialogContent`, `alert-dialog.tsx#AlertDialogContent`, `sheet.tsx#SheetContent` and `dropdown-menu.tsx#DropdownMenuSubContent` (its
 `DropdownMenuSubContent`, a second site in the same file) — all seven now carry
 `shadow-floating`. A floating surface is one thing; it gets one shadow. Anything
 wanting a fourth level wants the focus ring.
@@ -113,11 +113,11 @@ wanting a fourth level wants the focus ring.
 ## 5. Status vocabulary and glyph pairing
 
 **Every actor on a row is two adjacent glyphs, never fused:** WHO (the `AgentBadge`
-monogram, `primitives.tsx:400–407`) and WHAT (the state). Fusing them means neither can
+monogram, `primitives.tsx#AgentBadge`) and WHAT (the state). Fusing them means neither can
 change independently. State is an 8px dot (`size-2`) or an icon, **plus a text label** —
-6px in a `Chip` or dense row, which `Chip` renders (`size-1.5`, `primitives.tsx:98–103`).
+6px in a `Chip` or dense row, which `Chip` renders (`size-1.5`, `primitives.tsx#Chip`).
 A live state adds `pulse`; a terminal state swaps the dot for an icon. `RunStateBadge`
-is the one badge for board, table, and detail header (`primitives.tsx:195–217`):
+is the one badge for board, table, and detail header (`primitives.tsx#RunStateBadge`):
 
 | Wire state | Label | Tone | Glyph |
 |---|---|---|---|
@@ -132,13 +132,13 @@ is the one badge for board, table, and detail header (`primitives.tsx:195–217`
 | `KILLED` | Killed | danger, **solid fill** | `ShieldX` |
 
 Solid saturated red is reserved exclusively for `KILLED`, the enforcement outcome. An
-unrecognized state degrades to a neutral chip showing the raw value (`metaFor`, `primitives.tsx:156`) —
+unrecognized state degrades to a neutral chip showing the raw value (`metaFor`, `primitives.tsx#metaFor`) —
 never crashing, never borrowing an unearned tone.
 
 **Precedence when indicators compete on one row** — highest wins, and only the winner
 gets the row's accent: needs-you (held approval / awaiting confirmation) > failed or
 killed > working > starting or pending > done > idle. The board flattens the first two
-into one amber treatment (`runs.tsx:60, 633–639`) — the divergence to close: an approval
+into one amber treatment (`runs/board-groups.ts#needsYou`) — the divergence to close: an approval
 is a request, a failure is a report.
 
 ## 6. Buttons and back-out paths
@@ -147,7 +147,7 @@ is a request, a failure is a report.
 |---|---|---|
 | `default` (teal) | The affirmative action | **Exactly one per surface.** Two teal buttons means the surface has not decided what it is for |
 | `secondary` | A second action of equal weight | Rare — usually a sign the surface does two jobs |
-| `outline` | A safe alternative or non-committal action | `Attach`, `Retry` (`states.tsx:101–103`), and **`Deny`** |
+| `outline` | A safe alternative or non-committal action | `Attach`, `Retry` (`states.tsx#ErrorState`), and **`Deny`** |
 | `ghost` | Back-out and chrome | Cancel, Dismiss, Close, Discard, icon buttons |
 | `destructive` | Irreversible loss | Delete, purge — confirmation dialog required |
 | `link` / `info` | Inline navigation | `--info`, underline on hover |
@@ -158,7 +158,7 @@ is a request, a failure is a report.
   destruction pushes operators toward Approve.
 - **The irreversible action wears the weight.** A quiet dangerous choice beside a teal
   safe one is a surface lying about its stakes.
-- Sizes: `default` h-9, `sm` h-8, `lg` h-10, `icon` size-9 (`button.tsx:31–34`) — picked
+- Sizes: `default` h-9, `sm` h-8, `lg` h-10, `icon` size-9 (`button.tsx#buttonVariants`) — picked
   by density, never by emphasis.
 
 ## 7. In-flight feedback
@@ -168,7 +168,7 @@ Bind `disabled` the instant the action fires; reveal the spinner later.
 | Expected duration | Show |
 |---|---|
 | 0–100ms | Nothing. A flash of spinner reads as a fault |
-| 100ms–1s | `disabled` only (`disabled:opacity-50`, `button.tsx:8`) |
+| 100ms–1s | `disabled` only (`disabled:opacity-50`, `button.tsx#buttonVariants`) |
 | 1–3s | `disabled` + `Loader2 animate-spin`, or a label swap ("Save" → "Saving…") |
 | 3s+ | Stage labels that say what is happening ("Building image…", "Starting sandbox…") |
 
@@ -180,14 +180,14 @@ Bind `disabled` the instant the action fires; reveal the spinner later.
 
 ## 8. Forms
 
-`Field` (`form-primitives.tsx:20–54`) is the shape; do not rebuild it.
+`Field` (`form-primitives.tsx#Field`) is the shape; do not rebuild it.
 
 | Part | Rule |
 |---|---|
 | Label group | `space-y-2` between label, control, and hint; `Label` is 14px/500 by base rule |
 | Required marker | A `*` **sibling** of the label, `aria-hidden`, plus native `required` on the control — never color alone, never inside the accessible name |
 | Helper text | 12px `--muted-foreground`, below the control |
-| Trailing meta | 11px `--muted-foreground`, right-aligned (`OperatorOnlyHint`, `primitives.tsx:127`) |
+| Trailing meta | 11px `--muted-foreground`, right-aligned (`OperatorOnlyHint`, `primitives.tsx#OperatorOnlyHint`) |
 | Errors | `aria-invalid` on the control — `Input` already renders the destructive ring and border. Never hand-paint an error style |
 | Placeholder | Illustrative only, `--placeholder-foreground`. A placeholder is never a label |
 
@@ -210,15 +210,15 @@ Bind `disabled` the instant the action fires; reveal the spinner later.
 - **Cards** are `bg-card` + `border-border`, distinct from their parent: `SectionCard`
   (`rounded-xl`, `p-4`) is the document card, `WidgetCard` (`rounded-lg`) the pane card.
   **Never nest a card in a card** — that is a section.
-- **Empty states carry the action that fills them.** `EmptyState` (`states.tsx:35`)
+- **Empty states carry the action that fills them.** `EmptyState` (`states.tsx#EmptyState`)
   takes an `action`; omit it only when the emptiness is good news. Put the doc link next
   to the need.
 - **Persistent errors render inline** with something to read, retry, or act on:
-  `ErrorState` (`states.tsx:72`) for a pane, a shell banner (`app-shell.tsx:582`),
-  `TruncatedNote` (`states.tsx:116–135`) for a partial result.
+  `ErrorState` (`states.tsx#ErrorState`) for a pane, a shell banner (`app-shell.tsx#AppShell`),
+  `TruncatedNote` (`states.tsx#TruncatedNote`) for a partial result.
 - **Toasts (`sonner`) are transient confirmations only** — "Copied", "Secret saved".
   Anything worth reading twice is not a toast.
-- **Skeletons match the final layout's height** (`TableSkeleton`, `states.tsx:137`).
+- **Skeletons match the final layout's height** (`TableSkeleton`, `states.tsx#TableSkeleton`).
 - **`.scroll-thin` on every scroller** — a default OS scrollbar in a console pane is a
   visual leak.
 

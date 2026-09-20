@@ -1084,11 +1084,17 @@ func TestDataFlowAuditSinkRowCarriesTheOutageQualifier(t *testing.T) {
 //
 // So the rule here is the one the live-citation guard can then enforce: in
 // these rows every site is spelled out in full, and no bare `:N` shorthand is
-// left for a reader (or a guard) to resolve by guesswork.
+// left for a reader (or a guard) to resolve by guesswork. What "in full" means
+// is now a SYMBOL — `path/file.go#Symbol`, resolved with go/parser — because
+// the line-anchored form these rows used to carry made every insertion above a
+// cited line a failure of the required build check. The COUNT is what this
+// guard adds over its neighbour: a row that names one of several emitters
+// still tells an operator the others do not exist.
 func TestAuditActionsRuleSourceRowsCiteEveryLiveEmitSite(t *testing.T) {
+	root := repoRoot(t)
 	doc := readRepoFile(t, "docs/AUDIT-ACTIONS.md")
 	bareLineSpan := regexp.MustCompile("`:[0-9]+`")
-	citation := regexp.MustCompile("`(internal/[A-Za-z0-9_/.-]+\\.go):([0-9]+)`")
+	citation := regexp.MustCompile("`(internal/[A-Za-z0-9_/.-]+\\.go)#([A-Za-z0-9_.]+)`")
 
 	for _, ruleSource := range []string{"builtin:private-ip", "builtin:dial-failed"} {
 		var row string
@@ -1116,15 +1122,25 @@ func TestAuditActionsRuleSourceRowsCiteEveryLiveEmitSite(t *testing.T) {
 				ruleSource, len(sites))
 		}
 		for _, m := range sites {
-			lines := strings.Split(readRepoFile(t, m[1]), "\n")
-			n, err := strconv.Atoi(m[2])
-			if err != nil || n < 1 || n > len(lines) {
-				t.Errorf("%s cites %s:%s, which is past the end of the file", ruleSource, m[1], m[2])
+			src, err := os.ReadFile(filepath.Join(root, m[1]))
+			if err != nil {
+				t.Errorf("%s cites %s, which could not be read: %v", ruleSource, m[1], err)
 				continue
 			}
-			if !strings.Contains(lines[n-1], ruleSource) {
-				t.Errorf("%s cites %s:%s, but that line does not emit it:\n\t%s",
-					ruleSource, m[1], m[2], strings.TrimSpace(lines[n-1]))
+			bodies, perr := citedSymbolBodies(m[1], src)
+			if perr != nil {
+				t.Errorf("%s cites %s, which does not parse: %v", ruleSource, m[1], perr)
+				continue
+			}
+			body, ok := bodies[m[2]]
+			if !ok {
+				t.Errorf("%s cites %s#%s, but that file declares no such top-level symbol",
+					ruleSource, m[1], m[2])
+				continue
+			}
+			if !strings.Contains(body, ruleSource) {
+				t.Errorf("%s cites %s#%s, but that symbol's body never emits it",
+					ruleSource, m[1], m[2])
 			}
 		}
 	}
