@@ -4,6 +4,7 @@
 package api
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -21,18 +22,19 @@ func TestValidatePolicySpec_PushRulesNil(t *testing.T) {
 }
 
 // TestValidatePolicySpec_PushRulesBounds pins push_rules' write-time shape:
-// at most maxPushRulesDenyPaths entries, each at most maxPushRulesPathBytes
-// bytes and free of control characters, and max_inspect_pack_mib in
-// 0..maxPushRulesInspectPackMiB. Phase one only validates the strings — no
-// matcher runs against them here (that lands with the enforcement change).
+// each deny_paths entry at most maxPushRulesPathBytes bytes and free of
+// control characters, and max_inspect_pack_mib in 0..maxPushRulesInspectPackMiB.
+// Phase one only validates the strings — no matcher runs against them here
+// (that lands with the enforcement change).
+//
+// Deliberately NO "too many deny_paths" case: unlike allowed_domains,
+// deny_paths carries no count cap (see maxPushRulesPathBytes' own doc comment
+// for why — a clamp-merged deny_paths can legitimately exceed what either
+// side authored on its own, and a member must never be refused for a bound
+// their own policy never violated).
 func TestValidatePolicySpec_PushRulesBounds(t *testing.T) {
 	spec := func(pr *types.PushRulesSpec) types.RunPolicySpec {
 		return types.RunPolicySpec{MinConfinementClass: types.CC2, PushRules: pr}
-	}
-
-	tooManyPaths := make([]string, maxPushRulesDenyPaths+1)
-	for i := range tooManyPaths {
-		tooManyPaths[i] = "a"
 	}
 
 	refused := []struct {
@@ -40,8 +42,6 @@ func TestValidatePolicySpec_PushRulesBounds(t *testing.T) {
 		spec         types.RunPolicySpec
 		wantContains string
 	}{
-		{"too many deny_paths", spec(&types.PushRulesSpec{DenyPaths: tooManyPaths}),
-			"push_rules.deny_paths: at most"},
 		{"empty deny_paths entry", spec(&types.PushRulesSpec{DenyPaths: []string{""}}),
 			"push_rules.deny_paths[0]: empty entry"},
 		{"deny_paths entry too long", spec(&types.PushRulesSpec{DenyPaths: []string{strings.Repeat("a", maxPushRulesPathBytes+1)}}),
@@ -77,5 +77,17 @@ func TestValidatePolicySpec_PushRulesBounds(t *testing.T) {
 		if err := validatePolicySpec(ok); err != nil {
 			t.Errorf("rejected a policy inside the bounds %+v: %v", ok, err)
 		}
+	}
+
+	// A deny_paths list well past any per-list count an operator ceiling or a
+	// member's own proposal would author alone (e.g. a 100-entry
+	// composer.Clamp union of a 64-entry ceiling and a 64-entry proposal) must
+	// still validate — the decision this test pins.
+	manyPaths := make([]string, 100)
+	for i := range manyPaths {
+		manyPaths[i] = fmt.Sprintf("path-%d/**", i)
+	}
+	if err := validatePolicySpec(spec(&types.PushRulesSpec{DenyPaths: manyPaths})); err != nil {
+		t.Errorf("rejected a 100-entry deny_paths (no count cap by design): %v", err)
 	}
 }

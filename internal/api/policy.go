@@ -304,15 +304,29 @@ func validateUIAppPath(p string) error {
 	return nil
 }
 
-// maxPushRulesDenyPaths / maxPushRulesPathBytes bound push_rules.deny_paths —
-// hostile-input ceilings, not a sizing of any real policy: the ceiling exists
-// because this rides a per-run JSON document, same reasoning as
-// maxAllowedDomainsPerSpec and maxToolRuleNameLen. maxPushRulesInspectPackMiB
-// bounds max_inspect_pack_mib; the range (not a bare non-negative check) mirrors
-// how llm_inspection's other size knobs are bounded, and keeps a hand-authored
-// policy from asking the future pack inspector (#179) to read an unbounded pack.
+// maxPushRulesPathBytes bounds each push_rules.deny_paths ENTRY — a
+// hostile-input ceiling, not a sizing of any real policy, same reasoning as
+// maxToolRuleNameLen: this rides a per-run JSON document.
+//
+// Deliberately NO count cap on the list itself, unlike allowed_domains.
+// deny_paths only ever NARROWS what a push may touch — more entries can never
+// widen anything — and nothing does an expensive per-entry lookup on it the
+// way narrowMemberInlinePolicy does for allowed_domains (see
+// maxAllowedDomainsPerSpec's own doc): the same reasoning denied_domains
+// already rests on, which likewise carries no count cap. That matters
+// concretely here: boundMemberSpec validates the CLAMPED spec, not just what
+// a member typed, and composer.Clamp's push_rules union
+// (clamp.go:clampPushRules) can legally produce a deny_paths longer than
+// either the operator's ceiling or the member's own proposal authored on its
+// own. A count cap here would then refuse a member for a bound their OWN
+// policy never violated — unfixable from their side (found reviewing #176).
+//
+// maxPushRulesInspectPackMiB bounds max_inspect_pack_mib; the range (not a
+// bare non-negative check) mirrors how llm_inspection's other size knobs are
+// bounded, and keeps a hand-authored policy from asking the future pack
+// inspector (#179) to read an unbounded pack. Clamp only ever LOWERS this
+// scalar (never a union), so it cannot suffer the same post-clamp overshoot.
 const (
-	maxPushRulesDenyPaths      = 64
 	maxPushRulesPathBytes      = 256
 	maxPushRulesInspectPackMiB = 64
 )
@@ -327,9 +341,6 @@ const (
 func validatePushRules(pr *types.PushRulesSpec) error {
 	if pr == nil {
 		return nil
-	}
-	if len(pr.DenyPaths) > maxPushRulesDenyPaths {
-		return fmt.Errorf("push_rules.deny_paths: at most %d entries", maxPushRulesDenyPaths)
 	}
 	for i, p := range pr.DenyPaths {
 		if p == "" {

@@ -325,35 +325,89 @@ func Clamp(proposed, ceiling types.RunPolicySpec, maxEphemeralDiskMiB int) (type
 		out.WorkspaceMounts = nil
 	}
 
-	// Push rules: only narrows (deny_paths/max_inspect_pack_mib can never widen
-	// what a push may touch), so a proposal's own push_rules under a ceiling
-	// that sets NONE passes through unclamped — nothing here to protect
-	// against, unlike llm_inspection's detector_sidecar_url. When the ceiling
-	// DOES set one, treat it as a floor: an unset proposal inherits it
-	// wholesale, and a set proposal has the ceiling's deny_paths unioned in
-	// (deny always wins, same as denied_domains above) and its
-	// max_inspect_pack_mib capped at the ceiling's when the ceiling's is
-	// non-zero.
-	if ceiling.PushRules != nil {
-		if out.PushRules == nil {
-			warns = append(warns, "push_rules inherited from the operator's policy")
-			cp := *ceiling.PushRules
-			cp.DenyPaths = append([]string(nil), ceiling.PushRules.DenyPaths...)
-			out.PushRules = &cp
-		} else {
-			merged := *out.PushRules
-			if len(ceiling.PushRules.DenyPaths) > 0 {
-				merged.DenyPaths = union(merged.DenyPaths, ceiling.PushRules.DenyPaths)
-			}
-			if ceil := ceiling.PushRules.MaxInspectPackMiB; ceil > 0 && (merged.MaxInspectPackMiB <= 0 || merged.MaxInspectPackMiB > ceil) {
-				warns = append(warns, fmt.Sprintf("push_rules.max_inspect_pack_mib capped to operator maximum %d", ceil))
-				merged.MaxInspectPackMiB = ceil
-			}
-			out.PushRules = &merged
-		}
-	}
+	// Push rules. Split into its own function, same reason clampOperatorSwitches
+	// is: it keeps Clamp's own branch count under the gocyclo gate.
+	warns = clampPushRules(&out, ceiling, warns)
 
 	return out, warns
+}
+
+// clampPushRules bounds push_rules: only narrows (deny_paths/
+// max_inspect_pack_mib can never widen what a push may touch), so a
+// proposal's own push_rules under a ceiling that sets NONE passes through
+// unclamped — nothing here to protect against, unlike llm_inspection's
+// detector_sidecar_url. When the ceiling DOES set one, treat it as a floor:
+// an unset proposal inherits it wholesale, and a set proposal has the
+// ceiling's deny_paths unioned in (deny always wins, same as denied_domains
+// above — but see unionPaths, NOT union, for why) and its
+// max_inspect_pack_mib capped at the ceiling's when the ceiling's is
+// non-zero.
+//
+// pushRulesIsSet guards both the ceiling check here and the risk grade
+// (composer.Grade): an all-zero-but-non-nil *PushRulesSpec — push_rules: {}
+// on the wire — must read as "no opinion" exactly like nil, or an empty
+// ceiling would get inherited wholesale by every member spec and then
+// false-warn on the Review rail about rules that do not exist (found
+// reviewing #176).
+func clampPushRules(out *types.RunPolicySpec, ceiling types.RunPolicySpec, warns []string) []string {
+	if !pushRulesIsSet(ceiling.PushRules) {
+		return warns
+	}
+	if out.PushRules == nil {
+		warns = append(warns, "push_rules inherited from the operator's policy")
+		cp := *ceiling.PushRules
+		cp.DenyPaths = append([]string(nil), ceiling.PushRules.DenyPaths...)
+		out.PushRules = &cp
+		return warns
+	}
+	merged := *out.PushRules
+	if len(ceiling.PushRules.DenyPaths) > 0 {
+		merged.DenyPaths = unionPaths(merged.DenyPaths, ceiling.PushRules.DenyPaths)
+	}
+	if ceil := ceiling.PushRules.MaxInspectPackMiB; ceil > 0 && (merged.MaxInspectPackMiB <= 0 || merged.MaxInspectPackMiB > ceil) {
+		warns = append(warns, fmt.Sprintf("push_rules.max_inspect_pack_mib capped to operator maximum %d", ceil))
+		merged.MaxInspectPackMiB = ceil
+	}
+	out.PushRules = &merged
+	return warns
+}
+
+// pushRulesIsSet reports whether pr carries an actual rule rather than an
+// all-zero (but non-nil) *PushRulesSpec. See clampPushRules' doc for why this
+// matters: an empty ceiling push_rules must be indistinguishable from an
+// absent one, both here and in composer.Grade.
+func pushRulesIsSet(pr *types.PushRulesSpec) bool {
+	return pr != nil && (len(pr.DenyPaths) > 0 || pr.MaxInspectPackMiB > 0)
+}
+
+// unionPaths is union's exact-string counterpart for push_rules.deny_paths.
+// union folds case and trims whitespace — the right identity for
+// denied_domains, where DNS names are case-insensitive — but wrong for a
+// filesystem path: a git path is case- AND space-sensitive on Linux. union
+// also seeds its seen-set from its FIRST argument (the proposal, here), so a
+// member re-typing the ceiling's own rule in a different case would silently
+// DISPLACE the ceiling's spelling instead of adding a second entry:
+//
+//	ceiling  [".github/workflows/**"]
+//	proposal [".GitHub/workflows/**"]   ->  union(...) = [".GitHub/workflows/**"]
+//
+// leaving strictly weaker effective rules than the operator set — the one
+// security property this field has (found reviewing #176; #178/#179 inherit
+// the shape). unionPaths dedupes on the exact byte string only, so the
+// ceiling's own entry always survives, however it is later re-typed.
+func unionPaths(a, b []string) []string {
+	seen := make(map[string]bool, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	for _, lists := range [][]string{a, b} {
+		for _, s := range lists {
+			if !seen[s] {
+				seen[s] = true
+				out = append(out, s)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // clampUIApps bounds a proposal's UI apps. The ceiling's list is an ALLOWLIST of (name, port) pairs when it

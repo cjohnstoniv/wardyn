@@ -797,11 +797,24 @@ brokered lanes (`github_token`, `git_pat`) — git's own SSH transport has no
 broker seam. A policy that sets `push_rules` while `ssh_key` is the run's
 **only** git-capable grant is legal (never a `422` at write time) but the rules
 cannot be enforced; the Review rail's risk grade (`composer.Grade`) surfaces
-that as a **medium**-risk item so the operator is told rather than blocked.
+that as a **medium**-risk item so the operator is told rather than blocked. An
+all-zero `push_rules: {}` — nothing in `deny_paths`, `max_inspect_pack_mib`
+`0`/absent — reads as **absent**, the same as `null`: it never survives an
+operator ceiling into a member's clamped spec, and never grades the warning
+above.
+
+**Clamped as a floor, not a bare merge.** An operator ceiling's `push_rules`
+is inherited wholesale by a proposal that sets none, and unioned into one that
+does — `deny_paths` by **exact string**, never case- or whitespace-folded (a
+git path is case- and space-sensitive on Linux, unlike a DNS name), so a
+member re-typing the ceiling's own entry in different case adds a second
+entry rather than silently dropping the operator's. A ceiling that sets none
+leaves a proposal's own `push_rules` untouched — this field only narrows, so
+there is nothing here for a silent ceiling to protect against.
 
 | Field | Type | Default | What it does |
 |---|---|---|---|
-| `deny_paths` | `[]string` | `[]` | Glob-shaped path patterns (e.g. `.github/workflows/**`) a future pack inspector will refuse in a push. Stored and validated as **opaque strings only** — no matcher runs against them in this change. At most **64 entries**, each at most **256 bytes**, no NUL or other control character; rejected (`400`) at write time. |
+| `deny_paths` | `[]string` | `[]` | Glob-shaped path patterns (e.g. `.github/workflows/**`) a future pack inspector will refuse in a push. Stored and validated as **opaque strings only** — no matcher runs against them in this change. Each entry at most **256 bytes**, no NUL or other control character; rejected (`400`) at write time. **No count cap** — deny-only lists narrow rather than widen, the same stance `denied_domains` takes, and a clamp-merged list can legitimately exceed what either the operator's ceiling or the member's own proposal authored on its own. |
 | `max_inspect_pack_mib` | `int` | `0` | Caps how much of an incoming push pack a future inspector reads before giving up. `0`/absent keeps that inspector's own built-in default. Bounded at write time to **0..64**. |
 
 ## `llm_inspection` — `LLMInspectionSpec`

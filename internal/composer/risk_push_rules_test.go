@@ -58,4 +58,14 @@ func TestGrade_PushRulesUnenforceableWithSSHOnly(t *testing.T) {
 	if it := itemFor(Grade(run, noGitGrant), "push_rules"); it != nil {
 		t.Errorf("graded %+v with no git grant at all: ssh_key is not the reason", it)
 	}
+
+	// An all-zero-but-non-nil push_rules ("push_rules": {} — what
+	// composer.Clamp can hand back from an empty operator ceiling, see
+	// clampPushRules) carries no actual rule: pushRulesIsSet must keep this
+	// from grading a warning about rules that do not exist.
+	emptySpec := base
+	emptySpec.PushRules = &types.PushRulesSpec{}
+	if it := itemFor(Grade(run, emptySpec), "push_rules"); it != nil {
+		t.Errorf("graded %+v with an all-zero push_rules: nothing to warn about", it)
+	}
 }

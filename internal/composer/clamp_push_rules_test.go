@@ -93,3 +93,58 @@ func TestClamp_PushRulesMergedWhenBothSet(t *testing.T) {
 		t.Errorf("max_inspect_pack_mib = %d, want the proposal's own stricter 2 left alone", got.PushRules.MaxInspectPackMiB)
 	}
 }
+
+// TestClamp_PushRulesDenyPathsUnionIsCaseSensitive is the security regression
+// found reviewing #176: union() (the denied_domains helper) folds case and
+// whitespace, which is correct for a DNS name but wrong for a git path — Linux
+// paths are case- and space-sensitive. union also seeds its seen-set from its
+// FIRST argument (here, the proposal), so a member re-typing the ceiling's own
+// rule in a different case used to silently DISPLACE the ceiling's spelling,
+// leaving the member with strictly weaker effective rules than the operator
+// set — the one security property this field has. clampPushRules must use
+// unionPaths (exact-string) instead, so BOTH spellings survive.
+func TestClamp_PushRulesDenyPathsUnionIsCaseSensitive(t *testing.T) {
+	ceiling := operatorCeiling(t)
+	ceiling.PushRules = &types.PushRulesSpec{DenyPaths: []string{".github/workflows/**"}}
+
+	proposed := types.RunPolicySpec{PushRules: &types.PushRulesSpec{DenyPaths: []string{".GitHub/workflows/**"}}}
+	got, _ := Clamp(proposed, ceiling, 0)
+	if got.PushRules == nil {
+		t.Fatal("push_rules = nil, want the merged spec")
+	}
+	want := map[string]bool{".GitHub/workflows/**": true, ".github/workflows/**": true}
+	if len(got.PushRules.DenyPaths) != len(want) {
+		t.Fatalf("deny_paths = %v, want BOTH spellings present (the ceiling's must never be displaced): %v", got.PushRules.DenyPaths, want)
+	}
+	for _, p := range got.PushRules.DenyPaths {
+		if !want[p] {
+			t.Errorf("deny_paths contains unexpected entry %q", p)
+		}
+	}
+	foundCeiling := false
+	for _, p := range got.PushRules.DenyPaths {
+		if p == ".github/workflows/**" {
+			foundCeiling = true
+		}
+	}
+	if !foundCeiling {
+		t.Error("the ceiling's own exact spelling was displaced by the proposal's differently-cased re-typing")
+	}
+}
+
+// TestClamp_PushRulesEmptyCeilingSpecReadsAsAbsent pins the other #176 review
+// finding: an all-zero-but-non-nil ceiling.PushRules ("push_rules": {} on the
+// wire) must behave exactly like a nil one — never inherited wholesale into
+// every member's clamped spec.
+func TestClamp_PushRulesEmptyCeilingSpecReadsAsAbsent(t *testing.T) {
+	ceiling := operatorCeiling(t)
+	ceiling.PushRules = &types.PushRulesSpec{} // present, but nothing in it
+
+	got, warns := Clamp(types.RunPolicySpec{}, ceiling, 0)
+	if got.PushRules != nil {
+		t.Errorf("push_rules = %+v, want nil (an all-zero ceiling spec is absent)", got.PushRules)
+	}
+	if hasWarn(warns, "push_rules") {
+		t.Errorf("unexpected push_rules warning from an all-zero ceiling spec: %v", warns)
+	}
+}
