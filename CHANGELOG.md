@@ -8,6 +8,19 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- **Device and audit-federation storage** (migration `0066_devices_and_federation`, part of hybrid
+  enrolment and audit federation). Three tables: `devices` (organisation-side inventory of enrolled
+  laptops, credential hashed at rest, soft-revocable), `device_enrolment_tokens` (single-use
+  admin-minted tokens a laptop's first boot exchanges for a device credential), and `org_federation`
+  (a laptop's own single-row durable forwarder cursor). `internal/store/store_devices.go` adds the
+  `DeviceStore` optional capability (`store.PG` only, like `Pager`/`AuditChainVerifier`) with
+  `IngestDeviceAudit`: it verifies a forwarded batch's claimed hash chain in one transaction under the
+  existing audit-chain advisory lock, recomputing each row's hash in SQL over the stored jsonb, refuses
+  the whole batch on any mismatch, and accepts a genesis row as a recorded chain reset. Storage and the
+  store seam only — no routes, CLI or forwarder yet.
+
 ### Changed
 
 - **Doc citations name a SYMBOL, never a line number.** `docs/AUDIT-ACTIONS.md`'s 215 emit-site
