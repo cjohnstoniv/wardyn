@@ -630,8 +630,13 @@ var DEMOS_EGRESS = [
 var DEMOS_SECRETS = [
   "Write-only, even for you","A token the sandbox never even sees","No identity, no credential"
 ].map(function(t,i){ return { id:"se"+i, label:t, heading:t }; });
-var OPTIONAL = [OPTIONAL_SECRETS].concat(DEMOS_EGRESS, DEMOS_SECRETS,
-                                         [OPTIONAL_PROVIDERS, OPTIONAL_WORKSPACES]);
+/* Three categories, not two. Configuration you may not need yet is not the
+   same thing as a teaching walk-through, and calling both "optional" is what
+   put Secrets behind a "Start the demo" button. */
+var OPTIONAL_CONFIG = [OPTIONAL_SECRETS, OPTIONAL_PROVIDERS, OPTIONAL_WORKSPACES];
+var DEMOS = DEMOS_EGRESS.concat(DEMOS_SECRETS);
+var OPTIONAL = OPTIONAL_CONFIG.concat(DEMOS);
+function isDemo(id){ return DEMOS.some(function(s){ return s.id === id; }); }
 /* BEFORE walks required and optional interleaved as one numbered run of 17
    (Essentials → Egress demos → Secrets demos → Your work → Finish). */
 var LEGACY_ORDER = [REQUIRED[0],REQUIRED[1],REQUIRED[2],OPTIONAL_SECRETS]
@@ -891,12 +896,13 @@ function setupRail(){
   return h("div",{class:"rail"},[
     railGroup("Required", "4", REQUIRED, 1),
     h("div",{class:"group"},[
-      h("div",{class:"eyebrow"},[ h("span",{text:"Optional"}), h("span",{class:"n",text:"· 13"}) ]),
-      railItem(OPTIONAL_SECRETS),
-      demoDetails("Egress demos", DEMOS_EGRESS),
-      demoDetails("Secrets demos", DEMOS_SECRETS),
-      railItem(OPTIONAL_PROVIDERS),
-      railItem(OPTIONAL_WORKSPACES)
+      h("div",{class:"eyebrow"},[ h("span",{text:"Optional setup"}), h("span",{class:"n",text:"· 3"}) ]),
+      railItem(OPTIONAL_SECRETS), railItem(OPTIONAL_PROVIDERS), railItem(OPTIONAL_WORKSPACES)
+    ]),
+    h("div",{class:"group"},[
+      h("div",{class:"eyebrow"},[ h("span",{text:"Demos"}), h("span",{class:"n",text:"· 10"}) ]),
+      demoDetails("Egress", DEMOS_EGRESS),
+      demoDetails("Secrets", DEMOS_SECRETS)
     ])
   ]);
 }
@@ -915,7 +921,7 @@ function stepCounter(){
     ]);
   return h("div",{class:"eyebrow step-count"},[
     h("span",{text:"Step "+(idx+1)+" of "+order.length}),
-    h("span",{class:"line2",text:"Required before a run can launch. 13 optional steps follow."})
+    h("span",{class:"line2",text:"Required before a run can launch. 3 optional setup steps and 10 demos follow."})
   ]);
 }
 
@@ -1094,17 +1100,41 @@ function reviewStep(){
      required steps rather than counted alongside them. */
   if (after()){
     var n = 0;
-    kids.push(h("h3",{style:"margin-top:26px;margin-bottom:8px",text:"Optional, whenever you want them"}));
-    kids.push(h("p",{class:"hint",style:"margin-bottom:10px",
-      text:"13 steps that teach Wardyn's guarantees or connect your own work. None of them blocks a run."}));
-    kids.push(h("ul",{class:"optlist"}, OPTIONAL.map(function(s){
-      n++;
-      return h("li",{},[ h("span",{class:"n",text:String(n)}),
-        h("button",{class:"btn-link",onclick:(function(id){ return function(){ go("setup",id); }; })(s.id),
-          text:s.label}) ]);
-    })));
+    function list(title, note, items){
+      kids.push(h("h3",{style:"margin-top:26px;margin-bottom:8px",text:title}));
+      kids.push(h("p",{class:"hint",style:"margin-bottom:10px",text:note}));
+      kids.push(h("ul",{class:"optlist"}, items.map(function(s){
+        n++;
+        return h("li",{},[ h("span",{class:"n",text:String(n)}),
+          h("button",{class:"btn-link",onclick:(function(id){ return function(){ go("setup",id); }; })(s.id),
+            text:s.label}) ]);
+      })));
+    }
+    list("Optional setup", "Real configuration you may not need yet. None of it blocks a run.", OPTIONAL_CONFIG);
+    list("Demos", "Ten short walk-throughs that show a guarantee working. They change nothing.", DEMOS);
   }
   return h("div",{}, kids);
+}
+var CONFIG_BODY = {
+  integrations:{ lead:"Credentials a run may borrow — a model key, a git token, a registry login. Wardyn brokers them: the sandbox gets a short-lived grant, never the secret itself.",
+    why:"Optional because a run can launch without one. An agent harness with no model key simply has no model to call." },
+  providers:{ lead:"Where workspaces come from — a GitHub organisation, a GitLab group, a local directory.",
+    why:"Optional because you can attach a directory to a run directly. A provider is for when you want the same source available to everyone." },
+  workspaces:{ lead:"A repository or directory a run can be given, with its own policy for what that run may reach.",
+    why:"Optional because a run can start in an empty sandbox." }
+};
+function configStep(){
+  var s = stepById(S.step), c = CONFIG_BODY[s.id] || { lead:"", why:"" };
+  return h("div",{},[
+    h("p",{class:"hint",style:"font-size:14px;margin-bottom:16px",text:c.lead}),
+    h("div",{class:"card"},[
+      h("h3",{text:"Nothing configured yet"}),
+      h("p",{class:"hint",style:"margin-top:6px",text:c.why}),
+      h("div",{style:"margin-top:14px"},[
+        h("button",{class:"btn btn-outline btn-sm"},[ icon("plus"), "Add one" ])
+      ])
+    ])
+  ]);
 }
 function optionalStep(){
   var s = stepById(S.step);
@@ -1174,7 +1204,7 @@ function setupPage(){
            : s.id==="people"      ? peopleStep()
            : s.id==="corp_network"? networkStep()
            : s.id==="review"      ? reviewStep()
-           : optionalStep();
+           : isDemo(s.id) ? optionalStep() : configStep();
 
   var title = [ h("h2",{text:s.heading}) ];
   if (!isRequired(s.id)) title.push(chip("Optional","neutral"));
@@ -1414,7 +1444,7 @@ var TOUR = [
   { host:"A", mode:"after", screen:"setup", step:"environment",
     title:"Setup proposed — four steps, and a recommendation you can act on",
     do:'Nothing to click. Compare the counter and the <b>Recommended</b> chip with the previous stop.',
-    see:"Step 1 of 4, with the thirteen optional steps named as optional and listed after. Recommended now sits on Fence — the strongest barrier this host reports installed — and a line underneath says what is stronger and what it would take." },
+    see:"Step 1 of 4. What follows is split in two: three optional setup steps that are real configuration, and ten demos that teach a guarantee and change nothing. Today all thirteen are one undifferentiated list, which is how Secrets ends up behind a Start the demo button. Recommended now sits on Fence — the strongest barrier this host reports installed — and a line underneath says what is stronger and what it would take." },
   { host:"B", mode:"before", screen:"newrun",
     title:"A host with no barrier, today — the dead end",
     do:'Press <b>Launch run</b>.',
