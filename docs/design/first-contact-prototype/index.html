@@ -168,6 +168,19 @@ a:hover{text-decoration:underline}
 /* ============================ PRODUCT ==================================== */
 .app{max-width:1240px;margin:0 auto;border:1px solid var(--border);border-radius:14px;
   overflow:hidden;background:var(--background);margin-top:18px}
+/* In BEFORE the frame says so on itself. The guided walk explains each stop in
+   a box above the app, but the eye goes to the app, and today's behaviour kept
+   being read as the proposal. */
+.app.today{border-color:color-mix(in oklab,var(--warning) 45%,transparent)}
+.todaybar{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;
+  padding:8px 16px;background:var(--warning-subtle);
+  border-bottom:1px solid color-mix(in oklab,var(--warning) 35%,transparent);
+  font-size:var(--text-body)}
+.todaybar .tag{font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;
+  color:var(--warning)}
+.todaybar .txt{color:var(--foreground)}
+.todaybar .txt b{font-weight:600}
+.todaybar button{margin-left:auto}
 @media (max-width:640px){.app{border-radius:0;border-left:0;border-right:0;margin-top:10px}}
 
 /* --- primitives: buttons (button.tsx#buttonVariants) --- */
@@ -1545,7 +1558,20 @@ function render(){
            : shell(S.screen === "setup" ? setupPage()
                  : S.screen === "newrun" ? newRunPage()
                  : boardPage());
-  root.appendChild(S.screen === "signin" ? h("div",{class:"app"},[page]) : h("div",{class:"app"},[page]));
+  var frame = [];
+  if (!after())
+    frame.push(h("div",{class:"todaybar"},[
+      h("span",{class:"tag",text:"Today"}),
+      h("span",{class:"txt"},[
+        h("b",{text:"This is what the console does now"}),
+        " \u2014 the behaviour these issues change, not a proposal."
+      ]),
+      h("button",{class:"btn btn-outline btn-sm",onclick:function(){
+        S.mode = "after"; S.launchFailed = false; render(); window.scrollTo(0,0);
+      }},["See the proposal", icon("arrowRight")])
+    ]));
+  frame.push(page);
+  root.appendChild(h("div",{class:"app"+(after()?"":" today")}, frame));
   document.getElementById("scaffold-note").textContent = NOTES[S.host+"/"+S.mode];
   renderGuide();
   walkStrip();
