@@ -52,7 +52,10 @@ updates:
       docker-base-images:
         patterns: ["*"]
     ignore:
-      # Agent images ship on Node LTS lines only — odd-numbered majors are
-      # non-LTS. Extend this list when the next odd major appears.
+      # Agent images ship on Node LTS lines only. Held majors, by version and
+      # the date each one enters LTS per nodejs/Release's schedule.json:
+      #   26.x -> held until 2026-10-28 (remove this entry once that date passes)
+      # Dependabot's docker config rejects a glob here (e.g. "26.*"); use a
+      # version range instead.
       - dependency-name: node
-        versions: ["25.*", "27.*"]
+        versions: [">= 26.0.0, < 27.0.0"]
