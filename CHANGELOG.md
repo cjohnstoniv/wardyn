@@ -44,6 +44,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
   screen for the rest of the interval — up to five minutes on the setup gate. The hook now coalesces:
   a refocus during an in-flight read is remembered and fires exactly one follow-up read when that read
   settles, however many refocus events arrived while it was outstanding (#314).
+- **The decision-log line printed to stdout is now written under its own mutex.** A line over
+  `PIPE_BUF` was not an atomic OS write, so two concurrent egress decisions on the request path
+  could interleave into a corrupted stdout record. `decisionSink.mirror` now serialises the write
+  with a dedicated `outMu`, held only around the write itself.
+- **The first-use "approval pending" refusal body now spells it the same way as the header.** The
+  JSON body wrote `approval_pending`; `X-Wardyn-Egress` wrote `approval-pending`. The body now
+  matches the header's spelling, which is the wire contract `attach-bashrc` reads.
+- **A panic in the audit webhook flush loop no longer takes the control plane down.** The one
+  detached `go` statement that skipped the panic-safe wrapper (`buildAuditFanout`'s sink `Run`
+  loop) is now started with `goSafe`, containing a panic instead of crashing the process. Its
+  deliberate `context.WithoutCancel` lifetime — so the flush survives past request-tree
+  cancellation on shutdown — is unchanged (#261).
 
 ### Changed
 

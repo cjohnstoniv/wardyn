@@ -546,7 +546,7 @@ if echo "${ABS_BODY}" | grep -qE '"token"|"jti"|"kind"|"expires_at"'; then
   bad "(iv) absolute-URI request was MINTED (origin-form gating / no-inject broken): ${ABS_BODY}"
 elif echo "${ABS_BODY}" | grep -qiE 'grant_id is required|missing run claims|invalid decision'; then
   bad "(iv) absolute-URI reached the internal mint endpoint (run token injected on forward path): ${ABS_BODY}"
-elif echo "${ABS_BODY}" | grep -qiE 'approval_pending|first.?use'; then
+elif echo "${ABS_BODY}" | grep -qiE 'approval.pending|first.?use'; then
   # The unknown control-plane host is HELD by the proxy's egress allowlist as a
   # first-use approval (demo policy first_use_approval=true) — the SAME hold as
   # an unknown domain (assertion c). It never reached the internal mint and no
