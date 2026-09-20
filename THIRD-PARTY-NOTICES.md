@@ -174,7 +174,7 @@ Scope: reachable from `./cmd/...` under the production build tags `docker,k8s`.
 | `get-nonce` | 1.0.1 | MIT |
 | `js-tokens` | 4.0.0 | MIT |
 | `loose-envify` | 1.4.0 | MIT |
-| `lucide-react` | 1.46.0 | ISC |
+| `lucide-react` | 1.47.0 | ISC |
 | `object-assign` | 4.1.1 | MIT |
 | `prop-types` | 15.8.1 | MIT |
 | `react` | 18.3.1 | MIT |
