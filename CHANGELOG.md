@@ -8,6 +8,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- **The kind AWS SSO walk now runs nightly instead of only by hand.** `.github/workflows/nightly.yml`
+  gained a `kind-sso-walk` job that brings up `make kind-quickstart` + `make kind-sso` on the hosted
+  runner and drives `scripts/kind-sso-walk.sh`, excluding `sso-reauth-hold.spec.ts` (its case K holds a
+  credential for about ten minutes by design, which a new `WARDYN_KIND_SSO_SKIP_REAUTH_HOLD` knob on
+  the walk now lets a caller drop). The job asserts the walk actually executed specs and reached its
+  own closing `PASS` line, rather than trusting a bare exit code — an unset `WARDYN_TEST_K8S` makes the
+  walk self-skip and exit 0, which would otherwise be a permanently green job proving nothing.
+
 ### Fixed
 
 - **A reaped never-dispatched run now carries a failure reason, not a blank chip.** `reconcileFinalize`
