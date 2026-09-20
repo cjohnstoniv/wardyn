@@ -78,11 +78,26 @@ const (
 // the whole deployment and still not serialize one person's two launches any
 // better.
 //
-// FAILS OPEN, on every arm: a store without the seam, a wait that expires, a
-// pool with no spare connection. Each proceeds exactly as 0.7.8 did, with one
-// warning line and no new refusal — a person locked out of signing in because a
-// lock was busy is worse off than the two-sandbox residue this closes, and the
-// capture PUT's KILLED guard is still the belt underneath.
+// FAILS OPEN, on every arm, and every arm is BOUNDED so that "fails open"
+// means promptly rather than eventually: a store without the seam, a pool that
+// cannot spare a connection (checked before one is borrowed, then bounded again
+// at 250ms on the borrow itself), and a wait that expires
+// (db.LoginSupersedeLockWait — 5s in total across the in-process slot and the
+// lock). Each proceeds exactly as 0.7.8 did, with one warning line and no new
+// refusal: a person locked out of signing in because a lock was busy is worse
+// off than the two-sandbox residue this closes, and the capture PUT's KILLED
+// guard is still the belt underneath.
+//
+// AVAILABILITY, because this runs on a request path in a daemon that sets no
+// http.Server WriteTimeout and mounts no TimeoutHandler — a wedged request here
+// ends only when the client disconnects. The hold pins exactly ONE pool
+// connection, and db.AdvisoryLockKeyed gates the whole process to a single
+// hold, so the number pinned does not grow with how many people sign in at
+// once; a sign-in that cannot have the slot waits on a channel, never on a
+// connection. That shape is the fix for a real regression, not caution: one
+// connection per concurrent sign-in starved the very queries this guards, and
+// at pool_max_conns=3 two DIFFERENT people — who never contend on the key at
+// all — were enough to wedge every database-backed request in the daemon.
 func (s *Server) lockLoginSupersede(ctx context.Context, actor string) (release func()) {
 	noop := func() {}
 	if s.cfg.Store == nil || actor == "" {

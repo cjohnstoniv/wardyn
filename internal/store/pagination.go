@@ -187,6 +187,12 @@ var _ LoginLocker = PG{}
 // db.LoginSupersedeLockWait. Session-scoped, not transaction-scoped: the work it
 // guards is several independent statements (two supersede passes around a run
 // insert) and, on the capture path, a read-modify-write in a LATER request.
+//
+// It borrows from THIS pool — the request-serving one — so the cost is stated
+// where an operator sizing pool_max_conns can find it: one connection for the
+// duration of one hold, at most one per process at a time, and none at all
+// when the pool cannot spare two (db.AdvisoryLockKeyed). An error means the
+// lock was not taken and the caller proceeds unlocked.
 func (s PG) LockLoginSupersede(ctx context.Context, actor string) (func(), error) {
 	return db.AdvisoryLockKeyed(ctx, s.Pool, db.LoginSupersedeLockClass, loginLockObject(actor), db.LoginSupersedeLockWait)
 }

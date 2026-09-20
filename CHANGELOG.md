@@ -20,9 +20,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
   CREATOR (`store.LoginLocker`, `db.AdvisoryLockKeyed`) — not on the credential scope, which is
   empty for every `shared` sign-in and would serialize a whole deployment while serializing nothing
   that matters. The capture takes it before the existing per-scope mutex, in that fixed order. It
-  **fails open** on every arm — a store without the seam, a wait past `db.LoginSupersedeLockWait`
-  (5s), a pool with no spare connection — proceeding exactly as 0.7.8 did with one warning line and
-  no new refusal.
+  **fails open** on every arm, and every arm is bounded — a store without the seam, a pool that
+  cannot spare a connection (checked before one is borrowed, then bounded again at 250ms on the
+  borrow), a wait past `db.LoginSupersedeLockWait` (5s across the in-process slot and the lock) —
+  proceeding exactly as 0.7.8 did with one warning line and no new refusal.
+
+  **What it costs a deployment:** one pool connection for the duration of one hold, and at most one
+  per wardynd process at a time, so it does not grow with how many people sign in at once. None at
+  all when the pool cannot spare two — an install at the `pool_max_conns` floor `docs/ENV.md`
+  permits (2, or 4 with the ground-truth rotator) simply goes unserialized, as it was before, rather
+  than queueing sign-ins behind a connection it cannot spare.
 
 ### Changed
 

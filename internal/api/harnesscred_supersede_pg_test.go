@@ -17,11 +17,16 @@ package api
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/cjohnstoniv/wardyn/internal/db"
 	"github.com/cjohnstoniv/wardyn/internal/secretmask"
 	"github.com/cjohnstoniv/wardyn/internal/store"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -143,5 +148,115 @@ func TestPG_LoginSupersedeSerializesConcurrentSignIns(t *testing.T) {
 	}
 	if live[0].ID != runs[0].ID && live[0].ID != runs[1].ID {
 		t.Fatalf("the survivor %s is neither sign-in (%s, %s)", live[0].ID, runs[0].ID, runs[1].ID)
+	}
+}
+
+// sizedPool reopens base's database with an explicit pool_max_conns, so a test
+// can stand in a deployment sized the way docs/ENV.md's WARDYN_PG_DSN row
+// actually permits ("at least 2, and at least 4 with the ground-truth rotator
+// enabled") rather than the double-digit default a developer box produces.
+func sizedPool(t *testing.T, base *pgxpool.Pool, maxConns int) *pgxpool.Pool {
+	t.Helper()
+	dsn := base.Config().ConnString()
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	pool, err := db.Connect(context.Background(), fmt.Sprintf("%s%spool_max_conns=%d", dsn, sep, maxConns))
+	if err != nil {
+		t.Fatalf("open a pool_max_conns=%d pool: %v", maxConns, err)
+	}
+	// Before throwawayPGPool's DROP DATABASE cleanup, which LIFO ordering gives
+	// us for free by registering this one later.
+	t.Cleanup(pool.Close)
+	if got := pool.Config().MaxConns; got != int32(maxConns) {
+		t.Fatalf("pool max_conns = %d, want %d — the DSN parameter did not take, so this test would prove nothing", got, maxConns)
+	}
+	return pool
+}
+
+// TestPG_LoginSupersedeDoesNotStarveConcurrentSignIns is the availability half,
+// and it is the case the same-actor race test above cannot reach: two sign-ins
+// by DIFFERENT people. Their actor strings fold to different objids, so they
+// never contend on the lock at all — what they contend for is the POOL.
+//
+// The regression this pins was real and daemon-wide. A lock hold borrows a
+// connection for its whole span and the guarded work needs another, so one
+// connection per concurrent sign-in exhausted the pool; `lock_timeout` does not
+// bound a pool acquire (it bounds a LOCK wait), and pgxpool's Acquire does not
+// error on an empty pool, it blocks on the context. With no WriteTimeout and no
+// TimeoutHandler in front of the route, that context ends when the client
+// disconnects — so both sign-ins, and every other database-backed request in
+// the daemon, hung. At pool_max_conns=3 two people were enough; at the floor
+// docs/ENV.md blesses, 2, one was.
+//
+// Sized at both, with the single-instance lock held exactly as a serving
+// wardynd holds it (one connection, whole process lifetime) — that hold is what
+// makes the arithmetic as tight as it is in production.
+func TestPG_LoginSupersedeDoesNotStarveConcurrentSignIns(t *testing.T) {
+	for _, maxConns := range []int{2, 3} {
+		t.Run(fmt.Sprintf("pool_max_conns=%d", maxConns), func(t *testing.T) {
+			pool := sizedPool(t, throwawayPGPool(t), maxConns)
+
+			// The daemon's own process-lifetime hold, taken the way cmd/wardynd
+			// takes it. Without this the pool is a connection richer than any
+			// serving deployment's and the starvation cannot reproduce.
+			releaseInstance, ok, err := db.TryAdvisoryLock(context.Background(), pool, db.SingleInstanceLockKey)
+			if err != nil {
+				t.Fatalf("take the single-instance lock: %v", err)
+			}
+			if !ok {
+				t.Fatal("the single-instance lock was already held on a throwaway database")
+			}
+			defer releaseInstance()
+
+			h := newHarness(t)
+			cfg := baseTestConfig(h, store.NewPG(pool))
+			cfg.Audit = &memAudit{}
+			cfg.Approvals = h.approvals
+			cfg.Broker = h.broker
+			cfg.Runner = &fakeRunner{}
+			cfg.Secrets = &memSecrets{m: map[string][]byte{}}
+			cfg.MaskRegistry = secretmask.NewRegistry()
+			cfg.BedrockRegion = "us-east-1"
+			cfg.DefaultPolicy = govDeployment()
+			srv := New(cfg)
+
+			hl, ok := agentHarnessLogin(awsSSOAgent)
+			if !ok {
+				t.Fatal("aws-sso harness login convention missing")
+			}
+			actors := []string{"alice@corp.example", "bob@corp.example"}
+
+			var wg sync.WaitGroup
+			errs := make([]error, len(actors))
+			elapsed := make([]time.Duration, len(actors))
+			for i, actor := range actors {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					// A deadline stands in for the client that eventually gives up.
+					// Wedged, the launch fails with it; healthy, it never comes close.
+					ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+					defer cancel()
+					started := time.Now()
+					_, _, errs[i] = srv.launchHarnessLoginRun(ctx, actor, hl, perUserPortal, awsSSOPin{}, awsSSOScope{})
+					elapsed[i] = time.Since(started)
+				}()
+			}
+			wg.Wait()
+
+			for i, actor := range actors {
+				if errs[i] != nil {
+					t.Errorf("%s could not sign in (%s): %v — the lock starved the work it guards", actor, elapsed[i], errs[i])
+				}
+				// Not merely "finished": finished PROMPTLY. The wedge resolves only
+				// when a context dies, so a sign-in that took most of the budget is
+				// the same defect wearing a shorter deadline.
+				if elapsed[i] > 10*time.Second {
+					t.Errorf("%s waited %s to sign in, want well under 10s", actor, elapsed[i])
+				}
+			}
+		})
 	}
 }
