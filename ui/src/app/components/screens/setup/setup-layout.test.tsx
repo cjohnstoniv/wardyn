@@ -216,6 +216,47 @@ describe("SetupLayout", () => {
     expect(screen.queryByText(/you're ready — launch your first run now/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /keep setting up/i })).not.toBeInTheDocument();
   });
+
+  // #214 — Setup cannot finish on a host with no barrier: the caller (not
+  // this shell, which has no idea why) passes finishGate, and this footer
+  // disables Finish setup for it with the reason stated beside it.
+  describe("finishGate — the #214 Finish-setup gate", () => {
+    it("Finish setup is enabled and nothing extra renders when finishGate is absent", () => {
+      renderLayout({ current: "review" });
+      expect(screen.getByRole("button", { name: /finish setup/i })).toBeEnabled();
+    });
+
+    it("disables Finish setup and states the head + reason beside it", () => {
+      renderLayout({
+        current: "review",
+        finishGate: { head: "Setup can't finish without a barrier.", reason: "Wardyn confines every run." },
+      });
+      expect(screen.getByRole("button", { name: /finish setup/i })).toBeDisabled();
+      expect(screen.getByText("Setup can't finish without a barrier.")).toBeInTheDocument();
+      expect(screen.getByText("Wardyn confines every run.")).toBeInTheDocument();
+    });
+
+    it("the reason can carry its own route (a ReactNode, unlike nextGate's plain string)", async () => {
+      const onFix = vi.fn();
+      renderLayout({
+        current: "review",
+        finishGate: {
+          head: "Setup can't finish without a barrier.",
+          reason: (
+            <>
+              Wardyn confines every run.{" "}
+              <button type="button" onClick={onFix}>
+                Set up a barrier
+              </button>
+              .
+            </>
+          ),
+        },
+      });
+      await user.click(screen.getByRole("button", { name: "Set up a barrier" }));
+      expect(onFix).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 // MEDIUM-2: nextGate is produced only ON corp_network, so every step AFTER it

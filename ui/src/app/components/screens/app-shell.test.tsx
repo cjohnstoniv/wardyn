@@ -89,6 +89,56 @@ describe("AppShell (control plane unreachable)", () => {
   });
 });
 
+// #214 — the shell's own route to the Environment step, plus the top bar's,
+// wherever `noBarrier` is true. New run itself must stay reachable: disabling
+// it would hide the explanation behind the control that carries it.
+describe("AppShell — no-barrier banner and the top bar's route (#214)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function renderShell(noBarrier: boolean, unreachable = false) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }),
+    );
+    return render(
+      <MemoryRouter>
+        <ThemeProvider>
+          <AppShell
+            pendingApprovals={0}
+            attentionCount={0}
+            onSignOut={() => {}}
+            unreachable={unreachable}
+            lastOkAt={null}
+            noBarrier={noBarrier}
+          />
+        </ThemeProvider>
+      </MemoryRouter>,
+    );
+  }
+
+  it("stays silent when a barrier is available", () => {
+    renderShell(false);
+    expect(screen.queryByText(/No barrier can be built/)).toBeNull();
+    expect(screen.queryByRole("link", { name: "Set up a barrier" })).toBeNull();
+  });
+
+  it("banners the blocker and routes to Environment from the banner and the top bar, with New run left enabled", () => {
+    renderShell(true);
+    expect(
+      screen.getByText("No barrier can be built on this host — runs can't launch."),
+    ).toBeInTheDocument();
+    const routes = screen.getAllByRole("link", { name: "Set up a barrier" });
+    expect(routes.length).toBeGreaterThanOrEqual(2);
+    routes.forEach((r) => expect(r).toHaveAttribute("href", "/setup?step=environment"));
+    expect(screen.getByRole("button", { name: "New run" })).toBeEnabled();
+  });
+
+  it("suppresses the banner while the control plane is unreachable — a stale reading, not a fact", () => {
+    renderShell(true, true);
+    expect(screen.queryByText(/No barrier can be built/)).toBeNull();
+  });
+});
+
 // The SSO session dies outright at its expiry with no refresh —
 // this is the warning that never existed, pinned against /me's
 // session_expires_at (an admin-token/local session, absent here, must never

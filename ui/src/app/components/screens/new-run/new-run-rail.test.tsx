@@ -16,7 +16,7 @@
 // credential gets no sentence at all (F4), and an unread /healthz makes no
 // promise either way (F3).
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { useState, type ReactNode } from "react";
@@ -43,7 +43,7 @@ vi.mock("../settings/harness-login-pane", () => ({
 }));
 
 import { RunRail } from "./new-run-rail";
-import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE } from "../../wardyn/copy";
+import { NO_BARRIER, RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
 import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
 import { ModelAccessBanner } from "../../wardyn/model-access-banner";
 import { ModelAccessProvider, useModelAccessDoor } from "../../wardyn/model-access-context";
@@ -98,6 +98,11 @@ function railTree(props: {
   launchError?: string | null;
   /** The server refused the launch for the caller's own model credential. */
   credentialRefused?: boolean;
+  /** #214: `error` carries no server-composed reason at all. */
+  genericFailure?: boolean;
+  /** #214: a settled probe reports this host can build no barrier at all. */
+  noBarrier?: boolean;
+  onDismissError?: () => void;
   /** Mounted as a sibling INSIDE the same ModelAccessProvider — a test-only
    *  stand-in for a surface elsewhere in the shell that can close the shared
    *  door. */
@@ -126,9 +131,12 @@ function railTree(props: {
         inFlight: false,
         problem: null,
         error: props.launchError ?? null,
+        genericFailure: props.genericFailure ?? false,
         credentialRefused: props.credentialRefused ?? false,
+        noBarrier: props.noBarrier ?? false,
         warnings: [],
         onOpenRun: null,
+        onDismissError: props.onDismissError ?? (() => {}),
       }}
       preflight={{ error: null, result: props.preflightResult ?? null }}
       agentRow={props.agentRow}
@@ -721,5 +729,60 @@ describe("the launch door — the server's credential refusal opens the sign-in,
     // re-open it with a relaunch armed.
     await afterFocusSettles();
     expect(dialog()).toBeNull();
+  });
+});
+
+// #214 — Launch's own reason when no barrier can be built: stated beside it,
+// not a tooltip, and carrying a route to the step that fixes it.
+describe("RunRail — Launch's no-barrier reason and route (#214)", () => {
+  it("states the reason beside Launch with a link to the Environment step", () => {
+    renderRail({ noBarrier: true });
+    expect(screen.getByText(NO_BARRIER.LAUNCH_REASON, { exact: false })).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: NO_BARRIER.CTA });
+    expect(link).toHaveAttribute("href", NO_BARRIER.ROUTE);
+  });
+
+  it("says nothing when a barrier can be built", () => {
+    renderRail({ noBarrier: false });
+    expect(screen.queryByText(NO_BARRIER.LAUNCH_REASON, { exact: false })).toBeNull();
+    expect(screen.queryByRole("link", { name: NO_BARRIER.CTA })).toBeNull();
+  });
+});
+
+// #214 — a launch that fired and failed anyway. `genericFailure` is the ONE
+// shape with no server-composed reason (today's bare "Failed to launch
+// run." line, with no role, no route, and nothing to announce it) —
+// replaced by the named-stage failure card. Every OTHER server message keeps
+// rendering verbatim (new-run-screen.test.tsx's own "renders a drive refusal
+// verbatim" pin covers that path end to end); this file only proves the rail
+// picks the right one of the two and announces both.
+describe("RunRail — the launch failure card (#214)", () => {
+  it("names the stage, says where the reason is, and routes to it — announced", () => {
+    renderRail({ launchError: "Failed to launch run.", genericFailure: true });
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(RUN.LAUNCH_FAILED_TITLE);
+    expect(alert).toHaveTextContent(RUN.LAUNCH_FAILED_BODY);
+    expect(within(alert).getByRole("link", { name: /Open the run/ })).toHaveAttribute("href", "/runs");
+    // Today's bare line is gone.
+    expect(screen.queryByText("Failed to launch run.")).toBeNull();
+  });
+
+  it("dismiss clears the card", async () => {
+    const onDismissError = vi.fn();
+    renderRail({ launchError: "Failed to launch run.", genericFailure: true, onDismissError });
+    await userEvent.click(screen.getByRole("button", { name: RUN.LAUNCH_FAILED_DISMISS }));
+    expect(onDismissError).toHaveBeenCalledTimes(1);
+  });
+
+  it("a server-composed reason keeps rendering verbatim, now announced", () => {
+    renderRail({ launchError: "workspaces[0]: unknown secret \"prod-db\"", genericFailure: false });
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent('workspaces[0]: unknown secret "prod-db"');
+    expect(screen.queryByText(RUN.LAUNCH_FAILED_TITLE)).toBeNull();
+  });
+
+  it("no error, no card", () => {
+    renderRail({});
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

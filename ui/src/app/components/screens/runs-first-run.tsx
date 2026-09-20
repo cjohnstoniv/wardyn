@@ -26,6 +26,7 @@ import { Button } from "../ui/button";
 import { Mono } from "../wardyn/code-block";
 import { CopyButton } from "../wardyn/copy-button";
 import { CC_META } from "../wardyn/cc-meta";
+import { NO_BARRIER } from "../wardyn/copy";
 
 // Lazy on purpose. /runs is EAGER (App.tsx keeps it unlazied), so anything this
 // module imports statically lands in the entry chunk — and the demo catalog is
@@ -137,6 +138,17 @@ export function RunsFirstRun({
                   : barrierLabels.length > 0
                     ? `${barrierLabels.join(", ")} available on this host.`
                     : "None available on this host."}
+                {/* #214 — the board's own route to the step that fixes it, the
+                    fourth surface carrying it alongside the shell banner, the
+                    top bar and New Run's Launch reason. */}
+                {barrierLoaded && barrierLabels.length === 0 && (
+                  <>
+                    {" "}
+                    <Link to={NO_BARRIER.ROUTE} className="font-medium text-primary hover:underline">
+                      {NO_BARRIER.CTA} →
+                    </Link>
+                  </>
+                )}
               </p>
             </div>
           </li>

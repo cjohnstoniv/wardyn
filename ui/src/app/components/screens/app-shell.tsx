@@ -13,6 +13,7 @@ import {
 } from "react-router-dom";
 import {
   Activity,
+  AlertOctagon,
   AlertTriangle,
   ChevronsUpDown,
   Compass,
@@ -36,7 +37,7 @@ import {
 } from "lucide-react";
 import { WardynWordmark } from "../wardyn/logo";
 import { Chip } from "../wardyn/primitives";
-import { SHELL } from "../wardyn/copy";
+import { NO_BARRIER, SHELL } from "../wardyn/copy";
 import { useTheme } from "../wardyn/theme-provider";
 import { lastCheckedLabel } from "../../lib/readiness";
 // GOVERNANCE.TITLE is ONE string for two places — this nav label and the
@@ -502,6 +503,7 @@ export function AppShell({
   onSignOut,
   unreachable,
   lastOkAt,
+  noBarrier,
 }: {
   pendingApprovals: number;
   attentionCount: number;
@@ -511,6 +513,12 @@ export function AppShell({
   // this banner is the ONLY thing that tells a quiet board from a dead one.
   unreachable?: boolean;
   lastOkAt?: Date | null;
+  // #214 — the LAST /setup/status read said this host can build no barrier at
+  // all (deriveReadiness's barrierReady, the same fact environment-step.tsx's
+  // own danger card and the Runs board's readiness row read). False/undefined
+  // while unknown — the absent-row doctrine: never paint a scary banner on a
+  // guess.
+  noBarrier?: boolean;
 }) {
   const [meta, retryIdentity] = useMeta();
   // B1 — SETTLED and still unknown: /me answered nothing, so every tier the
@@ -567,6 +575,7 @@ export function AppShell({
                 pendingApprovals={pendingApprovals}
                 attentionCount={attentionCount}
                 onNewRun={() => navigate("/runs/new")}
+                noBarrier={!unreachable && !!noBarrier}
               />
             )}
             {/* Renders nothing when the mode is off. FIRST of the banners and not
@@ -632,6 +641,30 @@ export function AppShell({
                   Sign in again
                 </a>
                 <span>{SESSION_EXPIRY_COPY[sessionExpiry][1]}</span>
+              </div>
+            )}
+            {/* #214 — the shell's own route to the fix, on every screen, not
+                only the Runs board (runs-first-run.tsx's NoBarrierBanner stays
+                exactly as it was — board-scoped, with the real setup command).
+                Gated on !unreachable: a dead control plane's last-known reading
+                is not "no barrier", it is "unknown", and that banner above
+                already says so. */}
+            {!unreachable && noBarrier && (
+              <div
+                role="status"
+                className="relative z-50 flex shrink-0 items-start gap-2 border-b border-border bg-danger-subtle px-4 py-2 text-sm text-danger"
+              >
+                <AlertOctagon className="mt-0.5 size-4 shrink-0" />
+                <div className="min-w-0">
+                  <p className="font-medium">{NO_BARRIER.BANNER_TITLE}</p>
+                  <p className="text-xs text-danger">{NO_BARRIER.BANNER_BODY}</p>
+                </div>
+                <Link
+                  to={NO_BARRIER.ROUTE}
+                  className="ml-auto shrink-0 font-medium underline underline-offset-2"
+                >
+                  {NO_BARRIER.CTA}
+                </Link>
               </div>
             )}
             {/* LAST in the stack, and not hidden in focus mode: a dead control
@@ -707,12 +740,15 @@ export function TopBar({
   pendingApprovals,
   attentionCount,
   onNewRun,
+  noBarrier,
 }: {
   onSignOut: () => void;
   meta: ShellMeta;
   pendingApprovals: number;
   attentionCount: number;
   onNewRun: () => void;
+  /** #214 — see AppShell's own doc. */
+  noBarrier?: boolean;
 }) {
   // What the header calls "you": the IdP's display name, else the session
   // email, else the principal itself (an admin token or local mode has
@@ -758,6 +794,17 @@ export function TopBar({
       {/* F7-F2: min-w-0 lets this cluster actually shrink instead of forcing
           the header wider than the viewport (no flex-wrap/height change). */}
       <div className="ml-auto flex min-w-0 items-center gap-1.5">
+        {/* #214 — the top bar's own route to the Environment step. New run
+            itself stays live: disabling it would hide this explanation behind
+            the one control that carries it. */}
+        {noBarrier && (
+          <Link
+            to={NO_BARRIER.ROUTE}
+            className="hidden text-xs font-medium text-info hover:underline sm:inline"
+          >
+            {NO_BARRIER.CTA}
+          </Link>
+        )}
         <Button
           variant="ghost"
           size="icon"

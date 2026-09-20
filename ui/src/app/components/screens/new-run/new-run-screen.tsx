@@ -306,6 +306,13 @@ export function NewRunScreen() {
   // The Barrier control's per-tier state — see barrierReasons.
   const { qualifying, unavailable, belowFloor } = barrierReasons(availableClasses, floor);
 
+  // #214 — a SETTLED probe reporting zero classes: the host genuinely cannot
+  // build any barrier, and Launch itself is disabled for it (not just every
+  // tier). Deliberately NOT the "no driver at all" unknown case (probeSettled
+  // stays false there, see the /setup/status effect above) — that stays
+  // selectable-with-no-reason exactly as it already was, unrelated to this issue.
+  const noBarrierOnHost = probeSettled && !!availableClasses && availableClasses.length === 0;
+
   // UP-CLAMP the Barrier Seg to the active floor. `cc` is in the deps on
   // purpose: the /setup/status read resolves ASYNCHRONOUSLY and re-seeds
   // confinementClass from the server's own default, which can land BELOW a
@@ -337,10 +344,12 @@ export function NewRunScreen() {
     launchDisabled,
     launchSpinning,
     error,
+    genericFailure,
     credentialRefused,
     launchWarnings,
     launchedRunId,
     launch,
+    dismissError,
     preflighting,
     preflightResult,
     preflightError,
@@ -532,6 +541,57 @@ export function NewRunScreen() {
             driveUnavailable={driveUnavailable}
           />
 
+          {/* #214 — the Barrier control OUT of the Policy card and into its own
+              section: it decides whether a run is confined at all, and it was
+              the hardest thing on the screen to find. */}
+          <SectionCard title="Barrier">
+            {/* The run's REQUESTED barrier — a separate wire field from the
+                spec's min_confinement_class floor. Exactly one qualifying
+                class leaves nothing to ask — a sentence, not a picker. */}
+            {qualifying && qualifying.length === 1 ? (
+              <p className="text-body text-foreground">
+                <Chip tone="neutral">{CC_META[qualifying[0]].label}</Chip>{" "}
+                {RUN.BARRIER_ONLY_QUALIFIER}
+              </p>
+            ) : (
+              <Seg
+                label="Barrier"
+                value={cc}
+                onChange={(id) => {
+                  setCcTouched(true);
+                  patch({ confinementClass: id as ConfinementClass });
+                }}
+                options={ORDERED_CLASSES.map((c) => ({
+                  id: c,
+                  label: CC_META[c].label,
+                  // Two independent reasons, each with its own line below:
+                  // the host can't build this tier, or the policy forbids it.
+                  disabled: unavailable.includes(c) || belowFloor.includes(c),
+                }))}
+              />
+            )}
+            {unavailable.map((c) => (
+              <p key={c} className="mt-2 text-xs text-muted-foreground">
+                {CC_META[c].label} isn&apos;t installed on this host.
+              </p>
+            ))}
+            {/* Floor-disabled tiers get their OWN reason (barrierReasons keeps
+                the two lists disjoint — one reason per tier). A floor above
+                every buildable tier disables the Seg entirely — fail-closed,
+                with preflight/launch naming why. */}
+            {floor &&
+              belowFloor.map((c) => (
+                <p key={c} className="mt-2 text-xs text-muted-foreground">
+                  {CC_META[c].label} is below the policy&apos;s floor ({CC_META[floor].label}).
+                </p>
+              ))}
+            {/* Unknown never blocks launch: an untouched pick sends no
+                confinement_class (ccTouched), so the server decides. */}
+            {probeSettled && !availableClasses && (
+              <p className="mt-2 text-xs text-muted-foreground">{RUN.BARRIER_UNKNOWN}</p>
+            )}
+          </SectionCard>
+
           <SectionCard title="Policy">
             <div className="space-y-4">
               <PolicyPanel
@@ -629,56 +689,6 @@ export function NewRunScreen() {
                 </div>
               )}
 
-              {/* The run's REQUESTED barrier — a separate wire field from the
-                  spec's min_confinement_class floor. Exactly one qualifying
-                  class leaves nothing to ask — a sentence, not a picker. */}
-              <div className="border-t border-border pt-3">
-                {qualifying && qualifying.length === 1 ? (
-                  <div className="space-y-1">
-                    <div className="text-sm font-medium text-foreground">Barrier</div>
-                    <p className="text-body text-foreground">
-                      <Chip tone="neutral">{CC_META[qualifying[0]].label}</Chip>{" "}
-                      {RUN.BARRIER_ONLY_QUALIFIER}
-                    </p>
-                  </div>
-                ) : (
-                  <Seg
-                    label="Barrier"
-                    value={cc}
-                    onChange={(id) => {
-                      setCcTouched(true);
-                      patch({ confinementClass: id as ConfinementClass });
-                    }}
-                    options={ORDERED_CLASSES.map((c) => ({
-                      id: c,
-                      label: CC_META[c].label,
-                      // Two independent reasons, each with its own line below:
-                      // the host can't build this tier, or the policy forbids it.
-                      disabled: unavailable.includes(c) || belowFloor.includes(c),
-                    }))}
-                  />
-                )}
-                {unavailable.map((c) => (
-                  <p key={c} className="mt-2 text-xs text-muted-foreground">
-                    {CC_META[c].label} isn&apos;t installed on this host.
-                  </p>
-                ))}
-                {/* Floor-disabled tiers get their OWN reason (barrierReasons
-                    keeps the two lists disjoint — one reason per tier). A
-                    floor above every buildable tier disables the Seg
-                    entirely — fail-closed, with preflight/launch naming why. */}
-                {floor &&
-                  belowFloor.map((c) => (
-                    <p key={c} className="mt-2 text-xs text-muted-foreground">
-                      {CC_META[c].label} is below the policy&apos;s floor ({CC_META[floor].label}).
-                    </p>
-                  ))}
-                {/* Unknown never blocks launch: an untouched pick sends no
-                    confinement_class (ccTouched), so the server decides. */}
-                {probeSettled && !availableClasses && (
-                  <p className="mt-2 text-xs text-muted-foreground">{RUN.BARRIER_UNKNOWN}</p>
-                )}
-              </div>
             </div>
           </SectionCard>
         </div>
@@ -696,16 +706,22 @@ export function NewRunScreen() {
           toolRules={toolRules}
           launch={{
             onLaunch: launch,
-            disabled: launchDisabled,
+            // #214 — a settled probe reporting zero classes disables Launch
+            // itself, not just every tier: the one control that genuinely
+            // cannot work must not be the one that looks ready.
+            disabled: launchDisabled || noBarrierOnHost,
             spinning: launchSpinning,
             inFlight: launching,
             problem,
             error,
+            genericFailure,
             credentialRefused,
+            noBarrier: noBarrierOnHost,
             warnings: launchWarnings,
             onOpenRun: launchedRunId
               ? () => navigate(`/runs/${encodeURIComponent(launchedRunId)}`)
               : null,
+            onDismissError: dismissError,
           }}
           preflight={
             preflightIsCurrent

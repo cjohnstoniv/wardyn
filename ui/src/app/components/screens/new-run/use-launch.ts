@@ -35,10 +35,20 @@ export interface UseLaunchResult {
   launchDisabled: boolean;
   launchSpinning: boolean;
   error: string | null;
+  /** #214: the server sent NO message at all (getErrorMessage(e) was falsy) —
+   *  today's generic "Failed to launch run." case, named nothing, routed
+   *  nowhere, announced by nobody. Every OTHER failure keeps rendering its
+   *  own server-composed `error` text verbatim (see new-run-screen.test.tsx's
+   *  "renders a drive refusal verbatim" pin) — this flag is what lets the
+   *  rail draw the new named-stage failure card ONLY over the reason-less case. */
+  genericFailure: boolean;
   credentialRefused: boolean;
   launchWarnings: string[];
   launchedRunId: string | null;
   launch: () => Promise<void>;
+  /** #214: clears a failed launch's error/genericFailure state — the failure
+   *  card's own "Dismiss", independent of firing another launch. */
+  dismissError: () => void;
   preflighting: boolean;
   preflightResult: PreflightResult | null;
   preflightError: string | null;
@@ -60,6 +70,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged }: Us
   // spinner once the request has been running long enough to need one.
   const { disabled: launchDisabled, showSpinner: launchSpinning } = useDeferredBusy(launching);
   const [error, setError] = React.useState<string | null>(null);
+  const [genericFailure, setGenericFailure] = React.useState(false);
   const [credentialRefused, setCredentialRefused] = React.useState(false);
   // The 201's advisory `warnings[]` (§5c.8) — inline in the rail, not a toast.
   const [launchWarnings, setLaunchWarnings] = React.useState<string[]>([]);
@@ -109,6 +120,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged }: Us
 
   const launch = async () => {
     setError(null);
+    setGenericFailure(false);
     setCredentialRefused(false);
     setLaunching(true);
     setLaunchWarnings([]);
@@ -131,10 +143,22 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged }: Us
         navigate(`/runs/${encodeURIComponent(created.id)}`);
       }
     } catch (e) {
-      setError(getErrorMessage(e) || "Failed to launch run.");
+      // #214: a message the server actually composed keeps rendering verbatim
+      // (genericFailure stays false); only the reason-less case swaps in the
+      // named-stage failure card below.
+      const msg = getErrorMessage(e);
+      setError(msg || "Failed to launch run.");
+      setGenericFailure(!msg);
       setCredentialRefused(isCredentialRefusal(e));
       setLaunching(false);
     }
+  };
+
+  // #214: the failure card's own dismissal — independent of firing another
+  // launch, which is the only other place error/genericFailure clear today.
+  const dismissError = () => {
+    setError(null);
+    setGenericFailure(false);
   };
 
   // A dry-run of launch's own resolution: same body, same 4xx surface, but
@@ -183,10 +207,12 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged }: Us
     launchDisabled,
     launchSpinning,
     error,
+    genericFailure,
     credentialRefused,
     launchWarnings,
     launchedRunId,
     launch,
+    dismissError,
     preflighting,
     preflightResult,
     preflightError,

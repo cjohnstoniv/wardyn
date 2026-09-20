@@ -57,7 +57,7 @@ vi.mock("../../../lib/capabilities", async () => {
 import { NewRunScreen } from "./new-run-screen";
 import { baseStatus } from "../../../lib/test-fixtures";
 import { OperatorProvider } from "../../wardyn/operator-context";
-import { RUN } from "../../wardyn/copy";
+import { NO_BARRIER, RUN } from "../../wardyn/copy";
 
 const user = userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -190,6 +190,36 @@ describe("NewRunScreen — no runner configured reads as unknown, not confirmed-
       expect(screen.getByRole("radio", { name })).not.toBeDisabled();
     }
     expect(screen.queryByText(/isn't installed on this host/)).not.toBeInTheDocument();
+    // Unknown never disables Launch FOR THIS REASON — the "no barrier" text
+    // is for a SETTLED empty read (below), not an unresolved probe. (A title
+    // is still required, which is why this doesn't also assert `not
+    // toBeDisabled()` here — that's `problem`, a different gate.)
+    expect(screen.queryByText(NO_BARRIER.LAUNCH_REASON, { exact: false })).not.toBeInTheDocument();
+  });
+});
+
+// #214 — a settled probe reporting zero classes (a real runner, nothing it
+// can build): Launch is disabled too, not just the three tiers, with the
+// reason stated beside it and a route to the step that fixes it.
+describe("NewRunScreen — a host that can build no barrier disables Launch itself (#214)", () => {
+  it("disables Launch and states the reason with a route to Environment", async () => {
+    getSetupStatusMock.mockResolvedValue(
+      baseStatus({ runner: { driver: "docker", confinement_classes: [] } }),
+    );
+    renderScreen();
+    const launchBtn = await screen.findByRole("button", { name: "Launch run" });
+    await waitFor(() => expect(launchBtn).toBeDisabled());
+    expect(screen.getByText(NO_BARRIER.LAUNCH_REASON, { exact: false })).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: NO_BARRIER.CTA });
+    expect(link).toHaveAttribute("href", NO_BARRIER.ROUTE);
+  });
+
+  it("a host with at least one barrier leaves Launch alone", async () => {
+    renderScreen(); // beforeEach's default: CC1 only
+    const launchBtn = await screen.findByRole("button", { name: "Launch run" });
+    await user.type(screen.getByLabelText("Title"), "Fine host");
+    await waitFor(() => expect(launchBtn).not.toBeDisabled());
+    expect(screen.queryByText(NO_BARRIER.LAUNCH_REASON, { exact: false })).not.toBeInTheDocument();
   });
 });
 

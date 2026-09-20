@@ -21,7 +21,7 @@
 // are configured for the roster-pin e2e), so the model-provider warning
 // below is unconditionally absent, not merely an environment fact.
 import { test, expect, gotoConsole, ADMIN_TOKEN, launchRun } from "./fixtures";
-import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../src/app/components/wardyn/copy";
+import { NO_BARRIER, RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../src/app/components/wardyn/copy";
 import { MODEL_ACCESS_BANNER, RAIL_MODEL_ACCESS } from "../src/app/components/wardyn/model-access-copy";
 import { CC_META } from "../src/app/components/wardyn/cc-meta";
 import { AGENTS, PROVIDERS } from "../src/app/lib/workspace-providers-copy";
@@ -175,6 +175,58 @@ test.describe("New run — one page", () => {
     await openNewRun(page);
     await page.getByLabel("Title").fill("e2e smoke");
     await launchRun(page);
+  });
+});
+
+// #214 — the Barrier control out of the Policy card into its own section, and
+// Launch disabled (with its reason and a route to the Environment step) on a
+// host that genuinely cannot build a barrier. The seeded backend runs with
+// `-runner none` (this file's own header), which reads as UNKNOWN
+// availability, not confirmed-absent — so the settled-empty case this issue
+// is about is spliced onto a real /setup/status response, the same technique
+// agents.spec.ts and model-access-banner.spec.ts already use.
+test.describe("New run — no barrier can be built (#214)", () => {
+  async function spliceNoBarrier(page: Page) {
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.runner = { ...json.runner, driver: "docker", confinement_classes: [] };
+      await route.fulfill({ response, json });
+    });
+  }
+
+  test("the Barrier control lives in its own section, above Policy", async ({ page }) => {
+    await openNewRun(page);
+    const barrierSection = page.getByRole("heading", { name: "Barrier", exact: true }).locator("..").locator("..");
+    await expect(barrierSection.getByRole("radiogroup", { name: "Barrier" })).toBeVisible();
+    // Not inside the Policy card any more.
+    const policySection = page.getByRole("heading", { name: "Policy", exact: true }).locator("..").locator("..");
+    await expect(policySection.getByRole("radiogroup", { name: "Barrier" })).toHaveCount(0);
+  });
+
+  test("disables Launch with its reason beside it and a route to the Environment step", async ({ page }) => {
+    await spliceNoBarrier(page);
+    await openNewRun(page);
+    await page.getByLabel("Title").fill("e2e no barrier");
+
+    const launchBtn = page.getByRole("button", { name: "Launch run" });
+    await expect(launchBtn).toBeDisabled();
+    await expect(page.getByText(NO_BARRIER.LAUNCH_REASON, { exact: false })).toBeVisible();
+    // Scoped to the rail: the shell banner and the top bar carry the SAME
+    // link text elsewhere on this page (#214's other two routes), so an
+    // unscoped query is a Playwright strict-mode violation, not a bug.
+    const rail = page.locator("aside");
+    const route = rail.getByRole("link", { name: NO_BARRIER.CTA });
+    await expect(route).toHaveAttribute("href", NO_BARRIER.ROUTE);
+
+    await route.click();
+    await expect(page.getByRole("heading", { name: "Pick your barrier" })).toBeVisible();
+  });
+
+  test("a host with at least one barrier leaves Launch alone", async ({ page }) => {
+    await openNewRun(page); // the seeded backend's default (-runner none): unknown, never disabled for this reason
+    await page.getByLabel("Title").fill("e2e unknown host");
+    await expect(page.getByText(NO_BARRIER.LAUNCH_REASON, { exact: false })).toHaveCount(0);
   });
 });
 
@@ -370,6 +422,21 @@ test.describe("New run rail — ceiling + tool rules + 3 warnings at 1280x650 (F
         "Confinement floor raised to CC2 by member policy.",
         "Grant kind git_pat removed by member policy.",
       ];
+      await route.fulfill({ response, json });
+    });
+
+    // This test is about the rail's HEIGHT budget at 1280x650, not about
+    // barrier availability — but the seeded backend's own `-runner none`
+    // (this file's header) reads as no-barrier for #214's shell banner
+    // (deriveReadiness counts confinement_classes, empty either way), which
+    // would otherwise push <main> down and eat into the rail's own
+    // `calc(100vh-5rem)` budget for a reason this test isn't about. Spliced
+    // to a real barrier so that banner stays off, same as every other
+    // pre-#214 assumption here.
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.runner = { ...json.runner, driver: "docker", confinement_classes: ["CC1"] };
       await route.fulfill({ response, json });
     });
 
@@ -693,5 +760,10 @@ test.describe("New run rail — credentials and recording are read, not asserted
     await expect(page.getByText(refusal)).toBeVisible();
     await expect(page.getByTestId("harness-login-pane")).toHaveCount(0);
     await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toHaveCount(0);
+    // #214: announced — today's bare failure line had no role and nothing
+    // announced it. The server's own sentence still renders verbatim (it is
+    // NOT replaced by the named-stage card, which is reserved for the one
+    // shape with no server-composed reason at all).
+    await expect(page.getByRole("alert")).toHaveText(refusal);
   });
 });

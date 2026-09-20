@@ -19,8 +19,9 @@
 // below still dismisses the funnel's own "seen it" flag (setup-gate.ts), which
 // is per-browser cosmetic state, not a lock on the rest of the console.
 import * as React from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
+import { NO_BARRIER } from "../../wardyn/copy";
 import type {
   ConfinementClass,
   SetupStatus,
@@ -731,6 +732,30 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
       }
     : undefined;
 
+  // #214 — Setup cannot finish on a host with no barrier: this is the one
+  // decision the maintainer was most warned about, and it is deliberate.
+  // `readiness.barrierReady` is the SAME fact the shell banner, the top bar
+  // and the Runs board's readiness row read (lib/readiness.ts's
+  // deriveReadiness), so a person meets one sentence and one route wherever
+  // this blocks them.
+  const finishGate = !readiness.barrierReady
+    ? {
+        head: NO_BARRIER.FINISH_GATE_HEAD,
+        reason: (
+          <>
+            {NO_BARRIER.FINISH_GATE_REASON}{" "}
+            {/* Same-route nav — the searchParams effect above (which the
+                app-shell "Demos" entry and runs-first-run's own cards already
+                rely on for exactly this) routes it through selectStep. */}
+            <Link to={NO_BARRIER.ROUTE} className="font-medium text-info hover:underline">
+              {NO_BARRIER.CTA}
+            </Link>
+            .
+          </>
+        ),
+      }
+    : undefined;
+
   return (
     <>
       <SetupLayout
@@ -753,6 +778,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         onSelect={selectStep}
         onFinish={finish}
         nextGate={nextGate}
+        finishGate={finishGate}
         backOverride={
           stepId === "corp_network" && corpTab === "egress"
             ? () => setCorpTab("proxy")
