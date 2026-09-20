@@ -130,7 +130,7 @@ func (o *Orchestrator) Name() string {
 	return "orchestrator"
 }
 
-// ImagePresent implements runner.ImageChecker (W20-W20-record-image-5) by
+// ImagePresent implements runner.ImageChecker by
 // delegating to the first wired substrate that implements it — the docker
 // substrate does; a substrate with no local image cache (k8s) does not, and
 // is simply skipped. Callers treat the "none support it" error the same as

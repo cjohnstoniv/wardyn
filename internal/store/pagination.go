@@ -169,12 +169,12 @@ func (s PG) ActiveRunsByCreator(ctx context.Context, createdBy, task, agent stri
 // existed — SAFE here, unlike the ownership-scoped list, because the answer is
 // identical either way and the fallback is merely slower.
 //
-// WHY IT EXISTS. warnWorkspaceCollision loaded EVERY run in the deployment to
-// find the handful sharing one path — a Seq Scan plus a full sort of
+// It exists because, without it, finding the handful of runs sharing one path
+// means loading EVERY run in the deployment — a Seq Scan plus a full sort of
 // agent_runs, on every single run create, over a table nothing prunes and no
 // retention policy bounds. The warning is advisory and never blocks a launch,
-// so a deployment's whole run history was being sorted to produce a sentence
-// that is usually not printed.
+// so sorting a deployment's whole run history is not worth paying for a
+// sentence that is usually not printed.
 type ActiveRunsAtPathReader interface {
 	ActiveRunsAtWorkspacePath(ctx context.Context, workspacePath string) ([]types.AgentRun, error)
 }
@@ -265,15 +265,14 @@ func (s PG) ListApprovalsPageByRunCreator(ctx context.Context, createdBy string,
 // ?run_id= shape of GET /api/v1/approvals, which the CLI and the console's run
 // detail page poll. A capability interface for Pager's reason.
 //
-// WHY IT EXISTS. handleListApprovals installed the DB-paged reader only when
-// run_id was ABSENT, so a run-scoped request fell to the fetch-all branch:
-// Approvals.List -> store.ListApprovals -> ListApprovalsPage(ctx, state,
-// Page{}) -> a Page with Limit<=0, which emits NO LIMIT clause at all. One
-// run-scoped poll therefore materialised EVERY approval row the deployment had
-// ever written, in Go, and discarded all but one run's. Decided rows are never
-// deleted, so that read grew with deployment age — exactly the cost
-// ListApprovalsPage was added to remove for the unfiltered list, left in place
-// for the filtered one.
+// It exists because a run-scoped request with no dedicated reader falls to the
+// fetch-all branch: Approvals.List -> store.ListApprovals ->
+// ListApprovalsPage(ctx, state, Page{}) -> a Page with Limit<=0, which emits
+// NO LIMIT clause at all. One run-scoped poll therefore materialises EVERY
+// approval row the deployment has ever written, in Go, and discards all but
+// one run's. Decided rows are never deleted, so that read grows with
+// deployment age — the same cost ListApprovalsPage already removes for the
+// unfiltered list.
 //
 // Same fail-safe contract as Pager (NOT ApprovalsByRunCreatorPager's fail-CLOSED
 // one): an absent implementation falls back to the fetch-all + in-Go filter,

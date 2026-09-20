@@ -131,7 +131,7 @@ type Store interface {
 	// "recommended" is structurally excluded (CHECK) — it is a per-workspace
 	// derived build, never a catalog row.
 	UpsertBaseImage(ctx context.Context, b types.BaseImageEntry) (types.BaseImageEntry, error)
-	// UpdateBaseImageName renames a catalog row (W7-S1-3) — the operator-editable
+	// UpdateBaseImageName renames a catalog row — the operator-editable
 	// counterpart to UpdateSourceConfig above, deliberately NOT folded into
 	// UpsertBaseImage's identity-hit dedupe. See both doc comments.
 	UpdateBaseImageName(ctx context.Context, id uuid.UUID, name string) (types.BaseImageEntry, error)

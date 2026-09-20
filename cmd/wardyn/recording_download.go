@@ -44,7 +44,7 @@ func runRecordingCmd(client clientFn) *cobra.Command {
 				ctx, cancel = context.WithTimeout(ctx, timeout)
 				defer cancel()
 			}
-			// W21-S1-6: defaults to the run's own (bare-id) cast when --session is
+			// Defaults to the run's own (bare-id) cast when --session is
 			// unset — an interactive run's OTHER recordings (one per attach
 			// session, keyed "<run-id>~<session>") are otherwise unreachable from
 			// the CLI/SDK even though the server has always served them.

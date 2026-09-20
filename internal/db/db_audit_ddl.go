@@ -22,12 +22,12 @@ import (
 // role setup). Fails safe: any ambiguity (missing table, error) reports NOT
 // protected.
 //
-// THE LEGS THEMSELVES LIVE IN AuditDDLBypassRoutes, which answers the same
+// The legs themselves live in AuditDDLBypassRoutes, which answers the same
 // question and NAMES the routes that fired so the boot log can tell an operator
 // which one to close. This function is that answer as a bool, and there is no
 // second query anywhere that could disagree with it.
 //
-// THE TRIGGER PRIVILEGE IS PART OF THE CLAIM, and it is the least obvious third
+// The trigger privilege is part of the claim, and it is the least obvious third
 // of it. A role that is neither owner nor superuser but holds
 // GRANT TRIGGER ON audit_events cannot drop the shipped triggers — it can do
 // something quieter: CREATE its own row-level BEFORE INSERT trigger, which is
@@ -45,19 +45,19 @@ import (
 // TRIGGER from PUBLIC precisely because of that, but a deploy is free to grant
 // it back, so the claim has to be checked and not inferred.
 //
-// ALL FOUR ROLE LEGS TEST MEMBERSHIP, not a role attribute. The superuser leg asks
+// All four role legs test membership, not a role attribute. The superuser leg asks
 // whether current_user is a member of ANY role with rolsuper — not whether
 // current_user itself has rolsuper. Reading the attribute off the current_user
-// row missed the ordinary managed-Postgres shape (GRANT some admin role TO the
+// row misses the ordinary managed-Postgres shape (GRANT some admin role TO the
 // app role): that role has rolsuper = false, is not a member of the table's
-// owner, and holds no TRIGGER privilege, so it was reported PROTECTED while it
-// could SET ROLE to a superuser and ALTER TABLE ... DISABLE TRIGGER. pg_has_role
+// owner, and holds no TRIGGER privilege, so it would be reported PROTECTED while
+// it could SET ROLE to a superuser and ALTER TABLE ... DISABLE TRIGGER. pg_has_role
 // with 'MEMBER' is what makes this honest: 'MEMBER' is the right to SET ROLE, so
 // it follows the grant chain to any depth AND ignores INHERIT — a NOINHERIT role
 // that can still SET ROLE is caught. A role is a member of itself, so a directly
 // superuser role is reported exactly as it was before.
 //
-// WHAT THIS DELIBERATELY DOES NOT MODEL, stated so the next reader does not
+// What this deliberately does not model, stated so the next reader does not
 // widen it by guesswork. Membership in pg_write_all_data is NOT a bypass and is
 // NOT tested for: it confers INSERT/UPDATE/DELETE rights, but the append-only
 // triggers still fire and raise — measured in the probe beside this function,
@@ -93,20 +93,20 @@ const (
 // audit_events' append-only guard. An empty slice means protected, and is what
 // AuditDDLProtected is defined as.
 //
-// IT EXISTS SO THE BOOT LOG CAN NAME THE ROUTE. A bare bool made the daemon
-// guess: its WARN told the operator the app role "still owns audit_events or is
-// a superuser" and prescribed "connect wardynd as a distinct non-owner role",
-// which is the wrong remedy for two of the four routes and actively misleading
-// for the fourth — a role that owns nothing and is nobody's superuser, but holds
-// GRANT SET ON PARAMETER session_replication_role, gets a warning naming two
-// things it is not. Reporting the route is also the operator-facing half of the
+// It exists so the boot log can name the route: a bare bool would make the
+// daemon guess, with a WARN telling the operator only that the app role "still
+// owns audit_events or is a superuser" and prescribing "connect wardynd as a
+// distinct non-owner role", which is the wrong remedy for two of the four routes
+// and actively misleading for the fourth — a role that owns nothing and is
+// nobody's superuser, but holds GRANT SET ON PARAMETER session_replication_role,
+// would get a warning naming two things it is not. Reporting the route is also the operator-facing half of the
 // decision taken on this finding: report the replication-role route rather than
 // arming ENABLE ALWAYS.
 //
-// ONE PREDICATE, so the report and the verdict cannot disagree: the bool is
+// One predicate, so the report and the verdict cannot disagree: the bool is
 // len(routes) == 0 and there is no second query anywhere that answers it.
 //
-// FAILS SAFE, exactly as the bool did: a missing table, or any error, is a
+// Fails safe, exactly as the bool did: a missing table, or any error, is a
 // bypass rather than a protection claim.
 func AuditDDLBypassRoutes(ctx context.Context, pool *pgxpool.Pool) ([]string, error) {
 	var found, superuser, owner, trigger bool
@@ -137,14 +137,14 @@ func AuditDDLBypassRoutes(ctx context.Context, pool *pgxpool.Pool) ([]string, er
 		routes = append(routes, auditBypassTrigger)
 	}
 	if len(routes) > 0 {
-		// SHORT-CIRCUITED, and deliberately: the verdict is already decided, and
+		// Short-circuited, and deliberately: the verdict is already decided, and
 		// the two extra round trips below are the only place this function can
 		// fail on a server that answered the first query — a boot that used to
 		// reach a clean refusal must not start failing fatally on the version
 		// probe instead. The routes reported are the ones that fired.
 		return routes, nil
 	}
-	// THE FOURTH LEG, AND IT IS NOT A DDL ONE. The three above ask who can DROP
+	// The fourth leg, and it is not a DDL one. The three above ask who can DROP
 	// or DISABLE a trigger. `SET session_replication_role = 'replica'` needs no
 	// DDL at all: it makes every SIMPLY-ENABLED ('O') trigger stop firing for the
 	// session, so a role holding nothing but INSERT appends rows past all three
@@ -155,12 +155,12 @@ func AuditDDLBypassRoutes(ctx context.Context, pool *pgxpool.Pool) ([]string, er
 	// regardless of replication role — and why auditForeignTriggers now reads
 	// tgenabled 'R' as armed.
 	//
-	// GRANTABLE SINCE POSTGRESQL 15, which is what makes it a leg rather than a
+	// Grantable since PostgreSQL 15, which is what makes it a leg rather than a
 	// restatement of the superuser one. GRANT SET ON PARAMETER
 	// session_replication_role TO app is exactly the narrow grant a DBA hands an
 	// application role for a bulk load, and it survives as a standing capability.
 	//
-	// SEPARATE QUERY, AND VERSION-GUARDED, deliberately. has_parameter_privilege
+	// Separate query, and version-guarded, deliberately. has_parameter_privilege
 	// does not exist before PostgreSQL 15, and a missing function is a PARSE
 	// error — it would fail even inside an untaken CASE branch — so folding this
 	// into the query above would turn every pre-15 split-role boot into a hard
@@ -177,7 +177,7 @@ func AuditDDLBypassRoutes(ctx context.Context, pool *pgxpool.Pool) ([]string, er
 		return nil, nil
 	}
 	//
-	// AND IT FOLLOWS ROLE MEMBERSHIP, exactly as the three legs above do. Asking
+	// And it follows role membership, exactly as the three legs above do. Asking
 	// has_parameter_privilege(current_user, …) alone answers only for the role's
 	// OWN and inherited grants, so the ordinary managed-Postgres shape the
 	// superuser leg was itself rewritten for — GRANT some admin role TO the app
@@ -191,7 +191,7 @@ func AuditDDLBypassRoutes(ctx context.Context, pool *pgxpool.Pool) ([]string, er
 	// every role current_user can reach; a role is a member of itself, so the
 	// direct grant is simply the r = current_user row and nothing is lost.
 	//
-	// 'MEMBER' RATHER THAN 'SET' is deliberate on both axes. It is the privilege
+	// 'MEMBER' rather than 'SET' is deliberate on both axes. It is the privilege
 	// the other three legs use, and it is the CONSERVATIVE one: since PostgreSQL
 	// 16 a membership can be granted WITH SET FALSE, which pg_has_role reports as
 	// MEMBER = true, SET = false — so MEMBER is a superset of "can SET ROLE into

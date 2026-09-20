@@ -91,9 +91,8 @@ func secretCmd(client clientFn) *cobra.Command {
 
 // readSecretValue reads an entire secret value from r. Secrets are frequently
 // multi-line (PEM private keys, JSON service-account blobs, multi-line tokens),
-// so we must read ALL of stdin rather than a single line. The previous
-// implementation used bufio.ReadString('\n') and silently truncated everything
-// after the first newline, corrupting multi-line secrets (HIGH finding).
+// so this reads ALL of stdin rather than a single line: stopping at the first
+// newline would silently truncate and corrupt a multi-line secret.
 //
 // We strip at most ONE trailing newline (and an accompanying CR) — the common
 // artifact of an echoed prompt or a shell heredoc — but preserve all internal

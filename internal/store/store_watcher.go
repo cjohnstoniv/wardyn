@@ -35,7 +35,7 @@ type RunWatcherLeaser interface {
 	// heartbeat is younger than staleAfter) — a live process is responsible for it.
 	// The undispatched-run reaper consults it so it never false-fails a RUNNING run
 	// whose sandbox_ref write was merely lost but whose live watcher is holding the
-	// lease (GAP-RECONCILE-4). A missing row reads as NOT fresh (reap it).
+	// lease. A missing row reads as NOT fresh (reap it).
 	RunWatcherFresh(ctx context.Context, id uuid.UUID, staleAfter time.Duration) (bool, error)
 }
 
@@ -52,7 +52,7 @@ var _ RunWatcherLeaser = PG{}
 // fails if this const — or migration 0027's partial index, which must repeat the
 // list literally because an index predicate cannot be parameterised — drifts.
 //
-// DESIGN NOTE for the WAITING_FOR_CONFIRMATION producer (types.RunWaiting is a
+// Design note for the WAITING_FOR_CONFIRMATION producer (types.RunWaiting is a
 // reserved, not-yet-produced state): the sweep WILL claim runs sitting in it. If
 // the human-in-the-loop pause is ever implemented as "the agent process exits and
 // the run parks", adoption would probe a dead agent and finalize a run that is

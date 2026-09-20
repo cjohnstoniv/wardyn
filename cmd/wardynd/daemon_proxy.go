@@ -16,14 +16,14 @@ import (
 	"golang.org/x/net/http/httpproxy"
 )
 
-// ── DRAFT (M2 canon pending) ────────────────────────────────────────────────
+// DRAFT (M2 canon pending)
 
 const (
 	// daemonProxyInvalidRefusal is the BOOT REFUSAL for a WARDYN_DAEMON_PROXY_URL
 	// that fails to parse as a proxy. %s is a CLASSIFICATION of the failure
 	// ("not a URL", "an unsupported scheme", "missing a host") — NEVER the raw
 	// value or the url.Parse error text, either of which could echo a
-	// credential-bearing URL into the boot log (Codex #13).
+	// credential-bearing URL into the boot log.
 	//
 	// DRAFT (M2 canon pending)
 	daemonProxyInvalidRefusal = "refusing to start: WARDYN_DAEMON_PROXY_URL is %s — " +

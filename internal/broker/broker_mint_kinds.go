@@ -27,14 +27,12 @@ import (
 // An operator-created run's own Sub never collides with a member's stamped
 // row (secretOwnerFromRequest's own doc comment).
 //
-// That holds only because the Sub is NOT caller-chosen. The claim used to be
-// true of the operator strings it reasoned about (admin-token, local:<op>) and
-// false of an arbitrary LocalMode X-Wardyn-Principal header value picked to
-// EQUAL a member's OIDC sub — the header steered this very namespace, and
-// pg.Store.Get's `ORDER BY (owned_by = $1) DESC` makes the named owner's row
-// win over the operator's. api.runIdentitySubject (internal/api/runs_policy.go)
-// now mints the subject from the INJECTED local principal instead, leaving the
-// header for attribution only (F099).
+// That holds only because the Sub is NOT caller-chosen: an arbitrary LocalMode
+// X-Wardyn-Principal header value picked to EQUAL a member's OIDC sub would
+// steer this very namespace, since pg.Store.Get's `ORDER BY (owned_by = $1)
+// DESC` makes the named owner's row win over the operator's. api.runIdentitySubject
+// (internal/api/runs_policy.go) mints the subject from the INJECTED local
+// principal, not the raw header, which carries attribution only (F099).
 func ownerOf(caller *identity.Claims) string {
 	if caller == nil {
 		return ""
@@ -125,7 +123,7 @@ func (b *Broker) mintGitPAT(ctx context.Context, caller *identity.Claims, spec t
 // mintSSHKey resolves a stored SSH PRIVATE KEY and returns its VALUE (plus, when
 // named, the known_hosts material) to agent-run for a git-over-SSH clone.
 //
-// SECURITY EXCEPTION (documented honestly, mirrors mintGitPAT's honesty ceiling):
+// Security exception (mirrors mintGitPAT's honesty ceiling):
 // git's SSH transport has NO credential-helper seam (git credential.helper is
 // HTTP-only), so — unlike git_pat (returned to the helper, never on disk) or
 // api_key (never leaves the broker; the proxy injects it) — an SSH key CANNOT be

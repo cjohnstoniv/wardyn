@@ -43,13 +43,13 @@ const (
 // defaultPortForScheme is the port an absolute-form request URI means when its
 // authority carries no explicit one.
 //
-// F141: handlePlain hardwired 80, so `POST https://api.anthropic.com/v1/messages`
-// on the forward lane was evaluated, VETTED and DIALLED as port 80 — the policy
-// port matched against 80, the audit row RECORDED 80, and the transport then ran
-// a TLS handshake against :80 — while the request plainly named the https origin.
 // The port a decision row states has to be the port the proxy actually dials
 // (docs/AUDIT-ACTIONS.md lists `port` as an egress.* detail field), and the
-// allowlist has to be matched against the same one.
+// allowlist has to be matched against the same one (F141): hardcoding port 80
+// here would evaluate, vet and dial `POST https://api.anthropic.com/v1/messages`
+// as port 80 — the policy port matched against 80, the audit row recording 80,
+// and the transport running TLS against :80 — while the request plainly names
+// the https origin.
 func defaultPortForScheme(scheme string) int {
 	if strings.EqualFold(scheme, "https") {
 		return 443
@@ -124,10 +124,10 @@ func (p *Proxy) handlePlain(w http.ResponseWriter, r *http.Request) {
 	//   - A MODEL host (isLLMHost) whose channel we can parse takes the LLM
 	//     per-endpoint classifier — the handleConnect parity this lane never had
 	//     (F103/F141). An absolute-form `POST https://api.anthropic.com/v1/messages`
-	//     is the SAME prompt egress as the tunnel, and it used to be forwarded with
-	//     the brokered credential, unscanned EVEN IN mode=block, under a single
-	//     `allow / policy:allowed / scan=nil` row: no scan event, no blind marker,
-	//     nothing an auditor could tell apart from a GET. inspectLLM writes its own
+	//     is the SAME prompt egress as the tunnel, so without this classifier it
+	//     would forward with the brokered credential, unscanned EVEN IN mode=block,
+	//     under a single `allow / policy:allowed / scan=nil` row: no scan event, no
+	//     blind marker, nothing an auditor could tell apart from a GET. inspectLLM writes its own
 	//     403 and its own scan:blocked decision when it refuses.
 	//   - Every other host keeps the OPTIONAL generic inspection of a custom
 	//     (non-LLM) HTTP connector's body — the walled-garden extension, opt-in via

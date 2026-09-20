@@ -32,8 +32,8 @@ func validateModelEndpoints(f *bootFlags) (map[string]string, string, string, er
 	if err != nil {
 		return nil, "", "", err
 	}
-	// The OTHER relaxation WARDYN_ALLOW_TEST_ENDPOINTS unlocks, made audible
-	// (W6-S7). The AWS SSO override WARNs on every boot that carries it; this one
+	// The OTHER relaxation WARDYN_ALLOW_TEST_ENDPOINTS unlocks, made audible.
+	// The AWS SSO override WARNs on every boot that carries it; this one
 	// — which re-points the bearer-mode credential-INJECTION target — logged
 	// nothing at all, so a deployment that inherited it served a real Bedrock API
 	// key over cleartext with only docs/ENV.md to say so. Read off the VALIDATED

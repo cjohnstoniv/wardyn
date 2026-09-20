@@ -46,13 +46,13 @@ var errMountsUnsupported = errors.New("k8s: host bind mounts are not supported o
 // handle on a real corporate share, and creating an empty one under the same
 // name would hand the member a blank volume where their files should be.
 //
-// THE MEMBER READS THIS, WORD FOR WORD, which is why it names neither the claim
+// The member reads this, word for word, which is why it names neither the claim
 // nor the namespace: a CreateSandbox error becomes the run's failure hint
-// verbatim (dispatchRun's failAndRevoke, internal/api), and this hint used to be
-// wrapped as `claim %q is absent from namespace %q` — handing every member whose
+// verbatim (dispatchRun's failAndRevoke, internal/api), so it must never be
+// wrapped as `claim %q is absent from namespace %q` — that would hand every member whose
 // share is unprovisioned the runs namespace, the same string refuseForbiddenDriveClaim
 // already scrubs out of the 403 arm two cases up. The claim, the namespace and
-// the template now ride the operator's log line instead (ensureDrivePVC), where
+// the template ride the operator's log line instead (ensureDrivePVC), where
 // the person who can create the claim already looks.
 //
 // DRAFT (M2 canon pending) — the frozen member sentence for this refusal.
@@ -68,7 +68,7 @@ var errDriveClaimNotProvisioned = errors.New("drive: your drive's volume is not 
 // unmapped it surfaced the apiserver's own "cannot get resource" text, which
 // names no switch an operator could flip.
 //
-// THE APISERVER'S OWN WORDS ARE NOT IN IT, and that is what the two remedies
+// The apiserver's own words are not in it, and that is what the two remedies
 // below are for. A CreateSandbox error becomes the run's failure hint verbatim
 // (dispatchRun's failAndRevoke, internal/api), and that hint is read by the
 // MEMBER whose run failed. A raw 403 reads `persistentvolumeclaims is
@@ -82,14 +82,13 @@ var errDriveClaimNotProvisioned = errors.New("drive: your drive's volume is not 
 var errDrivePVCForbidden = errors.New("the apiserver refused this deployment access to your drive's storage")
 
 // driveForbiddenRBAC and driveForbiddenQuota are the two causes of a 403, and
-// EXACTLY ONE of them is appended to errDrivePVCForbidden.
+// exactly one of them is appended to errDrivePVCForbidden.
 //
-// They are indistinguishable by status code and take opposite remedies, which
-// is why the sentinel used to carry both halves and ask the reader to pick
-// using the apiserver text printed ahead of it — precisely the text that is no
-// longer shown. drivePVCForbiddenRemedy picks instead, on the same evidence the
+// They are indistinguishable by status code and take opposite remedies.
+// Because the apiserver text that would let a reader tell them apart is never
+// shown, drivePVCForbiddenRemedy picks instead, on the same evidence the
 // reader would have used (`exceeded quota`, the substring the quota admission
-// plugin's message always carries), and one instruction arrives instead of two.
+// plugin's message always carries), so one instruction arrives instead of two.
 const (
 	driveForbiddenRBAC = "grant the wardynd ServiceAccount `persistentvolumeclaims: get, create` in the runs namespace (Helm chart: userDrives.enabled=true)"
 
@@ -169,12 +168,12 @@ var errDriveClaimVanished = errors.New("your drive's volume claim was deleted wh
 // cannot repair either collision, so the only fail-closed answer is to refuse
 // the run — mounting the claim would put one member's private drive at the
 // drive target inside another member's agent.
-// THE MEMBER READS THIS, WORD FOR WORD, and that is why the evidence is not in
-// it. driveClaimIdentity used to wrap this sentinel with the claim name, the
-// label it compared and BOTH values — including wardyn.subject, which is a digest
-// of a person: a member whose run met a collision was handed another principal's
-// subject digest in their failure hint. The comparison now goes to the operator's
-// log line (driveClaimIdentity), which is where the admin who has to rename a
+// The member reads this, word for word, and that is why the evidence is not in
+// it: driveClaimIdentity must never wrap this sentinel with the claim name, the
+// label compared, or either value — wardyn.subject is a digest
+// of a person, and wrapping it would hand a member whose run met a collision another principal's
+// subject digest in their failure hint. The comparison goes to the operator's
+// log line instead (driveClaimIdentity), which is where the admin who has to rename a
 // drive or fix a template already looks, and the member keeps the remedy.
 //
 // DRAFT (M2 canon pending) — the frozen member sentence for this refusal.

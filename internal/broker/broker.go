@@ -49,7 +49,7 @@ const defaultMaxTTL = time.Hour
 // branchNamespaceFormat is the push-branch confinement convention recorded in
 // minted github_token metadata.
 //
-// IMPORTANT (honesty): the TOKEN itself is not branch-scoped — a GitHub
+// Honesty: the TOKEN itself is not branch-scoped — a GitHub
 // installation token cannot self-restrict to a ref prefix, so it can push to ANY
 // branch (including the default) in its granted repos. Enforcement lives one layer
 // out, in the git-broker proxy route (internal/egress/proxy/git_broker.go), which
@@ -63,7 +63,7 @@ const defaultMaxTTL = time.Hour
 // CONNECT is a different key and reaches allow under allow_all_egress (measured);
 // see docs/POLICIES.md.
 //
-// STILL NOT COVERED, stated plainly: the property binds the BROKERED App lane
+// Not covered: the property binds the BROKERED App lane
 // by default. An ssh_key push does not traverse this route at all (SSH is not
 // smart-HTTP). A git_pat push DOES traverse a brokered, cleartext smart-HTTP
 // route since 0.7 (the never-resident lane, default ON — internal/egress/proxy/
@@ -153,8 +153,8 @@ type Minted struct {
 	// KnownHosts is the OpenSSH known_hosts material for an ssh_key grant whose
 	// scope named a known_hosts_secret_ref. Empty otherwise (ssh_key runs fall back
 	// to the image-baked /etc/ssh/ssh_known_hosts for github.com / ADO). Nominally
-	// public host-key data, not a secret — but mask-registered by mint() anyway
-	// (W12-B-2), as defense in depth: storedSecretGrantPairing (internal/api)
+	// public host-key data, not a secret — but mask-registered by mint() anyway,
+	// as defense in depth: storedSecretGrantPairing (internal/api)
 	// now pins a MEMBER's known_hosts_secret_ref to exactly the operator's own
 	// ceiling pairing, but an unclamped (operator-authored) grant could still
 	// name an unexpected secret here, and this was the one mint output never
@@ -550,7 +550,7 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 	// returned and expires at its <=1h TTL. (Proven by a two-session PG16
 	// experiment; see TestPG_ConcurrentMintOnApproval_ExactlyOnce.)
 	//
-	// SKIPPED UNDER A LEASE, and that is the lease: the burn already happened on
+	// Skipped under a lease, and that is the lease: the burn already happened on
 	// the first mint, so this conditional UPDATE would match 0 rows and fail a
 	// re-mint the human explicitly authorized. Nothing else is skipped — the
 	// approval state, run ownership, no-widening and kill-switch checks above all
@@ -573,11 +573,11 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 	}
 
 	// D29: write the credential.mint SUCCESS row on the SAME tx as the minted_jti
-	// burn, so the audit event and the single-use burn commit atomically. The old
-	// post-commit auditMint (a write on a SEPARATE connection) left a crash window:
-	// minted_jti committed, then a crash before the audit write burned the approval
+	// burn, so the audit event and the single-use burn commit atomically. A
+	// post-commit write on a SEPARATE connection would open a crash window:
+	// minted_jti committed, then a crash before the audit write burns the approval
 	// with NO credential.mint row and nothing delivered — the git helper's retry
-	// then got 409 already_minted forever. Fail CLOSED: if the durable record
+	// then gets 409 already_minted forever. Fail CLOSED: if the durable record
 	// cannot be written, roll the whole mint back rather than hand out an
 	// unrecorded credential.
 	mintEv := mintEvent(caller, grantID, row.approvalID, minted.JTI, row.grantSpec.Scope, "success")
@@ -609,8 +609,8 @@ func (b *Broker) mint(ctx context.Context, caller *identity.Claims, grantID, app
 	// in the mask registry so PTY/asciicast streams can mask verbatim
 	// occurrences of the credential. A nil registry is a no-op; only
 	// value-bearing kinds (github_token, git_pat, ssh_key) set Token — api_key
-	// never does (its value stays proxy-side). KnownHosts is mask-registered too
-	// (W12-B-2): see the Minted.KnownHosts doc comment for why a nominally
+	// never does (its value stays proxy-side). KnownHosts is mask-registered too:
+	// see the Minted.KnownHosts doc comment for why a nominally
 	// public field still gets this treatment.
 	if b.maskReg != nil {
 		if minted.Token != "" {
@@ -827,8 +827,7 @@ type gitPATScope struct {
 // so a git_pat/ssh_key grant naming one is only an exfil attempt) — PLUS names
 // that are safe at the api_key sink (never sandbox-visible: resolved proxy-side
 // by name, or for bedrock-api-key, legitimately injected as a header by the
-// host-pinned Bedrock BEARER grant) but NOT safe as a raw git_pat/ssh_key VALUE
-// (W12-B-1):
+// host-pinned Bedrock BEARER grant) but NOT safe as a raw git_pat/ssh_key VALUE:
 //   - github-app-id / github-app-key: the GitHub App's numeric id and PEM
 //     private key (cmd/wardynd's secretGitHubAppID / secretGitHubAppKey), read
 //     server-side ONLY by githubMinter.client (github.go) to mint short-lived

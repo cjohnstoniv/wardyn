@@ -26,7 +26,7 @@ const serviceAccountNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccou
 // then ~/.kube/config) — the same chain `kubectl` and every other client-go
 // consumer uses, so an operator's existing kubeconfig setup just works.
 //
-// L5: an out-of-cluster kubeconfig's server host may be unreachable from
+// An out-of-cluster kubeconfig's server host may be unreachable from
 // wherever wardynd actually runs (a laptop-local kind cluster, a VPN-only
 // endpoint, ...) — in that case the boot-time egress canary (canary.go)
 // never gets a verdict at all and construction fails with a PERMANENT

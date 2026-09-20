@@ -93,8 +93,7 @@ const RecordingMountTarget = "/wardyn/recordings"
 
 // defaultCastDir is where wardyn-rec writes session recordings inside the
 // agent container. stopTimeout is the graceful StopSandbox timeout. Nobody in
-// the repo overrides either of these (P3-RNR-2); re-add a Config knob if that
-// changes.
+// the repo overrides either of these; re-add a Config knob if that changes.
 const (
 	defaultCastDir = "/var/log/wardyn"
 	stopTimeout    = 10 * time.Second
@@ -229,7 +228,7 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		StructuralEgress: c.StructuralEgress,
 		NetworkPolicy:    c.NetworkPolicy,
 		SessionRecording: c.SessionRecording,
-		// D3: this substrate binds a member's drive — driveMount
+		// This substrate binds a member's drive — driveMount
 		// (driver_mounts.go) resolves it and ensureDriveVolume
 		// (driver_volumes.go) creates or adopts the named volume. The control
 		// plane reads this to admit a drive-carrying run at create and at
@@ -281,15 +280,13 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	if err := d.ensureImage(ctx, spec.Image, func() { spec.NotifyWaiting("image: Pulling: " + spec.Image) }); err != nil {
 		return runner.Sandbox{}, err
 	}
-	// ...and the proxy sidecar, which used to be "assumed locally present
-	// (operator-provided) to avoid surprise pulls". That assumption held only for
-	// a repo checkout, which builds it. NOTHING ever fetched it otherwise:
+	// ...and the proxy sidecar image, which nothing else fetches: only a repo
+	// checkout or CI (which build it) have it resident already.
 	// deploy/compose/docker-compose.yaml parks the proxy-image stanza in
 	// profiles: ["build-only"], so `docker compose pull` resolves three images and
-	// never this one; `--no-build` cannot build it; and it went straight into
-	// ContainerCreate below. So on the one-line install and on the desktop tier
-	// the stack reached healthy, the console loaded, and the FIRST RUN failed at
-	// sandbox creation with an unresolvable ref.
+	// never this one, and `--no-build` cannot build it — so without this pull, the
+	// one-line install and the desktop tier reach a healthy stack and console and
+	// then fail the FIRST RUN at sandbox creation with an unresolvable ref.
 	//
 	// One line at the chokepoint that already has the right semantics ("failures
 	// to pull surface as errors — fail closed, never run a sandbox we could not
@@ -571,10 +568,10 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		// for every call this driver makes on Ref (name and ID are
 		// interchangeable path params), but teardown's not-found fallback
 		// (runIDFromAgentName) can only recover a run id from THIS form — a raw
-		// daemon-assigned ID carries no run id at all, so that fallback silently
-		// no-op'd for every exec-capable (runc/gVisor) runtime — the common
-		// case — leaking the proxy sidecar + per-run network whenever the agent
-		// container was already gone at teardown (W15-W15c-terminal-lifecycle-2).
+		// daemon-assigned ID carries no run id at all, so that fallback would
+		// silently no-op for every exec-capable (runc/gVisor) runtime — the
+		// common case — leaking the proxy sidecar + per-run network whenever the
+		// agent container was already gone at teardown.
 		Ref:           agentContainerName(spec.RunID),
 		Driver:        driverName,
 		EnforcedClass: enforced,
@@ -931,7 +928,7 @@ func (d *Driver) Status(ctx context.Context, ref string) (runner.Status, error) 
 // exec — see runAsMainProcess). Duplicated here (same literal) rather than
 // imported: internal/api sits above this concrete substrate and must stay
 // target-agnostic, so it cannot import internal/runner/docker. MUST match the
-// literal in runs_dispatch.go — see that constant's doc comment (W15-c) for
+// literal in runs_dispatch.go — see that constant's doc comment for
 // why a bare "" can no longer double for this case.
 const mainProcessExecID = "main-process"
 
@@ -951,8 +948,7 @@ const mainProcessExecID = "main-process"
 // DEFINITIVE when the container is ITSELF gone/stopped; while the container is
 // still RUNNING it is ambiguous (the agent may be alive), so return an ERROR to
 // route the caller into its bounded-retry/backoff path rather than finalizing a
-// healthy live-restore run — the reconciler's own comment (:928) used to assume
-// the opposite, mass-failing every in-flight exec run on a routine daemon restart.
+// healthy live-restore run.
 func (d *Driver) AgentStatus(ctx context.Context, ref, agentExecID string) (runner.Status, error) {
 	if agentExecID == "" || agentExecID == mainProcessExecID {
 		return d.Status(ctx, ref)
@@ -1049,19 +1045,18 @@ func (d *Driver) teardown(ctx context.Context, agentRef string) error {
 	}
 
 	if id == uuid.Nil && isNotFound(err) {
-		// W15-W15c-terminal-lifecycle-2: the agent container is already gone
-		// (crashed, OOM-killed, or a concurrent teardown beat us to it), so
-		// ContainerInspect never ran the label/name recovery above at all —
-		// id stayed uuid.Nil and this used to report success without EVER
-		// trying to resolve the run id, leaking the sibling proxy sidecar
-		// (still holding the run's credentials) and the per-run network.
-		// agentRef itself IS the deterministic agent name on BOTH substrates
-		// now — the exec-less (krun) path always used it (see Exec), and
-		// CreateSandbox's exec-based (runc/gVisor) return now names it too
-		// instead of the daemon's opaque agentResp.ID — so try it before
-		// giving up; a ref this parse still can't recognize (e.g. an older
-		// persisted ref from before this fix) falls through to the prior
-		// idempotent-success behavior unchanged.
+		// The agent container is already gone (crashed, OOM-killed, or a
+		// concurrent teardown beat us to it), so ContainerInspect never ran the
+		// label/name recovery above at all — id stayed uuid.Nil. Reporting
+		// success here without resolving the run id would leak the sibling
+		// proxy sidecar (still holding the run's credentials) and the per-run
+		// network, so recover it from agentRef before giving up: it IS the
+		// deterministic agent name on BOTH substrates — the exec-less (krun)
+		// path always used it (see Exec), and CreateSandbox's exec-based
+		// (runc/gVisor) return names it too, instead of the daemon's opaque
+		// agentResp.ID. A ref this parse still can't recognize (e.g. an older
+		// persisted ref predating deterministic naming) falls through to the
+		// prior idempotent-success behavior unchanged.
 		if nid, nerr := runIDFromAgentName(agentRef); nerr == nil {
 			id = nid
 		} else {
@@ -1182,7 +1177,7 @@ func (d *Driver) ensureImage(ctx context.Context, ref string, onPulling func()) 
 	return nil
 }
 
-// ImagePresent implements runner.ImageChecker (W20-W20-record-image-5): the
+// ImagePresent implements runner.ImageChecker: the
 // exported form of imagePresent, so a caller holding only a runner.Runner can
 // verify a cached image ref is still real before trusting it.
 func (d *Driver) ImagePresent(ctx context.Context, ref string) (bool, error) {

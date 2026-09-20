@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Short-lived control-plane handoff row (migration 0026): single-use WS attach
-// tickets. Was an in-process map, so a second control plane never saw it and a
-// restart dropped it. Consume-once, and here that is a single
-// DELETE ... RETURNING — the atomic form of the map's delete-on-read, exact
-// under concurrency AND across processes. Kept out of store.go on purpose (it
-// sits at a lint size boundary).
+// tickets, durable and shared across every control plane — an in-process map
+// cannot survive a restart or be seen by a second control plane. Consume-once,
+// and here that is a single DELETE ... RETURNING — the atomic form of a map's
+// delete-on-read, exact under concurrency AND across processes. Kept out of
+// store.go on purpose (it sits at a lint size boundary).
 package store
 
 import (
@@ -25,7 +25,7 @@ import (
 
 // hashToken returns hex(sha256(token)) — what's actually stored in every
 // *_sha256 credential column this package writes: attach_tickets.token_sha256
-// (STORE-3) and api_tokens.token_sha256 (migration 0045). The raw token never
+// and api_tokens.token_sha256 (migration 0045). The raw token never
 // reaches SQL: the mint/insert path hashes before writing and the
 // consume/lookup path hashes before reading, so every uniqueness and
 // consume-once property is unchanged (the hash is just as unique and just as

@@ -79,7 +79,7 @@ const groundtruthRotatorLockBackoff = 30 * time.Second
 // groundtruthRotatorLockBackoff and retries, taking over automatically once
 // the holder's Postgres session ends.
 //
-// AT MOST ONE STEADY-STATE LEADER — not exactly one, and NOT a fencing
+// At most one steady-state leader — not exactly one, and NOT a fencing
 // primitive. The advisory lock is SESSION-scoped and this loop never
 // re-verifies it after the acquire, so any session loss short of process death
 // (a Postgres restart, an RDS failover, pg_terminate_backend, an idle-session
@@ -87,8 +87,9 @@ const groundtruthRotatorLockBackoff = 30 * time.Second
 // rotating; a standby then wins within one backoff. Two leaders, undetected.
 // That is ACCEPTED, not overlooked: both write the identical harmless thing —
 // mint a stateless token, atomically rename it into place — so a reader always
-// sees one whole valid token and the worst case is the pre-S2 behavior this
-// replaced. Do NOT hang anything that needs real mutual exclusion on
+// sees one whole valid token, and the worst case is the same file thrash and
+// duplicate mints as no leader election at all. Do NOT hang anything that needs
+// real mutual exclusion on
 // db.GroundTruthRotatorLockKey; it would inherit an exclusivity guarantee that
 // is not there.
 //

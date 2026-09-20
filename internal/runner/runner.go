@@ -50,7 +50,7 @@ type Capabilities struct {
 	// UserDrives reports whether this driver can BIND a member's user drive
 	// (migration 0054) into the sandbox — SandboxSpec.Drive.
 	//
-	// FALSE IS THE FAIL-CLOSED DEFAULT AND IT IS LOAD-BEARING. A driver that
+	// False is the fail-closed default and it is load-bearing. A driver that
 	// says nothing declares no drive support, so the control plane refuses a
 	// drive-carrying request rather than admitting one this substrate would
 	// reject at CreateSandbox — the same rule ConfinementClasses states one
@@ -592,7 +592,7 @@ type Runner interface {
 	KillSandbox(ctx context.Context, ref string) error
 }
 
-// ImageChecker is an OPTIONAL Runner capability (W20-W20-record-image-5): a
+// ImageChecker is an OPTIONAL Runner capability: a
 // substrate whose local image cache can go stale out from under a workspace's
 // cached image_ref (the docker driver — a pruned/removed local image; the
 // daemon that built it is gone) implements this so a stale cache can be

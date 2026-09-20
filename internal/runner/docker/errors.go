@@ -62,7 +62,7 @@ var errDriveTargetInvalid = errors.New("a user drive may bind only at the reserv
 //
 // The demo agent tags (demoAgentImagePrefix) live in no registry, so for those
 // the fix is a make target and saying so beats leaking a bare "registry:
-// denied". B9-F8: ONLY for those. On an operator's own registry image or a
+// denied". This applies ONLY to those. On an operator's own registry image or a
 // workspace-built tag, `make agent-images` is advice that cannot work, and
 // appending it buries the daemon's real answer — auth refused, registry
 // unreachable, a typo in the ref — under a make target with nothing to do with

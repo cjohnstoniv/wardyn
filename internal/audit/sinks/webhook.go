@@ -191,8 +191,7 @@ func (w *WebhookSink) Run(ctx context.Context) {
 // on the common signal-driven shutdown the Run ctx is already cancelled, which
 // would make the last POST fail immediately and abandon the batch. A short
 // independent deadline lets the last batch actually deliver while still bounding
-// how long Close can block (finding: last batch must be flushed/awaited on
-// shutdown, and Close must not block indefinitely).
+// how long Close can block.
 func (w *WebhookSink) drainAndFlush(batch *[]types.AuditEvent, flush func(context.Context)) {
 	for {
 		select {
@@ -224,10 +223,9 @@ func (w *WebhookSink) Drops() int64 { return w.drops.Load() }
 // deliverWithRetry encodes batch as newline-delimited JSON and POSTs it to the
 // configured URL, retrying up to cfg.MaxRetries times with exponential backoff.
 // Delivery failures after all retries count the lost events in the drop counter
-// (finding: loss after retry exhaustion was logged but invisible to Drops) and
-// are logged; events are not re-queued. The backoff sleep honors both ctx
+// and are logged; events are not re-queued. The backoff sleep honors both ctx
 // cancellation and Close()'s stop signal so shutdown drains promptly rather than
-// blocking on context.Background() (finding: blocking retry stalled drain).
+// blocking on context.Background().
 func (w *WebhookSink) deliverWithRetry(ctx context.Context, batch []types.AuditEvent) {
 	body, err := encodeBatch(batch)
 	if err != nil {

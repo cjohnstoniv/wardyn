@@ -43,7 +43,7 @@ const governanceAssignmentCols = `id, subject_type, subject, profile_id, priorit
 // Returns ErrConflict when the UNIQUE(name) index rejects the write — a NEW
 // profile taking a taken name, or a rename onto another row's name. The caller
 // maps that to 409 with the name in the message, never a raw driver error
-// (the CreatePolicy contract, W20-S1-3).
+// (the CreatePolicy contract).
 //
 // created_by and created_at are NOT touched on the update path: creation
 // provenance stays with whoever authored the profile, even after a later edit
@@ -204,11 +204,11 @@ const governanceTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' T
 // second implementation in Go for a caller to skip, mis-order, or forget.
 // Ranked, in order:
 //
-//  1. TIER — user > group > all. An assignment is one admin explicitly naming
+//  1. tier — user > group > all. An assignment is one admin explicitly naming
 //     one principal, so the more specific naming wins outright; no priority in
 //     the group tier can beat a user-tier row.
 //
-//  2. WITHIN THE USER TIER, a sub-keyed match beats an email-keyed one.
+//  2. within the user tier, a sub-keyed match beats an email-keyed one.
 //     capabilitySubjects returns up to TWO user subjects (lowercased sub, then
 //     email) and an admin may legitimately have written an assignment against
 //     either, so dueling rows on the two are reachable and LIMIT 1 must not

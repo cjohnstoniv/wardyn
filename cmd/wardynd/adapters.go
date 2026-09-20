@@ -154,7 +154,7 @@ func (r *pgSessionRevocations) appNow() time.Time {
 // (folding at write time) cannot work, since the writer does not know whether
 // the caller named a sub or an email.
 func (r *pgSessionRevocations) IsSessionRevoked(ctx context.Context, sub, email string, issuedAt time.Time) (bool, error) {
-	// ASKED ON BOTH CLOCKS, AND EITHER ANSWER OF "REVOKED" WINS.
+	// Asked on both clocks, and either answer of "revoked" wins.
 	//
 	// revoked_at is stamped by POSTGRES. issuedAt is stamped by WARDYND — and by
 	// wardynd in two different senses, which is why this cannot simply pick one
@@ -349,7 +349,7 @@ func (s *approvalService) ListApprovalsPageByRun(ctx context.Context, runID uuid
 
 var _ store.ApprovalsByRunPager = (*approvalService)(nil)
 
-// ─── audit fanout ─────────────────────────────────────────────────────────────
+// Audit fanout
 
 // buildAuditFanout parses the -audit-sinks JSON config into a Fanout and starts
 // the background Run loop of any sink that needs one (the webhook sink batches).
@@ -428,7 +428,7 @@ func (f fanoutRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
 	return err
 }
 
-// ─── masking recorder ─────────────────────────────────────────────────────────
+// Masking recorder
 
 // maskingRecorder wraps an audit.Recorder and masks verbatim secret values from
 // the ev.Data and ev.Target fields before delegating to the inner recorder. A
@@ -446,7 +446,7 @@ type maskingRecorder struct {
 var _ audit.Recorder = maskingRecorder{}
 
 func (m maskingRecorder) Record(ctx context.Context, ev types.AuditEvent) error {
-	// CAPPED AT THE TOP OF THE CHAIN as well as at the INSERT (B6-F1): this
+	// Capped at the top of the chain as well as at the INSERT (B6-F1): this
 	// recorder is outermost, so capping here is what bounds the SPOOL and the
 	// SIEM SINKS too — store.InsertAuditEvent's own cap only protects the
 	// database. The target is `r.URL.Path` on the authz.denied lane, which the
@@ -456,17 +456,17 @@ func (m maskingRecorder) Record(ctx context.Context, ev types.AuditEvent) error 
 	// is work nobody asked for, and the mask is per-byte either way.
 	ev.Target = store.CapAuditTarget(ev.Target)
 	if m.reg != nil {
-		// W20-groundtruth-mapper-2: a run-less event (ev.RunID == nil —
-		// policy.inline, secret.*, an admin action) used to short-circuit this
-		// WHOLE block (the old guard was `m.reg != nil && ev.RunID != nil`),
-		// bypassing masking entirely instead of falling back to the
+		// A run-less event (ev.RunID == nil —
+		// policy.inline, secret.*, an admin action) must still fall back to the
 		// PROCESS-GLOBAL corpus (Bedrock SSO / subscription creds registered
-		// via AddGlobal). The uuid.Nil corpus is exactly that — globals
-		// only, since uuid.Nil is never a real run's perRun key — so a
-		// run-less row is now masked against the same globals every real run
-		// already is, just with no per-run corpus layered on top (there is
-		// none to add: masking is per-run, and without a run id there is no
-		// run-scoped snapshot to apply — a registered secret for some OTHER
+		// via AddGlobal) rather than bypass masking entirely — the guard here
+		// is `m.reg != nil` alone, never also `ev.RunID != nil`. The uuid.Nil
+		// corpus is exactly that — globals only, since uuid.Nil is never a
+		// real run's perRun key — so a run-less row is masked against the
+		// same globals every real run already is, just with no per-run
+		// corpus layered on top (there is none to add: masking is per-run,
+		// and without a run id there is no run-scoped snapshot to apply — a
+		// registered secret for some OTHER
 		// run must still never leak into a run-less event's masking).
 		runID := uuid.Nil
 		if ev.RunID != nil {
@@ -497,17 +497,17 @@ func (m maskingRecorder) Record(ctx context.Context, ev types.AuditEvent) error 
 	return m.inner.Record(ctx, ev)
 }
 
-// ─── spooling recorder ────────────────────────────────────────────────────────
+// Spooling recorder
 
 // spoolingRecorder wraps an audit.Recorder so that when the inner (durable) write
 // FAILS, the event is logged loudly and appended to a local append-only spool
 // instead of being silently lost (invariant 6, C1). It is placed BELOW
-// maskingRecorder in the chain, so the event it spools is already masked — closing
-// the H9 leak where the API server's recordAudit spooled the PRE-masking event
-// into audit-spool.jsonl. And because EVERY audit writer (API, broker, identity,
-// approvals, sweeper) shares this recorder, all of them inherit the durable
-// fallback — previously only the API server's recordAudit spooled, so broker
-// credential.mint / identity / approval writes were log-only-lost on a PG outage.
+// maskingRecorder in the chain, so the event it spools is already masked —
+// never the PRE-masking event, which must not land in audit-spool.jsonl. And
+// because EVERY audit writer (API, broker, identity, approvals, sweeper)
+// shares this recorder, all of them inherit the durable fallback: none of
+// broker credential.mint / identity / approval writes are log-only-lost on a
+// PG outage.
 type spoolingRecorder struct {
 	inner audit.Recorder
 	spool *api.AuditSpool // may be nil (spool unavailable) → log-only fallback
@@ -537,15 +537,15 @@ func (r spoolingRecorder) Record(ctx context.Context, ev types.AuditEvent) error
 	return err
 }
 
-// ─── lifecycle adapters ───────────────────────────────────────────────────────
+// Lifecycle adapters
 
 // lifecycleStore adapts the function-style store package to lifecycle.Store.
 // ListRunningWithPolicy reads each run's EFFECTIVE idle cap from the run row's
-// auto_stop_after_sec column (captured from the resolved policy at CreateRun).
-// It previously LEFT JOINed run_policies on policy_id and read the policy JSONB —
-// but inline/default/scan/verify/record/harness-login runs have no stored
-// policy_id, so the join was NULL and COALESCE'd to 0 (never auto-stop),
-// silently exempting every such run from idle reaping.
+// auto_stop_after_sec column (captured from the resolved policy at CreateRun),
+// NOT by LEFT JOINing run_policies on policy_id and reading the policy JSONB:
+// inline/default/scan/verify/record/harness-login runs have no stored
+// policy_id, so that join comes back NULL and COALESCEs to 0 (never
+// auto-stop), silently exempting every such run from idle reaping.
 type lifecycleStore struct {
 	pool *pgxpool.Pool
 }
@@ -553,7 +553,7 @@ type lifecycleStore struct {
 var _ lifecycle.Store = lifecycleStore{}
 
 func (l lifecycleStore) ListRunningWithPolicy(ctx context.Context) ([]lifecycle.RunSummary, time.Time, error) {
-	// now() COMES BACK WITH THE ROWS, and it is the same instant on every one of
+	// now() comes back with the rows, and it is the same instant on every one of
 	// them: now() is the transaction's start time, so a single statement reads
 	// one clock for the whole scan. updated_at is stamped by that same clock, so
 	// the reaper's subtraction is finally two readings of ONE clock — wardynd's
@@ -759,7 +759,7 @@ func runApprovalSweeper(ctx context.Context, st approval.Store, interval, after 
 				// one wedged row.
 				slog.ErrorContext(ctx, "wardynd: approval sweep error", slog.Any("err", err))
 			}
-			// AT THE TRANSITION: this is where a credential re-auth request
+			// At the transition: this is where a credential re-auth request
 			// actually becomes EXPIRED, and the only place that can count it
 			// honestly — the sidecar holding for it has long since given up, so
 			// no later resolve will ever meet the row.

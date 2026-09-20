@@ -222,8 +222,7 @@ func deniedSource(src string) error {
 	// A container-runtime socket anywhere is root-equivalent on the host: mounting
 	// it lets the sandbox drive the daemon (launch privileged containers → escape).
 	// Denied by BASENAME so a socket at a non-standard path (outside the denied
-	// /run, /var/run prefixes) is caught too — docker, containerd, podman, cri-o
-	// (previously only docker.sock was named).
+	// /run, /var/run prefixes) is caught too — docker, containerd, podman, cri-o.
 	switch path.Base(src) {
 	case "docker.sock", "containerd.sock", "podman.sock", "crio.sock":
 		return fmt.Errorf("mount source %q references a container-runtime socket; denied", src)

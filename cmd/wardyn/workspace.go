@@ -133,8 +133,8 @@ func resolveAttachSources(cmd *cobra.Command, client clientFn, args []string) ([
 // workspaceCmd onboards and inspects workspaces. `create` is the load-bearing
 // verb: a run whose policy names workspace_mounts/workspace_repos is refused
 // (422) unless that source is already ONBOARDED — an un-bypassable gate that
-// runs over inline, stored and default policies alike. Without this family the
-// gate was only clearable from the console.
+// runs over inline, stored and default policies alike. This family is what
+// makes the gate clearable outside the console.
 //
 // Interactive workspace review — the requirements contract, approved-egress
 // promotion, llm-cred binding, Record sessions and their confined replay, and

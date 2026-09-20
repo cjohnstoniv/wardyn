@@ -180,7 +180,7 @@ func newWithClient(ctx context.Context, cs kubernetes.Interface, restCfg *rest.C
 // operator who set the override cannot miss that every sandbox this Driver
 // creates runs with UNCONFINED egress until it is unset.
 func logWarnUnenforcedNetPolOptOut() {
-	// Wrapped across lines (review round 2, M7): enabling -tags k8s in
+	// Wrapped across lines: enabling -tags k8s in
 	// .golangci.yml's build-tags for the first time surfaced this as the
 	// tree's one pre-existing lll violation — wardynd never ran the k8s
 	// build through that gate before. Content unchanged.
@@ -271,10 +271,9 @@ func (d *Driver) Classes(ctx context.Context) (substrate.ClassSupport, error) {
 		// periodically, and the write is never refused. Not `filesystem`: nothing
 		// here binds a byte.
 		//
-		// THAT LIMIT ALONE BOUND THE WRONG CONTAINER, which is why 0.7.4 disclosed
-		// disk_mib as unenforced here: the agent runs in an ephemeral container the
-		// kubelet does not meter at all, so the budget sat on an idle main
-		// container nothing writes in. ephemeralScratchVolumes NARROWS that — two
+		// That limit alone binds the wrong container: the agent runs in an
+		// ephemeral container the kubelet does not meter at all, so the budget
+		// sits on an idle main container nothing writes in. ephemeralScratchVolumes NARROWS that — two
 		// emptyDirs, at /tmp and the agent's workdir, each carrying disk_mib as its
 		// sizeLimit and counted toward the pod's ephemeral-storage total whichever
 		// container writes them. A narrowing, not a close: what the agent writes

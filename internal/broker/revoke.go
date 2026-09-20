@@ -15,16 +15,16 @@ import (
 )
 
 // revokeNote is the honest per-kind revocation story stamped on every
-// credential.revoke row.
+// credential.revoke row: each kind gets a note true to what the cascade
+// actually does to it, never one GitHub-shaped sentence applied to all four.
 //
 // The github_token arm is scoped to RevokeRun ON PURPOSE (B11a-F1). Wardyn DOES
-// call DELETE /installation/token in two places now — VerifyRefRuleset's probe
+// call DELETE /installation/token in two places — VerifyRefRuleset's probe
 // hand-back and discardMinted, the mint's discard door — but neither can ever
 // reach the credential this row is about: both surrender a token that was never
-// returned to the run. A blanket "wardyn does not call it" would now be false,
-// and a note that overstates is the one thing an audit row must not do. NOTHING is actually invalidated by this cascade — the
-// note is the only place the audit trail says WHY, and one constant note lied
-// about two of the four kinds (F013): it claimed GitHub TTL semantics for an
+// returned to the run, so "wardyn does not call it" would be false here. NOTHING
+// is actually invalidated by this cascade (F013) — the note is the only place
+// the audit trail says WHY, and it must not claim GitHub TTL semantics for an
 // operator-managed PAT that Wardyn cannot expire, down-scope, or deny (the
 // identity denylist stops further MINTS, not use of a secret the sandbox already
 // holds — see mintGitPAT/mintSSHKey in broker_mint_kinds.go, "the honesty ceiling
@@ -43,7 +43,7 @@ func revokeNote(kind string) string {
 }
 
 // RevokeRun best-effort revokes credentials minted for a run, part of the
-// kill-switch cascade. HONEST LIMITATION: nothing here invalidates a credential
+// kill-switch cascade. Honest limitation: nothing here invalidates a credential
 // that was already handed out. GitHub App installation tokens are not revoked
 // individually before their (<=1h) expiry: GitHub's DELETE /installation/token
 // endpoint is real, but it can only be called by presenting the token itself,
@@ -64,10 +64,11 @@ func revokeNote(kind string) string {
 //
 // The cascade enumerates what the run ACTUALLY minted (mintedCredentialsSQL:
 // credential.mint audit rows UNION the approvals burn), not just the approvals
-// whose minted_jti was burnt. Sourcing it from approvals alone emitted ZERO rows
-// for every auto-mintable grant (requires_approval=false creates no approval row)
-// and for the 2nd..Nth mint of a leased git_pat, while THREAT-MODEL.md publishes
-// step 4 of the kill cascade as "every minted credential for the run" (F096/F122).
+// whose minted_jti was burnt. Sourcing it from approvals alone would emit ZERO
+// rows for every auto-mintable grant (requires_approval=false creates no approval
+// row) and for the 2nd..Nth mint of a leased git_pat, while THREAT-MODEL.md
+// publishes step 4 of the kill cascade as "every minted credential for the run"
+// (F096/F122).
 func (b *Broker) RevokeRun(ctx context.Context, runID uuid.UUID) error {
 	minted, err := b.db.MintedCredentials(ctx, runID)
 	if err != nil {

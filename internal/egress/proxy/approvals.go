@@ -243,8 +243,8 @@ func (a *approvalClient) configureHold(mode types.FirstUseMode, timeout time.Dur
 // grant and — when that grant is scope=once — SPENDS it, clearing the WHOLE entry
 // so no sibling can take it again. The caller must hold a.mu.
 //
-// INVARIANT the whole design rests on: A TERMINAL `once` ENTRY NEVER SURVIVES AN
-// UNLOCK. Every write of state/scope/expiresAt — Resolve's snapshot, Resolve's
+// Invariant the whole design rests on: a terminal `once` entry never survives
+// an unlock. Every write of state/scope/expiresAt — Resolve's snapshot, Resolve's
 // needPoll branch, and ResolveWait's publish — is followed by a consumeIfOnce
 // under the SAME lock. Nothing else in this file makes that visible, so a fourth
 // writer needs a fourth call.
@@ -297,12 +297,12 @@ func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveRe
 	// Arm the operator's budget HERE, before the first control-plane round trip —
 	// not at the timer below, which is armed only after the concurrent-raise retry
 	// loop. Nothing else bounds these calls: handleConnect/handlePlain carry no
-	// deadline (server.go sets ReadTimeout/WriteTimeout 0), so the only ceiling
-	// used to be the shared control-plane http.Client's own Timeout, and the
-	// retry loop spends up to concurrentRaiseRetries+1 of them PLUS its sleeps
-	// before the hold timer exists. Against a black-holed control plane that is
-	// 6x the client timeout — 785s on the shipped 130s client — for a hold
-	// docs/POLICIES.md sells as first_use_hold_seconds (default 30s).
+	// deadline (server.go sets ReadTimeout/WriteTimeout 0), so without this the
+	// only ceiling is the shared control-plane http.Client's own Timeout, and the
+	// retry loop can spend up to concurrentRaiseRetries+1 of them plus its sleeps
+	// before the hold timer even exists — against a black-holed control plane
+	// that is 6x the client timeout — 785s on the shipped 130s client — for a
+	// hold docs/POLICIES.md sells as first_use_hold_seconds (default 30s).
 	//
 	// Deriving the ctx once and passing it to every Resolve/raise/poll below puts
 	// the retry loop, the raise and every poll inside that one budget; the timer
@@ -324,7 +324,7 @@ func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveRe
 	// failed outright. Without this retry, ApprovalID==uuid.Nil below would
 	// bail out immediately: wait_for_review would silently degrade to a
 	// deny_with_review-style fail-fast for every connection except the one
-	// that won the raise race (W20-hold-fsm-4). The raise is a single HTTP
+	// that won the raise race. The raise is a single HTTP
 	// round trip, so a few short re-resolves clear it in practice; a raise
 	// that genuinely failed stays apPending/Nil and this exits the same as
 	// before, just after a bounded extra wait.
@@ -362,17 +362,17 @@ func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveRe
 		case <-timeout.C:
 			return resolveResult{State: apPending, ApprovalID: r.ApprovalID}
 		case <-ticker.C:
-			// The hold loop used to return its OWN poll result and ignore the cache:
-			// N held connections each run their own ticker, each poll the SAME
-			// approval, each get apApproved, each return it — up to defaultMaxHolds
-			// callers consuming one `once`. The control plane cannot help, because it
-			// does not know consumption exists; the cache is the only place it does.
-			// So this arm goes through the cache, under the lock, and consumes.
+			// This arm goes through the cache, under the lock, and consumes — never
+			// the raw poll result — because N held connections each running their
+			// own ticker would otherwise each poll the SAME approval, each get
+			// apApproved, and each return it: up to defaultMaxHolds callers
+			// consuming one `once`. The control plane cannot help, because it does
+			// not know consumption exists; the cache is the only place it does.
 			decided, newState, polledScope, polledExpiry := a.poll(ctx, r.ApprovalID)
 			if !decided {
 				continue
 			}
-			// A CLOSURE, so `defer` covers every return path. Do NOT flatten this
+			// A closure, so `defer` covers every return path. Do NOT flatten this
 			// into Lock() … early-return … Unlock(): an early return between the
 			// Lock and the Unlock LEAKS a.mu, and then every subsequent Resolve on
 			// ANY host blocks forever and all holdSem slots fill permanently — a
@@ -381,7 +381,7 @@ func (a *approvalClient) ResolveWait(ctx context.Context, host string) resolveRe
 				a.mu.Lock()
 				defer a.mu.Unlock()
 				st := a.hosts[host]
-				// (1) DISCRIMINATE FIRST. Storing before discriminating re-opens the
+				// (1) Discriminate first. Storing before discriminating re-opens the
 				// fail-open blocker: a stale holder that writes first stamps
 				// apApproved + its scope over a FRESH PENDING entry, then correctly
 				// returns pending to itself — leaving the cache holding
@@ -583,8 +583,8 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 			// claimed the slot. Writing here would resurrect apApproved onto a fresh
 			// PENDING id — the next Resolve serves it from the fast path, and
 			// evaluate stamps that PENDING id onto the ALLOW log, attributing an
-			// allow to an approval nobody decided (breaks the W20-hold-fsm-1 audit
-			// join). It would also let `until` fail open, by re-stamping apApproved
+			// allow to an approval nobody decided (breaks the audit join). It
+			// would also let `until` fail open, by re-stamping apApproved
 			// plus a past expiresAt onto an entry a sibling just expired. So write
 			// NOTHING and report pending. None of this was reachable before scopes:
 			// state only moved pending->terminal, so the stale write was idempotent.
@@ -627,7 +627,7 @@ func (a *approvalClient) Resolve(ctx context.Context, host string) resolveResult
 // Mode carries the run's first-use mode so the UI can tell a live-HELD
 // (wait_for_review) request apart from a passive deny_with_review pending.
 //
-// HOST, AND NO PORT, AND THAT IS THE SEMANTIC (P0.3 — R3-F001/F108/F145): a
+// Host, and no port, and that is the semantic (P0.3 — R3-F001/F108/F145): a
 // decision on this approval reaches EVERY port of that host for whatever span
 // its decision_scope names. Host is always the bare host — approvalHostKey
 // guarantees it, and is the same value this client keys its cache on — so the
@@ -683,10 +683,10 @@ func (a *approvalClient) raise(ctx context.Context, host string) (uuid.UUID, err
 // (fail closed).
 //
 // It also returns the DECISION'S SCOPE and expiry, which the caller must store
-// onto the cache entry: this decode already read the whole ApprovalRequest and
-// used to throw both away, and handleInternalGetApproval already writes the full
-// struct — so only the caller-side store is new. Without it every scope decided
-// while the host was PENDING (i.e. the normal path) silently degrades to run.
+// onto the cache entry: the decode already reads the whole ApprovalRequest
+// (handleInternalGetApproval already writes the full struct), so returning
+// them costs only the caller-side store. Without it every scope decided while
+// the host was PENDING (i.e. the normal path) silently degrades to run.
 //
 // scope/expiresAt are meaningful only when decided; they are zero otherwise, so a
 // transient error can never overwrite a good scope with a blank one — and callers

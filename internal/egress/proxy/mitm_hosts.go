@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// The MITM-ELIGIBILITY SEAM: how one Options.MITMHosts entry is read, and what
+// The MITM-eligibility seam: how one Options.MITMHosts entry is read, and what
 // the entry decides about the connection the proxy makes on the far side of a
 // tunnel it terminated. Split out of proxy.go/mitm.go/llm_routes.go when the
 // scheme arrived and all three crossed the file-size gate; nothing here changed
@@ -21,13 +21,13 @@ import (
 // config written before the port suffix existed — and matches ANY port; a
 // malformed or out-of-range port suffix is treated the same as absent rather
 // than guessed. No live caller authors a bare entry any more: both
-// planArtifactRedirect (W13-S1-5) and authorBedrockBearerInjection (F037) join
+// planArtifactRedirect and authorBedrockBearerInjection (F037) join
 // the host to the port they actually configured, so the any-port arm is not a
 // default that a new lane can fall into by accident.
-// A clean "host:port" (what planArtifactRedirect now authors, W13-S1-5) scopes
+// A clean "host:port" (what planArtifactRedirect now authors) scopes
 // the entry to exactly that port.
 //
-// AN OPTIONAL "http://" PREFIX says the ORIGIN behind this entry speaks PLAIN
+// An optional "http://" prefix says the origin behind this entry speaks plain
 // HTTP, so the MITM's upstream leg must re-originate in cleartext rather than
 // TLS. Everything without a prefix is TLS, which is every entry any lane has
 // ever authored and every entry a real deployment carries — production is
@@ -40,9 +40,9 @@ import (
 // placeholder straight through. So for the one deployment shape whose portal is
 // a plain-HTTP fake (WARDYN_AWS_SSO_ENDPOINT_OVERRIDE on http://, which already
 // refused to boot without WARDYN_ALLOW_TEST_ENDPOINTS), the MITM must terminate
-// AND then speak http to the origin. Hard-coding https there dialled TLS at a
-// server that serves none: every CONNECT became builtin:dial-failed + 502, no
-// role credentials, no model call.
+// AND then speak http to the origin. Hard-coding https here would dial TLS at
+// a server that serves none: every CONNECT would become builtin:dial-failed +
+// 502, no role credentials, no model call.
 func parseMITMHostPort(entry string) (host string, port int, plaintext bool) {
 	entry = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(entry)), ".")
 	switch {
@@ -65,7 +65,7 @@ func parseMITMHostPort(entry string) (host string, port int, plaintext bool) {
 // mitmPlaintextUpstream reports whether the MITM'd origin for host serves plain
 // HTTP, so forwardInspectedLLM re-originates in cleartext instead of TLS.
 //
-// EXPLICIT AND POSITIVE, never derived from the injection rule's require_tls:
+// Explicit and positive, never derived from the injection rule's require_tls:
 // that field is a Go bool whose zero value is false, so "does not require TLS"
 // silently covers every rule that never set it, and inverting it would have
 // started dialling cleartext at real TLS origins. This map holds only what an
@@ -100,7 +100,7 @@ func compileMITMHosts(entries []string) (hosts map[string]bool, ports map[string
 		hosts[h] = true
 		ports[h] = port
 		if plain {
-			// KEYED BY host:port, not by host (W6-S F2). The scheme is a property
+			// KEYED BY host:port, not by host (F2). The scheme is a property
 			// of the ENTRY, and entries are port-scoped; a host-keyed flag is
 			// sticky while ports[h] is last-writer-wins, so
 			// {"http://h:8090", "h:443"} re-originated the :443 TLS entry in
@@ -122,9 +122,9 @@ func compileMITMHosts(entries []string) (hosts map[string]bool, ports map[string
 // SSO fake (a deployment that already refused to boot without
 // WARDYN_ALLOW_TEST_ENDPOINTS) is the only shape that reaches the other arm.
 //
-// Hard-coding https here dialled TLS at a server that serves none: every one of
-// the SDK's 36-69 CONNECTs per run ended builtin:dial-failed + 502, so no role
-// credentials reached the sandbox and every model call starved. NOT terminating
+// Hard-coding https here would dial TLS at a server that serves none: every
+// CONNECT would end builtin:dial-failed + 502, so no role credentials would
+// reach the sandbox and every model call would starve. NOT terminating
 // the tunnel is not the alternative — a blind tunnel carries the sandbox's
 // placeholder through untouched, which is Phase B not happening.
 func (p *Proxy) upstreamSchemeFor(host string, port int) (scheme string, defaultPort int) {

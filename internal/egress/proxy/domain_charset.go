@@ -5,7 +5,7 @@ package proxy
 
 import "net"
 
-// The CHARSET half of ValidDomainEntry's "reject the dead entry at write time"
+// The charset half of ValidDomainEntry's "reject the dead entry at write time"
 // rule (B10-F7), in its own file because policy.go is at the 1000-line gate.
 //
 // A non-ASCII entry is dead for the same reason a mid-label "*" is. An

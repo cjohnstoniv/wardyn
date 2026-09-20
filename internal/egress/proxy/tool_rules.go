@@ -21,7 +21,7 @@ import (
 // decideByToolRules applies the run's tool_rules to one tool call, reporting
 // whether it answered the request.
 //
-// EVALUATED PROXY-SIDE, outside the sandbox, on the policy the control plane
+// Evaluated proxy-side, outside the sandbox, on the policy the control plane
 // resolved — so a compromised agent cannot rewrite the rules that govern it.
 //
 // An `allow` or a `deny` is answered immediately and NO approval row is

@@ -85,12 +85,12 @@ func proxyNetPolName(runID uuid.UUID) string { return "wardyn-proxy-netpol-" + r
 
 // wardynLabels stamps every Wardyn-owned object so audit and teardown
 // selectors can find them by run and component. extra is applied FIRST and
-// the three reserved keys are stamped LAST (M3 finding): extra is
+// the three reserved keys are stamped LAST: extra is
 // caller-supplied (ultimately from policy/dispatch, e.g. an operator- or
 // agent-provided label), and applying it last would let an entry silently
 // override wardyn.component — un-selecting the agent from its own
 // NetworkPolicy (whose selector is built from this same map). Every extra
-// VALUE is also sanitized to legal k8s label syntax (L4 finding): a
+// VALUE is also sanitized to legal k8s label syntax: a
 // free-form value (e.g. a run's agent name) that fails k8s's
 // `[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?`, <=63-char syntax would 422 the
 // WHOLE object create otherwise — an unsanitizable value is omitted
@@ -145,7 +145,7 @@ func sanitizeLabelValue(s string) (string, bool) {
 //
 // RunAsUser is deliberately NOT set here — see agentSecurityContext and
 // restrictedSecurityContext, which is is the one field that has to split by
-// container identity (H2 finding): RunAsNonRoot:true with a nil RunAsUser
+// container identity: RunAsNonRoot:true with a nil RunAsUser
 // only passes kubelet admission when the IMAGE's own USER is already
 // numeric. The wardyn-proxy image (proxy + canary containers) is, so it
 // gets this as-is; the agent images are not (see agentSecurityContext).
@@ -176,7 +176,7 @@ func restrictedSecurityContext() *corev1.SecurityContext {
 // and each creates that user via adduser/useradd -u 1000). RunAsNonRoot:true
 // with a NIL RunAsUser fails Pod Security admission here: the kubelet can
 // only verify non-root against a NUMERIC uid, and a name-form USER is
-// opaque to it at admission time — H2 finding, product-breaking (every
+// opaque to it at admission time — product-breaking (every
 // agent sandbox would 422 at pod create without this). RunAsUser:1000 is
 // what makes RunAsNonRoot admission-checkable instead of a hard failure.
 func agentSecurityContext() *corev1.SecurityContext {
@@ -269,14 +269,14 @@ const (
 )
 
 // ephemeralScratchVolumes is what brings the agent's /tmp and workdir writes
-// inside disk_mib on this substrate, where before the budget bound only the idle
-// main container.
+// inside disk_mib on this substrate; without it the ephemeral-storage limit
+// binds only the idle main container's writable layer.
 //
-// The gap it NARROWS (disclosed as 0.7.4's known gap (a)): the agent does its
+// The gap it NARROWS (0.7.4's known gap (a)): the agent does its
 // work in an EPHEMERAL container that Exec adds, and the kubelet does not meter
 // an ephemeral container's writable layer at all — resourceRequirements' limit
-// bound a container nothing writes in, so a `dd` from the agent filled the node
-// and the pod was never evicted. An emptyDir is metered as the POD's local
+// bounds a container nothing writes in, so an ordinary `dd` from the agent
+// fills the node without the pod ever being evicted. An emptyDir is metered as the POD's local
 // ephemeral storage no matter which container writes into it, and Exec copies
 // the main container's VolumeMounts verbatim onto the ephemeral container, so
 // mounting here reaches the agent by construction.

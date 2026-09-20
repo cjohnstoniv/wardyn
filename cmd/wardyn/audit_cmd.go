@@ -2,10 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // The `wardyn audit` command, split out of commands.go at the file-size gate's
-// seam (scripts/check-file-size.sh): one command, its flags and its two
-// server-shape rules — the paging/truncation contract W16-S1-2 added, and the
-// run-scope guard F266 added — read as one thing here and were 100 lines of a
-// 1000-line file there.
+// seam (scripts/check-file-size.sh): one command, its flags, the
+// paging/truncation contract, and the run-scope guard read as one
+// thing here rather than being 100 lines of a 1000-line file.
 package main
 
 import (
@@ -21,7 +20,7 @@ import (
 // events server-side (internal/api/audit.go's auditPerRunDefaultLimit),
 // oldest-first — a run with more events than that silently dropped its
 // newest ones, including run.complete, with no way to page further or even
-// detect the drop (W16-S1-2). --limit/--offset close the paging gap; a
+// detect the drop. --limit/--offset close the paging gap; a
 // truncated page (server sets X-Wardyn-Truncated, surfaced via
 // sdk.AuditEventsPage) prints a warning naming the next --offset instead of
 // looking identical to a complete trail. The filter flags mirror the
