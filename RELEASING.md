@@ -58,6 +58,43 @@ label (and push again) when the change is provably invisible in the two shots.
 reason not to tag", not "CI is green" — check the actual CI run on the commit
 before step 3.
 
+## How a release is prepared
+
+A release is a milestone that closed. The steps below do not change; this is
+how the work reaches them.
+
+```mermaid
+flowchart LR
+  I[Issue on the milestone<br/>labelled approved] --> B[Branch from main<br/>kind/issue-slug]
+  B --> PR[Pull request into main<br/>one issue per PR]
+  PR --> R{Required CI<br/>+ review}
+  R -->|green| M[main]
+  M --> RP[Release PR<br/>CHANGELOG, versions, ROADMAP]
+  RP --> RB[release/X.Y<br/>cut or fast-forwarded]
+  RB --> T[Tag vX.Y.Z<br/>release.yml publishes]
+  M -.->|cherry-pick fixes only| RB
+```
+
+1. **Milestone.** Every planned change is an issue on the `X.Y.Z` milestone,
+   filed before work starts and signed off with the `approved` label
+   ([CONTRIBUTING.md](CONTRIBUTING.md), "Branching, issues and pull requests").
+2. **Pull requests into `main`.** One issue per PR. `main` stays releasable
+   between them because each change is additive or behind a default that
+   keeps today's behaviour.
+3. **Release PR.** When the milestone's release-gating issues are closed, one
+   PR carries steps 1 and 1b below — the CHANGELOG rename, the version strings,
+   the ROADMAP row, `docs/TEST-GAPS.md` — and nothing else.
+4. **Release branch and tag.** Steps 3 to 5 below run on the merged release
+   commit: `release/X.Y` is cut from it for a new minor, or fast-forwarded to it
+   for a patch, and the tag goes on that branch.
+5. **Point releases.** A fix is a PR to `main`, cherry-picked onto
+   `release/X.Y`. The branch never takes a feature.
+
+**Evidence is certified against a SHA.** A walk, a conformance run or a gate
+proves the commit it ran on. Any commit after it — a fix, a rebase, the release
+commit itself — re-opens every gate that commit could affect, and the release
+record names the SHA each piece of evidence was produced on.
+
 ## Steps
 
 For a patch release, choose `X.Y.Z` **before** updating version strings: refresh

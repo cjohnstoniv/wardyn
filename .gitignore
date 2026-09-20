@@ -123,6 +123,9 @@ ds-bundle/
 # ROADMAP.md's v0.8 row links to it, so it has to ship for a reader following
 # that link out of the repo's own roadmap.
 !/docs/design/hybrid-0.8.md
+# 0.8/ ships for the same reason: the 0.8 issues and ROADMAP.md's v0.8 row both
+# link to the design document, so it has to be in the repo they link from.
+!/docs/design/0.8/
 /test/e2e/campaign/
 /test/e2e/RESULTS.md
 
