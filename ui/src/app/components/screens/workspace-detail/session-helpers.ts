@@ -129,7 +129,7 @@ export function approvedEgressSet(ws: Workspace): Set<string> {
   return already;
 }
 
-// W20-S1-1: this must mirror the server's OWN dedup in
+// This must mirror the server's OWN dedup in
 // handlePromoteRecordEgress (internal/api/record.go) — which skips a host
 // already covered by ApprovedEgress OR an effective egress:required
 // requirement row — or the card offers a host that's already covered,
@@ -146,7 +146,7 @@ export function approvedEgressSet(ws: Workspace): Set<string> {
 // comment), so callers (record-pane.tsx, workspace-detail.tsx) pass
 // window.location.hostname — both MUST pass the same value, since
 // workspace-detail.tsx's untrusted-content confirm dialog must never list
-// more hosts than the button that opened it offered (UI-WS-14).
+// more hosts than the button that opened it offered.
 export function egressPromotionDiff(ws: Workspace, taskKey: string, selfHost?: string): EgressPromotionDiff {
   const rr = recordResult(ws, taskKey);
   const observed = (rr?.observations?.domains ?? []).filter((d) => d.allow_count > 0).map((d) => d.host);
@@ -203,8 +203,8 @@ export function sessionStage(ws: Workspace, key: string): SessionStage {
   // the one real, server-stamped signal available to pair them (the same
   // field recordSessions above already orders by). A re-record stamps `open`
   // a fresh, later started_at while the stale verify:<key> entry from the
-  // PRIOR capture keeps its older one — W20-capture-store-1: without this
-  // gate that stale entry outranks the fresh, unverified open result below.
+  // PRIOR capture keeps its older one — without this gate that stale entry
+  // outranks the fresh, unverified open result below.
   const openStarted = open?.started_at;
   const confinedStarted = confined?.started_at;
   const confinedCurrent = !confined || !openStarted || !confinedStarted || confinedStarted >= openStarted;
@@ -215,7 +215,7 @@ export function sessionStage(ws: Workspace, key: string): SessionStage {
   return "recorded";
 }
 
-// lastCleanReplay is the workspace-wide roll-up (Workstream B3): the latest
+// lastCleanReplay is the workspace-wide roll-up: the latest
 // SETTLED confined entry, across every session, whose server verdict
 // (recordmode.CleanReplay) was clean===true — "the loop has closed, at least
 // once, as of this replay." Picks the latest by finished_at (reconcileRecordRun

@@ -75,12 +75,12 @@ describe("egressFromAudit", () => {
     expect(out.map((d) => d.id)).toEqual(["wire"]);
   });
 
-  // Negative control for 6a (ui/src/app/lib/types/audit.ts's ruleSourceLabel,
-  // the console's rule_source chip): a mixed feed of tool-rule AND real
-  // rule_source-carrying egress rows must project identically to before that
-  // change — egressFromAudit keys on toolRuleDecision alone, never on the new
-  // ruleSourceLabel function, so a non-tool rule_source (site-config's
-  // internal-host lift, a builtin guard refusal) is a REAL connection and stays.
+  // Negative control (ui/src/app/lib/types/audit.ts's ruleSourceLabel, the
+  // console's rule_source chip): a mixed feed of tool-rule AND real
+  // rule_source-carrying egress rows must project identically — egressFromAudit
+  // keys on toolRuleDecision alone, never on ruleSourceLabel, so a non-tool
+  // rule_source (site-config's internal-host lift, a builtin guard refusal)
+  // is a REAL connection and stays.
   it("6a negative control: non-tool rule_source values are real connections, not decisions", () => {
     const out = egressFromAudit([
       ev({ id: "tool", action: "egress.deny", target: "wardynd:8443", data: { rule_source: "policy:tool-deny" } }),
@@ -139,7 +139,7 @@ describe("demoAuditRows", () => {
   });
 });
 
-// W21-S1-5: listAudit's `action` param — run-detail issues a SECOND, filtered
+// listAudit's `action` param — run-detail issues a SECOND, filtered
 // fetch (?run_id=&action=session.recording) so the recording picker's index
 // doesn't compete with every other action for the shared 1000-row cap on a
 // chatty run's (oldest-first) audit trail.
@@ -191,10 +191,11 @@ describe("exitCodeFromAudit", () => {
   });
 });
 
-// 0.7.6 Finding 3 — "the failure names a destination instead of being one". The
-// dispatch-time model-credential refusal used to grade `unknown`: a complete
-// sentence with no machine-readable class, so the console could only print it.
-// The class is one key on the audit row the refusal already writes.
+// 0.7.6 Finding 3 — "the failure names a destination instead of being one".
+// Without this, the dispatch-time model-credential refusal would grade
+// `unknown`: a complete sentence with no machine-readable class of its own,
+// so the console could only print it. The class is one key on the audit row
+// the refusal already writes.
 describe("runEndingFromAudit — the model-credential refusal is its own ending", () => {
   const failed = (data: Record<string, unknown>): AuditEvent =>
     ev({ id: "c", actor_type: "system", actor: "wardynd", action: "run.create", outcome: "failure", data });

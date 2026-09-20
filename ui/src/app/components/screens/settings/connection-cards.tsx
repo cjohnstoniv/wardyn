@@ -5,19 +5,18 @@
 
 // The Model provider connection card, plus the Lane/SecretLane/HostSummary
 // primitives the Workspace Providers Git tab reuses for ITS credential lanes
-// (0.7.2; screens/providers/git-tab.tsx).
+// (screens/providers/git-tab.tsx).
 //
-// This used to also carry GitHostCard, the Git host card — retired in 0.7.2
-// (workspace-providers-prompt.md §2.1, Q4): its free-text Host field could
-// store a git-pat-<slug> for a host no provider admitted, a credential that
-// clones nothing. The three git Lanes it rendered move INTO a provider row on
-// /providers unchanged; this file keeps the shared shell (Lane/SecretLane/
-// HostSummary) EXPORTED rather than re-typed there.
+// This file also used to carry GitHostCard, the Git host card: its free-text
+// Host field could store a git-pat-<slug> for a host no provider admitted, a
+// credential that clones nothing. The three git Lanes it rendered move INTO a
+// provider row on /providers instead; this file keeps the shared shell
+// (Lane/SecretLane/HostSummary) EXPORTED rather than re-typed there.
 //
 // ONE component, rendered in TWO places: /settings and the Getting Started
-// "Secrets" step. That is deliberate — the funnel step used to be a thin embed
-// of the whole Integrations page, which is exactly how it drifted into showing
-// an operator-extensibility framework during first-run setup. Sharing the
+// "Secrets" step. That is deliberate — a thin embed of the whole Integrations
+// page inside the funnel step is exactly how it drifted into showing an
+// operator-extensibility framework during first-run setup. Sharing the
 // component makes drift impossible rather than merely discouraged.
 //
 // Reads go through deriveIntegrations (lib/api/integrations.ts) — the SAME
@@ -81,37 +80,33 @@ export const S = {
   BEDROCK_CONFIG_NOTE:
     "Region and model come from the daemon's own config (WARDYN_BEDROCK_REGION / WARDYN_BEDROCK_MODEL) — set them where wardynd starts, not here.",
   STORE_NOTE: "Wardyn stores this — it doesn't dial the provider to check it.",
-  // DRAFT (M2 canon pending) — F4 (Appendix A #4), console-login lane (0.7.3).
-  // A per_user Bedrock row is declared on the Agents tab, and its sign-in is
-  // per person (F5 below reads the CALLER's own model_access, not a
-  // deployment-wide fact) — this note says so rather than leaving the card
-  // silent about where the lane actually lives.
+  // DRAFT (M2 canon pending) — a per_user Bedrock row is declared on the
+  // Agents tab, and its sign-in is per person (the connected check below
+  // reads the CALLER's own model_access, not a deployment-wide fact) — this
+  // note says so rather than leaving the card silent about where the lane
+  // actually lives.
   BEDROCK_PER_USER_NOTE:
     "This lane is per person: it is declared on the Agents tab, and each person signs in to AWS themselves. What this card reads is your own sign-in, not the deployment's.",
-  // DRAFT (M2 canon pending) — U-02 (blind review lens-U, Appendix A #5's own
-  // closing paragraph), rewritten for U2-03 (blind round 2, lens-U2).
-  // not_applicable is the shared admin-token principal's own answer (no
-  // session of its own, ever) — it used to borrow the deployment-wide
-  // `!!bedrockRow` fact, painting a green "Connected" badge over an absent
-  // credential for exactly the principal the finding was about. This is the
-  // honest detail beside the badge, and it carries NO IMPERATIVE: the old
-  // "sign in to see yours" asked a MECHANISM to complete a sign-in the server
-  // refuses outright (harnessLoginMechanismPrincipalRefusal,
-  // internal/api/modelaccess.go) — an instruction with no door behind it.
+  // DRAFT (M2 canon pending) — U-02: not_applicable is the shared
+  // admin-token principal's own answer (no session of its own, ever) —
+  // reading the deployment-wide `!!bedrockRow` fact instead paints a green
+  // "Connected" badge over an absent credential for exactly this principal.
+  // This is the honest detail beside the badge, and it carries no
+  // imperative: asking a MECHANISM to "sign in to see yours" would ask it to
+  // complete a sign-in the server refuses outright
+  // (harnessLoginMechanismPrincipalRefusal, internal/api/modelaccess.go) —
+  // an instruction with no door behind it.
   BEDROCK_PER_USER_MECHANISM:
     "Per person — this caller is a mechanism, not a person, so it has no sign-in of its own. Each person's own AWS session carries their runs.",
-  // DRAFT (M2 canon pending) — R9 (fix-first review pass), console-login lane
-  // (0.7.3). Under per_user, resolveBedrockAuth skips the bearer/host-mount/
-  // static-key arms outright (Appendix A finding 3) — a stored bearer key
-  // still deletes fine (SecretLane stays visible), but it is never read while
-  // the row is per_user, so the card says so rather than implying it might be.
+  // DRAFT (M2 canon pending) — under per_user, resolveBedrockAuth skips the
+  // bearer/host-mount/static-key arms outright — a stored bearer key still
+  // deletes fine (SecretLane stays visible), but it is never read while the
+  // row is per_user, so the card says so rather than implying it might be.
   BEDROCK_BEARER_UNUSED_PER_USER:
     "Not read while this lane is per person — each person's own AWS sign-in carries their runs.",
 } as const;
 
-// ---------------------------------------------------------------------------
-// Card shell + lane rows
-// ---------------------------------------------------------------------------
+// Card shell + lane rows.
 
 function Card({
   title,
@@ -134,12 +129,12 @@ function Card({
   );
 }
 
-// One lane's RADIO button only — F4-F13 (Appendix A V8): this used to also
-// render the expanded form (`children`) INSIDE itself, so a selected lane's
-// Input + Save button ended up nested inside the `role="radiogroup"` DOM
-// subtree — an ARIA violation (a radiogroup's children must be `role="radio"`
-// nodes, never a form). The caller now renders the active lane's body
-// separately with LaneBody below, OUTSIDE the radiogroup. Radio semantics
+// One lane's RADIO button only: it must never also render the expanded form
+// (`children`) INSIDE itself, or a selected lane's Input + Save button ends
+// up nested inside the `role="radiogroup"` DOM subtree — an ARIA violation
+// (a radiogroup's children must be `role="radio"` nodes, never a form). The
+// caller renders the active lane's body separately with LaneBody below,
+// OUTSIDE the radiogroup. Radio semantics
 // (not aria-pressed) because these are mutually-exclusive choices within one
 // group, which is what a screen reader needs to announce "2 of 3". `tabIndex`
 // / `radioRef` are the roving-tabindex wiring (wardyn/use-roving-radio.ts) —
@@ -375,9 +370,7 @@ export function HostSummary({ host }: { host: string }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Model provider
-// ---------------------------------------------------------------------------
+// Model provider.
 
 type ModelLane = "subscription" | "api_key" | "bedrock";
 
@@ -408,13 +401,13 @@ export function ModelProviderCard({
     subRow ? "subscription" : keyRow ? "api_key" : bedrockRow ? "bedrock" : "subscription",
   );
   const [loginOpen, setLoginOpen] = React.useState<"anthropic" | "aws" | null>(null);
-  // U2-09 (blind round 2): one closer for the REFRESH, behind every way out of
+  // One closer for the REFRESH, behind every way out of
   // the login dialog. CAPTURE_CHECK_UNREACHABLE leaves the pane on its error
   // phase with the capture possibly LANDED — onDone never fires, so without
   // this the card kept reading not-connected until a manual page reload.
   // Cancel/Escape make no claim either way; they just cost one GET.
   //
-  // RV-04: the pane's own Cancel is the only path that KILLS the login sandbox
+  // The pane's own Cancel is the only path that KILLS the login sandbox
   // run (HarnessLoginPane owns that; it holds the run id). Escape and an
   // overlay click close the dialog and unmount the pane — deliberately NOT
   // lifted here, because a kill issued from the card would race the pane's own
@@ -450,21 +443,21 @@ export function ModelProviderCard({
   // only decides whether to offer a lane that would fail.
   const sharedSubBlocked = status.auth.shared_subscription_allowed === false;
 
-  // F2/F4/F5 (Appendix A): the claude-code roster row is per_user Bedrock SSO
+  // The claude-code roster row is per_user Bedrock SSO
   // — declared on the Agents tab, where each person signs in for themselves.
   // Read independently here on purpose: this card reads the server's settled
   // answer (status.harnesses), while the Agents tab reads the same `harness`
-  // prop for the DRAFT being edited — but both now share ONE predicate,
-  // isPerUserSsoRow (workspace-providers-copy.ts, R-01), so the three-part
-  // test (enabled/mechanism/credential_source) can't drift into two answers
-  // again. See that function's comment for why `enabled !== false` is
+  // prop for the DRAFT being edited — but both share ONE predicate,
+  // isPerUserSsoRow (workspace-providers-copy.ts), so the three-part
+  // test (enabled/mechanism/credential_source) can't drift into two answers.
+  // See that function's comment for why `enabled !== false` is
   // load-bearing, not decorative.
   const perUserSso = !!status.harnesses?.some((h) => h.id === "claude-code" && isPerUserSsoRow(h));
   const modelAccessState = status.model_access?.state;
   // `expiring` still counts as Connected — the session still signs, and the
   // warning rides the action line, not this badge.
   const perUserLive = modelAccessState === "live" || modelAccessState === "expiring";
-  // U2-03: "the caller is a MECHANISM, not a person … no sign-in it could
+  // "The caller is a MECHANISM, not a person … no sign-in it could
   // complete" (internal/api/modelaccess.go). One predicate behind both the
   // sentence and the missing door, so they can never drift apart.
   const mechanismPrincipal = perUserSso && !!status.model_access && modelAccessState === "not_applicable";
@@ -476,9 +469,9 @@ export function ModelProviderCard({
     <>
       <Card title={S.MODEL_TITLE} lede={S.MODEL_LEDE} footer={S.MODEL_FOOTER}>
         {!operator && <OperatorOnlyHint />}
-        {/* F4-F13 (Appendix A V8): roving tabindex + arrow keys
+        {/* Roving tabindex + arrow keys
             (wardyn/use-roving-radio.ts) — one Tab stop for the group, not
-            three. Each Lane's expanded form used to nest INSIDE it (an ARIA
+            three. Each Lane's expanded form must never nest INSIDE it (an ARIA
             violation for role="radiogroup"); the three bodies below render
             as SIBLINGS instead. */}
         <div role="radiogroup" aria-label={S.MODEL_TITLE} className="space-y-2" {...containerProps}>
@@ -506,7 +499,7 @@ export function ModelProviderCard({
             id="lane-bedrock"
             title="AWS Bedrock"
             hint="A bearer key, or an SSO device-code sign-in."
-            // F5: under a per_user row, a caller WITH a per-person model_access
+            // Under a per_user row, a caller WITH a per-person model_access
             // reading reports its OWN state. not_applicable (U-02) is NOT
             // folded into that reading and does NOT fall back to the
             // deployment-wide fact either — both would paint a green
@@ -514,12 +507,12 @@ export function ModelProviderCard({
             // never hold. It gets its own honest render: not connected, with
             // BEDROCK_PER_USER_MECHANISM as the detail.
             //
-            // U2-01 (blind round 2): the OTHER arm had the same disease. A
+            // The OTHER arm must not have the same disease: a
             // Bedrock row exists as soon as region OR model is set
-            // (deriveAiRows, integrations.ts) — so `!!bedrockRow` painted
-            // Connected over a deployment with no credential of any kind,
-            // which is exactly what scripts/e2e-backend.sh configures. The
-            // row's `bedrockLane` is activeBedrockLane()'s answer and is
+            // (deriveAiRows, integrations.ts), so `!!bedrockRow` alone would
+            // paint Connected over a deployment with no credential of any
+            // kind, which is exactly what scripts/e2e-backend.sh configures.
+            // The row's `bedrockLane` is activeBedrockLane()'s answer and is
             // undefined until a credential lane (bearer > SSO > ~/.aws mount >
             // static keys) is genuinely active — that is the honest key.
             //
@@ -529,7 +522,7 @@ export function ModelProviderCard({
             // `bedrockLane` is always undefined for them. `ready` is the
             // server's own "region + model + one credential lane" fold and is
             // the member-safe form of the same fact; it is false on the
-            // region-or-model-only deployment U2-01 guards against.
+            // region-or-model-only deployment the check above guards against.
             connected={
               perUserSso && status.model_access
                 ? modelAccessState !== "not_applicable" && perUserLive
@@ -648,7 +641,7 @@ export function ModelProviderCard({
                 // it shows whether or not a key happens to be stored.
                 <p className="text-meta leading-snug text-muted-foreground">{S.BEDROCK_BEARER_UNUSED_PER_USER}</p>
               )}
-              {/* U2-03 (blind round 2): NOT rendered for a mechanism
+              {/* NOT rendered for a mechanism
                   principal. `disabled={!operator}` is no guard here — an
                   admin token IS operator, so the button was live, and pressing
                   it opens a pane whose POST /setup/harness-login is refused
@@ -714,8 +707,8 @@ export function ModelProviderCard({
           }}
         >
           {/* ONE spelling with the button that opens it and with the shell
-              strip's own door (W0-mock ruling 5): this dialog used to say "Sign
-              in with AWS SSO" beside a control named "Sign in to AWS". */}
+              strip's own door (W0-mock ruling 5): the dialog title and the
+              control that opens it must never name the sign-in differently. */}
           <DialogTitle>
             {loginOpen === "aws" ? MODEL_ACCESS_BANNER.DIALOG_TITLE : "Sign in to Claude"}
           </DialogTitle>
@@ -735,7 +728,7 @@ export function ModelProviderCard({
   );
 }
 
-// GitHostCard retired in 0.7.2 — see the file header. Its Lane/SecretLane/
+// GitHostCard is retired — see the file header. Its Lane/SecretLane/
 // HostSummary shell lives above, exported; the row shell and the free-text
 // Host field are screens/providers/git-tab.tsx's now (the row's own host,
 // never a second text field).

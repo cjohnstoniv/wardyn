@@ -46,16 +46,17 @@ describe("MemberModeBanner", () => {
     // exactly as run and workspace ownership survive the clamp. Omitting the
     // third is the one of the three an admin is most likely to test blind.
     expect(MEMBER_MODE.CEILINGS).toMatch(/secrets/);
-    // Ceiling 4 (0.7.5, field report finding 3): the plain mode still resolves
-    // the admin's OWN model credential, and the tooltip has to say so — being
-    // misled by exactly this is what the finding reports — and name the way out.
+    // Ceiling 4: the plain mode still resolves the admin's own model
+    // credential, and the tooltip has to say so — an admin misled by exactly
+    // this needs to see the way out.
     expect(MEMBER_MODE.CEILINGS).toMatch(/Model access and ownership still resolve to you/);
-    // U-6 (W6 blind lens) — SUPERSEDES "…and it names the control that shows
-    // that state". The sentence used to point at 'View as a new member', an item
-    // that is not rendered at all on a shared/legacy deployment or against a
-    // 0.7.4 daemon (memberPreviewAvailable false), and that disappears from the
-    // menu while ANY member mode is on — precisely when this tooltip is on
-    // screen. Naming a control the reader cannot find is worse than naming none.
+    // (W6 blind lens) — supersedes "…and it names the control that shows that
+    // state": naming 'View as a new member' fails when that item is not
+    // rendered at all — on a shared/legacy deployment, against a 0.7.4
+    // daemon (memberPreviewAvailable false), or while any member mode is on,
+    // which removes it from the menu precisely when this tooltip is on
+    // screen. Naming a control the reader cannot find is worse than naming
+    // none.
     expect(MEMBER_MODE.CEILINGS).not.toContain("View as a new member");
     expect(MEMBER_MODE.MENU_NEW).toContain("View as a new member");
   });
@@ -79,14 +80,13 @@ describe("MemberModeBanner", () => {
     expect(MEMBER_MODE.CEILINGS_NEW).toMatch(/rolling upgrade/);
   });
 
-  // W6-5. The control is offered to BOTH admin tiers (`eligible = operator ||
+  // The control is offered to both admin tiers (`eligible = operator ||
   // securityOperator`, and OPERATIONS.md says so), and both clamp to member —
-  // which is why MEMBER_MODE.EXIT already names the mode rather than a tier to
-  // go back to, and this file's own comment says that is why. The banner then
-  // named a tier: a security_admin read "your admin role is paused" about a
-  // role they do not hold, on the one surface that is unconditional and on
-  // every screen — the same wrong-tier-sentence class SECURITY_ONLY_REASON was
-  // added this release to close.
+  // which is why MEMBER_MODE.EXIT names the mode rather than a tier to go
+  // back to. The banner must not name a tier either: a security_admin must
+  // not read "your admin role is paused" about a role they do not hold, on
+  // the one surface that is unconditional and on every screen — the same
+  // wrong-tier-sentence class SECURITY_ONLY_REASON exists to close.
   it("the banner names no tier — it is offered to both admin tiers and both clamp to member", () => {
     expect(MEMBER_MODE.BANNER).not.toMatch(/\badmin\b/i);
     expect(MEMBER_MODE.BANNER).not.toMatch(/\bsecurity[ _-]?admin\b/i);

@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// M7(b) — "What happened / What to do". The regression this pins: a run that
-// ended badly used to state its STATE and nothing else, leaving the reason in
-// the audit trail for an operator to find through the API.
+// M7(b) — "What happened / What to do": a run that ended badly must state
+// more than its state — the reason must not be left in the audit trail alone
+// for an operator to find through the API.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -89,11 +89,11 @@ describe("runEndingFromAudit — the state picks the family, the audit picks the
     });
   });
 
-  // An INTERACTIVE BYOI run's selftest is WARN-ONLY (runs_dispatch.go's
+  // An interactive BYOI run's selftest is warn-only (runs_dispatch.go's
   // byoiSelftest(…, false)): it records run.selftest/failure and the run carries
-  // on. Treating that row as the cause told an operator whose run failed an hour
-  // later that it was "refused before any task ran" — a false diagnosis of a run
-  // that ran.
+  // on. Treating that row as the cause would tell an operator whose run failed an
+  // hour later that it was "refused before any task ran" — a false diagnosis of a
+  // run that ran.
   it("a warn-only selftest row is not a cause — fail_closed:false disqualifies it", () => {
     const warned = ev("run.selftest", "failure", { data: { fail_closed: false } });
     expect(runEndingFromAudit("FAILED", [warned])).toEqual({ kind: "unknown", action: "" });
@@ -165,8 +165,8 @@ describe("RunFailureBlock", () => {
   it("auto_stop: framed as the policy working, and names the field that sets it", () => {
     renderBlock("STOPPED", [ev("run.autostop", "success", { actor: "wardyn/lifecycle-reaper" })]);
     expect(screen.getByText(/This is the policy working, not a fault\./)).toBeInTheDocument();
-    // The wire literal, in mono (§3) — the old line named a "never-reap
-    // lifecycle" control this console does not have.
+    // The wire literal, in mono (§3) — must name the real field, not a
+    // "never-reap lifecycle" control this console does not have.
     expect(screen.getByText("auto_stop_after_sec")).toHaveClass("font-mono");
     expect(screen.getByText("-1")).toHaveClass("font-mono");
   });
@@ -194,9 +194,8 @@ describe("RunFailureBlock", () => {
 
   // review R-01: run.failure_hint (D9's pre-agent-start class — never reaches
   // the audit trail at all, so `ending.kind` is "unknown" and ENDING_COPY has
-  // no entry) IS the prose for this ending, not silence. Red-first: before
-  // this fix, the block rendered {copy && (...)} — copy is undefined here —
-  // so neither "What happened" nor the hint appeared anywhere.
+  // no entry) is the prose for this ending, not silence — the block must
+  // render it even though `copy` is undefined for an unknown ending.
   it("unknown WITH a run.failure_hint: the hint is the happened prose — no invented 'What to do'", () => {
     render(
       <RunFailureBlock
@@ -258,13 +257,13 @@ describe("RunFailureBlock", () => {
   });
 });
 
-// ── 0.7.6 Finding 3 — the failed run IS the door ───────────────────────────
+// 0.7.6 Finding 3 — the failed run is the door
 //
-// The dispatch refusal named a destination ("sign in again under Settings →
-// Model provider") to a person who had just been interrupted, on a page that
-// can mount the sign-in itself. The block now shows the server's own sentence
-// with the sign-in beside it — but ONLY where a sign-in this viewer can
-// complete would repair THIS run's lane.
+// A dispatch refusal names a destination ("sign in again under Settings →
+// Model provider") to a person who was just interrupted, on a page that can
+// mount the sign-in itself. The block shows the server's own sentence with
+// the sign-in beside it — but only where a sign-in this viewer can complete
+// would repair this run's lane.
 const PER_USER_ROW: SetupHarnessTool = {
   id: "claude-code",
   display: "claude-code",

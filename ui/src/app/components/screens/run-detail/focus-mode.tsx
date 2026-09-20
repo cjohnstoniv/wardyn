@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// FOCUS MODE — design board 2c ("Focus"). The session owns the pixels and
+// Focus mode — design board 2c ("Focus"). The session owns the pixels and
 // everything else is glass over it: the terminal goes full-bleed, the shell's
 // header and sidebar are gone (app-shell's FocusContext, set by the canvas),
 // what chrome remains floats as a HUD, and the widgets move into an edge dock
@@ -55,8 +55,8 @@ export function FocusMode({ ctx, onExit }: { ctx: WidgetContext; onExit: () => v
   // F1-F6: a widget can stop being dockable out from under an open selection
   // (ssh, once the run it belongs to finishes) — clamp rather than let the
   // rail's glass panel keep rendering a widget that can no longer place a
-  // tile, the same clamp the canvas's own catalog already applies (R4-F020).
-  // R-9 (documented, not fixed): `dockSelection` itself is left stale rather
+  // tile, the same clamp the canvas's own catalog already applies.
+  // Documented, not fixed: `dockSelection` itself is left stale rather
   // than cleared in an effect — if the SAME widget becomes dockable again
   // (ctx changes availability back, not a state a finished run's ssh gate can
   // actually re-enter) the panel would silently reopen. The run states this
@@ -74,14 +74,13 @@ export function FocusMode({ ctx, onExit }: { ctx: WidgetContext; onExit: () => v
       // says so). In NATIVE fullscreen the browser exits first and this never
       // fires, so the two do not fight.
       if (e.key === "Escape" && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
-        // F1-F3 (Playwright repro confirmed the bug live — verdict N was
-        // wrong to doubt it): a Radix dialog/alertdialog (the Deny confirm,
-        // the take-over confirm) registers its OWN Escape-dismiss as a
-        // capture-phase document listener too — stopPropagation on either
-        // side never suppresses a SIBLING listener on the same node, so both
-        // fired: the dialog closed AND focus mode exited, remounting the
-        // terminal pane (dropping a live attach socket). Yield when a modal
-        // layer is open; its own handler still closes it.
+        // F1-F3: a Radix dialog/alertdialog (the Deny confirm, the take-over
+        // confirm) registers its OWN Escape-dismiss as a capture-phase
+        // document listener too — stopPropagation on either side never
+        // suppresses a SIBLING listener on the same node, so both would
+        // fire: the dialog would close AND focus mode would exit,
+        // remounting the terminal pane (dropping a live attach socket).
+        // Yield when a modal layer is open; its own handler still closes it.
         if (modalLayerOpen()) return;
         e.preventDefault();
         e.stopPropagation();

@@ -185,7 +185,7 @@ describe("EnvironmentStep — matrix-as-picker", () => {
     expect(screen.getAllByText("Recommended")).toHaveLength(1);
   });
 
-  // ── Honesty invariants (delete-the-row must fail the suite) ─────────────────
+  // Honesty invariants (delete-the-row must fail the suite)
   it("(H1) the permanent Doesn't-stop row renders RESIDUAL_PREFIX + each tier's residual", () => {
     renderStep();
     expect(screen.getByText(RESIDUAL_PREFIX)).toBeInTheDocument();
@@ -203,11 +203,11 @@ describe("EnvironmentStep — matrix-as-picker", () => {
     expect(caveats.some((el) => el.getAttribute("title") === expected)).toBe(true);
   });
 
-  // (H3) Data-drift guard, inherited from the deleted TierMatrix suite (0.6
-  // ponytail #1): this step is now the ONLY render site of CC_MATRIX_ROWS, so a
-  // row added to — or regraded in — cc-meta.ts must show up here or nowhere at
-  // all. Tone is counted off the three graded-cell aria-labels rather than the
-  // CSS classes, since the rest of the step carries success/warning tones too.
+  // Data-drift guard: this step is the ONLY render site of CC_MATRIX_ROWS, so
+  // a row added to — or regraded in — cc-meta.ts must show up here or nowhere
+  // at all. Tone is counted off the three graded-cell aria-labels rather than
+  // the CSS classes, since the rest of the step carries success/warning tones
+  // too.
   it("(H3) renders every CC_MATRIX_ROWS label + where-it-runs cell, graded from the data", () => {
     renderStep();
     for (const row of CC_MATRIX_ROWS) {
@@ -228,7 +228,7 @@ describe("EnvironmentStep — matrix-as-picker", () => {
     }).toEqual(want);
   });
 
-  // ── recommendedTier helper (exported for tests only) ─────────────────────────
+  // recommendedTier helper (exported for tests only)
   it("(R1) recommendedTier picks the strongest COMPATIBLE tier, not the strongest installed", () => {
     // kvm-capable ⇒ Vault is recommended even though CC3 isn't in confinement_classes.
     expect(recommendedTier(baseStatus())).toBe("CC3");
@@ -238,7 +238,7 @@ describe("EnvironmentStep — matrix-as-picker", () => {
     ).toBe("CC2");
   });
 
-  // ── #11 additions ───────────────────────────────────────────────────────────
+  // #11 additions
   it("(11a) clicking a NON-selectable column's body cell does NOT call onSelect", async () => {
     const { onSelect } = renderStep(); // CC3 is needs-setup here (not ready) ⇒ unselectable
     await user.click(screen.getByText(/Kata microVM/)); // the Vault Mechanism cell
@@ -326,7 +326,7 @@ describe("EnvironmentStep — matrix-as-picker", () => {
     expect(onSelect).toHaveBeenCalledWith("CC2");
   });
 
-  // R-F5: the OTHER leg of the narrowed predicate. "none" is the runner's own
+  // The OTHER leg of the narrowed predicate. "none" is the runner's own
   // sentinel — a deliberate answer, not a withheld one — so it stays no-driver
   // whatever the classes say. Without this case the predicate could be
   // simplified to `classes.length === 0` alone and every other pin here would
@@ -338,7 +338,7 @@ describe("EnvironmentStep — matrix-as-picker", () => {
   });
 });
 
-// B4: k8s variant rows — Runner/Egress containment/Confinement classes/Agent
+// k8s variant rows — Runner/Egress containment/Confinement classes/Agent
 // images. Absent entirely on a non-k8s driver; the tier matrix itself is
 // unaffected either way (same builder, k8s-shaped status data).
 describe("EnvironmentStep — k8s rows (prompt-v4)", () => {
@@ -428,12 +428,12 @@ describe("EnvironmentStep — k8s rows (prompt-v4)", () => {
     expect(within(panel).getByText(/CC1 \(k8s\/\(default\)\), CC2 \(k8s\/runsc\), CC3 \(k8s\/kata-qemu\)/)).toBeInTheDocument();
   });
 
-  // W4-S1-5/W27-S1-4: the tier matrix's own per-column guidance (below the
-  // k8s rows above) used to stay docker-shaped no matter the driver — a k8s
-  // operator got `wardyn setup wall`, "not listed in docker info runtimes",
-  // and a KVM-bind-mount /dev/kvm verdict probed on wardynd's own host, none
-  // of which apply to a cluster. The real lever (k8s.runtimeClasses) was
-  // never named anywhere on this step.
+  // The tier matrix's own per-column guidance (below the
+  // k8s rows above) must be driver-aware, not docker-shaped regardless of
+  // driver — a k8s operator must not see `wardyn setup wall`, "not listed in
+  // docker info runtimes", or a KVM-bind-mount /dev/kvm verdict probed on
+  // wardynd's own host, none of which apply to a cluster. The real lever is
+  // k8s.runtimeClasses, and this step must name it.
   describe("tier-matrix guidance is driver-aware", () => {
     it("a k8s driver's needs-setup column shows the Helm RuntimeClass command, never `wardyn setup wall`", async () => {
       // CC1+CC3 live so CC2 is the ONLY needs-setup column — isolates the

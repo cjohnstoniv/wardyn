@@ -61,7 +61,7 @@ describe("LiveApprovals", () => {
     expect(within(panel).getByText(/Sandbox is waiting/i)).toBeInTheDocument(); // header
   });
 
-  // W19-S1-3 / W20-hold-fsm-2: the proxy's real hold times out at 30s
+  // The proxy's real hold times out at 30s
   // (defaultHoldTimeout) while the approval row stays PENDING for up to 24h —
   // isHeld must stop claiming a live hold once that window has passed.
   it("stops flagging a wait_for_review request as held once the proxy's 30s hold has elapsed", async () => {
@@ -76,7 +76,7 @@ describe("LiveApprovals", () => {
     expect(within(panel).queryByText(/Sandbox is waiting/i)).not.toBeInTheDocument();
   });
 
-  // W20-hold-fsm-5: a poll failure must not render the same affirmative
+  // A poll failure must not render the same affirmative
   // "Watching for…" text a confirmed-empty poll gets.
   it("shows a poll-error state instead of the idle hint when listApprovals rejects with nothing pending", async () => {
     listApprovalsMock.mockRejectedValue(new Error("network error"));
@@ -232,7 +232,7 @@ describe("LiveApprovals", () => {
   const DENY_RUN_SCOPE_SENTENCE =
     /denying blocks this host for the rest of this run\. the agent won't be able to reach it, and you won't be asked again\./i;
 
-  // W20-W20-hold-fsm-6: a Deny click on the live strip must not go straight to
+  // A Deny click on the live strip must not go straight to
   // the API — a misclick must be recoverable via Cancel, not just fast.
   it("Deny opens a confirm dialog and does NOT call the API until confirmed", async () => {
     listApprovalsMock.mockResolvedValue([pending({ id: "a1", requested_scope: { host: "risky.example" } })]);
@@ -264,8 +264,9 @@ describe("LiveApprovals", () => {
     expect(denyMock).toHaveBeenCalledWith("a1", expect.any(String));
   });
 
-  // F2-F9: nothing gated the confirm button before — a double-click (or a
-  // second Enter) while the first deny was still in flight could fire it twice.
+  // The confirm button must be gated the instant it fires — a double-click
+  // (or a second Enter) while the first deny is still in flight must not
+  // fire it twice.
   it("disables the confirm button the instant it fires, so a second click can't re-deny", async () => {
     listApprovalsMock.mockResolvedValue([pending({ id: "a1", requested_scope: { host: "risky.example" } })]);
     let release: (v: unknown) => void = () => {};
@@ -351,11 +352,11 @@ describe("LiveApprovals", () => {
       expect(denyMock).toHaveBeenCalledWith("held", expect.any(String), { scope: "once", until: undefined });
     });
 
-    // The bug: the datetime-local's onChange used to call pick() directly,
-    // which for Approve decides on the spot — committing on the FIRST
-    // complete value while the operator might still be scrubbing hour/minute.
-    // The dialog variant (reason-dialog.tsx) only ever sets state; this one
-    // must too, behind the same kind of explicit confirm.
+    // The datetime-local's onChange must only set state, never call pick()
+    // directly — committing on the FIRST complete value would decide on the
+    // spot for Approve while the operator might still be scrubbing
+    // hour/minute. The dialog variant (reason-dialog.tsx) follows the same
+    // rule, behind the same kind of explicit confirm.
     it("the custom time input does not commit on change — only 'Use this time' does", async () => {
       listApprovalsMock.mockResolvedValue([pending({ id: "held", requested_scope: { host: "held.example" } })]);
       render(<LiveApprovals runId="r1" />);
@@ -400,8 +401,8 @@ describe("LiveApprovals", () => {
       const panel = await screen.findByTestId("live-approvals");
       expect(within(panel).getByRole("button", { name: /^Approve$/ })).not.toBeDisabled();
       expect(within(panel).getByRole("button", { name: /^Deny$/ })).not.toBeDisabled();
-      // The caret used to be hidden outright for a non-operator — F-12 fixed
-      // that for the one kind a member may actually decide.
+      // The caret renders for a non-operator too (F-12), for the one kind a
+      // member may actually decide.
       expect(within(panel).getAllByRole("button", { name: /more options/i })).toHaveLength(2);
       // No "admin only" hint: every row shown is one this member can decide.
       expect(screen.queryByText(/requires the admin role/i)).not.toBeInTheDocument();
@@ -536,13 +537,11 @@ describe("LiveApprovals", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // M3 — the strip sits UNDER the terminal it belongs to, so it caps at two rows
 // and offers the rest behind the board's own "Show all N". That cap is what
 // makes the ordering load-bearing: an implicit "whatever the API returned"
 // order was harmless while every row was visible, and hides the one decision
 // parking the sandbox the moment it is not.
-// ---------------------------------------------------------------------------
 describe("LiveApprovals — precedence and the two-row overflow", () => {
   beforeEach(() => {
     listApprovalsMock.mockReset().mockResolvedValue([]);
@@ -622,7 +621,7 @@ describe("LiveApprovals — precedence and the two-row overflow", () => {
   });
 });
 
-// R4-F002: the strip's PENDING read must carry ?run_id=. Filtering the fleet's
+// The strip's PENDING read must carry ?run_id=. Filtering the fleet's
 // list in the browser filters AFTER the server's requested_at DESC window
 // (internal/api/approvals.go:56-61), so on a busy fleet this run's own holds
 // never reach the strip that is supposed to be its primary decision surface.

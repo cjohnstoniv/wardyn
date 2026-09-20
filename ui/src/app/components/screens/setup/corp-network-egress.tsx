@@ -58,9 +58,7 @@ function TestVerdictChip({ state }: { state: ProxyTestResult["state"] }) {
   return <Chip tone="warning" dot>{state === "bypass" ? "Redirect not enforced" : "Blocked"}</Chip>;
 }
 
-// ------------------------------------------------------------
 // Host proxy tab
-// ------------------------------------------------------------
 export type ProbeUiState =
   | { kind: "idle" }
   // custom marks a custom-URL retry: the running view skips the builtin
@@ -82,9 +80,7 @@ export function useElapsedTimer(running: boolean): number {
   return sec;
 }
 
-// ------------------------------------------------------------
 // Egress redirection tab
-// ------------------------------------------------------------
 function TokenChip({ tokenRef }: { tokenRef: string }) {
   return (
     <Chip tone="neutral" mono className="shrink-0 text-meta" title={`token: ${tokenRef} — injected proxy-side at fetch time; the sandbox never holds it`}>
@@ -343,7 +339,7 @@ function ecosystemFor(from: string): string | undefined {
   return EGRESS_SUGGEST.find(([url]) => url === from)?.[1];
 }
 
-// M1: mirrors internal/api/site_config.go's normalizeRedirectEndpoint EXACTLY
+// Mirrors internal/api/site_config.go's normalizeRedirectEndpoint EXACTLY
 // (TrimSpace + lowercase scheme+authority up to the first `/` after `://`,
 // path case preserved) — a comparison KEY only, never applied to what gets
 // stored: the server does its own normalization on save regardless, and this
@@ -373,7 +369,7 @@ function AddRedirectForm({
   onAdd: (r: EgressRedirect) => void;
   operator: boolean;
   /** The `from` of every redirect already configured — Add is refused on a
-   *  match (F3-F5): a duplicate `from` is otherwise producible with no
+   *  match: a duplicate `from` is otherwise producible with no
    *  client/server guard, and the rest of this file keys a redirect BY its
    *  `from` (there is no server id), so a collision silently shadows one
    *  row's probe result with the other's. */

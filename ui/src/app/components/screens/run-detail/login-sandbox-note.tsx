@@ -3,15 +3,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// LOGIN SANDBOX NOTE — what this box IS, on the one run page that never said.
+// What this box is, on the one run page that never said so.
 //
 // `harness login` is a server-side task discriminator (harnessLoginTask,
 // internal/api/harnesscred.go): it gates the credential upload route, keeps the
 // session out of the recorder, and pins the run to an image whose own Dockerfile
-// header says "NOT a coding agent". The console labelled it nowhere. Opening it
-// from /runs therefore looked like any other interactive run — a bare shell, no
-// agent, no task — and the operator's reasonable next move (type `aws sso login`
-// on its own) leaves the token in ~/.aws/sso/cache, where it dies with the
+// header says "NOT a coding agent". Without this note, opening it from /runs
+// looks like any other interactive run — a bare shell, no agent, no task —
+// and the operator's reasonable next move (type `aws sso login` on its own)
+// leaves the token in ~/.aws/sso/cache, where it dies with the
 // container: `wardyn-aws-sso` is what uploads it, and the console's own pane is
 // what normally types the two as one chained command.
 //
@@ -27,7 +27,7 @@ import type { AgentRun } from "../../../lib/types";
 // one run it exists for.
 export const HARNESS_LOGIN_TASK = "harness login";
 
-// …AND the agent, because the task alone is PROVIDER-AGNOSTIC. Every container
+// …and the agent, because the task alone is provider-agnostic. Every container
 // login sets `harness login` — the Anthropic lane is the route's own default
 // (`provider = "anthropic"`, harnesscred_launch.go) and runs `claude setup-token`
 // in the claude-code image. Keyed on the task alone, this note told a
@@ -45,7 +45,7 @@ export const AWS_SSO_LOGIN_AGENT = "aws-sso";
 // session, so telling the reader to start a SECOND sign-in elsewhere would be the
 // one instruction guaranteed to waste their device code.
 //
-// U-2 (W6 blind lens) — AND IT CLAIMS NOTHING THE PAGE CANNOT KNOW. "the sign-in
+// U-2 (W6 blind lens) — and it claims nothing the page cannot know. "the sign-in
 // is already running in this box" is a fact about the IMAGE, not about this run:
 // an operator WARDYN_AGENT_IMAGES pin (what private estates use) makes a
 // console-0.7.5 / image-0.7.4 pairing real, and on an image-0.7.4 sandbox reached

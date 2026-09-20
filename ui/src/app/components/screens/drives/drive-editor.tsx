@@ -8,28 +8,28 @@
 //
 // Three things here are decisions, not styling:
 //
-//  1. IT OFFERS ONLY THIS RUNNER'S TWO BACKENDS (Q3). A backend must match the
+//  1. It offers only this runner's two backends (Q3). A backend must match the
 //     deployment's runner, so the picker never shows a pair whose every save
 //     would meet a 400; on Docker with no WARDYN_USER_DRIVE_HOST_ROOTS the
-//     `host_path` option is DISABLED WITH ITS REASON rather than offered and
+//     `host_path` option is disabled with its reason rather than offered and
 //     refused. The 400 stays on the API path, where `wardyn drive apply` will
 //     meet it.
-//  2. THE HOME-TEMPLATE RULE RUNS BOTH WAYS. A share names its own homes, so
+//  2. The home-template rule runs both ways. A share names its own homes, so
 //     the derived (`hash`) directory option is disabled for share backends;
-//     a MANAGED backend is the mirror — every non-hash template is disabled,
+//     a managed backend is the mirror — every non-hash template is disabled,
 //     since the home segment is concatenated into the object name `docker
 //     volume ls` / `kubectl get pvc` print, and a subject-bearing template
 //     would publish the principal there (scope widened 2026-09-03, see
 //     `homeDisabled` below). HOME_HINT says why either way — the same
 //     refusal the server raises, avoided rather than met.
-//  3. THE SERVER COMPOSES ITS OWN REFUSALS. The roots are an env-borne ceiling
-//     the console cannot read, so a host-root refusal is POST-ATTEMPT: the
+//  3. The server composes its own refusals. The roots are an env-borne ceiling
+//     the console cannot read, so a host-root refusal is post-attempt: the
 //     console contributes SAVE_REFUSED_TITLE and the body is the server's text,
 //     verbatim. SAVE_ERROR is the other failure — no answer at all.
-//  4. A 409 IS NOT THE SAME REFUSAL (UD-rehome, 0.7.2, U3). An identity-
-//     affecting edit on a drive WITH allocations meets driveRehomeGuard's
+//  4. A 409 is not the same refusal (U3). An identity-
+//     affecting edit on a drive with allocations meets driveRehomeGuard's
 //     confirm gate, not "this is written wrong" — the confirm dialog owns it,
-//     over the server's text verbatim, and retries the SAME save with
+//     over the server's text verbatim, and retries the same save with
 //     `?confirm=rehome` (api/drives.ts's `confirmRehome`).
 //
 // Every product string comes from user-drives-copy.ts. This file adds none.
@@ -68,7 +68,7 @@ import { Note, withMono } from "./display";
 // The three templates in admin-surface order (types.HomeTemplates). There is no
 // whole-email option: an address carries an "@", which no directory segment can
 // hold, so it would validate and then refuse every real caller.
-// The four long select-option labels — this editor is the ONLY place they
+// The four long select-option labels — this editor is the only place they
 // render; a table cell shows the kind chip over the backend's wire value
 // instead. It lived in display.tsx until this stayed its one consumer.
 const BACKEND_LABEL: Record<DriveBackend, string> = {
@@ -109,16 +109,16 @@ export function DriveEditor({
   // from the screen — the same read the sibling UserDrivesCard makes.
   const disabled = !useOperator();
   const offered = backendsFor(runnerTarget);
-  // NOTHING THIS RUNNER CAN MOUNT IS STILL AN ANSWER. wardynd's DEFAULT runner
+  // Nothing this runner can mount is still an answer. wardynd's default runner
   // is `none` (cmd/wardynd/boot_deps.go), and backendsFor() offers no pair for
   // it — nor for a substrate this build does not know — rather than guessing
   // one whose every save would 400. types.ValidateUserDrive compares
   // Backend.RunnerTarget() against the deployment's, and no backend's target is
-  // `none`, so on such a deployment EVERY save is refused, create and update
-  // alike. The `backend` state below therefore falls back to a TYPE FLOOR the
+  // `none`, so on such a deployment every save is refused, create and update
+  // alike. The `backend` state below therefore falls back to a type floor the
   // admin never picked, and saving it would meet a refusal naming a backend
   // that was never on screen — so the save is not offered at all. (An explicit
-  // sentence for the empty field is FILED: §7.2 freezes none.)
+  // sentence for the empty field is filed: §7.2 freezes none.)
   const noBackend = offered.length === 0;
   const [name, setName] = React.useState(drive?.name ?? "");
   const [backend, setBackend] = React.useState<DriveBackend>(drive?.backend ?? offered[0] ?? "docker_volume");
@@ -129,19 +129,19 @@ export function DriveEditor({
   const [writable, setWritable] = React.useState(!!drive?.writable);
   const [reclaim, setReclaim] = React.useState<DriveReclaim>(drive?.reclaim ?? "retain");
   const [saving, setSaving] = React.useState(false);
-  // `title` is set for a refusal the SERVER composed; a transport failure has no
+  // `title` is set for a refusal the server composed; a transport failure has no
   // server text at all and renders SAVE_ERROR alone.
   const [error, setError] = React.useState<{ title?: string; message: string } | null>(null);
-  // driveRehomeGuard's 409 (UD-rehome, U3): an identity-affecting edit
+  // driveRehomeGuard's 409 (U3): an identity-affecting edit
   // (backend/host_root/storage_class/home_template) on a drive with
   // allocations. Its message is the confirm dialog's body verbatim — the
   // console contributes only the heading (REHOME_TITLE).
   const [rehome, setRehome] = React.useState<string | null>(null);
 
   const managed = isManagedBackend(backend);
-  // The rule runs BOTH ways, and until 2026-09-03 only one way was gated here.
+  // The rule runs both ways, and until 2026-09-03 only one way was gated here.
   // A share's directories are named by the corporation's own directory, so the
-  // derived id cannot name one. A MANAGED drive is the mirror: its home segment
+  // derived id cannot name one. A managed drive is the mirror: its home segment
   // is concatenated into the object name that `docker volume ls` and `kubectl
   // get pvc` print, so a subject-bearing template would publish the principal
   // there — refused on the API path for `email_local` all along, and for `sub`
@@ -175,7 +175,7 @@ export function DriveEditor({
       else await api.createDrive(input);
       onSaved();
     } catch (e) {
-      // A 409 on an EDIT (never on create — there is no prior row to re-home)
+      // A 409 on an edit (never on create — there is no prior row to re-home)
       // is driveRehomeGuard's own confirm gate, not a "this is written wrong"
       // refusal: the confirm dialog owns it instead of SAVE_REFUSED_TITLE.
       if (drive && e instanceof HttpError && e.status === 409) {
@@ -217,7 +217,7 @@ export function DriveEditor({
           <div className="grid gap-2">
             {offered.map((b) => {
               // Docker with no roots set: offered-and-explained, never
-              // offered-and-refused. The reason IS the option's hint.
+              // offered-and-refused. The reason is the option's hint.
               const off = b === "host_path" && !hostRootsConfigured;
               return (
                 <OptionCard
@@ -268,7 +268,7 @@ export function DriveEditor({
           hint={
             <>
               <span className="block">{DRIVES.HOME_HINT}</span>
-              {/* HOME_RULE renders under the field for EVERY option: the rule is
+              {/* HOME_RULE renders under the field for every option: the rule is
                   what a claim is measured against whichever template names it. */}
               <span className="mt-1 block">{withMono(DRIVES.HOME_RULE)}</span>
             </>
@@ -337,7 +337,7 @@ export function DriveEditor({
       {error && (
         <Note tone="red" role="alert">
           {error.title && <b className="font-semibold">{error.title}</b>}
-          {/* The server's own prose, verbatim and PLAIN. It is a sentence that
+          {/* The server's own prose, verbatim and plain. It is a sentence that
               happens to quote a path, an env var and a wire value — monoing the
               whole of it says the sentence is a literal, which it is not, and
               the terms inside it are already set off by the server's own
@@ -350,7 +350,7 @@ export function DriveEditor({
         <Button variant="ghost" onClick={onCancel} disabled={saving}>
           {PEOPLE.CANCEL}
         </Button>
-        {/* The screen's ONE `default` button while the editor is open — the
+        {/* The screen's one `default` button while the editor is open — the
             allocation form below collapses and takes its teal with it. */}
         <Button onClick={() => save()} disabled={disabled || saving || noBackend || !name.trim()}>
           {saving ? <Loader2 className="size-4 animate-spin" /> : null}
@@ -358,10 +358,10 @@ export function DriveEditor({
         </Button>
       </div>
 
-      {/* UD-rehome (U3): driveRehomeGuard's 409 on an identity-affecting edit
-          of an ALLOCATED drive. The body is the server's text verbatim; the
+      {/* U3: driveRehomeGuard's 409 on an identity-affecting edit
+          of an allocated drive. The body is the server's text verbatim; the
           console contributes only REHOME_TITLE. Confirm reuses SAVE_CTA
-          painted destructive — the action IS saving the drive, and it strands
+          painted destructive — the action is saving the drive, and it strands
           every allocated person's work if confirmed. */}
       <AlertDialog open={!!rehome} onOpenChange={(o) => !o && setRehome(null)}>
         <AlertDialogContent>

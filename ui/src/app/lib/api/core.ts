@@ -14,11 +14,9 @@ import { CC_ORDER, type ConfinementClass } from "../types";
 const BASE = "/api/v1";
 const TOKEN_KEY = "wardyn_admin_token";
 
-// ------------------------------------------------------------
 // Auth token + 401 handling
-// ------------------------------------------------------------
-// X3-F7: a REASON and the PATH the caller was on when the 401 arrived — a
-// mid-session expiry used to swap the whole tree for a bare <SignIn> with no
+// X3-F7: a REASON and the PATH the caller was on when the 401 arrived — without
+// them, a mid-session expiry swaps the whole tree for a bare <SignIn> with no
 // explanation and no way back, dropping in-progress form state on the floor
 // with nothing to show for it. `path` is captured HERE, at the module level,
 // not in a React hook: the SignIn branch (App.tsx) renders OUTSIDE <Routes>,
@@ -212,7 +210,7 @@ export async function wfetch(
   }
 
   if (res.status === 401) {
-    // F6-F8: a REAL 401 means the bearer THIS REQUEST sent was rejected
+    // A REAL 401 means the bearer THIS REQUEST sent was rejected
     // (expired/revoked/foreign admin token) — leaving it stored would replay
     // the same rejected credential on every request from here to sign-in.
     // Scoped to exactly this branch: a store-independent 5xx (adminAuth
@@ -253,7 +251,7 @@ export async function asJson<T>(res: Response): Promise<T> {
 // in an HttpError. Change the envelope here and both follow. `reason` is the
 // envelope's optional machine-readable class ("" when absent or not a string),
 // carried only on the envelope path — a raw body has no class to read.
-// F6-F7: readability/DoS, not injection — React escapes whatever this
+// Readability/DoS, not injection — React escapes whatever this
 // returns either way. But a misrouted request can land on a web server or
 // proxy in front of wardynd instead of the daemon itself, and that answer's
 // body is neither ours nor small (an nginx/ALB error page, a captive-portal
@@ -311,15 +309,15 @@ export function unwrapList<T>(payload: unknown): T[] {
   return Array.isArray(payload) ? (payload as T[]) : [];
 }
 
-// The three answers a mount-time auth probe can honestly give. R4/F027: this
-// used to be a plain boolean, so a daemon 5xx and a dead network both returned
-// exactly `false` — indistinguishable from a real 401 — and App.tsx turned that
-// single bit into "unauthed" and rendered the sign-in gate with no hint that
-// anything was down. sign-in.tsx:116-123 had ALREADY made this split by hand
+// The three answers a mount-time auth probe can honestly give. R4/F027: a
+// plain boolean here would make a daemon 5xx and a dead network both return
+// exactly `false` — indistinguishable from a real 401 — so App.tsx would turn
+// that single bit into "unauthed" and render the sign-in gate with no hint
+// that anything was down. sign-in.tsx:116-123 already makes this split by hand
 // for submitToken, for the same reason and in the same words ("probeAuth
-// collapsed every failure ... to the same boolean `false`"); the sibling call
-// site was left on the old shape. Splitting it HERE is the one place both can
-// share, rather than a third hand-rolled copy.
+// collapsed every failure ... to the same boolean `false`"). Splitting it HERE
+// is the one place both call sites can share, rather than a third hand-rolled
+// copy.
 //
 //   "authed"      the protected row came back — this caller is signed in.
 //   "unauthed"    a REAL 401: no session cookie, or a rejected admin token.
@@ -340,8 +338,8 @@ export async function probeAuth(): Promise<AuthProbe> {
     const verdict: AuthProbe = res.ok ? "authed" : "unreachable";
     // The probe wants the STATUS and nothing else — but the row it asked for
     // still arrived, and an unread body never completes the request (see
-    // drainBody). This one fires on EVERY cold document load, so the leak it
-    // used to carry was the shell's, on every route and in every role.
+    // drainBody). This one fires on EVERY cold document load, so an unread
+    // body here would leak on every route and in every role.
     await drainBody(res);
     return verdict;
   } catch (e) {

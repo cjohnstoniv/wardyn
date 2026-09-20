@@ -66,7 +66,7 @@ export function baseMeDrive(overrides: Partial<MeUserDrive> = {}): MeUserDrive {
   };
 }
 
-// ─── the canon pin, shared ────────────────────────────────────────────────────
+// The canon pin, shared
 
 // expectNoOwnCopy is THE canon pin two screen directories both need: a
 // component in a copy-governed directory may RENDER copy, never author it, so a

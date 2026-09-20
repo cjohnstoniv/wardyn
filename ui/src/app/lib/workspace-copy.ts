@@ -10,7 +10,7 @@
 // Workspaces/Getting-Started/New-Run surfaces can't drift from the approved
 // wording. Pure TS — no React, no fetch, no DOM.
 
-// ============================ HONESTY CANON (verbatim) ============================
+// Honesty canon (verbatim)
 // mockup/wardyn-workspaces.js's `C` — the "Add workspace" wizard + workspace
 // detail hub's honesty canon.
 export const C = {
@@ -52,8 +52,8 @@ export const C = {
     "Repos are cloned fresh into the sandbox — nothing on your machine is touched, so there's nothing to protect with read-only.",
 };
 
-// ==================== WORKSPACE_DETAIL_DRAFT — v0.7.4 field-report round ===
-// DRAFT (M2 canon pending): new strings this round, staged in
+// WORKSPACE_DETAIL_DRAFT
+// DRAFT (M2 canon pending): new strings staged in
 // local/v074/canon/ui-workspaces-approvals.md — not part of the frozen `C`
 // export above (workspace-copy.test.ts's byte-checks parse only `C`).
 export const WORKSPACE_DETAIL_DRAFT = {
@@ -64,10 +64,9 @@ export const WORKSPACE_DETAIL_DRAFT = {
   ADD_WORKSPACE_IMAGE_AUTO_TITLE: "Auto",
   ADD_WORKSPACE_IMAGE_AUTO_HINT:
     "devcontainer.json if this repo has one, else the standard image.",
-  // F5-F10: the Recorded-sessions card's subtitle claimed the loop "writes
-  // the least-privilege policy" — it writes egress: requirement rows; the
-  // policy hand-off is the separate optional "Save session profile". Retired
-  // for a sentence that matches what RecordPane's own paragraph says.
+  // F5-F10: the loop writes egress: requirement rows, not a least-privilege
+  // policy directly — the policy hand-off is the separate optional "Save
+  // session profile" action. This subtitle matches RecordPane's own wording.
   SESSIONS_SUBTITLE:
     "Run a task once with everything open. Wardyn watches what it reaches and you approve the hosts. Replay it confined to prove that approval is enough.",
 } as const;

@@ -49,7 +49,7 @@ import {
   watchForCapture,
 } from "./capture-confirm";
 
-// RE-EXPORTED, not re-declared (R1-F7): the corroboration rule and its refusal
+// RE-EXPORTED, not re-declared: the corroboration rule and its refusal
 // sentence moved to capture-confirm.ts to keep this file under the size cap, and
 // every existing importer — this pane's tests, ui/e2e — keeps its import path.
 export { CAPTURE_NOT_CORROBORATED, serverConfirmsCapture } from "./capture-confirm";
@@ -81,9 +81,10 @@ import {
 export { SANDBOX_REFUSAL_LEAD_IN, extractAuthUrl, extractFailSentence, extractSetupToken } from "./login-pty-extract";
 
 // "intro" is the consent gate: nothing launches until the operator has read
-// what is about to happen and clicked Start. The pane used to fire on mount —
-// a dialog, then suddenly a terminal, then suddenly a browser auth prompt,
-// with nothing saying what was coming or what would be asked of you.
+// what is about to happen and clicked Start — skipping it would fire the pane
+// on mount instead: a dialog, then suddenly a terminal, then suddenly a
+// browser auth prompt, with nothing saying what was coming or what would be
+// asked of you.
 type Phase = "intro" | "prompt" | "launching" | "starting" | "attached" | "saving" | "done" | "error";
 
 // How often the pane asks whether the login sandbox is up yet. Same cadence
@@ -108,8 +109,8 @@ const LOGIN_SANDBOX_ENDED = "The sign-in sandbox stopped before it was ready —
 // above): the live walk asserts through it, and a Playwright spec cannot import
 // THIS module — it reaches AttachTerminal's xterm.css, which Node cannot load.
 
-// DRAFT (M2 canon pending) — THE SANDBOX SIGNS ITSELF IN NOW. The aws-sso image
-// starts the chained command in its own tmux session BEFORE its prep
+// DRAFT (M2 canon pending) — the sandbox signs itself in now. The aws-sso image
+// starts the chained command in its own tmux session before its prep
 // (deploy/images/aws-sso/agent-run → signin-pane.sh), and every attach path —
 // this pane, the Runs list, `wardyn attach`, ssh — joins that one session. So the
 // pane no longer hands AttachTerminal an `autoRun` for aws: that unconditional
@@ -193,12 +194,12 @@ export function HarnessLoginPane({
   const flow = loginFlow(provider);
   const askStartUrl = !!flow.needsStartUrl && !startURLManaged;
   // review-1 B1: every mount site passes an INLINE `onDone` — a fresh function
-  // identity on every parent re-render. `completeCapture` used to list `onDone`
-  // in its own deps, which put a fresh `completeCapture` in the watch effect's
-  // deps, which tore the watch down and restarted it (a fresh 45-min deadline,
-  // a fresh 5-min grace, the back-off reset to 2s) on every unrelated parent
-  // render — 63 audit reads in 5 minutes, probed. Same ref pattern
-  // attach-terminal.tsx:237-240 already uses for `onOutput`/`autoRun`.
+  // identity on every parent re-render. `completeCapture` must not list
+  // `onDone` in its own deps: that puts a fresh `completeCapture` in the watch
+  // effect's deps, which tears the watch down and restarts it (a fresh 45-min
+  // deadline, a fresh 5-min grace, the back-off reset to 2s) on every
+  // unrelated parent render — 63 audit reads in 5 minutes, probed. Same ref
+  // pattern attach-terminal.tsx:237-240 already uses for `onOutput`/`autoRun`.
   const onDoneRef = React.useRef(onDone);
   React.useEffect(() => {
     onDoneRef.current = onDone;
@@ -247,8 +248,8 @@ export function HarnessLoginPane({
   // Rolling buffer of recent PTY output + latches so we act on each thing once.
   const outBufRef = React.useRef("");
   const savedRef = React.useRef(false);
-  // THE LAUNCH-AFTER-DISMISS RACE. harnessLogin's POST answers with the run id
-  // AFTER dispatch has already created the run, so a cancellation that lands
+  // The launch-after-dismiss race: harnessLogin's POST answers with the run id
+  // after dispatch has already created the run, so a cancellation that lands
   // while it is in flight sees `runId === null` and kills nothing — the run is
   // born orphaned. Latched here on the way out and re-checked once the id
   // exists.
@@ -258,7 +259,7 @@ export function HarnessLoginPane({
   const signedInRef = React.useRef(false);
   // Once-only completion (Codex #9): guards completeCapture below.
   const completedRef = React.useRef(false);
-  // N1: confirmCapture kills the run BEFORE the corroboration round trip
+  // confirmCapture kills the run BEFORE the corroboration round trip
   // (R-7) and, on success, calls completeCapture — which would otherwise kill
   // it a second time. One guard, shared by both.
   const killedRef = React.useRef(false);
@@ -285,10 +286,10 @@ export function HarnessLoginPane({
   const selfRunArmedRef = React.useRef(false);
 
   const launch = React.useCallback(async () => {
-    // LOUD COMMENT (Finding 7a) — MUST stay first, BEFORE any `await` below:
-    // the click is the only user gesture this flow ever gets, and a popup
-    // blocker only allows a tab while the call stack is inside that gesture.
-    // Hoisting an `await` above this line silently reverts the lane.
+    // Finding 7a: this must stay first, before any `await` below — the click
+    // is the only user gesture this flow ever gets, and a popup blocker only
+    // allows a tab while the call stack is inside that gesture. Hoisting an
+    // `await` above this line silently reverts the lane.
     authTabRef.current?.close();
     const tab = openAuthTab();
     authTabRef.current = tab;
@@ -321,11 +322,11 @@ export function HarnessLoginPane({
     setAuthUrl("");
     try {
       const id = await harnessAuthApi.harnessLogin(provider, startUrl.trim());
-      // THE ID FIRST, THE TERMINAL LATER. Holding the id from t≈0 is what makes
-      // Cancel able to kill a sandbox that is still coming up — before P5 the
-      // POST did not answer until dispatch was done, so a timed-out launch left
-      // an orphan nobody could name.
-      // …and if the way out was taken WHILE that POST was in flight, this id is
+      // The id comes first, the terminal later. Holding the id from t≈0 is what
+      // makes Cancel able to kill a sandbox that is still coming up — P5 fixed
+      // the POST not answering until dispatch was done, which let a timed-out
+      // launch leave an orphan nobody could name.
+      // …and if the way out was taken while that POST was in flight, this id is
       // the only handle anybody will ever have on the run it created.
       if (dismissedRef.current) {
         runsApi.killRun(id).catch(() => {});
@@ -391,9 +392,9 @@ function startingSentenceOf(run: AgentRun | undefined): string {
       closeAuthTab();
       return;
     }
-    // The wait ending on a REASON rather than a clock: the substrate has given
-    // its final answer, and the five minutes that used to follow it were five
-    // minutes of waiting for news that had already arrived.
+    // The wait ends on a REASON rather than a clock: the substrate has given
+    // its final answer, and the five minutes that would otherwise follow it
+    // would be five minutes of waiting for news that had already arrived.
     if (verdict === "stuck" && startingSentenceOf(run)) {
       setStuck(true);
       setError(`${LOGIN_SANDBOX_STUCK_LEAD_IN} ${startingSentenceOf(run)}`);
@@ -667,7 +668,7 @@ function startingSentenceOf(run: AgentRun | undefined): string {
     return () => {
       document.removeEventListener("visibilitychange", onVisible);
       controller.abort();
-      // N3: never leave a stale (aborted) controller behind for a later
+      // Never leave a stale (aborted) controller behind for a later
       // `cancel()`/completeCapture to read as though it were still live.
       if (watchAbortRef.current === controller) watchAbortRef.current = null;
     };
@@ -840,11 +841,11 @@ function startingSentenceOf(run: AgentRun | undefined): string {
           />
           {phase === "error" ? null : phase === "saving" && !autoCaptured && flow.capture === "helper" ? (
             /* R-8: the corroboration round trip, narrated. Deliberately NOT the
-               "captured" note below — the server has not agreed yet. HELPER
-               FLOWS ONLY: a scrape flow's `saving` with no autoCapture is a
-               MANUAL token paste, which keeps its own row (and its own Save
+               "captured" note below — the server has not agreed yet. Helper
+               flows only: a scrape flow's `saving` with no autoCapture is a
+               manual token paste, which keeps its own row (and its own Save
                spinner) and would be told about an AWS sign-in it never made. */
-            /* U2-07: a live region, like the error path's role="alert" beside
+            /* A live region, like the error path's role="alert" beside
                it — a note that narrates a silent round trip is silence again
                for a screen-reader user. role="status" (polite), not "alert":
                this is one bounded fetch, not the Agents banner's poll loop. */

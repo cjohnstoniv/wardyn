@@ -3,17 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// THE SIGN-IN SANDBOX'S WAIT, ON A CLOCK (0.7.4 field report, finding 6).
-//
-// The pane used to end the wait after 15 CONSECUTIVE failed polls and call that
-// "≈30s". A tick count is not a duration: fast 5xx answers reach 15 in thirty
-// seconds, while reads that hang reach it in fifteen MINUTES (each one costs
-// WFETCH_TIMEOUT_MS), and `usePoll` skips ticks entirely while the tab is
-// hidden. The reporting estate measured a 131-second first pull of the aws-sso
-// image — with HEALTHY reads throughout, which never trips the counter at all —
-// and read the constant's own "far longer than any restart" as the budget that
-// had expired on them. It is not the budget that was wrong so much as the
-// SENTENCE: three different waits were narrated by one line.
+// The sign-in sandbox's wait is graded on the clock, not a tick count (0.7.4
+// field report, finding 6). A tick count is not a duration: fast 5xx answers
+// reach 15 in thirty seconds, while reads that hang reach it in fifteen
+// MINUTES (each one costs WFETCH_TIMEOUT_MS), and `usePoll` skips ticks
+// entirely while the tab is hidden. A 131-second first pull of the aws-sso
+// image, with HEALTHY reads throughout — which never trips a failed-poll
+// counter at all — showed that the budget itself was not the problem: one
+// line was narrating three different waits.
 //
 // So the wait is graded on the clock, and the counter is kept as a FLOOR rather
 // than as the measure: a hidden tab that comes back to one failed read must not
@@ -86,7 +83,7 @@ export const LOGIN_SANDBOX_READ_RETRYING =
 // The sentence that follows is the SUBSTRATE's (statusDetailSentence); this is
 // only the lead-in that names the speaker, as SANDBOX_REFUSAL_LEAD_IN does.
 //
-// round-2 UX S11: it does NOT say "image". The same verdict fires for
+// It does NOT say "image". The same verdict fires for
 // CreateContainerError, CreateContainerConfigError and CrashLoopBackOff, none of
 // which a new image reference fixes.
 export const LOGIN_SANDBOX_STUCK_LEAD_IN =

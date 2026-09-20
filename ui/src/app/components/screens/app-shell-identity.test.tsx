@@ -13,13 +13,13 @@ import { AppShell } from "./app-shell";
 import { usePrincipal } from "../wardyn/operator-context";
 import { ThemeProvider } from "../wardyn/theme-provider";
 
-// 0.7.1 — the header shows the PERSON, not the IdP's object id. For an SSO
+// The header shows the person, not the IdP's object id. For an SSO
 // user /me carries `principal` (the raw OIDC sub — an Entra object id, or
 // `gsv-member-0001` on the kind demo) beside `email` and `name`; the account
-// chip used to render the sub. It now reads name → email → principal, and the
+// chip reads name → email → principal, never the bare sub. The
 // sub survives as a secondary mono line in the menu, because that is the
 // string OPERATIONS.md tells an admin to paste. The principal the console
-// COMPARES against (PrincipalContext) must stay the sub — pinned last.
+// compares against (PrincipalContext) must stay the sub — pinned last.
 describe("AppShell — the account chip shows who you are (0.7.1)", () => {
   afterEach(() => vi.unstubAllGlobals());
 

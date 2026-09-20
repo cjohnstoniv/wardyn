@@ -115,9 +115,6 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged }: Us
     setLaunchedRunId(null);
     try {
       const created: CreateRunResult = await runsApi.createRun(buildRunInput());
-      // (A best-effort "save this as a policy" write used to live here, gated on
-      // state.saveAsProfile — a flag no control on this screen has ever set. It
-      // was unreachable from the moment the five-step wizard was replaced.)
       const warnings = created.warnings ?? [];
       // §5c.8: a run that launched WITH advisories is never navigated away from
       // on a clock. A 1.6s timer both raced every other way off this screen
@@ -129,7 +126,7 @@ export function useLaunch({ state, workspaces, useSaved, ccTouched, merged }: Us
       if (warnings.length > 0) {
         setLaunchWarnings(warnings);
         setLaunchedRunId(created.id);
-        setLaunching(false); // F2-F10 hygiene: nothing reads it once onOpenRun is set.
+        setLaunching(false); // nothing reads it once onOpenRun is set.
       } else {
         navigate(`/runs/${encodeURIComponent(created.id)}`);
       }

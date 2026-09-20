@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The mid-run AWS sign-in row (Finding 4). Its own file rather than more cases
-// in live-approvals.test.tsx (643 lines): this row has a different shape — a
+// The mid-run AWS sign-in row. Its own file rather than more cases in
+// live-approvals.test.tsx (643 lines): this row has a different shape — a
 // door, not a decision — a different audience rule, and its own provider.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -45,8 +45,8 @@ function reauthRow(over: Partial<ApprovalRequest> = {}): ApprovalRequest {
 
 // The viewer, named: every row below is OWNED BY alice@corp, so the default
 // principal is alice's — the "owner" cell each of these cases was written for.
-// A case that means a different viewer passes one (W6-U BLOCKER-2: the door is
-// the VIEWER's own sign-in, and only the row's owner can resolve it).
+// A case that means a different viewer passes one: the door is the VIEWER's
+// own sign-in, and only the row's owner can resolve it.
 function mount(operator: boolean, principal = "alice@corp") {
   return render(
     <OperatorProvider operator={operator} securityOperator={operator} principal={principal}>
@@ -139,12 +139,12 @@ describe("LiveApprovals — the mid-run AWS sign-in row", () => {
     expect(within(panel).getByRole("button", { name: REAUTH_ROW.ariaLabel })).toBeInTheDocument();
   });
 
-  // THE FOUR CELLS OF THE ONE OWNERSHIP RULE (W6-U BLOCKER-1/BLOCKER-2). The
-  // door is the viewer's OWN sign-in: a capture lands in the capturer's scope,
-  // so reauthResolvableBy (internal/api's injection_awssso.go) admits only the
-  // subject the row names on the per_user lane, and only the operator — whose
-  // credential the shared one is — on the shared lane. The other two cells
-  // above pin the shared lane; these two pin the per_user one.
+  // The four cells of the one ownership rule: the door is the viewer's OWN
+  // sign-in — a capture lands in the capturer's scope, so reauthResolvableBy
+  // (internal/api's injection_awssso.go) admits only the subject the row
+  // names on the per_user lane, and only the operator — whose credential the
+  // shared one is — on the shared lane. The other two cells above pin the
+  // shared lane; these two pin the per_user one.
   it("the OWNER gets the door, member or not — it is their own sign-in", async () => {
     listApprovalsMock.mockResolvedValue([reauthRow()]);
     mount(false, "alice@corp");

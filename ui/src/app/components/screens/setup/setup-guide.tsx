@@ -58,7 +58,7 @@ export const TIER_GUIDES: Partial<Record<ConfinementClass, SetupGuide>> = {
   },
 };
 
-// W4-S1-5/W27-S1-4: the k8s runner substrate isn't a `docker info` host at
+// The k8s runner substrate isn't a `docker info` host at
 // all — there's no daemon.json to edit and no `wardyn setup wall/vault`
 // command for wardynd to run against ITSELF. The actual lever is a
 // cluster-registered RuntimeClass, pinned to a Confinement Class via Helm

@@ -6,13 +6,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act, screen, waitFor, within, fireEvent } from "@testing-library/react";
 
-// HIGH fix (terminal reconnect): on an UNEXPECTED WebSocket drop the component
-// must re-attach to the persistent tmux session with a bounded number of
-// retries (rather than just printing "[connection closed]" and giving up). A
-// CLEAN close (code 1000) must NOT reconnect. These tests drive a fake
-// WebSocket to pin both behaviors.
+// On an unexpected WebSocket drop the component must re-attach to the
+// persistent tmux session with a bounded number of retries (rather than just
+// printing "[connection closed]" and giving up). A clean close (code 1000)
+// must not reconnect. These tests drive a fake WebSocket to pin both
+// behaviors.
 
-// --- Mock xterm so we don't need real DOM measurement in jsdom -------------
+// Mock xterm so we don't need real DOM measurement in jsdom
 const writeln = vi.fn();
 const resizeCalls: Array<[number, number]> = [];
 // D3: how many times the component asked xterm to take focus — the fix under
@@ -81,7 +81,7 @@ vi.mock("../lib/api/core", async (importOriginal) => ({
 // for the owner test that does.
 vi.mock("../lib/api/runs", () => ({ runs: { attachTicket: vi.fn(), takeoverAttach: vi.fn() } }));
 
-// --- Fake WebSocket --------------------------------------------------------
+// Fake WebSocket
 class FakeWebSocket {
   static OPEN = 1;
   static CONNECTING = 0;
@@ -243,10 +243,10 @@ describe("AttachTerminal reconnect", () => {
     expect(FakeWebSocket.instances.length).toBeGreaterThanOrEqual(2);
   });
 
-  // ptyCols pins the VISUAL grid to the forced width (rows still fit): the login
-  // CLI is a full-screen TUI that cursor-addresses whatever grid it is told, so
-  // PTY and xterm must agree — the old decoupled mode (wide PTY, container-fit
-  // view) interleaved redraw frames into garbage on screen.
+  // ponytail: ptyCols pins the visual grid to the forced width (rows still
+  // fit): the login CLI is a full-screen TUI that cursor-addresses whatever
+  // grid it is told, so PTY and xterm must agree on width — a decoupled
+  // PTY/view width interleaves redraw frames into garbage on screen.
   it("ptyCols pins the xterm grid AND the PTY resize message to the same width", async () => {
     resizeCalls.length = 0;
     render(<AttachTerminal runId="run_1" ptyCols={512} />);
@@ -270,8 +270,8 @@ describe("AttachTerminal reconnect", () => {
   });
 
   // A11y (WCAG 2.1.2 no keyboard trap): fullscreen must be escapable via a
-  // plain Escape keypress, not just the mouse-only toggle button. Before the
-  // fix, xterm's PTY forwarding swallowed Escape entirely.
+  // plain Escape keypress, not just the mouse-only toggle button — xterm's
+  // PTY forwarding otherwise swallows Escape entirely.
   it("Escape exits fullscreen instead of being swallowed by the PTY", async () => {
     const { getByLabelText, queryByLabelText } = render(<AttachTerminal runId="run_1" />);
     act(() => FakeWebSocket.instances[0].open());
@@ -311,11 +311,10 @@ describe("AttachTerminal — role-aware attach", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  // P1: an EXPLICITLY FOREIGN run is what the client-side refusal is for. This
-  // case used to render with NO createdBy at all — which is the login pane's own
-  // mount (a run the caller just created) — so the one shape the gate had no
-  // business refusing was the shape it pinned. The refusal itself is unchanged;
-  // what changed is that it now needs a stated owner who is not you.
+  // P1: the client-side refusal is for an explicitly foreign run — a stated
+  // createdBy that is not the caller. A run with no createdBy at all is the
+  // login pane's own mount (a run the caller just created) and must never be
+  // refused this way.
   it("viewer on an explicitly FOREIGN run: never opens a socket, and shows the reason instead of a raw error", async () => {
     render(
       <OperatorProvider operator={false} principal="alice@example.com">
@@ -326,14 +325,14 @@ describe("AttachTerminal — role-aware attach", () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
-  // P1 (0.7.3 field report): a member's own AWS sign-in never reached its
-  // terminal. The login pane mounts this component for a run the member CREATED
-  // one round trip earlier and passes no createdBy — there is no run object to
-  // read one from — so `owned` was false, `operator` false, and the component
-  // refused before ever asking the server. UNKNOWN ownership is not "not yours":
-  // the ticket lane (mintAttachTicket -> getRunAuthorizedBy) is owner-or-admin
-  // and is the enforcement point, so the client asks it instead of inventing a
-  // refusal it cannot justify. A foreign run costs one POST and one
+  // P1: a member's own run must reach its terminal even when the login pane
+  // mounts this component for a run the member created one round trip earlier
+  // and passes no createdBy — there is no run object to read one from yet, so
+  // `owned` false and `operator` false must not refuse before asking the
+  // server. Unknown ownership is not "not yours": the ticket lane
+  // (mintAttachTicket -> getRunAuthorizedBy) is owner-or-admin and is the
+  // enforcement point, so the client asks it instead of inventing a refusal
+  // it cannot justify. A foreign run still costs one POST and one
   // authz.denied{reason:"not_owner"} row; the case above is the negative half.
   it("member on a run they just created (createdBy unknown): asks the server instead of refusing", async () => {
     const attachTicket = vi.mocked(runs.attachTicket);
@@ -354,8 +353,8 @@ describe("AttachTerminal — role-aware attach", () => {
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
 
-  // Regression (W17-S1-1): a member who owns the run must be able to attach —
-  // the server's ticket lane is owner-or-admin (getRunAuthorized), not
+  // Regression: a member who owns the run must be able to attach — the
+  // server's ticket lane is owner-or-admin (getRunAuthorized), not
   // operator-only, so the UI's gate and connection lane must match it.
   it("member who owns this run: mints a ticket (owner-or-admin lane) and opens the WS", async () => {
     const attachTicket = vi.mocked(runs.attachTicket);
@@ -498,8 +497,8 @@ describe("AttachTerminal — attach mode, displacement, take-over", () => {
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
 
-  // THE regression. Contrast with "reconnects (opens a new socket) after an
-  // UNEXPECTED close" above: same non-1000 code shape, opposite required
+  // The regression. Contrast with "reconnects (opens a new socket) after an
+  // unexpected close" above: same non-1000 code shape, opposite required
   // behaviour, because this close means someone else is now typing.
   it("a close with code 1008 does NOT open a new socket", async () => {
     render(<AttachTerminal runId="run_1" />);
@@ -540,8 +539,8 @@ describe("AttachTerminal — attach mode, displacement, take-over", () => {
   });
 });
 
-// Take-over EVICTS, it does not promote: after the POST returns, this client's
-// socket is STILL the read-only one, so it has to reconnect to claim the writer
+// Take-over evicts, it does not promote: after the POST returns, this client's
+// socket is still the read-only one, so it has to reconnect to claim the writer
 // slot (handleAttachTakeover's own note). Real timers — the confirm dialog is
 // Radix, driven the same way live-approvals.test.tsx drives its deny confirm.
 describe("AttachTerminal — take-over reconnects to claim the writer slot", () => {
@@ -591,11 +590,12 @@ describe("AttachTerminal — take-over reconnects to claim the writer slot", () 
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
 
-  // A read-only observer whose holder LEAVES was a dead end: the attach-mode
-  // frame is sent once, at connect, so nothing ever told the observer it could
-  // now drive. Take-over then 409'd ("nobody is attached"), the reason landed
-  // in the footer, and the terminal — the hero of this whole screen — stayed
-  // permanently convinced it was read-only until a full page reload.
+  // A read-only observer whose holder leaves needs a way out: the attach-mode
+  // frame is sent once, at connect, so nothing tells the observer it could now
+  // drive. Take-over then 409s ("nobody is attached"), and that 409 must
+  // trigger a reclaim rather than surface as an error the operator cannot act
+  // on — otherwise the terminal, the hero of this whole screen, stays
+  // permanently convinced it is read-only until a full page reload.
   it("a 409 take-over means the holder left, so it reclaims instead of erroring", async () => {
     const takeover = vi.mocked(runs.takeoverAttach);
     takeover.mockReset();
@@ -668,16 +668,15 @@ describe("AttachTerminal — a handshake that never completes is a failure, not 
   });
 });
 
-// ── R4-F144: WCAG 2.1.2, No Keyboard Trap ───────────────────────────────────
-// xterm takes Tab, Shift+Tab and Escape into the PTY — correct for a terminal,
-// and it means a keyboard user who focuses this panel cannot leave the page
-// without a pointer. 2.1.2 allows a non-standard exit only if it is ADVISED ON
-// ENTRY, so the chord and its announcement are one feature: either alone still
-// fails the criterion.
+// R4-F144 (WCAG 2.1.2, No Keyboard Trap): xterm takes Tab, Shift+Tab and
+// Escape into the PTY — correct for a terminal, and it means a keyboard user
+// who focuses this panel cannot leave the page without a pointer. 2.1.2
+// allows a non-standard exit only if it is advised on entry, so the chord and
+// its announcement are one feature: either alone still fails the criterion.
 //
-// The chord is Ctrl+] and NOT the filed proposal's Ctrl+Shift+Esc — Windows
-// intercepts that at OS level (Task Manager) before the browser sees it, so on
-// the platform most likely to need it the exit would silently not exist.
+// The chord is Ctrl+] and not the filed proposal's Ctrl+Shift+Esc — Windows
+// intercepts that at OS level (Task Manager) before the browser sees it, so
+// on the platform most likely to need it the exit would silently not exist.
 describe("AttachTerminal — the keyboard trap has an advertised exit (F144)", () => {
   beforeEach(() => {
     keyHandler = null;
@@ -737,12 +736,11 @@ describe("AttachTerminal — the keyboard trap has an advertised exit (F144)", (
   });
 });
 
-// ── D3: nothing ever focuses the terminal ───────────────────────────────────
-// attach-terminal.tsx had no `.focus()` call at all; focus depended entirely
-// on xterm's own click-to-focus on its inner `.xterm-screen`. A click on the
-// container's padding, or the dead space below the last row, landed nowhere —
-// "click a specific area" — and a second click that happened to land on the
-// screen looked like a "needs a double click" requirement.
+// D3: a mousedown anywhere in the terminal container must focus the terminal.
+// xterm's own click-to-focus only fires on its inner `.xterm-screen`, so a
+// click on the container's padding, or the dead space below the last row,
+// lands nowhere — which reads as needing a very specific click location, or
+// a second click that happens to land on the screen.
 describe("AttachTerminal — D3 focus", () => {
   beforeEach(() => {
     focusCalls.n = 0;
@@ -789,13 +787,12 @@ describe("AttachTerminal — D3 focus", () => {
   });
 });
 
-// ── D1+D2 aggravator: promoted-in-place geometry ────────────────────────────
-// The attach-mode frame can, in principle, arrive more than once on the SAME
-// socket (the server pushes an update when the holder slot changes); when one
-// flips read_only true→false, this client inherited the departed holder's
-// tmux geometry (the server skips handshake geometry for a non-writer and
-// drops an observer's resize frames), and refit() never ran on a mode change
-// to correct it.
+// Promoted-in-place geometry: the attach-mode frame can, in principle, arrive
+// more than once on the same socket (the server pushes an update when the
+// holder slot changes); when one flips read_only true→false, this client
+// inherits the departed holder's tmux geometry (the server skips handshake
+// geometry for a non-writer and drops an observer's resize frames), so
+// refit() must run on a mode change to correct it.
 describe("AttachTerminal — refit(true) when read_only flips true→false", () => {
   beforeEach(stubTerminalEnv);
   afterEach(() => vi.unstubAllGlobals());

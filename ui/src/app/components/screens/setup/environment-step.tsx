@@ -84,18 +84,16 @@ const NOT_DETECTED: Partial<Record<ConfinementClass, string>> = {
   CC3: "Still not detected — no kata runtime in `docker info` yet.",
 };
 
-// W4-S1-5/W27-S1-4: `docker info` has no meaning on a k8s runner — the same
+// `docker info` has no meaning on a k8s runner — the same
 // "still not detected" fact, said in RuntimeClass terms instead.
 const K8S_NOT_DETECTED: Partial<Record<ConfinementClass, string>> = {
   CC2: "Still not detected — no RuntimeClass is pinned to CC2 yet (k8s.runtimeClasses.CC2).",
   CC3: "Still not detected — no RuntimeClass is pinned to CC3 yet (k8s.runtimeClasses.CC3).",
 };
 
-// ---------------------------------------------------------------------------
 // k8s environment rows (prompt-v4) — Runner / Egress containment / Confinement
 // classes / Agent images. Reuses CheckRow (step-bodies.tsx), the same
 // checklist-row look Review already renders, rather than inventing new markup.
-// ---------------------------------------------------------------------------
 
 // Egress containment is backed by a REAL server check (k8sEgressContainmentCheck,
 // setup_checks.go) — found by id, never re-derived, so its exact Detail/Fix
@@ -195,7 +193,7 @@ export function EnvironmentStep({
   const available = new Set(classes);
   const rec = recommendedTier(status);
   const k8s = status.runner.driver === "k8s";
-  // W4-S1-5/W27-S1-4: TIER_GUIDES/NOT_DETECTED are docker-shaped (`wardyn setup
+  // TIER_GUIDES/NOT_DETECTED are docker-shaped (`wardyn setup
   // wall`, `docker info` runtimes) — meaningless on a k8s runner, where the
   // real lever is a Helm-pinned RuntimeClass (K8S_TIER_GUIDES/K8S_NOT_DETECTED
   // above). One driver-aware pick, read by every column below.
@@ -527,7 +525,7 @@ function ColumnState({
   incompatibleReason?: string;
   substrate?: string;
   recheckToken: number;
-  /** W4-S1-5/W27-S1-4: driver-picked by the caller (TIER_GUIDES vs K8S_TIER_GUIDES) — this component renders whichever it's handed, never chooses. */
+  /** Driver-picked by the caller (TIER_GUIDES vs K8S_TIER_GUIDES) — this component renders whichever it's handed, never chooses. */
   guide?: SetupGuide;
   /** Same driver-picked story as `guide` (NOT_DETECTED vs K8S_NOT_DETECTED). */
   notDetected?: string;

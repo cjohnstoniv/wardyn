@@ -222,13 +222,11 @@ describe("ProvidersScreen", () => {
     ]);
   });
 
-  // F4-F3 (Appendix A V8, corrected verdict): the banner used to SWAP the
-  // whole tab body, discarding an edit typed moments before the 412 and
-  // making it unreadable first — this test used to assert only the banner
-  // title. Extended: the draft stays MOUNTED (the edited textarea survives),
-  // and the banner's ONE control is "Discard mine and reload" — no
-  // "Save over theirs" arm (a security document is never last-writer-wins
-  // from this banner).
+  // F4-F3: the banner must not SWAP the whole tab body — that would discard
+  // an edit typed moments before the 412 and make it unreadable. The draft
+  // stays MOUNTED (the edited textarea survives), and the banner's ONE
+  // control is "Discard mine and reload" — no "Save over theirs" arm (a
+  // security document is never last-writer-wins from this banner).
   it("a 412 renders the saved-elsewhere state, keeps the draft mounted, and never overwrites", async () => {
     getWorkspaceProvidersMock.mockResolvedValue({
       providers: { git: [{ id: "github", kind: "github", base_urls: ["https://github.com/acme"] }] },
@@ -313,13 +311,13 @@ describe("ProvidersScreen", () => {
     // The roster lands, so the rows render and the tab's own Save appears.
     expect(await screen.findByTestId("agent-row-claude-code")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: PROVIDERS.SAVE_CTA })).toBeInTheDocument();
-    // The dead-end click used to spend a /agent-providers read instead.
+    // The dead-end click must not spend a /agent-providers read.
     expect(getAgentProvidersMock.mock.calls.length).toBe(agentReads);
   });
 
-  // A-01 (review fix-first): the Agents tab's own Save used to re-fire the
-  // PARENT's WHOLE `load()`, which resets `draft` (the shared document
-  // GitTab/StorageTab render) to whatever /workspace-providers last GET —
+  // A-01: the Agents tab's own Save must not re-fire the PARENT's WHOLE
+  // `load()`, which would reset `draft` (the shared document GitTab/
+  // StorageTab render) to whatever /workspace-providers last GET —
   // silently discarding an admin's un-saved Git-tab edit made moments
   // earlier on a different tab. Save on Agents must re-read /setup/status
   // ONLY (`onStatusRefresh`), never /workspace-providers.

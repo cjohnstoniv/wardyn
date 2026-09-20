@@ -56,7 +56,7 @@ describe("extractSignedIn", () => {
 });
 
 describe("serverConfirmsCapture — strict (Codex #9)", () => {
-  // THE most important case in the lane: a free-running watch must never
+  // The most important case in the lane: a free-running watch must never
   // fall through to the presence fallbacks — a pre-existing live
   // model_access would otherwise confirm a sign-in that never happened.
   it("refuses a live model_access with no matching source_run_id", () => {

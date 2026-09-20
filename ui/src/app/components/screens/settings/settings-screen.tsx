@@ -11,8 +11,8 @@
 // operators answer once.
 //
 // Host · Model provider · Providers · Your SSH keys · Drives (last, §6's "fifth card").
-// Providers replaced Git host in 0.7.2 (workspace-providers-prompt.md §6): the
-// git credential lanes moved into a provider row on /providers.
+// Providers replaced Git host (workspace-providers-prompt.md §6): the git
+// credential lanes moved into a provider row on /providers.
 //
 // Two of them are components shared verbatim with the Getting Started
 // funnel (connection-cards.tsx) and one is the barrier picker shared with its
@@ -58,14 +58,15 @@ function HostCard({
   status: SetupStatus;
   /**
    * The site config, `null` for "this caller may not read it" (a member), or
-   * "error" for "the read FAILED" — three states, because the last two used to
-   * be one and the console spoke for the server in the difference (R4/F069).
+   * "error" for "the read FAILED" — three states, because a failed read and an
+   * empty read are different facts, and the console must never speak for the
+   * server in that difference (R4/F069).
    */
   siteConfig: SiteConfig | null | "error";
   onRecheck: () => void;
 }) {
   const navigate = useNavigate();
-  // The strongest installed class — 0.7.8's server-computed default, read
+  // The strongest installed class — the server-computed default, read
   // straight (no override state left to own here: there is nothing left to
   // persist, and this card is a read-only statement of "what every run
   // inherits by default", never a second place to pick it).
@@ -256,7 +257,7 @@ export function SettingsScreen() {
             siteConfig={siteConfig}
             onChanged={load}
           />
-          {/* The Providers card replaces Git host (0.7.2): the git credential
+          {/* The Providers card replaces Git host: the git credential
               lanes moved into a provider row on /providers, and this card is
               the same shared component the funnel's `providers` step body
               renders (setup/providers-card.tsx). */}

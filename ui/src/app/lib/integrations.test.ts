@@ -49,8 +49,8 @@ describe("integrations — T canon sentinel pins", () => {
     expect(T.CORP_POINTER).toBe(
       "Your corporate proxy and any egress redirects aren't integrations — they're network topology, and they live in Network under Getting started, on the same screen as the probe that proves them.",
     );
-    // Round E: the step must never CLAIM to be required — the proof is the
-    // only required thing, and most hosts pass it in one click.
+    // The step must never claim to be required — the proof is the only
+    // required thing, and most hosts pass it in one click.
     expect(T.CORP_LEDE).toBe(
       "First, and usually ten seconds: prove a sandbox on this host can reach the internet, and every step after this one can trust the answer. On most hosts that's one click — Test connectivity, see Reached, keep moving. Configure something here only if this machine reaches the internet through a corporate proxy, or has to fetch through internal mirrors — the proof then runs through that same path, exactly as a run would.",
     );
@@ -63,8 +63,8 @@ describe("integrations — T canon sentinel pins", () => {
     expect(T.EMBED_SCOPE_NOTE).not.toContain("Tools tab");
     // …and NOT the old tail claiming the full page still shows all four.
     expect(T.EMBED_SCOPE_NOTE).not.toContain("all four categories");
-    // …and not UX-8's false claim either — the embed renders all ten
-    // categories (INTEGRATION_GROUPS), not "the same two".
+    // …and not the false claim that it renders only "the same two" — the
+    // embed renders all ten categories (INTEGRATION_GROUPS).
     expect(T.EMBED_SCOPE_NOTE).not.toContain("same two categories");
     expect(T.NOPROXY_NOTE).toBe("Not applied — Wardyn's own egress allowlist decides what a sandbox may reach.");
     expect(T.NOT_CONFIGURED).toBe("Not configured — sandboxes go direct");
@@ -112,8 +112,8 @@ describe("integrations — T canon sentinel pins", () => {
     expect(T.GATE_UNTESTED).toBe(
       "One probe, and this step is done — everything after it assumes the network works. A minute now instead of a fake credential failure two steps later.",
     );
-    // The forced egress-tab visit died with round E — the mechanic that made
-    // the least-common feature feel mandatory. Pinned deleted.
+    // The forced egress-tab visit — the mechanic that made the least-common
+    // feature feel mandatory — no longer exists. Pinned deleted.
     expect("GATE_EGRESS_UNSEEN" in T).toBe(false);
     // Every gate state's bold headline (the footer's two-line treatment).
     expect(T.GATE_HEAD_UNTESTED).toBe("Connectivity isn't proven yet");
@@ -181,9 +181,8 @@ describe("integrations — CAPS capability-line notes", () => {
 
 describe("integrations — structured metadata is grounded in the T/CAPS canon above", () => {
 
-  // The two-category pin used to read CATEGORY_META, which existed for the
-  // deleted /integrations page's section headers. The IntegrationCategory type
-  // is what enforces the rule now — an integration is an account with a system
+  // The two-category pin is grounded in the IntegrationCategory type, not a
+  // separate CATEGORY_META — an integration is an account with a system
   // outside Wardyn, and Corporate network owns the network topology.
 
   // Two single-lane key types now, not three: azure_openai was the third and it

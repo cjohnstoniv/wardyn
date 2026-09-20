@@ -86,9 +86,6 @@ import {
 // demo catalog + launched-set reader are imported eagerly above (xterm-free).
 const DemoDetail = React.lazy(() => import("./demos-step"));
 
-// ------------------------------------------------------------
-// SetupScreen
-// ------------------------------------------------------------
 export function SetupScreen({ onDone }: { onDone: () => void }) {
   const operator = useOperator();
   // Defence in depth: this screen only ever mounts once App.tsx's SetupRoute
@@ -248,13 +245,14 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // SAME rule as the footer's Next button: "There is no click-past" (steps.ts's
   // own stated invariant) means every forward jump past Corporate network from
   // ANYWHERE, not just a Next click while that step is the one on screen —
-  // W2-S1-2: the guard used to be scoped to `stepId === "corp_network"` and
-  // this ref reset to open on every render taken off that step, so a rail
-  // jump (or deep link) FROM an earlier step straight past it never saw the
-  // real gate at all. Updated unconditionally wherever corpNetwork itself is
-  // computed (below); defaults open so a rail click is never blocked before
-  // that first computation lands. The whole gate, not just `.on`: a refused
-  // Next renders disabled with the gate's own `reason` as its title.
+  // The guard must not be scoped to `stepId === "corp_network"` —
+  // a ref that only reset to open on renders taken off that step would leave
+  // a rail jump (or deep link) FROM an earlier step straight past it, never
+  // seeing the real gate at all. Updated unconditionally wherever corpNetwork
+  // itself is computed (below); defaults open so a rail click is never
+  // blocked before that first computation lands. The whole gate, not just
+  // `.on`: a refused Next renders disabled with the gate's own `reason` as
+  // its title.
   const corpGateRef = React.useRef<CorpNetworkGate>({ on: true });
 
   // THE crossing predicate — why a move to `next` is refused, or undefined
@@ -316,11 +314,11 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     [stepId, status, canSelect],
   );
 
-  // LOW-3 (secrets-demos plan): same-route ?step= navigations. The param is
+  // Same-route ?step= navigations must not silently no-op. The param is
   // read once at mount, so a nav to /setup?step=<id> while ALREADY on /setup
-  // (the app-shell "Demos" entry, runs-first-run cards) moved the URL and not
-  // the step — a silent no-op. Route later param changes through selectStep,
-  // which already enforces canSelect and the visited bookkeeping.
+  // (the app-shell "Demos" entry, runs-first-run cards) would move the URL
+  // and not the step. Route later param changes through selectStep, which
+  // already enforces canSelect and the visited bookkeeping.
   React.useEffect(() => {
     const want = searchParams.get("step");
     if (
@@ -350,12 +348,13 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // PUTs then re-GETs so this orchestrator's own copy — and the rail badges
   // derived from it — never goes stale after an in-step save.
   //
-  // F6-F6 (Appendix A V8): the write's four advisory signals used to be
-  // discarded (putSiteConfig returned void), so an admin naming a secret ref
-  // nothing stores was told the save landed cleanly. These two warnings are
-  // ADDITIONAL toasts, stacked above whatever success toast the saving step
-  // itself already shows (corp-network-proxy.tsx / corp-network-egress.tsx) —
-  // never a replacement for it, so a clean save's plain success is untouched.
+  // F6-F6 (Appendix A V8): the write's four advisory signals must reach the
+  // caller — a putSiteConfig that returned void would tell an admin naming a
+  // secret ref nothing stores that the save landed cleanly. These two
+  // warnings are ADDITIONAL toasts, stacked above whatever success toast the
+  // saving step itself already shows (corp-network-proxy.tsx /
+  // corp-network-egress.tsx) — never a replacement for it, so a clean save's
+  // plain success is untouched.
   const saveSiteConfig = React.useCallback(
     async (next: SiteConfig) => {
       const result = await healthApi.putSiteConfig(next);
@@ -384,8 +383,8 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   // GET /workspace-providers is operatorOnly — gated on `operatorResolved &&
   // operator` so a security admin or a member does not take a swallowed 403
   // on every recheck (this funnel runs for every caller); the count just
-  // stays 0 (Optional) for them either way. Plain `!operator` alone used to
-  // be the guard; widened to the shared `adminReads` for the same defence-in-
+  // stays 0 (Optional) for them either way. The guard is the shared
+  // `adminReads`, not plain `!operator` alone, for the same defence-in-
   // depth reason `operator`'s own definition above explains — this screen
   // cannot actually mount with operator false today (app-shell.tsx paints no
   // route at all on a settled-but-unknown identity), but the guard holds if
@@ -423,10 +422,11 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         // host sweep — the daemon answers every other /setup/status from its
         // 30s host-proxy memo, and only the ?recheck=1 path waits on the
         // re-detect it kicks off (internal/api/hostproxy_cache.go). Stamping
-        // "Checked just now" beside a memoized "none detected" told the
-        // operator the host had just been looked at when it had not, which is
-        // precisely the complaint Re-check exists to answer. No stamp beats a
-        // false one: lastCheckedLabel(null) is the empty string.
+        // Stamping "Checked just now" beside a memoized "none detected" would
+        // tell the operator the host had just been looked at when it had
+        // not, which is precisely the complaint Re-check exists to answer.
+        // No stamp beats a false one: lastCheckedLabel(null) is the empty
+        // string.
         //
         // R-09: and the forced read is not proof on its own — hostProxyRecheck
         // waits hostProxyRecheckWait (2s) for the sweep it started and then
@@ -479,7 +479,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // W2-S1-2: a `?step=` deep link is read once at mount (the initializer
+  // A `?step=` deep link is read once at mount (the initializer
   // above), BEFORE status — and so the corp_network gate — is known. An
   // operator pasting/bookmarking a link past it must not skip the same
   // mandatory proof a rail jump can't skip either (selectStep's guard,
@@ -499,7 +499,7 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
 
-  // F3-F6: once per PAGE LOAD (clearStaleVisitFlagsOnce's own module latch —
+  // Once per PAGE LOAD (clearStaleVisitFlagsOnce's own module latch —
   // NOT a per-mount ref: this screen can unmount/remount within one load, and
   // a mark the operator set a moment ago in THIS still-fresh session must
   // survive that), the first time status lands — a fresh install (never
@@ -610,9 +610,9 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
 
   // The one number the Secrets rail badge needs: AI only, since 0.7.2 (the git
   // credential lanes moved to the `providers` step/screen, whose OWN badge now
-  // counts enabled provider rows — see providerCount below). It used to add
-  // SCM's count too, back when a git credential lived on THIS step's shared
-  // GitHostCard; GitHostCard is retired (workspace-providers-prompt.md §2.1).
+  // counts enabled provider rows — see providerCount below). SCM's count is
+  // not folded in here: GitHostCard, which used to carry a git credential on
+  // THIS step, is retired (workspace-providers-prompt.md §2.1).
   const integrationsData = deriveIntegrations(status, siteConfig, secretNames);
   const integrationsCount = integrationsData.ai.length;
   integrationsCountRef.current = integrationsCount;
@@ -625,8 +625,8 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   };
   // Unconditional (not gated on `stepId === "corp_network"`): refuseSelect and the
   // deep-link init effect above both need the REAL gate state no matter which
-  // step is on screen right now (see corpGateRef's declaration for why the
-  // old stepId-scoped version was the bug).
+  // step is on screen right now (see corpGateRef's declaration for why a
+  // stepId-scoped version would be wrong).
   corpGateRef.current = corpNetworkGate(corpNetwork, corpRedirects);
   // The steps actually walkable against THIS readiness — a demo whose
   // needsModel/needsSecret precondition is unmet is dropped, so neither the
@@ -838,10 +838,9 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         )}
       </SetupLayout>
 
-      {/* The NewRunDialog lived here, opened only by the deleted Launch step.
-          Launching is the top bar's "New run" on every screen, so the funnel no
-          longer carries its own copy — and `finish` (Review's "Finish setup")
-          is what retires the funnel now. */}
+      {/* Launching is the top bar's "New run" on every screen, so this funnel
+          carries no launch dialog of its own — `finish` (Review's "Finish
+          setup") is what retires the funnel. */}
     </>
   );
 }

@@ -501,15 +501,14 @@ describe("GovernanceScreen — assignments and the resolved preview", () => {
   });
 });
 
-// The precedence table that used to live here is GONE, deliberately. It tested
-// a TypeScript mirror of ResolveGovernanceProfile's ORDER BY, and the mirror is
-// what Phase 4's finish lane deleted: the preview now POSTs /governance/preview
-// and the server runs the real resolver. The four ranks — tier, sub-over-email,
-// priority DESC, name ASC — are pinned in
-// internal/api/governance_preview_test.go against a real Postgres, every case
-// asserted equal to a direct ResolveGovernanceProfile call, plus the store's
-// own governance_pg_test.go. Re-adding a client-side table here would re-create
-// exactly the second matcher that was removed.
+// No precedence table lives here, deliberately: a TypeScript mirror of
+// ResolveGovernanceProfile's ORDER BY would be a second implementation of the
+// answer. The preview POSTs /governance/preview and the server runs the real
+// resolver. The four ranks — tier, sub-over-email, priority DESC, name ASC —
+// are pinned in internal/api/governance_preview_test.go against a real
+// Postgres, every case asserted equal to a direct ResolveGovernanceProfile
+// call, plus the store's own governance_pg_test.go. Re-adding a client-side
+// table here would re-create exactly that second matcher.
 
 // THE canon pin: a component in this directory may render copy, never author
 // it. Anything a reader sees comes from governance-copy.ts (frozen §7) or the
@@ -555,12 +554,13 @@ describe("question — the confirm split", () => {
     expect(head.endsWith("?")).toBe(true);
   });
 
-  // R4/F035 — the split used to take the FIRST "? ", and a profile / drive name
-  // is validated only as non-empty, <=128 bytes and control-char-free
-  // (internal/api/governance.go:138-144), so "? " is a legal substring of one.
-  // Every one of these templates interpolates a name BEFORE its question mark,
-  // so a name that carried one truncated the dialog title mid-name and started
-  // the description mid-name too — with the profile the operator is about to
+  // R4/F035 — the split must take the LAST "? ", not the first: a profile /
+  // drive name is validated only as non-empty, <=128 bytes and
+  // control-char-free (internal/api/governance.go:138-144), so "? " is a
+  // legal substring of one. Every one of these templates interpolates a name
+  // BEFORE its question mark, so splitting on the first "? " in a name that
+  // carries one would truncate the dialog title mid-name and start the
+  // description mid-name too — with the profile the operator is about to
   // DELETE only half-named on the screen asking them to confirm it.
   const HOSTILE = 'prod? really';
   it.each([
@@ -636,10 +636,11 @@ describe("GovernanceScreen — the third limit is the user-drive door", () => {
     expect(limits.getByText(GOV.LIMITS_NONE)).toBeInTheDocument();
   });
 
-  // R4/F032: the cell tested the three BOOLEAN doors only, so a profile whose
-  // one limit is a run quota read "None" — while denyMemberRunQuota
-  // (internal/api/runs_create_validate.go) refused that member's next run with
-  // a 422. "None" is a claim about every field of GovernanceLimits.
+  // R4/F032: the cell must not test the three BOOLEAN doors only, or a
+  // profile whose one limit is a run quota reads "None" — while
+  // denyMemberRunQuota (internal/api/runs_create_validate.go) still refuses
+  // that member's next run with a 422. "None" is a claim about every field
+  // of GovernanceLimits.
   it("a quota-only profile names its cap and never reads 'None'", async () => {
     renderScreen(
       snapshot({ profiles: [profile({ limits: { max_concurrent_runs: 3 } }), PLATFORM] }),
@@ -664,7 +665,7 @@ describe("GovernanceScreen — the third limit is the user-drive door", () => {
 });
 
 // X3-F5 — the securityOps sibling of /permissions: hidden from a member's nav,
-// reachable by typing the URL, and its 403 was rendered as an unreachable
+// reachable by typing the URL, and its 403 must not render as an unreachable
 // control plane with a Retry that 403s forever.
 describe("GovernanceScreen — a 403 is a tier, not an outage", () => {
   it("renders the tier sentence with no Retry, and still offers Retry on a 500", async () => {

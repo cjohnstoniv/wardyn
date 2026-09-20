@@ -10,8 +10,8 @@
 // The `providers.ts` twin: same GET/PUT-with-ETag shape as
 // lib/api/providers.ts's workspace-providers client, over a different
 // singleton document. The wire types are lib/types/site.ts's
-// AgentProviders/AgentProvider (C3's mirror, shared with
-// SiteConfig.agent_providers) — imported, not re-declared here.
+// AgentProviders/AgentProvider (shared with SiteConfig.agent_providers) —
+// imported, not re-declared here.
 import type { AgentProvider, AgentProviders } from "../types/site";
 import { asJson, wfetch } from "./core";
 

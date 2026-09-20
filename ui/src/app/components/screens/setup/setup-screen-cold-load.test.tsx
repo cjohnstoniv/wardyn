@@ -4,12 +4,12 @@
  */
 
 // Split from setup-screen.test.tsx (which sits at the file-size gate's 1000-line
-// cap — see scripts/check-file-size.sh) rather than grown past it. Covers ONE
+// cap — see scripts/check-file-size.sh) rather than grown past it. Covers one
 // thing setup-screen.test.tsx's suite doesn't: the `operatorResolved && operator`
-// guard on reloadSiteConfig/loadSecrets/loadProviderCount (plan's member-cold-load
-// lane, P3 "the member's own Getting Started calls an admin-only endpoint").
-// Mirrors setup-screen.test.tsx's mock harness verbatim — this suite mounts the
-// same orchestrator, just with an explicit <OperatorProvider> instead of the
+// guard on reloadSiteConfig/loadSecrets/loadProviderCount — the member's own
+// Getting Started must never call an admin-only endpoint. Mirrors
+// setup-screen.test.tsx's mock harness verbatim — this suite mounts the same
+// orchestrator, just with an explicit <OperatorProvider> instead of the
 // no-provider fail-open default.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
@@ -107,7 +107,7 @@ describe("SetupScreen — operatorResolved && operator guard on admin-only reads
     healthMock.mockReset().mockResolvedValue({ confinement_classes: ["CC1", "CC2"] });
     listWorkspacesMock.mockReset().mockResolvedValue([]);
     getSiteConfigMock.mockReset().mockResolvedValue({});
-    // F6-F6: putSiteConfig returns the four advisory signals now, not void.
+    // putSiteConfig returns the four advisory signals, not void.
     putSiteConfigMock.mockReset().mockResolvedValue({
       siteConfig: {},
       danglingSecretRefs: [],

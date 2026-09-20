@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// THE LAUNCH CALL'S OWN OUTCOMES, and the blurb the pane puts on screen with
+// The launch call's own outcomes, and the blurb the pane puts on screen with
 // them (U-8, U-11).
 //
 // Its own file because harness-login-pane.test.tsx is at the 1000-line gate
@@ -164,9 +164,9 @@ describe("the wait reads the substrate's reason (finding 6)", () => {
     expect(alertBox).toHaveTextContent(LOGIN_SANDBOX_STUCK_LEAD_IN);
     expect(alertBox).toHaveTextContent(STUCK_IMAGE_PULL);
     expect(alertBox).toHaveTextContent("pull access denied");
-    // round-2 UX B3/S9: Try again is SUPPRESSED. It earns the identical answer
-    // until an admin changes the cluster or the image, exactly as U-11's 409
-    // does — a test asserting Try again here would pin the pre-ruling behaviour.
+    // Try again is suppressed. It earns the identical answer until an admin
+    // changes the cluster or the image, exactly as U-11's 409 does — a test
+    // asserting Try again here would pin behavior this ruling withholds.
     expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
   });
@@ -191,8 +191,8 @@ describe("the wait reads the substrate's reason (finding 6)", () => {
   });
 
   // The other half of the field report's sentence: "ContainerCreating for two
-  // minutes is normal". The clock still says 'slow' — the SENTENCE is the
-  // substrate's instead of the hedged guess the pane used to make.
+  // minutes is normal". The clock still says 'slow' — the sentence is the
+  // substrate's, not a hedged guess from the pane.
   it("ContainerCreating past the slow window reads as the ordinary first start", async () => {
     vi.mocked(runsApiMocked.getRun).mockResolvedValue({
       id: "run-123",
@@ -237,7 +237,7 @@ describe("the wait reads the substrate's reason (finding 6)", () => {
   });
 });
 
-// Review S2: the terminal status write is the one a 500ms deadline may drop, so
+// The terminal status write is the one a 500ms deadline may drop, so
 // a FAILED run can reach the pane with the reason only in failure_hint. The
 // server rebuilds status_detail from that hint — but the pane must never put its
 // stuck lead-in in front of an EMPTY sentence whatever it is handed, and a
@@ -287,14 +287,14 @@ describe("a terminal ending that arrived only as a failure_hint", () => {
 });
 
 
-// THE LAUNCH-AFTER-DISMISS RACE, and the handle that makes a dismissal from
-// OUTSIDE the pane reach the run it created (0.7.6, Codex #15).
+// The launch-after-dismiss race, and the handle that makes a dismissal from
+// outside the pane reach the run it created (0.7.6, Codex #15).
 //
 // The model-access door mounts this pane in a Dialog, whose Escape / overlay
 // click closes the PARENT — and `onCancel` is child-to-parent, so it cannot
 // reach back in to kill the login run. Worse, harnessLogin's POST answers with
 // the id AFTER dispatch has already created the run, so a cancellation landing
-// mid-flight used to see `runId === null`, kill nothing, and leave a "wardyn:
+// mid-flight would see `runId === null`, kill nothing, and leave a "wardyn:
 // sign-in running" run on the member's board for up to 30 minutes.
 describe("a dismissal from outside the pane still ends the login run", () => {
   beforeEach(() => {
@@ -334,9 +334,9 @@ describe("a dismissal from outside the pane still ends the login run", () => {
   });
 });
 
-// Finding 7a (0.7.5 field report): the verification tab never opened — it was
-// opened from inside a PTY callback, never a user gesture. The fix opens it
-// on the CLICK and navigates it once the URL is known.
+// Finding 7a (0.7.5 field report): the verification tab opens on the click,
+// not from inside a PTY callback — a callback isn't a user gesture, so a
+// popup opened there gets blocked. This navigates it once the URL is known.
 describe("the verification tab opens on the click (Finding 7a)", () => {
   let openSpy: MockInstance<typeof window.open>;
   let fakeWindow: { opener: unknown; location: { href: string }; closed: boolean; close: ReturnType<typeof vi.fn>; document: { write: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> } };
@@ -360,7 +360,7 @@ describe("the verification tab opens on the click (Finding 7a)", () => {
     openSpy = vi.spyOn(window, "open").mockClear().mockReturnValue(fakeWindow as unknown as Window);
   });
 
-  // THE RED CASE: goes red on any refactor that hoists an `await` above the
+  // The red case: goes red on any refactor that hoists an `await` above the
   // tab-open line — `harnessLogin` never resolves here, so if the open moved
   // below it, `window.open` would never be called at all.
   it("opens the tab SYNCHRONOUSLY, before the launch POST resolves", async () => {
@@ -391,13 +391,13 @@ describe("the verification tab opens on the click (Finding 7a)", () => {
     expect(screen.getByTestId("auth-tab-blocked-note")).toBeInTheDocument();
   });
 
-  // W6-U SHOULD-2 — the two `stuck` arms returned early and left the
-  // placeholder tab open. That tab was FOREGROUNDED by the click and reads
-  // "this page changes to your provider's sign-in page by itself… if nothing
-  // happens, go back there" — on the one start that never will, with the error
-  // sitting on the tab behind it. The CHANGELOG's "Wardyn closes it while it is
-  // still the placeholder (Cancel, an error, a completed sign-in)" was false
-  // for exactly these two.
+  // The two `stuck` arms must also close the placeholder tab, not just
+  // return early — it was foregrounded by the click and reads "this page
+  // changes to your provider's sign-in page by itself… if nothing happens,
+  // go back there", on the one start that never will, with the error
+  // sitting on the tab behind it. CHANGELOG.md's "Wardyn closes it while it
+  // is still the placeholder (Cancel, an error, a completed sign-in)"
+  // covers exactly these two states too.
   it.each([["STARTING"], ["FAILED"]] as const)(
     "a %s run stuck on a terminal reason closes the placeholder tab with the error",
     async (state) => {

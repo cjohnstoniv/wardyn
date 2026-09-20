@@ -111,7 +111,7 @@ describe("SetupLayout", () => {
       expect(onSelect).not.toHaveBeenCalled();
     });
 
-    // W13-S1-8: the action button stands in for corp-network-egress.tsx's
+    // The action button stands in for corp-network-egress.tsx's
     // inline Test/Test-all buttons, which are already disabled={!operator} —
     // this shared footer button had no such check.
     it("blocked WITH an action, a non-operator: the button is disabled and never fires", async () => {

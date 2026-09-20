@@ -47,10 +47,10 @@ type AuthStatus = "checking" | "authed" | "unauthed";
 // How often the reachability heartbeat beats, so the "control plane
 // unreachable" banner stays fresh. It hits /healthz, NOT /setup/status: the
 // latter is a full ListRuns plus a host sweep that shells out (host-proxy
-// detection, `git config` for SCM posture), and every authed tab used to run
-// it every 5s forever. /healthz already carries the only fact the shell
-// needs — liveness — so the expensive snapshot is now fetched exactly once
-// per session, for the landing decision.
+// detection, `git config` for SCM posture), far too expensive for every
+// authed tab to run every 5s forever. /healthz already carries the only fact
+// the shell needs — liveness — so the expensive snapshot is fetched exactly
+// once per session, for the landing decision.
 // Exported (X2-F15): navigation.spec.ts derives its own wait from this exact
 // constant instead of a second, independently-hardcoded copy of "5000" that
 // could drift from it.
@@ -193,10 +193,10 @@ function SetupRoute({
 }) {
   const roleResolved = useRoleResolved();
   // Warms the funnel's lazy chunk while the gate above holds, so the /me
-  // round trip and the dynamic import overlap instead of serializing — the
-  // gate would otherwise add its wait IN FRONT OF the chunk fetch that used
-  // to start immediately (both states paint the same RouteFallback, so nothing
-  // here is visible either way).
+  // round trip and the dynamic import overlap instead of serializing — without
+  // this the gate would add its wait IN FRONT OF the chunk fetch instead of
+  // alongside it (both states paint the same RouteFallback, so nothing here
+  // is visible either way).
   React.useEffect(() => {
     void import("./components/screens/onboarding/onboarding-screen");
   }, []);
@@ -290,11 +290,10 @@ function RequireSetup({ status }: { status: SetupStatus | null }) {
 
 // What needs an operator's attention — surfaced as the amber count badge on the
 // Runs nav entry — is `needsAttention` in screens/runs/board-groups, the SAME
-// predicate the board itself renders. This was a second hand-copied Set of run
-// states here, which meant the badge and the board could disagree about the
-// same run: neither knew about a held approval, which parks the sandbox while
-// the run state stays RUNNING, so a run the board could show as blocked never
-// reached the badge at all.
+// predicate the board itself renders. A second, hand-copied set of run states
+// here could disagree with the board about the same run: neither would know
+// about a held approval, which parks the sandbox while the run state stays
+// RUNNING, so a run the board shows as blocked could go unbadged.
 
 // The Runs attention badge and the Approvals pending badge are background
 // signals visible from every screen, so both are polled — approvals can now be
@@ -462,7 +461,7 @@ export default function App() {
   const [setupStatus, setSetupStatus] = React.useState<SetupStatus | null>(
     null,
   );
-  // RETURNED, like refreshHealth below (Codex #12): usePoll's in-flight guard is
+  // RETURNED, like refreshHealth below: usePoll's in-flight guard is
   // promise-based, so a void return would let a slow /setup/status — the
   // expensive endpoint — stack a second read on top of the first every tick.
   const refreshSetupStatus = React.useCallback(() => {
@@ -537,9 +536,9 @@ export default function App() {
   usePoll(refreshSetupStatus, MODEL_ACCESS_POLL_MS, auth !== "authed");
   // R4/F027: reachability is NOT gated on being signed in. /healthz is the one
   // unauthenticated endpoint the console has, and the state where it matters
-  // most is the one this used to skip — an outage that sent the human to the
-  // gate. Polled from mount so the verdict is live in every auth state, and so
-  // an outage recorded by the mount probe above clears on its own.
+  // most is the one an auth-gated poll would skip — an outage that sent the
+  // human to the gate. Polled from mount so the verdict is live in every auth
+  // state, and so an outage recorded by the mount probe above clears on its own.
   React.useEffect(() => {
     void refreshHealth();
   }, [refreshHealth]);

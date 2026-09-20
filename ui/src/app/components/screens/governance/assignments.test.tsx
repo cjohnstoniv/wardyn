@@ -5,9 +5,8 @@
 
 // AssignmentsBlock's own resolved-profile preview (governance-screen.test.tsx
 // covers the rest of the block through the full GovernanceScreen — this file
-// is scoped to the ONE new behaviour F4-F10 (Appendix A V8) adds, kept out of
-// that file to avoid a file-ownership collision with lane ui-member-cluster,
-// which owns governance-screen.tsx).
+// is scoped to the one behaviour below, kept separate to avoid a
+// file-ownership collision with whatever owns governance-screen.tsx).
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -63,9 +62,9 @@ beforeEach(() => {
 });
 
 describe("AssignmentsBlock — the resolved preview", () => {
-  // F4-F10 (Appendix A V8): `result` was not cleared when `claims` changed —
-  // the previous group's resolved profile sat under new, unrun input as if it
-  // were the new group's answer.
+  // `result` must clear when `claims` changes — otherwise the previous
+  // group's resolved profile sits under new, unrun input as if it were the
+  // new group's answer.
   it("typing new claims clears the previous group's stale preview result", async () => {
     previewGovernanceMock.mockResolvedValue({ profile_id: "p1", profile_name: "Platform", matched_tier: "group" });
     renderBlock();

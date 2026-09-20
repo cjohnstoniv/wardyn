@@ -114,7 +114,7 @@ describe("people-access-copy — casing rule", () => {
     expect(PREVIEW.RESULT_MATCHED("admin", "x")).not.toContain("as Admin");
   });
 
-  // THE DOC HALF of the same rule (R4/F033). renderPreviewResult now lowers a
+  // The doc half of the same rule (R4/F033). renderPreviewResult now lowers a
   // THIRD tier into RESULT_MATCHED/_DEFAULT/_LEGACY via roleLabelInSentence
   // (access-panel.tsx), so a security_admin verdict reads "Would sign in as
   // security admin — matched by …" where it used to read "member". §7.2's rule
@@ -132,7 +132,7 @@ describe("people-access-copy — casing rule", () => {
     // truth for the chip, so the doc's third-tier word is derived, not retyped.
     expect(PEOPLE.ROLE_SECURITY_ADMIN).toBe("Security admin");
     expect(rule).toContain(PEOPLE.ROLE_SECURITY_ADMIN.toLowerCase());
-    // THE MODULE HALF (R4/CANON-F033-B). The doc is not the only place this
+    // The module half (R4/CANON-F033-B). The doc is not the only place this
     // rule is written down: people-access-copy.ts's own header transcribes it,
     // and that transcription enumerated admin/member only. Rule (b) moves the
     // module WITH the doc, so pin the module's copy of the rule too — a doc
@@ -155,7 +155,7 @@ describe("people-access-copy — casing rule", () => {
     expect(note).toContain("roleLabelInSentence");
     // The statement F033 falsified, gone: it IS interpolated, lowercased.
     expect(note).not.toMatch(/title case and never interpolated into a sentence/);
-    // THE MODULE HALF (R4/CANON-F033-B): governance-copy.ts cites §7.9 as its
+    // The module half (R4/CANON-F033-B): governance-copy.ts cites §7.9 as its
     // authority and quoted that same retired sentence verbatim, so the doc fix
     // left the code contradicting the doc it points at.
     const govMod = readFileSync(resolve(process.cwd(), "src/app/lib/governance-copy.ts"), "utf8");

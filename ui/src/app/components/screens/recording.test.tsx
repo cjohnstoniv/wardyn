@@ -30,7 +30,7 @@ vi.mock("../../lib/api/runs", () => ({
     listRuns: () => listRunsMock(),
   },
 }));
-// W21-S1-7: components.recording is read once (health()) to tell "this
+// components.recording is read once (health()) to tell "this
 // deployment never records" apart from "no run has one yet". Default to an
 // older/unconfigured daemon's shape ({}) so every other test below is
 // unaffected.
@@ -140,7 +140,7 @@ describe("RecordingScreen", () => {
     expect(getRecordingMock).not.toHaveBeenCalled();
   });
 
-  // W21-S1-7 regression: a stock Helm install (persistence off) never
+  // Regression: a stock Helm install (persistence off) never
   // constructs a recording store, so /healthz's components.recording reports
   // "none". Both empty states must say so honestly instead of implying more
   // runs would eventually produce one.

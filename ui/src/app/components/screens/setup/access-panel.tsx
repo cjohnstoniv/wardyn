@@ -48,12 +48,10 @@ import { Chip } from "../../wardyn/primitives";
 import { EmptyState } from "../../wardyn/states";
 import { Segmented } from "../permissions";
 
-// ------------------------------------------------------------
 // Backtick-mono rendering (people-access-copy.ts's header note): a frozen
 // string carries an env var name as plain text; this is the ONE place that
 // decides which substrings get the mono treatment, applied uniformly
 // wherever they recur.
-// ------------------------------------------------------------
 const withMono = makeMono([
   "WARDYN_OIDC_ROLE_MAP",
   "WARDYN_OIDC_OPERATOR_EMAILS",
@@ -112,9 +110,9 @@ function roleLabelInSentence(role: string): string {
   }
 }
 
-// A quiet inline note — the ONLY error surface this panel uses (F-11's lesson:
-// in-viewport, next to the control that raised it, never a toast that can
-// scroll out of frame). Mirrors permissions.tsx's own private Note.
+// A quiet inline note — the ONLY error surface this panel uses: in-viewport,
+// next to the control that raised it, never a toast that can scroll out of
+// frame. Mirrors permissions.tsx's own private Note.
 function Note({ tone = "plain", children }: { tone?: "plain" | "red"; children: React.ReactNode }) {
   return (
     <p
@@ -142,7 +140,6 @@ function plainDeleteBody(value: string): string {
   return PEOPLE.DELETE_CONFIRM(value).slice(plainDeleteTitle(value).length).trim();
 }
 
-// ------------------------------------------------------------
 // Write-error classification. Collision and posture-flip 400s are
 // STRUCTURED (AccessCollisionError / AccessPostureFlipRequiredError,
 // lib/api/access.ts) as of commit 544467ed — keyed directly off their typed
@@ -151,7 +148,6 @@ function plainDeleteBody(value: string): string {
 // are now stable canon (docs/design/people-access-prompt.md's "Post-
 // adjudication canon additions") — matched EXACTLY, no `.includes`, so an
 // unrelated 400 can never be misclassified as one of these two.
-// ------------------------------------------------------------
 type WriteErrorKind =
   | { kind: "posture_flip"; before: string; after: string }
   | { kind: "email_refused" }
@@ -204,9 +200,7 @@ function writeErrorNote(err: WriteErrorKind): React.ReactNode {
   }
 }
 
-// ============================================================
 // AccessPanel
-// ============================================================
 export function AccessPanel({
   access,
   state,
@@ -256,9 +250,7 @@ export function AccessPanel({
   );
 }
 
-// ------------------------------------------------------------
 // Role mappings table + add form + Defaults block
-// ------------------------------------------------------------
 function MappingsTable({ access, onReload }: { access: AccessResponse; onReload: () => void }) {
   const [toDelete, setToDelete] = React.useState<AccessMapping | null>(null);
   const [busy, setBusy] = React.useState(false);
@@ -479,12 +471,10 @@ function MappingCard({
   );
 }
 
-// ------------------------------------------------------------
 // Add-mapping form — the FIRST_ROW posture guard runs here, pre-emptively,
 // using GET /access's own posture (before/after) rather than waiting for the
 // server to 400 (which access.go documents as the SAME data, exposed early —
 // see AccessPanel's header comment).
-// ------------------------------------------------------------
 function AddMappingForm({
   access,
   onReload,
@@ -620,9 +610,7 @@ function AddMappingForm({
   );
 }
 
-// ------------------------------------------------------------
 // Preview panel — a dry run, never saved (POST /access/preview).
-// ------------------------------------------------------------
 function PreviewPanel({ mapEmpty }: { mapEmpty: boolean }) {
   const [claims, setClaims] = React.useState("");
   const [running, setRunning] = React.useState(false);

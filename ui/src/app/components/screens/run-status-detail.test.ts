@@ -28,10 +28,11 @@ import {
   STUCK_IMAGE_PULL,
 } from "./run-status-detail";
 
-// 0.7.5 field report, finding 6. Every slow start looked identical: the run sat
-// in STARTING and nothing said whether it was pulling an image, waiting to
-// schedule, or stuck on a reference that would never resolve. The substrate's
-// answer now reaches the wire; this module is where it becomes a sentence.
+// 0.7.5 field report, finding 6: without this, every slow start looks
+// identical — the run sits in STARTING and nothing says whether it is
+// pulling an image, waiting to schedule, or stuck on a reference that would
+// never resolve. The substrate's answer reaches the wire; this module is
+// where it becomes a sentence.
 
 describe("statusDetailSentence", () => {
   it("renders the TERMINAL image failure with the registry's own words", () => {
@@ -92,7 +93,7 @@ describe("statusDetailSentence", () => {
     expect(isTerminalStatusReason("SomeFutureReason")).toBe(false);
   });
 
-  // N2 (review): a line that did not parse at all is NOT the "nothing has taken
+  // A line that did not parse at all is NOT the "nothing has taken
   // the pod" fact. Saying "Waiting for a machine to start it on." over a string
   // nobody recognised invents a diagnosis, which is the whole defect this module
   // exists to end.
@@ -106,7 +107,7 @@ describe("statusDetailSentence", () => {
     expect(statusDetailSentence("pod: : nothing has taken it")).toBe(STARTING_WAITING_FOR_NODE);
   });
 
-  // S2 (review): the server now always sends the detail beside a terminal
+  // The server always sends the detail beside a terminal
   // reason, but a UI that returns "" for one is a blank sentence under a lead-in
   // that promises words. Defence in depth, both registers.
   it("never falls silent on a terminal reason, even with no detail at all", () => {
@@ -138,7 +139,7 @@ describe("statusDetailSentence", () => {
   });
 });
 
-// round-2 UX S9: the header chip is max-w-[160px]. The sentences above truncate
+// The header chip is max-w-[160px]. The sentences above truncate
 // there to a restatement of the STARTING badge sitting right beside them, and
 // the registry's words — the entire point of a terminal reason — never appear.
 describe("statusDetailChip — the short register", () => {
@@ -147,7 +148,7 @@ describe("statusDetailChip — the short register", () => {
     expect(statusDetailChip("agent: ContainerCreating", "ContainerCreating")).toBe(CHIP_SETTING_UP);
     expect(statusDetailChip("pod: Unschedulable: taint", "Unschedulable")).toBe(CHIP_WAITING_FOR_MACHINE);
     expect(statusDetailChip("agent: ImagePullBackOff: denied", "ImagePullBackOff")).toBe(CHIP_IMAGE_PULL_FAILED);
-    // N1 (review): an unknown reason must not be asserted to be a machine wait.
+    // An unknown reason must not be asserted to be a machine wait.
     // The chip is the only register a narrow header shows, so a wrong short
     // answer there is worse than a long true one.
     expect(statusDetailChip("agent: SomeFutureReason: x", "SomeFutureReason")).toBe(

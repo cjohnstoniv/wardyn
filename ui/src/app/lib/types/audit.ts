@@ -21,7 +21,7 @@ export interface AuditEvent {
   data?: Record<string, unknown>;
 }
 
-// --- Tool-rule decisions ---------------------------------------------------
+// Tool-rule decisions
 // tool_rules lets a policy answer a tool call without waking anyone
 // (internal/egress/proxy/tool_rules.go). An `allow` or a `deny` creates NO
 // approval card, so the audit trail is the only place that decision is ever
@@ -60,7 +60,7 @@ export function toolRuleDecision(e: AuditEvent): RuleDecision | null {
   return effect ? { effect, source } : null;
 }
 
-// --- rule_source console labels (6a) ---------------------------------------
+// rule_source console labels (6a)
 // rule_source has ONE other reader in the console: this function, which covers
 // every NON-tool-rule value (a real egress/approval/guard decision, not a
 // policy-answered tool call — those are toolRuleDecision's, immediately
@@ -122,7 +122,7 @@ export function ruleSourceLabel(source: string): RuleSourceLabel | null {
   return { label: source, tone: "neutral" };
 }
 
-// --- Run detail supporting shapes (UI-side, projected from audit events) ---
+// Run detail supporting shapes (UI-side, projected from audit events)
 export interface CredentialGrant {
   id: string;
   scope: string;
@@ -147,7 +147,7 @@ export interface EgressDecision {
   approval_id?: string;
 }
 
-// --- Why a run ended badly (M7(b)) -----------------------------------------
+// Why a run ended badly (M7(b))
 // The console half of the CLI's runFailureReason (cmd/wardyn/commands.go): the
 // reason a run FAILED, was KILLED, or was auto-stopped is only ever in its
 // audit trail, and the run page already fetches that trail. No new endpoint.

@@ -64,7 +64,7 @@ describe("UI bundle is route-code-split", () => {
     const entry = chunks.find((c) => c.isEntry);
     expect(entry, "no entry chunk in build output").toBeDefined();
 
-    // 1. The build is actually split (pre-fix this was a single chunk).
+    // 1. The build is actually split (without it, this is a single chunk).
     expect(chunks.length).toBeGreaterThan(1);
 
     // 2. xterm and asciinema-player are the two heavy deps. They belong to the

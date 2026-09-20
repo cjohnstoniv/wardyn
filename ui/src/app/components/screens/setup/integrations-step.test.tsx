@@ -3,14 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// IntegrationsStep is now a thin composition of the SHARED ModelProviderCard
-// (../settings/connection-cards) plus its lede — it no longer embeds the whole
-// /integrations page, which is what let an operator-extensibility framework
-// (seven kinds, a probe system, an adopt lifecycle) surface during first-run
-// setup. GitHostCard retired in 0.7.2; its git credential lanes moved to the
-// `providers` step. The card's own behaviour is covered in
-// connection-cards.test.tsx; what THIS suite owns is that the step renders it,
-// wired to the step's status and recheck.
+// IntegrationsStep is a thin composition of the shared ModelProviderCard
+// (../settings/connection-cards) plus its lede — it does not embed the whole
+// /integrations page, which is what would let an operator-extensibility
+// framework (seven kinds, a probe system, an adopt lifecycle) surface during
+// first-run setup. Git credential lanes live in the `providers` step, not
+// here. The card's own behaviour is covered in connection-cards.test.tsx;
+// what this suite owns is that the step renders it, wired to the step's
+// status and recheck.
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -36,24 +36,24 @@ describe("IntegrationsStep", () => {
     ).toBeInTheDocument();
   });
 
-  // X3-F8: the lede named "the Secrets page" with no way to get there.
+  // X3-F8: the lede's "Secrets page" mention must be a real link, not just
+  // named text with no way to get there.
   it("X3-F8: the lede's Secrets page mention is a real link to /secrets", () => {
     renderStep();
     const link = screen.getByRole("link", { name: STEP_LEDE_LINK });
     expect(link).toHaveAttribute("href", "/secrets");
   });
 
-  // GitHostCard retired in 0.7.2 — the step renders ModelProviderCard only now;
-  // the git credential lanes moved to the `providers` step / /providers (its
-  // own test coverage).
+  // The step renders ModelProviderCard only — git credential lanes live in
+  // the `providers` step / /providers (its own test coverage), not here.
   it("renders the shared model-provider card", () => {
     renderStep();
     expect(screen.getByRole("radiogroup", { name: S.MODEL_TITLE })).toBeInTheDocument();
   });
 
-  // The regression this whole rework exists to prevent: the step used to embed
-  // IntegrationsScreen, so the funnel showed a catalog with an "Add integration"
-  // button during first-run setup.
+  // The regression this whole rework exists to prevent: embedding
+  // IntegrationsScreen would show the funnel a catalog with an "Add
+  // integration" button during first-run setup.
   it("offers no integration catalog — no Add integration affordance anywhere", () => {
     renderStep();
     expect(screen.queryByRole("button", { name: /add integration/i })).not.toBeInTheDocument();
@@ -65,7 +65,8 @@ describe("IntegrationsStep", () => {
     expect(screen.getByRole("radio", { name: /Claude subscription/ })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /API key/ })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /AWS Bedrock/ })).toBeInTheDocument();
-    // Azure was the fifth AI kind; it only ever powered the deleted composer.
+    // Azure is one of the five AI kinds the API can return, but only the
+    // deleted composer ever used it, so it must never render here.
     expect(screen.queryByText(/Azure/i)).not.toBeInTheDocument();
   });
 

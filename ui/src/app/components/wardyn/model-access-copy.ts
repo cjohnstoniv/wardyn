@@ -22,32 +22,32 @@ import { AGENTS } from "../../lib/workspace-providers-copy";
 // DRAFT (M2 canon pending) — ruled by the UX round (S2, S3, S13, nits)
 export const MODEL_ACCESS_BANNER = {
   // The first-run state. It states the NEED, never a verdict about what will
-  // happen at launch (Codex #12): "refused at launch" is true of the
-  // interactive and ephemeral-workspace shapes but not of every composed
-  // request — a scan run makes no model call at all — and the server's own 422
-  // says it at the click, where it is certainly true.
+  // happen at launch: "refused at launch" is true of the interactive and
+  // ephemeral-workspace shapes but not of every composed request — a scan run
+  // makes no model call at all — and the server's own 422 says it at the
+  // click, where it is certainly true.
   NOT_SIGNED_IN: "You are not signed in to AWS — Claude Code needs your AWS sign-in",
   // "lapsed" would be FALSE for a pin-contradicted session, which is live and
   // the wrong identity (internal/api/modelaccess.go's
-  // modelAccessPinContradictedAction) — one sentence true of both (round-2 UX
-  // B5); the server's action carries the account/role pair.
+  // modelAccessPinContradictedAction) — one sentence true of both; the
+  // server's action carries the account/role pair.
   EXPIRED: "Your AWS sign-in no longer works for Claude Code — sign in again",
   // The same fact WITHOUT its imperative, for when a page surface has claimed
-  // the door (round-2 UX S7): the strip keeps its sentence and drops its
-  // button, and "sign in again" beside no button points at nothing.
+  // the door: the strip keeps its sentence and drops its button, and "sign in
+  // again" beside no button points at nothing.
   EXPIRED_SHORT: "Your AWS sign-in no longer works for Claude Code",
   // {when} = relativeTime(deadline) ("in 3h"); absoluteTime(deadline) rides the
-  // element's title (round-2 UX B6). The deadline is IN the sentence, which is
-  // why no separate server action line renders for this state (S1).
+  // element's title. The deadline is IN the sentence, which is why no separate
+  // server action line renders for this state.
   EXPIRING: "Your AWS sign-in lapses {when}",
   // The shared row's ADMIN: their own sign-in repairs it, and the sentence
-  // names the blast radius because every run rides that one credential (S2).
+  // names the blast radius because every run rides that one credential.
   SHARED_ADMIN_EXPIRING: "The shared AWS sign-in every Claude Code run uses lapses {when}",
   SHARED_ADMIN_EXPIRED:
     "The shared AWS sign-in no longer works — every Claude Code run needs it; sign in again",
   // shared_expired (member): the server's action line renders ALONE — no
-  // sentence of ours, because it would be a second sentence saying the one fact
-  // (S13), and there is no button: nobody but the admin can repair it.
+  // sentence of ours, because it would be a second sentence saying the one
+  // fact, and there is no button: nobody but the admin can repair it.
   DIALOG_TITLE: "Sign in to AWS",
   // <DialogDescription className="sr-only"> — the dialog's accessible
   // description. Sighted readers never see it; a screen-reader user hears what
@@ -58,14 +58,14 @@ export const MODEL_ACCESS_BANNER = {
   // read, and a surface that disappears is not a confirmation.
   SIGNED_IN_TOAST: "Signed in to AWS — your runs can use your session now",
   // The per-viewer, per-session set-aside. Offered ONLY where the viewer cannot
-  // act (O-11, W0-mock ruling 3): the first-run state, and a dead SHARED
-  // credential for a non-operator. A lapse of something the person already had
-  // is never dismissable.
+  // act (W0-mock ruling 3): the first-run state, and a dead SHARED credential
+  // for a non-operator. A lapse of something the person already had is never
+  // dismissable.
   NOT_NOW: "Not now",
   // The strip's button has a name of its own ON /settings, where a MEMBER sees
   // it beside the Settings card's own disabled "Sign in to AWS" (the strip
-  // deliberately stays there — round-1 UX B1/S12 — so the collision is with a
-  // dead control rather than a live one). getByRole matches a disabled button,
+  // deliberately stays there, so the collision is with a dead control rather
+  // than a live one). getByRole matches a disabled button,
   // so without this one page carries two controls with one accessible name.
   // The rail's precedent: RAIL_MODEL_ACCESS.SIGN_IN_ARIA. Elsewhere the strip
   // is the only "Sign in to AWS" on the page and keeps the plain label, which
@@ -80,17 +80,16 @@ export const MODEL_ACCESS_BANNER = {
 // declared per-user lane is unsatisfied (enforceCreateLLMMechanism); a scan or
 // exec run needs no model credential and shows no line.
 export const RAIL_MODEL_ACCESS = {
-  // UX round S1: "This run is refused at launch." was a verdict on a run that does not exist yet.
-  // Codex #12: NON-VERDICT copy — "Launch is refused" over-claims for some composed shapes (a batch with a
+  // NON-VERDICT copy: "refused at launch" over-claims for some composed shapes (a batch with a
   // pure-ephemeral primary emits workspace_id in wizard-spec.ts; llmMechanismGateApplies exempts a
   // non-interactive workspace-bound request at create while dispatch can refuse later); the rail states
   // credential readiness, never the exact refusal stage, and never duplicates the server gate.
   NOT_SIGNED_IN: "Sign in to AWS before you launch — Claude Code needs your AWS sign-in.",
-  EXPIRED: "Your AWS sign-in no longer works for Claude Code — sign in again before you launch.",   // true of a pin mismatch too (B5)
+  EXPIRED: "Your AWS sign-in no longer works for Claude Code — sign in again before you launch.",   // true of a pin mismatch too
   EXPIRING: (when: string) => `Your AWS sign-in lapses ${when} — sign in again soon.`,
   SHARED_EXPIRED: "Your admin's AWS credential has expired — Claude Code runs need it reconnected.",
   // The shared row's ADMIN reads their own repair sentence, never the
-  // member's "ask them" line about themselves (review-1 S2; mirrors
+  // member's "ask them" line about themselves (mirrors
   // MODEL_ACCESS_BANNER.SHARED_ADMIN_EXPIRED, reworded for the rail's
   // "before you launch" voice).
   SHARED_ADMIN_EXPIRED: "The shared AWS sign-in no longer works — sign in again before you launch.",
@@ -111,10 +110,10 @@ export const MODEL_ACCESS_RUN_DOOR = {
   // here does not restart anything. It names the run HEADER rather than the
   // control on it ("Start a run like this one"), because this block also
   // renders inside focus mode, which portals the terminal pane alone and never
-  // draws that header (round-2 UX B7 / S7).
+  // draws that header.
   NOTE: "Sign in here. This run stays failed — relaunch it from the run header.",
   // The accessible name, distinct from every other "Sign in to AWS" a page can
-  // carry (S8; the SIGN_IN_AWS_ARIA_CARD precedent in wardyn/copy.ts). The
+  // carry (the SIGN_IN_AWS_ARIA_CARD precedent in wardyn/copy.ts). The
   // visible label stays AGENTS.SIGN_IN_AWS — one spelling of one control.
   SIGN_IN_ARIA: "Sign in to AWS — for this failed run",
 } as const;
@@ -122,7 +121,7 @@ export const MODEL_ACCESS_RUN_DOOR = {
 // DRAFT (M2 canon pending) — the mid-run re-auth row (Finding 4), ruled by the
 // UX rounds (B2, B3, S6, S8) and Codex #5.
 //
-// THE RULE THESE STRINGS FOLLOW: say what the ROW PROVES, and nothing more. A
+// The rule these strings follow: say what the ROW PROVES, and nothing more. A
 // PENDING credential_reauth row is evidence a sign-in was ASKED FOR. It is not
 // evidence that a request is still parked — the hold may have timed out, the
 // SDK may have disconnected, or the final resolve may have refused a roster
@@ -133,9 +132,9 @@ export const REAUTH_ROW = {
   label: "AWS sign-in needed",
   // Both branches, because the console cannot tell which one the person is in.
   hint: "If a model call is waiting on your sign-in, the run continues after you sign in; if it already failed, relaunch it.",
-  // AGENTS.SIGN_IN_AWS BY REFERENCE, not a second copy of its letters (general
-  // N1): the comment used to claim reuse while the string was retyped, which is
-  // exactly how one control acquires four spellings.
+  // AGENTS.SIGN_IN_AWS BY REFERENCE, not a second copy of its letters: a
+  // comment claiming reuse while the string is retyped is exactly how one
+  // control acquires four spellings.
   action: AGENTS.SIGN_IN_AWS,
   // The row's button has a name of its own, because a strip can carry several
   // and "Sign in to AWS" three times is three identical accessible names.
@@ -144,8 +143,7 @@ export const REAUTH_ROW = {
   // satisfy, so the row states the instruction instead of offering a dead door
   // (Codex #7 — the audience decides which of the two renders).
   sharedMemberHint: "This run uses the shared AWS sign-in — ask your admin to sign in again.",
-  // The PER_USER lane's non-owner — an admin reading a member's held run is the
-  // case that made this exist (round-2 general S5, W6-U BLOCKER-2). The
+  // The PER_USER lane's non-owner — an admin reading a member's held run. The
   // admin's own sign-in captures into the ADMIN's scope and can never resolve
   // this row (reauthResolvableBy), so the sentence names whose sign-in is
   // awaited and carries no button. "the run owner" stands in when the row
@@ -214,12 +212,11 @@ export { waitingReauth } from "../../lib/reauth-waiting-copy";
 // LiveApprovals' toast when a re-auth row leaves PENDING as APPROVED — the
 // person's only "it worked" moment, since the row vanishes on the next 4s poll.
 // Two words, because APPROVED proves the sign-in landed and proves NOTHING
-// about the run (round-2 UX S10, Codex #5): "the run is continuing" would be a
-// claim on forgeable-to-the-console evidence.
+// about the run (Codex #5): "the run is continuing" would be a claim on
+// forgeable-to-the-console evidence.
 export const REAUTH_SIGNED_IN_TOAST = "Signed in";
 
-// The /approvals card's title for the kind (UX round B3): a request that mints
-// nothing must not be titled "Mint a scoped credential", and the card carries
-// no blast-radius claim. "paused" is the word for PEOPLE; "held" is the wire's
-// (round-2 UX S6).
+// The /approvals card's title for the kind: a request that mints nothing must
+// not be titled "Mint a scoped credential", and the card carries no
+// blast-radius claim. "paused" is the word for PEOPLE; "held" is the wire's.
 export const REAUTH_TITLE = "Sign in to AWS again — this run is paused";

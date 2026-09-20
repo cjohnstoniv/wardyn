@@ -47,8 +47,8 @@ describe("hasLlmPath — via the integrations adapter", () => {
 
   // UI-LIB-3: auth_mode is only set once Wardyn peeks a real subscription
   // token (setup.go's subOK) — but the server's own llm_provider check calls
-  // ANY logged-in CLI real access. This used to read false here while the
-  // same payload's llm_provider check read "ok".
+  // ANY logged-in CLI real access, so this must agree and read true even when
+  // auth_mode can't yet confirm a subscription.
   it("counts a resident CLI login even when auth_mode can't confirm a subscription", () => {
     expect(hasLlmPath(status({ providers: [{ tool: "claude", installed: true, logged_in: true }] }))).toBe(true);
     expect(

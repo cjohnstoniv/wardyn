@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The demo RUNNER — the reusable machinery behind a hands-on demo sandbox:
+// The demo runner — the reusable machinery behind a hands-on demo sandbox:
 // launch/poll/re-attach (`useDemoRuns`), the Start / starting / live-terminal /
 // terminated controls (`DemoRunControls`), the inline decisions panel
 // (`DemoAuditPanel`), the numbered command walkthrough (`StepList`) and the
@@ -158,7 +158,7 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
         // (its policy grants Anthropic egress, and the connected model is injected
         // proxy-side). Same interactive shape, so "watch it live" is always honest.
         //
-        // W3-S1-1: the keyless demos' cards promise "no allowed
+        // The keyless demos' cards promise "no allowed
         // destinations / no key" — without task_mode="exec" the server still
         // folds the operator's site-wide model integration onto ANY run
         // (foldRunIntegration only skips it for task_mode=exec; see
@@ -227,7 +227,7 @@ export function useDemoRuns(onStarted?: (demoId: string) => void) {
   return { runs, starting, start, end, createErrors };
 }
 
-// DemoCaution — the honest CC1-open-egress danger note (demo 4).
+// DemoCaution — the honest CC1-open-egress danger note.
 export function DemoCaution({ text }: { text: string }) {
   return (
     <div
@@ -288,12 +288,12 @@ export function DemoRunControls({
   if (running && run) {
     return (
       <div className="mt-4 space-y-2">
-        {/* Shorter than the 70vh default ON PURPOSE: a demo's whole story is
+        {/* Shorter than the 70vh default, deliberately: a demo's whole story is
             the terminal AND the approvals strip under it — a command hangs, a
             row appears, a human decides, the command resumes. At 70vh the strip
             lives below the fold, so the decision happens off screen and the
-            resume looks like magic. 42vh keeps both halves in one 1080p frame. */}
-        {/* 36vh (not 42) so the policy above, the terminal, and the audit
+            resume looks like magic. */}
+        {/* 36vh so the policy above, the terminal, and the audit
             panel below all fit one 1080p frame while a demo runs — the cockpit
             view. A few command lines read fine at this height. */}
         <AttachTerminal runId={run.id} heightClass="h-[36vh]" />

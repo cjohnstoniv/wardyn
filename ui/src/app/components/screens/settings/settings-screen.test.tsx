@@ -144,12 +144,12 @@ describe("SettingsScreen — operatorResolved && operator guards the site-config
   });
 });
 
-// GET /api/v1/site-config became operatorOnly in R1: it carries the upstream
+// GET /api/v1/site-config is operatorOnly (R1): it carries the upstream
 // proxy secret ref, every integration's credential ref and the internal
-// proxy/SCM hostnames, and a plain member used to receive all of it on this
-// page load. A member now reaches this screen with siteConfig === null —
-// since the member-cold-load lane, because the read is skipped outright
-// (adminReads above), not because it still fires and 403s into a caught null.
+// proxy/SCM hostnames, so a plain member must never receive it on this page
+// load. A member reaches this screen with siteConfig === null because the
+// read is skipped outright (adminReads above), not because it still fires
+// and 403s into a caught null.
 //
 // Absence is fine; a false STATEMENT is not. With a null config `isProxyConfigured`
 // is false, so the two places that assert a proxy POSTURE would tell a member of
@@ -268,13 +268,11 @@ describe("SettingsScreen — a redacted checks list is not an Off image builder"
   });
 });
 
-// 0.7.8 — the Host card mounts the SAME picker (EnvironmentStep) Getting
-// Started does, and until now had NO coverage of its own: the private
-// per-mount override state this card used to own (and persist to
-// localStorage) is gone, so this pins what is left — a read-only statement
-// of the server's own default, gated on installed availability exactly like
-// every other selector. DONE WHEN: a test fails if an unavailable class
-// becomes selectable again.
+// The Host card mounts the SAME picker (EnvironmentStep) Getting Started
+// does. This pins a read-only statement of the server's own default, gated
+// on installed availability exactly like every other selector — the card
+// owns no private per-mount override state of its own (no localStorage).
+// DONE WHEN: a test fails if an unavailable class becomes selectable again.
 describe("SettingsScreen — the Host card's barrier picker offers only what's installed", () => {
   it("checks the strongest installed tier and disables the rest, read-only", async () => {
     // baseStatus: CC1+CC2 installed, CC3 not — Wall is the strongest.

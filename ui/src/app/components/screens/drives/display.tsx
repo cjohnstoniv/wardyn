@@ -24,12 +24,12 @@ export { Note, noteClass, question } from "../governance/display";
 // the container happened to accept a node.
 //
 // The copy module carries these as plain text on purpose (its own header rule),
-// so this is the ONE place that decides which substrings get the span. A DRIVE
-// NAME is never here: §7 renders it inside double quotes because it is a
+// so this is the one place that decides which substrings get the span. A drive
+// name is never here: §7 renders it inside double quotes because it is a
 // human-chosen label, not a literal.
 export const withMono = makeMono(["WARDYN_USER_DRIVE_HOST_ROOTS", "/home/agent/drive", "disk_mib", ". _ -"]);
 
-// The admin's spelling of a size: THE one size helper (lib/user-drives-display
+// The admin's spelling of a size: the one size helper (lib/user-drives-display
 // .ts's driveSizeLabel, §5 #10 — never lib/format.ts's fmtBytes), with the
 // admin half of the state it deliberately refuses to choose. driveSizeLabel
 // returns null for 0/absent because a member's sentence takes the _NOSIZE twin
@@ -51,12 +51,12 @@ export const GLOSS: Record<StorageEnforcement, string> = {
   eviction: DRIVES.ENFORCEMENT_EVICTION,
 };
 
-// ABSENT IS UNKNOWN, NOT `none`, and that is the half that was wrong. An older
-// daemon or an undetected runner sends no word at all, and folding that to
-// "none" printed "nothing binds this size" — a positive claim about the
-// substrate — under all three disk fields, while isUncappedEnforcement below
-// deliberately withheld the matching warning for the same input. One of the two
-// had to be total, and the honest one is silence: no word, no gloss.
+// Absent is unknown, not `none`. An older daemon or an undetected runner
+// sends no word at all, and folding that to "none" would print "nothing
+// binds this size" — a positive claim about the substrate — under all
+// three disk fields, while isUncappedEnforcement below deliberately
+// withholds the matching warning for the same input. One of the two has to
+// be total, and the honest one is silence: no word, no gloss.
 export const enforcementGloss = (e: StorageEnforcement | undefined): string =>
   e === undefined ? "" : (GLOSS[e] ?? DRIVES.ENFORCEMENT_NONE);
 

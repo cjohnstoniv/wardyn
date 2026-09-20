@@ -11,7 +11,7 @@
 // inserts Entry.ClaimValue while the row shows Entry.DisplayName — that split
 // is the whole point of the two fields.
 //
-// ABSENT MODE IS THE SPINE. With no directory configured this control IS the
+// Absent mode is the spine. With no directory configured this control IS the
 // plain text input it replaced: no banner, no disabled state, no "directory
 // unavailable" note — §7.9 deliberately freezes no string for that state. A
 // "who" field stays free text forever, because the deployment that never turns

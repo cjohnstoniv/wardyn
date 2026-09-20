@@ -193,10 +193,10 @@ describe("frozen contract — ids, labels, headings, order", () => {
       ["ssh-briefly-resident", "The one that touches disk — briefly"],
       ["github-app-broker", "A token the sandbox never even sees"],
       ["sts-fail-closed", "No identity, no credential"],
-      // "Your work" is `providers` (0.7.2 — org policy over git hosts and
-      // storage ceilings, before Workspaces per the ORDER test §9.1) then
-      // workspaces — the tier-1/2 library steps (Directories & repos, Base
-      // images) retired with sources-library.tsx/image-catalog.tsx.
+      // "Your work" is `providers` (org policy over git hosts and storage
+      // ceilings, before Workspaces per the ORDER test §9.1) then workspaces
+      // — the tier-1/2 library steps (Directories & repos, Base images) are
+      // retired; sources-library.tsx/image-catalog.tsx are gone.
       ["providers", "Providers"],
       ["workspaces", "Workspaces"],
       ["review", "Review"],
@@ -625,11 +625,11 @@ describe("review gate — the BARRIER is the only hard requirement; a model is o
     expect(stepDone(status, r, [], 0).review).toBe(false);
   });
 
-  // B7-F2 (UI half): the confinement_floor check stays a `warn` (by design —
-  // profile/stored-policy runs are unaffected, so `fail` would be dishonest),
-  // but "Ready to launch" over-claims while the default policy 422s every run
-  // that doesn't pin one. `ready` itself is untouched (barrier-only, 4 other
-  // consumers read it that way) — only the badge changes.
+  // The confinement_floor check stays a `warn` (by design — profile/stored-
+  // policy runs are unaffected, so `fail` would be dishonest), but "Ready to
+  // launch" over-claims while the default policy 422s every run that doesn't
+  // pin one. `ready` itself is untouched (barrier-only, 4 other consumers
+  // read it that way) — only the badge changes.
   it("a standing confinement-floor warning keeps Review honest, without touching `ready`", () => {
     const status = baseStatus({
       ready: true,

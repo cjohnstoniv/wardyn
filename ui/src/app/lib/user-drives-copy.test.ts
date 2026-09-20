@@ -18,7 +18,7 @@ import { DRIVE_MEMBER, DRIVE_RUN, DRIVES } from "./user-drives-copy";
 // row or a deleted one all fail here rather than shipping.
 //
 // Two normalisations, both of them documented rules rather than fudges:
-//   - BACKTICKS ARE STRIPPED from the doc cell. §7's header note makes mono a
+//   - Backticks are stripped from the doc cell. §7's header note makes mono a
 //     DISPLAY concern applied by the consuming component (the
 //     governance-copy.ts precedent); the frozen string itself is plain text.
 //     Unlike governance-prompt.md, this doc's §7.2-§7.8 DOES use backticks
@@ -244,7 +244,7 @@ describe("user-drives-copy — the reuse and no-shadow rules §5 spells out", ()
   });
 });
 
-// ─── §7.1's second table: the strings the SERVER composes ───────────────────
+// §7.1's second table: the strings the SERVER composes
 //
 // The table above freezes what the drives MODULE renders. This one freezes
 // what the module deliberately does NOT carry — the admin-facing refusals the
@@ -324,7 +324,7 @@ const goFixedRuns = (lit: string) => unenvelope(lit).split(/%[#+\- 0]*\d*(?:\.\d
  * only the request knows, and the constant itself (`k8s_pvc`, `email_local`)
  * where the verb is always given the same one.
  *
- * THE FIXED FLOOR IS LOAD-BEARING, not a tuning knob: without it the bare `"%s"`
+ * The fixed floor is load-bearing, not a tuning knob: without it the bare `"%s"`
  * that exists in these packages compiles to `^.*?$`, matches every row, and the
  * whole check passes vacuously. A frozen refusal is a sentence; 30 characters of
  * it are fixed by construction.
@@ -427,7 +427,6 @@ describe("user-drives-prompt §7.1 — the server-composed table matches the Go 
   });
 });
 
-// ---------------------------------------------------------------------------
 // §7.7 — DRIVE_MEMBER's refusals, across the language boundary.
 //
 // The suite above proves TS == doc for all 141 keys. §7.7 is titled
@@ -591,21 +590,18 @@ describe("user-drives-prompt §7.7 — the member refusals match the Go source",
   });
 });
 
-// R4/F051 — §7.3 froze the preview as a five-row <dl> while POST /drives/preview
+// §7.3 documents the preview as a five-row <dl> while POST /drives/preview
 // answers seven fields, and PREVIEW_OBJECT_HINT ("What the reclaim command
-// names — copy it when someone leaves") promised the object name UNCONDITIONALLY.
+// names — copy it when someone leaves") promises the object name UNCONDITIONALLY.
 // For the one request shape the endpoint's own `warning` names — an address
 // pasted first against a `hash`/`sub` drive — that name is well-formed and names
 // an object no run will ever mount, and docs/OPERATIONS.md sends an operator to
 // this very preview to collect the argument for `docker volume rm`.
 //
-// The ledger's decision for that defect was "(a) now (API-only, no frozen-copy
-// change) + a §7.3 note later"; the note is the half that never landed. These
-// pin it in BOTH directions, so it cannot rot the way it was written:
-// the doc must name what the endpoint answers AND the console must still be
-// dropping it — the day a mock round renders the row, this fails and the note
-// has to be rewritten rather than quietly becoming false in the other
-// direction.
+// Pinned in BOTH directions so it cannot rot silently: the doc must keep
+// naming what the endpoint answers AND the console must keep dropping it —
+// the day a mock round renders the row, this fails and the note has to be
+// rewritten rather than quietly becoming false in the other direction.
 describe("user-drives-prompt §7.3 — the preview note matches what the endpoint answers", () => {
   const doc = readFileSync(DOC, "utf8");
   const section = doc.slice(doc.indexOf("### 7.3 "), doc.indexOf("### 7.4 "));
@@ -677,12 +673,12 @@ describe("user-drives-prompt §7.3 — the allocations truncation note (R4/F092)
   });
 });
 
-// F049: §2.4's refusal register named the home-template rule's share-side
-// direction only, while drive-editor.tsx's `homeDisabled` has gated BOTH
-// directions since the scope widened 2026-09-03 (a managed backend refuses
-// every non-hash template, not just email_local). Pin both halves so a
-// revert to one-directional gating — in the doc OR the component — fails
-// here instead of drifting silently again.
+// §2.4's refusal register must document the home-template rule in BOTH
+// directions: drive-editor.tsx's `homeDisabled` gates both directions (a
+// managed backend refuses every non-hash template, not just email_local),
+// not just the share-side one. Pin both halves so a revert to
+// one-directional gating — in the doc OR the component — fails here instead
+// of drifting silently again.
 describe("user-drives-prompt §2.4 — the home-template rule's mirror direction", () => {
   const doc224 = readFileSync(resolve(process.cwd(), "../docs/design/user-drives-prompt.md"), "utf8");
   const editorSrc = readFileSync(

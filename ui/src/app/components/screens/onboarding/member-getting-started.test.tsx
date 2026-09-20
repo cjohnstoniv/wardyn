@@ -373,15 +373,15 @@ describe("MemberGettingStarted", () => {
     expect(screen.queryByText(/^Drive · /)).not.toBeInTheDocument();
   });
 
-  // C4.5/C3 — the chip stops reading the deployment-wide llm_ready and reads
-  // THIS caller's own SetupStatus.model_access instead: success tone ONLY for
-  // "live", every other state warning with the server's own `action` verbatim
-  // as the chip row's own line.
+  // The chip reads THIS caller's own SetupStatus.model_access, never the
+  // deployment-wide llm_ready: success tone ONLY for "live", every other
+  // state warning with the server's own `action` verbatim as the chip row's
+  // own line.
   describe("the Model access chip reads status.model_access", () => {
-    // U-1 — these two carry the PER_USER row now (they used to carry none):
-    // "Your AWS sign-in" and "Expiring" are per-person labels, and the server
-    // emits the same two states for a SHARED row's admin credential, where they
-    // would name a sign-in this member does not have (the U-1 cases below).
+    // U-1 — these two carry the PER_USER row: "Your AWS sign-in" and
+    // "Expiring" are per-person labels, and the server emits the same two
+    // states for a SHARED row's admin credential, where they would name a
+    // sign-in this member does not have (the U-1 cases below).
     it("live: success tone, no action line, no CTA", async () => {
       getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "live" }, harnesses: perUserHarness }));
       renderPage();
@@ -479,10 +479,11 @@ describe("MemberGettingStarted", () => {
       expect(screen.getByTestId("harness-login-pane")).toBeInTheDocument();
     });
 
-    // V1 r2 LOW: the pane's start-URL field started EMPTY, so every member had to
-    // find their org's access portal themselves — and the server ignores what
-    // they type under a per_user row, signing in against the row's own
-    // sso_start_url. The field was a control with no effect; the note is the fact.
+    // The pane's start-URL field would otherwise be EMPTY, leaving every
+    // member to find their org's access portal themselves — and the server
+    // ignores what they type under a per_user row, signing in against the
+    // row's own sso_start_url anyway. A field with no effect is worse than
+    // none; the note is the fact.
     it("...and that pane asks for no access portal — the admin's is the one used", async () => {
       const user = userEvent.setup();
       getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "not_configured" }, harnesses: perUserHarness }));
@@ -548,10 +549,10 @@ describe("MemberGettingStarted", () => {
     // row: a stale `mine` write from before the roster switched this member
     // to per_user must not read as "Your key" over a lane that can never use
     // it, and the checklist must not mark the section done.
-    // FIX PASS 1 (REVIEW-1.md H1) — before this fix, this exact fixture left
-    // the chip row showing MODEL_ACCESS_OWN_CHIP ("Your key", success) AND
-    // the card's own Sign-in button dead (both gated on the old bare
-    // `hasOwnKey`): H1's probe caught PROBE pane present after click = false.
+    // FIX PASS 1 (REVIEW-1.md H1) — gating on the old bare `hasOwnKey` alone
+    // would leave this exact fixture showing MODEL_ACCESS_OWN_CHIP ("Your
+    // key", success) with the chip row AND the card's own Sign-in button
+    // dead: H1's probe catches PROBE pane present after click = false.
     it("hasOwn:true + per_user + not_configured: still Not signed in, checklist NOT done, reveal absent, own chip absent, card's own button mounts the pane", async () => {
       const user = userEvent.setup();
       // FIX PASS 1 (M1) — same observable-of-modelKeyDone technique as the
@@ -591,9 +592,9 @@ describe("MemberGettingStarted", () => {
       expect(await screen.findByRole("button", { name: "Use my own key instead" })).toBeInTheDocument();
     });
 
-    // V1 r2 LOW: every unrecognised state fell through to
-    // MODEL_ACCESS_NOT_CONFIGURED — so `expired_renewable`, which dispatch
-    // RENEWS, told the member they were not signed in, with no CTA to fix it.
+    // An unrecognised state must not fall through to MODEL_ACCESS_NOT_CONFIGURED
+    // — `expired_renewable`, which dispatch RENEWS, would otherwise tell the
+    // member they are not signed in, with no CTA to fix it.
     it("a state outside the five renders NO chip and no CTA — unknown is not 'not configured'", async () => {
       getSetupStatusMock.mockResolvedValue(status({ model_access: { state: "expired_renewable" }, llm_ready: true }));
       renderPage();
@@ -665,14 +666,15 @@ describe("MemberGettingStarted", () => {
       expect(await screen.findByText(T.MODEL_ACCESS_PROVIDED_CHIP)).toBeInTheDocument();
     });
 
-    // U-1 (W6 blind lens) — THE WIRE SHAPE THE SERVER REALLY EMITS for a shared
+    // U-1 (W6 blind lens) — the wire shape the server really emits for a shared
     // bedrock_sso row: memberModelAccess (internal/api/modelaccess.go) projects
     // `live` for the ADMIN's credential, so the fixture above (no model_access at
-    // all) never exercised the branch that actually renders. With it, the chip row
-    // read "Model access · Your AWS sign-in" — a sign-in this member does not have
-    // — over a card saying "Provided by your admin", and New Run's rail says
-    // "Admin's credential". live/expiring under a NOT-per_user row is the admin's
-    // shared credential, so the chip row says what the card says.
+    // all) never exercises the branch that actually renders. Without this, the
+    // chip row would read "Model access · Your AWS sign-in" — a sign-in this
+    // member does not have — over a card saying "Provided by your admin", while
+    // New Run's rail says "Admin's credential". live/expiring under a
+    // NOT-per_user row is the admin's shared credential, so the chip row must
+    // say what the card says.
     it("U-1: shared bedrock_sso row + model_access live renders the PROVIDED chip, never 'Your AWS sign-in'", async () => {
       getSetupStatusMock.mockResolvedValue(
         status({ model_access: { state: "live" }, llm_ready: true, harnesses: sharedBedrockHarness }),
@@ -704,10 +706,11 @@ describe("MemberGettingStarted", () => {
       expect(screen.queryByText(T.MODEL_ACCESS_PROVIDED_CHIP)).not.toBeInTheDocument();
     });
 
-    // U-13 (a11y, W6 blind lens) — the page's two sign-in buttons had the
-    // IDENTICAL accessible name "Sign in to AWS" (plus a plain-text action line
-    // saying the same words), and the card's one opens a pane mounted in the card
-    // ABOVE it, moving no focus and staying enabled as a no-op once it is open.
+    // U-13 (a11y, W6 blind lens) — without distinct names, the page's two
+    // sign-in buttons would carry the IDENTICAL accessible name "Sign in to
+    // AWS" (plus a plain-text action line saying the same words), and the
+    // card's one opens a pane mounted in the card ABOVE it, moving no focus
+    // and staying enabled as a no-op once it is open.
     it("U-13: the two Sign in to AWS buttons have distinct accessible names, and the card's hides while the pane is open", async () => {
       const user = userEvent.setup();
       getSetupStatusMock.mockResolvedValue(
@@ -728,12 +731,12 @@ describe("MemberGettingStarted", () => {
       expect(screen.queryByRole("button", { name: SIGN_IN_AWS_NAME })).not.toBeInTheDocument();
     });
 
-    // U-9 (W6 blind lens) — the page called modelKeyState WITHOUT `mechanism`
-    // while the card passed it, so the file's own "ONE predicate" comment was
-    // untrue: under a shared BEDROCK row with a leftover own key, the page graded
-    // "own" (done) and the card graded shared_expired (not done). The observable
-    // is the colour budget — the one teal moved to "New run" while the card said
-    // the credential had expired.
+    // U-9 (W6 blind lens) — the page must call modelKeyState WITH `mechanism`,
+    // matching the card: without it, under a shared BEDROCK row with a
+    // leftover own key, the page would grade "own" (done) while the card
+    // grades shared_expired (not done). The observable is the colour
+    // budget — the one teal would move to "New run" while the card says the
+    // credential expired.
     it("U-9: shared bedrock row + own key + shared_expired — the page agrees with the card, 'New run' is not teal", async () => {
       listWorkspacesMock.mockResolvedValue([{ id: "w1" }]);
       listSecretsMineMock.mockResolvedValue({ names: ["anthropic-api-key"], mine: ["anthropic-api-key"] });
