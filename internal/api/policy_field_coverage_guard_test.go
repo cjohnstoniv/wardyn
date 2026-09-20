@@ -79,6 +79,8 @@ var runPolicySpecCoverage = map[string]policyFieldCoverage{
 		why: "closed effect enum, name charset/length, count cap; a proposal may narrow the ceiling's rules and never widen them"},
 	"GitPushAnyBranch": {validated: false, clamped: true,
 		why: "forced false unless the ceiling sets it — a boolean with no shape to validate. B11b-F11 added the Grade item so the human is told when it is on"},
+	"PushRules": {validated: true, clamped: true,
+		why: "#176: deny_paths per-entry byte/charset shape plus a count cap, max_inspect_pack_mib range-checked. It only NARROWS what a push may touch, so an operator-silent ceiling leaves a proposal's own push_rules untouched; a ceiling that sets one is a FLOOR — an unset proposal inherits it wholesale, a set one gets the ceiling's deny_paths unioned in and max_inspect_pack_mib capped. composer.Grade adds a medium-risk item when it is set and the run's only git grant is ssh_key (unenforceable, not unsafe). The matcher that actually reads deny_paths, and the rest of the enforcement, are a later change"},
 }
 
 func TestRunPolicySpec_EveryFieldIsBoundedOrDeclaredPassThrough(t *testing.T) {

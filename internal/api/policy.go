@@ -118,6 +118,9 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 	if err := validateUIApps(spec.UIApps); err != nil {
 		return err
 	}
+	if err := validatePushRules(spec.PushRules); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -297,6 +300,50 @@ func validateUIAppPath(p string) error {
 	}
 	if strings.Contains(p, "..") {
 		return fmt.Errorf("invalid path %q (\"..\" is not allowed)", p)
+	}
+	return nil
+}
+
+// maxPushRulesDenyPaths / maxPushRulesPathBytes bound push_rules.deny_paths —
+// hostile-input ceilings, not a sizing of any real policy: the ceiling exists
+// because this rides a per-run JSON document, same reasoning as
+// maxAllowedDomainsPerSpec and maxToolRuleNameLen. maxPushRulesInspectPackMiB
+// bounds max_inspect_pack_mib; the range (not a bare non-negative check) mirrors
+// how llm_inspection's other size knobs are bounded, and keeps a hand-authored
+// policy from asking the future pack inspector (#179) to read an unbounded pack.
+const (
+	maxPushRulesDenyPaths      = 64
+	maxPushRulesPathBytes      = 256
+	maxPushRulesInspectPackMiB = 64
+)
+
+// validatePushRules enforces push_rules' structural invariants at write time.
+// PHASE ONE ONLY, matching types.PushRulesSpec's own doc: this stores and
+// validates the strings #176 owns and never matches them — no glob library
+// ships in go.mod and filepath.Match cannot express "**", so the matcher and
+// the enforcement that reads these fields land with #179. nil is legal and
+// validates as a no-op, keeping the field's wire-identical-to-nothing contract
+// for every policy that predates it.
+func validatePushRules(pr *types.PushRulesSpec) error {
+	if pr == nil {
+		return nil
+	}
+	if len(pr.DenyPaths) > maxPushRulesDenyPaths {
+		return fmt.Errorf("push_rules.deny_paths: at most %d entries", maxPushRulesDenyPaths)
+	}
+	for i, p := range pr.DenyPaths {
+		if p == "" {
+			return fmt.Errorf("push_rules.deny_paths[%d]: empty entry", i)
+		}
+		if len(p) > maxPushRulesPathBytes {
+			return fmt.Errorf("push_rules.deny_paths[%d]: exceeds %d bytes", i, maxPushRulesPathBytes)
+		}
+		if !controlCharFree(p) {
+			return fmt.Errorf("push_rules.deny_paths[%d]: control character not allowed", i)
+		}
+	}
+	if pr.MaxInspectPackMiB < 0 || pr.MaxInspectPackMiB > maxPushRulesInspectPackMiB {
+		return fmt.Errorf("push_rules.max_inspect_pack_mib must be between 0 and %d, got %d", maxPushRulesInspectPackMiB, pr.MaxInspectPackMiB)
 	}
 	return nil
 }

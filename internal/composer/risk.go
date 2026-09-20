@@ -193,6 +193,18 @@ func Grade(run RunInput, spec types.RunPolicySpec) []RiskItem {
 				"The grant's own GitHub ruleset is what still bounds which repos it can touch.", "2")
 	}
 
+	// push_rules content rules require the git BROKER to read the pushed pack —
+	// the SSH transport has no broker seam (see the ssh_key case in gradeGrant
+	// above), so a policy that sets push_rules while ssh_key is this run's ONLY
+	// git-capable grant is legal but structurally unenforceable. A WARNING, not
+	// a launch refusal: the operator should be told, not blocked — a stored
+	// policy predating this field, or a run using ssh_key for something other
+	// than the confined push path, must still be free to launch.
+	if spec.PushRules != nil && pushRulesUnenforceable(spec.EligibleGrants) {
+		add("push_rules", "set", RiskMedium,
+			"push_rules is set, but this run's only git-capable grant is ssh_key — the SSH transport has no broker seam, so these content rules cannot be enforced.", "2")
+	}
+
 	// Idle reaping. The reaper skips on <= 0 (internal/lifecycle: "0 DISABLED"),
 	// so an omitted field — which the store COALESCEs to 0 — is just as unbounded
 	// as an explicit -1 and must grade the same. Only the rationale differs.
@@ -259,6 +271,26 @@ func gradeGrant(add func(field, value string, lvl RiskLevel, rationale, inv stri
 		add(field+".requires_approval", "true", RiskLow,
 			"Minting this grant requires explicit human approval.", "2")
 	}
+}
+
+// pushRulesUnenforceable reports whether ssh_key is the ONLY git-capable grant
+// among the ones eligible — github_token and git_pat are the two lanes the git
+// broker (and so a future push_rules inspector) actually sees; ssh_key's
+// transport bypasses it entirely (same rationale as gradeGrant's ssh_key
+// case). A run with neither git_pat nor github_token eligible grades no
+// warning here: it is not "ssh_key is the reason", it is "no git grant at
+// all", a different (and already-graded-elsewhere) situation.
+func pushRulesUnenforceable(grants []types.GrantSpec) bool {
+	sawSSH, sawBrokered := false, false
+	for _, g := range grants {
+		switch g.Kind {
+		case types.GrantSSHKey:
+			sawSSH = true
+		case types.GrantGitHubToken, types.GrantGitPAT:
+			sawBrokered = true
+		}
+	}
+	return sawSSH && !sawBrokered
 }
 
 // githubWritePerms returns the permission names set to "write"/"admin" in a

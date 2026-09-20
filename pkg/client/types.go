@@ -55,6 +55,11 @@ type (
 	// in RunPolicySpec.WorkspaceMounts.
 	WorkspaceMount = types.WorkspaceMount
 
+	// PushRulesSpec declares content rules for a run's brokered git pushes,
+	// carried in RunPolicySpec.PushRules. Phase one only: deny_paths and
+	// max_inspect_pack_mib are stored and validated; nothing reads them yet.
+	PushRulesSpec = types.PushRulesSpec
+
 	// ApprovalRequest is a human-in-the-loop approval gate. Returned by
 	// ListApprovals, Approve, and Deny.
 	ApprovalRequest = types.ApprovalRequest

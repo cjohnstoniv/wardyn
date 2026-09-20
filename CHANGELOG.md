@@ -8,6 +8,16 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- **`push_rules` policy field: content rules for a brokered git push.** `RunPolicySpec` carries a new
+  `*PushRulesSpec` — `deny_paths` and `max_inspect_pack_mib` — alongside `git_push_any_branch`:
+  where that field says WHERE a run's push may land, this one says WHAT it may touch. `nil` (every
+  policy authored before this field existed) is byte-identical to today's behaviour. This change
+  stores and validates the field only; no matcher reads `deny_paths` yet — a policy that sets
+  `push_rules` while the run's only git-capable grant is `ssh_key` (which the broker cannot inspect)
+  grades a medium-risk warning on the Review rail rather than a write-time refusal.
+
 ### Changed
 
 - **Doc citations name a SYMBOL, never a line number.** `docs/AUDIT-ACTIONS.md`'s 215 emit-site

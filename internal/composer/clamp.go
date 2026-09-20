@@ -100,7 +100,15 @@ func EffectiveConfinementFloor(policyMin, floor, cap types.ConfinementClass) typ
 //     intersected down to the ceiling's github permissions; TTL capped; and
 //     requires_approval forced on when the ceiling requires it;
 //   - workspace_mounts dropped entirely — host mounts are operator-authored and a
-//     composer (fed untrusted input) must never be able to introduce one.
+//     composer (fed untrusted input) must never be able to introduce one;
+//   - push_rules: when the ceiling sets one, an unset proposal inherits it
+//     WHOLESALE (nil is not "no opinion" once an operator opts in, same stance
+//     as llm_inspection); a proposal that also sets one gets its deny_paths
+//     UNIONED with the ceiling's (deny always wins, same as denied_domains) and
+//     its max_inspect_pack_mib capped at the ceiling's when non-zero. Unlike
+//     llm_inspection, this field only NARROWS what a push may touch — it can
+//     never widen egress or credentials — so a proposal's own push_rules under
+//     a SILENT ceiling passes through unclamped.
 //
 // maxEphemeralDiskMiB is the acting principal's GovernanceLimits.
 // MaxEphemeralDiskMiB (0 = unlimited), and it is a separate argument rather than
@@ -315,6 +323,34 @@ func Clamp(proposed, ceiling types.RunPolicySpec, maxEphemeralDiskMiB int) (type
 	if len(out.WorkspaceMounts) > 0 {
 		warns = append(warns, fmt.Sprintf("dropped %d proposed workspace mount(s): host mounts are operator-authored, never composer-proposed", len(out.WorkspaceMounts)))
 		out.WorkspaceMounts = nil
+	}
+
+	// Push rules: only narrows (deny_paths/max_inspect_pack_mib can never widen
+	// what a push may touch), so a proposal's own push_rules under a ceiling
+	// that sets NONE passes through unclamped — nothing here to protect
+	// against, unlike llm_inspection's detector_sidecar_url. When the ceiling
+	// DOES set one, treat it as a floor: an unset proposal inherits it
+	// wholesale, and a set proposal has the ceiling's deny_paths unioned in
+	// (deny always wins, same as denied_domains above) and its
+	// max_inspect_pack_mib capped at the ceiling's when the ceiling's is
+	// non-zero.
+	if ceiling.PushRules != nil {
+		if out.PushRules == nil {
+			warns = append(warns, "push_rules inherited from the operator's policy")
+			cp := *ceiling.PushRules
+			cp.DenyPaths = append([]string(nil), ceiling.PushRules.DenyPaths...)
+			out.PushRules = &cp
+		} else {
+			merged := *out.PushRules
+			if len(ceiling.PushRules.DenyPaths) > 0 {
+				merged.DenyPaths = union(merged.DenyPaths, ceiling.PushRules.DenyPaths)
+			}
+			if ceil := ceiling.PushRules.MaxInspectPackMiB; ceil > 0 && (merged.MaxInspectPackMiB <= 0 || merged.MaxInspectPackMiB > ceil) {
+				warns = append(warns, fmt.Sprintf("push_rules.max_inspect_pack_mib capped to operator maximum %d", ceil))
+				merged.MaxInspectPackMiB = ceil
+			}
+			out.PushRules = &merged
+		}
 	}
 
 	return out, warns
