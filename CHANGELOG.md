@@ -8,6 +8,18 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- **The type system can now express an autonomy rubric, with nothing yet reading it.** A governance
+  profile's `limits` may carry `autonomy_rubric`: nine closed fields — three egress postures, three
+  secret postures, three confinement classes — each unset or one of four autonomy levels (`L0`
+  attended through `L3`, which also permits `task_mode=exec`). An invalid level in any field is
+  refused at write with a 400 naming which one. `agent_runs` gains `autonomy_level`
+  (migration `0065_agent_runs_autonomy_level`), where a run's resolved level will be frozen once
+  resolution lands; every existing and new run reads `""` until then. This is the types, validation,
+  storage and console-mirror groundwork only — nothing resolves a level from a run's posture or
+  enforces one yet.
+
 ### Changed
 
 - **Doc citations name a SYMBOL, never a line number.** `docs/AUDIT-ACTIONS.md`'s 215 emit-site
