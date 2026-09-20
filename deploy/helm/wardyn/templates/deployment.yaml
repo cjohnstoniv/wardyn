@@ -51,9 +51,17 @@ out; guarded, the 0.5 defaults simply carry forward.
 {{- if and .Values.k8s.enabled (not .Values.k8s.proxyImage) -}}
 {{- fail "wardyn: k8s.enabled requires k8s.proxyImage. The k8s runner substrate (internal/runner/k8s driver.go) refuses to construct without one (errProxyImageUnset) — this is a boot-time failure, not a per-run one: wardynd's runner build returns the error straight up through cmd/wardynd/main.go, so the pod crash-loops instead of coming up with runs merely failing closed. Set k8s.proxyImage to the wardyn-proxy image you built and pushed (see the chart README's Prerequisites)." -}}
 {{- end -}}
-{{- if and .Values.k8s.enabled (not .Values.k8s.runtimeClasses.CC2) (not .Values.k8s.runtimeClasses.CC3) (not .Values.defaultPolicy) (not (hasKey .Values.env "WARDYN_DEFAULT_POLICY")) -}}
-{{- fail "wardyn: k8s.enabled is set with no k8s.runtimeClasses.CC2/CC3 RuntimeClass pinned AND no default policy override (defaultPolicy / env.WARDYN_DEFAULT_POLICY). The wardynd IMAGE itself bakes WARDYN_DEFAULT_POLICY=/examples/policies/default.json (a CC2 floor — Dockerfile.wardynd), but the k8s runner substrate advertises only [CC1] until a RuntimeClass is pinned here — so on a stock install EVERY run fails closed at dispatch: `runner \"k8s\" cannot enforce confinement_class CC2 (available: CC1)`. Fix either half of the pair: pin k8s.runtimeClasses.CC2 (or CC3) to an existing gVisor/Kata RuntimeClass that actually clears that floor, or set defaultPolicy (or env.WARDYN_DEFAULT_POLICY) to a policy whose min_confinement_class is CC1 (see examples/policies/demo.json, or ci/all-on-values.yaml's own defaultPolicy) so the stock image's CC2 default is overridden instead of inherited." -}}
-{{- end -}}
+{{- /*
+B12b-F7 retired in 0.7.8: the shipped default policy floor moved CC2 -> CC1
+(examples/policies/default.json), so a stock k8s install with no CC2/CC3
+RuntimeClass pinned now floors at CC1, which the k8s driver's own bare
+(no-RuntimeClass) advertisement of [CC1] already clears — the trap this guard
+refused ("every run fails closed at dispatch") no longer exists. An admin who
+sets a STRONGER floor (a governance profile, defaultPolicy, or
+env.WARDYN_DEFAULT_POLICY) without pinning a matching RuntimeClass still fails
+closed exactly as before, just at dispatch (resolveEnforcedConfinement) rather
+than at render — the fail-closed invariant lives there now, not here.
+*/ -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -248,6 +256,14 @@ spec:
             # path your own volume/extraEnv mounts the PEM at instead).
             - name: WARDYN_TRUSTED_CA_FILE
               value: {{ "/etc/wardyn/trusted-ca/ca.pem" | quote }}
+            {{- end }}
+            {{- if and .Values.awsSSOProxyInject (not (hasKey .Values.env "WARDYN_AWS_SSO_PROXY_INJECT")) }}
+            # Phase B kill switch (docs/OPERATIONS.md "Turning the lane off").
+            # An .Values.env entry overrides — scripts/kind-sso-walk.sh pins
+            # its posture with `--set env.WARDYN_AWS_SSO_PROXY_INJECT=...`,
+            # which must keep winning over this named value.
+            - name: WARDYN_AWS_SSO_PROXY_INJECT
+              value: {{ .Values.awsSSOProxyInject | quote }}
             {{- end }}
             {{- range $k, $v := .Values.env }}
             - name: {{ $k }}

@@ -370,7 +370,7 @@ Colour, stated per rule:
    share, a storage class, or Wardyn's own absence of enforcement.
 2. **No member-facing string names a host path, a storage object, or another person.** The
    object name renders to admins only (the preview). A member's request carries a flag, never a
-   path — this is the Iris guardrail the feature is built on, and the copy must not leak around
+   path — this is the guardrail the feature is built on, and the copy must not leak around
    it.
 3. **`/home/agent/drive` is one literal, mono, spelled once.** Every string that names the
    target uses it verbatim; the reserved-target refusal (§7.7) names it too.

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -32,6 +33,29 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
+// mintOKTicket is the fixed ticket value withMintOK's stub mint endpoint
+// hands back — the WS handlers below check the dial actually carries it.
+const mintOKTicket = "test-minted-ticket"
+
+// withMintOK wraps a WS handler (the pre-ticket-lane test doubles below all
+// had one of these: "accept everything as a WebSocket upgrade") with the mint
+// step runAttach now performs FIRST. Without this, the mint's own POST
+// request — no Upgrade header, so websocket.Accept always rejects it — would
+// be misread as the server's definitive answer and returned to the caller
+// before the dial these tests exist to exercise ever ran. Only requests for
+// POST .../attach-ticket are intercepted; everything else (the GET dial)
+// reaches wsHandler unchanged, so these tests still exercise the real pump.
+func withMintOK(wsHandler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach-ticket") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ticket":"` + mintOKTicket + `"}`))
+			return
+		}
+		wsHandler(w, r)
+	}
+}
+
 // --------------------------------------------------------------------------
 // buildWSURL: HTTP base URL -> WebSocket attach URL
 // --------------------------------------------------------------------------
@@ -46,6 +70,7 @@ func TestBuildWSURL(t *testing.T) {
 		name    string
 		baseURL string
 		runID   string
+		ticket  string
 		want    string
 	}{
 		{
@@ -78,12 +103,26 @@ func TestBuildWSURL(t *testing.T) {
 			runID:   "d4c3b2a1-6f5e-4d3c-8b2a-1f0e9d8c7b6a",
 			want:    "ws://host/api/v1/runs/d4c3b2a1-6f5e-4d3c-8b2a-1f0e9d8c7b6a/attach",
 		},
+		{
+			name:    "a minted ticket is added as ?ticket= via net/url, not string concat",
+			baseURL: "https://wardyn.example.com",
+			runID:   "8f14e45f-ceea-467e-adc5-f4b8e79f5f1c",
+			ticket:  "abc123def456",
+			want:    "wss://wardyn.example.com/api/v1/runs/8f14e45f-ceea-467e-adc5-f4b8e79f5f1c/attach?ticket=abc123def456",
+		},
+		{
+			name:    "a ticket needing escaping is query-encoded, not spliced raw",
+			baseURL: "http://localhost:8080",
+			runID:   "5b6a5f1e-1c1f-4d3e-8b2a-2f5a6b7c8d9e",
+			ticket:  "a b&c=d",
+			want:    "ws://localhost:8080/api/v1/runs/5b6a5f1e-1c1f-4d3e-8b2a-2f5a6b7c8d9e/attach?ticket=a+b%26c%3Dd",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := buildWSURL(tc.baseURL, tc.runID)
+			got := buildWSURL(tc.baseURL, tc.runID, tc.ticket)
 			if got != tc.want {
-				t.Errorf("buildWSURL(%q, %q) = %q, want %q", tc.baseURL, tc.runID, got, tc.want)
+				t.Errorf("buildWSURL(%q, %q, %q) = %q, want %q", tc.baseURL, tc.runID, tc.ticket, got, tc.want)
 			}
 		})
 	}
@@ -173,6 +212,13 @@ func TestRunAttach_NoTokenDialsAnyway(t *testing.T) {
 // the HTTP response and always exiting 1. It must now come back as an
 // *sdk.APIError carrying the real status + the server's {"error":...} body, so
 // exitCodeFor and dialHint classify it exactly like every other API call.
+//
+// The mint-then-dial lane surfaces THIS test's exact rejection one step
+// earlier than its name suggests: this stub answers every request (mint POST
+// included) with the same 403, so runAttach now returns it straight from the
+// mint attempt without ever reaching websocket.Dial — the same *sdk.APIError
+// shape either way. TestRunAttach_ForeignRunMintReturns404 below pins the
+// mint-rejection path specifically (a 404, the ticket lane's own shape).
 func TestRunAttach_RejectedHandshakeReturnsAPIError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -260,7 +306,7 @@ func TestRunAttach_CtxCancelRestoresTerminal(t *testing.T) {
 		stdinW.Close()
 	})
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(withMintOK(func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, nil)
 		if err != nil {
 			return
@@ -387,7 +433,7 @@ func helperCmd(t *testing.T, url string, stdin, stdout *os.File) *exec.Cmd {
 // the child outright: non-zero/signalled exit, no marker, ever.
 func TestRunAttach_SIGTERMDetachesCleanly(t *testing.T) {
 	accepted := make(chan struct{}, 1)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(withMintOK(func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, nil)
 		if err != nil {
 			return
@@ -476,7 +522,7 @@ func TestRunAttach_SIGTERMDetachesCleanly(t *testing.T) {
 // not), regardless of ctx cancellation.
 func TestRunAttach_SecondSIGTERMKillsAWedgedSession(t *testing.T) {
 	accepted := make(chan struct{}, 1)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(withMintOK(func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, nil)
 		if err != nil {
 			return
@@ -583,5 +629,208 @@ func TestAttachCmd_RefusesANonUUIDRunID(t *testing.T) {
 				t.Errorf("error = %q, want it to name an invalid run id", err.Error())
 			}
 		})
+	}
+}
+
+// --------------------------------------------------------------------------
+// Wardyn 0.7.8 lane/v0.7.8-cli-attach: `wardyn attach` mints a single-use
+// attach ticket with whatever token is configured (POST
+// /runs/{id}/attach-ticket, owner-or-admin) and dials with it, instead of
+// dialing the WS route directly with a bearer that route's fallback lane
+// requires be an ADMIN'S. These four pin the DONE criteria: a member's own
+// token mints and dials; a foreign run gets the ticket lane's 404 (no
+// existence oracle); an admin token still works; the ticket is freshly
+// minted on every attach attempt, never cached or reused.
+// --------------------------------------------------------------------------
+
+// TestRunAttach_MintsTicketThenDialsWithIt is the member success path: a
+// non-admin caller's own configured token is enough to mint (the mint
+// endpoint is owner-or-admin, not operator-only) and the CLI then dials with
+// the ticket the mint returned — not the bare bearer, which the WS route's
+// fallback lane would refuse for a member. This is the test that fails if the
+// mint step is ever removed: without it there is no ?ticket= to check for,
+// and the dial would simply not happen against this stub (it 403s any
+// ticket-less GET).
+func TestRunAttach_MintsTicketThenDialsWithIt(t *testing.T) {
+	const memberToken = "member-own-token"
+	const mintedTicket = "minted-for-member-run"
+	mintSawToken := false
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach-ticket") {
+			if r.Header.Get("Authorization") == "Bearer "+memberToken {
+				mintSawToken = true
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ticket":"` + mintedTicket + `"}`))
+			return
+		}
+		// The dial: only succeeds when it carries the ticket the mint just
+		// handed back — proves the CLI dialed WITH the minted ticket, not the
+		// bare bearer the pre-ticket-lane CLI would have sent instead.
+		if r.URL.Query().Get("ticket") != mintedTicket {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL, Token: memberToken}, "run-1")
+	if err != nil {
+		t.Fatalf("runAttach = %v, want nil (mint then ticket dial should succeed for a member's own token)", err)
+	}
+	if !mintSawToken {
+		t.Error("the mint request never carried the configured token as a bearer")
+	}
+}
+
+// TestRunAttach_AdminTokenMintsAndDials: an admin-token caller (e.g. CI) is
+// unaffected by the ticket lane — the mint endpoint authorizes an admin on
+// ANY run (attach_ticket.go's isOperator arm), so the same mint-then-dial
+// flow that serves a member also serves an admin token, with no change in
+// outcome.
+func TestRunAttach_AdminTokenMintsAndDials(t *testing.T) {
+	const adminTicket = "minted-for-admin"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach-ticket") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ticket":"` + adminTicket + `"}`))
+			return
+		}
+		if r.URL.Query().Get("ticket") != adminTicket {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL, Token: "admin-bearer-token"}, "run-1"); err != nil {
+		t.Fatalf("runAttach with an admin token = %v, want nil", err)
+	}
+}
+
+// TestRunAttach_ForeignRunMintReturns404: the goal's audit-shape change. A
+// run the caller does not own now refuses at MINT time with the byte-
+// identical 404 a nonexistent run gets (getRunAuthorized's no-existence-
+// oracle rule, internal/api/helpers.go) — never the WS route's old blanket
+// 403 (requireOperator), which never even loaded the run to check. The dial
+// must never be attempted once the mint has definitively refused.
+func TestRunAttach_ForeignRunMintReturns404(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach-ticket") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"run not found"}`))
+			return
+		}
+		t.Error("a dial was attempted after a 404 mint refusal — a foreign run must not fall through to a bare dial")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	err := runAttach(context.Background(), &sdk.Client{BaseURL: srv.URL, Token: "member-token"}, "run-1")
+	var ae *sdk.APIError
+	if !errors.As(err, &ae) {
+		t.Fatalf("err = %v (%T), want an *sdk.APIError", err, err)
+	}
+	if ae.Status != http.StatusNotFound {
+		t.Errorf("APIError.Status = %d, want 404 (no existence oracle)", ae.Status)
+	}
+}
+
+// TestRunAttach_TicketIsReMintedEachAttach: the ticket is single-use with a
+// 30s TTL (consumed by a DELETE-and-return on first redemption,
+// internal/api/attach_ticket.go's consumeAttachTicket) — a second attach must
+// mint its OWN fresh ticket, never replay a ticket a previous attempt already
+// spent. The stub hands out a distinct ticket per mint call and only accepts
+// a dial carrying the MOST RECENTLY minted one, so a cached/reused ticket
+// from attempt 1 would be refused on attempt 2.
+func TestRunAttach_TicketIsReMintedEachAttach(t *testing.T) {
+	var mintCount int32
+	var lastTicket atomic.Value
+	lastTicket.Store("")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/attach-ticket") {
+			n := atomic.AddInt32(&mintCount, 1)
+			tok := fmt.Sprintf("ticket-%d", n)
+			lastTicket.Store(tok)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ticket":"` + tok + `"}`))
+			return
+		}
+		if r.URL.Query().Get("ticket") != lastTicket.Load().(string) {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	for i := range 2 {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL, Token: "member-token"}, "run-1")
+		cancel()
+		if err != nil {
+			t.Fatalf("attempt %d: runAttach = %v, want nil", i, err)
+		}
+	}
+	if got := atomic.LoadInt32(&mintCount); got != 2 {
+		t.Errorf("mint count = %d, want 2 — the ticket must be re-minted per attempt, never cached or reused", got)
+	}
+}
+
+// TestRunAttach_FallsBackToBareDialWhenMintUnavailable pins the goal's other
+// requirement: "keep the admin/bearer path working exactly as now when no
+// ticket can be minted, so an admin-token CI caller is unaffected." No
+// /attach-ticket route is registered here (an older control plane); the mux's
+// own 404 page is not the JSON `{"ticket":...}` shape mintAttachTicket knows
+// how to read, so it is treated as inconclusive rather than a definitive
+// refusal, and the CLI falls back to dialing directly with the configured
+// bearer — exactly this command's behavior before the ticket lane existed.
+func TestRunAttach_FallsBackToBareDialWhenMintUnavailable(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/runs/run-1/attach", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("ticket") != "" {
+			t.Error("the fallback dial must not carry a ticket query param")
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer admin-bearer-token" {
+			t.Errorf("Authorization = %q, want the configured bearer (the pre-ticket-lane dial)", got)
+		}
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		<-r.Context().Done()
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := runAttach(ctx, &sdk.Client{BaseURL: srv.URL, Token: "admin-bearer-token"}, "run-1"); err != nil {
+		t.Fatalf("runAttach = %v, want nil (the legacy bearer dial must still work)", err)
 	}
 }

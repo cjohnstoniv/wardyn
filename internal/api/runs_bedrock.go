@@ -261,7 +261,7 @@ type bedrockAuth struct {
 	// ssoRefreshFailure carries the refusal sentence when a captured AWS SSO
 	// credential COULD have been renewed but the renewal did not land (the
 	// refresh token is spent, or the OIDC call did not complete). It is set only
-	// on the dispatch pass (refresh=true) and is independent of ready: the SSO
+	// on a refresh=true pass (the real launch, dispatch) and is independent of ready: the SSO
 	// lane simply did not fire, and within Bedrock the mount/static lanes below
 	// it still may. It exists so the dispatch gate can refuse the run with a
 	// reason instead of letting a run boot toward a model it cannot reach.
@@ -557,10 +557,10 @@ func awsSSOCacheFileContents(b awsSSOBlob, proxyInjected bool) string {
 // reachable for a member.
 //
 // refresh authorizes SIDE EFFECTS: only with refresh=true may the captured-SSO
-// lane redeem its rotating refresh token and persist the rotated pair. ONLY
-// DISPATCH sets it. Create and preflight pass false — a dry run must never spend
-// a one-use token, and it does not need to: an expired-but-renewable credential
-// reads READY there, because dispatch renews it (see the captured-SSO branch).
+// lane redeem its rotating refresh token and persist the rotated pair. The REAL
+// LAUNCH (create) and DISPATCH pass true; Review's preflight and the create
+// advisory pass false — a dry run must never spend a one-use token, and it does
+// not need to: an expired-but-renewable credential reads READY there.
 // bedrockRegionModel is the EFFECTIVE region and model for a run: the picked
 // workspace/container's per-run override where it names one, else the global
 // operator config.
@@ -749,7 +749,7 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 			s.cfg.MaskRegistry.AddGlobal([]byte(blob.AccessToken))
 			s.cfg.MaskRegistry.AddGlobal([]byte(blob.RefreshToken))
 			s.cfg.MaskRegistry.AddGlobal([]byte(blob.ClientSecret))
-			// The POST-refresh blob's own pair: dispatch is the one pass allowed
+			// The POST-refresh blob's own pair: a refresh=true pass is the one allowed
 			// to redeem the rotating refresh token, and the identity the gate
 			// compares must be the one this run will actually present.
 			return ready(bedrockAuth{env: env, egressHosts: hosts, ssoInject: true,

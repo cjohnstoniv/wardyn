@@ -79,7 +79,13 @@ function preflightWith(cred: ModelCredential): PreflightResult {
   return { setup_items: [], enforced_confinement_class: "CC1", model_credential: cred };
 }
 
-function renderRail(props: {
+type RailProps = Parameters<typeof railTree>[0];
+function renderRail(props: RailProps) {
+  const result = render(railTree(props));
+  return { ...result, rerenderWith: (next: Partial<RailProps>) => result.rerender(railTree({ ...props, ...next })) };
+}
+
+function railTree(props: {
   agentRow?: SetupHarnessTool;
   preflightResult?: PreflightResult;
   showModelWarning?: boolean;
@@ -90,6 +96,8 @@ function renderRail(props: {
   operator?: boolean;
   onLaunch?: () => void;
   launchError?: string | null;
+  /** The server refused the launch for the caller's own model credential. */
+  credentialRefused?: boolean;
   /** Mounted as a sibling INSIDE the same ModelAccessProvider — a test-only
    *  stand-in for a surface elsewhere in the shell that can close the shared
    *  door. */
@@ -118,6 +126,7 @@ function renderRail(props: {
         inFlight: false,
         problem: null,
         error: props.launchError ?? null,
+        credentialRefused: props.credentialRefused ?? false,
         warnings: [],
         onOpenRun: null,
       }}
@@ -126,9 +135,9 @@ function renderRail(props: {
     />
   );
   if (props.modelAccess === undefined) {
-    return render(<MemoryRouter>{rail}</MemoryRouter>);
+    return <MemoryRouter>{rail}</MemoryRouter>;
   }
-  return render(
+  return (
     <MemoryRouter>
       <StatusHost initial={props.modelAccess} refreshTo={props.refreshTo} agentRow={props.agentRow}>
         <OperatorProvider operator={!!props.operator} securityOperator={!!props.operator} principal="p@corp.example">
@@ -142,7 +151,7 @@ function renderRail(props: {
           )}
         </OperatorProvider>
       </StatusHost>
-    </MemoryRouter>,
+    </MemoryRouter>
   );
 }
 
@@ -586,5 +595,132 @@ describe("Finding 1 — the rail states WHO needs to sign in, not just whether a
       await userEvent.click(screen.getByRole("button", { name: "close door (test only)" }));
       expect(launch).not.toHaveFocus();
     });
+  });
+});
+
+// 0.7.6 field report: Launch with a lapsed AWS SSO session. The server refuses
+// the run (422, reason model_credential — before any run exists); the rail
+// answers THAT refusal with the door and launches again when the sign-in
+// completes. Launch is never pre-checked on the cached status: the server is
+// the gate, and its answer is what opens the door.
+describe("the launch door — the server's credential refusal opens the sign-in, and a completed sign-in launches again", () => {
+  const afterFocusSettles = () => act(() => new Promise((r) => setTimeout(r, 0)));
+  const pane = () => screen.queryByRole("button", { name: "fake pane" });
+  // The NEGATIVES read the dialog itself: the pane is a lazy chunk, so "no
+  // fake pane" is true for a tick whether or not the door opened.
+  const dialog = () => screen.queryByRole("dialog");
+
+  it("opens the door with no click, launches again exactly once on a completed sign-in, and returns focus to Launch", async () => {
+    const onLaunch = vi.fn();
+    // A STALE cache: the status still says live — the server's 422 is the fact.
+    renderRail({
+      agentRow: modelAccessRow(),
+      modelAccess: { state: "live" },
+      credentialRefused: true,
+      banner: true,
+      onLaunch,
+    });
+    expect(await screen.findByRole("button", { name: "fake pane" })).toBeInTheDocument();
+    expect(onLaunch).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "fake pane" }));
+    expect(onLaunch).toHaveBeenCalledTimes(1);
+    await afterFocusSettles();
+    expect(pane()).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Launch run" }));
+  });
+
+  it("Escape launches nothing; the sentence stays and the rail's own control appears once the status catches up", async () => {
+    const onLaunch = vi.fn();
+    renderRail({
+      agentRow: modelAccessRow(),
+      modelAccess: { state: "live" },
+      // door.refresh() is called when the door opens, so the shell's next
+      // answer is what the rail renders after the cancel.
+      refreshTo: { state: "expired_signin", action: AGENTS.SIGN_IN_AWS },
+      credentialRefused: true,
+      launchError: "the server's sentence",
+      banner: true,
+      onLaunch,
+    });
+    await screen.findByRole("button", { name: "fake pane" });
+    await userEvent.keyboard("{Escape}");
+    await afterFocusSettles();
+    expect(pane()).toBeNull();
+    expect(onLaunch).not.toHaveBeenCalled();
+    expect(screen.getByText("the server's sentence")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeInTheDocument();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Launch run" }));
+  });
+
+  it("a member under a shared row gets the sentence and no door — the repair is the admin's", async () => {
+    renderRail({
+      agentRow: modelAccessRow({ credential_source: "shared" }),
+      modelAccess: { state: "shared_expired", action: "ask your admin" },
+      credentialRefused: true,
+      launchError: "the server's sentence",
+      banner: true,
+    });
+    await act(async () => {});
+    expect(dialog()).toBeNull();
+    expect(screen.getByText("the server's sentence")).toBeInTheDocument();
+  });
+
+  it("a refusal on a row that is not bedrock_sso opens nothing — an AWS sign-in repairs no api-key lane", async () => {
+    renderRail({
+      agentRow: modelAccessRow({ mechanism: "anthropic_api_key" as SetupHarnessTool["mechanism"], credential_source: "shared" }),
+      modelAccess: { state: "live" },
+      credentialRefused: true,
+      banner: true,
+      operator: true,
+    });
+    await act(async () => {});
+    expect(dialog()).toBeNull();
+  });
+
+  it("once per click: a relaunch refused again does not reopen the door; a fresh Launch click re-arms it", async () => {
+    const onLaunch = vi.fn();
+    const r = renderRail({
+      agentRow: modelAccessRow(),
+      modelAccess: { state: "live" },
+      credentialRefused: false,
+      banner: true,
+      onLaunch,
+    });
+    r.rerenderWith({ credentialRefused: true });
+    await screen.findByRole("button", { name: "fake pane" });
+    await userEvent.click(screen.getByRole("button", { name: "fake pane" }));
+    expect(onLaunch).toHaveBeenCalledTimes(1);
+    // The relaunch (through the door's callback, not the button) is refused
+    // again: the screen clears the flag and sets it once more.
+    r.rerenderWith({ credentialRefused: false });
+    r.rerenderWith({ credentialRefused: true });
+    await act(async () => {});
+    expect(pane()).toBeNull();
+    // The person clicks Launch themselves — that re-arms the door.
+    await userEvent.click(screen.getByRole("button", { name: "Launch run" }));
+    expect(onLaunch).toHaveBeenCalledTimes(2);
+    r.rerenderWith({ credentialRefused: false });
+    r.rerenderWith({ credentialRefused: true });
+    expect(await screen.findByRole("button", { name: "fake pane" })).toBeInTheDocument();
+  });
+
+  it("a door the person opened themselves is left alone — completing it launches nothing, and it does not come back", async () => {
+    const onLaunch = vi.fn();
+    const r = renderRail({
+      agentRow: modelAccessRow(),
+      modelAccess: { state: "expired_signin", action: AGENTS.SIGN_IN_AWS },
+      credentialRefused: false,
+      banner: true,
+      onLaunch,
+    });
+    await userEvent.click(screen.getByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA }));
+    await screen.findByRole("button", { name: "fake pane" });
+    r.rerenderWith({ credentialRefused: true });
+    await userEvent.click(screen.getByRole("button", { name: "fake pane" }));
+    expect(onLaunch).not.toHaveBeenCalled();
+    // The click was consumed while the door was open: its closing must not
+    // re-open it with a relaunch armed (review-1 finding 1).
+    await afterFocusSettles();
+    expect(dialog()).toBeNull();
   });
 });

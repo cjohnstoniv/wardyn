@@ -169,9 +169,9 @@ result for them is evidence only for the tip somebody actually ran it on.
   (a `curl` from inside the sandbox rides the plain lane instead and is
   credentialed correctly, which is what made the earlier "rides the cleartext
   lane" description look true). Nothing in case K is simulated: the hold's own
-  sentence reaches a client that speaks inside the terminated tunnel, which the
-  walk's SDK does; only a client on the un-terminated plain lane would see the
-  origin's own 401 instead of the hold's sentence.
+  sentence reaches a client that speaks plain HTTP inside the terminated
+  tunnel, which the walk's SDK does; only a client on the un-terminated plain
+  lane would see the origin's own 401 instead of the hold's sentence.
   What the walk DOES prove live: the control plane,
   the approval, the console and the resume, on a real cluster. The
   docker-gated `test/awsssofake/reauth_hold_docker_test.go` does NOT prove the

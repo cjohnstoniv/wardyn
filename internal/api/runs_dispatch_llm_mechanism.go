@@ -440,8 +440,8 @@ type llmLanes struct {
 	// apiKey: the resolved spec already brokers an api_key grant for this
 	// agent's provider host — the operator's explicit api-key choice.
 	apiKey bool
-	// bedrock is the operator Bedrock posture resolved WITHOUT refresh: create is
-	// a dry run over a one-use rotating token.
+	// bedrock is the operator Bedrock posture; resolved WITH refresh only for the
+	// real launch (a dry run — preflight, the advisory — never spends the token).
 	bedrock bedrockAuth
 }
 
@@ -449,7 +449,7 @@ type llmLanes struct {
 // resolveLLMTransport's own lane block; the fold from lanes to a mechanism is
 // selectedMechanism, shared with dispatch.
 func (s *Server) resolveRunLLMLanes(ctx context.Context, req createRunRequest, spec *types.RunPolicySpec,
-	bedrockRef *types.WorkspaceBedrockRef, sso awsSSOScope,
+	bedrockRef *types.WorkspaceBedrockRef, sso awsSSOScope, refresh bool,
 ) llmLanes {
 	var l llmLanes
 	llmProv, _ := s.llmProviderFor(req.Agent)
@@ -461,10 +461,13 @@ func (s *Server) resolveRunLLMLanes(ctx context.Context, req createRunRequest, s
 	// tests subscription/managed before Bedrock) and refuse a run dispatch would
 	// have credentialed perfectly well.
 	//
-	// refresh=false: create is a dry run over a ONE-USE rotating token. An
-	// expired-but-renewable captured SSO session still reads READY here (dispatch
-	// renews it), so create never warns about — or refuses — a failure that
-	// cannot happen.
+	// refresh: the REAL launch passes true and redeems an expired-but-renewable
+	// captured SSO session right here, so the click is the check — a renewal
+	// AWS refuses is refused at create, before any run exists, instead of
+	// failing the run at dispatch after the person was told it launched (the
+	// 0.7.6 field report). Review's preflight and the create-path advisory pass
+	// false: dry runs over a ONE-USE rotating token, where an expired-but-
+	// renewable session still reads READY (dispatch renews it).
 	//
 	// modelRun is THIS RUN's own answer, hoisted so the Bedrock probe and the
 	// managed lane below cannot disagree (B2-F7). It used to be hard-coded true
@@ -476,7 +479,7 @@ func (s *Server) resolveRunLLMLanes(ctx context.Context, req createRunRequest, s
 	// launched by newStepRun, never decoded from a create body) — the same term
 	// llmMechanismGateApplies passes.
 	modelRun := isModelRun(req.TaskMode, req.WorkspaceID, nil, req.Interactive)
-	l.bedrock = s.resolveBedrockAuth(ctx, req.Agent, l.subscription, modelRun, false, bedrockRef, sso)
+	l.bedrock = s.resolveBedrockAuth(ctx, req.Agent, l.subscription, modelRun, refresh, bedrockRef, sso)
 	// The SAME predicate dispatch applies, with the same terms — including the
 	// posture term, whose absence here made every SSO deployment's managed run
 	// read as "subscription" at create and dispatch as something else.
@@ -512,7 +515,7 @@ func (s *Server) resolveRunLLMLanes(ctx context.Context, req createRunRequest, s
 //
 // Returns ok=false when it has already written the 422.
 func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseWriter, req createRunRequest,
-	spec types.RunPolicySpec, bedrockRef *types.WorkspaceBedrockRef, subject string, out *modelCredentialFacts,
+	spec types.RunPolicySpec, bedrockRef *types.WorkspaceBedrockRef, subject string, out *modelCredentialFacts, refresh bool,
 ) bool {
 	if !llmMechanismGateApplies(req) || s.cfg.Store == nil {
 		return true
@@ -533,7 +536,7 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 	// identity — never secretOwnerFromRequest, which answers "" for every
 	// operator and would refuse an admin their own per_user capture at create
 	// while dispatch resolved it fine.
-	lanes := s.resolveRunLLMLanes(ctx, req, &spec, bedrockRef, awsSSOScopeFor(sc, req.Agent, subject))
+	lanes := s.resolveRunLLMLanes(ctx, req, &spec, bedrockRef, awsSSOScopeFor(sc, req.Agent, subject), refresh)
 	selected, ok := s.selectedMechanism(req.Agent, lanes.subscription, lanes.bedrock, lanes.managed, lanes.apiKey)
 	if out != nil {
 		*out = gradeModelCredential(row, declared, lanes, selected, ok, s.subscriptionInjectEnabled())
@@ -545,15 +548,35 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 	// exists so a run dispatch would refuse never boots at all, and a run whose
 	// stored AWS sign-in the roster no longer allows is one of them.
 	if msg := pinContradictionRefusal(sc, lanes.bedrock, row.CredentialSource == types.CredentialSourcePerUser); msg != "" {
-		writeError(w, http.StatusUnprocessableEntity, msg)
+		writeLLMRefusal(w, msg)
 		return false
 	}
 	if mechanismSatisfied(row, selected, ok) {
 		return true
 	}
-	// No ssoRefreshFailure at create: nothing here redeems a refresh token.
-	writeError(w, http.StatusUnprocessableEntity, llmMechanismRefusal(row, selected, ok, ""))
+	// The captured-SSO lane's own renewal verdict names the refusal when it has
+	// one (the real launch redeems here; a dry run never has one). A renewal AWS
+	// did not ANSWER is transient — the sign-in is still good — so that refusal
+	// carries no class: the console's launch door must not open over "launch
+	// again in a moment".
+	msg := llmMechanismRefusal(row, selected, ok, lanes.bedrock.ssoRefreshFailure)
+	if lanes.bedrock.ssoRefreshFailure == awsSSORefreshUnavailableSentence && row.Mechanism == types.AgentMechanismBedrockSSO {
+		writeError(w, http.StatusUnprocessableEntity, msg)
+		return false
+	}
+	writeLLMRefusal(w, msg)
 	return false
+}
+
+// writeLLMRefusal is the create-time model-credential refusal: the same 422 and
+// sentence as before, plus the class the console acts on — the New Run rail
+// opens the AWS sign-in on it and launches again once the capture lands, so a
+// lapsed session costs one dialog rather than a trip to Getting started by hand.
+// The class is the failure audit row's own word (llmRefusalAuditReason), not a
+// second vocabulary; it never names WHICH lane — the console reads the current
+// roster row for that, exactly as the failure block does.
+func writeLLMRefusal(w http.ResponseWriter, msg string) {
+	writeJSON(w, http.StatusUnprocessableEntity, errorBody{Error: msg, Reason: llmRefusalAuditReason})
 }
 
 // llmUnavailableDetail is what the proxy's brokered-LLM 404 says when this run

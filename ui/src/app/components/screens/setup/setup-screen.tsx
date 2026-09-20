@@ -4,8 +4,8 @@
  */
 
 // SetupScreen — the "Getting started" first-run funnel ORCHESTRATOR. It owns the
-// SetupStatus fetch + re-check, the persisted default-barrier pick, the workspace/
-// secret/site-config loads, and every dialog; the SHELL (header, dismissible
+// SetupStatus fetch + re-check, the workspace/secret/site-config loads, and
+// every dialog; the SHELL (header, dismissible
 // intro, fast-path banner, phase rail, host-status strip, step heading, footer
 // nav) lives in SetupLayout, the pure step bodies in ./environment-step,
 // ./integrations-step, ./step-bodies, and the step/badge data in ./steps.
@@ -35,11 +35,7 @@ import { deriveIntegrations } from "../../../lib/api/integrations";
 import { useWorkspaceList } from "../../../lib/use-workspace-list";
 import type { AccessResponse } from "../../../lib/types";
 import type { AccessLoadState } from "./access-panel";
-import {
-  getDefaultCc,
-  resolveDefaultCc,
-  setDefaultCc,
-} from "../../wardyn/default-confinement";
+import { resolveDefaultCc } from "../../wardyn/default-confinement";
 import { deploymentMode, deriveReadiness, lastCheckedLabel } from "../../../lib/readiness";
 import { useOperator, useOperatorResolved } from "../../wardyn/operator-context";
 import { SetupLayout } from "./setup-layout";
@@ -225,15 +221,16 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
         setAccessState(e instanceof HttpError && e.status === 503 ? "sso_unavailable" : "fetch_failed");
       });
   }, []);
-  // Default-barrier pick (E3). Null until an explicit click — until then the
-  // effective selection is the resolved default (persisted pick if this host runs
-  // it, else strongest available). Clicking a ready card both selects and persists.
+  // Default-barrier pick (E3), IN-SESSION only (0.7.8: the default is a
+  // server fact — the strongest installed class at or above the policy floor
+  // — so there is nothing left to persist here). Null until an explicit
+  // click — until then the effective selection is the resolved default
+  // (this pick if this host still runs it, else strongest available).
   const [ccOverride, setCcOverride] = React.useState<ConfinementClass | null>(
     null,
   );
   const selectDefault = React.useCallback((cc: ConfinementClass) => {
     setCcOverride(cc);
-    setDefaultCc(cc);
   }, []);
 
   // THE single navigation funnel (A4): every Next/Back/rail-jump/in-step-jump
@@ -552,36 +549,19 @@ export function SetupScreen({ onDone }: { onDone: () => void }) {
   }, [onDone]);
 
   const readiness = status ? deriveReadiness(status) : null;
-  // Effective default-barrier selection: the explicit click if any, else the
-  // persisted pick — BOTH re-resolved against live availability, so a class that
-  // vanishes on a recheck (e.g. Docker stops mid-session) degrades to the strongest
-  // available card instead of leaving zero cards selected.
+  // Effective default-barrier selection: the explicit click this session if
+  // any, else the strongest available — re-resolved against LIVE
+  // availability, so a class that vanishes on a recheck (e.g. Docker stops
+  // mid-session) degrades to the strongest available card instead of leaving
+  // zero cards selected. There is nothing to persist across sessions: the
+  // default is a server fact (0.7.8's strongest-installed-at-or-above-the-
+  // floor rule), so a member landing here first can no longer downgrade a
+  // shared browser's stored pick the way the old HIGH-4 guard had to defend
+  // against — there is no stored pick left to downgrade.
   const selectedCc = resolveDefaultCc(
-    ccOverride ?? getDefaultCc(),
+    ccOverride,
     status?.runner.confinement_classes ?? [],
   );
-
-  // Persist the resolved default the first time we can (no explicit pick yet), so the
-  // recommended/strongest-available tier the picker SHOWS is the one actually saved.
-  // Otherwise consumers that read the stored default (e.g. the import SecurityChip)
-  // fall back to CC1/Fence and disagree with what the barrier step displays — you pick
-  // Vault, but the import shows Fence. Clicking a card still overrides + re-persists.
-  //
-  // HIGH-4 guard: a member's redacted SetupStatus always reports
-  // confinement_classes: [] (redactSetupStatusForMember) — resolveDefaultCc
-  // would floor that to CC1, and persisting it here would silently downgrade
-  // the STORED default for anyone sharing this browser profile (this
-  // localStorage key isn't per-role) the moment a member is ever the first to
-  // land on this screen. Only an operator's fully-informed, non-empty class
-  // list may seed the initial persisted default.
-  React.useEffect(() => {
-    if (
-      status &&
-      status.runner.confinement_classes.length > 0 &&
-      !getDefaultCc()
-    )
-      setDefaultCc(selectedCc);
-  }, [status, selectedCc]);
 
   if (!status || !readiness) {
     return (

@@ -8,6 +8,299 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+## [0.7.8] — 2026-09-19
+
+### Added
+
+- **Every `builtin:dial-failed` refusal now names why, and which hop.** `egress.DecisionLog` carries
+  two new fields: `cause` — the masked, topology-redacted sentence naming the failed STAGE (a TCP
+  dial, the origin's TLS handshake, the operator's own upstream-proxy CONNECT exchange) plus the
+  underlying error, so "dial failed" on an `x509: certificate signed by unknown authority` is no
+  longer the specific lie that cost this operator an hour — and `via`, the hop CLASS attempted
+  (`direct` or `upstream-proxy`, never an address). Both ride through the SAME mask + topology-redact
+  pass `Proxy.httpError` already applies to the sandbox-facing body, because `auditScope` hands a
+  run's own creator this whole row, not just the operator. Rendered beside the decision chip in the
+  run's Audit tab.
+
+- **The configured LLM gateway's own guard refusal is no longer misfiled as a dial failure.**
+  `vetTrustedHost`'s refusal of an operator-misconfigured internal model gateway (resolves to
+  loopback/link-local/this proxy's own control-plane network, or does not resolve at all) used to
+  share `builtin:dial-failed` with genuine network-lost-it dials, which also excluded it from
+  `wardyn_egress_denies_total` alongside failures the network actually caused (an accepted residual,
+  F065-gatewayvet). It now carries its own `builtin:gateway-vet-failed` rule_source and counts as an
+  ordinary denial, like any other guard refusal.
+
+- **A refusal on the run's own AWS SSO portal or a Bedrock endpoint now answers in a shape an AWS SDK
+  can parse.** `Proxy.httpError` writes `text/plain`; on a TERMINATED (MITM) connection that body *is*
+  the API response, so an AWS SDK hands it to its JSON parser — the operator's own
+  `JSON Parse error: Unexpected identifier "llm"` is literally the first token of `"llm upstream
+  error: …"`. The four sites this can happen at (`llm upstream vet failed` in `llm_routes.go` and
+  `mitm.go`, `llm upstream error` in `llm_routes.go`, `llm credential refresh failed` in `mitm.go`) now
+  detect the AWS lane (`isAWSLane`: the run's own `portal.sso.<region>.amazonaws.com` MITM entry, or a
+  Bedrock endpoint — never a configured LLM gateway, and never Anthropic/OpenAI/a corp artifact
+  mirror, which all keep today's plain-text body byte-for-byte) and answer with the modelled shape
+  `writeSSOUnauthorized` already proved for a spent credential hold: `application/json`,
+  `x-amzn-errortype`, `{"__type":…,"message":…}` carrying the same masked, topology-redacted sentence
+  the decision log's `cause` field carries.
+
+### Changed
+
+- **Compatibility: an AWS-lane refusal's HTTP status changed from 502 to 500 or 401.** A dial-shaped
+  or gateway-vet-shaped refusal on the run's own SSO portal or a Bedrock endpoint now answers 500
+  `InternalServerException` (a modelled, RETRYABLE server error — the same bounded, backed-off retry
+  either SDK already gives any 5xx, so a genuinely transient dial failure still gets retried, just
+  against a body it can parse instead of one that crashes its deserializer) rather than the flat 502
+  every refusal used to get. A credential-refresh failure on the same lane answers 401
+  `UnauthorizedException` instead — modelled and NON-retryable, `writeSSOUnauthorized`'s own precedent
+  for a spent hold — because retrying changes nothing when the credential itself cannot be resolved.
+  Keeping 502 (a generic transport error both SDKs retry on an unparseable body) is what produced the
+  reported operator's retry storm, ~20 attempts in seconds. Every non-AWS-lane host (Anthropic, OpenAI,
+  a corp artifact mirror, a configured LLM gateway) keeps the unchanged 502 plain-text body.
+
+- **The shipped confinement floor is CC1, and an unspecified run now defaults to the strongest
+  installed class, not the floor.** `examples/policies/default.json`'s `min_confinement_class` moved
+  CC2 -> CC1: on a stock, CC1-only install the old CC2 floor refused every default-policy run before
+  it launched (`runner "docker" cannot enforce confinement_class CC2 (available: CC1)`), and the k8s
+  Helm chart carried a render-time guard (B12b-F7) purely to catch the same trap early — both existed
+  because the floor doubled as the default. They no longer need to: a run naming no `confinement_class`
+  now resolves to the strongest class the runner actually advertises at or above whatever floor
+  applies (the admin floor, when one is set, is unchanged and still fails closed exactly as before).
+  An explicit request, the refusal path and the CC3 blast-radius override are unchanged to the byte.
+  An *unspecified* request under an admin floor is not: it now resolves to the strongest installed
+  class at or above that floor, where before it took the floor itself. Two server-authored lanes move
+  with it — a source scan and an AWS SSO sign-in capture now dispatch at that same class rather than
+  below the floor, and on a host that cannot meet an admin floor the sign-in is refused up front
+  instead of failing in the driver after superseding the person's existing sandbox.
+  **Residual:** on a host with gVisor or Kata installed, a person may now deliberately
+  request a weaker installed class than the old CC2 floor allowed — an explicit choice only, never the
+  default, which still always resolves to the strongest available. Note the console today always sends
+  an explicit class, so a console launch records `requested`; the `defaulted` row is what an API or CLI
+  launch that names no class produces. And because the advertised set is
+  live-probed rather than read from a static field, a runtime that disappears between two runs lowers
+  the *default* for the next unspecified request rather than refusing it — which is why the
+  `run.create` audit row now carries `confinement_source` (`requested`/`defaulted`), the one place that
+  distinguishes "the caller asked for this class" from "this is what today's runner had to offer." See
+  `threatmodel/THREAT-MODEL.md` residual #47.
+
+- **`WARDYN_AWS_SSO_PROXY_INJECT` (the Phase B kill switch) is now reachable the way
+  `docs/OPERATIONS.md`'s "Turning the lane off" already told operators to use it.** It was a named env
+  var read at boot, but reachable only through the Helm chart's generic `.Values.env` passthrough (no
+  `values.yaml` entry of its own) and absent from the Compose stack's explicit `WARDYN_*` env list
+  entirely — an operator following either install path's own documented rollback recipe for a corp-MITM
+  or SDK surprise had no chart value or compose var to set. The chart gains `awsSSOProxyInject`
+  (`deploy/helm/wardyn/values.yaml`), wired into the Deployment behind the same precedence `trustedCA`
+  already established: a raw `env.WARDYN_AWS_SSO_PROXY_INJECT` still wins, so
+  `scripts/kind-sso-walk.sh`'s existing `--set env.WARDYN_AWS_SSO_PROXY_INJECT=…` posture pin needed no
+  change. Compose gains the `WARDYN_AWS_SSO_PROXY_INJECT` passthrough beside its sibling `WARDYN_*`
+  vars. Both empty by default — byte-identical to today, wardynd's own compiled default (`on`) applies.
+
+- **The console offers only the barrier classes a run can actually use, and an untouched pick
+  defers to the server instead of guessing one.** Availability now comes from `/setup/status`'s
+  `runner.confinement_classes` everywhere — New Run's Barrier control moved off `/healthz` (a wire
+  mirror with no other consumer), matching the Getting-started/Settings barrier matrix it already
+  shared. Every selector disables an installed-but-below-floor or plain-uninstalled class with its
+  own reason, and where exactly one class qualifies for a run there is nothing to ask, so the control
+  collapses to a sentence rather than a picker. An inconclusive read (`unreachable`) never blocks
+  launch and no longer leaves every tier guessably selectable either. The per-browser
+  `wardyn-default-confinement` localStorage default is gone (its HIGH-4 downgrade guard was already
+  inert): the default is a server fact now, so New Run resolves its own from the host instead of
+  reading a stale browser preference, and Settings' Host card lost the private per-mount override
+  state that used to write to it.
+
+- **A console launch now records `confinement_source: defaulted` when the Barrier control was never
+  touched.** New Run used to send an explicit `confinement_class` on every launch — including runs
+  where the person never touched the Barrier control — so the server's own strongest-installed-
+  at-or-above-the-floor default (`runs_policy.go`'s `strongestAdvertisedAtOrAbove`) never actually
+  applied to a console launch, and the run-create audit's `confinement_source` field could only ever
+  read `requested` from this surface. An untouched pick (a clone's carried-over class still counts as
+  touched, B4b) now omits `confinement_class` from the request entirely.
+
+### Fixed
+
+- **The AWS sign-in tab's URL no longer carries junk after the device code.** Clicking "open AWS
+  sign-in" opened a tab whose `user_code=` had escape bytes appended — the login PTY's extractors
+  excluded whitespace and quote/bracket characters from a URL but not control bytes, and a tmux
+  redraw's cursor-addressed escapes butt directly against the URL with no delimiter between them.
+  Both `extractAuthUrl` and `extractDeviceVerificationUrl`
+  (`ui/src/app/components/screens/settings/login-pty-extract.ts`) now exclude C0/DEL control bytes
+  from the URL body, and the device-URL extractor prefers the longest `user_code=` candidate seen in
+  the buffer rather than the first, so a CSI landing mid-code (now itself a match boundary) can no
+  longer return a silently truncated code instead of visible junk.
+
+- **`wardyn attach` no longer needs the shared admin token for a member's own run.**
+  It dialed the attach WebSocket directly with whatever bearer was configured, and that
+  route falls through to `requireOperator` for a bare bearer — so a member got a blanket
+  **403** and the shared admin token was the only credential that ever worked. The CLI now
+  mints a single-use, 30s-TTL attach ticket first (`POST /runs/{id}/attach-ticket`,
+  owner-or-admin — the same door the console's own embedded terminal already uses) and
+  dials with `?ticket=` instead, so a member's own token (`WARDYN_TOKEN`) now works for a
+  run they created. The ticket is minted immediately before the one dial and never cached:
+  a fresh mint per attach attempt, matching the ticket's single-use, 30s TTL contract
+  (`internal/api/attach_ticket.go`). An admin-token caller (e.g. CI) is unaffected — the
+  mint endpoint authorizes an admin on any run — and when no ticket can be minted at all
+  (an older control plane with no `attach-ticket` route to answer), the CLI falls back to
+  dialing directly with the configured token exactly as before this ticket lane existed.
+  (`cmd/wardyn/attach.go`; no server change — `internal/api`'s ticket lane already served
+  the browser.)
+
+  **Audit shape change:** a non-owning member's `wardyn attach` used to be refused by the
+  WS route's `requireOperator` gate with a blanket **403** (`authz.denied`), before the run
+  was even loaded — no existence check at all. It now mints first, through the same
+  owner-or-admin door the browser uses, and for a run the caller does not own that mint
+  itself now refuses with the byte-identical **404** `authz.denied` (reason `not_owner`) a
+  nonexistent run would (`getRunAuthorized`'s no-existence-oracle rule) — the WS is never
+  dialed. Anyone alerting on the old blanket-403 `authz.denied` row for CLI attach should
+  also watch for this 404 shape.
+
+- **The run-detail "Attach from your terminal" card no longer claims the CLI needs the
+  admin token.** Its copy said `wardyn attach` "needs your admin token in
+  `WARDYN_ADMIN_TOKEN`" — false as of the fix above, and a member reading that card had no
+  reason to believe the command would work for them at all. It now names both `WARDYN_TOKEN`
+  (a member's own) and `WARDYN_ADMIN_TOKEN`, and that it mints the same one-time ticket the
+  page's own terminal does. (`ui/src/app/components/screens/run-detail-ssh.tsx`)
+
+- **The browser terminal sometimes needed a double click to type, sometimes only accepted a click in
+  one area, and sometimes never let you click back in.** Three separate causes, each with a pinning
+  test:
+  - A holder whose socket died silently (a dead peer on a quiet shell) could hold the writer slot
+    forever — nothing in the attach pump bounded it, since the existing 30s write timeout only ever
+    engages while output is flowing. The attach WebSocket now probes an otherwise-idle connection with
+    a WebSocket ping and frees the slot if the peer never answers (`internal/api/attach.go`).
+  - Toggling focus mode remounts the terminal (by design), and the old socket's holder slot was
+    released only after its recording was persisted and its `session.detach` audit was written — a
+    window in which the new socket's handshake was admitted read-only against its own vanishing
+    predecessor. The slot now frees the instant the old pump ends, before that tail
+    (`internal/api/attach.go`).
+  - The terminal never called `.focus()` at all; focus depended entirely on xterm's own click-to-focus
+    on its inner canvas, so a click on the container's padding or the space below the last row landed
+    nowhere. A click anywhere in the terminal, or a socket becoming writable, now focuses it
+    (`ui/src/app/components/attach-terminal.tsx`).
+An operator's blocking field report: on a private-endpoint Kubernetes estate reaching AWS through a
+corporate proxy, the first model call starved and the agent showed
+`API Error: SyntaxError: JSON Parse error: Unexpected identifier "llm"` — the giveaway that the
+proxy's own plain-text 502 body ("llm upstream vet failed: …") was handed straight to a JSON parser.
+The audit trail showed a tight loop of `policy:allowed` → `builtin:dial-failed`, with no way to tell
+*why* the dial failed. It cost the operator an hour.
+
+- **`builtin:upstream-proxy` is an allow, not a refusal.** The console's rule_source table folded it
+  into the generic "Refused by the built-in guard" bucket, which reads as a denial that never
+  happened — it is recorded once per run, at proxy construction, to audit the deliberate SSRF-guard
+  relaxation for the operator's configured upstream hop. It now renders as "Corp upstream proxy in
+  path" (an allow).
+
+- **The setup gate is a daemon decision now, not a console id list.** `/setup/status` rows carry a new
+  `blocking` bool (`SetupCheck.Blocking`), and the console's hard gate (`setupGateActive`) redirects into
+  the funnel only when a row is marked, never on grade or id alone. 0.7.7 twice tried to name the rows
+  that must not gate — first `llm_provider`, then `bedrock_provider` — and both times it was enumerating
+  a family rather than naming the property: the next lapsed sign-in graded `harness_credential_aws`, an
+  id neither list contained, and an admin whose own AWS SSO session had expired was pulled off New Run
+  onto Getting started in the middle of repairing it. A console cannot know which rows describe the
+  install and which describe the person reading them; the daemon can, and now says so.
+  Exactly three rows are marked: `runner`'s `fail` (no live confinement class — runs cannot launch),
+  `confinement_floor`'s `warn` (every run on the default policy refused before it launches), and
+  `sso_rbac`'s `warn` (OIDC configured with no role mapping — every SSO user is an admin, and the
+  funnel's People step is where that is fixed). Every other row — `age_key`, `tls_cookie_posture`,
+  `site_config`, `scm_provider`, `host_proxy`, `claude_subscription_staging`, `github_ref_ruleset`,
+  `k8s_egress_containment` (its `warn` **and** both `fail` arms), the install-wide
+  `harness_credential`, and the per-person `llm_provider`, `bedrock_provider` and
+  `harness_credential_aws` — keeps its grade on every surface that renders it, and never confiscates
+  the console again, whatever status it carries.
+  Two consequences worth stating plainly: a `fail` row now stops gating (the unenforced-CNI arm of
+  `k8s_egress_containment`, a posture an operator turns on deliberately), and an install that has a
+  runner, a meetable floor and a role mapping sets none of the three — so on a healthy Kubernetes
+  install the funnel gate no longer fires at all, where before 0.7.8 any `warn` held it. The rows are
+  still there to read; what they stopped doing is taking the console away.
+
+### Known gaps
+
+- **The corp-proxy estate's actual cause is still unidentified, and this release does not claim to fix
+  it.** The field report diagnosed Phase B's MITM lane as ignoring `SiteConfig.upstream_proxy_url`;
+  a new test now proves that lane *does* CONNECT through the corporate proxy, by hostname, and that a
+  `upstream_proxy_no_proxy` entry is the one thing that sends it direct. So the premise is disproven
+  and the real cause is one of: a bypass entry covering the AWS suffixes, the corp proxy refusing
+  `CONNECT portal.sso…:443`, or the proxy image lacking that estate's TLS-intercept CA
+  (`WARDYN_TRUSTED_CA_FILE` — the sandbox images bake one, the proxy image does not unless staged).
+  What 0.7.8 ships is the instrument: every `builtin:dial-failed` now carries the failed stage, the
+  underlying error and which hop was attempted, so the next run names its own cause instead of costing
+  an operator an hour. `WARDYN_AWS_SSO_PROXY_INJECT=off` remains the sanctioned stopgap.
+
+- **An observer learns it may type on reconnect, not in place.** A holder whose socket dies is now
+  reaped within the ping budget instead of holding the writer slot indefinitely, and a remount no
+  longer collides with its own release — so the next attach gets the slot. But the `attach-mode` frame
+  is still sent once per connect: a terminal already sitting open as a read-only observer does not
+  flip to writable live, it flips when it reconnects. True in-place promotion needs the holder registry
+  to track observer sinks rather than one writer, which is a larger change than this release took.
+
+- **The terminal's ordinary-use test corpus is not written.** The three reported faults ship with pins
+  that fail without their fix, but the wider corpus this campaign scoped — paste, selection, two tabs
+  on one run, a reconnect after a daemon bounce, the SSH lane joining the same session — is deferred,
+  as is k8s `Driver.Attach`, which has no test at all.
+
+- **Two console surfaces still describe the old setup gate.** The Getting-started Review step groups
+  rows by grade rather than by the new `blocking` flag, so a blocking `warn` reads under "Worth a
+  look" while a non-blocking `fail` reads under "Blocking"; and demo 02c's narration still says every
+  door leads to Getting started, which a healthy install no longer does.
+
+## [0.7.7] — 2026-09-18
+
+The 0.7.6 field report, in one journey: an admin on a Kubernetes estate whose AWS SSO session had
+lapsed clicked Launch on New Run, the run never started (the walk found both shapes: refused at the
+click, or launched and failed at dispatch when the refresh token was already retired), and the console
+loaded Getting started. This release answers both halves.
+
+Verified on the kind AWS SSO walk against images rebuilt from the commit under test (walk-4 on
+`e73f2c3d`, the tree this release descends from — only one live spec, case J, and this changelog change
+after it; the walk's `MANIFEST.json` records the tip and the rebuilt images): a member whose own sign-in
+has lapsed clicks Launch, the sign-in dialog opens itself over New Run, and the same click's run
+launches after the device flow (live case L); an admin with no usable session of their own loads New
+Run and stays there (L0); a session retired at the portal is refused at the click with no run created,
+and the dialog opens where the person is (J, rewritten for the click-time refusal and run, with the
+hold spec's two runnable negatives, against the same install); the mid-run hold and its resume are
+unchanged (K, K(resume)).
+
+### Fixed
+
+- **A lapsed AWS SSO session no longer sends an admin to Getting started.** The setup funnel's
+  redirect read every `warn` on `/setup/status` as an install defect — including the two
+  model-provider rows, `llm_provider` and `bedrock_provider`, which under a `per_user` Bedrock row are
+  graded through the CALLER's own session — so an admin whose own sign-in had lapsed was pulled off
+  New Run (or any page) the moment the shell's next status read landed (on the owner's estate, seconds
+  after they had clicked Launch), on an install that had never marked onboarding complete. The model provider is optional and
+  per person; the gate no longer reads either row. Both keep their grade everywhere they are
+  rendered. (The 0.7.6 field report; the kind walk's admin had been landing in the funnel on every
+  load for the same reason.)
+- **Launch with a lapsed sign-in is one dialog, then the run.** `POST /runs` still refuses a run whose
+  per-person session is missing or spent before any run exists, and the refusal now names its class
+  on the wire — `"reason":"model_credential"`, the failure audit row's own word; every other error
+  body is byte-identical. The real launch now also REDEEMS an expired session whose refresh token
+  still lives, right there at the click (Review's preflight stays a dry run): a renewal AWS refuses is
+  refused before any run exists, with the class — it used to be admitted and fail at dispatch, on the
+  run's own page, after the person had been told it launched. New Run answers that refusal by opening
+  the AWS sign-in dialog itself and launching the run again — the form as it then stands — the moment
+  the capture lands: no trip to Getting started, no second click. Escape leaves the sentence and the rail's own sign-in control; a member under a shared row
+  reads the sentence and no dialog, because the repair is the admin's; a relaunch refused again (a
+  pin contradiction the same identity cannot repair) shows the sentence and waits. Launch stays a
+  server decision — nothing is pre-checked on the console's cached status. Review's preflight 422
+  carries the same class.
+
+### Known gaps
+
+- **A renewal AWS does not answer is refused without the dialog.** When the token in hand has lapsed
+  and AWS is throttling or unreachable at the click, the launch is refused with *"launch again in a
+  moment"* and no sign-in dialog — the sign-in is still good, and a device flow repairs nothing about
+  an outage. A run whose renewal fails at dispatch (a token that lapses between the click and the
+  sandbox) still fails on its own page — the sentence alone when AWS did not answer, the 0.7.6 sign-in
+  door when the session is spent; neither launches it again from there — "Start a run like this one"
+  in the run header is the way back (New Run, prefilled).
+- **A relaunch armed by the dialog survives leaving New Run with the dialog open** (the dialog is the
+  shell's, so Back does not close it): a sign-in completed afterwards launches the run that click asked
+  for. It lands on that run only when the launch carries no advisories; a launch WITH advisories holds
+  for an "Open run" nobody is there to click, so the run is on the Runs board and nothing says so — and
+  a relaunch refused again after leaving shows its sentence nowhere.
+- **The hermetic suites prove the dialog opens itself (Playwright) and that Escape launches nothing
+  (vitest); the relaunch after a completed sign-in is proven on the kind AWS SSO walk only** (live
+  case L) — no mocked spec completes a device flow.
+
 ## [0.7.6] — 2026-09-18
 
 The 0.7.5 field report (an operator's handoff from running 0.7.1–0.7.5 on a private-endpoint Kubernetes estate) consolidated one journey — a person getting
@@ -271,7 +564,7 @@ tighten an existing input check and one turns a relayed oversized upload into a 
   docker-gated SDK-tolerance test, whose fake also serves plain HTTP with no proxy in the loop at
   all. The hold's own sentence reaches a client that speaks plain HTTP inside the terminated tunnel
   (the walk's SDK does); only a client on the un-terminated plain lane would see the origin's own
-  401. Listed here so the plaintext walk is not mistaken for a simulated one.
+  401. Listed here so the walk's plaintext client leg is not mistaken for a simulated one.
 - **The support bundle's Compose entry is redacted for reading, not for re-use.** It is not a valid
   `docker compose -f` input when marker-named structural keys exist (e.g. a `secrets:` section or a
   `*_token`-named volume) — those keys are redacted whole rather than per-value, so the redacted

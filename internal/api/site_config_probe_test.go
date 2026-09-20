@@ -990,6 +990,24 @@ func TestHandleTestSiteConfigProxy_UsesBaseImage(t *testing.T) {
 	if class != types.CC1 {
 		t.Errorf("dispatched class = %q, want the runner's own advertised class (CC1 here), never the operator's floor", class)
 	}
+	// NON-VACUOUS, deliberately (0.7.8): the assertion above says "never the
+	// operator's floor", but the harness sets no DefaultPolicy at all, so there
+	// IS no floor to ignore and CC1 is simply what the runner advertises — it
+	// would pass even if the probe started honouring a floor. Set one that
+	// cannot be met and re-run: the probe must still dispatch CC1. This is the
+	// line that fails if the probe is ever switched to
+	// strongestAdvertisedAtOrAbove like the scan and sign-in lanes were.
+	srv.cfg.DefaultPolicy.MinConfinementClass = types.CC3
+	fr2 := &probeFakeRunner{exitCode: 0}
+	srv2, _ := newProbeHarness(t, types.SiteConfig{UpstreamProxyURL: "http://proxy.corp:3128"}, fr2)
+	srv2.cfg.DefaultPolicy.MinConfinementClass = types.CC3
+	if w2 := do(t, srv2, http.MethodPost, "/api/v1/site-config/test-proxy", adminToken, "{}"); w2.Code != http.StatusOK {
+		t.Fatalf("with a CC3 floor: code = %d, want 200 — the probe is floor-blind by design; body=%s", w2.Code, w2.Body.String())
+	}
+	if _, class2 := fr2.dispatched(); class2 != types.CC1 {
+		t.Errorf("with a CC3 floor the probe dispatched %q, want CC1 — the probe answers a host question "+
+			"and takes the runner's own class; a floor it cannot meet must not change or refuse it", class2)
+	}
 	// The run's own Agent label must match what actually got dispatched
 	// (0.6.6): it used to default to "claude-code" from newStepRun even
 	// though the probe always runs "base", which compounded into

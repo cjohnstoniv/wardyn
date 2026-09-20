@@ -60,7 +60,6 @@ import {
   REAUTH_HEADING,
   REAUTH_SIGNED_IN_TOAST,
   MODEL_ACCESS_BANNER,
-  MODEL_ACCESS_RUN_DOOR,
   waitingReauth,
 } from "../../src/app/components/wardyn/model-access-copy";
 import { AGENTS } from "../../src/app/lib/workspace-providers-copy";
@@ -563,80 +562,70 @@ test("K(resume) (credential-reauth-hold): the member signs in and the SAME run c
   await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toHaveCount(0);
 });
 
-// ── J — the run door, on a run dispatch refused over the credential ─────────
+// ── J — the LAUNCH door, on a session retired at the portal ────────────────
 
-test("J (run-credential-door): a run refused over the model credential carries the sign-in where the person is", async ({
+test("J (launch door, spent session): a session retired at the portal is refused at the click — the sign-in opens where the person is, and no run exists", async ({
   page,
   request,
 }) => {
   test.setTimeout(15 * MINUTE);
 
-  // THE REFUSAL IS FORCED, not waited for, and the lever is dispatch's own
-  // renewal. `needsRefresh` is true for any token within awsSSORefreshSkew (10
-  // min) of its expiry, so from T+2 onward EVERY dispatch of this 12-minute
-  // token renews it first. With the session retired at the portal, that renewal
-  // is the thing that fails — and it fails at DISPATCH, where the run has
-  // already been created, which is exactly the shape the run door exists for.
+  // THE REFUSAL IS FORCED, not waited for, and the lever is the renewal.
+  // `needsRefresh` is true for any token within awsSSORefreshSkew (10 min) of
+  // its expiry, so from T+2 onward the launch renews this 12-minute token
+  // first — and with the session retired at the portal, that renewal fails.
   //
-  // Create still passes: the spent mark is written by the dispatch attempt, so
-  // at create time model_access still grades live. That ordering is the case.
+  // 0.7.6 forced this at DISPATCH: create passed (no renewal there), the run
+  // existed, and its own page carried the door. 0.7.7 redeems at the CLICK
+  // (the 0.7.6 field report's likeliest shape — walk-2 reproduced it: an
+  // expired session whose refresh token AWS had retired was told "launched"
+  // and failed on its page), so the same lever now
+  // yields a 422 before any run exists, carrying the class the New Run rail
+  // answers by opening the dialog itself. The run-page door of 0.7.6 stays for
+  // a session that lapses between the click and the sandbox — not forceable.
   await dexSignIn(page, MEMBER_EMAIL);
   const T = await freshCapture(page, request);
   await setReauthAfter(1);
 
   try {
-    await waitUntil(page, T + 2.2 * MINUTE, "dispatch renews inside awsSSORefreshSkew (10 min) of a 12-minute token");
+    await waitUntil(page, T + 2.2 * MINUTE, "the launch renews inside awsSSORefreshSkew (10 min) of a 12-minute token");
 
     await page.goto("/runs/new");
     await page.getByRole("combobox", { name: "Title" }).fill("a run whose credential cannot be renewed");
     await page.getByRole("radio", { name: /^Autonomous/ }).click();
     await page.locator("#nr-task").fill("Reply with the single word: ready.");
+    // At the click the server still grades the session live (the spent mark is
+    // written by the renewal the click itself performs), so nothing on the
+    // console could have warned: the server's answer is what opens the door.
+    expect((await modelAccess(page)).state, "nothing to warn about before the click").toBe("live");
+    const clickedAt = new Date().toISOString();
     await page.getByRole("button", { name: /^Launch/ }).click();
-    // The 201 is the point: the console offers the run, and the refusal is on
-    // the run's own page rather than in the launcher's error line.
-    await page.getByRole("button", { name: "Open run" }).click();
-    const runID = runIDFromURL(page);
 
-    await expect.poll(async () => (await runRow(page, runID)).state, { timeout: 5 * MINUTE }).toBe("FAILED");
-
-    // The server's CLASS, on the wire: the console grades the ending from this
-    // key, never from the sentence.
-    const trail = await auditFor(page, runID);
-    const refusal = trail.find((e) => e.action === "run.create" && e.outcome === "failure");
-    expect(refusal, "no run.create failure row on the refused run").toBeTruthy();
-    expect(String(refusal?.data?.reason), "the refusal is not classed as a model-credential one").toBe(
-      "model_credential",
-    );
-    expect(String(refusal?.data?.mechanism)).toBe("bedrock_sso");
-
-    // THE SERVER'S OWN SENTENCE, read off the audit row and then found on the
-    // page — never retyped here. Asserting a literal would pin a second
-    // spelling of a string lane run-credential-door owns.
-    const sentence = String(refusal?.data?.error ?? "");
-    expect(sentence, "the refusal row carries no sentence").not.toBe("");
-    // SCOPED TO THE FAILURE BLOCK, because the sentence is on this page TWICE —
-    // the run header's summary line carries it too (0.7.6's header states a
-    // terminal run's reason), and an unscoped locator is a strict-mode
-    // violation rather than a passing assertion. The failure block is the
-    // surface this case is about: it is the one that carries the door.
-    const failure = page.getByTestId("run-failure-block");
-    await expect(failure.getByText(sentence.slice(0, 80))).toBeVisible({ timeout: 2 * MINUTE });
-    // …and the header says it as well, which is the other half of "the refusal
-    // is where the person is" — asserted, not merely tolerated.
-    await expect(page.getByTestId("run-summary-header").getByText(sentence.slice(0, 40))).toBeVisible();
-
-    // …and the door, under its own accessible name — distinct from the strip's
-    // and the rail's, because this page can carry more than one.
-    const door = failure.getByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA });
-    await expect(door).toBeVisible({ timeout: 2 * MINUTE });
-    await expect(failure.getByText(MODEL_ACCESS_RUN_DOOR.NOTE)).toBeVisible();
-    // The claim it makes about itself is the one the block must not break: this
-    // run stays failed. No relaunch happens here.
-    await door.click();
-    await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible({ timeout: 60_000 });
+    // The refusal is where the person is: the dialog, over New Run, with the
+    // renewal's own sentence under the rail — and no "Open run", because there
+    // is no run.
+    await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible({ timeout: 2 * MINUTE });
     await expect(page.getByTestId("harness-login-pane")).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText(/can no longer be renewed/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open run" })).toHaveCount(0);
+
+    // Escape: nothing launched, the page never left, and the server's grade has
+    // caught up with what the click learned.
     await page.keyboard.press("Escape");
-    expect((await runRow(page, runID)).state, "opening the door restarted the run").toBe("FAILED");
+    await expect(page.getByTestId("harness-login-pane")).toHaveCount(0);
+    await expect(page).toHaveURL(/\/runs\/new$/);
+    await expect.poll(async () => (await modelAccess(page)).state, { timeout: 60_000 }).toBe("expired_signin");
+    const mine = (await page.evaluate(async () => {
+      const r = await fetch("/api/v1/runs?limit=1000", { credentials: "include" });
+      const body = (await r.json()) as
+        | { items?: Array<{ id: string; title?: string; created_at?: string }> }
+        | Array<{ id: string; title?: string; created_at?: string }>;
+      return Array.isArray(body) ? body : (body.items ?? []);
+    })) as Array<{ id: string; title?: string; created_at?: string }>;
+    expect(
+      mine.filter((r) => r.title === "a run whose credential cannot be renewed" && (r.created_at ?? "") >= clickedAt),
+      "a refused click creates no run",
+    ).toEqual([]);
   } finally {
     await setReauthAfter(0);
   }
@@ -708,7 +697,8 @@ async function fastHold(
 }
 
 // DEFERRED, with the measurements, not quietly dropped: a hold nobody answers
-// does time out — the product does it — but the walk cannot SEE it.
+// does time out — the product does it — but neither attempt on this release
+// drove it in time to see it.
 //
 // Two attempts, both of which raised a REAL hold (a PENDING credential_reauth
 // row and a credential.reauth.requested audit row, every time) and neither of

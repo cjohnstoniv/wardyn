@@ -59,7 +59,7 @@ func TestResolveRunLLMLanes_HonoursTheRunsOwnModelRunAnswer(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			spec := types.RunPolicySpec{}
-			lanes := srv.resolveRunLLMLanes(context.Background(), tc.req, &spec, nil, awsSSOScope{})
+			lanes := srv.resolveRunLLMLanes(context.Background(), tc.req, &spec, nil, awsSSOScope{}, false)
 			if lanes.bedrock.ready != tc.wantReady {
 				t.Errorf("bedrock.ready = %v, want %v — create must answer the same modelRun question dispatch does",
 					lanes.bedrock.ready, tc.wantReady)

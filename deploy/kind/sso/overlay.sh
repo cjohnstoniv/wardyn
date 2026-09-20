@@ -145,9 +145,9 @@ kubectl --context "${CONTEXT}" -n "${NAMESPACE}" rollout status deployment/wardy
 
 # ── 2. the chart, re-rendered on OIDC ───────────────────────────────────────
 # --reuse-values so the quickstart's image/substrate values persist; the default
-# policy rides along floored to CC1, because the baked default's CC2 floor would
-# refuse every MEMBER run on this Fence-only cluster (README.md's
-# "confinement-floor trap").
+# policy rides along floored to CC1 — redundant since 0.7.8 (the baked default
+# floors at CC1 now), kept so this Fence-only cluster states its own floor
+# rather than inheriting the image's.
 step "helm upgrade ${RELEASE} onto Dex SSO"
 helm --kube-context "${CONTEXT}" upgrade "${RELEASE}" deploy/helm/wardyn \
   -n "${NAMESPACE}" --reuse-values -f deploy/kind/sso/values.yaml \

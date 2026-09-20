@@ -145,13 +145,14 @@ const plainMITMHost = "wardyn-awsssofake.wardyn.svc.cluster.local"
 // the CLIENT. They are different questions and the proxy answers them
 // separately, so a plaintext entry still serves an ordinary TLS client (curl,
 // anything with the CA installed) while also serving the plaintext one the AWS
-// SDK actually sends (SDK-PATH.md).
+// SDK actually sends (measured — TestMITMConnect_PlaintextClientInsideTheTunnelIsServed
+// below).
 //
 // An earlier version of this file assumed only the TLS shape, which is what a
 // MITM is "supposed" to see — and that assumption is what let walk-5 stay red
 // after the upstream leg was fixed.
 
-// THE CLIENT LEG, MEASURED (SDK-PATH.md). The test above drives the tunnel the
+// THE CLIENT LEG, MEASURED. The test above drives the tunnel the
 // way a TLS client does. The agent's SDK does NOT: with a proxy configured it
 // reaches an `http://` endpoint by CONNECT and then sends PLAINTEXT inside the
 // tunnel — first byte 0x47, `G`, never 0x16. Reproduced offline against the real

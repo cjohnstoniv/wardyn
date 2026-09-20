@@ -72,6 +72,10 @@ interface RunRailProps {
     /** Why Launch cannot be pressed — a disabled button that won't say is a dead end. */
     problem: string | null;
     error: string | null;
+    /** The server refused THIS launch for the caller's own model credential (a
+     *  422 carrying reason `model_credential`) — the one refusal a sign-in
+     *  repairs, so the rail answers it with the door and launches again. */
+    credentialRefused: boolean;
     /** The 201's advisory `warnings[]`, once Launch has actually fired
      *  (§5c.8) — rendered here, inline, instead of a toast. */
     warnings: string[];
@@ -322,6 +326,37 @@ export function RunRail({
   // Launch explicitly as `returnTo` makes it the captured opener directly.
   const launchRef = React.useRef<HTMLButtonElement>(null);
 
+  // The server refused THIS click for the person's own model credential (422,
+  // reason model_credential — the class failure-block.tsx grades a dead run by).
+  // The door opens here, and the same launch fires again the moment the sign-in
+  // lands, so a lapsed session costs one dialog rather than a trip to Getting
+  // started. Launch stays the server's decision: nothing is pre-checked on the
+  // cached status, which can be five minutes stale. Once per click: a relaunch
+  // refused again (a pin contradiction the same identity cannot repair) leaves
+  // the sentence and waits for the person. Never over a door someone else
+  // opened: openDoor overwrites the opener, and the strip's focus contract
+  // (model-access-banner.tsx) reads it on close — and a click is CONSUMED on
+  // its first evaluation, whatever the door's state then, so a door that
+  // closes later (Escape, a sign-in started from the strip) never brings this
+  // dialog back with a relaunch armed for a click the person has moved past.
+  // A pending relaunch does survive leaving the page with the dialog open
+  // (the dialog is the shell's): a sign-in completed then launches the run
+  // that click asked for and lands on it.
+  const onLaunchRef = React.useRef(launch.onLaunch);
+  onLaunchRef.current = launch.onLaunch;
+  const autoOpened = React.useRef(false);
+  React.useEffect(() => {
+    if (!launch.credentialRefused || autoOpened.current) return;
+    autoOpened.current = true;
+    // The audience rule modelAccessDoor already states: a sign-in repairs a
+    // bedrock_sso lane for its per_user owner, or for any operator (a shared
+    // row); a member under a shared row keeps the server's sentence, no door.
+    if (door.open || !door.bedrockSSO || !(door.perUser || door.operator)) return;
+    door.openDoor(launchRef.current, () => onLaunchRef.current());
+    // The strip and the line above catch up with what the server just said.
+    void door.refresh();
+  }, [launch.credentialRefused, door.open, door.bedrockSSO, door.perUser, door.operator, door.openDoor, door.refresh]);
+
   // A run with no model credential to describe (a shell command — the screen
   // withholds agentRow for one), no model-access line and no warning to raise
   // has no Credentials section at all, rather than a heading over nothing.
@@ -494,7 +529,10 @@ export function RunRail({
             type="button"
             className="flex-1"
             disabled={launch.disabled || !!launch.problem}
-            onClick={launch.onLaunch}
+            onClick={() => {
+              autoOpened.current = false;
+              launch.onLaunch();
+            }}
           >
             {/* The icon slot always renders (never just on launching) so the
                 has-[>svg] padding rule and the icon+gap width never change —

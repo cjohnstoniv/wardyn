@@ -389,7 +389,9 @@ export function ModelAccessBanner() {
         onCancel={door.closeDoor}
         onDone={() => {
           completed.current = true;
-          door.closeDoor();
+          // The completion path, not closeDoor(): it also runs what the opener
+          // asked for on a completed sign-in (the New Run rail's relaunch).
+          door.signedIn();
           void door.refresh();
           // CONSOLE-RULES §9's transient case: the only other evidence is a
           // strip that disappears, and a surface vanishing is not a

@@ -79,6 +79,14 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	if dl.Repeat > 0 {
 		fields["repeat"] = dl.Repeat
 	}
+	// Cause/Via ride a dial-shaped refusal only (egress.DecisionLog's own doc
+	// comments) — absent on every ordinary decision, same as repeat above.
+	if dl.Cause != "" {
+		fields["cause"] = dl.Cause
+	}
+	if dl.Via != "" {
+		fields["via"] = dl.Via
+	}
 	data, _ := json.Marshal(fields)
 	outcome := decisionOutcome(dl.Decision)
 	ev := s.auditEvent(&runID, types.ActorAgent, claims.SPIFFEID,
@@ -92,11 +100,10 @@ func (s *Server) handlePostDecision(w http.ResponseWriter, r *http.Request) {
 	// egress.Deny; counting them paged operators for policy denials that never
 	// happened and made the true deny rate unreadable off the series. Both still
 	// record their egress.deny AUDIT row unchanged — only the counter is scoped.
-	// One accepted residual rides on the first exclusion: llm_routes.go reuses
-	// builtin:dial-failed for vetTrustedHost's GUARD refusal of the configured
-	// model gateway, so that refusal stops moving the counter as well. It keeps
-	// its egress.deny audit row; see isPolicyDeny (metrics.go) for why it is not
-	// separable at this handler.
+	// See isPolicyDeny (metrics.go): llm_routes.go's gatewayTarget GUARD refusal
+	// used to share builtin:dial-failed and ride this same exclusion (the
+	// F065-gatewayvet residual) — closed by giving it its own rule_source, so it
+	// now counts here like any other guard denial.
 	if dl.Decision == egress.Deny && isPolicyDeny(dl.RuleSource) {
 		s.metrics.egressDenied()
 	}

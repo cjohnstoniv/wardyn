@@ -15,6 +15,11 @@ export type SetupCheckPlatform = "linux" | "darwin" | "windows" | "wsl" | "any";
 // One environment/readiness row. status "info" is a permanent, non-fixable
 // condition (e.g. no /dev/kvm on macOS) — render it informationally, never as a
 // clearable warning.
+//
+// blocking (0.7.8): the DAEMON's own decision that this row must confiscate
+// the console (setup-gate.ts's setupGateActive reads it, and nothing else —
+// no id list lives on this side any more). Internal/api/setup_checks.go's
+// SetupCheck.Blocking doc names the three rows that ever carry it.
 export interface SetupCheck {
   id: string;
   label: string;
@@ -22,6 +27,7 @@ export interface SetupCheck {
   platform?: SetupCheckPlatform;
   detail?: string;
   fix?: string;
+  blocking?: boolean;
 }
 
 // A resident coding-agent CLI detected on the wardynd host PATH. logged_in is
@@ -407,8 +413,8 @@ export interface SetupStatus {
   // UI-ONLY, never on the wire: set by api.getSetupStatus()'s fallback when the
   // daemon couldn't answer (network error / non-ok). The Go contract does not
   // emit it. Consumers must treat the rest of the payload as UNTRUSTWORTHY —
-  // e.g. app-shell.tsx's barrier chip and runs.tsx's no-barrier blocker both
-  // skip repainting from it rather than reading empty confinement_classes as
-  // "no barrier installed".
+  // e.g. runs.tsx's no-barrier blocker and new-run-screen.tsx's Barrier
+  // control both skip repainting from it rather than reading empty
+  // confinement_classes as "no barrier installed".
   unreachable?: boolean;
 }

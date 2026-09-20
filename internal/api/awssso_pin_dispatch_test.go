@@ -224,7 +224,7 @@ func TestCreateRun_StoredBlobContradictingThePinIs422(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := createRunRequest{Agent: modelAccessAgent, Task: "ship it"}
-	ok := srv.enforceCreateLLMMechanism(context.Background(), rec, req, types.RunPolicySpec{}, nil, pinTestMember, nil)
+	ok := srv.enforceCreateLLMMechanism(context.Background(), rec, req, types.RunPolicySpec{}, nil, pinTestMember, nil, true)
 	if ok {
 		t.Fatal("create admitted a run whose stored AWS session contradicts the roster pin")
 	}
@@ -235,6 +235,11 @@ func TestCreateRun_StoredBlobContradictingThePinIs422(t *testing.T) {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Errorf("422 body = %q, want it to name %q", rec.Body.String(), want)
 		}
+	}
+	// A new sign-in under the current pin is the repair, so this arm carries
+	// the class the console's launch door acts on too.
+	if !strings.Contains(rec.Body.String(), `"reason":"model_credential"`) {
+		t.Errorf("422 body = %q, want reason model_credential", rec.Body.String())
 	}
 }
 
@@ -290,6 +295,12 @@ func TestSetupStatus_StoredBlobContradictingThePinGradesExpiredSignin(t *testing
 	}
 	if awsRow.Fix != ma.Action {
 		t.Errorf("harness_credential_aws fix = %q, want the same action line the member reads (%q)", awsRow.Fix, ma.Action)
+	}
+	// 0.7.8: the grade stays warn, but the row must never confiscate the
+	// console over ONE person's lapsed credential — Blocking is server-marked
+	// now, and this is exactly the row the 0.7.6 field report was about.
+	if awsRow.Blocking {
+		t.Error("harness_credential_aws must never be Blocking — it is graded through the CALLER's own session, not the install")
 	}
 
 	// THE ADMIN'S OWN STATUS IS UNTOUCHED: their capture agrees with the pin, so

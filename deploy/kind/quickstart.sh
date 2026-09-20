@@ -276,9 +276,11 @@ env:
   # The agent image is loaded into this cluster, not pullable from ghcr — point
   # the claude-code harness at the local tag or every run ImagePullBackOffs.
   WARDYN_AGENT_IMAGES: '{"base":"${BASE_IMAGE}","claude-code":"${AGENT_IMAGE}"}'
-  # The image bakes a CC2-floor default policy; this cluster's k8s driver
-  # advertises only [CC1] (no RuntimeClass pinned), so every default-policy run
-  # would fail closed — the same override deploy/compose/docker-compose.yaml makes.
+  # Both example policies float at CC1 as of 0.7.8, so this override is no
+  # longer load-bearing for confinement (the image's own baked default.json
+  # already floors at CC1, matching this cluster's no-RuntimeClass-pinned [CC1]
+  # k8s driver) — kept for demo.json's narrower allowed-domains list, the same
+  # reason deploy/compose/docker-compose.yaml keeps its own override.
   WARDYN_DEFAULT_POLICY: /examples/policies/demo.json
 EOF
 

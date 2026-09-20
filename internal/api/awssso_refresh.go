@@ -4,7 +4,8 @@
 package api
 
 // awssso_refresh.go renews a captured AWS IAM Identity Center (SSO) credential
-// CONTROL-PLANE SIDE, at dispatch, instead of shipping the refresh token into
+// CONTROL-PLANE SIDE — at the real launch, at dispatch and on a credential_reauth
+// hold; never on Review's preflight or the create advisory — instead of shipping the refresh token into
 // the sandbox and hoping the in-sandbox AWS SDK renews it.
 //
 // Why the control plane owns this. `CreateToken(grant_type=refresh_token)`
@@ -342,9 +343,11 @@ func (s *Server) markAWSSSOTokenSpent(fingerprint string) {
 //
 // A Put that fails AFTER a successful redeem does NOT fail this run: the rotated
 // pair is already spent at AWS, so re-redeeming is impossible and refusing would
-// throw away a credential we hold. This run is served from the in-memory blob and
-// the persist failure is audited — the NEXT dispatch reads the old, now-spent
-// pair and asks the person to sign in again rather than redeeming it twice.
+// throw away a credential we hold. The DISPATCH caller serves this run from the
+// in-memory blob (the create caller discards it; its dispatch then reads the old
+// pair from the store), the persist failure is audited, and the old pair is
+// marked spent — so whoever reads it next is refused as spent rather than
+// redeeming it twice.
 func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob awsSSOBlob) (awsSSOBlob, string) {
 	now := s.cfg.Now()
 	if !blob.renewable(now) || !blob.needsRefresh(now) {
@@ -465,7 +468,11 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 	if perr := s.storeAWSSSOBlob(ctx, scope, next); perr != nil {
 		// Redeemed but not stored — see the doc comment. Audited as a failure so
 		// the row is not read as "the rotated pair is safe", and the run still
-		// gets its credential.
+		// gets its credential. The OLD pair is spent at AWS whatever the store
+		// says: mark it, so the next read of it (dispatch after a create-time
+		// redeem, or the next launch) is refused as spent at once rather than
+		// paying a token round trip to learn the same thing.
+		s.markAWSSSOTokenSpent(fingerprint)
 		outcome = "failure"
 		data["persist_error"] = perr.Error()
 		slog.ErrorContext(ctx, "wardynd: persisting the renewed AWS SSO credential failed; serving this run from memory",

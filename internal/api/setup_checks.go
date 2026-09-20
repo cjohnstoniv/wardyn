@@ -23,6 +23,41 @@ import (
 // below is the one exception to "pure": it needs the store to confirm a run was
 // actually brokered, not just guess from a Repo string.
 
+// SetupCheck is one environment/readiness row. Status is ok|warn|fail|info;
+// "info" is a permanent, non-fixable condition (e.g. no /dev/kvm on macOS) that
+// must render as informational, not as a clearable warning. Platform lets the UI
+// show environment-appropriate copy (linux|darwin|windows|wsl|any).
+//
+// Blocking (0.7.8) decides ONE thing: whether the console must not open on
+// this install at all — setupGateActive (the console's setup gate) redirects
+// every route into the funnel while any row carries it, until onboarding
+// completes. It is set on exactly three arms: runnerCheck's fail (no runner, so
+// no run can happen), confinementFloorCheck's warn (a floor the runner cannot
+// meet refuses every run before it launches), and ssoRBACCheck's warn (OIDC
+// with no role mapping makes every signed-in human an admin, and the funnel's
+// People step is where that is fixed).
+//
+// It is NOT "this needs fixing" — nearly every warn/fail row does — and NOT a
+// severity ranking. Two families must never carry it. Rows graded through the
+// CALLER's own credential rather than the install: llmProviderCheck's and
+// bedrockProviderCheck's per_user arms, and awsSSOCredentialRow, which grades
+// the caller's own AWS SSO session. Confiscating the console over a fact about
+// one person is the 0.7.6 field report this flag exists to end. And advisory
+// install rows, whose grade belongs on every surface that renders them but
+// whose fix is nobody's emergency: the SCM safest-path ladder, an ephemeral age
+// key, TLS cookie posture, an acknowledged egress canary. (harnessCredential-
+// Check is install-wide, not per-person — its managed-subscription arm reads an
+// unscoped blob — and is advisory for the second reason, not the first.)
+type SetupCheck struct {
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Status   string `json:"status"`
+	Platform string `json:"platform,omitempty"`
+	Detail   string `json:"detail,omitempty"`
+	Fix      string `json:"fix,omitempty"`
+	Blocking bool   `json:"blocking,omitempty"`
+}
+
 // runnerCheck grades the sandbox runner: no runner (or no live class) is the one
 // FAIL on the checklist — runs cannot launch at all. CC2+ is ok; a CC1-only host
 // is "info", not a warning: runs work, just at the weakest isolation.
@@ -30,8 +65,9 @@ func runnerCheck(rnr SetupRunner) SetupCheck {
 	if rnr.Driver == "none" || len(rnr.ConfinementClasses) == 0 {
 		return SetupCheck{
 			ID: "runner", Label: "Sandbox runner", Status: "fail",
-			Detail: "No sandbox runner is configured, so runs cannot launch.",
-			Fix:    "Start wardynd with -runner docker (built with -tags docker) so runs are confined and executed.",
+			Detail:   "No sandbox runner is configured, so runs cannot launch.",
+			Fix:      "Start wardynd with -runner docker (built with -tags docker) so runs are confined and executed.",
+			Blocking: true,
 		}
 	}
 	labeled := make([]string, len(rnr.ConfinementClasses))
@@ -103,7 +139,8 @@ func confinementFloorCheck(rnr SetupRunner, floor types.ConfinementClass) (Setup
 		ID: "confinement_floor", Label: "Confinement floor", Status: "warn",
 		Detail: fmt.Sprintf("The configured confinement floor is %s, but this runner only advertises %s — every run on the default policy is refused before it launches.",
 			floor, advertised),
-		Fix: fix,
+		Fix:      fix,
+		Blocking: true,
 	}, true
 }
 
@@ -680,8 +717,9 @@ func ssoRBACCheck(oidcConfigured, roleMapConfigured, consoleRows bool) (SetupChe
 	}
 	return SetupCheck{
 		ID: "sso_rbac", Label: "SSO role mapping", Status: "warn",
-		Detail: "No role mapping is configured — neither WARDYN_OIDC_ROLE_MAP in your chart nor a mapping added on the People step — so every SSO user is an admin, unless your operator allowlist already splits admins from members.",
-		Fix:    "Set WARDYN_OIDC_ROLE_MAP (helm: env.WARDYN_OIDC_ROLE_MAP), or add a mapping on the People step (Setup → People → Role mappings), to map IdP roles/groups/emails to \"admin\" or \"member\".",
+		Detail:   "No role mapping is configured — neither WARDYN_OIDC_ROLE_MAP in your chart nor a mapping added on the People step — so every SSO user is an admin, unless your operator allowlist already splits admins from members.",
+		Fix:      "Set WARDYN_OIDC_ROLE_MAP (helm: env.WARDYN_OIDC_ROLE_MAP), or add a mapping on the People step (Setup → People → Role mappings), to map IdP roles/groups/emails to \"admin\" or \"member\".",
+		Blocking: true,
 	}, true
 }
 

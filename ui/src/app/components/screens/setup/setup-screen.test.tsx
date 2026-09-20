@@ -92,7 +92,6 @@ vi.mock("../../wardyn/live-approvals", () => ({
 
 import { SetupScreen, setupDismissed, dismissSetup } from "./setup-screen";
 import { DEMOS } from "../demos/demo-catalog";
-import { getDefaultCc } from "../../wardyn/default-confinement";
 import { baseStatus as sharedBaseStatus } from "../../../lib/test-fixtures";
 import { DRIVES } from "../../../lib/user-drives-copy";
 
@@ -930,21 +929,22 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
 
   // E3 — default barrier tier selection ---------------------------------------
 
-  it("preselects the resolved default barrier, persists a click, and keeps a todo card's setup command working (E3)", async () => {
+  it("preselects the resolved default barrier, moves on a click (in-session only), and keeps a todo card's setup command working (E3)", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByRole("heading", { name: /pick your barrier/i });
 
     // The three tiers are radios (role=radio / aria-checked); the tier name is in
     // each radio's accessible name (Fence/Wall/Vault). baseStatus has CC1+CC2 ready
-    // and no persisted pick, so the resolved default is the strongest available
-    // (Wall/CC2) — the SOLE checked radio.
+    // and no in-session pick yet, so the resolved default is the strongest
+    // available (Wall/CC2) — the SOLE checked radio.
     expect(screen.getAllByRole("radio", { checked: true })).toHaveLength(1);
     expect(screen.getByRole("radio", { name: /Wall/, checked: true })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /Fence/, checked: false })).toBeInTheDocument();
 
-    // Clicking the Fence radio moves the selection AND persists it to localStorage.
+    // Clicking the Fence radio moves the selection — for THIS view only
+    // (0.7.8: the default is a server fact, nothing here persists across
+    // sessions any more).
     await user.click(screen.getByRole("radio", { name: /Fence/ }));
-    expect(getDefaultCc()).toBe("CC1");
     expect(screen.getAllByRole("radio", { checked: true })).toHaveLength(1);
     expect(screen.getByRole("radio", { name: /Fence/, checked: true })).toBeInTheDocument();
 

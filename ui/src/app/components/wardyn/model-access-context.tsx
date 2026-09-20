@@ -73,8 +73,16 @@ export interface ModelAccessDoorHandle extends ModelAccessDoor {
    *  onCloseAutoFocus runs, and focusOpener() on a detached node fails.
    *  Omitted, it falls back to document.activeElement exactly as before —
    *  backward compatible for every other caller (S1 fix, review-1). */
-  openDoor: (returnTo?: HTMLElement | null) => void;
+  /** `onSignedIn` — what to do when the sign-in COMPLETES, for the one caller
+   *  whose next step is not "read the strip" but "launch again": the New Run
+   *  rail, on the server's model-credential refusal. Reported through
+   *  signedIn() below (the dialog's onDone), never inferred from `open`
+   *  falling — it falls the same way on Escape. A cancellation drops it. */
+  openDoor: (returnTo?: HTMLElement | null, onSignedIn?: () => void) => void;
+  /** The cancel path (Escape, the overlay, the pane's own Cancel). */
   closeDoor: () => void;
+  /** The completion path: close, then run the opener's `onSignedIn` once. */
+  signedIn: () => void;
   /** Put focus back on the control that opened the door, and say whether it
    *  could: false once a completed sign-in has taken that surface away, which
    *  is exactly when restoring to it would drop focus on <body>. */
@@ -87,8 +95,9 @@ interface ModelAccessContextValue {
   claim: () => () => void;
   claimed: boolean;
   open: boolean;
-  openDoor: (returnTo?: HTMLElement | null) => void;
+  openDoor: (returnTo?: HTMLElement | null, onSignedIn?: () => void) => void;
   closeDoor: () => void;
+  signedIn: () => void;
   focusOpener: () => boolean;
 }
 
@@ -105,6 +114,7 @@ const ModelAccessContext = React.createContext<ModelAccessContextValue>({
   open: false,
   openDoor: () => {},
   closeDoor: () => {},
+  signedIn: () => {},
   focusOpener: () => false,
 });
 
@@ -145,11 +155,26 @@ export function ModelAccessProvider({
   // closes — right after a cancellation, and wrong after a sign-in that took
   // the control away with the state that justified it.
   const opener = React.useRef<Element | null>(null);
-  const openDoor = React.useCallback((returnTo?: HTMLElement | null) => {
+  // WHAT to do when the sign-in completes — the rail's relaunch. A ref, not
+  // state: it is consumed exactly once, on signedIn(), and must never survive a
+  // cancellation (a door closed on Escape and reopened from the strip would
+  // otherwise launch a run the person walked away from).
+  const onSignedIn = React.useRef<(() => void) | null>(null);
+  const openDoor = React.useCallback((returnTo?: HTMLElement | null, afterSignIn?: () => void) => {
     opener.current = returnTo ?? (typeof document === "undefined" ? null : document.activeElement);
+    onSignedIn.current = afterSignIn ?? null;
     setOpen(true);
   }, []);
-  const closeDoor = React.useCallback(() => setOpen(false), []);
+  const closeDoor = React.useCallback(() => {
+    onSignedIn.current = null;
+    setOpen(false);
+  }, []);
+  const signedIn = React.useCallback(() => {
+    const cb = onSignedIn.current;
+    onSignedIn.current = null;
+    setOpen(false);
+    cb?.();
+  }, []);
   const focusOpener = React.useCallback(() => {
     const el = opener.current;
     if (!el || !el.isConnected || typeof (el as HTMLElement).focus !== "function") return false;
@@ -164,8 +189,8 @@ export function ModelAccessProvider({
   const refresh = React.useCallback(() => refreshRef.current(), []);
 
   const value = React.useMemo<ModelAccessContextValue>(
-    () => ({ status, refresh, claim, claimed, open, openDoor, closeDoor, focusOpener }),
-    [status, refresh, claim, claimed, open, openDoor, closeDoor, focusOpener],
+    () => ({ status, refresh, claim, claimed, open, openDoor, closeDoor, signedIn, focusOpener }),
+    [status, refresh, claim, claimed, open, openDoor, closeDoor, signedIn, focusOpener],
   );
   return <ModelAccessContext.Provider value={value}>{children}</ModelAccessContext.Provider>;
 }
@@ -207,6 +232,7 @@ export function useModelAccessDoor(): ModelAccessDoorHandle {
       open: ctx.open,
       openDoor: ctx.openDoor,
       closeDoor: ctx.closeDoor,
+      signedIn: ctx.signedIn,
       focusOpener: ctx.focusOpener,
     }),
     [
@@ -219,6 +245,7 @@ export function useModelAccessDoor(): ModelAccessDoorHandle {
       ctx.open,
       ctx.openDoor,
       ctx.closeDoor,
+      ctx.signedIn,
       ctx.focusOpener,
     ],
   );

@@ -895,3 +895,36 @@ func killData(t *testing.T, ev types.AuditEvent) map[string]any {
 	}
 	return data
 }
+
+// TestHarnessLogin_UnenforceableClassRefusalPrecedesTheSupersede is the second
+// ordering pin on this route, and the one 0.7.8 made necessary.
+//
+// The sign-in capture now dispatches at the strongest advertised class AT OR
+// ABOVE the admin floor, and strongestAdvertisedAtOrAbove falls back to the
+// floor itself when nothing advertised reaches it. So a CC1-only host under an
+// admin floor of CC2 produces a class this runner cannot enforce — correctly, a
+// refusal — but the refusal has to land BEFORE supersedeCallerLoginRuns, or the
+// person's existing sign-in sandbox is killed to make room for a run that then
+// fails in the driver. Refusing after destroying is the one order this route
+// must never take.
+func TestHarnessLogin_UnenforceableClassRefusalPrecedesTheSupersede(t *testing.T) {
+	f := newSupersedeFixture(t, nil, &fakeRunner{capsClasses: []types.ConfinementClass{types.CC1}})
+	f.srv.cfg.DefaultPolicy.MinConfinementClass = types.CC2
+
+	live := f.store.seed(types.AgentRun{
+		ID: uuid.New(), CreatedBy: "sub-member", Task: harnessLoginTask, Agent: awsSSOAgent,
+	})
+
+	w := doSSO(t, f.srv, http.MethodPost, "/api/v1/setup/harness-login",
+		memberLoginSession(t), `{"provider":"`+awsSSOProvider+`"}`)
+	if w.Code == http.StatusOK || w.Code == http.StatusCreated {
+		t.Fatalf("harness-login = %d on a CC1-only host under a CC2 floor, want a refusal: %s", w.Code, w.Body.String())
+	}
+	if got := f.store.stateOf(t, live.ID.String()); got != types.RunRunning {
+		t.Errorf("the caller's own sign-in sandbox is %s, want RUNNING — the refusal ran BELOW the "+
+			"supersede, so a person whose host cannot meet the floor loses the session they had", got)
+	}
+	if rows := f.audit.find("run.kill"); len(rows) != 0 {
+		t.Errorf("a refused sign-in wrote %d run.kill row(s); the supersede ran below the refusal", len(rows))
+	}
+}

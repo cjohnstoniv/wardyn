@@ -182,6 +182,30 @@ func TestSetupStatus_SpentRefreshTokenFlipsLiveToExpiring(t *testing.T) {
 	if !strings.Contains(after.ModelAccess.Action, wantDeadline) {
 		t.Errorf("after: model_access.action = %q, want the ExpiresAt-skew deadline %q", after.ModelAccess.Action, wantDeadline)
 	}
+	// 0.7.8: the checklist row moves with model_access (same grading, see
+	// awsSSOCredentialRow) but must never confiscate the console over it — the
+	// grade stays warn, the gate does not. redactSetupStatusForMember zeroes
+	// `after.Checks` entirely for this member session, so the row is read the
+	// same way TestSetupStatus_StoredBlobContradictingThePinGradesExpiredSignin
+	// does: straight off setupHarnessCreds, not the redacted HTTP body.
+	sc, _ := srv.siteConfigSnapshot(context.Background())
+	harnesses, _, ma := srv.setupHarnessCreds(context.Background(), sc, scope)
+	var awsRow SetupCheck
+	found := false
+	for _, h := range harnesses {
+		if chk, ok := harnessCredentialCheck(h, ma); ok && chk.ID == "harness_credential_aws" {
+			awsRow, found = chk, true
+		}
+	}
+	if !found {
+		t.Fatal("no harness_credential_aws row — the member's own capture lapsed, it must appear")
+	}
+	if awsRow.Status != "warn" {
+		t.Errorf("harness_credential_aws status = %q, want warn", awsRow.Status)
+	}
+	if awsRow.Blocking {
+		t.Error("harness_credential_aws must never be Blocking — graded through the caller's own session, not the install")
+	}
 }
 
 // LocalMode bypasses auth; the handler must report auth.mode == "local".

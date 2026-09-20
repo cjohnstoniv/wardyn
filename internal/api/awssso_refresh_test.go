@@ -475,7 +475,7 @@ func TestAWSSSORefresh_SlowDownRetriesOnceAndNeverDeadMarks(t *testing.T) {
 // credential we hold. Serve this run from memory and audit the persist failure.
 func TestAWSSSORefresh_PersistFailureStillServesTheRun(t *testing.T) {
 	s, audit, _ := ssoRefreshServer(t)
-	fakeOIDC(t, func(w http.ResponseWriter, _ map[string]string, _ int) {
+	calls := fakeOIDC(t, func(w http.ResponseWriter, _ map[string]string, _ int) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"accessToken": "fresh-access-token-abcdefghij", "expiresIn": 3600,
 			"refreshToken": "rotated-refresh-token-abcdefghij",
@@ -497,6 +497,16 @@ func TestAWSSSORefresh_PersistFailureStillServesTheRun(t *testing.T) {
 	}
 	if !strings.Contains(string(rows[0].Data), "persist_error") {
 		t.Errorf("audit data does not name the persist failure: %s", rows[0].Data)
+	}
+	// The old pair is spent at AWS whatever the store says (0.7.7, review-2):
+	// the next pass over the STORED (old) blob — the create caller's dispatch,
+	// or the next launch — is refused as spent without another token round trip.
+	again := s.resolveBedrockAuth(context.Background(), "claude-code", false, true, true, nil, awsSSOScope{})
+	if again.ssoInject || !strings.Contains(again.ssoRefreshFailure, "can no longer be renewed") {
+		t.Errorf("second pass: ssoInject=%v failure=%q; want the spent refusal off the stored old pair", again.ssoInject, again.ssoRefreshFailure)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("CreateToken calls = %d; want 1 — the spent mark answers the second pass", got)
 	}
 }
 
@@ -640,14 +650,16 @@ func TestAWSSSOCacheOmitsTheRefresherFields(t *testing.T) {
 	}
 }
 
-// TestAWSSSORefresh_CreateAndPreflightNeverRedeem: the dry-run passes must not
-// spend a one-use token. resolveRunLLMAccess (the create path) resolves Bedrock
+// TestAWSSSORefresh_AdvisoryNeverRedeems: the dry-run passes must not spend a
+// one-use token. resolveRunLLMAccess (the create-path ADVISORY) resolves Bedrock
 // with refresh=false, so no CreateToken call is made and the stored blob is
-// untouched — while the verdict is still READY.
-func TestAWSSSORefresh_CreateAndPreflightNeverRedeem(t *testing.T) {
+// untouched — while the verdict is still READY. The real launch's gate is the
+// one pass at create that DOES redeem (runs_create_sso_refresh_test.go);
+// preflight's gate is pinned there too.
+func TestAWSSSORefresh_AdvisoryNeverRedeems(t *testing.T) {
 	s, _, blob := ssoRefreshServer(t)
 	calls := fakeOIDC(t, func(w http.ResponseWriter, _ map[string]string, _ int) {
-		t.Error("create/preflight redeemed the refresh token — a dry run must never spend a rotating credential")
+		t.Error("the advisory redeemed the refresh token — a dry run must never spend a rotating credential")
 		w.WriteHeader(http.StatusInternalServerError)
 	})
 

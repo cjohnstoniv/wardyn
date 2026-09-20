@@ -25,7 +25,7 @@
  * ── EXECUTION ORDER IS LOAD-BEARING ─────────────────────────────────────────
  * The letters below are the REPORT's topics, not the order. The order is:
  *
- *   B → A → A(rail) → C → D → E → G → H → I → E2 → F
+ *   B → A → A(rail) → C → D → E → G → H → I → E2 → L0 → F → L
  *
  * B runs FIRST because it reads the member's SIGNED-IN card while the member is
  * still `live` from the previous file — case A's console save is what flips the
@@ -45,6 +45,14 @@
  * A leaves the member ACTIONABLE (expired_signin) and C consumes that window;
  * C heals the member back to `live`, and D and E each call
  * makeMemberActionable() for their own.
+ *
+ * 0.7.7 adds L0 and L. L0 CAPTURES the admin's own AWS session and then lapses
+ * it (ensureActionable's roster-pin flip — 0.7.8: a never-captured admin never
+ * emitted harness_credential_aws at all, so the case proved nothing about the
+ * row it was named for), so it sits right before F, which re-signs the admin
+ * in from whatever L0 left them at. L makes its own lapse (makeMemberActionable)
+ * and ends by HEALING the member through a completed sign-in, so it goes where
+ * nothing after it needs the member lapsed.
  *
  * ── NOTHING IS SKIPPED HERE ─────────────────────────────────────────────────
  * Every case runs live (D and E were flipped when lane `login-pane` merged).
@@ -1003,6 +1011,69 @@ test("E2 (starting-detail): a sign-in on an unpullable image fails in seconds wi
 
 // ── F — the no-credential member preview (LAST: it signs the ADMIN in) ──────
 
+// ── L0 — 0.7.7: the setup gate never confiscates the console over a person ──
+
+test("L0 (setup gate): an admin with a lapsed AWS sign-in of their own opens New Run and stays there", async ({
+  page,
+  request,
+}) => {
+  // The 0.7.6 field report's exact shape, on the walk: a per_user roster, an
+  // install that never marked onboarding complete, and an admin whose OWN
+  // session has lapsed. 0.7.8 rewrote this case: the ORIGINAL 0.7.7 version
+  // never captured the admin's own AWS session at all, so harness_credential_aws
+  // (h.Captured-gated — internal/api/modelaccess.go's harnessCredentialCheck)
+  // never appeared and the case exercised llm_provider/bedrock_provider's
+  // per_user arms instead — real rows, but not the one the 0.7.6 field report
+  // was actually about. This version captures the admin's own session first,
+  // through the SAME pane F uses below, then lapses it exactly the way the
+  // owner's did in the field: a roster-pin flip (ensureActionable, the shared
+  // helper C/D/E/L all use).
+  //
+  // ensureActionable's flip is the ROSTER's one shared pin — it lapses EVERY
+  // captured session under the old pair, not just this admin's. Nothing
+  // downstream in this file depends on a live admin session surviving into F
+  // (F re-signs one in itself), so the side effect is harmless here — but it
+  // is real, and stated rather than silently relied on.
+  await dexSignIn(page, ADMIN_EMAIL);
+  await signInThroughPane(page, openAdminLoginPane);
+  await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
+  await ensureActionable(page, request);
+  await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("expired_signin");
+
+  const status = await page.evaluate(async () => {
+    const r = await fetch("/api/v1/setup/status", { credentials: "include" });
+    return (await r.json()) as {
+      onboarding_complete?: boolean;
+      checks?: Array<{ id: string; status: string; blocking?: boolean }>;
+    };
+  });
+  expect(status.onboarding_complete, "the walk's fresh install never marks onboarding complete").toBeFalsy();
+  expect(
+    status.checks?.find((c) => c.id === "harness_credential_aws")?.status,
+    "the admin's own captured AWS session was just lapsed by the pin flip — the row the 0.7.6 field report's gate misread",
+  ).toBe("warn");
+  // The non-vacuity guard, restated against the 0.7.8 contract: every
+  // warn/fail row present must be non-blocking, or the assertion below (New
+  // Run stays put) would be meaningless — a truly blocking row SHOULD gate.
+  const gating = (status.checks ?? []).filter((c) => c.status === "warn" || c.status === "fail");
+  expect(
+    gating.filter((c) => c.blocking).map((c) => c.id),
+    "no warn/fail row on this install may be blocking, or this case proves nothing",
+  ).toEqual([]);
+
+  // A full LOAD of a gated route: the once-per-load gate evaluates the landing
+  // /setup/status read. The rail's per-person line renders off that same read,
+  // so once it is on screen the answer that used to bounce us has landed — and
+  // the page is still New Run.
+  await page.goto("/runs/new");
+  await expect(page.getByRole("heading", { name: "New run" })).toBeVisible({ timeout: 60_000 });
+  // EXPIRED, not NOT_SIGNED_IN: new-run-rail.tsx's ModelAccessLine reads
+  // `expired_signin` to RAIL_MODEL_ACCESS.EXPIRED — a captured-then-lapsed
+  // session, not "never signed in".
+  await expect(page.getByText(RAIL_MODEL_ACCESS.EXPIRED)).toBeVisible({ timeout: 60_000 });
+  await expect(page).toHaveURL(/\/runs\/new$/);
+});
+
 test("F (member-preview): an admin previews the state a member is in before they sign in", async ({ page }) => {
   // LAST IN THE FILE, and it must stay last: it signs the ADMIN in to AWS,
   // which breaks sso-member.spec.ts's "the capture belongs to the member alone"
@@ -1057,4 +1128,91 @@ test("F (member-preview): an admin previews the state a member is in before they
   await page.getByRole("button", { name: MEMBER_MODE.EXIT }).click();
   await expect(page.getByText(MEMBER_MODE.BANNER_NEW)).toBeHidden({ timeout: 60_000 });
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 60_000 }).toBe("live");
+});
+
+// ── L — 0.7.7: Launch with a lapsed sign-in is one dialog, then the run ─────
+
+test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself, and the same run launches after it", async ({
+  page,
+  request,
+}) => {
+  // The 0.7.6 field report, driven end to end: the member's session is lapsed
+  // (a pin flip — helpers.ts's makeMemberActionable, the same lapse every
+  // sign-in case here drives), they fill in New Run and click Launch. The
+  // server refuses the run before any row exists (422, reason
+  // model_credential); the rail opens the AWS sign-in dialog ITSELF; the
+  // device flow completes on the fake; the SAME click's run launches. No trip
+  // to Getting started, no second click.
+  await dexSignIn(page, MEMBER_EMAIL);
+  // ensureActionable, not a blind flip: the pin is handed back and forth by
+  // every case before this one and E2 leaves the member ALREADY actionable, so
+  // an unconditional makeMemberActionable() healed them (walk-2, L red on the
+  // opening poll). The lapse here is the pin contradiction — the create-time
+  // refusal's stored-identity arm, reason model_credential like the spent one.
+  await ensureActionable(page, request);
+  await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("expired_signin");
+
+  await page.goto("/runs/new");
+  await page.getByRole("combobox", { name: "Title" }).fill("L launch door");
+  await page.getByRole("radio", { name: /^Autonomous/ }).click();
+  await page.locator("#nr-task").fill("Reply with the single word: ready.");
+  const urlBefore = page.url();
+  const clickedAt = new Date().toISOString();
+
+  // THE CLICK IS THE CHECK. Nothing on the console pre-grades the cached
+  // status; the server's refusal is what opens the door. Driven through
+  // signInThroughPane so the witness is the server's MOVED capture, not the
+  // terminal node (helpers.ts explains why the DOM cannot be the witness).
+  await signInThroughPane(page, async (p: Page) => {
+    await p.getByRole("button", { name: /^Launch/ }).click();
+    await expect(p.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible({ timeout: 60_000 });
+    await expect(p.getByTestId("harness-login-pane")).toBeVisible({ timeout: 60_000 });
+    const start = p.getByRole("button", { name: "Start login" });
+    if (await start.isVisible().catch(() => false)) await start.click();
+  });
+
+  // The relaunch fired from the door's completion: this deployment's launch
+  // carries advisories (egress narrowed, resources capped), so the screen
+  // HOLDS with "Open run" exactly as a hand launch does (helpers.ts's
+  // launchAgentRun) — a run that launched with no advisories would have
+  // navigated already. NOT "Running" (walk-3): the fake answers inference in
+  // seconds and the agent exits, so the run can be FINISHED before this spec
+  // — which reaches the page only after signInThroughPane's capture poll — ever
+  // looks; the witness is the run ROW and its trail below, never a state chip.
+  const openRun = page.getByRole("button", { name: "Open run" });
+  await expect(openRun.or(page.getByRole("heading", { name: "L launch door" }))).toBeVisible({ timeout: SANDBOX_UP });
+  if (await openRun.isVisible().catch(() => false)) await openRun.click();
+  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/, { timeout: SANDBOX_UP });
+  const runID = runIDFromURL(page);
+  expect(page.url(), "the run page, not New Run or Getting started").not.toBe(urlBefore);
+  expect(new URL(page.url()).pathname, "never the setup funnel").not.toMatch(/^\/setup/);
+
+  // The server's own story of THIS click: created (never refused), credentialed
+  // on the fresh capture, and executed. A member reads their own run's trail.
+  const actions = (await page.evaluate(async (id: string) => {
+    const r = await fetch(`/api/v1/audit?run_id=${encodeURIComponent(id)}&limit=200`, { credentials: "include" });
+    const body = (await r.json()) as { items?: Array<{ action: string; outcome?: string }> } | Array<{ action: string; outcome?: string }>;
+    return (Array.isArray(body) ? body : (body.items ?? [])).map((e) => `${e.action}:${e.outcome ?? ""}`);
+  }, runID)) as string[];
+  expect(actions, "the relaunch created the run").toContain("run.create:success");
+  expect(actions, "the run was dispatched on the fresh capture and executed").toContain("run.exec:success");
+  expect(actions.filter((a) => a.startsWith("run.create:failure")), "never refused for its credential").toEqual([]);
+
+  // The server agrees on both halves: the member is live again, and the run
+  // that launched is the ONE this click created (a second create would mean the
+  // door relaunched twice).
+  await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
+  const mine = (await page.evaluate(async () => {
+    const r = await fetch("/api/v1/runs?limit=1000", { credentials: "include" });
+    const body = (await r.json()) as
+      | { items?: Array<{ id: string; title?: string; created_at?: string }> }
+      | Array<{ id: string; title?: string; created_at?: string }>;
+    return Array.isArray(body) ? body : (body.items ?? []);
+  })) as Array<{ id: string; title?: string; created_at?: string }>;
+  // Scoped to THIS click: an iteration against a cluster an earlier walk left
+  // behind sees that walk's run of the same title too.
+  const created = mine.filter(
+    (r) => r.id === runID || (r.title === "L launch door" && (r.created_at ?? "") >= clickedAt),
+  );
+  expect(created.map((r) => r.id), "exactly one run for this click").toEqual([runID]);
 });
