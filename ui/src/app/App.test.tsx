@@ -9,7 +9,7 @@
 // rule (App.tsx's own comment on the component explains why). This suite
 // drives it directly with a stub RoleProvider rather than the whole App, since
 // App's own auth/health polling has nothing to do with this decision.
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, type Mock } from "vitest";
 import { act, render, screen, cleanup, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -108,7 +108,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
 // rendered before ever letting the 401 land. `probeUnauthed` (cold-mount
 // case) needs no such control: nothing has rendered yet either way.
 function mockFetch(opts: { probeUnauthed?: boolean; me?: typeof ME_ADMIN; on401?: string }): {
-  fetch: ReturnType<typeof vi.fn>;
+  fetch: Mock;
   resolve401: () => void;
 } {
   const pending = opts.on401 ? deferred<Response>() : null;
@@ -310,7 +310,7 @@ describe("App — the setup-status poll behind the model-access door", () => {
   /** mockFetch, with /setup/status counted and — once `hold` is armed — held
    *  open, so a tick that lands mid-flight can be observed being dropped. */
   function statusFetch(): {
-    fetch: ReturnType<typeof vi.fn>;
+    fetch: Mock;
     calls: () => number;
     hold: () => { resolve: (v: Response) => void };
     fail: (on: boolean) => void;

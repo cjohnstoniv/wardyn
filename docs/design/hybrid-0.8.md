@@ -1,6 +1,10 @@
 # Hybrid local + remote — one org, two substrates, one person (0.8 design brief)
 
-Status: **RESEARCH, written in 0.7.2, built in nothing.** This is the brief behind
+Status: **Phase 0 decided, 2026-09-19** — O1 `m′`-at-org, O2 offline runs continue with
+durable evidence, O3 one audit chain per writer, O4 no placement field in Phase 1, O5
+drive-as-source as Phase 3a; the defaults and their reasons are in
+[0.8/PLAN.md](0.8/PLAN.md) § B, and Phase 1 is on the `0.8.0` milestone. Written in 0.7.2 as
+research; built in nothing yet. This is the brief behind
 [ROADMAP.md](../../ROADMAP.md)'s "Also new for 0.8: hybrid local + remote" row. Every
 claim about today's tree is anchored to the file and line it came from, at
 `feat/v0.7.2`; every claim about tomorrow is marked as a decision, an option or an
