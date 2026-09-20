@@ -687,6 +687,7 @@ jobs:
   # shipped to a public registry having never been scanned at all, and the stated
   # rationale (distroless, no OS package surface) was true of two of them.
   trivy:
+    name: trivy (${{ matrix.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 40
     strategy:
