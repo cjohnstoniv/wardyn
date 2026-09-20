@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// RUN CANVAS — design board 2b. What was a hard-coded 400px evidence rail is
-// now a free 12-column grid the operator arranges: tiles anywhere, drag from a
+// Run canvas — design board 2b. A free 12-column grid the operator arranges:
+// tiles anywhere, drag from a
 // header handle, resize from the corner, a snap ghost, a catalog, and two
 // situational presets (Live / Finished). The arrangement is per USER and
 // server-side, so it survives a new laptop.
@@ -100,11 +100,10 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   const situational: RunLayoutPreset = ctx.finished ? "finished" : "live";
   const [preset, setPreset] = React.useState<RunLayoutPreset>(situational);
   const [editing, setEditing] = React.useState(false);
-  // F1-F5 (downgraded — cosmetic, the pending PUT under editing already
-  // commits the arrangement to the OLD preset, so the server never lost the
-  // edit): while editing, a situational flip (the run finishes mid-edit) must
-  // not silently replace the in-progress arrangement on screen. Re-syncs the
-  // moment editing ends.
+  // While editing, a situational flip (the run finishes mid-edit) must
+  // not silently replace the in-progress arrangement on screen — the pending
+  // PUT under editing already commits the arrangement to the OLD preset, so
+  // the server never loses the edit. Re-syncs the moment editing ends.
   React.useEffect(() => {
     if (!editing) setPreset(situational);
   }, [situational, editing]);
@@ -117,7 +116,7 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
   const { layout, persistable, apply, save, reset } = useRunLayout(preset);
   const { ref, width, height } = useCanvasSize();
 
-  // FOCUS MODE (design board 2c). The shell learns about it through
+  // Focus mode (design board 2c). The shell learns about it through
   // app-shell's FocusContext, which is also why this is safe outside the
   // console: a canvas mounted with no <AppShell> above it gets the default
   // no-op setter and simply never enters focus.
@@ -310,8 +309,8 @@ export function RunCanvas({ ctx }: { ctx: WidgetContext }) {
         </div>
       ) : (
         // The board puts these controls in the tabs row; that row belongs to
-        // run-detail-command-bar.tsx, which this lane does not own — so the
-        // canvas carries its own entry points (see the hand-back).
+        // run-detail-command-bar.tsx, which this file does not own — so the
+        // canvas carries its own entry points.
         <div className="absolute bottom-4 right-4 z-30 flex items-center gap-1.5">
           <button
             type="button"

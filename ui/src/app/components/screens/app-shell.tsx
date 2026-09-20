@@ -106,7 +106,7 @@ export interface ShellMeta {
   // unwrapped test). Kept alongside `operator` rather than replacing it: every
   // existing operator-only gate stays exactly as it was.
   role: Role;
-  // W31-S1-7: when the SSO session dies outright (no refresh) — null for
+  // When the SSO session dies outright (no refresh) — null for
   // local/token auth, which has no session to expire.
   sessionExpiresAt: Date | null;
   // M3 — see operator-context.tsx's MemberLocalDirRootContext. null until /me
@@ -215,7 +215,7 @@ function useMeta(): [ShellMeta, () => void] {
 }
 
 // SESSION_WARN_MS — how far ahead of the session's real expiry to start
-// warning (W31-S1-7). The session itself has no refresh; this is advance
+// warning. The session itself has no refresh; this is advance
 // notice, not a renewal, so the human can save/finish before a silent 401
 // wipes the console back to the sign-in gate mid-work.
 const SESSION_WARN_MS = 5 * 60 * 1000;
@@ -228,8 +228,8 @@ const SESSION_CHECK_MS = 15 * 1000;
 // anything. Three states name the THIRD one instead of collapsing it into
 // the second.
 export type SessionExpiryState = "none" | "soon" | "expired";
-// DRAFT (M2 canon pending) — F3-F11's two new arms (was one string, "soon" only).
-// Exported so a suite asserting the banner STACK's order reads the shipped
+// DRAFT (M2 canon pending) — F3-F11's two new arms.
+// Exported so a suite asserting the banner stack's order reads the shipped
 // sentence rather than a second, hand-copied one.
 export const SESSION_EXPIRY_COPY = {
   soon: ["Your session is expiring soon.", "to avoid losing your place."],
@@ -323,13 +323,14 @@ const NAV_ITEMS: NavItem[] = [
 // simply not offering it.
 const MEMBER_NAV_PATHS = new Set(["/runs", "/approvals", "/workspaces"]);
 function navItemsForRole(role: Role, identityResolved: boolean): NavItem[] {
-  // B1 — the fix the field report bought: `role` is FAIL-OPEN "admin" for an
-  // unresolved /me AND for one that failed, so the nav used to offer Policies /
-  // Governance / Permissions / Secrets / Audit to a human the server had
-  // correctly refused. Indistinguishable from an authz breach, and it cost a
-  // customer hours of incident response. So "not known yet" renders NEITHER
-  // nav — not the admin set, not the member set — and the banner below says
-  // why. `role`'s own fail-open default stays exactly as it was (see
+  // B1 — the fix the field report bought: `role` is fail-open "admin" for an
+  // unresolved /me AND for one that failed, so leaving this unguarded offers
+  // Policies / Governance / Permissions / Secrets / Audit to a human the
+  // server had correctly refused. Indistinguishable from an authz breach,
+  // and it cost a customer hours of incident response. So "not known yet"
+  // renders neither nav — not the admin set, not the member set — and the
+  // banner below says why. `role`'s own fail-open default stays exactly as
+  // it was (see
   // operator-context.tsx: never harden it), because the answer to a guess is
   // not a different guess, it is declining to draw one.
   if (!identityResolved) return [];
@@ -611,11 +612,11 @@ export function AppShell({
                 </button>
               </div>
             )}
-            {/* W31-S1-7: the SSO session dies outright at its expiry, with no
+            {/* The SSO session dies outright at its expiry, with no
           refresh — this is the warning that never existed, so it is not a
           silent 401 that wipes the console mid-work. Re-authenticating now
           (while the current session still works) replaces it before it dies. */}
-            {/* F3-F11: three-state now — an already-past-expiry session used to
+            {/* F3-F11: three-state, so an already-past-expiry session doesn't
                 read "expiring soon" forever. */}
             {!unreachable && sessionExpiry !== "none" && (
               <div
@@ -776,7 +777,7 @@ export function TopBar({
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            {/* ui-shellAuth-4: the shared Button (not a raw <button>), matching
+            {/* The shared Button (not a raw <button>), matching
                 every sibling header control (theme toggle above, mobile nav
                 trigger) — its focus-visible ring is what keyboard focus falls
                 back to instead of the bare unthemed browser outline. */}
@@ -876,7 +877,7 @@ export function TopBar({
                 reaches the admin welcome hero or its step query at all, and
                 its own episode catalog is a single flat "Watch" list at the
                 bottom of the page, not a step deep link.
-                W6-3: `!== "admin"`, never `=== "member"`. Only the SUPER admin's
+                `!== "admin"`, never `=== "member"`. Only the SUPER admin's
                 SetupScreen honours ?step — a security admin's /setup/status is
                 redacted on the same !isOperator predicate (internal/api/setup.go)
                 and App.tsx hands them the same Getting Started, so the deep link
@@ -888,7 +889,7 @@ export function TopBar({
                 </Link>
               </DropdownMenuItem>
             )}
-            {/* W31-S1-1: local mode has no session to sign out of — humanOrAdminAuth
+            {/* Local mode has no session to sign out of — humanOrAdminAuth
                 (internal/api/http.go) bypasses auth entirely, so "Sign out" would drop
                 the client to a SignIn screen whose admin-token field is unchecked
                 (probeAuth trivially re-succeeds against the auth-bypassed API on

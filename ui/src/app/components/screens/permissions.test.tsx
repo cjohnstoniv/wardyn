@@ -190,8 +190,8 @@ describe("PermissionsScreen — enforcement confirms", () => {
     await user.click(screen.getByRole("switch", { name: `${PERM.ENFORCEMENT_TITLE} ${KIND.egress_host.label}` }));
 
     const dialog = await screen.findByRole("alertdialog");
-    // The TITLE has to ask the same question as the body and the button — it
-    // used to ask the opposite one ("Enforce Egress hosts?").
+    // The title must ask the same question as the body and the button, never
+    // the opposite one ("Enforce Egress hosts?").
     expect(within(dialog).getByText(PERM.ENFORCE_OFF_TITLE(KIND.egress_host.label))).toBeInTheDocument();
     expect(within(dialog).queryByText(PERM.ENFORCE_ON_TITLE(KIND.egress_host.label))).toBeNull();
     expect(within(dialog).getByText(PERM.ENFORCE_OFF_BODY)).toBeInTheDocument();
@@ -284,9 +284,9 @@ describe("PermissionsScreen — the grant table", () => {
   });
 
   // F4-F5/F6-F5 (Appendix A V8): a grant markInertGrants flagged Inert on the
-  // wire (a pre-canonicalization value that can never match) used to render
+  // wire (a pre-canonicalization value that can never match) must not render
   // as an ordinary red Deny/amber Allow chip — a rule that has never fired,
-  // and never will until re-saved, read as an active one.
+  // and never will until re-saved, would read as an active one.
   it("an inert grant renders a neutral Inert chip, never its effect's amber/red tone", async () => {
     getPermissionsMock.mockResolvedValue({
       grants: [grant({ value: "STRIPE_LIVE_KEY", inert: true })],
@@ -346,7 +346,7 @@ describe("PermissionsScreen — add a grant", () => {
 
   // 0.7.2: the seventh kind renders off the same CAPABILITY_KINDS/KIND data
   // every other kind does — a provider row id is the grant's value, and the
-  // hint says so (A2's KindCopy, wired here with no screen code of its own).
+  // hint says so (KindCopy, wired here with no screen code of its own).
   it("workspace_provider renders with A2's KindCopy", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderScreen();

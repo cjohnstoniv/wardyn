@@ -3,32 +3,31 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// F8-ui-types-mirror PROBE — intended destination:
-//   ui/src/app/lib/api/runs.wire.fields.test.ts
-// (sibling of ui/src/app/lib/api/runs.wire.test.ts; it imports `./runs` and
-// `./core` relative to that directory, so it must be copied THERE to run).
+// F8-ui-types-mirror probe: pins runWireBody's wire-forwarding to the Go DTO
+// (sibling of ui/src/app/lib/api/runs.wire.test.ts; imports `./runs` and
+// `./core` relative to this directory).
 //
 // Run (from the repo root, no PG needed — fetch is stubbed):
 //   cd ui && pnpm vitest run src/app/lib/api/runs.wire.fields.test.ts
 //
 // What it pins, in three layers:
-//   A. runWireBody (runs.ts:70-116) forwards EVERY field of the Go DTO
+//   A. runWireBody (runs.ts:70-116) forwards every field of the Go DTO
 //      pkg/client.CreateRunRequest (client.go:178-300) that the console can
-//      set, on BOTH createRun and preflightRun, and OMITS the key when the
-//      input has no value for it. Today's guard (runs.wire.test.ts:42-64)
-//      covers only workspaces[] and integration_id; the eleven other
-//      forwarded fields have no assertion anywhere (see §4 of the trace doc).
+//      set, on both createRun and preflightRun, and omits the key when the
+//      input has no value for it. runs.wire.test.ts:42-64 covers only
+//      workspaces[] and integration_id; the eleven other forwarded fields
+//      have no assertion anywhere else.
 //   B. The whitelist's deliberate drops are pinned too (devcontainer_repo /
-//      devcontainer_ref are CLI-only and are NOT forwarded), so a change in
+//      devcontainer_ref are CLI-only and not forwarded), so a change in
 //      either direction is a visible test change, never a silent one.
-//   C. SOURCE PARITY, from the TS side — the counterpart of Go's
+//   C. Source parity, from the TS side — the counterpart of Go's
 //      TestTerminalRunStates_UIParity (internal/types/terminal_parity_test.go):
 //      every JSON tag on the Go CreateRunRequest is either forwarded by
 //      runWireBody or on the explicit UI-never-sends list; every key the TS
 //      AgentRun interface (types/runs.ts:57-122) declares is a JSON tag on Go's
 //      types.AgentRun (types.go:129-212) or on handleGetRun's wrapper
 //      (runs_policy.go:172-175). A Go rename (e.g. failure_hint -> failure_reason)
-//      fails HERE instead of as a runtime `undefined` the console renders as "—".
+//      fails here instead of as a runtime `undefined` the console renders as "—".
 //      The Go side is read from source with the same regex discipline the Go
 //      parity test uses; the repo root is found by walking up to go.mod so the
 //      file works from ui/ (vitest's cwd) or anywhere under it.
@@ -46,9 +45,7 @@ type WireInput = Parameters<typeof runs.createRun>[0];
 const policyWithFloor = (floor: string): RunPolicySpec =>
   ({ min_confinement_class: floor, allowed_domains: ["api.anthropic.com"], first_use_approval: "always_deny" }) as unknown as RunPolicySpec;
 
-// ---------------------------------------------------------------------------
 // Shared fetch stub — same shape as runs.wire.test.ts:19-30.
-// ---------------------------------------------------------------------------
 let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   // A FRESH Response per call: a Response body can only be read once, and the
@@ -129,9 +126,7 @@ const UI_NEVER_SENDS = new Set(["devcontainer_repo", "devcontainer_ref"]);
 //   ui_apps — handleGetRun's anonymous struct (runs_policy.go:172-175), GET /runs/{id} only.
 const TS_RUN_KEYS_FROM_WRAPPERS = new Set(["ui_apps"]);
 
-// ---------------------------------------------------------------------------
-// A. Every forwarded field reaches BOTH doors with the value the caller set.
-// ---------------------------------------------------------------------------
+// A. Every forwarded field reaches both doors with the value the caller set.
 describe("runWireBody — every console-settable DTO field reaches the wire (F8 probe)", () => {
   for (const door of ["createRun", "preflightRun"] as const) {
     it(`${door}: forwards all ${Object.keys(expectedWire).length} fields verbatim`, async () => {
@@ -202,10 +197,8 @@ describe("runWireBody — every console-settable DTO field reaches the wire (F8 
   });
 });
 
-// ---------------------------------------------------------------------------
 // B. The confinement clamp (runs.ts:82-85 + core.ts:66) — pinned exactly,
-//    including the two edge cases the trace doc names as hypotheses H3.
-// ---------------------------------------------------------------------------
+//    including the two edge cases below (H3a, H3b).
 describe("runWireBody — confinement_class clamp against inline_policy.min_confinement_class", () => {
   const base: WireInput = { agent: "claude-code", repo: "r", task: "t" };
 
@@ -224,8 +217,8 @@ describe("runWireBody — confinement_class clamp against inline_policy.min_conf
     expect(sentBody().confinement_class).toBe("CC1");
   });
 
-  // H3 (trace doc): an UNKNOWN class ranks 0 (core.ts:66), so it is silently
-  // REPLACED by the floor instead of reaching the server's 400
+  // H3: an unrecognised class ranks 0 (core.ts:66), so it is silently
+  // replaced by the floor instead of reaching the server's 400
   // (runs.go:40-49). This pins today's behaviour so a fix (or a regression)
   // is visible; the assertion is on what the code does, not on what is ideal.
   it("H3a: an unrecognised requested class is replaced by the floor (server 400 is masked)", async () => {
@@ -239,10 +232,8 @@ describe("runWireBody — confinement_class clamp against inline_policy.min_conf
   });
 });
 
-// ---------------------------------------------------------------------------
 // C. Source parity with the Go wire — the TS-side twin of
 //    internal/types/terminal_parity_test.go.
-// ---------------------------------------------------------------------------
 function repoRoot(): string {
   let dir = resolve(process.cwd());
   for (let i = 0; i < 8; i++) {
@@ -271,9 +262,9 @@ function tsInterfaceKeys(src: string, name: string): string[] {
   if (!m) throw new Error(`interface ${name} not found`);
   const keys: string[] = [];
   for (const line of m[1].split("\n")) {
-    // R-04: `(?:readonly\s+)?` — a `readonly` modifier used to fall through
-    // this match entirely, silently treating a mirrored `readonly foo?:`
-    // field as absent from the TS side (see the SiteConfig test below).
+    // R-04: `(?:readonly\s+)?` — the regex must match an optional `readonly`
+    // modifier, or a mirrored `readonly foo?:` field silently reads as absent
+    // from the TS side (see the SiteConfig test below).
     const k = /^\s*(?:readonly\s+)?([A-Za-z_][A-Za-z0-9_]*)\??\s*:/.exec(line);
     if (k) keys.push(k[1]);
   }
@@ -345,17 +336,14 @@ describe("source parity — Go wire tags vs the TS mirror (F8 probe)", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // D. F6-F14 — the same "documents the omissions" idiom (proven above for
-// AgentRun), extended to four more FLAT structs (the census's "34 mirrored
-// types, ~12 with drift"). Still flat-only: goJSONTags does not handle nested
-// braces, so an EMBEDDED response wrapper (grantView{types.CapabilityGrant;
-// Inert}, siteConfigPutResponse{types.SiteConfig;…}) is read off its own
-// nested type, never folded into the base struct's tag list — this batch's
-// drifts are mostly embedded, which is why CapabilityGrant/RunPolicySpec
-// below show full parity on the BASE struct even though the response bodies
-// carry more.
-// ---------------------------------------------------------------------------
+// AgentRun), extended to four more flat structs. Still flat-only: goJSONTags
+// does not handle nested braces, so an embedded response wrapper
+// (grantView{types.CapabilityGrant; Inert},
+// siteConfigPutResponse{types.SiteConfig;…}) is read off its own nested
+// type, never folded into the base struct's tag list — these drifts are
+// mostly embedded, which is why CapabilityGrant/RunPolicySpec below show
+// full parity on the base struct even though the response bodies carry more.
 describe("source parity — four more flat structs (F6-F14)", () => {
   const root = repoRoot();
   const workspaceGo = readFileSync(join(root, "internal/types/workspace.go"), "utf8");

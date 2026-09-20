@@ -19,7 +19,7 @@ describe("workspace-copy — sentinel byte-exact pins", () => {
   });
 });
 
-// W9-S1-5: BLIND_SPOT must match the scanner's REAL bounds
+// BLIND_SPOT must match the scanner's REAL bounds
 // (internal/workspacescan/scan.go's maxDepth=6, maxManifestHits, maxFileBytes;
 // detect.go's maxDetectLines) rather than a stale "4 levels" that never
 // tracked a depth the scanner raised to 6, and must name the per-scan file

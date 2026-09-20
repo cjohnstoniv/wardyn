@@ -3,15 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// UNIFIED RUNS — one screen, two densities:
+// Unified runs — one screen, two densities:
 //   - Board: the live run card board (auto-refreshed every ~3s), grouped by the
-//     run's TITLE — runs that share one are the same piece of work.
+//     run's title — runs that share one are the same piece of work.
 //   - Table: the same runs and the same groups, dense and horizontally
 //     scrollable, with a header row per group.
-// This used to group by state (Needs-attention / Active / Done-by-outcome).
-// Titles replaced that as the grouping axis; the triage it provided survives in
-// the state facet, in the attention-first ordering, and in each group header's
-// per-state counts. See titleGroups.
+// Titles are the grouping axis; a state-based triage (Needs-attention / Active
+// / Done-by-outcome) survives in the state facet, in the attention-first
+// ordering, and in each group header's per-state counts. See titleGroups.
 // Every card / row navigates to the addressable /runs/:id detail page.
 // "New run" lives in the app shell top bar.
 import * as React from "react";
@@ -158,9 +157,9 @@ export function RunsScreen() {
   React.useEffect(() => {
     const s = location.state as { openNewRun?: boolean } | null;
     if (!s?.openNewRun) return;
-    // Was: open the dialog here. New run is its own page now, so the same
-    // intent is a redirect — and `replace` keeps Back going where the operator
-    // came from rather than bouncing through this screen again.
+    // New run is its own page, so the openNewRun intent is a redirect —
+    // and `replace` keeps Back going where the operator came from rather
+    // than bouncing through this screen again.
     navigate("/runs/new", { replace: true });
   }, [location.state, navigate]);
 
@@ -174,15 +173,14 @@ export function RunsScreen() {
       /* keep last-good data */
     });
   }, [fetchRuns]);
-  // Nothing pauses the board any more — the New run dialog that used to was
-  // replaced by its own page, which unmounts this screen entirely.
+  // Nothing pauses the board — New run is its own page, not a dialog mounted
+  // here, so nothing on this screen ever needs to pause polling.
   usePoll(refresh, POLL_MS, false);
 
-  // F1-F10: "Refresh now" used to call `load`, which flips status to
-  // "loading" and unmounts the WHOLE toolbar (search input, focus and all)
-  // for a round trip the board already runs every POLL_MS in the background.
-  // A manual refresh is the background path plus a spinner, not a second
-  // skeleton.
+  // F1-F10: `load` flips status to "loading" and unmounts the whole toolbar
+  // (search input, focus and all) for a round trip the board already runs
+  // every POLL_MS in the background. A manual refresh takes the background
+  // path plus a spinner instead, not a second skeleton.
   const [refreshing, setRefreshing] = React.useState(false);
   const manualRefresh = () => {
     setRefreshing(true);
@@ -365,10 +363,9 @@ export function RunsScreen() {
             </SelectContent>
           </Select>
 
-          {/* fix: this used to be plain muted text + a raw CircleDot icon —
-              a second visual treatment for the same "live" concept Audit
-              already renders as a Chip pill. Shared primitive, same "Live ·
-              …" copy template. */}
+          {/* Same shared primitive Audit uses for the "live" concept — a Chip
+              pill with the "Live · …" copy template, not a separate visual
+              treatment. */}
           <Chip tone="success" dot pulse className="ml-auto" title="Polling for new runs">
             Live · refreshes every {POLL_MS / 1000}s
           </Chip>
@@ -393,9 +390,9 @@ export function RunsScreen() {
       <TruncatedNote count={runs.length} cap={LIST_LIMIT} />
 
       {status === "loading" ? (
-        // fix: this used to always render the board card-grid skeleton, even
-        // in Table density — flashing the wrong shape on every manual
-        // Refresh / re-navigation while Table mode was active.
+        // Renders the density-matching skeleton — the board card-grid one
+        // only in Board density — so a manual Refresh or re-navigation in
+        // Table mode doesn't flash the wrong shape.
         mode === "table" ? (
           <div className="overflow-hidden rounded-xl border border-border bg-card">
             <TableSkeleton rows={8} cols={7} />
@@ -417,7 +414,7 @@ export function RunsScreen() {
         /* X3-F4: RunsFirstRun is the OPERATOR's funnel — a host-barrier readout
            a member's redacted status renders blank, over steps their role cannot
            reach. Same board, the member's own answer.
-           W6-3: `!== "admin"`, never `=== "member"`. The redaction that makes
+           `!== "admin"`, never `=== "member"`. The redaction that makes
            the funnel blank is keyed on isOperator (internal/api/setup.go), which
            is SUPER-admin only — so a security admin's status arrives redacted
            too, and through the two-valued form this tier read every withheld
@@ -672,9 +669,9 @@ function RunsTable({
             const terminal = isTerminalRunState(run.state);
             const attachable = !!run.interactive && run.state === "RUNNING";
             return (
-              // fix: same nested-interactive-widget issue as the board's
-              // RunCard (role="button" wrapping the real per-row action
-              // buttons) — dropped for the same reason; see RunCard above.
+              // Same nested-interactive-widget issue as the board's RunCard
+              // (role="button" wrapping the real per-row action buttons) —
+              // dropped for the same reason; see RunCard above.
               <TableRow
                 key={run.id}
                 onClick={() => onOpen(run.id)}

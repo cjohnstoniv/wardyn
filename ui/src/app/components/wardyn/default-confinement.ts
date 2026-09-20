@@ -3,11 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Default barrier tier (0.7.8) — pure resolution helpers, no persistence. The
-// default is a SERVER fact now (runs_policy.go's strongestAdvertisedAtOrAbove:
+// Default barrier tier — pure resolution helpers, no persistence. The
+// default is a server fact (runs_policy.go's strongestAdvertisedAtOrAbove:
 // the strongest installed class at or above the policy floor), so there is
-// nothing left for the browser to remember across sessions — the
-// wardyn-default-confinement localStorage key this file used to own is gone.
+// nothing left for the browser to remember across sessions.
 //
 // What's left is the pure "which tier wins" math, still shared by every
 // surface that shows a barrier default: New Run resolves its own from

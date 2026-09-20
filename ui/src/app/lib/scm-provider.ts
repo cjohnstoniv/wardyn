@@ -106,12 +106,11 @@ export const LANE_META: Record<Lane, LaneMeta> = {
   ssh: { label: "SSH · resident", tooltip: CAPABILITY.sshKeyLine, tone: "warning", residency: "resident_mount" },
 };
 
-// The LEGACY_NAMES list (github-pat, gitlab-pat, ado-pat, bitbucket-pat) lived
-// here. Those pre-convention secret names remain fully usable — a git_pat grant
-// can name any stored secret — they just can't be bucketed onto a host by name,
-// so deriveProviders skips them. The list itself was only ever read by the
-// deleted SCM Provider step, which listed them in a footer; the SKIPPING is in
-// deriveProviders' own name-parsing and is pinned by scm-provider.test.ts.
+// Pre-convention secret names (github-pat, gitlab-pat, ado-pat, bitbucket-pat)
+// remain fully usable — a git_pat grant can name any stored secret — they
+// just can't be bucketed onto a host by name, so deriveProviders skips them.
+// The skipping is in deriveProviders' own name-parsing and is pinned by
+// scm-provider.test.ts.
 
 export interface ProviderRow {
   host: string;

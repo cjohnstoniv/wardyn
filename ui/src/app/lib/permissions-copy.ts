@@ -3,14 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Permissioning copy canon (0.6, WS-A stage A-A) — the frozen canonical-strings
-// table from docs/design/permissioning-prompt.md, transcribed verbatim. The
-// admin Permissions screen (A-E/E2) and the member why-denied surfaces (A-E/E3)
-// read these instead of retyping the copy, so the shipped wording can't drift
-// from the reviewed mock (docs/design/permissioning-mock/index.html).
+// Permissioning copy canon — the frozen canonical-strings table from
+// docs/design/permissioning-prompt.md, transcribed verbatim. The admin
+// Permissions screen and the member why-denied surfaces read these instead
+// of retyping the copy, so the shipped wording can't drift from the reviewed
+// mock (docs/design/permissioning-mock/index.html).
 //
-// Pure TS — no React, no fetch, no DOM. Nothing imports it yet: A-A is a mock
-// round, and the screens that consume it land in A-E.
+// Pure TS — no React, no fetch, no DOM.
 //
 // Two laws are baked into the wording below and must survive any edit:
 //   1. DOCTRINE — a capability bounds what the MEMBER chose, never what the
@@ -19,12 +18,11 @@
 //   2. A grant is amber, never green. A capability grant is not a success
 //      state — it is a widened blast radius, and the console says so.
 
-// ============================ Kinds ============================
+// Kinds
 
 // The closed set, in the order the admin screen renders them. Mirrors the Go
-// slice in internal/api/capabilities.go (A-B) — an eighth kind is a Go constant
-// plus a row here, no DDL. `agent` and `integration` are 0.7's fifth and sixth
-// and `workspace_provider` is 0.7.2's seventh, added on exactly those terms.
+// slice in internal/api/capabilities.go — a new kind is a Go constant plus a
+// row here, no DDL.
 export const CAPABILITY_KINDS = ["egress_host", "secret", "workspace", "image", "agent", "integration", "workspace_provider"] as const;
 export type CapabilityKind = (typeof CAPABILITY_KINDS)[number];
 
@@ -91,11 +89,10 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
     enforced: "A member can name an image granted to them. Every other ref is still refused.",
     direction: "widens",
   },
-  // ADDITION to §7.1 (0.7): the two kinds the org-controls round added, noted
-  // as an addition in docs/design/permissioning-prompt.md §7.1 exactly the way
-  // ENFORCE_OFF_TITLE is in §7.2. Governance's own §7.1 declares permissions
-  // copy referenced-never-re-frozen, so this file stays the one home for KIND
-  // rows and governance-prompt.md never grows a second.
+  // Governance's own §7.1 declares permissions copy referenced-never-re-frozen,
+  // so this file stays the one home for KIND rows — new kind copy is staged in
+  // docs/design/permissioning-prompt.md §7.1 and added here, never duplicated
+  // into governance-prompt.md.
   agent: {
     label: "Agents",
     blurb: "Which agents a member may launch a run with.",
@@ -120,11 +117,9 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
       "A member can only name providers granted to them. A workspace's own provider and the site default still apply — a grant bounds what the member chose, never what an admin set up for them.",
     direction: "narrows",
   },
-  // ADDITION (0.7.2): the workspace-providers round's kind, added on the same
-  // terms as `agent` and `integration` above. Its six strings are staged in
-  // docs/design/workspace-providers-prompt.md §7.6 and are DRAFT (M2 canon
-  // pending) — the owner's canon sitting freezes them, and the swap is a
-  // one-file diff here.
+  // A new kind's strings are staged in docs/design/workspace-providers-prompt.md
+  // §7.6 as DRAFT (M2 canon pending) until the owner's canon sitting freezes
+  // them, and the swap to canon is then a one-file diff here.
   workspace_provider: {
     // DRAFT (M2 canon pending)
     label: "Git providers",
@@ -138,7 +133,7 @@ export const KIND: Record<CapabilityKind, KindCopy> = {
   },
 };
 
-// ============================ Admin surface ============================
+// Admin surface
 
 export const PERM = {
   TITLE: "Permissions",
@@ -149,11 +144,10 @@ export const PERM = {
   // a third?").
   DOCTRINE:
     "A capability bounds what a member chose, never what an admin pre-authorized. Egress a workspace, a stored policy, or a scan already carries is never narrowed by a grant.",
-  // F4-F6 (Appendix A V8): capAllowed (internal/api/capabilities.go) exempts
-  // RoleAdmin only — a security admin (useSecurityOperator, gated to THIS
-  // screen) is bounded like anyone else. The old sentence said "Admins" over
-  // a screen a security admin also reaches, so they read themselves as
-  // exempt and then hit their own grants at launch.
+  // capAllowed (internal/api/capabilities.go) exempts RoleAdmin only — a
+  // security admin (useSecurityOperator, gated to THIS screen) is bounded
+  // like anyone else, so the wording must not say "Admins" over a screen a
+  // security admin also reaches.
   EXEMPT: "Super admins, the admin token, and local mode are never bounded by these rules. A security admin is bounded like a member.",
 
   // ---- enforcement switch ----
@@ -178,19 +172,16 @@ export const PERM = {
   ENFORCE_ON_TITLE: (kind: string) => `Enforce ${kind}?`,
   ENFORCE_ON_BODY: (n: number) =>
     `${n} member${n === 1 ? "" : "s"} ${n === 1 ? "is" : "are"} bounded by the grants below from their next request. Anything not granted starts being refused.`,
-  // ADDITION to §7.2 (0.7 R4/F133): the count comes from GET /runs, which can be
-  // refused or fail. The canon table froze only the counted form, so an unread
-  // count printed as "0 members are bounded" — the opposite of the lockout risk
-  // this dialog exists to state. Same sentence, minus the number.
+  // The count comes from GET /runs, which can be refused or fail — an unread
+  // count must not print as "0 members are bounded", the opposite of the
+  // lockout risk this dialog exists to state. Same sentence, minus the number.
   ENFORCE_ON_BODY_UNKNOWN:
     "Members are bounded by the grants below from their next request. Anything not granted starts being refused.",
   ENFORCE_ON_ZERO:
     "There are no allow grants for this capability. Enforcing it now refuses every member request until you add one.",
-  // ADDITION to §7.2 (0.6 implementation): the canon table froze one title and
-  // an off-BODY, so the off-dialog asked "Enforce Egress hosts?" over a body
-  // saying members go back and a button saying Stop enforcing. Same shape as
-  // ENFORCE_ON_TITLE, same verb as ENFORCE_STOP — noted as an addition in
-  // docs/design/permissioning-prompt.md §7.2.
+  // The off-dialog needs its own title, not a reuse of ENFORCE_ON_TITLE — the
+  // body says members go back and the button says Stop enforcing, so the
+  // title must match ("Stop enforcing", not "Enforce").
   ENFORCE_OFF_TITLE: (kind: string) => `Stop enforcing ${kind}?`,
   ENFORCE_OFF_BODY: "Members go back to the powers they had before this capability was enforced. Denies still apply.",
   ENFORCE_CONFIRM: "Enforce",
@@ -236,20 +227,18 @@ export const PERM = {
   GRANT_IS_NOT_SUCCESS: "Every allow below is something a member can reach that they otherwise couldn't.",
 };
 
-// ==================== PERM_DRAFT — 0.7.4 field-report round ================
 // DRAFT (M2 canon pending): new strings this round. Kept OUT of PERM above —
 // permissions-copy.ts carries no byte-parity gate against
-// docs/design/permissioning-prompt.md (Appendix A V8's own note: "no
-// byte-parity suite on permissions-copy.ts"), so nothing PARSES this file
-// back out of the doc today, but a DRAFT string still gets its own export
-// (the AGENTS_DRAFT / workspace-providers-copy.ts precedent) rather than
-// landing inside PERM, which the doc's own §7 table transcribes verbatim.
+// docs/design/permissioning-prompt.md, so nothing parses this file back out
+// of the doc, but a DRAFT string still gets its own export (the AGENTS_DRAFT
+// / workspace-providers-copy.ts precedent) rather than landing inside PERM,
+// which the doc's own §7 table transcribes verbatim.
 export const PERM_DRAFT = {
-  // F4-F5/F6-F5 (Appendix A V8): a stored grant whose value predates the
-  // per-kind canonicalization rule (grantView.Inert, permissions.go's
-  // markInertGrants) can never match anything the resolver compares — a red
-  // Deny chip for a rule that has never fired, and never will until re-saved.
-  // Neutral, not danger/warning: it names a state, not a live consequence.
+  // A stored grant whose value predates the per-kind canonicalization rule
+  // (grantView.Inert, permissions.go's markInertGrants) can never match
+  // anything the resolver compares — a red Deny chip for a rule that has
+  // never fired, and never will until re-saved. Neutral, not danger/warning:
+  // it names a state, not a live consequence.
   INERT_CHIP: "Inert",
   // Reuses the substance of the server's own WARN-log remedy (permissions.go's
   // markInertGrants — "re-save each row through POST /api/v1/permissions/grants
@@ -258,9 +247,9 @@ export const PERM_DRAFT = {
   INERT_REMEDY: "This row predates the value rule and can never match anything the resolver compares — re-save it to canonicalize it, or find out why it's refused.",
 } as const;
 
-// ============================ Member why-denied ============================
+// Member why-denied
 
-// Inline moments only — 0.6 ships no member-facing permissions screen. Member
+// Inline moments only — there is no member-facing permissions screen. Member
 // nav stays Runs · Approvals.
 export const DENIED = {
   // Approvals: the Approve/Deny buttons disable, with the reason beside them.
@@ -277,13 +266,12 @@ export const DENIED = {
   WORKSPACE_BODY: "A run against this workspace is refused at launch. Ask an admin to grant it to you.",
 
   // (§7.3's SECRET_DROPPED(n)/EGRESS_DROPPED(n) are deliberately NOT here. They
-  // are count-shaped copy for a preflight/Review surface, and 0.6 ships none:
+  // are count-shaped copy for a preflight/Review surface Wardyn doesn't ship:
   // the drop is surfaced at launch instead, listed inline in the New Run rail
   // under AGENTS.LAUNCH_WARNING_TITLE, carrying the SERVER's text, which names
   // the kind and the exact value (internal/api/runs.go -> new-run-rail.tsx's
-  // launch.warnings block, 0.7.2's §5c.8). A string defined here
-  // and rendered nowhere is not canon, it is a claim — so it waits for the
-  // surface that draws it.)
+  // launch.warnings block). A string defined here and rendered nowhere is not
+  // canon, it is a claim — so it waits for the surface that draws it.)
 
   // Secrets page, member view, `secret` enforced.
   SECRETS_NARROWED: "Only secrets granted to you are listed.",
@@ -294,10 +282,10 @@ export const DENIED = {
 };
 
 // M3 — member local_dir onboarding (AddWorkspaceDialog), root-constrained per
-// WARDYN_MEMBER_WORKSPACE_ROOTS/_MAP (member-role-desktop.md §DECISIONS
-// O1/O3). Presentational only: enforcement is ValidateMemberMountSource at
-// bind time, same non-authoritative-hint relationship DENIED above has to
-// server-side requireOperator.
+// WARDYN_MEMBER_WORKSPACE_ROOTS/_MAP (member-role-desktop.md). Presentational
+// only: enforcement is ValidateMemberMountSource at bind time, same
+// non-authoritative-hint relationship DENIED above has to server-side
+// requireOperator.
 export const MEMBER_WORKSPACE = {
   ROOT_HINT: (root: string) =>
     `Mounted from this machine into the sandbox. Must be under ${root} — your admin set this boundary.`,

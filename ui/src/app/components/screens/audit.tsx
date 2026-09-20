@@ -65,7 +65,6 @@ const GROUND_TRUTH: Record<string, { tone: "success" | "warning" | "neutral"; hi
   unavailable: { tone: "neutral", hint: "no eBPF sensor has ever reported — this tier is opt-in" },
 };
 
-// ------------------------------------------------------------------
 // Event-kind bucketing. AuditEvent.action is an open dotted-verb string the
 // backend owns (internal/types/types.go); these are the REAL prefixes/values
 // wardynd emits today:
@@ -80,7 +79,6 @@ const GROUND_TRUTH: Record<string, { tone: "success" | "warning" | "neutral"; hi
 //   policy.*, recording.upload, run.compose* — is run/session/policy lifecycle.
 // Bucketing is prefix-based so an action the table below doesn't know about yet
 // degrades into "lifecycle" (the catch-all) instead of vanishing from a facet.
-// ------------------------------------------------------------------
 type EventKind = "egress" | "tool" | "credentials" | "approvals" | "lifecycle" | "enforcement";
 
 const KIND_META: Record<EventKind, { label: string; Icon: React.ElementType }> = {
@@ -217,13 +215,11 @@ function describeEvent(e: AuditEvent): string {
   return e.target ? `${e.action} — ${e.target}` : e.action;
 }
 
-// ------------------------------------------------------------------
 // Day grouping. Groups are created in the order their day is first seen while
 // walking the (already server-ordered) event list — never re-sorted by
 // wall-clock time. That preserves append (seq) order both within a day and
 // across days, whichever direction the current query returned (newest-first
 // for the global window, oldest-first for a per-run trail).
-// ------------------------------------------------------------------
 interface DayGroup {
   key: number;
   label: string;
@@ -297,12 +293,12 @@ export function AuditScreen() {
   // operator their run was gone when the control plane had just hiccuped.
   const [drillError, setDrillError] = React.useState<"not-found" | "failed" | null>(null);
 
-  // MEDIUM fix: when a run_id filter is set, query the SERVER with run_id so we
-  // get that run's authoritative, complete per-run trail (not a client filter
-  // over a truncated global window that may have scrolled the run's events off).
-  // MEDIUM fix: do NOT client re-sort by wall-clock time — the server returns
-  // events in authoritative append (seq) order; re-sorting by `time` can reorder
-  // events that share a timestamp and misrepresent causality. Preserve as-is.
+  // When a run_id filter is set, query the SERVER with run_id so we get that
+  // run's authoritative, complete per-run trail (not a client filter over a
+  // truncated global window that may have scrolled the run's events off).
+  // Must NOT client re-sort by wall-clock time — the server returns events in
+  // authoritative append (seq) order; re-sorting by `time` can reorder events
+  // that share a timestamp and misrepresent causality. Preserve as-is.
   const fetchEvents = React.useCallback(() => {
     // The kernel sensor's health rides along with every audit refresh (initial
     // load AND each poll tick): "unavailable" and "degraded" are the ABSENCE of
@@ -390,7 +386,7 @@ export function AuditScreen() {
     return s;
   }, [events]);
 
-  // F5-F8: the Event facet's own SelectItem list is `KIND_ORDER.filter((k) =>
+  // The Event facet's own SelectItem list is `KIND_ORDER.filter((k) =>
   // presentKinds.has(k))` — when the loaded window narrows (a run_id drill-in
   // whose authoritative trail lacks the selected kind) that item unmounts
   // while `kindFilter` still points at it, leaving the trigger blank over a
@@ -544,9 +540,9 @@ export function AuditScreen() {
               title="The trail starts with your first run."
               description="Every egress decision, credential broker, approval, and enforcement action gets recorded here the moment you launch a run."
               action={
-                // #11: an audit screen doesn't need to own a run-launcher —
-                // /runs is already the canonical "Launch your first run" CTA
-                // (its own empty state). This just points there instead of
+                // An audit screen doesn't need to own a run-launcher — /runs
+                // is already the canonical "Launch your first run" CTA (its
+                // own empty state). This just points there instead of
                 // duplicating a second NewRunDialog mount.
                 <Button variant="outline" onClick={() => navigate("/runs")}>
                   Open Runs
@@ -588,7 +584,7 @@ export function AuditScreen() {
 }
 
 // Per-run drill banner: real run fields only (id / agent / task / repo / the
-// metals ConfinementChip). "Open run" deep-links to /runs/:id (ui-auditRec-2).
+// metals ConfinementChip). "Open run" deep-links to /runs/:id.
 // A true 404 (getRun resolved undefined) reads as "archived or deleted"; a
 // REJECTED fetch (500/network/403) is a distinct, transient failure with its
 // own message + Retry — collapsing the two told an operator their run was

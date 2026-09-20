@@ -12,8 +12,8 @@
 //          (CONSOLE-RULES §5) · headline · hover-revealed Attach · kebab
 //   row 2  repo/workspace · barrier · state word · what is waiting · id · age
 // Row 1 answers "who is doing what"; row 2 is the evidence line. The barrier
-// STRIP that used to sit on row 2 moved out entirely — the chip already names
-// the tier, and the run detail page is where the ladder is worth drawing.
+// does not get its own strip on row 2 — the chip already names the tier, and
+// the run detail page is where the ladder is worth drawing.
 import * as React from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -50,9 +50,9 @@ import { statusDetailSentence } from "../run-status-detail";
 export function CardGrid({ children }: { children: React.ReactNode }) {
   // auto-fill with a min(100%, floor) track: cards reflow and collapse to ONE
   // column below the floor instead of clipping (min(100%, …) stops overflow on
-  // narrow containers). The floor is 26rem, not the 34rem this shipped with —
-  // 34 yields two columns on a 1400px board where three fit comfortably now
-  // that the card is two rows instead of four.
+  // narrow containers). The floor is 26rem: 34rem would yield two columns on a
+  // 1400px board where three fit comfortably now that the card is two rows
+  // instead of four.
   return (
     <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(min(100%,26rem),1fr))]">{children}</div>
   );
@@ -67,9 +67,9 @@ export function SectionHeading({
   Icon?: React.ElementType;
   title: string;
   count: number;
-  /** The Needs-you lane owns amber; every other heading is quiet. This was
-   *  three props (iconTint / titleTint / countTint) that no caller ever set
-   *  to different values — one heading has one tone. */
+  /** The Needs-you lane owns amber; every other heading is quiet. One
+   *  heading has one tone — not iconTint/titleTint/countTint, since no
+   *  caller ever needs them to differ. */
   tone?: "neutral" | "warning";
 }) {
   const warn = tone === "warning";
@@ -127,16 +127,17 @@ export function RunCard({
   const interrupted = attention === "interrupted";
   const repo = repoLabel(run);
 
-  // fix: this container used to be role="button" tabIndex={0} — a widget
-  // role directly nesting the real Attach/Review/kebab <button>s below,
-  // which is an invalid ARIA structure (interactive-in-interactive). Mouse
-  // click-to-open stays via the plain onClick; keyboard/AT users already
-  // have a dedicated affordance for the same action (RunActions' "Open
-  // detail" menu item), so no functionality is lost by dropping the role.
+  // This container is a plain <div>, not role="button" tabIndex={0}: that
+  // would be a widget role directly nesting the real Attach/Review/kebab
+  // <button>s below, an invalid ARIA structure (interactive-in-interactive).
+  // Mouse click-to-open stays via the plain onClick; keyboard/AT users
+  // already have a dedicated affordance for the same action (RunActions'
+  // "Open detail" menu item), so no functionality is lost by dropping the
+  // role.
   return (
     <div
-      // review C-13: a stable e2e hook — the class-based xpath locator it
-      // replaced coupled the spec to a Tailwind utility name.
+      // A stable e2e hook: a class-based xpath locator would couple the spec
+      // to a Tailwind utility name.
       data-testid="run-card"
       onClick={() => onOpen(run.id)}
       className={cn(
@@ -169,10 +170,10 @@ export function RunCard({
           <Button
             size="sm"
             // §6: exactly one `default` button per surface, and the board's is
-            // the shell's New run. A lane of N asking cards was N teal buttons
-            // competing with it — the amber rail and the pinned lane already
-            // say which cards are the request, so this one only has to be
-            // reachable.
+            // the shell's New run. A lane of N asking cards would be N teal
+            // buttons competing with it — the amber rail and the pinned lane
+            // already say which cards are the request, so this one only has
+            // to be reachable.
             variant="outline"
             className="h-7 shrink-0"
             onClick={(e) => {
@@ -259,11 +260,11 @@ export function RunActions({
   onOpen: (id: string) => void;
   onKill: (id: string) => void;
 }) {
-  // fix: the board's Kill action fired with no confirmation, unlike the
-  // identical action on Run Detail — one misclick here killed a run with zero
-  // chance to back out. The dialog is rendered as a SIBLING of
-  // DropdownMenuContent (not nested inside it), controlled by its own state, so
-  // it survives the menu's close/unmount.
+  // The board's Kill action needs confirmation, like the identical action on
+  // Run Detail — without it, one misclick kills a run with zero chance to
+  // back out. The dialog is rendered as a SIBLING of DropdownMenuContent (not
+  // nested inside it), controlled by its own state, so it survives the
+  // menu's close/unmount.
   const [confirmId, setConfirmId] = React.useState<string | null>(null);
   const navigate = useNavigate();
   // 0.7.3 F7 — the Runs-list door onto the same clone the run header offers
@@ -342,8 +343,8 @@ export function RunActions({
 }
 
 // Skeletons match the final layout's height (CONSOLE-RULES §9): two rows in a
-// p-3 card, not the four-row p-4 block the card used to be — an over-tall
-// skeleton makes the board jump the moment the list lands.
+// p-3 card, not a four-row p-4 block — an over-tall skeleton makes the board
+// jump the moment the list lands.
 export function BoardSkeleton() {
   return (
     <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(min(100%,26rem),1fr))]">

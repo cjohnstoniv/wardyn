@@ -50,7 +50,7 @@ import { absoluteTime } from "./format";
 // (bundle-split.test.ts). Copy lives here; the rule lives there.
 export { MODEL_ACCESS_ACTIONABLE, isPerUserSsoRow } from "./model-access";
 
-// ==================== §7.2-§7.5 — PROVIDERS, the admin screen ==============
+// §7.2-§7.5 — PROVIDERS, the admin screen
 
 export const PROVIDERS = {
   // ---- §7.2 the screen header + the Git tab ----
@@ -82,8 +82,7 @@ export const PROVIDERS = {
     "Its host goes back to the legacy list — admitted if listed there, with no address bound. Stored credentials stay.",
   FIELD_BASE_URLS: "Allowed addresses",
   BASE_URLS_HINT: "One per line, over HTTPS. A repository is admitted when its URL starts with one of these.",
-  // F4-F11 (Appendix A V8, §5.1 Q12 option (b), owner default): the old
-  // sentence claimed "at least one path segment" while display.tsx
+  // The sentence must not claim "at least one path segment": display.tsx
   // deliberately does NOT require one on a self-hosted host (a bare
   // `https://git.corp.example` GHES-style host is valid) — only the two
   // well-known hosts constrain the path, and only dev.azure.com REQUIRES one.
@@ -119,8 +118,8 @@ export const PROVIDERS = {
   SAVED_ELSEWHERE_BODY: "Reload to see their version before saving yours.",
   SAVED_TOAST: "Providers saved.",
   // Inline pluralisation — the PERM.ENFORCE_ON_BODY shape, not a second
-  // helper (§5 #9). Stays on the page as an amber note until the next save
-  // (Q8), in addition to the transient toast.
+  // helper (§5 #9). Stays on the page as an amber note until the next save,
+  // in addition to the transient toast.
   SAVED_NARROWED: (n: number) =>
     n === 1
       ? `${n} onboarded source is now outside every enabled provider — runs can't clone it until an admin widens the addresses or turns its host on.`
@@ -157,7 +156,7 @@ export const PROVIDERS = {
   FIELD_DRIVES_ENABLED: "User drives",
   DRIVES_ENABLED_HINT:
     "Off means this deployment offers no drives: nothing is mounted and every drive write is refused. Existing drives and allocations are kept.",
-  // DRIVES_OFF_BANNER (Q9) MOVED to DRIVES.DRIVES_OFF_BANNER
+  // DRIVES_OFF_BANNER MOVED to DRIVES.DRIVES_OFF_BANNER
   // (user-drives-copy.ts) — the banner it describes renders on /drives, and
   // that module already owns every other string that screen renders.
   FIELD_MAX_DRIVE: "Largest drive (MiB)",
@@ -190,7 +189,7 @@ export const PROVIDERS = {
   STEP_BADGE_READY_AGENTS: (n: number) => `Ready · ${n} agent${n === 1 ? "" : "s"}`,
 } as const;
 
-// ==================== §7.4 (member table) — PROVIDER_MEMBER =================
+// §7.4 (member table) — PROVIDER_MEMBER
 
 // Server-composed member doors (the DRIVE_MEMBER precedent in
 // user-drives-copy.ts): keyed in the module AND byte-checked against the Go
@@ -204,14 +203,14 @@ export const PROVIDER_MEMBER = {
     `this run's model access is configured as ${mechanism}, and that credential expired at ${ts} and could not be renewed — sign in again under Settings → Model provider. Wardyn does not substitute a different model provider.`,
 } as const;
 
-// ==================== §7.7 — AGENTS =========================================
+// §7.7 — AGENTS
 
 // The Agents tab (C-UI, W4), the member's Getting Started "Model access" chip,
 // the New Run agent picker, and the run-detail "Effective policy" widget. Kept
 // here (not a separate module) because §7 froze it in the SAME prompt doc as
 // PROVIDERS, over the SAME two-column table shape `parseFrozenTables` clones —
 // a second file would be a second parser for one doc. `AGENTS_TITLE` /
-// `AGENTS_LEAD` / `AGENT_ROW_DISABLED_HINT` are prefixed (round note #7) so no
+// `AGENTS_LEAD` / `AGENT_ROW_DISABLED_HINT` are prefixed so no
 // key collides with PROVIDERS across the one cross-namespace lookup the test
 // uses; the row's own Enabled switch reuses `PROVIDERS.FIELD_ENABLED`.
 export const AGENTS = {
@@ -241,7 +240,7 @@ export const AGENTS = {
   SSO_START_URL_MANAGED: "Your admin set this organization's access portal. Your sign-in uses it — there is nothing to enter here.",
   ADMIN_OWN_CHIP_NOTE: "This is your own sign-in — the same one a member makes. Under a shared credential it is the one everyone uses.",
   // The picker item's sub-line for a disabled row (the plan's fragment,
-  // sentence-cased per CONSOLE-RULES §10 — round note #4).
+  // sentence-cased per CONSOLE-RULES §10).
   UNAVAILABLE: "Not enabled by your admin",
   MODEL_ACCESS_LIVE: "Model access · Your AWS sign-in",
   MODEL_ACCESS_EXPIRING: "Model access · Expiring",
@@ -346,7 +345,7 @@ export function modelAccessActionLine(
 // server's settled row, agents-tab.tsx's perUserSaved reads the same
 // `harness` prop — same three-part test, same answer.
 
-// ==================== AGENTS_DRAFT — 0.7.3 field-report round ==============
+// AGENTS_DRAFT — new strings not yet in the frozen §7.7 table
 // DRAFT (M2 canon pending): new strings this round, NOT part of the frozen
 // §7.7 AGENTS table above — workspace-providers-copy.test.ts's byte-check
 // parses only PROVIDERS/PROVIDER_MEMBER/AGENTS out of the doc, so a NEW
@@ -377,7 +376,7 @@ export const AGENTS_DRAFT = {
   SSO_START_URL_REQUIRED: "Required for a per-person lane — Save is disabled until this names a real https:// start URL.",
 } as const;
 
-// ==================== PROVIDERS_DRAFT — 0.7.4 field-report round ===========
+// PROVIDERS_DRAFT — new strings not yet in the frozen §7.2 table
 // DRAFT (M2 canon pending): new strings this round, NOT part of the frozen
 // §7.2 PROVIDERS table — kept in a separate export for the same reason
 // AGENTS_DRAFT is (the byte-check parses only PROVIDERS/PROVIDER_MEMBER/

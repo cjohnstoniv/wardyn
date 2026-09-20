@@ -413,7 +413,7 @@ describe("RunDetailScreen — R-5 the ending trio is skipped while the run is li
 // cleanup (matches the sibling pattern everywhere else in this file); it has
 // no vacuous test standing in for a red-first pin.
 
-// THE POINT OF THE REDESIGN, and therefore the assertion most worth pinning: a
+// The point of the redesign, and therefore the assertion most worth pinning: a
 // held egress request renders in the TERMINAL'S OWN COLUMN, under the output
 // that caused it — not in a sidebar, not a toast. Asserting it exists somewhere
 // on the page would pass for a layout that put it back in the rail, so this
@@ -554,7 +554,7 @@ describe("RunDetailScreen — onClone refuses on an unreadable audit row (review
   });
 });
 
-// W17-S1-3: the run-detail Audit tab's own fetch is capped at LIST_LIMIT
+// The run-detail Audit tab's own fetch is capped at LIST_LIMIT
 // (server: auditPerRunDefaultLimit) and returned oldest-first — a chatty run's
 // later events can silently fall off the end. A capped page must say so; a
 // page under the cap must not.

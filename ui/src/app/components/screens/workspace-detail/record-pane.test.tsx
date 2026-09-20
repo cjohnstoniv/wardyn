@@ -3,14 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Ported from the retired import-workspace/record-pane.test.tsx, adapted for
-// the merged per-session lifecycle (no more separate confined/replayMode
-// prop — each session's card shows whichever stage it's actually in: record
-// open -> recorded -> [Replay confined] -> replaying -> replayed). Every test
-// below that exercised meaningful behavior (CC1 banner, model-readiness note,
-// new-session form, open-record lifecycle, settled review card, empty-capture
-// honesty, confined replay + live approvals) survives; only the harness
-// (renderPane) and the confined-mode assertions changed shape.
+// The pane's per-session lifecycle has no separate confined/replayMode prop —
+// each session's card shows whichever stage it's actually in: record open ->
+// recorded -> [Replay confined] -> replaying -> replayed.
 import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -71,13 +66,13 @@ function renderPane(
   operator = true,
   launch: { warnings?: string[]; confinementClass?: string } | null = null,
   hostClasses: ("CC1" | "CC2" | "CC3")[] | null = null,
-  // R4/F001: the two predicates used to be ONE argument
-  // (`securityOperator={operator}`), so this helper could only ever produce
-  // admin (both true) or member (both false) — and the one tier 0.7 §B
-  // introduced, and the only one where the pane's split gate is observable
-  // (operator:false, securityOperator:true), was unreachable from every test in
-  // this file. It defaults to `operator`, so every existing call site keeps
-  // exactly the viewer it had.
+  // The two predicates are separate arguments, not ONE
+  // (`securityOperator={operator}`) — collapsing them would let this helper
+  // only ever produce admin (both true) or member (both false), making the
+  // one tier 0.7 §B introduced, and the only one where the pane's split gate
+  // is observable (operator:false, securityOperator:true), unreachable from
+  // every test in this file. `securityOperator` defaults to `operator`, so
+  // every existing call site keeps exactly the viewer it had.
   securityOperator = operator,
 ) {
   return render(
@@ -142,7 +137,7 @@ describe("RecordPane — header, open-egress banner, model note", () => {
     expect(screen.getByText(/no model provider is configured/i)).toBeInTheDocument();
   });
 
-  // W20-S1-2: once a session has actually launched, the server's own
+  // Once a session has actually launched, the server's own
   // confinement_class is the truth — it beats the runner-derived guess in
   // BOTH directions (stronger: the weakest-barrier line goes; weaker: it
   // appears even though the runner offers better).
@@ -215,14 +210,14 @@ describe("RecordPane — open-record session lifecycle", () => {
     expect(onDoneRecording).toHaveBeenCalledWith("run-42");
   });
 
-  // The attach chokepoint stopped refusing a run whose creator it cannot see
+  // The attach chokepoint does not refuse a run whose creator it cannot see
   // (P1), which is right for the login pane — but this pane's sessions belong to
   // the OPERATOR who launched them (record/replay are operatorOnly, routes.go),
   // so a member merely VIEWING this workspace never owns the run. Mounting a
-  // terminal for them now buys a failed ticket mint, a raw "could not mint an
-  // attach ticket" error where they used to get the role sentence, and one
-  // authz.denied{not_owner} row per mount. The pane's controls were already
-  // operator-gated; the terminal simply was not.
+  // terminal for them buys a failed ticket mint, a raw "could not mint an
+  // attach ticket" error instead of the role sentence, and one
+  // authz.denied{not_owner} row per mount — the terminal must be
+  // operator-gated the same as the pane's other controls.
   it("a non-operator sees no terminal for a recording session — only the operator gets one", () => {
     const rr: RecordResult = { run_id: "run-42", label: "build & test", mode: "interactive", status: "recording" };
     renderPane({ record_results: { "build-test": rr } }, {}, true, false);
@@ -309,7 +304,7 @@ describe("RecordPane — settled review card (open recording)", () => {
     expect(onPromoteEgress).toHaveBeenCalledWith("build-test");
   });
 
-  // W20-S1-1: an observed-and-allowed host that is platform plumbing (the
+  // An observed-and-allowed host that is platform plumbing (the
   // model-provider harness host every session needs, or the console's own
   // origin) must never be offered for approval, and — since nothing needed
   // approving at all — the pane must NOT claim "already allowed" (that
@@ -437,8 +432,8 @@ describe("RecordPane — settled review card (open recording)", () => {
     expect(screen.getByRole("button", { name: /re-record/i })).toBeInTheDocument();
   });
 
-  // ui-wsDetail-3: Re-record must not fire the launch on the first click —
-  // it would silently replace the settled review this card is showing.
+  // Re-record must not fire the launch on the first click — it would
+  // silently replace the settled review this card is showing.
   it("Re-record asks for confirmation before overwriting the settled review", async () => {
     const onRecord = vi.fn();
     renderPane({ record_results: { "build-test": recorded() }, profile }, { onRecord });
@@ -521,7 +516,7 @@ describe("RecordPane — confined replay (Replay confined -> replaying -> replay
     expect(screen.getByRole("button", { name: /^replay again$/i })).toBeInTheDocument();
   });
 
-  // W19-W19b-2: learnVerifyEgress writes a live approval to ws.requirements
+  // learnVerifyEgress writes a live approval to ws.requirements
   // (egress:<host>, level required), not ws.approved_egress — a host approved
   // that way must not still render as blocked, and the Approve CTA it would
   // duplicate-write with must not offer to approve it again.
@@ -545,8 +540,8 @@ describe("RecordPane — confined replay (Replay confined -> replaying -> replay
     expect(blocked === null || within(blocked).queryByText("learned.example.com") === null).toBe(true);
   });
 
-  // ui-wsDetail-3: same overwrite-with-no-confirm gap, on the settled
-  // CONFINED review's own re-run button.
+  // The same overwrite-with-no-confirm gap, on the settled CONFINED review's
+  // own re-run button.
   it("Replay again asks for confirmation before overwriting the settled containment review", async () => {
     const onReplayConfined = vi.fn();
     renderPane({ record_results: { "build-test": learning, "verify:build-test": confinedRR }, approved_egress: ["github.com"] }, { onReplayConfined });
@@ -580,7 +575,7 @@ describe("RecordPane — confined replay (Replay confined -> replaying -> replay
     expect(within(panel).getByText("evil.example.com")).toBeInTheDocument();
     expect(within(panel).queryByText("other.com")).not.toBeInTheDocument();
 
-    // Deny is a two-step confirm (LiveApprovals, W20-W20-hold-fsm-6: it
+    // Deny is a two-step confirm (LiveApprovals: it
     // permanently poisons the host, so a click opens a confirm dialog rather
     // than calling the API directly — see live-approvals.test.tsx's own
     // "Deny opens a confirm dialog" pin) — click the row's Deny, then the
@@ -722,9 +717,9 @@ describe("RecordPane — off-policy bucket subtracts the requirements lane too",
 
 // A wizard Verify session is stored confined under key "verify:verify" with
 // no open "verify" sibling — recordSessions (open-only) can never list it, so
-// without this it was invisible here even while isRecording(ws) still counted
-// it: "Never recorded", "Start recording" disabled, no way to see or stop the
-// live run. orphanedVerifySessions + this card close that.
+// without orphanedVerifySessions + this card it would be invisible here even
+// while isRecording(ws) still counts it: "Never recorded", "Start recording"
+// disabled, no way to see or stop the live run.
 describe("RecordPane — an orphaned verify:* session (no open sibling)", () => {
   it("live: renders a stoppable card (terminal + live approvals + Done), never 'Never recorded'", async () => {
     const onDoneRecording = vi.fn();
@@ -800,7 +795,7 @@ describe("RecordPane — a viewer's controls are disabled", () => {
     };
     // Through renderPane, not a hand-rolled render: the helper is the file's
     // one harness, and a tier only one bespoke block can reach is a tier the
-    // other 800 lines silently cannot test (R4/F001).
+    // other 800 lines silently cannot test.
     renderPane({ record_results: { "build-test": recorded } }, {}, true, false, null, null, true);
     // The DECISION half — promoting observed egress into the allowlist — is
     // theirs and stays live. This is what makes the pane worth showing them at

@@ -78,7 +78,7 @@ describe("extractAuthUrl", () => {
 
   // Owner field report regression (0.7.8): a CSI written with no whitespace
   // between it and the URL — the shape a terminal colorizer actually emits —
-  // used to be swallowed into the match because control bytes are not `\s`.
+  // must not be swallowed into the match; control bytes are not `\s`.
   it("does not swallow a CSI reset that immediately follows the URL", () => {
     const url = "https://claude.ai/oauth/authorize?code=true&client_id=abc123";
     expect(extractAuthUrl(`\x1b[36m${url}\x1b[0m\r\n`)).toBe(url);
@@ -165,7 +165,7 @@ describe("extractFailSentence", () => {
     expect(extractFailSentence(`${MARKER} refused.\n`, MARKER)).toBe("refused.");
   });
 
-  // RV-03 (review follow-up): the ANSI strip lived only in cmd/wardyn-aws-sso,
+  // The ANSI strip lived only in cmd/wardyn-aws-sso,
   // beside the cap U2-05 already re-applied here — same argument, same place.
   // Colour/cursor CSI and an OSC title-set are the shapes a PTY actually emits.
   it("strips ANSI CSI and OSC sequences the sandbox printed", () => {

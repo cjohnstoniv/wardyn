@@ -36,10 +36,10 @@ export interface MeUserDrive {
   paused?: boolean;
 }
 
-// GET /me — see whoami() below for where each field comes from. ONE
-// declaration rather than the two identical inline literals this used to
-// carry: a field added to the promise type and forgotten in the response cast
-// is a field the console silently cannot read.
+// GET /me — see whoami() below for where each field comes from. One
+// declaration, not two identical inline literals: a field added to the
+// promise type and forgotten in the response cast is a field the console
+// silently cannot read.
 export interface Me {
   principal: string;
   method: string;
@@ -51,7 +51,7 @@ export interface Me {
   // absent on a pre-0.7.1 daemon. Display only: the header reads name, then
   // email, then principal; `principal` stays the ownership key.
   name?: string;
-  // ISO timestamp the SSO session dies at, with no refresh (W31-S1-7) —
+  // ISO timestamp the SSO session dies at, with no refresh —
   // present only for method:"sso". Absent for local/token auth, which has no
   // session to expire.
   session_expires_at?: string;
@@ -84,7 +84,7 @@ export interface Me {
   // ceilings apply. Absent on a pre-0.7.5 daemon, which reads the same as "the
   // plain mode" — and the plain mode is exactly what such a daemon is in.
   member_mode_no_credential?: boolean;
-  // WHETHER THE PREVIEW IS WORTH OFFERING here (0.7.5): true only where the
+  // Whether the preview is worth offering here (0.7.5): true only where the
   // org's model-access agent row gives each person their OWN AWS sign-in. Under
   // a `shared` row the posture hides nothing, so its banner would claim a state
   // this deployment contradicts — the entry is not rendered at all, and the
@@ -186,10 +186,10 @@ export const health = {
   // endpoints, not PUT /site-config") on every save. Strip it here, once, so
   // no caller has to remember to.
   //
-  // R4/F029: `integrations` was stripped by NAME, so the SECOND server-owned
-  // field added to the same document (onboarding_completed_at) repeated the
-  // bug verbatim — every Corporate-network save 400'd once onboarding had
-  // completed. The strip is now driven by SERVER_OWNED_SITE_CONFIG_KEYS
+  // `integrations` must not be stripped by NAME alone — a second server-owned
+  // field added to the same document (onboarding_completed_at) would repeat
+  // the same bug and 400 every Corporate-network save once onboarding had
+  // completed. The strip is driven by SERVER_OWNED_SITE_CONFIG_KEYS
   // (lib/types/site.ts), the one list a third such field gets added to.
   async putSiteConfig(cfg: SiteConfig): Promise<SiteConfigSaveResult> {
     const body: Record<string, unknown> = { ...cfg };
@@ -203,9 +203,9 @@ export const health = {
         sources_no_longer_admitted?: number | null;
       }
     >(res);
-    // F6-F6 (Appendix A V8): siteConfigPutResponse's four advisory signals —
-    // this used to discard all of them and return void, so an admin naming a
-    // missing secret ref was told their save landed cleanly.
+    // F6-F6 (Appendix A V8): siteConfigPutResponse's four advisory signals
+    // must reach the caller — discarding them and returning void would tell
+    // an admin naming a missing secret ref that their save landed cleanly.
     const { dangling_secret_refs, onboarding_completed_at_ignored, applies_from, sources_no_longer_admitted, ...siteConfig } =
       parsed;
     return {
@@ -274,15 +274,14 @@ export const health = {
     runner?: string;
     // 0.7.3 F6 removed the shell's only consumer (App.tsx's confinement/
     // barrier chip) along with `ConfinementClass`. Kept here as the wire
-    // mirror — same treatment as `network_policy` below (U-07).
+    // mirror — same treatment as `network_policy` below.
     confinement_classes?: string[];
     ebpf_groundtruth?: { state?: string; reason?: string };
     // k8sNetpolVerdict's three-value enum (internal/api/setup.go) — present on
-    // Kubernetes only (absent on Docker, and on an older daemon). 0.7.3 F6
-    // removed the shell's own chip (which used to read this field directly);
-    // the console now surfaces the verdict via /setup/status's
-    // k8s_egress_containment check on the setup Environment step instead.
-    // Kept here as the wire mirror — review C-09.
+    // Kubernetes only (absent on Docker, and on an older daemon). The shell's
+    // own chip is gone; the console now surfaces the verdict via
+    // /setup/status's k8s_egress_containment check on the setup Environment
+    // step instead. Kept here as the wire mirror.
     network_policy?: "enforced" | "unenforced" | "acknowledged";
     // OIDC is configured, so GET /auth/login exists — the sign-in screen only
     // offers the SSO link when the server says the flow is actually mounted.
@@ -301,7 +300,7 @@ export const health = {
     // (internal/api/uigateway.go's uiSandboxHealthz).
     ui_sandbox?: { enabled?: boolean; enter_url_template?: string; host_mode?: boolean };
     // Per-pluggable-seam selection (server.go's ComponentInfo), keyed by seam
-    // name ("recording", "identity", ...). W21-S1-7: recording.selected ===
+    // name ("recording", "identity", ...). recording.selected ===
     // "none" is the honest signal that THIS deployment's recording store
     // never came up (stock Helm install: persistence off) — distinct from
     // "no run has produced one yet". Absent on an older daemon.
@@ -353,7 +352,7 @@ export const health = {
   // status:"ok" IS the not-ready verdict and no caller has to catch.
   async readyz(): Promise<{ status?: string; postgres?: string }> {
     try {
-      // F6-F1: handleReadyz bounds its own store Ping, so the daemon itself
+      // handleReadyz bounds its own store Ping, so the daemon itself
       // won't hang — the real risk is the TRANSPORT (an LB/ingress accepting
       // the connection with no ready backend behind it, which has no
       // Read/WriteTimeout to save it). Without a signal here, `unreachable`
@@ -381,11 +380,12 @@ export const health = {
   // rejects — the caller drops the local token either way, and a hung sign-out
   // is worse than an unconfirmed one — but the caller now has something to say.
   async logout(): Promise<boolean> {
-    // FIX #6 + R4-F107: a console.error is not "surfaced". Nobody has DevTools
-    // open while signing out, so a failed logout left the HttpOnly OIDC session
-    // alive and the next reload silently re-entered the console — invisible,
-    // and on a shared machine it is the whole point of the button. The log line
-    // stays (it names the status); the BOOLEAN is what App.tsx turns into words.
+    // R4-F107: a console.error is not "surfaced". Nobody has DevTools open
+    // while signing out, so a failed logout would leave the HttpOnly OIDC
+    // session alive and the next reload would silently re-enter the console —
+    // invisible, and on a shared machine that is the whole point of the
+    // button. The log line stays (it names the status); the BOOLEAN is what
+    // App.tsx turns into words.
     try {
       const res = await wfetch("/auth/logout", { method: "POST" });
       if (!res.ok) {

@@ -46,7 +46,7 @@ export const policies = {
 
   // GET /api/v1/policies/default — THE CALLER'S ceiling: the spec a run created
   // without a policy_id gets, and the ceiling their inline policy is clamped
-  // against. W14-S1-6; routed through effectiveCeiling since 0.7, so for a
+  // against. Routed through effectiveCeiling since 0.7, so for a
   // member under a governance profile this answers with THAT profile's spec.
   async getDefaultPolicy(): Promise<DefaultPolicy> {
     const res = await wfetch("/policies/default", { method: "GET" });

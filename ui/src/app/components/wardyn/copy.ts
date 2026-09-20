@@ -20,11 +20,11 @@ export type RunMode = "interactive" | "autonomous";
 export const RUN_MODE: Record<RunMode, { label: string; blurb: string }> = {
   interactive: {
     label: "Interactive",
-    // UX-7: an interactive run execs NO agent at all (internal/types/types.go:
+    // An interactive run execs NO agent at all (internal/types/types.go:
     // "no agent task is exec'd and no completion watcher is started — the
-    // human drives via wardyn attach") — the old blurb described per-action
-    // approval, an autonomous-shaped behavior this mode doesn't have. Matches
-    // compose-form.tsx's own Field hint for the same toggle.
+    // human drives via wardyn attach") — the blurb must not describe
+    // per-action approval, an autonomous-shaped behavior this mode doesn't
+    // have. Matches compose-form.tsx's own Field hint for the same toggle.
     blurb: "Comes up idle — you attach and drive it over a terminal.",
   },
   autonomous: {
@@ -174,13 +174,11 @@ export const APPROVAL = {
   HOST_WIDE_NOTE: "This covers the host, not one port — an approval here answers every port on it.",
 } as const;
 
-// ============================================================
 // Egress-approval decision scopes — egress_domain only. Canon strings from
 // egress-scopes-PHASE0-COPY.md (the sign-off artifact; the mock/copy spec is
 // UI source of truth in this repo — do not paraphrase these). Consumed by the
 // three decision surfaces (live-approvals.tsx, reason-dialog.tsx) plus the
 // blast-radius banner and decided-row badge (approvals.tsx, run-detail.tsx).
-// ============================================================
 export const APPROVAL_SCOPE_ORDER: ApprovalScope[] = ["once", "run", "until", "always"];
 
 // Menu label, approve flavor.
@@ -224,13 +222,13 @@ export const UNTIL_PRESETS: { label: string; ms: number }[] = [
   { label: "24 hours", ms: 24 * 60 * 60_000 },
 ];
 
-// The deny confirm dialog's description (Phase 0 §3) — replaces a sentence
-// that was flatly false for two of the four scopes: "Denying blocks this host
-// for the rest of the session — there is no undo and no re-raise once it's
-// denied" is wrong for `once` (which re-raises on the next attempt) and wrong
-// for `always` (which outlives "the session" AND can be undone in the
-// workspace's egress settings). `until` renders the honest reason it's
-// missing a time rather than silently rendering "undefined".
+// The deny confirm dialog's description (Phase 0 §3) must not read "Denying
+// blocks this host for the rest of the session — there is no undo and no
+// re-raise once it's denied" — that is wrong for `once` (which re-raises on
+// the next attempt) and wrong for `always` (which outlives "the session" AND
+// can be undone in the workspace's egress settings). `until` must render the
+// honest reason it's missing a time rather than silently rendering
+// "undefined".
 export function denyDialogCopy(scope: ApprovalScope, opts: { until?: string } = {}): string {
   switch (scope) {
     case "once":
@@ -330,20 +328,20 @@ export const RUN_COCKPIT = {
   // --- Terminal widget, four states (design board 2d) ---
   // 1. You hold the PTY.
   driving: "you are driving",
-  // NOTE: there is deliberately no "drivingHint" here. One existed, unreferenced,
+  // There is deliberately no "drivingHint" here. One existed, unreferenced,
   // advertising "⇧⌘F for real fullscreen" — nothing binds that chord; fullscreen
   // is the header button only. A hint for a shortcut that does not exist is
   // worse than no hint, and an unrendered string is a trap waiting for someone
   // to render it. Add it back the day the chord is actually wired.
-  // 2. Someone else holds it. Attach is a SHARED tmux session, so this is a
-  // real state the console used to have no words for — it just competed for
+  // 2. Someone else holds it. Attach is a SHARED tmux session, so this state
+  // needs its own words — without them, a second attacher just competes for
   // the same PTY silently.
   heldBy: (principal: string) => `held by ${principal}`,
   watchingReadOnly: "watching read-only — keystrokes go nowhere",
   // Does NOT assert a transport. The holder's source is on the wire
-  // (AttachHolder.source, "web" | "ssh"), and "from a CLI" was wrong for the
-  // very common case of a second browser tab or another operator's console —
-  // it sent people hunting for a terminal window that did not exist.
+  // (AttachHolder.source, "web" | "ssh") — "from a CLI" would be wrong for the
+  // very common case of a second browser tab or another operator's console,
+  // sending people hunting for a terminal window that does not exist.
   heldHint:
     "Someone else is driving this session. You can watch it live, or take it from them — they get told, and it lands in the audit trail.",
   // Where the transport IS known, say it — it is the one detail that tells an
@@ -385,18 +383,18 @@ export const RUN_COCKPIT = {
   execNoHarness: "exec — shell command, no agent harness",
   // 4. Terminal state: the pane becomes the replay surface in place.
   finishedReplay: "run finished · replay",
-  // The in-place replay pane's two empty states. They exist HERE because the
-  // same two facts are already stated by the Recording tab (states.tsx /
-  // recording.tsx), and the inline copies had ALREADY drifted from those —
-  // a trailing period on one, and a short form that dropped the explanation of
-  // when a recording is produced at all.
+  // The in-place replay pane's two empty states live HERE because the same
+  // two facts are already stated by the Recording tab (states.tsx /
+  // recording.tsx) — a second copy is exactly how a trailing period or a
+  // dropped explanation of when a recording is produced would drift between
+  // them.
   recordingLoading: "Loading the captured session…",
   recordingDisabled: "Session recording is disabled on this deployment",
   recordingMissing:
     "This run has no captured terminal session. A recording is produced once an agent process runs in the sandbox.",
-  // The THIRD fact, and the one the pane used to state as the second: a fetch
-  // that FAILED establishes nothing about the run, so it may not be reported as
-  // "this run has no recording". Same sentence the Recording tab already shows
+  // The THIRD fact: a fetch that FAILED establishes nothing about the run, so
+  // it must not be reported as "this run has no recording". Same sentence the
+  // Recording tab already shows
   // for the same failure (run-detail.tsx's RecordingTab) — hoisted here so the
   // two cannot drift, exactly like the two above it.
   recordingError: "Couldn't load this run's recording.",
@@ -559,7 +557,7 @@ export const WIRE_TO_COPY: Record<WireApprovalKind, ApprovalKind> = {
   credential: "credential",
   egress_domain: "egress",
   tool_call: "tool",
-  // Its OWN kind, not "credential" (UX round B3): mapping it there made
+  // Its OWN kind, not "credential" (UX round B3): mapping it there would make
   // /approvals title the row "Mint a scoped credential" and paint the
   // blast-radius banner over a request that mints nothing.
   credential_reauth: "reauth",
@@ -763,11 +761,10 @@ export const PEOPLE_STEP = {
   SINGLE_USER_SSO_NOTE_DOC: "docs/OPERATIONS.md",
   SINGLE_USER_SSO_NOTE_SUFFIX: ', "Second user, same host".',
   MULTI_USER_LEDE: "People sign in with SSO; each is an admin or a member, per your role map.",
-  // CHANGED (docs/design/people-access-prompt.md §7.1) — the old PREFIX/SUFFIX
-  // pair read as one sentence naming ONE source (WARDYN_OIDC_ROLE_MAP or the
-  // operator allowlist), true when that was the whole role map; a role can now
-  // also come from a console row (the acting-surface table right below this
-  // lede), so leaving it unedited would have the lede contradict the table.
+  // The PREFIX/SUFFIX pair must name all three sources a role can come from —
+  // WARDYN_OIDC_ROLE_MAP, the operator allowlist, AND a console row (the
+  // acting-surface table right below this lede) — not just the env var and
+  // the allowlist, or the lede would contradict the table.
   // PREFIX ends with ONE trailing space (before MULTI_USER_ROLES_VAR is
   // concatenated in) — copy the literal string, do not trim it.
   MULTI_USER_ROLES_PREFIX: "Roles come from the mappings below — your chart's ",
@@ -789,12 +786,10 @@ export const PEOPLE_STEP = {
 // Rendered here ahead of that sitting because the states themselves (the save
 // note, the trusted-CA count) already exist and shipping words for them beats
 // a blank control.
-// 0.7.3 F6 removed the three CONFINEMENT_NETPOL_* rows this block used to
-// carry (app-shell.tsx's header chip was their only consumer) — the netpol
-// verdict now lives on the setup Environment step alone; see
-// docs/design/workspace-providers-prompt.md §7.6 for the retired rows
-// (local/ is gitignored campaign evidence, not a path a shipped file can
-// point at — U-05).
+// 0.7.3 F6: this block carries no CONFINEMENT_NETPOL_* rows (app-shell.tsx's
+// header chip was their only consumer) — the netpol verdict lives on the
+// setup Environment step alone; see docs/design/workspace-providers-prompt.md
+// §7.6 for the retired rows.
 export const SITE = {
   // B2: the site-config save path's own note — a change here does not reach a
   // run already going (the egress sidecar compiles its config once at sandbox
@@ -809,10 +804,10 @@ export const SITE = {
 // ("B-γ → wardyn/copy.ts"), parsed by nothing today.
 //
 // The shell's identity states (B1, R4-F107). Both are about the ONE question
-// the console cannot answer for itself: who is signed in. A failed /me used to
-// render the admin nav off a fail-open guess — indistinguishable from an authz
-// breach to the human reading it — and a failed sign-out used to be a
-// console.error nobody sees.
+// the console cannot answer for itself: who is signed in. A failed /me must
+// not render the admin nav off a fail-open guess — indistinguishable from an
+// authz breach to the human reading it — and a failed sign-out must not
+// silently console.error with nobody seeing it.
 export const SHELL = {
   // B1: settled, but /me never answered. Rendered instead of a guessed nav, so
   // it has to say that the emptiness is ignorance and not a denial.
@@ -861,12 +856,12 @@ export const RUN = {
   // silently contradicted.
   SAVED_POLICY_GOVERNS: (barrier: string, egress: string) =>
     `The stored spec governs this run — barrier floor ${barrier}, ${egress}. Your attached workspace mounts into it; nothing else on this page is merged.`,
-  // 0.7.8, item 3 — exactly one installed class meets the floor: nothing to
-  // ask, so the Seg collapses to this sentence instead (new-run-screen.tsx).
+  // Exactly one installed class meets the floor: nothing to ask, so the Seg
+  // collapses to this sentence instead (new-run-screen.tsx).
   BARRIER_ONLY_QUALIFIER: "— the only barrier this run can use.",
-  // 0.7.8, item 2 — an inconclusive host probe never blocks launch and no
-  // longer leaves every tier guessably selectable either: an untouched pick
-  // sends no confinement_class at all, so the server's own read decides.
+  // An inconclusive host probe never blocks launch and does not leave every
+  // tier guessably selectable either: an untouched pick sends no
+  // confinement_class at all, so the server's own read decides.
   BARRIER_UNKNOWN:
     "Couldn't check which barriers this host has — leave this alone and Wardyn will use the strongest one it can, or pick one yourself.",
 } as const;
@@ -876,7 +871,7 @@ export const RUN = {
 // keeps working unchanged.
 export { TERMINAL } from "./copy/terminal";
 
-// ── DRAFT (M2 canon pending) — the New Run rail's TRUTH block ────────────────
+// DRAFT (M2 canon pending) — the New Run rail's TRUTH block
 // Appendix A finding 1: the rail rendered two unconditional security claims —
 // "Minted at launch, injected by the proxy. Never written into the sandbox." and
 // "Every keystroke and every outbound connection." — neither of which consulted
@@ -897,8 +892,7 @@ export { TERMINAL } from "./copy/terminal";
 export const RECORDING_DISABLED_TITLE = "Session recording is disabled on this deployment";
 // The switch is WARDYN_RECORDING_STORE, not WARDYN_RECORDING_DIR: the DIR only
 // moves the `fs` store's path and turns nothing on (docs/ENV.md), while the
-// chart renders STORE=off whenever persistence.enabled=false. This sentence
-// named the DIR from 0.7.1 until 0.7.5's docs review read it against the chart.
+// chart renders STORE=off whenever persistence.enabled=false.
 export const RECORDING_DISABLED_DESC =
   "No run on this server will ever produce one — set persistence.enabled (Helm) or WARDYN_RECORDING_STORE=pg to turn it on.";
 
@@ -920,11 +914,12 @@ export const RAIL_CREDENTIAL = {
     "Model credential — AWS credentials sign inside the sandbox, so this run holds them for its lifetime.",
   // Whose credential that is — the per_user/shared distinction, in the Barrier
   // chip's shape because it is the same kind of fact: a bound, stated up front.
-  // U-3: OWNERSHIP, not status. This chip is painted from the ROSTER ROW alone —
-  // the rail never reads model_access — so "Your AWS sign-in" (byte-identical to
-  // YOUR_MODEL_KEY.SIGNED_IN_CHIP, which on Getting Started is the SIGNED-IN
-  // success chip) told a member who had not signed in that they had. The row's
-  // fact is whose credential the lane uses, and that is what it now says.
+  // OWNERSHIP, not status. This chip must be painted from the ROSTER ROW
+  // alone — the rail never reads model_access — so it must not reuse "Your
+  // AWS sign-in" (byte-identical to YOUR_MODEL_KEY.SIGNED_IN_CHIP, which on
+  // Getting Started is the SIGNED-IN success chip), which would tell a
+  // member who had not signed in that they had. The row's fact is whose
+  // credential the lane uses, and that is what it says.
   SANDBOX_BEDROCK_CHIP_PER_USER: "Per-person AWS sign-in",
   SANDBOX_BEDROCK_CHIP_SHARED: "Admin's credential",
   // residency "sandbox", subscription: WARDYN_SUBSCRIPTION_INJECT=off, which is

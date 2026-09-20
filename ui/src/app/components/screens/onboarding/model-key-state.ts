@@ -5,7 +5,7 @@
 
 // Appendix A finding 2 + 2b (0.7.4 field report) — ONE total truth table
 // deciding what "Your model key" claims, replacing the two independent
-// readiness signals (`llm_ready` vs `status.model_access`) that used to
+// readiness signals (`llm_ready` vs `status.model_access`) that could
 // disagree on the same page. Pure and synchronous so the card
 // (done/showEmptyForm) and the checklist (member-getting-started.tsx's
 // modelKeyDone) read the SAME predicate — the "one source of truth"

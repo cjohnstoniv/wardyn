@@ -17,10 +17,10 @@ import {
 } from "./login-start-wait";
 import { TERMINAL_STATUS_REASONS } from "../run-status-detail";
 
-// Finding 6 (0.7.4 field report): the pane's readiness budget was 15 consecutive
-// failed polls, called "≈30s". These are the four answers that replace it, as a
-// table — the component test drives the same rules through a real poll loop, but
-// the RULES are decided here.
+// Finding 6 (0.7.4 field report): the pane's readiness wait is graded into four
+// answers by this table, not a single fixed poll-count budget — the component
+// test drives the same rules through a real poll loop, but the RULES are
+// decided here.
 const T0 = 1_000_000;
 
 describe("startWaitVerdict", () => {
@@ -36,8 +36,8 @@ describe("startWaitVerdict", () => {
     ).toBe("starting");
   });
 
-  // The measured cold pull was 131s. A healthy read every two seconds for two
-  // minutes is the case the old budget could not express at all.
+  // The measured cold pull was 131s: a healthy read every two seconds for two
+  // minutes must still grade as merely slow, not a failure.
   it("is 'slow' once a HEALTHY wait passes the slow-start window", () => {
     expect(
       startWaitVerdict({ now: T0 + RUN_POLL_SLOW_START_MS, startedAt: T0, failingSince: null, failures: 0 }),
@@ -58,9 +58,9 @@ describe("startWaitVerdict", () => {
     ).toBe("starting");
   });
 
-  // R1-F8: the same blip PAST the slow-start window is still "starting", never
-  // "slow" — the slow-start sentence claims Wardyn CAN read the sandbox, and the
-  // read it would be claiming that about has just failed.
+  // The same blip past the slow-start window is still "starting", never "slow"
+  // — the slow-start sentence claims Wardyn CAN read the sandbox, and the read
+  // it would be claiming that about has just failed.
   it("never claims the sandbox is readable while the latest read failed", () => {
     expect(
       startWaitVerdict({
@@ -147,8 +147,8 @@ describe("startWaitVerdict", () => {
 // already knows whether this is normal or over, and the pane now reads it.
 describe("startWaitVerdict — the REASON, not the clock", () => {
   it("ends the wait at two seconds on a terminal reason", () => {
-    // "ImagePullBackOff for two seconds is terminal" — the field report's own
-    // words. Under the old rules this run sat there for five minutes.
+    // "ImagePullBackOff for two seconds is terminal" — a terminal reason ends
+    // the wait immediately, not after the slow-start clock runs out.
     expect(
       startWaitVerdict({
         now: T0 + 2_000,
@@ -162,7 +162,8 @@ describe("startWaitVerdict — the REASON, not the clock", () => {
   });
 
   it("every reason the substrate calls terminal ends it, not just the image ones", () => {
-    // round-2 UX S11: which is why the lead-in does not say "image".
+    // Every reason the substrate calls terminal ends the wait, not just the
+    // image ones — which is why the lead-in does not say "image".
     for (const reason of TERMINAL_STATUS_REASONS) {
       expect(
         startWaitVerdict({
@@ -203,10 +204,9 @@ describe("startWaitVerdict — the REASON, not the clock", () => {
     ).toBe("starting");
   });
 
-  // THE REGRESSION PIN over the whole table: a run with no status_detail — a
-  // warm Docker image, a pre-0.7.6 daemon — must grade EXACTLY as it did in
-  // 0.7.5. The rows are the four cases above, re-run with the new inputs absent
-  // and then explicitly null.
+  // A run with no status_detail — a warm Docker image, a pre-0.7.6 daemon —
+  // must grade exactly as it did in 0.7.5. The rows are the four cases above,
+  // re-run with the new inputs absent and then explicitly null.
   it("grades a run with no detail exactly as 0.7.5 did", () => {
     const rows: Array<[StartWaitInput, string]> = [
       [{ now: T0, startedAt: T0, failingSince: null, failures: 0 }, "starting"],

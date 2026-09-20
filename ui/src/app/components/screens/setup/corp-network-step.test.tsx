@@ -107,9 +107,7 @@ describe("the trusted-CA count (F22)", () => {
   });
 });
 
-// ------------------------------------------------------------
 // Pure helpers
-// ------------------------------------------------------------
 describe("pure helpers", () => {
   it("compactEndpoint leaves a short endpoint whole, scheme dropped", () => {
     expect(compactEndpoint("https://registry.npmjs.org")).toBe("registry.npmjs.org");
@@ -147,9 +145,7 @@ describe("pure helpers", () => {
   });
 });
 
-// ------------------------------------------------------------
 // Test probes — five states, both buttons disable+relabel while running
-// ------------------------------------------------------------
 describe("Test probes — real states, never a fake pass, running disables+relabels on BOTH buttons", () => {
   it("proxy Test: idle -> running (disabled, relabeled) -> reached", async () => {
     let resolve!: (v: { state: string; detail: string }) => void;
@@ -268,9 +264,7 @@ describe("Test probes — real states, never a fake pass, running disables+relab
   });
 });
 
-// ------------------------------------------------------------
 // Egress redirection tab — row density, network-only chip, combobox
-// ------------------------------------------------------------
 describe("Egress redirection — rows, network-only chip, the From combobox", () => {
   const redirects: SiteConfig["egress_redirects"] = [
     {
@@ -313,9 +307,8 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     expect(screen.getAllByText("network only")).toHaveLength(1);
   });
 
-  // ui-setup-2: the row's only edit affordance (click-to-expand) was a bare
-  // div with no role/tabIndex/onKeyDown — unreachable and unactivatable from
-  // the keyboard.
+  // The row's only edit affordance (click-to-expand) must be keyboard
+  // reachable and activatable, not a bare div with no role/tabIndex/onKeyDown.
   it("a redirect row is keyboard-focusable and Enter expands its editor (ui-setup-2)", async () => {
     const user = userEvent.setup();
     renderEgress();
@@ -336,8 +329,8 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     expect(screen.getByRole("button", { name: /^cancel$/i })).toBeInTheDocument();
   });
 
-  // WIRE-3: an integration-backed redirect used to render identically to an
-  // untokened one — the operator concluded the token was lost.
+  // WIRE-3: an integration-backed redirect must not render identically to an
+  // untokened one — that reads as the token having been lost.
   it("an integration-sourced token renders its own distinct chip, not the bare-secret one", async () => {
     renderEgress({
       egress_redirects: [{ from: "artifactory.corp.internal", to: "mirror.corp.internal", token_integration_ref: "corp-artifactory" }],
@@ -351,9 +344,9 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
   });
 
   // WIRE-3: typing a bare secret name into the expanded editor's Token field
-  // and saving used to leave the row's OWN token_integration_ref standing
-  // (spread from `...r`) alongside the freshly-set token_secret_ref — a
-  // both-token-sources body the server hard-400s.
+  // and saving must clear the row's own token_integration_ref, not leave it
+  // standing (spread from `...r`) alongside the freshly-set token_secret_ref
+  // — a both-token-sources body the server hard-400s.
   it("saving a bare token typed over an integration-sourced row clears token_integration_ref", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     const { saveSiteConfig, container } = renderEgress({
@@ -389,11 +382,11 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     }
   });
 
-  // F3-F5: a duplicate `from` is producible today — no client/server guard
-  // existed, and the rest of this file keys a redirect BY `from` (there is no
-  // server id), so a collision would silently shadow one row's probe result
-  // with the other's. The plan's own correction rejects index-keying (shifts
-  // every later row's verdict) — disabling Add on the collision is smaller.
+  // A duplicate `from` is producible today — no client/server guard existed,
+  // and the rest of this file keys a redirect BY `from` (there is no server
+  // id), so a collision would silently shadow one row's probe result with
+  // the other's. Index-keying would shift every later row's verdict on
+  // removal, so disabling Add on the collision is the smaller fix.
   it("F3-F5: Add is refused on a `from` collision with an existing redirect, and the reason is shown", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderEgress();
@@ -423,12 +416,12 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     expect(screen.queryByText(/already exists for this from/i)).not.toBeInTheDocument();
   });
 
-  // M1: the client collision check must fold like the server's own
+  // The client collision check must fold like the server's own
   // normalizeRedirectEndpoint (TrimSpace + lowercase scheme+authority) — a
   // different-CASE typed `from` is the SAME redirect once the server
   // normalizes it, and a client check that misses that hole lets the
-  // operator create the exact silently-shadowed duplicate F3-F5 exists to
-  // prevent.
+  // operator create the exact silently-shadowed duplicate the collision
+  // guard above exists to prevent.
   it("M1: a different-case `from` (same authority once folded) is still a collision", async () => {
     const user = userEvent.setup({ pointerEventsCheck: 0 });
     renderEgress();
@@ -461,11 +454,10 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     expect(screen.queryByText(/already exists for this from/i)).not.toBeInTheDocument();
   });
 
-  // UI-SETUP-14: the "From" <Field label> pointed htmlFor="eg-add-from" at an
-  // id the combobox trigger never carried — every sibling field here (To,
-  // Token secret name) is wired correctly, so a screen-reader user tabbing
-  // this form heard THOSE announced by name and this one only by its
-  // placeholder content.
+  // The "From" <Field label> must resolve to an id the combobox trigger
+  // actually carries — every sibling field here (To, Token secret name)
+  // is wired correctly, and a screen-reader user tabbing this form needs
+  // this one announced by name too, not just by its placeholder content.
   it("the From field has an accessible name — getByLabelText resolves it, not just a placeholder", async () => {
     renderStep();
     await userEvent.click(screen.getByRole("tab", { name: /egress redirection/i }));
@@ -521,10 +513,10 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     );
   });
 
-  // B2 (VL-19): `egress_redirects` is compiled into the sidecar at dispatch,
-  // exactly like the upstream proxy — so every redirect save (add, edit,
-  // remove) carries the "applies to runs started from now" note. Before this
-  // pin only the proxy saves said so; a redirect added mid-run looked applied.
+  // `egress_redirects` is compiled into the sidecar at dispatch, exactly
+  // like the upstream proxy, so every redirect save (add, edit, remove)
+  // must carry the "applies to runs started from now" note — a redirect
+  // added mid-run must not read as already applied.
   describe("every redirect save carries the applies-from-now note (B2)", () => {
     it("add", async () => {
       const user = userEvent.setup({ pointerEventsCheck: 0 });
@@ -562,11 +554,12 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
     });
   });
 
-  // UI-SETUP-9: the fire-once guard used to be a ref INSIDE EgressTab, which
-  // the step's tab ternary unmounts on every switch away — a fresh mount
-  // reset the ref to 0 while the lifted testAllSignal counter (owned by
-  // CorpNetworkStep) still held the LAST dispatch, so returning to the tab
-  // read it as new and re-fired the whole real-sandbox sweep, unrequested.
+  // The fire-once guard can't live as a ref inside EgressTab: the step's tab
+  // ternary unmounts EgressTab on every switch away, so a fresh mount would
+  // reset a local ref to 0 while the lifted testAllSignal counter (owned by
+  // CorpNetworkStep) still holds the LAST dispatch — returning to the tab
+  // would then read as new and re-fire the whole real-sandbox sweep,
+  // unrequested.
   it("leaving the Egress tab and coming back does not re-fire 'Test all' — each dispatch runs exactly once", async () => {
     testRedirectMock.mockResolvedValue({ state: "reached", detail: "reachable via the mirror" });
     let actions: CorpStepActions | null = null;
@@ -591,10 +584,8 @@ describe("Egress redirection — rows, network-only chip, the From combobox", ()
   });
 });
 
-// ------------------------------------------------------------
 // The redirect editor's identity — keyed by `from`, matching testStates/
 // redirectProbes, not a positional array index.
-// ------------------------------------------------------------
 describe("Egress redirect editor — expansion keyed by `from`, not a shifting index (UI-SETUP-2)", () => {
   // A minimal stateful stand-in for the orchestrator's own siteConfig
   // round-trip: mutate()/saveSiteConfig "land" by writing straight back into
@@ -652,12 +643,10 @@ describe("Egress redirect editor — expansion keyed by `from`, not a shifting i
   });
 });
 
-// ------------------------------------------------------------
 // The gate — no escape but the honest ones (no_runner, or naming what still
 // needs fixing). "Skip this step" and the "Manage in Integrations" link are
 // GONE: this step is mandatory, and the very next step IS Integrations, so
 // the cross-link was noise.
-// ------------------------------------------------------------
 describe("No skip control, no Integrations cross-link — this step is mandatory", () => {
   it("never renders a Skip button, configured or not", () => {
     const { rerender } = renderStep({ siteConfig: null });
@@ -686,11 +675,9 @@ describe("No skip control, no Integrations cross-link — this step is mandatory
   });
 });
 
-// ------------------------------------------------------------
 // The gate itself — reporting probe/visit facts upward via onGateChange, and
 // seeding back from a prior visit's gate (the whole point of lifting this
 // state: CorpNetworkStep unmounts when the operator navigates away).
-// ------------------------------------------------------------
 describe("Gate reporting — proxy test and redirect tests report upward (no visit tracking: no rung demands one)", () => {
   it("a reached proxy test calls onGateChange with the full result (probeRunning batched off in the same patch)", async () => {
     testProxyMock.mockResolvedValueOnce({ state: "reached", detail: "reached in 42ms" });
@@ -723,12 +710,13 @@ describe("Gate reporting — proxy test and redirect tests report upward (no vis
     expect(screen.getByRole("button", { name: /^test again$/i })).toBeEnabled();
   });
 
-  // UI-SETUP-3: re-entering the step MID-probe (jump to another rail step and
-  // back while the first click's sandbox is still out) used to seed only from
-  // gate.proxyProbe, which is undefined until the probe resolves — the panel
-  // read "Not tested" with an ENABLED Test button while the footer, reading
-  // the same gate.probeRunning the orchestrator carries, said "Probe in
-  // flight". Clicking the panel's button launched a duplicate probe.
+  // Re-entering the step MID-probe (jump to another rail step and back while
+  // the first click's sandbox is still out) must not seed only from
+  // gate.proxyProbe, which is undefined until the probe resolves — otherwise
+  // the panel reads "Not tested" with an ENABLED Test button while the
+  // footer, reading the same gate.probeRunning the orchestrator carries,
+  // says "Probe in flight", and clicking the panel's button launches a
+  // duplicate probe.
   it("re-entering the step MID-probe seeds 'Testing…' (disabled) instead of a false 'Not tested' with an enabled button", () => {
     renderStep({ gate: { ...unsetGate(), probeRunning: true } });
     expect(screen.getByText(/starting a throwaway sandbox/i)).toBeInTheDocument();
@@ -772,11 +760,11 @@ describe("Gate reporting — proxy test and redirect tests report upward (no vis
     expect(screen.queryByText("Not tested")).not.toBeInTheDocument();
   });
 
-  // The bug "Test all" hit with 2+ redirects: onProbeResult used to
-  // materialize its patch from the render-time gate.redirectProbes, so
-  // concurrent results clobbered each other and only the LAST survived — the
-  // mandatory gate could never unlock even with every row green. Both `from`
-  // keys must accumulate regardless of resolve order.
+  // "Test all" with 2+ redirects: onProbeResult must not materialize its
+  // patch from the render-time gate.redirectProbes, or concurrent results
+  // clobber each other and only the last survives — the mandatory gate could
+  // then never unlock even with every row green. Both `from` keys must
+  // accumulate regardless of resolve order.
   it("two configured redirects, both tested via 'Test all': BOTH `from` keys accumulate in the gate", async () => {
     testRedirectMock.mockImplementation(async (from: string) => ({ state: "reached", detail: `reached ${from}` }));
     const onGateChange = vi.fn();
@@ -805,12 +793,10 @@ describe("Gate reporting — proxy test and redirect tests report upward (no vis
   });
 });
 
-// ------------------------------------------------------------
 // One Test button per screen + the footer's fix-it actions. While the
 // orchestrator's gate (gateResult) is offering an action, the panel's own
 // button — and the custom block's — is suppressed: the gate row is the one
 // launch point. The actions the step registers are what that row dispatches.
-// ------------------------------------------------------------
 describe("One launch point — gateResult hides the panel button; registered actions drive the step", () => {
   const offWithProbe = { on: false, head: "x", reason: "y", tone: "warning", action: { label: "Test connectivity", kind: "probe" } } as const;
 
@@ -887,15 +873,13 @@ describe("One launch point — gateResult hides the panel button; registered act
 });
 
 
-// ---------------------------------------------------------------------------
-// M7(a) — one verdict, one heading, one owner of the fix.
+// One verdict, one heading, one owner of the fix.
 //
-// The regression these pin: the probe verdict used to be a bare chip inside the
-// PROXY panel while its headline and advice hung off the step footer, so a run
-// that never started read under the proxy's heading with the proxy's
+// The probe verdict must not render as a bare chip inside the PROXY panel
+// while its headline and advice hang off the step footer — that would make
+// a run that never started read under the proxy's heading with the proxy's
 // instruction. Every branch below asserts the verdict names itself and names
 // what to do next, in the panel, beside the result.
-// ---------------------------------------------------------------------------
 describe("Corporate network — each probe verdict under its own heading", () => {
   beforeEach(() => {
     cleanup();
@@ -912,7 +896,7 @@ describe("Corporate network — each probe verdict under its own heading", () =>
   it("blocked: the proxy's own headline AND the proxy's own next action, in the panel", async () => {
     await probe({ state: "blocked", detail: T.TEST_BLOCKED });
     expect(await screen.findByText(T.GATE_HEAD_BLOCKED)).toBeInTheDocument();
-    // The advice used to live ONLY in the step footer.
+    // The advice must render in the panel, not only in the step footer.
     expect(screen.getByText(T.GATE_BLOCKED)).toBeInTheDocument();
   });
 

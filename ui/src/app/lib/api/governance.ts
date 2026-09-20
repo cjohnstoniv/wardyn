@@ -222,11 +222,11 @@ export const governance = {
   //
   // The dry run runs THE resolver server-side —
   // Store.ResolveGovernanceProfile, the same call the enforcement path makes on
-  // every run. There is deliberately NO client-side precedence here: this
-  // screen used to re-read GET /governance and re-implement the SQL ORDER BY in
-  // TypeScript, and a second implementation of the precedence rule is a second
-  // implementation of the answer. It saves nothing and enforces nothing, but it
-  // must not be able to disagree with what actually binds a member.
+  // every run. There is deliberately NO client-side precedence here: a second
+  // implementation of the SQL ORDER BY precedence rule in TypeScript is a
+  // second implementation of the answer. It saves nothing and enforces
+  // nothing, but it must not be able to disagree with what actually binds a
+  // member.
   async previewGovernance(input: GovernancePreviewInput): Promise<GovernancePreview> {
     const res = await wfetch("/governance/preview", { method: "POST", body: JSON.stringify(input) });
     return asJson<GovernancePreview>(res);

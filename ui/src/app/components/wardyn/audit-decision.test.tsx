@@ -101,7 +101,7 @@ describe("ruleSourceLabel", () => {
     });
     // A name that never resolved is not the address-range floor: labelled as
     // one (or as the generic guard) the operator widens an SSRF control over a
-    // DNS outage, which is the deny the console must not mis-name (F055).
+    // DNS outage, which is the deny the console must not mis-name.
     expect(ruleSourceLabel("builtin:resolve-failed")).toEqual({
       label: "Refused because the name did not resolve, not by policy or the address rule",
       tone: "danger",

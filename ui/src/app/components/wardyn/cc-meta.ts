@@ -87,8 +87,8 @@ export const CC_META: Record<ConfinementClass, CCMeta> = {
 export const CONFINEMENT_CONSTANT_NOTE =
   "Whatever the barrier, every run still gets Wardyn's egress filtering, short-lived brokered credentials, human approvals, and full audit — those are set by policy, not the barrier. The barrier only decides how strongly the sandbox is walled off from your machine.";
 
-// ── Tier comparison matrix (E1) ─────────────────────────────────────────────
-// The pricing-table view (tiers as columns, protections as rows). The ONLY new
+// Tier comparison matrix — the pricing-table view (tiers as columns,
+// protections as rows). The ONLY new
 // tier metadata — no parallel store: each row just GRADES the tiers; the actual
 // wording (protects / doesntProtect) still lives in CC_META above. Three states,
 // rendered with the same CircleCheck/CircleAlert/CircleX + success/warning/danger

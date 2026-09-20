@@ -132,7 +132,7 @@ describe("record helpers — read the server-authored record fields", () => {
     expect(newEgressHosts(w, "code")).toEqual(["registry.npmjs.org"]);
   });
 
-  // W20-S1-1: a host already covered by an effective egress:required
+  // A host already covered by an effective egress:required
   // requirement row (e.g. approved earlier via the workspace wizard, never
   // written to the legacy approved_egress/profile lanes) must NOT be offered
   // again — the server's own dedup (handlePromoteRecordEgress) drops it, so
@@ -164,7 +164,7 @@ describe("record helpers — read the server-authored record fields", () => {
     expect(newEgressHosts(w, "code")).toEqual(["registry.npmjs.org"]);
   });
 
-  // W20-S1-1: a platform-plumbing host (the model-provider harness host every
+  // A platform-plumbing host (the model-provider harness host every
   // session needs, or the console's own origin) must land in its OWN bucket
   // — never "approvable" (nothing to click Approve for) and never
   // "alreadyApproved" (that claims an operator decision that never
@@ -391,7 +391,7 @@ describe("sessionStage — record open → recorded → replaying confined → r
     expect(sessionStage(w, "s")).toBe("replayed");
   });
 
-  // W20-capture-store-1: a re-recorded session must NOT inherit the PRIOR
+  // A re-recorded session must NOT inherit the PRIOR
   // recording's confined verdict — verify:<key> is keyed only on the session
   // key, so it silently survives a re-record untouched.
   it("re-record after replay: the stale confined verdict must not outrank the fresh, unverified open capture", () => {

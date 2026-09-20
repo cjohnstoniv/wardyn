@@ -9,9 +9,9 @@
 // It holds requests only: a held approval or a run awaiting confirmation.
 // A failed or killed run needs review too, but it is a REPORT, not a request —
 // it stays with the work it belongs to and carries a danger rail there
-// (CONSOLE-RULES §5's precedence note). The board used to flatten both into one
-// amber treatment, which made "someone is waiting on you" and "something is
-// over" look identical.
+// (CONSOLE-RULES §5's precedence note). A single flattened amber treatment for
+// both would make "someone is waiting on you" and "something is over" look
+// identical, so the two stay visually distinct.
 //
 // A run is in this lane XOR in a group, never both — the screen filters the
 // lane's runs out before grouping the rest.

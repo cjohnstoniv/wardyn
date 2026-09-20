@@ -3,12 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// DrivesScreen — the admin's drive registry (0.7 user drives, slice D5a). Every
-// assertion reads its expected string from a copy module rather than retyping
-// it, the convention governance-screen.test.tsx already follows: these tests
-// fail the moment a rendered string stops coming from the canon.
+// DrivesScreen — the admin's drive registry. Every assertion reads its
+// expected string from a copy module rather than retyping it, the convention
+// governance-screen.test.tsx already follows: these tests fail the moment a
+// rendered string stops coming from the canon.
 //
-// THE REGISTRY HALF. The allocation list, the form that writes one and the
+// The registry half. The allocation list, the form that writes one and the
 // preview live in allocations.test.tsx — split off at the seam their own source
 // has when this file reached the 1000-line ceiling scripts/check-file-size.sh
 // holds. The no-own-copy pin below still covers all four components, because it
@@ -211,13 +211,13 @@ describe("DrivesScreen — states", () => {
   });
 
   // LAYOUT, which textContent cannot see. Note is a flex COLUMN and withMono
-  // returns an array, so handing it to Note directly made every contiguous text
-  // run and the `disk_mib` Mono a flex item of its own: the one frozen sentence
-  // painted as three stacked lines with the identifier orphaned on a full-width
-  // line. Both existing assertions passed throughout — textContent concatenates
-  // and Playwright's getByText normalises whitespace — so the DOM shape is what
-  // has to be pinned: the flex column gets exactly ONE child, and that child
-  // holds the whole sentence.
+  // returns an array — handing it to Note directly would make every
+  // contiguous text run and the `disk_mib` Mono a flex item of its own,
+  // painting the one frozen sentence as three stacked lines with the
+  // identifier orphaned on a full-width line. textContent concatenates and
+  // Playwright's getByText normalises whitespace, so neither assertion above
+  // can see this — the DOM shape is what has to be pinned: the flex column
+  // gets exactly ONE child, and that child holds the whole sentence.
   it("the honesty note is ONE flex item, so the sentence flows as a paragraph", async () => {
     renderScreen();
     await screen.findByText(HOMES.name);
@@ -421,8 +421,8 @@ describe("DrivesScreen — the editor offers only this runner's backends (Q3)", 
 
     // Back to managed: the home segment is concatenated into the object name
     // that `docker volume ls` and `kubectl get pvc` print, so publishing the
-    // subject there is refused by the API — for email_local always, and for
-    // sub since 2026-09-03. The console must not offer a menu that 400s.
+    // subject there is refused by the API for both email_local and sub. The
+    // console must not offer a menu that 400s.
     await userEvent.click(within(editor).getByText(DRIVES.BACKEND_K8S_PVC));
 
     expect(within(editor).getByText(DRIVES.HOME_SUB).closest("button")).toBeDisabled();
@@ -603,7 +603,7 @@ describe("DrivesScreen — the write gate", () => {
     // OperatorProvider defaults operator TRUE (fail-open), so the restricted
     // case is the one worth pinning: it must come from the provider.
     //
-    // A FIXTURE SPLICE, and it claims no more than that. GET /drives is
+    // A fixture splice, and it claims no more than that. GET /drives is
     // operatorOnly, so no REAL caller both reads this snapshot and lacks the
     // tier — what is pinned here is the wiring, that every write control takes
     // its `disabled` from the provider rather than from a local default. What a
@@ -663,7 +663,7 @@ describe("DrivesScreen — the write gate", () => {
   });
 });
 
-// THE canon pin: a component in this directory may render copy, never author
+// The canon pin: a component in this directory may render copy, never author
 // it. Anything a reader sees comes from user-drives-copy.ts (frozen §7) or the
 // modules §7.1 defers to — so a quoted or bare prose string in this source is a
 // canon break, not a style question.

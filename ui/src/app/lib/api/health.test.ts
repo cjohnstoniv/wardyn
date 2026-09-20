@@ -98,7 +98,7 @@ describe("health — site-config integrations round-trip", () => {
     expect(body.scm_hosts).toEqual(["github.com", "gitlab.com"]);
   });
 
-  // R4/F029: the SECOND server-owned key on the same document repeated the
+  // The SECOND server-owned key on the same document repeated the
   // first one's bug because the strip was written by name. Derived from
   // SERVER_OWNED_SITE_CONFIG_KEYS so a THIRD one cannot ship unstripped.
   it("strips EVERY server-owned key a GET echoes, not just integrations", async () => {
@@ -138,9 +138,9 @@ describe("health — site-config integrations round-trip", () => {
   });
 });
 
-// F6-F6 (Appendix A V8): siteConfigPutResponse's four advisory signals used to
-// be discarded outright — putSiteConfig returned void — so an admin saving a
-// proxy config naming a missing secret was told it saved cleanly.
+// F6-F6 (Appendix A V8): siteConfigPutResponse's four advisory signals must
+// reach the caller — discarding them (putSiteConfig returning void) tells an
+// admin saving a proxy config naming a missing secret that it saved cleanly.
 describe("health.putSiteConfig() — the four advisory signals", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -324,15 +324,13 @@ describe("health.whoami() — the user-drive pair", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// R4/F066 — the console's reachability oracle has to be able to SEE a store
+// R4/F066 — the console's reachability oracle has to be able to see a store
 // outage. /healthz cannot: handleHealthz writes `"status": "ok"` as a literal
 // and never touches the store (internal/api/healthz.go), on purpose — liveness
 // must not restart a pod because Postgres failed over. /readyz is the probe
 // that already Pings it (internal/api/security_headers.go:124-136), and this
 // reader gives it the same {}-on-no-answer contract health() has, so App.tsx
 // can treat "not ready" and "not live" as one verdict without a catch.
-// ---------------------------------------------------------------------------
 describe("health.readyz — the store probe /healthz deliberately isn't", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
   beforeEach(() => {
@@ -378,8 +376,8 @@ describe("health.readyz — the store probe /healthz deliberately isn't", () => 
     expect((await health.readyz()).status).toBeUndefined();
   });
 
-  // F6-F1: handleReadyz itself won't hang (it bounds its own Ping), but the
-  // live risk is the TRANSPORT — an LB/ingress that accepts a connection with
+  // handleReadyz itself won't hang (it bounds its own Ping), but the
+  // live risk is the transport — an LB/ingress that accepts a connection with
   // no ready backend behind it. Before this fix readyz() carried no signal at
   // all, so that case froze the {}-on-no-answer contract every other branch
   // above already gets: `unreachable` would freeze at its LAST known value
@@ -420,8 +418,7 @@ describe("health.readyz — the store probe /healthz deliberately isn't", () => 
   });
 });
 
-// ---------------------------------------------------------------------------
-// R4/F010 — SOURCE PARITY for the GET /me wire mirror.
+// Source parity for the GET /me wire mirror.
 //
 // The sibling run-wire mirror is pinned MECHANICALLY (runs.wire.fields.test.ts
 // :280-343: it readFileSync's the Go source, extracts the json tags, and fails
@@ -439,7 +436,6 @@ describe("health.readyz — the store probe /healthz deliberately isn't", () => 
 // handleMe composes its body as a map literal plus `body["…"] = …` assignments
 // rather than a tagged struct, so the keys are read from those two shapes; the
 // drive sub-object IS a struct (meUserDrive) and is read from its json tags.
-// ---------------------------------------------------------------------------
 
 // Walk up to go.mod so the file works from ui/ (vitest's cwd) or anywhere under
 // it — the same discipline as runs.wire.fields.test.ts:246-253.
@@ -505,7 +501,7 @@ describe("source parity — GET /me's Go body vs the TS Me mirror (F010)", () =>
   const meGo = readFileSync(join(root, "internal/api/me.go"), "utf8");
   // Every non-test internal/api/user_drives*.go as one text: meUserDrive moved to
   // user_drives_me.go in the size-cap split (53674b46) — a pure move must not redden
-  // the F010 parity check, and the struct name is unique across the set.
+  // this parity check, and the struct name is unique across the set.
   const drivesGo = readdirSync(join(root, "internal/api"))
     .filter((n) => /^user_drives.*\.go$/.test(n) && !n.endsWith("_test.go"))
     .sort()

@@ -79,7 +79,7 @@ export function proxyDetected(d?: HostProxyDetection): boolean {
 
 // A URL "has credentials" (from the FE's own perspective — HostProxySetting's
 // detected value is already server-masked, this is about what the operator is
-// TYPING right now) when it parses with a non-empty username.
+// typing right now) when it parses with a non-empty username.
 export function hasUserinfo(url: string): boolean {
   try {
     return !!new URL(url).username;
@@ -116,11 +116,11 @@ function ConfigStatusLine({ tone, children }: { tone: "success" | "neutral" | "w
   );
 }
 
-// W13-S1-1: the server's own graded verdict on this host's proxy detection
+// The server's own graded verdict on this host's proxy detection
 // (internal/api/setup_checks.go's hostProxyCheck) — same Detail/Fix the
-// Review step's checks list would show, INCLUDING the one line that actually
+// Review step's checks list would show, including the one line that actually
 // explains an unreachable upstream (a loopback-bound detected proxy) and its
-// fix (`wardyn setup proxy-relay`). Review sits AFTER this mandatory gate, so
+// fix (`wardyn setup proxy-relay`). Review sits after this mandatory gate, so
 // an operator stuck here on a bad proxy could never reach it — surface the
 // same diagnosis right here instead of only downstream of the gate it causes.
 function HostProxyCheckNote({ check }: { check: SetupCheck }) {
@@ -219,17 +219,17 @@ function EvidenceBlock({
   );
 }
 
-// M7(a) — a verdict's OWN headline and tone, beside the verdict itself.
-//
-// The gap this closes: every non-reached verdict used to render as a bare chip
-// inside the proxy panel while its headline and its advice hung off the STEP
-// FOOTER (setup-layout's gate row), so a runner problem — a probe sandbox that
-// never started, or one that started and never reported back — read under the
-// proxy's heading with the proxy's instruction. An operator sent to reconfigure
-// a proxy that was never tested is being sent to fix the wrong thing.
+// A verdict's own headline and tone sit beside the verdict itself, closing the
+// gap where a non-reached verdict would otherwise render as a bare chip inside
+// the proxy panel while its headline and advice hung off the step footer
+// (setup-layout's gate row): a runner problem — a probe sandbox that never
+// started, or one that started and never reported back — must not read under
+// the proxy's heading with the proxy's instruction. An operator sent to
+// reconfigure a proxy that was never tested is being sent to fix the wrong
+// thing.
 //
 // Zero new copy: every string below already exists in lib/integrations.ts, and
-// the mapping is the SAME ladder corpNetworkGate walks (steps.ts) — the two are
+// the mapping is the same ladder corpNetworkGate walks (steps.ts) — the two are
 // deliberately identical so the panel and the footer can never name two
 // different owners for one verdict. Only a real `blocked` (intercepted
 // included) is warning-toned, because only it names something fixable on this
@@ -348,7 +348,7 @@ function ProxyTestBlock({
   const running = state.kind === "running";
   const hasResult = state.kind === "done";
   const customPass = state.kind === "done" && state.result.state === "reached" && state.result.custom;
-  // M7(a): the verdict's own headline, note and tone. Null on a pass.
+  // The verdict's own headline, note and tone. Null on a pass.
   const brief = state.kind === "done" ? proxyVerdictBrief(state.result) : null;
   return (
     <div
@@ -361,7 +361,7 @@ function ProxyTestBlock({
         // around a custom pass reads differently from a verified one.
         customPass
           ? "border-dashed border-info/40"
-          : // M7(a): the frame carries the verdict's tone, so a blocked probe
+          : // The frame carries the verdict's tone, so a blocked probe
             // looks different from a probe that never ran. Colour never says it
             // alone — the headline and the toned Chip inside say it in words.
             brief?.tone === "warning"
@@ -389,14 +389,14 @@ function ProxyTestBlock({
           </>
         )}
         {state.kind === "done" && (
-          // F3-F9: the probe VERDICT is announced to a screen reader the moment
+          // F3-F9: the probe verdict is announced to a screen reader the moment
           // it lands — the ticker above (elapsedSec, "running" branch) stays
-          // OUTSIDE this region on purpose, or a live announcement would fire
+          // outside this region on purpose, or a live announcement would fire
           // every second while the sandbox is out.
           <div role="status" aria-live="polite">
-            {/* M7(a): headline first, then the chip, then the wire detail, then
+            {/* Headline first, then the chip, then the wire detail, then
                 this verdict's own note. The order is the argument — the
-                operator reads WHAT happened before they read who owns it. */}
+                operator reads what happened before they read who owns it. */}
             {brief && <p className="text-body font-medium text-foreground">{brief.head}</p>}
             <ProxyVerdict result={state.result} />
             {/* no_runner is the one state with no wire detail worth quoting:
@@ -436,7 +436,7 @@ function ProxyTestBlock({
                 <p className="text-meta leading-snug text-muted-foreground">{T.TEST_STANDING}</p>
               </>
             )}
-            {/* Revealed ONLY after a failure — never on arrival, or everyone
+            {/* Revealed only after a failure — never on arrival, or everyone
                 reaches for it instead of fixing the proxy and the gate goes
                 decorative. A recovery affordance, not configuration. Covers
                 intercepted too (it is a blocked flavor). No button of its own
@@ -491,8 +491,8 @@ function ProxyTestBlock({
   );
 }
 
-// Everything ProxyTestBlock needs, owned by CorpNetworkStep (NOT this tab):
-// the probe can be fired from the step's gate row while EITHER tab is up, and
+// Everything ProxyTestBlock needs, owned by CorpNetworkStep (not this tab):
+// the probe can be fired from the step's gate row while either tab is up, and
 // its state must survive switching tabs — so the tab only renders it.
 export interface ProxyProbeBundle {
   state: ProbeUiState;
@@ -518,9 +518,9 @@ export function HostProxyTab({
 }: {
   siteConfig: SiteConfig | null;
   detection: HostProxyDetection | undefined;
-  /** See EvidenceBlock/HostProxyCheckNote (W13-S1-1) — the server's graded verdict on this detection. */
+  /** See EvidenceBlock/HostProxyCheckNote — the server's graded verdict on this detection. */
   hostProxyCheck?: SetupCheck;
-  /** W12-W12-C-3: the store's actual secret names — lets this tab notice when
+  /** The store's actual secret names — lets this tab notice when
    *  a configured upstream_proxy_secret_ref no longer resolves to anything
    *  (deleted/renamed elsewhere), and gates AddSecretDialog's overwrite warning.
    *  Undefined (not `[]`) means unknown, not empty — see CorpNetworkStep's doc. */
@@ -539,8 +539,7 @@ export function HostProxyTab({
   const [selected, setSelected] = React.useState(0);
 
   // Seed from the freshest doc exactly once — a later reload (Re-check) must
-  // never stomp an in-progress edit. (Inherited from the retired HostProxyStep,
-  // whose seededRef this is; this step is the only proxy surface left.)
+  // never stomp an in-progress edit.
   const seededRef = React.useRef(false);
   React.useEffect(() => {
     if (seededRef.current || !siteConfig) return;
@@ -558,7 +557,7 @@ export function HostProxyTab({
   const candidates = proxyCandidateValues(detection);
   const configured = isProxyConfigured(siteConfig);
   const showUse = !useSecret && !configured;
-  // W12-W12-C-3: a referenced secret can vanish out from under this config —
+  // A referenced secret can vanish out from under this config —
   // deleted or rotated away from the Secrets screen, which has no idea this
   // ref exists to warn about it — leaving "Chaining through the URL in secret
   // X" claiming a proxy that no longer resolves to anything. secretNames is
@@ -627,7 +626,7 @@ export function HostProxyTab({
 
       <div className="space-y-3 rounded-xl border border-border bg-card p-3.5">
         <BlockLabel>{T.CONFIG_HEAD}</BlockLabel>
-        {/* Driven by what's actually SAVED (siteConfig), never by which input
+        {/* Driven by what's actually saved (siteConfig), never by which input
             mode (useSecret) happens to be open — switching to "Enter a URL
             instead" on a secret-only config must keep naming the secret, not
             claim "Chaining through" a plain URL that was never set. */}
@@ -732,7 +731,7 @@ export function HostProxyTab({
                 >
                   {saving ? <Loader2 className="size-3.5 animate-spin" /> : "Save"}
                 </Button>
-                {/* W13-S1-1: an unreachable saved proxy hard-locks the operator
+                {/* An unreachable saved proxy hard-locks the operator
                     behind the mandatory Corporate network gate — Save alone
                     can't get back to "no proxy" (it refuses an empty URL to
                     guard against an accidental clear, above), so "no proxy" needs
@@ -819,10 +818,10 @@ export function HostProxyTab({
         onOpenChange={setAddSecretOpen}
         lockName
         initialName={secretName}
-        // W12-W12-C-3: without this, the dialog's own overwrite-confirm gate
+        // Without this, the dialog's own overwrite-confirm gate
         // (secrets.tsx) never fires — an operator typing an in-use name here
         // silently clobbers whatever that secret already held, no different
-        // from every other AddSecretDialog caller that DOES pass this.
+        // from every other AddSecretDialog caller that does pass this.
         existingNames={secretNames}
         onSaved={(name) => {
           setAddSecretOpen(false);

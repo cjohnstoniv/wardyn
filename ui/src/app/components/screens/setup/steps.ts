@@ -16,10 +16,8 @@ import { isUsable } from "../../../lib/workspace-status";
 import { T } from "../../../lib/integrations";
 import { PROVIDERS } from "../../../lib/workspace-providers-copy";
 
-// ------------------------------------------------------------
 // Steps — ids/labels FROZEN (e2e tests target them). The single source of truth
 // for the step contract; the orchestrator imports these rather than redefining.
-// ------------------------------------------------------------
 // EVERY hands-on demo is its own funnel sub-step (so they render as separate
 // items in the rail). Getting Started is now the ONE demos surface — /demos is
 // a redirect — so this is the whole catalog, not a hand-kept subset of it.
@@ -75,7 +73,7 @@ export type SetupStepId =
 const DEMO_TITLES = Object.fromEntries(DEMOS.map((d) => [d.id, d.title])) as Record<DemoStepId, string>;
 
 // id→label lookup — the rail and the layout footer both need it; export once
-// here instead of each rebuilding the same map (F5).
+// here instead of each rebuilding the same map.
 export const STEP_LABEL: Record<SetupStepId, string> = {
   environment: "Environment",
   people: "People",
@@ -114,10 +112,8 @@ export const STEP_HEADING: Record<SetupStepId, string> = {
   review: "Review readiness",
 };
 
-// ------------------------------------------------------------
 // Phases (redesign) — groups the FROZEN steps above for the funnel layout.
 // Translated 1:1 from the design's PHASES9 onto the real ids above.
-// ------------------------------------------------------------
 export interface PhaseDef {
   id: string;
   label: string;
@@ -202,13 +198,11 @@ export const OPTIONAL_STEPS = new Set<SetupStepId>([
   "workspaces",
 ]);
 
-// ------------------------------------------------------------
 // Honest per-step badges (B4) — reflect reality, never a false "Done".
 // stepBadges/stepDone carry one design delta (see the workspaces case below).
-// ------------------------------------------------------------
 export type StepBadge = { text: string; tone: "success" | "warning" | "neutral" | "info" };
 
-// DRAFT (M2 canon pending) — B7-F2 (UI half): the Review badge must not read
+// DRAFT (M2 canon pending) — the Review badge must not read
 // "Ready to launch" while a confinement floor warning is standing (every run
 // on the default policy is refused before it launches) — see stepBadges' review case below.
 export const REVIEW_BADGE_FLOOR_WARN = "Ready, except the default policy";
@@ -430,18 +424,17 @@ export function stepBadges(
         : { text: "Optional", tone: "neutral" },
     ...demoBadges,
     // Same ladder: Optional -> Skipped (orchestrator's visited override) ->
-    // Ready · N providers (Q10: git rows decide the one done rule for this
+    // Ready · N providers (git rows decide the one done rule for this
     // step; the Agents-tab count rides the card summary, not this badge).
     providers:
       providerCount > 0
         ? { text: PROVIDERS.STEP_BADGE_READY(providerCount), tone: "success" }
         : { text: "Optional", tone: "neutral" },
-    // An onboarded workspace IS a ready workspace as of 0.5 — see
-    // lib/workspace-status.ts. This badge used to split them, showing "In
-    // progress" for anything not yet scanned and "N of M onboarded" while a
-    // scan caught up. With the scan gone, "In progress" became a state nothing
-    // could ever leave: the rail read "Workspaces · In progress" forever next to
-    // a workspace a run could attach immediately.
+    // An onboarded workspace IS a ready workspace — see lib/workspace-status.ts.
+    // There is no scan step left to split "In progress" from "N of M
+    // onboarded" over: with no scan, "In progress" would be a state nothing
+    // could ever leave, and the rail would read "Workspaces · In progress"
+    // forever next to a workspace a run could attach immediately.
     workspaces: workspaces.length
       ? { text: `Ready · ${workspaces.length} onboarded`, tone: "success" }
       : { text: "Optional", tone: "neutral" },
@@ -453,7 +446,7 @@ export function stepBadges(
     // one-click run — but that's a nudge, not a gate).
     review: status.checks.some((c) => c.status === "fail")
       ? { text: "Needs attention", tone: "warning" }
-      : // B7-F2 (UI half): `ready` stays the documented barrier-only signal (4
+      : // `ready` stays the documented barrier-only signal (4
         // other consumers read it that way) — only this badge is wrong when the
         // confinement floor exceeds what this runner advertises (its own check
         // stays a `warn`, by design: profile/stored-policy runs are unaffected).

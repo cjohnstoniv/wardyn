@@ -43,9 +43,9 @@ describe("isLikelyStartUrl", () => {
   });
 });
 
-// W12-W12-C-6 + W5-S1-7: the "done" phase's success line used to be a hardcoded
-// "your Claude subscription is connected" regardless of provider, so an AWS SSO
-// capture ended with the same Anthropic-only claim. doneLabel is per-provider.
+// doneLabel is per-provider: a hardcoded "your Claude subscription is
+// connected" regardless of provider would end an AWS SSO capture with the
+// same Anthropic-only claim.
 describe("loginFlow doneLabel", () => {
   it("names the provider actually connected, not always Claude", () => {
     expect(loginFlow("anthropic").doneLabel).toMatch(/claude subscription/i);
@@ -54,12 +54,12 @@ describe("loginFlow doneLabel", () => {
   });
 });
 
-// ─── the consent gate ────────────────────────────────────────────────────────
+// The consent gate.
 //
 // Owner report, verbatim: "you see a dialog then all of a sudden terminal then
 // all of a sudden a popup asking for auth. We should alert the user before
-// this happens what to expect and what's required from them." The pane used to
-// launch the sandbox ON MOUNT; now nothing happens until Start login.
+// this happens what to expect and what's required from them." Nothing
+// launches the sandbox except Start login.
 
 // lastAttachOutput captures the onOutput callback the pane hands AttachTerminal
 // on its most recent render, so a test can feed it PTY chunks directly — the
@@ -153,10 +153,10 @@ describe("HarnessLoginPane — the consent gate", () => {
     expect(harnessLoginMock).not.toHaveBeenCalled();
   });
 
-  // V1 r2 LOW: under a per_user agent row the server signs in against the ROW's
-  // stored sso_start_url and IGNORES whatever is typed here, so asking was a
-  // field that could not take effect — and every member had to hunt down a URL
-  // their admin had already entered.
+  // Under a per_user agent row the server signs in against the ROW's stored
+  // sso_start_url and IGNORES whatever is typed here, so asking is a field
+  // that cannot take effect — and every member would have to hunt down a URL
+  // their admin already entered.
   describe("startURLManaged — the org's portal is a fact, not a question", () => {
     it("skips the start-URL gate for the note, and launches with an empty start URL", async () => {
       render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
@@ -185,9 +185,9 @@ describe("HarnessLoginPane — the consent gate", () => {
 
   // Appendix A finding 1's fail-fast ask, pane half: wardyn-aws-sso prints a
   // fail marker on a refused capture (a wrong-account pin, a portal error) and
-  // NEVER prints doneMarker in that case — before this latch the pane just sat
-  // on "waiting" forever with no explanation, the operator's only signal a
-  // terminal that stopped scrolling.
+  // NEVER prints doneMarker in that case. Without this latch, the pane would
+  // sit on "waiting" forever with no explanation, the operator's only signal
+  // a terminal that stopped scrolling.
   describe("the helper's fail marker ends the wait with why", () => {
     async function attachAwsRun(onDone = vi.fn(), onCancel = vi.fn()) {
       render(<HarnessLoginPane provider="aws" startURLManaged onDone={onDone} onCancel={onCancel} />);
@@ -203,11 +203,11 @@ describe("HarnessLoginPane — the consent gate", () => {
       expect(screen.queryByRole("alert")).toBeNull();
     });
 
-    // R5 (fix-first review pass): the run is already killed by this point, so
-    // the terminal's socket just closes — but the SCROLLBACK (device-code
-    // chatter, the portal's reply, the helper's own preceding lines) stays on
-    // screen beside the alert rather than vanishing with it, since the one
-    // extracted sentence is otherwise the operator's only artifact.
+    // The run is already killed by this point, so the terminal's socket just
+    // closes — but the SCROLLBACK (device-code chatter, the portal's reply,
+    // the helper's own preceding lines) stays on screen beside the alert
+    // rather than vanishing with it, since the one extracted sentence is
+    // otherwise the operator's only artifact.
     it("the fail marker moves to the error phase, names why, kills the run, and keeps the scrollback", async () => {
       const { onDone } = await attachAwsRun();
       await act(async () =>
@@ -248,7 +248,7 @@ describe("HarnessLoginPane — the consent gate", () => {
     });
   });
 
-  // RR-2: `saving` with no autoCapture is TWO different states. On a helper
+  // `saving` with no autoCapture is TWO different states. On a helper
   // flow it is the corroboration round trip (R-8's spinner). On the anthropic
   // scrape flow it is a MANUAL token paste — which keeps its own row, its own
   // Save spinner, and must never be handed a sentence about an AWS sign-in it
@@ -449,13 +449,11 @@ describe("HarnessLoginPane — the consent gate", () => {
       expect(onDone).not.toHaveBeenCalled();
     });
 
-    // Finding 7 (0.7.4 field report), console half: the status read ANSWERS and
-    // simply does not show this run's capture yet — a lagging replica, or the
-    // supersede's kill landing between the 204 and the read. The write really
-    // did precede the read; it was not VISIBLE to it. Refusing on that first
-    // read is what told a person whose retry worked to sign in again.
-    //
-    // Red on the unfixed tree: one read, one refusal, no second chance.
+    // The status read can ANSWER and simply not show this run's capture yet —
+    // a lagging replica, or the supersede's kill landing between the 204 and
+    // the read. The write can precede the read without being VISIBLE to it,
+    // so refusing on that first read tells a person whose sign-in actually
+    // worked to do it again.
     it("re-reads a status that answers but does not show this run's capture yet", async () => {
       getSetupStatusMock
         .mockResolvedValueOnce({ harness: [], model_access: undefined } as unknown as SetupStatus)
@@ -499,9 +497,9 @@ describe("HarnessLoginPane — the consent gate", () => {
       // Still in flight — and the run is already gone.
       expect(runsApiMocked.killRun).toHaveBeenCalledWith("run-123");
       // R-8: the spinner covers the round trip rather than leaving the operator
-      // on a terminal that has quietly stopped scrolling. U2-07 (blind round
-      // 2): and a screen-reader user hears it — the whole point of narrating a
-      // silent round trip is lost in a note no live region announces.
+      // on a terminal that has quietly stopped scrolling. A screen-reader user
+      // hears it too — the whole point of narrating a silent round trip is
+      // lost in a note no live region announces.
       expect(screen.getByTestId("capture-verifying-note")).toBeInTheDocument();
       expect(screen.getByTestId("capture-verifying-note")).toHaveAttribute("role", "status");
 
@@ -553,7 +551,7 @@ describe("serverConfirmsCapture", () => {
     ).toBe(false);
   });
 
-  // R-10: the MEMBER-REDACTED shape — {provider, captured, expired,
+  // The MEMBER-REDACTED shape — {provider, captured, expired,
   // source_run_id} and nothing else (setup.go's redactSetupStatusForMember).
   it("aws: the member-redacted row shape confirms on its own", () => {
     expect(
@@ -579,7 +577,7 @@ describe("serverConfirmsCapture", () => {
     ).toBe(true);
   });
 
-  // R-10: an EXPIRED row is exactly the shape the dropped leg used to admit.
+  // An EXPIRED row is exactly the shape the dropped leg used to admit.
   it("aws: an expired harness row confirms nothing", () => {
     expect(
       serverConfirmsCapture(
@@ -616,10 +614,10 @@ describe("serverConfirmsCapture", () => {
   });
 });
 
-// ─── P5: the pane waits for the sandbox instead of assuming it ───────────────
+// P5: the pane waits for the sandbox instead of assuming it.
 //
-// POST /setup/harness-login answers with the run id BEFORE dispatch now
-// (internal/api/harnesscred_launch.go), so "resolved" no longer means
+// POST /setup/harness-login answers with the run id BEFORE dispatch
+// (internal/api/harnesscred_launch.go), so "resolved" does not mean
 // "attachable": handleAttachTicket 409s a non-RUNNING run and a mint failure is
 // terminal in AttachTerminal. The pane holds a `starting` phase — with the run
 // id, so Cancel kills a sandbox that is still coming up — and polls the run
@@ -672,9 +670,9 @@ describe("HarnessLoginPane — the starting phase (P5)", () => {
     expect(loginFlow("aws").cmd).toContain("&& wardyn-aws-sso");
   });
 
-  // R-07: `getRun` failures were swallowed unconditionally ("a blip is not an
-  // outcome"), which is right for ONE and wrong for all of them — a daemon
-  // restart mid-pull, a pruned run or a 403 after a roster edit left the
+  // Swallowing `getRun` failures unconditionally ("a blip is not an
+  // outcome") is right for ONE and wrong for all of them — a daemon restart
+  // mid-pull, a pruned run or a 403 after a roster edit would leave the
   // starting copy on screen forever with nothing but Cancel to end it.
   it("a persistently unreadable run ends the wait, and Cancel still works", async () => {
     vi.mocked(runsApiMocked.getRun).mockRejectedValue(new Error("control plane unreachable"));
@@ -695,7 +693,7 @@ describe("HarnessLoginPane — the starting phase (P5)", () => {
       // advanceTimersByTimeAsync flushes the microtasks each rejected read
       // queues, which is what usePoll's in-flight guard waits on.
       //
-      // FINDING 6: fifteen ticks is no longer an ending. It was called "≈30s"
+      // Finding 6: fifteen ticks is no longer an ending. It was called "≈30s"
       // and the reporting estate's cold pull took 131 — so thirty seconds of a
       // daemon being unreachable now says "still trying", and the wait ends on
       // the CLOCK (RUN_POLL_UNREADABLE_AFTER_MS, 150 ticks at this cadence).
@@ -802,16 +800,16 @@ describe("HarnessLoginPane — the starting phase (P5)", () => {
     }
   });
 
-  // ── the self-run grace window (finding 4) ─────────────────────────────────
+  // The self-run grace window.
   //
   // The aws-sso image starts the pair in its own tmux session before its prep,
   // and every attach path joins that session. The pane therefore types nothing
   // — UNLESS the sandbox never announced itself, which is what an operator
   // WARDYN_AGENT_IMAGES pin on an older image looks like from here.
   //
-  // FAKE TIMERS BEFORE RENDER, always: the pane arms its grace timer the moment
-  // it attaches, so timers installed afterwards can never fire it and every
-  // "did not type" assertion below would be true for the wrong reason.
+  // Fake timers before render, always: the pane arms its grace timer the
+  // moment it attaches, so timers installed afterwards can never fire it and
+  // every "did not type" assertion below would be true for the wrong reason.
   async function attachedOnFakeTimers(): Promise<void> {
     vi.mocked(runsApiMocked.getRun).mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun);
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
@@ -842,8 +840,8 @@ describe("HarnessLoginPane — the starting phase (P5)", () => {
       vi.useFakeTimers({ shouldAdvanceTime: true });
       try {
         await attachedOnFakeTimers();
-        // NEITHER typing path: AttachTerminal's own unconditional autoRun is
-        // what 0.7.4 used, and it fires 900ms after connect with no check at all.
+        // NEITHER typing path fires: AttachTerminal's own unconditional
+        // autoRun would fire 900ms after connect with no check at all.
         expect(lastAttachProps?.autoRun).toBeUndefined();
         act(() => lastAttachOutput?.(chunk));
         await act(async () => {

@@ -79,16 +79,16 @@ describe("PolicyPanel — templates", () => {
     for (const t of POLICY_TEMPLATES) {
       const parsed = JSON.parse(templateText(t)) as RunPolicySpec;
       if (t.id === "allow-all") {
-        // DELIBERATE and LOAD-BEARING: allow-all's two highs (allow-all egress +
-        // the omitted idle cap = never-reap) are what make the safety meter's
-        // "Weakest" reachable from a single template click. A 3600 here would drop
-        // it to ONE high and collapse Weakest — so absent is asserted, not 3600.
+        // allow-all's two highs (allow-all egress + the omitted idle cap =
+        // never-reap) are what make the safety meter's "Weakest" reachable
+        // from a single template click. A 3600 here would drop it to ONE
+        // high and collapse Weakest — so absent is asserted, not 3600.
         expect(Object.keys(parsed)).not.toContain("auto_stop_after_sec");
       } else {
         // ci/model-provider inherit 3600 from their source examples; minimal and
         // registries gain it so the conservative (non-interactive) meter frame
         // does not grade the shipped starter "Elevated" purely for an omitted cap.
-        // NOTE: minimal is BOTH policies.tsx's STARTER_SPEC and the run wizard's
+        // minimal is BOTH policies.tsx's STARTER_SPEC and the run wizard's
         // fresh Custom-policy prefill (new-run-screen spreads MINIMAL.spec) — both
         // now idle-stop after an hour. Intended; TouchDebounce keeps live sessions
         // alive, so an attended interactive run is never reaped out from under you.
@@ -145,10 +145,9 @@ describe("PolicyPanel — helper rail", () => {
     expect(FIELD_HELP.llm_inspection.values).toMatch(/workspace_secret_values is REFUSED/);
   });
 
-  // Was network-dialog.test.tsx's "each card states what actually happens, not
-  // the mode name". The dialog and the run wizard's Confined card both died with
-  // the custom form; this rail is the one surviving surface that describes the
-  // three modes, so the canon strings (ui-batch2-mock.md D33 + D8) pin here.
+  // This is the one surviving surface that describes the three modes — each
+  // card states what actually happens, not the mode name — so the canon
+  // strings (ui-batch2-mock.md D33 + D8) pin here.
   it("first_use_approval states what each mode does, and bounds the hold (D33 + D8)", () => {
     const v = FIELD_HELP.first_use_approval.values;
     expect(v).toContain(
@@ -289,10 +288,10 @@ describe("PolicyPanel — safety meter", () => {
   });
 });
 
-// tool_rules shipped in 0.7 with ZERO console surface: enforced by the proxy,
-// invisible in the UI. The section is the first rung of posture-gated autonomy,
-// so what it writes has to be exactly what the wire means — an implicit `hold`
-// default, an absent key for "no rules", and a duplicate refused before Save.
+// tool_rules is enforced by the proxy and otherwise invisible in the UI. The
+// section is the first rung of posture-gated autonomy, so what it writes has
+// to be exactly what the wire means — an implicit `hold` default, an absent
+// key for "no rules", and a duplicate refused before Save.
 describe("PolicyPanel — the tool_rules section", () => {
   const user = userEvent.setup({ pointerEventsCheck: 0 });
 
@@ -342,9 +341,9 @@ describe("PolicyPanel — the tool_rules section", () => {
     expect(screen.getAllByRole("button", { name: /^Remove rule/ })).toHaveLength(1);
   });
 
-  // N icon-only buttons all reading "Remove rule" gave a screen reader no way
-  // to tell them apart, and no way to say which one it just pressed. The tool
-  // input beside it was already numbered.
+  // N icon-only buttons must not all read "Remove rule" — a screen reader
+  // would have no way to tell them apart, or to say which one it just
+  // pressed. The tool input beside it is already numbered.
   it("numbers each remove button, so no two share an accessible name", async () => {
     render(
       <Harness
@@ -388,9 +387,9 @@ describe("PolicyPanel — the tool_rules section", () => {
   });
 
   // parseSpec is a bare cast: whatever object the textarea parses to arrives
-  // here as a "RunPolicySpec". Typing any of these used to THROW out of the
+  // here as a "RunPolicySpec". Typing any of these must never throw out of the
   // section into the route's ErrorBoundary, blanking the screen and losing the
-  // draft mid-edit. The section has to keep rendering and say what is wrong.
+  // draft mid-edit — the section has to keep rendering and say what is wrong.
   it.each([
     ["a rule with no fields", [{}]],
     ["a rule with a numeric tool", [{ tool: 1, effect: "allow" }]],

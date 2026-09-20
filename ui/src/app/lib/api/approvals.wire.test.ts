@@ -5,16 +5,16 @@
 
 // The approve/deny DECISION BODY, pinned against the real module.
 //
-// Why this file has to exist (F125): every UI test that decides an approval
+// Why this file has to exist: every UI test that decides an approval
 // mocks lib/api/approvals WHOLESALE — that is a deliberate rule, written down
 // in approvals.ts's own header and in lib/types/approvals.ts's decisionArgs
-// note — so before this suite nothing anywhere observed the JSON approve()
-// and deny() actually build. The daemon does not catch a wrong key either: its
-// decision body is decoded BY HAND precisely so DisallowUnknownFields is NOT
-// set (internal/api/approvals.go's decodeDecisionRequest), so an unknown key is
-// dropped in silence and Normalize() keeps the default `run` scope — no 400, no
-// log, no console error. Renaming decision_scope/decision_expires_at used to
-// leave the whole 1800-test suite green; it fails HERE now.
+// note — so nothing anywhere else observes the JSON approve() and deny()
+// actually build. The daemon does not catch a wrong key either: its decision
+// body is decoded BY HAND precisely so DisallowUnknownFields is NOT set
+// (internal/api/approvals.go's decodeDecisionRequest), so an unknown key is
+// dropped in silence and Normalize() keeps the default `run` scope — no 400,
+// no log, no console error. A rename of decision_scope/decision_expires_at is
+// caught only HERE — the rest of the suite stays green regardless.
 //
 // Same three layers as runs.wire.fields.test.ts, which is this file's pattern:
 //   A. the exact body for every DecisionOptions shape, approve AND deny;
@@ -54,9 +54,7 @@ const sentMethod = (call = 0): string => String(fetchMock.mock.calls[call][1]?.m
 
 const UNTIL = "2026-09-30T12:00:00.000Z";
 
-// ---------------------------------------------------------------------------
 // A. The exact body, both verbs, every scope shape.
-// ---------------------------------------------------------------------------
 describe("approvals.approve/deny — the decision body on the wire", () => {
   it("sends ONLY {reason} for a bare 2-argument call (the pre-scope body, byte for byte)", async () => {
     await approvals.approve("ap_1", "looks fine");
@@ -112,11 +110,9 @@ describe("approvals.approve/deny — the decision body on the wire", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // B. The deliberate omissions — an absent option is an ABSENT KEY, not null.
-//    Go reads both fields as omitempty and Normalize() keeps `run`, so a key
-//    present-but-empty would be a different wire fact than "not sent".
-// ---------------------------------------------------------------------------
+// Go reads both fields as omitempty and Normalize() keeps `run`, so a key
+// present-but-empty would be a different wire fact than "not sent".
 describe("approvals.approve/deny — omissions", () => {
   it("omits decision_expires_at entirely when no `until` is given (never null, never empty)", async () => {
     await approvals.approve("ap_1", "r", { scope: "always" });
@@ -139,11 +135,9 @@ describe("approvals.approve/deny — omissions", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
 // C. Source parity with the Go wire — the TS-side twin of
-//    internal/types/terminal_parity_test.go, same discipline as
-//    runs.wire.fields.test.ts's section C.
-// ---------------------------------------------------------------------------
+// internal/types/terminal_parity_test.go, same discipline as
+// runs.wire.fields.test.ts's section C.
 function repoRoot(): string {
   let dir = resolve(process.cwd());
   for (let i = 0; i < 8; i++) {

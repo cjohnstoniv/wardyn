@@ -104,22 +104,17 @@ export function decisionArgs(scope: ApprovalScope, until?: string): [] | [Decisi
   return scope === "run" ? [] : [{ scope, until }];
 }
 
-// ─── isHeld ──────────────────────────────────────────────────────────────────
+// isHeld
 //
-// MOVED HERE from wardyn/live-approvals.tsx, which is the move that module's own
-// ponytail note asked for: "move isHeld into lib/types/approvals.ts beside
-// decisionArgs (which lives there for a comparable reason) and have both callers
-// import it from there."
-//
-// Why it finally had to happen: screens/runs/board-groups.ts is EAGER (the board
-// is the landing route and App.tsx's attention badge shares the rule) and it
-// imported this one predicate from live-approvals.tsx. Rollup assigns chunks per
-// MODULE, so that single import hoisted the WHOLE strip — and, once the strip
-// grew the mid-run sign-in row, wardyn/model-access-copy.ts and through it
-// lib/workspace-providers-copy.ts — into the entry chunk, past
-// bundle-split.test.ts's budget. Here it costs the eager graph the predicate and
-// nothing else; live-approvals.tsx re-exports it so its own readers keep their
-// import path.
+// isHeld lives here, not in wardyn/live-approvals.tsx, because
+// screens/runs/board-groups.ts is EAGER (the board is the landing route and
+// App.tsx's attention badge shares the rule): importing this predicate from
+// live-approvals.tsx would hoist the WHOLE strip — Rollup assigns chunks per
+// MODULE — and once the strip grows the mid-run sign-in row, wardyn/model-
+// access-copy.ts and through it lib/workspace-providers-copy.ts, past
+// bundle-split.test.ts's budget. Here it costs the eager graph the predicate
+// and nothing else; live-approvals.tsx re-exports it so its own readers keep
+// their import path.
 //
 // This file is the right home for the same reason decisionArgs is: it is the
 // module both sides already depend on, and it is never mocked.
@@ -140,7 +135,7 @@ const HOLD_TIMEOUT_MS = 30_000;
 //    requested_scope so the UI can flag it, but PENDING alone doesn't mean
 //    "still holding the sandbox": the connection fails closed at
 //    HOLD_TIMEOUT_MS while the approval row itself stays PENDING for up to 24h
-//    afterward (W20-hold-fsm-2).
+//    afterward.
 //
 // Exported because the run cockpit's command bar and the board's card state
 // the same fact ("N waiting · sandbox held"). Two copies of this test would be

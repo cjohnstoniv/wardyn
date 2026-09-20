@@ -17,13 +17,13 @@ vi.mock("../../lib/api/setup", () => ({ setup: { getSetupStatus: vi.fn().mockRes
 vi.mock("../../lib/api/workspaces", () => ({ workspaces: { createWorkspace: vi.fn() } }));
 vi.mock("sonner", () => ({ toast: { warning: vi.fn(), error: vi.fn() } }));
 
-// 0.7 §B — the local_dir root hint follows the workspace-OWNERSHIP namespace,
-// which /me keys on !isOperator (me.go), NOT on role === "member". A SECURITY
-// ADMIN's workspaces are owner-stamped like a member's, so memberSourcesAllowed
+// 0.7 §B — the local_dir root hint follows the workspace-ownership namespace,
+// which /me keys on !isOperator (me.go), not on role === "member". A security
+// admin's workspaces are owner-stamped like a member's, so memberSourcesAllowed
 // clamps them at authoring time and ValidateMemberMountSource at bind time —
-// before this fix the dialog asked `role === "member"` and simply never
-// rendered the real member_local_dir_root /me was already sending them, so a
-// security admin typed a path with no boundary shown and got refused later.
+// asking `role === "member"` here instead would never render the real
+// member_local_dir_root /me is already sending them, so a security admin
+// would type a path with no boundary shown and get refused later.
 function renderDialog(operator: boolean, root: string | null) {
   return render(
     <OperatorProvider operator={operator} memberLocalDirRoot={root}>
@@ -64,11 +64,12 @@ describe("AddWorkspaceDialog — the local_dir root constraint follows !operator
 // derivation the three tests above already exercise, and the checkbox lives
 // inside a collapsed Disclosure, so a query for it passes vacuously either way.
 
-// F1 (V2 walk 1): a repo admitted ONLY by the legacy `scm_hosts` list was
-// onboarded in complete silence — the audit row was written at this door and the
-// ADMIT.LEGACY_HOST sentence went only to whoever launched the first run. The
-// 201 now carries it, and this dialog closes on success with no persistent
-// advisory slot, so the warning toast is where it can still be read.
+// F1 (V2 walk 1): a repo admitted only by the legacy `scm_hosts` list must
+// not onboard in silence — the audit row is written at this door, but
+// without surfacing it here the ADMIT.LEGACY_HOST sentence would reach only
+// whoever launches the first run. The 201 carries it, and this dialog closes
+// on success with no persistent advisory slot, so the warning toast is
+// where it can still be read.
 describe("AddWorkspaceDialog — the 201's advisory warnings", () => {
   it("says the server's warning sentence verbatim after a successful create", async () => {
     const sentence =
@@ -105,11 +106,11 @@ describe("AddWorkspaceDialog — the 201's advisory warnings", () => {
   });
 });
 
-// F5-F2: "You can change everything later." is false — a workspace is
-// CREATE-ONLY in this console (no Edit path; updateWorkspace has zero
-// production callers, workspaces.test.tsx's "kebab is Open · Delete… only"
-// describe pins the kebab menu to exactly Open/Delete). Delete the sentence,
-// keep the rest of the description.
+// F5-F2: this copy must not claim "you can change everything later" — a
+// workspace is create-only in this console (no Edit path; updateWorkspace
+// has zero production callers, workspaces.test.tsx's "kebab is Open ·
+// Delete… only" describe pins the kebab menu to exactly Open/Delete). Delete
+// the sentence, keep the rest of the description.
 describe("AddWorkspaceDialog — F5-F2: no false promise of a later edit", () => {
   it("never claims everything can be changed later", () => {
     renderDialog(true, null);
@@ -120,9 +121,10 @@ describe("AddWorkspaceDialog — F5-F2: no false promise of a later edit", () =>
   });
 });
 
-// F5-F5: the Branch field's value was silently dropped for local_dir/ephemeral
-// (only the repo submit arm ever read it) — offer it only where it does
-// something, and let Name take the full row when it's gone.
+// F5-F5: the Branch field's value would be silently dropped for
+// local_dir/ephemeral (only the repo submit arm ever reads it) — offer it
+// only where it does something, and let Name take the full row when it's
+// gone.
 describe("AddWorkspaceDialog — F5-F5: Branch only where it's wired", () => {
   it("shows Branch for a repo source", () => {
     renderDialog(true, null);
@@ -143,10 +145,10 @@ describe("AddWorkspaceDialog — F5-F5: Branch only where it's wired", () => {
   });
 });
 
-// F5-F6: picking "devcontainer.json" stored {kind:"recommended"}, which
+// F5-F6: picking "devcontainer.json" would store {kind:"recommended"}, which
 // workspaceImage() collapses back into the absent case with no profile yet
-// (the dialog runs no scan) — an honest chip contradicted the pick the
-// operator just made. Collapse the two dishonest choices into ONE "Auto"
+// (the dialog runs no scan) — an honest chip would then contradict the pick
+// the operator just made. Collapse the two dishonest choices into one "Auto"
 // option that stores nothing at all; Pinned stays the one explicit choice.
 describe("AddWorkspaceDialog — F5-F6: one honest Auto image choice", () => {
   async function openImagePicker() {

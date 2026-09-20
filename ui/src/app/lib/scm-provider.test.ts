@@ -67,7 +67,7 @@ describe("hostError", () => {
   });
 
   it("rejects what validSiteHost rejects — a dot is required, and no scheme/port/path", () => {
-    // The exact case that used to save the secret and then 400 on Done.
+    // hostError must catch this client-side, or Done saves the secret and then 400s.
     expect(hostError("localhost")).toMatch(/dot/i);
     expect(hostError("https://ghes.corp.internal/")).toMatch(/dot/i);
     expect(hostError("ghes.corp.internal:8080")).toMatch(/dot/i);

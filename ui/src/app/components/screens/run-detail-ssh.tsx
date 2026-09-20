@@ -6,11 +6,10 @@
 // "Attach from your terminal" — the two ways into a running sandbox that are
 // not this browser tab.
 //
-// This card used to be SSH-only and returned NULL whenever the deployment had
-// the gateway off (/healthz's `ssh` absent). That is the DEFAULT for the
-// compose stack, so most operators saw a live terminal in the browser with
-// nothing anywhere saying a real terminal could reach the same session — which
-// is exactly what was reported.
+// The card must never render nothing just because the SSH gateway is off
+// (/healthz's `ssh` absent) — that is the DEFAULT for the compose stack, so an
+// operator would otherwise see a live terminal in the browser with nothing
+// anywhere saying a real terminal could reach the same session.
 //
 // `wardyn attach <run-id>` needs no gateway and no operator configuration: it
 // dials the same WebSocket this page's terminal uses, lands in the SAME tmux
@@ -22,7 +21,7 @@
 // Shown to the run's OWNER or to an admin, matching the server rather than
 // merely hiding a control it would refuse — all three lanes are owner-or-admin
 // there (attach_ticket.go's isOperator, uigateway.go's ta.role check, and
-// sshgateway.go's sshAuth admin arm since migration 0043). It stays absent for
+// sshgateway.go's sshAuth admin arm). It stays absent for
 // everyone else, and when the run isn't RUNNING — there is nothing to attach
 // to. (The ui-sandboxes mock's "non-owner -> null" predates those admin arms;
 // see the amendment in docs/design/ui-sandboxes-prompt.md §9.)
@@ -70,9 +69,9 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
   // Did /healthz actually ANSWER? `ssh`/`uiSandbox` being null conflates two
   // facts — "not loaded yet" and "loaded, and the deployment has it off" — and
   // the OFF copy below is a statement about the DEPLOYMENT ("Off on this
-  // deployment... an operator turns it on by setting WARDYN_SSH_LISTEN"). This
-  // card used to render that on a 5xx or a network blip and never re-check
-  // (the effect's deps never change on this page).
+  // deployment... an operator turns it on by setting WARDYN_SSH_LISTEN"). The
+  // OFF copy must not render off a 5xx or a network blip, which this effect
+  // would never re-check (its deps never change on this page).
   //
   // The signal has to come from the BODY, not from the promise: health()
   // CANNOT reject — lib/api/health.ts:242-247 returns {} for a non-ok response
@@ -106,11 +105,11 @@ export function ConnectSSHCard({ run }: { run: AgentRun }) {
         if (alive) setKeys(k);
       })
       .catch(() => {
-        // fix: a failed fetch used to set keys=[] — identical to a
-        // confirmed-empty response — which rendered "no key is registered"
-        // even for an owner who does have keys, on a transient error. Leave
-        // it null (not-yet-loaded) so hasKeys keeps assuming keys exist
-        // instead of asserting a fact the fetch never confirmed.
+        // A failed fetch must leave keys null (not-yet-loaded), never [] —
+        // [] is identical to a confirmed-empty response and would render "no
+        // key is registered" for an owner who does have keys, on a transient
+        // error. hasKeys then keeps assuming keys exist instead of asserting
+        // a fact the fetch never confirmed.
       });
     return () => {
       alive = false;

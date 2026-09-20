@@ -40,9 +40,9 @@ export function modelKeyProvider(harnesses?: SetupHarnessTool[]) {
     // when it falls back to the default with no row at all. "per_user" is
     // the only value model-key-state.ts branches on.
     credentialSource: row?.credential_source,
-    // FIX PASS 1 (REVIEW-1.md ruling R1) — the SAME row's declared
-    // mechanism, for ownKeyApplies: a "bedrock_"-prefixed mechanism refuses
-    // a member's own API key even under a SHARED (non-per_user) row.
+    // The SAME row's declared mechanism, for ownKeyApplies: a "bedrock_"-
+    // prefixed mechanism refuses a member's own API key even under a SHARED
+    // (non-per_user) row.
     mechanism: row?.mechanism,
   };
 }
@@ -224,8 +224,8 @@ export function YourModelKey({
       ) : state.result === "shared_expired" ? (
         <div>
           <p className="text-sm text-muted-foreground">{T.SHARED_EXPIRED_BODY}</p>
-          {/* FIX PASS 1 (R2(b)) — hidden under shared_bedrock: a member's own
-              key can never satisfy a Bedrock mechanism even on a shared row. */}
+          {/* Hidden under shared_bedrock: a member's own key can never
+              satisfy a Bedrock mechanism even on a shared row. */}
           {state.revealAllowed && (
             <Button variant="link" size="sm" className="mt-1 h-auto p-0" onClick={() => setRevealEmpty(true)}>
               {T.USE_OWN_KEY}
@@ -248,15 +248,14 @@ export function YourModelKey({
         // (band "per_user" — not_applicable is the common real case, the
         // admin-token principal on an enabled per_user row), or a shared row
         // whose mechanism is Bedrock but llmReady is false (band
-        // "shared_bedrock"). FIX PASS 1 (R2): a neutral sentence per band,
-        // never a bare title.
+        // "shared_bedrock"). A neutral sentence per band, never a bare title.
         //
         // U-14 (W6 blind lens): under per_user that sentence is the
-        // `not_applicable` ANSWER ("this is a shared token, not a person"), and
-        // it was also the fallthrough for an absent or unrecognised state — so a
-        // member whose state simply could not be read was told there was nothing
-        // to set up, beside a lede saying model access uses their own AWS
-        // sign-in. An unknown state claims nothing at all.
+        // `not_applicable` ANSWER ("this is a shared token, not a person") —
+        // it must never also be the fallthrough for an absent or unrecognised
+        // state, or a member whose state simply could not be read reads as if
+        // there is nothing to set up, beside a lede saying model access uses
+        // their own AWS sign-in. An unknown state claims nothing at all.
         unknownBody(state.band, modelAccess?.state) && (
           <p className="text-sm text-muted-foreground">{unknownBody(state.band, modelAccess?.state)}</p>
         )

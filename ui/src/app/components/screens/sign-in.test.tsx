@@ -109,7 +109,7 @@ describe("SignIn — SSO entry point", () => {
   });
 });
 
-// W31-S1-2 regression: wardynd never prints an admin token on startup — it
+// Regression: wardynd never prints an admin token on startup — it
 // only ever READS WARDYN_ADMIN_TOKEN from the environment (cmd/wardynd's
 // boot_flags.go/main.go). The sign-in copy claiming otherwise was the gate's
 // only instruction AND part of the threat model's own token-provenance claim
@@ -138,7 +138,7 @@ describe("SignIn — admin token instructions are honest about provenance", () =
   });
 });
 
-// W31-S1-4: every submitToken failure used to collapse to probeAuth's plain
+// Every submitToken failure used to collapse to probeAuth's plain
 // boolean, so a daemon 5xx and an unreachable control plane both rendered the
 // SAME "That admin token was rejected" copy as an actually-bad token — and
 // cleared a token that may have been perfectly valid.
@@ -187,7 +187,7 @@ describe("SignIn — submitToken tells a rejected token apart from a reachabilit
   });
 });
 
-// W31-S1-5 (re-fix): the OIDC callback redirects a user-actionable login
+// Re-fix: the OIDC callback redirects a user-actionable login
 // denial to "/?auth_error=<code>" instead of a bare http.Error text page —
 // but that redirect lands right back on THIS screen, so if nothing here reads
 // the code the user sees a plain sign-in form with zero explanation, no

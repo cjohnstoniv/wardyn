@@ -171,7 +171,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
   // setup-layout.test.tsx).
   // …and steps through the Egress redirection tab: the forward walk passes
   // THROUGH it (navigation, not a gate), so after this helper a single
-  // "Next:" click advances to Integrations, same as before round F.
+  // "Next:" click advances to Integrations.
   const clearCorpNetworkGate = async () => {
     await user.click(screen.getByRole("button", { name: /^test connectivity$/i }));
     await screen.findByText(/can.t test here/i);
@@ -287,8 +287,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(await screen.findByRole("heading", { name: /no identity, no credential/i })).toBeInTheDocument();
 
-    // your work: `providers` (0.7.2) comes first — its body is the card, zero
-    // teal (the footer Next is the step's one affirmative).
+    // your work: `providers` comes first — its body is the card, zero teal
+    // (the footer Next is the step's one affirmative).
     await user.click(screen.getByRole("button", { name: /^next:/i }));
     expect(await screen.findByTestId("providers-card")).toBeInTheDocument();
 
@@ -302,8 +302,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(screen.getByText(DRIVES.CARD_EMPTY)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: /^next:/i }));
-    // review step — the consolidated readiness rollup + the checks that used to
-    // live on the barrier step (now grouped, e.g. the "gVisor runtime" ok row).
+    // review step — the consolidated readiness rollup + the checks grouped in
+    // from the barrier step (e.g. the "gVisor runtime" ok row).
     expect(await screen.findByRole("heading", { name: /review readiness/i })).toBeInTheDocument();
     expect(screen.getByText("gVisor runtime")).toBeInTheDocument();
 
@@ -333,7 +333,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(await screen.findByRole("heading", { name: /pick your barrier/i })).toBeInTheDocument();
   });
 
-  // W2-S1-2: a deep link past corp_network is the same click-past the rail
+  // A deep link past corp_network is the same click-past the rail
   // guards — a bookmarked/pasted `?step=` must not skip the mandatory proof
   // any more than a rail click can. Once status (and so the gate) loads, an
   // over-reaching initial step gets pulled back to corp_network.
@@ -342,10 +342,10 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(await screen.findByRole("heading", { name: /^network$/i })).toBeInTheDocument();
   });
 
-  // H3/H-1/HIGH-1 — the corp gate is CROSSING-based, and demo targets are
-  // exempt. /demos redirects into a demo step and every episode cold-opens on
-  // one: if the corrector bounced those to Network, a shared demo link would
-  // never open its demo. Nothing unsafe opens — a demo gates its own Start on
+  // The corp gate is CROSSING-based, and demo targets are exempt. /demos
+  // redirects into a demo step and every episode cold-opens on one: if the
+  // corrector bounced those to Network, a shared demo link would never open
+  // its demo. Nothing unsafe opens — a demo gates its own Start on
   // barrierReady, which this fixture's no_runner host fails anyway.
   describe("the crossing gate — demo links open, click-past still can't happen", () => {
     it("a cold ?step=<demo> deep link opens the demo instead of bouncing to Network", async () => {
@@ -355,14 +355,14 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       expect(screen.queryByRole("heading", { name: /^network$/i })).not.toBeInTheDocument();
     });
 
-    // MEDIUM-2: nextGate is produced only ON corp_network, so the last demo's
-    // Next used to render ENABLED and its click bare-return into nothing. The
-    // shell asks the same predicate selectStep does, so it renders disabled and
-    // says why.
+    // nextGate is produced only ON corp_network, so the last demo's Next must
+    // render DISABLED rather than enabled with its click bare-returning into
+    // nothing. The shell asks the same predicate selectStep does, so it
+    // renders disabled and says why.
     it("the last demo's Next is DISABLED, with the gate's reason as its title — never a dead-enabled button", async () => {
       renderScreen(<SetupScreen onDone={() => {}} />, "/setup?step=sts-fail-closed");
       await screen.findByRole("heading", { name: /no identity, no credential/i });
-      // `providers` (0.7.2) is now the step directly after the last demo.
+      // `providers` is the step directly after the last demo.
       const next = screen.getByRole("button", { name: /^next: providers$/i });
       expect(next).toBeDisabled();
       expect(next.getAttribute("title")).toMatch(/one probe/i);
@@ -385,8 +385,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     });
   });
 
-  // M3/M-D — the walk is stepOrder(status): a demo whose needsSecret is unmet
-  // is not a step, so the rail can't offer it and a link to it can't strand the
+  // The walk is stepOrder(status): a demo whose needsSecret is unmet is not
+  // a step, so the rail can't offer it and a link to it can't strand the
   // operator on a step no consumer can find an index for.
   describe("conditional demo steps — the walk follows the stored secret", () => {
     const granted = DEMOS.find((d) => d.needsSecret)!;
@@ -411,10 +411,10 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     });
   });
 
-  // UI-SETUP-1: loadSecrets is folded into the SAME recheck every "Re-check"
-  // here calls (secret names were fetched once at mount, so the Integrations
-  // rail badge couldn't see one added/deleted in the embedded step until a
-  // reload) — and the PRESS forces a host re-detect the MOUNT must not.
+  // loadSecrets must be folded into the SAME recheck every "Re-check" here
+  // calls, or the Integrations rail badge can't see a secret added/deleted
+  // in the embedded step until a reload — and the PRESS forces a host
+  // re-detect the MOUNT must not.
   it("Re-check re-fetches secret names and forces a host re-detect; the mount fetch does neither", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence");
@@ -572,10 +572,10 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       expect(await screen.findByText("Can't test here")).toBeInTheDocument();
     });
 
-    // UI-SETUP-11: steps.ts states the invariant outright ("There is no
-    // click-past"), but that was enforced on the footer's Next button only —
-    // the always-visible rail let the SAME jump happen in one click with no
-    // friction. Blocking it here is what actually makes the stated rule true.
+    // steps.ts states the invariant outright ("There is no click-past"), so
+    // it must be enforced on the always-visible rail too, not just the
+    // footer's Next button — otherwise the rail lets the SAME jump happen in
+    // one click with no friction.
     it("the rail can't click past a blocked gate — same rule the footer's Next enforces; backward jumps are unaffected", async () => {
       renderScreen(<SetupScreen onDone={() => {}} />);
       await screen.findByText("Fence");
@@ -597,7 +597,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
       await user.click(within(nav).getByRole("button", { name: /environment/i }));
       expect(await screen.findByRole("heading", { name: /pick your barrier/i })).toBeInTheDocument();
 
-      // W2-S1-2: the SAME jump is blocked from an EARLIER step too — not just
+      // The SAME jump is blocked from an EARLIER step too — not just
       // while sitting on corp_network itself. A rail click straight from
       // Environment to Integrations (skipping over corp_network entirely,
       // never having visited it this render) must be a no-op just the same.
@@ -636,8 +636,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     ).toBeInTheDocument();
     // The SHARED Settings model-provider card, not the deleted /integrations
     // catalog. (connection-cards.test.tsx owns its own behaviour; this
-    // asserts the orchestrator mounts it.) GitHostCard retired in 0.7.2 — its
-    // git credential lanes moved to the `providers` step / /providers.
+    // asserts the orchestrator mounts it.) GitHostCard is retired — its git
+    // credential lanes live in the `providers` step / /providers.
     expect(await screen.findByRole("radiogroup", { name: /model provider/i })).toBeInTheDocument();
     expect(screen.queryByRole("radiogroup", { name: /git host/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /add integration/i })).not.toBeInTheDocument();
@@ -650,12 +650,10 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(await within(btn).findByText("Ready · 1 connected")).toBeInTheDocument();
   });
 
-  // The inverse of the old UX-1 rule. That wave made the badge count the eight
+  // The step is two cards, Model provider and Git host — the catalog for
   // GENERIC categories (package feeds, registries, cloud, data, MCP, work
-  // tracking, observability, other) alongside AI/SCM, because the step body
-  // showed them. 0.5 removed generic kinds and the catalog that held them — the
-  // step is two cards, Model provider and Git host — so a stored generic row
-  // must NOT earn the badge for something the step cannot configure.
+  // tracking, observability, other) is gone, so a stored generic row must
+  // NOT earn the badge for something the step cannot configure.
   it("the badge ignores a generic-kind row — the step configures model + git host only", async () => {
     getSetupStatusMock.mockResolvedValue(
       baseStatus({ integrations: [{ id: "jira-1", kind: "jira", name: "Jira" }] }),
@@ -679,8 +677,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
 
   // A4 — "Skipped" state: an optional step the operator navigated past without
   // configuring it reads "Skipped" in the rail instead of a perpetual "Optional".
-  // Exercised via Integrations now that the old corporate-network steps (which
-  // used to carry this coverage) are folded into it.
+  // Exercised via Integrations, since the corporate-network steps are folded
+  // into it and this is where that coverage now lives.
   describe("A4 — Skipped state", () => {
     it("navigating past Integrations without connecting anything marks its rail badge Skipped", async () => {
       renderScreen(<SetupScreen onDone={() => {}} />);
@@ -797,7 +795,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // No early escape any more — the mandatory gate keeps the operator in setup.
     expect(screen.queryByRole("button", { name: /finish later/i })).not.toBeInTheDocument();
 
-    // Corporate network is a mandatory gate even for a rail jump (W2-S1-2) —
+    // Corporate network is a mandatory gate even for a rail jump —
     // clear it (same helper every other walkthrough in this suite uses) before
     // jumping to the final step.
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
@@ -844,7 +842,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
     await screen.findByText("Fence"); // environment settled
     // walk to Review (the last step, 16 of 16 — six conditional demo steps are
-    // filtered out of this fixture's walk, and `providers` (0.7.2) is one more
+    // filtered out of this fixture's walk, and `providers` is one more
     // always-walked step) — checks live there, not on the barrier step
     await user.click(screen.getByRole("button", { name: /^next:/i })); // -> people
     await screen.findAllByText("Single-user");
@@ -861,11 +859,11 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     // grouped headings prove the rollup, not a flat dump
     expect(screen.getByText("Blocking")).toBeInTheDocument();
 
-    // Exactly 1 — the orchestrator's own mount. This used to be 2: the embedded
-    // IntegrationsScreen ran a SECOND, independent getSetupStatus when the walk
-    // passed through the connection step. The shared cards take `status` as a
-    // prop from the orchestrator instead, so walking the funnel no longer
-    // re-fetches the same status a second time.
+    // Exactly 1 — the orchestrator's own mount. The embedded IntegrationsScreen
+    // must not run a SECOND, independent getSetupStatus when the walk passes
+    // through the connection step: the shared cards take `status` as a prop
+    // from the orchestrator instead, so walking the funnel never re-fetches
+    // the same status a second time.
     expect(getSetupStatusMock).toHaveBeenCalledTimes(1);
     // Two Re-check buttons now share this step: the persistent HostStatusBar (first
     // in DOM order) and ReviewStep's own (rendered after it in the step body). Both
@@ -909,7 +907,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(screen.getByText("WSL networking")).toBeInTheDocument();
   });
 
-  // E2 — setup-check provenance ------------------------------------------------
+  // E2 — setup-check provenance
 
   it("environment step names the concrete substrate each ready tier runs as (E2)", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
@@ -927,7 +925,7 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(screen.getAllByText(/Running here as/)).toHaveLength(2);
   });
 
-  // E3 — default barrier tier selection ---------------------------------------
+  // E3 — default barrier tier selection
 
   it("preselects the resolved default barrier, moves on a click (in-session only), and keeps a todo card's setup command working (E3)", async () => {
     renderScreen(<SetupScreen onDone={() => {}} />);
@@ -941,9 +939,8 @@ describe("SetupScreen", { timeout: 20_000 }, () => {
     expect(screen.getByRole("radio", { name: /Wall/, checked: true })).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /Fence/, checked: false })).toBeInTheDocument();
 
-    // Clicking the Fence radio moves the selection — for THIS view only
-    // (0.7.8: the default is a server fact, nothing here persists across
-    // sessions any more).
+    // Clicking the Fence radio moves the selection — for THIS view only: the
+    // default is a server fact, and nothing here persists across sessions.
     await user.click(screen.getByRole("radio", { name: /Fence/ }));
     expect(screen.getAllByRole("radio", { checked: true })).toHaveLength(1);
     expect(screen.getByRole("radio", { name: /Fence/, checked: true })).toBeInTheDocument();

@@ -167,7 +167,7 @@ describe("ApprovalsScreen — deny error handling", () => {
     expect(screen.getByRole("button", { name: REAUTH_ROW.ariaLabel })).toBeInTheDocument();
     expect(screen.queryByText(/Mint a scoped credential/i)).not.toBeInTheDocument();
     // The hint renders; the "Blast radius:" LABEL over it does not (UX ruling
-    // B3, general S4). The row grants nothing — it asks its owner to sign in
+    // B3). The row grants nothing — it asks its owner to sign in
     // again to a credential the deployment already configured — so a
     // blast-radius label claimed a capability that does not exist.
     expect(screen.getByText(REAUTH_ROW.hint)).toBeInTheDocument();
@@ -303,14 +303,14 @@ describe("ApprovalsScreen — role-aware decide buttons", () => {
     expect(screen.queryByText(/requires the admin role/i)).not.toBeInTheDocument();
   });
 
-  // ui-member-cluster review finding: the decide-gate chip's fallback text
-  // was hardcoded to OPERATOR_ONLY_REASON even though the predicate feeding
-  // it (kindDecidable = canDecideApproval(useSecurityOperator(), kind)) is
-  // security-tier, not operator-tier — "Requires the admin role." is false
-  // for a caller a security admin could also satisfy. A security admin never
-  // reaches this fallback at all (kindDecidable is unconditionally true for
-  // them); the fix is for who DOES see it — a plain member/viewer denied a
-  // credential/tool_call decision now reads the honest tier sentence.
+  // The decide-gate chip's fallback text must not be hardcoded to
+  // OPERATOR_ONLY_REASON: the predicate feeding it (kindDecidable =
+  // canDecideApproval(useSecurityOperator(), kind)) is security-tier, not
+  // operator-tier — "Requires the admin role." is false for a caller a
+  // security admin could also satisfy. A security admin never reaches this
+  // fallback at all (kindDecidable is unconditionally true for them); a
+  // plain member/viewer denied a credential/tool_call decision reads the
+  // honest tier sentence instead.
   it("a security admin never sees OPERATOR_ONLY_REASON; a member denied by kind sees the security-tier sentence", async () => {
     mockPendingKind = "tool_call";
     const { unmount } = render(
@@ -327,8 +327,8 @@ describe("ApprovalsScreen — role-aware decide buttons", () => {
 
     // The title's second clause: a plain member (not a security admin)
     // denied by kind sees the honest SECURITY_ONLY_REASON sentence, not the
-    // false OPERATOR_ONLY_REASON fallback — this is the arm W6-03 found
-    // unexercised (the test previously only ever mounted securityOperator).
+    // false OPERATOR_ONLY_REASON fallback — an arm otherwise unexercised by
+    // a test that only ever mounted securityOperator.
     render(
       <OperatorProvider operator={false} securityOperator={false}>
         <MemoryRouter>
@@ -508,12 +508,12 @@ describe("ApprovalsScreen ?tab=", () => {
   });
 });
 
-// F5-F4 + F5-F11: one transient failure on mount used to leave status="error"
-// forever while the 10s poll kept silently filling pendingItems and the nav
-// badge — the queue looked stuck on "Something went wrong" while the badge
-// claimed "1 pending". The tick now heals status back to "ready", and is
-// paused only while the FOREGROUND load is in flight (audit.tsx precedent) so
-// a poll tick during the error state can still recover it.
+// F5-F4 + F5-F11: without this, one transient failure on mount would leave
+// status="error" forever while the 10s poll keeps silently filling
+// pendingItems and the nav badge — the queue would look stuck on "Something
+// went wrong" while the badge claims "1 pending". The tick heals status back
+// to "ready", paused only while the FOREGROUND load is in flight (audit.tsx
+// precedent) so a poll tick during the error state can still recover it.
 describe("ApprovalsScreen — F5-F4: a poll tick heals a stuck error state", () => {
   beforeEach(() => {
     mockPendingKind = "credential";
@@ -553,8 +553,8 @@ describe("ApprovalsScreen — F5-F4: a poll tick heals a stuck error state", () 
       </MemoryRouter>,
     );
     // Before the initial fetch settles, neither the error view nor the queue
-    // has rendered yet — the skeleton is up (R2: this control would still
-    // pass if `status` were initialised to "ready" without asserting the
+    // has rendered yet — the skeleton is up (this control would still pass
+    // if `status` were initialised to "ready" without asserting the
     // skeleton is actually THERE, not just that the error view isn't).
     expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
     expect(document.querySelector(".animate-pulse")).not.toBeNull();
@@ -598,13 +598,15 @@ describe("ApprovalsScreen — F5-F11: deciding refreshes silently, no skeleton f
   });
 });
 
-// ── B4: a terminal run's PENDING approvals ──────────────────────────────────
-// Killing a run used to strand its approvals: they sat PENDING for up to 24h
-// (WARDYN_APPROVAL_EXPIRY_AFTER) while the console kept offering Approve and
-// Deny on them. Both buttons were dead — the sandbox was torn down, the
-// identity revoked, the server refuses — and a dead control on a governance
-// surface reads as "this is still yours to answer". 0.7.2 cancels them
-// server-side (types.ApprovalCancelled) and the screen stops asking.
+// B4: a terminal run's PENDING approvals.
+//
+// Killing a run must not strand its approvals: left PENDING, they would sit
+// for up to 24h (WARDYN_APPROVAL_EXPIRY_AFTER) while the console keeps
+// offering Approve and Deny on them. Both buttons would be dead — the
+// sandbox is torn down, the identity revoked, the server refuses — and a
+// dead control on a governance surface reads as "this is still yours to
+// answer". 0.7.2 cancels them server-side (types.ApprovalCancelled) and the
+// screen stops asking.
 describe("ApprovalsScreen — the run has ended (B4)", () => {
   it("offers no decision on a KILLED run, and says what happened instead", async () => {
     mockRunState = "KILLED";
@@ -648,7 +650,8 @@ describe("ApprovalsScreen — the run has ended (B4)", () => {
   });
 });
 
-// ── P0.3 (R3-F001/F108/F145) ────────────────────────────────────────────────
+// P0.3 (R3-F001/F108/F145).
+//
 // An egress_domain approval has always been HOST-WIDE — the proxy strips any
 // port before keying the decision (approvalHostKey). Three surfaces relied on
 // that quietly while "Reach api.example.com" read, to a human, like the one

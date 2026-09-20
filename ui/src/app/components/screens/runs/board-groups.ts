@@ -5,16 +5,16 @@
 
 // The runs board's pure logic — grouping, headlines, and the ONE attention
 // rule. No JSX, so App.tsx's sidebar badge imports the same rule the board
-// renders: those used to be two hand-copied Sets of run states that could
-// (and did) disagree about what "needs you" means.
+// renders — one shared source keeps what "needs you" means from drifting
+// between the two.
 //
 // Attention is no longer a function of the run state alone. A held approval
 // parks the sandbox while the run is still RUNNING, so the state says nothing
 // about it — the signal comes from the PENDING approvals list, joined here.
 import type { AgentRun, ApprovalRequest } from "../../../lib/types";
-// THE PREDICATE, not the strip: importing it from live-approvals.tsx hoisted
-// that whole module (and everything it imports) into the eager entry chunk —
-// see isHeld's own doc in lib/types/approvals.ts.
+// Import the predicate, not the strip: importing it from live-approvals.tsx
+// would hoist that whole module (and everything it imports) into the eager
+// entry chunk — see isHeld's own doc in lib/types/approvals.ts.
 import { isHeld } from "../../../lib/types";
 import {
   attentionFor,
@@ -99,7 +99,7 @@ export function needsYou(run: AgentRun, signals: RunSignals): boolean {
   return runAttention(run, signals) === "permission";
 }
 
-// ── title grouping ──────────────────────────────────────────────────────────
+// Title grouping
 // The board groups by the run's TITLE: runs that share one are the same piece
 // of work, and seeing the twelve nightly audits as one thing is the point of
 // naming them. It replaced grouping by state — the triage that gave up is

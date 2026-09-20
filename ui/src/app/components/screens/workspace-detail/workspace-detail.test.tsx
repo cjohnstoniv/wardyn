@@ -301,12 +301,12 @@ describe("WorkspaceDetailScreen — a session's egress promotion confirms before
     );
   });
 
-  // UI-WS-14: requestPromoteEgress used to subtract only ws.approved_egress —
-  // session-helpers.ts's newEgressHosts (which drives the button's own
-  // count) ALSO subtracts profile.egress_domains, so the confirm could list
-  // an auto-allowed host the button never asked about. The bulk list is no
-  // longer read-only either: it checkboxes, and only the CHECKED subset is
-  // posted (the server's own optional {"hosts":[…]} field).
+  // requestPromoteEgress must subtract both ws.approved_egress and
+  // profile.egress_domains, matching session-helpers.ts's newEgressHosts
+  // (which drives the button's own count) — otherwise the confirm could list
+  // an auto-allowed host the button never asked about. The bulk list is not
+  // read-only either: it checkboxes, and only the checked subset is posted
+  // (the server's own optional {"hosts":[…]} field).
   it("the confirm lists exactly what the button counted, and promotes only the hosts left checked", async () => {
     const rr: RecordResult = {
       run_id: "r1",
@@ -499,12 +499,12 @@ describe("WorkspaceDetailScreen — Delete and Rebuild follow the row's owner", 
   });
 });
 
-// F5-F3 — the card offered a live Remove over rows the remove path cannot
-// touch. Removing a host is PUT .../approved-egress plus, for an
-// operator-authored requirements row, PUT .../requirements — and that second
-// write reads the workspace's OWN overlay, while the row's provenance was read
-// off the EFFECTIVE fold. A scan_seeded row is in neither: the X fired two
-// no-op writes and the row came straight back.
+// F5-F3 — Remove must be disabled for a row the remove path cannot reach.
+// Removing a host is PUT .../approved-egress plus, for an operator-authored
+// requirements row, PUT .../requirements — and that second write reads the
+// workspace's OWN overlay, while the row's provenance is read off the
+// EFFECTIVE fold. A scan_seeded row is in neither: removing it would fire two
+// no-op writes and the row would come straight back.
 describe("WorkspaceDetailScreen — Allowed hosts, removable means the remove path can reach it", () => {
   it("parks a scan_seeded-only row with a reason, and leaves an approved host live", async () => {
     getWorkspaceMock.mockResolvedValue(
@@ -533,12 +533,12 @@ describe("WorkspaceDetailScreen — Allowed hosts, removable means the remove pa
     );
   });
 
-  // R-F1: the other half of the overlay/fold mismatch. A row whose operator_set
+  // The other half of the overlay/fold mismatch: a row whose operator_set
   // requirement is INHERITED (in the effective fold, absent from the
-  // workspace's own overlay — a source contract this workspace composes) is
-  // parked for the right reason, but it is not a scan row: saying so put two
-  // contradictory provenances on one row ("required by this workspace" beside
-  // "detected by this workspace's scan").
+  // workspace's own overlay — a source contract this workspace composes) must
+  // be parked for the right reason, but it is not a scan row — saying so would
+  // put two contradictory provenances on one row ("required by this workspace"
+  // beside "detected by this workspace's scan").
   it("an INHERITED operator_set row is parked as inherited, not as a scan row", async () => {
     getWorkspaceMock.mockResolvedValue(
       ws({
@@ -565,9 +565,9 @@ describe("WorkspaceDetailScreen — Allowed hosts, removable means the remove pa
     expect(parked).toHaveAttribute("title", SECURITY_ONLY_REASON);
   });
 
-  // R-F4: the Denied twin renders the same HostList behind the same
-  // securityOperator gate — a member got a bare disabled X there while the
-  // Allowed card beside it said why. Same reason, same tier.
+  // The Denied twin renders the same HostList behind the same securityOperator
+  // gate — a member must not get a bare disabled X there while the Allowed
+  // card beside it says why. Same reason, same tier.
   it("the Denied hosts twin says the same thing to the same caller", async () => {
     getWorkspaceMock.mockResolvedValue(ws({ denied_egress: ["evil.example.com"] }));
     renderDetail("ws-1", false, false);
@@ -577,7 +577,7 @@ describe("WorkspaceDetailScreen — Allowed hosts, removable means the remove pa
   });
 });
 
-// F5-F10: the old subtitle claimed the record loop "writes the
+// F5-F10: the subtitle must not claim the record loop "writes the
 // least-privilege policy" — it writes `egress:` requirement rows; the policy
 // hand-off is the separate optional "Save session profile" action. The
 // retired sentence must appear nowhere.
@@ -592,9 +592,9 @@ describe("WorkspaceDetailScreen — F5-F10: the Recorded-sessions subtitle stops
 
 // F6-F3 (site 2): getSetupStatus() degrades to the synthetic READY_FALLBACK
 // (unreachable:true) on any non-401 failure — hasLlmPath(READY_FALLBACK) is
-// always false, so the old `.then((s) => setLlmReady(hasLlmPath(s)))` told an
-// operator "no model provider configured" for a daemon that simply never
-// answered. `unreachable` must read as unknown, not "no".
+// always false, so `.then((s) => setLlmReady(hasLlmPath(s)))` alone would
+// tell an operator "no model provider configured" for a daemon that simply
+// never answered. `unreachable` must read as unknown, not "no".
 describe("WorkspaceDetailScreen — F6-F3 site 2: an unreachable setup status never claims no model provider", () => {
   it("shows no model-provider warning when the setup status is the synthetic unreachable fallback", async () => {
     getSetupStatusMock.mockResolvedValue(setupStatus({ unreachable: true }));
@@ -613,10 +613,10 @@ describe("WorkspaceDetailScreen — F6-F3 site 2: an unreachable setup status ne
   });
 });
 
-// F5-F7: `load` had no request token across an `:id` change — the component
+// F5-F7: `load` needs a request token across an `:id` change — the component
 // is REUSED across a workspace-to-workspace navigation (react-router keeps
 // the same element mounted, only the param changes), so a slow response for
-// the OLD id that resolves after the NEW id's own load can paint stale data
+// the OLD id that resolves after the NEW id's own load could paint stale data
 // under the new URL. Copies audit.tsx's drillRequestId idiom.
 function NavButton({ to }: { to: string }) {
   const navigate = useNavigate();

@@ -429,11 +429,9 @@ export const DEMOS: Demo[] = [
     ],
   },
 
-  // ============================================================
   // Secrets demos — governance for a stored VALUE, tied to egress or not.
   // write-only-by-design goes FIRST: it's the precondition the other two
   // gate on (both reference the secret it walks the operator through adding).
-  // ============================================================
   {
     id: "write-only-by-design",
     section: "secrets",
@@ -558,14 +556,12 @@ export const DEMOS: Demo[] = [
     ],
   },
 
-  // ============================================================
   // Per-KIND secrets demos. The three above teach the mechanism; these five
   // teach that the mechanism CHANGES with the credential kind, because it is
   // the consuming protocol — not a Wardyn preference — that decides how far
   // out of the sandbox a credential can be kept. Read them as a ladder:
   // header-injected (never enters) → piped (enters, never rests) → resident
   // (rests, briefly) → re-originated (cannot even be asked for) → refused.
-  // ============================================================
   {
     id: "rest-api-token",
     section: "secrets",

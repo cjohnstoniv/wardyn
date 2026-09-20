@@ -12,7 +12,7 @@
 // block leaves both files well under the 1000-line file gate rather than
 // pushing a 914-line screen through it.
 //
-// ─── WHY THE DRIVE LIVES HERE AND NOT IN THE ADD-WORKSPACE DIALOG ──────────
+// Why the drive lives here and not in the Add-workspace dialog:
 //
 // A drive is NOT a workspace, and the card says so by being orthogonal to its
 // own Select: the block renders the same whatever the Select says, "Ephemeral
@@ -20,7 +20,7 @@
 // fourth OptionCard in the dialog — a dialog entry would make it a source you
 // onboard, which is exactly the conflation the copy exists to prevent.
 //
-// ─── FOUR STATES, AND THE ABSENT ONE MATTERS MOST ──────────────────────────
+// Four states, and the absent one matters most:
 //
 // The allocation (/me.user_drive) and the door
 // (/me.user_drive_denied_by_profile) are two independent bits because there
@@ -41,8 +41,8 @@
 // "denied AND unallocated" is a real state in which the obvious advice — ask
 // an admin for an allocation — is the wrong advice.
 //
-// A FIFTH bit, /me.user_drive_unavailable (0.7.2, R1-F139 == R4-F052), rides
-// beside the door and the allocation and outranks the allocation the same
+// A fifth bit, /me.user_drive_unavailable, rides beside the door and the
+// allocation and outranks the allocation the same
 // way: when /me itself could not answer for this caller's drive, `drive` is
 // already null (the server suppresses it), so the fifth bit is what tells
 // "no allocation" apart from "couldn't say" and gives the reason line a
@@ -77,9 +77,9 @@ import type { WizardState } from "./wizard-types";
 // three per workspace-providers-prompt.md §7.7 (U3). `unmountable` wraps
 // driveMountFor's specific reason (REFUSED_BACKEND's {reason}) ONLY at
 // launch — driveUnavailableReason deliberately discards it before it reaches
-// /me, so there is no {reason} to fill REFUSED_BACKEND with here. Q14 (same
-// doc) left this token's own card state to a later mock round; until then it
-// falls back to the same generic line `unavailable` renders — both are
+// /me, so there is no {reason} to fill REFUSED_BACKEND with here. This
+// token's own card state falls back to the same generic line `unavailable`
+// renders until a dedicated one is designed — both are
 // honestly "couldn't confirm this, ask an admin" for a member who has no
 // more specific advice to act on.
 function unavailableReason(token: string): string | null {
@@ -149,7 +149,7 @@ function DriveBlock({
   // and the sentence after it flip together and neither promises persistence a
   // read-only mount cannot give.
   //
-  // A NARROWING NEEDS A MOUNT TO NARROW. With the checkbox off this run mounts
+  // A narrowing needs a mount to narrow. With the checkbox off this run mounts
   // nothing — wizard-spec.ts emits `drive` only for driveEnabled, so
   // `read_only` would ride nothing — and the sentence above is an OFFER, not a
   // description of this run. So `driveReadOnly` is read only while the mount is
@@ -246,15 +246,14 @@ export function WorkspaceCard({
       <Select
         value={state.workspaces[0]?.workspaceId ?? "__none__"}
         onValueChange={(v) =>
-          // F2-F8: this REPLACES INDEX 0 ONLY — a multi-workspace clone (B4b)
-          // or an extra attached via the chips below survives a change to the
-          // primary selection. The old form overwrote the whole array, so
-          // picking a different primary silently dropped every extra.
-          // R2: dedupe — picking an id ALREADY an extra (below) must not leave
-          // it twice (double mounts/repos on the wire; the chip's Remove would
-          // then drop both the extra AND the primary the operator just chose).
-          // R3: "Ephemeral scratch — no repo" means NO workspace, not "promote
-          // the first extra" — state.workspaces.slice(1) was wrong here.
+          // This replaces index 0 only — a multi-workspace clone or an extra
+          // attached via the chips below survives a change to the primary
+          // selection; overwriting the whole array would silently drop every
+          // extra. Dedupes: picking an id already an extra must not leave it
+          // twice (double mounts/repos on the wire; the chip's Remove would
+          // then drop both the extra AND the primary the operator just
+          // chose). "Ephemeral scratch — no repo" means NO workspace, never
+          // "promote the first extra".
           patch({
             workspaces:
               v === "__none__"
@@ -284,7 +283,7 @@ export function WorkspaceCard({
           ))}
         </SelectContent>
       </Select>
-      {/* F2-F8: extras a multi-workspace clone carried (or the primary select
+      {/* Extras a multi-workspace clone carried (or the primary select
           demoted when it changed) — attached, but not the primary, so they get
           no reason line of their own; just a way off. */}
       {state.workspaces.length > 1 && (
