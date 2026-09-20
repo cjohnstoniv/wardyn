@@ -30,4 +30,7 @@ RUN apk add --no-cache curl iproute2 ca-certificates
 # No ENTRYPOINT on purpose (see note above). The default CMD is a harmless
 # self-documenting message for standalone `docker run` invocations; the Wardyn
 # driver replaces it with `sleep infinity`.
+# The two binaries a TASK exec needs in order not to exit 127 — see each file's
+# header. Stubs on purpose: this image is a probe target, not an agent.
+COPY agent-run wardyn-rec /usr/local/bin/
 CMD ["/bin/sh", "-c", "echo 'wardyn e2e fixture: probes run via docker exec' && sleep infinity"]

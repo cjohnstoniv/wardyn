@@ -150,6 +150,11 @@ func (h *harness) seedScriptWorkspace(label, script string) string {
 	if err := os.WriteFile(filepath.Join(td, "solution.sh"), []byte(script), 0o755); err != nil {
 		h.t.Fatalf("write solution.sh: %v", err)
 	}
+	// …and writable by the sandbox's uid, exactly as seedWorkspace does (see
+	// openForSandbox): on a uid-1001 runner the script could not write the file
+	// this test reads its result from, so "did not reach github.com (code="")"
+	// was an unwritable mount, not an egress failure.
+	openForSandbox(h.t, ws)
 	// ONBOARD, exactly as seedWorkspace does: the run-create mount gate
 	// (validateWorkspaceSources) refuses a local-dir source that was never
 	// onboarded. This seeder skipped it and only looked green on a box whose
