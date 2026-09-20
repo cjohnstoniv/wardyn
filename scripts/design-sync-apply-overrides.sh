@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2025 The Wardyn Authors
+# SPDX-License-Identifier: Apache-2.0
+
 # Re-apply the repo's overrides to the staged design-sync library.
 #
 # `.ds-sync/` is staged by the /design-sync skill and is not tracked, so every
