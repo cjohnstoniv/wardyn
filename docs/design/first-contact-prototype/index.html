@@ -476,6 +476,17 @@ textarea.input{height:auto;padding:9px 12px;resize:vertical;font-family:inherit}
 .bare-fail{margin-top:12px;font-size:12px;color:var(--danger);display:flex;gap:6px;
   align-items:flex-start}
 .bare-fail svg{width:14px;height:14px;flex:none;margin-top:2px}
+/* A scaffold tag on a BEFORE state, so today's behaviour is never mistaken
+   for the prototype being unfinished. */
+.todaytag{margin-top:6px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--muted-foreground);border-left:2px solid var(--border-strong);padding-left:8px}
+.failcard{margin-top:12px;padding:10px 12px;border-radius:var(--radius-sm);
+  border:1px solid color-mix(in oklab,var(--danger) 30%,transparent);background:var(--danger-subtle)}
+.failcard .t{display:flex;gap:7px;align-items:flex-start;font-size:var(--text-body);
+  font-weight:500;color:var(--danger)}
+.failcard .t svg{width:15px;height:15px;margin-top:2px}
+.failcard .d{margin-top:5px;font-size:12px;color:var(--muted-foreground);padding-left:22px}
+.failcard .acts{margin-top:8px;padding-left:22px;display:flex;gap:10px;flex-wrap:wrap}
 
 /* run rows */
 .runrow{display:flex;gap:12px;align-items:center;padding:12px 14px;
@@ -1361,12 +1372,32 @@ function newRunPage(){
   /* BEFORE — the launch failure is a bare paragraph with no role, so nothing
      announces it. AFTER — Launch never fires, and a failure that does happen
      is announced. */
-  if (S.launchFailed && !after())
+  if (S.launchFailed && !after()){
+    /* canon today - new-run-screen.tsx. One sentence: no role, no reason, no
+       route. The scaffold tag beneath says so, so this reads as the defect
+       rather than as an unfinished prototype. */
     launchKids.push(h("p",{class:"bare-fail"},[ icon("triangleAlert"),
       h("span",{text:"Failed to launch run."}) ]));
+    launchKids.push(h("p",{class:"todaytag",
+      text:"Today's message, verbatim - issue #214"}));
+  }
   if (S.launchFailed && after())
-    launchKids.push(h("p",{class:"bare-fail",role:"alert"},[ icon("triangleAlert"),
-      h("span",{text:"Failed to launch run."}) ]));
+    /* PROPOSED. A launch can still fail for reasons no preflight can rule out:
+       an unbuildable image, a daemon that dies mid-dispatch. Disabling Launch
+       on a barrier-less host closes one door; it does nothing for this
+       message. Name the stage it failed at, say where the reason is, and
+       carry the route there. */
+    launchKids.push(h("div",{class:"failcard",role:"alert"},[
+      h("div",{class:"t"},[ icon("triangleAlert"),
+        h("span",{text:"The run was created, but its sandbox did not start."}) ]),
+      h("p",{class:"d",text:"Wardyn recorded why on the run's page, with anything it managed to do first."}),
+      h("div",{class:"acts"},[
+        h("button",{class:"btn-link",style:"font-size:12px",
+          onclick:function(){ S.launchFailed=false; go("board"); },text:"Open the run \u2192"}),
+        h("button",{class:"btn-link",style:"font-size:12px",
+          onclick:function(){ S.launchFailed=false; render(); },text:"Dismiss"})
+      ])
+    ]));
 
   launchKids.push(h("button",{class:"btn btn-default",style:"width:100%;margin-top:14px",
     disabled: launchDisabled,
@@ -1453,11 +1484,11 @@ var TOUR = [
   { host:"B", mode:"before", screen:"newrun",
     title:"A host with no barrier, today — the dead end",
     do:'Press <b>Launch run</b>.',
-    see:"Issue #214. Every barrier is disabled because none can be built here, but Launch is enabled anyway. It fails with a bare line that no screen reader announces, and nothing on this page, the board, or the top bar tells you where to go." },
+    see:"Issue #214. Every barrier is disabled because none can be built here, but Launch is enabled anyway. It fails with a bare line that no screen reader announces, and nothing on this page, the board, or the top bar tells you where to go. That line is today's text verbatim, tagged as such underneath." },
   { host:"B", mode:"after", screen:"newrun",
     title:"The same host, proposed — refused with a reason and a route",
     do:'Try <b>Launch run</b> again, then follow <b>Set up a barrier</b>.',
-    see:"Launch is disabled with its reason stated beside it rather than hidden in a tooltip, and it carries a link to the step that fixes it. The board and the top bar carry the same route." },
+    see:"Launch is disabled with its reason stated beside it rather than hidden in a tooltip, and it carries a link to the step that fixes it. The board and the top bar carry the same route. Then press Launch on Host A for the other half: a failure that can still happen names the stage it failed at and carries a route to the reason." },
   { host:"B", mode:"after", screen:"setup", step:"environment",
     title:"Where that route lands",
     do:'You are done — the switches above are yours now. Try <b>Host A</b> and flip <b>Before</b>/<b>After</b> on any screen.',
