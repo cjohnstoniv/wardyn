@@ -146,6 +146,20 @@ a:hover{text-decoration:underline}
   background:transparent;color:var(--muted-foreground);cursor:pointer}
 .walk button:hover{color:var(--foreground);border-color:var(--foreground)}
 
+/* --- the guided walk (scaffold) --- */
+.guide{max-width:1240px;margin:16px auto 0;padding:14px 16px;border:1px solid var(--border);
+  border-radius:14px;background:var(--card);display:grid;
+  grid-template-columns:minmax(0,1fr) auto;gap:14px;align-items:center}
+@media (max-width:760px){.guide{grid-template-columns:minmax(0,1fr)}}
+.guide .n{font-size:var(--text-meta);letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted-foreground);font-weight:600}
+.guide h3{font-size:15px;margin-top:3px}
+.guide .do{margin-top:6px;font-size:var(--text-body);color:var(--foreground)}
+.guide .do b{color:var(--primary);font-weight:600}
+.guide .see{margin-top:4px;font-size:12px;color:var(--muted-foreground);max-width:88ch}
+.guide .acts{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.guide.done{border-color:color-mix(in oklab,var(--primary) 40%,transparent)}
+
 /* ============================ PRODUCT ==================================== */
 .app{max-width:1240px;margin:0 auto;border:1px solid var(--border);border-radius:14px;
   overflow:hidden;background:var(--background);margin-top:18px}
@@ -376,9 +390,11 @@ textarea.input{height:auto;padding:9px 12px;resize:vertical;font-family:inherit}
   border:1px solid var(--border);border-radius:var(--radius);background:var(--muted);
   padding:6px 10px}
 .cmd code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--foreground)}
-.mark{display:inline-flex;width:18px;height:18px}
-.mark svg{width:18px;height:18px}
-.mark.yes{color:var(--success)} .mark.caveat{color:var(--warning)} .mark.no{color:var(--danger)}
+/* Named for the matrix CELL, not `.mark` — `.signin .mark` is the logo block
+   and a bare `.mark` leaked this 18px box onto it, squeezing the wordmark. */
+.cellmark{display:inline-flex;width:18px;height:18px}
+.cellmark svg{width:18px;height:18px}
+.cellmark.yes{color:var(--success)} .cellmark.caveat{color:var(--warning)} .cellmark.no{color:var(--danger)}
 .constant-note{margin-top:14px;font-size:12px;color:var(--muted-foreground);max-width:78ch}
 .rec-note{margin-top:14px;display:flex;gap:8px;align-items:flex-start;font-size:var(--text-body);
   color:var(--muted-foreground);max-width:78ch}
@@ -499,6 +515,7 @@ textarea.input{height:auto;padding:9px 12px;resize:vertical;font-family:inherit}
   <p class="note" id="scaffold-note"></p>
 </div>
 
+<div class="guide" id="guide"></div>
 <div id="root"></div>
 <div class="walk" id="walkstrip"></div>
 
@@ -906,7 +923,7 @@ function stepCounter(){
 function markCell(kind, cc){
   var name = kind==="yes" ? "circleCheck" : kind==="caveat" ? "circleAlert" : "circleX";
   var title = kind==="caveat" ? RESIDUAL_PREFIX+" "+CC_META[cc].doesntProtect : null;
-  var sp = h("span",{class:"mark "+kind, title:title},[ icon(name) ]);
+  var sp = h("span",{class:"cellmark "+kind, title:title},[ icon(name) ]);
   sp.appendChild(h("span",{class:"sr",
     text: kind==="yes" ? "Protected" : kind==="caveat" ? (RESIDUAL_PREFIX+" "+CC_META[cc].doesntProtect) : "Not protected"}));
   return sp;
@@ -1379,6 +1396,82 @@ function walkStrip(){
         text:"· three routes to Environment: the banner, the top bar, and New run's Launch reason"}));
   }
 }
+
+/* ============================================================================
+   THE GUIDED WALK. Six stops. Each one sets the switches for you and says what
+   to do and what to look at, so the page never leaves you guessing. The three
+   switches stay live for free play afterwards.
+   ========================================================================= */
+var TOUR = [
+  { host:"A", mode:"before", screen:"signin",
+    title:"Sign in — what the field advertises",
+    do:'Type any characters into <b>Admin token</b> and press <b>Sign in</b>.',
+    see:"Issue #212. The field's placeholder is a working demo credential, and the hint below it names an environment variable. The first thing a new admin reads is a token to paste." },
+  { host:"A", mode:"before", screen:"setup", step:"environment",
+    title:"Setup today — seventeen steps, and a recommendation that is not installed",
+    do:'Look at the step counter above the heading, then at which column carries <b>Recommended</b>.',
+    see:"Issue #213. It says Step 1 of 17, because ten optional demos are counted alongside the four steps that actually block a run. And Recommended sits on Vault — which is experimental, and which this host does not have installed — because the current code infers KVM from the operating system rather than reading what the host reports." },
+  { host:"A", mode:"after", screen:"setup", step:"environment",
+    title:"Setup proposed — four steps, and a recommendation you can act on",
+    do:'Nothing to click. Compare the counter and the <b>Recommended</b> chip with the previous stop.',
+    see:"Step 1 of 4, with the thirteen optional steps named as optional and listed after. Recommended now sits on Fence — the strongest barrier this host reports installed — and a line underneath says what is stronger and what it would take." },
+  { host:"B", mode:"before", screen:"newrun",
+    title:"A host with no barrier, today — the dead end",
+    do:'Press <b>Launch run</b>.',
+    see:"Issue #214. Every barrier is disabled because none can be built here, but Launch is enabled anyway. It fails with a bare line that no screen reader announces, and nothing on this page, the board, or the top bar tells you where to go." },
+  { host:"B", mode:"after", screen:"newrun",
+    title:"The same host, proposed — refused with a reason and a route",
+    do:'Try <b>Launch run</b> again, then follow <b>Set up a barrier</b>.',
+    see:"Launch is disabled with its reason stated beside it rather than hidden in a tooltip, and it carries a link to the step that fixes it. The board and the top bar carry the same route." },
+  { host:"B", mode:"after", screen:"setup", step:"environment",
+    title:"Where that route lands",
+    do:'You are done — the switches above are yours now. Try <b>Host A</b> and flip <b>Before</b>/<b>After</b> on any screen.',
+    see:"The Environment step states that no barrier is available, the forward control becomes Re-check rather than a Next that walks you past the only thing blocking you, and Finish setup is disabled. That last one is the decision most worth arguing with — see the README." }
+];
+var tourAt = 0, touring = true;
+
+function applyTour(){
+  var t = TOUR[tourAt];
+  S.host = t.host; S.mode = t.mode; S.screen = t.screen;
+  if (t.step) S.step = t.step;
+  if (t.screen === "signin"){ S.token=""; S.signinAlert=null; }
+  S.launchFailed = false; S.barrier = null; S.cmdOpen = {};
+  render(); window.scrollTo(0,0);
+}
+function renderGuide(){
+  var g = document.getElementById("guide");
+  g.textContent = "";
+  if (!touring){
+    g.className = "guide done";
+    g.appendChild(h("div",{},[
+      h("div",{class:"n",text:"Free play"}),
+      h("h3",{text:"Walk anything you like"}),
+      h("p",{class:"see",text:"The three switches at the top drive every screen. Host B is the no-barrier host; Before is today, After is the proposal."})
+    ]));
+    g.appendChild(h("div",{class:"acts"},[
+      h("button",{class:"btn btn-outline btn-sm",onclick:function(){ touring=true; tourAt=0; applyTour(); }},[ icon("rotate"), "Restart the walk" ])
+    ]));
+    return;
+  }
+  var t = TOUR[tourAt];
+  g.className = "guide";
+  g.appendChild(h("div",{},[
+    h("div",{class:"n",text:"Guided walk · "+(tourAt+1)+" of "+TOUR.length}),
+    h("h3",{text:t.title}),
+    h("p",{class:"do",html:t.do}),
+    h("p",{class:"see",text:t.see})
+  ]));
+  var acts = [];
+  if (tourAt > 0)
+    acts.push(h("button",{class:"btn btn-outline btn-sm",onclick:function(){ tourAt--; applyTour(); }},[ icon("arrowLeft"), "Back" ]));
+  if (tourAt < TOUR.length-1)
+    acts.push(h("button",{class:"btn btn-default btn-sm",onclick:function(){ tourAt++; applyTour(); }},["Next", icon("arrowRight")]));
+  else
+    acts.push(h("button",{class:"btn btn-default btn-sm",onclick:function(){ touring=false; renderGuide(); }},["Finish", icon("arrowRight")]));
+  acts.push(h("button",{class:"btn btn-ghost btn-sm",onclick:function(){ touring=false; renderGuide(); },text:"Skip"}));
+  g.appendChild(h("div",{class:"acts"}, acts));
+}
+
 function render(){
   var root = document.getElementById("root");
   root.textContent = "";
@@ -1388,6 +1481,7 @@ function render(){
                  : boardPage());
   root.appendChild(S.screen === "signin" ? h("div",{class:"app"},[page]) : h("div",{class:"app"},[page]));
   document.getElementById("scaffold-note").textContent = NOTES[S.host+"/"+S.mode];
+  renderGuide();
   walkStrip();
   syncSwitches();
 }
@@ -1396,10 +1490,12 @@ document.getElementById("sw-theme").addEventListener("click", function(e){
 });
 document.getElementById("sw-host").addEventListener("click", function(e){
   var b = e.target.closest("button"); if (!b) return;
+  touring = false;
   S.host = b.getAttribute("data-v"); S.barrier = null; S.launchFailed = false; S.cmdOpen = {}; render();
 });
 document.getElementById("sw-mode").addEventListener("click", function(e){
   var b = e.target.closest("button"); if (!b) return;
+  touring = false;
   S.mode = b.getAttribute("data-v");
   if (!walkOrder().some(function(s){ return s.id === S.step; }) && isRequired(S.step) === false) S.step = "environment";
   S.launchFailed = false; render();
@@ -1409,7 +1505,7 @@ document.getElementById("restart").addEventListener("click", function(){
   S.signinAlert = null; S.launchFailed = false; S.cmdOpen = {}; render();
 });
 setTheme("dark");
-render();
+applyTour();
 </script>
 </body>
 </html>
