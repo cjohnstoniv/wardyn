@@ -11,7 +11,7 @@
 // new-session form, open-record lifecycle, settled review card, empty-capture
 // honesty, confined replay + live approvals) survives; only the harness
 // (renderPane) and the confined-mode assertions changed shape.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ProfileObservations, RecordResult, Workspace } from "../../../lib/types";
@@ -66,7 +66,7 @@ function ws(over: Partial<Workspace> = {}): Workspace {
 const noop = () => {};
 function renderPane(
   over: Partial<Workspace> = {},
-  handlers: Partial<Record<string, ReturnType<typeof vi.fn>>> = {},
+  handlers: Partial<Record<string, Mock>> = {},
   modelReady = true,
   operator = true,
   launch: { warnings?: string[]; confinementClass?: string } | null = null,

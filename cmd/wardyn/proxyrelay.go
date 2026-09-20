@@ -93,8 +93,7 @@ func setupProxyRelayCmd() *cobra.Command {
 			// `tee`) otherwise captures a security WARNING as if it were routine
 			// informational output. Printed next to the address it describes: an
 			// operator who started this from a script never reads --help, and
-			// the exposure the default carries used to live only in a source
-			// comment.
+			// would otherwise never see the exposure the default carries.
 			if warn := relayExposureWarning(listenAddr); warn != "" {
 				fmt.Fprintln(cmd.ErrOrStderr(), warn)
 			}

@@ -13,7 +13,7 @@ import (
 
 // approvals_reauth.go — the ONE helper decide() needs for the credential_reauth
 // kind, in its own file because approvals.go sits at the 1000-line cap and this
-// helper is the seam the kind rule introduced (security round-2 SHOULD-1).
+// helper is the seam the kind rule introduced.
 
 // canSeeApproval reports whether this caller may be told that ap EXISTS — the
 // security tier, which decides any kind on any run, or a caller who owns ap's

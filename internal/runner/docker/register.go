@@ -22,7 +22,7 @@ import (
 // path) shared between agent containers and wardynd's -recording-dir, where
 // wardyn-rec delivers finished casts (single-host delivery only).
 //
-// SECURITY (HIGH-finding): that shared mount is the REDUCED-ISOLATION fallback
+// Security (HIGH-finding): that shared mount is the REDUCED-ISOLATION fallback
 // delivery path — casts written to it are UNMASKED (secret masking lives
 // control-plane-side, on the brokered upload path) and it has NO cross-run
 // isolation (all agent containers share one uid). The driver prefers the masked

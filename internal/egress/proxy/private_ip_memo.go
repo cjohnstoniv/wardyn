@@ -24,11 +24,11 @@ const privateIPMemoMax = 64
 // refused builtin:private-ip after resolution — and how many identical attempts
 // have since been refused straight out of the memo.
 //
-// WHY THIS VERDICT AND NO OTHER (B6): the agent CLI retries a denial ten times
-// (that loop is the CLI's — the proxy has none), and each retry used to
-// re-resolve the name, re-vet it and emit another egress.deny, so a single
-// misconfigured private endpoint filled the run's evidence rail with ten
-// identical denials. The private-address guard is the one refusal that cannot
+// Why this verdict and no other (B6): the agent CLI retries a denial ten times
+// (that loop is the CLI's — the proxy has none), and without this memo each
+// retry would re-resolve the name, re-vet it and emit another egress.deny, so
+// a single misconfigured private endpoint would fill the run's evidence rail
+// with ten identical denials. The private-address guard is the one refusal that cannot
 // change its mind mid-run: the internal_hosts lift that would lift it is
 // compiled into this sidecar's config at dispatch and read once at startup, so
 // no site-config change reaches the run being refused (the 403 body says so, in
@@ -37,7 +37,7 @@ const privateIPMemoMax = 64
 // MUST keep asking, and neither is memoed. Step 0's literal-IP guard is not
 // memoed either: it resolves nothing, so there is nothing to save.
 //
-// STATED CEILING (docs/OPERATIONS.md's Network section says this to operators):
+// Stated ceiling (docs/OPERATIONS.md's Network section says this to operators):
 // the memo is per run, so a name that flips from a private to a public address
 // mid-run stays refused until the run ends. The remedy is the one the 403
 // already gives — declare it under internal_hosts — and a new run re-resolves.
@@ -184,18 +184,18 @@ func (p *Proxy) privateIPRefused(req egress.Request, kind blockKind) {
 
 // privateIPMemoHit answers an identical repeat from the memo, counting it.
 //
-// CALLED BEFORE THE FIRST-USE APPROVAL FLOW (V1-D5), not after it. It used to sit
-// below, which meant a memoed host carrying an `unknown` policy verdict re-entered
-// Resolve/ResolveWait on every one of the CLI's ten retries: a spent scope=once
-// grant was consumed, or a fresh egress_domain question was POSTed to a human, or
-// the connection was PARKED in ResolveWait until the hold deadline — and the
-// request was then refused straight out of the memo with a NIL decision log, so a
-// human decision was spent on a request denied with no decision row at all (before
-// the memo existed it at least wrote an egress.deny). A private-IP target can
-// never be approved into reachability: the address guard is unconditional and the
-// internal_hosts lift that would change it is compiled into this sidecar at
-// dispatch, so the question can only ever be answered "yes" and then overruled.
-// Exactly the wasted question F032 moved the method check above the raise to stop.
+// Called before the first-use approval flow, not after it: calling it after
+// would let a memoed host carrying an `unknown` policy verdict re-enter
+// Resolve/ResolveWait on every one of the CLI's ten retries — spending a
+// scope=once grant, POSTing a fresh egress_domain question to a human, or
+// PARKING the connection in ResolveWait until the hold deadline — for a
+// request the memo then refuses straight out with a NIL decision log, so a
+// human decision would be spent on a request denied with no decision row at
+// all. A private-IP target can never be approved into reachability: the
+// address guard is unconditional and the internal_hosts lift that would
+// change it is compiled into this sidecar at dispatch, so the question can
+// only ever be answered "yes" and then overruled. F032 moved the method check
+// above the raise to stop exactly this wasted question.
 //
 // It stays BELOW policy:denied and policy:method: both name a more specific rule
 // for this request, and neither costs a human anything.
@@ -221,7 +221,7 @@ func (p *Proxy) privateIPBlockKind(host string, port int) blockKind {
 // Called at run end (Server.Shutdown, before the decision sink drains) so a
 // repeat count is not lost to the sandbox simply stopping.
 //
-// CEILING, stated rather than implied: this runs on the ORDERLY stop —
+// Ceiling, stated rather than implied: this runs on the ORDERLY stop —
 // cmd/wardyn-proxy's signal handler calls Shutdown with a 15 s budget, so a
 // SIGTERM flushes. A SIGKILL at grace expiry, an OOM kill, or a pod deleted out
 // from under the sidecar drops whatever streaks were still open. What is lost is

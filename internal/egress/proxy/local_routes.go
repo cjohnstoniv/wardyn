@@ -67,7 +67,7 @@ const (
 	// signed in" and "the credential could not be refreshed" have different
 	// fixes, and only one of them is a person's to make.
 	//
-	// APPENDED, not slotted in beside its siblings: docs/AUDIT-ACTIONS.md cites
+	// Appended, not slotted in beside its siblings: docs/AUDIT-ACTIONS.md cites
 	// each of these by LINE with a zero-line window, so inserting above them
 	// rots three citations for nothing.
 	ruleSourceCredentialReauthTimeout = "credential:reauth-timeout"
@@ -196,7 +196,7 @@ type toolCallScope struct {
 // sandbox-facing alias the tool-approval gate uses to park a tool call for a
 // human decision.
 //
-// The RUN IDENTITY IS NEVER SANDBOX INPUT: it rides the run token this proxy
+// The run identity is never sandbox input: it rides the run token this proxy
 // holds (forwardToControlPlane), which the control plane binds from its
 // verified claims — the same derivation the approvals GET and the recording PUT
 // use, and the reason the sandbox itself stays tokenless.

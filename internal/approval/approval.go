@@ -137,7 +137,7 @@ func Decide(ctx context.Context, st Store, id uuid.UUID, decidedByType types.Act
 		"decision":    string(decision.State),
 		"reason":      decision.Reason,
 	}
-	// Self-joining SIEM stream (W20-hold-fsm-1's companion): surface the
+	// Self-joining SIEM stream: surface the
 	// approval's own requested-scope host at the top level, when it has one, so
 	// a consumer of this event never has to parse the nested requested_scope
 	// JSON to learn which host a human just approved/denied. Best-effort — a
@@ -206,10 +206,10 @@ func ExpireStale(ctx context.Context, st Store, olderThan time.Duration) (int, e
 // ExpireStaleByKind is ExpireStale plus a per-KIND tally of what it moved.
 //
 // It exists because a metric that counts a state transition has to be
-// incremented WHERE THE STATE CHANGES. The credential re-auth counter used to
-// be bumped at a later resolve that happened to meet a terminal row, which
-// counts retries rather than outcomes — with the measured ~30 s SDK cadence one
-// aged-out request scored dozens of "expired" — and never fired at all for a
+// incremented WHERE THE STATE CHANGES: bumping the credential re-auth counter
+// at a later resolve that happens to meet a terminal row would count retries
+// rather than outcomes — with the measured ~30 s SDK cadence one aged-out
+// request would score dozens of "expired" — and would never fire at all for a
 // run whose sidecar had already given up. A separate function rather than a
 // changed signature: every existing caller asks the question it always asked.
 func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (int, map[types.ApprovalKind]int, error) {
@@ -222,13 +222,13 @@ func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (
 
 	expired := 0
 	byKind := map[types.ApprovalKind]int{}
-	// COLLECTED, NOT RETURNED ON THE FIRST FAILURE. ListApprovals is ordered
+	// Collected, not returned on the first failure: ListApprovals is ordered
 	// (ORDER BY requested_at DESC in the store) and the sweeper re-lists in the
-	// same order every tick, so a single permanently failing PENDING row used to
-	// abort the sweep at the same position forever — stranding every approval
-	// sorted after it, fleet-wide, with no expiry ever reaching them. The sweep
-	// now expires what it can and reports every row it could not, the shape
-	// FSStore.Sweep already uses.
+	// same order every tick, so returning on the first permanently failing
+	// PENDING row would abort the sweep at the same position every time —
+	// stranding every approval sorted after it, fleet-wide, with no expiry ever
+	// reaching them. The sweep instead expires what it can and reports every row
+	// it could not, the shape FSStore.Sweep already uses.
 	var failures []error
 	for _, ap := range pending {
 		if ap.RequestedAt.After(cutoff) {
@@ -294,10 +294,10 @@ func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (
 // with nothing pending emits nothing at all, which is what makes a re-kill
 // idempotent in the audit log as well as in the store.
 //
-// THE ROW IS EMITTED ON THE FAILURE PATH TOO, carrying however many rows DID
-// move plus the error. The first draft returned the CAS failure before reaching
-// the audit block, so a cancel that moved two approvals and then hit a store
-// error left two rows durably CANCELLED and nothing in the trail — exactly the
+// The row is emitted on the failure path too, carrying however many rows DID
+// move plus the error: returning the CAS failure before reaching the audit
+// block would leave a cancel that moved two approvals and then hit a store
+// error with two rows durably CANCELLED and nothing in the trail — exactly the
 // unexplained emptying of the operator's queue this row exists to explain, and
 // the reason ExpireStale records inside its own loop rather than after it.
 func CancelForRun(ctx context.Context, st Store, runID uuid.UUID, reason string) (int, error) {

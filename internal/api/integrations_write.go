@@ -125,8 +125,7 @@ func validateIntegrationDelivery(d types.IntegrationDelivery) error {
 		}
 		// ONE implementation of the format rule, shared with the api_key
 		// eligible-grant path (validInjectionFormat, policy.go) — the two
-		// authoring paths write the identical wire field, and until F097 only
-		// this one checked it.
+		// authoring paths write the identical wire field.
 		if err := validInjectionFormat(d.Format); err != nil {
 			return err
 		}
@@ -209,7 +208,7 @@ func validateIntegrationWrite(in types.Integration) error {
 		return fmt.Errorf("id: invalid identifier %q (lowercase alphanumeric, '.', '_', '-', 1-128 chars, "+
 			"plus up to three colon-joined qualifier segments)", in.ID)
 	}
-	// 0.5: only the CLOSED kinds are writable. Generic kinds (package feeds,
+	// Only the CLOSED kinds are writable. Generic kinds (package feeds,
 	// container registries, cloud providers, data stores, MCP servers, work
 	// tracking, observability, "other service") were an operator-extensibility
 	// surface for the /integrations catalog, and that catalog is gone —
@@ -261,7 +260,7 @@ func validateIntegrationWrite(in types.Integration) error {
 		return fmt.Errorf("docs: too long (%d bytes, max 2048)", len(in.Docs))
 	}
 	if len(in.DefaultFor) > 0 && !types.AIProviderKind(in.Kind) {
-		// PLATFORM-API-3: both marks are defined only for the AI kinds
+		// Both marks are defined only for the AI kinds
 		// (types.Integration.DefaultFor's doc), and their readers
 		// (applyDefaultForRadio's clear, defaultAgentRunsIntegration) already
 		// filter on it — so a non-AI row taking a mark here just STEALS it from
@@ -289,7 +288,7 @@ func validateIntegrationWrite(in types.Integration) error {
 		if (region == "") != (model == "") {
 			return fmt.Errorf("config: bedrock region and model must be set together (a region-scoped inference profile 403s at invoke with only one)")
 		}
-		// bug-integrations-2: resolveBedrockAuth (runs_bedrock.go) reads FOUR
+		// resolveBedrockAuth (runs_bedrock.go) reads FOUR
 		// FIXED global secret names in a fixed precedence — bearer > captured
 		// SSO > ~/.aws mount > static keys — never this row's own
 		// secret_name/auth_lane (Bedrock creds are deliberately operator-
@@ -337,8 +336,8 @@ func applyDefaultForRadio(rows []types.Integration, id string, newDefaultFor []s
 }
 
 // resolveIntegrationRefFrom is resolveIntegrationRef's pure half: resolves
-// ref against an ALREADY-COMPUTED effective set. Factored out (PLATFORM-API-8)
-// so a caller resolving several refs in one request (applyWorkspaceRequirements,
+// ref against an ALREADY-COMPUTED effective set. Factored out so a caller
+// resolving several refs in one request (applyWorkspaceRequirements,
 // launchRecordRun) can compute effectiveIntegrations ONCE instead of once per
 // ref — effectiveIntegrations reads the site-config store, a full secret
 // listing, and peeks the subscription/Bedrock state, so recomputing it per ref
@@ -364,7 +363,7 @@ func resolveIntegrationRefFrom(rows []integrationRow, ref string) (types.Integra
 // point of deriving legacy rows in the first place. ok=false when ref is
 // empty or names nothing at all. The single-ref convenience form — a caller
 // resolving MULTIPLE refs in one request should compute effectiveIntegrations
-// once and call resolveIntegrationRefFrom directly (PLATFORM-API-8).
+// once and call resolveIntegrationRefFrom directly.
 // owner (secretOwnerFromRequest — "" for an operator) widens the presence map
 // this resolves against to include the caller's OWN stored secrets, so a
 // member's own anthropic-api-key synthesises the legacy anthropic_api_key row
@@ -394,7 +393,7 @@ func (s *Server) defaultAgentRunsIntegration(ctx context.Context, onlyType strin
 		}
 	}
 	for _, in := range sc.Integrations {
-		// bug-integrations-1: a Disabled row must never be handed back as
+		// A Disabled row must never be handed back as
 		// "the site-wide default" — applyIntegrationRequirement's probe path
 		// already refuses one; this fold-time tier is the actual agent-run
 		// model-credential path and had no equivalent guard.

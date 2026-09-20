@@ -134,9 +134,8 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 	// token, and silently retrying a different lane would only paper over it.
 	// Only a TRANSPORT-level failure (no HTTP response at all: an unreachable
 	// control plane, or an older one with no attach-ticket route to answer)
-	// falls back to dialing directly with the configured token, exactly as
-	// this command behaved before the ticket lane existed — so an admin-token
-	// CI caller pointed at such a deployment is unaffected.
+	// falls back to dialing directly with the configured token, so an
+	// admin-token CI caller pointed at such a deployment is unaffected.
 	//
 	// Skipped entirely once ctx is already Done: a caller cancellation that
 	// lands before the mint even starts can otherwise race the mint's own HTTP

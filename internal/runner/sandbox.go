@@ -160,8 +160,8 @@ func RecorderArgv(castDir, outDir, uploadURL string, runID uuid.UUID, agentArgv 
 // the NAMES without a live env (cmd/wardynd/envdoc_guard_test.go's compose
 // forward guard, chiefly) reads the same list ProxySidecarEnvKnobs iterates,
 // instead of a hand-copied second list that can silently drift from it: a
-// name added here and forgotten there used to pass that guard anyway, because
-// it hardcoded its own 3 names and asserted only `len(knobs) == len(names)`.
+// length-only comparison (`len(knobs) == len(names)`) would not catch a
+// name added here and forgotten there.
 var proxySidecarEnvKnobNames = []string{
 	"WARDYN_LLM_SCAN",
 	"WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS",
@@ -176,7 +176,7 @@ var proxySidecarEnvKnobNames = []string{
 
 // ProxySidecarEnvKnobNames returns a COPY of the knob-name list: exported for the
 // envdoc guard, cloned so no caller can append to or reorder the list that decides
-// what reaches every proxy sidecar (re-review R-12).
+// what reaches every proxy sidecar.
 func ProxySidecarEnvKnobNames() []string { return slices.Clone(proxySidecarEnvKnobNames) }
 
 // ProxySidecarEnvKnobs returns the operator knobs the wardyn-proxy sidecar reads
@@ -187,8 +187,7 @@ func ProxySidecarEnvKnobNames() []string { return slices.Clone(proxySidecarEnvKn
 // docker driver builds an Env slice, the k8s driver an Env array on the pod
 // spec. So a knob a substrate forgets is not "off", it is UNREACHABLE — the
 // operator sets it, nothing refuses it, and the control it names silently never
-// applies on that substrate. That is how the git_pat branch-namespace switch
-// shipped dead on Kubernetes in review, which is why the LIST lives here, beside
+// applies on that substrate — which is why the LIST lives here, beside
 // BuildProxyConfig, rather than once per driver: one list, every substrate.
 //
 // Values are passed through verbatim; each knob's own reader does the parsing

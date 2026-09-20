@@ -19,7 +19,7 @@ import (
 // ResolveReauthApproval moves a credential_reauth approval to APPROVED and
 // writes its credential.reauth.resolved audit row in ONE transaction.
 //
-// WHY A TRANSACTION, when DecideApproval + Record would have compiled. This is
+// Why a transaction, when DecideApproval + Record would have compiled. This is
 // the mint's own argument (internal/broker's b.mint, whose credential.mint row
 // commits with the minted_jti burn): the state change is what unblocks a HELD
 // credential request, and the audit row is the only durable record that a

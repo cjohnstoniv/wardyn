@@ -32,7 +32,7 @@ import (
 //     copied into spec.Mounts by internal/api dispatch. The create-run HTTP
 //     request has no mounts field, so a prompt-injected agent / malicious
 //     requester can NEVER choose a host mount (invariants 1 & 3).
-//   - DENY-LIST DEFENSE-IN-DEPTH: even though the values came from policy
+//   - Deny-list defense-in-depth: even though the values came from policy
 //     (already validated at policy-write time), we re-run the SAME pair of
 //     checks the authoring surface ran — runner.ValidateMountSource and
 //     runner.ValidateAuthoredTarget — here, and FAIL CLOSED. Any denied Source
@@ -167,12 +167,12 @@ func (d *Driver) agentMounts(ctx context.Context, spec runner.SandboxSpec, rroSu
 //     drive's own host_root (runner.UserDriveHomeWithinItsRoot), and must still
 //     be NAMED after this principal's home.
 //
-// ONE PATH, NO FLAG. Both checks run for every drive that reaches the matching
+// One path, no flag. Both checks run for every drive that reaches the matching
 // arm — there is no provenance flag deciding whether the ceiling applies, and
 // there must never be one: a gate whose only false state is "somebody stopped
 // setting the stamp" fails OPEN when that refactor lands.
 //
-// A KUBERNETES BACKEND IS AN ERROR, NEVER A SKIP. types.ValidateUserDrive
+// A Kubernetes backend is an error, never a skip. types.ValidateUserDrive
 // refuses a k8s backend on a Docker deployment at the write boundary, so a
 // k8s_pvc drive reaching this driver means the deployment's runner target
 // changed under a stored row. Mounting nothing would hand the member a sandbox
@@ -202,7 +202,7 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount, rroSup
 	// a reader's only evidence for a check they might otherwise delete, and it
 	// was wrong.
 	//
-	// NAMED BY runner.DriveSubject, NEVER BY drive.ObjectName. This refusal is
+	// Named by runner.DriveSubject, never by drive.ObjectName. This refusal is
 	// a CreateSandbox error and therefore the run's failure_hint verbatim, and
 	// on a SHARE the object name is <host_root>/<home> — the operator's
 	// absolute share path. The target is the member's own sandbox path and is
@@ -326,7 +326,7 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount, rroSup
 		if err := runner.UserDriveHomeWithinItsRoot(drive, real); err != nil {
 			return nil, fmt.Errorf("docker: denied user drive mount -> %q: %w", m.Target, err)
 		}
-		// AND THE RESOLVED PATH MUST STILL BE THIS PERSON'S HOME. The two rules
+		// And the resolved path must still be this person's home. The two rules
 		// catch different substitutions: the root check refuses a link that
 		// LEAVES this drive's tree, and this one refuses a link that stays inside
 		// it and lands on somebody ELSE's home (`alice -> ../bob`, which satisfies
@@ -373,14 +373,14 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount, rroSup
 // driveBindOptions decides whether the share bind asks the daemon to make its
 // read-only RECURSIVE, or carries no BindOptions at all.
 //
-// WHY ASK AT ALL. A bind's `ro` only reaches SUBMOUNTS from Linux 5.12
+// Why ask at all. A bind's `ro` only reaches SUBMOUNTS from Linux 5.12
 // (mount_setattr's AT_RECURSIVE); below that the kernel silently binds the top
 // level read-only and leaves every submount beneath it writable — and a share's
 // per-person home is exactly where a submount (an autofs home, a second export
 // mounted under the first) turns up. ReadOnlyForceRecursive makes the daemon
 // ERROR rather than hand back that half-honoured mount.
 //
-// WHY IT IS NOT ASKED UNCONDITIONALLY. The daemon only honours the request for
+// Why it is not asked unconditionally. The daemon only honours the request for
 // a runtime that declares the OCI `rro` mount option, and REFUSES THE CREATE
 // for one that does not (moby's supportsRecursivelyReadOnly). gVisor does not
 // declare it — `runsc features` lists `ro` and `rbind` and no `rro` — and
@@ -394,7 +394,7 @@ func (d *Driver) driveMount(ctx context.Context, drive *types.DriveMount, rroSup
 // read-only mount, and writing `true` beside a writable bind would assert a
 // property this mount does not have.
 //
-// THE LOSS IS LOGGED, ON THE RUN IT AFFECTS. When a read-only drive lands on a
+// The loss is logged, on the run it affects. When a read-only drive lands on a
 // runtime that cannot be asked, the bind still goes in read-only and this says
 // so — an operator who needs the recursive guarantee for a share with submounts
 // has one lever, which is to run that drive's workloads on a runtime that

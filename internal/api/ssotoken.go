@@ -19,7 +19,7 @@ import (
 // in-sandbox upload rather than a sizing of the real payload.
 const maxSSOTokenUploadBytes = 16 << 10 // 16 KiB
 
-// ── DRAFT (M2 canon pending) ────────────────────────────────────────────────
+// DRAFT (M2 canon pending)
 
 // ssoTokenUnstampedScopeRefusal answers a login run that carries no launch-time
 // credential-scope stamp on a deployment whose roster now reads `per_user`.
@@ -36,7 +36,7 @@ const ssoTokenUnstampedScopeRefusal = "this sign-in started before Wardyn record
 // Cancel, or the person's NEXT sign-in superseding it (one live sign-in sandbox
 // per person, harnesscred_supersede.go). The sentence is read off a terminal
 // inside that sandbox by whoever is still looking at it, so it says which
-// attempt won rather than blaming this one — CONDITIONALLY (R1-F9): after a
+// attempt won rather than blaming this one — CONDITIONALLY: after a
 // Cancel, or the pane's own post-capture kill, there is no newer sandbox to be
 // sent to, and a sentence that assumes one sends the reader looking for it.
 //
@@ -53,7 +53,7 @@ const ssoTokenRunKilledRefusal = "this sign-in sandbox was closed — a newer si
 // aws-sso harness-login run before a credential can land.
 //
 // That covers WHICH run may write. WHAT it writes is bound to trusted server
-// state too (F006): the blob's region and start_url must equal the operator's
+// state too: the blob's region and start_url must equal the operator's
 // own boot config and the access-portal URL this run was launched with, and a
 // run may capture only once. See the block below.
 //
@@ -78,7 +78,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "run is not an aws sso container-login run")
 		return
 	}
-	// A KILLED run MAY STILL REACH THIS ROUTE, and that is the belt the supersede
+	// A KILLED run may still reach this route, and that is the belt the supersede
 	// needs. Killing a run revokes its identity and token verification fails
 	// closed on a revoked run (internal/identity/embedded.go) — but RevokeRun is
 	// best-effort (a failed revoke is reported, not retried forever), and
@@ -88,7 +88,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// sandbox's late upload and the capture the person just made in the new one.
 	//
 	// Safe against the honest paths: confirmCapture kills only AFTER the upload
-	// (harness-login-pane.tsx, R-7) and Cancel wants no upload at all. Only
+	// (harness-login-pane.tsx) and Cancel wants no upload at all. Only
 	// KILLED — a COMPLETED/FAILED/STOPPED login run is not a run something else
 	// deliberately ended, and refusing those would be a new rule about a state
 	// this lane has never produced.
@@ -108,7 +108,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The LAUNCH-TIME record of what this run was authorized to capture: the
-	// operator's access-portal URL, the credential scope, and (0.7.3) the
+	// operator's access-portal URL, the credential scope, and the
 	// roster's account/role pin. Read back off this run's OWN audit row rather
 	// than re-resolved from the live roster — see loginRunStamp.
 	stamp, aerr := s.loginRunStamp(r.Context(), claims.RunID)
@@ -122,7 +122,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// WHOSE credential this is — DECIDED AT LAUNCH, read back here, never
+	// WHOSE credential this is — Decided at launch, read back here, never
 	// recomputed from the live roster. The roster says whether this deployment
 	// keeps ONE model credential for everyone (`shared`, today) or one per person
 	// (`per_user`), and the namespace is the login run's own identity subject
@@ -130,7 +130,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// humanOrAdminAuth injected) — trusted server state, never anything the
 	// sandbox said. Every read and write below goes through it.
 	//
-	// WHY THE STAMP AND NOT A FRESH RESOLUTION. This handler's other two bindings
+	// Why the stamp and not a fresh resolution. This handler's other two bindings
 	// (region, start_url) are launch-time state; the scope was not, and a login
 	// run stays alive to harnessLoginIdleCap. An admin flipping the row from
 	// `per_user` to `shared` inside that window turned the member's still-running
@@ -147,8 +147,8 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SERIALISED PER SCOPE, because the once-only guard below is a read-then-put
-	// (V1-r2-lensS #4): two concurrent PUTs from the same login sandbox both read
+	// Serialised per scope, because the once-only guard below is a read-then-put
+	// (a read-then-put race): two concurrent PUTs from the same login sandbox both read
 	// "not captured yet" and both stored, last write winning, so the guard held
 	// only against a SEQUENTIAL second capture. This is the refresher's own
 	// per-owner single-flight lock (awssso_refresh.go), keyed the same way — the
@@ -166,7 +166,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// blob carries the SERVER-stamped SourceRunID below, so "this run already
 	// captured" is answerable from the credential itself.
 	//
-	// READ THROUGH THE SAME SCOPE AS THE WRITE. The operator-wide read this used
+	// Read through the same scope as the write. The operator-wide read this used
 	// to make is not the blob this run is about under per_user: prev would be the
 	// ADMIN's capture, its SourceRunID would never equal this run's, and the
 	// member's own login sandbox could PUT over its own genuine capture as often
@@ -182,7 +182,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// THE RUN STATE AGAIN, RE-READ INSIDE THE LOCK — the KILLED check at the top
+	// The run state again, re-read inside the lock — the KILLED check at the top
 	// of this handler is a check-then-use with everything between it and the
 	// write in the window: the body read, the stamp read, the bind, the scope
 	// resolve, the lock wait and the once-only read. That is easily long enough
@@ -192,11 +192,11 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	// been checked. Same reason as the once-only guard beside it: a read-then-put
 	// is only a guard if the read is inside the critical section.
 	//
-	// ONE GetRun, and the last thing before the write. It cannot be exact — the
+	// One GetRun, and the last thing before the write. It cannot be exact — the
 	// kill takes no lock of ours — but it narrows a window measured in reads and
 	// a lock wait to the two statements below.
 	//
-	// FAIL CLOSED on an unreadable run, with store_error beside the other two
+	// Fail closed on an unreadable run, with store_error beside the other two
 	// arms decided in here: a capture whose owning run cannot be read is a
 	// capture nobody can say is still wanted, and the sandbox's remedy (sign in
 	// again) is the same either way.
@@ -224,7 +224,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Mask the captured token values out of THIS run's PTY capture/decision log.
-	// PER-RUN, not AddGlobal (F007): these bytes are sandbox input — the guards
+	// PER-RUN, not AddGlobal: these bytes are sandbox input — the guards
 	// above bind WHOSE IdP and WHICH run, never what the token itself contains —
 	// and secretmask's global corpus is applied to every run's output AND, via
 	// cmd/wardynd's maskingRecorder, to the Data/Target of every persisted audit
@@ -253,11 +253,11 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 			"owner": scope.owner, "credential_source": awsSSOCredentialSourceLabel(scope),
 		})))
 
-	// A SIGN-IN ANSWERS ANY HELD RUN (Finding 4). Every PENDING credential_reauth
+	// A sign-in answers any held run. Every PENDING credential_reauth
 	// this capture satisfies moves to APPROVED, so the sidecar holding that run's
 	// model call wakes on its next poll instead of running out its budget.
 	//
-	// AFTER the captured emit above, never before: invariant I7's chain is
+	// After the captured emit above, never before: invariant I7's chain is
 	// captured -> resolved -> retry, and a resolution recorded ahead of the
 	// capture that justifies it is a credential-bearing retry with no auditable
 	// predecessor. Best-effort and never fatal — the credential is already
@@ -269,7 +269,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// bindSSOBlob binds WHAT is uploaded to WHAT THE OPERATOR ASKED FOR, and is the
+// bindSSOBlob binds WHAT is uploaded to what the operator asked for, and is the
 // whole of this handler's content check. Extracted from the handler body so
 // handleUploadSSOToken stays a readable sequence of authorize / bind / store
 // (and under the cyclomatic cap as the bindings grew from three to five).
@@ -298,7 +298,7 @@ func (s *Server) bindSSOBlob(blob awsSSOBlob, stamp loginRunStamp) (msg, reason 
 	if missing := blob.missingFields(); len(missing) > 0 {
 		return "sso token blob is missing required fields (" + strings.Join(missing, ", ") + ")", refuseReasonBlobShape
 	}
-	// Defense in depth (W15-d): this blob is persisted once and then baked
+	// Defense in depth: this blob is persisted once and then baked
 	// VERBATIM, unescaped, into every later Bedrock run's ~/.aws/config INI
 	// (awsSSOConfigFileContents). StartURL gets the same https-URL-no-whitespace
 	// guard the operator's own pre-login input takes (validateSSOStartURL); the
@@ -319,7 +319,7 @@ func (s *Server) bindSSOBlob(blob awsSSOBlob, stamp loginRunStamp) (msg, reason 
 			return "invalid sso token: " + field + " contains control characters or whitespace", refuseReasonFieldUnsafe
 		}
 	}
-	// SHAPE, not merely safety (S2-06). The ROSTER-SAVE door has always held the
+	// Shape, not merely safety. The ROSTER-SAVE door has always held the
 	// admin's pin to `^\d{12}$` and IAM's own role grammar (validateAgentSSOPin);
 	// this door took anything without a control character. On the unpinned/bare-id
 	// shape nothing else looks at these two at all, so a wrong-shaped identity was
@@ -331,7 +331,7 @@ func (s *Server) bindSSOBlob(blob awsSSOBlob, stamp loginRunStamp) (msg, reason 
 	if !iamRoleName.MatchString(blob.RoleName) {
 		return ssoTokenRoleShapeRefusal, refuseReasonFieldShape
 	}
-	// F006 — the two operator values the server already HOLDS, so the binding
+	// The two operator values the server already HOLDS, so the binding
 	// needs no new trust source: the region is the same
 	// cmp.Or(BedrockAWSSSORegion, BedrockRegion) boot config this sandbox was
 	// launched with, and the start URL is the operator's own request value read
@@ -342,14 +342,14 @@ func (s *Server) bindSSOBlob(blob awsSSOBlob, stamp loginRunStamp) (msg, reason 
 	if blob.StartURL != stamp.SSOStartURL {
 		return "sso token start_url does not match the AWS access portal URL this login run was launched with", refuseReasonStartURLMismatch
 	}
-	// Finding 1: WHICH account and role, not merely which portal.
+	// Which account and role, not merely which portal.
 	return bindCaptureToPin(blob, stamp, s.cfg.BedrockModel)
 }
 
 // missingFields names the fields valid() requires and this blob does not carry.
 //
 // The refusal sentence names THEM rather than a fixed list, because the list
-// drifted: valid() also requires account_id and role_name, and since 0.7.3 the
+// drifted: valid() also requires account_id and role_name, and the
 // commonest capture failure is pickAccountRole coming back blank on a portal
 // miss — so the person reading their login terminal was told four field names,
 // none of which was the missing one.
@@ -378,7 +378,7 @@ func (b awsSSOBlob) missingFields() []string {
 // now reads `per_user`, so the launch-time answer is unknowable and the only
 // fallback available (the operator namespace) is precisely the wrong one.
 //
-// THE UNSTAMPED ARM IS THE OPERATOR ARM. authorizeHarnessLogin lets nobody but
+// The unstamped arm is the operator arm. authorizeHarnessLogin lets nobody but
 // an operator launch a login run unless the row is `per_user`, so an unstamped
 // run on a roster that does not read `per_user` today is an operator's — the
 // same For("") this handler has always used, unchanged. If the row DOES read
@@ -398,8 +398,8 @@ func (s *Server) loginRunScope(ctx context.Context, stamp loginRunStamp, subject
 		return awsSSOScope{}, true
 	default:
 		// A roster read that FAILED cannot prove the operator arm either, so it
-		// refuses rather than falling through to the unscoped write (S2-08's
-		// family: ok is the fail-closed half of awsSSOScopeForAgent).
+		// refuses rather than falling through to the unscoped write (ok is the
+		// fail-closed half of awsSSOScopeForAgent).
 		scope, ok := s.awsSSOScopeForAgent(ctx, modelAccessAgent, subject)
 		return awsSSOScope{}, ok && !scope.perUser
 	}

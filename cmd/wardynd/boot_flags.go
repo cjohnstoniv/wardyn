@@ -199,7 +199,7 @@ type bootFlags struct {
 	awsSSOEndpointOverride *string
 	// awsSSOProxyInject is the PHASE B kill switch: whether a captured-AWS-SSO
 	// Bedrock dispatch injects the session proxy-side (the token never resident)
-	// or writes it into the sandbox as 0.7.5 did. A STRING, not a bool flag,
+	// or writes it into the sandbox. A STRING, not a bool flag,
 	// because its two documented spellings are `on` and `off` and an
 	// unrecognised value takes the DEFAULT rather than refusing boot — see
 	// api.ResolveAWSSSOProxyInject for why a switch meant to be reached in a
@@ -574,7 +574,7 @@ func resolveLocalMode(f *bootFlags) (localModeState, error) {
 	// operator who set both learns that when their FIRST approval hangs — a 503
 	// per decision, forever. Say it at boot instead.
 	//
-	// SCOPED TO THE COMBINATION THAT IS ACTUALLY BROKEN, and only that one: local
+	// Scoped to the combination that is actually broken, and only that one: local
 	// mode authenticates nobody, so both the decider and the run's created_by
 	// come from the same client-supplied source and no request in that mode can
 	// prove a second human decided (requireSecondHuman refuses outright). With

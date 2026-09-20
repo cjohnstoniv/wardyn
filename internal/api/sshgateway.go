@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The SSH gateway (C2): `ssh <run-id>@<advertise-host>` lands in the same
+// The SSH gateway: `ssh <run-id>@<advertise-host>` lands in the same
 // tmux session and masked live recorder the web terminal (attach.go) uses.
 // Lives here, next to attach.go, rather than a new package, because the SSH
 // caller must go through the SAME runIsUnrecordable gate and liveMaskWriter
@@ -210,7 +210,7 @@ func (s *Server) sshGatewayHealthz() map[string]any {
 //
 // Every REJECTION is audited under ssh.auth right here — including an
 // unknown key or an unparseable/unknown run id — so a scan against the
-// gateway leaves a trail. SUCCESS is deliberately NOT audited here (W25.4-1):
+// gateway leaves a trail. SUCCESS is deliberately NOT audited here:
 // golang.org/x/crypto/ssh calls PublicKeyCallback on the UNSIGNED "query"
 // every pubkey auth attempt opens with (RFC 4252 §7), and even for a direct
 // signed attempt this callback still runs BEFORE the signature is verified —
@@ -312,7 +312,7 @@ func (s *Server) sshAuditAuthFailure(ctx context.Context, conn ssh.ConnMetadata,
 	s.recordAudit(ctx, ev)
 }
 
-// sshVerifiedAuth is ServerConfig's VerifiedPublicKeyCallback (W25.4-1's fix):
+// sshVerifiedAuth is ServerConfig's VerifiedPublicKeyCallback:
 // golang.org/x/crypto/ssh calls it ONLY after verifying the client's
 // signature over this exact key — i.e. only once the client has actually
 // proven it holds the matching private key, which sshAuth's own invocation
@@ -320,7 +320,9 @@ func (s *Server) sshAuditAuthFailure(ctx context.Context, conn ssh.ConnMetadata,
 // *ssh.Permissions object sshAuth returned for this key, ownership
 // transferred to this callback per the ssh package's contract — principal and
 // run_id are already resolved in its Extensions, so no store lookups are
-// needed here, only the audit write sshAuth used to do prematurely.
+// needed here — only the audit write, which belongs here rather than in
+// sshAuth, since sshAuth's own invocation cannot yet guarantee the client
+// holds the matching key.
 //
 // sshAuthTimeout-bounded for the same reason sshAuth is: this also runs
 // inside ssh.NewServerConn's handshake, uninterruptible by the pre-auth
@@ -335,7 +337,7 @@ func (s *Server) sshVerifiedAuth(conn ssh.ConnMetadata, key ssh.PublicKey, perms
 		return nil, errors.New("ssh: internal: missing run id in verified permissions")
 	}
 	// override:true names the ONE case where the run's owner is not the human
-	// on the other end — an admin key reaching someone else's run (F1). Absent
+	// on the other end — an admin key reaching someone else's run. Absent
 	// datum = an ordinary owner login, so the datum's presence is itself the
 	// thing an auditor greps for.
 	var data json.RawMessage

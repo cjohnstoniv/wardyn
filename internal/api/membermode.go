@@ -3,18 +3,18 @@
 
 package api
 
-// membermode.go — "view as member" (v0.7.4, field-report P2): POST
+// membermode.go — "view as member": POST
 // /me/member-mode, the two mint doors it closes, and the audit marker every
 // refusal met inside the mode carries.
 //
-// WHAT THE MODE IS. An admin asks to be treated as a member for the rest of
+// What the mode is. An admin asks to be treated as a member for the rest of
 // this browser session. internal/auth/oidc does the whole of the clamping:
 // Session.MemberMode rides the existing cookie and contextWithPrincipal — the
 // one read of the stamped role — publishes RoleMember instead. Nothing in this
 // package re-derives a tier, so every predicate here (isOperator,
 // isSecurityOperator, every ownsRunOrAdmin) follows for free.
 //
-// WHAT IT IS NOT. It is not impersonation and it is not a second identity: the
+// What it is not. It is not impersonation and it is not a second identity: the
 // sub, email, groups, ownership and every audit row stay the admin's own. It is
 // also not proof that a MEMBER would be refused — a real second identity is
 // that proof (docs/OPERATIONS.md names both, and the mode's three ceilings).
@@ -32,8 +32,8 @@ const (
 	// admin token, local mode, and a deployment with no IdP configured at all.
 	// All three are ONE shared credential that isOperator answers true for with
 	// no session role to demote — so there is genuinely nothing to pause, and
-	// pretending otherwise would ship the exact contradiction P2 names (a
-	// console that says "you are a member" over an API that still says admin).
+	// pretending otherwise would ship the exact contradiction: a console that
+	// says "you are a member" over an API that still says admin.
 	memberModeNoHumanRefusal = "member mode needs a signed-in SSO human: the admin token, local mode " +
 		"and a deployment with no identity provider all use one shared credential with no per-person " +
 		"role to pause. Sign in through SSO to use it."
@@ -52,7 +52,7 @@ const (
 // request that must never be hard to make.
 type memberModeRequest struct {
 	Enabled bool `json:"enabled"`
-	// NoCredential (0.7.5) selects the "view as a NEW member (not signed in)"
+	// NoCredential selects the "view as a NEW member (not signed in)"
 	// posture — see membermode_preview.go. Meaningful only with Enabled, and
 	// stored as the AND of the two, so there is no body that turns the mode off
 	// and leaves the preview on.
@@ -72,17 +72,17 @@ type memberModeRequest struct {
 // member toggling ON is a no-op 200 for the same reason — they are already what
 // they asked to be, and a 4xx would only teach them the control exists for
 // someone else. It is a no-op in FACT as well as in status code: SetMemberMode
-// writes no cookie for that caller (W6-4), because everything downstream reads
+// writes no cookie for that caller, because everything downstream reads
 // the FLAG rather than the stamped tier — a member carrying mm:1 would be shown
 // a banner naming an admin role they do not hold and refused their own
 // credential mints by the two doors below.
 //
-// GUARD ORDER IS LOAD-BEARING, and it is TWO conditions, not one. The obvious
+// Guard order is load-bearing, and it is TWO conditions, not one. The obvious
 // arm is "no per-human identity": the admin token and local mode are one shared
 // credential that isOperator answers true for with no session role to demote.
 //
 // `s.cfg.OIDC == nil` is a SEPARATE condition and cannot be folded into the
-// first, which is what an earlier version of this comment claimed. The `wdn_`
+// first. The `wdn_`
 // API-token lane publishes a human identity through the same withHumanIdentity
 // the SSO branch uses (apitokens.go), and http.go mounts that lane REGARDLESS of
 // OIDC — deliberately, so an operator who never configured SSO can still hold a
@@ -109,7 +109,7 @@ func (s *Server) handleSetMemberMode(w http.ResponseWriter, r *http.Request) {
 	if r.ContentLength != 0 && !decodeStrict(w, r, &req) {
 		return
 	}
-	// THE POSTURE IS GRANTED BY THE SERVER, never taken from the body. The
+	// The posture is granted by the server, never taken from the body. The
 	// no-credential preview only does anything where the model-access agent's
 	// roster row is per_user (memberPreviewApplies, membermode_preview.go);
 	// asking for it anywhere else would enter a mode whose banner asserts a
@@ -124,7 +124,7 @@ func (s *Server) handleSetMemberMode(w http.ResponseWriter, r *http.Request) {
 		// nothing wrong with the server, the caller simply has no session left
 		// to re-sign.
 		//
-		// DEFENCE IN DEPTH rather than a live lane: Middleware publishes no
+		// Defence in depth rather than a live lane: Middleware publishes no
 		// principal for an expired, revoked or tampered cookie, so those
 		// requests land on the no-human 400 above and never get here. Kept
 		// because the guard above proves the caller HAS a human identity, not
@@ -167,7 +167,7 @@ func (s *Server) handleSetMemberMode(w http.ResponseWriter, r *http.Request) {
 // path" rather than as an incident. The key is OMITTED when the mode is off — it
 // is a marker, not a field every row has to answer.
 //
-// EVERY admin-tier refusal goes through this, not only the two middleware
+// Every admin-tier refusal goes through this, not only the two middleware
 // chokepoints (requireOperator and requireSecurityOperator, http.go). The
 // IN-HANDLER refusals go through it too — getWorkspaceAuthorized's
 // operator-owned-workspace arm (helpers.go), secrets.go's ?owner= gate,
@@ -180,8 +180,8 @@ func (s *Server) handleSetMemberMode(w http.ResponseWriter, r *http.Request) {
 // filtering the denial stream to tell an admin walking the member path from a
 // member incident.
 //
-// A HAND-ROLLED map at an admin-tier emit is the regression to look for: the
-// two refusals above were exactly that until 0.7.4, and each was reachable by
+// A hand-rolled map at an admin-tier emit is the regression to look for: the
+// two refusals above were exactly that, and each was reachable by
 // an admin in member mode doing what the member Getting Started card invites —
 // deciding their own run's held egress at scope `always`, creating a workspace.
 // authz_denied_doc_test.go's scanner reads this call, so a reason introduced

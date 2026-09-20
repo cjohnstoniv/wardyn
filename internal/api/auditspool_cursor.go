@@ -99,14 +99,12 @@ func spoolCursorFingerprint(spoolPath string, offset int64) string {
 // file never errs in. So an out-of-range or unreadable cursor reads as 0: replay
 // from the start, at-least-once, exactly the pre-cursor behaviour.
 //
-// A SIZE BOUND CANNOT SAY THAT, and this is the whole of R1 F280: the test used
-// to be `n < 0 || n > size`, so a cursor left over a REPLACED spool was honoured
-// whenever the replacement happened to be at least as large — and a replacement
-// usually IS, because the two cases that produce one are a compaction (a smaller
-// file, but a smaller CURSOR too, so the old larger one often still fits) and an
-// operator moving a `.quarantine` file back onto the spool path. Executed, the
-// hole replayed 4 of 5 events and silently dropped a credential.mint: the offset
-// was in range for bytes that were never the bytes it was measured against.
+// A size bound cannot say that: a cursor left over a REPLACED spool would be
+// honoured whenever the replacement happened to be at least as large — and a
+// replacement usually IS, because the two cases that produce one are a
+// compaction (a smaller file, but a smaller CURSOR too, so the old larger one
+// often still fits) and an operator moving a `.quarantine` file back onto the
+// spool path.
 //
 // So the sidecar carries the offset AND a fingerprint of the content ending
 // there, and a mismatch reads as 0 like any other unusable cursor. A sidecar in

@@ -50,8 +50,7 @@ func (b *Broker) loadGrant(ctx context.Context, grantID uuid.UUID) (types.GrantS
 // selectLiveCredentialApproval is the ONE spelling of ensureApproval's lookup:
 // the newest non-EXPIRED credential approval for a grant. The pre-insert read
 // and the post-insert re-select both run it, so a narrowing of the predicate
-// (the EXPIRED filter was one) can never land on a single copy — the drift the
-// expired-approval fix had to repair in two places by hand.
+// (the EXPIRED filter is one) can never land on only one of the two copies.
 const selectLiveCredentialApproval = `
 	SELECT id, state, requested_scope, minted_jti, reason
 	  FROM approvals
@@ -68,14 +67,14 @@ const selectLiveCredentialApproval = `
 // NOTHING; a racing double-insert loses harmlessly and the re-select returns
 // the single winner.
 //
-// EXPIRED rows are SKIPPED by the lookup (W19-W19c-2), which the pre-insert read
+// EXPIRED rows are SKIPPED by the lookup, which the pre-insert read
 // and the post-insert re-select run as ONE const, so the winner it returns is a
 // PENDING row by predicate rather than by relying on requested_at ordering to
 // sort the swept row below it. The approval sweeper (approval.ExpireStale) ages
 // out every stale PENDING approval, including this one; without the filter the
-// next mint attempt re-found that EXPIRED row forever, MintForGrant mapped it
-// to ErrApprovalDenied, and the run was permanently wedged with no PENDING
-// request left for a human to decide. An expiry is a sweep nobody decided
+// next mint attempt would re-find that EXPIRED row forever, MintForGrant would
+// map it to ErrApprovalDenied, and the run would stay permanently wedged with
+// no PENDING request left for a human to decide. An expiry is a sweep nobody decided
 // (types.ApprovalDecision), so re-raising a fresh PENDING is the honest
 // recovery. DENIED is a real human decision and stays terminal — it is
 // deliberately NOT skipped. CANCELLED is on the DENIED side of that line and is

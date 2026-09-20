@@ -24,25 +24,24 @@ import (
 // reach can hold open indefinitely (measured: 30s against a 3s context). So on a
 // host whose interop is wedged the FIRST caller after every daemon boot paid six
 // seconds at best and unboundedly at worst — and the console's first paint is
-// that caller. It cost the 0.7.3 e2e suite 17 spec files, whose opening
-// page-render assertion timed out at 5s with nothing on screen.
+// that caller.
 //
 // A readiness snapshot must never block on a subprocess, so a sweep that has not
 // answered yet reports what the memo holds and refreshes behind the request. The
 // three things that keeps honest:
 //
-//   - SEEDED INSTALLS NEVER SEE THE WINDOW. A compose/`make setup` install —
+//   - Seeded installs never see the window. A compose/`make setup` install —
 //     the corporate-network case this detection exists for — carries its answer
 //     in WARDYN_HOST_PROXY_B64, which DetectHostProxy decodes in-process with no
 //     exec at all, so cachedHostProxy resolves it SYNCHRONOUSLY on the first
 //     call rather than reporting an empty detection the operator would read as
 //     the confident "nothing is there" (hostProxyCheck's blind flag is false on
 //     a seeded install — the honesty rule at setup_checks.go's own doc comment).
-//   - A HANGING SWEEP IS BOUNDED, LOGGED AND RETRIED. hostProxySweepDeadline
+//   - A hanging sweep is bounded, logged and retried. hostProxySweepDeadline
 //     abandons it, releases the in-flight flag so the next poll tries again, and
 //     says so once in the journal — rather than leaving a permanently blind
 //     daemon reading as "none detected" forever with nothing to see.
-//   - RE-CHECK FORCES A RE-DETECT. GET /setup/status?recheck=1 (operator-only)
+//   - Re-check forces a re-detect. GET /setup/status?recheck=1 (operator-only)
 //     drops the memo first, so the console's Re-check button is a real re-read of
 //     the host and not a refetch of the same 30s-old answer.
 //
@@ -70,7 +69,7 @@ var hostProxySweepDeadline = 10 * time.Second
 // the unforced poll must never block on a subprocess (that is the whole point of
 // the memo), but a button whose one job is "look at the host again" and which
 // answers from the memo it just invalidated is always one press behind — and
-// stamps "checked just now" over the old value (U2-02). Two seconds covers the
+// stamps "checked just now" over the old value. Two seconds covers the
 // env/shell/git/file tiers and a healthy OS tier; a wedged interop blows through
 // it and gets the same last-known answer a poll gets.
 const hostProxyRecheckWait = 2 * time.Second
@@ -110,7 +109,7 @@ var (
 	hostProxySettled chan struct{}
 	// hostProxyForcedAt is when Re-check last FORCED a re-detect. One forced
 	// re-detect per hostProxySweepDeadline is the aggregate bound single-flight
-	// deliberately yields (S2-07): the wedged sweep Re-check exists for is
+	// deliberately yields: the wedged sweep Re-check exists for is
 	// unstuck by one, and N presses inside one deadline otherwise started N
 	// overlapping sweeps with up to two host subprocesses each.
 	hostProxyForcedAt time.Time
@@ -166,8 +165,7 @@ func startHostProxySweepLocked() {
 		// Contain a panic in the detached sweep so it cannot crash the daemon —
 		// the same law sshGo and the run watcher state, and this one parses
 		// whatever a host .exe printed (JSON/regexp over foreign output), which is
-		// exactly the shape those recovers exist for. Pre-fix the same panic ran
-		// on the request goroutine, where net/http recovers it.
+		// exactly the shape those recovers exist for.
 		defer func() {
 			if r := recover(); r != nil {
 				slog.Error("wardynd: PANIC in host-proxy sweep (contained)", slog.Any("panic", r))
@@ -227,9 +225,9 @@ func abandonHostProxySweep(seq uint64) bool {
 }
 
 // hostProxyRecheck is the whole Re-check door (handleSetupStatus's recheck
-// param): force a re-detect (at most one per hostProxySweepDeadline — S2-07),
+// param): force a re-detect (at most one per hostProxySweepDeadline),
 // start the sweep, and wait a BOUNDED moment for it so the answer this press
-// returns is the one it asked for (U2-02). A press inside the bound starts
+// returns is the one it asked for. A press inside the bound starts
 // nothing, but still waits on the sweep already in flight — which is what the
 // operator is waiting for anyway.
 //

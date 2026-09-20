@@ -38,17 +38,16 @@ const leafCertTTL = 24 * time.Hour
 // leafRenewBefore is how long before NotAfter a CACHED leaf stops being reused
 // and is re-minted instead.
 //
-// The cache used to be a plain map hit with no expiry check, on the assumption
-// (stated in this file, never implemented) that "the cert is regenerated
-// whenever the proxy restarts". A per-run proxy sidecar has no lifetime bound —
-// internal/lifecycle skips the idle reaper entirely when the run's
-// AutoStopAfterSec <= 0, which is the default, and the per-run MITM CA is
-// minted for a YEAR (internal/api/mitmca.go) precisely because runs are
-// expected to outlive a day. Past 25h of uptime every NEW CONNECT to a MITM'd
-// host was answered "200 Connection Established" and then failed the sandbox's
-// TLS handshake with "certificate has expired", silently and permanently
-// (F078). The margin keeps a leaf from expiring mid-handshake on a conn that
-// picked it up moments before NotAfter.
+// A per-run proxy sidecar has no lifetime bound of its own — internal/lifecycle
+// skips the idle reaper entirely when the run's AutoStopAfterSec <= 0, which is
+// the default, and the per-run MITM CA is minted for a YEAR
+// (internal/api/mitmca.go) precisely because runs are expected to outlive a
+// day. leafCertTTL is only 24h: without this margin, a leaf picked up moments
+// before NotAfter would answer a new CONNECT to a MITM'd host with "200
+// Connection Established" and then fail the sandbox's TLS handshake with
+// "certificate has expired", silently and permanently. The margin keeps a leaf
+// from expiring mid-handshake on a conn that picked it up just before
+// NotAfter.
 const leafRenewBefore = time.Hour
 
 // leafUsableAt reports whether a cached leaf is still safely reusable at now —
@@ -187,7 +186,7 @@ func (a *certAuthority) leafFor(host string) (*tls.Certificate, error) {
 //  2. OPERATOR-CONFIGURED corp artifact hosts (p.mitmHosts, compiled at dispatch
 //     from the site-config artifact overrides) — so the operator's OWN corporate
 //     registry token can be injected on the wire and the sandbox never holds it.
-//  3. THE RUN'S OWN AWS IAM Identity Center portal host (portal.sso.<region>, or
+//  3. the run's own AWS IAM Identity Center portal host (portal.sso.<region>, or
 //     the test override's host), authored at DISPATCH from the run's own
 //     captured SSO credential — never from the sandbox, never from a run
 //     request, never from a policy — when that run is on the captured-SSO
@@ -204,7 +203,7 @@ func (a *certAuthority) leafFor(host string) (*tls.Certificate, error) {
 // The expanded surface (#2) is bounded on every axis: the set is authored by an
 // admin via the site-config API (NOT the sandbox, NOT the agent, NOT the run
 // request — a prompt-injected agent cannot add a host); it is an EXACT-hostname
-// allowlist, never a wildcard or suffix match — and, since W13-S1-5, exact on
+// allowlist, never a wildcard or suffix match — and exact on
 // PORT too when the authored entry names one (mitmPorts; see handleConnect's
 // corp-MITM branch) so a mirror configured at a non-443 port cannot have its
 // tunnel matched by hostname alone and then dialed at the wrong port; a host
@@ -237,19 +236,19 @@ func (p *Proxy) mitmLLMHost(host string, port int) bool {
 }
 
 // mitmPortAllowed reports whether an authored mitmHosts entry for host covers
-// port. It is the W13-S1-5 clamp itself, and it lives HERE — beside the
+// port. It is the clamp itself, and it lives HERE — beside the
 // membership predicates — rather than inline in one branch of handleConnect.
 //
-// TRUST BOUNDARY (F009): eligibility must never be decidable without the port.
-// The clamp used to be written only inside handleConnect's isCorpMITMHost
-// branch, so a port MISMATCH fell through to the LLM branch, whose
-// mitmLLMHost consulted no port at all — and any operator-configured MITM host
+// TRUST BOUNDARY: eligibility must never be decidable without the port. Both
+// isCorpMITMHost and mitmLLMHost route through this function, so a port
+// MISMATCH can never fall through to a branch that consults no port at all and
+// TLS-terminates — and credential-injects — an operator-configured MITM host
 // that also satisfies isLLMHost (a bedrock/vpce host, which dispatch itself
-// authors onto MITMHosts, or a configured gateway host) was TLS-terminated and
-// credential-injected on ports the operator never configured. It also keys the
-// map on the NORMALIZED host, as compileMITMHosts does: reading p.mitmPorts
-// with the raw CONNECT spelling let a trailing dot or an uppercase letter miss
-// the entry and read 0 == any-port, while isCorpMITMHost normalized and matched.
+// authors onto MITMHosts, or a configured gateway host) on a port the operator
+// never configured. It also keys the map on the NORMALIZED host, as
+// compileMITMHosts does: reading p.mitmPorts with the raw CONNECT spelling
+// would let a trailing dot or an uppercase letter miss the entry and read 0 ==
+// any-port.
 //
 // 0 == the authored entry carried no port and stays any-port (a bare legacy
 // entry), the same backward-compatible meaning it has always had.
@@ -307,7 +306,7 @@ func (p *Proxy) channelForHost(host string) contentscan.Channel {
 // opaque subscription-OAuth path inspectable. The caller has already evaluated +
 // allowed the CONNECT (its egress.allow decision is recorded); per-request scan
 // decisions are emitted inside. port is the REAL CONNECT port (handleConnect's
-// parsed target) carried through to serveMITMRequest's dial (W13-S1-5) — never
+// parsed target) carried through to serveMITMRequest's dial — never
 // assume 443, a corp artifact mirror may listen elsewhere.
 // tlsRecordHandshake is the first byte of a TLS ClientHello (content type 22,
 // "handshake"). It is the ONE byte that tells a terminated tunnel's two possible
@@ -356,7 +355,7 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 		_ = clientConn.Close()
 		return
 	}
-	// THE CLIENT LEG SPEAKS THE SCHEME THIS HOST'S ENTRY NAMES, exactly as the
+	// The client leg speaks the scheme this host's entry names, exactly as the
 	// upstream leg does (upstreamSchemeFor). For every real portal and every corp
 	// artifact host that is TLS, byte for byte as before.
 	//
@@ -368,7 +367,7 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 	// was never seen, never injected and never forwarded: the SDK retried 36-69
 	// times per run and the portal saw nothing at all.
 	//
-	// STILL A TERMINATED TUNNEL, which is what Phase B needs — the sandbox holds
+	// Still a terminated tunnel, which is what Phase B needs — the sandbox holds
 	// a placeholder, so the proxy has to see the request to substitute the real
 	// token, and a blind tunnel carries the placeholder through untouched. No
 	// confidentiality is given up either: an entry only says `http://` when the
@@ -379,7 +378,7 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 	// client has already sent is lost — and so the peek below can put its byte
 	// back.
 	buffered := &readerConn{Conn: clientConn, r: brw.Reader}
-	// ORDER MATTERS, and the short circuit is load-bearing: a TLS entry must
+	// Order matters, and the short circuit is load-bearing: a TLS entry must
 	// never reach the peek, because peeking waits for a byte the client has not
 	// sent yet and a TLS client is waiting for the server to go first. Only a
 	// plaintext entry — the one deployment shape whose origin serves cleartext —
@@ -434,14 +433,14 @@ func (p *Proxy) mitmConnect(w http.ResponseWriter, r *http.Request, host string,
 // fails closed rather than forwarding a stale token. port is the REAL CONNECT
 // port (from mitmConnect) — the dial below MUST use it rather than assume 443:
 // a tokened tunnel dialed to the wrong port presents the operator's credential
-// to whatever answers there instead of the intended mirror (W13-S1-5).
+// to whatever answers there instead of the intended mirror.
 func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host string, port int) {
-	// F107 — allowed_methods applies to the inner requests too. The CONNECT that
-	// opened this tunnel was evaluated as method "CONNECT"; every request inside
-	// it is chosen by the SANDBOX afterwards, and the proxy is holding the
-	// plaintext, so `allowed_methods: [GET, CONNECT]` used to open the tunnel and
-	// then forward an inner POST 200, audited decision=allow — the restriction
-	// silently unenforced on exactly the lane where the proxy can see the method.
+	// allowed_methods applies to the inner requests too, not just the CONNECT
+	// that opened this tunnel: the CONNECT is evaluated as method "CONNECT", but
+	// every request inside it is chosen by the SANDBOX afterwards, and the proxy
+	// is holding the plaintext here, so the method restriction must be
+	// re-applied per inner request rather than treated as satisfied once by the
+	// CONNECT.
 	//
 	// The APPROVAL half of "one CONNECT carries many inner requests" stays as it
 	// is and is documented (approvals.go's ceilings note, docs/POLICIES.md's
@@ -493,15 +492,14 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	// inspection via inspect_forward_egress. That flag already extends scanning
 	// to the plain (non-MITM) forward path (handlePlain/inspectForwardBody);
 	// route the body through the SAME scanBufferedBody core here so the flag's
-	// promise holds on this path too (W19-W19d-1: a MITM'd non-LLM tunnel used
-	// to be unconditionally unscanned, no matter the policy).
+	// promise holds on this path too: without it, a MITM'd non-LLM tunnel would
+	// stay unconditionally unscanned no matter the policy.
 	//
-	// F036 is why the condition is the CHANNEL and not `mitmSource ==
-	// ruleSourceArtifactMITM`: widening isBedrockHost to the PrivateLink form
-	// moved vpce Bedrock hosts from !isLLMHost (artifact branch, scanned) to
-	// isLLMHost (LLM branch, ChannelGeneric ⇒ scanNone, UNSCANNED) — a
-	// legitimate matcher fix silently removing scan coverage, and emitting a
-	// bare `scan:mitm` allow with no scan block, which reads to an auditor as
+	// The condition is the CHANNEL, not `mitmSource == ruleSourceArtifactMITM`:
+	// a host-matcher change that moves a host between the artifact branch
+	// (!isLLMHost, scanned) and the LLM branch (isLLMHost, ChannelGeneric ⇒
+	// scanNone) must not silently drop scan coverage by emitting a bare
+	// `scan:mitm` allow with no scan block — a row that reads to an auditor as
 	// "inspected via MITM" for a turn that was never inspected. The channel is
 	// the honest question: LLM-classified hosts whose channel is a real model
 	// schema still take inspectLLM's per-endpoint classifier as always.
@@ -517,7 +515,7 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 		bodyReader, scanSummary, releaseBody, blocked = p.inspectForwardBody(w, r, host, port)
 	} else {
 		bodyReader, scanSummary, releaseBody, blocked = p.inspectLLM(w, r, host, port, rest, channel)
-		// Honest coverage (F036): a MITM'd tunnel whose channel we cannot parse
+		// Honest coverage: a MITM'd tunnel whose channel we cannot parse
 		// carried a body we did NOT look at. inspectLLM's scanNone default is
 		// silent by design (it is the "not prompt-bearing" case), which on THIS
 		// path produced a bare scan:mitm allow with no scan block at all — a row
@@ -544,7 +542,7 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	hdr, ok, ierr := p.inject.resolveCtx(r.Context(), host)
 	if ierr != nil {
 		if r.Context().Err() != nil {
-			// THE CLIENT IS GONE. A caller released from a re-auth wait by its
+			// The client is gone. A caller released from a re-auth wait by its
 			// own cancellation has not been refused anything: writing a 401 and
 			// a deny row here would record an expiry that did not happen, for a
 			// request nobody is listening to (security SHOULD-1). The hold
@@ -595,7 +593,7 @@ func (p *Proxy) serveMITMRequest(w http.ResponseWriter, r *http.Request, host st
 	if ok {
 		injectHdr = &hdr
 	}
-	// THE PIN (W6-S F3). A rule may narrow its credential to ONE request shape;
+	// The pin (F3). A rule may narrow its credential to ONE request shape;
 	// anything else to the same host is forwarded WITHOUT it and the origin
 	// answers as it answers any unauthenticated call. For the captured-AWS-SSO
 	// lane that is what stops the injected session riding `POST /logout` — which

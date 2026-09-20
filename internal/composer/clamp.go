@@ -111,7 +111,7 @@ func EffectiveConfinementFloor(policyMin, floor, cap types.ConfinementClass) typ
 // Run Review rail would show a size the run then silently does not get. The two
 // share one min() (CapDiskMiB) so they cannot drift.
 //
-// It CLAMPS A NON-ZERO REQUEST ONLY — deliberately not capField's zero-fill
+// It clamps a non-zero request only — deliberately not capField's zero-fill
 // idiom. A zero disk_mib means "unbounded scratch" and must stay that way: the
 // only thing that fills a zero is the org's own storage.ephemeral.
 // default_disk_mib, at dispatch, because filling from a MAXIMUM would hand every
@@ -173,36 +173,34 @@ func Clamp(proposed, ceiling types.RunPolicySpec, maxEphemeralDiskMiB int) (type
 	// inherit, not a merge: this is a visibility/detection control, not
 	// something a member's own choice should ever weaken.
 	//
-	// W12-A-1 (CRIT) / W14-S1-1: the mirror case matters just as much — a
-	// ceiling that sets NONE (the shipped default.json's own posture) is the
-	// FLOOR for this field too, not "no opinion". Before this fix the block
-	// below only fired when the ceiling had an opinion, so under a nil ceiling
-	// a member's own hand-authored inline_policy.llm_inspection passed straight
-	// through unclamped — able to point detector_sidecar_url at any URL the
-	// wardyn-proxy process can reach (a surface the sandbox's OWN confinement
-	// class never bounds — see contentscan/sidecar.go) or flip intercept_tls,
-	// with zero operator opinion in the way. Symmetric with the
-	// workspace_mounts drop below: drop, don't pass through.
+	// The mirror case matters just as much — a ceiling that sets NONE
+	// (the shipped default.json's own posture) is the FLOOR for this field
+	// too, not "no opinion". A nil ceiling must still clamp a member's own
+	// hand-authored inline_policy.llm_inspection, which could otherwise point
+	// detector_sidecar_url at any URL the wardyn-proxy process can reach (a
+	// surface the sandbox's OWN confinement class never bounds — see
+	// contentscan/sidecar.go) or flip intercept_tls, with zero operator
+	// opinion in the way. Symmetric with the workspace_mounts drop below:
+	// drop, don't pass through.
 	if ceiling.LLMInspection != nil {
 		warns = append(warns, "llm_inspection set to the operator's configured mode: "+ceiling.LLMInspection.Mode)
 		cp := *ceiling.LLMInspection
-		// W12-A-3: the inherited copy never carries resolved secret VALUES — a
+		// The inherited copy never carries resolved secret VALUES — a
 		// compose/profile proposal is advisory output handed straight back to
-		// the caller (and, before this fix, also embedded verbatim in the
-		// run.compose audit event), and neither ever needs more than the
-		// NAMES a reviewer needs to see which secrets are covered. Only
-		// dispatch ever resolves names -> values, in memory, for the proxy
-		// sidecar (runs_dispatch.go). Deep-copy the slices so this clamp never
-		// aliases the ceiling's own backing arrays (types.RunPolicySpec.Clone's
-		// same discipline).
+		// the caller, and neither it nor the run.compose audit event ever
+		// needs more than the NAMES a reviewer needs to see which secrets are
+		// covered. Only dispatch ever resolves names -> values, in memory, for
+		// the proxy sidecar (runs_dispatch.go). Deep-copy the slices so this
+		// clamp never aliases the ceiling's own backing arrays
+		// (types.RunPolicySpec.Clone's same discipline).
 		cp.WorkspaceSecretNames = append([]string(nil), ceiling.LLMInspection.WorkspaceSecretNames...)
 		cp.WorkspaceSecretValues = nil
 		cp.ClassifiedMarkers = append([]string(nil), ceiling.LLMInspection.ClassifiedMarkers...)
 		out.LLMInspection = &cp
-		// bug-policy-1: the AllowedDomains intersection above already ran and
-		// narrowed out.AllowedDomains to the PROPOSAL's own (narrower) list —
-		// it never had a reason to keep the ceiling's detector_sidecar_url
-		// host, since AT THAT POINT the ceiling hadn't inherited yet. But
+		// The AllowedDomains intersection above already ran and narrowed
+		// out.AllowedDomains to the PROPOSAL's own (narrower) list — it never
+		// had a reason to keep the ceiling's detector_sidecar_url host, since
+		// AT THAT POINT the ceiling hadn't inherited yet. But
 		// validateLLMInspection (internal/api/policy.go) requires the
 		// inherited sidecar's host to be an EXACT entry on THIS SAME
 		// (post-clamp) spec's own allowed_domains — so every compose/
@@ -249,18 +247,15 @@ func Clamp(proposed, ceiling types.RunPolicySpec, maxEphemeralDiskMiB int) (type
 	out.EligibleGrants = clampGrants(out.EligibleGrants, ceiling, &warns)
 
 	// Resources: cap each set field at the ceiling's, when the ceiling sets one.
-	// W14-S1-3: an UNSET ceiling used to opine nothing at all — skipped
-	// entirely — which left a proposal's own CPU/memory/pids request
-	// completely uncapped under the shipped default.json ceiling (it sets no
-	// Resources block). Clamp is the operator-ceiling authority for every
-	// caller that reaches it (a member's inline_policy, any compose/profile
-	// proposal); it must never hand back an unbounded sandbox just because
-	// the operator never bothered to opine. Fall back to the same
-	// conservative platform defaults CreateSandbox itself applies when a
-	// Resources field is zero (runner.Default{CPUMillis,MemoryMiB,PidsLimit})
-	// — the ceiling, and this clamp, then agree with what the sandbox would
-	// enforce anyway. DiskMiB has no platform default (CreateSandbox leaves
-	// it opt-in), so it stays skip-when-both-unset exactly as before.
+	// An unset ceiling is not "no opinion": Clamp is the operator-ceiling
+	// authority for every caller that reaches it (a member's inline_policy,
+	// any compose/profile proposal), so it must never hand back an unbounded
+	// sandbox just because the operator never bothered to opine. Fall back to
+	// the same conservative platform defaults CreateSandbox itself applies
+	// when a Resources field is zero (runner.Default{CPUMillis,MemoryMiB,
+	// PidsLimit}) — the ceiling, and this clamp, then agree with what the
+	// sandbox would enforce anyway. DiskMiB has no platform default
+	// (CreateSandbox leaves it opt-in), so it stays skip-when-both-unset.
 	effCeilingResources := ceiling.Resources
 	if effCeilingResources == nil {
 		effCeilingResources = &types.ResourceLimits{
@@ -300,16 +295,15 @@ func Clamp(proposed, ceiling types.RunPolicySpec, maxEphemeralDiskMiB int) (type
 	// compromised/runaway agent lives forever) both rank as more permissive than
 	// an explicit cap and are capped down exactly like an excessive positive one.
 	//
-	// AND NOTHING WHEN THE CEILING SETS NO POSITIVE MAXIMUM. A branch here used
-	// to rewrite a negative proposal to 0 and warn about it; it changed the
-	// number without changing the outcome, because internal/lifecycle's reaper
-	// skips every run whose policy value is <= 0 — 0 and -1 are the same run,
-	// never idle-reaped. It also contradicted the value's documented meaning
-	// (docs/POLICIES.md's auto_stop_after_sec row, and the console's field help:
-	// "-1 = never reaped, stated explicitly — identical behavior to leaving it
-	// out, written down as intent"), so a member who wrote their intent down was
-	// warned for it and a member who omitted the field was not. A ceiling that
-	// wants runs reaped states a positive maximum, which the branch above binds.
+	// Nothing happens when the ceiling sets no positive maximum: internal/
+	// lifecycle's reaper skips every run whose policy value is <= 0, so 0 and
+	// -1 are the same run, never idle-reaped, and rewriting one to the other
+	// would only change the number, never the outcome. It would also
+	// contradict the value's documented meaning (docs/POLICIES.md's
+	// auto_stop_after_sec row, and the console's field help: "-1 = never
+	// reaped, stated explicitly — identical behavior to leaving it out,
+	// written down as intent"). A ceiling that wants runs reaped states a
+	// positive maximum, which the branch above binds.
 	if ceiling.AutoStopAfterSec > 0 && (out.AutoStopAfterSec <= 0 || out.AutoStopAfterSec > ceiling.AutoStopAfterSec) {
 		warns = append(warns, fmt.Sprintf("auto_stop_after_sec capped to operator maximum %ds", ceiling.AutoStopAfterSec))
 		out.AutoStopAfterSec = ceiling.AutoStopAfterSec
@@ -421,10 +415,10 @@ func ClampRunConfinement(runClass string, floor types.ConfinementClass) (string,
 // normalizeClampTTL resolves a TTL to the number of seconds a mint would actually
 // live. 0 and every NEGATIVE value mean "the broker maximum" — the same reading
 // internal/api's normalizeGrantTTLSeconds gives them, which is what makes the two
-// sides comparable. The clamp used to test `== 0` alone and pass a negative
-// through untouched, so it kept a grant the write-time comparator refuses:
-// under a 300s ceiling, ttl_seconds=-1 resolves to 3600 for the comparator and
-// stayed -1 through the clamp.
+// sides comparable: testing `== 0` alone and passing a negative through
+// untouched would keep a grant the write-time comparator refuses — under a
+// 300s ceiling, ttl_seconds=-1 resolves to 3600 for the comparator, so the
+// clamp must normalize it the same way.
 func normalizeClampTTL(ttl int) int {
 	if ttl <= 0 || ttl > maxGrantTTLSeconds {
 		return maxGrantTTLSeconds
@@ -439,10 +433,8 @@ func normalizeClampTTL(ttl int) int {
 // This is the SELECTION half of "is this grant within the ceiling", and it is
 // exported because internal/api's write-time comparator
 // (governanceGrantWithinCeiling) must select from the same set the runtime clamp
-// bounds against. F014 was that selection existing twice; round 1 shared only the
-// pairing PREDICATE (PairingInCeiling) and left the two searches standing, and
-// they drifted again within the round — on github_token, whose scope names no
-// pairing at all.
+// bounds against (F014): one definition, not two independent searches that can
+// drift on a kind like github_token, whose scope names no pairing at all.
 //
 // Identity, never bounds: approval, TTL and github scope are what a clamp
 // NARROWS and a comparator REFUSES, so they are the caller's question, not this
@@ -508,11 +500,11 @@ func grantDominatedBy(g, cg types.GrantSpec) bool {
 //  2. If ONE of them DOMINATES the proposal on every remaining axis, bound
 //     against THAT grant alone. This is exactly the question the write-time
 //     comparator asks, so a proposal the operator's ceiling already permits comes
-//     through unchanged instead of being narrowed against a sibling entry. Round
-//     1 met every candidate instead, which emptied a github_token proposal naming
-//     one of two repo sets the ceiling carved (the comparator accepts it; the
-//     clamp handed the run no repos) and made a ceiling naming ONE pairing twice
-//     answer differently in the two slice orders.
+//     through unchanged instead of being narrowed against a sibling entry.
+//     Meeting every candidate instead can empty a github_token proposal naming
+//     one of two repo sets the ceiling carved (the comparator accepts it; a
+//     meet would hand the run no repos) and can make a ceiling naming ONE
+//     pairing twice answer differently depending on slice order.
 //
 // When none dominates, the bounds are MET across the candidates: the TTL cap is
 // the minimum, requires_approval is forced on if ANY of them requires it, and a
@@ -616,23 +608,24 @@ func clampGitHubScope(proposed, ceiling json.RawMessage, warns *[]string) json.R
 	if len(ceiling) > 0 {
 		_ = json.Unmarshal(ceiling, &c)
 	}
-	// Repos: intersect to the ceiling. W23-S1-3 (RBAC-bypass): an EMPTY ceiling
-	// repo list is DENY-ALL, not "any repo" — it used to skip this block
-	// entirely on the theory that the proposal's repos are already grounded to
-	// the workspace's ACTUAL detected remote by groundGitHubGrants before the
-	// clamp, so an empty ceiling only ever restricts by PERMISSIONS (below).
-	// That holds for the composer/profile pipelines, which DO ground a
-	// proposal's repos to something real (an actually-detected git remote, an
-	// operator-selected git workspace, or a prior run's already-clamped grant)
-	// before calling Clamp — and which now widen their OWN ceiling copy to
-	// that grounded set first (widenCeilingRepoAllowlist, internal/api/
-	// compose.go) so this unconditional intersection never drops their
-	// legitimate access. It does NOT hold for a hand-authored spec (a member's
-	// own inline_policy, clamped with no grounding step ahead of it): under
-	// the shipped default.json ceiling (github_token with "repos": []) the old
-	// skip let a member's own arbitrary repo list survive verbatim — an
-	// unbounded RBAC escalation. Always intersecting closes that gap: an empty
-	// ceiling now denies everything for anything nothing has grounded.
+	// Repos: intersect to the ceiling (RBAC-bypass): an EMPTY
+	// ceiling repo list is DENY-ALL, not "any repo". Skipping this block when
+	// the ceiling is empty relies on the theory that the proposal's repos are
+	// already grounded to the workspace's ACTUAL detected remote by
+	// groundGitHubGrants before the clamp, so an empty ceiling only ever
+	// restricts by PERMISSIONS (below). That holds for the composer/profile
+	// pipelines, which DO ground a proposal's repos to something real (an
+	// actually-detected git remote, an operator-selected git workspace, or a
+	// prior run's already-clamped grant) before calling Clamp — and which
+	// widen their OWN ceiling copy to that grounded set first
+	// (widenCeilingRepoAllowlist, internal/api/compose.go) so this
+	// unconditional intersection never drops their legitimate access. It does
+	// NOT hold for a hand-authored spec (a member's own inline_policy,
+	// clamped with no grounding step ahead of it): under the shipped
+	// default.json ceiling (github_token with "repos": []) skipping this
+	// block would let a member's own arbitrary repo list survive verbatim —
+	// an unbounded RBAC escalation. Always intersecting closes that gap: an
+	// empty ceiling denies everything for anything nothing has grounded.
 	allowed := toSet(c.Repos)
 	kept, dropped := partition(p.Repos, func(r string) bool { return allowed[strings.ToLower(strings.TrimSpace(r))] })
 	if len(dropped) > 0 {
@@ -640,11 +633,10 @@ func clampGitHubScope(proposed, ceiling json.RawMessage, warns *[]string) json.R
 	}
 	p.Repos = kept
 	// Permissions: keep only those the ceiling allows, never above the ceiling
-	// level. Deny-by-default (M6): an absent/empty ceiling permission map grants NO
-	// permissions, so every proposed permission (incl. write/admin) is dropped —
-	// previously guarded by `c.Permissions != nil`, which let them pass untouched.
-	// This is the real M6 fix: the LLM can never obtain a permission the operator
-	// ceiling doesn't bless, even when the ceiling places no repo-level allowlist.
+	// level. Deny-by-default (M6): an absent/empty ceiling permission map
+	// grants NO permissions, so every proposed permission (incl. write/admin)
+	// is dropped — the LLM can never obtain a permission the operator ceiling
+	// doesn't bless, even when the ceiling places no repo-level allowlist.
 	for perm, lvl := range p.Permissions {
 		cl, ok := c.Permissions[perm]
 		if !ok {
@@ -666,7 +658,7 @@ func clampGitHubScope(proposed, ceiling json.RawMessage, warns *[]string) json.R
 
 // GitHubScopeWithin reports whether a PROPOSED github_token scope stays inside a
 // CEILING's, by the exact rules clampGitHubScope enforces above: the ceiling's
-// repo list is an ALLOWLIST (an empty one is deny-all, W23-S1-3), a permission
+// repo list is an ALLOWLIST (an empty one is deny-all), a permission
 // absent from the ceiling map is not grantable at any level (M6), and a present
 // one bounds the level by permRank.
 //

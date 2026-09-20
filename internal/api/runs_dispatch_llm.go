@@ -26,7 +26,7 @@ import (
 type llmTransport struct {
 	// modelRun: this dispatch actually invokes the model (see the doc comment
 	// on resolveLLMTransport's local modelRun below) — false for task-mode=exec
-	// and for a non-interactive scan run. W5-S1-5: buildRunMounts reads this to
+	// and for a non-interactive scan run. buildRunMounts reads this to
 	// drop the resident ~/.claude mount (claudeCredTarget/claudeCredJSONTarget)
 	// from a non-model run's spec even when the resolved POLICY still carries
 	// it (e.g. an operator's subscription-blessed default/named policy reused
@@ -141,13 +141,13 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	// layer exists so the refusal is legible.
 	t.injectSub = s.cfg.SubscriptionPostureOK && modelRun && t.subscription && s.cfg.SubscriptionToken != nil && !s.cfg.DisableSubscriptionInject
 
-	// A HARNESS LOGIN run has no credential yet — its whole purpose is for the
+	// A harness login run has no credential yet — its whole purpose is for the
 	// operator to run `claude setup-token` in the attach shell and mint one. Point
 	// the CLI at the real API (its OAuth flow tunnels to the allowlisted OAuth
 	// hosts through HTTPS_PROXY) and seed NO api-key placeholder, so nothing
 	// mis-signals api-key mode. No mount, no injection, no MITM — computed BEFORE
 	// the Bedrock block below so it can gate resolveBedrockAuth itself, not just
-	// the sandboxEnv branch (W12-W12-C-1): every consumer of llm.bedrock* —
+	// the sandboxEnv branch: every consumer of llm.bedrock* —
 	// resident_env's ~/.aws mount (runs_dispatch.go), the bearer grant + MITM
 	// host (runs_dispatch.go, dispatch.go) — reads bedrockReady/injectBedrockBearer
 	// directly, so leaving t.bedrock resolved (even though sandboxEnv correctly
@@ -334,7 +334,7 @@ func (s *Server) applyBedrockTransport(ctx context.Context, run types.AgentRun, 
 		detail = "bearer token injected proxy-side into bedrock-runtime (TLS-MITM); sandbox holds only a placeholder — never resident"
 		mode = "bearer"
 	case b.ssoInject && b.ssoProxyInject:
-		// PHASE B (0.7.6). The synthetic ~/.aws still exists — the SDK needs the
+		// Phase B. The synthetic ~/.aws still exists — the SDK needs the
 		// profile to know WHICH account/role to ask for — but its token cache
 		// holds an inert placeholder, and the session itself is set on the wire
 		// by the proxy at that one host. The ROLE credentials the SDK mints from
@@ -447,7 +447,7 @@ func setSandboxCATrustVars(sandboxEnv map[string]string, onlyIfUnset bool) {
 // has not already set them, so a MITM'd run's own /tmp/wardyn paths are never
 // touched here.
 //
-// FIVE, not four: "install the CA" is one action PER TOOLCHAIN, and AWS CLI v2
+// Five, not four: "install the CA" is one action PER TOOLCHAIN, and AWS CLI v2
 // ships its OWN Python and its OWN CA store — it reads none of the other four.
 // Without AWS_CA_BUNDLE a MITM'd Bedrock/STS call still fails, in a lane the
 // product drives itself. deploy/images/README.md carries the per-toolchain
@@ -546,7 +546,7 @@ func (s *Server) authorSubscriptionInjection(ctx context.Context, run types.Agen
 // handleConnect's `cport == 0 || cport == port` then matches everything), so
 // an agent that can reach the Bedrock host at all could CONNECT to it on a
 // port nobody configured and have that tunnel TLS-terminated with the Wardyn
-// leaf and the operator's Bearer injected onto whatever answered there (F037).
+// leaf and the operator's Bearer injected onto whatever answered there.
 // The injection SCOPE below stays a bare host — buildInjector requires that —
 // only the MITM-eligibility set carries the port.
 func (s *Server) authorBedrockBearerInjection(ctx context.Context, run types.AgentRun, t llmTransport, injections []runner.InjectionGrant) ([]runner.InjectionGrant, []string, bool) {
@@ -583,7 +583,7 @@ func llmInspectMITMEnabled(policy *types.RunPolicySpec) bool {
 	return li != nil && li.InterceptTLS && li.Mode != "" && !strings.EqualFold(li.Mode, "off")
 }
 
-// inspectableLLMRefusal is require_inspectable_llm's refusal (F048). It
+// inspectableLLMRefusal is require_inspectable_llm's refusal. It
 // enumerates BOTH Bedrock sub-modes: the gate below fails the bearer lane closed
 // too, and a sentence that named only SigV4 told an operator their bearer run
 // was refused for a reason that did not apply to it. It is a run failure hint
@@ -598,16 +598,14 @@ const inspectableLLMRefusal = "require_inspectable_llm: the resolved LLM transpo
 // REQUIRED but the resolved LLM transport is OPAQUE. Opaque transports:
 // (a) a subscription/OAuth transport that is NOT being MITM'd (injectSub /
 // intercept_tls auto-enable MITM, making it inspectable); (b) BEDROCK, BOTH
-// sub-modes. Previously only the subscription case failed closed, silently
-// exempting opaque Bedrock; then the SigV4 sub-mode failed closed while the
-// BEARER sub-mode was exempted on the claim that proxy-injected + MITM'd makes
-// it inspectable. That claim was FALSE (F048): require_inspectable_llm is a
+// sub-modes — proxy-injected + MITM'd does NOT make Bedrock inspectable:
+// require_inspectable_llm is a
 // RUNTIME guarantee (policy.go), and MITM only makes a body READABLE — SCANNING
 // it needs an extractor and a prompt-bearing channel, and there is neither for
 // Bedrock. contentscan.Extract handles anthropic.messages / openai.chat /
 // generic / mcp.jsonrpc only, and channelForHost gives a bedrock-runtime host
 // ChannelGeneric, which classifyLLM treats as not prompt-bearing — so a bearer
-// Bedrock run admitted as "inspectable" gets ZERO scan coverage. Both sub-modes
+// Bedrock run admitted as "inspectable" would get ZERO scan coverage. Both sub-modes
 // therefore fail closed until a Bedrock extractor + channel exist; when they do,
 // re-exempt the bearer arm HERE (one predicate) and say so in THREAT-MODEL 5.1a.
 // The default (require_inspectable_llm=false) instead degrades visibly rather
@@ -639,7 +637,7 @@ type dispatchLLMPlan struct {
 	mitmCACertPEM string
 	mitmCAKeyPEM  string
 	// bedrockMITMHosts is the Bedrock bearer's per-run MITM host, if any, as
-	// "host:port" (never a bare host — see authorBedrockBearerInjection, F037).
+	// "host:port" (never a bare host — see authorBedrockBearerInjection).
 	bedrockMITMHosts []string
 	// llmUnavailableDetail is the self-explaining detail the proxy's brokered-LLM
 	// 404 renders when this run reaches that route with no credential behind it
@@ -648,7 +646,7 @@ type dispatchLLMPlan struct {
 	// mitmLLM is whether the BUILT-IN LLM hosts should be intercepted —
 	// subscription/managed injection or intercept_tls inspection, never a CA
 	// minted purely for artifact tokens. Computed here because every input to it
-	// is decided here; dispatchRun used to recompute the same disjunction inline.
+	// is decided here.
 	mitmLLM bool
 }
 
@@ -664,7 +662,7 @@ type dispatchLLMPlan struct {
 // load-bearing: before resolveEnvSecretGrants, so a user env_secret named
 // SSL_CERT_FILE cannot clobber the bundle it stages.
 //
-// FAIL CLOSED, and the ok return is the whole contract: each authoring helper
+// Fail closed, and the ok return is the whole contract: each authoring helper
 // has already marked the run FAILED before returning false, so a false here
 // means "stop dispatching, the run is already terminal" — exactly what the four
 // bare returns meant when this lived inline.
@@ -679,7 +677,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// WHOSE credential, decided from a roster we could actually READ. A failed
 	// read yields a zero siteCfg — perUser=false, owner="" — which is the
 	// OPERATOR namespace, so a store blip credentialed a per_user member's run
-	// with the deployment-wide session (R-02).
+	// with the deployment-wide session.
 	if !s.enforceReadableRosterForCredential(ctx, run, p, policy, siteCfgOK) {
 		return dispatchLLMPlan{}, false
 	}
@@ -695,7 +693,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		*p.ResolvedManaged = llm.injectManaged
 	}
 
-	// NO CROSS-MECHANISM FALLBACK: refuse before a single credential is authored
+	// No cross-mechanism fallback: refuse before a single credential is authored
 	// when the org declared how this agent reaches its model and the transport
 	// just resolved is not that one. Placed here, ahead of the MITM CA and every
 	// grant author, so a refused run mints nothing — see

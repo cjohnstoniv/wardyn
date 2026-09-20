@@ -157,12 +157,12 @@ func (d *Driver) KillSandbox(ctx context.Context, ref string) error {
 // docker's per-object-name removal loop, because k8s's label selector does in
 // one call what docker's driver needs several names for.
 //
-// B9-F1: a 404 on the agent pod used to end the whole teardown as "already
-// gone". It is not: the agent pod is the one object of a run that routinely
-// disappears on its own (0.7.2 made disk_mib its ephemeral-storage limit and
-// 0.7.5 put the agent's own writes inside that budget via
-// ephemeralScratchVolumes, so the kubelet EVICTS it and its terminated-pod GC
-// reaps it — a kill path no Wardyn code is on; a deleted node does the same),
+// A 404 on the agent pod does not mean the whole run is gone: the agent pod
+// is the one object of a run that routinely disappears on its own (disk_mib
+// is the agent container's ephemeral-storage limit, and the agent's own
+// writes land inside that budget via ephemeralScratchVolumes, so the kubelet
+// EVICTS it and its terminated-pod GC reaps it — a kill path no Wardyn code
+// is on; a deleted node does the same),
 // and what it leaves behind
 // is the credential-bearing half: a proxy pod still Running with resolved
 // upstream creds, the per-run Secret carrying every SecretEnv value verbatim,
@@ -226,7 +226,7 @@ func (d *Driver) teardownByRunID(ctx context.Context, runID uuid.UUID, gracePeri
 		return fmt.Errorf("k8s: teardown: waiting for pods to terminate before dropping NetworkPolicies: %w", err)
 	}
 
-	// Secret FIRST, NetworkPolicies after (W6-S4, the mirror of CreateSandbox's
+	// Secret FIRST, NetworkPolicies after (the mirror of CreateSandbox's
 	// order): the netpols are what the orphan sweep keys the Secret on, since
 	// listing Secrets needs a verb that returns their bodies. Dropping them
 	// before the Secret would leave a crash window whose survivor is exactly the
@@ -274,14 +274,12 @@ func (d *Driver) waitPodsGone(ctx context.Context, ns string, listOpts metav1.Li
 // driver satisfied it, so on k8s nothing ever revisited a run's objects once
 // no sandbox_ref pointed at them.
 //
-// 0.7.2 is what makes that reachable routinely rather than only after a
-// control-plane crash: a run's disk_mib is now the agent container's
-// ephemeral-storage LIMIT (naming.go's resourceRequirements), so the kubelet
-// EVICTS the agent pod — a kill path no Wardyn code is on. An ORDINARY `dd` from
-// the agent reaches it only since 0.7.5, which mounted the agent's /tmp and
-// workdir on metered emptyDirs (ephemeralScratchVolumes); before that the agent
-// wrote to an ephemeral container's unmetered layer and nothing was ever
-// evicted for it. Normal finalization now attempts teardown when the pod ends;
+// This is reachable routinely, not only after a control-plane crash: a run's
+// disk_mib is the agent container's ephemeral-storage LIMIT (naming.go's
+// resourceRequirements), so the kubelet EVICTS the agent pod — a kill path no
+// Wardyn code is on. An ORDINARY `dd` from the agent reaches it too, since the
+// agent's /tmp and workdir are mounted on metered emptyDirs
+// (ephemeralScratchVolumes). Normal finalization attempts teardown when the pod ends;
 // this sweep retries abandoned or failed cleanup. The credential-bearing
 // siblings are the point: a proxy pod can retain resolved upstream creds in
 // memory, and the per-run Secret holds proxy config JSON and SecretEnv values.
@@ -350,7 +348,7 @@ type sweepCandidate struct {
 // sweepCandidates lists every object that can name an orphaned run: the agent
 // and proxy pods, AND both NetworkPolicies.
 //
-// B9-F5: listing pods alone left a run whose pods are BOTH gone unreachable —
+// Listing pods alone would leave a run whose pods are BOTH gone unreachable —
 // permanently, since the sweep is the only thing that revisits a run no
 // sandbox_ref points at. That is not a corner: a deleted node takes both pods
 // together, and an eviction plus the kubelet's terminated-pod GC gets there on
@@ -359,11 +357,11 @@ type sweepCandidate struct {
 // NetworkPolicies. Any fix that leaves the Secret reachable only via a pod
 // label repeats the bug.
 //
-// The Secret is reached WITHOUT being listed (W6-S4). `list` on secrets returns
+// The Secret is reached WITHOUT being listed. `list` on secrets returns
 // every Secret's body and RBAC cannot scope a list by label, so granting it
 // would hand this ServiceAccount plaintext read of every Secret in the
-// namespace — the control plane's own, with k8s.runsNamespace unset. 0.7.3
-// granted no Secret-body read verb and neither does 0.7.4. Instead the
+// namespace — the control plane's own, with k8s.runsNamespace unset. No
+// Secret-body read verb is granted. Instead the
 // NetworkPolicies, which carry no credential, are ordered to strictly outlive
 // the Secret (created before it in CreateSandbox, deleted after it in
 // teardownByRunID), so a surviving Secret always has a surviving NetworkPolicy
@@ -388,7 +386,7 @@ type sweepCandidate struct {
 //
 // All three lists use the SAME agent/proxy component selector. That is what
 // keeps a boot canary out: its objects carry labelManaged and a labelRun that
-// IS a parseable uuid (canary.go's M2 per-invocation suffix), so only
+// IS a parseable uuid (canary.go's per-invocation suffix), so only
 // labelComponent tells them apart from a run's — and runCanaryPhase cleans its
 // own up on every path. A drive PVC is excluded twice over: it is not one of the
 // three kinds listed here, and it never carries labelRun at all.

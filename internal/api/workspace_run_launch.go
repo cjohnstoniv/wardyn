@@ -82,7 +82,7 @@ func workspaceSourcesOfType(ws types.Workspace, typ types.WorkspaceSourceType) [
 }
 
 // claimImportStep atomically claims the workspace's serial import-step slot for
-// runID, CAS-ing active_run_id from the value the caller observed (M1/H14): two
+// runID, CAS-ing active_run_id from the value the caller observed: two
 // concurrent step launches that both saw the slot free cannot both dispatch —
 // the loser gets errImportStepBusy. It returns the CLAIMED workspace row (the
 // base any pre-dispatch status write must build on so it preserves the claim)
@@ -124,7 +124,7 @@ const stepRunAgent = "claude-code"
 // login lane's agent + Interactive) before the row is returned; callers take
 // run.CreatedAt as the launch clock.
 //
-// IT IS ALSO THE LIMITS-AXIS CHOKEPOINT (F153). Every server-launched lane that
+// It is also the limits-axis chokepoint. Every server-launched lane that
 // creates a run passes through here, and gov is a REQUIRED argument with no
 // usable zero value, so a lane added later cannot compile without saying which
 // of the acting principal's governance limits bind the run it is about to
@@ -140,7 +140,7 @@ func (s *Server) newStepRun(ctx context.Context, runID uuid.UUID, actor, task st
 	if err := s.stepRunCeilingLimits(ctx, actor, gov); err != nil {
 		return types.AgentRun{}, "", err
 	}
-	// SUBJECT vs ATTRIBUTION (F099): actor stays the attribution (CreatedBy, the
+	// Subject vs attribution: actor stays the attribution (CreatedBy, the
 	// sponsor claim); the identity's SUBJECT — the secret-namespace selector — is
 	// runIdentitySubject's, so a LocalMode X-Wardyn-Principal header cannot point
 	// a server-launched step/probe/login run at another principal's stored rows.
@@ -294,8 +294,8 @@ func recordRunGovernance(ceiling governanceCeiling) stepRunGovernance {
 
 // scanRunGovernance: a scan run is server-authored and unattachable
 // (deny_interactive has nothing to say about it) but it IS one of the runs the
-// principal has going, so the quota binds it. This is the lane F153's residue
-// exposed: POST /workspaces/{id}/scan is member-reachable, it creates a run for
+// principal has going, so the quota binds it. This closes a real gap:
+// POST /workspaces/{id}/scan is member-reachable, it creates a run for
 // that member, and until this it read no limit at all — a member at their cap
 // could keep spawning scans.
 func scanRunGovernance(ceiling governanceCeiling) stepRunGovernance {
@@ -303,10 +303,10 @@ func scanRunGovernance(ceiling governanceCeiling) stepRunGovernance {
 }
 
 // harnessLoginGovernance: the container-login box, which is the ONE step lane
-// whose answer changed in 0.7.2.
+// whose answer differs from the rest.
 //
 // deny_interactive does NOT bind it, deliberately and narrowly. That limit is
-// about a person getting a shell for THEIR OWN WORKLOAD; this box carries no
+// about a person getting a shell for their own workload; this box carries no
 // workload, mounts nothing, mints nothing, and its "terminal" shows a device
 // code and a verification URL — it is a credential-capture step WARDYN authors
 // and auto-types, not the member's session. It is also the only way a principal
@@ -332,12 +332,12 @@ func operatorStepGovernance(ceiling governanceCeiling) stepRunGovernance {
 // stepRunCeilingLimits applies the Limits axis to one step lane's launch,
 // scoped by that lane's own stepRunGovernance answer.
 //
-// THE SCOPING RULE, stated once here the way ceilingForDispatch states the deny
+// The scoping rule, stated once here the way ceilingForDispatch states the deny
 // axis's, so "absent row => absent behaviour" cannot be re-decided per call
 // site: the Limits axis binds POST /runs (runs_create_validate.go) and every
 // lane that reaches newStepRun. An unassigned principal has no profile, so
 // there is no limit to read and no deployment-wide default to fall back on
-// (PF-36 — the `all` assignment IS the opt-in).
+// (the `all` assignment IS the opt-in).
 //
 // The MESSAGES are the frozen member copy from the create path, reused verbatim
 // rather than reworded: one limit means one sentence wherever a member meets it,
@@ -377,7 +377,7 @@ func (s *Server) stepRunCeilingLimits(ctx context.Context, actor string, gov ste
 }
 
 // recordSessionPolicy is the spec one record session launches under. EXTRACTED
-// from launchRecordRun (0.7.2) rather than written new: that function sits at the
+// from launchRecordRun rather than written new: that function sits at the
 // funlen ratchet (.golangci.yml, 150 non-comment lines), and the agent-roster
 // check it gained is what forced a block out. Nothing about the policy changed —
 // the comments are the originals, moved with the code they explain.
@@ -397,7 +397,7 @@ func (s *Server) recordSessionPolicy(ws types.Workspace, cc types.ConfinementCla
 	}
 	return types.RunPolicySpec{
 		MinConfinementClass: cc,
-		// A CONFINED REPLAY session is default-deny, limited to AllowedDomains
+		// A confined replay session is default-deny, limited to AllowedDomains
 		// (baseline clone/registry hosts ∪ the workspace's approved egress) — so
 		// re-running the same steps proves they work under least privilege. A
 		// learning session (open) allows all egress so the capture is complete.
@@ -431,7 +431,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	if s.cfg.Runner == nil {
 		return types.AgentRun{}, false, fmt.Errorf("no runner configured")
 	}
-	// THE ACTING PRINCIPAL'S CEILING (PF-24), resolved FIRST — before the
+	// The acting principal's ceiling, resolved FIRST — before the
 	// import-step CAS claim below, so a refusal costs no state and needs no
 	// abort().
 	//
@@ -444,20 +444,19 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// to on demand.
 	//
 	// POST /workspaces/{id}/record IS OPERATOR-ONLY (routes.go), not a
-	// security-tier route — an earlier version of this comment said the
-	// opposite, and the guard it justified could therefore never fire.
+	// security-tier route.
 	// requireOperator gates on s.isOperator and effectiveCeiling short-circuits
 	// on that SAME predicate, so every principal who reaches this function
 	// arrives with Profile == nil. A security admin gets 403 at the door:
 	// mounting the lane on securityOps would hand the tier that is defined never
 	// to reach credential material or the host exactly both, which is why the
-	// route did not move to make the guard live (F153).
+	// route did not move to make the guard live.
 	//
 	// recordCeilingLimits below is therefore a FAIL-CLOSED assertion rather than
 	// a live gate: any resolved profile refuses the lane outright. It costs
 	// nothing today and is what a re-mount, or a second caller, meets.
 	//
-	// WHICH WALLS RIDE ALONG, named rather than implied — the earlier wording
+	// Which walls ride along, named rather than implied — the earlier wording
 	// ("the same walls as their ordinary runs") was true of one axis and false
 	// of the other, which is how the gap survived review:
 	//   - the DENY axis rides into dispatch and the re-assertion phase applies
@@ -466,7 +465,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	//   - the LIMITS axis is applied BELOW, in this function. It is read nowhere
 	//     else that this lane passes through: dispatch never reads it, and
 	//     denyMemberGovernance/denyMemberRunQuota sit on POST /runs.
-	//     THE SCOPING RULE, stated once here the way ceilingForDispatch states
+	//     The scoping rule, stated once here the way ceilingForDispatch states
 	//     the deny axis's, so it cannot be re-decided per call site: the Limits
 	//     axis binds POST /runs and this lane, and this lane binds it by
 	//     refusing every assigned profile outright rather than by reading limit
@@ -486,7 +485,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	ctx = context.WithoutCancel(ctx)
 	ceiling, cerr := s.effectiveCeiling(ctx)
 	if cerr != nil {
-		// FAIL CLOSED, the call effectiveCeiling's own doc makes: carrying on
+		// Fail closed, the call effectiveCeiling's own doc makes: carrying on
 		// would silently substitute the deployment ceiling for a profile that
 		// may be far narrower — a widening caused by a database hiccup, on the
 		// one lane that hands out an open-egress sandbox.
@@ -497,7 +496,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	if lerr := s.stepRunCeilingLimits(ctx, actor, recordRunGovernance(ceiling)); lerr != nil {
 		return types.AgentRun{}, false, lerr
 	}
-	// THE AGENT ROSTER, on the one step lane it binds (agent_providers.go), and
+	// The agent roster, on the one step lane it binds (agent_providers.go), and
 	// HERE for the same reason as the two refusals above it: a refusal costs no
 	// state. newStepRun hardcodes stepRunAgent and calls Store.CreateRun/
 	// dispatchRun directly, so every server-launched lane bypasses
@@ -505,7 +504,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// interactive MODEL run, so a codex-only org must not be able to record
 	// through claude-code.
 	//
-	// THE OTHER STEP LANES ARE EXEMPT, deliberately: scan, verify, Build and the
+	// The other step lanes are exempt, deliberately: scan, verify, Build and the
 	// harness-login capture are non-model steps Wardyn authors for its own
 	// purposes, and refusing them on an agent roster would make a login run —
 	// the very thing that repairs a credential — unreachable.
@@ -518,7 +517,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// member's sentence in the record panel, the one thing handleRecordWorkspace
 	// strips before answering 422. Nothing this check reads is built yet.
 	//
-	// AND PROVIDER ADMISSION (0.7.2), which earns its place here for every one of
+	// And provider admission, which earns its place here for every one of
 	// the reasons above: a record session's clone URLs are derived from
 	// ws.Sources by wireWorkspaceSource below — a PURE function with no *Server
 	// and no site config in scope — so the call belongs at this call site, ahead
@@ -526,7 +525,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// narrowed it must not keep recording through it; and its refusal is bare and
 	// pre-claim for the identical reasons.
 	//
-	// THREE LINES, and a helper for the two refusals they would otherwise be:
+	// Three lines, and a helper for the two refusals they would otherwise be:
 	// this function is at the funlen ratchet (.golangci.yml, 150 non-comment
 	// lines), so the next lane to add a statement here extracts a block first —
 	// which is what recordLaunchRefusals is.
@@ -612,7 +611,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// egress in first so subscription/api-key wiring below attaches in both modes.
 	unionAllowedDomains(&policy, s.modelProviderEgress(s.cfg.DefaultPolicy))
 
-	// Model access for the session comes from the WORKSPACE's OWN binding (SPINE-7)
+	// Model access for the session comes from the WORKSPACE's OWN binding
 	// — the same resolveRunIntegration precedence (explicit → workspace pin →
 	// operator default) a real run of this workspace uses — not just the operator
 	// ceiling's convention secret. A confined replay whose job is to PROVE least
@@ -620,12 +619,12 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// its capture (and the promotion candidates derived from it) reflect a different
 	// transport. A synthetic claude-code request with this one workspace as wsRefs
 	// drives the identical fold launch/preflight run; bedrockRef is threaded into
-	// dispatch below so a bedrock-bound workspace records its OWN region, not the
+	// dispatch below so a bedrock-bound workspace records its own region, not the
 	// global default.
 	var injections []runner.InjectionGrant
 
 	// The workspace's REQUIRED contract rows ride a session the SAME way they
-	// ride a real run (SEAM-2): a confined replay whose install step needs
+	// ride a real run: a confined replay whose install step needs
 	// Artifactory (say) or a declared secret must reach AND authenticate to
 	// it, not merely reach it — without this the held-then-approved request
 	// the operator approves below goes out credential-less and 401s, and the
@@ -634,7 +633,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// through the SAME chokepoint a real run uses (applyWorkspaceRequirements,
 	// runs_create.go) — not a hand-rolled integration:-only loop, which
 	// silently dropped required secret: rows even though the Verify carry
-	// card promises "N required secrets ride proxy-side" (W8-S1-2). nil
+	// card promises "N required secrets ride proxy-side". nil
 	// selections: only Required rows apply — a confined replay has no per-run
 	// optional opt-in surface. Independent of the LLM mode below — a
 	// requirement credential is never skipped just because this session
@@ -652,7 +651,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 	// every one of them a second time.
 	llmGrantsBefore := len(policy.EligibleGrants)
 
-	// Unconditional, same as launch/preflight for a real run (W20-W20-llm-transport-matrix-1):
+	// Unconditional, same as launch/preflight for a real run:
 	// foldRunIntegration already resolves the workspace's OWN binding first and only
 	// falls through to the operator's site-wide DefaultFor:agent_runs integration when
 	// the workspace names nothing — it returns kind=="" when neither resolves, so the
@@ -716,7 +715,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		GitGrants:          gitBrokerGrant(primaryCloneURL, ghGrantID),
 		SSHGrants:          sshGrants,
 		Injections:         injections,
-		// The workspace's own Bedrock region/model (SPINE-7) — nil for a non-bedrock
+		// The workspace's own Bedrock region/model — nil for a non-bedrock
 		// binding, so dispatch keeps the global config exactly as before.
 		BedrockRef:  bedrockRef,
 		Interactive: true,
@@ -733,7 +732,7 @@ func (s *Server) launchRecordRun(ctx context.Context, actor string, ws types.Wor
 		// path) — and even for a member's, it gates that workspace's OWN binds
 		// only, never the session's operator-staged credential mounts.
 		MemberMounts: s.memberMountPosture([]types.Workspace{ws}),
-		// W20-llm-transport-matrix-2: the pre-dispatch llmMode guess above
+		// The pre-dispatch llmMode guess above
 		// cannot see the Wardyn-managed subscription lane at all — correct it
 		// below against what dispatch ACTUALLY resolved.
 		ResolvedManaged: &resolvedManaged,

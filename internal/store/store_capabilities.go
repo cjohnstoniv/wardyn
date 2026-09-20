@@ -70,14 +70,13 @@ func (s PG) ListCapabilityGrants(ctx context.Context) ([]types.CapabilityGrant, 
 // grants.
 //
 // It exists because that check runs on the FAIL-CLOSED path taken by every
-// caller whose group snapshot is unanswerable — which includes every API token
-// minted before 0.7, on every request — and it used to ask
-// ListCapabilityGrants, i.e. the whole table, once per value checked. That made
-// a holder of one pre-0.7 token able to force an unbounded full-table read per
-// checked value: 68 ms at 20k grants against 0.35 ms for the indexed sibling,
-// multiplied by however many values the handler examines. An authorization
-// question whose cost scales with the size of the table it reads is an
-// availability surface, not just a slow page.
+// caller whose group snapshot is unanswerable — every API token minted before
+// 0.7, on every request. Answering it with ListCapabilityGrants, the whole
+// table, once per value checked, would let a holder of one pre-0.7 token force
+// an unbounded full-table read per checked value: 68 ms at 20k grants against
+// 0.35 ms for the indexed sibling, multiplied by however many values the
+// handler examines. An authorization question whose cost scales with the size
+// of the table it reads is an availability surface, not just a slow page.
 //
 // The predicate is EXACTLY the one internal/api applied in Go afterwards
 // (subject_type='group', effect='deny', capability=$1), moved into SQL so the

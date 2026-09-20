@@ -165,7 +165,7 @@ func rootCmd() *cobra.Command {
 	// every structural error prints, which put the fleet-wide bearer in
 	// cleartext in every terminal capture, CI log and screenshot of one. The
 	// declared default stays empty; the env is read where the token is USED.
-	// NOTE: passing --token puts the secret in argv (visible in `ps`); prefer
+	// Passing --token puts the secret in argv (visible in `ps`); prefer
 	// the env var.
 	root.PersistentFlags().StringVar(&token, "token", "",
 		"admin bearer token (env WARDYN_ADMIN_TOKEN or WARDYN_TOKEN; --token is visible in the process list, prefer the env var)")

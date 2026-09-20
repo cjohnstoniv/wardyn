@@ -1,7 +1,7 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// The RUN seam for user drives (0.7, migration 0054): turning
+// The RUN seam for user drives (migration 0054): turning
 // `drive: {enabled, read_only}` on a create-run request into the mount a runner
 // executes, or into the one refusal that explains why there is none.
 //
@@ -10,7 +10,7 @@
 // 1000-line gate, and the fact that a security seam reads better whole than
 // scattered through a handler that is already doing eleven other things.
 //
-// ─── THE THREE REFUSAL SHAPES, AND WHY THEY DIFFER ─────────────────────────
+// The three refusal shapes, and why they differ.
 //
 // The whole design of this seam is one table, and each row is a decision that
 // could have gone the other way:
@@ -27,7 +27,7 @@
 // authz.denied would fill the denial stream with rows about members who did
 // nothing wrong, which is how a real denial stops standing out.
 //
-// ─── ENABLED BUT UNMOUNTABLE IS AN ERROR, NOT A QUIET LAUNCH ───────────────
+// Enabled but unmountable is an error, not a quiet launch.
 //
 // Every arm below REFUSES the run rather than launching it driveless. The
 // alternative reads friendlier and is worse: a member ticks "mount my drive",
@@ -35,7 +35,7 @@
 // container layer that is deleted at teardown. Asking for storage and silently
 // not getting it is how work is lost, so the request is a REQUIREMENT.
 //
-// ─── WHERE THE RESOLVED MOUNT LIVES BETWEEN CREATE AND DISPATCH ────────────
+// Where the resolved mount lives between create and dispatch.
 //
 // On dispatchParams, next to the governance ceiling's own dispatch-time input
 // (the dispatchCeiling argument dispatchRun requires) — NOT on the run row,
@@ -109,7 +109,7 @@ const (
 // writes the member's frozen sentence, counts the refusal by reason, and logs
 // the operator's half — in that order, and never one without the others.
 //
-// IT EXISTS BECAUSE FIVE OF THE SIX ARMS RECORDED NOTHING. A refused drive was
+// It exists because five of the six arms recorded nothing. A refused drive was
 // a 422 to the member and silence everywhere else: no audit row (the profile
 // DOOR has one, denyMemberDrive's authz.denied, and it is the only arm that
 // did), no log line, no metric, and no request log either — routes.go wires
@@ -120,13 +120,13 @@ const (
 // runner was re-pointed) looked from the outside exactly like nobody launching
 // runs.
 //
-// THE AUDIENCE SPLIT IS THE SAME ONE driveShareIsBindable ARGUES FOR. The
+// The audience split is the same one driveShareIsBindable argues for. The
 // member gets driveRefusal's sentence and nothing else; the operator's
 // diagnosis — the drive, the backend, the path, the roots — goes to slog, where
 // the person who can fix it already looks. So attrs may name the operator's
 // filesystem and the message may not.
 //
-// NOT AN AUDIT ROW. An audit row is an authorization event about a principal's
+// Not an audit row. An audit row is an authorization event about a principal's
 // attempt, which is what the door's authz.denied is; these are the deployment
 // failing to keep a promise it already made to somebody it already authorized.
 // Recording them as denials would put "bob was denied" in the log for a NAS
@@ -142,7 +142,7 @@ func (s *Server) refuseDrive(w http.ResponseWriter, status int, reason, member s
 // runner will execute, writing its own HTTP error and returning ok=false once
 // it has responded.
 //
-// CALLED AFTER validateWorkspaceSources, in handleCreateRun and again in
+// Called after validateWorkspaceSources, in handleCreateRun and again in
 // handlePreflightRun, and the placement is deliberate on both counts. AFTER,
 // because the onboarding gate is the un-bypassable chokepoint on the resolved
 // spec and a drive must not be able to answer before it; in PREFLIGHT too,
@@ -156,7 +156,7 @@ func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 	if req.Drive == nil || !req.Drive.Enabled {
 		return nil, true
 	}
-	// THE ORG SWITCH FIRST, and the order is the argument: storage.user_drive's
+	// The org switch first, and the order is the argument: storage.user_drive's
 	// `disabled` and a profile's DenyUserDrive answer two different questions, and
 	// only the second one is about this member. With drives off deployment-wide
 	// nobody was DENIED — there is nothing here to mount — so it is a 422 in the
@@ -203,11 +203,11 @@ func (s *Server) seedRequestDrive(w http.ResponseWriter, r *http.Request,
 // (userDriveDeniedByProfile, the /me field) alike: this is an authz rule, and
 // two spellings of one authz rule is one place a widening can hide.
 //
-// KEYED ON ceiling.Profile != nil, the scoping rule every limit in
+// Keyed on ceiling.Profile != nil, the scoping rule every limit in
 // denyMemberGovernance follows: an UNASSIGNED member has no profile, so there
 // is no door, and a deployment that has never authored one is unaffected.
 //
-// AND ON !isOperator, which is belt to that braces. denyMemberRequest already
+// And on !isOperator, which is belt to that braces. denyMemberRequest already
 // short-circuits an operator before it resolves a ceiling at all, so the zero
 // governanceCeiling an operator carries here has a nil Profile — but the
 // operator exemption is the kind of property that should be readable at the
@@ -244,7 +244,7 @@ func driveDoorShut(ceiling governanceCeiling) (string, bool) {
 // enforcement 403 below and the admin preview, which answers a claim set the
 // door would refuse with the same bytes rather than a paraphrase.
 //
-// NO BACKTICKS. §7's header note makes a backticked substring in the canon a
+// No backticks. §7's header note makes a backticked substring in the canon a
 // MONO SPAN the console applies at display time, never characters on the wire —
 // the rule ValidateAuthoredTarget's reserved-target refusal already follows, and
 // the canon module (ui/src/app/lib/user-drives-copy.ts) carries none. The wire
@@ -273,7 +273,7 @@ func (s *Server) denyMemberDrive(w http.ResponseWriter, r *http.Request, ceiling
 // a preview that skipped them told an admin a drive was allocated and working
 // right up until the member ticked the box.
 //
-//  0. THE RUNNER CANNOT BIND A DRIVE AT ALL. runner.Capabilities.UserDrives is
+//  0. The runner cannot bind a drive at all. runner.Capabilities.UserDrives is
 //     the declaration, and it is checked here for the reason
 //     resolveEnforcedConfinement checks ConfinementClasses in the same request:
 //     the control plane must refuse to schedule a run demanding more than the
@@ -281,31 +281,31 @@ func (s *Server) denyMemberDrive(w http.ResponseWriter, r *http.Request, ceiling
 //     BACKEND-vs-TARGET match below — which a docker_volume drive on a Docker
 //     deployment passes — so a run whose runner cannot bind a drive is
 //     admitted, answered 201, and fails at dispatch. Both substrates declare
-//     true today (D3, D4); the gate is what makes the NEXT one safe, and what
+//     true today; the gate is what makes the NEXT one safe, and what
 //     makes a driver that regresses its own mount path fail at the door
 //     instead of at a member's run.
 //
-//     IT IS CHECKED FIRST because it is the dominant fact: a mis-targeted
+//     It is checked first because it is the dominant fact: a mis-targeted
 //     backend is a row an admin can re-author, while this one no request can
 //     satisfy on this build, and it stays true after the other is fixed. A
 //     Capabilities error is a 503 and not a 422 — the same split
 //     resolveEnforcedConfinement draws between "cannot" and "cannot tell".
 //
-//     IT ADDS NO MEMBER STRING: it reuses REFUSED_BACKEND, whose frozen
+//     It adds no member string: it reuses REFUSED_BACKEND, whose frozen
 //     sentence is already parameterized on the reason, so the table §7.7
 //     declares COMPLETE stays complete.
 //
-//     SCOPED TO A WIRED RUNNER, as that sibling gate is: with no runner there
+//     Scoped to a wired runner, as that sibling gate is: with no runner there
 //     is no dispatch to disagree with, so there is no promise to break.
 //
-//  1. BACKEND UNAVAILABLE HERE. A drive's backend names exactly one substrate
+//  1. Backend unavailable here. A drive's backend names exactly one substrate
 //     (types.DriveBackend.RunnerTarget), and the write boundary already refuses
 //     to author a mismatched one — so this arm only fires for a row that was
 //     valid when written and is not now, i.e. a deployment that re-pointed
 //     WARDYN_RUNNER. Re-checked rather than trusted because a stale row must
 //     not become a mount attempt the driver has no code path for.
 //
-//  2. THE SHARE IS NOT THERE (host_path only — see driveShareIsBindable).
+//  2. The share is not there (host_path only — see driveShareIsBindable).
 //
 // It writes its own 422 and returns false once it has.
 func (s *Server) driveIsMountableHere(ctx context.Context, w http.ResponseWriter, resolved types.ResolvedDrive) bool {
@@ -344,7 +344,7 @@ type driveBindFailure struct {
 	// cancel arm and its timeout arm are indistinguishable from their return
 	// values, so counting both inflated the one counter that is supposed to mean
 	// "this deployment's shares stopped answering" with clients that closed the
-	// tab (B5-F4).
+	// tab.
 	silent bool
 }
 
@@ -398,12 +398,12 @@ func (s *Server) driveBindFailureHere(ctx context.Context, resolved types.Resolv
 // driveMountFor folds a resolved drive and the run request into the mount, or
 // writes the 422 that says why it cannot.
 //
-// THREE REFUSALS, and all are the same class: the caller is authorized, the
+// Three refusals, and all are the same class: the caller is authorized, the
 // allocation exists, and this particular RUN cannot have it. The first two are
 // driveIsMountableHere's, shared with the preview; the third is this seam's
 // alone, because only it holds a request.
 //
-//	WIDENING. read_only:false against a read-only allocation is refused rather
+//	Widening. read_only:false against a read-only allocation is refused rather
 //	than ignored, and that is the choice worth naming: silently honouring the
 //	allocation would launch a run the member believes is writable, and they
 //	would find out when their work failed to persist. The narrow direction
@@ -463,9 +463,9 @@ func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, req c
 	}, true
 }
 
-// driveShareBindFailure is driveMountFor's host_path arm (F269 split the DECISION out of the
-// former driveShareIsBindable writer; driveBindFailureHere is its only caller): the two facts a share
-// bind depends on that the ROW CANNOT CARRY, re-established at the moment of
+// driveShareBindFailure is driveMountFor's host_path arm (driveBindFailureHere is its only
+// caller): the two facts a share
+// bind depends on that the row cannot carry, re-established at the moment of
 // the mount. It writes its own 422 and returns false once it has.
 //
 // It runs for host_path ONLY. Every other backend is either an object Wardyn
@@ -473,7 +473,7 @@ func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, req c
 // and refuses by name (k8s_pvc_static — the driver's own bind failure, which is
 // why no console string is frozen for it).
 //
-// ─── (1) THE ENV CEILING, RE-CHECKED ───────────────────────────────────────
+// (1) The env ceiling, re-checked
 //
 // handleUpsertUserDrive already applied UserDriveHostRootCheck when this row
 // was authored, and that is exactly why it has to run again: the check is over
@@ -489,7 +489,7 @@ func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, req c
 // deployment dispatches elsewhere" are one fact — this deployment cannot mount
 // their drive.
 //
-// THE DIAGNOSIS GOES TO THE LOG, NOT INTO THE 422. UserDriveHostRootCheck's own
+// The diagnosis goes to the log, not into the 422. UserDriveHostRootCheck's own
 // error spells the host_root and the whole WARDYN_USER_DRIVE_HOST_ROOTS list,
 // and this body is read by a MEMBER — the same reader the missing-home arm
 // below, applyUserDriveEnv and driveAuditTarget all decline to hand the
@@ -497,14 +497,14 @@ func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, req c
 // says who can fix it, and the roots reach the operator through slog, where the
 // admin diagnosing a stale row is actually looking.
 //
-// ─── (2) THE DIRECTORY MUST EXIST, AND BE ONE ──────────────────────────────
+// (2) The directory must exist, and be one
 //
-// WARDYN NEVER mkdir's ON A SHARE (DESIGN §3): the tree belongs to whoever owns
+// Wardyn never mkdir's on a share (DESIGN §3): the tree belongs to whoever owns
 // the share, its permissions and quota are theirs, and a control plane that
 // created directories there would be authoring on a filesystem it does not own.
 // So a missing home is a REFUSAL — and it has to be raised here rather than
 // left to the driver, because a bind mount of a non-existent source is one of
-// the few places Docker HELPFULLY CREATES IT: an empty root-owned directory
+// the few places Docker helpfully creates it: an empty root-owned directory
 // appears on the operator's share, the run launches, and the member's work goes
 // somewhere no admin allocated.
 //
@@ -512,7 +512,7 @@ func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, req c
 // file at the drive target is not a drive, and the sentence a member needs
 // ("that directory is not there") is true of both.
 //
-// ─── (3) AND IT HAS TO ANSWER, WITHIN A BOUND ──────────────────────────────
+// (3) And it has to answer, within a bound
 //
 // Both facts above are FILESYSTEM syscalls on a path the operator mounted, and
 // on a share that path is very often an NFS/SMB mount. A blackholed server does
@@ -524,24 +524,22 @@ func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, req c
 // It is the same argument, and the same shape, as the broker's
 // refRulesetProbeTimeout for a blackholed api.github.com.
 //
-// THE SYSCALL IS NOT CANCELLABLE and this does not pretend otherwise: os.Stat
+// The syscall is not cancellable and this does not pretend otherwise: os.Stat
 // and filepath.EvalSymlinks take no context, so the goroutine runs to
 // completion after we have stopped waiting. What the bound buys is that the
 // REQUEST returns, the connection is released, and the member gets a sentence
 // instead of a hang. The stranded goroutine ends when the mount does.
 //
-// A TIMEOUT IS ITS OWN REFUSAL, never folded into "that directory is not
+// A timeout is its own refusal, never folded into "that directory is not
 // there": the two have different remedies (one is an admin creating a
 // directory, the other is an operator's mount) and telling a member the first
 // when the second is true sends them to the wrong person.
 //
-// TWO CALLERS, NOT ONE. The note here used to read "on the create path only",
-// and that stopped being true when F269 gave GET /me the same DECISION so the
-// console would stop offering a mount the launch refuses: resolveMeUserDrive
-// (user_drives.go) reaches this through driveBindFailureHere as well. A display
-// read on a console timer therefore runs the same uncancellable syscalls, which
-// is why the strand short-circuit in driveShareProbe below is load-bearing
-// rather than an optimisation — see R1 F295.
+// Two callers, not one: resolveMeUserDrive (user_drives.go) reaches this
+// through driveBindFailureHere as well, so GET /me runs the same DECISION the
+// launch does. A display read on a console timer therefore runs the same
+// uncancellable syscalls, which is why the strand short-circuit in
+// driveShareProbe below is load-bearing rather than an optimisation.
 //
 // ponytail: one os.Stat, on a path already derived, once per share generation.
 
@@ -559,7 +557,7 @@ func (s *Server) driveShareBindFailure(ctx context.Context, resolved types.Resol
 				resolved.Drive.Name),
 			attrs: []any{slog.String("drive", resolved.Drive.Name), slog.String("host_root", resolved.Drive.HostRoot),
 				slog.Duration("timeout", driveShareProbeTimeout)},
-			// THE CALLER GAVE UP, not the share (B5-F4): driveShareProbe returns
+			// The caller gave up, not the share: driveShareProbe returns
 			// the same (nil, false) for its timeout and for ctx.Done, and only
 			// the caller can tell them apart. A member who closed the tab is not
 			// a share that stopped answering, and counting it as one is how the
@@ -577,16 +575,14 @@ func (s *Server) driveShareBindFailure(ctx context.Context, resolved types.Resol
 	// directory is missing, and the operator's filesystem layout stays where
 	// GET /drives already keeps it (a boolean, not the roots).
 	//
-	// %s AND NOT %q, and the doc's backticks are not typed here. §7's header
+	// %s and not %q, and the doc's backticks are not typed here. §7's header
 	// note makes a backticked substring a MONO SPAN the console applies, never
 	// characters in the string — so a PLACEHOLDER the doc backticks ships bare
 	// (this one, and it is what DRIVE_MEMBER.REFUSED_HOME_MISSING carries),
 	// while a placeholder the doc QUOTES ships %q (DENIED_DRIVE's profile name).
 	// A backticked LITERAL ships bare for the SAME reason: the canon module
 	// carries no backtick anywhere, so REFUSED_WRITABLE's read_only:false and
-	// REFUSED_HOME_INVALID's `. _ -` are wire text here and mono on screen. Three
-	// refusals used to type them and shipped literal backticks a member read as
-	// punctuation.
+	// REFUSED_HOME_INVALID's `. _ -` are wire text here and mono on screen.
 	statErr, ok := s.driveShareProbe(ctx, "home:"+resolved.ObjectName, func() error {
 		st, err := os.Stat(resolved.ObjectName)
 		if err != nil {
@@ -627,8 +623,8 @@ const driveShareProbeTimeout = 5 * time.Second
 // driveShareProbes holds the subjects — a host root, a home object — whose probe
 // thread has been started and has not come back, and when it started.
 //
-// PROCESS-SCOPED ON PURPOSE, not a Server field. What it remembers is a
-// STRANDED KERNEL THREAD, and threads belong to the process rather than to any
+// Process-scoped on purpose, not a Server field. What it remembers is a
+// stranded kernel thread, and threads belong to the process rather than to any
 // one Server: two Servers over one hung mount strand into the same pool, and a
 // per-Server map would let the second start the probes the first already
 // learned not to. Keys are absolute paths, so distinct shares never collide.
@@ -648,19 +644,17 @@ var driveShareProbes sync.Map // string -> time.Time (probe start)
 // The caller's ctx is honoured too, so a member who gave up on the request does
 // not hold the connection for the rest of the timeout.
 //
-// IT DOES NOT START A PROBE BEHIND ONE THAT IS ALREADY STRANDED (R1 F295), and
+// It does not start a probe behind one that is already stranded, and
 // that is what makes this bound hold for a caller on a TIMER. The syscall is
 // uncancellable, so every probe we give up on leaves a thread in the kernel
 // until the mount answers; GET /me runs this same DECISION on every console
-// poll for a host_path allocation, so a hard-mounted share that stops answering
-// used to cost TWO stranded threads and up to ten seconds of first paint PER
-// POLL, accumulating for as long as the console stayed open. Asking again
+// poll for a host_path allocation. Asking again
 // cannot produce a different answer while the first ask is still outstanding —
 // the share is, demonstrably, not answering — so a subject already known to be
 // stranded is refused from memory: no new thread, no wait, and the same
 // "did not answer in time" the launch door would give.
 //
-// STRANDED MEANS "OVERDUE", not merely "running": an entry younger than the
+// Stranded means "overdue", not merely "running": an entry younger than the
 // timeout is a probe a concurrent request legitimately has in flight, and
 // short-circuiting on that would turn ordinary concurrency into a refusal.
 // LoadOrStore keeps the FIRST start time, so a queue of readers against one hung
@@ -675,7 +669,7 @@ func (s *Server) driveShareProbe(ctx context.Context, key string, check func() e
 	}
 	done := make(chan error, 1)
 	go func() {
-		// ONLY THE OWNER CLEARS THE MARK — the caller whose LoadOrStore actually
+		// Only the owner clears the mark — the caller whose LoadOrStore actually
 		// stored it. A concurrent reader that found a probe already in flight
 		// and inside its bound runs its own check (concurrency stays allowed)
 		// but must not touch the entry: deleting on its way out would retire the
@@ -693,11 +687,10 @@ func (s *Server) driveShareProbe(ctx context.Context, key string, check func() e
 	case err := <-done:
 		return err, true
 	case <-timer.C:
-		// SAID ONCE PER STRAND, which is what the short-circuit above buys: the
-		// accumulation used to be invisible (no metric, no log on the /me path),
-		// and logging per POLL would have been a flood rather than a signal.
-		// Now one overdue probe produces one line, and the reads behind it
-		// produce none.
+		// Said once per strand, which is what the short-circuit above buys:
+		// logging per POLL would be a flood rather than a signal, so one
+		// overdue probe produces one line, and the reads behind it produce
+		// none.
 		slog.WarnContext(ctx, "wardynd: a user-drive share probe did not answer; its thread is stranded until the mount does, and reads behind it are refused from memory",
 			slog.String("subject", key), slog.Duration("timeout", driveShareProbeTimeout))
 		return nil, false

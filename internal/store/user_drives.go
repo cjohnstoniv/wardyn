@@ -103,7 +103,7 @@ const driveNameSlugIndex = "user_drives_name_slug_uniq"
 // userDriveUniqueConflict translates a unique-violation from the drive write
 // into the sentinel that carries the right REMEDY, or nil when err is not one.
 //
-// TOLD APART BY CONSTRAINT NAME, because the two refusals are different
+// Told apart by constraint name, because the two refusals are different
 // problems. UNIQUE(name) means the name is taken: pick another. The 0061 index
 // means the name is free and its SLUG is not — "Corp NAS" against an existing
 // "corp nas" — so an admin handed "a user drive named %q already exists" would
@@ -131,7 +131,7 @@ func userDriveUniqueConflict(err error) error {
 // they must be able to be, since ON DELETE RESTRICT makes delete-and-recreate
 // impossible for an allocated drive).
 //
-// RENAMING A DRIVE MOVES A PVC's NAME, and that is a documented consequence
+// Renaming a drive moves a PVC's name, and that is a documented consequence
 // rather than a bug this store can fix: types.DriveObjectName folds the name
 // into a k8s claim name AND a Docker volume name, so a renamed drive's members
 // bind an object that does not exist yet and a managed drive provisions a fresh
@@ -143,24 +143,24 @@ func userDriveUniqueConflict(err error) error {
 // object name for a principal. docs/OPERATIONS.md, "User drives on Kubernetes",
 // is that runbook.
 //
-// THE HANDLER NO LONGER WRITES THAT UNCONDITIONALLY. An identity-affecting PUT
-// on a drive that already has grants — backend, home_template, host_root or
-// name, the four columns every allocated person's storage object is derived
-// from — is refused 409 by driveRehomeGuard unless the request carries
-// ?confirm=rehome. The RULE stays at the API boundary, where the request that
-// asked for it is; what this statement carries is the guard's PRECONDITION
-// (refuseIfAllocated), which is not a second copy of the rule but the bit the
-// boundary decided, re-asserted where the write happens. Without it the guard was
-// a read followed by an unconditional write, and a grant created in between was
-// re-homed silently — see ErrDriveAllocated.
+// An identity-affecting PUT on a drive that already has grants — backend,
+// home_template, host_root or name, the four columns every allocated person's
+// storage object is derived from — is refused 409 by driveRehomeGuard unless
+// the request carries ?confirm=rehome. The rule stays at the API boundary,
+// where the request that asked for it is; what this statement carries is the
+// guard's PRECONDITION (refuseIfAllocated), which is not a second copy of the
+// rule but the bit the boundary decided, re-asserted where the write happens.
+// Without it, the guard would be a read followed by an unconditional write,
+// and a grant created in between would be re-homed silently — see
+// ErrDriveAllocated.
 //
 // Returns ErrConflict when UNIQUE(name) rejects the write — a new drive taking
 // a taken name, or a rename onto another row's name. The caller maps that to
 // 409 with the name in the message, never a raw driver error (the CreatePolicy
 // contract).
 //
-// ─── AND THE CROSS-ROW GUARD: TWO SHARES OVER ONE ROOT MUST AGREE ON HOW A
-// HOME IS NAMED ─────────────────────────────────────────────────────────────
+// And the cross-row guard: two shares over one root must agree on how a home
+// is named.
 //
 // A share's object name is `<host_root>/<home>` (types.DriveObjectName) — no
 // drive component at all, because the directory was named by whoever owns the
@@ -170,7 +170,7 @@ func userDriveUniqueConflict(err error) error {
 // the half nobody types — the DERIVED one, which that guard's own doc names as
 // its residual and hands to "where the decision lives", i.e. here.
 //
-// THE REFUSAL IS TEMPLATE DISAGREEMENT, NOT AN EQUAL ROOT. Two host_path drives
+// The refusal is template disagreement, not an equal root. Two host_path drives
 // on one root stay legal, because that is a real deployment shape and the one
 // driveHostRootNesting deliberately permits: a read-write and a read-only view
 // of /srv/homes, or two size ceilings over it. What is refused is the pair that
@@ -185,7 +185,7 @@ func userDriveUniqueConflict(err error) error {
 // stated invariant ("one home directory belongs to one principal") failing on
 // the backend its index cannot reach.
 //
-// RESIDUAL, stated rather than implied: `email_local` folds two principals whose
+// Residual, stated rather than implied: `email_local` folds two principals whose
 // addresses share the part before the "@" onto one home. That fold is a property
 // of the template itself and happens on a SINGLE drive just as readily, so it is
 // not this guard's shape and closing it here would leave `sub` as the only
@@ -193,7 +193,7 @@ func userDriveUniqueConflict(err error) error {
 // types.ValidateUserDrive, which already refuses `email_local` on a managed
 // backend for exactly that reason.
 //
-// IN THE STATEMENT, not in a read before it, for the reason
+// In the statement, not in a read before it, for the reason
 // UpsertUserDriveGrant's guard is: one round trip rather than two, so the window
 // between "no other root-mate names homes differently" and the write is a single
 // statement. It is still not a constraint — a cross-row rule over one table
@@ -216,7 +216,7 @@ func (s PG) UpsertUserDrive(ctx context.Context, d types.UserDrive, refuseIfAllo
 	if !refuseIfAllocated {
 		return s.upsertUserDriveOn(ctx, s.Pool, d, false)
 	}
-	// THE PREDICATE ALONE IS NOT THE GUARD — THE ROW LOCK IS.
+	// The predicate alone is not the guard — the row lock is.
 	//
 	// NOT EXISTS over user_drive_grants is evaluated against the statement's
 	// snapshot, and under READ COMMITTED an INSERT that has not committed yet is
@@ -235,7 +235,7 @@ func (s PG) UpsertUserDrive(ctx context.Context, d types.UserDrive, refuseIfAllo
 	// the outcome the confirmation is about). Either way the predicate is
 	// race-free rather than merely usually right.
 	//
-	// READ COMMITTED IS PINNED rather than inherited, for the reason the audit
+	// Read committed is pinned rather than inherited, for the reason the audit
 	// chain's tx pins it: default_transaction_isolation is a USERSET GUC, and
 	// under REPEATABLE READ the snapshot is taken before the lock is granted —
 	// which would put the pre-lock snapshot back in charge of the predicate and
@@ -280,7 +280,7 @@ func (s PG) upsertUserDriveOn(ctx context.Context, q driveQuerier, d types.UserD
 		if conflict := userDriveUniqueConflict(err); conflict != nil {
 			return types.UserDrive{}, conflict
 		}
-		// NO ROWS IS ONE OF THE TWO GUARDS IN THE WHERE AND NOTHING ELSE. The
+		// No rows is one of the two guards in the WHERE and nothing else. The
 		// SELECT is a row of constants, so only its WHERE can empty it;
 		// UNIQUE(name) raises 23505 (handled just above) and the primary key is
 		// absorbed by ON CONFLICT. scanUserDrive folds pgx.ErrNoRows into
@@ -288,7 +288,7 @@ func (s PG) upsertUserDriveOn(ctx context.Context, q driveQuerier, d types.UserD
 		// would be the wrong word to hand a caller — the row it asked to write is
 		// not missing, it was refused.
 		//
-		// WHICH guard refused costs one read on this already-failing path, and
+		// Which guard refused costs one read on this already-failing path, and
 		// the DURABLE blocker is asked FIRST. Both can be true of one write, and
 		// they are not equally actionable: the allocation is transient (the admin
 		// re-sends, sees what re-homing costs, and confirms) while the home-name
@@ -299,7 +299,7 @@ func (s PG) upsertUserDriveOn(ctx context.Context, q driveQuerier, d types.UserD
 		// The read is not part of the DECISION — the statement above already made
 		// it, under the row lock — so it cannot reintroduce the window.
 		if errors.Is(err, ErrNotFound) {
-			// NAMESPACE-FIRST FOR A SHARE, unchanged: the durable blocker before
+			// Namespace-first for a share, unchanged: the durable blocker before
 			// the transient one.
 			namespacePossible := string(d.Backend) == shareBackend && d.HostRoot != ""
 			if namespacePossible && s.driveHomeNamespaceClash(ctx, q, d) {
@@ -308,7 +308,7 @@ func (s PG) upsertUserDriveOn(ctx context.Context, q driveQuerier, d types.UserD
 			if refuseIfAllocated && s.driveHasGrants(ctx, q, d.ID) {
 				return types.UserDrive{}, ErrDriveAllocated
 			}
-			// AND WHEN ONLY ONE GUARD WAS IN THE STATEMENT, the answer is that
+			// And when only one guard was in the statement, the answer is that
 			// guard's — whatever the re-read managed to say. Both re-reads answer
 			// false on an error by design (the fallback decides the MESSAGE,
 			// never the write), and a grant deleted between the refusing
@@ -441,7 +441,7 @@ func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, erro
 // without this guard Wardyn itself creates one volume and binds it into two
 // people's sandboxes, read-write wherever the allocations are writable.
 //
-// ─── THE NAMESPACE IS THE OBJECT NAME'S, NOT THE ROW'S ────────────────────────
+// The namespace is the object name's, not the row's.
 //
 // Scoping this to drive_id — which is what it and migration 0059's index both
 // did — states the rule over the row that happens to carry the name rather than
@@ -468,7 +468,7 @@ func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, erro
 // not see is two textually different roots that resolve to one tree through a
 // symlink; that needs the filesystem, which the store has no access to, and it
 // is driveHostRootNesting (which does resolve, on the drive-write path) that
-// owns the resolved half. RESIDUAL, stated rather than implied: a DERIVED home
+// owns the resolved half. Residual, stated rather than implied: a DERIVED home
 // — no override at all — can still collide across two same-root shares, because
 // two drives may carry different home_templates and a share's derived name is a
 // claim substring rather than a digest (types.ValidateUserDrive refuses `hash`
@@ -478,7 +478,7 @@ func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, erro
 // design decision about whether two shares may share a root at all, and it
 // belongs where that decision lives, not here.
 //
-// THE GUARD IS IN THE STATEMENT, not in a read before it, so the window between
+// The guard is in the statement, not in a read before it, so the window between
 // "nobody else holds this name" and the write is one statement rather than two
 // round trips. It is still not a constraint: two concurrent inserts can both
 // pass NOT EXISTS under READ COMMITTED. Migration 0059's partial unique index on
@@ -496,7 +496,7 @@ func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, erro
 // where the request that omitted the field can still be seen — the column's own
 // DEFAULT true never applies, because this INSERT always supplies a value.
 //
-// ─── AND THE SECOND GUARD IN THE SAME STATEMENT: A SILENT RE-HOME ──────────
+// And the second guard in the same statement: a silent re-home.
 //
 // home_override IS an identity field. The object a member binds is derived
 // from it (DriveObjectName over the resolved home), so clearing one re-homes
@@ -522,12 +522,12 @@ func (s PG) ListUserDrives(ctx context.Context) ([]types.UserDriveListItem, erro
 // state the field. Stating it is the confirmation, so there is no ?confirm= to
 // invent and no second spelling of the act.
 //
-// IN THE STATEMENT, not in a read before it, for the reason the uniqueness
+// In the statement, not in a read before it, for the reason the uniqueness
 // guard above is: the window between "does this row pin a name" and the write
 // is one statement rather than two round trips — which is strictly better than
 // driveRehomeGuard, whose own doc concedes its read-then-write race.
 //
-// THE ZERO VALUE IS THE SAFE ONE. A caller that forgets the argument passes
+// The zero value is the safe one. A caller that forgets the argument passes
 // false, which REFUSES the clear rather than performing it.
 func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant, homeOverrideStated bool) (types.UserDriveGrant, error) {
 	if g.ID == uuid.Nil {
@@ -564,7 +564,7 @@ func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant, ho
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
 			return types.UserDriveGrant{}, ErrNotFound
 		}
-		// 23505 IS THE GUARD ABOVE, WON BY THE DATABASE INSTEAD. Migration 0059
+		// 23505 is the guard above, won by the database instead. Migration 0059
 		// added the partial unique index this statement's NOT EXISTS could only
 		// approximate — two concurrent inserts can both pass NOT EXISTS under
 		// READ COMMITTED, and the index is what actually stops the second. That
@@ -573,7 +573,7 @@ func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant, ho
 		// driver string, for the one request the index exists to refuse
 		// correctly.
 		//
-		// NOT DETERMINISTICALLY TESTABLE and nothing here claims to cover it —
+		// Not deterministically testable, and nothing here claims to cover it —
 		// the same statement residual #25 makes about the mount TOCTOU. The
 		// guard closes every single-threaded case, so no fixture can reach the
 		// index; internal/db's own test asserts the SQLSTATE at the database,
@@ -581,14 +581,14 @@ func (s PG) UpsertUserDriveGrant(ctx context.Context, g types.UserDriveGrant, ho
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return types.UserDriveGrant{}, ErrConflict
 		}
-		// NO ROWS is one of the two guards above and nothing else: the FK raises
+		// No rows is one of the two guards above and nothing else: the FK raises
 		// 23503 (handled just above), the natural key is absorbed by ON
 		// CONFLICT, and the SELECT is otherwise a row of constants that cannot
 		// be empty. It arrives as ErrNotFound because scanUserDriveGrant folds
 		// pgx.ErrNoRows into it for the READ callers that share the helper — on
 		// THIS statement that reading would be wrong, and the reason is above.
 		//
-		// WHICH of the two is decidable by the caller without a second read, and
+		// Which of the two is decidable by the caller without a second read, and
 		// the API needs to decide because the two remedies are different
 		// sentences. They are mutually exclusive by construction: the INSERT's
 		// uniqueness guard short-circuits on an EMPTY home_override, and an
@@ -640,7 +640,7 @@ const userDriveGrantList = `SELECT ` + userDriveGrantCols + ` FROM user_drive_gr
 // ListUserDriveGrantsPage is ListUserDriveGrants bounded to one window — the
 // seventh entry in Pager, and the one user_drive_grants was missing.
 //
-// THE LIMIT IS NOT A COURTESY, IT CHANGES THE PLAN. This ORDER BY has no index
+// The limit is not a courtesy, it changes the plan. This ORDER BY has no index
 // to serve it, so unbounded it is a Seq Scan feeding a full sort: measured on
 // this deployment's own PostgreSQL 17 at work_mem=4MB with 50,000 allocations,
 // `external merge Disk: 5584kB`, 149.7 ms, every row materialised and
@@ -685,10 +685,10 @@ const userDriveTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' TH
 // btree so there is no second implementation in Go for a caller to skip,
 // mis-order, or forget. Ranked, in order:
 //
-//  1. TIER — user > group > all. A grant is one admin explicitly naming one
+//  1. tier — user > group > all. A grant is one admin explicitly naming one
 //     principal, so the more specific naming wins outright; no priority in the
 //     group tier can beat a user-tier row.
-//  2. WITHIN THE USER TIER, a sub-keyed match beats an email-keyed one.
+//  2. within the user tier, a sub-keyed match beats an email-keyed one.
 //     capabilitySubjects returns up to TWO user subjects (lowercased sub, then
 //     email) and an admin may legitimately have written a grant against either.
 //     Sub wins because it is the stable identifier — an email is reassignable,
@@ -714,8 +714,8 @@ const userDriveTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' TH
 //     EXPLAINABLE, which a row id would not be — "the alphabetically first
 //     group's allocation wins" is an answer to "why did Bob get that one".
 //
-// THE RULE WAS COPIED FROM ResolveGovernanceProfile, WHICH DOES NOT NEED THE
-// LAST KEY. governance_assignments carries no per-assignment override — only
+// The rule was copied from ResolveGovernanceProfile, which does not need the
+// last key. governance_assignments carries no per-assignment override — only
 // profile_id and priority — so two assignments naming one profile are
 // interchangeable and the tie is unobservable. Copying the ORDER BY into a
 // table whose rows DO carry per-row overrides is what turned a benign gap into
@@ -723,7 +723,7 @@ const userDriveTierOrder = `CASE subject_type WHEN 'user' THEN 0 WHEN 'group' TH
 // listing and the resolver now agree on the last key rather than only the
 // first.
 //
-// DISABLED GRANTS ARE IN THE QUERY, and the winner's own `enabled` decides
+// Disabled grants are in the query, and the winner's own `enabled` decides
 // PAUSED vs MOUNTED — a disabled row that wins its tier yields paused, never
 // the wider row beneath it (DESIGN §2.2: turning Bob's row off cannot silently
 // hand him the group's writable drive). Excluding them in the WHERE instead

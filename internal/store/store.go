@@ -106,7 +106,7 @@ func (s PG) Ping(ctx context.Context) error {
 	return s.Pool.Ping(ctx)
 }
 
-// ─── AgentRun ────────────────────────────────────────────────────────────────
+// AgentRun
 
 // CreateRun inserts a new run and returns the persisted row.
 func (s PG) CreateRun(ctx context.Context, r types.AgentRun) (types.AgentRun, error) {
@@ -272,7 +272,7 @@ func (s PG) SetRunFailureHint(ctx context.Context, id uuid.UUID, hint string) er
 // 0063). Fed by runner.SandboxSpec.OnWaiting from inside CreateSandbox, once per
 // CHANGE of reason.
 //
-// IT DOES NOT BUMP updated_at, and that is load-bearing rather than an
+// It does not bump updated_at, and that is load-bearing rather than an
 // oversight. agent_runs.updated_at is the clock the idle reaper measures
 // idleness by AND the clock the killed-run tail-upload grace is measured from
 // (see TouchRun, which exists to bump it, and api/internal_live_run.go). A
@@ -289,7 +289,7 @@ func (s PG) SetRunStatusDetail(ctx context.Context, id uuid.UUID, detail string)
 // reaper (which measures idleness by agent_runs.updated_at) does not stop a run
 // that a human is actively attached to. Returns ErrNotFound when no row matched.
 //
-// A TERMINAL run is never touched (W6-S1), and the guard is HERE rather than at
+// A TERMINAL run is never touched, and the guard is HERE rather than at
 // the four callers (the UI relay, both attach pumps, the SSH channel keepalives)
 // because they share one reason and one bug. Each of them touches BEFORE the
 // door that refuses a non-RUNNING run, and updated_at is also the clock the
@@ -347,11 +347,11 @@ func scanRun(row pgx.Row) (types.AgentRun, error) {
 	return r, nil
 }
 
-// ─── RunPolicy ───────────────────────────────────────────────────────────────
+// RunPolicy
 
 // CreatePolicy inserts a policy and returns the persisted row. Returns
 // ErrConflict when the name's UNIQUE constraint (run_policies.name) rejects a
-// duplicate — the caller maps that to 409, never the raw driver error (W20-S1-3).
+// duplicate — the caller maps that to 409, never the raw driver error.
 func (s PG) CreatePolicy(ctx context.Context, p types.RunPolicy) (types.RunPolicy, error) {
 	specJSON, err := json.Marshal(p.Spec)
 	if err != nil {
@@ -387,7 +387,7 @@ func (s PG) ListPolicies(ctx context.Context) ([]types.RunPolicy, error) {
 // UpdatePolicy replaces a policy's name and spec and bumps updated_at, returning
 // the persisted row. Returns ErrNotFound when no policy has the given id, and
 // ErrConflict when the rename collides with run_policies.name's UNIQUE
-// constraint — the SAME mapping CreatePolicy has made since W20-S1-3, because
+// constraint — the SAME mapping CreatePolicy has made, because
 // the constraint is the same one and a rename onto a taken name is the same
 // caller-fixable mistake as an insert under one (B1-F5). Without it the API's
 // blanket 500 handed an admin the raw driver text.
@@ -446,7 +446,7 @@ func scanPolicy(row pgx.Row) (types.RunPolicy, error) {
 	return p, nil
 }
 
-// ─── CredentialGrant ─────────────────────────────────────────────────────────
+// CredentialGrant
 
 // CreateGrant inserts a credential grant (eligibility record) and returns it.
 func (s PG) CreateGrant(ctx context.Context, g types.CredentialGrant) (types.CredentialGrant, error) {
@@ -482,7 +482,7 @@ func scanGrant(row pgx.Row) (types.CredentialGrant, error) {
 	return g, nil
 }
 
-// ─── ApprovalRequest ─────────────────────────────────────────────────────────
+// ApprovalRequest
 
 // CreateApproval inserts a new approval request.
 func (s PG) CreateApproval(ctx context.Context, a types.ApprovalRequest) (types.ApprovalRequest, error) {
@@ -635,7 +635,7 @@ func scanApproval(row pgx.Row) (types.ApprovalRequest, error) {
 	return a, nil
 }
 
-// ─── AuditEvent ──────────────────────────────────────────────────────────────
+// AuditEvent
 
 // InsertAuditEvent appends a single audit event. Implements audit.Recorder.
 // The Postgres trigger blocks UPDATE/DELETE; this function only ever INSERTs.
@@ -654,7 +654,7 @@ func scanApproval(row pgx.Row) (types.ApprovalRequest, error) {
 // writers this package knows nothing about; the lock here is re-entrant within
 // the transaction and costs nothing. See db.AuditChainLockKey.
 func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEvent) error {
-	// THE CAP LIVES HERE, at the one INSERT every audit writer reaches — the api
+	// The cap lives here, at the one INSERT every audit writer reaches — the api
 	// server, the broker, identity, the approval sweeper and the spool drain
 	// alike — rather than in Server.auditEvent, which internal/approval bypasses
 	// by building types.AuditEvent values of its own. See CapAuditTarget.
@@ -663,7 +663,7 @@ func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, ev *types.AuditEv
 	if err != nil {
 		return fmt.Errorf("store: marshal audit data: %w", err)
 	}
-	// READ COMMITTED IS PINNED HERE, not inherited. Since 0056 the head read
+	// Read committed is pinned here, not inherited. Since 0056 the head read
 	// that decides prev_hash happens INSIDE the trigger, i.e. inside THIS
 	// transaction — so under REPEATABLE READ the transaction snapshot, taken by
 	// the advisory-lock statement below BEFORE the lock is granted, is the one
@@ -741,8 +741,8 @@ func (s PG) QueryRecentAuditEvents(ctx context.Context, limit int) ([]types.Audi
 // find the latest kernel.sensor.heartbeat that drives the eBPF ground-truth
 // health state (so the stream reports healthy only while beats are arriving).
 //
-// MOST RECENT BY `time`, PICKED OUT OF A seq-ORDERED WINDOW, and both halves are
-// deliberate:
+// Most recent by `time`, picked out of a seq-ordered window, and both halves
+// are deliberate:
 //
 //   - `seq DESC` is INSERTION order, and the audit spool replays at-least-once
 //     while keeping each event's original ev.Time. A beat spooled through a
@@ -755,7 +755,7 @@ func (s PG) QueryRecentAuditEvents(ctx context.Context, limit int) ([]types.Audi
 //     `ORDER BY time DESC` would abandon it and sort the whole action's history
 //     on every probe.
 //
-//     TWENTY IS A WINDOW, NOT A PROOF, and the difference is worth stating: it
+//     Twenty is a window, not a proof, and the difference is worth stating: it
 //     covers a replay burst of up to twenty rows and costs nineteen extra
 //     index-scan rows per probe. A LONGER backlog — the drain replays in
 //     batches and loops until the spool clears, so an outage of more than a few
@@ -806,7 +806,7 @@ func scanAuditEvent(row pgx.Row) (types.AuditEvent, error) {
 	return ev, nil
 }
 
-// ─── SiteConfig ──────────────────────────────────────────────────────────────
+// SiteConfig
 
 // GetSiteConfig returns the operator-wide site config, or a ZERO-VALUE
 // SiteConfig (not an error) when no row has been written yet — first boot has

@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -544,7 +545,7 @@ func TestExec_EphemeralContainerMountsTheDrive(t *testing.T) {
 			}
 		}
 		wantMain := corev1.VolumeMount{Name: driveVolumeName, MountPath: runner.DriveTarget, ReadOnly: readOnly}
-		if mainMount == nil || *mainMount != wantMain {
+		if mainMount == nil || cmp.Diff(*mainMount, wantMain) != "" {
 			t.Errorf("ro=%v: main container mount = %+v, want %+v", readOnly, mainMount, wantMain)
 		}
 
@@ -562,7 +563,7 @@ func TestExec_EphemeralContainerMountsTheDrive(t *testing.T) {
 			t.Fatalf("ro=%v: exec container mounts = %v, want the drive plus the %d scratch mounts", readOnly, mounts, len(wantScratch))
 		}
 		execMount := mountFor(mounts, driveVolumeName)
-		if execMount == nil || *execMount != wantMain {
+		if execMount == nil || cmp.Diff(*execMount, wantMain) != "" {
 			t.Errorf("ro=%v: exec container drive mount = %+v, want %+v", readOnly, execMount, wantMain)
 		}
 
@@ -1094,7 +1095,7 @@ func TestApplyDriveToPod_AppendsRatherThanAssigns(t *testing.T) {
 	}
 	mounts := spec.Containers[0].VolumeMounts
 	wantDrive := corev1.VolumeMount{Name: driveVolumeName, MountPath: runner.DriveTarget, ReadOnly: false}
-	if len(mounts) != 2 || mounts[0] != existingMount || mounts[1] != wantDrive {
+	if len(mounts) != 2 || cmp.Diff(mounts[0], existingMount) != "" || cmp.Diff(mounts[1], wantDrive) != "" {
 		t.Fatalf("main container mounts = %+v, want [%+v %+v]", mounts, existingMount, wantDrive)
 	}
 	// By NAME, not by index: a sidecar is not where the agent's drive goes.

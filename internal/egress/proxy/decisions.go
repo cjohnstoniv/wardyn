@@ -68,7 +68,7 @@ func (s *decisionSink) emit(log egress.DecisionLog) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		// COUNTED, not silently returned (B10-F6). A decision emitted after close
+		// Counted, not silently returned. A decision emitted after close
 		// is still a decision the audit never received, and the sink's stated
 		// posture is "best-effort delivery, but the gap is summarized, not silent".
 		// The window is real and lands where it matters most: MITM tunnels are
@@ -93,7 +93,7 @@ func (s *decisionSink) emit(log egress.DecisionLog) {
 // injection rules are registered before the first emit, so the snapshot is
 // always current).
 //
-// HONEST RESIDUAL: masking catches verbatim byte-identical occurrences only.
+// Masking catches verbatim byte-identical occurrences only.
 func (s *decisionSink) mirror(log egress.DecisionLog) {
 	if s.out == nil {
 		return
@@ -137,10 +137,10 @@ func (s *decisionSink) run() {
 			// Individual decision: best-effort, must never block egress — but a
 			// decision the control plane REFUSED is a decision that was not
 			// individually recorded, which is exactly what s.dropped counts and
-			// reportDropped summarizes (F075 fix-up). Discarding the error made
-			// an over-large or rejected decision vanish from the audit trail
+			// reportDropped summarizes (F075 fix-up). Discarding the error would
+			// let an over-large or rejected decision vanish from the audit trail
 			// with nothing anywhere saying so: internal/api's MaxBytesReader
-			// 413s a body over maxJSONBody, and that 413 used to be silent.
+			// 413s a body over maxJSONBody, and that 413 must not be silent.
 			if err := s.post(log); err != nil {
 				s.dropped.Add(1)
 			}
@@ -157,7 +157,7 @@ func (s *decisionSink) run() {
 // at shutdown. It runs on the worker goroutine and reuses post(), so it never
 // adds latency to the agent's request path.
 //
-// HONEST POSTURE: DB delivery of individual decisions is best-effort under
+// DB delivery of individual decisions is best-effort under
 // flood; when the buffer overflows those specific decisions are lost, but the
 // gap is summarized to the control plane (count since last report), not silent.
 // The delta is only marked reported once the summary post actually lands, so a
@@ -206,7 +206,7 @@ func (s *decisionSink) post(log egress.DecisionLog) error {
 		return err
 	}
 	// Mask secret values from the body before posting to the control plane.
-	// HONEST RESIDUAL: verbatim byte-identical masking only.
+	// Verbatim byte-identical masking only.
 	body = maskDecisionBytes(body)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

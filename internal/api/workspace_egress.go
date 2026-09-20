@@ -57,7 +57,7 @@ func unionWorkspaceEgress(spec *types.RunPolicySpec, workspaces []types.Workspac
 	for _, ws := range workspaces {
 		if p, ok := workspaceProfile(ws); ok {
 			// Filter the merged SCAN PROFILE through this workspace's egress "off"
-			// overrides (GAP-EGRESS-5): the folded contract already drops an off'd
+			// overrides: the folded contract already drops an off'd
 			// egress requirement row, but the same host also rides in via the profile
 			// union here — which the fold never touches — so an operator who set
 			// egress:<host> off would still reach it. The scan seeds the host into
@@ -78,8 +78,8 @@ func unionWorkspaceEgress(spec *types.RunPolicySpec, workspaces []types.Workspac
 // re-laned required/optional by another attachment, or restated by the overlay,
 // survives in the folded contract, so it is NOT off). This is the set to subtract
 // from the merged scan-profile union so an "off" egress override actually closes
-// egress rather than being defeated by the profile path (GAP-EGRESS-5, closed
-// together with WSPIPE-7's Overrides writer — upsertAndAttach, sources.go).
+// egress rather than being defeated by the profile path (closed
+// together with the Overrides writer — upsertAndAttach, sources.go).
 func egressOverriddenOff(ws types.Workspace) map[string]bool {
 	off := map[string]bool{}
 	for _, att := range ws.Attachments {
@@ -126,7 +126,7 @@ func filterOffEgress(domains []string, off map[string]bool) []string {
 // derived from a git_pat/ssh_key grant's host (adoEgressDomains,
 // sshOver443Endpoint) — a self-hosted GHES or ADO Server has no such built-in
 // bundle, so the operator declares its host(s) once in site-config — as a
-// provider row's base URL since 0.7.2, or in the legacy ScmHosts list — and every
+// provider row's base URL, or in the legacy ScmHosts list — and every
 // cloning run inherits them. Non-secret, additive: it only ever widens the
 // allowlist with hosts the operator explicitly declared, never anything
 // content-derived. No SiteConfig row / no Store configured / no ScmHosts set
@@ -160,7 +160,7 @@ func (s *Server) unionSiteConfigScmHosts(ctx context.Context, spec *types.RunPol
 //   - Ecosystem "" (network-only): DROPS exactly the one declared From host —
 //     there is no per-ecosystem table to consult for an arbitrary redirect.
 //
-// SCOPE — matching run only (GAP-EGRESS-2). A redirect is applied ONLY when the
+// Scope — matching run only. A redirect is applied ONLY when the
 // run's OWN egress actually reaches one of the public hosts it fronts (its From
 // host, or an ecosystem public host — the same hosts a scan of that ecosystem
 // seeds into the run's egress). types.EgressRedirect promises substitution "for
@@ -173,7 +173,7 @@ func (s *Server) unionSiteConfigScmHosts(ctx context.Context, spec *types.RunPol
 // regardless of whether it reaches this redirect (docs/OPERATIONS.md, "Egress
 // redirects: two tiers").
 //
-// The dropped hosts are matched port- and wildcard-aware (GAP-EGRESS-6): a
+// The dropped hosts are matched port- and wildcard-aware: a
 // "*.pythonhosted.org" or "pypi.org:443" allowlist entry — both legal in
 // AllowedDomains — is subtracted exactly like a bare "pypi.org" is, so public
 // reach never survives beside the corp mirror.
@@ -206,13 +206,13 @@ func substituteArtifactEgress(domains []string, sc types.SiteConfig) []string {
 		for _, h := range pub {
 			dropHost[strings.ToLower(h)] = true
 		}
-		// PORT-QUALIFIED, never bare (F106). A bare allowlist entry matches on
+		// Port-qualified, never bare. A bare allowlist entry matches on
 		// EVERY port (classifyDomain gives it port 0, and Policy.AllowsLiteralIP
 		// answers true from allowedExact before it ever consults the
-		// port-qualified map), so a redirect To of https://10.40.2.11:8443/ used
-		// to trust 10.40.2.11:22 and :5432 as well — the private-IP guard's whole
-		// job, undone on ports the operator never named. The MITM/token half of
-		// the SAME redirect has been port-exact since W13-S1-5
+		// port-qualified map), so a bare redirect To of https://10.40.2.11:8443/
+		// would trust 10.40.2.11:22 and :5432 as well — the private-IP guard's
+		// whole job, undone on ports the operator never named. The MITM/token
+		// half of the SAME redirect is port-exact
 		// (planArtifactRedirect authors mitmHosts as net.JoinHostPort(host,
 		// redirectPort(r.To))), so the credential was scoped to one port while
 		// the SSRF trust was not. Both halves now derive the port from ONE
@@ -251,7 +251,7 @@ func substituteArtifactEgress(domains []string, sc types.SiteConfig) []string {
 
 // appendNetworkRedirectDenials denies each NETWORK-ONLY redirect's From host so
 // deny-beats-allow-all closes the public route the operator redirected away
-// (GAP-EGRESS-4): a subtraction-only substitution does nothing under any
+// a subtraction-only substitution does nothing under any
 // allow_all_egress policy (every learning Record session, plus any allow-all
 // operator policy), leaving From fully reachable while only the credentialed corp
 // To host was added. Ecosystem rows stay subtraction-only (a public CDN may still
@@ -329,12 +329,12 @@ func workspaceSuggestedEgress(workspaces []types.Workspace) []string {
 // there is no per-source deny CONTRACT to fold the way the required-egress
 // loop below folds allows.
 //
-// A METHOD, not a package function, for one reason: the operator_set
-// provenance gate lives on s.cfg and this path MUST apply it. It was a package
-// func through 0.7's flip of RequireOperatorSetEgress, so the gate reached the
-// run-create path only and a scan_seeded egress host — derived by the scanner
-// from UNTRUSTED repo content — was still auto-allowed on every confined
-// replay. Both paths now route through egressProvenanceAllowed.
+// A method, not a package function, for one reason: the operator_set
+// provenance gate lives on s.cfg and this path MUST apply it. As a package
+// func, the gate would reach the run-create path only, leaving a scan_seeded
+// egress host — derived by the scanner from UNTRUSTED repo content — still
+// auto-allowed on every confined replay. Both paths now route through
+// egressProvenanceAllowed.
 func (s *Server) confinedEgressDomains(ws types.Workspace) []string {
 	base := &types.RunPolicySpec{AllowedDomains: workspaceCloneEgress(ws)}
 	unionWorkspaceEgress(base, []types.Workspace{ws})
@@ -361,7 +361,7 @@ func (s *Server) confinedEgressDomains(ws types.Workspace) []string {
 
 // egressProvenanceAllowed is THE decision point for the operator_set
 // egress-provenance gate (RequireOperatorSetEgress,
-// WARDYN_REQUIRE_OPERATOR_SET_EGRESS — default TRUE since 0.7): may this
+// WARDYN_REQUIRE_OPERATOR_SET_EGRESS — default TRUE): may this
 // workspace requirement row auto-widen a run's egress allowlist without an
 // operator ever acting?
 //
@@ -459,7 +459,7 @@ const (
 // workspace's approved-egress list. Read-only and advisory — it never widens
 // anything itself.
 //
-// W25-S1-2: the route is member-reachable, so the run scan is filtered by
+// The route is member-reachable, so the run scan is filtered by
 // ownsRunOrAdmin — the same owner-or-admin predicate handleListRuns and
 // getRunAuthorized use. Every host returned comes from a RUN's audit trail;
 // unfiltered, a member learned which hosts a colleague's run on the shared
@@ -483,7 +483,7 @@ func (s *Server) handleObservedEgress(w http.ResponseWriter, r *http.Request) {
 	// so offering one broke promotion for every real host beside it); and
 	// explicitly DENIED by the operator, where deny beats allow at the proxy
 	// (policy.go), so the promotion answers 200 and the host stays blocked
-	// forever (B4-F6).
+	// forever.
 	skip := map[string]bool{}
 	for _, d := range ws.ApprovedEgress {
 		skip[d] = true
@@ -503,7 +503,7 @@ func (s *Server) handleObservedEgress(w http.ResponseWriter, r *http.Request) {
 	// The NEWEST maxObservedRuns, at the database, through the Pager seam
 	// firstBrokeredRepoFromRuns already uses (setup_checks.go) — this is a
 	// member-reachable route that read the WHOLE runs table and then windowed it
-	// in Go, so its cost grew with the deployment's entire run history (B4-F9).
+	// in Go, so its cost grew with the deployment's entire run history.
 	// The bound is now the PAGE rather than the number of matching runs found
 	// while walking an unbounded list: an honest, stated ceiling on how far back
 	// the advisory panel looks.

@@ -35,7 +35,7 @@
 // Set-Cookie: wardyn_* dropped (cookie tossing). Both directions are pinned by
 // tests in uigateway_test.go.
 //
-// NO CONTENT IS RECORDED. ui.auth/ui.start/ui.open/ui.close say that a human
+// No content is recorded. ui.auth/ui.start/ui.open/ui.close say that a human
 // opened and closed an app; there is no keystroke, screen or page capture on
 // this path, and these actions are deliberately distinct from session.attach so
 // a relay session can never appear in the recording picker as if it were one.
@@ -67,7 +67,7 @@ const (
 	// attach ticket.
 	uiEnterPath = "/__wardyn/enter"
 	// uiRunPrefix roots every relayed request: /r/<run-id>/<app>/<app path>.
-	// The run id AND the app are IN THE PATH so the session cookie can be
+	// The run id AND the app are in the path so the session cookie can be
 	// Path-scoped to both — one run's page cannot make the browser attach
 	// another run's cookie, and one app's session cannot be the other's
 	// (uiCookiePath, uigateway_session.go).
@@ -158,7 +158,7 @@ func (s *Server) uiEnterURLTemplate() string {
 // mounted on the console router: these routes must exist ONLY on the second
 // origin, and Server.Handler() must 404 them — pinned by test.
 //
-// CONSEQUENCE, stated because it is easy to miss: being off the chi router also
+// Consequence, stated because it is easy to miss: being off the chi router also
 // makes this surface invisible to TestAuthzMatrix, which discovers routes by
 // walking that router. A green authz matrix says NOTHING about relay
 // authorization. The ticket/session tests in uigateway_test.go are this
@@ -186,7 +186,7 @@ func (s *Server) UIGatewayHandler() http.Handler {
 	})
 }
 
-// ─── enter: redeem the ticket, re-check, set the cookie ──────────────────────
+// enter: redeem the ticket, re-check, set the cookie
 
 // handleUIEnter is the ticket handoff:
 //
@@ -310,7 +310,7 @@ func (s *Server) uiRunOrigin(runID uuid.UUID) string {
 	return strings.TrimSuffix(origin, "/")
 }
 
-// ─── relay ───────────────────────────────────────────────────────────────────
+// relay
 
 // handleUIRelay serves /r/<run-id>/<app>/... — every request after the handoff.
 // The cookie is the ONLY credential accepted here: there is no fall-through to
@@ -477,7 +477,7 @@ func uiIsWardynCookie(name string) bool {
 	return strings.HasPrefix(strings.ToLower(name), uiCookiePrefix)
 }
 
-// ─── dial: one exec per connection ───────────────────────────────────────────
+// dial: one exec per connection
 
 // uiDialError is a dial failure with the status and message the browser should
 // see. It travels out of band (uiDialErrBox on the request context) rather than
@@ -589,7 +589,7 @@ func (s *Server) uiDial(ctx context.Context, _, addr string) (net.Conn, error) {
 		return nil, uiFail(ctx, http.StatusBadGateway, sshExecStreamErrorMessage(err))
 	}
 
-	// KEEPALIVE PER CONNECTION, not per inbound request. handleUIRelay touches
+	// Keepalive per connection, not per inbound request. handleUIRelay touches
 	// the run once per HTTP request, and a relayed WebSocket (an editor's
 	// live-reload or LSP socket) is ONE request for its entire life — so an
 	// actively-used editor looked idle to the reaper and auto_stop_after_sec
@@ -657,7 +657,7 @@ func (s *Server) acquireUIConn(runID uuid.UUID) (func(), bool) {
 	}, true
 }
 
-// ─── on-demand launcher ──────────────────────────────────────────────────────
+// on-demand launcher
 
 // uiEnsureApp makes sure the declared port is actually listening inside the
 // sandbox, starting the app if it is not. ONE exec does the whole cycle —
@@ -780,7 +780,7 @@ func (s *Server) markUIAppReady(key string) {
 	s.uiReady[key] = s.cfg.Now()
 }
 
-// ─── audit ───────────────────────────────────────────────────────────────────
+// audit
 
 // auditUI writes one ui.* event on the DAEMON-lifetime context, never the
 // request's: ui.close in particular reports the end of the very connection

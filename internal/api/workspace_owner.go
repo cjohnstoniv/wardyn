@@ -12,14 +12,14 @@ import (
 )
 
 // The two halves of "an admin acting on a MEMBER's workspace stays visible":
-// the offboarding reassign (decision O6) and the cross-user audit marker
-// (decision O5) every workspace-scoped write stamps.
+// the offboarding reassign and the cross-user audit marker every
+// workspace-scoped write stamps.
 
 // handleReassignWorkspace returns a member-owned workspace to the operator
 // (owned_by = ""), the offboarding path for a member who has left: their
 // owned rows would otherwise point at an identity nobody can sign in as.
 //
-// ADMIN-ONLY, enforced by the operatorOnly group in routes.go rather than
+// Admin-only, enforced by the operatorOnly group in routes.go rather than
 // in here — deliberately, because that refusal is written before any lookup
 // and is therefore a CONSTANT 403 for every id a member can name: existing,
 // foreign, own, or invented. That is strictly blinder than the
@@ -28,11 +28,11 @@ import (
 // workspace does not let a member disown it, so there is no owner tier here at
 // all.
 //
-// IDEMPOTENT on purpose: reassigning an already-operator-owned row succeeds and
+// Idempotent on purpose: reassigning an already-operator-owned row succeeds and
 // audits from_owner "" — offboarding runs over a list of ids and must not fail
 // halfway through because one of them was already handled.
 //
-// ONE CONSEQUENCE WORTH NAMING: the row's local_dir sources stop being
+// One consequence worth naming: the row's local_dir sources stop being
 // member-authored the moment ownership moves, so memberMountPosture no longer
 // resolves roots for them and the member root/dotfile gate no longer applies —
 // they become ordinary operator mounts, bounded by ValidateMountSource alone.
@@ -66,7 +66,7 @@ func (s *Server) handleReassignWorkspace(w http.ResponseWriter, r *http.Request)
 }
 
 // auditWorkspaceData marshals a workspace-scoped write's audit Data, stamping
-// the O5 cross-user marker: when the ACTOR is not the workspace's owner — i.e.
+// the cross-user marker: when the ACTOR is not the workspace's owner — i.e.
 // an admin acting on a member-owned workspace, for support or offboarding —
 // the event additionally carries workspace_owner. That makes cross-user admin
 // access to member data QUERYABLE (?actor=<admin> plus workspace_owner != actor)
@@ -106,8 +106,8 @@ func auditWorkspaceDataFor(actor, owner string, data map[string]any) json.RawMes
 	return mustJSON(data)
 }
 
-// workspaceOwner reads a workspace's owner for the O5 marker ALONE, on the
-// give-up paths of writers that never got a row back to read it from (the
+// workspaceOwner reads a workspace's owner for the cross-user marker ALONE, on
+// the give-up paths of writers that never got a row back to read it from (the
 // durable write failed, or was never attempted). Every failure answers "" — no
 // store, a row deleted mid-flight — which stamps nothing, so a marker lookup
 // can never turn a recorded miss into an unrecorded one.

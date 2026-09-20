@@ -92,8 +92,8 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 
 	// (2) BOTH NetworkPolicies, BEFORE any pod exists AND before the Secret.
 	//
-	// Before the SECRET is W6-S4: these two objects carry no credential, so the
-	// orphan sweep may list THEM (0.7.3's Role already withheld every Secret-body
+	// Before the SECRET: these two objects carry no credential, so the
+	// orphan sweep may list THEM (the Role withholds every Secret-body
 	// read verb, and `list` is one — RBAC cannot scope a list by label, so it
 	// returns every Secret in the namespace, which with an unset k8s.runsNamespace
 	// is the control plane's own). Creating them first, and deleting them LAST at
@@ -128,7 +128,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			Ingress: []networkingv1.NetworkPolicyIngressRule{{
 				From: []networkingv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: agentLabels}}},
 			}},
-			// M4: BOTH rules carry the same metadata-excluding peer. A rule
+			// BOTH rules carry the same metadata-excluding peer. A rule
 			// with Ports but no To matches ALL destinations on those ports —
 			// a peer-less "DNS" rule would permit port 53 to the metadata
 			// address too, voiding the Except on the general rule right
@@ -260,7 +260,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 			// topology. Off, for the same reason as the line above it.
 			EnableServiceLinks: boolPtr(false),
 			HostAliases:        []corev1.HostAlias{{IP: proxyIP, Hostnames: []string{"wardyn-proxy"}}},
-			// L3: the default ClusterFirst dnsPolicy points the agent at
+			// The default ClusterFirst dnsPolicy points the agent at
 			// kube-dns/CoreDNS — which its own NetworkPolicy denies (no DNS
 			// egress at all; see the agent netpol above). A proxy-UNAWARE
 			// lookup (a tool that ignores HTTP_PROXY) would then hang for
@@ -338,10 +338,10 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 // arbitrary, possibly large agent image needs the same generous budget the
 // canary itself gets.
 //
-// ON TIMEOUT it says WHY the pod never started, which is the whole point of the
+// On timeout it says WHY the pod never started, which is the whole point of the
 // lastPod capture below. A pod that never leaves Pending has no container status
-// at all, so every check inside the poll is looking at an empty list and the
-// caller used to get "context deadline exceeded" and nothing else. The most
+// at all, so every check inside the poll is looking at an empty list, and
+// without this enrichment the caller gets only "context deadline exceeded" and nothing else. The most
 // common cause on a drive-mounting deployment is exactly the one that reads
 // worst: the claim never bound, and the scheduler said so, in the PodScheduled
 // condition, for the whole timeout — "0/3 nodes are available: pod has unbound
@@ -382,7 +382,7 @@ func (d *Driver) waitContainerRunning(ctx context.Context, podName, containerNam
 			// A container that crashes before ever reaching Running (a bad
 			// image whose entrypoint exits immediately, CrashLoopBackOff's
 			// first cycle, ...) must fail fast here — without this check
-			// review round 2 (M5) found it falls through to "keep polling"
+			// without this check it falls through to "keep polling"
 			// and burns the full canaryWaitTimeout on a container that will
 			// never run.
 			if t := cs.State.Terminated; t != nil {
@@ -541,7 +541,7 @@ const cloudMetadataAddr = "169.254.169.254/32"
 
 // notMetadataIPBlock is 0.0.0.0/0 except the cloud-metadata address, shared
 // by the proxy netpol's DNS and general egress rules so they can never
-// drift apart (M4 finding: a rule missing this peer permits its ports to
+// drift apart (a rule missing this peer permits its ports to
 // the metadata address too, voiding the other rule's Except). IPv4-only —
 // this substrate does not yet reason about IPv6 pod networks.
 func notMetadataIPBlock() *networkingv1.IPBlock {

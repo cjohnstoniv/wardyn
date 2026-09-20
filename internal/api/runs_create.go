@@ -68,8 +68,8 @@ const composerWorkspaceTarget = "/home/agent/work"
 // genuine double-clone for one WITH an explicit target, and a hard 422 for a
 // local_dir source (the unique-target invariant re-checked below would then see
 // the identical target twice). A composed run's workspace's base_image and
-// ephemeral source targets are therefore a known, currently-unclosed gap — see
-// reconcile-workspace-first.md item 2 — not something this function covers.
+// ephemeral source targets are therefore a known, currently-unclosed gap, not
+// something this function covers.
 //
 // base_image REPLACES the old container-kind image resolution: when the
 // workspace carries one (and the caller didn't already set an explicit
@@ -82,13 +82,13 @@ const composerWorkspaceTarget = "/home/agent/work"
 // run→workspace linkage the scan/verify/record uploads authorize on, so a user
 // run must never claim it.
 //
-// seededImageOwner is the ownership half of G3's fix (PF-34, denyMemberSeededImage):
-// the OwnedBy of the workspace whose base_image just set req.Image, and "" in
+// seededImageOwner is the ownership half of denyMemberSeededImage's fix: the
+// OwnedBy of the workspace whose base_image just set req.Image, and "" in
 // every other case — including a member-owned workspace that set no image and an
 // operator-owned one that did. The callers' capability re-check keys on exactly
 // that emptiness, so returning the owner unconditionally would turn an
-// ownership-scoped guard into the unconditional variant PF-34 names as a
-// catastrophic regression.
+// ownership-scoped guard into the unconditional variant denyMemberSeededImage
+// exists to prevent — a catastrophic regression.
 func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicySpec, req *createRunRequest) (ephemeralDirs []string, seededImageOwner string, code int, err error) {
 	if req.WorkspaceID == nil {
 		return nil, "", 0, nil
@@ -161,8 +161,8 @@ func (s *Server) seedRequestWorkspace(ctx context.Context, spec *types.RunPolicy
 	return ephemeralDirs, seededImageOwner, 0, nil
 }
 
-// authorizeSpecWorkspaceSources is the RESOLVED-SPEC half of F335's gate: every
-// onboarded workspace the spec's mount sources and repos resolve to must be one
+// authorizeSpecWorkspaceSources is the RESOLVED-SPEC half of the onboarding
+// gate: every onboarded workspace the spec's mount sources and repos resolve to must be one
 // the caller may launch against (mayLaunchWorkspace).
 //
 // The workspace_id door is authorized by getWorkspaceLaunchable before any
@@ -213,7 +213,7 @@ func (s *Server) authorizeSpecWorkspaceSources(ctx context.Context, r *http.Requ
 
 // enforcedConfinement is the PURE confinement math both the launch path and the
 // preflight dry-run run: the requested class when set (never WEAKER than the
-// policy minimum), else — 0.7.8 — the STRONGEST class advertised is that meets
+// policy minimum), else the STRONGEST class advertised is that meets
 // the policy minimum (never the minimum itself; see strongestAdvertisedAtOrAbove),
 // then the deterministic BLAST-RADIUS floor.
 //
@@ -258,10 +258,10 @@ func enforcedConfinement(spec types.RunPolicySpec, reqCC types.ConfinementClass,
 // against what the runner and identity provider can actually deliver (invariant
 // 5, fail closed). The request value wins when set (never WEAKER than the
 // policy minimum); an unspecified request defaults to the STRONGEST class the
-// runner advertises at or above the policy minimum (strongestAdvertisedAtOrAbove
-// — 0.7.8). The deterministic BLAST-RADIUS floor then raises powerful-credential
+// runner advertises at or above the policy minimum (strongestAdvertisedAtOrAbove).
+// The deterministic BLAST-RADIUS floor then raises powerful-credential
 // runs to CC3, and the runner must advertise the EXACT enforced class
-// (membership, not rank — M8: a Kata-only host advertises [CC1, CC3] with no
+// (membership, not rank: a Kata-only host advertises [CC1, CC3] with no
 // CC2, so a rank check would pass a CC2 demand and fail later with a raw docker
 // error). Writes the HTTP error itself and returns ok=false on any refusal.
 // Extracted verbatim from handleCreateRun.
@@ -289,7 +289,7 @@ func (s *Server) resolveEnforcedConfinement(ctx context.Context, w http.Response
 	// Confinement gating: refuse to schedule a run whose confinement class the
 	// runner cannot structurally enforce (invariant 5, fail closed).
 	if s.cfg.Runner != nil {
-		// Membership, not rank (M8): CC2 (gVisor/runsc) and CC3 (Kata/krun) resolve to
+		// Membership, not rank: CC2 (gVisor/runsc) and CC3 (Kata/krun) resolve to
 		// INDEPENDENT runtimes, so a host can advertise a non-contiguous set (e.g. a
 		// Kata-only host advertises [CC1, CC3], no CC2). A rank check —
 		// confinementGE(best, enforced) — would let a CC2 demand pass on that host
@@ -352,7 +352,7 @@ type grantWiring struct {
 	// sshEgress collects the SSH-over-443 endpoints these grants need reachable.
 	sshEgress []string
 	// warnings are the sentences the 201 has to carry about wiring this function
-	// DECLINED to build — today only the provider lane vetoes (0.7.2). Collected
+	// DECLINED to build — today only the provider lane vetoes. Collected
 	// on the struct rather than returned separately for applySSHLaneWarnings'
 	// reason: a lane dropped silently fails mid-clone, inside the sandbox, where
 	// nobody is reading.
@@ -366,7 +366,7 @@ type grantWiring struct {
 // footgun as a default). A grant write failure is fatal (the run would be
 // ungovernable): the HTTP error is written here and ok=false returned — through
 // writeServerError, so the driver text behind it reaches the LOG and not the
-// member who called POST /runs (W6-S2). That chokepoint is why the request is a
+// member who called POST /runs. That chokepoint is why the request is a
 // parameter beside the writer: it is what names the method and path in the log
 // line an operator is already reading.
 // Extracted verbatim from handleCreateRun.
@@ -561,16 +561,15 @@ func (s *Server) applySSHLaneWarnings(ctx context.Context, req createRunRequest,
 //     nothing else adds these for ADO. Mirrors the SSH lane.
 //
 // wsRefs is the run's referenced onboarded workspaces, resolved by the caller
-// (it also feeds the workspace cred binding + image resolution) — this used to
-// resolve them itself. legacyRepo is the request's single `repo` field, which
-// the declaresRepo gate below needs and grantWiring cannot supply. Extracted
-// verbatim from handleCreateRun.
+// (it also feeds the workspace cred binding + image resolution). legacyRepo is
+// the request's single `repo` field, which the declaresRepo gate below needs
+// and grantWiring cannot supply. Extracted verbatim from handleCreateRun.
 func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *types.RunPolicySpec, gw grantWiring, wsRefs []types.Workspace, legacyRepo string) {
 	if added := unionWorkspaceEgress(spec, wsRefs); len(added) > 0 {
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.workspace.egress",
 			runID.String(), "success", mustJSON(map[string]any{"added_domains": added})))
 	}
-	// Repo clone host(s) each referenced workspace needs (GAP-EGRESS-1): a
+	// Repo clone host(s) each referenced workspace needs: a
 	// non-GitHub HTTPS clone (GitLab, self-hosted git) reaches its forge as an
 	// ordinary egress host, and nothing else in this union adds it — so a real run
 	// of a workspace whose only access is anonymous read got NO clone host and the
@@ -588,22 +587,19 @@ func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *type
 			runID.String(), "success", mustJSON(map[string]any{"added_domains": cloneAdded})))
 	}
 	// Site-config SCM hosts (GHES / ADO Server) are a CLONE lane, so union them
-	// only when this run actually declares a repo (GAP-EGRESS-3): a sealed
+	// only when this run actually declares a repo: a sealed
 	// local-dir-only analysis run must not inherit an unauthenticated HTTPS lane to
 	// every internal SCM host the operator declared for GHES clone runs. A repo is
 	// declared via spec.WorkspaceRepos, the legacy single `repo` field, or any
 	// git-clone grant lane.
 	//
-	// legacyRepo is checked DIRECTLY (eca43861 gated on gw.gitGrants instead, on
-	// the comment's claim that "the legacy run.Repo already folded into
-	// gw.gitGrants by augmentGitBrokerGrants" — which is false: that fold is a
+	// legacyRepo is checked DIRECTLY, not via gw.gitGrants: that fold is a
 	// no-op when gw.firstGitHubGrantID == nil, i.e. whenever the run has no
-	// github grant). The hole is user-visible: repoCloneURL (runs_scm.go) accepts
-	// a full https:// URL, so `--repo https://ghes.corp.example/team/app` is an
+	// github grant, and repoCloneURL (runs_scm.go) accepts a full https:// URL, so
+	// `--repo https://ghes.corp.example/team/app` is an
 	// ordinary credential-free HTTPS clone whose ONLY egress source is this
-	// union — with no grant minted, declaresRepo went false and the proxy denied
-	// the clone. That is the same GAP-EGRESS-1 class eca43861 fixed for
-	// workspaces one hunk above. The gate's actual intent (a sealed
+	// union — without checking legacyRepo directly, declaresRepo would read false
+	// and the proxy would deny the clone. The gate's actual intent (a sealed
 	// local-dir-only run inherits no SCM lane) is unchanged: no repo, no union.
 	declaresRepo := len(spec.WorkspaceRepos) > 0 || strings.TrimSpace(legacyRepo) != "" ||
 		gw.firstGitHubGrantID != nil ||
@@ -634,7 +630,7 @@ func (s *Server) unionRunEgress(ctx context.Context, runID uuid.UUID, spec *type
 // launches and that one host is refused mid-run — which, without this, is a
 // support ticket rather than a sentence on the 201.
 //
-// WARN, NEVER REFUSE (PF-14's doctrine, and the same asymmetry the profile CRUD's
+// Warn, never refuse (the same asymmetry the profile CRUD's
 // omission warnings take): the member did not author the workspace, cannot edit
 // the ceiling, and has nothing to correct — refusing would make an admin's two
 // independent decisions into a launch failure the member cannot resolve.
@@ -696,7 +692,7 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, w http.ResponseWrite
 	// silently clobbered back to FAILED (was: unconditional write), audit, and
 	// answer 201 with the refreshed (FAILED) run + warnings.
 	buildFailed := func(auditData map[string]any) {
-		// D9: surface the build failure under the FAILED badge, not only in the
+		// Surface the build failure under the FAILED badge, not only in the
 		// run.build audit row. The error text is already in auditData["error"].
 		hint := "the run's sandbox image could not be built"
 		if e, ok := auditData["error"].(string); ok && e != "" {
@@ -742,13 +738,13 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, w http.ResponseWrite
 				"devcontainer_repo": req.DevcontainerRepo, "image": built,
 			})))
 	case len(wsRefs) > 0:
-		// PARITY-4: a base_image workspace reached here via mounts/repos — a composed
+		// A base_image workspace reached here via mounts/repos — a composed
 		// or UI run that did NOT send workspace_id (the workspace_id door sets req.Image
 		// and takes the case above). If it declares an explicit base_image CHOICE but no
 		// builder is wired, FAIL the run the same way the workspace_id door 400s
 		// (validateImageBuildRequest), rather than silently launching on the convention
-		// image and dropping the operator's chosen base image (the door divergence
-		// PARITY-4 flags). resolveWorkspaceImage is fail-open by design (shared with the
+		// image and dropping the operator's chosen base image (the door divergence this
+		// creates). resolveWorkspaceImage is fail-open by design (shared with the
 		// wizard/record paths), so the fail-closed decision for the CHOSEN base image
 		// lives here, on the create door, not in it.
 		if b := wsRefs[0].BaseImage; b != nil && b.Kind != "recommended" &&

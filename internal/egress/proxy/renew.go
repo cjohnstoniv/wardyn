@@ -126,11 +126,10 @@ func defaultRenewerTuning() renewerTuning {
 //
 // The control plane — not this loop — decides whether renewal is still allowed:
 // a revoked or terminal run is refused there. What the loop decides is how long
-// to keep ASKING, and that used to be "every 60s forever, on any failure". The
-// field cost of that: 999 of the last 1000 audit rows on a real deployment were
-// `auth.failed` from this loop against one run whose token the control plane
-// would never renew again, and every real security event had aged out of the
-// console's window mid-investigation. So:
+// to keep ASKING: retrying forever at a fixed interval on any failure floods the
+// audit log with `auth.failed` rows from a run whose token the control plane
+// will never renew again, burying real security events outside the console's
+// retention window. So:
 //
 //   - a post-auth 403 (run not found / terminal — handleInternalTokenRenew's own
 //     refusals) is PERMANENT and knowable: stop at once;

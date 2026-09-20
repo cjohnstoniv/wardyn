@@ -17,7 +17,7 @@ import (
 )
 
 // recordingAuthorizer is the owner-or-admin authorization callback wired into
-// recording.Handler (item 4, server.go's Mount call): a run's recording is
+// recording.Handler (server.go's Mount call): a run's recording is
 // exactly as sensitive as its live PTY attach (it may show whatever the
 // agent's injected credentials left on screen), so it gets the SAME
 // ownership gate as getRunAuthorized — an admin, or the run's own creator,
@@ -47,7 +47,7 @@ func (s *Server) recordingAuthorizer(r *http.Request, runIDPrefix string) bool {
 	if run.CreatedBy == principalFromRequest(r) {
 		return true
 	}
-	// M1: audited only once the run is confirmed to genuinely exist — a
+	// Audited only once the run is confirmed to genuinely exist — a
 	// malformed prefix or an unknown run (both branches above) stays silent;
 	// only a POSITIVELY identified foreign run reaches this audit. The 404
 	// recording.Handler writes on a false return is unaffected either way.
@@ -56,8 +56,8 @@ func (s *Server) recordingAuthorizer(r *http.Request, runIDPrefix string) bool {
 	return false
 }
 
-// maxRecordingUploadBytes caps a single recording PUT (Finding 3: DoS / disk
-// exhaustion). An authenticated in-sandbox agent could otherwise stream an
+// maxRecordingUploadBytes caps a single recording PUT. An authenticated
+// in-sandbox agent could otherwise stream an
 // unbounded cast and fill the control plane's disk. 64 MiB comfortably holds a
 // long PTY session's asciicast while bounding a single hostile upload. Bytes
 // beyond the cap cause http.MaxBytesReader to error, which we surface as 413.
@@ -91,7 +91,7 @@ func (s *Server) handleUploadRecording(w http.ResponseWriter, r *http.Request) {
 	// verbatim secret values are replaced with "<secret-hidden>" before the bytes
 	// reach the RecordingStore. A nil MaskRegistry is a safe no-op (pass-through).
 	//
-	// HONEST RESIDUAL: only verbatim byte-identical occurrences are masked.
+	// Honest residual: only verbatim byte-identical occurrences are masked.
 	// base64-encoded, hex-encoded, or model-narrated representations of secrets
 	// are NOT caught. This is intentional — masking catches the most likely
 	// accidental leakage vector (token printed to stdout/asciicast).
@@ -152,8 +152,8 @@ func buildMaskingBody(src io.Reader, reg *secretmask.Registry, runID uuid.UUID) 
 	// mask-registers (internal/broker/broker.go) precisely so PTY/asciicast
 	// streams mask it. secretmask.JSONEscapedVariants adds each secret's
 	// JSON-string-escaped rendering so those land masked on this path too (the
-	// same expansion the audit maskingRecorder now applies to ev.Data — D31).
-	// RESIDUAL (disclosed in THREAT-MODEL.md and secretmask.Mask): a secret SPLIT
+	// same expansion the audit maskingRecorder applies to ev.Data).
+	// Residual (disclosed in THREAT-MODEL.md and secretmask.Mask): a secret SPLIT
 	// across two asciicast events by wardyn-rec's PTY read boundaries is still not
 	// caught — the `"],[t,"o","` event framing breaks the verbatim byte run,
 	// which no per-value match closes.

@@ -18,8 +18,7 @@ import "fmt"
 // (classifyDomain, internal/egress/proxy/policy.go) understands exactly two
 // forms: a LEADING "*." suffix match, or an exact host. A mid-label pattern
 // like "oidc.*.amazonaws.com" is neither — it compiles to an exact hostname no
-// real request can ever equal, so it allows nothing (the shipped bug this
-// replaces: the login was denied on the very hosts it "pre-allowed"). The one
+// real request can ever equal, so it allows nothing. The one
 // supported form that would cover every region is "*.amazonaws.com", which
 // opens every AWS service (S3, EC2, …) to the sandbox — far too wide for a
 // login box, so the region is resolved instead of widened.

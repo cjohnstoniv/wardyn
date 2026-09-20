@@ -3,7 +3,7 @@
 
 // Attach-session holder registry + audited take-over.
 //
-// THE PROBLEM THIS EXISTS TO FIX: attach is a SHARED tmux session. handleAttachWS
+// The problem this exists to fix: attach is a SHARED tmux session. handleAttachWS
 // (attach.go) opens a fresh Runner.Attach per client against the same persistent
 // session, so opening the run page while a `wardyn attach` holds it from a CLI
 // means two clients silently compete for one PTY — and neither can observe the
@@ -41,7 +41,7 @@ const (
 )
 
 // attachTakeoverReasonPrefix is the load-bearing half of the close reason a
-// displaced client receives. THE CONTRACT WITH THE UI: a take-over closes the
+// displaced client receives. The contract with the UI: a take-over closes the
 // displaced WebSocket with code 1008 (websocket.StatusPolicyViolation) and a
 // reason of exactly `taken over by <principal>`. The UI matches on that code
 // (or this prefix) and must NOT take its bounded-reconnect path — a displaced
@@ -94,7 +94,7 @@ type attachHolder struct {
 	// evicted flips the instant a take-over removes this holder from the
 	// registry, and it is what actually REVOKES write authority.
 	//
-	// THE BUG THIS FIXES: the pumps gate writes on the *attachHolder pointer
+	// The bug this fixes: the pumps gate writes on the *attachHolder pointer
 	// they captured at attach time. Removing the entry from the registry map
 	// does not touch that pointer, and displace() deliberately closes the
 	// socket rather than cancelling the pump context (a cancelled ctx sends no
@@ -125,7 +125,7 @@ func (h *attachHolder) canWrite() bool { return h != nil && !h.evicted.Load() }
 // attachWriteChunk bounds ONE Session.Write issued on a client's behalf, and so
 // is the granularity at which write authority is re-tested.
 //
-// THE BUG THIS BOUNDS: canWrite was read once per FRAME and the whole frame was
+// The bug this bounds: canWrite was read once per FRAME and the whole frame was
 // then handed to the sandbox. A web frame is one message up to attachReadLimit
 // (1 MiB — a paste, deliberately raised for exactly that), and the runner's
 // Write blocks under PTY back-pressure, so the window was "however long tmux
@@ -144,7 +144,7 @@ const attachWriteChunk = 4 * 1024
 //
 // A nil holder is a read-only observer: nothing is written at all.
 //
-// CEILING: the chunk already handed to the sandbox cannot be recalled — a
+// Ceiling: the chunk already handed to the sandbox cannot be recalled — a
 // take-over landing mid-chunk still delivers that chunk. Bounding the residual
 // to attachWriteChunk is the honest guarantee; making it exactly zero means
 // tearing the runner exec down at eviction (docker's hijacked write aborts on
@@ -209,7 +209,7 @@ func (h *attachHolder) view() attachHolderView {
 // is read-only from the server; asking the client to refrain from sending is
 // not a control, it is a request to the one component we do not control.
 //
-// THE CONTRACT THE UI IMPLEMENTS AGAINST:
+// The contract the UI implements against:
 //
 //	{"type":"attach-mode","read_only":true,
 //	 "holder":{"held":true,"principal":"alice@example.com",
@@ -242,9 +242,9 @@ func writeAttachMode(ctx context.Context, c *websocket.Conn, readOnly bool, hold
 
 // attachHolderRegistry is the per-daemon map of run id -> current PTY holder.
 //
-// CEILING: it is IN-PROCESS. A multi-replica control plane sees only its OWN
-// replica's holders, so "held:false" means "nobody is attached THROUGH THIS
-// DAEMON" — the UI copy must not claim more than that. Wardyn refuses
+// Ceiling: it is IN-PROCESS. A multi-replica control plane sees only its OWN
+// replica's holders, so "held:false" means "nobody is attached through this
+// daemon" — the UI copy must not claim more than that. Wardyn refuses
 // replicas>1 by construction today (deployment.yaml, same assumption as
 // Server.siteConfigMu and secretmask.Registry), so this is exact, not hopeful.
 // ponytail: in-process holder registry, single-daemon truth. Upgrade path is a
@@ -257,10 +257,10 @@ type attachHolderRegistry struct {
 
 // The registry lives on Server (server.go's attachHolders field), beside
 // sshSessions and lastTouch — the same per-process, per-run bookkeeping shape
-// this package already uses twice. It was briefly a package-level sync.Map
-// keyed by *Server instead; that kept the mechanism in one file but leaked one
+// this package already uses twice. A package-level sync.Map
+// keyed by *Server would keep the mechanism in one file but leak one
 // entry per Server for the process's lifetime (a test binary builds many and
-// the map has no eviction), and it put a global where the house pattern is a
+// the map has no eviction), and would put a global where the house pattern is a
 // struct field.
 func (s *Server) attachRegistry() *attachHolderRegistry { return &s.attachHolders }
 
@@ -401,7 +401,7 @@ func (s *Server) handleAttachTakeover(w http.ResponseWriter, r *http.Request) {
 	}
 
 	actorType, principal := actorFromRequest(r)
-	// AUDIT FIRST, DISPLACE SECOND. The displaced session's own teardown is what
+	// Audit first, displace second. The displaced session's own teardown is what
 	// makes the reverse order unsafe: see the FINDING on attach.go's
 	// session.detach audit, where recording on a context the teardown cancels
 	// dropped the event outright. Displacing first means the take-over audit

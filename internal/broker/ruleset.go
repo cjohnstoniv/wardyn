@@ -95,7 +95,7 @@ const refRevokeTimeout = 3 * time.Second
 //   - INSIDE the namespace neither "creation" nor "update" may be in force, or
 //     the ruleset would refuse the very pushes a run makes.
 //
-// LIMITS, stated because the caller grades security on this answer:
+// Limits, stated because the caller grades security on this answer:
 //   - The bypass read has been measured only with a USER token: on 11 rulesets
 //     across 7 public repos a plain non-admin OAuth token gets
 //     current_user_can_bypass "never" while bypass_actors is omitted (GitHub

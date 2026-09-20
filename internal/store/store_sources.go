@@ -24,7 +24,7 @@ import (
 // consumer keeps reading (Sources/BaseImage/Profile/Status), and the folded
 // EffectiveRequirements the run path consumes.
 
-// ─── Sources (tier 1) ────────────────────────────────────────────────────────
+// Sources (tier 1)
 
 const sourceCols = `id, kind, locator, ref, name, requirements, profile, status, ` +
 	`active_run_id, created_at, updated_at`
@@ -327,7 +327,7 @@ func (s PG) SetSourceScanResultUnfenced(ctx context.Context, id uuid.UUID, profi
 		profile, string(status), id, sourceRequirementsParam(seed)))
 }
 
-// ─── Base images (tier 2) ───────────────────────────────────────────────────
+// Base images (tier 2)
 
 const baseImageCols = `id, kind, name, image, steps, created_at, updated_at`
 
@@ -360,7 +360,7 @@ func scanBaseImage(row pgx.Row) (types.BaseImageEntry, error) {
 // whatsoever; if this conflict clause applied EXCLUDED.name unconditionally,
 // every such passthrough call would silently rename an operator's
 // custom-named catalog row back to that placeholder. See
-// UpdateBaseImageName for the actual rename path (W7-S1-3).
+// UpdateBaseImageName for the actual rename path.
 func (s PG) UpsertBaseImage(ctx context.Context, b types.BaseImageEntry) (types.BaseImageEntry, error) {
 	var steps []byte
 	if len(b.Steps) > 0 {
@@ -376,7 +376,7 @@ func (s PG) UpsertBaseImage(ctx context.Context, b types.BaseImageEntry) (types.
 }
 
 // UpdateBaseImageName renames a catalog base-image row — the explicit, scoped
-// rename path (W7-S1-3), mirroring UpdateSourceConfig above. handleCreateBaseImage
+// rename path, mirroring UpdateSourceConfig above. handleCreateBaseImage
 // is the only caller: on an identity hit where the REQUEST carried an explicit
 // name (the Add dialog's re-POST-to-rename shape), never from UpsertBaseImage's
 // own conflict clause, which passthrough callers share and must never let rename
@@ -490,7 +490,7 @@ func (s PG) DeleteBaseImage(ctx context.Context, id uuid.UUID, detach bool) erro
 	return nil
 }
 
-// ─── The verify-approve merge writer ─────────────────────────────────────────
+// The verify-approve merge writer
 
 // MergeWorkspaceRequirements ADDS rows to a workspace's requirements overlay
 // atomically — the `jsonb ||` idiom SetWorkspaceRecordResult established — so
@@ -527,7 +527,7 @@ func (s PG) MergeWorkspaceRequirements(ctx context.Context, id uuid.UUID, add ma
 	return s.hydrated(ctx, ws)
 }
 
-// ─── Hydration: attachments → the derived view ──────────────────────────────
+// Hydration: attachments → the derived view
 
 // hydrated materializes a workspace's derived read-only view. For a row whose
 // composition lives in ATTACHMENTS (post-split), Sources/BaseImage/Profile/

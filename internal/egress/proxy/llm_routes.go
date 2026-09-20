@@ -90,7 +90,7 @@ var scanSlots = make(chan struct{}, maxConcurrentScans)
 // hold live at once, counted for as long as the buffer is REACHABLE — not just
 // while it is being scanned.
 //
-// TRUST BOUNDARY (F074 fix-up): the scan slot above bounds the buffer+extract
+// Trust boundary (F074 fix-up): the scan slot above bounds the buffer+extract
 // WINDOW; it says nothing about the buffer's LIFETIME. scanBufferedBody hands
 // its caller a re-readable copy of the whole body and the caller then streams
 // it through RoundTrip, so the slot was already released while up to
@@ -233,7 +233,7 @@ func joinLLMPath(prefix, rest string) string {
 	return strings.TrimPrefix(prefix, "/") + "/" + rest
 }
 
-// ── DRAFT (M2 canon pending) ────────────────────────────────────────────────
+// DRAFT (M2 canon pending)
 const (
 	// llmNoCredentialDetail is the brokered-LLM 404's detail when the control
 	// plane composed none: it says what the route IS, so the sandbox's own error
@@ -291,10 +291,10 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 	// CONTROL-PLANE-authored gateway gets gatewayTarget's relaxed per-request
 	// vet (vetTrustedHost); every other host — including the PUBLIC vendor host
 	// when no gateway is configured at all — gets egressTarget's SSRF-guarded
-	// p.vetHost, exactly as on every other forward-egress path
-	// (W23-S1-4 / W19-W19d-3 covered the corp-upstream branch; folding the
-	// gateway vet into egressTarget too used to lift the private-IP guard for
-	// the gateway HOSTNAME on evaluate/serveMITMRequest as well).
+	// p.vetHost, exactly as on every other forward-egress path (folding the
+	// gateway vet into egressTarget instead would also lift the private-IP
+	// guard for the gateway HOSTNAME on evaluate/serveMITMRequest — the reason
+	// the two vets stay separate).
 	target, err := p.llmRouteTarget(host, port)
 	if err != nil {
 		// A refused/unreachable configured gateway is vetTrustedHost's OWN
@@ -334,17 +334,17 @@ func (p *Proxy) proxyLLMRequest(w http.ResponseWriter, r *http.Request, host str
 // llmRouteTarget resolves the brokered LLM route's dial target, choosing the
 // vet by what host IS rather than by which route asked.
 //
-// TRUST BOUNDARY (F087 — read before widening): gatewayTarget/vetTrustedHost is
+// Trust boundary (F087 — read before widening): gatewayTarget/vetTrustedHost is
 // the RELAXED vet. It admits RFC1918/ULA/CGNAT by design, because an
 // operator-configured internal model gateway is expected to live there, and it
 // is safe ONLY because that host was typed into the control plane at boot.
-// Applying it unconditionally to every host proxyLLMRequest dials extended the
-// relaxation to `api.anthropic.com`/`api.openai.com` on a run with NO gateway
-// configured, so a poisoned/split-horizon resolver answering RFC1918 for the
-// public vendor host got the startup-minted brokered credential delivered to
-// it — the exact DNS-rebinding case the unconditional private-IP guard exists
-// for, and the guard v0.6.6 had on this path. A host that is not in
-// p.gatewayVendor is an ordinary host: it takes egressTarget.
+// Applying it unconditionally to every host proxyLLMRequest dials would extend
+// the relaxation to `api.anthropic.com`/`api.openai.com` on a run with NO
+// gateway configured: a poisoned/split-horizon resolver answering RFC1918 for
+// the public vendor host would get the startup-minted brokered credential
+// delivered to it — the exact DNS-rebinding case the unconditional private-IP
+// guard exists to close. A host that is not in p.gatewayVendor is an ordinary
+// host: it takes egressTarget.
 //
 // This is what THREAT-MODEL.md residual #29 and OPERATIONS.md already state —
 // "only the brokered /wardyn/llm/* route (Proxy.gatewayTarget) resolves or
@@ -378,7 +378,7 @@ func (p *Proxy) forwardInspectedLLM(w http.ResponseWriter, r *http.Request, host
 	// Build the upstream target as a STRUCTURED url.URL, never by concatenating
 	// `rest` into a string that http.NewRequestWithContext then re-PARSES.
 	//
-	// TRUST BOUNDARY (F035): `rest` is the PERCENT-DECODED path (r.URL.Path),
+	// Trust boundary (F035): `rest` is the PERCENT-DECODED path (r.URL.Path),
 	// and it is the same value classifyLLM keys the inspection decision on. Fed
 	// back through a URL parser, a decoded "#" becomes a FRAGMENT and a decoded
 	// "?" becomes a QUERY, so `POST /wardyn/llm/anthropic/v1/messages%23z`
@@ -484,13 +484,14 @@ func scanSummaryFrom(res contentscan.Result, serr error, eng *contentscan.Engine
 		(res.FindingsCapped || res.SkipReason == "findings_capped" ||
 			res.SkipReason == "scan_budget" || res.SkipReason == "attachment_decode_error"):
 		// B2/B4 (F075/F073/F056 fix-up): findings_capped, scan_budget, and
-		// attachment_decode_error all set Result.Skipped, and this switch used
-		// to resolve `case res.Skipped` before ever reaching "alert" — so the
-		// decision's Action flipped from "alert" to "skipped" exactly when a
-		// real secret was also found alongside a budget/decode limit
+		// attachment_decode_error all set Result.Skipped, so this switch checks
+		// findings BEFORE `res.Skipped` and resolves to "alert" whenever a real
+		// secret is found alongside a budget/decode limit — resolving
+		// `res.Skipped` first would flip the decision's Action from "alert" to
+		// "skipped" exactly when a real secret was also found
 		// (egress.ScanSummary.Action is the literal audit-action suffix,
 		// docs/AUDIT-ACTIONS.md:71: llm.scan.alert vs llm.scan.skipped — a SIEM
-		// rule keyed on llm.scan.alert lost the detected secret). A skipped
+		// rule keyed on llm.scan.alert would lose the detected secret). A skipped
 		// scan that still carries findings is the loudest scan there is: it
 		// still alerts; the truncation/decode-limit rides on
 		// Skipped/SkipReason, not on Action. span_oversize is deliberately
@@ -545,16 +546,16 @@ func (p *Proxy) inspectLLM(w http.ResponseWriter, r *http.Request, host string, 
 // bodyBearingMethod reports whether a method may carry a request body Wardyn
 // would want to inspect.
 //
-// TRUST BOUNDARY (F088/F112): this is the ONE definition, shared by
-// hasScannableBody and by both LLM endpoint classifiers, because the two used
-// to disagree — hasScannableBody accepted POST/PUT/PATCH while the classifiers
-// opened with `if method != http.MethodPost { return scanNone }`. The sandbox
-// picks the verb as freely as it picks the suffix, so `PUT /v1/messages` with a
-// secret in the body reached the vendor with the operator's brokered credential
-// under mode=block, allowed, with scanSummary=nil — audit-indistinguishable
-// from a bodiless GET /v1/models. Closing the suffix axis (F112's fail-closed
-// default) while leaving the verb axis open just moved the same bypass one
-// keystroke sideways.
+// Trust boundary (F088/F112): this is the ONE definition, shared by
+// hasScannableBody and by both LLM endpoint classifiers, so the two can never
+// disagree — a second definition (hasScannableBody accepting POST/PUT/PATCH
+// while a classifier opens with `if method != http.MethodPost { return
+// scanNone }`) would let the sandbox pick the verb as freely as it picks the
+// suffix: `PUT /v1/messages` with a secret in the body would reach the vendor
+// with the operator's brokered credential under mode=block, allowed, with
+// scanSummary=nil — audit-indistinguishable from a bodiless GET /v1/models.
+// Closing the suffix axis (F112's fail-closed default) while leaving the verb
+// axis open would just move the same bypass one keystroke sideways.
 func bodyBearingMethod(method string) bool {
 	switch method {
 	case http.MethodPost, http.MethodPut, http.MethodPatch:
@@ -745,27 +746,25 @@ func classifyAnthropicLLM(method, rest string) int {
 	case method == http.MethodPost && strings.HasSuffix(r, "/count_tokens"):
 		return scanMessages
 	default:
-		// FAIL-CLOSED DEFAULT (F112): every OTHER POST on this route is
-		// uninspected, not quiet. /v1/messages/batches and the legacy /v1/complete
-		// used to be the only named ones, so the vendor's CONTENT-UPLOAD surface
-		// fell to the old scanNone default: POST /v1/files is a multipart upload
-		// of arbitrary user bytes (documented 500 MB ceiling) and it was forwarded
-		// with the operator's brokered credential, unscanned, carrying NO scan
-		// block at all — a row indistinguishable in audit from GET /v1/models.
-		// Worse, under block + on_scanner_error=block the strict operator's one
-		// hard control refused `batches` as uninspected_channel while forwarding
-		// `files`: the control was bypassable by choosing a different suffix.
-		//
-		// An enumerated allowlist cannot hold this line, because the SANDBOX picks
-		// the whole suffix (handleLocalRoute dispatches on a bare prefix match and
-		// forwards <rest> verbatim) and the VENDOR adds endpoints without asking
-		// us. So the default is the honest answer — "prompt-bearing but no
+		// Fail-closed default (F112): every OTHER POST on this route is
+		// uninspected, not quiet — the enumerated arms above cannot be trusted to
+		// cover the vendor's whole content-upload surface, because the SANDBOX
+		// picks the whole suffix (handleLocalRoute dispatches on a bare prefix
+		// match and forwards <rest> verbatim) and the VENDOR adds endpoints
+		// without asking us. A default that quietly fell to scanNone for anything
+		// unnamed would forward a multipart upload of arbitrary user bytes (POST
+		// /v1/files, documented 500 MB ceiling) with the operator's brokered
+		// credential, unscanned, carrying NO scan block at all — a row
+		// indistinguishable in audit from GET /v1/models — and would let a strict
+		// operator's block + on_scanner_error=block control be bypassed by
+		// choosing an unnamed suffix (refused as `batches`, forwarded as
+		// `files`). So the default is the honest answer — "prompt-bearing but no
 		// extractor yet" — and a new arm above is what earns silence.
 		//
 		// F088 second axis: the same is true of the VERB. `PUT /v1/messages` is
 		// not a documented Anthropic call, so it lands here rather than on the
-		// scanMessages arm — uninspected and refused under fail-closed blocking,
-		// instead of the silent brokered forward it used to get.
+		// scanMessages arm — uninspected and refused under fail-closed blocking
+		// rather than silently forwarded.
 		return scanOpaque
 	}
 }
@@ -786,16 +785,18 @@ func classifyOpenAILLM(method, rest string) int {
 	case method == http.MethodPost && (r == "chat/completions" || strings.HasSuffix(r, "/chat/completions")):
 		return scanMessages
 	default:
-		// FAIL-CLOSED DEFAULT (F112), same rule as classifyAnthropicLLM: /responses,
-		// /embeddings and the legacy /completions used to be enumerated here while
-		// the vendor's own OpenAPI spec also defines POST /v1/files and the
-		// multipart /v1/audio/{transcriptions,translations} uploads plus
-		// /v1/audio/speech — all of which fell to the old scanNone default and
-		// streamed through with the brokered credential and no scan block. The
-		// enumeration also had to carry each endpoint's BARE spelling (F088: with
-		// no gateway prefix configured, `rest` for POST /wardyn/llm/openai/responses
-		// is exactly "responses", which a suffix-only arm missed) — a second way
-		// the same list could silently lose an endpoint. The default answers both.
+		// Fail-closed default (F112), same rule as classifyAnthropicLLM: an
+		// enumerated allowlist of endpoints cannot be trusted to cover the
+		// vendor's whole content-upload surface. The vendor's own OpenAPI spec
+		// defines POST /v1/files and the multipart
+		// /v1/audio/{transcriptions,translations} uploads plus /v1/audio/speech
+		// beside /responses, /embeddings and /completions — an enumeration naming
+		// only the chat-adjacent endpoints would stream the rest through with the
+		// brokered credential and no scan block. An enumeration also has to carry
+		// each endpoint's BARE spelling (F088: with no gateway prefix configured,
+		// `rest` for POST /wardyn/llm/openai/responses is exactly "responses",
+		// which a suffix-only arm would miss) — a second way the same list could
+		// silently lose an endpoint. The default answers both.
 		return scanOpaque
 	}
 }
@@ -827,11 +828,11 @@ var awsRegionLabel = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-\d+$`)
 // endpoint — the public regional form OR the PrivateLink/VPC-endpoint form
 // `vpce-<id>[-<az>].bedrock-runtime.<region>.vpce.amazonaws.com` (and the
 // hyphen-glued `vpce-<id>-bedrock-runtime.<region>.vpce.amazonaws.com`), which
-// CONTAINS but does not START WITH the service name — so the old prefix
-// matcher dropped private-endpoint model traffic out of isLLMHost's
-// opaque-tunnel coverage, the one call an auditor most wants to see.
+// CONTAINS but does not START WITH the service name, so a prefix match alone
+// would drop private-endpoint model traffic out of isLLMHost's opaque-tunnel
+// coverage — the one call an auditor most wants to see.
 //
-// SECURITY (read before loosening): this is NOT a substring match. Every arm is
+// Security (read before loosening): this is NOT a substring match. Every arm is
 // anchored on AWS-OWNED DNS an attacker cannot register — `<region>.amazonaws.com`
 // for the public form, `.vpce.amazonaws.com` for the private one — because
 // isLLMHost's true weight is in serveMITMRequest, where it picks the inspection
@@ -883,19 +884,19 @@ func isBedrockHost(h string) bool {
 // (https://docs.aws.amazon.com/general/latest/gr/bedrock.html), with or without
 // the `-fips` variant.
 //
-// F113 — this used to be the two literals `bedrock-runtime` and `bedrock`, so
-// six of AWS's eight published labels fell out of isLLMHost: every `-fips`
-// endpoint (a FedRAMP-High workload is generally REQUIRED to use one, and
-// GovCloud publishes `bedrock-runtime-fips.us-gov-{west,east}-1.amazonaws.com`)
-// and the whole agent family, including `bedrock-agent-runtime` — the
-// InvokeAgent DATA plane, i.e. prompt-bearing model traffic. The consequence is
-// on the honesty side: proxy.go emits the one-time `llm.scan.blind` coverage row
-// only under isLLMHost, so a CONNECT to a FIPS Bedrock endpoint was opaque AND
-// unflagged — an audit trail showing an egress.allow and no blind row anywhere,
-// which reads as "no model tunnel happened", against a THREAT-MODEL.md that
-// says those tunnels "stay opaque and flagged llm.scan.blind". It also mislabels
-// the MITM decision row for such a host as corp-artifact rather than model
-// traffic.
+// The enumeration must cover every AWS-published label, including each
+// `-fips` variant (a FedRAMP-High workload is generally REQUIRED to use one,
+// and GovCloud publishes
+// `bedrock-runtime-fips.us-gov-{west,east}-1.amazonaws.com`) and the whole
+// agent family, including `bedrock-agent-runtime` — the InvokeAgent DATA
+// plane, i.e. prompt-bearing model traffic. Missing any of them costs
+// honesty, not just coverage: proxy.go emits the one-time `llm.scan.blind`
+// coverage row only under isLLMHost, so an unrecognised label leaves a
+// CONNECT to that endpoint opaque AND unflagged — an audit trail showing an
+// egress.allow and no blind row anywhere, which reads as "no model tunnel
+// happened", against a THREAT-MODEL.md that says those tunnels "stay opaque
+// and flagged llm.scan.blind". It also mislabels the MITM decision row for
+// such a host as corp-artifact rather than model traffic.
 //
 // The enumeration is deliberately exhaustive-by-name rather than a
 // `strings.HasPrefix(l, "bedrock")`: isBedrockHost's callers treat a match as

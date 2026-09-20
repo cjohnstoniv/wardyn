@@ -33,7 +33,7 @@ const upstreamConnectTimeout = 15 * time.Second
 // traverse it — that split is enforced by a dedicated controlTransport (see
 // newProxy), so the run token is never sent toward the corp proxy.
 //
-// SECURITY: the embedded credential (if the operator's URL carried user:pass@)
+// The embedded credential (if the operator's URL carried user:pass@)
 // is held ONLY here in proxy memory — the same posture as the run token — and is
 // registered in the process secret-mask registry (see NewServer) so it can never
 // leak into a decision log or stdout.
@@ -129,7 +129,7 @@ func (u *upstreamProxy) maskValues() [][]byte {
 // dialThroughUpstream dials the corporate parent proxy and issues a CONNECT for
 // the REAL destination host:port, returning the established tunnel.
 //
-// SECURITY RELAXATION (deliberate + audited): the corp proxy address is
+// Security relaxation (deliberate + audited): the corp proxy address is
 // resolved+pinned WITHOUT the private-IP/loopback/metadata guard — a corp proxy
 // is frequently a private IP (10.x), and this is the OPERATOR-CONFIGURED trusted
 // egress hop, the same trust boundary as the control-plane URL
@@ -168,13 +168,13 @@ func (p *Proxy) dialThroughUpstream(ctx context.Context, realHost string, realPo
 	}
 	// Read the proxy's reply to our CONNECT; a 2xx means the tunnel is open.
 	//
-	// BOUND THE READ. A proxy that accepts the TCP connection and then never
+	// Bound the read: a proxy that accepts the TCP connection and then never
 	// answers would otherwise block here forever: the MITM path has already told
 	// the agent "200 Connection Established" before this dial, so the operator
-	// sees an APPROVED request hang indefinitely instead of failing. That is the
-	// reported symptom when a corp client binds its proxy to loopback only — the
-	// container-runtime VM can open nothing, but a misrouted address can still
-	// accept and stall. Fail fast instead; the caller turns the error into the
+	// sees an APPROVED request hang indefinitely instead of failing — the
+	// failure mode when a corp client binds its proxy to loopback only, where
+	// the container-runtime VM can open nothing but a misrouted address can
+	// still accept and stall. Fail fast instead; the caller turns the error into the
 	// normal dial-failed DENY + 502. Matches the dialer timeout in proxy.go.
 	if err := conn.SetReadDeadline(time.Now().Add(upstreamConnectTimeout)); err != nil {
 		_ = conn.Close()

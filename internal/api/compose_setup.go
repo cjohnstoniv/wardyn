@@ -50,7 +50,7 @@ type SetupItem struct {
 // button, because the only fix is the OPERATOR widening their own ceiling
 // (e.g. a dropped egress domain).
 //
-// v1 verifies PRESENCE only (Decision 3: declared-present, never
+// v1 verifies PRESENCE only (declared-present, never
 // "verified" in the UI copy) — a stored secret, an onboarded+scanned workspace,
 // a surviving grant. Live credential verification (does the key actually
 // authenticate?) is a FUTURE seam at the egress proxy (broker-verified calls),
@@ -66,7 +66,7 @@ type SetupFix struct {
 // (post-clamp) spec — the same trust boundary composer.Grade uses. Called once
 // per compose round, after grading and before the advisory audit is assembled
 // (runComposePipeline). Non-blocking: items never gate the proposal, they only
-// inform the review panel (Decision 4).
+// inform the review panel.
 func (s *Server) deriveSetupItems(ctx context.Context, owner string, run composer.RunInput, spec types.RunPolicySpec, presentSecrets map[string]bool, llmAccess *composeLLMAccess) []SetupItem {
 	var items []SetupItem
 
@@ -133,7 +133,7 @@ func (s *Server) setupLLMAccessItem(agent string, llmAccess *composeLLMAccess, s
 	}
 	if !llmAccess.Provisioned {
 		if p, ok := s.llmProviderFor(agent); ok {
-			// W15-W15b-composer-pipeline-6: name the run's ACTUAL resolved
+			// Name the run's ACTUAL resolved
 			// grant secret, not the provider convention name — an
 			// integration-bound run's api_key grant carries the
 			// INTEGRATION's own secret (applyIntegrationCreds), which may
@@ -395,7 +395,7 @@ func setupRepoCredentialItems(spec types.RunPolicySpec, presentSecrets map[strin
 				continue
 			}
 			seenGH = true
-			// W15-b: name the repo(s) this grant is actually SCOPED to (the
+			// Name the repo(s) this grant is actually SCOPED to (the
 			// grounded reality groundGitHubGrants set — never the analyzer's
 			// guess) so a reviewer can see it agrees with the workspace they
 			// selected, instead of trusting an opaque "minted at run start".
@@ -442,7 +442,7 @@ func setupRepoCredentialItems(spec types.RunPolicySpec, presentSecrets map[strin
 // spec.Clone() (types.go), since unionWorkspaceEgress mutates its spec argument
 // IN PLACE (workspace_run.go) and this proposal's spec must not be touched
 // before the operator approves it. Clone, not a hand-rolled AllowedDomains-only
-// append: this row now also reports the denied side (Phase 4), and a partial
+// append: this row now also reports the denied side, and a partial
 // copy that deep-copies only AllowedDomains is exactly the bug resolvePolicy's
 // own doc comment (runs_policy.go) already describes taking once on this same
 // field family — a caller's `append` into a shared backing array let one run's
@@ -502,7 +502,7 @@ func setupEgressWorkspaceItem(spec types.RunPolicySpec, workspaces []types.Works
 // class isn't live it distinguishes an honest "needs setup" (an installable
 // runtime — CC2/CC3 with the substrate simply not registered yet) from an
 // honest "not fixable on this host" (Vault without /dev/kvm), reusing the exact
-// hardware fact commit 74b4d0a wired into internal/setup for the Getting
+// hardware fact wired into internal/setup for the Getting
 // Started wizard. A "missing" verdict's Fix is always "none": the remedy is a
 // host-level command (`wardyn setup wall`/`vault`) or a hardware limit, neither
 // of which this server can drive with a button — Detail points at Getting

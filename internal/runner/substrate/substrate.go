@@ -80,12 +80,12 @@ type ClassSupport struct {
 	// UserDrives reports whether this substrate can BIND a member's user drive
 	// (migration 0054) into the sandbox — runner.SandboxSpec.Drive.
 	//
-	// FALSE IS THE FAIL-CLOSED DEFAULT AND IT IS LOAD-BEARING: a substrate that
+	// False is the fail-closed default and it is load-bearing: a substrate that
 	// says nothing declares no drive support, and the control plane then
 	// refuses a drive-carrying run instead of admitting one this substrate
 	// rejects at CreateSandbox. Never overclaim, exactly as Classes must not.
 	//
-	// THE ORCHESTRATOR AGGREGATES THIS AS A CONJUNCTION, NOT A UNION — see its
+	// The orchestrator aggregates this as a conjunction, not a union — see its
 	// Capabilities. Every other flag here is OR-merged because it describes a
 	// control SOME substrate can enforce for a run routed to it; this one is
 	// consulted BEFORE routing, so one substrate that cannot bind a drive makes
@@ -96,7 +96,7 @@ type ClassSupport struct {
 	// quota refuses the write), `eviction` (the kubelet kills the pod over the
 	// limit; it never refuses the write) or `none`/empty (nothing binds it).
 	//
-	// THE ORCHESTRATOR AGGREGATES THIS AS THE WEAKEST, NOT A UNION — the same
+	// The orchestrator aggregates this as the weakest, not a union — the same
 	// reasoning UserDrives' conjunction rests on: the word is what the control
 	// plane tells an admin a disk number MEANS, so one substrate that enforces
 	// nothing makes the deployment unable to promise enforcement. Never overclaim.

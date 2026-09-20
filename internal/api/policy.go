@@ -78,7 +78,7 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 	// The two wait_for_review knobs. Bounded HERE because every ingest point
 	// crosses this function — the stored-policy write, the inline run policy,
 	// the WARDYN_DEFAULT_POLICY file, and the composer/profile clamp — and
-	// because a member authors them directly (B11b-F2). The proxy clamps them
+	// because a member authors them directly. The proxy clamps them
 	// a second time for a policy stored before this bound existed.
 	if spec.MaxHolds < 0 || spec.MaxHolds > maxHoldsPerSpec {
 		return fmt.Errorf(maxHoldsRefusal, maxHoldsPerSpec, spec.MaxHolds)
@@ -122,7 +122,7 @@ func validatePolicySpec(spec types.RunPolicySpec) error {
 }
 
 // maxHoldsPerSpec and maxFirstUseHoldSeconds bound the two wait_for_review
-// knobs (B11b-F2). They were the last policy fields NOTHING visited: the
+// knobs. They were the last policy fields NOTHING visited: the
 // composer clamp does not reach them and this validator did not read them, so
 // a member's inline_policy under a wait_for_review ceiling could author
 // {max_holds: 1000000, first_use_hold_seconds: 2592000} and turn the proxy's
@@ -140,7 +140,7 @@ const (
 	maxFirstUseHoldSeconds = 600
 )
 
-// ── DRAFT (M2 canon pending) ────────────────────────────────────────────────
+// DRAFT (M2 canon pending)
 
 // The two bound refusals a policy author reads in a 400 body. They name the
 // accepted RANGE rather than the ceiling alone, because 0 is a meaningful third
@@ -148,7 +148,6 @@ const (
 // as "lower it", which for 0 is the wrong instruction. Each echoes the value so
 // someone editing a pasted policy can see which field they are being told about.
 const (
-	// DRAFT (M2 canon pending)
 	maxHoldsRefusal = "max_holds must be between 0 (the built-in default) and %d, got %d"
 	// DRAFT (M2 canon pending)
 	firstUseHoldSecondsRefusal = "first_use_hold_seconds must be between 0 (the built-in default) and %d, got %d"
@@ -384,7 +383,7 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 		if !egress.ValidHeaderName(rule.Header) {
 			return fmt.Errorf("eligible_grants[%d]: api_key header %q is not a valid HTTP header name", i, rule.Header)
 		}
-		// F097: FORMAT takes the same rule the INTEGRATION authoring path has
+		// FORMAT takes the same rule the INTEGRATION authoring path has
 		// always applied to the identical wire field (validateIntegrationDelivery
 		// — one implementation, called from both, so the two authoring paths for
 		// one InjectionRule cannot enforce different rules). It was checked
@@ -399,7 +398,7 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 			return fmt.Errorf("eligible_grants[%d]: api_key %w", i, err)
 		}
 	}
-	// A git_pat grant returns the STORED PAT VALUE to the git credential
+	// A git_pat grant returns the stored PAT value to the git credential
 	// helper (unlike api_key, whose value never leaves the broker). Require
 	// host + secret_name and reject a reserved platform-internal secret at
 	// WRITE time — fail closed so a policy can never exfiltrate
@@ -432,7 +431,7 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 			return fmt.Errorf("eligible_grants[%d]: ssh_key host %q is not a supported SSH-over-443 provider (github.com / dev.azure.com)", i, host)
 		}
 	}
-	// An env_secret grant puts a STORED SECRET VALUE in the sandbox env for the
+	// An env_secret grant puts a stored secret value in the sandbox env for the
 	// whole run (see GrantEnvSecret). Require a portable, non-WARDYN_ env var
 	// name and a secret_name, and reject a reserved platform-internal secret at
 	// WRITE time — the same fail-closed shape git_pat/ssh_key get, and for the
@@ -472,21 +471,21 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 // SSH makes unparseable — so the operator picks one lane here, at write time,
 // instead of being silently deprived of the endpoint at dispatch.
 //
-// DELIBERATELY STRICTER THAN DISPATCH. "Brokered" is decided at RUN time — the
+// Deliberately stricter than dispatch. "Brokered" is decided at RUN time — the
 // broker map is seeded from the github_token grant's scope.repos AND from the
 // run's declared clone set (augmentGitBrokerGrants), so a grant with an empty repo
 // scope is not brokered until a run supplies --repo. Policy-write therefore cannot
 // know whether a given run will be brokered; the rule it enforces is DECLARATIVE
 // (you may not declare both lanes to one forge), and the message says so.
 //
-// git_pat FOR A BROKERED FORGE IS COVERED TOO, since 2026-08-03. It used to be
-// exempt on the reasoning that such a grant was "already dead twice over" —
+// A git_pat for a brokered forge is covered too. Exempting it on the reasoning
+// that such a grant is "already dead twice over" does not hold:
 // wardyn-git-helper refuses on isGitHubHost before the PAT fallback whenever
 // WARDYN_GIT_BROKER_REPOS is set, and github.com is one of the four broker
-// denies. The first of those is not a barrier: the helper is how *git* asks for a
+// denies — but that is not a barrier: the helper is how *git* asks for a
 // credential, and nothing obliges an agent to go through git — a POST to the mint
 // route returns the PAT, because the proxy's mint refusal (isBrokeredGitGrant)
-// matches github_token grant ids only. That left one barrier, a name-keyed egress
+// matches github_token grant ids only. That leaves one barrier, a name-keyed egress
 // deny that this repo documents as not binding a raw-IP CONNECT under
 // allow_all_egress. And a GitHub git_pat is typically a USER PAT — wider than the
 // repo-scoped installation token beside it, and bound by no branch namespace.
@@ -605,7 +604,7 @@ func validatePolicyWorkspaces(spec types.RunPolicySpec) error {
 // outbound content-inspection block. A nil spec (the default) is valid (off).
 // Takes the FULL RunPolicySpec (not just LLMInspection) because
 // detector_sidecar_url is now validated against this SAME spec's own egress
-// allowlist — see the W12-A-1 comment below.
+// allowlist — see the raw-value comment below.
 func validateLLMInspection(spec types.RunPolicySpec) error {
 	li := spec.LLMInspection
 	if li == nil {
@@ -617,7 +616,7 @@ func validateLLMInspection(spec types.RunPolicySpec) error {
 	default:
 		return fmt.Errorf("llm_inspection.mode: unknown mode %q", li.Mode)
 	}
-	// W12-A-1/W12-S1-1: a raw VALUE may never be authored on a policy write —
+	// A raw VALUE may never be authored on a policy write —
 	// stored, inline, or WARDYN_DEFAULT_POLICY. Only dispatch ever populates
 	// this field, internally, in memory, on the ephemeral copy handed to the
 	// proxy sidecar (resolveLLMInspectionSecrets, runs_dispatch.go). An
@@ -626,7 +625,7 @@ func validateLLMInspection(spec types.RunPolicySpec) error {
 		return fmt.Errorf("llm_inspection.workspace_secret_values may not be set on a policy write " +
 			"(it is resolved internally, store->proxy, at dispatch — see workspace_secret_names)")
 	}
-	// F126: the write-time half of the SINK guard. workspace_secret_names is
+	// The write-time half of the SINK guard. workspace_secret_names is
 	// resolved to PLAINTEXT onto the policy copy handed to the proxy sidecar
 	// (resolveLLMInspectionSecrets), which makes it a credential sink like the
 	// api_key/git_pat/ssh_key lanes — and sinkReservedSecret is the one guard
@@ -647,7 +646,7 @@ func validateLLMInspection(spec types.RunPolicySpec) error {
 			if !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
 				return fmt.Errorf("llm_inspection.detector_sidecar_url must be an http(s) URL")
 			}
-			// W12-A-1 belt-and-braces: the sidecar is dialed PROXY-SIDE with the
+			// Belt-and-braces: the sidecar is dialed PROXY-SIDE with the
 			// outbound span TEXT (internal/contentscan/sidecar.go) — a surface the
 			// sandbox's own confinement class never bounds, so "trusted operator
 			// config" (that file's own framing) only actually holds once this

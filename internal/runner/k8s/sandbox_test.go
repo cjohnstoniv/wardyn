@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/google/uuid"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -736,7 +737,7 @@ func TestCreateSandbox_DriveShapesTheAgentPod(t *testing.T) {
 		t.Error("agent pod carries a hostPath volume — forbidden by Pod Security Standards Baseline and Restricted alike")
 	}
 	wantMount := corev1.VolumeMount{Name: driveVolumeName, MountPath: runner.DriveTarget, ReadOnly: false}
-	if got := mountFor(pod.Spec.Containers[0].VolumeMounts, driveVolumeName); got == nil || *got != wantMount {
+	if got := mountFor(pod.Spec.Containers[0].VolumeMounts, driveVolumeName); got == nil || cmp.Diff(*got, wantMount) != "" {
 		t.Errorf("main container drive mount = %+v, want %+v (mounts=%+v)", got, wantMount, pod.Spec.Containers[0].VolumeMounts)
 	}
 	// The drive target is under the agent's HOME, and the scratch volumes are

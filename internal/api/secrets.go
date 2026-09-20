@@ -90,7 +90,7 @@ func ReservedPlatformSecret(name string) bool { return reservedSecret(name) }
 // (mintGitPAT/mintSSHKey). Those return a secret's raw VALUE into the sandbox
 // (unlike api_key, whose value never leaves the broker), so they need a
 // STRICTLY WIDER guard — internal/broker.reservedBrokerSecretNames — that also
-// refuses github-app-key/github-app-id and bedrock-api-key (W12-B-1). Those two
+// refuses github-app-key/github-app-id and bedrock-api-key. Those two
 // pairs are operator-PROVIDED credentials the generic secrets API must stay able
 // to Put, which is exactly why they are sealed on the broker side only. The
 // broker cannot import this package, so the two lists are related but
@@ -119,7 +119,7 @@ func sinkReservedSecret(name string) bool {
 // api_key grant, which validateInlineSecretRefs and the injection sink allow via
 // the provider switch (oauthProviderForSentinel), which runs AFTER this guard.
 //
-// types.AWSSSOAccessTokenSecret (0.7.6) is the THIRD sentinel and is here for
+// types.AWSSSOAccessTokenSecret is the THIRD sentinel and is here for
 // the identical reason: resolveAWSSSOInjection resolves it from the captured
 // AWS SSO blob, so a value Put under that name would be silently shadowed. It
 // is likewise NOT in sinkReservedSecret — being resolved at that sink is the
@@ -161,7 +161,7 @@ func (s *Server) writableSecretName(w http.ResponseWriter, name, owner string) b
 }
 
 // handlePutSecret stores (or overwrites) a named secret in the caller's own
-// namespace (0.7, migration 0050: "" for an operator, else their own
+// namespace (migration 0050: "" for an operator, else their own
 // principal — see secretOwnerFromRequest). The value is write-only: no API
 // path ever returns it. Every write is an audit event.
 func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
@@ -211,7 +211,7 @@ func (s *Server) handlePutSecret(w http.ResponseWriter, r *http.Request) {
 // admitSecretCount is the secretsMaxPerOwner check, sited immediately before
 // the Put so nothing between them can change the count.
 //
-// AN OVERWRITE IS NEVER REFUSED, and that is the whole reason this is a
+// An overwrite is never refused, and that is the whole reason this is a
 // function rather than a `len(names) >= max` line. `Put` is both "add" and
 // "rotate": an operator sitting exactly at the cap must still be able to
 // replace an expiring key, and a cap that refused that would turn a soft guard
@@ -238,12 +238,12 @@ func (s *Server) admitSecretCount(w http.ResponseWriter, r *http.Request, owner,
 // owner's row), so deleting one 204s exactly like deleting a never-set name —
 // no existence oracle. Audited.
 //
-// THE EXPLICIT ?owner= ARM IS NOT IDEMPOTENT, and the asymmetry is the point.
+// The explicit ?owner= arm is not idempotent, and the asymmetry is the point.
 // The no-existence-oracle posture above is about MEMBERS: a member must not
 // learn from a status code whether another member holds a name. An admin who
 // has already named the namespace has no such oracle to gain, and the 204 they
-// got for a namespace that never held the row is exactly how F341's mis-aimed
-// revoke looked identical to a real one — 204 with an outcome=success audit
+// got for a namespace that never held the row would look identical to a real
+// one — 204 with an outcome=success audit
 // row while the secret stayed live. So this arm reports the miss instead.
 func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
@@ -274,9 +274,9 @@ func (s *Server) handleDeleteSecret(w http.ResponseWriter, r *http.Request) {
 // the named principal exists — the same posture handleReassignWorkspace's
 // admin-only gate uses for the analogous workspace-ownership query.
 //
-// THE VALUE IS RESOLVED, NOT PASSED THROUGH. It used to become the namespace
-// key verbatim, so it matched exactly ONE identity form: an admin naming a real
-// member by their email, or by a case-variant of their subject, got 204 and an
+// The value is resolved, not passed through: a plain verbatim key would match
+// exactly ONE identity form, so an admin naming a real
+// member by their email, or by a case-variant of their subject, would get 204 and an
 // outcome=success audit row while the PUT landed in a namespace nobody reads and
 // the DELETE left the live secret in place. ?owner= names a HUMAN; a namespace
 // is keyed by the principal that human's own writes stamp
@@ -291,7 +291,7 @@ func (s *Server) secretOwnerParam(w http.ResponseWriter, r *http.Request) (owner
 	}
 	if !s.isOperator(r.Context()) {
 		writeError(w, http.StatusForbidden, "?owner= is admin-only")
-		// AUDITED, because this is a member reaching for ANOTHER human's
+		// Audited, because this is a member reaching for ANOTHER human's
 		// credential namespace and the row is the only trace it happened.
 		// docs/AUDIT-ACTIONS.md's contract is "every member denial that isn't a
 		// plain foreign-resource 404", and a middleware-gated admin route
@@ -301,7 +301,7 @@ func (s *Server) secretOwnerParam(w http.ResponseWriter, r *http.Request) (owner
 		//
 		// SHAPE-IDENTICAL to the middleware's and to getWorkspaceAuthorized's
 		// in-handler twin: reason from the closed vocabulary, target the path,
-		// method in the data — and, since 0.7.4, the member-mode marker, which
+		// method in the data — and the member-mode marker, which
 		// is why all four sites build the datum through the one
 		// authzDeniedDatum (membermode.go) rather than hand-rolling the map.
 		// It names no namespace: the refusal is constant and runs before any
@@ -331,7 +331,7 @@ const secretOwnerUnresolvedMsg = "?owner= names an email address that no princip
 // known principals. An OIDC subject is an opaque, case-SENSITIVE string, so a
 // deployment may legitimately hold two that differ only by case; guessing which
 // one an admin meant would write a credential into the wrong human's namespace,
-// which is worse than the miss F341 is about.
+// which is worse than the miss this file already tracks via owner_known:false.
 const secretOwnerAmbiguousMsg = "?owner= matches more than one known principal; name the subject exactly"
 
 // principalIdentity pairs a stored namespace key (the principal exactly as that
@@ -393,8 +393,7 @@ func (s *Server) knownPrincipals(ctx context.Context) []principalIdentity {
 //     the one admin surface that lacked it.
 //  4. Neither, and it is email-shaped ⇒ REFUSED. An "@" value that pairs to no
 //     principal cannot be a subject this deployment issues, so writing it could
-//     only create a namespace the owner never reads — the silent no-op F341
-//     names. A bare value is taken verbatim: refusing a subject merely because
+//     only create a namespace the owner never reads. A bare value is taken verbatim: refusing a subject merely because
 //     this deployment has not seen it yet would break pre-provisioning for a
 //     member who has not signed in.
 //
@@ -403,7 +402,7 @@ func (s *Server) knownPrincipals(ctx context.Context) []principalIdentity {
 // a member who has not signed in — but it is indistinguishable, from the outside,
 // from a typo: both answer 204 with an outcome=success row, and the typo's
 // namespace is one nobody will ever read. So the caller stamps owner_known:false
-// and the log can tell the two apart afterwards (B5-F7 residual). The STATUS is
+// and the log can tell the two apart afterwards. The STATUS is
 // unchanged: refusing here would break the affordance.
 func (s *Server) resolveSecretOwner(ctx context.Context, v string) (owner string, known bool, refusal string) {
 	directory := s.knownPrincipals(ctx)
@@ -505,12 +504,12 @@ func secretOwnerAuditData(owner string, known bool) json.RawMessage {
 // `mine` is always the queried namespace's own rows (the caller's, or one
 // member's via admin ?owner=) — operator ⇒ mine == names.
 //
-// `names` keeps its PRE-0.7 meaning for an admin (this endpoint's three
+// `names` keeps its original meaning for an admin (this endpoint's three
 // existing UI callers are unchanged): the operator namespace, or one
 // member's own rows with ?owner=. For a MEMBER it narrows to the
 // operator-owned names an eligible grant in the operator's ceiling actually
 // PAIRS with (memberVisibleOperatorSecretNames), closing a name-enumeration
-// gap the flat pre-0.7 namespace had — capSeamAllowed(capSecret, n) alone
+// gap the flat namespace had — capSeamAllowed(capSecret, n) alone
 // passed everything through whenever that capability was unenforced (the
 // default), so a member could list every operator secret's name regardless
 // of any grant. Narrowed HERE and not in listUserSecretNames, which also
@@ -545,7 +544,7 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// THE ONE UNAUDITED VERB ON AN AUDITED SURFACE. `?owner=` is admin-only
+	// The one unaudited verb on an audited surface. `?owner=` is admin-only
 	// (secretOwnerParam) and every WRITE through it stamps secret_owner —
 	// secret.write and secret.delete both do. The read did not, so an admin
 	// could enumerate another human's secret namespace and leave nothing an
@@ -554,7 +553,7 @@ func (s *Server) handleListSecrets(w http.ResponseWriter, r *http.Request) {
 	// unlogged in general, but that this read is the only verb on this surface
 	// that was.
 	//
-	// NAMES, NOT VALUES, and the row says so. reservedFilteredSecretNames
+	// Names, not values, and the row says so. reservedFilteredSecretNames
 	// returns store.List — identifiers only; no value is read, decrypted or
 	// returned here (value resolution is secret.read, at injection time, which
 	// is a different action carrying grant_id/jti). So this records an

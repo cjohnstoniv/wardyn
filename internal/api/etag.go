@@ -6,7 +6,7 @@
 // /site-config. Both already serialize their own writers with an in-process
 // mutex (see handlePutSiteConfig's siteConfigMu and
 // handlePutCapabilityEnforcement's capEnforcementMu), which already stops two
-// concurrent PUTs from silently clobbering each other ON THIS PROCESS — what
+// concurrent PUTs from silently clobbering each other on this process — what
 // If-Match adds on top is a CLIENT-side guarantee: a caller that read the
 // document, means to change it based on what it read, and wants to be told
 // (412) rather than silently overwrite a write that landed in between its GET

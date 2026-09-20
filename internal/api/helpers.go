@@ -215,7 +215,7 @@ func (s *Server) ownsWorkspaceOrAdmin(r *http.Request, ws types.Workspace) bool 
 // ownsWorkspaceOrSecurityAdmin is ownsWorkspaceOrAdmin's READ twin: the
 // workspace's owner, or EITHER admin tier.
 //
-// WHY THE READ TIER IS WIDER THAN THE WRITE TIER, and it is not symmetry for
+// Why the read tier is wider than the write tier, and it is not symmetry for
 // its own sake: a security admin may already rewrite a workspace's
 // approved/denied egress (securityOps, routes.go — "deciding which hosts a
 // workspace's runs may reach is the same authority as deciding an egress
@@ -228,7 +228,7 @@ func (s *Server) ownsWorkspaceOrAdmin(r *http.Request, ws types.Workspace) bool 
 // check its own work. That is what makes the old state actively harmful rather
 // than merely inconsistent.
 //
-// THE RUN NOUN ALREADY RESOLVED THIS EXACT QUESTION, THE SAME WAY. ownsRunOrAdmin
+// The run noun already resolved this exact question, the same way. ownsRunOrAdmin
 // is isSecurityOperator (inspect-or-stop, over a fleet-wide list the same tier
 // gets), and ownsRunOrSuperAdmin exists as its strict twin for the ONE route
 // that writes into a live PTY. Two predicates, two names, one per tier. The
@@ -237,7 +237,7 @@ func (s *Server) ownsWorkspaceOrAdmin(r *http.Request, ws types.Workspace) bool 
 // for reads by getWorkspaceReadable — so the read answer was never decided, it
 // was inherited. Splitting them is what stops it drifting back.
 //
-// A MEMBER IS UNAFFECTED, and no route changes tier: all four readers stay
+// A member is unaffected, and no route changes tier: all four readers stay
 // classMember, a foreign member still gets the byte-identical 404, and the WRITE
 // getter (getWorkspaceAuthorized) keeps isOperator via ownsWorkspaceOrAdmin
 // below — a security admin still cannot update, delete, reassign, or bind
@@ -307,7 +307,7 @@ func (s *Server) getWorkspaceAuthorized(w http.ResponseWriter, r *http.Request, 
 // "minus the write tier" is now literal: this consults
 // ownsWorkspaceOrSecurityAdmin (either admin tier) where getWorkspaceAuthorized
 // consults ownsWorkspaceOrAdmin (super only). They shared one predicate until
-// 0.7's second admin tier made the read answer wrong — see
+// the second admin tier made the read answer wrong — see
 // ownsWorkspaceOrSecurityAdmin for why the read is the half that had to widen.
 func (s *Server) getWorkspaceReadable(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.Workspace, bool) {
 	ws, ok := s.getWorkspaceOr404(w, r, id)
@@ -322,7 +322,7 @@ func (s *Server) getWorkspaceReadable(w http.ResponseWriter, r *http.Request, id
 }
 
 // mayLaunchWorkspace reports whether the caller of r may turn ws's id into
-// BOUND HOST STATE inside a sandbox they control — the launch tier, which is
+// bound host state inside a sandbox they control — the launch tier, which is
 // deliberately NARROWER than the read tier next door.
 //
 // Operator-owned (OwnedBy == "") is launchable by every authenticated caller:
@@ -330,7 +330,7 @@ func (s *Server) getWorkspaceReadable(w http.ResponseWriter, r *http.Request, id
 // getter admits it too. A member-owned row is launchable by its OWNER or by a
 // SUPER admin, and by nobody else.
 //
-// DELIBERATELY ownsWorkspaceOrAdmin (super only), NOT the read twin
+// Deliberately ownsWorkspaceOrAdmin (super only), NOT the read twin
 // ownsWorkspaceOrSecurityAdmin: reading a foreign workspace to decide its egress
 // is the security tier's stated purpose, but MOUNTING that workspace's host
 // directory into a sandbox the security admin owns is credential material and
@@ -398,7 +398,7 @@ func (s *Server) getRunOr404(w http.ResponseWriter, r *http.Request, id uuid.UUI
 // INSPECT-OR-STOP is the whole of that arm's warrant — run_files, run_resources,
 // grants, kill, the approval/audit evidence reads.
 //
-// THE SANDBOX SWEEP'S TIER NOTE DEPENDS ON THIS LINE, so the two are
+// The sandbox sweep's tier note depends on this line, so the two are
 // cross-referenced rather than left to drift: routes.go once justified keeping
 // POST /admin/sandboxes/sweep on operatorOnly as protecting "the axis the
 // security tier does not get", meaning foreign-run termination — which this
@@ -407,7 +407,7 @@ func (s *Server) getRunOr404(w http.ResponseWriter, r *http.Request, id uuid.UUI
 // ownsRunOrSuperAdmin below, revisit it: TestSecurityAdminCanStopAForeignRun is
 // the pin that will say so.
 //
-// THE SPLIT, named once: two routes sit under the same owner-or-admin shape and
+// The split, named once: two routes sit under the same owner-or-admin shape and
 // are NOT inspect-or-stop, so neither may use this predicate —
 //
 //   - the attach-ticket mint, which hands out an interactive shell in a foreign
@@ -462,7 +462,7 @@ func (s *Server) getRunAuthorizedBy(w http.ResponseWriter, r *http.Request, id u
 		return run, true
 	}
 	writeError(w, http.StatusNotFound, "run not found")
-	// M1: audited AFTER confirming the run genuinely exists — a truly-missing
+	// Audited AFTER confirming the run genuinely exists — a truly-missing
 	// run (the getRunOr404 branch above) stays silent, so only a POSITIVELY
 	// identified foreign run reaches this audit (reason not_owner). The response
 	// written above is unaffected (byte-identical either way).
@@ -531,19 +531,19 @@ func decodeStrictMsg(w http.ResponseWriter, r *http.Request, dst any) string {
 	return ""
 }
 
-// decodeStrictKeys is decodeStrictMsg plus the SET OF TOP-LEVEL KEYS the body
+// decodeStrictKeys is decodeStrictMsg plus the set of top-level keys the body
 // actually carried, for the one thing a decoded struct cannot answer: whether a
 // zero value was WRITTEN or merely OMITTED.
 //
 // It exists because a whole-document PUT and an older client are a data-loss
 // pair. A v0.6.x SDK GETs /site-config, decodes into ITS OWN SiteConfig — which
-// has no field for anything 0.7 added — re-marshals, and PUTs the result: the
+// has no field for anything newer — re-marshals, and PUTs the result: the
 // newer fields are simply gone from the body, and a handler that cannot tell
 // "absent" from "cleared" writes empty over the operator's stored value. The
 // same footgun was already solved twice by hand on this document (Integrations,
 // OnboardingCompletedAt), each time for one field.
 //
-// SAME CAP, SAME STRICTNESS. The body is read once under maxJSONBody and the
+// Same cap, same strictness. The body is read once under maxJSONBody and the
 // struct decode runs over those bytes with DisallowUnknownFields exactly as
 // decodeStrictMsg does — this is a second QUESTION about the same body, never a
 // second, looser decode path.
@@ -595,7 +595,7 @@ func readCappedBody(w http.ResponseWriter, r *http.Request, capBytes int64, noun
 	return raw, true
 }
 
-// ─── workspace read redaction ────────────────────────────────────────────────
+// workspace read redaction
 
 // workspaceReadTier is how much of a workspace document a reader may see. Three
 // values, because the routes already have three answers and were giving all of
@@ -636,8 +636,8 @@ func (s *Server) workspaceReadTierFor(r *http.Request, ws types.Workspace) works
 // redactWorkspaceForRead projects a workspace document down to what its reader's
 // tier may see.
 //
-// WHAT THIS CLOSES. R1 narrowed GET /site-config, /sources, /sources/{id} and
-// /base-images to admin-only because those documents carry "an upstream-proxy
+// What this closes. GET /site-config, /sources, /sources/{id} and
+// /base-images were narrowed to admin-only because those documents carry "an upstream-proxy
 // PASSWORD ref, a database-password requirement key, and the /srv NFS path of a
 // local_dir source" (routes.go). GET /workspaces{,/{id}} served the SAME class
 // of datum — sources[].path=/srv/nfs-prod/payments,
@@ -646,20 +646,20 @@ func (s *Server) workspaceReadTierFor(r *http.Request, ws types.Workspace) works
 // artifacts.corp.internal] — to a plain member, 200 OK, while that identical
 // session was 403'd on the other three. One disclosure class, two answers.
 //
-// PROJECTION RATHER THAN NARROWING, unlike the four routes above, and the reason
+// Projection rather than narrowing, unlike the four routes above, and the reason
 // is that these routes have real member callers: the console's own workspace
 // list and detail are how a member picks what to run against. The four narrowed
 // routes had none (mountLibraryRoutes' own note: "NOTHING member-facing consumes
 // either route"). A tier move here would break the product; a projection does
 // not.
 //
-// APPLIED AT THE RESPONSE, never inside getWorkspaceReadable, and that placement
+// Applied at the response, never inside getWorkspaceReadable, and that placement
 // is load-bearing: workspace_build.go and workspace_envcode.go take the same
 // struct from that getter and do real work with these fields (resolving an
 // image, mounting a path). Redacting in the getter would break a build to fix a
 // read.
 //
-// WHAT IS DELIBERATELY KEPT, so the next reader does not have to guess:
+// What is deliberately kept, so the next reader does not have to guess:
 //   - approved_egress / denied_egress stay. They are what a member's own run
 //     against this workspace may reach, and a member who may launch it can
 //     observe them from their run's policy anyway.
@@ -672,10 +672,10 @@ func (s *Server) workspaceReadTierFor(r *http.Request, ws types.Workspace) works
 //     projection (setup_integrations.go) withholds separately.
 //   - profile.git_remotes stays, for the same reason Sources[].Source does for a
 //     REPO workspace: a repo coordinate is how a member identifies what they are
-//     launching against, and it is not one of the four classes R1 declared
+//     launching against, and it is not one of the four classes declared
 //     member-forbidden. Only the local_dir HOST path is.
 //
-// THE SCANNED PROFILE IS PROJECTED TOO (redactProfileForRead). It travels in
+// The scanned profile is projected too (redactProfileForRead). It travels in
 // this same document and republishes every one of these axes under its own keys
 // — required_secrets is the stored secret NAME the requirements map was just
 // stripped of, secret_files_present and leak_findings[].path are the host path
@@ -687,7 +687,7 @@ func redactWorkspaceForRead(ws types.Workspace, tier workspaceReadTier) types.Wo
 	if tier == workspaceReadFull {
 		return ws
 	}
-	// CLONE BEFORE MUTATING. The store hands back a freshly scanned struct
+	// Clone before mutating. The store hands back a freshly scanned struct
 	// today, but its slices and maps are still shared with everything else that
 	// read it in this request, and a redaction that reached back into a cached
 	// row would be a far worse bug than the one it fixes.
@@ -720,8 +720,8 @@ func redactWorkspaceForRead(ws types.Workspace, tier workspaceReadTier) types.Wo
 // the `secret:` and `write:` requirement keys they duplicate.
 var profileHostAxisKeys = []string{"required_secrets", "secret_files_present", "leak_findings"}
 
-// profileEgressAxisKeys are the scanned-profile keys carrying INTERNAL EGRESS
-// HOSTS. Gone at the member tier and kept at the security tier, exactly like the
+// profileEgressAxisKeys are the scanned-profile keys carrying internal egress
+// hosts. Gone at the member tier and kept at the security tier, exactly like the
 // `egress:` requirement keys they duplicate — the security admin decides this
 // workspace's egress and cannot decide blind.
 var profileEgressAxisKeys = []string{"egress_domains", "suggested_egress"}

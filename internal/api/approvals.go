@@ -23,7 +23,7 @@ import (
 // decisionRequest is the approve/deny body.
 type decisionRequest struct {
 	Reason string `json:"reason"`
-	// Scope/ExpiresAt are named decision_* ON THE WIRE deliberately, not for
+	// Scope/ExpiresAt are named decision_* on the wire deliberately, not for
 	// symmetry with the stored column. A bare "scope" collides with the
 	// approval's own RequestedScope — the host JSON that is part of the PENDING
 	// dedup index, and the identifier the console already binds to on three
@@ -59,7 +59,7 @@ const maxDecisionUntil = 30 * 24 * time.Hour
 // branch calls Approvals.List, which is ListApprovalsPage with an empty Page,
 // and Page.appendTo emits no LIMIT at all for Limit<=0 — so one run-scoped poll
 // materialised every approval row the deployment ever wrote and discarded all
-// but one run's (F072). Decided rows are never deleted, so that read grew with
+// but one run's. Decided rows are never deleted, so that read grew with
 // deployment age.
 //
 // A lister without that capability keeps the fetch-all path, and there it must
@@ -70,7 +70,7 @@ const maxDecisionUntil = 30 * 24 * time.Hour
 // badge of 0. The DB reader gets the same ordering for free: the WHERE is
 // applied before the LIMIT by construction.
 //
-// Ownership scoping (item 2): a member's ?run_id= must name an owned run —
+// Ownership scoping: a member's ?run_id= must name an owned run —
 // checked via the SAME getRunAuthorized gate GET/kill/profile/grants use, so a
 // foreign or unknown run_id answers with the byte-identical 404 (no existence
 // oracle). A member's UNSCOPED list (no run_id) is narrowed to approvals on
@@ -122,7 +122,7 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 	var pageFn func(store.Page) ([]types.ApprovalRequest, error)
 	switch {
 	case runID != uuid.Nil:
-		// Run-scoped: filter AT THE DB. Fail-SAFE (not fail-closed): a backend
+		// Run-scoped: filter at the DB. Fail-SAFE (not fail-closed): a backend
 		// without the capability falls through to the fetch-all closure below,
 		// which returns the identical rows. Ownership was already proven above.
 		if pager, capable := s.cfg.Approvals.(store.ApprovalsByRunPager); capable {
@@ -164,13 +164,13 @@ type approvalPageLister interface {
 // approvals the broker mints inside the same transaction that observes the
 // APPROVED state (handled by the broker on the next mint call); here we only
 // record the human decision via the approval FSM. Owner-or-admin FOR
-// egress_domain approvals ONLY (item 3 + HIGH-1 review fix): see decide().
+// egress_domain approvals ONLY: see decide().
 func (s *Server) handleApproveApproval(w http.ResponseWriter, r *http.Request) {
 	s.decide(w, r, true)
 }
 
 // handleDenyApproval transitions an approval to DENIED (fail closed).
-// Owner-or-admin for egress_domain approvals only (item 3 + HIGH-1): see decide().
+// Owner-or-admin for egress_domain approvals only: see decide().
 func (s *Server) handleDenyApproval(w http.ResponseWriter, r *http.Request) {
 	s.decide(w, r, false)
 }
@@ -256,7 +256,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		return
 	}
 
-	// Loaded AT MOST ONCE each. The member gate needs both for its own checks
+	// Loaded at most once each. The member gate needs both for its own checks
 	// and the scope rules reuse whatever it loaded; an OPERATOR's decide read
 	// nothing from the store before this change, and the scope-gated loads
 	// further down keep it that way for the default `run` scope and for every
@@ -265,13 +265,13 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// The gate loads BOTH rows or NEITHER, so its one flag seeds both here; they
 	// diverge below, where rule 4 may load the approval alone and leave the run
 	// unread for `always` to fetch.
-	// RULE 3b, BEFORE the member gate (security NIT-5) but AFTER ownership
-	// (security round-2 SHOULD-1). The plan's promise is 409 on every tier that
-	// can SEE the row; behind authorizeMemberDecision a member who owned the run
-	// got that gate's flat 404 instead, so the answer to "why was I refused"
-	// depended on who asked about a verb that applies to nobody.
+	// Rule 3b, BEFORE the member gate but AFTER ownership. The plan's promise is
+	// 409 on every tier that can SEE the row; behind authorizeMemberDecision a
+	// member who owned the run got that gate's flat 404 instead, so the answer
+	// to "why was I refused" depended on who asked about a verb that applies to
+	// nobody.
 	//
-	// But the first fix moved the kind test ahead of ownership, which made it an
+	// Moving the kind test ahead of ownership would make it an
 	// EXISTENCE ORACLE: any authenticated member holding a UUID could learn it
 	// was a credential_reauth approval of somebody's run. This file's own gate
 	// (below), routes.go and approvals_decide_test.go all state the opposite
@@ -303,7 +303,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		return
 	}
 
-	// H4 — the store loads, gated on SCOPE. Two conditions, not one: rule 4
+	// The store loads, gated on SCOPE. Two conditions, not one: rule 4
 	// needs ap.Kind, and rule 4 can ONLY ever fire on the operator path, since
 	// the member gate above already forced egress_domain or 404. Gate the load
 	// on `always` alone and an operator POSTing {"decision_scope":"once"} at a
@@ -313,10 +313,10 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// was accepted and persisted before this, contradicting rule 4's own docs
 	// and the CLI's --scope help. Only the truly bodyless/default "" path
 	// skips the load.
-	// UNCONDITIONAL since 0.7.6, and the kind rule below is why: credential_reauth
+	// Unconditional, and the kind rule below is why: credential_reauth
 	// is not decidable by anyone, so the refusal cannot be gated on the caller
 	// having sent a scope. This costs the operator's bodyless Approve one store
-	// READ it did not used to make — the honest price of a rule that must hold on
+	// READ — the honest price of a rule that must hold on
 	// every path into Decide(), which is one-way.
 	needAP := true
 	if needAP && !haveAP {
@@ -335,7 +335,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// early read above is best-effort (a store blip there must not turn a
 	// not-decidable kind into a decidable one).
 	//
-	// A credential_reauth row is NOT A DECISION and is refused to
+	// A credential_reauth row is not a decision and is refused to
 	// every tier, security operator included (409, not 403: the request is real
 	// and readable, it is the VERB that does not apply).
 	//
@@ -356,9 +356,9 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	//
 	// tool_call is bounded by the clamp, so no scope changes anything: refused.
 	//
-	// credential USED to be in the same bucket ("a credential mints exactly once
-	// by construction"), and for once/until/always it still is. `run` is the one
-	// exception, and it is the whole of B2's per-run credential lease
+	// credential is in the same bucket for once/until/always ("a credential
+	// mints exactly once by construction"). `run` is the one
+	// exception, and it is the whole of the per-run credential lease
 	// (docs/adoption/corp-network-onboarding-findings.md): a git_pat installs a
 	// STANDING credential helper git invokes on every operation, so single-use
 	// forced the operator to choose between a click per git op and standing
@@ -403,7 +403,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		return
 	}
 
-	// V1-D1 — DEFENCE IN DEPTH: the run may have ENDED while this approval sat in
+	// Defence in depth: the run may have ENDED while this approval sat in
 	// the queue (refuseIfRunEnded). Placed with the other pre-Decide() rules, and
 	// for their reason: PENDING -> decided is one-way.
 	// The run row it loads is only consulted for the terminal check itself;
@@ -414,10 +414,9 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 
 	decidedByType, decidedBy := actorFromRequest(r)
 
-	// approve -> State is the same translation approval.Decide used to do
-	// internally; it now happens here because ApprovalDecision.State is the
-	// single source of truth DecideApproval persists (no separate bool to
-	// keep in sync).
+	// approve -> State is the translation this line performs because
+	// ApprovalDecision.State is the single source of truth DecideApproval
+	// persists (no separate bool to keep in sync).
 	state := types.ApprovalDenied
 	if approve {
 		state = types.ApprovalApproved
@@ -430,7 +429,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		ExpiresAt: body.ExpiresAt,
 	})
 	if err != nil {
-		// THE BREAK-GLASS LEAVES A ROW EVEN WHEN THE DECISION FAILS, because
+		// The break-glass leaves a row even when the decision fails, because
 		// what the row records is that a four-eyes rule was bypassed — and it
 		// was, at the gate above, before this call. docs/ENV.md promises the
 		// operator that EVERY admin-token bypass writes one; an emit that only
@@ -438,7 +437,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		// whether the store happened to answer, so a probing caller who never
 		// completes a decision leaves nothing behind at all.
 		//
-		// THE OUTCOME IS WHAT KEEPS THE EARLIER ROUND'S REPAIR: this row must
+		// The outcome matters: this row must
 		// never claim a decision was made. "failure" plus the error class says
 		// exactly what happened — the gate was passed, the decision was not —
 		// and it is the absence of an approval.decide beside it that a reader
@@ -485,7 +484,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 				"reason": "admin_token_break_glass", "switch": envEgressSecondHuman,
 			})))
 	}
-	// THE DECISION IS ALREADY COMMITTED. Everything below is its DURABLE ECHO —
+	// The decision is already committed. Everything below is its DURABLE ECHO —
 	// the permanent `always` grant on the workspace, the verify loop's
 	// requirement row, and the fail-silent-BUT-AUDITED rows both of them write
 	// when they give up. All of it ran on r.Context(), which net/http cancels the
@@ -501,7 +500,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	if approve {
 		s.learnVerifyEgress(wbCtx, result, decidedByType, decidedBy)
 	}
-	// OUTSIDE the `if approve` above, which IS the approve-only guard: placing
+	// Outside the `if approve` above, which IS the approve-only guard: placing
 	// this call beside learnVerifyEgress makes deny·always a silent no-op behind
 	// a green UI — an operator's permanent deny that never reaches the workspace.
 	//
@@ -555,19 +554,19 @@ func decodeDecisionRequest(w http.ResponseWriter, r *http.Request) (decisionRequ
 // it reports whether BOTH ap and run were read (member path) or NEITHER
 // (operator path), and the scope-gated loads downstream pay for what they need.
 //
-// Member: may decide only an egress_domain approval raised by a run THEY own
-// (item 3, narrowed by the HIGH-1 review fix). credential and tool_call
+// Member: may decide only an egress_domain approval raised by a run THEY own.
+// credential and tool_call
 // approvals stay admin-only REGARDLESS of ownership: the shipped default policy
 // requires approval on github_token, so letting a member self-approve their OWN
 // run's credential request would self-mint a real token, and self-approving a
-// tool_call re-opens exactly the allowance the clamp (item 5 / HIGH-2) is
+// tool_call re-opens exactly the allowance the clamp is
 // supposed to bound — both under the SAME authority the operator's ceiling
 // exists to constrain. Kind is checked before ownership so a foreign non-egress
 // approval and an OWNED non-egress approval read identically (both 404, no
 // existence oracle either way) — not audited: this is a foreign-shaped 404, not
 // a distinct reachable-surface denial (see THREAT-MODEL.md).
 //
-// Then, and only then, the 0.6 egress_host capability: which hosts a member may
+// Then, and only then, the egress_host capability: which hosts a member may
 // decide FOR THEMSELVES. Ordered last on purpose — see the block itself.
 func (s *Server) authorizeMemberDecision(w http.ResponseWriter, r *http.Request, id uuid.UUID) (types.ApprovalRequest, types.AgentRun, bool, bool) {
 	var (
@@ -588,7 +587,7 @@ func (s *Server) authorizeMemberDecision(w http.ResponseWriter, r *http.Request,
 	if rerr != nil || !s.ownsRunOrAdmin(r, run) {
 		writeError(w, http.StatusNotFound, "approval not found")
 		if rerr == nil {
-			// M1: audited only once the approval is confirmed to genuinely exist
+			// Audited only once the approval is confirmed to genuinely exist
 			// and be decidable in kind — a run lookup failure here would be a
 			// data-integrity oddity, not a clean "not owned".
 			s.recordAudit(r.Context(), s.auditEvent(&ap.RunID, actorTypeFromRequest(r), principalFromRequest(r),
@@ -677,10 +676,10 @@ func bypassRunID(ap types.ApprovalRequest, haveAP bool) *uuid.UUID {
 // egress_domain decision whose decider IS the run's creator. It returns false
 // having already written its own 4xx/5xx, exactly like the other rule helpers.
 //
-// THE ADMIN-TOKEN PRINCIPAL BYPASSES IT, and that is stated here, in
+// The admin-token principal bypasses it, and that is stated here, in
 // docs/OPERATIONS.md and in the threat model's residual list rather than left
 // for someone to discover. A bare WARDYN_ADMIN_TOKEN caller is attributed
-// system/admin-token (actorFromRequest, FIX #10) precisely because a shared
+// system/admin-token (actorFromRequest) precisely because a shared
 // token carries NO per-human identity — there is no second human to compare it
 // against, and X-Wardyn-Principal is ignored off LocalMode specifically so a
 // token bearer cannot forge one. Refusing the token instead would lock an
@@ -694,7 +693,7 @@ func bypassRunID(ap types.ApprovalRequest, haveAP bool) *uuid.UUID {
 // writes the row once Decide() has succeeded, for the reason argued at the
 // admin-token branch below.
 //
-// LOCALMODE REFUSES THE GATE OUTRIGHT — 503, not a comparison. The switch is
+// LocalMode refuses the gate outright — 503, not a comparison. The switch is
 // UNENFORCEABLE there, and that is structural rather than a hole to patch:
 // LocalMode is the no-auth bypass (humanOrAdminAuth injects Config.LocalOperator
 // and authenticates nobody), so BOTH operands of "is the decider the creator"
@@ -752,13 +751,13 @@ func (s *Server) requireSecondHuman(w http.ResponseWriter, r *http.Request, id u
 		return false, true
 	}
 	actorType, principal := actorFromRequest(r)
-	// THE SCOPE CHECKS COME FIRST, for the admin-token caller too. They used to
-	// sit below the break-glass branch, so an approval.second_human.bypass row
-	// was written for any admin-token caller while the switch was on — before
-	// the kind, before the row was known to exist, and before the decision.
-	// That produced break-glass records for credential approvals this switch
+	// The scope checks come first, for the admin-token caller too. Moving them
+	// below the break-glass branch would write an approval.second_human.bypass row
+	// for any admin-token caller while the switch is on — before
+	// the kind, before the row is known to exist, and before the decision —
+	// producing break-glass records for credential approvals this switch
 	// never governs, for approval ids that do not exist, and for requests that
-	// went on to 500 with no approval.decide beside them, while docs/ENV.md
+	// go on to 500 with no approval.decide beside them, while docs/ENV.md
 	// ("Scoped to egress_domain only") and the threat model both describe the
 	// row as the record of a four-eyes rule bypassed on a decision that
 	// happened. The load is what makes "on an approval that exists" true, so it
@@ -878,7 +877,7 @@ func (s *Server) resolveAlwaysTarget(w http.ResponseWriter, r *http.Request, ap 
 	// PUT /workspaces/{id}/approved-egress, which is operator-gated on this
 	// exact predicate.
 	//
-	// AUTHORIZATION BEFORE VALIDATION, deliberately. Rule 5 below answers 400
+	// Authorization before validation, deliberately. Rule 5 below answers 400
 	// with "this run references no onboarded workspace" — a fact about the run's
 	// configuration. Running it first would hand that answer to a caller who is
 	// not permitted to use this scope at all, and would make the reply depend on
@@ -895,7 +894,7 @@ func (s *Server) resolveAlwaysTarget(w http.ResponseWriter, r *http.Request, ap 
 	// "your own approval vanished". Do not "fix" this back.
 	if !s.isSecurityOperator(r.Context()) { // LOCKSTEP with authorizeMemberDecision; see http.go
 		writeError(w, http.StatusForbidden, "decision_scope always is operator-only")
-		// AUDITED, like every other member denial on this path (the capability
+		// Audited, like every other member denial on this path (the capability
 		// refusal above and the four-eyes one below both write this row): a
 		// member reaching for `always` is reaching for a permanent workspace
 		// allowlist entry through the approval queue, which is the back door
@@ -924,7 +923,7 @@ func (s *Server) resolveAlwaysTarget(w http.ResponseWriter, r *http.Request, ap 
 	if !haveRun {
 		var err error
 		if run, err = s.cfg.Store.GetRun(r.Context(), ap.RunID); err != nil {
-			// REJECT, never fall through: falling through would persist `always`
+			// Reject, never fall through: falling through would persist `always`
 			// on the approval row with no workspace resolved and no durable
 			// write — a permanent grant that exists only in the UI.
 			writeServerError(w, r, "resolve run for always", err)

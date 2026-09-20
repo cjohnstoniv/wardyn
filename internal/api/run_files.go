@@ -4,12 +4,12 @@
 // Per-file diff stat for a run's workspace — the Files-changed widget on the
 // run-detail cockpit.
 //
-// WHY NOT workspacescan: that package is an ONBOARDING scanner (what a repo
+// Why not workspacescan: that package is an ONBOARDING scanner (what a repo
 // needs), not a differ, and it reads the host filesystem. This read has to
 // answer "what has the agent changed so far", which is a question about the
 // sandbox's own working tree, mid-run.
 //
-// WHY NOT the host filesystem: run.WorkspacePath is the HOST directory the
+// Why not the host filesystem: run.WorkspacePath is the HOST directory the
 // workspace is bind-mounted from, so reading it from wardynd would work on
 // docker-on-this-host and silently return nothing on k8s (where the mount is a
 // PVC on another node) — the daemon must never assume it shares a filesystem
@@ -111,7 +111,7 @@ const (
 // substrate that dropped exec env would otherwise `cd ""`, fail, and report
 // vcs=none for a workspace we never actually looked at.
 //
-// WHY IT SEARCHES rather than trusting one path: /home/agent/work is only the
+// Why it searches rather than trusting one path: /home/agent/work is only the
 // FALLBACK mount target (composerWorkspaceTarget) — a workspace source may set
 // its own Target (workspace_run.go), and the run row does not carry the
 // resolved path, so a hardcoded guess would report vcs=none for a real repo
@@ -125,9 +125,7 @@ const (
 // to $W/<repo leaf> (deploy/images/common/agent-run-lib.sh), so W itself is a
 // plain directory and only its CHILD is a work tree — the script therefore tries
 // $W/$R (R = the repo leaf, from run.Repo) first, then W, then the exec's cwd,
-// then every child of W. Before that ordering existed every repo run read as
-// vcs=none at /home/agent/work: "nothing changed", confidently, for a sandbox
-// that had a full clone one directory down.
+// then every child of W.
 //
 // exit 3 means "there is no git work tree here" — a fact about the workspace,
 // reported as 200 vcs=none. Any other nonzero exit lands in the same place
@@ -185,7 +183,7 @@ type runFilesResponse struct {
 	Files []runFileStat `json:"files"`
 	// Path is the in-sandbox directory actually inspected. Present on BOTH
 	// outcomes on purpose: on vcs:"none" it is the evidence that turns "no repo
-	// here" into "no repo AT THIS PATH", which is what an operator needs when a
+	// here" into "no repo at this path", which is what an operator needs when a
 	// workspace is mounted at a non-default target.
 	Path      string `json:"path,omitempty"`
 	Truncated bool   `json:"truncated"`
@@ -208,7 +206,7 @@ type runFilesResponse struct {
 //	501  the runner has no ExecStream primitive
 //	500  the exec launched but the read failed
 //
-// AUDIT: failures only. The console polls this; a row per poll tick would bury
+// Audit: failures only. The console polls this; a row per poll tick would bury
 // the trail this project treats as its system of record. A successful read
 // mints nothing, opens no network path, and changes no run state — there is
 // nothing to non-repudiate.
@@ -270,7 +268,7 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// STREAMING CONTRACT (runner.ExecSession's doc, and the reason
+	// Streaming contract (runner.ExecSession's doc, and the reason
 	// drainExecStderr exists in the SSH gateway): Stdout and Stderr are
 	// UNBUFFERED io.Pipes fed by ONE demux goroutine — a single undrained
 	// stderr byte blocks that goroutine, Stdout, AND Wait. git writes to stderr
@@ -285,12 +283,10 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 		go func() { _, _ = io.Copy(io.Discard, sess.Stderr) }()
 	}
 
-	// THE BYTE CAP, and the Wait that must not follow it. readExecStdout reports
+	// The byte cap, and the Wait that must not follow it. readExecStdout reports
 	// whether the stream had MORE to give; when it did, the in-sandbox writer is
 	// still blocked on an unbuffered pipe nobody is draining, so Wait cannot
-	// return and the deferred Close above is the only thing that frees it —
-	// which is what the 5 s stall + 500 + a run.files failure row per poll tick
-	// used to be (B1-F4).
+	// return and the deferred Close above is the only thing that frees it.
 	out, capped, readErr := readExecStdout(sess.Stdout, runFilesMaxOutput)
 	inspectedPath, files, truncated := parseRunFiles(bytes.NewReader(out))
 	if capped {
@@ -322,11 +318,8 @@ func (s *Server) handleRunFiles(w http.ResponseWriter, r *http.Request) {
 		}
 		// exit 3 is the script's OWN "there is no git work tree here" signal.
 		// Any OTHER nonzero exit means git ran and failed — most often it is
-		// missing from the image entirely. Those are different facts and used
-		// to collapse into the same one: the widget asserted "No git repository
-		// at <path>", so an operator re-mounted their workspace to fix an image
-		// problem. vcs:"unknown" says only what we know, which is that we could
-		// not tell.
+		// missing from the image entirely. vcs:"unknown" says only what we know,
+		// which is that we could not tell.
 		if code == runFilesExitNoWorkTree {
 			// A FACT about the workspace, not a failure: 200, an honest empty
 			// list, no audit row. NAME the directory we looked in — a bare

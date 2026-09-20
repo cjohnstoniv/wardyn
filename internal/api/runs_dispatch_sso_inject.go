@@ -17,7 +17,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// PHASE B — the captured AWS SSO session, injected proxy-side instead of
+// Phase b — the captured AWS SSO session, injected proxy-side instead of
 // written into the sandbox.
 //
 // `portal.sso.<region>` GetRoleCredentials is `authtype:none` (unsigned), so a
@@ -32,12 +32,12 @@ import (
 // still the one the operator's roster meant. See the snapshot below.
 
 // awsSSOProxyInjectDefaultOn is the DEFAULT of the kill switch
-// WARDYN_AWS_SSO_PROXY_INJECT (open decision O-10).
+// WARDYN_AWS_SSO_PROXY_INJECT.
 //
-// THIS CONSTANT IS THE FLIP. Shipping the lane off by default is one edit here
+// This constant is the flip. Shipping the lane off by default is one edit here
 // and nothing else: every other site reads Config.AWSSSOProxyInject, which
-// ResolveAWSSSOProxyInject derives from this. `off` restores 0.7.5 byte for
-// byte for NEW dispatches — a run already dispatched keeps the lane it was
+// ResolveAWSSSOProxyInject derives from this. `off` restores the pre-lane
+// behavior byte for byte for NEW dispatches — a run already dispatched keeps the lane it was
 // authored with (its cache file, its grant and its MITM entry) until it ends,
 // which is why the operator's rollback step is "flip it and relaunch the runs
 // that matter", not "flip it and the fleet changes under you".
@@ -76,7 +76,7 @@ func resolveAWSSSOProxyInject(raw string, def bool) bool {
 // AWSSSOProxyInjectFlagDefault is the DEFAULT the boot flag advertises, derived
 // from the one constant rather than typed a second time.
 //
-// It exists because the "one-line flip" was a LIE without it (general B3):
+// It exists because the "one-line flip" was a LIE without it:
 // cmd/wardynd's flag hard-coded the string "on", so with nothing set in the
 // environment the resolver was handed "on" and never consulted the constant at
 // all — flipping awsSSOProxyInjectDefaultOn to false would have shipped the
@@ -167,12 +167,12 @@ func ssoPortalMITMEntry(ssoRegion, endpointOverride string) string {
 // entry is ANY-PORT in the proxy and an agent that can reach the portal host at
 // all could otherwise CONNECT to it on a port nobody configured and have that
 // tunnel terminated with the Wardyn leaf and the operator's SSO session injected
-// onto whatever answered there (F037's shape, one host over).
+// onto whatever answered there.
 func (s *Server) authorBedrockSSOInjection(ctx context.Context, run types.AgentRun, t llmTransport,
 	sso awsSSOScope, injections []runner.InjectionGrant,
 ) ([]runner.InjectionGrant, []string, bool) {
 	portalHost := ssoPortalHost(t.bedrock.ssoRegion, s.cfg.AWSSSOEndpointOverride)
-	// THE PORT THE RUN ACTUALLY REACHES, not a hard-coded 443 (security NIT-2).
+	// The port the run actually reaches, not a hard-coded 443.
 	// ssoEgressHosts already honours the override's port, so an override on any
 	// other port was allowlisted and MITM-eligible at 443 only: the CONNECT was
 	// never terminated, the header was never injected, and require_tls was off
@@ -193,7 +193,7 @@ func (s *Server) authorBedrockSSOInjection(ctx context.Context, run types.AgentR
 			SSORoleName:      t.bedrock.ssoRoleName,
 			Region:           t.bedrock.ssoRegion,
 		},
-		// PRODUCTION IS TLS-ONLY. The single exception is the deployment that
+		// Production is TLS-only. The single exception is the deployment that
 		// already refused to boot without WARDYN_ALLOW_TEST_ENDPOINTS: the
 		// plain-http SSO fake, which serves no TLS at all. Leaving require_tls on
 		// there would refuse the walk's own requests; leaving it OFF anywhere
@@ -204,7 +204,7 @@ func (s *Server) authorBedrockSSOInjection(ctx context.Context, run types.AgentR
 		// carrying Wardyn's own sentence instead of a bare AWS 401 the person
 		// cannot act on.
 		"require_tls": s.cfg.AWSSSOEndpointOverride == "",
-		// THE PATH PIN (W6-S F3). The injected session may ride exactly ONE
+		// The path pin. The injected session may ride exactly ONE
 		// request: the GetRoleCredentials for the account and role this run was
 		// dispatched with. Everything else the sandbox sends to the portal host —
 		// `POST /logout`, which AWS documents as invalidating the owner's
@@ -213,13 +213,12 @@ func (s *Server) authorBedrockSSOInjection(ctx context.Context, run types.AgentR
 		// /assignment/* — is forwarded WITHOUT the header and answered by AWS as
 		// an unauthenticated call. Nothing Wardyn holds is exposed either way.
 		//
-		// 0.7.5 could not do this: the token was resident in the sandbox, so its
-		// reach was the agent's. Proxy-side injection is the first point at which
+		// A sandbox-resident token cannot do this: its reach would be the
+		// agent's. Proxy-side injection is the first point at which
 		// the admin-asserted pair becomes an ENFORCED one.
 		//
-		// THE PIN IS ALWAYS ON. An earlier version of this comment said a blob
-		// carrying neither field would leave the rule unpinned; that is not a
-		// state this lane can be in. The upload refuses a blob missing either
+		// The pin is always on. A blob carrying neither field cannot leave the
+		// rule unpinned: the upload refuses a blob missing either
 		// (awsSSOBlob.missingFields, ssotoken.go — account_id and role_name are
 		// required fields, and a short capture is refused as blob_shape), so a
 		// STORED session always carries the pair and awsSSOPinQuery always

@@ -70,7 +70,7 @@ type metrics struct {
 	// "nobody can mount their drive since the NAS moved" reached an operator as
 	// a support ticket, if at all.
 	//
-	// BY REASON, and the label set is CLOSED (driveRefusalReason*): a reason is
+	// By reason, and the label set is CLOSED (driveRefusalReason*): a reason is
 	// a cardinality decision, and a free-form label here would be one series per
 	// message. Never the drive, the subject or the path — those are the audit
 	// log's and the slog line's, both of which this counter points at.
@@ -78,7 +78,7 @@ type metrics struct {
 	// ssoRefreshOutcomes counts each control-plane AWS SSO renewal ATTEMPT
 	// (refreshAWSSSOBlob's CreateToken call), by outcome — the same four the
 	// harness.credential.refresh audit row's own branching already
-	// distinguishes (Finding 5): success is "redeemed at AWS" — the increment
+	// distinguishes: success is "redeemed at AWS" — the increment
 	// fires the instant CreateToken succeeds, BEFORE the re-Put; a persist
 	// failure afterward is still audited failure/persist_error, but counts
 	// here too, since the run was served from the renewed pair either way.
@@ -97,17 +97,17 @@ type metrics struct {
 	ssoRefreshOutcomes map[string]int64
 
 	// credentialReauthOutcomes counts each mid-run credential re-auth WORKFLOW's
-	// outcome (Finding 4): requested when a lapsed credential opens a hold,
+	// outcome: requested when a lapsed credential opens a hold,
 	// resolved when a sign-in answers it, and expired/cancelled when the row was
 	// aged out or the run ended under it. timeout is the one the operator
 	// actually tunes on — it means the sandbox's SDK was told to fail because
 	// nobody signed in inside WARDYN_CREDENTIAL_REAUTH_TIMEOUT, and a series that
 	// is mostly timeouts is a deployment whose people are not seeing the request.
 	//
-	// BY OUTCOME, CLOSED set (credentialReauthOutcomeValues) for the reason
+	// By outcome, CLOSED set (credentialReauthOutcomeValues) for the reason
 	// driveRefusals gives: a label nobody enumerated is one series per string.
 	//
-	// EVERY label is counted AT ITS OWN TRANSITION, which is the whole
+	// Every label is counted at its own transition, which is the whole
 	// correction: requested at the raise, resolved at the resolution, expired
 	// where the sweeper ages a row out, cancelled where a terminal run cancels
 	// one, timeout where the daemon ingests the sidecar's decision row. The
@@ -129,12 +129,12 @@ type metrics struct {
 	credentialReauthWaitCount int64
 
 	// startWaitSum / startWaitCount are how long a sandbox that was still being
-	// created spent on each SUBSTRATE reason — the series that turns finding 6's
+	// created spent on each SUBSTRATE reason — the series that turns an
 	// anecdote ("127s and 131s, on two occasions") into something an operator can
 	// graph. Same shape as launchSum/launchCount: sum and count, i.e. an average,
 	// and no histogram until someone needs a p99 (see this type's ponytail note).
 	//
-	// BY REASON, with a CLOSED label set (startWaitReasons), for exactly the
+	// By reason, with a CLOSED label set (startWaitReasons), for exactly the
 	// argument driveRefusals makes: a substrate reason is not Wardyn's to
 	// enumerate — a future kubelet can invent one — and a free-form label here
 	// would be one series per string the platform ever says. Anything unknown
@@ -299,14 +299,14 @@ func (m *metrics) egressDenied() {
 //     internal/egress/proxy, all genuine dial failures on a request policy
 //     ALLOWED, where the network lost it: proxy.go's forward-path round trip,
 //     proxy.go's CONNECT tunnel dial, and llm_routes.go's brokered-LLM round
-//     trip. RESOLVED (F065-gatewayvet, was an ACCEPTED RESIDUAL): a fourth
-//     site — llm_routes.go's gatewayTarget arm, on errGatewayVet, vetTrustedHost's
-//     GUARD refusal of the configured model gateway — USED TO reuse this same
-//     source, which excluded a config problem the operator's own gateway can
-//     never satisfy from the counter alongside failures the network actually
-//     caused. It now carries its own rule_source (ruleSourceGatewayVetFailed,
-//     egress lane) and is DELIBERATELY absent from this exclusion list below —
-//     a guard refusal counts as a denial like any other.
+//     trip. RESOLVED (F065-gatewayvet): a fourth site — llm_routes.go's
+//     gatewayTarget arm, on errGatewayVet, vetTrustedHost's GUARD refusal of the
+//     configured model gateway — carries its own rule_source
+//     (ruleSourceGatewayVetFailed, egress lane) rather than reusing this same
+//     source, which would file a config problem the operator's own gateway can
+//     never satisfy alongside failures the network actually caused. It is
+//     DELIBERATELY absent from the exclusion list below — a guard refusal counts
+//     as a denial like any other.
 //   - egress.decisions.dropped:<n> — decisions.go's synthetic summary for
 //     decision records the buffer had to drop. An audit-FIDELITY alert about a
 //     wedged control plane, not a denial of anything; the count rides in the
@@ -328,11 +328,11 @@ const (
 	ruleSourceCredentialReauthTimeout = "credential:reauth-timeout"
 )
 
-// isPolicyDeny reports whether an egress.Deny with this rule_source is a DENIAL
-// BY POLICY — the thing wardyn_egress_denies_total's HELP string promises and
+// isPolicyDeny reports whether an egress.Deny with this rule_source is a denial
+// by policy — the thing wardyn_egress_denies_total's HELP string promises and
 // the only thing an operator alerting on that series wants to be paged for.
 //
-// EXCLUSION, not an allowlist, on purpose: the policy/guard sources are open-
+// Exclusion, not an allowlist, on purpose: the policy/guard sources are open-
 // ended (policy, approval:<id>, builtin:private-ip, policy:tool-deny,
 // brokered:git-pat:denied, scan:blocked, site-config:*, …) and a new one is one
 // feature away. An allowlist would silently UNDERCOUNT real denials — a security
@@ -392,7 +392,7 @@ func (m *metrics) write(w io.Writer) {
 		"# TYPE wardyn_credential_reauth_wait_seconds summary\n"+
 		"wardyn_credential_reauth_wait_seconds_sum %g\nwardyn_credential_reauth_wait_seconds_count %d\n",
 		m.credentialReauthWaitSum, m.credentialReauthWaitCount)
-	// HELP text: DRAFT (M2 canon pending) — R4-F065. M2 recommends the HELP-only
+	// HELP text: DRAFT (M2 canon pending). M2 recommends the HELP-only
 	// remediation (this wording change) over the filed alternative that also
 	// splits the series into {reason="policy"|"dial_failed"|"decisions_dropped"};
 	// no owner ruling yet (M2-canon-sheet.md §2/§6b), so the series itself is
@@ -438,7 +438,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 // is the same Postgres ping /readyz makes (0 = the pod is out of the Service's
 // endpoints and runs are failing their durable writes), and
 // wardyn_audit_spool_lines is the backlog those failed writes are spooling to
-// disk. A spool that grows and never drains back to 0 is the C1 fallback doing
+// disk. A spool that grows and never drains back to 0 is the fallback doing
 // its job while the drain loop is not doing its own — invisible until now
 // outside a log line.
 func (s *Server) writeHealthGauges(r *http.Request, w io.Writer) {
@@ -465,12 +465,12 @@ func (s *Server) writeHealthGauges(r *http.Request, w io.Writer) {
 	fmt.Fprintf(w, "# HELP wardyn_audit_spool_quarantined_total Spool lines moved aside after the store rejected them repeatedly; each one is an event missing from the queryable trail until it is re-fed.\n"+
 		"# TYPE wardyn_audit_spool_quarantined_total counter\nwardyn_audit_spool_quarantined_total %d\n", s.cfg.AuditSpool.Quarantined())
 	s.writeSinkDrops(w)
-	// B6-F6: the eBPF sensor's cumulative counts, moved off the anonymous
+	// The eBPF sensor's cumulative counts, moved off the anonymous
 	// /healthz onto this gated scrape where every other volume series lives.
 	s.writeEbpfGroundtruthCounters(ctx, w)
 }
 
-// writeSinkDrops emits the per-SIEM-sink delivery-drop counter (D2): events a
+// writeSinkDrops emits the per-SIEM-sink delivery-drop counter: events a
 // webhook/syslog sink shed past its buffer or after retry exhaustion, which the
 // audit Fanout counts but nothing exposed to a scrape target. Omitted entirely
 // when no sinks are configured (AuditSinkDrops nil), so a deployment without SIEM
@@ -496,7 +496,7 @@ func (s *Server) writeSinkDrops(w io.Writer) {
 // sweeper aged out. Exported for cmd/wardynd's sweeper goroutine, which is the
 // ONLY place this transition happens: by the time a row expires the sidecar
 // that held for it gave up hours ago, so no resolve will ever meet it and
-// counting at a resolve would count nothing at all (security NIT-3).
+// counting at a resolve would count nothing at all.
 func (s *Server) RecordCredentialReauthExpired(n int) {
 	for i := 0; i < n; i++ {
 		s.metrics.credentialReauthRecorded(credentialReauthOutcomeExpired)

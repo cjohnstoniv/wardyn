@@ -186,7 +186,7 @@ func LoadConfig(path string) (*Config, error) {
 // The decode is STRICT (DisallowUnknownFields), matching the decodeStrict
 // posture the control plane's own write paths already use.
 //
-// TRUST BOUNDARY (F029 — read before relaxing): the sidecar image is pinned by
+// TRUST BOUNDARY (read before relaxing): the sidecar image is pinned by
 // the OPERATOR, independently of wardynd (WARDYN_PROXY_IMAGE, k8s.proxyImage,
 // and the shipped desktop examples pin it by DIGEST), so a config written by a
 // NEWER control plane routinely meets an OLDER proxy binary. A lenient

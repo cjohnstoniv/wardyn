@@ -68,7 +68,7 @@ func (s *Server) handleScanSource(w http.ResponseWriter, r *http.Request) {
 				"confidence": profile.Confidence, "secret_reqs": len(profile.RequiredSecrets),
 				"suggested_egress": len(profile.SuggestedEgress), "leak_findings": len(profile.LeakFindings),
 				// AI-advisor discriminator, same shape uploadSourceScanResult records
-				// for a repo source (scanresult.go) — W9-S1-6.
+				// for a repo source (scanresult.go).
 				"ai_advisor": aiRan, "ai_changed": aiChanged,
 			})))
 		writeJSON(w, http.StatusOK, profile)
@@ -154,9 +154,8 @@ func seedSourceRequirements(kind types.SourceKind, locator string, p workspacesc
 //
 // Consults the SAME opt-in ADVISORY AI gap-fill the sandboxed repo-scan upload
 // lane does (applyScanAIAdvisor, scanresult.go) — WARDYN_SCAN_AI_ADVISOR
-// previously only ever ran for a repo source, silently never firing for a
-// local_dir one even though the flag's own help text makes no such
-// distinction (W9-S1-6). aiRan/aiChanged mirror uploadSourceScanResult's own
+// also fires for a local_dir source, since the flag's own help text makes no
+// such distinction between source kinds. aiRan/aiChanged mirror uploadSourceScanResult's own
 // audit discriminator for the caller to record.
 func (s *Server) scanLocalDirSource(ctx context.Context, src types.Source) (profile workspacescan.WorkspaceProfile, aiRan, aiChanged bool, detail string, ok bool) {
 	fi, serr := os.Stat(src.Locator)
@@ -185,7 +184,7 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	if url == "" {
 		return types.AgentRun{}, fmt.Errorf("repo %q has no derivable clone URL", src.Locator)
 	}
-	// PROVIDER ADMISSION, at the launcher's own clone-URL derivation. This lane
+	// Provider admission, at the launcher's own clone-URL derivation. This lane
 	// creates a run without passing decodeAndValidateCreateRun or
 	// validateWorkspaceSources, so the request doors above it cannot cover it: a
 	// source onboarded before a provider row narrowed it must not keep cloning
@@ -226,10 +225,10 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	if cerr != nil {
 		return types.AgentRun{}, release(cerr)
 	}
-	// STRONGEST ADVERTISED AT OR ABOVE THE FLOOR (0.7.8), not the bare floor: a
-	// scan used to dispatch AT the floor unconditionally, so a gVisor/Kata host
-	// running under a CC1 floor (the new shipped default) would otherwise scan
-	// every source at the weakest tier despite a stronger one being available.
+	// Strongest advertised at or above the floor, not the bare floor: dispatching
+	// at the bare floor unconditionally would have a gVisor/Kata host running
+	// under a CC1 floor (the new shipped default) scan every source at the
+	// weakest tier despite a stronger one being available.
 	// handleScanSource already refused a nil s.cfg.Runner above this call, so
 	// Capabilities is safe to read here.
 	caps, caperr := s.cfg.Runner.Capabilities(ctx)
@@ -238,11 +237,11 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	}
 	cc := strongestAdvertisedAtOrAbove(caps.ConfinementClasses, ceilingFloorClass(ceiling))
 	srcID := src.ID
-	// THE LIMITS AXIS (F153). This lane creates a run FOR the acting member, so
+	// The limits axis. This lane creates a run FOR the acting member, so
 	// max_concurrent_runs binds it; a scan run is server-authored and
-	// unattachable, so deny_interactive does not. Until newStepRun made the
-	// decision a required argument, this lane read no limit at all and a member
-	// sitting at their cap could keep spawning scans.
+	// unattachable, so deny_interactive does not. newStepRun requires this as an
+	// explicit argument precisely so a scan run cannot go out unbound — a
+	// member sitting at their cap must not be able to keep spawning scans.
 	run, token, err := s.newStepRun(ctx, runID, actor, "source scan", cc, scanRunGovernance(ceiling), func(run *types.AgentRun) {
 		run.SourceID = &srcID
 		run.Repo = src.Locator
@@ -260,7 +259,7 @@ func (s *Server) launchSourceScanRun(ctx context.Context, actor string, src type
 	if gerr != nil {
 		return types.AgentRun{}, release(fmt.Errorf("create scan clone grants: %w", gerr))
 	}
-	// DECISION (Phase 4): a workspace's DeniedEgress deliberately does NOT reach
+	// Decision: a workspace's DeniedEgress deliberately does NOT reach
 	// this policy, unlike confinedEgressDomains/workspace_run.go. src is a
 	// LIBRARY-tier Source (source_scan.go's package doc), not a Workspace, and
 	// it carries no back-reference to one: a Source is attached to zero, one, or

@@ -20,7 +20,7 @@ import (
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
-// ─── omission warnings ─────────────────────────────────────────────────────
+// omission warnings
 
 // governanceOmissionWarnings names what the DEPLOYMENT ceiling carries that
 // this profile does not.
@@ -113,7 +113,7 @@ func missingGrantKinds(have, want []types.GrantSpec) []string {
 	return kinds
 }
 
-// ─── the per-request ceiling memo ────────────────────────────────────────────
+// the per-request ceiling memo
 
 // ceilingMemoKey carries the per-request ceiling memo. A pointer holder rather
 // than the value itself, because context.WithValue cannot be written to after
@@ -138,19 +138,18 @@ type ceilingMemo struct {
 	err   error
 }
 
-// do is the memo's whole contract: resolve AT MOST ONCE, and hand every caller
+// do is the memo's whole contract: resolve at most once, and hand every caller
 // that one answer.
 //
-// SINGLE-FLIGHT, not last-writer-wins, and the difference is the bug. The lock
-// used to be released between the check and the fill, so two concurrent callers
-// both missed, both resolved, and the loser returned ITS OWN pair rather than
-// the memo's — the store was asked twice and the two callers received DIFFERENT
-// profiles. That is precisely the divergence the memo exists to remove: a
-// security admin narrowing a profile mid-request could still land a run whose
-// egress was clamped under one ceiling and whose grants were filtered under
-// another, which is what the memo was introduced to make impossible.
+// Single-flight, not last-writer-wins: releasing the lock between the check
+// and the fill would let two concurrent callers both miss, both resolve, and
+// the loser return ITS OWN pair rather than the memo's — the store asked
+// twice, the two callers handed DIFFERENT profiles. That is precisely the
+// divergence the memo exists to remove: a security admin narrowing a profile
+// mid-request could still land a run whose egress was clamped under one
+// ceiling and whose grants were filtered under another.
 //
-// The lock is HELD ACROSS THE RESOLVE, deliberately. A concurrent caller waits
+// The lock is held across the resolve, deliberately. A concurrent caller waits
 // for the answer instead of starting a second read, which is the point — the
 // alternative (resolve twice, keep the first) still asks the store twice and
 // still lets the two reads straddle a profile edit. The cost is bounded by the
@@ -159,13 +158,13 @@ type ceilingMemo struct {
 // resolveEffectiveCeiling never re-enters this method, so there is no
 // self-deadlock to reason about.
 //
-// A WAITER'S OWN CONTEXT IS NOT CONSULTED while it waits: it gets the answer the
+// A waiter's own context is not consulted while it waits: it gets the answer the
 // first caller's resolve produced, cancelled context or not. That is correct for
 // this memo — the answer is about the PRINCIPAL, not about the waiter's
 // deadline, and handing one caller a "context cancelled" where another got a
 // ceiling would reintroduce the disagreement by another route.
 //
-// THE SCOPE IS ONE REQUEST, which is what makes a lock held across a store read
+// The scope is one request, which is what makes a lock held across a store read
 // safe to reason about at all. The memo lives on the request context
 // (ceilingMemoKey, installed once per authenticated request by the auth
 // middleware), so the longest anything waits here is one in-flight resolve for

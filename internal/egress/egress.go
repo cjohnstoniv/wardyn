@@ -1,10 +1,10 @@
 // Copyright 2025 The Wardyn Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Package egress defines the L2 proxy decision model shared by
+// Package egress defines the proxy decision model shared by
 // cmd/wardyn-proxy and the control plane's policy/approval wiring.
 //
-// INVARIANTS:
+// Invariants:
 //   - Default deny. An empty policy allows nothing.
 //   - DeniedDomains always beats AllowedDomains.
 //   - Private/link-local/metadata IPs are unconditionally denied (DNS
@@ -54,8 +54,8 @@ type DecisionLog struct {
 	// Cause is the masked, topology-redacted sentence naming WHY a builtin
 	// dial-shaped refusal happened and at what STAGE (a TCP dial, the origin's
 	// TLS handshake, the operator's own upstream-proxy CONNECT exchange) —
-	// never just "dial failed", which is the one lie that cost a reported
-	// operator an hour tracing a corp-proxy 502 back to its cause. It runs
+	// never just "dial failed", which hides which stage or hop actually
+	// failed. It runs
 	// through the SAME two passes a sandbox-facing error body already does
 	// (maskDecisionBytes, then Proxy.redactTopology) before it ever reaches
 	// this field: auditScope (internal/api/audit.go) hands a run's OWN CREATOR
@@ -106,10 +106,10 @@ type ScanSummary struct {
 	// THE WIRE (F075).
 	//
 	// Findings above carries at most the cap's worth of rows, so a truncated
-	// scan used to be indistinguishable in the audit from one that happened to
-	// find exactly that many — and when an earlier skip reason (span_oversize,
-	// scan_budget) had already claimed SkipReason, nothing said the result was
-	// truncated at all. FindingsCapped is that flag; FindingsPastCap is the
+	// scan would otherwise be indistinguishable in the audit from one that
+	// happened to find exactly that many — including when an earlier skip
+	// reason (span_oversize, scan_budget) already claims SkipReason, leaving
+	// nothing else to say the result was truncated. FindingsCapped is that flag; FindingsPastCap is the
 	// count of findings examined past the cap (an upper bound on how many were
 	// pushed out, since severity keep-backs are counted too — see
 	// contentscan.Result.FindingsDropped). FindingsTotal is what an auditor
@@ -166,9 +166,9 @@ type InjectionRule struct {
 	// sandbox makes to that host. For the captured-AWS-SSO lane that includes
 	// `POST /logout`, which AWS documents as invalidating the owner's server-side
 	// sign-in session, and a GetRoleCredentials for any other account/role the
-	// session holds. In 0.7.5 the token was resident in the sandbox, so its reach
-	// was the same and nothing could narrow it; proxy-side injection is the first
-	// point at which an admin-asserted identity can become an enforced one.
+	// session holds. Proxy-side injection is the first point at which this
+	// admin-asserted identity can be narrowed to one request shape, rather
+	// than riding every request to the host.
 	//
 	// Both empty = unpinned = today's behaviour, which is every other rule.
 	PinPath  string            `json:"pin_path,omitempty"`
@@ -182,7 +182,7 @@ func (r InjectionRule) Pinned() bool { return r.PinPath != "" }
 // An UNPINNED rule allows every request, which is what every rule but the
 // captured-AWS-SSO one does today.
 //
-// IT TAKES THE RAW QUERY, NOT url.Values, and that is the whole correctness of
+// It takes the raw query, not url.Values, and that is the whole correctness of
 // the query arm (security re-round SHOULD-1). Matching on a parsed
 // url.Values.Get accepted four shapes that carry a SECOND account or role
 // alongside the pinned one, with the credential attached and RawQuery forwarded
@@ -216,7 +216,7 @@ func (r InjectionRule) AllowsInjection(method, path, rawQuery string) bool {
 	if len(r.PinQuery) == 0 {
 		return true
 	}
-	// ';' is refused on the RAW query, before any parse. DEFENCE IN DEPTH, and
+	// ';' is refused on the RAW query, before any parse. Defence in depth, and
 	// labelled as such: on this Go, url.ParseQuery already answers
 	// "invalid semicolon separator in query" and the err arm below refuses it —
 	// verified, not assumed. It is spelled out anyway because that behaviour is
@@ -230,7 +230,7 @@ func (r InjectionRule) AllowsInjection(method, path, rawQuery string) bool {
 	if err != nil {
 		return false
 	}
-	// ONE SPELLING PER KEY. A key whose literal bytes differ from its decoded
+	// One spelling per key. A key whose literal bytes differ from its decoded
 	// form (account%5Fid, account+id, ...) is a second way to write a name this
 	// rule pins, and the origin may read it as the first.
 	//

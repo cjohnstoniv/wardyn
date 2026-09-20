@@ -67,12 +67,11 @@ type Proxy struct {
 	// mitmPorts pairs each mitmHosts entry (same lowercased host key) with the
 	// CONNECT port that entry is scoped to, parsed from an Options.MITMHosts
 	// entry's optional ":port" suffix. 0 means the entry carried no port (the
-	// historical bare-host format every existing caller sends — Bedrock's
-	// runtimeHost, an un-migrated redirect) and stays eligible on ANY port,
-	// unchanged from before this field existed. A positive value (an
+	// bare-host format every existing caller sends — Bedrock's runtimeHost, an
+	// un-migrated redirect) and stays eligible on ANY port. A positive value (an
 	// artifact-redirect entry now authors "host:port") is EXACT: a CONNECT to
-	// the same host on a DIFFERENT port is never MITM'd or token-injected
-	// (W13-S1-5) — handleConnect enforces this alongside isCorpMITMHost so the
+	// the same host on a DIFFERENT port is never MITM'd or token-injected —
+	// handleConnect enforces this alongside isCorpMITMHost so the
 	// allowlist stays as tight as isMITMHost's doc comment claims.
 	mitmPorts map[string]int
 	// mitmPlaintext marks the mitmHosts entries whose ORIGIN serves plain HTTP,
@@ -147,15 +146,14 @@ type Proxy struct {
 	// noProxy is the compiled upstream BYPASS list (site-config
 	// UpstreamProxyNoProxy) — the destinations dialed DIRECTLY instead of
 	// through the corp upstream. Empty == every forward dial chains through the
-	// upstream (byte-identical to before this field existed). Consulted only via
-	// Proxy.bypassUpstream; it is a routing decision and never lifts the SSRF
-	// guard or grants a policy allow. See egress_target.go.
+	// upstream. Consulted only via Proxy.bypassUpstream; it is a routing
+	// decision and never lifts the SSRF guard or grants a policy allow. See
+	// egress_target.go.
 	noProxy []noProxyRule
 
 	// internalHosts are the OPERATOR-DECLARED internal hostnames (site-config
 	// InternalHosts) eligible for vetHost's private-IP-guard lift — see
-	// Proxy.vetHost / liftInternalHost. Empty == no lift (byte-identical to
-	// before this field existed).
+	// Proxy.vetHost / liftInternalHost. Empty == no lift.
 	internalHosts []internalHostRule
 	// localSubnets are this proxy's OWN interface subnets, captured ONCE at
 	// construction (net.InterfaceAddrs, NewServer) — never re-read per request.
@@ -263,8 +261,7 @@ type Options struct {
 	UpstreamNoProxy []string
 	// InternalHosts are the operator-declared internal hostnames (site-config,
 	// CONTROL-PLANE-authored — the sandbox cannot set this) eligible for
-	// vetHost's private-IP-guard lift. Empty == no lift (byte-identical to
-	// before this field existed). See Proxy.internalHosts.
+	// vetHost's private-IP-guard lift. Empty == no lift. See Proxy.internalHosts.
 	InternalHosts []types.InternalHost
 	// LocalSubnets are the proxy's own interface subnets (net.InterfaceAddrs,
 	// captured once by NewServer before constructing Options). See
@@ -525,7 +522,7 @@ func newProxy(opts Options) *Proxy {
 // ServeHTTP routes between CONNECT tunneling, brokered LOCAL routes, and
 // plain-HTTP forwarding.
 //
-// SECURITY: the local brokered routes (/wardyn/...) are reachable ONLY via
+// The local brokered routes (/wardyn/...) are reachable ONLY via
 // origin-form requests addressed to the proxy listener itself — i.e. the
 // request-target is path-only (r.URL.Host == ""). An absolute-URI forward
 // request for http://wardyn-proxy:3128/wardyn/v1/... carries a non-empty
@@ -601,7 +598,7 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	// below can attribute to "approval:<id>" instead of "policy:allowed" — a
 	// released request otherwise logs indistinguishably from a standing policy
 	// allow, with no approval_id, breaking the audit join from decision back to
-	// who approved the egress (W20-hold-fsm-1). Zero == this request never went
+	// who approved the egress. Zero == this request never went
 	// through approval (a direct policy allow).
 	var approvalID uuid.UUID
 
@@ -613,19 +610,20 @@ func (p *Proxy) evaluate(ctx context.Context, host string, port int, method stri
 	// 2. Method restriction (CONNECT counts as method "CONNECT"), applied BEFORE
 	// the first-use approval flow below.
 	//
-	// F032: it used to sit after the raise, so a request whose method can NEVER
-	// pass — allowed_methods=["GET"] and the sandbox sends POST — still POSTed an
+	// F032: the method check runs BEFORE the first-use approval raise because it
+	// depends on nothing the approval produces, so refusing first is free. If it
+	// ran after the raise, a request whose method can NEVER pass —
+	// allowed_methods=["GET"] and the sandbox sends POST — would still POST an
 	// egress_domain ApprovalRequest to the control plane, and under
-	// wait_for_review PARKED the connection in ResolveWait until a human answered
-	// or the hold deadline passed. A human was asked to decide egress for a
-	// request the very next step refuses unconditionally, and since the SANDBOX
-	// picks the method it also picked how many approval rows and hold slots it
-	// could create: N POSTs to N unknown hosts under a GET-only policy fill the
+	// wait_for_review would PARK the connection in ResolveWait until a human
+	// answered or the hold deadline passed: a human asked to decide egress for a
+	// request the very next step refuses unconditionally. Since the SANDBOX picks
+	// the method, it also picks how many approval rows and hold slots it can
+	// create — N POSTs to N unknown hosts under a GET-only policy would fill the
 	// operator's queue and saturate max_holds, stalling the run's legitimate
-	// first-use approvals. The check depends on nothing the approval produces,
-	// so refusing first is free — and it also stops a method-denied request from
-	// SPENDING a scope=once grant (the trade-off approvals.go documents for the
-	// already-granted half of this ordering).
+	// first-use approvals. Running the check first also stops a method-denied
+	// request from SPENDING a scope=once grant (the trade-off approvals.go
+	// documents for the already-granted half of this ordering).
 	//
 	// Order against policy:denied is unchanged: a host the policy denies outright
 	// still logs policy:denied, never policy:method.
@@ -788,7 +786,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// BEFORE the LLM branch so it stays clear of the LLM-specific blind-coverage
 	// bookkeeping; these hosts are not model APIs and are never content-scanned.
 	//
-	// PORT-SCOPED (W13-S1-5): mitmHosts is host-only, so also require the CONNECT
+	// Port-scoped: mitmHosts is host-only, so also require the CONNECT
 	// port to match what was actually configured (mitmPortAllowed; 0 == the
 	// entry carried no port and stays any-port, for backward compat with a bare
 	// legacy entry). Without this a CONNECT to the same hostname on a port the
@@ -882,19 +880,20 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 // tunnel pipes bytes in both directions until EITHER side finishes, then closes
 // both connections — the standard CONNECT-proxy shape.
 //
-// F079 — why the first finisher and not both: this used to wg.Wait() for BOTH
-// io.Copy calls before closing anything. When the sandbox side went away the
-// client->upstream copy returned and half-closed the upstream write side, but
-// the upstream->client copy stayed blocked in Read until the upstream sent or
-// closed. An upstream that never does — an attacker-controlled allowed host, a
-// hung TLS endpoint, a dropped FIN — pinned that goroutine, its 32 KiB copy
+// F079 — why the first finisher closes and not both: waiting (wg.Wait()) for
+// BOTH io.Copy calls before closing anything would let either direction pin
+// the tunnel forever. When the sandbox side goes away the client->upstream
+// copy returns and half-closes the upstream write side, but the
+// upstream->client copy stays blocked in Read until the upstream sends or
+// closes. An upstream that never does — an attacker-controlled allowed host, a
+// hung TLS endpoint, a dropped FIN — would pin that goroutine, its 32 KiB copy
 // buffer, the hijacked client socket and the upstream socket FOREVER: the
 // listener's IdleTimeout (server.go) does not apply to a hijacked connection,
 // and nothing else deadlines or caps an opaque tunnel (the inner MITM server
-// has ReadHeaderTimeout/ReadTimeout/IdleTimeout, mitm.go — this lane had
-// none). A prompt-injected process in the sandbox could open and abandon
-// tunnels in a loop, measured at 2 goroutines + both sockets retained per
-// tunnel, inside a sidecar sized at 256 MiB.
+// has ReadHeaderTimeout/ReadTimeout/IdleTimeout, mitm.go — this lane has
+// none of its own). A prompt-injected process in the sandbox could open and
+// abandon tunnels in a loop, measured at 2 goroutines + both sockets retained
+// per tunnel, inside a sidecar sized at 256 MiB.
 //
 // Closing on the first finisher bounds that to the lifetime of whichever
 // direction ends first, and costs nothing a CONNECT tunnel relies on: the

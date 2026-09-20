@@ -4,7 +4,7 @@
 package api
 
 // membermode_preview.go — "view as a NEW member (not signed in)", the second
-// posture of member mode (v0.7.5, field report finding 3).
+// posture of member mode.
 //
 // It lives in its own file rather than in membermode.go because the whole
 // argument for the one guard it publishes is a screen long, and because
@@ -37,7 +37,7 @@ const (
 // the no-credential preview, in which the caller's own per-user model
 // credential must read as absent.
 //
-// WHY THE READ CHOKEPOINT AND NOT THE SCOPE. awsSSOScopeFor is pure and
+// Why the read chokepoint and not the scope. awsSSOScopeFor is pure and
 // ctx-less, and three call sites hold a site config and call it directly, so a
 // bit on awsSSOScope would ripple a signature change through every one of them
 // and put the preview into a value that is also used at WRITE doors. readAWSSSOBlob
@@ -47,20 +47,20 @@ const (
 // "not signed in" with no rule of their own. Every one of them already fails
 // closed on an absent credential; the preview simply reaches that arm.
 //
-// PER-USER ONLY, and that is the security property, not a scoping detail: the
+// Per-user only, and that is the security property, not a scoping detail: the
 // operator namespace is the credential a `shared` deployment gives EVERY run,
 // so hiding it there would show an admin a state no member on that deployment
 // is ever in, and would do it by suppressing the one credential the whole
 // install runs on. Under `shared` the preview therefore changes nothing — which
 // is correct: a member there has no sign-in of their own to be missing.
 //
-// NOT A WIDENING IN ANY DIRECTION. It can only make a read answer ABSENT, and
+// Not a widening in any direction. It can only make a read answer ABSENT, and
 // absent is the fail-closed answer everywhere it lands. The writers
 // (storeAWSSSOBlob, the run-token upload routes) never consult it, and the one
 // door that could have written inside the preview — the login launch — is
 // refused with memberPreviewSignInRefusal above.
 //
-// IT IS A REQUEST-SCOPED FACT. It rides the context published by
+// It is a request-scoped fact. It rides the context published by
 // oidc.contextWithPrincipal, so it is visible exactly as long as the request's
 // context is: every dispatch this reaches today is handler-synchronous and
 // detaches with context.WithoutCancel, which preserves values. A future
@@ -95,7 +95,7 @@ func previewHidesOwnCredential(ctx context.Context) bool {
 // as an install with no roster, which is a deployment with no per-user estate
 // and therefore correctly unavailable.
 //
-// RESIDUAL, documented rather than coded (docs/OPERATIONS.md): an admin already
+// Residual, documented rather than coded (docs/OPERATIONS.md): an admin already
 // inside the preview when an admin flips the roster per_user -> shared keeps the
 // variant banner until they exit. The cookie is the record of what they asked
 // for, and re-reading the roster on every render to expire a banner would put a

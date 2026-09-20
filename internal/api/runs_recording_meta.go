@@ -11,7 +11,7 @@ import (
 )
 
 // recordingMetaTailBytes bounds how much of a cast's TAIL StatAndTail reads to
-// find the last output event's timestamp (R4-F077). asciicast output events
+// find the last output event's timestamp. asciicast output events
 // are one PTY chunk each — typically well under a kilobyte — so this comfortably
 // holds several trailing events without ever approaching the 64 MiB cap a cast
 // itself is bounded to.
@@ -38,7 +38,7 @@ func wantsRecordingMeta(r *http.Request) bool {
 // projectRecordingMeta fills HasRecording/RecordingBytes/RecordingDurationSec
 // on each run from RecordingStore.StatAndTail, so the Recordings library can be
 // built from a run listing alone instead of downloading every run's cast
-// (F077-followup-server-probe: 39.8 MB measured for 200 runs). Best-effort: a
+// (39.8 MB measured for 200 runs). Best-effort: a
 // store error or ErrNotFound just leaves the run's three fields at zero/false,
 // the same as "no recording" — a metadata miss must never fail the run list.
 // No-op unless wantsRecordingMeta(r) — see its doc for why this is opt-in.

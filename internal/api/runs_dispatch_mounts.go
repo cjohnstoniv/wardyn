@@ -63,7 +63,7 @@ func driveTargetReserved(target string) bool {
 func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member memberMountPosture) []runner.Mount {
 	var mounts []runner.Mount
 	for _, wm := range policy.WorkspaceMounts {
-		// W5-S1-5: the resident ~/.claude subscription mount is a MODEL-RUN-ONLY
+		// The resident ~/.claude subscription mount is a MODEL-RUN-ONLY
 		// credential (THREAT-MODEL.md 5.1a) — a task-mode=exec or non-interactive
 		// scan run makes no model call and must get NO LLM credential, even when
 		// the resolved POLICY still carries the mount (e.g. a subscription-blessed
@@ -73,7 +73,7 @@ func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member memberM
 		if !llm.modelRun && (wm.Target == claudeCredTarget || wm.Target == claudeCredJSONTarget) {
 			continue
 		}
-		// THE RESERVED DRIVE TARGET, RE-CHECKED ON THE STORED POLICY. Every
+		// The reserved drive target, re-checked on the stored policy. Every
 		// AUTHORING seam refuses /home/agent/drive (validatePolicySpec,
 		// validateWorkspaceSource, seedRequestWorkspace, wireWorkspaceSource) —
 		// and none of them ran on a policy row written BEFORE the reservation
@@ -85,7 +85,7 @@ func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member memberM
 		// failure_hint — a sentence about an internal reservation, handed to a
 		// member, for a policy an operator wrote long before the rule.
 		//
-		// DROPPED, not refused, which is buildRepoRecords' choice for the same
+		// Dropped, not refused, which is buildRepoRecords' choice for the same
 		// row on the repo side (runs_scm.go) and the same reasoning: the bind
 		// is UNPERFORMABLE either way — the driver will not do it — so the only
 		// question is whether the run comes up with one fewer mount or does not
@@ -93,7 +93,7 @@ func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member memberM
 		// the target is the member's own drive, so a bind there would either be
 		// shadowed by their drive or land in an empty directory.
 		//
-		// LOUD, for the reason the repo-side collision is loud: the operator has
+		// Loud, for the reason the repo-side collision is loud: the operator has
 		// a policy row to fix and nothing else will tell them. The LOG is the
 		// audience — this seam has no run warnings channel, and the member has
 		// nothing to do about an operator's stored row.
@@ -141,10 +141,9 @@ func buildRunMounts(policy types.RunPolicySpec, llm llmTransport, member memberM
 // proxy.ValidUpstreamProxyURL, not a narrower copy of it; in practice a port
 // outside 1-65535 or a missing host) all return "" (direct egress, today's
 // behavior) plus an audit event; none of them fail the run, crash dispatch, or
-// ship a config that exits the wardyn-proxy sidecar 1 at startup (F028). That
-// last class is the one the sidecar used to answer with os.Exit(1) at container
-// start, taking the run's whole egress path with it instead of degrading to
-// this audited fallback.
+// ship a config that exits the wardyn-proxy sidecar 1 at startup — the sidecar
+// exiting at container start would take the run's whole egress path with it
+// instead of degrading to this audited fallback.
 // Extracted verbatim from dispatchRun.
 func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, siteCfg types.SiteConfig, siteCfgErr error) string {
 	if siteCfgErr != nil {
@@ -157,11 +156,11 @@ func (s *Server) resolveRunUpstreamProxy(ctx context.Context, runID uuid.UUID, s
 	}
 	var getSecret func(context.Context, string) ([]byte, error)
 	if s.cfg.Secrets != nil {
-		// Operator namespace ONLY (0.7): the upstream proxy's own address is
+		// Operator namespace ONLY: the upstream proxy's own address is
 		// never run through VetHost/the private-IP guard — it is expected to be
-		// a private corp-network hop and CONNECTed to directly (F008 only made
-		// the guard bind the NAME of the destination the upstream is asked to
-		// dial, not the upstream's own address) — so a member-substitutable
+		// a private corp-network hop and CONNECTed to directly (the guard binds
+		// only the NAME of the destination the upstream is asked to
+		// dial, never the upstream's own address) — so a member-substitutable
 		// secret here would let a member redirect every run's egress to a
 		// server of their own choosing with no SSRF guard on that hop at all,
 		// not merely widen what a vetted destination allows.
@@ -228,7 +227,7 @@ func buildBaseSandboxEnv(run types.AgentRun, proxyURL string, needs *toolchainNe
 		"http_proxy":  proxyURL,
 		"https_proxy": proxyURL,
 		// Exclude the proxy itself and loopback from proxy traversal. DERIVED
-		// from proxyURL, not the literal "wardyn-proxy" (B11a-F13): that name is
+		// from proxyURL, not the literal "wardyn-proxy": that name is
 		// only the default per-run sidecar alias, and -proxy-url /
 		// WARDYN_PROXY_URL_OVERRIDE moves it. With an override the sandbox's own
 		// HTTP_PROXY named a host that was NOT in its NO_PROXY, so a
@@ -345,7 +344,7 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 	if p.Interactive && p.InteractiveStart == "agent" {
 		sandboxEnv["WARDYN_INTERACTIVE_START"] = "agent"
 	}
-	// Boot seed (Part A1): an interactive run's Task, when non-empty, is no
+	// Boot seed: an interactive run's Task, when non-empty, is no
 	// longer discarded — it fires once at sandbox boot, in the same persistent
 	// session the human's attach later joins (interactiveStart above decides
 	// whether it reads as an initial prompt or a startup command; that
@@ -365,7 +364,7 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 			}
 		}
 	}
-	// Tool-approval posture (Part C1/C2): "hold" routes an AUTONOMOUS run's own
+	// Tool-approval posture: "hold" routes an AUTONOMOUS run's own
 	// tool calls to a Wardyn approval instead of running unsupervised —
 	// consumed by agent-run's autonomous branch (its hold branch runs claude
 	// under --permission-mode manual with wardyn-toolgate as the permission
@@ -398,14 +397,14 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 	// A PAT for a BROKERED forge is withheld for the same reason the ssh_key is —
 	// see dropBrokeredGrants.
 	gitPATGrants, droppedPAT := dropBrokeredGrants(p.GitPATGrants, p.GitGrants, brokeredForgeHost)
-	// THE POINT OF THE PAT BROKER, and the half that is easy to leave out: when
+	// The point of the PAT broker, and the half that is easy to leave out: when
 	// the never-resident lane is on, the grant ids must NOT reach the sandbox.
 	// Leaving them here would let the in-sandbox credential helper mint the PAT
 	// exactly as before, and the credential would be resident despite the broker
 	// — the feature would look like it worked while changing nothing.
 	//
 	// agent-run learns which hosts to route through the broker from
-	// WARDYN_GIT_PAT_BROKER_HOSTS below, which carries HOST NAMES ONLY and no
+	// WARDYN_GIT_PAT_BROKER_HOSTS below, which carries host names only and no
 	// grant id, so it cannot be used to mint anything.
 	if p.PATBroker && len(gitPATGrants) > 0 {
 		hosts := slices.Sorted(maps.Keys(gitPATGrants))
@@ -477,7 +476,7 @@ func applyEphemeralDirsEnv(sandboxEnv map[string]string, dirs []string) {
 // own overwrite guard, setSandboxCATrustVars' onlyIfUnset) still sees the whole
 // environment rather than half of it.
 //
-// MOVE, not copy: a key left in both maps would reach a k8s Pod spec twice —
+// Move, not copy: a key left in both maps would reach a k8s Pod spec twice —
 // once as a secretKeyRef and once INLINE — and the inline copy is exactly the
 // API-readable leak the split exists to close. A named key that is absent (a
 // grant that resolved and was later dropped) is simply skipped; nil is returned
@@ -538,7 +537,7 @@ func applyUserDriveEnv(sandboxEnv map[string]string, drive *types.DriveMount) {
 // data that is still there. Actor SYSTEM — a member ticked a checkbox, and what
 // is recorded is dispatch's own resolution of that flag into an object.
 //
-// TARGET NAMES THE STORAGE, not the run id — the run is already named by the
+// Target names the storage, not the run id — the run is already named by the
 // event's own run id, so spending the target on it a second time made the row's
 // one rendered detail redundant. The console's Audit tab renders a row as time,
 // actor, action and `target`, and nothing at all from `data` (`AuditTab`), so
@@ -546,13 +545,13 @@ func applyUserDriveEnv(sandboxEnv map[string]string, drive *types.DriveMount) {
 //
 // WHICH storage it names depends on WHO can read the row, and that is
 // driveAuditTarget's whole subject: a member reads their own run's rows through
-// GET /audit?run_id=, so a share's absolute host path ANYWHERE ON THIS ROW would
+// GET /audit?run_id=, so a share's absolute host path anywhere on this row would
 // hand them the operator's filesystem layout — the exact thing
 // driveShareIsBindable refuses to put in a refusal and applyUserDriveEnv refuses
 // to put in the sandbox. A share's target is therefore "<drive>/<home>"; a
 // managed object's name is Wardyn's own and stays verbatim.
 //
-// `object` CARRIES THE SAME NAME, and the reason is that "anywhere on this row"
+// `object` carries the same name, and the reason is that "anywhere on this row"
 // is the whole claim: masking the Target while the payload still spelled
 // <host_root>/<home> moved the operator's filesystem layout one field over,
 // inside the same row GET /audit?run_id= hands the run's creator whole. So a

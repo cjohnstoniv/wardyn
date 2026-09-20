@@ -33,7 +33,7 @@ const (
 	// execWaitMaxProbeErrors mirrors docker's waitMaxProbeErrors BUDGET
 	// (~1 minute), not its raw number: docker polls at 200ms so 300 errors
 	// there is ~1 minute; this package polls at 1s, so the same ~1 minute
-	// budget is 60, not 300 (L1 finding — the copied literal carried
+	// budget is 60, not 300 (the copied literal carried
 	// docker's cadence-scaled count, not its time budget). A transient
 	// error is NOT "the agent exited" — it must not surface as one (see
 	// docker's identical comment on waitMaxProbeErrors).
@@ -224,7 +224,7 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 				// add) and the caller had no way to tell "still starting"
 				// from "will never start" -- exactly the shape that made a
 				// k8s connectivity probe hang for its full wait budget
-				// whatever the network did (0.6.6).
+				// whatever the network did.
 				if w := cs.State.Waiting; w != nil && execNeverStartedReasons[w.Reason] {
 					return 0, fmt.Errorf("k8s: exec wait: agent container never started (%s: %s): %w",
 						w.Reason, w.Message, runner.ErrExecNeverStarted)

@@ -46,15 +46,16 @@ func (s *PgxStore) BeginReadCommitted(ctx context.Context) (Tx, error) {
 // mintedCredentialsSQL sources RevokeRun's cascade from what the run ACTUALLY
 // minted, not from what a human approved.
 //
-// The approvals half (`minted_jti`, written by mint()'s single-use burn) was the
-// only source until F096/F122: a grant with requires_approval=false creates NO
-// approvals row at all (MintForGrant routes straight to mint()), and under the B2
-// per-run lease the burn is skipped on re-mints, so every auto-minted credential
-// and every 2nd..Nth leased jti was invisible and got no credential.revoke row —
+// The approvals half (`minted_jti`, written by mint()'s single-use burn) alone is
+// not sufficient: a grant with requires_approval=false creates NO approvals row
+// at all (MintForGrant routes straight to mint()), and under the B2 per-run
+// lease the burn is skipped on re-mints, so every auto-minted credential and
+// every 2nd..Nth leased jti would be invisible and get no credential.revoke row —
 // while THREAT-MODEL.md's kill cascade publishes step 4 as "every minted
-// credential for the run". The audit half closes that: credential.mint SUCCESS is
-// written INSIDE the mint transaction (D29, insertAuditEventTx), so a jti exists
-// in audit_events for exactly the credentials that were actually handed out.
+// credential for the run" (F096/F122). The audit half covers that: credential.mint
+// SUCCESS is written INSIDE the mint transaction (D29, insertAuditEventTx), so a
+// jti exists in audit_events for exactly the credentials that were actually
+// handed out.
 //
 // UNION (not UNION ALL) de-duplicates the approval-gated mint, which appears in
 // both halves. The approvals half is KEPT rather than replaced so runs whose mint

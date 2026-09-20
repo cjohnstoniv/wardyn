@@ -65,11 +65,11 @@ const maxProviderBaseURLPathSegments = 2
 
 // mountWorkspaceProviderRoutes registers the two provider endpoints. They are a
 // mount function rather than two lines in routes() for the reason every other
-// 0.7 family is: routes() is at its funlen ratchet, and the file's own route-tier
+// route family is: routes() is at its funlen ratchet, and the file's own route-tier
 // map lists mounts, not individual routes.
 //
 // operatorOnly for BOTH, for the identical reason the /site-config pair is: a
-// base URL NAMES CORPORATE TOPOLOGY (the org's forge hosts and org paths), so the
+// base URL names corporate topology (the org's forge hosts and org paths), so the
 // GET is the same disclosure the sibling GET was narrowed for. A member never
 // needs it — a member's refusal names the provider KIND only, never the allowed
 // addresses — and the member-safe projection (memberSafeIntegration's shape) is
@@ -96,7 +96,7 @@ func gitProviderRows(sc types.SiteConfig) []types.GitProvider {
 // existed (the absent-row doctrine capEnforced and every GovernanceLimits zero
 // value already follow).
 //
-// It counts rows ENABLED OR DISABLED: a disabled row is still configuration —
+// It counts rows enabled or disabled: a disabled row is still configuration —
 // the admin saying "off" — and falling back to legacy open mode because the only
 // row is switched off would be the opposite of what they wrote down.
 func providersConfigured(sc types.SiteConfig) bool {
@@ -371,8 +371,8 @@ func validateStorageProviders(st *types.StorageProviders) error {
 
 // cloneTarget is a clone URL reduced to the three facts the match rule compares.
 // SSH is its own shape because an SSH clone URL carries no comparable path
-// (git@ssh.dev.azure.com:v3/org/... is not /org/...), so ORG-PATH SCOPING IS
-// HOST-LEVEL ONLY FOR SSH in v1 — a documented ceiling, not an oversight.
+// (git@ssh.dev.azure.com:v3/org/... is not /org/...), so org-path scoping is
+// host-level only for SSH in v1 — a documented ceiling, not an oversight.
 type cloneTarget struct {
 	scheme string
 	host   string
@@ -393,7 +393,7 @@ func parseCloneTarget(cloneURL string) (cloneTarget, bool) {
 	if raw == "" {
 		return cloneTarget{}, false
 	}
-	// THE TRAVERSAL GUARD, before either form is read: a path the server and the
+	// The traversal guard, before either form is read: a path the server and the
 	// sandbox's git read differently is not a target this function can reduce
 	// honestly, so it is UNREADABLE and therefore refused — with the same
 	// operator/member sentences every other unreadable target earns. See
@@ -606,7 +606,7 @@ func providerFor(sc types.SiteConfig, cloneURL string) (types.GitProvider, bool)
 // for https://acme.visualstudio.com would union dev.azure.com while the kind-wide
 // claim refused every dev.azure.com repo.
 //
-// READ-SIDE ONLY. Nothing folds this back into ScmHosts: that list stays legacy,
+// Read-side only. Nothing folds this back into ScmHosts: that list stays legacy,
 // keeps its own validator and audit count, and is never written by this feature —
 // a fold would turn github.com entries into provider rows and flip
 // providersConfigured on the first PUT with no admin action at all.
@@ -652,15 +652,15 @@ func effectiveScmHosts(sc types.SiteConfig) []string {
 // plus every repo in the source library, through the same providerFor the
 // admission sites use.
 //
-// NARROWING IS NEVER SILENT: this number rides the PUT's response body (the
+// Narrowing is never silent: this number rides the PUT's response body (the
 // console shows it in the save toast) and the audit datum, so an admin who
 // tightens a base URL learns what they just cut off. An error here FAILS the
 // write rather than reporting a comforting 0 — a false "nothing was affected" is
 // the one answer this function must never give.
 func (s *Server) sourcesNoLongerAdmitted(ctx context.Context, candidate types.SiteConfig) (int, error) {
-	// DEDUPED BY CLONE URL: one repository attached to a workspace AND sitting in
+	// Deduped by clone URL: one repository attached to a workspace AND sitting in
 	// the source library is ONE repo the admin is about to cut off, and counting
-	// it twice overstates the blast radius of their own narrowing (V1 lens A).
+	// it twice overstates the blast radius of their own narrowing.
 	refused := map[string]bool{}
 	count := func(locator string) {
 		cloneURL := repoCloneURL(locator)
@@ -707,7 +707,7 @@ type workspaceProvidersPutResponse struct {
 // handleGetWorkspaceProviders returns the stored provider block.
 //
 // operatorOnly, for the same reason GET /site-config is (routes.go): base URLs
-// NAME CORPORATE TOPOLOGY. A member-safe projection (the memberSafeIntegration
+// name corporate topology. A member-safe projection (the memberSafeIntegration
 // shape) is the later one-line widening — the safe direction.
 //
 // The response carries an ETag so a caller that means to base a later PUT on
@@ -845,7 +845,7 @@ func storageProvidersConfigured(sc types.SiteConfig) bool {
 		(sc.WorkspaceProviders.Storage.Ephemeral != nil || sc.WorkspaceProviders.Storage.UserDrive != nil)
 }
 
-// ─── the member capability gate ───────────────────────────────────────────────
+// the member capability gate
 
 // capProvider403 is the member's refusal when a git provider row this
 // deployment admits is one they hold no capability grant for.

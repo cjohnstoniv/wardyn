@@ -123,7 +123,7 @@ func topologyPatterns(controlPlaneURL string, up *upstreamProxy) []*regexp.Regex
 	return out
 }
 
-// THE DIAL-FAILED SHAPE: a request policy ALLOWED, where the network then
+// The dial-failed shape: a request policy ALLOWED, where the network then
 // lost it. Every emitting site needs the SAME two things httpError already
 // gives the sandbox body — the secret mask and the topology redaction — in
 // the DECISION LOG too (egress.DecisionLog.Cause), because auditScope hands a
@@ -158,8 +158,8 @@ func (p *Proxy) viaHop(host string) string {
 
 // dialStage names WHICH LEG of a dial-shaped failure produced err, so Cause
 // says what actually failed instead of a blanket "dial failed" — an x509
-// handshake failure read as a network dial failure is the specific lie that
-// cost the reported operator an hour.
+// handshake failure read as a network dial failure hides which layer
+// actually failed.
 //
 // A heuristic over the error TEXT, not a type switch: dialThroughUpstream's
 // own stages (resolve/dial/CONNECT-handshake, upstream.go) and crypto/tls's
@@ -188,7 +188,7 @@ func dialStage(err error) string {
 
 // causeSentence builds the STAGE-PREFIXED, masked, topology-redacted sentence
 // naming why a genuinely DIAL-shaped refusal happened — what
-// egress.DecisionLog.Cause carries, and (0.7.8) the same text an AWS-lane
+// egress.DecisionLog.Cause carries, and the same text an AWS-lane
 // sandbox error body's "message" carries on the ONE site that shares both
 // (forwardInspectedLLM's RoundTrip failure — see httpErrorAWSAware), so the
 // audited cause and what the agent's own SDK is told are the same words.
