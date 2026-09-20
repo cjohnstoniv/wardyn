@@ -8,6 +8,22 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Two concurrent sign-ins can no longer leave two live credential-bearing sandboxes.** A sign-in
+  supersedes the caller's older ones across several independent statements — the first supersede
+  pass, the run insert, the second pass — and because `created_at` is stamped in-process BEFORE the
+  insert, two launches that interleave there could each decide the other did not precede it: both
+  sandboxes stayed live, neither KILLED, each able to capture a ~1yr AWS SSO session, and the
+  credential capture's own read-modify-write arrives minutes later in a different request. Both
+  spans now hold a per-person Postgres **session-level** advisory lock keyed on the login run's
+  CREATOR (`store.LoginLocker`, `db.AdvisoryLockKeyed`) — not on the credential scope, which is
+  empty for every `shared` sign-in and would serialize a whole deployment while serializing nothing
+  that matters. The capture takes it before the existing per-scope mutex, in that fixed order. It
+  **fails open** on every arm — a store without the seam, a wait past `db.LoginSupersedeLockWait`
+  (5s), a pool with no spare connection — proceeding exactly as 0.7.8 did with one warning line and
+  no new refusal.
+
 ### Changed
 
 - **Doc citations name a SYMBOL, never a line number.** `docs/AUDIT-ACTIONS.md`'s 215 emit-site

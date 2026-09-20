@@ -52,6 +52,56 @@ const (
 	supersedeCASAttempts = 3
 )
 
+// lockLoginSupersede serializes ONE person's sign-in launches — and the
+// credential capture that belongs to one — across replicas, and returns the
+// release the caller MUST defer.
+//
+// Why a lock at all, when supersedeOlderLoginRuns argues a deterministic total
+// order needs none: the order is correct and still leaves the interleaving that
+// function names. created_at is stamped in-process by newStepRun BEFORE the
+// insert, so a launch that stalls between the two inserts its row with an
+// EARLIER timestamp than a sibling that started later; the sibling's second
+// pass saw nothing, and the stalled launch's pass sees a sibling that does not
+// precede it. Both survive, neither is KILLED, and the capture PUT's belt does
+// not apply to that pair — two live sandboxes, each able to capture a ~1yr AWS
+// SSO session. Holding a lock across both passes and the insert is what removes
+// the interleaving, because the second launch cannot stamp until the first has
+// inserted.
+//
+// SESSION-scoped, not transaction-scoped, because the span is not one
+// transaction: two supersede passes around CreateRun here, and on the capture
+// path a read-modify-write in a different request minutes later.
+//
+// KEYED BY ACTOR, the login run's creator. Not by the credential scope: under
+// the `shared` roster — every deployment that has not turned on per_user —
+// scope.owner is EMPTY for every sign-in, so a scope-keyed lock would serialize
+// the whole deployment and still not serialize one person's two launches any
+// better.
+//
+// FAILS OPEN, on every arm: a store without the seam, a wait that expires, a
+// pool with no spare connection. Each proceeds exactly as 0.7.8 did, with one
+// warning line and no new refusal — a person locked out of signing in because a
+// lock was busy is worse off than the two-sandbox residue this closes, and the
+// capture PUT's KILLED guard is still the belt underneath.
+func (s *Server) lockLoginSupersede(ctx context.Context, actor string) (release func()) {
+	noop := func() {}
+	if s.cfg.Store == nil || actor == "" {
+		return noop
+	}
+	locker, ok := s.cfg.Store.(store.LoginLocker)
+	if !ok {
+		slog.WarnContext(ctx, "wardynd: this store cannot serialize concurrent sign-ins; proceeding unlocked")
+		return noop
+	}
+	unlock, err := locker.LockLoginSupersede(ctx, actor)
+	if err != nil {
+		slog.WarnContext(ctx, "wardynd: could not serialize this person's concurrent sign-ins; proceeding unlocked",
+			slog.Any("error", err))
+		return noop
+	}
+	return unlock
+}
+
 // supersedeCallerLoginRuns kills actor's other non-terminal login runs on this
 // agent. Called by launchHarnessLoginRun BEFORE newStepRun, which is where the
 // concurrency quota is counted (stepRunCeilingLimits -> CountActiveRunsBy): the
