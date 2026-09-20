@@ -202,10 +202,10 @@ describe("RunCanvas — saving", () => {
   });
 });
 
-// F1-F5: when a run finishes DURING canvas editing, `situational` flips —
-// the unguarded effect used to setPreset(situational) on every flip, and
-// `dirty=false` + commit() replaced the in-progress arrangement on screen
-// (the server kept the edit; only the screen jumped).
+// When a run finishes DURING canvas editing, `situational` flips — the
+// effect must stay guarded rather than setPreset(situational) on every flip,
+// or `dirty=false` + commit() would replace the in-progress arrangement on
+// screen (the server keeps the edit; only the screen would jump).
 describe("RunCanvas — F1-F5 a situational flip mid-edit does not clobber the in-progress arrangement", () => {
   it("freezes the preset while editing, and re-syncs the moment editing ends", async () => {
     const user = userEvent.setup();
@@ -224,8 +224,7 @@ describe("RunCanvas — F1-F5 a situational flip mid-edit does not clobber the i
     expect(getLayout).not.toHaveBeenCalledWith("finished");
     expect(screen.getByRole("heading", { name: "Egress" })).toBeInTheDocument();
 
-    // Neg (canvas.test.tsx:180): exiting edit re-syncs to the run's actual
-    // situation — this must still hold.
+    // Exiting edit still re-syncs to the run's actual situation.
     await user.click(screen.getByRole("button", { name: RUN_COCKPIT.doneEditing }));
     await waitFor(() => expect(getLayout).toHaveBeenCalledWith("finished"));
     await waitFor(() =>
@@ -281,12 +280,10 @@ describe("RunCanvas — the terminal cannot be arranged away", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// T2b/M3 — terminal-first. Every one of these already HELD when they were
+// M3 — terminal-first. Every one of these already HELD when they were
 // written; they exist because nothing pinned them, so a preset edit could have
 // quietly demoted the session to a tile among tiles and no test would have
 // noticed. "Dominant" is the load-bearing word: at the top is not enough.
-// ---------------------------------------------------------------------------
 describe("the live preset is terminal-first", () => {
   const area = (w: { w: number; h: number }) => w.w * w.h;
 
@@ -336,14 +333,14 @@ describe("the live preset is terminal-first", () => {
   });
 });
 
-// R4-F003: the ssh tile's availability predicate claimed to "mirror
-// ConnectSSHCard's own gate" and did not — the card is owner OR ADMIN
-// (run-detail-ssh.tsx:50, docs/design/ui-sandboxes-prompt.md's 0.6 amendment,
-// and run-detail-ssh.test.tsx's passing admin case), while the registry asked
-// owner only. `available` is what canvas.tsx and focus-mode.tsx filter on, so
-// an admin's cockpit dropped the tile on every run they did not start — even
-// when their SAVED layout named it. This suite's default ctx is a non-owner
-// non-admin, which is exactly why it never saw this.
+// The ssh tile's availability predicate must mirror ConnectSSHCard's own
+// gate — the card is owner OR ADMIN (run-detail-ssh.tsx:50,
+// docs/design/ui-sandboxes-prompt.md's 0.6 amendment, and
+// run-detail-ssh.test.tsx's passing admin case), not owner only. `available`
+// is what canvas.tsx and focus-mode.tsx filter on, so an admin's cockpit must
+// not drop the tile on a run they did not start — even when their SAVED
+// layout named it. This suite's default ctx is a non-owner non-admin, which
+// is exactly why a regression here needs its own coverage.
 describe("RunCanvas — the SSH tile follows the card's own owner-OR-admin gate", () => {
   const adminCtx = () =>
     ctx({
@@ -392,11 +389,12 @@ describe("RunCanvas — the SSH tile follows the card's own owner-OR-admin gate"
   });
 });
 
-// R4-F005: the layout GET committed its answer unconditionally, so on a slow
-// control plane a drag/remove/add made WHILE it was in flight was silently
-// undone on screen — while the debounced PUT (which closes over the human's
-// layout) still wrote that edit to the server. Screen and server then disagreed
-// until the next page load, with no message either way.
+// A late layout GET must never undo an arrangement already made: on a slow
+// control plane a drag/remove/add made WHILE the GET is in flight must
+// survive on screen — the debounced PUT (which closes over the human's
+// layout) still writes that edit to the server, so screen and server must
+// agree rather than disagree until the next page load, with no message
+// either way.
 describe("RunCanvas — a late layout GET never undoes an arrangement already made", () => {
   it("keeps the removed tile removed when the slow GET finally answers", async () => {
     const user = userEvent.setup();
@@ -423,12 +421,12 @@ describe("RunCanvas — a late layout GET never undoes an arrangement already ma
 });
 
 
-// R4-F020: the catalog enumerated the WHOLE table while the grid drew only
-// what `available` admitted, so on any run where the ssh gate is false (every
-// finished run, and every run you did not start) "Attach from your terminal"
-// was still offered — one click ticked it, ran addWidget and PUT the phantom
-// placement, and no tile ever appeared. focus-mode.tsx's dock already filtered
-// on the same predicate; the catalog was the one consumer that did not.
+// The catalog must offer only what `available` admits, matching what the
+// grid actually draws — offering "Attach from your terminal" on a run where
+// the ssh gate is false (every finished run, and every run you did not
+// start) would let one click tick it, run addWidget and PUT a phantom
+// placement, with no tile ever appearing. focus-mode.tsx's dock already
+// filters on the same predicate; the catalog must too.
 describe("RunCanvas — the catalog offers only what can actually render", () => {
   const finishedOwnerCtx = () =>
     ctx({
@@ -469,14 +467,15 @@ describe("RunCanvas — the catalog offers only what can actually render", () =>
 });
 
 
-// R4-F126: put() reports THREE outcomes and saveDefault speaks three different
-// sentences from them — and only the 501 arm was tested, so collapsing "failed"
-// back into "unsupported" (reverting the fix that split them) left every
-// run-detail test green. The two sentences are opposites: layoutNotPersisted is
-// a permanent fact about the deployment that also silences every future write
-// (persistRef), layoutSaveFailed is about THIS attempt and the next one is
-// expected to work. A 500 or a network blip taking the permanent arm told an
-// operator their server cannot store layouts, and stopped writing.
+// put() reports THREE outcomes and saveDefault must speak three different
+// sentences from them, never collapsing "failed" back into "unsupported" —
+// both arms need their own coverage, or a regression there would slip past
+// every other run-detail test. The two sentences are opposites:
+// layoutNotPersisted is a permanent fact about the deployment that also
+// silences every future write (persistRef), layoutSaveFailed is about THIS
+// attempt and the next one is expected to work. A 500 or a network blip must
+// never take the permanent arm — that would wrongly tell an operator their
+// server cannot store layouts, and stop writing for good.
 describe("RunCanvas — a save that merely FAILED is not a deployment that cannot persist", () => {
   beforeEach(() => {
     toasted.success.mockReset();
@@ -519,14 +518,14 @@ describe("RunCanvas — a save that merely FAILED is not a deployment that canno
   });
 });
 
-// R4-F142: the tile's FILL rule was written for a widget that renders ONE root
-// card (`[&>section]:flex-1`) and the terminal widget renders a FRAGMENT — the
-// M7(b) failure block, then the pane, then the approvals strip. So the rule
-// caught the failure block, a `shrink-0` <section> written to size to its
-// content, and gave it `flex: 1 1 0%`: measured in Chromium at 271px of a 518px
-// tile, half the replay pane gone on every KILLED/FAILED run, and a 271px
-// bordered card holding only an "Open audit trail" button when the ending is
-// one this build does not recognise.
+// The tile's FILL rule targets a widget that renders ONE root card
+// (`[&>section]:flex-1`); the terminal widget renders a FRAGMENT instead —
+// the M7(b) failure block, then the pane, then the approvals strip — so the
+// rule must not also catch the failure block, a `shrink-0` <section> written
+// to size to its content. Letting it through gives the failure block
+// `flex: 1 1 0%`, shrinking the replay pane by roughly half on every
+// KILLED/FAILED run, down to a bordered card holding only an "Open audit
+// trail" button when the ending is one this build does not recognise.
 //
 // jsdom computes no layout, so this asserts the SELECTOR rather than the pixels:
 // take every `[&>SEL]:util` arbitrary variant off the elements that carry it

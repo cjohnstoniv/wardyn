@@ -90,7 +90,7 @@ describe("DemoDetail — the single demo renderer", () => {
     toastErrorMock.mockReset();
   });
 
-  // H4: `demo-card-<id>` existed only on the dead /demos page's DemoCard. It is
+  // `demo-card-<id>` existed only on the dead /demos page's DemoCard. It is
   // what keeps "the episode changes URL only" true — the selector has to survive
   // the move onto the funnel step (funnel.ts documents this exact trap).
   it("carries the demo-card-<id> wrapper testid the /demos cards used to own", async () => {
@@ -156,7 +156,7 @@ describe("DemoDetail — the single demo renderer", () => {
     expect(panel).not.toHaveTextContent("egress decisions");
   });
 
-  // W3-S1-5: a kill that LOSES the server's "state changed concurrently" race
+  // A kill that LOSES the server's "state changed concurrently" race
   // does not tear the sandbox down — the run is still live server-side. End
   // demo must not treat that 409 like a clean stop: it must surface the
   // failure and keep tracking the run (UI + localStorage), or the operator is
@@ -203,7 +203,7 @@ describe("DemoDetail — the single demo renderer", () => {
     expect(await screen.findByTestId("demo-terminated")).toBeInTheDocument();
   });
 
-  // H-2: the "Turn this into a policy" payoff was wired ONLY in the deleted
+  // The "Turn this into a policy" payoff was wired ONLY in the deleted
   // DemoScreen (profileRunId state + ProfileReview mount + the onTurnIntoPolicy
   // prop DemoRunControls needs to render the button at all), while
   // record-a-policy's own steps still tell the operator to click it. It moved
@@ -237,8 +237,8 @@ describe("DemoDetail — the single demo renderer", () => {
     expect(screen.queryAllByText(/\{grant_id\}/)).toHaveLength(0);
   });
 
-  // ── the TEACH+GATE lane (needsGitHubApp) ───────────────────────────────────
-  // Deliberately NOT the needsSecret/needsModel shape: those demos are dropped
+  // The teach-and-gate lane (needsGitHubApp): deliberately NOT the
+  // needsSecret/needsModel shape — those demos are dropped
   // from the walk entirely, which is fine for a card that is meaningless
   // without its prerequisite. This one's whole job is to teach a lane nothing
   // local can fake, so it keeps its place and closes its Start instead.
@@ -273,10 +273,9 @@ describe("DemoDetail — the single demo renderer", () => {
     expect(within(gate).getByRole("link", { name: /settings/i })).toHaveAttribute("href", "/settings");
   });
 
-  // ── a REFUSED run-create ───────────────────────────────────────────────────
-  // sts-fail-closed's lesson IS the 422: the mint is unreachable, so the run
-  // never starts. A toast would scroll away mid-take; the card is where the
-  // operator (and the e2e) is already looking.
+  // A refused run-create: sts-fail-closed's lesson IS the 422 — the mint is
+  // unreachable, so the run never starts. A toast would scroll away mid-take;
+  // the card is where the operator (and the e2e) is already looking.
   it("a 422 at create renders on the card, not in a toast — and still earns the demo its checkmark", async () => {
     const onDemoLaunched = vi.fn();
     createRunMock.mockRejectedValueOnce(

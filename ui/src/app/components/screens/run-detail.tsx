@@ -104,7 +104,7 @@ export function RunDetailScreen() {
   const [egress, setEgress] = React.useState<EgressDecision[]>([]);
   const [approvals, setApprovals] = React.useState<ApprovalRequest[]>([]);
   const [audit, setAudit] = React.useState<AuditEvent[]>([]);
-  // W21-S1-5: the run's session.recording events, indexed SEPARATELY from the
+  // The run's session.recording events, indexed SEPARATELY from the
   // general audit trail — that trail is fetched oldest-first with a hard
   // 1000-row cap (LIST_LIMIT), so a chatty run's earlier session.recording
   // events can crowd out later ones (or vice versa: an early one falls off)
@@ -132,7 +132,7 @@ export function RunDetailScreen() {
   // Which cast to replay: the run's own (stored under the bare run id) or one
   // interactive attach session (the composite `<run-id>~<session-uuid>` key).
   const [recKey, setRecKey] = React.useState(id);
-  // W21-S1-7, now the shared hook: the same /healthz read the Recordings
+  // Now the shared hook: the same /healthz read the Recordings
   // library and the New Run rail make. See use-recording-disabled.ts.
   const recordingDisabled = useRecordingDisabled() === true;
 
@@ -153,17 +153,17 @@ export function RunDetailScreen() {
       // outstanding set of requests instead of a new set every 4s (R4-F074).
       // Egress is derived from the same audit events we already fetch here — call
       // egressFromAudit(a) instead of api.getEgress (which would re-fetch /audit).
-      // allSettled, NOT all (R4-F141). The PAGE is the run; the other four are
-      // panes on it. Under Promise.all a single subsidiary rejection replaced
-      // the whole cockpit — run state, live terminal, approvals strip and the
-      // KILL button for a RUNNING run — with ErrorState's "we couldn't reach
-      // the Wardyn control plane", an outage claim that was false: GET
-      // /runs/{id} had just returned 200. And the rejection is routine, not
+      // allSettled, NOT all. The PAGE is the run; the other four are panes on
+      // it — a single subsidiary rejection under Promise.all would replace the
+      // whole cockpit (run state, live terminal, approvals strip and the KILL
+      // button for a RUNNING run) with ErrorState's "we couldn't reach the
+      // Wardyn control plane", an outage claim that is false when GET
+      // /runs/{id} just returned 200. The rejection is routine, not
       // hypothetical: handleListApprovals answers 500 "approval listing is not
       // scoped for members on this backend" on a backend without
       // ApprovalsByRunCreatorPager (internal/api/approvals.go), and a degraded
-      // audit store fails listAudit. Each pane now keeps its last-good value
-      // and the page stays operable.
+      // audit store fails listAudit. Each pane keeps its last-good value and
+      // the page stays operable.
       return Promise.allSettled([
         runsApi.getRun(id),
         runsApi.getGrants(id),
@@ -199,9 +199,9 @@ export function RunDetailScreen() {
           if (recA.status === "fulfilled") setRecordingAudit(recA.value);
           // R-5: run.complete/run.kill/run.autostop cannot exist for a run
           // that ISN'T terminal — fetching them every DETAIL_POLL_MS tick on
-          // a live run was 3 wasted round-trips per tick, forever. Gated on
-          // THIS tick's own fresh state (not a stale last-known ref), so the
-          // exact tick a run turns terminal is the one that catches it.
+          // a live run would be 3 wasted round-trips per tick, forever. Gated
+          // on THIS tick's own fresh state (not a stale last-known ref), so
+          // the exact tick a run turns terminal is the one that catches it.
           if (r.value && isTerminalRunState(r.value.state)) {
             Promise.all([
               auditApi.listAudit(id, "run.complete"),
@@ -223,11 +223,11 @@ export function RunDetailScreen() {
   React.useEffect(() => {
     setRun(undefined);
     setStatus("loading");
-    // fix: reset recording state on run-id change too, or the Recording
-    // tab kept showing the PREVIOUS run's cast (labelled as this run) until
-    // something else happened to touch recState — the lazy-load effect below
+    // Reset recording state on run-id change too: without it, the Recording
+    // tab would keep showing the PREVIOUS run's cast (labelled as this run)
+    // until something else touched recState — the lazy-load effect below
     // only fetches when recState === "idle", so a stale "ready"/"error" from
-    // the last run id blocked the refetch entirely.
+    // the last run id would block the refetch entirely.
     setRecording(null);
     setRecState("idle");
     setRecKey(id);
@@ -245,9 +245,9 @@ export function RunDetailScreen() {
   // be keyed on the Recording tab alone. Still lazy — a LIVE run on Overview
   // fetches nothing, which is the common case.
   const wantsRecording = tab === "recording" || (tab === "overview" && terminal && !!run);
-  // F1-F2: no ordering guard meant a slow fetch for an earlier-selected cast
-  // (recKey A) could resolve AFTER a later selection (recKey B) and overwrite
-  // it, or setState after unmount. NOT a plain `let alive` + cleanup (the
+  // F1-F2: without an ordering guard, a slow fetch for an earlier-selected
+  // cast (recKey A) could resolve AFTER a later selection (recKey B) and
+  // overwrite it, or setState after unmount. NOT a plain `let alive` + cleanup (the
   // sibling pattern in run-context-row.tsx/run-detail-ssh.tsx): this effect's
   // own setRecState("loading") is itself a dependency-array member, so a
   // cleanup tied to every re-run would invalidate the very request it just
@@ -269,10 +269,10 @@ export function RunDetailScreen() {
         if (recRequest.current === thisRequest) setRecState("error");
       });
   }, [wantsRecording, id, recKey, recState]);
-  // R-6: F1-F2's other half (setState after unmount) was still open — the
-  // counter only advanced on a NEW fetch starting, never on teardown. -1
-  // never matches a real (>=1) generation, so any in-flight fetch's callback
-  // is permanently a no-op once this component is gone.
+  // F1-F2's other half: setState after unmount. The counter must also
+  // advance on teardown, not only when a new fetch starts — -1 never
+  // matches a real (>=1) generation, so any in-flight fetch's callback is
+  // permanently a no-op once this component is gone.
   React.useEffect(() => () => { recRequest.current = -1; }, []);
 
   const copyLink = () => {
@@ -337,13 +337,12 @@ export function RunDetailScreen() {
   // derivations below keep the last/first matching row regardless.
   const endingEvents = [...audit, ...endingAudit];
 
-  // THE PAGE DOES NOT SCROLL. `h-full min-h-0 flex flex-col` fills app-shell's
-  // <main> exactly — main is flex-1 inside a h-screen column, so its height is
-  // definite and this resolves against it; overflow-y-auto up there then never
-  // fires. Measured in a browser before this was written (1280x720: main
-  // scrollHeight === clientHeight, terminal body clipping 6000px into 464px).
-  // That is why app-shell.tsx needed no change: every OTHER screen still
-  // scrolls exactly as it did.
+  // The page does not scroll. `h-full min-h-0 flex flex-col` fills
+  // app-shell's <main> exactly — main is flex-1 inside a h-screen column, so
+  // its height is definite and this resolves against it; overflow-y-auto up
+  // there then never fires (measured at 1280x720: main scrollHeight ===
+  // clientHeight, terminal body clipping 6000px into 464px). app-shell.tsx
+  // needs no change for this — every OTHER screen still scrolls.
   //
   // The non-Overview tabs DO scroll, individually — Audit renders up to 1000
   // rows and has to go somewhere.
@@ -478,8 +477,8 @@ export function RunDetailScreen() {
       <ReasonDialog
         prompt={decide}
         // Always is greyed out when THIS run resolves to no onboarded
-        // workspace (Phase 1e's read-only denormalization) — see
-        // reason-dialog.tsx's own doc for why the default is false.
+        // workspace (a read-only denormalization) — see reason-dialog.tsx's
+        // own doc for why the default is false.
         // runHasWorkspace also covers workspace_id, not just workspace_ids:
         // a record/verify step run carries the former only.
         hasWorkspace={!!run && runHasWorkspace(run)}
@@ -490,21 +489,15 @@ export function RunDetailScreen() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Cockpit — the Overview tab. THE TERMINAL IS THE PAGE.
+// Cockpit — the Overview tab. The terminal is the page: the Audit tab owns
+// the event trail, so this component gives the terminal the full pane
+// rather than sharing it with a timeline.
 //
-// What this replaced: a two-column document that spent its hero on a Run
-// timeline (audit.slice(-12)) and put the live terminal below it at h-[70vh],
-// so on a 1080p display the prompt line sat ~1,800px down. The timeline is
-// GONE — the Audit tab owns the trail — and the terminal now fills the pane.
-//
-// Layout: phase 2 replaced the fixed terminal-1fr + 400px-rail grid with a
-// CONFIGURABLE canvas (design board 2b) — see run-detail/canvas.tsx. This
-// component's whole job now is to assemble the WidgetContext every widget
+// Layout: a CONFIGURABLE canvas (design board 2b) — see run-detail/canvas.tsx.
+// This component's whole job is to assemble the WidgetContext every widget
 // reads from, including the terminal hero itself: the canvas PLACES the
 // terminal, it does not build it, because building it needs the attach /
 // recording / approvals graph that lives here.
-// ---------------------------------------------------------------------------
 function Cockpit({
   run,
   terminal,
@@ -573,10 +566,9 @@ function Cockpit({
           replay is not the news — why it ended is. Inside the terminal widget
           rather than beside it so the canvas keeps placing exactly one hero,
           and nothing on this page moves for a run that ended fine (the block
-          renders null unless the audit trail says otherwise). 0.7.3 F7 moved
-          the clone door off this block onto the run header (a strict
-          superset of the states this block explains), so it takes no onClone
-          any more. */}
+          renders null unless the audit trail says otherwise). The clone door
+          lives on the run header instead (0.7.3 F7), a strict superset of
+          the states this block explains, so this block takes no onClone. */}
       <LoginSandboxNote run={run} />
       <RunFailureBlock run={run} audit={audit} onGoAudit={onGoAudit} />
       <TerminalPane
@@ -590,13 +582,11 @@ function Cockpit({
       />
       {run.state === "RUNNING" && (
         <div className="shrink-0 space-y-2 pt-2.5">
-          {/* Said once, where a viewer actually feels the consequence. This
-              used to be half of the Overview's pending-approval banner; the
-              banner is gone (the command bar states the count and the strip
-              below is the decision surface), but its VIEWER half carries
-              information nothing else on the page does — that the run is
-              stopped and they personally cannot unstick it. Same
-              canDecideApproval kind-question the banner asked: the page is
+          {/* Said once, where a viewer actually feels the consequence: the
+              run is stopped and they personally cannot unstick it — the
+              command bar states the pending count and the strip below is the
+              decision surface, so this is the VIEWER-only half of that
+              story. Same canDecideApproval kind-question: the page is
               already owner-scoped, so a member here owns every approval
               shown; egress_domain is theirs to decide, credential and
               tool_call stay admin-only regardless. */}
@@ -633,18 +623,16 @@ function Cockpit({
 }
 
 // Every human attach session is recorded and masked, but under a COMPOSITE cast
-// key the console never asked for — so they were write-only. There is no
-// list-casts endpoint (and no Store.List to add one on): the index is a
-// session.recording-FILTERED audit fetch (W21-S1-5) — not the general trail,
-// whose own 1000-row cap a chatty run can blow through — where the event's
-// TARGET is that very key.
+// key the console never asked for — so it is write-only without an index.
+// There is no list-casts endpoint (and no Store.List to add one on): the
+// index is a session.recording-FILTERED audit fetch — not the
+// general trail, whose own 1000-row cap a chatty run can blow through —
+// where the event's TARGET is that very key.
 function attachSessions(audit: AuditEvent[]): AuditEvent[] {
   return audit.filter((e) => e.action === "session.recording" && e.outcome === "success" && e.target);
 }
 
-// ---------------------------------------------------------------------------
 // Approvals tab (this run's approvals)
-// ---------------------------------------------------------------------------
 function ApprovalsTab({
   approvals,
   onDecide,
@@ -694,10 +682,10 @@ function ApprovalsTab({
             {a.decided_by && (
               <div className="mt-2 text-xs text-muted-foreground">
                 Decided by <span className="text-foreground">{a.decided_by}</span>
-                {/* Scope badge (Phase 0 §6) — the console's DecidedRow shows
-                    the same fact; without it here the cockpit would show a
-                    decided egress row and the console would show it grew a
-                    scope, for the SAME approval. */}
+                {/* Scope badge — the console's DecidedRow shows the same
+                    fact; without it here the cockpit would show a decided
+                    egress row and the console would show it grew a scope,
+                    for the SAME approval. */}
                 {scopeBadge && <> · {scopeBadge}</>}
                 {a.reason && <> · {a.reason}</>}
               </div>
@@ -735,9 +723,7 @@ function ApprovalsTab({
   );
 }
 
-// ---------------------------------------------------------------------------
 // Audit tab (this run's events)
-// ---------------------------------------------------------------------------
 function AuditTab({
   events,
   runId,
@@ -754,8 +740,8 @@ function AuditTab({
         Append-only · {events.length} event{events.length === 1 ? "" : "s"} for this run
         {/* W25-W25.2-3: carry the run. A bare /audit is permanently EMPTY for a
             member — the server scopes non-admins to ?run_id= of a run they own
-            (internal/api/audit.go handleQueryAudit) — so the unqualified link
-            dropped them on a feed that can never fill. */}
+            (internal/api/audit.go handleQueryAudit) — so an unqualified link
+            would drop them on a feed that can never fill. */}
         <Link
           to={`/audit?run_id=${runId}`}
           className="ml-1 inline-flex items-center gap-1 text-primary hover:underline"
@@ -768,7 +754,7 @@ function AuditTab({
           <Sparkles className="size-3.5" /> Make a policy from this run
         </Button>
       </div>
-      {/* W17-S1-3: the per-run fetch (auditApi.listAudit) is capped at
+      {/* The per-run fetch (auditApi.listAudit) is capped at
           LIST_LIMIT/auditPerRunDefaultLimit and returned OLDEST-first — a
           chatty run's late events silently fall off the end with no cue. */}
       <TruncatedNote count={events.length} cap={LIST_LIMIT}>
@@ -796,7 +782,7 @@ function AuditTab({
                 </span>
                 {/* A tool call the policy's own tool_rules answered rides an
                     egress.allow/deny row whose target is the CONTROL PLANE —
-                    so the row says who decided (M5), as the Audit screen does. */}
+                    so the row says who decided, as the Audit screen does. */}
                 {toolRuleDecision(e) ? (
                   <AuditDecision event={e} className="flex min-w-0 flex-1 items-center gap-2 text-xs" />
                 ) : (
@@ -816,9 +802,7 @@ function AuditTab({
   );
 }
 
-// ---------------------------------------------------------------------------
 // Recording tab
-// ---------------------------------------------------------------------------
 function RecordingTab({
   state,
   recording,
@@ -831,7 +815,7 @@ function RecordingTab({
 }: {
   state: "idle" | "loading" | "error" | "ready";
   recording: Recording | null;
-  /** W21-S1-7: this deployment's recording store never came up — a missing
+  /** This deployment's recording store never came up — a missing
    *  cast means "it can't", not "it hasn't yet". */
   recordingDisabled: boolean;
   runId: string;

@@ -181,7 +181,7 @@ export interface UserDrivePreview {
   // NOT one of §7's frozen strings: those are the member's doors, and this is an
   // admin's typo. Rendered verbatim, under its own heading, when it is present.
   //
-  // NOT RENDERED YET, and that is the point of typing it. Both keys have been on
+  // Not rendered yet, and that is the point of typing it. Both keys have been on
   // the wire since the endpoint shipped and the console silently dropped them;
   // the type is where the gap becomes visible to the mock round that owns where
   // they belong on the "Who gets what" panel. A surface arrives through a mock

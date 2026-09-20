@@ -11,7 +11,7 @@ export const harnessAuth = {
   // POST /api/v1/setup/harness-login — launch an interactive login sandbox for a
   // provider (default "anthropic"); returns the run id.
   //
-  // THE RUN IS NOT UP YET when this resolves. The server answers as soon as the
+  // The run is not up yet when this resolves. The server answers as soon as the
   // run row exists and the launch is stamped, then finishes the launch
   // detached (internal/api/harnesscred_launch.go) — because the cold pull it
   // used to block through outran this client's own deadline. The caller polls

@@ -33,7 +33,7 @@ import type {
   RunState,
 } from "../../lib/types";
 
-/* ---------- generic semantic chip ---------- */
+/* Generic semantic chip. */
 type Tone = "neutral" | "success" | "warning" | "danger" | "info" | "cyan" | "primary";
 
 // Text-only tint for the same tone ladder — used where a state is a WORD in a
@@ -107,7 +107,7 @@ export function Chip({
   );
 }
 
-/* ---------- generic "done" chip ---------- */
+/* Generic "done" chip. */
 // A SectionCard header's completion signal (member Getting Started, 6c's "Your
 // model key") — one shared glyph+label so every section's done state reads
 // identically instead of five near-identical inline chips.
@@ -119,7 +119,7 @@ export function DoneChip() {
   );
 }
 
-/* ---------- operator-only disabled reason ---------- */
+/* Operator-only disabled reason. */
 // Trailing note for a disabled operator-only control (a DropdownMenuItem, most
 // often) — VISIBLE text baked into the control's own content, not a
 // hover-only title, so the reason is there whether or not the control can
@@ -132,7 +132,7 @@ export function OperatorOnlyHint() {
   );
 }
 
-/* ---------- section eyebrow label ---------- */
+/* Section eyebrow label. */
 export function SectionLabel({
   children,
   className,
@@ -143,7 +143,7 @@ export function SectionLabel({
   return <div className={cn("label-eyebrow", className)}>{children}</div>;
 }
 
-/* ---------- fail-soft enum lookup ----------
+/* Fail-soft enum lookup.
  * Wire enums (run state, confinement class, actor type, outcome, approval
  * kind/state) are owned by the backend. If the backend adds or renames a value
  * the UI does not know about, an unguarded `meta[value]` returns undefined and
@@ -157,7 +157,7 @@ function metaFor<T>(table: Record<string, T>, key: string, fallback: NoInfer<T>)
   return (key != null && table[key]) || fallback;
 }
 
-/* ---------- run state ----------
+/* Run state.
  * ONE run badge for the board, the table, and the detail header, so the same
  * state always reads the same way. Live states keep the dot + pulse chip;
  * terminal outcomes are differentiated by an ICON (C4) instead, and `solid`
@@ -216,7 +216,7 @@ export function RunStateBadge({
   );
 }
 
-/* ---------- confinement class ----------
+/* Confinement class.
  * Tone/Icon are presentational and live here; the hint text is the honest,
  * substrate-only wording shared with New Run's Barrier control and the
  * Getting-started/Settings barrier matrix via cc-meta.ts — see that module
@@ -275,7 +275,7 @@ export function confinementTierMeta(value: ConfinementClass): { ordinal: 1 | 2 |
   return { ordinal: m.ordinal, fillClass: m.fillClass };
 }
 
-/* ---------- actor type (audit hero) ---------- */
+/* Actor type (audit hero). */
 const actorMeta: Record<ActorType, { tone: Tone; Icon: React.ElementType; label: string }> = {
   human: { tone: "info", Icon: User, label: "human" },
   agent: { tone: "primary", Icon: Bot, label: "agent" },
@@ -291,7 +291,7 @@ export function ActorTypeChip({ type }: { type: ActorType }) {
   );
 }
 
-/* ---------- outcome ---------- */
+/* Outcome. */
 const outcomeMeta: Record<Outcome, { Icon: React.ElementType; label: string; color: string }> = {
   success: { Icon: CircleCheck, label: "success", color: "text-success" },
   denied: { Icon: CircleAlert, label: "denied", color: "text-warning" },
@@ -307,7 +307,7 @@ export function OutcomeBadge({ outcome }: { outcome: Outcome }) {
   );
 }
 
-/* ---------- approval kind / state ---------- */
+/* Approval kind / state. */
 // ui-approvals-2: the label reads APPROVAL_KIND_LABEL (via copy.ts's
 // WIRE_TO_COPY, the SAME wire->copy map approvals.tsx's own kindLabel()
 // uses for the adjacent title/banner) instead of a second, wire-shaped
@@ -350,7 +350,7 @@ export function ApprovalStateBadge({ state }: { state: ApprovalState }) {
   );
 }
 
-/* ---------- composer risk level ---------- */
+/* Composer risk level. */
 // Wardyn's DETERMINISTIC risk grade for a config choice (low/medium/high). The
 // tone escalates with risk so high-risk items are visually unmistakable. Fail-
 // soft: an unrecognized level degrades to a neutral chip showing the raw value.
@@ -370,13 +370,13 @@ export function RiskBadge({ level }: { level: RiskLevel }) {
   );
 }
 
-/* ---------- egress decision ---------- */
+/* Egress decision. */
 export function EgressDecisionChip({ decision }: { decision: "allow" | "deny" | "pending" }) {
   const tone: Tone = decision === "allow" ? "success" : decision === "deny" ? "danger" : "warning";
   return <Chip tone={tone} dot mono>{decision}</Chip>;
 }
 
-/* ---------- agent monogram avatar ---------- */
+/* Agent monogram avatar. */
 // Circular colored initials (CC / CX / CU) — one consistent agent representation
 // used on run cards, tables, and detail/recording headers alike.
 type AgentMeta = { label: string; initials: string; badge: string };
@@ -416,7 +416,7 @@ export function AgentBadge({ agent, withLabel = true }: { agent: Agent; withLabe
   );
 }
 
-/* ---------- section card shell ---------- */
+/* Section card shell. */
 // Shared by run-detail.tsx (Identity/Egress/Grants/etc.) and
 // run-detail-ssh.tsx's ConnectSSHCard — lives here, not in either screen
 // file, so the two don't import from each other (that WAS a cycle: nothing
@@ -451,7 +451,7 @@ export function SectionCard({
   );
 }
 
-/* ---------- widget card shell (run cockpit) ---------- */
+/* Widget card shell (run cockpit). */
 // The run-detail cockpit's widget shell. Deliberately a SIBLING of SectionCard
 // rather than more props on it: SectionCard is a padded, self-sizing document
 // card (run-detail-ssh.tsx's ConnectSSHCard uses it, and so does every screen

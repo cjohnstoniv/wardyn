@@ -99,12 +99,12 @@ describe("anyCapabilityEnforced", () => {
   });
 });
 
-// ─── the shared matcher table ────────────────────────────────────────────────
+// The shared matcher table
 // One list of (kind, grantValue, want, expected) rows per matcher, so the next
-// change to internal/api/capabilities.go has a row to add on BOTH sides rather
+// change to internal/api/capabilities.go has a row to add on both sides rather
 // than a silent divergence. capValueMatches / capValueOverlaps are the Go twins
 // (internal/api/capabilities.go); the Go-side consumer of this same table is
-// filed as a follow-up (F014).
+// a filed follow-up.
 export const CAP_MATCH_CASES: Array<[string, string, string, boolean]> = [
   ["egress_host", "*", "anything.example", true],
   ["secret", "*", "STRIPE_LIVE_KEY", true],

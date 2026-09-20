@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// "View as member" (0.7.4, field-report P2) — the console half: the account-menu
-// way in, and the persistent banner that is the way out.
+// "View as member" — the console half: the account-menu way in, and the
+// persistent banner that is the way out.
 //
 // Both live here rather than in app-shell.tsx because the shell is at the
 // file-size gate, and because they are ONE control: a mode you can enter and
@@ -29,25 +29,25 @@ export const MEMBER_MODE = {
   // The banner. Present tense and "paused", because the role is coming back the
   // moment they exit — it was not taken away.
   //
-  // "your usual role", never "your admin role" (W6-5): the control is offered
-  // to BOTH admin tiers (see `eligible` below, and OPERATIONS.md's "Both admin
+  // "your usual role", never "your admin role": the control is offered to
+  // BOTH admin tiers (see `eligible` below, and OPERATIONS.md's "Both admin
   // tiers get the control"), so the banner naming one of them tells a
   // security_admin about a role they do not hold — on the one surface that is
   // unconditional and on every screen. This is the same reason EXIT names the
   // mode rather than a tier to go back to, two lines down.
   BANNER: "Viewing as member — your usual role is paused for this session",
-  // The SECOND posture (0.7.5, field report finding 3). A separate menu item
-  // rather than a toggle inside the mode: the two are different questions — "what
-  // does a member see" and "what does a member who has not signed in see" — and
-  // the second is the one a per_user deployment actually cannot show otherwise.
+  // A separate menu item rather than a toggle inside the mode: the two are
+  // different questions — "what does a member see" and "what does a member
+  // who has not signed in see" — and the second is the one a per_user
+  // deployment actually cannot show otherwise.
   MENU_NEW: "View as a new member (not signed in)",
   // Names the AWS state first, because that is the whole difference and it is
-  // what the admin came to look at; the paused role rides second, as in BANNER.
-  // U-11: "signing in is refused until you exit" was in the variant TOOLTIP
-  // only, and a tooltip is a hover — no keyboard, no touch. It is the one limit
-  // an admin can act on from inside the preview (Getting Started offers two
-  // sign-in buttons here, and the launch 409s deterministically,
-  // harnesscred_launch.go), so it rides the visible sentence.
+  // what the admin came to look at; the paused role rides second, as in
+  // BANNER. "Signing in is refused until you exit" must ride the visible
+  // sentence, not only a title tooltip (a tooltip is a hover — no keyboard,
+  // no touch): it is the one limit an admin can act on from inside the
+  // preview (Getting Started offers two sign-in buttons here, and the launch
+  // 409s deterministically, harnesscred_launch.go).
   BANNER_NEW:
     "Viewing as a new member — not signed in to AWS; signing in is refused until you exit; your usual role is paused for this session",
   EXIT: "Exit member mode",
@@ -56,23 +56,22 @@ export const MEMBER_MODE = {
   // mistake this mode invites is reading it as proof that a member is refused:
   // it shows you what a member SEES. A real second identity is the proof.
   CEILINGS:
-    // "and secrets" (U-12): OPERATIONS.md's ceiling 1 names all three, and the
-    // code scopes them identically — secretOwnerFromRequest hands a clamped
-    // admin their OWN namespace, exactly as run and workspace ownership survive
-    // the clamp. Dropping the third made the tooltip narrower than the ceiling.
+    // OPERATIONS.md's ceiling 1 names all three (runs, workspaces, secrets),
+    // and the code scopes them identically — secretOwnerFromRequest hands a
+    // clamped admin their OWN namespace, exactly as run and workspace
+    // ownership survive the clamp. Dropping the third would make the tooltip
+    // narrower than the ceiling.
     "Member mode clamps your ROLE only. Runs, workspaces and secrets you created stay yours, " +
     "and governance ceilings still resolve against your real group membership. " +
     "Credentials you already hold — your SSH key, any API token — keep their admin stamp until refreshed at your next sign-in. " +
-    // Ceiling 4 (0.7.5): the one the field report found by being misled by it.
-    // It is in the PLAIN tooltip and not only in OPERATIONS.md because the
-    // mistake it prevents is made while the banner is on screen.
+    // This ceiling belongs in the PLAIN tooltip and not only in OPERATIONS.md
+    // because the mistake it prevents is made while the banner is on screen.
     //
-    // U-6: and it STOPS there. It used to point at 'View as a new member', an
-    // item that is not rendered at all on a shared/legacy deployment or against
-    // a 0.7.4 daemon (memberPreviewAvailable false), and that disappears from
-    // the menu while ANY member mode is on — which is precisely when this
-    // tooltip is on screen. Naming a control the reader cannot find is worse
-    // than naming none: the ceiling itself is the true half.
+    // It must not point at a control the reader cannot find: 'View as a new
+    // member' is not rendered at all on a shared/legacy deployment, and it
+    // disappears from the menu while ANY member mode is on — precisely when
+    // this tooltip is on screen. Naming an unreachable control is worse than
+    // naming none, so the ceiling itself carries the whole sentence.
     "Model access and ownership still resolve to you. " +
     "During a rolling upgrade an older replica ignores the flag and answers as admin. " +
     "It shows you what a member sees — sign in as a real member to prove what a member is refused.",
@@ -132,7 +131,7 @@ export function MemberModeMenuItem({
    *  cookie changed and every screen's cached data was fetched as an admin. */
   onEntered?: () => void;
 }) {
-  // One `failed` per item, keyed by the posture that failed: against a 0.7.4
+  // One `failed` per item, keyed by the posture that failed: against an older
   // replica mid-upgrade the plain item still works and the new one 400s, and a
   // shared flag would paint that failure onto the item that did not fail.
   const [failed, setFailed] = React.useState<"" | "plain" | "new">("");

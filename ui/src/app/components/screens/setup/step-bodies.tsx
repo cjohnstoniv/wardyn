@@ -3,19 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Step bodies surviving today: CheckRow (shared), ReviewStep,
-// useSiteConfigStep and WorkspacesStep. HostProxyStep/
-// ArtifactRepoStep used to live here too, kept alive only by the Integrations
-// "Add integration" dialog's mirror/proxy hand-off; that hand-off retired
-// when Corporate network became the single home for both, and the two
-// bodies went with it (part of the 13->9 Getting Started collapse).
-// SourcesStep/ImagesStep (the tier-1/2 library steps) went the same way when
-// sources-library.tsx/image-catalog.tsx were deleted — "Your work" is just
-// `workspaces` again. Mostly presentational — the caller owns SetupStatus AND
-// the fetched SiteConfig (the sole owner — see useSiteConfigStep below), while
-// each body owns its OWN writes (the SiteConfig saves via the caller-owned
-// saveSiteConfig; WorkspacesStep's own write is the one-shot POST inside
-// AddWorkspaceDialog).
+// Step bodies in this file: CheckRow (shared), ReviewStep,
+// useSiteConfigStep and WorkspacesStep. Mostly presentational — the caller owns
+// SetupStatus and the fetched SiteConfig (the sole owner — see
+// useSiteConfigStep below), while each body owns its own writes (the
+// SiteConfig saves via the caller-owned saveSiteConfig; WorkspacesStep's own
+// write is the one-shot POST inside AddWorkspaceDialog).
 import * as React from "react";
 import { Link } from "react-router-dom";
 import { AlertTriangle, Info, Loader2, Plus, CircleCheck, RotateCw } from "lucide-react";
@@ -36,9 +29,7 @@ import { AccessPanel, type AccessLoadState } from "./access-panel";
 import { UserDrivesCard } from "./user-drives-card";
 import type { AccessResponse } from "../../../lib/types";
 
-// ------------------------------------------------------------
 // Shared check-row primitives (Review + the Corporate network step).
-// ------------------------------------------------------------
 const CHECK_ICON: Record<SetupCheckStatus, React.ElementType> = {
   ok: CircleCheck,
   warn: AlertTriangle,
@@ -73,16 +64,14 @@ export function CheckRow({ check }: { check: SetupCheck }) {
   );
 }
 
-// ------------------------------------------------------------
 // Review step — the consolidated readiness rollup (its own step, before Launch).
 // Every cross-cutting check grouped by status (blockers → warnings → ready), plus
-// the permanent "About this host" facts. These used to be dumped onto the barrier
-// step even though they span steps 2–7; here they're a single honest go/no-go view.
-// ------------------------------------------------------------
+// the permanent "About this host" facts, spanning steps 2–7 as a single honest
+// go/no-go view.
 
-// DRAFT (M2 canon pending) — F3-F2: distinct from "Worth a look" (warnings):
-// nothing here is wrong, there's just a fix available for something that was
-// never required.
+// DRAFT (M2 canon pending) — distinct from "Worth a look" (warnings): nothing
+// here is wrong, there's just a fix available for something that was never
+// required.
 const REVIEW_GROUP_OPTIONAL = "Optional — not blocking";
 
 export function ReviewStep({
@@ -105,9 +94,9 @@ export function ReviewStep({
   const infoNotes = status.checks.filter((c) => c.platform);
   const blockers = actionable.filter((c) => c.status === "fail");
   const warnings = actionable.filter((c) => c.status === "warn");
-  // F3-F2: an `info` check WITH a fix (e.g. the image builder, off by default,
-  // with a one-line env var to turn it on) is optional, not done — lumping it
-  // under green "Ready" claimed nothing was left to do when there was. Only an
+  // An `info` check with a fix (e.g. the image builder, off by default, with a
+  // one-line env var to turn it on) is optional, not done — lumping it under
+  // green "Ready" would claim nothing was left to do when there was. Only an
   // `info` check with no fix (a permanent fact about this host) belongs there.
   const optionalNotBlocking = actionable.filter((c) => c.status === "info" && c.fix);
   const ready = actionable.filter((c) => c.status === "ok" || (c.status === "info" && !c.fix));
@@ -159,7 +148,7 @@ export function ReviewStep({
       {infoNotes.length > 0 && (
         <section className="space-y-2">
           <SectionLabel>About this host</SectionLabel>
-          {/* F3-F2: a platform note that ALSO carries a fix is not "nothing to
+          {/* A platform note that also carries a fix is not "nothing to
               set up" — CheckRow renders its Fix line regardless of this
               sentence, so the sentence must not contradict it. */}
           {!infoNotes.some((c) => c.fix) && (
@@ -191,20 +180,18 @@ export function ReviewStep({
   );
 }
 
-// ------------------------------------------------------------
-// SiteConfig writes: ONE owner (V2). The orchestrator (setup-screen) holds the
+// SiteConfig writes: one owner (V2). The orchestrator (setup-screen) holds the
 // fetched doc and hands each writing surface `siteConfig` + `reloadSiteConfig`/
-// `saveSiteConfig`. HARD CONSTRAINT: every such surface re-GETs
-// (reloadSiteConfig()) in a mount effect, on entry, before any save — the PUT is
-// a shallow merge on top of the CURRENT doc, so a copy that's gone stale since
-// another step's edit would otherwise silently clobber it.
+// `saveSiteConfig`. Every such surface must re-GET (reloadSiteConfig()) in a
+// mount effect, on entry, before any save — the PUT is a shallow merge on top
+// of the current doc, so a copy that's gone stale since another step's edit
+// would otherwise silently clobber it.
 //
 // This hook is that prologue plus a `saving` flag around each write, written
 // once so the guard can't drift between copies. `mutate` PUTs via the
 // orchestrator-owned saveSiteConfig and reports failure as `false` — toasting
 // the server's reason — so a caller only commits its own local field state once
 // the PUT actually lands. Sole remaining consumer: corp-network-step.tsx.
-// ------------------------------------------------------------
 export function useSiteConfigStep(
   reloadSiteConfig: () => Promise<void>,
   saveSiteConfig: (next: SiteConfig) => Promise<void>,
@@ -232,15 +219,11 @@ export function useSiteConfigStep(
   return { saving, mutate };
 }
 
-// ------------------------------------------------------------
-// Workspaces step — "Your work"'s one remaining step (sources/images tiers
-// retired with sources-library.tsx/image-catalog.tsx). Onboarding a workspace
-// is recommended, not required: a run's ephemeral path still launches with
-// none. A simple list of what's onboarded already, plus the SAME one-shot
-// AddWorkspaceDialog /workspaces uses (workspaces.tsx) — no wizard, no
-// resume/edit flow: "onboarding is a convenience, not a gate"
-// (add-workspace-dialog.tsx).
-// ------------------------------------------------------------
+// Workspaces step — "Your work". Onboarding a workspace is recommended, not
+// required: a run's ephemeral path still launches with none. A simple list of
+// what's onboarded already, plus the same one-shot AddWorkspaceDialog
+// /workspaces uses (workspaces.tsx) — no wizard, no resume/edit flow:
+// "onboarding is a convenience, not a gate" (add-workspace-dialog.tsx).
 export function WorkspacesStep({
   workspaces,
   loading,
@@ -297,7 +280,7 @@ export function WorkspacesStep({
 
       {/* Persistent storage is not a workspace and gets no step of its own
           (nothing later in the funnel fails without one) — it gets this card,
-          under the list, SUPER-only. Same component as Settings' fifth card. */}
+          under the list, super-only. Same component as Settings' fifth card. */}
       <UserDrivesCard />
 
       {addOpen && (
@@ -311,13 +294,11 @@ export function WorkspacesStep({
   );
 }
 
-// ------------------------------------------------------------
 // People step — "Who can sign in". A pure explainer, done on arrival
 // (steps.ts's stepDone.people): single-user (one admin credential, no
 // per-person identity) vs multi-user (SSO, role-mapped admins/members). Zero
 // teal here — the footer's Next is the surface's one affirmative action, so
 // every button in this body is `outline`.
-// ------------------------------------------------------------
 export function DeploymentStep({
   status,
   access,
@@ -404,10 +385,6 @@ export function DeploymentStep({
   );
 }
 
-// LaunchStep lived here: the funnel's 10th step, an "Example — not live config"
-// card showing a made-up task ("Add a health check endpoint and a unit test for
-// it") with Launch/Open Runs buttons. It was cut because the example was a
-// fiction — it named work against a repo the operator may never have onboarded,
-// so it could not say which workspace it applied to — and because its lede still
-// advertised the deleted AI Run Composer. Review is the last step now, and the
-// top bar's New run button is the one real launch point.
+// Review is the last step; the top bar's New run button is the one real
+// launch point. A step showing an example task against an unspecified
+// workspace would be fiction, not guidance.

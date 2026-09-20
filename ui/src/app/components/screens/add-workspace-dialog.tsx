@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The ONE "Add workspace" dialog — replaces the retired 7-step
+// The one "Add workspace" dialog — replaces the retired 7-step
 // workspace-wizard/ directory (Sources -> Base image -> Integrations -> Build
 // -> Requirements -> Verify -> Done). A workspace is usable the instant it's
 // created (internal/api/runs_create.go: "onboarding is a convenience, not a
@@ -39,9 +39,9 @@ import type { Workspace, WorkspaceSourceInput } from "../../lib/types";
 const DEFAULT_TARGET = "/home/agent/work";
 
 type SourceKind = "repo" | "local_dir" | "ephemeral";
-// F5-F6: "devcontainer" and "standard" used to be two separate picks that
-// stored byte-identical state ({kind:"recommended"} either way, since this
-// dialog never scans) — collapsed into one honest "auto" choice that stores
+// F5-F6: "devcontainer" and "standard" would store byte-identical state
+// ({kind:"recommended"} either way, since this dialog never scans) as two
+// separate picks, so they collapse into one honest "auto" choice that stores
 // nothing at all and lets the server/scan decide. Pinned stays the one real
 // choice this dialog can actually promise.
 type ImageChoice = "auto" | "pinned";
@@ -200,10 +200,11 @@ export function AddWorkspaceDialog({
         ...(base_image ? { base_image } : {}),
       });
       onClose();
-      // The server's advisory sentences, verbatim — today the legacy-scm_hosts
-      // grace (F1: this door admitted the host and said nothing). There is no
-      // persistent advisory slot in this dialog and it closes on success, so the
-      // warning toast is where it can still be read. One per host.
+      // The server's advisory sentences, verbatim — surfacing them matters for
+      // the legacy-scm_hosts grace path (F1), which otherwise admits the host
+      // and says nothing. There is no persistent advisory slot in this dialog
+      // and it closes on success, so the warning toast is where it can still
+      // be read. One per host.
       for (const warning of created.warnings ?? []) toast.warning(warning);
       onCreated(created);
     } catch (e) {
@@ -219,9 +220,9 @@ export function AddWorkspaceDialog({
         <DialogHeader>
           <DialogTitle>Add workspace</DialogTitle>
           <DialogDescription>
-            {/* F5-F2: "You can change everything later." was false — a
-                workspace is create-only in this console (no Edit path;
-                updateWorkspace has zero production callers). */}
+            {/* F5-F2: this copy must not claim "you can change everything
+                later" — a workspace is create-only in this console (no Edit
+                path; updateWorkspace has zero production callers). */}
             A workspace is a repo or directory a run can attach.
           </DialogDescription>
         </DialogHeader>
@@ -298,10 +299,10 @@ export function AddWorkspaceDialog({
             </p>
           )}
 
-          {/* F5-F5: Branch's value was only ever read on the repo submit arm
-              — offered for every kind, it silently dropped what was typed
-              for local_dir/ephemeral. Repo-only, and the row wraps to one
-              column (Name full-width) when it's gone. */}
+          {/* F5-F5: Branch's value is only ever read on the repo submit arm,
+              so offering it for every kind would silently drop what was
+              typed for local_dir/ephemeral. Repo-only, and the row wraps to
+              one column (Name full-width) when it's gone. */}
           <div className={cn("grid gap-3", kind === "repo" ? "grid-cols-2" : "grid-cols-1")}>
             <Field label="Name" htmlFor="aw-name">
               <Input

@@ -22,7 +22,7 @@ import { YOUR_MODEL_KEY as T } from "../../wardyn/copy";
 import { AGENTS, modelAccessChipBare } from "../../../lib/workspace-providers-copy";
 import type { SetupHarnessTool } from "../../../lib/types";
 
-// U-13 (a11y): the two "Sign in to AWS" buttons now carry DISTINCT accessible
+// U-13 (a11y): the two "Sign in to AWS" buttons carry distinct accessible
 // names (the visible text plus the section they are in), so a lookup by the
 // visible name is a prefix match — the same query, still by what the button
 // says, and the exact aria-labels are pinned in their own case below.
@@ -31,7 +31,7 @@ const SIGN_IN_AWS_NAME = new RegExp(`^${AGENTS.SIGN_IN_AWS}`);
 
 // Appendix A finding 2 — a per_user roster row (the wire shape a real
 // bedrock_sso lane sends: modelKeyProvider's harnesses.find picks the first
-// enabled row in the SERVER's catalog order, and this test's id matches the
+// enabled row in the server's catalog order, and this test's id matches the
 // default claude-code key).
 const perUserHarness: SetupHarnessTool[] = [
   {
@@ -100,7 +100,7 @@ describe("YourModelKey", () => {
     expect(screen.getByPlaceholderText("sk-ant-…")).toBeInTheDocument();
   });
 
-  // Appendix A finding 2 — five per-principal states through the CARD. Each
+  // Appendix A finding 2 — five per-principal states through the card. Each
   // is a per_user roster row except shared_expired, which only exists in the
   // shared/none bucket (a per_user row's own "other" state renders as
   // `unknown`, not shared_expired — an admin's shared credential is not the
@@ -137,7 +137,7 @@ describe("YourModelKey", () => {
         />,
       );
       expect(screen.getByText(T.EXPIRING_CHIP)).toBeInTheDocument();
-      // L2 (REVIEW-1.md) — the expiring body, not just the chip.
+      // The expiring body, not just the chip.
       expect(screen.getByText(T.SIGNED_IN_BODY)).toBeInTheDocument();
       await user.click(screen.getByRole("button", { name: SIGN_IN_AWS_NAME }));
       expect(onSignInAws).toHaveBeenCalledTimes(1);
@@ -162,7 +162,7 @@ describe("YourModelKey", () => {
       expect(screen.queryByPlaceholderText("sk-ant-…")).not.toBeInTheDocument();
     });
 
-    // U-10 (W6 blind lens) — SUPERSEDES "same as not_configured": an expired
+    // U-10 — supersedes "same as not_configured": an expired
     // session is not "nothing is configured for you". The chip is the chip row's
     // own label for the state (bare inside this card), and the body says what
     // actually happened — which is also what the server's action line on the
@@ -202,7 +202,7 @@ describe("YourModelKey", () => {
       expect(screen.queryByText(T.EXPIRED_SIGNIN_BODY)).not.toBeInTheDocument();
     });
 
-    // U-15: the chip is the same label as the chip row's, WITHOUT the
+    // U-15: the chip is the same label as the chip row's, without the
     // "Model access · " qualifier — this card's own heading is the subject.
     it("shared_expired (shared/none): the bare shared-expired chip, NOT done, no button, reveal shown", () => {
       render(
@@ -221,10 +221,10 @@ describe("YourModelKey", () => {
       expect(screen.getByRole("button", { name: T.USE_OWN_KEY })).toBeInTheDocument();
     });
 
-    // FIX PASS 1 (REVIEW-1.md M2) — not_applicable is emitted ONLY for the
-    // admin-token principal on an ENABLED per_user row (awsSSOScopeIsMechanism,
-    // internal/api/modelaccess.go): real traffic, not a skew artifact. Ruling
-    // R2(a): result stays `unknown`, but the body is now PER_PERSON_NA_BODY,
+    // FIX PASS 1 — not_applicable is emitted only for the
+    // admin-token principal on an enabled per_user row (awsSSOScopeIsMechanism,
+    // internal/api/modelaccess.go): real traffic, not a skew artifact. The
+    // result stays `unknown`, but the body is now PER_PERSON_NA_BODY,
     // never a bare title.
     it("not_applicable under per_user -> PER_PERSON_NA_BODY, no chip, no button, no form, reveal hidden", () => {
       render(
@@ -246,8 +246,8 @@ describe("YourModelKey", () => {
       expect(screen.queryByPlaceholderText("sk-ant-…")).not.toBeInTheDocument();
     });
 
-    // U-14 (W6 blind lens): PER_PERSON_NA_BODY is the `not_applicable` ANSWER,
-    // and it was ALSO the fallthrough for any absent or unrecognised state under
+    // PER_PERSON_NA_BODY is the `not_applicable` answer,
+    // and it is also the fallthrough for any absent or unrecognised state under
     // a per_user row — telling a member whose state could not be read that there
     // was nothing to set up, beside a lede saying model access uses their own AWS
     // sign-in. Unknown claims nothing.
@@ -272,8 +272,8 @@ describe("YourModelKey", () => {
     );
   });
 
-  // U-13 (a11y) — two buttons on the page said "Sign in to AWS" with the same
-  // accessible name, and the card's opens a pane in a DIFFERENT card above it.
+  // U-13 (a11y) — two buttons on the page say "Sign in to AWS" with the same
+  // visible name, and the card's opens a pane in a different card above it.
   describe("the card's own Sign in to AWS button (U-13)", () => {
     const signInProps = {
       llmReady: true,
@@ -297,9 +297,9 @@ describe("YourModelKey", () => {
     });
   });
 
-  // FIX PASS 1 (REVIEW-1.md rulings R1/R2(b)) — a SHARED row (no per_user
+  // FIX PASS 1 — a shared row (no per_user
   // credential_source) whose declared mechanism is Bedrock: mechanismSatisfied
-  // refuses a member's own API key on ANY Bedrock roster row regardless of
+  // refuses a member's own API key on any Bedrock roster row regardless of
   // credential_source, so this band behaves like per_user for hasOwn/reveal
   // purposes even though `status.model_access` here is the deployment-wide
   // answer (the caller is not graded per-principal on a shared row).
@@ -323,7 +323,7 @@ describe("YourModelKey", () => {
       expect(screen.getByText(T.SHARED_EXPIRED_BODY)).toBeInTheDocument();
       expect(screen.queryByText("Done")).not.toBeInTheDocument();
       expect(screen.queryByText("••••••••••••")).not.toBeInTheDocument();
-      // Reveal is HIDDEN here (unlike the plain shared_expired case above) —
+      // Reveal is hidden here (unlike the plain shared_expired case above) —
       // a member's own key is useless under Bedrock regardless of credential_source.
       expect(screen.queryByRole("button", { name: T.USE_OWN_KEY })).not.toBeInTheDocument();
     });
@@ -368,7 +368,7 @@ describe("YourModelKey", () => {
   // Appendix A finding 2, plan item 5 — a member who somehow still holds
   // `mine` for the shared secret name (a stale write from before the roster
   // switched them to per_user) must not see "Your key" over a lane that can
-  // never read it: hasOwn is IGNORED under per_user.
+  // never read it: hasOwn is ignored under per_user.
   it("hasOwn under a per_user row is ignored: still 'Not signed in', NOT done, reveal absent", () => {
     render(
       <YourModelKey
@@ -453,13 +453,13 @@ describe("YourModelKey", () => {
       <YourModelKey llmReady={true} mine={["anthropic-api-key"]} known={false} variant="default" onChanged={() => {}} />,
     );
     expect(screen.queryByText("Done")).not.toBeInTheDocument();
-    // The masked-value content is still honest (it's a fact from a DIFFERENT,
+    // The masked-value content is still honest (it's a fact from a different,
     // independently-successful fetch) — only the done badge is suppressed.
     expect(screen.getByText("••••••••••••")).toBeInTheDocument();
   });
 });
 
-// X3-F3 — this pane is the ONE write path a member has, and it hardcoded
+// X3-F3 — this pane is the one write path a member has, and it hardcoded
 // `anthropic-api-key`. On a codex-only roster an anthropic key can never be
 // used (the capability matrix marks it impossible for that harness), so the
 // member stored a key that nothing would ever read. The name follows the org's

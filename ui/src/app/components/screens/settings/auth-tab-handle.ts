@@ -3,13 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Finding 7a (0.7.5 field report): the verification tab never opened. The old
-// code called `window.open(url, "_blank", "noopener,noreferrer")` from inside
-// `onOutput` — a PTY callback, never a user gesture — and every modern browser
-// blocks a popup that is not tied to one.
-//
-// The fix: open the tab ON THE CLICK (the only gesture the flow ever gets),
-// keep the handle, and NAVIGATE it once the verification URL appears.
+// Finding 7a (0.7.5 field report): a tab opened from inside a PTY callback
+// (`onOutput`), never a user gesture, is blocked by every modern browser —
+// the tab must open on the click (the only gesture this flow gets), keep the
+// handle, and navigate it once the verification URL appears.
 // `window.open(url, "_blank", "noopener")` returns null by spec — there is no
 // handle to navigate later — so the pattern here is the standard
 // pre-`noopener` mitigation: open blank, then sever `opener` by hand.
@@ -17,19 +14,19 @@
 // and keeps the forward handle (`w.location`, `w.close()`) usable even once
 // the document has navigated cross-origin.
 //
-// review-1 B2, COORDINATOR RULING (option A) — `close()` is BEST-EFFORT, not
+// review-1 B2, coordinator ruling (option A) — `close()` is best-effort, not
 // guaranteed, once the tab has navigated. Chromium (verified in e2e) refuses
 // `.close()` — and any further `.location` write — on a window it did not
-// itself open with script, once that window's `opener` has been disowned AND
+// itself open with script, once that window's `opener` has been disowned and
 // it has navigated cross-origin: the tab-nabbing mitigation above is exactly
 // what makes the browser stop trusting this handle as "ours" past that point.
-// The alternative — NOT severing `opener` — was rejected: it would hand the
+// The alternative — not severing `opener` — was rejected: it would hand the
 // provider's own page (a *.awsapps.com / claude.ai origin) a live reference
-// back into the console tab via `window.opener`, which is the bound Finding
-// 7a exists inside, not a bug to trade away for a `close()` that always
+// back into the console tab via `window.opener`, which is the leak Finding
+// 7a exists to close, not a bug to trade away for a `close()` that always
 // works. So: before navigation, `close()` reliably closes the placeholder
 // (every exit path in the pane still does this). After navigation, the
-// provider's own page — the one the person approves — IS the tab's end
+// provider's own page — the one the person approves — is the tab's end
 // state; the pane's `closeAuthTab()` calls are harmless no-ops past that
 // point (caught, never thrown) rather than something to route around.
 export type AuthTab = {
@@ -38,13 +35,13 @@ export type AuthTab = {
 };
 
 // DRAFT (M2 canon pending) — written into the about:blank tab the moment the
-// person CLICKS Start, because that click is the only user gesture the flow
+// person clicks Start, because that click is the only user gesture the flow
 // ever gets. Plain text, no stylesheet, no font, no network — CONSOLE-RULES'
 // "no inline hex or ad-hoc sizing" applies to Wardyn's own screens, not to a
 // page that exists for a few seconds before AWS's own page replaces it, but a
 // plain document is also the simplest thing that cannot fail to render.
-// Provider-neutral (O-4: the anthropic flow gets this tab too, by
-// construction — both Start buttons call the same `launch()`).
+// Provider-neutral: the anthropic flow gets this tab too, by construction —
+// both Start buttons call the same `launch()`.
 export const AUTH_TAB_PLACEHOLDER_HTML =
   "<!doctype html><meta charset=utf-8><title>Wardyn — waiting for the sign-in page</title>" +
   "<body>" +

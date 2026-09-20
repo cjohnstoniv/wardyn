@@ -89,9 +89,7 @@ beforeEach(() => {
   setSecretMock.mockReset().mockResolvedValue(undefined);
 });
 
-// ------------------------------------------------------------
 // Host proxy tab — the six states the mock draws
-// ------------------------------------------------------------
 describe("Host proxy tab — panel states", () => {
   it("empty: nothing detected, nothing configured", () => {
     renderStep();
@@ -166,11 +164,11 @@ describe("Host proxy tab — panel states", () => {
     expect(screen.queryByLabelText(/proxy url/i)).not.toBeInTheDocument();
   });
 
-  // UI-SETUP-8: switching to URL mode on a secret-only proxy used to keep
-  // asking `configured` (either field) but display ONLY upstream_proxy_url —
-  // true, so-configured, but undefined, so the status line rendered
-  // "Chaining through" a Mono with nothing in it: an affirmative claim naming
-  // no value at all.
+  // Switching to URL mode on a secret-only proxy must still name the secret:
+  // asking `configured` (either field) while displaying only
+  // upstream_proxy_url would leave the status line rendering "Chaining
+  // through" a Mono with nothing in it — an affirmative claim naming no
+  // value at all.
   it("switching to URL mode on a secret-only proxy still names the secret — never 'Chaining through' nothing", async () => {
     renderStep({ siteConfig: { upstream_proxy_secret_ref: "my-proxy-secret" } });
     await userEvent.click(screen.getByRole("button", { name: /enter a url instead/i }));
@@ -178,9 +176,9 @@ describe("Host proxy tab — panel states", () => {
     expect(screen.getByText("my-proxy-secret")).toBeInTheDocument();
   });
 
-  // UI-SETUP-7: Save on an empty Proxy URL field unconditionally PUTs both
-  // upstream_proxy_url AND upstream_proxy_secret_ref undefined — fine when
-  // nothing was configured, a silent delete of a real corporate proxy
+  // Save must not unconditionally PUT both upstream_proxy_url and
+  // upstream_proxy_secret_ref undefined on an empty Proxy URL field — fine
+  // when nothing was configured, a silent delete of a real corporate proxy
   // otherwise (exactly what switching from the secret field via "Enter a URL
   // instead" without typing anything leaves on screen).
   it("Save is disabled on an empty URL once a proxy is already configured — never a silent clear", async () => {
@@ -198,12 +196,12 @@ describe("Host proxy tab — panel states", () => {
     expect(screen.getByRole("button", { name: /add secret…/i })).toBeInTheDocument();
   });
 
-  // W12-W12-C-3: upstream_proxy_secret_ref has no lifecycle integrity — a
+  // upstream_proxy_secret_ref has no lifecycle integrity — a
   // secret it names can be deleted or rotated away from the Secrets screen,
-  // which has no idea this reference exists, and this step kept claiming
-  // "Chaining through the URL in secret X" forever after. secretNames (the
-  // store's own live list, already fetched by the orchestrator) is a
-  // presence check that catches it.
+  // which has no idea this reference exists, so this step must not keep
+  // claiming "Chaining through the URL in secret X" once that happens.
+  // secretNames (the store's own live list, already fetched by the
+  // orchestrator) is a presence check that catches it.
   it("a configured secret ref that no longer resolves in the store renders a warning, not a stale success claim", () => {
     renderStep({ siteConfig: { upstream_proxy_secret_ref: "corp-proxy" }, secretNames: [] });
     expect(screen.getByText(/no longer exists in the store/i)).toBeInTheDocument();
@@ -223,11 +221,12 @@ describe("Host proxy tab — panel states", () => {
     expect(screen.queryByText(/no longer exists in the store/i)).not.toBeInTheDocument();
   });
 
-  // W12-W12-C-3 (overwrite half): AddSecretDialog only warns before an
-  // overwrite when it's HANDED the existing-names list — the corp-network
-  // step's own "Add secret…" dialog used to open with none, so saving over
-  // an in-use name here silently clobbered it with no warning at all (every
-  // other AddSecretDialog caller in the app already passes this).
+  // (overwrite half): AddSecretDialog only warns before an
+  // overwrite when it's handed the existing-names list, so the corp-network
+  // step's own "Add secret…" dialog must pass the store's real names through
+  // — without them, saving over an in-use name here silently clobbers it with
+  // no warning at all (every other AddSecretDialog caller in the app already
+  // passes this).
   it("'Add secret…' passes the store's real names through, so saving over an in-use name warns first", async () => {
     // Default secretName state is "upstream-proxy-url" (the dialog opens
     // locked to it) — put that exact name in the store already.
@@ -237,10 +236,10 @@ describe("Host proxy tab — panel states", () => {
     expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
   });
 
-  // W13-S1-1: the server's graded host_proxy check (Detail/Fix) is the ONLY
-  // place that explains a loopback-bound proxy is unreachable from a sandbox —
-  // and it used to render only on the Review step, which sits BEHIND this
-  // step's own mandatory gate. Surface it here, where the operator is stuck.
+  // The server's graded host_proxy check (Detail/Fix) is the only
+  // place that explains a loopback-bound proxy is unreachable from a sandbox,
+  // so it must surface here too — not only on the Review step, which sits
+  // behind this step's own mandatory gate, where the operator is stuck.
   it("a loopback-bound host_proxy check's Detail/Fix render in place of EVIDENCE_NONE when nothing was detected", () => {
     renderStep({
       status: baseStatus({
@@ -287,7 +286,7 @@ describe("Host proxy tab — panel states", () => {
     expect(screen.getByText(/bound to loopback/i)).toBeInTheDocument();
   });
 
-  // W13-S1-1 (part 2): Save alone can never get back to "no proxy" once one is
+  // (part 2): Save alone can never get back to "no proxy" once one is
   // configured (it disables itself on an empty field to guard against an
   // accidental clear) — an unreachable saved proxy needs its own, explicit way
   // out right on the screen that set it, or the mandatory gate downstream
@@ -308,9 +307,7 @@ describe("Host proxy tab — panel states", () => {
   });
 });
 
-// ------------------------------------------------------------
 // Evidence rows — "Use this" wiring, and NO_PROXY's exception
-// ------------------------------------------------------------
 describe("Evidence — 'Use this' per row, NO_PROXY carries the note instead", () => {
   it("clicking a row's 'Use this' saves that row's exact value", async () => {
     const detection: HostProxyDetection = {
@@ -338,12 +335,12 @@ describe("Evidence — 'Use this' per row, NO_PROXY carries the note instead", (
     expect(screen.getAllByRole("button", { name: /^use this$/i })).toHaveLength(1);
   });
 
-  // UI-SETUP-5: this block's own "Re-check" used to reload site-config only
-  // (reloadSiteConfig), which carries no host-proxy detection at all — the
-  // rows above it could never actually refresh from the button sitting right
-  // there. onRecheck is the orchestrator's FULL recheck (status + site-config,
-  // the same one the persistent host-status strip's identically-labelled
-  // button already calls).
+  // This block's own "Re-check" must trigger the orchestrator's full recheck
+  // (status + site-config), not merely reload site-config (reloadSiteConfig),
+  // which carries no host-proxy detection at all — otherwise the rows above
+  // it can never actually refresh from the button sitting right there.
+  // onRecheck is that full recheck, the same one the persistent host-status
+  // strip's identically-labelled button already calls.
   it("Re-check calls the orchestrator's full recheck, not merely reloadSiteConfig", async () => {
     const onRecheck = vi.fn();
     renderStep({ onRecheck });
@@ -359,13 +356,11 @@ describe("Evidence — 'Use this' per row, NO_PROXY carries the note instead", (
   });
 });
 
-// ------------------------------------------------------------
-// F3-F9: the probe VERDICT is a live region — a screen-reader operator who
+// F3-F9: the probe verdict is a live region — a screen-reader operator who
 // clicked Test connectivity and looked away hears the result land, instead
 // of having to re-focus the panel to discover it settled. The ticker
-// ("Starting a throwaway sandbox — Ns") stays OUTSIDE this region: it is not
+// ("Starting a throwaway sandbox — Ns") stays outside this region: it is not
 // a role="status" itself, so it never fires a repeat announcement.
-// ------------------------------------------------------------
 describe("F3-F9: the probe result is announced (role=status, aria-live=polite)", () => {
   it("the done verdict renders inside a role=status/aria-live=polite region", async () => {
     testProxyMock.mockResolvedValueOnce({ state: "reached", detail: "reached in 42ms" });
@@ -388,11 +383,9 @@ describe("F3-F9: the probe result is announced (role=status, aria-live=polite)",
   });
 });
 
-// ------------------------------------------------------------
 // Custom-URL block — the escape for a host with no public internet. Only
 // surfaced after a real failure, never up front (T.CUSTOM_URL_WHY), and a
 // pass through it must never wear the verified treatment (T.CUSTOM_CAVEAT).
-// ------------------------------------------------------------
 describe("Custom-URL block — only after a blocked result, weaker claim on a pass, inline server reject", () => {
   it("does not appear before testing, or once the test reaches — only a real 'blocked' surfaces it", async () => {
     testProxyMock.mockResolvedValueOnce({ state: "reached", detail: "reached in 42ms" });

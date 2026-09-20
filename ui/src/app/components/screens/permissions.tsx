@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The admin Permissions screen (0.6 pillar 2, WS-A stage A-E/E2) — the seventh
-// sidebar entry, beside Policies, admin-only. One page, three blocks, in the
+// The admin Permissions screen (0.6 pillar 2) — the seventh sidebar entry,
+// beside Policies, admin-only. One page, three blocks, in the
 // order the reviewed mock draws them (docs/design/permissioning-mock/index.html):
 // header facts → per-kind enforcement → the grant table + add form.
 //

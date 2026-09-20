@@ -48,11 +48,11 @@ import { useOperator } from "../wardyn/operator-context";
 // here so we reject obviously-bad names before the round-trip.
 const SECRET_NAME_RE = /^[a-z0-9]([a-z0-9._-]{0,126}[a-z0-9])?$/;
 
-// Prebuilt secret-name suggestions offered on a BLANK-name open of AddSecretDialog
+// Prebuilt secret-name suggestions offered on a blank-name open of AddSecretDialog
 // (never on a prefilled/rotate open — the operator already knows the name then).
 // Chips only prefill the Name field, never a value — the credential itself is
 // always typed/pasted by the operator.
-// github-pat/gitlab-pat are deliberately NOT suggested here — they're now
+// github-pat/gitlab-pat are deliberately not suggested here — they're now
 // LEGACY_NAMES (lib/scm-provider.ts): the SCM ladder writes git-pat-<slug>
 // instead, and suggesting the old flat names would contradict that convention.
 const PROVIDER_NAME_CHIPS = [
@@ -71,7 +71,7 @@ const WRITE_ONLY_TOOLTIP =
   "Write-only: the value can be replaced or removed, but never read back — not even by you.";
 
 // Rungs 2/3 of the SCM safest-path ladder (ScmProviderStep) name their secrets
-// with these prefixes; both are STANDING resident credentials auto-used by every
+// with these prefixes; both are standing resident credentials auto-used by every
 // future clone to that host, unlike a GitHub App's per-run brokered token.
 const STANDING_NAME_RE = /^(ssh-key-|git-pat-)/;
 const STANDING_TOOLTIP =
@@ -155,9 +155,9 @@ export function SecretsScreen() {
                 : `Add an API key or access token so runs can reference it by name. ${OPERATOR_ONLY_REASON}`
             }
             action={
-              // ui-secretsPolicies-4: this screen stores any credential, not
-              // just LLM keys — match the header button's "Add secret" copy
-              // instead of narrowing a first-time operator's mental model.
+              // This screen stores any credential, not just LLM keys — match
+              // the header button's "Add secret" copy instead of narrowing a
+              // first-time operator's mental model.
               <Button onClick={() => setAddOpen(true)} disabled={!operator}>
                 <Plus className="size-4" /> Add your first secret
               </Button>
@@ -260,14 +260,14 @@ export function SecretsScreen() {
   );
 }
 
-// What a locked name actually means. NOT "the clone lane matches this name":
+// What a locked name actually means. Not "the clone lane matches this name":
 // no Go code maps a host to a secret name. The only reader of the
 // git-pat-/ssh-key- prefixes is scmProviderCheck (internal/api/setup.go:865),
 // which grades setup posture and gates nothing. A run reaches a credential
 // through a grant that names it explicitly — git_pat {host, secret_name},
 // ssh_key {host, key_secret_ref}, both required
 // (internal/api/runs_scm.go:223-260) — chosen by hand in the New Run wizard's
-// git-credential card. The GitHub App is the one place a name IS the binding:
+// git-credential card. The GitHub App is the one place a name is the binding:
 // the broker reads the fixed github-app-id / github-app-key
 // (cmd/wardynd/main.go:698-699).
 function lockedNameHint(lane: Lane, hasHost: boolean): string {
@@ -294,7 +294,7 @@ export function AddSecretDialog({
   open: boolean;
   onOpenChange: (o: boolean) => void;
   onSaved?: (name: string) => void;
-  // MEDIUM fix: the names already stored, so we can warn before silently
+  // The names already stored, so we can warn before silently
   // overwriting one. Optional — callers without the list (e.g. inline in a
   // wizard) simply skip the overwrite warning.
   existingNames?: string[];
@@ -302,11 +302,11 @@ export function AddSecretDialog({
   // or this screen's "Rotate" action prefilling the secret being rotated).
   // Optional — defaults to "", preserving existing callers' blank-name behavior.
   initialName?: string;
-  // Host-aware locked mode (design "Prompt D"): Name becomes read-only — the
+  // Host-aware locked mode: Name becomes read-only — the
   // operator can never edit it. Optional and additive; omitted, this is
   // exactly today's editable, chip-suggested dialog.
   lockName?: boolean;
-  // The host this credential is FOR. Rendered ONCE, above Name, as a read-only
+  // The host this credential is for. Rendered once, above Name, as a read-only
   // fact block (glyph + host + lane chip) — never as an input, because this
   // dialog only stores a name/value pair: nothing here binds the secret to the
   // host. That binding is per-run, made in the New Run wizard's git-credential
@@ -326,14 +326,13 @@ export function AddSecretDialog({
   const [value, setValue] = React.useState("");
   // Masked at entry, revealed only on request: a write-only store should not
   // put the plaintext on screen while it is typed (shoulder-surf + screen
-  // shares; caught on camera by the demo series). -webkit-text-security is
-  // the only way to mask a MULTILINE value (PEM keys need the textarea);
-  // Firefox ignores it and degrades to plaintext — cosmetic masking, not a
-  // security boundary either way.
+  // shares). -webkit-text-security is the only way to mask a multiline value
+  // (PEM keys need the textarea); Firefox ignores it and degrades to
+  // plaintext — cosmetic masking, not a security boundary either way.
   const [reveal, setReveal] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [saving, setSaving] = React.useState(false);
-  // MEDIUM fix: require an explicit confirm-overwrite click when the typed name
+  // Require an explicit confirm-overwrite click when the typed name
   // already exists, so a save never silently clobbers a secret in use by runs.
   const [confirmOverwrite, setConfirmOverwrite] = React.useState(false);
 
@@ -401,7 +400,7 @@ export function AddSecretDialog({
         </DialogHeader>
 
         <div className="space-y-4 py-1">
-          {/* Read-only fact, never an input, and the ONE place the host appears
+          {/* Read-only fact, never an input, and the one place the host appears
               on screen — the hint below deliberately says "this host" rather
               than repeating it. */}
           {host && (
@@ -421,7 +420,7 @@ export function AddSecretDialog({
             required
             hint={lockName ? lockedNameHint(resolvedLane, !!host) : undefined}
           >
-            {/* Suggestions only on a BLANK-name open (a fresh "Add secret", not a
+            {/* Suggestions only on a blank-name open (a fresh "Add secret", not a
                 rotate/fix-flow or locked open that already knows what it wants) —
                 prefill the name only, never a value. */}
             {!initialName && !lockName && (
@@ -476,7 +475,7 @@ export function AddSecretDialog({
               </button>
             </div>
           </Field>
-          {/* MEDIUM fix: warn when the name already exists so the operator
+          {/* Warn when the name already exists so the operator
               doesn't silently overwrite a secret currently referenced by runs. */}
           {isOverwrite && !error && (
             <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning-subtle px-3 py-2 text-xs text-warning">

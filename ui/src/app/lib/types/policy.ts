@@ -10,8 +10,8 @@ import type { ConfinementClass, UIApp } from "./runs";
 // (Azure DevOps / GitLab / ...). Unlike api_key (proxy-injected, value never
 // returned) the PAT value reaches git via the credential helper as a password.
 // ssh_key = a resident private key written to disk for git's SSH transport
-// (WIRE-5; internal/types/types.go's GrantKind carries all six — this union
-// was missing the one lane approvals.tsx already has a dedicated banner for).
+// (internal/types/types.go's GrantKind carries all six — this union must not
+// omit the one lane approvals.tsx already has a dedicated banner for).
 // env_secret = a stored secret injected as a sandbox env var (admin-gated).
 export type GrantKind = "github_token" | "cloud_sts" | "api_key" | "git_pat" | "ssh_key" | "env_secret";
 
@@ -70,8 +70,8 @@ export function firstUseRaisesApproval(v: unknown): boolean {
 
 // firstUseLabel is a short human label for review/summary surfaces. always_deny
 // is a real, restrictive choice ("Always deny") wherever the operator could
-// have picked a review mode instead — labelling it "Off" there reads as LESS
-// restrictive than it is (N4). Only under allow-all egress is the setting
+// have picked a review mode instead — labelling it "Off" there would read as
+// less restrictive than it is. Only under allow-all egress is the setting
 // genuinely inert (buildSpec forces always_deny and the Network card hides the
 // control entirely) — callers that know the run is allow-all pass `allowAll`
 // and get the honest "Off (allow-all)" instead.
@@ -209,7 +209,7 @@ export interface ResourceLimits {
 }
 
 export interface RunPolicySpec {
-  // R-03: the key is always present (no `,omitempty` on
+  // The key is always present (no `,omitempty` on
   // internal/types/policy.go's AllowedDomains), but the VALUE can be `null` on
   // the wire — a nil slice (e.g. recordmode.go's no-observed-egress arm)
   // marshals to `null`, not `[]`. `?? []` at every read site.
@@ -250,7 +250,7 @@ export interface RunPolicySpec {
   tool_rules?: ToolRule[];
   // Declared in-sandbox loopback HTTP apps the UI gateway may relay to the
   // browser (mirrors Go's RunPolicySpec.UIApps). Read-only in the console —
-  // ui_apps is operator-authored via the API/YAML, no editor in 0.6.
+  // ui_apps is operator-authored via the API/YAML, with no editor here.
   ui_apps?: UIApp[];
   // Turns off branch-namespace confinement for this run's brokered pushes
   // (mirrors Go's RunPolicySpec.GitPushAnyBranch). For a sandbox a human

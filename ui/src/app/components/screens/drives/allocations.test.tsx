@@ -377,7 +377,7 @@ describe("DrivesScreen — the allocation form's wire shapes", () => {
     });
   });
 
-  // THE REFUSAL THAT UNSTATED KEY EXISTS TO PROVOKE. Omitting home_override is
+  // The refusal the unstated key exists to provoke: omitting home_override is
   // what stops a repoint from clearing a pinned directory name — and on an
   // allocation that HAS one pinned, the server answers 409 rather than
   // re-homing that person silently. The console composes nothing for it: the
@@ -453,7 +453,7 @@ describe("DrivesScreen — the allocation form's wire shapes", () => {
     });
   });
 
-  // F4-F7 (Appendix A V8): submit() reset only `subject` — sizeOverride/
+  // Appendix A V8: submit() reset only `subject` — sizeOverride/
   // writable/homeOverride/homeTouched/enabled persisted, so allocating alice
   // with home_override:"alice" and then bob (no fields touched) pinned bob to
   // alice's directory. Batch-shaped fields (driveID/priority/subjectType) stay
@@ -578,11 +578,12 @@ describe("DrivesScreen — the preview's three answers and its refusals", () => 
     expect(await screen.findByText(GOV.PREVIEW_RESULT_UNKNOWN)).toBeInTheDocument();
   });
 
-  // THE PANEL RUNS THE LAUNCH'S GATES NOW, so it has real refusals to show —
-  // the governance door's 403 and the launch's 422s. Collapsing every non-2xx
-  // into "couldn't resolve this" threw away the one answer an admin opened the
-  // panel for. Rendered the way drive-editor.tsx already renders a refused
-  // save: the server's message verbatim, no new component and no new string.
+  // The panel runs the launch's gates, so it has real refusals to show — the
+  // governance door's 403 and the launch's 422s. Collapsing every non-2xx
+  // into "couldn't resolve this" would throw away the one answer an admin
+  // opened the panel for. Rendered the way drive-editor.tsx already renders
+  // a refused save: the server's message verbatim, no new component and no
+  // new string.
   it("the governance door's 403 renders the server's own sentence", async () => {
     renderScreen();
     const denied = 'drive: mounting a user drive is not allowed by your governance profile "Locked down". Launch without drive.';

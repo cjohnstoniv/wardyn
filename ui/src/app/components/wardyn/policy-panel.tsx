@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// PolicyPanel — ONE spec-JSON authoring surface, two instances:
+// PolicyPanel — one spec-JSON authoring surface, two instances:
 //
 //   instance="policies"  the admin policy editor's body (the name field stays
 //                        on the screen; the operator gate stays on Save).
@@ -11,14 +11,14 @@
 //                        an optional "reuse a saved policy" mode row and an
 //                        optional Preflight button.
 //
-// `inline_policy` on POST /runs is the IDENTICAL Go struct a stored policy
+// `inline_policy` on POST /runs is the identical Go struct a stored policy
 // holds (types.RunPolicySpec), validated by the same validatePolicySpec — so
-// one panel serves both, and the SERVER stays the source of truth for what is
+// one panel serves both, and the server stays the source of truth for what is
 // legal. The panel only parses (so a syntactically broken document never
-// reaches the API) and derives read-only summaries from what parsed. The ONE
+// reaches the API) and derives read-only summaries from what parsed. The one
 // live call it makes is the SafetyMeter's debounced grade of the current
-// document (POST /policies/grade) — advisory, and grading the DOCUMENT, which
-// is a different question than the screen's preflight of the RESOLVED run.
+// document (POST /policies/grade) — advisory, and grading the document, which
+// is a different question than the screen's preflight of the resolved run.
 //
 // The screen owns everything that isn't the JSON: the saved-policy list, the
 // preflight call (runs.preflightRun) and its result rendering, the Workspace
@@ -59,15 +59,15 @@ export interface PolicyTemplate {
 // at), as consts rather than a fetch — there is no template endpoint, and a
 // deployment that wants its own gallery is the day to add one.
 //
-// claude-subscription.template.json is deliberately NOT here: its `__comment`
+// claude-subscription.template.json is deliberately not here: its `__comment`
 // key and machine-specific mounts would 400 under DisallowUnknownFields /
 // validatePolicySpec the moment anyone clicked it.
 //
-// auto_stop_after_sec: every template EXCEPT allow-all carries 3600. Under the
+// auto_stop_after_sec: every template except allow-all carries 3600. Under the
 // safety meter's conservative (non-interactive) frame an omitted idle cap grades
-// HIGH on its own (composer/risk.go: never-reap holds minted credentials forever),
+// high on its own (composer/risk.go: never-reap holds minted credentials forever),
 // so without it the shipped starter would read "Elevated" — contradicting the
-// owner's safest axis. allow-all DELIBERATELY omits it: its two highs (allow-all
+// owner's safest axis. allow-all deliberately omits it: its two highs (allow-all
 // egress + never-reap) are what make "Weakest" reachable from a single template
 // click, and a 3600 there would collapse it to one high. ci/model-provider
 // inherit 3600 from their source examples; minimal/registries gain it here for
@@ -95,7 +95,7 @@ export const POLICY_TEMPLATES: readonly PolicyTemplate[] = [
     hint: "One host, one proxy-injected API key. Nothing else is reachable.",
     // examples/policies/ci-claude-llm.json, auto_stop included: this is the one
     // template carrying a minted credential, so the source's idle cap matters
-    // MOST here — without it a non-interactive run holds the key forever and
+    // most here — without it a non-interactive run holds the key forever and
     // preflight grades it RiskHigh. Idle-stop only fires after a genuinely
     // silent hour (lifecycle TouchDebounce keeps active sessions alive).
     spec: {
@@ -126,8 +126,8 @@ export const POLICY_TEMPLATES: readonly PolicyTemplate[] = [
     label: "Package registries",
     hint: "Model providers plus the language package registries — the build-and-install set.",
     // examples/policies/default.json's egress set. Its github_token grant is
-    // deliberately NOT carried: any repo-covering github_token makes the run
-    // brokered and UNCONDITIONALLY removes github.com and friends from egress
+    // deliberately not carried: any repo-covering github_token makes the run
+    // brokered and unconditionally removes github.com and friends from egress
     // (docs/POLICIES.md "Brokered GitHub") — a surprise this template's name
     // does not promise. auto_stop_after_sec: 3600 is added here (the source has
     // no cap) for the same meter reason as minimal — see the array header.
@@ -157,7 +157,7 @@ export const POLICY_TEMPLATES: readonly PolicyTemplate[] = [
     id: "ci",
     label: "CI baseline",
     hint: "No egress, no grants, stopped after an idle hour — the unattended default.",
-    // examples/policies/ci.json verbatim. The 3600 STAYS: a non-interactive run
+    // examples/policies/ci.json verbatim. The 3600 stays: a non-interactive run
     // that is never reaped holds its minted credentials indefinitely, which the
     // product's own risk grade calls high (internal/composer/risk.go).
     spec: {
@@ -210,10 +210,10 @@ export interface FieldHelp {
 // field to RunPolicySpec (which mirrors types.RunPolicySpec) without documenting
 // it here and this file stops compiling. No markdown-parsing test needed.
 //
-// Note what is NOT snippetable: llm_inspection.workspace_secret_values. It is
+// Note what is not snippetable: llm_inspection.workspace_secret_values. It is
 // refused on every policy write (validatePolicySpec) — dispatch resolves
 // workspace_secret_names to values in memory, for the proxy sidecar only — so
-// the llm_inspection snippet authors NAMES and the help text says so.
+// the llm_inspection snippet authors names and the help text says so.
 export const FIELD_HELP = {
   allowed_domains: {
     what: "The egress allowlist — the hosts the sandbox may reach.",
@@ -231,11 +231,10 @@ export const FIELD_HELP = {
   first_use_approval: {
     what: "What happens when the sandbox reaches a host that is not listed.",
     // The three mode bodies are docs/design/ui-batch2-mock.md's canon strings
-    // (D33 for deny_with_review, D8 for wait_for_review), verbatim. They used to
-    // live on the run wizard's own Confined card and NetworkDialog's
-    // UNLISTED_RULES; this panel replaced both, so it inherits the copy — a hold
-    // is BOUNDED (first_use_hold_seconds, 30s default), which the old
-    // "until you approve or deny it" wording promised away.
+    // (D33 for deny_with_review, D8 for wait_for_review), verbatim — this panel
+    // is their one source now, replacing the run wizard's old Confined card and
+    // NetworkDialog's UNLISTED_RULES. A hold is bounded (first_use_hold_seconds,
+    // 30s default), not "until you approve or deny it".
     values:
       "always_deny — refused outright, no prompt, no wait. " +
       "deny_with_review — Default-deny. A new host is refused and raised for your review — approve it once and a retry gets through. " +
@@ -366,10 +365,10 @@ const HIDDEN_ON_RUN: readonly (keyof RunPolicySpec)[] = ["workspace_mounts"];
 
 export type ChipTone = NonNullable<React.ComponentProps<typeof Chip>["tone"]>;
 
-// 4b dedup: policies.tsx's table rows import these two straight from here
+// policies.tsx's table rows import these two straight from here
 // instead of keeping their own copies.
 
-// Compact, honest egress summary. allow_all_egress is ALWAYS the block-list
+// Compact, honest egress summary. allow_all_egress is always the block-list
 // phrasing (never "unrestricted") — see wardyn/copy.ts.
 export function egressSummary(spec: RunPolicySpec): { label: string; tone: ChipTone } {
   if (spec.allow_all_egress) {
@@ -386,7 +385,7 @@ export function egressSummary(spec: RunPolicySpec): { label: string; tone: ChipT
   };
 }
 
-// Honest lifecycle summary — mirrors the reaper's ACTUAL semantics
+// Honest lifecycle summary — mirrors the reaper's actual semantics
 // (internal/lifecycle/lifecycle.go): auto_stop_after_sec <= 0 or unset means the
 // run is exempt from idle auto-stop, not "30 minutes by default".
 export function lifecycleSummary(spec: RunPolicySpec): string {
@@ -398,10 +397,10 @@ export function lifecycleSummary(spec: RunPolicySpec): string {
 /* ---------- tool rules ---------- */
 
 // The wire words stay mono and verbatim (allow/hold/deny); these are their past
-// tense, and ONLY the rail's one-line summary uses them.
+// tense, and only the rail's one-line summary uses them.
 const EFFECT_PAST: Record<ToolEffect, string> = { allow: "allowed", hold: "held", deny: "denied" };
 
-// The effect's semantic tint. Not decoration: an effect IS a run/approval state
+// The effect's semantic tint. Not decoration: an effect is a run/approval state
 // word, so it takes the state palette (CONSOLE-RULES §2) and never a metal.
 const EFFECT_TONE: Record<ToolEffect, string> = {
   allow: "text-success",
@@ -412,12 +411,12 @@ const EFFECT_TONE: Record<ToolEffect, string> = {
 // Split the flat wire list into what the editor renders as two different things:
 // the named rules (addable, removable) and the "*" default (neither).
 //
-// An ABSENT "*" is `hold`: ToolEffectFor returns ok=false for an unmatched tool,
+// An absent "*" is `hold`: ToolEffectFor returns ok=false for an unmatched tool,
 // and the caller then raises a human approval — which is exactly what hold does.
 // So the default row can state `hold` honestly whether or not the document
 // spells the rule out.
 //
-// A non-list `tool_rules` reads as NO rules: parseSpec is a bare cast, so the
+// A non-list `tool_rules` reads as no rules: parseSpec is a bare cast, so the
 // textarea can hand this a string or an object, and the section has to render
 // the refusal toolRulesProblem returns for it — throwing here would hit the
 // route's ErrorBoundary and take the operator's draft with it.
@@ -440,7 +439,7 @@ function splitToolRules(rules: readonly ToolRule[] | undefined): {
 // The "*" rule is written when the document already spelled it out, or when the
 // default says something other than `hold` — an implicit hold and an explicit
 // one behave identically, so emitting it into every policy would add a no-op
-// line to documents that never asked for one. An empty result DROPS the key
+// line to documents that never asked for one. An empty result drops the key
 // entirely: `tool_rules: []` and no key at all mean the same thing, and the
 // shorter one is what a policy written before this field looks like.
 function withToolRules(
@@ -458,7 +457,7 @@ function withToolRules(
   return next;
 }
 
-// The new-run rail's one line. It NAMES the tools: "3 rules" alone would say
+// The new-run rail's one line. It names the tools: "3 rules" alone would say
 // nothing about which calls still stop for a human. Null when the run has no
 // rules at all, so a policy written before the field existed grows no empty
 // rail section — and so does a malformed one, which the panel's own refusal
@@ -518,7 +517,7 @@ function ToolRulesSection({
 }) {
   const { named, defaultEffect, explicitDefault } = splitToolRules(spec.tool_rules);
   // Mirrors the server's own refusals so the operator sees them here rather
-  // than as a 400 after Save. The SERVER is still the gate — this is advisory,
+  // than as a 400 after Save. The server is still the gate — this is advisory,
   // exactly like the JSON parse above it.
   const problem = toolRulesProblem(spec.tool_rules ?? []);
   const write = (nextNamed: ToolRule[], nextDefault: ToolEffect) =>
@@ -553,7 +552,7 @@ function ToolRulesSection({
 
       {named.map((rule, i) => (
         <div key={i} className={cn(RULE_GRID, "border-b border-border py-2")}>
-          {/* No maxLength: the cap is 64 BYTES (Go's len) and the attribute
+          {/* No maxLength: the cap is 64 bytes (Go's len) and the attribute
               counts UTF-16 units, so it cannot express this one — it would
               silently swallow the 65th keystroke of a legal ASCII name while
               still letting a 40-character CJK name (120 bytes) through. The
@@ -645,11 +644,11 @@ export function parseSpec(text: string): ParsedSpec {
   return { ok: true, spec: value as RunPolicySpec };
 }
 
-// C5's one real trap, named: a parse that SUCCEEDS but whose
+// C5's one real trap, named: a parse that succeeds but whose
 // min_confinement_class names no real barrier class silently sets no floor —
 // the caller's own barrier control is what actually launches, and nothing
 // said so. Returns the unparseable value (for the caller's hint) or null —
-// null for an OMITTED field too (a policy that authors no floor on purpose is
+// null for an omitted field too (a policy that authors no floor on purpose is
 // not a trap).
 export function unparseableFloorClass(parsed: ParsedSpec): string | null {
   if (!parsed.ok) return null;

@@ -35,7 +35,7 @@ export interface Episode {
 // have not been recorded yet — `tag: null` until a release ships them, at
 // which point `episodeUrl` starts resolving them.
 //
-// 00 IS FIRST, and the position is the claim: it is the front door, the one
+// 00 is first, and the position is the claim: it is the front door, the one
 // episode written for someone who knows only that they want to sandbox an
 // agent, and 01 is what it hands off to.
 export const EPISODES: Episode[] = [
@@ -67,9 +67,9 @@ export const EPISODES: Episode[] = [
 // The member Getting Started screen (screens/onboarding/member-getting-started.tsx)
 // imports this list — never the reverse, lib/ must not import a screen — and
 // demo-videos.test.ts treats it as the allowed set of member step ids.
-// COUPLING: rename a member section and update this list AND every member
-// episode's `steps` entry together — otherwise `episodesFor` silently returns
-// nothing for it.
+// Rename a member section and update this list AND every member episode's
+// `steps` entry together — otherwise `episodesFor` silently returns nothing
+// for it.
 export const MEMBER_SECTION_IDS = ["workspace", "first-run", "approvals"] as const;
 
 // null tag = not recorded yet — never build a URL for a release that doesn't

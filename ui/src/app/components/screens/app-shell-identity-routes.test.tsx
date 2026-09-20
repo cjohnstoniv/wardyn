@@ -18,7 +18,7 @@ import {
 import { ThemeProvider } from "../wardyn/theme-provider";
 import { SHELL } from "../wardyn/copy";
 
-// V1-D3 — B1 gated the NAV and nothing else.
+// V1-D3 — B1 gated the nav and nothing else.
 //
 // navItemsForRole returned [] correctly and the banner + Retry worked, but every
 // route stayed reachable by URL: the account menu's Settings link was
@@ -27,10 +27,10 @@ import { SHELL } from "../wardyn/copy";
 // Connect/Disconnect card plus the Providers card into admin /providers, and a
 // bookmark or a reload on /permissions, /governance, /policies, /secrets or
 // /audit painted the full admin screen — all off useMeta's fail-open seed
-// (operator ?? true, role ?? "admin"), which is the seed B1 deliberately did NOT
+// (operator ?? true, role ?? "admin"), which is the seed B1 deliberately did not
 // harden and which this fix deliberately still does not harden.
 //
-// The gate is at the ROUTE SHELL instead, the one place every route renders
+// The gate is at the route shell instead, the one place every route renders
 // under: unknown identity ⇒ no route, banner + Retry, and no Settings link. The
 // context defaults keep failing open for the ordinary not-settled-yet paint,
 // which is the rationale B1 recorded.
@@ -67,7 +67,7 @@ function stubMe(me: Record<string, unknown> | null) {
 }
 
 // The screens are stood in for by markers: what is under test is whether the
-// shell renders the route AT ALL, not what each admin screen draws.
+// shell renders the route at all, not what each admin screen draws.
 function renderAt(path: string) {
   render(
     <MemoryRouter initialEntries={[path]}>
@@ -185,29 +185,29 @@ describe("AppShell — a settled-but-unknown identity gets no route (V1-D3)", ()
 });
 
 // Phase 5: the landing gate (App.tsx's FirstRunLanding) waits on the shell's
-// roleResolved signal. It must mean "the /me fetch SETTLED", never "method is
+// roleResolved signal. It must mean "the /me fetch settled", never "method is
 // non-empty" — a failed /me leaves method "" for good, and a signal derived
 // from it would strand "/" on a spinner forever. Here fetch rejects outright
 // (whoami → null), so the signal has to flip on the failure path too.
 //
-// B1 (0.7.2) RESTATES this describe rather than adding a sibling that would
+// B1 restates this describe rather than adding a sibling that would
 // contradict it, because the two halves are one rule and the field report cost
 // a customer hours by reading only the first:
 //
-//   1. roleResolved KEEPS meaning "settled, success or failure". Pointing it at
+//   1. roleResolved keeps meaning "settled, success or failure". Pointing it at
 //      identityResolved instead — the first draft of this fix — would strand "/"
 //      on RouteFallback forever, since nothing retried /me. The existing cases
 //      below pin that, defaults and all.
-//   2. …and "settled" is therefore NOT "answered". So the SIDEBAR is gated on
-//      identityResolved: a settled-but-unknown identity renders NEITHER the
+//   2. …and "settled" is therefore not "answered". So the sidebar is gated on
+//      identityResolved: a settled-but-unknown identity renders neither the
 //      admin nav nor the member nav, plus one banner saying so and a Retry that
-//      re-fires whoami(). Before this, a human the server had correctly DENIED
+//      re-fires whoami(). Before this, a human the server had correctly denied
 //      saw Policies / Governance / Permissions / Secrets / Audit off the
 //      fail-open "admin" default — indistinguishable from an authz breach, on a
 //      governance product, which is worse than a cosmetic bug.
 //
-// The tier defaults themselves stay fail-OPEN (case 2 below, R4/F119). That is
-// the point: the fix is to stop DRAWING a nav from a guess, not to harden the
+// The tier defaults themselves stay fail-open (case 2 below). That is
+// the point: the fix is to stop drawing a nav from a guess, not to harden the
 // guess into a different one.
 describe("AppShell (roleResolved after a failed /me)", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -220,15 +220,15 @@ describe("AppShell (roleResolved after a failed /me)", () => {
     );
   }
 
-  // R4/F119 — the TIER the failed /me leaves behind, which is the half this
+  // The tier the failed /me leaves behind, which is the half this
   // describe never read. useMeta seeds operator/securityOperator/role with
-  // `?? true` / `?? "admin"` and the comments around them call the DIRECTION
-  // load-bearing ("an older daemon that never sends this field must fail OPEN
+  // `?? true` / `?? "admin"` and the comments around them call the direction
+  // load-bearing ("an older daemon that never sends this field must fail open
   // like every other identity signal here"; operator-context.tsx: 'Never
   // "harden" this default to false either'). Nothing asserted it: flipping all
   // three to `?? false` / `?? "member"` left the whole suite green, and the one
   // path where the defaults decide what a real human sees is exactly this one —
-  // a 5xx, a dropped network, a pre-0.7 daemon. Fail-CLOSED here does not
+  // a 5xx, a dropped network, a pre-0.7 daemon. Fail-closed here does not
   // protect anything (the server refuses every write regardless, requireOperator
   // is the enforcement point); it just hides the console from the admin who is
   // trying to find out what is wrong.
@@ -270,10 +270,10 @@ describe("AppShell (roleResolved after a failed /me)", () => {
         </ThemeProvider>
       </MemoryRouter>,
     );
-    // Negative control: the first paint is NOT settled — the signal is not a
+    // Negative control: the first paint is not settled — the signal is not a
     // constant true (which would defeat the member/admin race the gate closes).
     // Re-anchored off the route child (V1-D3): a settled-but-unknown identity
-    // now paints no route at all, so the banner IS the settled signal.
+    // now paints no route at all, so the banner is the settled signal.
     expect(screen.getByTestId("probe")).toHaveTextContent("pending");
     expect(screen.queryByText(SHELL.UNKNOWN_BODY)).toBeNull();
     await waitFor(() =>
@@ -283,21 +283,21 @@ describe("AppShell (roleResolved after a failed /me)", () => {
   });
 
   it("paints no route at all when /me never answers — the fail-open tier reaches nothing (V1-D3)", async () => {
-    // R4/F119 pinned the TIER a failed /me leaves behind: useMeta seeds
+    // This pins the tier a failed /me leaves behind: useMeta seeds
     // operator/securityOperator/role with `?? true` / `?? "admin"`, and the
     // direction is load-bearing ("Never harden this default to false either") —
-    // failing CLOSED there protects nothing, since requireOperator on the server
+    // failing closed there protects nothing, since requireOperator on the server
     // is the enforcement point, and it hides the console from the admin trying to
-    // find out what is wrong. That rule STANDS, and the case below (a resolved
+    // find out what is wrong. That rule stands, and the case below (a resolved
     // daemon whose /me omits the fields) is where it still reaches a screen.
     //
-    // What V1-D3 changed is where the ignorance is answered. B1 gated the NAV
+    // What V1-D3 changed is where the ignorance is answered. B1 gated the nav
     // only, so the fail-open tier still painted: the account menu's Settings link
     // reached the operator-only Model-provider card in two clicks, and a bookmark
     // or reload on /permissions, /governance, /policies, /secrets, /audit painted
-    // the full admin screen off that seed. The shell now renders NO route while
+    // the full admin screen off that seed. The shell now renders no route while
     // the identity is settled-but-unknown, so the defaults decide nothing a human
-    // can see — which is why this case asserts the ABSENCE of the route child
+    // can see — which is why this case asserts the absence of the route child
     // rather than the tier it would have been handed.
     vi.stubGlobal(
       "fetch",
@@ -333,12 +333,12 @@ describe("AppShell (roleResolved after a failed /me)", () => {
       </MemoryRouter>,
     );
 
-    // The fail-open seed is still what the context holds on the FIRST paint,
-    // before the rejection lands — unhardened, exactly as F119 requires.
+    // The fail-open seed is still what the context holds on the first paint,
+    // before the rejection lands — unhardened, exactly as this rule requires.
     expect(screen.getByTestId("tier-probe")).toHaveTextContent(
       JSON.stringify({ operator: true, securityOperator: true, role: "admin" }),
     );
-    // …and once the /me is SETTLED and still unknown, the route is gone and the
+    // …and once the /me is settled and still unknown, the route is gone and the
     // banner is the page.
     await waitFor(() =>
       expect(screen.getByText(SHELL.UNKNOWN_BODY)).toBeInTheDocument(),
@@ -349,7 +349,7 @@ describe("AppShell (roleResolved after a failed /me)", () => {
 
   it("keeps the tier fail-OPEN for a daemon whose /me omits the fields entirely", async () => {
     // A pre-0.7 daemon: /me answers 200 with the identity keys it has always
-    // sent and none of the three tier keys. Absent must read as OPEN, not as
+    // sent and none of the three tier keys. Absent must read as open, not as
     // "member" — the same rule, on the path that actually reaches the `??`.
     vi.stubGlobal(
       "fetch",
@@ -404,7 +404,7 @@ describe("AppShell (roleResolved after a failed /me)", () => {
       </MemoryRouter>,
     );
 
-    // Wait for the real /me to settle, so this reads the RESOLVED value rather
+    // Wait for the real /me to settle, so this reads the resolved value rather
     // than the seed it happens to equal.
     await waitFor(() =>
       expect(screen.getByTestId("probe")).toHaveTextContent("resolved"),
@@ -414,9 +414,9 @@ describe("AppShell (roleResolved after a failed /me)", () => {
     );
   });
 
-  // ── B1, the half above pins the rule for ─────────────────────────────────
-  // The tier stays fail-open (the three cases above) AND the sidebar stops
-  // drawing anything from it. Both, or the fix is the one the round rejected.
+  // B1, the half above pins the rule for:
+  // the tier stays fail-open (the three cases above) and the sidebar stops
+  // drawing anything from it. Both, or the fix is incomplete.
   it("renders NEITHER nav and says why when /me never answers", async () => {
     vi.stubGlobal(
       "fetch",
@@ -458,7 +458,7 @@ describe("AppShell (roleResolved after a failed /me)", () => {
         screen.queryByRole("link", { name: new RegExp(`^${label}`) }),
       ).toBeNull();
     }
-    // …and not the member set either. "We don't know" is a THIRD answer, not a
+    // …and not the member set either. "We don't know" is a third answer, not a
     // quieter guess: showing the member nav would be just as unfounded.
     for (const label of ["Runs", "Approvals", "Workspaces"]) {
       expect(
@@ -474,7 +474,7 @@ describe("AppShell (roleResolved after a failed /me)", () => {
 
   it("Retry re-fires /me, and an answer restores the nav it earns", async () => {
     const user = userEvent.setup();
-    // First /me rejects; the second answers as a MEMBER. Both halves matter:
+    // First /me rejects; the second answers as a member. Both halves matter:
     // the retry has to actually re-fetch (the effect ran once, on mount), and
     // what comes back has to drive the nav — proving the banner state was
     // ignorance and not a latch.
@@ -539,7 +539,7 @@ describe("AppShell (roleResolved after a failed /me)", () => {
     );
 
     await waitFor(() => expect(meCalls).toBe(2));
-    // The banner is gone and the MEMBER nav — not the admin one it defaulted
+    // The banner is gone and the member nav — not the admin one it defaulted
     // to a moment ago — is what the answer produced.
     await waitFor(() =>
       expect(screen.queryByText(SHELL.UNKNOWN_BODY)).toBeNull(),

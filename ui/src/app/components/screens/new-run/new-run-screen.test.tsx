@@ -230,8 +230,9 @@ describe("NewRunScreen — the rail tells the truth about model access", () => {
 
   // F6-F3 (site 1) — lib/api/setup.ts's READY_FALLBACK resolves on ANY
   // non-401 failure (endpoint missing, network error, …), not just "no model
-  // provider". `hasLlmPath` read it as a genuine empty answer, so a daemon that
-  // never answered got the SAME accusation as a truly bare host.
+  // provider". `hasLlmPath` would read it as a genuine empty answer, so a
+  // daemon that never answered would get the SAME accusation as a truly bare
+  // host.
   it("does not warn on a synthetic READY_FALLBACK (unreachable) answer", async () => {
     getSetupStatusMock.mockResolvedValue(baseStatus({ unreachable: true }));
     renderScreen();
@@ -291,13 +292,13 @@ describe("NewRunScreen — the additions line counts the union, not the sum", ()
   });
 });
 
-// The form's fields FOLLOW the run mode. This screen used to show one Task box
-// for every run, including interactive ones — where the server used to ignore
-// task entirely, so the operator typed a prompt nothing would ever read. Task
-// now rides as an interactive run's optional boot seed (Part A1), but it is
-// still never the field literally labeled "Task" — that label stays batch-only,
-// and an interactive run gets its own "Initial prompt" / "Startup command"
-// field instead (new-run-screen.tsx's isInteractive branch).
+// The form's fields FOLLOW the run mode. A single Task box for every run,
+// including interactive ones, would let an operator type a prompt the server
+// ignores entirely for an interactive run. Task rides as an interactive run's
+// optional boot seed (Part A1), but it is still never the field literally
+// labeled "Task" — that label stays batch-only, and an interactive run gets
+// its own "Initial prompt" / "Startup command" field instead
+// (new-run-screen.tsx's isInteractive branch).
 describe("NewRunScreen — the form matches the run mode", () => {
   it("asks an interactive run what to start with, not for a task", async () => {
     renderScreen();
@@ -333,7 +334,7 @@ describe("NewRunScreen — the form matches the run mode", () => {
   });
 
   // A shell command is unattended by definition. Offering "Interactive" for one
-  // used to produce a run that silently never executed the command (the server
+  // would produce a run that silently never executes the command (the server
   // drops task_mode for an interactive run).
   it("hides the run mode for a shell command, which is always unattended", async () => {
     renderScreen();
@@ -439,11 +440,11 @@ describe("NewRunScreen — Preflight", () => {
     await waitFor(() => expect(button).toBeEnabled());
   });
 
-  // R4-F090: the verdict sits directly above Launch, "the last thing read
+  // The verdict sits directly above Launch, "the last thing read
   // before committing" — so it may only be shown while it is still a verdict
-  // about the body Launch would send. It used to survive ANY edit: preflight a
-  // title, change the run, and the graded-elsewhere badge stayed beside the
-  // button while createRun shipped something the verdict never saw.
+  // about the body Launch would send. It must not survive ANY edit: preflight
+  // a title, change the run, and the graded-elsewhere badge would stay beside
+  // the button while createRun ships something the verdict never saw.
   it("drops the verdict as soon as the run body changes — a stale grade is never rendered beside Launch", async () => {
     preflightRunMock.mockResolvedValue({
       setup_items: [],
@@ -543,9 +544,10 @@ describe("NewRunScreen — the keyboard contract", () => {
     expect(navigateMock).not.toHaveBeenCalled();
   });
 
-  // The predicate used to read title/description/task/policy-id only, so a form
-  // whose ONLY work was an authored policy body counted as untouched — Esc threw
-  // the document away without a word.
+  // The dirty predicate must read the policy body too, not just
+  // title/description/task/policy-id — otherwise a form whose ONLY work was
+  // an authored policy body counts as untouched, and Esc throws the document
+  // away without a word.
   it("counts an edited policy body as dirty on its own", async () => {
     renderScreen();
     const spec = (await screen.findByLabelText("Spec (JSON)")) as HTMLTextAreaElement;
@@ -629,12 +631,12 @@ describe("NewRunScreen — the member's drive reaches the wire", () => {
     expect(screen.queryByLabelText(DM.NR_CHECKBOX)).toBeNull();
   });
 
-  // Every case above runs on the context's fail-OPEN operator default, so until
-  // now the MOUNTING tier was never rendered in vitest at all — a member, whose
-  // console additionally resolves GET /me/capabilities. That flag gates real
-  // code (useMyCapabilities' effect, and capabilityAllowed over a non-null set
-  // in the same card the drive block lives in), and a drive offer that only
-  // survives the admin default would ship green.
+  // Every case above runs on the context's fail-OPEN operator default, so the
+  // MOUNTING tier needs its own coverage — a member's console additionally
+  // resolves GET /me/capabilities. That flag gates real code
+  // (useMyCapabilities' effect, and capabilityAllowed over a non-null set in
+  // the same card the drive block lives in), and a drive offer that only
+  // works under the admin default would ship green.
   it("offers the drive to a MEMBER — the tier that actually mounts one", async () => {
     myCapabilitiesMock.mockReturnValue({
       grants: [],
@@ -658,7 +660,7 @@ describe("NewRunScreen — the member's drive reaches the wire", () => {
   });
 });
 
-// R4-F118 — "Review predicts launch", the SCREEN half.
+// "Review predicts launch", the SCREEN half.
 //
 // runs.wire.fields.test.ts proves runWireBody maps one input to byte-identical
 // create/preflight bodies. Nothing proved the SCREEN hands both doors the same
@@ -770,12 +772,12 @@ describe("NewRunScreen — the unparseable barrier-class hint", () => {
 
 // §5c.8 — a run that launched WITH advisories.
 //
-// This used to be a 1.6s setTimeout that navigated to /runs/:id. It raced every
+// The screen must hold, not navigate on a timer: a timer would race every
 // other way off the screen (Esc and the ghost "Runs" button both land on
-// /runs, and the timer then yanked the member to the run), and it gave a
-// multi-line advisory a fixed beat nobody finishes reading. The screen HOLDS
-// now: the warnings stay listed and the primary button becomes "Open run",
-// which is the only thing that navigates.
+// /runs, and a timer would then yank the member to the run), and it would
+// give a multi-line advisory a fixed beat nobody finishes reading. The
+// warnings stay listed and the primary button becomes "Open run", which is
+// the only thing that navigates.
 describe("NewRunScreen — the 201's warnings hold the screen, no timer", () => {
   async function launchWith(warnings?: string[]) {
     createRunMock.mockResolvedValue({ id: "run_9", warnings });
@@ -809,19 +811,22 @@ describe("NewRunScreen — the 201's warnings hold the screen, no timer", () => 
     expect(navigateMock).toHaveBeenCalledWith("/runs/run_9");
   });
 
-  // The load-bearing regression: NOTHING is pending. Real timers here would
-  // only prove 1.6s hadn't elapsed yet.
+  // The load-bearing check: NOTHING is pending. Real timers here would only
+  // prove nothing fired within an arbitrary window, not that nothing was
+  // scheduled.
   it("leaves no pending navigation behind — the member backs out and stays out", async () => {
     await launchWith(["secret: DEPLOY_KEY was dropped — not granted to you"]);
     await screen.findByText(AGENTS.LAUNCH_WARNING_TITLE);
 
     vi.useFakeTimers();
     try {
-      // The ghost "Runs" button is the way out that the timer used to fight.
+      // The ghost "Runs" button is a way out; nothing schedules a competing
+      // navigation.
       fireEvent.click(screen.getByRole("button", { name: "Runs" }));
       expect(navigateMock).toHaveBeenCalledWith("/runs");
       navigateMock.mockReset();
-      // Ten seconds, six times the beat the timer used to take.
+      // Ten seconds — long enough that any stray scheduled navigation would
+      // have fired.
       vi.advanceTimersByTime(10_000);
       expect(navigateMock).not.toHaveBeenCalled();
     } finally {

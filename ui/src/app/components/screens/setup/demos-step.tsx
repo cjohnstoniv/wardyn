@@ -11,8 +11,8 @@
 // Default-exported so setup-screen can React.lazy() it and keep xterm out of
 // the main setup chunk.
 //
-// THE single demo renderer since /demos died — which is why it carries two
-// things that used to live only on that page's DemoCard:
+// The single demo renderer — it carries two things that once lived only on
+// the deleted /demos page's DemoCard:
 //  - the `demo-card-<id>` testid on its wrapper, so a demo is still addressable
 //    by the same selector after the URL swap (funnel.ts documents that trap);
 //  - the "Turn this into a policy" payoff: DemoRunControls only renders that

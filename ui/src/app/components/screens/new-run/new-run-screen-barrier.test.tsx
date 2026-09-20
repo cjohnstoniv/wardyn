@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The Barrier control (0.7.8) — split out of new-run-screen.test.tsx, which
-// was already at the check-file-size.sh ceiling. Its own copy of the
-// screen's mock harness, same shape as new-run-screen-saved-policy.test.tsx's.
+// The Barrier control — split out of new-run-screen.test.tsx, which was
+// already at the check-file-size.sh ceiling. Its own copy of the screen's
+// mock harness, same shape as new-run-screen-saved-policy.test.tsx's.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -145,12 +145,11 @@ describe("NewRunScreen — the barrier floor disables what it forbids", () => {
   });
 });
 
-// 0.7.8, per an Opus review of the matching server-side lane
-// (internal/api/runs_policy.go's strongestAdvertisedAtOrAbove): a console
-// launch used to ALWAYS send confinement_class, so the server's own
-// strongest-installed-at-or-above-the-floor default never applied to a
-// console launch at all, and the new confinement_source audit field
-// (requested vs defaulted) could never read "defaulted" from this screen.
+// An untouched Barrier control must omit confinement_class, so the server's
+// own strongest-installed-at-or-above-the-floor default
+// (internal/api/runs_policy.go's strongestAdvertisedAtOrAbove) applies to a
+// console launch, and the confinement_source audit field (requested vs
+// defaulted) can read "defaulted" from this screen.
 describe("NewRunScreen — an untouched Barrier omits confinement_class", () => {
   it("sends no confinement_class when the operator never touches the Barrier control", async () => {
     mockConfinementClasses = ["CC1", "CC2", "CC3"];
@@ -194,25 +193,22 @@ describe("NewRunScreen — no runner configured reads as unknown, not confirmed-
   });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
 // B4b — a clone, MOUNTED.
 //
 // wizard-spec.test.ts proves runPrefill + initialWizardState compose the right
 // state. It cannot prove the SCREEN keeps it: the mount-time /setup/status read
-// used to re-seed confinementClass from the operator's persisted default a tick
-// after the prefill applied — and moved pristineCc with it, so the overwrite
-// did not even read as dirty. A CC3 run cloned on a CC1-default machine
-// launched at CC1 while the banner promised the barrier carried over. Silently
-// weaker than the run it copies is the one direction a governance product must
-// never err, and only a mounted test that reads the WIRE BODY can see it.
+// must not re-seed confinementClass (and pristineCc with it) over a clone's
+// already-applied prefill — silently launching a cloned run weaker than its
+// source, while the banner still promises the barrier carried over, is the one
+// direction a governance product must never allow. Only a mounted test that
+// reads the WIRE BODY can catch it.
 //
-// 0.7.8: there is no persisted default left to disagree with (the server
-// picks the strongest installed class at or above the floor) — the carve-out
-// now guards against the SAME class of bug for a different reason: an
-// untouched Barrier control omits confinement_class so the server decides
-// (see the sibling describe above), and a clone's carried-over class must
-// still reach the wire explicitly rather than silently falling into that omit.
-// ═══════════════════════════════════════════════════════════════════════════
+// There is no persisted default left to disagree with (the server picks the
+// strongest installed class at or above the floor) — the carve-out now guards
+// against the SAME class of bug for a different reason: an untouched Barrier
+// control omits confinement_class so the server decides (see the sibling
+// describe above), and a clone's carried-over class must still reach the wire
+// explicitly rather than silently falling into that omit.
 describe("NewRunScreen — a cloned run reaches the wire as the run it cloned", () => {
   const prefill = {
     inlinePolicy: false,
@@ -238,8 +234,8 @@ describe("NewRunScreen — a cloned run reaches the wire as the run it cloned", 
   it("launches at the SOURCE run's barrier, not the server's own default", async () => {
     mockConfinementClasses = ["CC1", "CC2", "CC3"];
     renderClone();
-    // Wait for the barrier probe to settle — this is the effect that used to
-    // overwrite the prefill, so asserting before it lands would pass on the bug.
+    // Wait for the barrier probe to settle — this is the effect that can
+    // overwrite the prefill, so asserting before it lands would pass regardless.
     await screen.findByRole("button", { name: /Launch run/ });
     await waitFor(() =>
       expect(screen.getByRole("radio", { name: "Vault" })).toHaveAttribute("aria-checked", "true"),

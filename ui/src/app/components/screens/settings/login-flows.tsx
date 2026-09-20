@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// EXTRACTED from harness-login-pane.tsx (review-1 S4): the per-provider login
+// Extracted from harness-login-pane.tsx: the per-provider login
 // table is pure data plus one presentational component — nothing here reads
 // or writes the pane's own state. Moved out so the pane, which now carries
 // three lanes' worth of logic (0.7.5's P5 wait, 0.7.6's starting-detail
@@ -17,8 +17,8 @@ import { AWS_BLURB_MANAGED_OPENING } from "./login-pane-copy";
 // Per-provider login conventions. Adding a provider is a new row here (mirrors
 // the server-side agentHarnessLogin table), not a forked component.
 //
-// The two flows differ in HOW the credential comes back:
-//   · anthropic — `claude setup-token` PRINTS the token, so we scrape it off the
+// The two flows differ in how the credential comes back:
+//   · anthropic — `claude setup-token` prints the token, so we scrape it off the
 //     PTY and PUT it (capture: "scrape").
 //   · aws — `aws sso login` writes its token to ~/.aws/sso/cache/*.json and
 //     prints only a short-lived device code + verification URL. The in-sandbox
@@ -29,7 +29,7 @@ export type CaptureMode = "scrape" | "helper";
 export type LoginFlow = {
   cmd: string;
   title: string;
-  // U-8: taken as a FUNCTION of `startURLManaged` because the aws flow's opening
+  // U-8: taken as a function of `startURLManaged` because the aws flow's opening
   // clause is false under a managed row (there is no field, and the server
   // ignores a supplied URL). Every other flow ignores the argument.
   blurb: (startURLManaged: boolean) => React.ReactNode;
@@ -50,7 +50,7 @@ export type LoginFlow = {
   // is boot config; the start URL is per-organization and asked for here). The
   // server seeds both into the sandbox before the command is auto-typed.
   needsStartUrl?: boolean;
-  // "What happens next" — shown BEFORE anything launches (the intro phase, or
+  // "What happens next" — shown before anything launches (the intro phase, or
   // above the AWS start-URL form), so the terminal and the browser auth prompt
   // arrive announced. Includes what is required of the operator.
   expects: React.ReactNode[];

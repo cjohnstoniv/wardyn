@@ -114,9 +114,9 @@ export function agentRowInvalid(row: AgentProvider): boolean {
 // mechanism 400s at save (validateAgentMechanism's agent400NeedsLane), so the
 // picker never shows a blank, unlaunchable choice.
 //
-// IT IS NOT THE ANSWER TO "IS THIS AGENT ENABLED" — see rowEnabled. A row this
+// Not the answer to "is this agent enabled" — see rowEnabled. A row this
 // function invents carries no `disabled`, so reading `!row.disabled` off it
-// rendered every not-offered agent as ON.
+// would render every not-offered agent as ON.
 function resolvedRow(agents: AgentProvider[], harness: SetupHarnessTool): AgentProvider {
   return agents.find((a) => a.id === harness.id) ?? { id: harness.id, mechanism: defaultMechanism(harness) };
 }
@@ -396,7 +396,7 @@ function Row({
 
           {!harness.no_managed_auth && (
             <Field label={AGENTS.FIELD_SOURCE}>
-              {/* role=radiogroup + role=radio, not two bare buttons (V2/F3): this is
+              {/* role=radiogroup + role=radio, not two bare buttons: this is
                   a one-of-two form choice exactly like the mechanism picker above
                   it, and selection was conveyed by the `variant` styling alone —
                   a screen-reader user could not tell which source was chosen.
@@ -598,11 +598,11 @@ export function AgentsTab({
     setSaving(true);
     setSaveError(null);
     try {
-      // WHAT THE ADMIN SEES IS WHAT IS WRITTEN, in catalog order. A switch that
+      // What the admin sees is what is written, in catalog order. A switch that
       // is ON contributes its row (the stored one, or the defaults for one just
-      // enabled); a switch that is OFF contributes NOTHING unless a stored row
+      // enabled); a switch that is OFF contributes nothing unless a stored row
       // exists for it, which is kept and pinned off. Mapping every catalog id to
-      // an invented row is what made an unrelated edit widen the org's roster.
+      // an invented row would widen the org's roster on an unrelated edit.
       const catalogRows = roster.flatMap((h) => {
         const stored = agents.find((a) => a.id === h.id);
         if (rowEnabled(agents, h)) return [stored ?? { id: h.id, mechanism: defaultMechanism(h) }];
@@ -680,12 +680,10 @@ export function AgentsTab({
     <div className="space-y-4">
       <p className="text-body text-muted-foreground">{AGENTS.AGENTS_LEAD}</p>
 
-      {/* F4-F3 (Appendix A V8, corrected verdict, rule 8 — this tab's own
-          412 was HELD until 0.7.3 shipped, now unblocked): keep the draft
-          MOUNTED — the banner sits ABOVE the rows rather than replacing
-          them, so an edit typed moments before the 412 is still readable.
-          ONE control, "Discard mine and reload": the corrected verdict
-          REFUSES a "Save over theirs" arm. */}
+      {/* F4-F3 (Appendix A V8): keep the draft mounted — the banner sits
+          above the rows rather than replacing them, so an edit typed
+          moments before the 412 is still readable. One control, "Discard
+          mine and reload" — there is no "Save over theirs" arm. */}
       {savedElsewhere && (
         <div className="space-y-3 rounded-lg border border-warning/30 bg-warning-subtle p-4">
           <p className="text-sm font-medium text-foreground">{PROVIDERS.SAVED_ELSEWHERE_TITLE}</p>

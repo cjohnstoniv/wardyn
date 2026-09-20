@@ -75,15 +75,14 @@ export interface UserDriveMeta {
    *
    *  R4/F091 — THE THIRD KEY, and the reason there are three rather than two
    *  (internal/api/me.go:126-137). `drive: null` alone means "you have no
-   *  allocation", which is ADVICE ("ask an admin for one") — and it was also
-   *  what a member got when their group snapshot was stale, when their
-   *  allocation could not name a directory, and when the store was down. The
+   *  allocation", which is ADVICE ("ask an admin for one") — but it is also
+   *  what a member gets when their group snapshot is stale, when their
+   *  allocation could not name a directory, or when the store is down. The
    *  server ships the reason as a closed vocabulary beside the null
    *  (`groups_snapshot_stale` / `unmountable` / `unavailable` /
    *  `governance_unavailable`, user_drives_resolve.go) and suppresses the
-   *  allocation alongside it; the console typed the key and then read it
-   *  nowhere, so all four arrived as the one answer whose remedy is wrong for
-   *  every one of them.
+   *  allocation alongside it; without reading that key, all four arrive as
+   *  the one answer whose remedy is wrong for every one of them.
    *
    *  Carried here so a consumer CAN tell them apart. Non-empty means the drive
    *  affordance must not be offered — the server has not said the mount would
@@ -242,7 +241,7 @@ export function usePrincipal(): string {
 
 // F5-F1 — the shared "may this caller mutate THIS row" predicate: an operator
 // may always; a member may ONLY a row they own (ownedBy === principal).
-// PREDICATE CORRECTION over the naive `owned_by === principal` a first draft
+// A correction over the naive `owned_by === principal` a first draft
 // would reach for: an operator-created row carries owned_by:"" (see
 // Workspace.OwnedBy's doc comment — empty means operator-owned, not
 // "unowned"), and /me.principal is non-empty for a signed-in admin too, so

@@ -73,9 +73,9 @@ describe("setup-gate — the funnel's own per-browser state (no hard gate any mo
     expect(loadVisitedSteps().sort()).toEqual(["corp_network", "environment"]);
   });
 
-  // F3-F6: neither flag gates anything — their only job is the rail's
-  // "Skipped" badge — so a mark left by a PREVIOUS install on this browser is
-  // a false green on a fresh one that never actually visited that step.
+  // Neither flag gates anything — their only job is the rail's "Skipped"
+  // badge — so a mark left by a PREVIOUS install on this browser is a false
+  // green on a fresh one that never actually visited that step.
   it("clearStaleVisitFlags: a fresh, never-onboarded, never-run install clears both stale flags", () => {
     markIntegrationsSkipped();
     markStepVisited("corp_network");
@@ -103,9 +103,9 @@ describe("setup-gate — the funnel's own per-browser state (no hard gate any mo
   });
 });
 
-// L3: the PRODUCTION path (setup-screen.tsx calls clearStaleVisitFlagsOnce,
-// never the unlatched clearStaleVisitFlags above) — pinned separately so the
-// once-per-load semantics DEVIATION-1 relies on actually has coverage.
+// The PRODUCTION path (setup-screen.tsx calls clearStaleVisitFlagsOnce,
+// never the unlatched clearStaleVisitFlags above) — pinned separately so its
+// once-per-load semantics actually has coverage.
 describe("clearStaleVisitFlagsOnce — the module-level once-per-load latch (L3)", () => {
   beforeEach(() => {
     localStorage.clear();
@@ -118,9 +118,10 @@ describe("clearStaleVisitFlagsOnce — the module-level once-per-load latch (L3)
     expect(clearStaleVisitFlagsOnce(fresh)).toBe(true);
     expect(integrationsSkipped()).toBe(false);
 
-    // A mark set AFTER the first call — the ordinary in-session case
-    // (DEVIATION-1's whole point) — must survive the second call within the
-    // same load, even though the condition (`fresh`) is unchanged.
+    // A mark set AFTER the first call — the ordinary in-session case, and
+    // the whole point of the once-per-load latch — must survive the second
+    // call within the same load, even though the condition (`fresh`) is
+    // unchanged.
     markIntegrationsSkipped();
     expect(clearStaleVisitFlagsOnce(fresh)).toBe(false);
     expect(integrationsSkipped()).toBe(true);
@@ -189,9 +190,8 @@ describe("firstRunLanding — the INSTALL's onboarding mark decides for an admin
   });
 });
 
-// ------------------------------------------------------------
 // setupGateActive — the server-derived hard gate.
-// ------------------------------------------------------------
+//
 // 0.7.8: the bar is the DAEMON's own `blocking` flag (SetupCheck.Blocking,
 // internal/api/setup_checks.go), not a status/id guess made here. A `warn`/
 // `fail` grade is necessary but NOT sufficient — most of the checklist can
@@ -210,12 +210,12 @@ describe("setupGateActive", () => {
   // trusts the flag alone, so the fixture only needs to carry it.
   const blocking = { id: "runner", status: "fail" as const, blocking: true };
 
-  // 0.7.8: this replaces the old "never gates on the model-provider rows"
-  // case. That was the second shape of an id list 0.7.7 added (llm_provider,
-  // then bedrock_provider) — and the next lapsed sign-in graded a third id,
-  // harness_credential_aws, nobody had added to it, because the console was
-  // enumerating a family instead of naming the property that matters. There is
-  // no id list left to outgrow: a row gates on `blocking`, whatever its id.
+  // The gate reads the daemon's `blocking` flag alone — never a hardcoded id
+  // list. An id list is exactly the trap this avoids: enumerating a family of
+  // ids that happen to matter today misses the next one a daemon adds
+  // (llm_provider, then bedrock_provider, then harness_credential_aws would
+  // each need their own addition). There is no id list left to outgrow: a
+  // row gates on `blocking`, whatever its id.
   it("never gates on a row the daemon did not mark blocking, however it is graded", () => {
     expect(setupGateActive({ checks: [ok, warnNonBlocking] })).toBe(false);
     expect(setupGateActive({ checks: [ok, failNonBlocking] })).toBe(false);

@@ -94,9 +94,9 @@ describe("AgentsTab", () => {
     expect(within(row).getByText(AGENTS.PER_USER_UNAVAILABLE)).toBeInTheDocument();
   });
 
-  // V2/F3: the credential source was two bare <button type=button> — no group
-  // role, no checked state, selection conveyed by the `variant` styling alone —
-  // sitting directly under a mechanism control that IS a radiogroup.
+  // The credential source is a real radiogroup (role=radiogroup + role=radio),
+  // matching the sibling mechanism control — not two styled buttons with
+  // selection conveyed by `variant` alone.
   it("the credential source is a radiogroup whose chosen option reads as checked", async () => {
     getAgentProvidersMock.mockResolvedValue({
       providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso", credential_source: "per_user" }] },
@@ -119,7 +119,7 @@ describe("AgentsTab", () => {
     expect(within(row).getByRole("radio", { name: AGENTS.SOURCE_PER_USER })).not.toBeDisabled();
   });
 
-  // VL-23: the start-URL input is reachable by its Field label (htmlFor/id).
+  // The start-URL input is reachable by its Field label (htmlFor/id).
   it("the SSO start-URL input is reachable by its label on a per_user row", async () => {
     getAgentProvidersMock.mockResolvedValue({
       providers: {
@@ -203,14 +203,14 @@ describe("AgentsTab", () => {
   });
 });
 
-// The tab's Switch is the SERVER's roster answer, and Save writes what the
-// admin can see. `SetupHarnessTool.enabled` is `ok && !row.Disabled`
-// (setupHarnessTools, internal/api) — the same field agent-picker.tsx:31
-// already reads. This tab did not read it: the Switch derived from
-// `!row.disabled` on a row resolvedRow INVENTED for every catalog id with no
-// stored row, so an admin who had narrowed the roster (CLI/MDM/PUT
-// /site-config) and then edited anything here silently re-enabled every catalog
-// agent — the mirror image of the `{agents: []}` wipe, in the same function.
+// The tab's Switch reflects the SERVER's roster answer, and Save writes
+// exactly what the admin can see. `SetupHarnessTool.enabled` is
+// `ok && !row.Disabled` (setupHarnessTools, internal/api) — the same field
+// agent-picker.tsx:31 reads. The Switch must derive from that field, never
+// invent a default for a catalog id with no stored row: inventing one would
+// silently re-enable every catalog agent an admin had narrowed (CLI/MDM/PUT
+// /site-config) on any unrelated edit here — the mirror image of the
+// `{agents: []}` wipe, in the same function.
 describe("AgentsTab — the roster on screen is the server's, and Save writes it", () => {
   const NARROWED: SetupHarnessTool[] = [
     harness(),
@@ -290,11 +290,11 @@ describe("AgentsTab — the roster on screen is the server's, and Save writes it
   });
 });
 
-// SetupStatus.harnesses is OPTIONAL on the wire ("older daemons omit it — treat
-// absent as unknown, never as false"). save() builds the whole PUT body from
-// this prop, so an absent roster defaulted to [] PUT `{agents: []}` — after
-// which every catalog agent reads disabled and every run naming an agent is
-// refused, from one click on a Save the admin had no reason to distrust.
+// SetupStatus.harnesses is OPTIONAL on the wire (older daemons omit it — treat
+// absent as unknown, never as false). save() builds the whole PUT body from
+// this prop, so an absent roster must never default to [] — PUTting
+// `{agents: []}` would disable every catalog agent and refuse every run
+// naming one, from a single Save the admin has no reason to distrust.
 describe("AgentsTab — an unknown roster is never a saveable empty one", () => {
   it("renders the fetch-failed state, with no rows and no Save, when the roster is undefined", async () => {
     render(<AgentsTab operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
@@ -311,9 +311,9 @@ describe("AgentsTab — an unknown roster is never a saveable empty one", () => 
     expect(putAgentProvidersMock).not.toHaveBeenCalled();
   });
 
-  // V1 r2 HIGH: the roster comes from the PARENT's /setup/status read, and this
-  // Retry called the tab's own load() — a re-read of /agent-providers, which had
-  // not failed. Three clicks, three getAgentProviders calls, nothing moved.
+  // The roster comes from the PARENT's /setup/status read. This Retry must
+  // re-fire that read, never the tab's own load() — a re-read of
+  // /agent-providers only re-tries a fetch that never failed.
   it("its Retry re-fires the PARENT's roster read, never this tab's own fetch", async () => {
     render(<AgentsTab operator onRetryRoster={retryRosterMock} onStatusRefresh={statusRefreshMock} />);
     await screen.findByText(PROVIDERS.FETCH_FAILED_TITLE);
@@ -336,10 +336,11 @@ describe("AgentsTab — an unknown roster is never a saveable empty one", () => 
   });
 });
 
-// V1 r2 MEDIUM: `per_user` is captured for an AWS SSO sign-in only, so a stored
-// row pairing it with any other mechanism rendered "Per person" ACTIVE and
-// DISABLED at once, hid the start-URL field, and re-PUT both fields verbatim on
-// the next unrelated Save — a value the admin could neither see nor clear.
+// `per_user` is valid for AWS SSO only. A stored row pairing it with any
+// other mechanism must be normalised on load: rendering "Per person" both
+// active and disabled at once, hiding the start-URL field, and re-PUTting
+// both fields verbatim on the next unrelated Save would leave a value the
+// admin can neither see nor clear.
 describe("AgentsTab — a stored per_user on a mechanism that can't carry it is normalised on LOAD", () => {
   const STORED = {
     id: "claude-code",
@@ -389,12 +390,12 @@ describe("AgentsTab — a stored per_user on a mechanism that can't carry it is 
     expect(within(row).getByLabelText(AGENTS.FIELD_SSO_START_URL)).toHaveValue("https://acme.awsapps.com/start");
   });
 
-  // A-09 (review fix-first): a bedrock_sso row with credential_source SHARED
-  // (or unset) is the same "the admin can neither see nor clear it" trap as
-  // the mechanism case above — the pin fields aren't shown (per_user gate),
-  // so a stale sso_account_id/sso_role_name/sso_start_url from another client
-  // survived load-normalise and rode the next unrelated Save straight into
-  // agent400SSOPinUnused. One clause (credential_source !== "per_user") now
+  // A bedrock_sso row with credential_source SHARED (or unset) is the same
+  // "the admin can neither see nor clear it" trap as the mechanism case
+  // above — the pin fields aren't shown (per_user gate), so a stale
+  // sso_account_id/sso_role_name/sso_start_url from another client can
+  // survive load-normalise and ride the next unrelated Save straight into
+  // agent400SSOPinUnused. One clause (credential_source !== "per_user")
   // clears all four fields together, regardless of mechanism.
   it("a stored bedrock_sso+SHARED row carrying a stale pin is normalised on LOAD too", async () => {
     const STORED_SHARED_WITH_PIN = {
@@ -425,9 +426,10 @@ describe("AgentsTab — a stored per_user on a mechanism that can't carry it is 
   });
 });
 
-// V1 r2 LOW: the chip's final `else` painted MODEL_ACCESS_NOT_CONFIGURED over
-// ANY unrecognised state, so a daemon reporting `expired_renewable` — a live,
-// renewable credential — told the admin they were signed out, with no CTA.
+// The chip's final `else` must not paint MODEL_ACCESS_NOT_CONFIGURED over any
+// unrecognised state: a daemon reporting `expired_renewable` — a live,
+// renewable credential — would otherwise tell the admin they're signed out,
+// with no CTA.
 describe("AgentsTab — a model-access state outside the five gets no chip", () => {
   it("renders NO chip and no sign-in button for expired_renewable", async () => {
     getAgentProvidersMock.mockResolvedValue({ providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] }, etag: '"m1"' });
@@ -450,8 +452,8 @@ describe("AgentsTab — a model-access state outside the five gets no chip", () 
   });
 });
 
-// V1 r2 LOW: the admin's own sign-in under a per_user row goes against the ROW's
-// stored portal — the server ignores a typed one — so the pane must not ask.
+// The admin's own sign-in under a per_user row goes against the ROW's stored
+// portal — the server ignores a typed one — so the pane must not ask.
 describe("AgentsTab — the admin's per_user sign-in never asks for the portal", () => {
   it("opens the login pane with the managed note instead of the start-URL field", async () => {
     getAgentProvidersMock.mockResolvedValue({
@@ -535,11 +537,11 @@ describe("AgentsTab — the ETag / 412 / 400 contract", () => {
     }
   });
 
-  // F4-F3 (Appendix A V8, corrected verdict, rule 8 — unblocked for this
-  // tab): the banner used to SWAP the whole body — every row (and any
-  // unsaved edit on one) came down with it, unreadable first. Now the draft
-  // stays MOUNTED, the banner sits ABOVE the rows, and its ONE control is
-  // "Discard mine and reload" — no "Save over theirs" arm.
+  // F4-F3 (Appendix A V8): on a 412, the banner must not swap the whole
+  // body — every row (and any unsaved edit on one) would come down with it,
+  // unreadable first. The draft stays MOUNTED, the banner sits ABOVE the
+  // rows, and its ONE control is "Discard mine and reload" — no "Save over
+  // theirs" arm.
   it("a 412 renders SAVED_ELSEWHERE ABOVE the still-mounted rows, and never overwrites", async () => {
     getAgentProvidersMock.mockResolvedValue({
       providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] },
@@ -574,16 +576,17 @@ describe("AgentsTab — the ETag / 412 / 400 contract", () => {
   });
 });
 
-// V1 r2 HIGH (Appendix A finding 4, staleness root cause): modelAccess comes
-// from the PARENT's /setup/status, never re-read after a successful Save, so
-// right after declaring per_user the admin's own door can go on showing the
-// stale pre-save state until an unrelated navigation happens to re-fetch it.
+// Appendix A finding 4 (staleness root cause): modelAccess comes from the
+// PARENT's /setup/status and is never re-read after a successful Save on its
+// own — right after declaring per_user, the admin's own door would otherwise
+// go on showing the stale pre-save state until an unrelated navigation
+// happens to re-fetch it.
 //
-// A-01 (review fix-first): the re-fire is `onStatusRefresh` — /setup/status
-// ONLY — never `onRetryRoster`, which is the PARENT's whole load(): it also
-// resets the Git/Storage tabs' own unsaved `draft`, clears a pending 412
-// banner, and a transient GET failure there would flip the whole screen to
-// FETCH_FAILED right after a successful, unrelated agent save.
+// A-01: the re-fire must be `onStatusRefresh` — /setup/status ONLY — never
+// `onRetryRoster`, which is the PARENT's whole load(): that also resets the
+// Git/Storage tabs' own unsaved `draft`, clears a pending 412 banner, and a
+// transient GET failure there would flip the whole screen to FETCH_FAILED
+// right after a successful, unrelated agent save.
 describe("AgentsTab — a successful Save re-fires ONLY the parent's status read", () => {
   it("calls onStatusRefresh after a successful save, never onRetryRoster", async () => {
     putAgentProvidersMock.mockResolvedValue({ providers: { agents: [] }, etag: '"r2"' });
@@ -605,7 +608,7 @@ describe("AgentsTab — a successful Save re-fires ONLY the parent's status read
     expect(retryRosterMock).not.toHaveBeenCalled();
   });
 
-  // A-05: the 412 twin — no negative control existed for this call site.
+  // The 412 twin: a negative control for this call site.
   it("does NOT call onStatusRefresh when someone else saved first (412)", async () => {
     getAgentProvidersMock.mockResolvedValue({
       providers: { agents: [{ id: "claude-code", mechanism: "bedrock_sso" }] },
@@ -639,9 +642,9 @@ describe("AgentsTab — the per_user sign-in banner", () => {
     expect(within(banner).getByText(AGENTS_DRAFT.PER_USER_SIGN_IN_BODY)).toBeInTheDocument();
     expect(within(banner).getByText(AGENTS.ADMIN_OWN_CHIP_NOTE)).toBeInTheDocument();
     expect(within(banner).getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeInTheDocument();
-    // A-07: role="status" covers ONLY the title/body pair — never
-    // ModelAccessSignIn (HarnessLoginPane's own multi-step device-code/poll
-    // flow would otherwise re-announce wholesale on every poll tick).
+    // role="status" covers ONLY the title/body pair — never ModelAccessSignIn
+    // (HarnessLoginPane's own multi-step device-code/poll flow would
+    // otherwise re-announce wholesale on every poll tick).
     const statusRegion = within(banner).getByRole("status");
     expect(within(statusRegion).getByText(AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE)).toBeInTheDocument();
     expect(within(statusRegion).queryByText(AGENTS.ADMIN_OWN_CHIP_NOTE)).not.toBeInTheDocument();
@@ -673,9 +676,9 @@ describe("AgentsTab — the per_user sign-in banner", () => {
     expect(within(row).queryByText(AGENTS_DRAFT.PER_USER_SIGN_IN_TITLE)).not.toBeInTheDocument();
   });
 
-  // U-03 (blind review lens-U): a per_user row that is only DRAFTED — Per
-  // person toggled in the picker, not yet saved — must not surface the live
-  // CTA. Its only outcome would be a server 400 with no field to answer
+  // U-03: a per_user row that is only DRAFTED — Per person toggled in the
+  // picker, not yet saved — must not surface the live CTA. Its only outcome
+  // would be a server 400 with no field to answer
   // (harnesscred.go's 400 fires on the STORED row's start URL being empty,
   // which is exactly the shared-server state here). `harnesses` (the server
   // read) still says shared/unsaved even though the draft says per_user.
@@ -691,8 +694,8 @@ describe("AgentsTab — the per_user sign-in banner", () => {
     expect(within(row).getByRole("button", { name: AGENTS.SIGN_IN_AWS })).toBeInTheDocument();
   });
 
-  // R-01 (review): the row is SAVED disabled + per_user, and the DRAFT
-  // switches it back on — perUserSaved must still read `false`. It is
+  // R-01: the row is SAVED disabled + per_user, and the DRAFT switches it
+  // back on — perUserSaved must still read `false`. It is
   // `isPerUserSsoRow`'s `enabled !== false` conjunct, not two of its three
   // parts: the server's login predicate (perUserLoginRow) and its
   // model_access scoping (awsSSOScopeFor) both treat a disabled row as NOT
@@ -748,9 +751,10 @@ describe("AgentsTab — not_applicable renders no model-access block at all", ()
   });
 });
 
-// Finding 4's other half: the roster pin. Two labelled Inputs mirroring
-// sso_start_url — shown only under bedrock_sso + per_user, cleared exactly
-// when the start URL is (normalizeAgentRow, and the same onChange paths).
+// Appendix A finding 4's other half: the roster pin. Two labelled Inputs
+// mirroring sso_start_url — shown only under bedrock_sso + per_user, cleared
+// exactly when the start URL is (normalizeAgentRow, and the same onChange
+// paths).
 describe("AgentsTab — the roster pin (sso_account_id / sso_role_name)", () => {
   it("renders both pin inputs, reachable by label, only on a bedrock_sso per_user row", async () => {
     getAgentProvidersMock.mockResolvedValue({

@@ -28,7 +28,7 @@
 // A drive NAME is never mono: it is a human-chosen label, and the strings
 // below already spell the double quotes it is rendered inside.
 
-// ==================== §7.1 — reused canon, referenced never re-frozen ========
+// §7.1 — reused canon, referenced never re-frozen.
 //
 // These already exist and are IMPORTED, not retyped. Re-exported from here so
 // a drives surface has one import site and cannot accidentally grow a second
@@ -85,7 +85,7 @@ export { ACCESS_STATE, PEOPLE, PREVIEW } from "./people-access-copy";
 //     the launch-warning toast title — each component-local text, not a
 //     copy.ts export.
 //
-// DELIBERATELY ABSENT — the strings the SERVER emits. §7.1's second table
+// Deliberately absent — the strings the SERVER emits. §7.1's second table
 // freezes seven Go format strings that this module does NOT carry, because
 // the console renders them FROM THE WIRE, verbatim, and a second copy here
 // would be a claim rather than canon. All seven are ADMIN-facing (registering
@@ -114,7 +114,7 @@ export { ACCESS_STATE, PEOPLE, PREVIEW } from "./people-access-copy";
 // belt-and-braces governance-copy.ts's MEMBER already uses for its own §7.7.
 // See DRIVE_MEMBER's own note.
 
-// ==================== §7.2-§7.5 — DRIVES, the admin screen ==================
+// §7.2-§7.5 — DRIVES, the admin screen.
 
 export const DRIVES = {
   // ---- §7.2 the drives block ----
@@ -123,10 +123,10 @@ export const DRIVES = {
   // title — the way GOVERNANCE.TITLE serves nav and heading (§7.2 prose).
   TITLE: "User drives",
   LEAD: "Persistent storage a run can mount at /home/agent/drive. An admin registers a drive and allocates it to people or groups; each person gets their own directory in it, and chooses per run whether to mount it.",
-  // The org switch (`disabled` on GET /drives's snapshot, S2/0.7.2): renders
+  // The org switch (the `disabled` field on GET /drives's snapshot): renders
   // ABOVE the table it still shows in full — everything here is kept, nothing
-  // mounts until the switch is back on. Q9 (workspace-providers-prompt.md):
-  // moved here from that module (U3) because the screen it renders on already
+  // mounts until the switch is back on. Q9 (workspace-providers-prompt.md,
+  // U3): moved here from that module because the screen it renders on already
   // owns every other string beside it.
   DRIVES_OFF_BANNER:
     "User drives are turned off for this deployment under Workspace providers. Everything here is kept; nothing mounts until they are turned back on.",
@@ -220,7 +220,7 @@ export const DRIVES = {
   ENFORCEMENT_REQUEST: "Size requested; the storage class decides",
   ENFORCEMENT_EXTERNAL: "Size bounded by the share's own quota",
   ENFORCEMENT_NONE: "Size shown, not enforced",
-  // 0.7.2: Kubernetes' word for ephemeral scratch, not a drive backend — no v1
+  // Kubernetes' word for ephemeral scratch, not a drive backend — no v1
   // drive backend yields it (EnforcementFor is drive-backend-keyed and
   // untouched). Appended here (workspace-providers-prompt.md §2.8/§7.1) so the
   // Workspace Providers Storage tab can read the SAME `DRIVES.ENFORCEMENT_*`
@@ -250,8 +250,8 @@ export const DRIVES = {
   FIELD_DRIVE: "Drive",
   DRIVE_PLACEHOLDER: "Choose a drive",
   FIELD_SIZE_OVERRIDE: "Size override (MiB)",
-  // B5-F2 residual (Appendix A verdict): a size-only write to an already-
-  // provisioned k8s_pvc drive is a 200 and reported everywhere — the store
+  // A size-only write to an already-provisioned k8s_pvc drive is a 200 and
+  // reported everywhere — the store
   // never refuses it (OPERATIONS.md's own documented claim-shape reuse) — but
   // the PVC itself keeps its old request; the k8s driver only WARNs the
   // drift. Said here rather than a 409 an admin's console PUT has no way to
@@ -321,7 +321,7 @@ export const DRIVES = {
   FETCH_FAILED_TITLE: "Couldn't load user drives",
   FETCH_FAILED_BODY:
     "Something went wrong reaching the server. Allocations that already exist still bind every run — this list just can't show them right now.",
-  // The ONE row the re-home confirm dialog adds (U3, 0.7.2): driveRehomeGuard's
+  // The ONE row the re-home confirm dialog adds (U3): driveRehomeGuard's
   // 409 (§7.1) already names what moves and who it moves for — this is only
   // the console's heading over that server text. Cancel is PEOPLE.CANCEL; the
   // confirm reuses SAVE_CTA above, painted destructive, because the action IS
@@ -345,7 +345,7 @@ export const DRIVES = {
   CARD_OPEN: "Manage drives",
 } as const;
 
-// ==================== §7.6-§7.7 — DRIVE_MEMBER ==============================
+// §7.6-§7.7 — DRIVE_MEMBER.
 
 // §7.6's moments render ONLY when a drive is allocated (or, for the reason
 // lines, when it exists but can't be mounted). GS_DRIVE_CHIP follows
@@ -400,7 +400,7 @@ export const DRIVE_MEMBER = {
   // attempt, not a caption on an offer nobody was made.
   NR_PAUSED: "Your drive is paused by your admin.",
   NR_DENIED: (profile: string) => `Your governance profile "${profile}" does not allow mounting a drive.`,
-  // Two of /me.user_drive_unavailable's four tokens (U3, R1-F139 == R4-F052).
+  // Two of /me.user_drive_unavailable's four tokens (U3).
   // `groups_snapshot_stale` reuses MEMBER.DENIED_STALE_GROUPS (governance-
   // copy.ts) verbatim rather than a new row. `unmountable` renders THIS
   // sentence too, NOT REFUSED_BACKEND below: REFUSED_BACKEND's {reason} is
@@ -458,7 +458,7 @@ export const DRIVE_MEMBER = {
   REFUSED_TARGET_RESERVED: "workspace_mounts[0]: target /home/agent/drive is reserved for the user drive",
 } as const;
 
-// ==================== §7.8 — DRIVE_RUN ======================================
+// §7.8 — DRIVE_RUN.
 
 // One <dt>/<dd> pair in IdentityWidget's <dl>, between Sandbox and Started,
 // rendered ONLY when the run row carries a drive — which it does not in v1

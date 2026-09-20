@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// ============================================================
 // New Run permission wizard — typed state + spec composition.
 //
 // This is the single source of truth for the CANONICAL wire contract the
@@ -21,7 +20,6 @@
 //   - api_key grant scope = {host, header, secret_name, format}; format is the
 //     "%s"-style wrapper "Bearer %s" (matches internal/egress /
 //     injectionRuleFromScope, which defaults Format to "Bearer %s").
-// ============================================================
 import type {
   AuditEvent,
   ConfinementClass,
@@ -259,7 +257,7 @@ export interface WizardState {
   // A user-supplied base image ref. When set, the backend wraps it with the
   // runner tools before use (see CreateRunInput.image). "" = the convention image.
   image: string;
-  // RETIRED with the wizard's hydrator (W15-W15e-wizard-roundtrip): both
+  // RETIRED with the wizard's hydrator: both
   // `devcontainerRepo` and `opaqueGrants` existed ONLY to carry a hydrated
   // proposal/policy through a round trip, and the hydrator that wrote them
   // (wizardStateFromProposal / applyProfileSpecToState) has no callers left.
@@ -453,15 +451,15 @@ function freshWizardState(defaultCc: ConfinementClass): WizardState {
     gitPatHost: "",
     gitPatSecretName: "",
     gitPatUsername: "",
-    // W12-W12-B-4: approval-gated by default used to sound safer, but the
-    // broker's mint is single-use per grant (internal/broker/broker.go's
-    // minted_jti guard) regardless of RequiresApproval — an approval-gated
-    // git_pat authenticates exactly ONE git operation, then every later one
-    // in the SAME run (a second push, a submodule fetch, …) 409s "mint
-    // returned without approval_id" with no way to re-approve mid-run. The
-    // cached github_token lane doesn't hit this (its brokered mint is
-    // refreshed per use, not a raw single-use secret grant), so default off
-    // to match its effective behavior; the operator can still opt back in.
+    // Approval-gated sounds safer, but the broker's mint is single-use per
+    // grant (internal/broker/broker.go's minted_jti guard) regardless of
+    // RequiresApproval — an approval-gated git_pat authenticates exactly ONE
+    // git operation, then every later one in the SAME run (a second push, a
+    // submodule fetch, …) 409s "mint returned without approval_id" with no
+    // way to re-approve mid-run. The cached github_token lane doesn't hit
+    // this (its brokered mint is refreshed per use, not a raw single-use
+    // secret grant), so default off matches its effective behavior; the
+    // operator can still opt back in.
     gitPatRequiresApproval: false,
 
     allowedDomains: ["api.anthropic.com"],

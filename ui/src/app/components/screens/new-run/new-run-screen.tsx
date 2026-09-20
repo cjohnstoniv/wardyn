@@ -78,9 +78,9 @@ export function NewRunScreen() {
   // cockpit rendered at all.
   const prefill = (useLocation().state as { prefill?: RunPrefill } | null)?.prefill;
   // Seed with CC1 — a harmless placeholder the /setup/status effect below
-  // replaces within a tick with the server's own default (0.7.8: the
-  // strongest installed class), the moment it resolves. There is no
-  // per-browser default left to seed this from (see default-confinement.ts).
+  // replaces within a tick with the server's own default (the strongest
+  // installed class), the moment it resolves. There is no per-browser
+  // default left to seed this from (see default-confinement.ts).
   const [state, setState] = React.useState<WizardState>(() =>
     initialWizardState("CC1", prefill?.state),
   );
@@ -166,11 +166,11 @@ export function NewRunScreen() {
   }, []);
 
   // ONE /setup/status read for everything this screen needs: model-access
-  // readiness, the harness catalog, and (0.7.8) which barriers this host can
+  // readiness, the harness catalog, and which barriers this host can
   // build — runner.confinement_classes, the same field every other surface
-  // reads, not the /healthz mirror this screen used to poll. `unreachable`
-  // already distinguishes "couldn't check" from a real empty list, so there
-  // is no retry-on-empty heuristic to reimplement.
+  // reads, never a separately-polled mirror. `unreachable` already
+  // distinguishes "couldn't check" from a real empty list, so there is no
+  // retry-on-empty heuristic to reimplement.
   React.useEffect(() => {
     let alive = true;
     setupApi
@@ -242,8 +242,8 @@ export function NewRunScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // The envelope-field detach funnel (D11/claim6) retired with the controls it
-  // guarded: four of its five fields were the Network card's, and the fifth —
+  // The envelope-field detach funnel retired with the controls it guarded:
+  // four of its five fields were the Network card's, and the fifth —
   // confinementClass — is now guarded by the floor-DISABLE below instead, which
   // is strictly stronger. A one-time up-clamp alone would re-open the
   // below-floor 422 (runs_create.go's floor check, on both the policy_id and
@@ -303,7 +303,7 @@ export function NewRunScreen() {
   // successful parse's. Both paths refuse to launch below it server-side.
   const floor = useSaved ? (selectedPolicy?.spec.min_confinement_class as ConfinementClass | undefined) : parsedFloor;
 
-  // The Barrier control's per-tier state (item 3, 0.7.8) — see barrierReasons.
+  // The Barrier control's per-tier state — see barrierReasons.
   const { qualifying, unavailable, belowFloor } = barrierReasons(availableClasses, floor);
 
   // UP-CLAMP the Barrier Seg to the active floor. `cc` is in the deps on
@@ -450,7 +450,7 @@ export function NewRunScreen() {
       )}
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
-        {/* ── Left: the form ─────────────────────────────────────── */}
+        {/* Left: the form */}
         <div className="min-w-0 space-y-4">
           {/* Identity first: the one thing that makes this run findable a week
               from now, and the only field on the page that is always required. */}
@@ -544,7 +544,7 @@ export function NewRunScreen() {
                 interactive={isInteractive}
                 savedPolicy={{
                   active: useSaved,
-                  onActiveChange: (v: boolean) => { // F2-F1, R1
+                  onActiveChange: (v: boolean) => { 
                     const c = clearedSpecOnCustomSwitch(v, securityOperator && operatorResolved, !!state.selectedPolicyId);
                     if (c) setSpecText(c);
                     setUseSaved(v);
@@ -683,7 +683,7 @@ export function NewRunScreen() {
           </SectionCard>
         </div>
 
-        {/* ── Right: the live rail, a fixed 320px ────────────────── */}
+        {/* Right: the live rail, a fixed 320px */}
         <RunRail
           governanceProfile={governanceProfile}
           savedPolicy={selectedPolicy}

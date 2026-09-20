@@ -44,7 +44,7 @@ import {
 
 interface RunRailProps {
   /**
-   * The governance profile bounding THIS caller, from GET /policies/default's
+   * The governance profile bounding this caller, from GET /policies/default's
    * governance_profile_name. Undefined for a caller with no assignment — the
    * absent-row doctrine, and the section below simply does not render, so an
    * unassigned member's rail is byte-for-byte what it was.
@@ -52,7 +52,7 @@ interface RunRailProps {
   governanceProfile?: string;
   /** The stored policy this run launches by reference, when there is one. */
   savedPolicy?: { name: string; spec: RunPolicySpec };
-  /** The barrier the run REQUESTS (a separate wire field from the spec floor). */
+  /** The barrier the run requests (a separate wire field from the spec floor). */
   cc: ConfinementClass;
   /** An agent run with no model path launches, then fails its first model call. */
   showModelWarning: boolean;
@@ -72,28 +72,28 @@ interface RunRailProps {
     /** Why Launch cannot be pressed — a disabled button that won't say is a dead end. */
     problem: string | null;
     error: string | null;
-    /** The server refused THIS launch for the caller's own model credential (a
+    /** The server refused this launch for the caller's own model credential (a
      *  422 carrying reason `model_credential`) — the one refusal a sign-in
      *  repairs, so the rail answers it with the door and launches again. */
     credentialRefused: boolean;
     /** The 201's advisory `warnings[]`, once Launch has actually fired
      *  (§5c.8) — rendered here, inline, instead of a toast. */
     warnings: string[];
-    /** Set once a run launched WITH warnings: the screen stays put and this
+    /** Set once a run launched with warnings: the screen stays put and this
      *  replaces Launch, so the member opens the run when they have read them.
-     *  Null on every other state. A timed redirect used to do this and raced
-     *  every other navigation off the screen. */
+     *  Null on every other state. A timed redirect races every other
+     *  navigation off the screen, so this must replace Launch instead. */
     onOpenRun: (() => void) | null;
   };
   preflight: { error: string | null; result: PreflightResult | null };
   /**
-   * The picked agent's /setup/status roster row — WITHHELD by the screen for a
+   * The picked agent's /setup/status roster row — withheld by the screen for a
    * run that makes no model call (a shell command), so its absence is also how
    * this rail knows there is no model credential to describe.
    *
-   * Its `credential_residency` is published for ONE row shape only (an enabled
+   * Its `credential_residency` is published for one row shape only (an enabled
    * per_user + bedrock_sso row) and is the only thing read off it here. The
-   * row's `mechanism` is the DECLARED lane and is NEVER read: under a `shared`
+   * row's `mechanism` is the declared lane and is never read: under a `shared`
    * row that lane is satisfied by a chain that fell through to a different,
    * resident one, and in legacy mode the field is empty — keying a sentence on it
    * rendered "AWS credentials sign inside the sandbox" over a Claude sign-in.
@@ -101,13 +101,13 @@ interface RunRailProps {
   agentRow?: SetupHarnessTool;
 }
 
-// CredentialFacts states where the MODEL credential lands, and nothing wider —
+// CredentialFacts states where the model credential lands, and nothing wider —
 // "Credentials" as a heading over "never written into the sandbox" was a
 // universal claim only the model credential ever supported.
 //
-// THE PRECEDENCE, and why it is only two rungs. A CURRENT preflight verdict
+// The precedence, and why it is only two rungs. A current preflight verdict
 // describes the exact body about to be launched, resolved lane and all, so it
-// wins and everything below is read off IT. Otherwise the only claim available
+// wins and everything below is read off it. Otherwise the only claim available
 // is the one the roster row settles by itself — a per-user Bedrock SSO row,
 // resident whatever the run carries — and that row is also the one case whose
 // precise answer cannot be fetched, since Preflight 422s a member who has not
@@ -120,11 +120,11 @@ function CredentialFacts({
 }: {
   cred?: ModelCredential;
   agentRow?: SetupHarnessTool;
-  /** Whether a CURRENT preflight verdict is on screen (U-4). */
+  /** Whether a current preflight verdict is on screen. */
   preflightRun: boolean;
 }) {
   if (cred) {
-    // Keyed on the RESOLVED mechanism, never on the row's declared one.
+    // Keyed on the resolved mechanism, never on the row's declared one.
     const bedrock = cred.residency === "sandbox" && cred.mechanism !== "anthropic_subscription";
     return (
       <>
@@ -146,10 +146,10 @@ function CredentialFacts({
   return (
     <>
       <CredentialLine>{RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH}</CredentialLine>
-      {/* U-4: …and the way to find out, ONLY while there is nothing to find it
+      {/* …and the way to find out, only while there is nothing to find it
           in. A current verdict that carries no `model_credential` — always so
           against a 0.7.4 daemon, and on 0.7.5 whenever the roster read failed or
-          there is no store — left this hint beside the result of pressing it: a
+          there is no store — puts this hint beside the result of pressing it: a
           promise that is false the moment it is followed. */}
       {!preflightRun && <CredentialLine>{RAIL_CREDENTIAL.RUN_PREFLIGHT_HINT}</CredentialLine>}
     </>
@@ -174,7 +174,7 @@ function AWSSignInChip({ perUser }: { perUser: boolean }) {
   );
 }
 
-// credentialSentence maps a RESOLVED grade to the one sentence true of it.
+// credentialSentence maps a resolved grade to the one sentence true of it.
 function credentialSentence(cred: ModelCredential): string {
   switch (cred.residency) {
     case "proxy":
@@ -192,27 +192,27 @@ function credentialSentence(cred: ModelCredential): string {
   }
 }
 
-// ModelAccessLine — Finding 1: the rail states WHO (this launcher) needs to
+// ModelAccessLine — Finding 1: the rail states who (this launcher) needs to
 // sign in, a second and independent fact from showModelWarning above (a
-// DEPLOYMENT with no model path at all). RunRail withholds it entirely unless
-// the selected agent is the one model_access grades AND the door needs
+// deployment with no model path at all). RunRail withholds it entirely unless
+// the selected agent is the one model_access grades and the door needs
 // attention (showModelAccess) — a codex row or a live session renders nothing.
 //
 // `// ponytail:` this reads useModelAccessDoor() itself rather than taking the
 // door as a prop threaded from new-run-screen.tsx: that screen is at its
-// 1000-line file-size gate and gets a ZERO-line diff (the context exists
+// 1000-line file-size gate and gets a zero-line diff (the context exists
 // exactly so a nested surface can reach the door with no prop-drilling).
 function ModelAccessLine({ door, onSignIn }: { door: ModelAccessDoorHandle; onSignIn: () => void }) {
   const when = door.deadline ? relativeTime(door.deadline) : "";
   let sentence = "";
   let action = "";
   let title = "";
-  // `expiring` is a STATE, not an alarm (round-1 UX S3, round-2 S14) — muted
+  // `expiring` is a state, not an alarm — muted
   // text, not the warning tint the other three states use.
   let warning = true;
-  // The server's action ONLY when it carries what the sentence and button
+  // The server's action only when it carries what the sentence and button
   // cannot — the pin-contradicted account/role pair — never the button's own
-  // label repeated as prose (S1).
+  // label repeated as prose.
   const serverAction = door.action && door.action !== AGENTS.SIGN_IN_AWS ? door.action : "";
   switch (door.state) {
     case "not_configured":
@@ -226,18 +226,18 @@ function ModelAccessLine({ door, onSignIn }: { door: ModelAccessDoorHandle; onSi
     case "expiring":
       warning = false;
       title = door.deadline ? absoluteTime(door.deadline) : "";
-      // No separate action line — the deadline is IN the sentence (S1 / W0-mock
-      // ruling 1) — EXCEPT against a daemon that sends no `deadline` (review-1
-      // S3): an older daemon's `expiring` state would otherwise render NOTHING
-      // at all here while the rail still CLAIMS the door — zero sign-in
-      // controls on /runs/new. Mirrors the strip's own fallback.
+      // No separate action line — the deadline is in the sentence — except
+      // against a daemon that sends no `deadline`: an older daemon's
+      // `expiring` state would otherwise render nothing at all here while the
+      // rail still claims the door — zero sign-in controls on /runs/new.
+      // Mirrors the strip's own fallback.
       sentence = when ? RAIL_MODEL_ACCESS.EXPIRING(when) : "";
       action = when ? "" : door.action;
       break;
     case "shared_expired":
-      // The one credential every run rides. Its ADMIN reads their own repair
-      // sentence, never the member's "ask them" line about themselves
-      // (review-1 S2) — everybody else keeps the server's instruction.
+      // The one credential every run rides. Its admin reads their own repair
+      // sentence, never the member's "ask them" line about themselves —
+      // everybody else keeps the server's instruction.
       sentence = door.operator ? RAIL_MODEL_ACCESS.SHARED_ADMIN_EXPIRED : RAIL_MODEL_ACCESS.SHARED_EXPIRED;
       action = door.operator ? "" : door.action;
       break;
@@ -256,19 +256,19 @@ function ModelAccessLine({ door, onSignIn }: { door: ModelAccessDoorHandle; onSi
       }
       title={title || undefined}
     >
-      {/* Two SEPARATE text nodes (mirrors model-access-banner.tsx's
+      {/* Two separate text nodes (mirrors model-access-banner.tsx's
           modelAccessStripCopy rendering) — the server's action, when it
           renders, is a second fact beside ours, never appended into the same
           sentence. */}
       {sentence && <span>{sentence}</span>}
       {action && <span> {action}</span>}
-      {/* The rail's OWN sign-in, under a DISTINCT accessible name from the
+      {/* The rail's own sign-in, under a distinct accessible name from the
           strip's/Getting Started's "Sign in to AWS" (U-13's actual rule is two
           controls with distinct names, not one hidden) — and hidden while the
           door dialog is open, so there is never a live control pointing at a
           dialog that is already on screen. Gated on door.actionable, not just
           needsAttention: a non-operator's shared_expired has nothing this
-          viewer can repair (round-1 UX S13). */}
+          viewer can repair. */}
       {door.actionable && !door.open && (
         <>
           {" "}
@@ -301,7 +301,7 @@ export function RunRail({
 }: RunRailProps) {
   // Both of finding 1's facts, read rather than asserted: where the model
   // credential lands, and whether this deployment records anything at all.
-  // `recordingDisabled` is TRI-STATE — undefined until /healthz answers.
+  // `recordingDisabled` is tri-state — undefined until /healthz answers.
   const cred = preflight.result?.model_credential;
   const recordingDisabled = useRecordingDisabled();
   // Finding 1: model_access grades the claude-code row alone, so a shell
@@ -309,24 +309,24 @@ export function RunRail({
   // door says.
   const door = useModelAccessDoor();
   const showModelAccess = agentRow?.id === MODEL_ACCESS_AGENT && door.needsAttention;
-  // Door ownership (round-2 UX B1/S2): the rail claims it for exactly as long
+  // Door ownership: the rail claims it for exactly as long
   // as it renders its own sign-in control, so the shell strip drops its
   // button here — no New Run exception — and keeps its sentence.
   useClaimModelAccessDoor(showModelAccess && door.actionable);
 
   // Focus returns to Launch, not to #main-content (which would drop the
-  // member at the top of the form they were mid-way through), when THIS
-  // rail's own control opened the door. The DOOR owns the return target
-  // (review-1 S1): the rail's own sign-in control unmounts the moment the
-  // state it described clears (a completed sign-in), so by the time the
-  // dialog's onCloseAutoFocus runs, document.activeElement — what a bare
-  // openDoor() would have captured — is a DETACHED node and focusOpener()
-  // fails, falling through to #main-content; a separate effect here racing
-  // Radix's own FocusScope exit trap cannot reliably win either. Passing
-  // Launch explicitly as `returnTo` makes it the captured opener directly.
+  // member at the top of the form they were mid-way through), when this
+  // rail's own control opened the door. The door owns the return target: the
+  // rail's own sign-in control unmounts the moment the state it described
+  // clears (a completed sign-in), so by the time the dialog's onCloseAutoFocus
+  // runs, document.activeElement — what a bare openDoor() would have
+  // captured — is a detached node and focusOpener() fails, falling through to
+  // #main-content; a separate effect here racing Radix's own FocusScope exit
+  // trap cannot reliably win either. Passing Launch explicitly as `returnTo`
+  // makes it the captured opener directly.
   const launchRef = React.useRef<HTMLButtonElement>(null);
 
-  // The server refused THIS click for the person's own model credential (422,
+  // The server refused this click for the person's own model credential (422,
   // reason model_credential — the class failure-block.tsx grades a dead run by).
   // The door opens here, and the same launch fires again the moment the sign-in
   // lands, so a lapsed session costs one dialog rather than a trip to Getting
@@ -335,7 +335,7 @@ export function RunRail({
   // refused again (a pin contradiction the same identity cannot repair) leaves
   // the sentence and waits for the person. Never over a door someone else
   // opened: openDoor overwrites the opener, and the strip's focus contract
-  // (model-access-banner.tsx) reads it on close — and a click is CONSUMED on
+  // (model-access-banner.tsx) reads it on close — and a click is consumed on
   // its first evaluation, whatever the door's state then, so a door that
   // closes later (Escape, a sign-in started from the strip) never brings this
   // dialog back with a relaunch armed for a click the person has moved past.
@@ -361,31 +361,31 @@ export function RunRail({
   // withholds agentRow for one), no model-access line and no warning to raise
   // has no Credentials section at all, rather than a heading over nothing.
   const showCredentials = showModelWarning || !!cred || !!agentRow || showModelAccess;
-  // U-5: with NO provider connected and nothing resolved, "Resolved at launch."
-  // and the Preflight hint sat directly under "No model provider is connected.
-  // This run launches; its first model call fails." Nothing resolves at launch
-  // when there is nothing to resolve. A RESOLVED credential still states itself
-  // — that sentence is read off the verdict, not guessed.
+  // With no provider connected and nothing resolved, "Resolved at launch."
+  // and the Preflight hint must not sit directly under "No model provider is
+  // connected. This run launches; its first model call fails." Nothing
+  // resolves at launch when there is nothing to resolve. A resolved credential
+  // still states itself — that sentence is read off the verdict, not guessed.
   const showCredentialFacts = !!cred || (!!agentRow && !showModelWarning);
   return (
-    // F2-F7/F3-F1: a sticky box is clamped by its containing block — with
+    // A sticky box is clamped by its containing block — with
     // ceiling + tool rules + 3 warnings (member/warnings path) the rail's
     // real content runs ~700-730px, below the fold at 1280x650 with no way
     // to reach Launch. Bounded to the viewport with its own scroll.
     //
     // 100vh - 5rem, not -3rem: the sticky container is app-shell.tsx's
-    // <main> (its own overflow-y:auto scroller), which starts BELOW the
+    // <main> (its own overflow-y:auto scroller), which starts below the
     // h-14 (3.5rem/56px) header — sticky's `top-6` (1.5rem/24px) offset is
-    // relative to THAT scroller, not the viewport, so the rail's stuck
+    // relative to that scroller, not the viewport, so the rail's stuck
     // position sits at 3.5rem+1.5rem = 5rem from the viewport top, not 1.5rem.
     <aside className="h-fit rounded-xl border border-border bg-card p-4 lg:sticky lg:top-6 lg:max-h-[calc(100vh-5rem)] lg:overflow-y-auto">
       <p className="mb-3 text-sm font-semibold text-foreground">What this run can do</p>
 
-      {/* Below lg the rail sits UNDER the form at full width, so its sections
+      {/* Below lg the rail sits under the form at full width, so its sections
           read across instead of stacking into a very tall column. */}
       <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-1">
-        {/* FIRST, above Policy, because it bounds everything under it — a
-            member's own spec AND a saved policy they pick are both clamped to
+        {/* First, above Policy, because it bounds everything under it — a
+            member's own spec and a saved policy they pick are both clamped to
             it. Frozen copy (§7.6), rendered only when a profile is actually
             assigned. */}
         {governanceProfile && (
@@ -418,28 +418,28 @@ export function RunRail({
 
         {showCredentials && (
         <RailSection title="Credentials">
-          {/* Finding 1, above CredentialFacts: a per-PERSON fact ("do I have a
+          {/* Finding 1, above CredentialFacts: a per-person fact ("do I have a
               sign-in at all"), independent of showModelWarning below (a
-              DEPLOYMENT fact — some model path exists at all). */}
+              deployment fact — some model path exists at all). */}
           {showModelAccess && (
             <ModelAccessLine door={door} onSignIn={() => door.openDoor(launchRef.current)} />
           )}
-          {/* The per-person line SUPERSEDES the deployment one when both would
-              otherwise render (live-walk finding): under a per_user row,
-              setupBedrock grades llm_ready through the CALLER's own AWS
+          {/* The per-person line supersedes the deployment one when both would
+              otherwise render: under a per_user row,
+              setupBedrock grades llm_ready through the caller's own AWS
               scope, so a never-signed-in member reads SSOPresent=false ->
               Ready=false -> llm_ready=false -> showModelWarning=true on a
-              deployment that unambiguously HAS a model path — the admin's
+              deployment that unambiguously has a model path — the admin's
               row exists, this person just has not signed in yet. Stacking
               "No model provider is connected" under NOT_SIGNED_IN would be a
               false claim beside a true one. showModelAccess is the more
               specific fact whenever it applies; the deployment sentence
-              still covers every OTHER no-model-path shape (no per_user row
+              still covers every other no-model-path shape (no per_user row
               at all, a shared credential nobody set up, a legacy daemon). */}
           {showModelWarning && !showModelAccess && (
             <p className="mb-1.5 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-foreground">
               {RAIL_MODEL_ACCESS.NO_PROVIDER}{" "}
-              {/* Rulebook §9: the action that fills the gap rides next to the
+              {/* The action that fills the gap rides next to the
                   need, not only in a footer. Links are --info, never teal. */}
               <Link to="/settings" className="font-medium text-info hover:underline">
                 {RAIL_MODEL_ACCESS.NO_PROVIDER_CTA}
@@ -464,7 +464,7 @@ export function RunRail({
           )}
         </RailSection>
 
-        {/* One line, and it NAMES the tools: "3 rules" alone would say nothing
+        {/* One line, and it names the tools: "3 rules" alone would say nothing
             about which calls still stop for a human. */}
         {toolRules && (
           <RailSection title="Tool rules">
@@ -477,9 +477,9 @@ export function RunRail({
             directions at once. The shared hook is the same /healthz read the
             Recordings library and the run cockpit make.
 
-            UNKNOWN renders nothing: a promise this specific may not be made
+            Unknown renders nothing: a promise this specific may not be made
             from a /healthz read that has not landed, failed, or carried no
-            recording component at all — and U-15: the whole SECTION goes with
+            recording component at all — and U-15: the whole section goes with
             it, as Credentials already does above. A bare "Recording" heading
             over nothing is a section that failed to load, and this rail is read
             as a checklist of what the run can do. */}
@@ -512,13 +512,13 @@ export function RunRail({
         </div>
       )}
 
-      {/* Preflight moved ONTO the Policy panel, next to the document it checks —
+      {/* Preflight lives on the Policy panel, next to the document it checks —
           one button, not two competing ones. Its result stays here, beside
           Launch, because "what would be clamped" is the last thing read before
           committing. */}
       <div className="mt-4 flex gap-2">
         {launch.onOpenRun ? (
-          // The run IS launched — Launch has nothing left to do, and the one
+          // The run is launched — Launch has nothing left to do, and the one
           // teal here becomes the way on. Nothing navigates until it is clicked.
           <Button type="button" className="flex-1" onClick={launch.onOpenRun}>
             {AGENTS.OPEN_RUN_CTA}
@@ -543,9 +543,9 @@ export function RunRail({
           </Button>
         )}
       </div>
-      {/* A disabled button that doesn't say why is a dead end. This screen had
-          NO client-side validation at all before — an empty form launched, and
-          the server's rejection arrived after the fact. */}
+      {/* A disabled button that doesn't say why is a dead end: without
+          client-side validation, an empty form would launch and the server's
+          rejection would arrive after the fact. */}
       {launch.problem && !launch.inFlight && (
         <p className="mt-2 text-center text-xs text-muted-foreground">{launch.problem}</p>
       )}
@@ -556,7 +556,7 @@ export function RunRail({
           {preflight.error}
         </p>
       )}
-      {/* UNFRAMED: a bordered box inside the rail card is a card in a card
+      {/* Unframed: a bordered box inside the rail card is a card in a card
           (CONSOLE-RULES §9). A divider is what separates a section from the
           section above it. */}
       {preflight.result && (

@@ -24,13 +24,13 @@ const COPY_FAILED_TOAST = "Copy failed — your browser blocked clipboard access
 //  - `copyAsync`: awaits the write and only flips `copied` (returns true) on
 //    success — for callers that show a distinct success/failure toast.
 //
-// F6-F13: `copy` used to discard copyAsync's outcome entirely, so a plain
-// onClick on an insecure context (LAN HTTP — no navigator.clipboard) told the
-// caller nothing at all: no icon swap, no toast, silence. copyAsync already
-// knows whether it worked; copy() now surfaces a failure toast rather than
-// reinventing the write with the deprecated execCommand fallback (needs a
-// focused selection, and every call site here copies an arbitrary string,
-// not a DOM selection).
+// F6-F13: `copy` must not discard copyAsync's outcome — a plain onClick on
+// an insecure context (LAN HTTP — no navigator.clipboard) must not leave the
+// caller with nothing at all: no icon swap, no toast, silence. copyAsync
+// already knows whether it worked, so copy() surfaces a failure toast
+// rather than reinventing the write with the deprecated execCommand
+// fallback (needs a focused selection, and every call site here copies an
+// arbitrary string, not a DOM selection).
 export function useCopyToClipboard(resetMs: number | null = 1500) {
   const [copied, setCopied] = React.useState(false);
 

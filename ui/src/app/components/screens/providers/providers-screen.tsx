@@ -3,22 +3,22 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The /providers screen (0.7.2) — the admin's org policy over git hosts and
-// storage ceilings. SUPER-only, no nav item: reached from the funnel's
+// The /providers screen — the admin's org policy over git hosts and
+// storage ceilings. Super-only, no nav item: reached from the funnel's
 // `providers` step card and the Settings card (setup/providers-card.tsx),
 // exactly the /drives precedent (drives-screen.tsx's own header note) —
-// nothing LINKS a security admin or a member here, but the URL is a URL, and
-// both GET/PUT /workspace-providers are operatorOnly, so their READ is a 403.
+// nothing links a security admin or a member here, but the URL is a URL, and
+// both GET/PUT /workspace-providers are operatorOnly, so their read is a 403.
 // That is a tier refusal, not a transport failure, and this screen answers it
 // as one.
 //
-// EVERY user-visible string here comes from workspace-providers-copy.ts (§7,
+// Every user-visible string here comes from workspace-providers-copy.ts (§7,
 // frozen) or the reused canon it names (S.GIT_FOOTER, PERM.*, DRIVES.*). This
 // file adds no copy of its own.
 //
-// ONE `default` (teal) button at a time (CONSOLE-RULES §6, prompt §4): Save
-// providers, under the active tab. The Agents tab (C-UI, W4) is PRESENT but
-// EMPTY here — a Segmented option with an EMPTY body, not hidden: the frozen
+// One `default` (teal) button at a time (CONSOLE-RULES §6, prompt §4): Save
+// providers, under the active tab. The Agents tab (C-UI, W4) is present but
+// empty here — a Segmented option with an empty body, not hidden: the frozen
 // mock always draws three tabs, and C-UI lands its real body in the same
 // wave the member-facing Model access states ship, so the control's shape
 // shouldn't move twice. Empty, not a placeholder sentence: a placeholder
@@ -64,11 +64,11 @@ export function ProvidersScreen() {
   // — a count of newly-refused sources is worth reading twice, not only in
   // the transient toast.
   const [narrowed, setNarrowed] = React.useState<number | null>(null);
-  // Whether the LOADED snapshot — never the draft — has zero git rows. The Save
-  // withhold below is about the state the ORG is in: true legacy-open mode,
-  // whose own banner owns the one affirmative. Gating it on the DRAFT meant
-  // removing the last row hid the only button that could save that removal,
-  // and the change was silently discarded on navigation.
+  // Whether the loaded snapshot — never the draft — has zero git rows. The Save
+  // withhold below is about the state the org is in: true legacy-open mode,
+  // whose own banner owns the one affirmative. Gating it on the draft would mean
+  // removing the last row hides the only button that could save that removal,
+  // silently discarding the change on navigation.
   const [loadedEmpty, setLoadedEmpty] = React.useState(true);
 
   const load = React.useCallback(() => {
@@ -82,21 +82,21 @@ export function ProvidersScreen() {
         setStatus("ready");
       })
       // GET /workspace-providers is operatorOnly, like GET /drives — a 403 is
-      // the TIER, not the network (drives-screen.tsx's own comment).
+      // the tier, not the network (drives-screen.tsx's own comment).
       .catch((e) => setStatus(loadFailStatus(e)));
   }, []);
   React.useEffect(load, [load]);
 
-  // The Agents tab's OWN Save re-fires ONLY this — never `load` (A-01): a
+  // The Agents tab's own Save re-fires only this — never `load` (A-01): a
   // successful agent save needs `setupStatus` refreshed (modelAccess/
   // harnesses can be stale the instant a per_user lane is declared), but
-  // `load` ALSO resets `draft` (the Git/Storage tabs' own unsaved edits),
+  // `load` also resets `draft` (the Git/Storage tabs' own unsaved edits),
   // clears `savedElsewhere`, and a transient GET failure here would flip the
   // whole screen to FETCH_FAILED right after a successful, unrelated save.
   // Errors are swallowed on purpose: a stale chip is better than a dead
-  // screen for a refresh nothing on screen is waiting on. R-02 (review): a
-  // rejection re-fires ONCE — the ordinary failure here is one transient
-  // request, not an outage — then gives up silently, same as before.
+  // screen for a refresh nothing on screen is waiting on. R-02: a
+  // rejection re-fires once — the ordinary failure here is one transient
+  // request, not an outage — then gives up silently.
   const refreshSetupStatus = React.useCallback(() => {
     setupApi
       .getSetupStatus()
@@ -110,7 +110,7 @@ export function ProvidersScreen() {
     try {
       const result = await api.putWorkspaceProviders(draft, etag);
       setDraft(result.providers);
-      // The PUT response IS the new loaded snapshot: saving a removal down to
+      // The PUT response is the new loaded snapshot: saving a removal down to
       // zero rows puts the org in true legacy-open mode, and the banner's Add
       // owns the affirmative again.
       setLoadedEmpty((result.providers.git ?? []).length === 0);
@@ -137,7 +137,7 @@ export function ProvidersScreen() {
     }
   };
 
-  // Any row the server is guaranteed to refuse withholds Save — on EVERY tab,
+  // Any row the server is guaranteed to refuse withholds Save — on every tab,
   // because the PUT carries the whole document: a git row with no addresses is a
   // 400 whichever tab is open when Save is pressed, and there is nothing honest
   // to send. The row itself carries the reason (BASE_URLS_REQUIRED under its
@@ -188,12 +188,12 @@ export function ProvidersScreen() {
             ]}
           />
 
-          {/* F4-F3 (Appendix A V8, corrected verdict): keep the draft MOUNTED
-              — the banner sits ABOVE the tabs rather than replacing them, so
-              an edit typed moments before the 412 is still on screen and
-              readable. ONE control, "Discard mine and reload" (= load()):
-              the corrected verdict REFUSES a "Save over theirs" arm — a
-              security document is never last-writer-wins from this banner. */}
+          {/* F4-F3 (Appendix A V8): keep the draft mounted — the banner sits
+              above the tabs rather than replacing them, so an edit typed
+              moments before the 412 is still on screen and readable. One
+              control, "Discard mine and reload" (= load()): a "Save over
+              theirs" arm is refused — a security document is never
+              last-writer-wins from this banner. */}
           {savedElsewhere && (
             <div className="space-y-3 rounded-lg border border-warning/30 bg-warning-subtle p-4">
               <p className="text-sm font-medium text-foreground">{PROVIDERS.SAVED_ELSEWHERE_TITLE}</p>
@@ -234,7 +234,7 @@ export function ProvidersScreen() {
               operator={operator}
             />
           )}
-          {/* Agents is its OWN resource (SiteConfig.agent_providers, its
+          {/* Agents is its own resource (SiteConfig.agent_providers, its
               own GET/PUT) — a separate document from Git/Storage's
               WorkspaceProviders, so it fetches and saves itself (the
               UserDrivesCard precedent) rather than riding this screen's
@@ -242,27 +242,27 @@ export function ProvidersScreen() {
               shared one below is withheld while it's active. */}
           {tab === "agents" && (
             <AgentsTab
-              /* UNDEFINED, never `?? []`: the tab builds its whole PUT
-                 body from this, so an older daemon's absent roster read
-                 as an empty one saved `{agents: []}` and disabled every
+              /* Undefined, never `?? []`: the tab builds its whole PUT
+                 body from this, so an older daemon's absent roster must not
+                 read as an empty one and save `{agents: []}`, disabling every
                  agent. Absent is unknown (setup.ts's own rule). */
               harnesses={setupStatus?.harnesses}
               modelAccess={setupStatus?.model_access}
               operator={operator}
-              /* The roster comes from THIS screen's /setup/status read, so
-                 the tab's roster-unknown Retry has to re-fire THAT — its own
+              /* The roster comes from this screen's /setup/status read, so
+                 the tab's roster-unknown Retry has to re-fire that — its own
                  load() re-reads /agent-providers, which is not the read that
                  failed, and clicking it changed nothing. */
               onRetryRoster={load}
               onStatusRefresh={refreshSetupStatus}
             />
           )}
-          {/* ONE teal button at a time (CONSOLE-RULES §6, prompt §4): in
-              the legacy-open empty state the Git tab's own banner action IS
+          {/* One teal button at a time (CONSOLE-RULES §6, prompt §4): in
+              the legacy-open empty state the Git tab's own banner action is
               the state's one affirmative, so the screen's Save providers is
               withheld rather than doubling it. Withheld only while there is
-              NOTHING to save — the loaded snapshot was empty AND the draft
-              still is: a draft emptied by Remove is a pending CHANGE (Save
+              nothing to save — the loaded snapshot was empty and the draft
+              still is: a draft emptied by Remove is a pending change (Save
               stays; the banner's Add steps down to outline — git-tab.tsx's
               `loadedEmpty`), and a first row added on a fresh install is one
               too (Save appears the moment the draft has a row). */}

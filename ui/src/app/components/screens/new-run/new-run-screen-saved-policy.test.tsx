@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The saved-policy lane (F2-F1/F2-F2/F2-F4/F2-F5) — split out of
+// The saved-policy lane (F2-F1/F2-F2/F2-F5) — split out of
 // new-run-screen.test.tsx, which was already at the check-file-size.sh
 // ceiling. Its own copy of the screen's mock harness: NewRunScreen imports
 // policies/setup/health/runs/workspaces/capabilities regardless of which
@@ -82,7 +82,7 @@ beforeEach(() => {
 });
 
 describe("NewRunScreen — the saved-policy lane", () => {
-  // A member's LIST read redacts secret refs (redactPoliciesForRead) — this is
+  // A member's list read redacts secret refs (redactPoliciesForRead) — this is
   // what that redacted body looks like on the wire.
   const REDACTED_POLICY = {
     id: "pol_redacted",
@@ -120,19 +120,19 @@ describe("NewRunScreen — the saved-policy lane", () => {
     expect(JSON.stringify(createRunMock.mock.calls[0][0])).not.toContain("<redacted>");
   });
 
-  // R1 (post-ship review) — the clear must key on isSecurityOperator (admin OR
+  // R1 — the clear must key on isSecurityOperator (admin or
   // security_admin, matching the server's redactPoliciesForRead gate), never
-  // the bare `operator`/`securityOperator` context booleans: BOTH default
-  // fail-OPEN (true) while /me is unresolved or the fetch failed
+  // the bare `operator`/`securityOperator` context booleans: both default
+  // fail-open (true) while /me is unresolved or the fetch failed
   // (operator-context.tsx), which is the wrong direction for a clear that must
   // still fire for a member in that state.
   it("R1: a member whose /me hasn't resolved yet still gets a redacted body cleared", async () => {
     listPoliciesMock.mockResolvedValue([REDACTED_POLICY]);
     render(
       <MemoryRouter>
-        {/* operator/securityOperator both at their fail-open TRUE default —
+        {/* operator/securityOperator both at their fail-open true default —
             exactly what an unresolved /me looks like — operatorResolved is the
-            ONLY signal this is not a real admin/security_admin answer. */}
+            only signal this is not a real admin/security_admin answer. */}
         <OperatorProvider operator operatorResolved={false}>
           <NewRunScreen />
         </OperatorProvider>
@@ -146,7 +146,7 @@ describe("NewRunScreen — the saved-policy lane", () => {
     expect(JSON.stringify(createRunMock.mock.calls[0][0])).not.toContain("<redacted>");
   });
 
-  // R1 neg — a security_admin's saved-policy body is the REAL one (the server
+  // R1 neg — a security_admin's saved-policy body is the real one (the server
   // redacts on isSecurityOperator, which a security_admin passes); the clear
   // must not fire and throw it away.
   it("R1 neg: a resolved security_admin keeps the real body — no clear", async () => {
@@ -164,11 +164,11 @@ describe("NewRunScreen — the saved-policy lane", () => {
     await user.click(screen.getByRole("button", { name: "Launch run" }));
     await waitFor(() => expect(createRunMock).toHaveBeenCalled());
     // Not cleared: whatever the fixture carried (here, the literal string a
-    // MEMBER would have seen redacted) reaches the wire byte-for-byte.
+    // member would have seen redacted) reaches the wire byte-for-byte.
     expect(JSON.stringify(createRunMock.mock.calls[0][0])).toContain("<redacted>");
   });
 
-  // F2-F2 — the reworded rail sentence: the saved lane does NOT merge nothing,
+  // F2-F2 — the reworded rail sentence: the saved lane does not merge nothing,
   // the create door still prepends the attached Workspace card's mounts.
   it("the rail names the attached workspace as what still merges, not 'nothing'", async () => {
     listPoliciesMock.mockResolvedValue([REDACTED_POLICY]);
@@ -181,7 +181,7 @@ describe("NewRunScreen — the saved-policy lane", () => {
   // F2-F5 — a reference that no longer resolves gets its own reason, but only
   // once listPolicies() has actually answered (neg: no message before then).
   // A clone prefill is the one path that can carry a selectedPolicyId nothing
-  // has loaded yet — every OTHER path only ever sets one off the loaded list.
+  // has loaded yet — every other path only ever sets one off the loaded list.
   it("says the saved policy is gone once it fails to resolve — never before the list loads", async () => {
     let settle: (v: unknown) => void = () => {};
     listPoliciesMock.mockReturnValue(new Promise((r) => (settle = r)));
@@ -200,12 +200,12 @@ describe("NewRunScreen — the saved-policy lane", () => {
     await user.type(screen.getByLabelText("Title"), "clone gone");
     expect(screen.queryByText(RUN.POLICY_GONE)).not.toBeInTheDocument();
 
-    settle([]); // resolves with no match — NOW it is actually gone.
+    settle([]); // resolves with no match — now it is actually gone.
     expect(await screen.findByText(RUN.POLICY_GONE)).toBeInTheDocument();
   });
 
-  // F2-F4 — codex-cli has no tool-approval contract; the Seg must show "Auto"
-  // checked, DERIVED for display, never patched into state.
+  // codex-cli has no tool-approval contract; the Seg must show "Auto"
+  // checked, derived for display, never patched into state.
   it("shows Auto for codex-cli and restores the real hold choice on switch-back", async () => {
     renderScreen();
     await user.click(screen.getByRole("radio", { name: /^Autonomous/ }));

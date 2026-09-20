@@ -6,7 +6,7 @@
 // waitingReauth — the ONE string the RUNS BOARD carries for a run that is
 // waiting on its owner's AWS sign-in.
 //
-// IT LIVES IN A LEAF MODULE, AND THAT IS THE WHOLE POINT. The board card is on
+// It lives in a leaf module, and that is the whole point. The board card is on
 // the EAGER graph (App -> AppShell -> RunsScreen -> runs/run-card), while
 // wardyn/model-access-copy.ts belongs to the LAZY side: the door dialog, the
 // New Run rail, the failure block and the model-access banner, which app-shell
@@ -26,11 +26,11 @@
 // and watch the run sit there.
 //
 // `mine` is the VIEWER's relation to the run, and it is the difference between
-// a true sentence and a false one (W6-U SHOULD-1): the board and the cockpit
-// header addressed every reader as the owner, so a shared-lane member read
-// "Waiting for your AWS sign-in" on the same screen whose row told them to ask
-// their admin, and an admin opening a member's held run read it about a
-// sign-in of theirs that could never clear it. Only the run's owner can.
+// a true sentence and a false one (W6-U SHOULD-1): addressing every reader as
+// the owner would have a shared-lane member read "Waiting for your AWS
+// sign-in" on the same screen whose row tells them to ask their admin, and an
+// admin opening a member's held run read it about a sign-in of theirs that
+// could never clear it. Only the run's owner can.
 //
 // Defaulted TRUE rather than required: the one caller this module cannot reach
 // is ui/e2e/live/sso-reauth-hold.spec.ts, which lane e2e-sso-path owns and

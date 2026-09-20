@@ -146,12 +146,12 @@ describe("buildSpec — write mode resolves honestly into workspace_mounts[].rea
   });
 });
 
-// Regression for the wizard-contract HIGH finding: under allow-all egress the
-// wizard dropped the run's own required hosts AND emitted allowed_domains=[].
-// But proxy credential injection fails CLOSED unless the api_key grant's exact
-// injection host is in allowed_domains — even under allow-all. So whenever an
-// api_key/LLM grant is present, buildSpec MUST always include its injection
-// host in allowed_domains, regardless of the allow-all toggle.
+// Under allow-all egress, buildSpec must never drop the run's own required
+// hosts or emit a bare allowed_domains=[]. Proxy credential injection fails
+// CLOSED unless the api_key grant's exact injection host is in
+// allowed_domains — even under allow-all. So whenever an api_key/LLM grant is
+// present, buildSpec MUST always include its injection host in
+// allowed_domains, regardless of the allow-all toggle.
 describe("buildSpec — allow-all egress + LLM api_key grant", () => {
   function stateWithLlmKey(overrides: Partial<WizardState> = {}): WizardState {
     return {
@@ -269,9 +269,9 @@ describe("buildSpec — git_pat grant", () => {
       gitPatSecretName: "",
     });
     expect((missingSecret.inline_policy.eligible_grants ?? []).some((g) => g.kind === "git_pat")).toBe(false);
-    // D5/claim4 (worse than filed): a half-configured PAT used to still widen
-    // egress to the typed host even with no grant to justify it. requiredHosts'
-    // union is now gated on the SAME predicate as the grant emission above.
+    // D5/claim4: a half-configured PAT must never widen egress to the typed
+    // host with no grant to justify it — requiredHosts' union is gated on the
+    // SAME predicate as the grant emission above.
     expect(missingSecret.inline_policy.allowed_domains).not.toContain("gitlab.com");
 
     const missingHost = buildSpec({
@@ -283,7 +283,7 @@ describe("buildSpec — git_pat grant", () => {
     expect((missingHost.inline_policy.eligible_grants ?? []).some((g) => g.kind === "git_pat")).toBe(false);
   });
 
-  // W12-W12-B-4: the broker's mint is single-use per grant regardless of
+  // The broker's mint is single-use per grant regardless of
   // RequiresApproval — an approval-gated git_pat authenticates exactly ONE
   // git operation, then a second in the same run 409s with no way to
   // re-approve mid-run. Default off (matching the cached github_token
@@ -423,10 +423,11 @@ describe("impliedEgressHosts — the list buildSpec unions and step-egress.tsx r
 
 // PARITY-2: a multi-source workspace has no single kind/source to flatten to
 // — internal/store/store.go's deriveWorkspaceMirrors bails (leaves Kind/
-// Source empty) whenever len(Sources) != 1. The old buildSpec read w.kind/
-// w.source directly, so a multi-source or migrated-ephemeral (0029) workspace
-// silently attached NOTHING — a 400 "mount source is empty" at launch with no
-// operator fix available. Iterating w.sources closes it.
+// Source empty) whenever len(Sources) != 1. buildSpec must iterate w.sources
+// rather than read w.kind/w.source directly — reading those fields directly
+// on a multi-source or migrated-ephemeral (migration 0029) workspace would
+// silently attach NOTHING, a 400 "mount source is empty" at launch with no
+// operator fix available.
 describe("buildSpec — multi-source workspaces (PARITY-2)", () => {
   const multiWs = {
     id: "ws-multi",
@@ -523,8 +524,8 @@ describe("buildSpec — multi-source workspaces (PARITY-2)", () => {
 });
 
 
-// What the run's MODE puts on the wire. Each of these was, at some point, a
-// field silently ignored or silently dropped between the form and the sandbox.
+// What the run's MODE puts on the wire — each of these fields must survive
+// the trip from form to sandbox, never silently ignored or dropped.
 describe("buildSpec — the run mode decides what ships", () => {
   it("an interactive run's task rides as its optional boot seed, and its startup choice", () => {
     const { run } = buildSpec({
@@ -563,9 +564,9 @@ describe("buildSpec — the run mode decides what ships", () => {
     expect(run.interactive_start).toBeUndefined();
   });
 
-  // The bug this closes: a shell command left on the (default) interactive mode
-  // launched a sandbox that NEVER ran the command — the server ignores task_mode
-  // for an interactive run, so the whole point of the run vanished silently.
+  // A shell command must never launch on the (default) interactive mode: the
+  // server ignores task_mode for an interactive run, so the sandbox would
+  // never run the command and the whole point of the run would vanish silently.
   it("a shell command is unattended even if the mode still says interactive", () => {
     const { run } = buildSpec({
       ...initialWizardState(),
@@ -590,7 +591,7 @@ describe("buildSpec — the run mode decides what ships", () => {
   });
 });
 
-// A1's seed opt-in and C1's tool-approval posture — both new CreateRunInput
+// A1's seed opt-in and the tool-approval posture — both new CreateRunInput
 // fields riding this ONE form increment. Both follow the SAME shape as
 // interactive_start above: the wire default is never sent, only the
 // non-default explicit choice goes out — so a stale/leftover state field can
@@ -839,18 +840,15 @@ describe("buildSpec — drive", () => {
   });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
 // B4b — "Start a run like this one"
 //
-// The field report asked for a re-run button and assumed the run record held
-// everything needed. It does not: AgentRun carries no task_mode, no
-// interactive_start, no seed_auto_tools and no tool_approvals, and an inline
-// policy is never persisted at all. So the clone reads TWO durable sources —
-// the run row and its `run.create` audit event — and NAMES the one thing it
-// cannot carry. A clone that silently dropped `tool_approvals: hold` would
-// launch a less supervised run than the one it copied, which is exactly the
-// class of failure this product exists to prevent.
-// ═══════════════════════════════════════════════════════════════════════════
+// A re-run button cannot assume the run record holds everything needed: AgentRun
+// carries no task_mode, no interactive_start, no seed_auto_tools and no
+// tool_approvals, and an inline policy is never persisted at all. So the clone
+// reads TWO durable sources — the run row and its `run.create` audit event —
+// and NAMES the one thing it cannot carry. A clone that silently dropped
+// `tool_approvals: hold` would launch a less supervised run than the one it
+// copied, which is exactly the class of failure this product exists to prevent.
 describe("B4b — runPrefill: the clone carries both sources, and says what it cannot", () => {
   // A killed run as the two sources actually leave it behind.
   const row = {

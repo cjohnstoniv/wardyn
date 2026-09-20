@@ -61,8 +61,7 @@ function renderCard(run: Partial<AgentRun> = {}, principal = OWNER, operator = t
 // Every health() fixture below carries status:"ok" because a real /healthz body
 // always does (internal/api/healthz.go:61) — and the card reads exactly that
 // bit to tell "the daemon answered, both gateways are off" apart from "no
-// answer at all", which lib/api/health.ts reports as the same resolved `{}`
-// (R4-F037).
+// answer at all", which lib/api/health.ts reports as the same resolved `{}`.
 beforeEach(() => {
   healthMock.mockReset();
   listKeysMock.mockReset();
@@ -99,11 +98,9 @@ describe("ConnectSSHCard — visibility", () => {
     expect(healthMock).not.toHaveBeenCalled();
   });
 
-  // This card used to return NULL with SSH off — the compose default — so most
-  // operators saw a live browser terminal and nothing anywhere saying a real
-  // terminal could reach the same session. The CLI lane needs no gateway, so the
-  // card now always renders for a running run you own, and says plainly that SSH
-  // is the part that is off.
+  // The CLI lane needs no gateway, so the card always renders for a running
+  // run you own — SSH being off hides only the ssh command, never the whole
+  // card — and it says plainly that SSH is the part that is off.
   it("with SSH disabled it still offers the CLI, and says what would turn SSH on", async () => {
     healthMock.mockResolvedValue({ status: "ok" });
     listKeysMock.mockResolvedValue([]);
@@ -342,7 +339,8 @@ describe("ConnectSSHCard — UI apps lane", () => {
       ),
     );
     // "noopener" makes window.open return null even when the tab DID open, so
-    // the old `!win` branch showed the popup-blocked error on every success.
+    // a truthy check on the return value would show a popup-blocked error on
+    // every success.
     await screen.findByRole("button", { name: UI_APPS_LANE.cta("vscode") });
     expect(screen.queryByText(UI_APPS_LANE.errorTitle("vscode"))).toBeNull();
     openSpy.mockRestore();
@@ -414,21 +412,21 @@ describe("ConnectSSHCard — UI apps lane", () => {
     const uiHeading = await screen.findByText(UI_APPS_LANE.title);
     const sshCommand = screen.getByText(`ssh ${baseRun.id}@wardyn.corp.example -p 2222`);
 
-    // The lane was originally inserted right after the SSH *heading*, which put
-    // it AHEAD of the ssh command the heading introduces.
+    // The lane must follow the ssh command itself, not just the SSH heading
+    // that introduces it.
     expect(sshCommand.compareDocumentPosition(uiHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
 
-// R4-F037: the card's OFF copy is a claim about the DEPLOYMENT ("Off on this
-// deployment... an operator turns it on by setting WARDYN_SSH_LISTEN"), and it
-// used to render on a /healthz that never answered. The real failure mode is
-// NOT a rejected promise — lib/api/health.ts swallows every non-ok response
-// and every network/parse/abort error into a resolved `{}` — so these cases
-// drive the REAL health() through a stubbed fetch, which is the shape a live
-// 5xx or blip actually produces. `status:"ok"` (healthz.go:61, present in
-// every successful body) is the only thing that separates "answered: both off"
-// from "no answer".
+// The card's OFF copy is a claim about the DEPLOYMENT ("Off on this
+// deployment... an operator turns it on by setting WARDYN_SSH_LISTEN"), so it
+// must never render on a /healthz that never answered. The failure mode to
+// guard is NOT a rejected promise — lib/api/health.ts swallows every non-ok
+// response and every network/parse/abort error into a resolved `{}` — so
+// these cases drive the REAL health() through a stubbed fetch, which is the
+// shape a live 5xx or blip actually produces. `status:"ok"` (healthz.go:61,
+// present in every successful body) is the only thing that separates
+// "answered: both off" from "no answer".
 describe("ConnectSSHCard — a FAILED /healthz asserts nothing about the deployment", () => {
   afterEach(() => vi.unstubAllGlobals());
 

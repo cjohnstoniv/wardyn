@@ -9,9 +9,9 @@ import { T } from "../integrations";
 import { aiServerId, deriveIntegrations } from "./integrations";
 import type { SiteConfig } from "../types";
 
-// UI-WS-2: the Add dialog resolves which wire row to adopt/PUT via this
-// helper, BEFORE its first reload can hand it a derived IntegrationRow of its
-// own — pinned here as the single source of truth deriveAiRows' own serverId
+// The Add dialog resolves which wire row to adopt/PUT via this helper,
+// BEFORE its first reload can hand it a derived IntegrationRow of its own —
+// pinned here as the single source of truth deriveAiRows' own serverId
 // values are drawn from, so the two can't drift apart.
 describe("aiServerId", () => {
   it("matches deriveAiRows' own serverId for every type that has one", () => {
@@ -22,8 +22,8 @@ describe("aiServerId", () => {
     expect(aiServerId("openai_api_key")).toBe("openai_api_key");
   });
 
-  // Every AiType now maps to a server id. azure_openai was the one that didn't
-  // (no site-config field, no SetupCheck id) and it was removed in 0.5.
+  // Every AiType now maps to a server id. azure_openai has neither a
+  // site-config field nor a SetupCheck id — it was removed in 0.5.
 });
 
 describe("deriveIntegrations — empty inputs", () => {
@@ -180,10 +180,10 @@ describe("deriveIntegrations — AI providers", () => {
 });
 
 describe("deriveIntegrations — SCM hosts", () => {
-  // SCM-SEAM-2: this used to drop the row entirely — an add that registered
-  // the host into scm_hosts (widening every future run's egress allowlist)
-  // but skipped the optional credential read as a silent no-op, with no row
-  // anywhere to reveal, inspect, or delete what was actually just widened.
+  // Without this row, an add that registers the host into scm_hosts
+  // (widening every future run's egress allowlist) but has no credential to
+  // read would be a silent no-op, with no row anywhere to reveal, inspect,
+  // or delete what was actually just widened.
   it("a registered host with no stored credential still renders — egress only, no chips, no secret", () => {
     const data = deriveIntegrations(baseStatus(), { scm_hosts: ["gitlab.com"] }, []);
     expect(data.scm).toHaveLength(1);
@@ -222,9 +222,9 @@ describe("deriveIntegrations — SCM hosts", () => {
     expect(row.posture).toEqual({ kind: "gh_verdict", verdict: "unknown", checkedLabel: "not yet" });
   });
 
-  // §9.4 (round 14): effective_scm_hosts is the server's projected union — a
-  // host a workspace-provider row CLAIMS (enabled or disabled) is removed from
-  // it even though the legacy scm_hosts list still names it, so a disabled
+  // effective_scm_hosts is the server's projected union — a host a
+  // workspace-provider row CLAIMS (enabled or disabled) is removed from it
+  // even though the legacy scm_hosts list still names it, so a disabled
   // provider's host must not keep reading "Connected" here.
   it("a host scm_hosts lists but effective_scm_hosts omits renders no row for it", () => {
     // No stored credential: with the host missing from effective_scm_hosts,
