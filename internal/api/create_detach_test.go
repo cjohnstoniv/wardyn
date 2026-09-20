@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -201,5 +202,18 @@ func TestCreateRun_ClientDisconnectDuringBuild_StillCompensates(t *testing.T) {
 	}
 	if ev := findAudit(audit.events, runID, "run.build", "failure"); ev == nil {
 		t.Errorf("the build failure must be audited; events=%s", auditDump(audit.events, runID))
+	}
+
+	// The 201 body itself must carry the refreshed FAILED state, not the
+	// PENDING snapshot taken before the build ran — resolveCreateRunImage no
+	// longer writes the response itself (it must stay callable off-request),
+	// so the refresh+answer moved to the handler one frame up; a regression
+	// there would silently answer 201 with a stale PENDING run.
+	var body createRunResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response body: %v (body=%s)", err, w.Body.String())
+	}
+	if body.State != types.RunFailed {
+		t.Fatalf("response body state = %q, want %q (FAILED) — the 201 must answer the refreshed run, not a stale PENDING snapshot", body.State, types.RunFailed)
 	}
 }

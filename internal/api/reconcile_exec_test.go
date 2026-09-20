@@ -82,6 +82,14 @@ func (s *bootReconcileStore) SetRunFailureHint(_ context.Context, _ uuid.UUID, h
 	return nil
 }
 
+// hintValue reads the failure hint under lock (the reap runs on the sweeper's
+// own goroutine, so a bare field read races with SetRunFailureHint above).
+func (s *bootReconcileStore) hintValue() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.hint
+}
+
 func (s *bootReconcileStore) ListRuns(context.Context) ([]types.AgentRun, error) {
 	return []types.AgentRun{s.run}, nil
 }
@@ -213,6 +221,9 @@ func TestReconcileOnBoot_ExecRunFinalizesFromAgentExit(t *testing.T) {
 	if !fake.transitioned || fake.toState != types.RunCompleted {
 		t.Fatalf("an exec run whose agent exited 0 must finalize COMPLETED via AgentStatus; transitioned=%v to=%q — container Status alone reports RUNNING forever", fake.transitioned, fake.toState)
 	}
+	if h := fake.hintValue(); h != "" {
+		t.Errorf("a run finalizing to a successful terminal state must get NO failure hint (it would paint a red reason chip on a completed run), got %q", h)
+	}
 	if len(fr.stopped) == 0 {
 		t.Error("finalize must tear the still-up idle sandbox down")
 	}
@@ -244,6 +255,9 @@ func TestReconcileOnBoot_ExecRunFailsFromNonZeroExit(t *testing.T) {
 	}
 	if !fake.transitioned || fake.toState != types.RunFailed {
 		t.Fatalf("a non-zero agent exit must finalize FAILED; transitioned=%v to=%q", fake.transitioned, fake.toState)
+	}
+	if fake.hintValue() == "" {
+		t.Error("a run finalizing to FAILED must get a failure hint so the badge carries a reason")
 	}
 }
 
@@ -418,6 +432,16 @@ func TestRunWatcherSweeper_PeriodicallyReapsUndispatchedOrphans(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the sweeper never reaped a sandbox-less run past undispatchedGrace; boot-only leaves it stranded non-terminal with un-revoked credentials for the life of the pod")
+	}
+	// #123: the reaped run must carry a failure hint, not a blank chip — the
+	// hint write races the sweeper goroutine (it lands AFTER the finals send),
+	// so poll briefly instead of reading it the instant finals fires.
+	deadline := time.Now().Add(2 * time.Second)
+	for fake.hintValue() == "" && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if fake.hintValue() == "" {
+		t.Error("a reaped never-dispatched run must get a failure hint so its FAILED badge carries a reason (#123)")
 	}
 }
 
