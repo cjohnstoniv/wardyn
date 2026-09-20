@@ -85,10 +85,15 @@ ui/playwright-report/
 /examples/composer-configs/anthropic-api.json
 /examples/composer-configs/openai-api.json
 
-# design-sync (claude.ai/design system sync) — staged scripts, build output, machine state
+# design-sync (claude.ai/design system sync)
+# The staged tooling and the build output are regenerable; the inputs are not,
+# so .design-sync/ is tracked. Everything account- or machine-specific inside
+# it is ignored below, because a project id belongs to one claude.ai account
+# and every account that picks this repo up gets a different one.
 .ds-sync/
 ds-bundle/
-/.design-sync/
+/.design-sync/.cache/
+/.design-sync/project.local.json
 
 # Claude Code local config (contributors bring their own)
 .claude/*
@@ -118,6 +123,7 @@ ds-bundle/
 !/docs/design/workspace-providers-mock/
 # CONSOLE-RULES.md is a permanent doc, not a mock round: docs/README.md indexes it
 # and every UI review cites it, so it ships with the repo like any other doc.
+!/docs/design/SYNC.md
 !/docs/design/CONSOLE-RULES.md
 # hybrid-0.8.md is the same shape: a published design brief, not a mock round.
 # ROADMAP.md's v0.8 row links to it, so it has to ship for a reader following
