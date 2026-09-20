@@ -42,7 +42,13 @@
 // DRIVE_MEMBER precedent in user-drives-copy.ts), so they are transcribed here
 // as the wording the Go side must emit.
 
-import type { SetupHarnessTool } from "./types";
+import { absoluteTime } from "./format";
+// The two model-access POLICY exports moved to lib/model-access.ts (0.7.6) —
+// re-exported here so every existing import site is untouched. They had to
+// leave: this module carries the whole AGENTS copy table, and the shell's eager
+// graph now reads that policy, which put 16 kB of copy into the entry chunk
+// (bundle-split.test.ts). Copy lives here; the rule lives there.
+export { MODEL_ACCESS_ACTIONABLE, isPerUserSsoRow } from "./model-access";
 
 // ==================== §7.2-§7.5 — PROVIDERS, the admin screen ==============
 
@@ -299,11 +305,32 @@ export function modelAccessChipBare(state: string): string | undefined {
     : label;
 }
 
-// U-10: the per_user "something actionable to do" states — the member's own
-// sign-in. Exported once so the Agents tab (admin) and member Getting
-// Started (member) share ONE policy instead of two independently-typed
-// literal sets that could drift on a sixth state.
-export const MODEL_ACCESS_ACTIONABLE = new Set(["not_configured", "expired_signin", "expiring"]);
+// The server's action line as the READER's clock renders it — the one place the
+// console re-composes a server sentence, and only this one.
+//
+// `expiring`'s action carries an RFC3339 UTC stamp ("Sign in again before
+// 2026-09-19T14:03:22Z", internal/api/modelaccess.go), which a person in
+// another timezone misreads — and since 0.7.6 that state rides a banner on
+// every screen for its whole 24-hour window. The template re-composed here is
+// the SAME frozen §7.7 string the server formats, so only the instant changes.
+// Every other state, and an `expiring` from a daemon too old to send
+// `deadline`, renders verbatim.
+//
+// It lives HERE, beside the template, rather than in lib/model-access.ts: this
+// module carries the whole AGENTS table, and lib/model-access.ts is imported by
+// the shell's eager graph — one reference to AGENTS from there put 16 kB of copy
+// into the entry chunk (bundle-split.test.ts). Its two callers are both lazy
+// screens.
+export function modelAccessActionLine(
+  access: { state?: string; action?: string; deadline?: string } | undefined | null,
+): string {
+  if (!access?.action) return "";
+  if (access.state === "expiring" && access.deadline) {
+    return AGENTS.MODEL_ACCESS_EXPIRING_ACTION(absoluteTime(access.deadline));
+  }
+  return access.action;
+}
+
 
 // R-01 (fix-console-u review): the "is this harness row a per-person AWS SSO
 // lane" predicate — `h.enabled !== false` (not truthiness) is load-bearing,
@@ -318,9 +345,6 @@ export const MODEL_ACCESS_ACTIONABLE = new Set(["not_configured", "expired_signi
 // recurrence this fixes): connection-cards.tsx's perUserSso reads the
 // server's settled row, agents-tab.tsx's perUserSaved reads the same
 // `harness` prop — same three-part test, same answer.
-export function isPerUserSsoRow(h: SetupHarnessTool): boolean {
-  return h.enabled !== false && h.mechanism === "bedrock_sso" && h.credential_source === "per_user";
-}
 
 // ==================== AGENTS_DRAFT — 0.7.3 field-report round ==============
 // DRAFT (M2 canon pending): new strings this round, NOT part of the frozen

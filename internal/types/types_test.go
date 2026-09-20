@@ -172,6 +172,7 @@ func TestApprovalKindValues(t *testing.T) {
 		{"credential", ApprovalCredential, "credential"},
 		{"egress_domain", ApprovalEgressDomain, "egress_domain"},
 		{"tool_call", ApprovalToolCall, "tool_call"},
+		{"credential_reauth", ApprovalCredentialReauth, "credential_reauth"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

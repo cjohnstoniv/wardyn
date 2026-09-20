@@ -31,6 +31,7 @@ import { approvals as approvalsApi } from "./lib/api/approvals";
 import { runs as runsApi } from "./lib/api/runs";
 import { usePoll } from "./lib/use-poll";
 import { AttentionPublisherProvider, type AttentionCounts } from "./lib/attention-context";
+import { ModelAccessProvider } from "./components/wardyn/model-access-context";
 import type {
   AgentRun,
   ApprovalRequest,
@@ -243,8 +244,8 @@ export function FirstRunLanding({ status }: { status: SetupStatus | null }) {
   return <Navigate to={firstRunLanding(status, role)} replace />;
 }
 
-// The hard gate: while the daemon grades any setup check `fail` or `warn`,
-// every route below redirects into the funnel. `/setup` and `/demos` sit
+// The hard gate: while the daemon marks any setup check `blocking`, every route
+// below redirects into the funnel. `/setup` and `/demos` sit
 // OUTSIDE this wrapper, so the way to satisfy the gate is always reachable and
 // this can never trap anyone (the funnel configures environment, network and
 // secrets in place). Waits for the first /setup/status and the real role before
@@ -253,8 +254,10 @@ export function FirstRunLanding({ status }: { status: SetupStatus | null }) {
 // which would gate a member on checks their console cannot even see.
 //
 // Not the 0.5 gate this file's header warns about: that one demanded the funnel
-// be FINISHED. This asks only that the install works, and `info` checks — the
-// optional ones, model provider included — never hold it.
+// be FINISHED. This asks only that the install can work at all, and since 0.7.8
+// the DAEMON names the rows that mean it (a dead runner, an unenforceable
+// confinement floor, SSO with no role mapping) — a grade alone never holds it,
+// and a row about the caller's own credential never can.
 function RequireSetup({ status }: { status: SetupStatus | null }) {
   const role = useRole();
   const roleResolved = useRoleResolved();
@@ -298,6 +301,20 @@ function RequireSetup({ status }: { status: SetupStatus | null }) {
 // decided from RunDetail too, not only the Approvals screen, so onChanged alone
 // would leave the badge stale.
 const ATTENTION_POLL_MS = 5000;
+
+// How often the model-access door re-reads the status it rides on. FIVE
+// MINUTES — 12 requests an hour per tab, a sixtieth of either poller above —
+// because the thing it watches moves on the scale of an SSO session, not a run:
+// /setup/status is the expensive endpoint (a runner Capabilities call, a CLI
+// sweep, a secret listing, a platform/SCM detect, a site-config read and an AWS
+// SSO blob decrypt), and this is the poll that made it periodic at all.
+//
+// usePoll is what makes the cadence honest: a hidden tab skips its ticks
+// entirely and returning to the tab fires one immediately, which closes the
+// "left open for hours" hole without asking the daemon for a faster cadence.
+//
+// A named module constant on purpose: a field report moves one number here.
+const MODEL_ACCESS_POLL_MS = 300_000;
 
 // M2: can THIS role reach a captured return path? Scoped to the one place a
 // wrong answer is a dead end the plan named (restoring a mid-session-401
@@ -445,10 +462,20 @@ export default function App() {
   const [setupStatus, setSetupStatus] = React.useState<SetupStatus | null>(
     null,
   );
+  // RETURNED, like refreshHealth below (Codex #12): usePoll's in-flight guard is
+  // promise-based, so a void return would let a slow /setup/status — the
+  // expensive endpoint — stack a second read on top of the first every tick.
   const refreshSetupStatus = React.useCallback(() => {
-    setupApi
+    return setupApi
       .getSetupStatus()
-      .then(setSetupStatus)
+      .then((status) => {
+        // authRef, not a closed-over `auth` (the same ref H1's 401 handler
+        // reads): /setup/status is the expensive endpoint and can still be in
+        // flight across a sign-out, and its late answer describes the person
+        // who just left.
+        if (authRef.current !== "authed") return;
+        setSetupStatus(status);
+      })
       .catch(() => {
         /* leave the last-known status in place — never trap behind a failed probe */
       });
@@ -492,8 +519,22 @@ export default function App() {
     });
   }, []);
   React.useEffect(() => {
-    if (auth === "authed") refreshSetupStatus();
+    if (auth === "authed") {
+      void refreshSetupStatus();
+      return;
+    }
+    // Signing out DROPS the snapshot. It is one person's model-access state,
+    // their harness roster and their readiness — and the next sign-in on this
+    // tab renders the shell (and the model-access strip in it) before the
+    // landing read answers, which would show them the last person's.
+    setSetupStatus(null);
   }, [auth, refreshSetupStatus]);
+  // …and again every five minutes, because model_access is a per-person
+  // credential LIFECYCLE: read once per session, a member who signed in at 09:00
+  // is told at 09:00 and never again, and the strip below would be as stale as
+  // the tab is old. Paused while unauthenticated — the endpoint 401s, and the
+  // landing read above is what re-arms it.
+  usePoll(refreshSetupStatus, MODEL_ACCESS_POLL_MS, auth !== "authed");
   // R4/F027: reachability is NOT gated on being signed in. /healthz is the one
   // unauthenticated endpoint the console has, and the state where it matters
   // most is the one this used to skip — an outage that sent the human to the
@@ -560,6 +601,11 @@ export default function App() {
   return (
     <ThemeProvider>
       <AttentionPublisherProvider value={publishAttention}>
+      {/* The door: one model-access answer and one sign-in dialog for the strip
+          in the shell, the New Run rail, a credential-failed run's failure
+          block and a held run's approval row — none of which can be reached by
+          prop-drilling through screens that are at the file-size gate. */}
+      <ModelAccessProvider status={setupStatus} onRefresh={refreshSetupStatus}>
       <Routes>
         <Route
           element={
@@ -770,6 +816,7 @@ export default function App() {
           </Route>
         </Route>
       </Routes>
+      </ModelAccessProvider>
       </AttentionPublisherProvider>
       <Toaster />
     </ThemeProvider>

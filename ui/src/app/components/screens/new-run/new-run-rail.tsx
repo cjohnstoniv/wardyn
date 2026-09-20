@@ -15,7 +15,7 @@
 // side by side. Squeezing a 320px rail into a phone column is how the
 // consequences of a choice end up unreadable exactly where they are hardest to
 // scroll back to.
-import type * as React from "react";
+import * as React from "react";
 import { Link } from "react-router-dom";
 import { Loader2, TriangleAlert } from "lucide-react";
 import type {
@@ -33,6 +33,14 @@ import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../../wardyn/copy";
 import { useRecordingDisabled } from "../../../lib/hooks/use-recording-disabled";
 import { RailSection } from "./new-run-primitives";
+import { MODEL_ACCESS_AGENT } from "../../../lib/model-access";
+import { absoluteTime, relativeTime } from "../../../lib/format";
+import { RAIL_MODEL_ACCESS } from "../../wardyn/model-access-copy";
+import {
+  useClaimModelAccessDoor,
+  useModelAccessDoor,
+  type ModelAccessDoorHandle,
+} from "../../wardyn/model-access-context";
 
 interface RunRailProps {
   /**
@@ -64,6 +72,10 @@ interface RunRailProps {
     /** Why Launch cannot be pressed — a disabled button that won't say is a dead end. */
     problem: string | null;
     error: string | null;
+    /** The server refused THIS launch for the caller's own model credential (a
+     *  422 carrying reason `model_credential`) — the one refusal a sign-in
+     *  repairs, so the rail answers it with the door and launches again. */
+    credentialRefused: boolean;
     /** The 201's advisory `warnings[]`, once Launch has actually fired
      *  (§5c.8) — rendered here, inline, instead of a toast. */
     warnings: string[];
@@ -180,6 +192,101 @@ function credentialSentence(cred: ModelCredential): string {
   }
 }
 
+// ModelAccessLine — Finding 1: the rail states WHO (this launcher) needs to
+// sign in, a second and independent fact from showModelWarning above (a
+// DEPLOYMENT with no model path at all). RunRail withholds it entirely unless
+// the selected agent is the one model_access grades AND the door needs
+// attention (showModelAccess) — a codex row or a live session renders nothing.
+//
+// `// ponytail:` this reads useModelAccessDoor() itself rather than taking the
+// door as a prop threaded from new-run-screen.tsx: that screen is at its
+// 1000-line file-size gate and gets a ZERO-line diff (the context exists
+// exactly so a nested surface can reach the door with no prop-drilling).
+function ModelAccessLine({ door, onSignIn }: { door: ModelAccessDoorHandle; onSignIn: () => void }) {
+  const when = door.deadline ? relativeTime(door.deadline) : "";
+  let sentence = "";
+  let action = "";
+  let title = "";
+  // `expiring` is a STATE, not an alarm (round-1 UX S3, round-2 S14) — muted
+  // text, not the warning tint the other three states use.
+  let warning = true;
+  // The server's action ONLY when it carries what the sentence and button
+  // cannot — the pin-contradicted account/role pair — never the button's own
+  // label repeated as prose (S1).
+  const serverAction = door.action && door.action !== AGENTS.SIGN_IN_AWS ? door.action : "";
+  switch (door.state) {
+    case "not_configured":
+      sentence = RAIL_MODEL_ACCESS.NOT_SIGNED_IN;
+      action = serverAction;
+      break;
+    case "expired_signin":
+      sentence = RAIL_MODEL_ACCESS.EXPIRED;
+      action = serverAction;
+      break;
+    case "expiring":
+      warning = false;
+      title = door.deadline ? absoluteTime(door.deadline) : "";
+      // No separate action line — the deadline is IN the sentence (S1 / W0-mock
+      // ruling 1) — EXCEPT against a daemon that sends no `deadline` (review-1
+      // S3): an older daemon's `expiring` state would otherwise render NOTHING
+      // at all here while the rail still CLAIMS the door — zero sign-in
+      // controls on /runs/new. Mirrors the strip's own fallback.
+      sentence = when ? RAIL_MODEL_ACCESS.EXPIRING(when) : "";
+      action = when ? "" : door.action;
+      break;
+    case "shared_expired":
+      // The one credential every run rides. Its ADMIN reads their own repair
+      // sentence, never the member's "ask them" line about themselves
+      // (review-1 S2) — everybody else keeps the server's instruction.
+      sentence = door.operator ? RAIL_MODEL_ACCESS.SHARED_ADMIN_EXPIRED : RAIL_MODEL_ACCESS.SHARED_EXPIRED;
+      action = door.operator ? "" : door.action;
+      break;
+    default:
+      // live, not_applicable, "" — RunRail's showModelAccess gate already
+      // withholds this component for these, but a future daemon state this
+      // console does not know says nothing rather than inventing a sentence.
+      return null;
+  }
+  if (!sentence && !action) return null;
+  return (
+    <p
+      className={
+        "mb-1.5 rounded-md px-2 py-1.5 text-xs " +
+        (warning ? "border border-warning/30 bg-warning-subtle text-foreground" : "text-muted-foreground")
+      }
+      title={title || undefined}
+    >
+      {/* Two SEPARATE text nodes (mirrors model-access-banner.tsx's
+          modelAccessStripCopy rendering) — the server's action, when it
+          renders, is a second fact beside ours, never appended into the same
+          sentence. */}
+      {sentence && <span>{sentence}</span>}
+      {action && <span> {action}</span>}
+      {/* The rail's OWN sign-in, under a DISTINCT accessible name from the
+          strip's/Getting Started's "Sign in to AWS" (U-13's actual rule is two
+          controls with distinct names, not one hidden) — and hidden while the
+          door dialog is open, so there is never a live control pointing at a
+          dialog that is already on screen. Gated on door.actionable, not just
+          needsAttention: a non-operator's shared_expired has nothing this
+          viewer can repair (round-1 UX S13). */}
+      {door.actionable && !door.open && (
+        <>
+          {" "}
+          <Button
+            variant="link"
+            size="sm"
+            className="h-auto p-0 align-baseline text-xs"
+            aria-label={RAIL_MODEL_ACCESS.SIGN_IN_ARIA}
+            onClick={onSignIn}
+          >
+            {AGENTS.SIGN_IN_AWS}
+          </Button>
+        </>
+      )}
+    </p>
+  );
+}
+
 export function RunRail({
   governanceProfile,
   savedPolicy,
@@ -197,10 +304,63 @@ export function RunRail({
   // `recordingDisabled` is TRI-STATE — undefined until /healthz answers.
   const cred = preflight.result?.model_credential;
   const recordingDisabled = useRecordingDisabled();
+  // Finding 1: model_access grades the claude-code row alone, so a shell
+  // command or a different agent (codex) never reads this line whatever the
+  // door says.
+  const door = useModelAccessDoor();
+  const showModelAccess = agentRow?.id === MODEL_ACCESS_AGENT && door.needsAttention;
+  // Door ownership (round-2 UX B1/S2): the rail claims it for exactly as long
+  // as it renders its own sign-in control, so the shell strip drops its
+  // button here — no New Run exception — and keeps its sentence.
+  useClaimModelAccessDoor(showModelAccess && door.actionable);
+
+  // Focus returns to Launch, not to #main-content (which would drop the
+  // member at the top of the form they were mid-way through), when THIS
+  // rail's own control opened the door. The DOOR owns the return target
+  // (review-1 S1): the rail's own sign-in control unmounts the moment the
+  // state it described clears (a completed sign-in), so by the time the
+  // dialog's onCloseAutoFocus runs, document.activeElement — what a bare
+  // openDoor() would have captured — is a DETACHED node and focusOpener()
+  // fails, falling through to #main-content; a separate effect here racing
+  // Radix's own FocusScope exit trap cannot reliably win either. Passing
+  // Launch explicitly as `returnTo` makes it the captured opener directly.
+  const launchRef = React.useRef<HTMLButtonElement>(null);
+
+  // The server refused THIS click for the person's own model credential (422,
+  // reason model_credential — the class failure-block.tsx grades a dead run by).
+  // The door opens here, and the same launch fires again the moment the sign-in
+  // lands, so a lapsed session costs one dialog rather than a trip to Getting
+  // started. Launch stays the server's decision: nothing is pre-checked on the
+  // cached status, which can be five minutes stale. Once per click: a relaunch
+  // refused again (a pin contradiction the same identity cannot repair) leaves
+  // the sentence and waits for the person. Never over a door someone else
+  // opened: openDoor overwrites the opener, and the strip's focus contract
+  // (model-access-banner.tsx) reads it on close — and a click is CONSUMED on
+  // its first evaluation, whatever the door's state then, so a door that
+  // closes later (Escape, a sign-in started from the strip) never brings this
+  // dialog back with a relaunch armed for a click the person has moved past.
+  // A pending relaunch does survive leaving the page with the dialog open
+  // (the dialog is the shell's): a sign-in completed then launches the run
+  // that click asked for and lands on it.
+  const onLaunchRef = React.useRef(launch.onLaunch);
+  onLaunchRef.current = launch.onLaunch;
+  const autoOpened = React.useRef(false);
+  React.useEffect(() => {
+    if (!launch.credentialRefused || autoOpened.current) return;
+    autoOpened.current = true;
+    // The audience rule modelAccessDoor already states: a sign-in repairs a
+    // bedrock_sso lane for its per_user owner, or for any operator (a shared
+    // row); a member under a shared row keeps the server's sentence, no door.
+    if (door.open || !door.bedrockSSO || !(door.perUser || door.operator)) return;
+    door.openDoor(launchRef.current, () => onLaunchRef.current());
+    // The strip and the line above catch up with what the server just said.
+    void door.refresh();
+  }, [launch.credentialRefused, door.open, door.bedrockSSO, door.perUser, door.operator, door.openDoor, door.refresh]);
+
   // A run with no model credential to describe (a shell command — the screen
-  // withholds agentRow for one) and no warning to raise has no Credentials
-  // section at all, rather than a heading over a sentence about nothing.
-  const showCredentials = showModelWarning || !!cred || !!agentRow;
+  // withholds agentRow for one), no model-access line and no warning to raise
+  // has no Credentials section at all, rather than a heading over nothing.
+  const showCredentials = showModelWarning || !!cred || !!agentRow || showModelAccess;
   // U-5: with NO provider connected and nothing resolved, "Resolved at launch."
   // and the Preflight hint sat directly under "No model provider is connected.
   // This run launches; its first model call fails." Nothing resolves at launch
@@ -258,13 +418,31 @@ export function RunRail({
 
         {showCredentials && (
         <RailSection title="Credentials">
-          {showModelWarning && (
+          {/* Finding 1, above CredentialFacts: a per-PERSON fact ("do I have a
+              sign-in at all"), independent of showModelWarning below (a
+              DEPLOYMENT fact — some model path exists at all). */}
+          {showModelAccess && (
+            <ModelAccessLine door={door} onSignIn={() => door.openDoor(launchRef.current)} />
+          )}
+          {/* The per-person line SUPERSEDES the deployment one when both would
+              otherwise render (live-walk finding): under a per_user row,
+              setupBedrock grades llm_ready through the CALLER's own AWS
+              scope, so a never-signed-in member reads SSOPresent=false ->
+              Ready=false -> llm_ready=false -> showModelWarning=true on a
+              deployment that unambiguously HAS a model path — the admin's
+              row exists, this person just has not signed in yet. Stacking
+              "No model provider is connected" under NOT_SIGNED_IN would be a
+              false claim beside a true one. showModelAccess is the more
+              specific fact whenever it applies; the deployment sentence
+              still covers every OTHER no-model-path shape (no per_user row
+              at all, a shared credential nobody set up, a legacy daemon). */}
+          {showModelWarning && !showModelAccess && (
             <p className="mb-1.5 rounded-md border border-warning/30 bg-warning-subtle px-2 py-1.5 text-xs text-foreground">
-              No model provider is connected. This run launches; its first model call fails.{" "}
+              {RAIL_MODEL_ACCESS.NO_PROVIDER}{" "}
               {/* Rulebook §9: the action that fills the gap rides next to the
                   need, not only in a footer. Links are --info, never teal. */}
               <Link to="/settings" className="font-medium text-info hover:underline">
-                Connect →
+                {RAIL_MODEL_ACCESS.NO_PROVIDER_CTA}
               </Link>
             </p>
           )}
@@ -347,10 +525,14 @@ export function RunRail({
           </Button>
         ) : (
           <Button
+            ref={launchRef}
             type="button"
             className="flex-1"
             disabled={launch.disabled || !!launch.problem}
-            onClick={launch.onLaunch}
+            onClick={() => {
+              autoOpened.current = false;
+              launch.onLaunch();
+            }}
           >
             {/* The icon slot always renders (never just on launching) so the
                 has-[>svg] padding rule and the icon+gap width never change —

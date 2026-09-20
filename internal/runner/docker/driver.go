@@ -278,7 +278,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	}
 
 	// Best-effort image presence: pull the agent image if absent.
-	if err := d.ensureImage(ctx, spec.Image); err != nil {
+	if err := d.ensureImage(ctx, spec.Image, func() { spec.NotifyWaiting("image: Pulling: " + spec.Image) }); err != nil {
 		return runner.Sandbox{}, err
 	}
 	// ...and the proxy sidecar, which used to be "assumed locally present
@@ -296,7 +296,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// provision"). It no-ops where the image is already resident, so a checkout
 	// and CI (which builds it) are unaffected, and k8s is untouched — kubelet
 	// pulls the sidecar there.
-	if err := d.ensureImage(ctx, d.cfg.ProxyImage); err != nil {
+	if err := d.ensureImage(ctx, d.cfg.ProxyImage, func() { spec.NotifyWaiting("image: Pulling: " + d.cfg.ProxyImage) }); err != nil {
 		return runner.Sandbox{}, err
 	}
 
@@ -1158,13 +1158,21 @@ func (d *Driver) SweepOrphanedSandboxes(ctx context.Context, minAge time.Duratio
 // ensureImage pulls ref if it is not already present locally. Pull output is
 // drained and discarded; failures to pull surface as errors (fail closed —
 // never run a sandbox we could not provision).
-func (d *Driver) ensureImage(ctx context.Context, ref string) error {
+//
+// onPulling (nil-safe) fires immediately BEFORE the pull that blocks, and only
+// there: imagePresent has just said this host does not have the image, so this
+// is the one place in the tree where a first download can be ASSERTED rather
+// than hedged. After the pull it would arrive when the wait is already over.
+func (d *Driver) ensureImage(ctx context.Context, ref string, onPulling func()) error {
 	present, err := d.imagePresent(ctx, ref)
 	if err != nil {
 		return err
 	}
 	if present {
 		return nil
+	}
+	if onPulling != nil {
+		onPulling()
 	}
 	// imagePresent said false, so a pull failure means the image is genuinely
 	// absent locally (not a stale tag) — see pullFailure for what that error says.

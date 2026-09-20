@@ -310,7 +310,10 @@ func TestSupportBundleCmdEndToEnd(t *testing.T) {
 
 	dir := t.TempDir()
 	composePath := filepath.Join(dir, "docker-compose.yaml")
-	composeContent := "services:\n  wardynd:\n    environment:\n      WARDYN_ADMIN_TOKEN: \"demo-admin-token\"\n"
+	composeContent := "services:\n  wardynd:\n    environment:\n" +
+		"      WARDYN_ADMIN_TOKEN: \"demo-admin-token\"\n" +
+		"      APP_PRIVATE_KEY: |\n        first-sensitive-line\n        second-sensitive-line\n" +
+		"      WARDYN_AUDIT_SINKS: >-\n        [{\"bearer_token\": \"first-sensitive-line\n        second-sensitive-line\"}]\n"
 	if err := os.WriteFile(composePath, []byte(composeContent), 0o644); err != nil {
 		t.Fatalf("write compose file: %v", err)
 	}
@@ -368,8 +371,10 @@ func TestSupportBundleCmdEndToEnd(t *testing.T) {
 	if !strings.Contains(files["audit-tail.json"], "run.dispatch") {
 		t.Errorf("audit-tail.json is missing the event's action: %s", files["audit-tail.json"])
 	}
-	if strings.Contains(files["compose-config.redacted.yaml"], "demo-admin-token") {
-		t.Errorf("compose-config.redacted.yaml leaked the admin token: %s", files["compose-config.redacted.yaml"])
+	for _, secret := range []string{"demo-admin-token", "first-sensitive-line", "second-sensitive-line"} {
+		if strings.Contains(files["compose-config.redacted.yaml"], secret) {
+			t.Errorf("compose-config.redacted.yaml leaked %q: %s", secret, files["compose-config.redacted.yaml"])
+		}
 	}
 }
 

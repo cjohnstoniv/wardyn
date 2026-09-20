@@ -257,11 +257,11 @@ cover-check: test-report test-report-docker test-report-k8s ## Enforce the COVER
 # always runs both; local runs say so loudly when they are skipped — X2-F24:
 # this used to add only test-report-pg, so a local release-check never ran the
 # race detector over the concurrency proofs CI gates on). Still not a full CI
-# replica: eight jobs need a
-# live daemon or service — conformance, conformance-k8s, envbuild-integration,
+# replica: the live-service jobs need a
+# daemon or service — conformance, conformance-k8s, envbuild-integration,
 # helm-install-test, the Playwright ui-e2e, desktop-envelope, buildx-smoke,
-# and trivy — and are CI-only. See
-# RELEASING.md.
+# and trivy — and run separately with those prerequisites. See RELEASING.md
+# and ci.yml for their local setup.
 release-check: ci ## Pre-tag gate: make ci + CHANGELOG (+ PG lane)
 	@grep -q "## \[Unreleased\]" CHANGELOG.md || (echo "CHANGELOG missing [Unreleased]"; exit 1)
 	@if [ -n "$$WARDYN_TEST_PG" ]; then \
@@ -649,20 +649,23 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@# what makes the netpol label a complete key for the Secret.
 	@# Asserted on the Role block specifically: granting these in the cluster-scoped
 	@# ClusterRole instead would satisfy a bare grep while widening every namespace.
-	@# (k8s.runtimeClasses.CC2 pinned only to satisfy the B12b-F7 guard — this gate inspects the Role's verbs, not the class)
-	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.runtimeClasses.CC2=gvisor --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.allowRunsInReleaseNamespace=true); \
+	@out=$$(helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.allowRunsInReleaseNamespace=true); \
 	role=$$(echo "$$out" | awk '/^---/{r=0} /^kind: Role$$/{r=1} r'); \
 	echo "$$out" | grep -qE 'resources: \[[^]]*"secrets"' || { echo "the render has no secrets rule — the verb assertions below would be vacuous"; exit 1; }; \
 	echo "$$role" | grep -A1 'resources: \["networkpolicies"\]' | grep -q '"list"' || { echo "the k8s-runner Role does not grant networkpolicies: list — SweepOrphanedSandboxes keys the both-pods-gone reclaim on the run's NetworkPolicy labels, so without it that run's Secret (proxy config + every secret_env value) is never reclaimed"; exit 1; }; \
 	echo "$$out" | grep -EA1 'resources: \[[^]]*"secrets"' | grep -qE '"(get|list|watch)"' && { echo "the k8s-runner Role grants a Secret-BODY read verb (get/list/watch) on secrets — every one of them returns the object's data, RBAC cannot scope them by label, and with runsNamespace unset that is namespace-wide plaintext read of the control plane's own Secrets. wardynd never reads a Secret back: the kubelet mounts the per-run one into the proxy pod, and the sweep finds it by its NetworkPolicy labels (W6-S4)"; exit 1; } || true
-	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.allowRunsInReleaseNamespace=true 2>&1 | grep -q "cannot enforce confinement_class CC2" || { echo "chart no longer refuses k8s.enabled with no CC2/CC3 RuntimeClass pinned and no default-policy override (defaultPolicy/env.WARDYN_DEFAULT_POLICY) — the image bakes a CC2-floor default policy but the k8s driver advertises only [CC1] until a RuntimeClass is pinned, so a stock install fails closed on every run instead of at render time (B12b-F7)"; exit 1; }
-	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.allowRunsInReleaseNamespace=true --set-file defaultPolicy=examples/policies/demo.json >/dev/null 2>&1 || { echo "a CC1-floor defaultPolicy (examples/policies/demo.json) no longer satisfies the CC2/CC3-or-policy refusal — the escape hatch for a plain runc/CC1 cluster with no gVisor/Kata RuntimeClass is gone"; exit 1; }
-	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.allowRunsInReleaseNamespace=true --set k8s.runtimeClasses.CC3=kata-qemu >/dev/null 2>&1 || { echo "a CC3-only RuntimeClass pin no longer satisfies the CC2/CC3-or-policy refusal — CC3 alone must clear it, not only CC2"; exit 1; }
+	@# B12b-F7 retired in 0.7.8 (deployment.yaml's guard comment carries the
+	@# full reasoning): the shipped default floor moved CC2 -> CC1, so this
+	@# exact shape — no RuntimeClass pinned, no policy override — is now the
+	@# unblocked default case and must render clean rather than refuse.
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.allowRunsInReleaseNamespace=true >/dev/null 2>&1 || { echo "k8s.enabled with no CC2/CC3 RuntimeClass pinned and no defaultPolicy override no longer renders — the 0.7.8 shipped CC1 floor should make this the default, unblocked case (B12b-F7 retired)"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.allowRunsInReleaseNamespace=true --set-file defaultPolicy=examples/policies/demo.json >/dev/null 2>&1 || { echo "a CC1-floor defaultPolicy (examples/policies/demo.json) override no longer renders"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.allowRunsInReleaseNamespace=true --set k8s.runtimeClasses.CC3=kata-qemu >/dev/null 2>&1 || { echo "a CC3-only RuntimeClass pin no longer renders"; exit 1; }
 	@# R-01: deploy/kind/quickstart.sh's generated values (k8s.enabled + proxyImage +
 	@# a real runsNamespace + env.WARDYN_DEFAULT_POLICY, no runtimeClasses pin) must
-	@# render clean — this is the exact shape `make kind-quickstart` feeds the chart,
-	@# and the B12b-F7 guard above refused it until quickstart.sh's env block gained
-	@# this override (see that script's own comment, byte-matching compose's).
+	@# render clean — this is the exact shape `make kind-quickstart` feeds the chart.
+	@# The env override predates B12b-F7's retirement and is now redundant (both
+	@# default.json and demo.json floor at CC1) but harmless, so it stays.
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set k8s.enabled=true --set k8s.proxyImage=ghcr.io/example/wardyn-proxy:test --set serviceAccount.automount=true --set k8s.runsNamespace=wardyn-runs --set env.WARDYN_DEFAULT_POLICY=/examples/policies/demo.json >/dev/null 2>&1 || { echo "deploy/kind/quickstart.sh's generated values (k8s.enabled, proxyImage, a real runsNamespace, env.WARDYN_DEFAULT_POLICY, no runtimeClasses pin) no longer render — make kind-quickstart's helm upgrade --install would fail closed (R-01)"; exit 1; }
 	@# The absence check below needs a render that SUCCEEDED and a Role that
 	@# EXISTS, or it passes on nothing: `grep -q X && fail || true` is satisfied
@@ -683,6 +686,7 @@ helm-lint: ## Lint + template-render the Helm chart (default + all-on values + t
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeySecretRef.name=wardyn-age | grep -A3 "name: WARDYN_AGE_KEY" | grep -q "name: wardyn-age" || { echo "secrets.ageKeySecretRef.name did not wire WARDYN_AGE_KEY from that Secret"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeySecretRef.name=wardyn-age --set secrets.ageKeyFromSecret=true 2>&1 | grep -q "secrets.ageKeySecretRef.name is set together with" || { echo "chart no longer refuses two age-identity sources named at once"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set-file defaultPolicy=examples/policies/demo.json --set env.WARDYN_DEFAULT_POLICY=/examples/policies/demo.json | grep -q 'value: "/examples/policies/demo.json"' || { echo "env.WARDYN_DEFAULT_POLICY no longer wins over the ConfigMap-backed default"; exit 1; }
+	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set awsSSOProxyInject=off --set env.WARDYN_AWS_SSO_PROXY_INJECT=on | grep -A1 "name: WARDYN_AWS_SSO_PROXY_INJECT" | grep -q 'value: "on"' || { echo "env.WARDYN_AWS_SSO_PROXY_INJECT no longer wins over awsSSOProxyInject — scripts/kind-sso-walk.sh's --set env.WARDYN_AWS_SSO_PROXY_INJECT posture pin would stop working"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set defaultPolicy='not json' 2>&1 | grep -q "mustFromJson" || { echo "chart no longer refuses an invalid defaultPolicy at render"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set ingress.enabled=true 2>&1 | grep -q "ingress.enabled is set with no ingress.hosts" || { echo "chart no longer refuses ingress.enabled with no hosts — an Ingress with no rules applies cleanly and routes nothing"; exit 1; }
 	@helm template wardyn ./deploy/helm/wardyn --set auth.adminToken.secretRef.name=wardyn-auth --set secrets.ageKeyFromSecret=true --set ingress.enabled=true --set 'ingress.hosts[0].host=wardyn.example.test' | grep -A2 'paths:' | grep -q 'path: /' || { echo "an ingress.hosts entry with no paths no longer defaults to the console root — it rendered paths: null, which the API server rejects"; exit 1; }

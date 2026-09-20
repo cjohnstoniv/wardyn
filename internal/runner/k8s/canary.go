@@ -17,6 +17,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
+
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 )
 
 // k8sPollInterval paces every bounded poll in this package (canary terminal
@@ -68,14 +70,12 @@ const (
 // exhaustive (the timeout is the general-purpose safety net for anything
 // else, including a stuck-Pending scheduling failure); this is the fast path
 // for the common cases.
-var terminalWaitingReasons = map[string]bool{
-	"ImagePullBackOff":           true,
-	"ErrImagePull":               true,
-	"CreateContainerError":       true,
-	"CreateContainerConfigError": true,
-	"InvalidImageName":           true,
-	"CrashLoopBackOff":           true,
-}
+//
+// The list itself moved to runner.TerminalWaitingReasons, which is tagless: the
+// control plane decides on the same six strings (a terminal startup reason is
+// the one detail that outlives a FAILED run) and cannot import a `k8s`-tagged
+// symbol. This name stays because it is what this package's poll loops read.
+var terminalWaitingReasons = runner.TerminalWaitingReasons
 
 // canaryPhaseResult is one canary phase's outcome. err non-nil means the
 // phase itself could not reach a verdict (indeterminate).

@@ -521,7 +521,13 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// no dependency on sb.Ref), so moving it earlier is safe.
 	s.stampRunWatcherLease(ctx, run.ID)
 
+	// What the substrate says it is waiting on, while it is still waiting; the
+	// closer ends the last stretch wardyn_run_start_wait_seconds is timing, so
+	// it runs on the failure path too (runStatusDetailWriter has the contract).
+	onWaiting, endStartWait := s.runStatusDetailWriter(ctx, run.ID)
+	spec.OnWaiting = onWaiting
 	sb, err := s.cfg.Runner.CreateSandbox(ctx, spec)
+	endStartWait()
 	if err != nil {
 		// Conditional: only mark FAILED if still STARTING. A kill landing between the
 		// entry claim and this failure moved the run to KILLED — don't clobber that

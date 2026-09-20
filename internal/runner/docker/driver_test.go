@@ -173,7 +173,7 @@ func TestEnsureImage_MissingHintsMakeTarget(t *testing.T) {
 	f.failImagePull = true // absent + unpullable
 	d := newTestDriver(f)
 
-	err := d.ensureImage(context.Background(), "wardyn/agent-oracle:local")
+	err := d.ensureImage(context.Background(), "wardyn/agent-oracle:local", nil)
 	if err == nil {
 		t.Fatal("ensureImage on an absent, unpullable image: got nil error")
 	}
@@ -202,7 +202,7 @@ func TestEnsureImage_MissingDoesNotHintMakeTargetForANonDemoRef(t *testing.T) {
 		f.failImagePull = true // absent + unpullable
 		d := newTestDriver(f)
 
-		err := d.ensureImage(context.Background(), ref)
+		err := d.ensureImage(context.Background(), ref, nil)
 		if err == nil {
 			t.Fatalf("ensureImage(%q) on an absent, unpullable image: got nil error", ref)
 		}
@@ -1121,4 +1121,50 @@ func TestWaitMainProcess_TolerantOfTransientProbeErrors(t *testing.T) {
 	if code != 9 {
 		t.Errorf("Wait code = %d, want 9", code)
 	}
+}
+
+// TestEnsureImage_ReportsPullingOnlyWhenAbsent is the one place a FIRST PULL can
+// be ASSERTED rather than hedged: imagePresent has just said the host does not
+// have this image, so the wait the person is sitting through IS the download.
+// The kubelet's ContainerCreating covers a pull and everything else it does
+// before a container runs, which is why the k8s sentence stays conditional and
+// this one does not.
+func TestEnsureImage_ReportsPullingOnlyWhenAbsent(t *testing.T) {
+	t.Run("present: nothing is downloading, so nothing is said", func(t *testing.T) {
+		f := newFakeDocker()
+		f.images["wardyn/agent-claude:local"] = true
+		d := newTestDriver(f)
+		pulls := 0
+		if err := d.ensureImage(context.Background(), "wardyn/agent-claude:local", func() { pulls++ }); err != nil {
+			t.Fatalf("ensureImage on a present image: %v", err)
+		}
+		if pulls != 0 {
+			t.Errorf("onPulling fired %d times for an image the host already has", pulls)
+		}
+	})
+
+	t.Run("absent: said once, BEFORE the pull that blocks", func(t *testing.T) {
+		f := newFakeDocker()
+		d := newTestDriver(f)
+		var order []string
+		f.onPull = func(string) { order = append(order, "pull") }
+		if err := d.ensureImage(context.Background(), "wardyn/agent-claude:local", func() {
+			order = append(order, "report")
+		}); err != nil {
+			t.Fatalf("ensureImage on an absent, pullable image: %v", err)
+		}
+		if !slices.Equal(order, []string{"report", "pull"}) {
+			t.Fatalf("order = %v, want the report BEFORE the pull — after it, the sentence arrives when the wait is over", order)
+		}
+	})
+
+	// A nil callback is the driver-level caller (the conformance suite,
+	// cmd/wardyn-runner): no control plane, nothing to write to, no panic.
+	t.Run("nil callback", func(t *testing.T) {
+		f := newFakeDocker()
+		d := newTestDriver(f)
+		if err := d.ensureImage(context.Background(), "wardyn/agent-claude:local", nil); err != nil {
+			t.Fatalf("ensureImage with a nil callback: %v", err)
+		}
+	})
 }

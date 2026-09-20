@@ -32,12 +32,7 @@ import type { SetupStatus, SiteConfig } from "../../../lib/types";
 import { PageHeader } from "../../wardyn/page-header";
 import { ErrorState, TableSkeleton } from "../../wardyn/states";
 import { Mono } from "../../wardyn/code-block";
-import {
-  getDefaultCc,
-  resolveDefaultCc,
-  setDefaultCc,
-} from "../../wardyn/default-confinement";
-import type { ConfinementClass } from "../../../lib/types";
+import { strongestAvailable } from "../../wardyn/default-confinement";
 import { EnvironmentStep } from "../setup/environment-step";
 import { useOperator, useOperatorResolved } from "../../wardyn/operator-context";
 import { isProxyConfigured } from "../setup/corp-network-proxy";
@@ -70,11 +65,11 @@ function HostCard({
   onRecheck: () => void;
 }) {
   const navigate = useNavigate();
-  const [override, setOverride] = React.useState<ConfinementClass | null>(null);
-  const selected = resolveDefaultCc(
-    override ?? getDefaultCc(),
-    status.runner.confinement_classes ?? [],
-  );
+  // The strongest installed class — 0.7.8's server-computed default, read
+  // straight (no override state left to own here: there is nothing left to
+  // persist, and this card is a read-only statement of "what every run
+  // inherits by default", never a second place to pick it).
+  const selected = strongestAvailable(status.runner.confinement_classes ?? []) ?? "CC1";
 
   const envBuilder = status.checks.find((c) => c.id === "env_builder");
   // GET /api/v1/site-config is operatorOnly since R1 — it carries the upstream
@@ -109,14 +104,10 @@ function HostCard({
       </p>
 
       <div className="mt-3">
-        <EnvironmentStep
-          status={status}
-          selected={selected}
-          onSelect={(cc) => {
-            setOverride(cc);
-            setDefaultCc(cc);
-          }}
-        />
+        {/* Read-only here (see `selected` above): a click has nothing left to
+            change, so onSelect is a no-op rather than a second place that
+            picks a default a run could then inherit from. */}
+        <EnvironmentStep status={status} selected={selected} onSelect={() => {}} />
       </div>
 
       <div className="mt-4 divide-y divide-border border-t border-border pt-1">

@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/cjohnstoniv/wardyn/internal/audit"
 	"github.com/cjohnstoniv/wardyn/internal/auth/oidc"
 	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
@@ -221,14 +222,24 @@ var _ ssh.Channel = (*fakeSSHChannel)(nil)
 // the package's plain recRecorder would race under -race.
 func holderTestServer(t *testing.T) (*Server, *touchCountingStore, *holderTestRunner, *sshTestRecorder, types.AgentRun) {
 	t.Helper()
+	audit := &sshTestRecorder{}
+	srv, st, fr, run := holderTestServerWithAudit(t, audit)
+	return srv, st, fr, audit, run
+}
+
+// holderTestServerWithAudit is holderTestServer's construction, factored out so
+// a test that needs to OBSERVE or DELAY specific audit events (D2's release-
+// before-audit-tail ordering) can supply its own audit.Recorder instead of the
+// plain sshTestRecorder.
+func holderTestServerWithAudit(t *testing.T, rec audit.Recorder) (*Server, *touchCountingStore, *holderTestRunner, types.AgentRun) {
+	t.Helper()
 	ast := newAuthzStore()
 	st := &touchCountingStore{authzStore: ast}
 	fr := &holderTestRunner{}
-	audit := &sshTestRecorder{}
 
 	h := newHarness(t)
 	cfg := baseTestConfig(h, st)
-	cfg.Audit = audit
+	cfg.Audit = rec
 	cfg.Runner = fr
 	cfg.OIDC = &oidc.Authenticator{}
 	srv := New(cfg)
@@ -237,7 +248,7 @@ func holderTestServer(t *testing.T) (*Server, *touchCountingStore, *holderTestRu
 	ast.mu.Lock()
 	ast.runs[run.ID] = run
 	ast.mu.Unlock()
-	return srv, st, fr, audit, run
+	return srv, st, fr, run
 }
 
 const (
@@ -950,5 +961,165 @@ func TestAttachWS_EvictionStopsAPasteMidFlight(t *testing.T) {
 		}
 		t.Errorf("delivered chunk sizes = %v (total %d), want exactly one %d-byte chunk: the rest of the paste "+
 			"must be dropped at the chunk boundary once the take-over is decided", sizes, len(paste), attachWriteChunk)
+	}
+}
+
+// ─── D1: a holder that outlives its socket ─────────────────────────────────
+
+// TestAttachWS_DeadPeerHolderIsFreed is the regression test for D1's liveness
+// probe (attachPingInterval).
+//
+// MEASUREMENT (done before writing this fix, per the campaign spec): built the
+// same scenario below against the PRE-FIX pump — a silent PTY (never fed any
+// output) and a peer that stops reading right after the attach-mode frame, the
+// exact shape of a browser tab whose machine died or lost its network mid-
+// session. attachHolderFor(run.ID) was STILL non-nil after several real
+// seconds of polling, and nothing in the pump could ever free it: with no
+// output, attachWriteTimeout's bounded Write is never attempted; with no
+// client frame, c.Read has no deadline of its own. The slot was bounded only
+// by whatever the OS/proxy eventually notices about the dead TCP connection —
+// in the worst case (a genuine network black hole, no FIN, no RST), never.
+// Every OTHER attacher (a second browser tab, `wardyn attach`, the SSH
+// gateway) reads that run as permanently "held" until the daemon restarts —
+// this is the reported "sometimes I can never click back in".
+//
+// SIMULATING "dead" without a real dead socket: coder/websocket only answers
+// (or even observes) a Ping while something on that side is calling
+// Read/Reader — its own documented contract ("You must always read from the
+// connection. Otherwise control frames will not be handled."). So a test
+// client that simply STOPS reading after the attach-mode frame reproduces a
+// vanished peer exactly: the TCP connection stays open (no close, no error),
+// yet no pong ever comes back — indistinguishable, at this layer, from a
+// laptop whose lid just closed. This is the same idiom
+// attach_takeover_f5_probe_test.go's drainClient/wsPing pair already relies on
+// (a concurrent reader is what lets Ping complete); here we withhold it.
+func TestAttachWS_DeadPeerHolderIsFreed(t *testing.T) {
+	srv, _, fr, _, run := holderTestServer(t)
+	srv.pingEvery = 15 * time.Millisecond // test-only override; see attachPingEvery
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	c := dialAttach(t, ts, srv, run.ID, holderOwner, "")
+	readAttachMode(t, c) // one read, then we go silent — see the doc above
+	waitFor(t, "the holder's session to open", func() bool { return fr.session(0) != nil })
+	waitFor(t, "the holder to register", func() bool { return srv.attachHolderFor(run.ID) != nil })
+
+	// (deliberately: no further c.Read, no c.Close — the dead peer)
+
+	waitFor(t, "the dead-peer holder to be freed by the ping probe", func() bool {
+		return srv.attachHolderFor(run.ID) == nil
+	})
+}
+
+// ─── D2: release before the recording/audit tail ───────────────────────────
+
+// blockingDetachAudit delays ONLY the "session.detach" audit write until the
+// test signals unblock, so a test can hold open the exact window D2's fix
+// widens responsiveness into: "the holder is freed" vs. "the departing
+// session's own detach is durably recorded". Every other action (session
+// .attach, session.takeover, ...) passes straight through to the wrapped
+// recorder, unblocked, so it never distorts anything but the one event this
+// test is about.
+type blockingDetachAudit struct {
+	*sshTestRecorder
+	unblock chan struct{}
+}
+
+func (r *blockingDetachAudit) Record(ctx context.Context, ev types.AuditEvent) error {
+	if ev.Action == "session.detach" {
+		<-r.unblock
+	}
+	return r.sshTestRecorder.Record(ctx, ev)
+}
+
+// TestAttachWS_RemountReleasesHolderBeforeAuditTail is the regression test for
+// D2. Focus mode (canvas.tsx) remounts the terminal: the OLD attach socket
+// closes in cleanup and the NEW one opens in the same effect flush, well
+// before the OLD handler's finishRecording + session.detach audit have any
+// chance to run (they are disk/DB I/O with no bound). Pre-fix, releaseHolder
+// was deferred to run AFTER that tail, so the new handshake's
+// registerAttachHolder call landed inside that window and was admitted READ-
+// ONLY against its own vanishing self — the reported "sometimes I can never
+// click back in".
+//
+// This also PINS the accepted audit-order trade-off the fix's own comment
+// documents: releasing the slot promptly means a successor's session.attach
+// can be recorded BEFORE the departing session's session.detach lands — the
+// opposite of handleAttachTakeover's "audit first, displace second" rule,
+// deliberately: a take-over is one human forcibly ending another's session
+// (losing that event is unacceptable), whereas a remount is the SAME
+// principal reclaiming a socket that was always theirs (the trail gains an
+// attach slightly ahead of its own detach, never a lost or misattributed
+// event).
+func TestAttachWS_RemountReleasesHolderBeforeAuditTail(t *testing.T) {
+	audit := &blockingDetachAudit{sshTestRecorder: &sshTestRecorder{}, unblock: make(chan struct{})}
+	t.Cleanup(func() {
+		select {
+		case <-audit.unblock: // already closed
+		default:
+			close(audit.unblock)
+		}
+	})
+	srv, _, fr, run := holderTestServerWithAudit(t, audit)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	// ── the departing session: the OLD terminal instance ──
+	c1 := dialAttach(t, ts, srv, run.ID, holderOwner, "")
+	mode1 := readAttachMode(t, c1)
+	if mode1.ReadOnly {
+		t.Fatal("the first client was told it is read-only")
+	}
+	waitFor(t, "the first session to open", func() bool { return fr.session(0) != nil })
+	waitFor(t, "the holder to register", func() bool { return srv.attachHolderFor(run.ID) != nil })
+
+	// Close it exactly the way the remount's cleanup does (canvas.tsx: "the old
+	// instance closes its socket in cleanup"): a clean 1000, not a drop.
+	if err := c1.Close(websocket.StatusNormalClosure, "component unmounted"); err != nil {
+		t.Fatalf("close the departing socket: %v", err)
+	}
+
+	// The pump has ended and released the holder — this must happen WITHOUT
+	// waiting for session.detach, which blockingDetachAudit is holding open.
+	waitFor(t, "the departing holder to be released before its own detach audit lands", func() bool {
+		return srv.attachHolderFor(run.ID) == nil
+	})
+	// Prove it's genuinely still blocked, not just not-yet-polled: the detach
+	// event must be ABSENT from the log at this exact point.
+	if ev := findAudit(audit.snapshot(), run.ID, "session.detach", "success"); ev != nil {
+		t.Fatal("session.detach already recorded — this test's premise (it is held open) is not exercising the window at all")
+	}
+
+	// ── the remount's new instance, same principal, same run ──
+	c2 := dialAttach(t, ts, srv, run.ID, holderOwner, "")
+	mode2 := readAttachMode(t, c2)
+	if mode2.ReadOnly {
+		t.Fatal("the remounted terminal was admitted read-only against its own vanishing predecessor — D2 regressed")
+	}
+	waitFor(t, "the second session to open", func() bool { return fr.session(1) != nil })
+
+	// PIN THE ORDER: the successor's session.attach is already durably
+	// recorded while the departing session's session.detach is STILL absent —
+	// the accepted inversion the fix's comment documents.
+	events := audit.snapshot()
+	var attaches int
+	for _, ev := range events {
+		if ev.RunID != nil && *ev.RunID == run.ID && ev.Action == "session.attach" && ev.Outcome == "success" {
+			attaches++
+		}
+	}
+	if attaches < 2 {
+		t.Fatalf("only %d session.attach events recorded before the detach unblocked, want 2 (departing + remount)", attaches)
+	}
+	if ev := findAudit(events, run.ID, "session.detach", "success"); ev != nil {
+		t.Fatal("the departing session's session.detach landed before the remount's session.attach — the ordering this test pins did not hold")
+	}
+
+	// Let the departing session's audit tail finish and confirm it is not lost
+	// (best-effort provenance, but never dropped): released the slot early does
+	// not mean the event never lands.
+	close(audit.unblock)
+	if ev := waitForAudit(t, audit.sshTestRecorder, run.ID, "session.detach", "success"); ev == nil {
+		t.Fatal("the departing session's session.detach was never recorded once unblocked")
 	}
 }

@@ -419,6 +419,13 @@ func closedEnumChecks() []closedEnumCheck {
 		// TestApprovalStatesCoversEveryConstant reds if a constant is added
 		// without it.
 		{"approvals", "state", enumSet(types.ApprovalStates)},
+		// 0064: approvals.KIND, which carried an inline CHECK from 0001 that no
+		// parity guard read at all — the same blindness 0062 closed one column
+		// over, left open on the column beside it. credential_reauth (the
+		// mid-run re-auth request) is the kind that would have been written by
+		// Go and rejected by Postgres with every gate green. DERIVED from
+		// types.ApprovalKinds for the reason the state entry above gives.
+		{"approvals", "kind", enumSet(types.ApprovalKinds)},
 		{"approvals", "decision_scope", stringSet(
 			string(types.ScopeOnce), string(types.ScopeRun), string(types.ScopeUntil), string(types.ScopeAlways),
 			"", // 0039's NOT NULL DEFAULT '' — see above

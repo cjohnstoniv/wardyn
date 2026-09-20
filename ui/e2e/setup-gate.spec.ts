@@ -29,13 +29,23 @@ async function mockGatedStatus(
       // mode is also what renders People's "Open Permissions" affordance.
       json.auth = { ...json.auth, mode: "sso" };
     }
+    // The e2e backend runs `-runner none` (scripts/e2e-backend.sh), so the REAL
+    // runner row is a `fail` — and since 0.7.8 a runner fail is BLOCKING. Left
+    // alone it would gate every case here on its own, so the probe below would
+    // prove nothing and the not-gated cases could never load a page at all.
+    // Clearing the flag on the real rows is what makes the probe the only thing
+    // this spec gates on.
     json.checks = [
-      ...(json.checks ?? []),
+      ...(json.checks ?? []).map((c: { blocking?: boolean }) => ({ ...c, blocking: false })),
       {
         id: "e2e_gate_probe",
         label: "e2e gate probe",
         status: "warn",
         detail: "forced by setup-gate.spec.ts",
+        // 0.7.8: setupGateActive gates on `blocking`, not on grade/id — a
+        // probe with no flag would silently stop testing anything this spec
+        // exists to cover.
+        blocking: true,
       },
     ];
     await route.fulfill({ response, json });
@@ -141,6 +151,66 @@ test.describe("setup gate — forced on access, never a prison", () => {
     await mockMemberRole(page);
     await page.goto("/runs");
     await expect(page).toHaveURL(/\/runs/);
+  });
+
+  // The path the owner actually walked (0.7.6): the gate fires once per PAGE
+  // LOAD (gateFiredThisLoad in setup-gate.ts), so a live goto() only ever
+  // exercises the LANDING read — every other case above lands already gated.
+  // What sent the owner's admin to Getting started mid-session was a
+  // BACKGROUND refresh (App.tsx's status poll) handing back a newly-blocking
+  // check while they sat on New Run. usePoll refetches on tab refocus
+  // ("coming back to the tab refreshes now" — its own comment) rather than
+  // waiting out its 5-minute interval, so that refocus tick — not a timer —
+  // is what this case drives, by dispatching the same `visibilitychange`
+  // event the real return-to-tab does.
+  test("a status that turns blocking on a BACKGROUND refresh gates too, not just the landing read", async ({
+    page,
+  }) => {
+    let blocking = false;
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const json = await response.json();
+      json.onboarding_complete = false;
+      // Same reason as mockGatedStatus: the backend's own `-runner none` fail
+      // row is blocking, and would gate the landing read this case needs to
+      // get PAST before it can prove anything about a background refresh.
+      json.checks = (json.checks ?? []).map((c: { blocking?: boolean }) => ({ ...c, blocking: false }));
+      // The row the owner's own admin carried — graded through THEIR credential,
+      // not the install's. Warn, and never blocking: present from the first read
+      // so that staying on New Run below is a statement about `blocking`, not
+      // about the row being absent.
+      json.checks.push({
+        id: "harness_credential_aws",
+        label: "AWS SSO session",
+        status: "warn",
+        detail: "your AWS SSO session has expired",
+      });
+      if (blocking) {
+        json.checks.push({
+          id: "e2e_gate_probe",
+          label: "e2e gate probe",
+          status: "warn",
+          blocking: true,
+        });
+      }
+      await route.fulfill({ response, json });
+    });
+
+    await page.goto("/runs/new");
+    await expect(page.getByRole("heading", { name: "New run" })).toBeVisible();
+
+    // FIRST, the fix itself: a warn the daemon did not mark blocking — the very
+    // row that used to throw this admin onto Getting started — survives a
+    // background refresh with the person still on New Run.
+    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await page.waitForResponse((r) => r.url().includes("/setup/status"));
+    await expect(page).toHaveURL(/\/runs\/new$/);
+
+    // THEN the positive: the install now fails a genuinely blocking check — as
+    // it would seconds after the owner clicked Launch — and the NEXT read gates.
+    blocking = true;
+    await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await page.waitForURL(/\/setup/);
   });
 
   // Re-check means "look at the HOST again", and only the daemon can do that:

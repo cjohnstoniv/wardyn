@@ -45,9 +45,9 @@ user, same host](#second-user-same-host)". Deciding who can do what:
 
 ## State stores
 
-Three stores hold data that exists nowhere else on every deployment, and a fourth
-appears the moment you register a **user drive**. Lose any of them and the loss is
-permanent.
+These stores hold recovery state. User drives add each person's files, and the
+audit fallback holds events that have not reached Postgres. Losing their only
+copy is permanent.
 
 | Store | Where | Holds | If you lose it |
 |---|---|---|---|
@@ -55,6 +55,7 @@ permanent.
 | Recordings | volume `${WARDYN_NS:-wardyn}-recordings` (`WARDYN_RECORDING_DIR=/data/recordings`) | PTY asciicasts for Replay — **only with `WARDYN_RECORDING_STORE=fs`**; the shipped default (`pg`) keeps them in Postgres and leaves this volume empty | every session replay it holds; nothing reconstructs them |
 | Age key | `WARDYN_AGE_KEY` in `deploy/compose/.env` | the X25519 identity every stored secret is encrypted to | every secret in Postgres becomes undecryptable ciphertext |
 | User drives | one object per person, per drive, on a deployment that registered one — a Docker volume or a PVC, both named `wardyn-drive-<drive-slug>-<home>`, or a subdirectory of the share YOU mounted (`host_path` — `<host_root>/<home>`) | each person's own files, written by their own runs at `/home/agent/drive`. Postgres holds the drive rows and the allocations, never the bytes, so `pg_dump` never carried this | that person's work; nothing reconstructs it |
+| Audit fallback | `WARDYN_AUDIT_SPOOL` and its `.consumed` / `.quarantine` sidecars; Compose mounts their directory on `<project>_audit` | pending failed-Postgres writes, their replay cursor, and permanently refused events | audit events absent from the database backup |
 
 `postgres_data`, `registry_data` and `audit` carry no explicit `name:` in
 `deploy/compose/docker-compose.yaml`, so Docker prefixes them with the compose
@@ -75,15 +76,43 @@ stack teardown must not delete a person's files. It is also why a backup that
 walks the compose volumes misses them entirely; list them with `docker volume ls
 --filter label=wardyn.managed=true`.
 
-The `audit` volume is **derived**, not primary: the optional file sink
-(`WARDYN_AUDIT_SINKS`, [ENV.md](ENV.md)). Postgres is the source of truth for the
-audit log (`deploy/helm/wardyn/values.yaml` says the same about `persistence`);
-the file sink is a forwarding copy for a SIEM. Ground truth (`tetragon_export`)
-and the rotator's `groundtruth_token` are transient — regenerated on start.
+The optional audit **file sink** (`WARDYN_AUDIT_SINKS`, [ENV.md](ENV.md)) is a
+forwarding copy for a SIEM. The Compose `audit` volume also holds the **fallback
+spool**, whose pending events are not yet in Postgres, so the volume is not
+disposable derived data. Preserve that recovery state as described below.
+Ground truth (`tetragon_export`) and the rotator's `groundtruth_token` are
+transient — regenerated on start.
+
+### Audit fallback recovery
+
+Keep the spool, `<spool>.consumed`, and `<spool>.quarantine` with the database
+backup as one recovery set. Quiesce work and stop wardynd while taking the
+database dump and copying its durable spool directory, so a drain cannot retire
+events between the two snapshots. Preserve ownership and restrictive file modes.
+The spool holds failed primary writes until replay succeeds; quarantine holds
+rejected events requiring manual triage. Neither is reconstructed from Postgres.
+
+Restore the matching files at `WARDYN_AUDIT_SPOOL` before wardynd starts.
+`NewAuditSpool` resumes from the valid `.consumed` cursor, restores the backlog
+and quarantine counters, and the drain retries pending events. Quarantine is
+not replayed automatically. A missing or mismatched cursor restarts replay from
+the beginning and can duplicate events; replay is at-least-once. The cursor
+identifies spool bytes, **not a database snapshot**: never pair a newer cursor
+with an older database dump, because it can skip events absent from that dump.
+Unmatched recovery sets need manual reconciliation.
+
+On ephemeral storage, preserve pending files **before** deleting the container
+or pod; once its directory is gone there is nothing to restore. If possible,
+recover Postgres and let the backlog drain first, while retaining quarantine.
+Use durable spool storage for repeatable backup/restore.
 
 ### Back them up
 
 ```sh
+# 0. Quiesce active work, then stop the writer while taking the database
+#    and audit-fallback backups as one recovery set.
+docker compose -f deploy/compose/docker-compose.yaml stop wardynd
+
 # 1. Postgres (the container name is ${WARDYN_NS:-wardyn}-postgres)
 docker exec wardyn-postgres pg_dump -U wardyn wardyn > wardyn-$(date +%F).sql
 
@@ -107,6 +136,13 @@ docker run --rm -v wardyn-recordings:/from -v "$PWD":/to alpine \
 #    A `host_path` drive is a subtree of a share you already back up, and a PVC
 #    is a snapshot per claim — see "User drives on Docker" and "User drives on
 #    Kubernetes" for the per-substrate detail.
+
+# 5. Snapshot/copy the audit-fallback directory, including its .consumed and
+#    .quarantine sidecars (see "Audit fallback recovery"). On stock Compose
+#    it is /data/audit on <project>_audit, not the unprefixed volume "audit".
+
+# 6. Once both the database and fallback copies are complete:
+docker compose -f deploy/compose/docker-compose.yaml start wardynd
 ```
 
 ### Restore them
@@ -125,7 +161,8 @@ dump loads.
 #    database mid-restore. (Restoring onto a HOST THAT ALREADY HAS DATA?
 #    `docker compose -f deploy/compose/docker-compose.yaml down -v` first —
 #    pg_dump's plain-SQL output re-creates the schema from scratch and will
-#    collide with an existing one.)
+#    collide with an existing one. Preserve any current spool/quarantine
+#    before down -v deletes the audit volume.)
 docker compose -f deploy/compose/docker-compose.yaml up -d postgres
 
 # 3. Restore into it. -v ON_ERROR_STOP=1 makes the FIRST failed statement
@@ -158,16 +195,19 @@ docker run --rm -v wardyn-recordings:/to -v "$PWD":/from alpine \
 #    volume name); a WRONG id makes Wardyn refuse the volume rather than adopt
 #    it. host_path drives need nothing here — you restore that share yourself.
 
+# 5b. Restore the matching audit-fallback directory and sidecars before
+#     wardynd starts, preserving ownership/modes ("Audit fallback recovery").
+
 # 6. Now bring up the rest of the stack.
 make setup
 
 # 7. Verify — row count first:
 docker exec -i wardyn-postgres psql -U wardyn -d wardyn -c "SELECT count(*) FROM audit_events;"
-#    then prove the age key actually decrypts what came back, which a row
-#    count alone can't: launch a run against any workspace/policy that
-#    depends on a previously-stored secret and confirm it starts instead of
-#    failing closed with a decrypt error (see "Rotating the age key" — the
-#    wrong key fails exactly here, not at boot):
+#    Startup already decrypts the persisted signing key and fails closed if
+#    the age key does not match. Also verify an application secret, which a
+#    row count cannot prove: launch a run against any workspace/policy that
+#    depends on a previously-stored secret and confirm it starts without a
+#    decrypt error (see "Rotating the age key"):
 wardyn run --agent claude-code --workspace <workspace-id>
 #    and, if this deployment allocates user drives, that a drive came back with
 #    its bytes rather than as a fresh empty volume — step 5 is the only thing
@@ -630,7 +670,19 @@ dropped (buffer overflow or retry exhaustion) even though Postgres — the
 primary — still got the row; non-zero means SIEM-side loss only, not a gap in
 the append-only trail itself. `wardyn_drive_refusals_total{reason}` counts
 runs refused their user drive, by reason — a signal for the drive-claim
-allocator, not the audit pipeline.
+allocator, not the audit pipeline. `wardyn_sso_refresh_total{outcome}` counts
+control-plane AWS SSO `CreateToken` renewal attempts (`awssso_refresh.go`), by
+`success` / `spent` / `transport_error` / `unavailable` — the same distinction
+the `harness.credential.refresh` audit row's `spent` field and expiry check
+already make, graphable without grepping the audit trail. `spent` increments
+ONCE per refresh token AWS retires, at the CreateToken call that discovers it
+(the `invalid_grant`/`expired_token`/`invalid_client`/`unauthorized_client`
+codes); every later dispatch on that same token exits at an earlier,
+UNCOUNTED short-circuit (the in-memory dead-mark check, before CreateToken is
+ever called again), so the series reads "how many distinct sessions AWS
+retired," not "how many times people hit a dead one." A climbing
+`transport_error`/`unavailable` series is the SSO-OIDC endpoint itself in
+trouble.
 
 The eBPF ground-truth sensor's cumulative counts scrape here too —
 `wardyn_groundtruth_observed_total`, `wardyn_groundtruth_dropped_total`,
@@ -1124,7 +1176,7 @@ to the claude-code image only** — the `codex-cli` image still reaches for seve
 hosts of its own at start (see the CHANGELOG's known gaps). **And only to an
 image actually carrying the three `ENV` lines**: `agent-claude-code` (where they
 were measured) is not a published image — `agent-base` is what ships, and it now
-carries the three lines too, so any image built `FROM ghcr.io/cjohnstoniv/agent-base:0.7.5`
+carries the three lines too, so any image built `FROM ghcr.io/cjohnstoniv/agent-base:0.7.6`
 inherits them. An image on another base, or an older tag pinned in
 `WARDYN_AGENT_IMAGES`, still parks on the CLI's own bootstrap; see
 [corp-image-authoring.md](adoption/corp-image-authoring.md) for the rebuild
@@ -1802,6 +1854,13 @@ revokes every unrevoked token that principal holds — a token is their session 
 another form. The `all` arm is deployment-wide for tokens too: EVERY live token
 goes, the calling admin's own included — plan to re-mint after a global revoke.
 
+**Registered SSH keys are separate.** An API token can register one through
+`wardyn ssh-key ensure`. Neither deleting the token nor revoking sessions
+removes that key, and key deletion does not disconnect an established SSH
+connection. For incident response or offboarding, also follow
+[SSH access revocation](SSH.md#revoking-access-during-an-incident): remove the
+key registrations and terminate affected runs when existing access must end.
+
 **Name them by either identity.** `--sub` takes the OIDC `sub` **or** the email,
 and both halves of the revoke honour both — the session cutoff and the token
 sweep — so you do not have to know which one your IdP made authoritative. This
@@ -1823,7 +1882,7 @@ admin/member gate and capability grants all resolve to the owning human — so a
 member's token reaches exactly the routes their session reaches, and no more. A
 token is **never** the admin identity: minting one requires a verified SSO human,
 so neither the admin token nor local mode can mint one, and a token cannot mint a
-successor.
+second API token.
 
 Only `hex(sha256(token))` is stored, so a lost token is re-minted, never
 recovered, and a database reader (a reporting role, a hot standby, a `pg_dump` in
@@ -2850,6 +2909,72 @@ leave whichever hop takes it. That is why the bottom-right cell — bypass AND
 lift — is the working private-endpoint configuration, and why the recipes below
 set both fields.
 
+### Phase B: the SSO/Bedrock MITM lane and the upstream proxy
+
+Phase B (`WARDYN_AWS_SSO_PROXY_INJECT=on`, the default — see [ENV.md](ENV.md) and "Turning the
+lane off" below) terminates and re-originates `portal.sso.<region>.amazonaws.com` inside the
+`wardyn-proxy` sidecar to inject a captured AWS SSO session on the wire. That re-origination is a
+forward dial like any other in this section, not a separate lane with its own rules: it is governed
+by `upstream_proxy_url`, `upstream_proxy_no_proxy` and `internal_hosts` exactly as above, and on a
+private-endpoint estate it needs the same bypass-plus-lift configuration a VPC-endpoint Bedrock
+deployment already does (see "Bedrock on a private endpoint" below).
+
+**The invariant, stated once:** the sandbox's dials — and the sidecar's forward dials on the
+sandbox's behalf, MITM re-origination included — follow `SiteConfig.upstream_proxy_url`; wardynd's
+own dials follow `WARDYN_DAEMON_PROXY_URL` ("wardynd behind a corporate proxy", next); every
+outbound path belongs to exactly one of those two. An operator field report found this class of bug
+reported three separate times because nothing said so in one place: "Each time a NEW outbound path
+was added, it did not inherit the operator's proxy configuration. A checklist item for anything that
+dials — 'does this path honour `upstream_proxy_url`?' — would have caught all three." See
+[docs/adoption/aws-sso-mitm-upstream-proxy.md](adoption/aws-sso-mitm-upstream-proxy.md) for the full
+report and the maintainer's analysis of what the code actually does today.
+
+**A TLS-intercepting corporate proxy needs its CA on both sides of this lane, asymmetrically.**
+Every sandbox image bakes `corp-ca.pem` at build (`install_mitm_ca`, "Corporate TLS-inspection root"
+below), but the `wardyn-proxy` image carries a corporate CA only if one was staged at its own build —
+otherwise it trusts one only through `WARDYN_TRUSTED_CA_FILE` ([ENV.md](ENV.md)). Unset, the
+re-origination's re-dial fails `x509: certificate signed by unknown authority`, filed as the same
+bare `builtin:dial-failed` as every other dial failure in this section.
+
+### wardynd behind a corporate proxy
+
+Everything above this point in this section — `upstream_proxy_url`, `upstream_proxy_no_proxy`,
+`SiteConfig`, the Phase B MITM re-origination just above — is the **sandbox's** egress hop: it
+governs what a run's own outbound traffic sees, compiled into the `wardyn-proxy` sidecar's config at
+dispatch. It has nothing to do with **wardynd's own** outbound calls: OIDC discovery/JWKS at boot,
+the audit webhook sink, GitHub App token minting, AWS SSO `CreateToken` renewal, and Entra directory
+sync. Those five calls all ride the process's shared
+`http.DefaultTransport`, and Go's `net/http` honors the standard `HTTP_PROXY` / `HTTPS_PROXY` /
+`NO_PROXY` variables **process-wide** — including inside the Kubernetes client, so a mistyped
+`NO_PROXY` on a k8s deployment can take the control plane's own API access down with it. That is why
+those three variables are documented as unsupported for wardynd's runtime environment (see `docs/ENV.md`'s
+`HTTP_PROXY` row) rather than a supported knob.
+
+`WARDYN_DAEMON_PROXY_URL` (+ `WARDYN_DAEMON_NO_PROXY`) is the supported, scoped replacement: it sets
+`http.DefaultTransport.Proxy` directly at boot (`installDaemonProxy`, beside the same-shaped
+`WARDYN_TRUSTED_CA_FILE` trust-tier knob), so it reaches exactly wardynd's five outbound consumers above
+and nothing else — the Kubernetes client builds its own transport (unaffected) and the Docker client
+speaks a unix socket (unaffected). Unset leaves the transport untouched, byte-identical to today
+(`ProxyFromEnvironment` still applies if you set the standard variables yourself — unsupported, not
+rejected).
+
+**The bypass list defends itself.** Wardynd auto-appends three hosts to `WARDYN_DAEMON_NO_PROXY` before
+applying it, because getting this wrong is exactly the outage this knob exists to prevent:
+`KUBERNETES_SERVICE_HOST` (the in-cluster API server address), the `WARDYN_AWS_SSO_ENDPOINT_OVERRIDE`
+host when one is configured (a kind Service in a test walk must never be dialed through a corporate
+proxy), and the `WARDYN_OIDC_INTERNAL_ISSUER` host when one is configured (a cluster-internal issuer
+wardynd itself dials at boot, before SiteConfig or any other runtime read exists). Every boot that sets
+a proxy logs one line naming the proxy host (never any embedded
+credential — `WARDYN_DAEMON_PROXY_URL` refuses to start if the URL carries `user:pass@`) and the
+effective bypass list:
+
+```
+grep 'daemon egress proxy configured' <logs>
+```
+
+A malformed `WARDYN_DAEMON_PROXY_URL` (not `http://`/`https://`, no host, or an embedded credential)
+refuses boot rather than silently falling back to direct — same posture as `WARDYN_TRUSTED_CA_FILE`.
+
 ### Corporate TLS-inspection root
 
 A TLS-inspecting upstream proxy — one that terminates and re-signs TLS with its
@@ -3151,6 +3276,28 @@ declared `per_user` AND they hold the `agent` capability for that row's agent �
 an admin always reaches it, and under a `per_user` row captures their own
 session exactly as anyone else does.
 
+**Launch with a lapsed session.** `POST /runs` refuses a run whose per-person
+session is missing or spent BEFORE any run exists (`422`; since 0.7.7 the body
+also carries `"reason":"model_credential"`, the failure audit row's own class —
+no other error body changes). Since 0.7.7 the real launch is also the one pass
+at create that REDEEMS an expired session whose refresh token still lives
+(Review's preflight never does): a renewal AWS refuses as spent is refused at
+the click with that class; one AWS does not answer is refused with *"launch
+again in a moment"* and no class — only once the token in hand has itself
+lapsed; a still-valid one carries the run. New Run answers the classed refusal with the sign-in
+dialog itself and launches the same run again once the capture lands, so a
+lapsed session is one dialog, not a trip to Getting Started; a member under a
+shared row reads the sentence and no dialog, because the repair is the admin's.
+Launch is never pre-checked on the console's cached status — the server is the
+gate. The setup funnel does not confiscate the console over that lapse. Since 0.7.8 the
+daemon decides which rows redirect an admin into the funnel — it marks them
+`blocking` on `/setup/status`, and only three are: a dead runner, a confinement
+floor the runner cannot meet, and OIDC with no role mapping. Every row graded
+through the caller's own credential — `llm_provider` and `bedrock_provider`
+under `per_user`, and `harness_credential_aws`, the row an expired AWS SSO
+session actually produces — keeps its grade wherever it renders and never moves
+anyone off the page they are on.
+
 **What the sign-in sandbox is, and what it is not.** It is the AWS CLI and
 nothing else: no LLM harness, no repo, no mounts. Its run is labelled `harness
 login` server-side, and the run page names it, so opening it from `/runs` is not
@@ -3195,7 +3342,11 @@ tries. Anyone with a WRITABLE attach can answer — the console's sign-in pane,
 `wardyn attach`, an SSH attach, or the Runs list when they hold the terminal.
 A read-only viewer cannot; the prompt itself has no deadline, so it waits until
 a writable attach answers or the sandbox's own 30-minute idle cap ends the run.
-Pin the account and the role on the roster row and the question never comes up.
+Pin the account and the role on the roster row and the question never comes up. While the sandbox
+waits on the answer, the sign-in panel's own copy already narrates the sign-in as done
+(`CAPTURE_HANDOFF`) — the browser step finished — so the person reads "click or tab into the
+terminal, type the number, press Enter" rather than a claim that Wardyn is still waiting on them
+externally.
 
 **Signing in from Getting Started is still the path to prefer** — it watches for
 the helper's success marker, corroborates the capture with the server, and shuts
@@ -3214,7 +3365,7 @@ after attaching and, ONLY if the sandbox has not announced itself (no
 the chained command itself, exactly as 0.7.4 did. The first thing the new image
 prints is that announcement, before its own prep wait, so on a current image the
 console never types and a second sign-in is never started over a running one.
-If you pin agent images, pull the 0.7.5 aws-sso image at the same upgrade.
+If you pin agent images, pull the 0.7.6 aws-sso image at the same upgrade.
 
 **The launch answers before the sandbox is up.** Since 0.7.4 `POST
 /setup/harness-login` returns `{run_id, state: "PENDING"}` as soon as the run
@@ -3453,7 +3604,9 @@ The pane polls the run while the sandbox comes up and says which of four states 
 | On screen | What Wardyn knows |
 |---|---|
 | "Starting the sign-in sandbox…" | Reads are healthy, OR have been failing for under 10 seconds (a blip); the sandbox is not up yet; less than a minute has passed since launch. |
-| "Still starting — Wardyn can read the sign-in sandbox, it just isn't up yet…" | Reads are healthy, past a minute since launch. Usually a first image pull on this node. Nothing on this path can *prove* a pull is what it is waiting on, which is why the sentence is hedged. |
+| "Still starting — Wardyn can read the sign-in sandbox, it just isn't up yet…" | Reads are healthy, past a minute since launch, and the run carries no `status_detail` (a pre-0.7.6 daemon, or a Docker warm image with nothing to report). Nothing on this path can *prove* a pull is what it is waiting on, which is why the sentence is hedged. |
+| the substrate's own reason (e.g. "Waiting for a machine with room for this sandbox.", "Downloading the image…") | Reads are healthy and the run's `status_detail` names a non-terminal reason ("What a starting run is waiting on", above) — since 0.7.6 this REPLACES the generic "Still starting" hedge; the clock budget is unchanged, only the sentence is more honest. |
+| the substrate's own reason, Cancel only, no clock | `status_detail`'s reason is TERMINAL (`ImagePullBackOff`, `CrashLoopBackOff`, …) — the wait ends in seconds, not after five minutes, because trying again gets the same answer until the cluster or the image changes. |
 | "Wardyn can't read the sign-in sandbox right now — still trying…" | The console's reads of the run have been failing for at least 10 seconds (a daemon restart, an ingress 5xx, a roster edit that made the read a 403). The sandbox itself may be perfectly fine. |
 | "Wardyn stopped being able to read the sign-in sandbox…" | Reads have been failing for at least five minutes AND at least 15 consecutive polls. The wait ends; the run id is kept, so Cancel still tears the sandbox down. |
 
@@ -3461,23 +3614,82 @@ The wait is graded on BOTH the clock and a poll-count floor, not on poll ticks a
 (five minutes of failing reads) says the outage is real, and the 15-failure floor — kept from the
 old tick budget — says it is not one hidden-tab poll pretending to be one (a backgrounded tab skips
 ticks entirely, so a single failed read after ten minutes away must not immediately read as
-unreadable). A healthy wait is never ended by the pane, however long the pull takes — what bounds
-it is the server, below.
+unreadable). A healthy wait with no reason to report is never ended by the pane, however long the
+pull takes; a healthy wait carrying a TERMINAL reason ends on the reason instead — what otherwise
+bounds it is the server, below.
 
-### The two server bounds a slow registry hits, and what to do about them
+### What a starting run is waiting on
+
+A run sits in `STARTING` for the whole of `CreateSandbox` — there is no sandbox reference until it
+returns, so nothing outside the runner could previously be asked what the substrate was doing. Since
+0.7.6 the runner reports it while it waits: every poll of the proxy pod and of the agent pod computes
+one line and, when that line CHANGES, writes it to `agent_runs.status_detail` (migration
+`0063_agent_runs_status_detail`). The console renders it on the run header, on the Runs board row and
+in the sign-in pane (below).
+
+The line is the substrate's own words, in the shape `<component>: <Reason>[: <message>]`:
+
+| line | what it means | does waiting fix it? |
+|---|---|---|
+| `agent: ContainerCreating` | the kubelet has the pod and is getting a container ready — which includes pulling the image | yes |
+| `agent: PodInitializing` | as above, init containers | yes |
+| `pod: Unschedulable: <scheduler's message>` | no node will take the pod (a taint, a full cluster, an unbound claim) — read the message | yes, if the cluster changes |
+| `pod: Pending` | the pod exists and nothing has claimed it yet | yes |
+| `image: Pulling: <ref>` | **Docker substrate only** — the host does not have this image and is downloading it now | yes |
+| `agent: ImagePullBackOff: <registry's message>` | the registry refused or the tag does not exist | **no** |
+| `agent: ErrImagePull: <registry's message>` | as above, first failure | **no** |
+| `agent: InvalidImageName: <message>` | the reference does not parse | **no** |
+| `agent: CreateContainerError: <message>` | the image exists; the kubelet would not make a container from it | **no** |
+| `agent: CreateContainerConfigError: <message>` | usually a missing Secret or ConfigMap key | **no** |
+| `agent: CrashLoopBackOff: <message>` | the container starts and exits, repeatedly | **no** |
+
+The six "no" reasons are terminal: the sign-in pane ends its wait on them in seconds rather than
+after five minutes, and offers only Cancel, because trying again gets the same answer until somebody
+changes the cluster or the image. They are the list in `internal/runner/waiting.go`
+(`TerminalWaitingReasons`), which the Kubernetes poll loops, the control plane's read projection and
+the console's mirror all read from.
+
+`status_detail` is display-only, never interpreted, and never cleared by a write: the API blanks it
+at READ for any run that is not `STARTING` — except a run that FAILED on one of the terminal reasons,
+where the reason IS the failure. The last reason therefore survives on the row for a `SELECT`
+postmortem without the console ever narrating a finished run's old wait. A run read from a pre-0.7.6
+daemon, or a run that started before this upgrade, simply carries no reason.
+
+### The two real bounds on a slow start
 
 The pane will wait; the **runner** will not wait forever, and those are the bounds an operator has to
 size:
 
-- `canaryWaitTimeout` = **3 minutes** (`internal/runner/k8s/canary.go`) bounds the wait for the
-  sandbox container to be running. A first pull of the `aws-sso` image was measured at **131 seconds**
+- `podIPWaitTimeout` = **90 seconds** (`internal/runner/k8s/canary.go`) is a SCHEDULING bound, not a
+  pull bound. It bounds the wait for the PROXY pod's CNI-assigned IP, and the CNI assigns that at
+  PodSandbox creation, *before* any application image is pulled. A cold pull can therefore never trip
+  it; an unschedulable pod trips it every time, which is why `pod: Unschedulable: …` is the line an
+  operator most often sees just before this error.
+- `canaryWaitTimeout` = **3 minutes** (same file) is the agent image's PULL bound. It bounds the wait
+  for the agent pod's main container to reach Running, which is where a genuine first pull of an
+  arbitrary agent image is spent. A first pull of the `aws-sso` image was measured at **131 seconds**
   on a reporting estate — 73% of this budget.
-- `podIPWaitTimeout` = **90 seconds** (same file) is the second, tighter bound.
 
-Neither is configurable in 0.7.5 and neither was moved: they bound every Kubernetes run on every
-estate, and finding 6 was about what the console SAYS, not about how long the runner waits. A pull
-slower than them fails the run honestly — the run carries a `failure_hint` naming the deadline and
-the pod's Pending state, and the pane shows that sentence rather than a guess.
+Neither is configurable in 0.7.6 and neither was moved: they bound every Kubernetes run on every
+estate. A pull slower than them fails the run honestly — the run carries a `failure_hint` naming the
+deadline and the pod's Pending state, and the pane shows that sentence rather than a guess.
+
+**A first pull after an upgrade does not fail a run.** Every image tag changes at a version bump, so
+the first start on each node after an upgrade re-pulls; that is a two-minute wait, not a fault. On
+Kubernetes the sentence stays conditional — the kubelet reports `ContainerCreating` for a pull and for
+everything else it does before a container runs, and Wardyn does not read the Events API (below) — so
+the console says a first start *can* take a couple of minutes while the image downloads. Only the
+Docker substrate asserts a download outright, because `ensureImage` has just checked and the host does
+not have the image.
+
+**No chart change, and why.** The reason comes from `pods: get`, which the chart already grants.
+There is no new RBAC verb in 0.7.6 and none is wanted. A `Pulling` reason on Kubernetes lives in an
+Event, and granting `events: get,list` would — under `k8s.allowRunsInReleaseNamespace=true` — let
+Wardyn read every co-tenant workload's event stream in that namespace (a `fieldSelector` is a client
+convenience, not something RBAC can enforce). `deploy/helm/wardyn/templates/rbac.yaml` states this in
+its own header paragraph: *"the kubelet's eviction verdict comes back through pods: get … never the
+Events API, so no 'events' verb belongs here."* Read that paragraph before "fixing" the conditional
+wording by granting the verb.
 
 **The fix for a slow registry is to pre-pull, not to wait longer.** Get the agent and `aws-sso`
 images onto every node at upgrade time — a DaemonSet that pulls the new tags, or the node cache of
@@ -3632,7 +3844,9 @@ working tree and reloads them first. It retags the two `:local` agent images
 on that Docker daemon — a compose stack sharing that daemon adopts them for
 new runs, which the walk warns about once. Either way the walk writes an
 `images.txt` into its evidence directory naming the tree's HEAD and each
-image's content digest and build time, so "which tip did this prove?" is
+image's content digest and build time (and, since 0.7.6, a `MANIFEST.json` with the host and node
+digests compared per image, the dirty paths, the fake's TTL knobs and the kill-switch posture read
+back off the Deployment), so "which tip did this prove?" is
 answerable afterwards rather than remembered.
 
 **It is still a manual proof, not a CI job** — no workflow runs it, so a green
@@ -3668,6 +3882,157 @@ point of the walk, not a caveat on it:
 - **The device-code step is pre-approved.** The fake approves every device
   code permanently, so the walk never exercises a human being slow, a code
   expiring before anyone attaches, or a browser leg that fails.
+
+### Where people are told about model access
+
+From 0.7.6 an actionable model-access state reaches a person on every console screen, not only on
+Getting Started. The console reads `model_access` from `GET /setup/status` once per session and then
+every five minutes (a hidden tab skips its ticks and a returning one refreshes at once), and renders a
+banner for the three states a person can act on — `not_configured`, `expired_signin`, `expiring` —
+plus `shared_expired`, which a member cannot. The banner carries the sign-in itself: the same AWS SSO
+login pane Settings mounts, in a dialog, on whatever screen they were on.
+
+Two suppressions are deliberate. On Getting Started the page IS the door. On Settings and the
+Providers screen the banner is withheld for an ADMIN only, because those pages already mount the same
+pane for the same states; a member keeps the banner there, because the Settings card's AWS button is
+admin-only and would otherwise strand them on the page they were sent to.
+
+`not_configured` (the first-run state) and, for a non-admin, `shared_expired` carry a "Not now" that
+hides the banner for that person in that browser session. A lapse — `expired_signin` or `expiring` —
+cannot be dismissed.
+
+Under a `shared` row the one credential is the admin's, and a member whose runs depend on it is told
+when it dies ("Your admin's model credential expired — ask them to reconnect it") with no button,
+because nobody but an admin can repair it. The ADMIN reading the same state sees the blast radius
+named — "The shared AWS sign-in no longer works — every Claude Code run needs it" — and gets the
+sign-in, which is the path `authorizeHarnessLogin` has always admitted for an operator. Wardyn has no
+way for that member to notify the admin; that gap is listed in the CHANGELOG.
+
+### A run refused for a model credential
+
+When an `AgentProviders` row says HOW an agent reaches its model and the credential that lane needs is
+dead at dispatch, the run is failed with the server's own sentence — and from 0.7.6 that refusal is
+also machine-readable: the `run.create` failure row it already wrote carries `reason:
+model_credential` and the run's DECLARED `mechanism`. The console grades that ending `credential` and
+renders the sentence with the AWS sign-in beside it, in a dialog, on the run page.
+
+The button is offered only where a sign-in the reader can complete would repair the state: the
+refused run's declared lane must still be the deployment's Claude Code lane, the reader's own
+`model_access` must be actionable, and the reader must be the person who created the run — an admin
+reading somebody else's failed run is shown the sentence alone, because their sign-in repairs nothing
+for that run. A refusal whose renewal merely did not complete ("launch again in a moment") grades
+`live` and gets no button either, correctly: nothing is wrong with that credential.
+
+Signing in from there does not restart anything. The run stays FAILED; relaunch is the run header's
+"Start a run like this one".
+
+**The refusal sentences' destination.** The refusals that name a destination — the dispatch refusal,
+its create-time 422 twin, the stored-AWS-identity refusal and the spent-renewal sentence — now name a
+door the reader can open. Under a `per_user` row that is the console's Getting started page or the
+model-access banner every screen carries; under a `shared` row it stays Settings → Model provider,
+which is the admin's own page. The CLI prints the same sentence, and Getting started is the
+destination that is true for its reader too.
+
+### A run is holding for a sign-in
+
+A run on the captured-AWS-SSO Bedrock lane can have its credential lapse **while it is working**.
+Before 0.7.6 that was terminal: the agent's next model call failed and a mid-task context was lost.
+Now the proxy **parks** the sandbox's next credential exchange while the credential's owner signs in
+again.
+
+**What the operator sees.**
+
+- The run stays RUNNING. Its header chip reads *Waiting for your AWS sign-in* (plus a count when
+  something else is pending too), and the cockpit's approvals strip carries one row, *AWS sign-in
+  needed*, whose single button opens the sign-in dialog. There is no Approve and no Deny: the request
+  is answered by signing in, and the API refuses a decision on it with `409` — to the security tier
+  and to the run's own owner or an admin. A caller who does not own the run gets the same
+  `404 approval not found` every other kind gives them, byte for byte, so the refusal cannot be
+  used to ask whether a UUID is somebody else's sign-in request.
+- The audit trail carries `credential.reauth.requested` at the raise — with `owner`,
+  `credential_source` and a `reason` from a closed set (`spent` the refresh token is gone at AWS,
+  `unavailable` renewal failed transiently with nothing left to serve, `not_found` there is no stored
+  session for that namespace) — and `credential.reauth.resolved` when a sign-in answers it, naming
+  `resolved_by` and the `capture_run_id` it landed from.
+- `/metrics` carries `wardyn_credential_reauth_total{outcome=requested|resolved|expired|cancelled|timeout}`
+  and `wardyn_credential_reauth_wait_seconds` (sum/count — the average time a request stayed open).
+  **Each label is counted at its own transition**: `requested` at the raise, `resolved` at the sign-in
+  that answered it, `expired` where the 24 h sweeper ages a row out, `cancelled` where a terminal run
+  cancels one, `timeout` where the daemon ingests the sidecar's `credential:reauth-timeout` decision.
+  That decision row is written for a spent BUDGET and nothing else: a hold ended by a proxy
+  shutdown, by a killed run (which leaves its own `approval.cancelled` row) or by a request
+  answered with anything but an approval refuses the sandbox with the same modelled 401 but is
+  neither counted nor logged as a timeout, so `timeout` always means "the owner had the whole
+  window".
+- **`timeout` is the label to alert on**, and the one to tune `WARDYN_CREDENTIAL_REAUTH_TIMEOUT`
+  against: it means a sandbox's model call was FAILED because nobody signed in inside the budget. A
+  rising `timeout` beside a `wait_seconds` average near the budget says people are only just making
+  it — lengthen the budget, or make the request more visible. A rising `timeout` with a LOW
+  `wait_seconds` says the opposite: the agent's SDK is giving up before the hold does, and the knob
+  should come DOWN below that SDK's own patience so the call fails fast instead of late.
+- A series that is mostly `expired` is a deployment whose people never see the request at all — check
+  that the console is reachable and that the roster names real principals. Mostly `cancelled` means
+  the runs are ending (killed, or finishing) before anyone answers.
+- **A hold expiry is deliberately NOT counted on `wardyn_egress_denies_total`.** Policy allowed the
+  host and allowed the request; what ran out was a person's time, and that series is the one whose
+  HELP promises "denial by policy" and which operators page on.
+
+**What the operator can change.** `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` (proxy sidecar, default `600s`,
+clamped `[10s, 1800s]`) is how long ONE hold waits. Lower it if your agent's SDK gives up before the
+hold does — on expiry the call fails with the AWS `UnauthorizedException` it would have got anyway.
+Both container runners forward it from wardynd's environment into every proxy sidecar, and the
+compose stack forwards it from the operator's shell into wardynd. A docker-gated measurement against
+the reference agent's own SDK (`wardyn/agent-claude-code`) found it still waiting on a parked
+credential exchange at eleven minutes — the test's own ceiling, not the SDK's — having made 28
+`GetRoleCredentials` calls in that window, roughly every 30 s. So the 600 s default is the binding
+constraint, not that SDK; a less patient SDK is what the "lower it" advice above is for.
+
+**The PENDING row outlives the hold, deliberately.** When the budget ends, the model call fails and
+the row stays PENDING — the sign-in is still wanted, and the next run needs it too. So a PENDING
+`credential_reauth` row is evidence that a sign-in was **asked for**; it is not evidence that a
+request is still parked. The 24-hour approval sweeper (`WARDYN_APPROVAL_EXPIRY_AFTER`) or the run's
+own terminal cascade closes it. Read the pair of audit rows, or the `credential:reauth-timeout`
+decision row, to tell the three apart.
+
+**Bounds.** One hold per REQUEST, however many of the sandbox's concurrent calls discover the lapse —
+the hold belongs to the request rather than to whichever call opened it, so a client that gives up
+does not end it and a client that arrives later joins it instead of starting a second one;
+at most eight such workflows per run, after which the run is refused rather than asked again. A hold
+ends within one poll of a 401/403/410 on the approval read (which is what a killed run answers before
+its CANCELLED row is readable), after three consecutive 404s, and at its budget — never later.
+
+### Turning the lane off
+
+`WARDYN_AWS_SSO_PROXY_INJECT=off` restores the pre-0.7.6 behaviour: the SSO access token is written
+into the sandbox's token cache, `portal.sso` is not TLS-MITM'd, no injection grant is authored, and a
+lapsed session fails the run's model call as it used to. It is also the sanctioned stopgap for the
+corporate-proxy interaction described in ["Phase B: the SSO/Bedrock MITM lane and the upstream
+proxy"](#phase-b-the-ssobedrock-mitm-lane-and-the-upstream-proxy) above — reachable now as a named
+Helm value and a Compose env line, not only through the raw env passthrough.
+
+It applies to **new dispatches only**. The placeholder cache, the injection grant and the MITM entry
+are all authored at dispatch, so a run that is already running keeps the lane it was authored with
+until it ends — including a run that is currently HELD, which keeps holding to its budget and can
+still be resolved by a sign-in. After flipping the switch, relaunch the runs that matter or wait them
+out; do not expect a running sandbox to change lane under you. The default is `on` — set the
+environment variable to `off` to roll back; a run already dispatched under `on` is unaffected by a
+later flip either direction.
+
+**A downgrade to 0.7.5 with `credential_reauth` rows present is UNSUPPORTED.** Migration `0064` is
+additive (it widens a CHECK), so the upgrade needs nothing; the old CHECK would refuse the rows on
+the way back. The upgrade runbook's `pg_dump` is the rollback.
+
+### Version combinations
+
+`claimSingleInstance` excludes a second daemon. It does not exclude an old sidecar image, an old
+browser bundle or an old CLI, so:
+
+| combination | behaviour |
+|---|---|
+| 0.7.5 proxy sidecar, 0.7.6 daemon | No hold. The 423 is an unrecognised status, the re-resolve fails closed, and the run's model call fails as it did in 0.7.5. The approval row is still raised and still visible. |
+| 0.7.6 proxy sidecar, 0.7.5 daemon | No 423 is ever answered, so the hold never opens. Byte-identical to 0.7.5. |
+| 0.7.5 console, 0.7.6 daemon | The row renders through `WIRE_TO_COPY`'s fallback (the raw kind string in the chip) and the screen does not crash; the Approve/Deny pair is offered and the server answers 409. Tell people on an old bundle to reload. |
+| 0.7.5 CLI reading a `credential_reauth` row | The kind is a plain string on the wire; `wardyn approvals list` prints it verbatim. |
 
 ### Internal model gateway
 
@@ -3812,8 +4177,9 @@ normal egress, which dispatch already chains to the configured upstream. It
 dispatches the published `agent-base` image (a plain curl task) at the STRONGEST
 confinement class this host's runner actually advertises — never the operator's
 configured floor, because the question is whether egress works, not whether the
-floor is enforceable (a CC2 floor with no RuntimeClass registered otherwise fails
-the probe before it reaches the network, reading as a proxy problem it is not; see
+floor is enforceable (an admin floor above what this host's runner advertises —
+CC2 with no RuntimeClass registered, say — otherwise fails the probe before it
+reaches the network, reading as a proxy problem it is not; see
 `not_run` below and the setup checklist's confinement-floor warning row).
 
 It also accepts an optional `{"url": "https://…"}`:
@@ -4028,8 +4394,10 @@ silently patched.
 
 The secret store binds **one** age identity for both encryption and decryption
 (`internal/secretstore/pg`), so simply changing `WARDYN_AGE_KEY` migrates nothing
-— it strands every existing ciphertext, and wardynd then fails closed on the
-first decrypt rather than starting.
+— it strands every existing ciphertext. Startup decrypts the persisted signing
+key through `loadOrCreateSigningKey` / `loadOrCreateSecret` and fails closed on
+a mismatch, before serving requests. A healthy start checks that boot key, not
+every application secret; verify a secret-dependent run after recovery too.
 
 `wardynd -rotate-age-key <key-file>` is the supported rotation, a **maintenance
 mode, not a server start**: it mints a new identity, re-encrypts every row of the
@@ -4258,10 +4626,13 @@ because PostgreSQL requires ownership for `ALTER TABLE` and for
 `CREATE OR REPLACE FUNCTION`. That is not hypothetical on a 0.6 → 0.7 upgrade. Every 0.6.x release ships
 through `0049`, so this path applies `0050`–`0062`, and most of it is exactly
 this shape: `0050` (secrets), `0052` and `0060` (api_tokens, created back in
-`0045`), `0055` (workspaces) and `0062` (approvals, created in `0001`) are
+`0045`), `0055` (workspaces) and `0062`, `0063`, `0064` (approvals and
+`agent_runs`, both created in `0001`) are
 `ALTER TABLE` on tables an earlier release created — `0050` also drops and
-re-adds a primary key, `0060` and `0062` each drop and re-add a CHECK (`0062`
-widens `approvals.state` with `CANCELLED`) — and `0056`, `0057` and `0058` are three successive
+re-adds a primary key, `0060`, `0062` and `0064` each drop and re-add a CHECK
+(`0062` widens `approvals.state` with `CANCELLED`, `0064` widens
+`approvals.kind` with `credential_reauth`), and `0063` adds the
+`agent_runs.status_detail` column — and `0056`, `0057` and `0058` are three successive
 `CREATE OR REPLACE`s of the chain function `0047` created, each re-creating its
 trigger on `audit_events`. (`0053` alters `role_mappings`, which `0051` CREATES
 two migrations earlier in the same run, so it is not an instance of the hazard.)
@@ -4479,7 +4850,7 @@ bad *release*, the dump is the rollback.
 
 The chart renders no database. `postgres.dsn` points at a Postgres you operate,
 so the backup is your Postgres's own backup story — Wardyn adds no mechanism.
-What it adds is three corrections to the compose recipe:
+The differences from the Compose recipe are:
 
 - **Recordings are NOT in the dump on a stock chart install.** The chart pins
   the recording store itself (`deploy/helm/wardyn/values.yaml`, the
@@ -4493,22 +4864,24 @@ What it adds is three corrections to the compose recipe:
 - **The age key is a Secret, not a `.env` line.** See below; still the item that
   makes the difference between a restorable dump and a file of undecryptable
   ciphertext.
-- **The audit spool is not a backup target.** `WARDYN_AUDIT_SPOOL` renders to
+- **Pending audit fallback is a backup target.** `WARDYN_AUDIT_SPOOL` renders to
   `/tmp/audit-spool.jsonl` on a stock install and onto the PVC beside the
   recordings once `persistence` is on (`templates/deployment.yaml`), so turning
-  persistence on sweeps the spool up too — neither needs restoring. Derived by
-  design (`internal/api/auditspool.go`): the fallback for a failed Postgres write,
-  draining back into the database. Postgres remains the source of truth for the
-  audit log on both substrates. The one file beside it that is NOT derived is
-  `<spool>.quarantine`: it holds events the store permanently refused, which are
-  by definition absent from the database, so keep it until you have re-fed or
-  triaged its lines.
+  persistence on includes the spool and its sidecars in that volume's snapshot.
+  Undrained events and quarantined lines can be absent from `pg_dump`; preserve
+  them with the matching database backup and restore them before startup. Follow
+  [Audit fallback recovery](#audit-fallback-recovery), including its cursor and
+  snapshot-consistency limits. On the default `emptyDir`, scaling to zero or
+  replacing the pod loses these files: drain or preserve them first.
 
 ### Restore: rehearse into a scratch database first
 
 Two steps are Wardyn's, and both are cheap:
 
-**1. Nothing may run against the database mid-restore.** The compose recipe's
+**1. Preserve any current fallback state, then stop the control plane.** On the
+default ephemeral spool, copy any pending spool/sidecars and quarantine before
+scaling to zero; deleting the pod discards them. Nothing may run against the
+database mid-restore. The compose recipe's
 "start Postgres alone" becomes a scale-to-zero, which on a chart install is the
 whole control plane:
 
@@ -5060,10 +5433,11 @@ rather than a preference:
   failed Postgres write, each pod draining its own back into the database.
 - **the age identity, when `WARDYN_AGE_KEY` is unset** — each process mints its
   own ephemeral one at boot (`buildSecretStore`, `cmd/wardynd`), so a secret
-  written by one pod cannot be decrypted by any other. Fails closed (a decrypt
-  error, never a wrong plaintext) and surfaces on `Get`, not at boot, so the pod
-  starts healthy and the failure appears at first use. Setting the key removes
-  this one entirely.
+  written by one pod cannot be decrypted by any other. The signing-key `Get`
+  happens during startup: once that key exists, a process with a different age
+  identity fails closed before serving, rather than starting healthy. Persisting
+  the same `WARDYN_AGE_KEY` across restarts avoids this mismatch; replacing it
+  without re-encrypting the stored secrets does not.
 - **the docker driver's sandbox tracking maps** (`agentExecs`, `pending`,
   `mainProc`, `creating` in `internal/runner/docker/driver.go`) — the process that
   created a sandbox is the only one that can observe its agent exec (`Wait`), and
@@ -5176,16 +5550,20 @@ driver, not a guess:
   mechanism, precisely: (i) enforcement is by **eviction, not a
   quota** — the kubelet kills the POD once it exceeds the limit, in-flight work
   is lost, and the agent process never sees `ENOSPC`; it gets no chance to
-  flush or fail gracefully. An eviction is a kill path no Wardyn code is on, so
-  what reclaims the evicted run's SIBLINGS — the proxy pod still running with
+  flush or fail gracefully. The completion watcher and restart reconciler recognize a terminal
+  pod even if Kubernetes never publishes the agent container's exit status. An unknown agent
+  exit is a failed run, not a successful task; a recorded agent exit keeps its actual result.
+  Normal run finalization then revokes credentials and attempts to reclaim the run's siblings —
+  the proxy pod still running with
   its resolved upstream credentials, and the per-run Secret holding the run
-  token, the MITM CA key and any injected git token — is the control plane's
+  token, the MITM CA key and any injected git token. Failed cleanup can be retried by the
+  control plane's
   orphan sweep (`internal/api/reconcile.go`, implemented on this substrate by
   `internal/runner/k8s/lifecycle.go`'s `SweepOrphanedSandboxes`), on the next
-  boot and on its cadence after. It runs once the run is past
-  `undispatchedGrace`, so the window between the eviction and the sweep is real
-  and bounded by that grace, not by zero; a user drive's claim is never touched
-  by it. Two narrowings of that window since 0.7.3: an ordinary
+  boot and on its cadence after. Sweep candidates must be past `undispatchedGrace`;
+  cleanup is best-effort and can take longer when the Kubernetes API is unavailable.
+  A user drive's claim is never touched by it. Two narrowings of that window since 0.7.3: an
+  ordinary
   stop/kill of a run whose agent pod is ALREADY gone now reclaims the siblings
   itself (the sandbox ref is the agent pod name, so the run id needs no live pod
   to read it from), and the sweep lists the per-run Secret and both

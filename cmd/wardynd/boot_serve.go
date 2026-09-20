@@ -92,7 +92,7 @@ func startBackgroundWorkers(rootCtx context.Context, f *bootFlags, srv *api.Serv
 	if *f.approvalExpiryInterval > 0 {
 		go goSafe("approval.sweeper", func() {
 			// FIX #5: sweeper shares maskedRec so approval.expire events fan out to SIEM.
-			runApprovalSweeper(rootCtx, approvalStore{PG: store.NewPG(pool), rec: maskedRec}, *f.approvalExpiryInterval, *f.approvalExpiryAfter)
+			runApprovalSweeper(rootCtx, approvalStore{PG: store.NewPG(pool), rec: maskedRec}, *f.approvalExpiryInterval, *f.approvalExpiryAfter, srv)
 		})
 		slog.Info("wardynd: approval expiry sweeper started",
 			slog.Duration("interval", *f.approvalExpiryInterval),

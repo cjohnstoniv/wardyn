@@ -12,7 +12,10 @@ import {
   RUN_POLL_UNREADABLE_AFTER_MS,
   LOGIN_SANDBOX_SLOW_START,
   LOGIN_SANDBOX_READ_RETRYING,
+  LOGIN_SANDBOX_STUCK_LEAD_IN,
+  type StartWaitInput,
 } from "./login-start-wait";
+import { TERMINAL_STATUS_REASONS } from "../run-status-detail";
 
 // Finding 6 (0.7.4 field report): the pane's readiness budget was 15 consecutive
 // failed polls, called "≈30s". These are the four answers that replace it, as a
@@ -137,5 +140,92 @@ describe("startWaitVerdict", () => {
     expect(LOGIN_SANDBOX_SLOW_START).toContain("Wardyn can read the sign-in sandbox, it just isn't up yet");
     expect(LOGIN_SANDBOX_READ_RETRYING).toContain("still trying");
     expect(RUN_POLL_UNREADABLE_AFTER_MS).toBe(300_000);
+  });
+});
+
+// 0.7.6 finding 6: the wait stops being graded purely on a clock. The substrate
+// already knows whether this is normal or over, and the pane now reads it.
+describe("startWaitVerdict — the REASON, not the clock", () => {
+  it("ends the wait at two seconds on a terminal reason", () => {
+    // "ImagePullBackOff for two seconds is terminal" — the field report's own
+    // words. Under the old rules this run sat there for five minutes.
+    expect(
+      startWaitVerdict({
+        now: T0 + 2_000,
+        startedAt: T0,
+        failingSince: null,
+        failures: 0,
+        detail: "agent: ImagePullBackOff: rpc error: pull access denied",
+        reason: "ImagePullBackOff",
+      }),
+    ).toBe("stuck");
+  });
+
+  it("every reason the substrate calls terminal ends it, not just the image ones", () => {
+    // round-2 UX S11: which is why the lead-in does not say "image".
+    for (const reason of TERMINAL_STATUS_REASONS) {
+      expect(
+        startWaitVerdict({
+          now: T0 + 1_000,
+          startedAt: T0,
+          failingSince: null,
+          failures: 0,
+          detail: `agent: ${reason}: something`,
+          reason,
+        }),
+      ).toBe("stuck");
+    }
+    expect(LOGIN_SANDBOX_STUCK_LEAD_IN).not.toContain("image");
+  });
+
+  it("does NOT end the wait on an ordinary reason, however long it has run", () => {
+    // "ContainerCreating for two minutes is normal" — the other half of the
+    // same sentence. The clock is untouched: this is still 'slow'.
+    expect(
+      startWaitVerdict({
+        now: T0 + 120_000,
+        startedAt: T0,
+        failingSince: null,
+        failures: 0,
+        detail: "agent: ContainerCreating",
+        reason: "ContainerCreating",
+      }),
+    ).toBe("slow");
+    expect(
+      startWaitVerdict({
+        now: T0 + 5_000,
+        startedAt: T0,
+        failingSince: null,
+        failures: 0,
+        detail: "pod: Unschedulable: 0/1 nodes are available",
+        reason: "Unschedulable",
+      }),
+    ).toBe("starting");
+  });
+
+  // THE REGRESSION PIN over the whole table: a run with no status_detail — a
+  // warm Docker image, a pre-0.7.6 daemon — must grade EXACTLY as it did in
+  // 0.7.5. The rows are the four cases above, re-run with the new inputs absent
+  // and then explicitly null.
+  it("grades a run with no detail exactly as 0.7.5 did", () => {
+    const rows: Array<[StartWaitInput, string]> = [
+      [{ now: T0, startedAt: T0, failingSince: null, failures: 0 }, "starting"],
+      [{ now: T0 + RUN_POLL_SLOW_START_MS, startedAt: T0, failingSince: null, failures: 0 }, "slow"],
+      [{ now: T0 + RUN_POLL_RETRYING_AFTER_MS, startedAt: T0, failingSince: T0, failures: 3 }, "retrying"],
+      [
+        {
+          now: T0 + RUN_POLL_UNREADABLE_AFTER_MS,
+          startedAt: T0,
+          failingSince: T0,
+          failures: RUN_POLL_MIN_FAILURES,
+        },
+        "unreadable",
+      ],
+    ];
+    for (const [input, want] of rows) {
+      expect(startWaitVerdict(input)).toBe(want);
+      expect(startWaitVerdict({ ...input, detail: null, reason: null })).toBe(want);
+      expect(startWaitVerdict({ ...input, detail: "" })).toBe(want);
+    }
   });
 });

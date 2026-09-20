@@ -12,17 +12,23 @@
 // terminal, no capture and no corroboration. What happens AFTER the sandbox is
 // up stays in the sibling file.
 import * as React from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, type MockInstance } from "vitest";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+// lastAttachOutput captures the onOutput callback the pane hands AttachTerminal
+// on its most recent render — the only way to feed it a PTY chunk without a
+// real xterm (Finding 7a's tab-navigate case needs this; every other case in
+// this file never gets far enough to mount the terminal at all).
+let lastAttachOutput: ((chunk: string) => void) | undefined;
 // The pane reaches AttachTerminal (and through it xterm's stylesheet); no case
 // here gets far enough to mount it, but the import itself has to resolve.
 vi.mock("../../attach-terminal", () => ({
   AttachTerminal: React.forwardRef(function FakeTerminal(
-    _props: { onOutput?: (chunk: string) => void; autoRun?: string },
+    props: { onOutput?: (chunk: string) => void; autoRun?: string },
     ref: React.ForwardedRef<{ sendText: (t: string) => void }>,
   ) {
+    lastAttachOutput = props.onOutput;
     React.useImperativeHandle(ref, () => ({ sendText: () => {} }), []);
     return <div data-testid="fake-terminal" />;
   }),
@@ -37,11 +43,13 @@ vi.mock("../../../lib/api/harness-auth", () => ({
 vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: vi.fn(), getRun: vi.fn() } }));
 vi.mock("../../../lib/api/setup", () => ({ setup: { getSetupStatus: vi.fn() } }));
 
-import { HarnessLoginPane } from "./harness-login-pane";
+import { HarnessLoginPane, type HarnessLoginPaneHandle } from "./harness-login-pane";
 import { AWS_BLURB_MANAGED_OPENING } from "./login-pane-copy";
 import { HttpError } from "../../../lib/api/core";
 import { runs as runsApiMocked } from "../../../lib/api/runs";
 import type { AgentRun } from "../../../lib/types";
+import { LOGIN_SANDBOX_SLOW_START, LOGIN_SANDBOX_STUCK_LEAD_IN, RUN_POLL_SLOW_START_MS } from "./login-start-wait";
+import { STARTING_CONTAINER_CREATING, STUCK_IMAGE_PULL } from "../run-status-detail";
 
 // U-11 (W6 blind lens) — the no-credential member preview offers "Sign in to
 // AWS" (Getting Started renders the CTA off a not_configured state) and the
@@ -128,5 +136,306 @@ describe("the aws blurb under a managed access portal (U-8)", () => {
     const text = await blurbAfterStart(false);
     expect(text).toContain("Give Wardyn your organization");
     expect(text).not.toContain(AWS_BLURB_MANAGED_OPENING);
+  });
+});
+
+// 0.7.6 finding 6: the wait ends on the REASON, not on the clock. "The first
+// time, it produced a 'Could not reach the control plane' error and a wrong
+// diagnosis; the second time we only stayed calm because we had measured it
+// before."
+describe("the wait reads the substrate's reason (finding 6)", () => {
+  beforeEach(() => {
+    harnessLoginMock.mockReset().mockResolvedValue("run-123");
+    vi.mocked(runsApiMocked.killRun).mockReset().mockResolvedValue(undefined);
+    vi.mocked(runsApiMocked.getRun).mockReset();
+  });
+
+  it("a STARTING run on an unpullable image shows the registry's words and offers Cancel ONLY", async () => {
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue({
+      id: "run-123",
+      state: "STARTING",
+      status_detail: "agent: ImagePullBackOff: rpc error: code = Unknown desc = pull access denied",
+      status_reason: "ImagePullBackOff",
+    } as AgentRun);
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+
+    const alertBox = await screen.findByRole("alert");
+    expect(alertBox).toHaveTextContent(LOGIN_SANDBOX_STUCK_LEAD_IN);
+    expect(alertBox).toHaveTextContent(STUCK_IMAGE_PULL);
+    expect(alertBox).toHaveTextContent("pull access denied");
+    // round-2 UX B3/S9: Try again is SUPPRESSED. It earns the identical answer
+    // until an admin changes the cluster or the image, exactly as U-11's 409
+    // does — a test asserting Try again here would pin the pre-ruling behaviour.
+    expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
+  });
+
+  // Codex #11: dispatch marks the run FAILED the instant waitContainerRunning
+  // errors, which can land between two of the pane's polls. The server keeps a
+  // TERMINAL reason on a FAILED run precisely so this branch still says why.
+  it("the same run caught already FAILED says the same thing", async () => {
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue({
+      id: "run-123",
+      state: "FAILED",
+      failure_hint: "the sandbox could not be created: agent container stuck waiting (ImagePullBackOff): denied",
+      status_detail: "agent: ImagePullBackOff: rpc error: code = Unknown desc = pull access denied",
+      status_reason: "ImagePullBackOff",
+    } as AgentRun);
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+
+    const alertBox = await screen.findByRole("alert");
+    expect(alertBox).toHaveTextContent(STUCK_IMAGE_PULL);
+    expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument();
+  });
+
+  // The other half of the field report's sentence: "ContainerCreating for two
+  // minutes is normal". The clock still says 'slow' — the SENTENCE is the
+  // substrate's instead of the hedged guess the pane used to make.
+  it("ContainerCreating past the slow window reads as the ordinary first start", async () => {
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue({
+      id: "run-123",
+      state: "STARTING",
+      status_detail: "agent: ContainerCreating",
+      status_reason: "ContainerCreating",
+    } as AgentRun);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+      await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+      await screen.findByTestId("login-sandbox-starting");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(RUN_POLL_SLOW_START_MS + 5_000);
+      });
+      const block = screen.getByTestId("login-sandbox-starting");
+      expect(block).toHaveTextContent(STARTING_CONTAINER_CREATING);
+      expect(block).not.toHaveTextContent(LOGIN_SANDBOX_SLOW_START);
+      // Still a wait, not an ending.
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The regression pin: a run with NO reason — a warm docker image, a pre-0.7.6
+  // daemon — grades exactly as 0.7.5 did.
+  it("with no reason at all, the 0.7.5 slow-start sentence still stands", async () => {
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue({ id: "run-123", state: "STARTING" } as AgentRun);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+      await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+      await screen.findByTestId("login-sandbox-starting");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(RUN_POLL_SLOW_START_MS + 5_000);
+      });
+      expect(screen.getByTestId("login-sandbox-starting")).toHaveTextContent(LOGIN_SANDBOX_SLOW_START);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// Review S2: the terminal status write is the one a 500ms deadline may drop, so
+// a FAILED run can reach the pane with the reason only in failure_hint. The
+// server rebuilds status_detail from that hint — but the pane must never put its
+// stuck lead-in in front of an EMPTY sentence whatever it is handed, and a
+// pre-0.7.6 daemon hands it the hint alone.
+describe("a terminal ending that arrived only as a failure_hint", () => {
+  beforeEach(() => {
+    harnessLoginMock.mockReset().mockResolvedValue("run-123");
+    vi.mocked(runsApiMocked.killRun).mockReset().mockResolvedValue(undefined);
+    vi.mocked(runsApiMocked.getRun).mockReset();
+  });
+
+  it("the server's rebuilt detail reads exactly like the run that kept it", async () => {
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue({
+      id: "run-123",
+      state: "FAILED",
+      // What projectStatusDetail rebuilds from the hint when the row held nothing.
+      status_detail: "agent: ImagePullBackOff: rpc error: pull access denied",
+      status_reason: "ImagePullBackOff",
+      failure_hint:
+        "the sandbox could not be created: agent container stuck waiting (ImagePullBackOff): rpc error: pull access denied",
+    } as AgentRun);
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+
+    const alertBox = await screen.findByRole("alert");
+    expect(alertBox).toHaveTextContent(LOGIN_SANDBOX_STUCK_LEAD_IN);
+    expect(alertBox).toHaveTextContent("pull access denied");
+    expect(screen.queryByRole("button", { name: /try again/i })).not.toBeInTheDocument();
+  });
+
+  // The old daemon: a reason and a hint, no detail. Never a lead-in with nothing
+  // after it — the run's own sentence is better than a promise with no words.
+  it("falls through to the run's own sentence rather than promising words it has not got", async () => {
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue({
+      id: "run-123",
+      state: "FAILED",
+      failure_hint:
+        "the sandbox could not be created: agent container stuck waiting (ImagePullBackOff): rpc error: pull access denied",
+    } as AgentRun);
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+
+    const alertBox = await screen.findByRole("alert");
+    expect(alertBox).toHaveTextContent("pull access denied");
+    expect(alertBox.textContent ?? "").not.toMatch(new RegExp(`${LOGIN_SANDBOX_STUCK_LEAD_IN}\\s*$`));
+  });
+});
+
+
+// THE LAUNCH-AFTER-DISMISS RACE, and the handle that makes a dismissal from
+// OUTSIDE the pane reach the run it created (0.7.6, Codex #15).
+//
+// The model-access door mounts this pane in a Dialog, whose Escape / overlay
+// click closes the PARENT — and `onCancel` is child-to-parent, so it cannot
+// reach back in to kill the login run. Worse, harnessLogin's POST answers with
+// the id AFTER dispatch has already created the run, so a cancellation landing
+// mid-flight used to see `runId === null`, kill nothing, and leave a "wardyn:
+// sign-in running" run on the member's board for up to 30 minutes.
+describe("a dismissal from outside the pane still ends the login run", () => {
+  beforeEach(() => {
+    harnessLoginMock.mockReset();
+    vi.mocked(runsApiMocked.killRun).mockReset().mockResolvedValue(undefined);
+    vi.mocked(runsApiMocked.getRun).mockReset().mockResolvedValue(undefined as unknown as AgentRun);
+  });
+
+  it("ref.cancel() kills the run the pane is holding", async () => {
+    harnessLoginMock.mockResolvedValue("run-abc");
+    const onCancel = vi.fn();
+    const ref = React.createRef<HarnessLoginPaneHandle>();
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={onCancel} paneRef={ref} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    await screen.findByTestId("login-sandbox-starting");
+
+    await act(async () => ref.current?.cancel());
+    expect(runsApiMocked.killRun).toHaveBeenCalledWith("run-abc");
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("a cancel DURING the launch POST kills the run that POST created", async () => {
+    let answer: (id: string) => void = () => {};
+    harnessLoginMock.mockReturnValue(new Promise<string>((resolve) => (answer = resolve)));
+    const ref = React.createRef<HarnessLoginPaneHandle>();
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} paneRef={ref} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+
+    // Dismissed while the POST is still in flight: nothing has an id yet.
+    await act(async () => ref.current?.cancel());
+    expect(runsApiMocked.killRun).not.toHaveBeenCalled();
+
+    await act(async () => {
+      answer("run-born-orphaned");
+    });
+    expect(runsApiMocked.killRun).toHaveBeenCalledWith("run-born-orphaned");
+  });
+});
+
+// Finding 7a (0.7.5 field report): the verification tab never opened — it was
+// opened from inside a PTY callback, never a user gesture. The fix opens it
+// on the CLICK and navigates it once the URL is known.
+describe("the verification tab opens on the click (Finding 7a)", () => {
+  let openSpy: MockInstance<typeof window.open>;
+  let fakeWindow: { opener: unknown; location: { href: string }; closed: boolean; close: ReturnType<typeof vi.fn>; document: { write: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> } };
+
+  beforeEach(() => {
+    harnessLoginMock.mockReset();
+    lastAttachOutput = undefined;
+    vi.mocked(runsApiMocked.killRun).mockReset().mockResolvedValue(undefined);
+    vi.mocked(runsApiMocked.getRun).mockReset().mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun);
+    fakeWindow = {
+      opener: {},
+      location: { href: "about:blank" },
+      closed: false,
+      close: vi.fn(),
+      document: { write: vi.fn(), close: vi.fn() },
+    };
+    openSpy = vi.spyOn(window, "open").mockReturnValue(fakeWindow as unknown as Window);
+  });
+
+  // THE RED CASE: goes red on any refactor that hoists an `await` above the
+  // tab-open line — `harnessLogin` never resolves here, so if the open moved
+  // below it, `window.open` would never be called at all.
+  it("opens the tab SYNCHRONOUSLY, before the launch POST resolves", async () => {
+    harnessLoginMock.mockReturnValue(new Promise<string>(() => {})); // never resolves
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    expect(openSpy).toHaveBeenCalledWith("", "_blank");
+  });
+
+  it("navigates the tab already open when the verification URL appears — never a second window.open", async () => {
+    harnessLoginMock.mockResolvedValue("run-123");
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    await screen.findByTestId("fake-terminal");
+    await act(async () => lastAttachOutput?.("https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH\n"));
+    expect(fakeWindow.location.href).toBe("https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH");
+    expect(openSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("a blocked popup still surfaces the header link and AUTH_TAB_BLOCKED_NOTE", async () => {
+    openSpy.mockReturnValue(null);
+    harnessLoginMock.mockResolvedValue("run-123");
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    await screen.findByTestId("fake-terminal");
+    await act(async () => lastAttachOutput?.("https://device.sso.us-east-1.amazonaws.com/?user_code=ABCD-EFGH\n"));
+    expect(await screen.findByTestId("auth-url-link")).toBeInTheDocument();
+    expect(screen.getByTestId("auth-tab-blocked-note")).toBeInTheDocument();
+  });
+
+  // W6-U SHOULD-2 — the two `stuck` arms returned early and left the
+  // placeholder tab open. That tab was FOREGROUNDED by the click and reads
+  // "this page changes to your provider's sign-in page by itself… if nothing
+  // happens, go back there" — on the one start that never will, with the error
+  // sitting on the tab behind it. The CHANGELOG's "Wardyn closes it while it is
+  // still the placeholder (Cancel, an error, a completed sign-in)" was false
+  // for exactly these two.
+  it.each([["STARTING"], ["FAILED"]] as const)(
+    "a %s run stuck on a terminal reason closes the placeholder tab with the error",
+    async (state) => {
+      harnessLoginMock.mockResolvedValue("run-123");
+      vi.mocked(runsApiMocked.getRun).mockResolvedValue({
+        id: "run-123",
+        state,
+        status_detail: "agent: ImagePullBackOff: rpc error: code = Unknown desc = pull access denied",
+        status_reason: "ImagePullBackOff",
+        failure_hint:
+          state === "FAILED"
+            ? "the sandbox could not be created: agent container stuck waiting (ImagePullBackOff): denied"
+            : undefined,
+      } as AgentRun);
+      render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+      await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+      expect(await screen.findByRole("alert")).toHaveTextContent(LOGIN_SANDBOX_STUCK_LEAD_IN);
+      // Exactly once: the arm returns, so the poll cannot close it again.
+      expect(fakeWindow.close).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  // The negative control: the generic FAILED arm already closed it, and still does.
+  it("an ordinary FAILED run (no terminal reason) still closes the tab", async () => {
+    harnessLoginMock.mockResolvedValue("run-123");
+    vi.mocked(runsApiMocked.getRun).mockResolvedValue({
+      id: "run-123",
+      state: "FAILED",
+      failure_hint: "boom",
+    } as AgentRun);
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    await screen.findByRole("alert");
+    expect(fakeWindow.close).toHaveBeenCalled();
+  });
+
+  it("Cancel closes the tab", async () => {
+    harnessLoginMock.mockResolvedValue("run-123");
+    render(<HarnessLoginPane provider="aws" startURLManaged onDone={vi.fn()} onCancel={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: /start login/i }));
+    await screen.findByTestId("fake-terminal");
+    await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    expect(fakeWindow.close).toHaveBeenCalled();
   });
 });

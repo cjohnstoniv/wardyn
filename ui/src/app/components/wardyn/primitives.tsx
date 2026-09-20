@@ -218,9 +218,10 @@ export function RunStateBadge({
 
 /* ---------- confinement class ----------
  * Tone/Icon are presentational and live here; the hint text is the honest,
- * substrate-only wording shared with step-confinement.tsx via cc-meta.ts —
- * see that module for why (credential brokering / egress filtering / HITL
- * approvals are policy-driven, not tied to the confinement class).
+ * substrate-only wording shared with New Run's Barrier control and the
+ * Getting-started/Settings barrier matrix via cc-meta.ts — see that module
+ * for why (credential brokering / egress filtering / HITL approvals are
+ * policy-driven, not tied to the confinement class).
  */
 // Fence / Wall / Vault — a single "how separated is the agent from your machine"
 // ladder. Each tier gets its own METALS token (bronze/silver/gold, defined in
@@ -316,6 +317,9 @@ const kindTone: Record<ApprovalKind, Tone> = {
   credential: "info",
   egress_domain: "cyan",
   tool_call: "neutral",
+  // Warning, like the other rows that are WAITING on a person — a re-auth
+  // request is a held run, not an informational note.
+  credential_reauth: "warning",
 };
 export function ApprovalKindChip({ kind }: { kind: ApprovalKind }) {
   const tone = metaFor(kindTone, kind as string, "neutral" as Tone);

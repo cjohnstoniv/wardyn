@@ -56,7 +56,7 @@ func TestAWSSSOConfigAcceptedByRealBotocore(t *testing.T) {
 
 	// Phase 2: the REAL generator this test exists to validate.
 	config := awsSSOConfigFileContents(blob)
-	cacheJSON := awsSSOCacheFileContents(blob)
+	cacheJSON := awsSSOCacheFileContents(blob, false)
 	cacheName := awsSSOCacheFileName(awsSSOProfileName)
 	t.Logf("generated ~/.aws/config:\n%s", config)
 	t.Logf("generated cache filename: sso/cache/%s.json", cacheName)
@@ -193,7 +193,7 @@ func TestAWSSSOConfigAcceptedByRealBotocore_MultiAccountPinned(t *testing.T) {
 
 	out, runErr := awsssofake.RunAWSCommand(t, s, map[string]string{
 		".aws/config":                           config,
-		".aws/sso/cache/" + cacheName + ".json": awsSSOCacheFileContents(blob),
+		".aws/sso/cache/" + cacheName + ".json": awsSSOCacheFileContents(blob, false),
 	}, "aws", "configure", "export-credentials", "--profile", awsSSOProfileName)
 	t.Logf("aws configure export-credentials output:\n%s", out)
 

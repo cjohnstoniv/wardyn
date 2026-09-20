@@ -199,8 +199,9 @@ func TestLLMGateway_ResolvesToOwnSubnet_Refused(t *testing.T) {
 // TestLLMGateway_ResolverAnswersMetadata_RefusedNeverDialled: a gateway
 // hostname whose resolver answers the metadata address is refused per
 // request and the dialer is NEVER invoked (fail closed before any network
-// activity) — the decision log names "builtin:dial-failed", not the
-// misleading allow-shaped "brokered:llm".
+// activity) — the decision log names ruleSourceGatewayVetFailed, not the
+// misleading allow-shaped "brokered:llm" and not a dial failure (nothing was
+// ever dialled).
 func TestLLMGateway_ResolverAnswersMetadata_RefusedNeverDialled(t *testing.T) {
 	dialed := false
 	res := fakeResolver{m: map[string][]net.IP{"llm-gateway.corp.internal": ips("169.254.169.254")}}
@@ -229,15 +230,15 @@ func TestLLMGateway_ResolverAnswersMetadata_RefusedNeverDialled(t *testing.T) {
 	if dialed {
 		t.Fatal("a refused gateway resolution must never reach the dialer")
 	}
-	if d := lastDecision(t, buf); d.RuleSource != "builtin:dial-failed" || d.Decision != egress.Deny {
-		t.Fatalf("decision = %+v, want deny/builtin:dial-failed", d)
+	if d := lastDecision(t, buf); d.RuleSource != ruleSourceGatewayVetFailed || d.Decision != egress.Deny {
+		t.Fatalf("decision = %+v, want deny/%s", d, ruleSourceGatewayVetFailed)
 	}
 }
 
-// TestLLMGateway_ResolverError_502DialFailed_RunUnaffected: a resolve
+// TestLLMGateway_ResolverError_502GatewayVetFailed_RunUnaffected: a resolve
 // failure for the gateway host 502s that one request; the run (this proxy
 // instance) keeps serving — a second, resolvable request still succeeds.
-func TestLLMGateway_ResolverError_502DialFailed_RunUnaffected(t *testing.T) {
+func TestLLMGateway_ResolverError_502GatewayVetFailed_RunUnaffected(t *testing.T) {
 	res := &toggleResolver{err: errors.New("dns down")}
 	gw := captureUpstream(t, true, "ok")
 	inj := staticInj(map[string]injectedHeader{"llm-gateway.corp.internal": {name: "X-Api-Key", value: "K"}})
@@ -249,8 +250,8 @@ func TestLLMGateway_ResolverError_502DialFailed_RunUnaffected(t *testing.T) {
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d, want 502", rec.Code)
 	}
-	if d := lastDecision(t, buf); d.RuleSource != "builtin:dial-failed" {
-		t.Fatalf("rule_source = %q, want builtin:dial-failed", d.RuleSource)
+	if d := lastDecision(t, buf); d.RuleSource != ruleSourceGatewayVetFailed {
+		t.Fatalf("rule_source = %q, want %s", d.RuleSource, ruleSourceGatewayVetFailed)
 	}
 
 	// The run is unaffected: flip the resolver to succeed and the SAME proxy

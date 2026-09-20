@@ -227,6 +227,17 @@ const (
 	//
 	// DRAFT (M2 canon pending)
 	harnessCredentialAWSPinMismatchDetail = "Your captured AWS SSO session names an AWS account and role this agent's roster row no longer allows, so Bedrock runs using it are refused before they start."
+	// harnessCredentialAWSRenewalSpentDetail is the operator's checklist-row
+	// text for `expiring` reached via Cause == causeRenewalSpent: AWS itself
+	// retired the refresh token behind this session (a renewal already saw
+	// invalid_grant or a sibling code), so the existing "stops being renewable
+	// at <deadline>" sentence would say the wrong thing — that one describes a
+	// registration lapsing on its own schedule, not a grant AWS has already
+	// killed. %s is ma.Deadline (ExpiresAt − awsSSORefreshSkew).
+	//
+	// DRAFT (M2 canon pending)
+	harnessCredentialAWSRenewalSpentDetail = "Your captured AWS SSO session's refresh token was retired by AWS (a renewal attempt was refused) — " +
+		"it cannot be renewed and stops answering Bedrock calls at %s. Sign in again before then."
 )
 
 // harnessLoginMechanismPrincipalRefusal (M2 canon pending) — DRAFT
@@ -267,11 +278,26 @@ type SetupModelAccess struct {
 	// Action is the one thing to do, already composed by the server ("" when
 	// there is nothing).
 	Action string `json:"action,omitempty"`
-	// Deadline is the instant Action names, carried IN-PROCESS only (json:"-")
-	// so the admin's checklist row prints the same one the member's action line
-	// does. Not a second wire copy of a fact Action already states in the
-	// member's own words — the console never re-composes that sentence.
-	Deadline string `json:"-"`
+	// Deadline is the instant Action names — the registration's lapse, or the
+	// access token's expiry for a blob that cannot be renewed. It serves the
+	// admin's checklist row, which prints the same one the member's action line
+	// does, and since 0.7.6 it is ON THE WIRE.
+	//
+	// It was in-process only, on the reasoning that Action already states this
+	// fact in the member's own words and the console never re-composes that
+	// sentence. Finding 2 replaced that reasoning with LOCALISATION: `expiring`
+	// now rides a strip on every screen for the whole 24-hour window, and the
+	// sentence carries an RFC3339 UTC stamp, which a reader in another timezone
+	// misreads every time they see it. The console re-composes that ONE line
+	// through the same frozen template (AGENTS.MODEL_ACCESS_EXPIRING_ACTION) on
+	// the reader's own clock, and relativeTime in the strip; it needs the
+	// instant to do either.
+	//
+	// SAFE FOR A MEMBER only because memberModelAccess builds a FRESH struct
+	// that drops it — the leak that function exists to close was this same
+	// instant republished one field over. Pinned:
+	// TestModelAccessDeadline_OnTheWireForItsOWNER_NeverForASharedMember.
+	Deadline string `json:"deadline,omitempty"`
 	// PinMismatch says this answer's `expired_signin` is a CONTRADICTED identity
 	// rather than a lapsed session. IN-PROCESS only (json:"-"): the console
 	// renders Action verbatim and needs no second copy of what it says — this
@@ -285,7 +311,30 @@ type SetupModelAccess struct {
 	// deadline or offered a sign-in at all. False is `shared` AND legacy open
 	// mode — in both, the graded blob is the OPERATOR's.
 	PerUser bool `json:"-"`
+	// Cause is WHICH fact put this answer into `expiring` — "" for every other
+	// state. IN-PROCESS only (json:"-"): the six WIRE states are the vocabulary
+	// the console renders and stay unchanged; Cause exists only so grading and
+	// the admin checklist row (awsSSOCredentialRow) can tell apart two different
+	// facts that happen to want the same door — a refresh token AWS has already
+	// retired (causeRenewalSpent) is not the same story as a registration or an
+	// unrenewable access token approaching ITS OWN lapse on schedule.
+	Cause string `json:"-"`
 }
+
+// The three reasons awsSSOCredentialState can land on `expiring` — see
+// awsSSOCredentialCause, which mirrors the branches that produce them.
+const (
+	// causeRenewalSpent: AWS itself retired the refresh token (an earlier
+	// CreateToken call returned invalid_grant et al.); the access token in hand
+	// still answers Bedrock calls until it crosses the refresh skew.
+	causeRenewalSpent = "renewal_spent"
+	// causeRegistrationLapsing: the credential is still renewable, but the OIDC
+	// client registration behind the refresh token lapses inside the window.
+	causeRegistrationLapsing = "registration_lapsing"
+	// causeTokenExpiring: no working refresh token (none captured, or the
+	// registration already lapsed) and the access token itself is running out.
+	causeTokenExpiring = "token_expiring"
+)
 
 // memberModelAccess is the member-facing projection of a model-access answer,
 // applied by redactSetupStatusForMember.
@@ -334,7 +383,16 @@ func memberModelAccess(ma SetupModelAccess) SetupModelAccess {
 // `live` for the same reason expired_renewable does: there is nothing for the
 // person to do YET. On the one-hour-token estate this design comes from, such a
 // blob reaches `expiring` within the hour on its own.
-func awsSSOCredentialState(blob awsSSOBlob, found, perUser bool, now time.Time) string {
+//
+// spent SKIPS THE renewable ARM ENTIRELY (Finding 5): once AWS has retired the
+// refresh token, whether the client registration ALSO lapsed is moot — no
+// retry redeems it either way — so the only question left is the one dispatch
+// itself asks, needsRefresh: inside the refresh skew a dispatch would already
+// refuse this run, so grading anything but DEAD there would promise a launch
+// the person cannot make (Codex #6); outside it the access token still signs
+// requests, so `expiring` (not `live`) is what tells the person while there is
+// still time to act.
+func awsSSOCredentialState(blob awsSSOBlob, found, perUser, spent bool, now time.Time) string {
 	if !found {
 		if perUser {
 			return modelAccessNotConfigured
@@ -346,6 +404,12 @@ func awsSSOCredentialState(blob awsSSOBlob, found, perUser bool, now time.Time) 
 	dead := modelAccessSharedExpired
 	if perUser {
 		dead = modelAccessExpiredSignin
+	}
+	if spent {
+		if blob.needsRefresh(now) {
+			return dead
+		}
+		return modelAccessExpiring
 	}
 	switch {
 	case blob.renewable(now):
@@ -359,6 +423,20 @@ func awsSSOCredentialState(blob awsSSOBlob, found, perUser bool, now time.Time) 
 		return modelAccessExpiring
 	default:
 		return modelAccessLive
+	}
+}
+
+// awsSSOCredentialCause names WHICH fact put a blob into `expiring`, mirroring
+// the branches above that can reach it. Only meaningful when the state IS
+// `expiring` — callers elsewhere (dead, live, not_configured, …) never call it.
+func awsSSOCredentialCause(blob awsSSOBlob, spent bool, now time.Time) string {
+	switch {
+	case spent:
+		return causeRenewalSpent
+	case blob.renewable(now):
+		return causeRegistrationLapsing
+	default:
+		return causeTokenExpiring
 	}
 }
 
@@ -381,10 +459,18 @@ func modelAccessAction(state, ts string) string {
 // modelAccessDeadline is the timestamp the expiring action names: the client
 // registration's lapse when the blob can be renewed (that is what actually runs
 // out), the access token's own expiry when it cannot.
-func modelAccessDeadline(blob awsSSOBlob, found bool, now time.Time) string {
+//
+// spent is checked EXPLICITLY (Finding 5), ahead of the renewable arm: a spent
+// credential is never renewed again regardless of what registration timestamp
+// it carries, so the deadline that matters is the moment dispatch itself stops
+// serving the access token — ExpiresAt − awsSSORefreshSkew, the same instant
+// needsRefresh uses to grade it dead.
+func modelAccessDeadline(blob awsSSOBlob, found, spent bool, now time.Time) string {
 	switch {
 	case !found:
 		return ""
+	case spent:
+		return blob.ExpiresAt.Add(-awsSSORefreshSkew).UTC().Format(time.RFC3339)
 	case blob.renewable(now) && !blob.RegistrationExpiresAt.IsZero():
 		return blob.RegistrationExpiresAt.UTC().Format(time.RFC3339)
 	default:
@@ -405,7 +491,13 @@ func modelAccessDeadline(blob awsSSOBlob, found bool, now time.Time) string {
 //
 // Returns the zero value when there is nothing per-principal to report: no
 // bedrock_sso row and no captured session (see SetupModelAccess).
-func setupModelAccess(sc types.SiteConfig, blob awsSSOBlob, found bool, scope awsSSOScope, oidcConfigured bool, now time.Time) SetupModelAccess {
+//
+// spent is whether THIS blob's refresh token is already known dead — read by
+// the one caller (setupHarnessCreds) from the in-memory ssoRefreshSpent map
+// the control-plane refresher owns (awssso_refresh.go). Threaded as a plain
+// parameter, not read here, so this stays pure over its arguments like the
+// rest of the file.
+func setupModelAccess(sc types.SiteConfig, blob awsSSOBlob, found, spent bool, scope awsSSOScope, oidcConfigured bool, now time.Time) SetupModelAccess {
 	row, declared := agentProviderFor(sc, modelAccessAgent)
 	ssoLane := declared && !row.Disabled && row.Mechanism == types.AgentMechanismBedrockSSO
 	// The caller is the shared admin bearer token, not a person: no sign-in it
@@ -421,9 +513,12 @@ func setupModelAccess(sc types.SiteConfig, blob awsSSOBlob, found bool, scope aw
 	if !ssoLane && !found {
 		return SetupModelAccess{}
 	}
-	state := awsSSOCredentialState(blob, found, scope.perUser, now)
-	deadline := modelAccessDeadline(blob, found, now)
+	state := awsSSOCredentialState(blob, found, scope.perUser, spent, now)
+	deadline := modelAccessDeadline(blob, found, spent, now)
 	out := SetupModelAccess{State: state, Deadline: deadline, Action: modelAccessAction(state, deadline), PerUser: scope.perUser}
+	if state == modelAccessExpiring {
+		out.Cause = awsSSOCredentialCause(blob, spent, now)
+	}
 	// A STORED SESSION THE ROSTER NO LONGER ALLOWS grades expired_signin, which
 	// is the one thing that matters here: MODEL_ACCESS_ACTIONABLE
 	// (workspace-providers-copy.ts) is what decides whether the console offers
@@ -509,8 +604,14 @@ func awsSSOCredentialRow(h SetupHarness, ma SetupModelAccess) SetupCheck {
 		// member's own action line about one credential, and say something false:
 		// the session keeps renewing past that timestamp.
 		row.Status = "warn"
-		row.Detail = "Your captured AWS SSO session stops being renewable at " + ma.Deadline +
-			" — after that a Bedrock run using it fails until someone signs in again."
+		if ma.Cause == causeRenewalSpent {
+			// AWS retired the grant, not a registration lapsing on schedule — the
+			// sentence below would tell the operator something false about why.
+			row.Detail = fmt.Sprintf(harnessCredentialAWSRenewalSpentDetail, ma.Deadline)
+		} else {
+			row.Detail = "Your captured AWS SSO session stops being renewable at " + ma.Deadline +
+				" — after that a Bedrock run using it fails until someone signs in again."
+		}
 		row.Fix = "Re-run the containerized AWS SSO login on the provider step."
 	case modelAccessExpiredSignin, modelAccessSharedExpired, modelAccessNotConfigured:
 		row.Status = "warn"
@@ -540,4 +641,18 @@ func awsSSOCredentialRow(h SetupHarness, ma SetupModelAccess) SetupCheck {
 		row.Detail = "A captured AWS SSO session is connected (expires " + h.ExpiresAt + ")."
 	}
 	return row
+}
+
+// awsSSOTokenSpentFor is setupHarnessCreds' one call site's "is this blob's
+// refresh token already known dead" read. Living here (not inline in
+// setupHarnessCreds, setup.go) keeps that call site's edit net-zero —
+// setup.go is AT its allowlisted line-count cap. Guarded on RefreshToken !=
+// "": the spent map is keyed by a fingerprint of the refresh token, and
+// fingerprinting "" would mark every refresh-token-less blob spent the moment
+// ANY one of them was.
+func (s *Server) awsSSOTokenSpentFor(blob awsSSOBlob) bool {
+	if blob.RefreshToken == "" {
+		return false
+	}
+	return s.awsSSOTokenSpent(awsSSOTokenFingerprint(blob.RefreshToken))
 }

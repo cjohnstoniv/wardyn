@@ -32,10 +32,10 @@ Teal is the only loud color, and it means *"press this."* Everything else is gre
 | Affirmative action | `--primary` / `--primary-foreground` | The **one** `default` Button per surface (`button.tsx:12`) | Hover backgrounds, decoration, headings, ornamental icons |
 | Selected state | `--primary` at low alpha | `OptionCard` selected (`form-primitives.tsx:80`), `Checkbox`/`RadioGroup` checked, text `selection:` (`input.tsx:11`) | Anything not actually selected |
 | Focus ring | `--ring` | `focus-visible:border-ring focus-visible:ring-ring focus-visible:ring-[3px]` (`button.tsx:8`, `input.tsx:12`) — full alpha; a `/50` ring never met the 3:1 floor | Anything merely selected — the ring stays neutral so focus and selection read differently |
-| Active nav item | `--sidebar-accent` fill + `--sidebar-primary` rail | `navLinkClass` (`app-shell.tsx:368–374`) and the active rail (`app-shell.tsx:413`) | A third active treatment — use the shipped one |
+| Active nav item | `--sidebar-accent` fill + `--sidebar-primary` rail | `navLinkClass` (`app-shell.tsx:380–386`) and the active rail (`app-shell.tsx:425`) | A third active treatment — use the shipped one |
 | Barrier tier | METALS: `--fence-*` bronze, `--wall-*` silver, `--vault-*` gold | `ConfinementChip` (`primitives.tsx:246–267`), `BarrierStrengthStrip`, `tier-illustration.tsx:70–72`, the tier matrix (`setup/environment-step.tsx:53–55`) | Card borders, run state, buttons, section headers |
-| Run / approval / health state | `--success` `--warning` `--danger` `--info` `--cyan` + their `-subtle` fills | `Chip` tones (`primitives.tsx:51–60`), shell banners (`app-shell.tsx:570`), `TruncatedNote` | Decoration. Always paired with a glyph or word — never color alone |
-| Agent identity | `--agent-claude` and the per-agent badge colors | `AgentBadge` monogram (`primitives.tsx:397–403`) | Anything but the WHO badge |
+| Run / approval / health state | `--success` `--warning` `--danger` `--info` `--cyan` + their `-subtle` fills | `Chip` tones (`primitives.tsx:51–60`), shell banners (`app-shell.tsx:582`), `TruncatedNote` | Decoration. Always paired with a glyph or word — never color alone |
+| Agent identity | `--agent-claude` and the per-agent badge colors | `AgentBadge` monogram (`primitives.tsx:400–407`) | Anything but the WHO badge |
 | Destructive | `--destructive` (= `--danger`) | `destructive` Button, delete confirmations | Deny, Cancel, or any reversible action |
 | Everything else | `--muted`, `--muted-foreground`, `--accent`, `--border`, `--border-strong`, `--surface-2` | Surfaces, rows, hairlines, secondary text | — |
 
@@ -85,8 +85,8 @@ Headings come from `@layer base`, used as-is: `h1` `1.5rem`/600/1.3/`-0.01em` ·
   tile-size pill), which sits at the 11px rung today; give it its own token if it ever
   needs to be smaller than text.
 - Two 11px uppercase labels disagree on tracking: `.label-eyebrow` is `0.06em`,
-  `SectionCard`'s `h2` is `tracking-wider` (`primitives.tsx:440`). Use `.label-eyebrow`,
-  as `WidgetCard` does (`primitives.tsx:502`).
+  `SectionCard`'s `h2` is `tracking-wider` (`primitives.tsx:443`). Use `.label-eyebrow`,
+  as `WidgetCard` does (`primitives.tsx:505`).
 
 ## 4. Radius and elevation
 
@@ -102,16 +102,18 @@ cards, run cards, icon wells. Exactly three elevation levels:
 | Floating | one `--shadow-floating` token | Popovers, dropdowns, selects, dialogs, sheets, floating toolbars |
 
 `--shadow-floating` is ONE shared value in `theme.css` (`@theme inline`), deliberately not
-per-theme — a floating surface reads the same way in light and dark. It replaced the two
-spellings that shipped one idea: `shadow-md` (`dropdown-menu.tsx:45`, `select.tsx:68`,
-`popover.tsx:37`) and `shadow-lg` (`dialog.tsx:66`, `alert-dialog.tsx:61`,
-`sheet.tsx:61`, L233). A floating surface is one thing; it gets one shadow. Anything
+per-theme — a floating surface reads the same way in light and dark. It replaced two other
+spellings that shipped one idea, both now consolidated onto it: `shadow-md` and `shadow-lg`
+used to be split across `dropdown-menu.tsx:45`, `select.tsx:68`, `popover.tsx:37`,
+`dialog.tsx:68`, `alert-dialog.tsx:63`, `sheet.tsx:63` and `dropdown-menu.tsx:233` (its
+`DropdownMenuSubContent`, a second site in the same file) — all seven now carry
+`shadow-floating`. A floating surface is one thing; it gets one shadow. Anything
 wanting a fourth level wants the focus ring.
 
 ## 5. Status vocabulary and glyph pairing
 
 **Every actor on a row is two adjacent glyphs, never fused:** WHO (the `AgentBadge`
-monogram, `primitives.tsx:397–403`) and WHAT (the state). Fusing them means neither can
+monogram, `primitives.tsx:400–407`) and WHAT (the state). Fusing them means neither can
 change independently. State is an 8px dot (`size-2`) or an icon, **plus a text label** —
 6px in a `Chip` or dense row, which `Chip` renders (`size-1.5`, `primitives.tsx:98–103`).
 A live state adds `pulse`; a terminal state swaps the dot for an icon. `RunStateBadge`
@@ -212,7 +214,7 @@ Bind `disabled` the instant the action fires; reveal the spinner later.
   takes an `action`; omit it only when the emptiness is good news. Put the doc link next
   to the need.
 - **Persistent errors render inline** with something to read, retry, or act on:
-  `ErrorState` (`states.tsx:72`) for a pane, a shell banner (`app-shell.tsx:570`),
+  `ErrorState` (`states.tsx:72`) for a pane, a shell banner (`app-shell.tsx:582`),
   `TruncatedNote` (`states.tsx:116–135`) for a partial result.
 - **Toasts (`sonner`) are transient confirmations only** — "Copied", "Secret saved".
   Anything worth reading twice is not a toast.
@@ -253,9 +255,9 @@ Run this on any screen or mock before it ships:
 - [ ] **Density** — one rung per role, no fifth size sneaking in
 - [ ] **Cards** distinct from parent, never nested
 - [ ] **Row-by-row over side-by-side** unless comparison is the actual point
-- [ ] **Reduced motion honored** — `prefers-reduced-motion` is handled nowhere in
-      `ui/src`, so the `animate-ping` pulse and `animate-pulse` skeletons run
-      regardless. Gate them before adding motion
+- [ ] **Reduced motion honored** — preserve `theme.css`'s global
+      `prefers-reduced-motion` guard for CSS animations, transitions, and smooth
+      scrolling; check new motion with the preference enabled
 
 ## 12. Mock-first
 

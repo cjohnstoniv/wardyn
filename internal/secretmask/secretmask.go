@@ -492,10 +492,8 @@ func (w *MaskingWriter) Write(p []byte) (n int, err error) {
 //
 // OWNERSHIP: Close does NOT close dst. dst is borrowed, not owned — the caller
 // constructed it and is the only party that knows how it must be terminated.
-// Closing it here would make MaskingWriter a second closer racing the first: the
-// brokered-upload path hands us an *io.PipeWriter whose close carries the copy
-// error, and io.Pipe's error store is once-only, so a Close here would stamp EOF
-// and silently swallow that error (a truncated upload would look like success).
+// Closing a borrowed stream here could hide the caller's source error behind
+// a clean EOF, making a truncated recording look like a successful upload.
 func (w *MaskingWriter) Close() error {
 	if len(w.tail) > 0 {
 		masked, _ := safeMask(w.m, w.tail)

@@ -3,9 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Canonical, HONEST confinement metadata — the single source of truth for both
-// the ConfinementChip (primitives.tsx) and the New Run confinement step
-// (step-confinement.tsx), so the wording can't drift apart.
+// Canonical, HONEST confinement metadata — the single source of truth for the
+// ConfinementChip (primitives.tsx), the Getting-started/Settings barrier
+// matrix (environment-step.tsx), and New Run's Barrier control
+// (new-run-screen.tsx), so the wording can't drift apart.
 //
 // CC1/CC2/CC3 is the internal WIRE value (mirrors internal/types/types.go's
 // ConfinementClass). Users see the friendly display label — Fence / Wall / Vault

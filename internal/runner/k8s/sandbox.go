@@ -229,7 +229,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 		return fail(fmt.Errorf("k8s: create proxy pod: %w", err))
 	}
 
-	proxyIP, err := d.waitPodIP(ctx, proxyPodName(spec.RunID))
+	proxyIP, err := d.waitPodIP(ctx, proxyPodName(spec.RunID), spec.NotifyWaiting)
 	if err != nil {
 		return fail(fmt.Errorf("k8s: proxy pod never got an IP: %w", err))
 	}
@@ -324,7 +324,7 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 	// hits "container not found" against a pod still Pending — a REAL gap a
 	// live-cluster conformance run surfaced (a fake-clientset unit test
 	// can't: nothing simulates the kubelet).
-	if err := d.waitContainerRunning(ctx, agentPodName(spec.RunID), mainContainerName); err != nil {
+	if err := d.waitContainerRunning(ctx, agentPodName(spec.RunID), mainContainerName, spec.NotifyWaiting); err != nil {
 		return fail(fmt.Errorf("k8s: agent pod's main container never started: %w", err))
 	}
 
@@ -347,17 +347,31 @@ func (d *Driver) CreateSandbox(ctx context.Context, spec runner.SandboxSpec) (ru
 // condition, for the whole timeout — "0/3 nodes are available: pod has unbound
 // immediate PersistentVolumeClaims". Reading it back turns a blind wait into the
 // sentence an operator can act on.
-func (d *Driver) waitContainerRunning(ctx context.Context, podName, containerName string) error {
+//
+// onWaiting (nil-safe) gets that same reason WHILE the wait is happening rather
+// than only in the error at the end of it, once per CHANGE — see
+// runner.SandboxSpec.OnWaiting. The pod is already fetched every poll, so this
+// costs nothing but the comparison.
+func (d *Driver) waitContainerRunning(ctx context.Context, podName, containerName string, onWaiting func(string)) error {
 	// The last pod the poll actually observed. Captured rather than re-fetched
 	// after the fact: a re-fetch on a dead context returns nothing at all, which
 	// is precisely the state the enrichment exists for.
 	var lastPod *corev1.Pod
+	// The last reason REPORTED, so the report fires on a change and not on a
+	// tick. No mutex: the poll body runs on this goroutine, one call at a time.
+	var lastReason string
 	err := wait.PollUntilContextTimeout(ctx, k8sPollInterval, canaryWaitTimeout, true, func(pollCtx context.Context) (bool, error) {
 		pod, gerr := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(pollCtx, podName, metav1.GetOptions{})
 		if gerr != nil {
 			return false, gerr
 		}
 		lastPod = pod
+		if reason := waitingReason(pod); reason != lastReason {
+			lastReason = reason
+			if onWaiting != nil {
+				onWaiting(reason)
+			}
+		}
 		for _, cs := range pod.Status.ContainerStatuses {
 			if cs.Name != containerName {
 				continue
@@ -482,9 +496,15 @@ func (d *Driver) resolveRuntimeClassName(ctx context.Context, class types.Confin
 	}
 }
 
-// waitPodIP polls podName until its CNI-assigned Status.PodIP is set.
-func (d *Driver) waitPodIP(ctx context.Context, podName string) (string, error) {
+// waitPodIP polls podName until its CNI-assigned Status.PodIP is set, reporting
+// why it is still waiting (nil-safe, once per change — runner.SandboxSpec.
+// OnWaiting). This is the FIRST wait CreateSandbox blocks on, so on a cluster
+// with nowhere to put the pod it is the one a person actually sits through: the
+// CNI assigns the IP at PodSandbox creation, before any application image is
+// pulled, so this bound bites on SCHEDULING and its reason says so.
+func (d *Driver) waitPodIP(ctx context.Context, podName string, onWaiting func(string)) (string, error) {
 	var ip string
+	var lastReason string
 	err := wait.PollUntilContextTimeout(ctx, k8sPollInterval, podIPWaitTimeout, true, func(pollCtx context.Context) (bool, error) {
 		pod, gerr := d.clientset.CoreV1().Pods(d.cfg.Namespace).Get(pollCtx, podName, metav1.GetOptions{})
 		if gerr != nil {
@@ -493,6 +513,12 @@ func (d *Driver) waitPodIP(ctx context.Context, podName string) (string, error) 
 		if pod.Status.PodIP != "" {
 			ip = pod.Status.PodIP
 			return true, nil
+		}
+		if reason := waitingReason(pod); reason != lastReason {
+			lastReason = reason
+			if onWaiting != nil {
+				onWaiting(reason)
+			}
 		}
 		for _, cs := range pod.Status.ContainerStatuses {
 			if w := cs.State.Waiting; w != nil && terminalWaitingReasons[w.Reason] {

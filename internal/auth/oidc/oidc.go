@@ -91,8 +91,9 @@ type Config struct {
 	// listed values, case-insensitively. Matching is exact, not suffix-based:
 	// listing "example.com" does NOT admit "eng.example.com", which must be
 	// listed separately; wildcards are not supported.
-	// An empty list allows any verified email. Fail closed: if the IdP does not
-	// return a verified email and AllowedEmailDomains is non-empty, login is denied.
+	// An empty list checks neither the email domain nor email_verified.
+	// With a non-empty list, login is denied unless the IdP returns
+	// email_verified=true and the email's domain matches.
 	// Entra ID tokens typically OMIT email_verified entirely, so this option
 	// fail-closes on every login against an Entra tenant; prefer Entra App Roles
 	// (WARDYN_OIDC_ROLE_MAP against the "roles" claim, below) plus the app

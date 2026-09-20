@@ -5,7 +5,7 @@
 # hint that prints it.
 #
 # It had three copies: the console pane types it into the attach PTY
-# (LOGIN_FLOWS.aws.cmd, ui/src/app/components/screens/settings/harness-login-pane.tsx),
+# (LOGIN_FLOWS.aws.cmd, ui/src/app/components/screens/settings/login-flows.tsx),
 # agent-run --idle echoed it to the container's stdout (where no human attaching
 # later ever sees it), and a human who opened the run from /runs got a bare
 # prompt with no hint at all — so the reasonable next move was `aws sso login`

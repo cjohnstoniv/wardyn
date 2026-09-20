@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/cjohnstoniv/wardyn/internal/runner"
 	"github.com/cjohnstoniv/wardyn/internal/types"
 )
 
@@ -106,7 +107,11 @@ func TestCreateRunThreadsConfinement(t *testing.T) {
 }
 
 // TestCreateRunInheritsConfinementWhenUnset verifies an empty confinement_class
-// inherits the policy minimum (CC2) — the prior default behavior is preserved.
+// resolves to the policy minimum (CC2) when there is no runner to probe —
+// pgHarness wires Runner: nil, so strongestAdvertisedAtOrAbove has nothing
+// advertised to raise it above the floor (0.7.8: with a real runner this now
+// resolves to the STRONGEST advertised class instead; see
+// TestCreateRun_ConfinementDefaultMatrix below for that behavior).
 func TestCreateRunInheritsConfinementWhenUnset(t *testing.T) {
 	srv, _ := pgHarness(t)
 	body := `{"agent":"claude-code","repo":"acme/widgets"}`
@@ -119,7 +124,177 @@ func TestCreateRunInheritsConfinementWhenUnset(t *testing.T) {
 		t.Fatalf("decode run: %v", err)
 	}
 	if run.ConfinementClass != types.CC2 {
-		t.Errorf("confinement_class = %q, want CC2 (inherited policy minimum)", run.ConfinementClass)
+		t.Errorf("confinement_class = %q, want CC2 (no runner to advertise anything stronger)", run.ConfinementClass)
+	}
+}
+
+// pgHarnessConfinement builds a pool-backed Server with a configurable runner
+// and policy floor — pgHarnessWithRunner (interactive_test.go) hardcodes a CC2
+// floor and no egress-domain policy shape this table needs, so the 0.7.8
+// confinement-default matrix builds its own minimal harness rather than
+// bending that one to a second purpose.
+func pgHarnessConfinement(t *testing.T, r runner.Runner, floor types.ConfinementClass) *Server {
+	t.Helper()
+	srv, _ := pgHarnessWithRunner(t, r)
+	srv.cfg.DefaultPolicy.MinConfinementClass = floor
+	return srv
+}
+
+// TestCreateRun_ConfinementDefaultMatrix is 0.7.8's core behavior change,
+// end-to-end through POST /runs: every row of the "Host has / Floor / Default
+// / May pick" table, for both an unspecified and an explicit request.
+func TestCreateRun_ConfinementDefaultMatrix(t *testing.T) {
+	cases := []struct {
+		name        string
+		advertised  []types.ConfinementClass
+		floor       types.ConfinementClass
+		wantDefault types.ConfinementClass
+	}{
+		{"CC1 only, CC1 floor: default CC1 (stock install)", []types.ConfinementClass{types.CC1}, types.CC1, types.CC1},
+		{"CC1+CC2, CC1 floor: default CC2 (strongest, not the floor)", []types.ConfinementClass{types.CC1, types.CC2}, types.CC1, types.CC2},
+		{"CC1+CC2+CC3, CC1 floor: default CC3", []types.ConfinementClass{types.CC1, types.CC2, types.CC3}, types.CC1, types.CC3},
+		{"admin floor CC2, CC1+CC2+CC3 installed: default CC3 (strongest >= floor)", []types.ConfinementClass{types.CC1, types.CC2, types.CC3}, types.CC2, types.CC3},
+		{"Kata-only [CC1,CC3], CC1 floor: default CC3 (membership, not rank)", []types.ConfinementClass{types.CC1, types.CC3}, types.CC1, types.CC3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fr := &fakeRunner{capsClasses: tc.advertised}
+			srv := pgHarnessConfinement(t, fr, tc.floor)
+
+			// Unspecified request: resolves to the strongest advertised class
+			// at or above the floor, never the bare floor.
+			w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken,
+				`{"agent":"claude-code","repo":"acme/widgets"}`)
+			if w.Code != http.StatusCreated {
+				t.Fatalf("unspecified request: code = %d, want 201; body=%s", w.Code, w.Body.String())
+			}
+			var run types.AgentRun
+			if err := json.Unmarshal(w.Body.Bytes(), &run); err != nil {
+				t.Fatalf("decode run: %v", err)
+			}
+			if run.ConfinementClass != tc.wantDefault {
+				t.Errorf("unspecified request: confinement_class = %q, want %q", run.ConfinementClass, tc.wantDefault)
+			}
+
+			// Explicit request for every class the host advertises (the "May
+			// pick" column): each one is accepted at or above the floor.
+			for _, want := range tc.advertised {
+				if !confinementGE(want, tc.floor) {
+					continue // not a legal pick on this floor — covered by the reject case below
+				}
+				w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken,
+					`{"agent":"claude-code","repo":"acme/widgets","confinement_class":"`+string(want)+`"}`)
+				if w.Code != http.StatusCreated {
+					t.Fatalf("explicit %s: code = %d, want 201; body=%s", want, w.Code, w.Body.String())
+				}
+				var got types.AgentRun
+				if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+					t.Fatalf("decode run: %v", err)
+				}
+				if got.ConfinementClass != want {
+					t.Errorf("explicit %s: confinement_class = %q, want %q (requested, never re-defaulted)", want, got.ConfinementClass, want)
+				}
+			}
+		})
+	}
+}
+
+// TestCreateRun_ExplicitFloorAboveAvailability422sByteIdentically: an admin
+// floor (or an explicit request) the runner cannot structurally enforce still
+// refuses byte-identically to the pre-0.7.8 behavior — strongestAdvertisedAtOrAbove
+// falls back to the floor unchanged when nothing advertised meets it, so the
+// membership check in resolveEnforcedConfinement is still what 422s it, not a
+// silently accepted weaker class.
+func TestCreateRun_ExplicitFloorAboveAvailability422sByteIdentically(t *testing.T) {
+	fr := &fakeRunner{capsClasses: []types.ConfinementClass{types.CC1}}
+	srv := pgHarnessConfinement(t, fr, types.CC2) // admin floor CC2, but only CC1 is installed
+	w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, `{"agent":"claude-code","repo":"acme/widgets"}`)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("code = %d, want 422; body=%s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode error body: %v", err)
+	}
+	const want = `runner "fake" cannot enforce confinement_class CC2 (available: CC1)`
+	if body.Error != want {
+		t.Errorf("error = %q, want %q", body.Error, want)
+	}
+}
+
+// TestCreateRun_RequestBelowAdminFloorStill422s: an explicit request weaker
+// than the deployment floor is refused regardless of what the runner
+// advertises — the default-resolution rule never loosens the "never weaker
+// than the policy minimum" rule for an EXPLICIT request.
+func TestCreateRun_RequestBelowAdminFloorStill422s(t *testing.T) {
+	fr := &fakeRunner{capsClasses: []types.ConfinementClass{types.CC1, types.CC2, types.CC3}}
+	srv := pgHarnessConfinement(t, fr, types.CC2)
+	w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken,
+		`{"agent":"claude-code","repo":"acme/widgets","confinement_class":"CC1"}`)
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("code = %d, want 422; body=%s", w.Code, w.Body.String())
+	}
+}
+
+// TestCreateRun_BlastRadiusOverrideStillWins: a write-capable GitHub grant
+// raises RequiredConfinementFloor to CC3 (composer's blast-radius rule) even
+// when the strongest-advertised default would otherwise have picked a weaker
+// class — the override applies AFTER the new default-resolution branch, not
+// instead of it.
+func TestCreateRun_BlastRadiusOverrideStillWins(t *testing.T) {
+	fr := &fakeRunner{capsClasses: []types.ConfinementClass{types.CC1, types.CC2, types.CC3}}
+	srv := pgHarnessConfinement(t, fr, types.CC1)
+	srv.cfg.DefaultPolicy.EligibleGrants = []types.GrantSpec{
+		{Kind: types.GrantGitHubToken, Scope: json.RawMessage(`{"repos":["acme/widgets"],"permissions":{"contents":"write"}}`), RequiresApproval: true},
+	}
+	w := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, `{"agent":"claude-code","repo":"acme/widgets"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create run: code = %d, want 201; body=%s", w.Code, w.Body.String())
+	}
+	var run types.AgentRun
+	if err := json.Unmarshal(w.Body.Bytes(), &run); err != nil {
+		t.Fatalf("decode run: %v", err)
+	}
+	if run.ConfinementClass != types.CC3 {
+		t.Errorf("confinement_class = %q, want CC3 (blast-radius override)", run.ConfinementClass)
+	}
+}
+
+// TestPreflightAndCreateAgreeOnConfinementDefault is the behavioral twin of
+// TestPreflightMirrorsLaunchGates (the structural AST guard): fires the SAME
+// unspecified-confinement body through preflight and create, and asserts both
+// resolve to the same defaulted class — Review and the real launch must never
+// disagree about what a run will actually enforce.
+func TestPreflightAndCreateAgreeOnConfinementDefault(t *testing.T) {
+	fr := &fakeRunner{capsClasses: []types.ConfinementClass{types.CC1, types.CC2}}
+	srv := pgHarnessConfinement(t, fr, types.CC1)
+	body := `{"agent":"claude-code","repo":"acme/widgets"}`
+
+	pre := do(t, srv, http.MethodPost, "/api/v1/runs/preflight", adminToken, body)
+	if pre.Code != http.StatusOK {
+		t.Fatalf("preflight: code = %d, want 200; body=%s", pre.Code, pre.Body.String())
+	}
+	var pf preflightResponse
+	if err := json.Unmarshal(pre.Body.Bytes(), &pf); err != nil {
+		t.Fatalf("decode preflight: %v", err)
+	}
+
+	create := do(t, srv, http.MethodPost, "/api/v1/runs", adminToken, body)
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create: code = %d, want 201; body=%s", create.Code, create.Body.String())
+	}
+	var run types.AgentRun
+	if err := json.Unmarshal(create.Body.Bytes(), &run); err != nil {
+		t.Fatalf("decode run: %v", err)
+	}
+
+	if pf.EnforcedConfinementClass != types.CC2 || run.ConfinementClass != types.CC2 {
+		t.Errorf("preflight = %q, create = %q, want both CC2 (strongest advertised)", pf.EnforcedConfinementClass, run.ConfinementClass)
+	}
+	if pf.EnforcedConfinementClass != run.ConfinementClass {
+		t.Errorf("preflight (%q) and create (%q) disagree on the enforced class", pf.EnforcedConfinementClass, run.ConfinementClass)
 	}
 }
 

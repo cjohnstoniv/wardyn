@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -67,6 +68,38 @@ func (f *fakeApprovals) Request(_ context.Context, req types.ApprovalRequest) (t
 		req.ID = uuid.New()
 	}
 	req.State = types.ApprovalPending
+	// STAMPED, as approval.RequestApproval stamps it. Left unset, every
+	// generation check that compares a login run's created_at against this
+	// (the credential re-auth's I6) passed VACUOUSLY: any real timestamp is
+	// after the zero time, so a sign-in from before the request answered it.
+	if req.RequestedAt.IsZero() {
+		req.RequestedAt = time.Now().UTC()
+	}
+	// THE PARTIAL UNIQUE INDEX, MODELLED (migration 0022
+	// approvals_pending_noncred_uniq: one PENDING row per
+	// (run_id, kind, requested_scope) for every kind but `credential`, which 0064
+	// notes now covers credential_reauth too).
+	//
+	// Without it this double let N concurrent raises for ONE run each insert a
+	// row, because approval.RequestApproval's dedup is a LIST-then-INSERT with a
+	// real race window between the two — which the database closes and this map
+	// did not. Every api-level concurrency assertion of the form "N callers, one
+	// question" was therefore decided by goroutine scheduling: it passed most
+	// runs and failed some, proving nothing either way (patch-review batch E).
+	//
+	// Returning the WINNER rather than an error is also what the store+FSM pair
+	// does end to end: store.PG.CreateApproval maps the 23505 to
+	// ErrDuplicatePending and approval.RequestApproval re-reads and returns the
+	// existing row. This is the SERVICE double, so it models that pair's
+	// observable answer. The mapping itself is pinned a layer down
+	// (internal/approval's TestRequestApproval_DuplicatePending..., and
+	// internal/store's PG-gated concurrent-raise test against the real index).
+	for _, ap := range f.byID {
+		if ap.State == types.ApprovalPending && ap.RunID == req.RunID && ap.Kind == req.Kind &&
+			string(ap.RequestedScope) == string(req.RequestedScope) {
+			return ap, nil
+		}
+	}
 	f.requested = append(f.requested, req)
 	f.byID[req.ID] = req
 	return req, nil

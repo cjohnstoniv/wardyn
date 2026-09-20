@@ -162,6 +162,14 @@ const FAILED_CAUSE: Record<string, RunEndingKind> = {
   "run.selftest": "selftest",
 };
 
+// The machine-readable class the dispatch-time model-credential refusal stamps
+// on the run.create/failure row it already writes
+// (internal/api/runs_dispatch_llm_mechanism.go's llmRefusalAuditReason). It is
+// the ONLY thing that distinguishes that refusal from every other run.create
+// failure, which is why it is matched exactly and never by sniffing the
+// sentence.
+const CREDENTIAL_REASON = "model_credential";
+
 /** The FIRST event matching `pick` — the root cause, not the last symptom. */
 function firstEvent(events: AuditEvent[], pick: (e: AuditEvent) => boolean): AuditEvent | undefined {
   return events.find(pick);
@@ -217,7 +225,27 @@ export function runEndingFromAudit(state: RunState, events: AuditEvent[]): RunEn
     events,
     (e) => e.outcome === "failure" && e.action in FAILED_CAUSE && e.data?.fail_closed !== false,
   );
-  return cause ? from(FAILED_CAUSE[cause.action], cause, cause.action) : { kind: "unknown", action: "" };
+  if (cause) return from(FAILED_CAUSE[cause.action], cause, cause.action);
+  // AFTER the image/selftest scan, deliberately: those are earlier causes, and a
+  // credential refusal that followed one of them is fallout.
+  const credential = firstEvent(
+    events,
+    (e) => e.action === "run.create" && e.outcome === "failure" && str(e.data?.reason) === CREDENTIAL_REASON,
+  );
+  if (credential) {
+    return {
+      kind: "credential",
+      action: credential.action,
+      outcome: credential.outcome,
+      actor: credential.actor,
+      time: credential.time,
+      // NO detail: this row's `error` is byte-identical to the run's own
+      // failure_hint, which the failure block already renders for an ending
+      // with no copy of its own — printing it here would say it twice.
+      mechanism: str(credential.data?.mechanism),
+    };
+  }
+  return { kind: "unknown", action: "" };
 }
 
 export const audit = {

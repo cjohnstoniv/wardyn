@@ -233,7 +233,9 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	// their own per_user capture here while dispatch, reading run.CreatedBy,
 	// resolved it fine.
 	ssoSubject := runIdentitySubject(ctx, principalFromRequest(r))
-	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, nil) {
+	// refresh=true: the real launch redeems an expired-but-renewable session
+	// here, so a spent one is refused before any run exists (0.7.7).
+	if !s.enforceCreateLLMMechanism(ctx, w, req, spec, bedrockRef, ssoSubject, nil, true) {
 		return
 	}
 
@@ -350,7 +352,7 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	gw.augmentGitBrokerGrants(req.Repo, spec.WorkspaceRepos)
 
 	s.recordAudit(ctx, s.auditEvent(&runID, createdByType, createdBy, "run.create",
-		runID.String(), "success", mustJSON(createRunAuditData(req, policyID, enforced, id.JTI, policyWarns))))
+		runID.String(), "success", mustJSON(createRunAuditData(req, policyID, enforced, reqCC, id.JTI, policyWarns))))
 
 	// Model-resolution fail-fast (AGT4-2): a non-interactive harness run whose agent
 	// needs a model but has NO resolvable credential boots and 404s on its FIRST model
@@ -540,12 +542,25 @@ func (s *Server) seedAndAdmitWorkspace(ctx context.Context, w http.ResponseWrite
 // row, so this event is their ONLY provenance record — which makes the payload
 // a contract worth reading in one scope instead of a block interleaved with the
 // dispatch sequence.
-func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced types.ConfinementClass, jti string,
+//
+// confinement_source ("requested"/"defaulted", from reqCC, the pre-resolution
+// request value — never re-derive it from enforced, which cannot tell a
+// defaulted class from one the caller happened to name explicitly) is what
+// makes `enforced` legible after 0.7.8: an unspecified request's default is now
+// live-probed (the strongest class the runner advertises at or above the
+// floor), so the SAME enforced value can mean "the caller asked for this" one
+// day and "this is what today's runner offered" the next if a runtime
+// disappears — the row is the one place that distinction survives.
+func createRunAuditData(req createRunRequest, policyID *uuid.UUID, enforced types.ConfinementClass, reqCC types.ConfinementClass, jti string,
 	clampWarnings []string,
 ) map[string]any {
+	confinementSource := "defaulted"
+	if reqCC != "" {
+		confinementSource = "requested"
+	}
 	data := map[string]any{
 		"agent": req.Agent, "repo": req.Repo, "policy_id": policyID,
-		"confinement_class": enforced, "jti": jti,
+		"confinement_class": enforced, "confinement_source": confinementSource, "jti": jti,
 		"inline_policy": req.InlinePolicy != nil,
 	}
 	if req.TaskMode == "exec" {
@@ -628,7 +643,7 @@ func (s *Server) resolveRunLLMAccess(ctx context.Context, req createRunRequest, 
 	// decide where a credential is written, deleted or SERVED take ok
 	// (harnesscred.go, ssotoken.go, enforceReadableRosterForCredential).
 	ssoScope, _ := s.awsSSOScopeForAgent(ctx, req.Agent, subject)
-	lanes := s.resolveRunLLMLanes(ctx, req, &llmSpec, bedrockRef, ssoScope)
+	lanes := s.resolveRunLLMLanes(ctx, req, &llmSpec, bedrockRef, ssoScope, false)
 	var llmAccess *composeLLMAccess
 	if note, provisioned := s.reconcileLLMAccess(&llmSpec, req.Agent, presentSecrets, s.subscriptionInjectEnabled(), lanes.managed); note != "" {
 		llmAccess = &composeLLMAccess{Provisioned: provisioned, Note: note}

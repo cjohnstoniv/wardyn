@@ -1,6 +1,6 @@
 # Wardyn Published Threat Model
 
-**Version:** v2 (tracks the shipped codebase; last reviewed at v0.7.5)
+**Version:** v2 (tracks the shipped codebase; last reviewed at v0.7.8)
 **Status:** published alongside the codebase.
 
 **Implementation status markers.** Controls are tagged inline: **[shipped]**
@@ -970,9 +970,11 @@ hiding them would repeat the failure mode we are designed to avoid.
     write is audited (`policy.create`/`update`/`delete`,
     `secret.write`/`secret.delete`, `site_config.write`,
     `harness.credential.captured`/`disconnected`) — plus optional narrowing to a
-    verified-email domain (`WARDYN_OIDC_EMAIL_DOMAINS`, empty = any verified email;
-    the `email` claim it matches is only forced IdP-VERIFIED when that var is also
-    set — set both, or trust your IdP). In local and admin-token mode the only
+    verified-email domain (`WARDYN_OIDC_EMAIL_DOMAINS`). When that list is empty,
+    `oidc.CallbackHandler` checks neither the email's domain nor `email_verified`;
+    email-based operator assignment then trusts the IdP's email claim. Set the
+    domain and operator lists together, or explicitly trust that claim.
+    In local and admin-token mode the only
     principal IS the admin, so the gap collapses into #9. The fix is `ROADMAP.md`'s
     v1.0 "separation of duty on the control plane".
 
@@ -1029,6 +1031,15 @@ hiding them would repeat the failure mode we are designed to avoid.
     failed and the role check passed; a TTL-refused attempt is an `ssh.auth` failure
     with its own reason string). No in-place role-update endpoint exists; the
     re-register path is still immediate.
+
+    **Session/token revocation does not revoke SSH keys.** The supported
+    `wardyn ssh-key ensure` workflow may register a key using a per-user API
+    token. The registration has no link to that token's later revocation, and
+    `sshAuth` does not consult the session cutoff. The owner check has no role
+    TTL. Removing a key stops subsequent authentications but does not disconnect
+    established SSH connections, whose new channels remain usable while the
+    run is running. See [SSH incident response](../docs/SSH.md#revoking-access-during-an-incident)
+    for separate key removal and affected-run termination.
 
 16. **SSH key fingerprint squatting has no self-service remediation.** The
     `ssh_public_keys.fingerprint` primary key is GLOBAL by design — a key must
@@ -1798,6 +1809,97 @@ hiding them would repeat the failure mode we are designed to avoid.
     Treat both vars as production-forbidden, not production-discouraged. See
     `internal/api/awssso_endpoint.go`, `internal/api/llm_gateway.go` and
     docs/ENV.md.
+46. **A model call can be PARKED for minutes, and a re-auth request outlives the hold that raised
+    it.** When a captured AWS SSO session lapses mid-run, the proxy holds the sandbox's
+    `GetRoleCredentials` request while its owner signs in again, instead of failing it
+    (`internal/egress/proxy/credhold.go`). The hold is bounded — one workflow per approval per run,
+    at most `maxReauthHolds` (8) workflows per run, each bounded by
+    `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` (default 600 s, clamped `[10s, 1800s]`) and by the sandbox
+    SDK's own tolerance, which Wardyn does not control: an SDK with a shorter request timeout than
+    the budget gives up first, and the knob exists to be lowered below it. Three things are
+    deliberately NOT closed. (a) **The parked request is not a paused agent**: the agent's tool call
+    is simply slow, and a client that disconnects loses the turn exactly as it does today — Wardyn
+    never claims a held call will resume, only that the sign-in is what a resume needs. (b) **The
+    approval row outlives the hold on purpose**: when the budget ends, the call fails with a
+    modelled `UnauthorizedException` and a `credential:reauth-timeout` decision row, and the PENDING
+    row stays — the sign-in is still wanted, and the 24 h sweeper or the run's terminal cascade
+    closes it. So a PENDING `credential_reauth` row is evidence a sign-in was asked for, never
+    evidence a request is still parked. (c) **`portal.sso.<region>` is one more host whose plaintext
+    the proxy sees** for the runs that carry this lane — exactly one host, exactly one port, only
+    with a paired injection grant, authored at dispatch from the run's own credential, never from
+    the sandbox. The proxy sees `GetRoleCredentials`/`ListAccountRoles`, never the model call.
+    Contained by `WARDYN_AWS_SSO_PROXY_INJECT=off`, which restores the 0.7.5 behaviour for new
+    dispatches (a run already dispatched keeps the lane it was authored with until it ends).
+
+47. **0.7.8: the shipped default policy floor moved CC2 -> CC1, and an unspecified
+    run's confinement class is now live-probed rather than a static policy field.**
+    Before 0.7.8 every default-policy run enforced CC2 unconditionally (or refused
+    to launch at all on a CC1-only host — the trap `examples/policies/default.json`
+    and the k8s chart's B12b-F7 render guard both existed to route around). Now a
+    run naming no `confinement_class` resolves to the STRONGEST class the runner
+    actually advertises at or above the policy floor (`strongestAdvertisedAtOrAbove`,
+    `internal/api/runs_policy.go`), and — the residual — **a person on a host with
+    gVisor or Kata installed may deliberately REQUEST a weaker installed class than
+    the old CC2 floor would have allowed**, down to CC1, provided it still clears
+    the deployment's own floor (unchanged: an explicit request below the policy
+    minimum or an admin-set floor still 422s byte-identically). This is an explicit,
+    per-run choice, never the default — the default always resolves to the
+    strongest advertised class, never merely the floor. The second half: because
+    the advertised set is live-probed (`Runner.Capabilities`) rather than read from
+    a static field, **a runtime that disappears between two runs (a gVisor package
+    removed, a RuntimeClass unregistered) silently LOWERS the default for the next
+    unspecified request rather than refusing it** — the run still launches, just at
+    a weaker class than the previous one got, with no error to notice. This is why
+    `run.create`'s audit row (`docs/AUDIT-ACTIONS.md`) carries `confinement_source`
+    (`requested`/`defaulted`): it is the one place that distinguishes "the caller
+    asked for CC1" from "CC1 is what today's runner had to offer," which an
+    `enforced` value of CC1 alone cannot say on its own.
+
+### The injected call is pinned on the wire (security INFO-1 / W6-S F3) — SHIPPED, not deferred
+
+Residual #46 above named what the proxy injects; this narrows WHICH requests it injects onto. Raised
+in fix pass 1 as a 0.7.7 candidate, raised again by the blind W6 security round with the AWS
+documentation attached, and shipped in 0.7.6 on the owner's ruling.
+
+**What was true before.** The proxy injected the session on **any** request to the run's portal host:
+`GET /federation/credentials` for any account/role pair the person could assume, the `/assignment/*`
+enumeration, and `POST /logout` — which AWS documents as invalidating the owner's server-side IAM
+Identity Center sign-in session, i.e. the next credential exchange of every run that person has, not
+just this one (already-minted role credentials keep working until the permission set's own duration
+expires). The roster's
+account/role pin was enforced at the RESOLVE (`driftFrom`, against the roster and the dispatch-time
+snapshot) and never against what the SANDBOX asked for. Exposure was identical to 0.7.5's resident
+token, so it was never a regression — but 0.7.5 could not have done better and Phase B can, because
+the proxy now sees the request line.
+
+**What ships.** The authored injection rule carries a PIN (`egress.InjectionRule.PinPath` /
+`PinQuery`). The PATH half (`GET /federation/credentials`) is authored UNCONDITIONALLY on this lane —
+there is no roster shape that leaves it off. The QUERY half (`account_id` + `role_name`) is set from
+the grant's own dispatch-time snapshot, which always names both fields: the capture upload refuses a
+blob missing either (`ssotoken.go`'s `missingFields` check), so every stored session — whether or not
+the roster row itself pins an account/role — carries a snapshot the query pin can be built from. A
+request the pin does not cover is **forwarded without the header**, and AWS answers it as an
+unauthenticated call.
+
+Three properties, each a way this could have been gotten wrong:
+
+- **It is a withholding, not a refusal.** No new refusal vocabulary, no new decision row, no new
+  failure mode for a legitimate call. A sandbox cannot tell a withheld header from an expired
+  session.
+- **The strip still runs.** A host with an injection rule always has the sandbox's own credential
+  headers removed, including the header that rule supplies — otherwise a withheld injection would
+  fall through to the "no rule at all" branch, which PRESERVES the agent's header, and the sandbox's
+  own value would ride exactly the requests the pin exists to narrow.
+- **Both lanes.** The pin is applied on the MITM lane and on the plain (absolute-URI) lane, or it
+  would be bypassable by simply not using TLS.
+
+**The pair is the SNAPSHOT'S**, generated from the same captured blob, one call apart, as the
+sandbox's own `~/.aws/config` — so it is byte-for-byte what the SDK asks for, on a roster row that
+pins account/role and on one that does not.
+
+**What it does not do.** It does not bound what the person is entitled to, and it does not stop a
+sandbox reaching the portal — only what a Wardyn-held credential may be spent on. A sandbox that
+obtains a session by some other means is outside this boundary, as it always was.
 
 ### Operator overrides that boot past a fail-closed gate
 
@@ -1895,8 +1997,8 @@ proxy-injected, and what bounds it; where a bound does not exist, it says so.
 | `git_pat` grant (Azure DevOps / GitLab), **`WARDYN_GIT_PAT_BROKER=off` only** | Nothing, by default. Under the `off` escape hatch: the **PAT value**, streamed from `wardyn-git-helper` to the sandbox's `git` process | Nothing structural any more — this row is a MODE, not an impossibility. The default (`WARDYN_GIT_PAT_BROKER=on`, since 0.7) removes the opaque CONNECT tunnel instead of trying to inject into it: `agent-run` rewrites the granted hosts to a plain-HTTP broker path (`url.<broker>/git/<host>/.insteadOf`), the proxy terminates the request itself, mints server-side and sets Basic auth on the OUTBOUND leg (`internal/egress/proxy/pat_broker.go`), and the grant ids are withheld from the sandbox env so the in-sandbox helper could not mint anyway. Read the row below on the same pattern as `WARDYN_SUBSCRIPTION_INJECT=off` | **Only the `off` mode is resident, and only there do these bounds apply.** Helper emission is gated on a per-run `0400` caller-auth secret and the value is mask-registered at mint — but that gate binds only a caller going through `wardyn-git-helper`: the proxy's local mint route (`POST /wardyn/v1/credentials/mint`) is itself unauthenticated, so a caller that reads the grant id straight out of the sandbox env and POSTs the route directly is not bound at all. **No expiry, no down-scoping** — and that last limit survives the broker: a PAT carries whatever scope the operator issued it with, and there is no ADO/GitLab equivalent of a scoped installation token, so `on` makes the credential NON-RESIDENT, never least-privilege (the broker's allowlist is per-HOST for exactly that reason). `off` is an escape hatch for a forge that misbehaves under the rewrite, not a supported posture. See below. |
 | `env_secret` grant (arbitrary tool auth) | The stored secret's **value**, as a sandbox environment variable the operator names (`{"name":"MY_TOKEN","secret_name":"…"}`) | Nothing structural — a COVERAGE gap, not an impossibility. A PAT-authenticated CLI or REST tool reads a `*_TOKEN` env var; `git_pat` wires git's credential helper only and `api_key` injects one header at one host, so neither reaches it. A per-tool proxy shim could; none exists (`docs/adoption/corp-network-onboarding-findings.md` B1) | **The weakest bounds of any row here, and the kind is designed that way — read them before enabling it.** Resident for the WHOLE run; no mint, no TTL, no JTI, so nothing for the kill-switch to revoke; no expiry or down-scoping. See below. |
 | Bedrock **access-key** mode | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` (+ optional `AWS_SESSION_TOKEN`) in the sandbox env | AWS SigV4 signs each request **in-process** — no static header for the proxy to strip and replace | Per-run output masking (PTY/recordings); withheld from non-model (verify/scan) runs; the three secret names are reserved at the broker sink, so no `git_pat`/`ssh_key` grant can resolve them into the sandbox. IAM least-privilege scoping — ideally short-TTL STS creds scoped to one inference profile — is the **operator's** responsibility; Wardyn neither enforces nor verifies it. |
-| Bedrock **captured-AWS-SSO** mode (containerized `aws sso login`) | **WHOSE session, first: `shared` (the default) is ONE credential an admin captured, which every run inherits — the blast radius of one compromised sandbox is every member's runs. A `per_user` roster row makes it one credential PER PRINCIPAL, captured by that person's own sign-in, stored in that person's own secret namespace and read with no fall-through to the operator's row or to any other Bedrock lane, so the radius per capture is ONE PERSON and their own account/role.** **0.7.3: which account and role a `per_user` sign-in may capture is ADMIN-ASSERTED, not person-asserted** — an admin may pin `sso_account_id`/`sso_role_name` on the roster row, and a sign-in (or an uploaded blob) that disagrees with the pin, or with the account the configured `WARDYN_BEDROCK_MODEL` ARN names, is refused at three doors (roster save, sign-in, capture) rather than accepted and silently wrong; the pin binds at the login sandbox's LAUNCH, so it cannot be re-pointed by an admin edit made while a sign-in is already in flight. **The shared admin bearer token is not a person and cannot hold a `per_user` session of its own**: `POST /setup/harness-login` refuses (`422`, audited) a NEW capture attempt made with that token under a `per_user` row wherever a console human or `wdn_` token exists to redirect to instead — every login made with the admin token would land in the one `owner: "admin-token"` namespace and overwrite the last capture; a session that namespace already holds still grades and dispatches normally. Then, in either case: a minimal synthetic `~/.aws`: a generated `config` plus the **SSO token cache** (`sso/cache/<sha1>.json`) carrying the SSO **access token** — and the refresh token / client id + secret when the login also registered a client. Delivered base64 in a sandbox env var, materialized by `agent-run`. | Nothing structural — a **not-yet-built** gap. `portal.sso.<region>` `GetRoleCredentials` is `authtype:none`, so a MITM could carry the token as the `x-amz-sso_bearer_token` **header** and keep it out of the sandbox entirely (the "Phase B" never-resident alternative). Until that ships, the token is written into the sandbox. **And it is written at whatever confinement class the run asked for:** `RequiredConfinementFloor` raises a run to CC3 for a grant-delivered credential, but the SSO cache blob is not a grant and is delivered at dispatch, after that floor has already been computed — so a CC1/CC2 run receives it and no floor applies to this lane. 0.7.2 narrows the blast radius to ONE PERSON under `per_user`; 0.7.3 narrows WHICH account/role it can be but still does not raise the class — the owner's ruling (0.7.3) is to DEFER a hard floor, since it would fail closed on a CC1-only host, and ship it warn-first at 0.8 instead. Phase B (which ends the residency and moots the question) remains open. | Files written `0600`; token values mask-registered **globally**, not per-run (one capture is reused across runs) — access + refresh at capture, access + refresh again at each control-plane renewal; the refresh token, client id and client secret are WITHHELD from the sandbox cache whenever a refresh token exists, because the CONTROL PLANE renews the session at dispatch (SSO-OIDC `CreateToken`) and is the only party that can persist the rotated pair — one refresher per token. A renewal that cannot be completed marks the captured-SSO lane NOT READY and carries its reason on the dispatch verdict; the refusal that reason is for arrives with the dispatch-time mechanism gate, which is what stops a lapsed credential from crossing to another auth mechanism — until then the remaining Bedrock lanes (host mount, static keys) are tried as before; withheld from non-model runs; the capture login run is never recorded. **Not bounded:** masking is verbatim-match only, so the base64-encoded copy in the env var is not matched, and Wardyn cannot revoke an SSO session. **Whose credential a capture becomes is decided at LAUNCH, not at upload:** the login run's own `harness.login.started` row carries the `credential_source` + `owner` resolved when the sandbox was launched, and the upload reads that back instead of re-asking the live roster — a login sandbox lives to its idle cap, so re-resolving at upload time let an admin flipping a row from `per_user` to `shared` mid-run turn a member's PUT into a write of the operator-wide credential every run inherits. A run launched before that stamp existed falls back to the operator namespace only where the roster is not `per_user`, and is refused `409` otherwise; the residual is bounded to runs alive across the deploying restart. **Revocation ceiling (0.7.2), stated rather than implied:** Disconnect is admin-only and deletes the CALLER's own stored blob — under `per_user` that is the admin's own capture, never a named member's, and members have no self-service Disconnect (both are 0.8 items). A member's stored session is ended by their next sign-in superseding it, by revoking the session (or the account/permission-set assignment) at IAM Identity Center — the system of record, and the offboarding step — or by its own client-registration expiry. Deleting the Wardyn console account does not delete the blob. |
-| **Derived AWS role credentials** (every SigV4 Bedrock mode) | The short-lived role credentials the in-sandbox AWS SDK mints for itself from the SSO session (`portal.sso.<region>` `GetRoleCredentials`) | Same as access-key mode: SigV4 signs in-process, so these stay resident **regardless** of how the SSO session reached the sandbox — Phase B would end the SSO token's residency, not theirs | Bounded only by their own STS lifetime and the IAM role's scope, both set outside Wardyn. Wardyn never sees these values, so they are **not** mask-registered and cannot be masked. |
+| Bedrock **captured-AWS-SSO** mode (containerized `aws sso login`) | **WHOSE session, first: `shared` (the default) is ONE credential an admin captured, which every run inherits — the blast radius of one compromised sandbox is every member's runs. A `per_user` roster row makes it one credential PER PRINCIPAL, captured by that person's own sign-in, stored in that person's own secret namespace and read with no fall-through to the operator's row or to any other Bedrock lane, so the radius per capture is ONE PERSON and their own account/role.** **0.7.3: which account and role a `per_user` sign-in may capture is ADMIN-ASSERTED, not person-asserted** — an admin may pin `sso_account_id`/`sso_role_name` on the roster row, and a sign-in (or an uploaded blob) that disagrees with the pin, or with the account the configured `WARDYN_BEDROCK_MODEL` ARN names, is refused at three doors (roster save, sign-in, capture) rather than accepted and silently wrong; the pin binds at the login sandbox's LAUNCH, so it cannot be re-pointed by an admin edit made while a sign-in is already in flight. **The shared admin bearer token is not a person and cannot hold a `per_user` session of its own**: `POST /setup/harness-login` refuses (`422`, audited) a NEW capture attempt made with that token under a `per_user` row wherever a console human or `wdn_` token exists to redirect to instead — every login made with the admin token would land in the one `owner: "admin-token"` namespace and overwrite the last capture; a session that namespace already holds still grades and dispatches normally. Then, in either case: a minimal synthetic `~/.aws`: a generated `config` plus the **SSO token cache** (`sso/cache/<sha1>.json`) carrying the SSO **access token** — and the refresh token / client id + secret when the login also registered a client. Delivered base64 in a sandbox env var, materialized by `agent-run`. **0.7.6 (Phase B, shipped): the SSO access token no longer lands here.** With `WARDYN_AWS_SSO_PROXY_INJECT=on` the generated cache file carries an inert placeholder token (`wardyn-proxy-injected`) and a far-future `expiresAt`, and the real access token exists only in wardynd's store and the proxy's memory. The sandbox still receives the generated `config` (start URL, region, account, role — operator configuration, not a credential). With the switch `off` the 0.7.5 bytes are restored for NEW dispatches. | **Nothing — Phase B SHIPPED in 0.7.6, and this row is now an injection, not an exception.** `portal.sso.<region>` `GetRoleCredentials` is `authtype:none` (unsigned), so the proxy carries the session as the `x-amz-sso_bearer_token` **header** on a per-run TLS-MITM'd, dispatch-authored host+port entry with a paired injection grant — the same operator-configured MITM+injection pattern `isMITMHost` already admits for the corp artifact hosts and the Bedrock bearer. The token is never written into the sandbox. **The CC1/CC2 floor question this cell used to carry is moot with the switch on**: there is no longer a credential delivered outside a grant on this lane, so there is nothing for `RequiredConfinementFloor` to be too late for. It returns verbatim the moment `WARDYN_AWS_SSO_PROXY_INJECT=off` is set, which is the documented rollback — an operator who flips it is choosing the 0.7.5 residency, and should read the 0.7.3 deferral above as still current for that posture. **The re-origination is a forward dial like any other MITM host, not exempt from the corporate upstream**: it follows `SiteConfig.upstream_proxy_url`/`upstream_proxy_no_proxy` same as every other dial, and behind a TLS-intercepting corporate proxy it additionally needs `WARDYN_TRUSTED_CA_FILE` staged on the proxy sidecar or the re-dial fails closed the same way any other dial failure does — see `docs/OPERATIONS.md`'s Phase B section and `docs/adoption/aws-sso-mitm-upstream-proxy.md`. | Files written `0600`; token values mask-registered **globally**, not per-run (one capture is reused across runs) — access + refresh at capture, access + refresh again at each control-plane renewal; the refresh token, client id and client secret are WITHHELD from the sandbox cache whenever a refresh token exists, because the CONTROL PLANE renews the session at the real launch and at dispatch (SSO-OIDC `CreateToken`) and is the only party that can persist the rotated pair — one refresher per token. A renewal that cannot be completed marks the captured-SSO lane NOT READY and carries its reason on the dispatch verdict; the refusal that reason is for arrives with the dispatch-time mechanism gate, which is what stops a lapsed credential from crossing to another auth mechanism — until then the remaining Bedrock lanes (host mount, static keys) are tried as before; withheld from non-model runs; the capture login run is never recorded. **Not bounded:** masking is verbatim-match only, so the base64-encoded copy in the env var is not matched, and Wardyn cannot revoke an SSO session. **Whose credential a capture becomes is decided at LAUNCH, not at upload:** the login run's own `harness.login.started` row carries the `credential_source` + `owner` resolved when the sandbox was launched, and the upload reads that back instead of re-asking the live roster — a login sandbox lives to its idle cap, so re-resolving at upload time let an admin flipping a row from `per_user` to `shared` mid-run turn a member's PUT into a write of the operator-wide credential every run inherits. A run launched before that stamp existed falls back to the operator namespace only where the roster is not `per_user`, and is refused `409` otherwise; the residual is bounded to runs alive across the deploying restart. **Revocation ceiling (0.7.2), stated rather than implied:** Disconnect is admin-only and deletes the CALLER's own stored blob — under `per_user` that is the admin's own capture, never a named member's, and members have no self-service Disconnect (both are 0.8 items). A member's stored session is ended by their next sign-in superseding it, by revoking the session (or the account/permission-set assignment) at IAM Identity Center — the system of record, and the offboarding step — or by its own client-registration expiry. Deleting the Wardyn console account does not delete the blob. **0.7.6:** the injected value is additionally mask-registered **per run** (`MaskRegistry.Add(claims.RunID, token)`) at each resolve, beside the renewal path's existing global registration — the per-run set is evicted for terminal runs past `RunSecretGrace`, the global set has no expiry (the standing ceiling; TTL-aware masking is a follow-up). Injection is pinned to ONE host and port derived from the credential's own region (or the test override), is refused without TLS on every production deployment, and is refused outright — **403, never another credential** — if the roster row's owner / credential source / mechanism / account / role / region drift from the snapshot taken at dispatch. A dead credential HOLDS the call rather than failing it, bounded by `WARDYN_CREDENTIAL_REAUTH_TIMEOUT` (default 600 s, clamped `[10s, 1800s]`); see residual #46. |
+| **Derived AWS role credentials** (every SigV4 Bedrock mode) | The short-lived role credentials the in-sandbox AWS SDK mints for itself from the SSO session (`portal.sso.<region>` `GetRoleCredentials`) | Same as access-key mode: SigV4 signs in-process, so these stay resident **regardless** of how the SSO session reached the sandbox — Phase B would end the SSO token's residency, not theirs — and in 0.7.6 it did. These role credentials are still resident, still outside Wardyn's sight and still unmaskable, which is why `gradeModelCredential` keeps answering `sandbox` for this lane. Phase B did not change the residency classification, and a reader who "fixes" `credential_residency.go` because the SSO token left the sandbox is reading the wrong row. | Bounded only by their own STS lifetime and the IAM role's scope, both set outside Wardyn. Wardyn never sees these values, so they are **not** mask-registered and cannot be masked. |
 | Bedrock **host `~/.aws` mount** (`WARDYN_BEDROCK_AWS_DIR`) | Whatever the operator's host `~/.aws` holds — the SSO token cache, and any static keys in it — readable at `/home/agent/.aws` | The AWS SDK resolves credentials from the file itself | Bind-mounted **read-only**, so the sandbox can never write the operator's host AWS state; nothing is stored by Wardyn and no keys go into env. Wardyn never reads the contents, so it cannot mask them. A single-user / self-hosted choice, not for a shared multi-tenant service. |
 | Subscription `~/.claude` mount, **`WARDYN_SUBSCRIPTION_INJECT=off` only** | A real, refreshable **copy** of the operator's Claude OAuth credentials | With injection off there is no proxy-side token provider to inject from (the distroless compose `wardynd` carries no `claude` binary of its own) | **Mode-dependent — read the defaults carefully.** With injection ON (the host-mode default) the staged `.credentials.json` is sanitized to an inert sentinel (refresh token blanked, access token replaced, expiry pinned), so nothing usable is resident. The **compose stack defaults this env var to `off`**, so on that stack the resident copy is the default. The mount is read-only, and lands only when the run's resolved `ai_provider` integration is a `resident_host` `anthropic_subscription` (a workspace pin or the operator's `DefaultFor: agent_runs` default) against an operator-blessed ceiling mount. |
 | Container-**login** runs (`harness login`) | **Launched by an admin, or — under a `per_user` agent row — by the person capturing their OWN credential, in which case the sandbox is seeded with the ADMIN'S access-portal URL and ignores any the caller supplies, so a capture can never be bound to a foreign IdP/account.** The credential the run exists to obtain: `claude setup-token` prints it to the PTY; `aws sso login` writes it to `~/.aws/sso/cache` before `wardyn-aws-sso` uploads it | The credential does not exist yet — there is nothing to inject | A throwaway box: no workspace, no repo, no credential mounts, mints nothing (the AWS flow is seeded with one NON-secret file — a `~/.aws/config` holding the operator's SSO start URL + region, which `aws sso login` cannot run without), default-deny egress pinned to the login flow's hosts, idle auto-stop. **Never recorded** — the recorder is dropped entirely for a `harness login` run (masking could not have covered it: the value arrives after the run's mask snapshot). **0.7.5 — and the sign-in the image now runs itself is not recorded either, deliberately.** The claude-code image's boot pane wraps its seed in `wardyn-rec` (`boot_seed_rec_wrap`, `deploy/images/common/agent-run-lib.sh`); the aws-sso image's sign-in pane does NOT. It handles the credential this run exists to obtain — the device code, the portal's reply, and the helper's upload — and the recorder is exactly what must not see them, for the same reason the run's recorder is dropped at dispatch: the value arrives after the run's mask snapshot is taken, so masking could not have covered it. The consequence, stated rather than implied: **there is no cast of what happened inside a sign-in sandbox**, including whatever a human typed at the pane's trailing shell after the sign-in finished. That shell has the same bounds as any other attach into this box — the AWS CLI, no repo, no mounts, default-deny egress pinned to the SSO endpoints, and a 30-minute idle cap — and the audit trail still carries the capture (`harness.credential.captured` / `.refused`) and the launch (`harness.login.started`). What is not carried is the keystrokes. |
@@ -2255,6 +2357,50 @@ with the default window, a sustained same-reason burst from behind an ingress is
 visible as a count on a periodic row rather than as one row per attempt. An
 operator who wants row-per-attempt on the public lane sets the window to `0`, at
 the cost the limiter's own residual already names.
+
+### The setup gate trusts a daemon-marked flag, and is inert on a healthy install
+
+0.7.8 moved the console's setup-funnel gate (`setupGateActive`) off a hard-coded id
+list and onto a `blocking` bool the daemon sets on individual `/setup/status` rows
+(`SetupCheck.Blocking`). Two consequences worth stating rather than leaving implicit.
+
+**A `fail` row can now stop gating.** `k8s_egress_containment`'s `unenforced` arm — the
+cluster's CNI does not enforce `NetworkPolicy`, and the operator accepted that with
+`WARDYN_K8S_ALLOW_UNENFORCED_NETPOL=1` — is graded `fail` and was never marked
+`blocking`: it is a fact about the SUBSTRATE's confinement (every sandbox this runner
+creates has unconfined egress), which the checklist, the banner and Audit all keep
+showing, but which the operator has already, explicitly, accepted. Confiscating the
+console over an accepted risk would not make the risk smaller; it would just make the
+accepting operator's own install harder to operate while they live with the choice
+they made. The bound is the same one that arm already carries elsewhere in this
+document: the acceptance is loud (an env var an operator must set on purpose, an
+audited boot-time canary result) and visible everywhere the row renders, not hidden by
+this change.
+
+That arm's sibling, the `""` INDETERMINATE fail — a control plane reporting a Kubernetes
+runner but no canary verdict — carries no acceptance behind it, and is not marked
+`blocking` either. It stays covered in practice rather than by this flag: a live daemon
+reaches that arm only when `Capabilities()` errors, which leaves the confinement-class
+list empty, and an empty list is exactly what makes `runner` fail — which IS blocking. The
+gate still fires; it fires on the row that means "this install cannot run anything", not
+on the row that means "this install cannot tell you about its network".
+
+**On a healthy Helm install, none of the three blocking rows is ever set — the gate is
+effectively inert there.** `runner` fails only with no live confinement class at all;
+`confinement_floor` warns only when the configured floor is a class the runner does
+not advertise; `sso_rbac` warns only with OIDC configured and no role mapping — though that
+last one is not merely a misconfiguration: a single-operator deployment, or one whose
+operator allowlist already separates admins from members, is a perfectly fine install
+that this row still holds in the funnel until onboarding completes. A correctly
+configured multi-user Kubernetes deployment (a registered RuntimeClass, a floor the
+chart's values actually advertise, `WARDYN_OIDC_ROLE_MAP` or a People-step mapping set)
+never trips any of the three, so the funnel exists for the FIRST-run and
+misconfiguration cases this gate was built for, and simply never fires again once an
+install is healthy — which is the intended shape (the same "a place you go, not a wall
+you are trapped behind" principle `setup-gate.ts` already documents), stated here as a
+residual because it means the gate's absence is not, by itself, evidence the install
+is fine: an operator who wants that assurance still reads the checklist, not just
+whether the funnel opened.
 
 ### Known latent vulnerabilities
 

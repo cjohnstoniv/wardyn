@@ -154,9 +154,12 @@ auditor.
 - **"The session is still recorded" — the SHELL is; exec and sftp are not.**
   Turning on `WARDYN_SSH_LISTEN` makes both halves fleet-wide: `ssh` exec output
   and sftp payloads are **not** recorded and sftp uploads are not byte-counted,
-  while the interactive SSH shell **is** recorded, unmasked, with **no
-  delete-one route** — a secret pasted into a recorded terminal is stored in
-  cleartext, permanently. And a `wardynd` restart mid-run (an MDM upgrade
+  while the interactive SSH shell **is** recorded through the browser terminal's
+  same masking pipeline. Only registry-known secrets are masked: an unregistered
+  secret pasted into the terminal can remain in cleartext. There is **no
+  delete-one route**; the age-based retention sweep is the removal mechanism
+  (default: keep forever). See [SSH recording and masking scope](SSH.md#recording).
+  A `wardynd` restart mid-run (an MDM upgrade
   window, a crash, a laptop waking) wipes the in-memory masking snapshot, after
   which the stream passes through **unmasked** with a `success` audit event,
   because nothing in that path can tell "no secrets for this run" from "not my
@@ -732,8 +735,8 @@ sudo cp deploy/desktop/wardyn.env.example /etc/wardyn/wardyn.env
 # has. Substitute the current release's digests, or a published tag while you
 # are only smoke-testing.
 sudo sed -i '' -e 's/\$UPN/you@example.com/' \
-               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.7.5|' \
-               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.7.5|' \
+               -e 's|^WARDYN_WARDYND_IMAGE=.*|WARDYN_WARDYND_IMAGE=ghcr.io/cjohnstoniv/wardynd:0.7.8|' \
+               -e 's|^WARDYN_PROXY_IMAGE=.*|WARDYN_PROXY_IMAGE=ghcr.io/cjohnstoniv/wardyn-proxy:0.7.8|' \
                /etc/wardyn/wardyn.env
 sudo cp examples/policies/demo.json /etc/wardyn/policy.json
 

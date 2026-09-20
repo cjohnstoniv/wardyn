@@ -3,15 +3,20 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Default barrier tier (E3) — the single source for the operator's default
-// barrier: the strongest available class (over CC_ORDER) plus the localStorage
-// persistence for their explicit pick. The Getting-started barrier step persists
-// the pick here; the New Run wizard, the workspace-import Record/Security chips,
-// and onboarding-screen read it back via resolveDefaultCc()/getDefaultCc()/
-// strongestAvailable(), treating it as a floor and never silently downgrading
-// below what's persisted.
+// Default barrier tier (0.7.8) — pure resolution helpers, no persistence. The
+// default is a SERVER fact now (runs_policy.go's strongestAdvertisedAtOrAbove:
+// the strongest installed class at or above the policy floor), so there is
+// nothing left for the browser to remember across sessions — the
+// wardyn-default-confinement localStorage key this file used to own is gone.
+//
+// What's left is the pure "which tier wins" math, still shared by every
+// surface that shows a barrier default: New Run resolves its own from
+// /setup/status directly (new-run-screen.tsx); Getting started and Settings'
+// Host card pass an in-session pick (never persisted) as `persisted` below,
+// purely so a click during THIS view stays highlighted across a re-check;
+// onboarding-screen/member-getting-started/record-pane read strongestAvailable
+// straight, with no pick to prefer at all.
 import { CC_ORDER, type ConfinementClass } from "../../lib/types";
-import { lsGet, lsSet } from "../../lib/storage";
 
 /** The strongest class present in `available` — the last CC_ORDER member present. */
 export function strongestAvailable(available: ConfinementClass[]): ConfinementClass | undefined {
@@ -19,9 +24,10 @@ export function strongestAvailable(available: ConfinementClass[]): ConfinementCl
 }
 
 /**
- * Resolve the default barrier tier: the operator's persisted pick if this host
- * can still run it, else the strongest tier this host can run, else CC1 (nothing
- * available — never leave the wizard with no default at all).
+ * Resolve the barrier tier to show as selected: `persisted` (an in-session
+ * pick, e.g. a click) if this host can still run it, else the strongest tier
+ * this host can run, else CC1 (nothing available — never leave the picker
+ * with no selection at all).
  */
 export function resolveDefaultCc(
   persisted: ConfinementClass | null,
@@ -29,18 +35,4 @@ export function resolveDefaultCc(
 ): ConfinementClass {
   if (persisted && available.includes(persisted)) return persisted;
   return strongestAvailable(available) ?? "CC1";
-}
-
-// ---------------------------------------------------------------------------
-// Persisted default — via lib/storage's private-mode-tolerant lsGet/lsSet.
-// ---------------------------------------------------------------------------
-const DEFAULT_CC_KEY = "wardyn-default-confinement";
-
-export function getDefaultCc(): ConfinementClass | null {
-  const v = lsGet(DEFAULT_CC_KEY);
-  return v === "CC1" || v === "CC2" || v === "CC3" ? v : null;
-}
-
-export function setDefaultCc(cc: ConfinementClass): void {
-  lsSet(DEFAULT_CC_KEY, cc);
 }

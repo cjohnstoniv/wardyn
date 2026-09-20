@@ -92,6 +92,18 @@ type bootFlags struct {
 	// value) — precedent WARDYN_DEFAULT_POLICY. Empty = unset = every outbound
 	// TLS client in this process trusts exactly the system roots, as today.
 	trustedCAFile *string
+	// daemonProxyURL / daemonNoProxy are WARDYN_DAEMON_PROXY_URL /
+	// WARDYN_DAEMON_NO_PROXY (see daemon_proxy.go): a forward proxy for
+	// wardynd's OWN outbound HTTP calls (OIDC discovery/JWKS, audit webhooks,
+	// GitHub App minting, AWS SSO CreateToken renewal, Entra sync) — the
+	// supported replacement for setting HTTPS_PROXY on wardynd, which stays
+	// unsupported (Go's net/http would also re-point the Kubernetes client and
+	// every http.ProxyFromEnvironment reader process-wide). Same posture class
+	// as trustedCAFile above: control-plane-authored only, never a SiteConfig
+	// field. Empty daemonProxyURL = the shared http.DefaultTransport is left
+	// untouched, byte-identical to today.
+	daemonProxyURL *string
+	daemonNoProxy  *string
 	// anthropicBaseURL / openaiBaseURL are WARDYN_ANTHROPIC_BASE_URL /
 	// WARDYN_OPENAI_BASE_URL (see internal/api/llm_gateway.go's
 	// ValidateLLMGateways): an operator-set internal model gateway base URL
@@ -185,10 +197,18 @@ type bootFlags struct {
 	// explicitly true — the same two-deliberate-acts shape as
 	// allowLocalModeWithOIDC, and for the same reason.
 	awsSSOEndpointOverride *string
-	allowTestEndpoints     *bool
-	bedrockAWSDir          *string
-	bedrockAWSProfile      *string
-	bedrockAWSSSORegion    *string
+	// awsSSOProxyInject is the PHASE B kill switch: whether a captured-AWS-SSO
+	// Bedrock dispatch injects the session proxy-side (the token never resident)
+	// or writes it into the sandbox as 0.7.5 did. A STRING, not a bool flag,
+	// because its two documented spellings are `on` and `off` and an
+	// unrecognised value takes the DEFAULT rather than refusing boot — see
+	// api.ResolveAWSSSOProxyInject for why a switch meant to be reached in a
+	// hurry must not be able to crash-loop a daemon.
+	awsSSOProxyInject   *string
+	allowTestEndpoints  *bool
+	bedrockAWSDir       *string
+	bedrockAWSProfile   *string
+	bedrockAWSSSORegion *string
 
 	proxyURL *string
 
@@ -269,6 +289,8 @@ func parseBootFlags() *bootFlags {
 		controlURL:              flagEnv("control-plane-url", "WARDYN_CONTROL_PLANE_URL", "http://wardynd:8080", "externally-reachable control plane URL for sidecars"),
 		policyPath:              flagEnv("default-policy", "WARDYN_DEFAULT_POLICY", "examples/policies/default.json", "path to the default RunPolicy spec JSON"),
 		trustedCAFile:           flagEnv("trusted-ca-file", "WARDYN_TRUSTED_CA_FILE", "", "path to a PEM bundle of additional trusted roots (e.g. a corporate TLS-inspecting middlebox's CA), added to the system roots for wardynd's own outbound TLS, the proxy sidecar's forwarding transport, and every sandbox's CA trust. Empty (default) = system roots only, byte-identical to today"),
+		daemonProxyURL:          flagEnv("daemon-proxy-url", "WARDYN_DAEMON_PROXY_URL", "", "forward proxy (http:// or https://, no user:pass@) wardynd's OWN outbound HTTP calls traverse: OIDC discovery/JWKS, audit webhooks, GitHub App token minting, AWS SSO CreateToken renewal, and Entra directory sync. Empty (default) = http.DefaultTransport is left untouched (today's ProxyFromEnvironment behavior). Malformed ⇒ boot refused. See docs/ENV.md"),
+		daemonNoProxy:           flagEnv("daemon-no-proxy", "WARDYN_DAEMON_NO_PROXY", "", "NO_PROXY-spelled bypass list for WARDYN_DAEMON_PROXY_URL (host, .suffix, CIDR, *). wardynd auto-appends three hosts: KUBERNETES_SERVICE_HOST, the WARDYN_AWS_SSO_ENDPOINT_OVERRIDE host, and the WARDYN_OIDC_INTERNAL_ISSUER host. Ignored when the proxy URL is unset"),
 		anthropicBaseURL:        flagEnv("anthropic-base-url", "WARDYN_ANTHROPIC_BASE_URL", "", "operator-set internal model gateway base URL (https://, RFC1918/CGNAT literal allowed) re-pointing the api-key lane's brokered upstream for Anthropic instead of api.anthropic.com. Empty (default) = the public host, byte-identical to today. Subscription/managed runs are unaffected — they still reach api.anthropic.com directly"),
 		openaiBaseURL:           flagEnv("openai-base-url", "WARDYN_OPENAI_BASE_URL", "", "same as -anthropic-base-url, for OpenAI's api-key lane (api.openai.com)"),
 		ageKey:                  flagEnv("age-key", "WARDYN_AGE_KEY", "", "age X25519 identity (AGE-SECRET-KEY-...) for the secret store; generated+logged if empty"),
@@ -288,7 +310,7 @@ func parseBootFlags() *bootFlags {
 		oidcClientID:       flagEnv("oidc-client-id", "WARDYN_OIDC_CLIENT_ID", "", "OIDC client id"),
 		oidcClientSecret:   flagEnv("oidc-client-secret", "WARDYN_OIDC_CLIENT_SECRET", "", "OIDC client secret"),
 		oidcRedirectURL:    flagEnv("oidc-redirect-url", "WARDYN_OIDC_REDIRECT_URL", "", "OIDC redirect URL (<base>/auth/callback)"),
-		oidcEmailDomains:   flagEnv("oidc-email-domains", "WARDYN_OIDC_EMAIL_DOMAINS", "", "comma-separated allowed email domains (empty = any verified email)"),
+		oidcEmailDomains:   flagEnv("oidc-email-domains", "WARDYN_OIDC_EMAIL_DOMAINS", "", "comma-separated allowed email domains; requires email_verified=true when set (empty = no domain or email_verified checks)"),
 		oidcOperatorEmails: flagEnv("oidc-operator-emails", "WARDYN_OIDC_OPERATOR_EMAILS", "", "comma-separated operator (admin) emails; a signed-in human NOT listed is a member (owner-scoped: reads + launches/kills their OWN runs, 403 on configuring the deployment, secret writes, and admin-only credential/tool_call approvals — still decides egress_domain approvals on and attaches to their own runs). Empty with OIDC configured is REFUSED at boot — see -allow-oidc-no-operator-list"),
 		// Refused by default (validateOperatorPosture) when OIDC SSO is configured
 		// and the operator allowlist is empty — the same refuse-with-an-escape-hatch
@@ -347,6 +369,7 @@ func parseBootFlags() *bootFlags {
 		bedrockModel:           flagEnv("bedrock-model", "WARDYN_BEDROCK_MODEL", "", `optional: Bedrock model id for claude-code — a cross-region inference-profile id (e.g. "us.anthropic.claude-sonnet-4-5-..."), or the profile's FULL ARN ("arn:aws:bedrock:<region>:<acct>:inference-profile/<id>" or ".../application-inference-profile/<id>", which is how quota, logging and guardrails attach to the profile rather than the bare model). Not a bare foundation-model id. Passed to the agent verbatim — Wardyn does not parse or validate the shape. Requires -bedrock-region too.`),
 		bedrockBaseURL:         flagEnv("bedrock-base-url", "WARDYN_BEDROCK_BASE_URL", "", `optional: Bedrock DATA-PLANE base URL (https://, an RFC1918/CGNAT literal allowed) re-pointing bedrock-runtime at a VPC/PrivateLink endpoint, so inference traffic never traverses the public internet. Empty (default) = the regional public host, byte-identical to today. It moves the egress allow-list entry, the bearer mode's TLS-MITM + Authorization-injection target, and the sandbox's ANTHROPIC_BEDROCK_BASE_URL / AWS_ENDPOINT_URL_BEDROCK_RUNTIME together. CEILING: ONE data-plane host per deployment — it wins for EVERY region, so a multi-region estate must not set it. The CONTROL plane (bedrock.<region>.amazonaws.com) is NOT overridden; pin an inference-profile ARN with -bedrock-model instead. A malformed value refuses boot.`),
 		awsSSOEndpointOverride: flagEnv("aws-sso-endpoint-override", "WARDYN_AWS_SSO_ENDPOINT_OVERRIDE", "", `TEST ONLY: re-point BOTH AWS IAM Identity Center services (sso-oidc and the sso portal) at this base URL — http:// or https://. It moves the containerized login sandbox's AWS_ENDPOINT_URL_SSO/_SSO_OIDC, the ssoInject sandbox's, the SSO egress allow-list entries (including the login flow's device.sso.<r>) and the dispatch-time CreateToken URL together. It exists so an AWS SSO walk can run against test/awsssofake on a throwaway cluster with no AWS tenant. REFUSED unless -allow-test-endpoints (WARDYN_ALLOW_TEST_ENDPOINTS=true) is also set, and every boot carrying it WARNs. Never a production posture, and never a substitute for -bedrock-base-url (a different service, and a supported one). Empty (the default) = the real regional AWS endpoints.`),
+		awsSSOProxyInject:      flagEnv("aws-sso-proxy-inject", "WARDYN_AWS_SSO_PROXY_INJECT", api.AWSSSOProxyInjectFlagDefault(), `on|off: whether a captured AWS SSO session is injected PROXY-SIDE on the run's own portal.sso host (the sandbox's token cache holds only a placeholder, and a session that lapses mid-run HOLDS the model call while its owner signs in again) or written into the sandbox as it was before 0.7.6. "off" restores the older behaviour for NEW dispatches only — a run already dispatched keeps the lane it was authored with until it ends. It is the rollback for an SDK or corporate-MITM surprise; an unrecognised value takes the default rather than refusing boot.`),
 		allowTestEndpoints:     flagBool("allow-test-endpoints", "WARDYN_ALLOW_TEST_ENDPOINTS", false, "override: acknowledge that this deployment is a TEST deployment. It unlocks exactly two relaxations: -aws-sso-endpoint-override may re-point AWS IAM Identity Center at a server of your choosing, and -bedrock-base-url may be plain http:// (which sends inference traffic, and in bearer mode the API key riding it, unencrypted). Without it either one REFUSES boot; with it, each logs a TEST HATCH ACTIVE warning at every boot. Never set on a deployment holding a real credential."),
 		bedrockAWSDir:          flagEnv("bedrock-aws-dir", "WARDYN_BEDROCK_AWS_DIR", "", `bind a host ~/.aws directory READ-ONLY into each Bedrock run so the AWS SDK resolves credentials itself. SSO/IAM-Identity-Center auto-refresh works only for sso-session profiles whose CACHED token is still valid (the read-only mount cannot write back a rotated token; legacy sso_start_url profiles need a periodic host 'aws sso login'). Works in compose too (mount it via the WARDYN_BEDROCK_AWS_DIR bind, same path host==container). Exposes the WHOLE ~/.aws to the untrusted sandbox — point it at ~/.aws only. Leave empty to use static aws-* secrets or a bedrock-api-key instead.`),
 		bedrockAWSProfile:      flagEnv("bedrock-aws-profile", "WARDYN_BEDROCK_AWS_PROFILE", "", `optional: AWS_PROFILE to select from the mounted ~/.aws (common with SSO). Falls back to the standard AWS_PROFILE when left empty. Only used with -bedrock-aws-dir.`),
@@ -389,7 +412,7 @@ func parseBootFlags() *bootFlags {
 		sshListen:        flagEnv("ssh-listen", "WARDYN_SSH_LISTEN", "", `SSH gateway listen address (e.g. ":2222"); empty (the default) disables the gateway entirely — no listener, no new surface`),
 		uiListen:         flagEnv("ui-sandbox-listen", "WARDYN_UI_SANDBOX_LISTEN", "", `UI-sandbox gateway listen address (e.g. ":8081"); empty (the default) disables the gateway entirely — no listener, no new surface. MUST differ from -listen: relayed pages are the sandbox's own code, and the separate origin is what keeps them away from the console's session`),
 		uiAdvertise:      flagEnv("ui-sandbox-advertise", "WARDYN_UI_SANDBOX_ADVERTISE", "", `externally-reachable base URL of the UI-sandbox gateway (e.g. "https://wardyn-ui.example.com"), published on /healthz for the console's Open button; purely advisory copy (the gateway binds -ui-sandbox-listen, not this)`),
-		uiSessionTTL: flagDuration("ui-sandbox-session-ttl", "WARDYN_UI_SANDBOX_SESSION_TTL", 8*time.Hour, `how long a UI-sandbox relay session (the wardyn_ui_sess cookie minted at the ticket handoff) stays usable; the relay's sibling of -ssh-role-ttl. Applied to cookies ALREADY in browsers, since the cookie carries its own issued-at — so shortening it takes effect at once. Role, run ownership and the revoke cutoff are re-checked on every new connection regardless; this bounds how long a session can outlive its enter at all`),
+		uiSessionTTL:     flagDuration("ui-sandbox-session-ttl", "WARDYN_UI_SANDBOX_SESSION_TTL", 8*time.Hour, `how long a UI-sandbox relay session (the wardyn_ui_sess cookie minted at the ticket handoff) stays usable; the relay's sibling of -ssh-role-ttl. Applied to cookies ALREADY in browsers, since the cookie carries its own issued-at — so shortening it takes effect at once. Role, run ownership and the revoke cutoff are re-checked on every new connection regardless; this bounds how long a session can outlive its enter at all`),
 		uiOriginTemplate: flagEnv("ui-sandbox-origin-template", "WARDYN_UI_SANDBOX_ORIGIN_TEMPLATE", "", `optional PER-RUN origin for the UI-sandbox gateway, e.g. "https://run-{run}.ui.example.com" (needs wildcard DNS + a wildcard certificate). Set, every run gets its own browser origin and an enter on any other host is refused; empty, all runs share one origin separated only by a path-scoped cookie`),
 
 		sshAdvertise: flagEnv("ssh-advertise", "WARDYN_SSH_ADVERTISE", "", `externally-reachable host[:port] for the SSH gateway, shown in the run-detail "Connect via SSH" pane's ssh command; purely advisory copy (the gateway itself binds -ssh-listen, not this). Empty publishes NO address at all: /healthz reports an empty advertise_addr, the console pane has no host to show and "wardyn ssh" refuses with that message — so set this whenever the gateway is enabled`),

@@ -15,9 +15,15 @@ import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { SummaryHeader } from "./run-detail-summary-header";
 import { OperatorProvider } from "../wardyn/operator-context";
+import { waitingReauth } from "../wardyn/model-access-copy";
 import type { AgentRun, RunState } from "../../lib/types";
 import { TERMINAL_RUN_STATES } from "../../lib/types";
 import { RUN } from "../wardyn/copy";
+import {
+  CHIP_SETTING_UP,
+  CHIP_WAITING_FOR_MACHINE,
+  STARTING_CONTAINER_CREATING,
+} from "./run-status-detail";
 
 // SummaryHeader now renders a "Runs" breadcrumb <Link> (react-router-dom),
 // which throws outside a Router context — wrap every render the same way
@@ -249,6 +255,55 @@ describe("SummaryHeader — the who + what glyph pair", () => {
     expect(glyph()).toHaveAttribute("data-attention", "permission");
   });
 
+  // Finding 4 — "sandbox held" would send the person looking for an Approve
+  // button that does not exist for this kind. The chip names what they can do,
+  // and KEEPS THE COUNT (round-2 UX S8): a count-free string would hide a
+  // co-pending egress approval, so the person signs in and the run still sits.
+  it("a held run waiting on an AWS sign-in says so, and still counts the others", () => {
+    renderHeader(
+      // The run's OWNER (created_by "me") — "your sign-in" is true of them, and
+      // only of them.
+      <OperatorProvider operator principal="me">
+        <SummaryHeader
+          run={runningInteractive}
+          terminal={false}
+          pendingApprovalCount={2}
+          sandboxHeld
+          awaitingReauth
+          onKill={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText(waitingReauth(2))).toBeInTheDocument();
+    expect(screen.queryByText(/sandbox held/i)).not.toBeInTheDocument();
+    expect(waitingReauth(2)).toMatch(/1 more waiting/);
+    expect(waitingReauth(1)).toBe("Waiting for your AWS sign-in");
+  });
+
+  // W6-U SHOULD-1 — the same chip, read by somebody who is not the owner: an
+  // admin opening a member's held run, or a member under a shared-lane row
+  // whose own cockpit row says "ask your admin". Only the owner's sign-in
+  // clears the hold, so "your" was false on both.
+  it("…and says whose sign-in it is when the reader is NOT the owner", () => {
+    renderHeader(
+      <OperatorProvider operator principal="admin@corp">
+        <SummaryHeader
+          run={runningInteractive}
+          terminal={false}
+          pendingApprovalCount={1}
+          sandboxHeld
+          awaitingReauth
+          onKill={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    expect(screen.getByText(waitingReauth(1, false))).toBeInTheDocument();
+    expect(waitingReauth(1, false)).toBe("Waiting for the owner's AWS sign-in");
+    expect(screen.queryByText(waitingReauth(1))).not.toBeInTheDocument();
+    // The count clause is unchanged by the audience (round-2 UX S8).
+    expect(waitingReauth(3, false)).toMatch(/2 more waiting/);
+  });
+
   it("a pending approval that is NOT holding the sandbox reads as monitoring, not as a demand", () => {
     renderHeader(
       <OperatorProvider operator>
@@ -292,5 +347,75 @@ describe("SummaryHeader — the who + what glyph pair", () => {
       </OperatorProvider>,
     );
     expect(glyph()).toHaveAttribute("data-attention", "interrupted");
+  });
+});
+
+// 0.7.6 finding 6: a STARTING run says what it is waiting ON, in the header's
+// own short register. The 0.7.5 field report's estate watched an identical
+// "Starting" badge for 131 seconds twice and had no way to tell a first pull
+// from a hang.
+describe("SummaryHeader — the startup reason (finding 6)", () => {
+  const starting = (extra: Partial<AgentRun>): AgentRun => ({
+    ...runningInteractive,
+    state: "STARTING",
+    interactive: false,
+    ...extra,
+  });
+
+  it("carries the reason, in the SHORT register, with the sentence on the title", () => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader
+          run={starting({ status_detail: "agent: ContainerCreating", status_reason: "ContainerCreating" })}
+          terminal={false}
+          onKill={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    const chip = screen.getByText(CHIP_SETTING_UP);
+    expect(chip).toBeInTheDocument();
+    // The sentence is reachable, but never the chip's own text: at max-w-[160px]
+    // it would truncate to a restatement of the STARTING badge beside it.
+    expect(chip.closest("[title]")).toHaveAttribute("title", STARTING_CONTAINER_CREATING);
+    expect(screen.queryByText(STARTING_CONTAINER_CREATING)).toBeNull();
+  });
+
+  // review R-01/F1-F4's rule for the failure_hint chip applies here for the same
+  // reason: min-w-0 shrink lets it give up WIDTH, never existence. A `hidden …`
+  // waterfall step would hide the one sentence a waiting person is waiting for.
+  it("may never hide at any width", () => {
+    const { container } = renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader
+          run={starting({ status_detail: "pod: Unschedulable: no room", status_reason: "Unschedulable" })}
+          terminal={false}
+          onKill={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    const chip = screen.getByText(CHIP_WAITING_FOR_MACHINE).closest("[title]");
+    expect(chip).not.toBeNull();
+    expect(container.innerHTML).toContain(CHIP_WAITING_FOR_MACHINE);
+    expect(chip?.className ?? "").not.toMatch(/(^|\s)hidden(\s|$)/);
+    expect(chip?.className ?? "").toContain("shrink");
+  });
+
+  it("says NOTHING on a run that is no longer starting, even carrying a stale detail", () => {
+    renderHeader(
+      <OperatorProvider operator={true}>
+        <SummaryHeader
+          run={{
+            ...runningInteractive,
+            state: "COMPLETED",
+            status_detail: "agent: ContainerCreating",
+            status_reason: "ContainerCreating",
+          }}
+          terminal
+          onKill={() => {}}
+        />
+      </OperatorProvider>,
+    );
+    expect(screen.queryByText(CHIP_SETTING_UP)).toBeNull();
+    expect(screen.queryByText(STARTING_CONTAINER_CREATING)).toBeNull();
   });
 });

@@ -19,9 +19,11 @@ import { Button } from "../ui/button";
 import { AgentBadge, Chip, ConfinementChip, RunStateBadge } from "../wardyn/primitives";
 import { RunStateGlyph } from "../wardyn/run-state-glyph";
 import { RUN, RUN_COCKPIT } from "../wardyn/copy";
+import { waitingReauth } from "../../lib/reauth-waiting-copy";
 import { BarrierStrengthStrip } from "../wardyn/barrier-strength-strip";
 import { KillRunDialog } from "../wardyn/kill-run-dialog";
 import { useOperator, usePrincipal } from "../wardyn/operator-context";
+import { isTerminalStatusReason, statusDetailChip, statusDetailSentence } from "./run-status-detail";
 
 
 // Exported for the failure block (run-detail/failure-block.tsx), which states
@@ -56,6 +58,7 @@ export function SummaryHeader({
   exitCode,
   pendingApprovalCount = 0,
   sandboxHeld = false,
+  awaitingReauth = false,
   onCopyLink,
   linkCopied = false,
   onKill,
@@ -74,6 +77,12 @@ export function SummaryHeader({
   // decides). Computed by the parent with live-approvals.tsx's own exported
   // isHeld, so this chip and the strip under the terminal can never disagree.
   sandboxHeld?: boolean;
+  // At least one of those pending approvals is a mid-run AWS SIGN-IN request.
+  // It gets its own chip because "sandbox held" sends the person looking for an
+  // Approve button that does not exist for this kind — and because this is the
+  // one hold they can clear themselves. The count rides the sentence (round-2
+  // UX S8), so a co-pending egress approval is not hidden behind the sign-in.
+  awaitingReauth?: boolean;
   // Copy this run's permalink. The old screen had a Copy-link button in a
   // breadcrumb row that the command bar replaced; the affordance survives the
   // row it lived in.
@@ -99,6 +108,13 @@ export function SummaryHeader({
   const canAttach = operator || owned;
   const elapsed = useElapsed(run.created_at, run.updated_at, terminal);
   const shortId = run.id.replace(/^run_/, "");
+  // "" whenever there is nothing to say. The SERVER has already blanked
+  // status_detail for every run that is not STARTING (except a FAILED one whose
+  // reason IS the failure) — and the header gates on STARTING anyway, because a
+  // FAILED run's header already says why in the failure_hint chip below, and two
+  // chips narrating one ending is how a bar this crowded loses the one that
+  // matters.
+  const statusChip = run.state === "STARTING" ? statusDetailChip(run.status_detail, run.status_reason) : "";
 
   // review R-09: a stable e2e hook, scoping "Interactive"/"Fence" text
   // assertions to this bar rather than the whole page (both strings are
@@ -226,6 +242,27 @@ export function SummaryHeader({
 
       <RunStateBadge state={run.state} />
 
+      {/* 0.7.6 finding 6: what a STARTING run is waiting ON. The SHORT register
+          (statusDetailChip), never the sentence — this chip is max-w-[160px]
+          like failure_hint below, so the full sentence truncates to a
+          restatement of the badge right beside it ("Starting the sandbo…") and
+          the registry's own words, the entire point of a terminal reason, never
+          reach the screen. The sentence rides the `title`, where width is free.
+          Tone is `warning`, not `info`, when the reason is TERMINAL (round-2 UX
+          S9): an info chip on a start that is already over reads as progress.
+          Same min-w-0 shrink truncate + "may never hide at any width" treatment
+          as failure_hint — the server has already blanked status_detail for
+          every run this must not speak for. */}
+      {statusChip && (
+        <Chip
+          tone={isTerminalStatusReason(run.status_reason) ? "warning" : "info"}
+          className="min-w-0 max-w-[160px] shrink"
+          title={statusDetailSentence(run.status_detail, run.status_reason)}
+        >
+          <span className="block min-w-0 truncate">{statusChip}</span>
+        </Chip>
+      )}
+
       {/* A FAILED run said nothing about WHY anywhere in the console — the
           agent's exit code was CLI-only (wardyn run --wait). Stays visible at
           every width: it's the only place a FAILED run says why. */}
@@ -328,9 +365,13 @@ export function SummaryHeader({
           <Chip tone="warning" className="h-7 max-w-[130px] gap-1">
             <ShieldAlert className="size-3 shrink-0" />
             <span className="block min-w-0 truncate">
-              {sandboxHeld
-                ? RUN_COCKPIT.waitingHeld(pendingApprovalCount)
-                : RUN_COCKPIT.waiting(pendingApprovalCount)}
+              {awaitingReauth
+                ? /* `owned` — the chip says whose sign-in is awaited, and only
+                     the run's owner can give it (W6-U SHOULD-1). */
+                  waitingReauth(pendingApprovalCount, owned)
+                : sandboxHeld
+                  ? RUN_COCKPIT.waitingHeld(pendingApprovalCount)
+                  : RUN_COCKPIT.waiting(pendingApprovalCount)}
             </span>
           </Chip>
         )}

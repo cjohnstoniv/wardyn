@@ -13,6 +13,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"io"
 	"math/big"
@@ -559,5 +560,165 @@ func TestMITMCorpHost_DecisionCarriesRealPort(t *testing.T) {
 	}
 	if d.Decision != egress.Allow {
 		t.Fatalf("decision = %q, want allow", d.Decision)
+	}
+}
+
+// A hold that expires answers the SANDBOX with the modelled AWS credential
+// error, not the generic 502 a refresh failure gives — and leaves a decision row
+// that names the hold rather than a refresh failure.
+//
+// The two are different facts with different fixes: "the credential could not be
+// refreshed" is the operator's, "nobody signed in" is a person's. And the status
+// matters to the SDK: 502 is a transport error both AWS SDKs RETRY (three more
+// full holds for one lapse), UnauthorizedException is modelled and terminal.
+func TestMITMReauthTimeoutWrites401AndItsOwnDecision(t *testing.T) {
+	prevPoll := holdPollInterval
+	holdPollInterval = 5 * time.Millisecond
+	defer func() { holdPollInterval = prevPoll }()
+
+	// THE DECISION ROW IS NARROWER THAN THE 401 (security NIT-B). Every case
+	// below ends without a credential and every one of them earns the modelled
+	// 401 — the sandbox has to be told. Only ONE of them expired, and only that
+	// one may write credential:reauth-timeout, because that row is what an
+	// operator reads as "the owner had the whole window". A shutdown and a
+	// killed run did not have the whole window.
+	for _, tc := range []struct {
+		name     string
+		budget   string
+		steps    []approvalStep
+		shutdown bool // end the hold through the coordinator, as Shutdown does
+		wantRow  bool
+		sentence string
+	}{{
+		name:     "the budget really expired",
+		budget:   "10s", // the clamp's floor
+		steps:    pending(1),
+		wantRow:  true,
+		sentence: reauthTimedOutSentence,
+	}, {
+		name:     "the run was killed under the hold",
+		budget:   "1800s",
+		steps:    []approvalStep{{state: types.ApprovalCancelled, status: http.StatusOK}},
+		sentence: reauthEndedSentence,
+	}, {
+		name:     "the proxy shut down under the hold",
+		budget:   "1800s",
+		steps:    pending(1),
+		shutdown: true,
+		sentence: reauthEndedSentence,
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(envCredentialReauthTimeout, tc.budget)
+
+			// A control plane that asks for a human forever.
+			approvalID := uuid.New()
+			cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusLocked)
+				_, _ = w.Write([]byte(`{"state":"reauth_pending","approval_id":"` + approvalID.String() + `"}`))
+			}))
+			defer cp.Close()
+
+			inj := &injector{
+				byHost:    map[string]*injEntry{"portal.sso.eu-west-2.amazonaws.com": {grantID: uuid.New(), expiresAt: time.Now().Add(-time.Hour).UnixMilli()}},
+				base:      cp.URL,
+				token:     newTokenSource("tok"),
+				client:    cp.Client(),
+				reauth:    newReauthCoordinator(),
+				approvals: &fakeApprovalReader{steps: tc.steps},
+			}
+			t.Cleanup(inj.reauth.stop)
+			p, buf := newLocalRouteProxy(t, cp.URL, "RUNTOK", upstreamAddr(cp), inj, nil)
+
+			if tc.shutdown {
+				// The parked request is already waiting when the proxy stops.
+				go func() {
+					waitForWorkflowDeadline(t, inj.reauth)
+					inj.reauth.stop()
+				}()
+			}
+			req := httptest.NewRequest(http.MethodPost, "https://portal.sso.eu-west-2.amazonaws.com/federation/credentials", nil)
+			rec := httptest.NewRecorder()
+			p.serveMITMRequest(rec, req, "portal.sso.eu-west-2.amazonaws.com", 443)
+
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401 — a 502 is a transport error the SDK retries", rec.Code)
+			}
+			var body map[string]string
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("body is not JSON: %v; got %q", err, rec.Body.String())
+			}
+			if body["__type"] != "UnauthorizedException" {
+				t.Errorf("__type = %q, want UnauthorizedException", body["__type"])
+			}
+			if body["message"] != tc.sentence {
+				t.Errorf("message = %q, want %q — the body must not misstate WHY the hold ended", body["message"], tc.sentence)
+			}
+			// I8 — nothing credential-shaped in the body the sandbox reads.
+			if strings.Contains(rec.Body.String(), "Bearer") || strings.Contains(rec.Body.String(), approvalID.String()) {
+				t.Errorf("the refusal body leaked something it should not: %q", rec.Body.String())
+			}
+			_ = p.sink.close(context.Background())
+			switch got := strings.Count(buf.String(), ruleSourceCredentialReauthTimeout); {
+			case tc.wantRow && got != 1:
+				t.Errorf("%s rows = %d, want exactly 1: %s", ruleSourceCredentialReauthTimeout, got, buf.String())
+			case !tc.wantRow && got != 0:
+				t.Errorf("a hold that did NOT expire wrote %d %s row(s) — the trail claims the owner had the whole window: %s",
+					got, ruleSourceCredentialReauthTimeout, buf.String())
+			}
+		})
+	}
+}
+
+// A CLIENT THAT HUNG UP IS WRITTEN NOTHING — no 401, no deny row (security
+// SHOULD-1). The first shape ended the workflow with an expiry whenever its
+// first caller's ctx died, so a disconnect was recorded as "nobody signed in
+// before the hold expired" for a hold that still had minutes left, and every
+// other waiter was handed that terminal answer.
+func TestMITMReauthClientDisconnectWritesNothing(t *testing.T) {
+	prevPoll := holdPollInterval
+	holdPollInterval = 5 * time.Millisecond
+	defer func() { holdPollInterval = prevPoll }()
+	t.Setenv(envCredentialReauthTimeout, "1800s")
+
+	approvalID := uuid.New()
+	cp := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusLocked)
+		_, _ = w.Write([]byte(`{"state":"reauth_pending","approval_id":"` + approvalID.String() + `"}`))
+	}))
+	defer cp.Close()
+
+	inj := &injector{
+		byHost:    map[string]*injEntry{"portal.sso.eu-west-2.amazonaws.com": {grantID: uuid.New(), expiresAt: time.Now().Add(-time.Hour).UnixMilli()}},
+		base:      cp.URL,
+		token:     newTokenSource("tok"),
+		client:    cp.Client(),
+		reauth:    newReauthCoordinator(),
+		approvals: &fakeApprovalReader{steps: pending(1)}, // PENDING forever
+	}
+	t.Cleanup(inj.reauth.stop)
+	p, buf := newLocalRouteProxy(t, cp.URL, "RUNTOK", upstreamAddr(cp), inj, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
+	defer cancel()
+	req := httptest.NewRequest(http.MethodPost, "https://portal.sso.eu-west-2.amazonaws.com/federation/credentials", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	p.serveMITMRequest(rec, req, "portal.sso.eu-west-2.amazonaws.com", 443)
+
+	if rec.Body.Len() != 0 {
+		t.Errorf("a hung-up client was written %q", rec.Body.String())
+	}
+	_ = p.sink.close(context.Background())
+	if strings.Contains(buf.String(), ruleSourceCredentialReauthTimeout) {
+		t.Errorf("a disconnect was recorded as a hold expiry: %s", buf.String())
+	}
+	// …and the hold itself is UNTOUCHED: the owner may still be signing in, and
+	// the sandbox's next retry joins this same workflow.
+	inj.reauth.mu.Lock()
+	wf := inj.reauth.workflows[approvalID]
+	inj.reauth.mu.Unlock()
+	if wf == nil || wf.finished() {
+		t.Error("the disconnect ended the hold; the next retry would open a second one for the same lapse")
 	}
 }

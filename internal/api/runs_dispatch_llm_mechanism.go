@@ -43,8 +43,10 @@ const (
 	// would be a second spelling of a sentence that exists.
 	//
 	// DRAFT (M2 canon pending)
-	llmMechanismDeadSentence = "this run's model access is configured as %s, and that credential %s — " +
-		"sign in again under Settings → Model provider. Wardyn does not substitute a different model provider."
+	// The third %s is the REMEDY clause (llmMechanismRemedy): the destination is
+	// the one part of this sentence that depends on who is reading it.
+	llmMechanismDeadSentence = "this run's model access is configured as %s, and that credential %s — %s " +
+		"Wardyn does not substitute a different model provider."
 
 	// llmMechanismPinContradictedSentence is the refusal for a STORED AWS SSO
 	// session whose account/role the roster no longer allows. It is its own
@@ -61,7 +63,7 @@ const (
 	//
 	// DRAFT (M2 canon pending)
 	llmMechanismPinContradictedSentence = "this run's stored AWS sign-in is for account %s / role %s, but this agent now pins AWS sign-ins to account %s / role %s — " +
-		"nothing was started. Sign in to AWS again under Settings → Model provider to replace it. Wardyn does not rewrite a stored sign-in."
+		"nothing was started. To replace it, %s Wardyn does not rewrite a stored sign-in."
 
 	// llmMechanismStateNotConfigured is the state above when NOTHING credentials
 	// the run: the declared lane did not fire and no other one did either.
@@ -78,6 +80,42 @@ const (
 	//
 	// DRAFT (M2 canon pending)
 	llmMechanismStateNotTheLane = "is not the lane this run resolved to, which is %s"
+
+	// ── the REMEDY clause the three refusals above end on ──────────────────
+	//
+	// The destination is the one part of a refusal that depends on WHO is
+	// reading it, and until 0.7.6 there was one: "sign in again under Settings →
+	// Model provider". Under a per_user row that page's AWS button is
+	// admin-only (connection-cards.tsx's disabled={!operator}), so the sentence
+	// sent the member it was talking to — the only person who CAN repair their
+	// own captured session — to the one page that will not let them (UX round
+	// B1). The member's two real doors are the console's Getting started page
+	// and the model-access banner every screen now carries.
+
+	// llmMechanismRemedyPerUser is that member's destination. It names Getting
+	// started FIRST because that is the one door true on all three surfaces this
+	// sentence reaches (round-2 UX S5): the rail's 422, the failed run's block
+	// in focus mode — where the block owns the sign-in and the banner has no
+	// button — and the CLI, whose reader has no console banner at all. Sentence
+	// case, as the nav item and the page title are.
+	//
+	// DRAFT (M2 canon pending)
+	llmMechanismRemedyPerUser = "sign in to AWS from Getting started in the console, or from the sign-in banner the console shows on every page."
+
+	// llmMechanismRemedyShared is the ADMIN's destination, unchanged: under a
+	// shared row the one credential is theirs and Settings → Model provider is
+	// where they replace it.
+	//
+	// DRAFT (M2 canon pending)
+	llmMechanismRemedyShared = "sign in again under Settings → Model provider."
+
+	// llmMechanismRemedySharedFirst is the same destination without "again":
+	// "again" is a claim about the reader's past, and the not-configured arm is
+	// the one state that says nothing ever fired here (UX round B1's second
+	// half).
+	//
+	// DRAFT (M2 canon pending)
+	llmMechanismRemedySharedFirst = "sign in under Settings → Model provider."
 
 	// llmDetailBedrockExpired is the brokered-LLM 404's detail for a
 	// half-configured Bedrock deployment (see llmUnavailableDetail). %s = the
@@ -183,6 +221,35 @@ func mechanismSatisfied(row types.AgentProvider, selected types.AgentMechanism, 
 	return selected.ProviderType() == row.Mechanism.ProviderType()
 }
 
+// llmRefusalAuditReason is the MACHINE-READABLE class on the run.create/failure
+// audit row this gate writes: "the run was refused over a model credential".
+// Not copy — a wire value the console grades an ending by (lib/api/audit.ts's
+// CREDENTIAL_REASON), so it is not in the DRAFT block above and never changes
+// with the wording.
+//
+// Deliberately NOT narrowed to "a sign-in repairs it": the server states the
+// CLASS, and the console decides whether to offer a door from the same
+// model-access grading every other surface reads — a refusal whose renewal
+// merely did not complete ("launch again in a moment") grades live and gets no
+// button, correctly, without this key knowing anything about it.
+const llmRefusalAuditReason = "model_credential"
+
+// llmMechanismRemedy is the destination clause for one reader: the member's own
+// two doors under a per_user row, the admin's Settings page otherwise.
+//
+// `configured` is whether ANY lane fired — the one state where nothing ever
+// did is also the one where "again" would be false.
+func llmMechanismRemedy(perUser, configured bool) string {
+	switch {
+	case perUser:
+		return llmMechanismRemedyPerUser
+	case !configured:
+		return llmMechanismRemedySharedFirst
+	default:
+		return llmMechanismRemedyShared
+	}
+}
+
 // llmMechanismRefusal is the sentence for a declared lane that is not carrying
 // this run. It names BOTH lanes whenever there are two to name — the one the
 // admin declared and the one that actually resolved — and says only "is not
@@ -199,7 +266,8 @@ func llmMechanismRefusal(row types.AgentProvider, selected types.AgentMechanism,
 	if ok {
 		state = fmt.Sprintf(llmMechanismStateNotTheLane, llmMechanismWords[selected])
 	}
-	return fmt.Sprintf(llmMechanismDeadSentence, llmMechanismWords[row.Mechanism], state)
+	return fmt.Sprintf(llmMechanismDeadSentence, llmMechanismWords[row.Mechanism], state,
+		llmMechanismRemedy(row.CredentialSource == types.CredentialSourcePerUser, ok))
 }
 
 // pinContradictionRefusal is the sentence for a resolved Bedrock auth whose
@@ -208,13 +276,16 @@ func llmMechanismRefusal(row types.AgentProvider, selected types.AgentMechanism,
 // Shared by the dispatch gate and its create/Review twin for the file's own
 // reason: a fold that disagreed between them would refuse a run at launch that
 // create had just admitted.
-func pinContradictionRefusal(sc types.SiteConfig, b bedrockAuth) string {
+func pinContradictionRefusal(sc types.SiteConfig, b bedrockAuth, perUser bool) string {
 	stored, pinned, mismatch := bedrockBlobPinMismatch(sc, b)
 	if !mismatch {
 		return ""
 	}
+	// A stored session exists by construction here, so the remedy is always the
+	// "again" arm of its audience's clause.
 	return fmt.Sprintf(llmMechanismPinContradictedSentence,
-		stored.AccountID, stored.RoleName, pinned.AccountID, pinned.RoleName)
+		stored.AccountID, stored.RoleName, pinned.AccountID, pinned.RoleName,
+		llmMechanismRemedy(perUser, true))
 }
 
 // enforceConfiguredLLMMechanism fails a run CLOSED when the org declared HOW this
@@ -279,7 +350,7 @@ func (s *Server) enforceConfiguredLLMMechanism(ctx context.Context, run types.Ag
 	// reason awssso_pin.go opens with: the blob is baked verbatim into the
 	// sandbox's ~/.aws/config, so rewriting it would record a session nobody saw
 	// and merely move the IAM 403 back to run time.
-	msg := pinContradictionRefusal(sc, llm.bedrock)
+	msg := pinContradictionRefusal(sc, llm.bedrock, row.CredentialSource == types.CredentialSourcePerUser)
 	if msg == "" {
 		if mechanismSatisfied(row, selected, ok) {
 			return true
@@ -287,8 +358,17 @@ func (s *Server) enforceConfiguredLLMMechanism(ctx context.Context, run types.Ag
 		msg = llmMechanismRefusal(row, selected, ok, llm.bedrock.ssoRefreshFailure)
 	}
 	s.failAndRevoke(ctx, run.ID, types.RunStarting, msg)
+	// `reason` is what makes this refusal readable by a machine — the console
+	// grades the ending `credential` from it and offers the sign-in instead of
+	// directions to it (Finding 3). `mechanism` is the DECLARED lane, so that
+	// door binds to THIS run's lane: the reason covers every declared mechanism
+	// (an OpenAI row's refusal included), while the console's model_access
+	// grades Claude Code alone, and without the lane key a failed Codex run
+	// whose owner also lacks an AWS sign-in would be offered one.
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.create",
-		run.ID.String(), "failure", mustJSON(map[string]any{"error": msg})))
+		run.ID.String(), "failure", mustJSON(map[string]any{
+			"error": msg, "reason": llmRefusalAuditReason, "mechanism": string(row.Mechanism),
+		})))
 	return false
 }
 
@@ -360,8 +440,8 @@ type llmLanes struct {
 	// apiKey: the resolved spec already brokers an api_key grant for this
 	// agent's provider host — the operator's explicit api-key choice.
 	apiKey bool
-	// bedrock is the operator Bedrock posture resolved WITHOUT refresh: create is
-	// a dry run over a one-use rotating token.
+	// bedrock is the operator Bedrock posture; resolved WITH refresh only for the
+	// real launch (a dry run — preflight, the advisory — never spends the token).
 	bedrock bedrockAuth
 }
 
@@ -369,7 +449,7 @@ type llmLanes struct {
 // resolveLLMTransport's own lane block; the fold from lanes to a mechanism is
 // selectedMechanism, shared with dispatch.
 func (s *Server) resolveRunLLMLanes(ctx context.Context, req createRunRequest, spec *types.RunPolicySpec,
-	bedrockRef *types.WorkspaceBedrockRef, sso awsSSOScope,
+	bedrockRef *types.WorkspaceBedrockRef, sso awsSSOScope, refresh bool,
 ) llmLanes {
 	var l llmLanes
 	llmProv, _ := s.llmProviderFor(req.Agent)
@@ -381,10 +461,13 @@ func (s *Server) resolveRunLLMLanes(ctx context.Context, req createRunRequest, s
 	// tests subscription/managed before Bedrock) and refuse a run dispatch would
 	// have credentialed perfectly well.
 	//
-	// refresh=false: create is a dry run over a ONE-USE rotating token. An
-	// expired-but-renewable captured SSO session still reads READY here (dispatch
-	// renews it), so create never warns about — or refuses — a failure that
-	// cannot happen.
+	// refresh: the REAL launch passes true and redeems an expired-but-renewable
+	// captured SSO session right here, so the click is the check — a renewal
+	// AWS refuses is refused at create, before any run exists, instead of
+	// failing the run at dispatch after the person was told it launched (the
+	// 0.7.6 field report). Review's preflight and the create-path advisory pass
+	// false: dry runs over a ONE-USE rotating token, where an expired-but-
+	// renewable session still reads READY (dispatch renews it).
 	//
 	// modelRun is THIS RUN's own answer, hoisted so the Bedrock probe and the
 	// managed lane below cannot disagree (B2-F7). It used to be hard-coded true
@@ -396,7 +479,7 @@ func (s *Server) resolveRunLLMLanes(ctx context.Context, req createRunRequest, s
 	// launched by newStepRun, never decoded from a create body) — the same term
 	// llmMechanismGateApplies passes.
 	modelRun := isModelRun(req.TaskMode, req.WorkspaceID, nil, req.Interactive)
-	l.bedrock = s.resolveBedrockAuth(ctx, req.Agent, l.subscription, modelRun, false, bedrockRef, sso)
+	l.bedrock = s.resolveBedrockAuth(ctx, req.Agent, l.subscription, modelRun, refresh, bedrockRef, sso)
 	// The SAME predicate dispatch applies, with the same terms — including the
 	// posture term, whose absence here made every SSO deployment's managed run
 	// read as "subscription" at create and dispatch as something else.
@@ -432,7 +515,7 @@ func (s *Server) resolveRunLLMLanes(ctx context.Context, req createRunRequest, s
 //
 // Returns ok=false when it has already written the 422.
 func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseWriter, req createRunRequest,
-	spec types.RunPolicySpec, bedrockRef *types.WorkspaceBedrockRef, subject string, out *modelCredentialFacts,
+	spec types.RunPolicySpec, bedrockRef *types.WorkspaceBedrockRef, subject string, out *modelCredentialFacts, refresh bool,
 ) bool {
 	if !llmMechanismGateApplies(req) || s.cfg.Store == nil {
 		return true
@@ -453,7 +536,7 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 	// identity — never secretOwnerFromRequest, which answers "" for every
 	// operator and would refuse an admin their own per_user capture at create
 	// while dispatch resolved it fine.
-	lanes := s.resolveRunLLMLanes(ctx, req, &spec, bedrockRef, awsSSOScopeFor(sc, req.Agent, subject))
+	lanes := s.resolveRunLLMLanes(ctx, req, &spec, bedrockRef, awsSSOScopeFor(sc, req.Agent, subject), refresh)
 	selected, ok := s.selectedMechanism(req.Agent, lanes.subscription, lanes.bedrock, lanes.managed, lanes.apiKey)
 	if out != nil {
 		*out = gradeModelCredential(row, declared, lanes, selected, ok, s.subscriptionInjectEnabled())
@@ -464,16 +547,36 @@ func (s *Server) enforceCreateLLMMechanism(ctx context.Context, w http.ResponseW
 	// The stored-identity refusal first, exactly as dispatch orders it: this door
 	// exists so a run dispatch would refuse never boots at all, and a run whose
 	// stored AWS sign-in the roster no longer allows is one of them.
-	if msg := pinContradictionRefusal(sc, lanes.bedrock); msg != "" {
-		writeError(w, http.StatusUnprocessableEntity, msg)
+	if msg := pinContradictionRefusal(sc, lanes.bedrock, row.CredentialSource == types.CredentialSourcePerUser); msg != "" {
+		writeLLMRefusal(w, msg)
 		return false
 	}
 	if mechanismSatisfied(row, selected, ok) {
 		return true
 	}
-	// No ssoRefreshFailure at create: nothing here redeems a refresh token.
-	writeError(w, http.StatusUnprocessableEntity, llmMechanismRefusal(row, selected, ok, ""))
+	// The captured-SSO lane's own renewal verdict names the refusal when it has
+	// one (the real launch redeems here; a dry run never has one). A renewal AWS
+	// did not ANSWER is transient — the sign-in is still good — so that refusal
+	// carries no class: the console's launch door must not open over "launch
+	// again in a moment".
+	msg := llmMechanismRefusal(row, selected, ok, lanes.bedrock.ssoRefreshFailure)
+	if lanes.bedrock.ssoRefreshFailure == awsSSORefreshUnavailableSentence && row.Mechanism == types.AgentMechanismBedrockSSO {
+		writeError(w, http.StatusUnprocessableEntity, msg)
+		return false
+	}
+	writeLLMRefusal(w, msg)
 	return false
+}
+
+// writeLLMRefusal is the create-time model-credential refusal: the same 422 and
+// sentence as before, plus the class the console acts on — the New Run rail
+// opens the AWS sign-in on it and launches again once the capture lands, so a
+// lapsed session costs one dialog rather than a trip to Getting started by hand.
+// The class is the failure audit row's own word (llmRefusalAuditReason), not a
+// second vocabulary; it never names WHICH lane — the console reads the current
+// roster row for that, exactly as the failure block does.
+func writeLLMRefusal(w http.ResponseWriter, msg string) {
+	writeJSON(w, http.StatusUnprocessableEntity, errorBody{Error: msg, Reason: llmRefusalAuditReason})
 }
 
 // llmUnavailableDetail is what the proxy's brokered-LLM 404 says when this run

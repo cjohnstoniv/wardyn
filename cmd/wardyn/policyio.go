@@ -4,8 +4,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 
 	yaml "gopkg.in/yaml.v3"
 )
@@ -20,9 +22,18 @@ import (
 // map[string]interface{} (JSON-marshalable), so this one bridge covers both
 // formats and needs no extension/content sniff.
 func policyToJSON(raw []byte) ([]byte, error) {
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	var doc any
-	if err := yaml.Unmarshal(raw, &doc); err != nil {
+	if err := dec.Decode(&doc); err != nil && err != io.EOF {
 		return nil, fmt.Errorf("parse policy (accepts JSON or YAML): %w", err)
+	}
+	// A policy is one document; ignoring a trailing document can silently
+	// discard restrictions the operator intended to apply.
+	var extra yaml.Node
+	if err := dec.Decode(&extra); err == nil {
+		return nil, fmt.Errorf("policy input must contain exactly one document")
+	} else if err != io.EOF {
+		return nil, fmt.Errorf("parse policy after first document: %w", err)
 	}
 	out, err := json.Marshal(doc)
 	if err != nil {

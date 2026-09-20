@@ -394,6 +394,7 @@ export function RunDetailScreen() {
             exitCode={exitCodeFromAudit(endingEvents)}
             pendingApprovalCount={pending.length}
             sandboxHeld={pending.some(isHeld)}
+            awaitingReauth={pending.some((p) => p.kind === "credential_reauth")}
             onCopyLink={copyLink}
             linkCopied={copied}
             onKill={kill}
@@ -547,8 +548,16 @@ function Cockpit({
   // The SUPER-admin question, for the widget context: ConnectSSHCard reads it
   // itself, and RUN_WIDGETS.ssh.available has to ask the same one.
   const operator = useOperator();
+  // "blocked until an admin decides" is FALSE for a re-auth row (UX round B2):
+  // no admin decides it, and the person who can fix it is the credential's own
+  // owner. The kind is excluded from the predicate rather than the sentence
+  // reworded — a run whose ONLY pending row is a re-auth is not blocked on
+  // anyone's decision at all, and the strip's own heading says what it needs.
   const viewerBlocked =
-    pending.length > 0 && !securityOperator && !pending.some((p) => canDecideApproval(false, p.kind));
+    pending.length > 0 &&
+    !securityOperator &&
+    pending.some((p) => p.kind !== "credential_reauth") &&
+    !pending.some((p) => p.kind !== "credential_reauth" && canDecideApproval(false, p.kind));
 
   // The terminal widget's contents. Unchanged from the fixed-rail cockpit: the
   // session, and directly beneath it the approval that is HOLDING the session —

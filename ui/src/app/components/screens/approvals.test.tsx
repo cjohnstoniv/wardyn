@@ -8,6 +8,8 @@ import { act, render, screen, waitFor, fireEvent, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import type { ApprovalRequest, MeCapabilities } from "../../lib/types";
+import { ModelAccessProvider } from "../wardyn/model-access-context";
+import { REAUTH_ROW, REAUTH_TITLE } from "../wardyn/model-access-copy";
 
 // HIGH fix (error handling): approve/deny were unguarded awaits. A rejected
 // deny() must NOT leave the dialog's confirm button spinning forever, must
@@ -51,7 +53,14 @@ vi.mock("../../lib/api/approvals", () => {
               id: "apr_1",
               run_id: "run_1",
               kind: mockPendingKind,
-              requested_scope: { host: "api.example.com" },
+              // A credential_reauth row carries the lane and the SUBJECT whose
+              // sign-in resolves it — the wire fields reauthAudience grades the
+              // viewer against (approvals-reauth.test.tsx owns the four cells;
+              // this case is the owner's).
+              requested_scope:
+                mockPendingKind === "credential_reauth"
+                  ? { mechanism: "bedrock_sso", credential_source: "per_user", owner: "you@corp" }
+                  : { host: "api.example.com" },
               state: "PENDING",
               requested_at: new Date().toISOString(),
             } satisfies ApprovalRequest,
@@ -133,6 +142,37 @@ describe("ApprovalsScreen — deny error handling", () => {
     toastSuccess.mockClear();
     denyMock.mockReset();
     approveMock.mockReset();
+  });
+
+  // Finding 4 — a mid-run AWS sign-in request is a DOOR, not a decision. The
+  // Approve/Deny pair is REMOVED for the kind (a disabled pair would name a
+  // role that could decide it, and none can: the server answers 409 to either
+  // verb), the card is titled for what it asks rather than "Mint a scoped
+  // credential", and it carries NO blast-radius claim — nothing is granted.
+  it("renders the re-auth request as a door with its own title and no blast radius", async () => {
+    mockPendingKind = "credential_reauth";
+    render(
+      // The row's OWNER — the one viewer whose own sign-in clears it.
+      <OperatorProvider operator={false} securityOperator={false} principal="you@corp">
+        <MemoryRouter>
+          <ModelAccessProvider status={null} onRefresh={() => {}}>
+            <ApprovalsScreen />
+          </ModelAccessProvider>
+        </MemoryRouter>
+      </OperatorProvider>,
+    );
+    expect(await screen.findByText(REAUTH_TITLE)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Approve$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Deny$/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: REAUTH_ROW.ariaLabel })).toBeInTheDocument();
+    expect(screen.queryByText(/Mint a scoped credential/i)).not.toBeInTheDocument();
+    // The hint renders; the "Blast radius:" LABEL over it does not (UX ruling
+    // B3, general S4). The row grants nothing — it asks its owner to sign in
+    // again to a credential the deployment already configured — so a
+    // blast-radius label claimed a capability that does not exist.
+    expect(screen.getByText(REAUTH_ROW.hint)).toBeInTheDocument();
+    expect(screen.queryByText(/Blast radius/i)).not.toBeInTheDocument();
+    mockPendingKind = "credential";
   });
 
   it("surfaces a toast and re-enables the confirm button when deny() rejects", async () => {

@@ -261,7 +261,7 @@ func write(t *testing.T, dir, name, content string) string {
 // a spinner forever with a credential already captured. Both sides are read from
 // source (Go and TypeScript cannot share the constant).
 func TestSuccessMarker_UIParity(t *testing.T) {
-	uiPath := filepath.Join("..", "..", "ui", "src", "app", "components", "screens", "settings", "harness-login-pane.tsx")
+	uiPath := filepath.Join("..", "..", "ui", "src", "app", "components", "screens", "settings", "login-flows.tsx")
 	ts, err := os.ReadFile(uiPath)
 	if err != nil {
 		t.Fatalf("read %s: %v", uiPath, err)
@@ -570,7 +570,7 @@ func runHelperAgainst(t *testing.T, portal *awsssofake.Server, upload http.Handl
 // fail marker exists to fix, one level up: the pane would keep waiting for a
 // line this helper no longer prints.
 func TestFailMarker_UIParity(t *testing.T) {
-	uiPath := filepath.Join("..", "..", "ui", "src", "app", "components", "screens", "settings", "harness-login-pane.tsx")
+	uiPath := filepath.Join("..", "..", "ui", "src", "app", "components", "screens", "settings", "login-flows.tsx")
 	ts, err := os.ReadFile(uiPath)
 	if err != nil {
 		t.Fatalf("read %s: %v", uiPath, err)

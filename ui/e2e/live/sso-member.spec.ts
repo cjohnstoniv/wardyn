@@ -48,6 +48,12 @@
 import { expect, test } from "@playwright/test";
 import { MEMBER_MODE } from "../../src/app/components/wardyn/member-mode-banner";
 import { MEMBER_GETTING_STARTED, YOUR_MODEL_KEY } from "../../src/app/components/wardyn/copy";
+// 0.7.6 lanes ui-model-access-door and ui-new-run-model-access, handed over by
+// constant name in local/v076/canon/*-docs.md. Both modules are plain constant
+// tables with no CSS import — the rule ui/e2e/live/helpers.ts states for
+// SELFRUN_MARKER, and what keeps `playwright test --project=live --list` green.
+import { MODEL_ACCESS_BANNER, RAIL_MODEL_ACCESS } from "../../src/app/components/wardyn/model-access-copy";
+import { AGENTS } from "../../src/app/lib/workspace-providers-copy";
 import {
   ADMIN_EMAIL,
   ADMIN_TOKEN,
@@ -84,6 +90,112 @@ test("the admin declares the per-user Bedrock SSO lane and pins the account", as
   // included. This is the assertion the whole per_user design rests on.
   const adminAccess = await modelAccess(page);
   expect(adminAccess.state, "the admin who declared the lane must not inherit a credential").toBe("not_configured");
+  await dexSignOut(page);
+});
+
+// ── I — the strip, in the ONE window a member has never signed in ───────────
+
+test("I (model-access-banner): a never-signed-in member is told on every screen, not only on Getting Started", async ({
+  page,
+}) => {
+  // Finding 2, live, and THIS IS THE ONLY SEAT ON THE WALK THAT CAN PROVE IT.
+  //
+  // The plan hands case I to the recovery file, and the interactive half of it
+  // (open the door from the strip, sign in, the strip clears without a reload)
+  // lives there. The `not_configured` half cannot: the whole of that file runs
+  // AFTER the member's first capture, and nothing in the product deletes a
+  // member's stored session — makeMemberActionable() reaches `expired_signin`
+  // by contradicting the pin, which is a DIFFERENT sentence
+  // (MODEL_ACCESS_BANNER.EXPIRED). DELETE /setup/harness-credential is
+  // operator-only and scoped to the CALLER's own subject (harnesscred.go's
+  // handleHarnessDisconnect), so not even the walk's admin token can put the
+  // member back. So the first-run strip is asserted HERE, in the four seconds
+  // between the admin declaring the lane and the member signing in, and this
+  // case must stay BEFORE the capture and must not make one.
+  //
+  // It is read-only for that reason: the door is opened and DISMISSED. Under
+  // startURLManaged the pane opens in phase `intro` and only "Start login"
+  // sends POST /setup/harness-login (see the recovery file's case F), so
+  // nothing is launched and the member is still `not_configured` for the case
+  // below.
+  await dexSignIn(page, MEMBER_EMAIL);
+  expect((await modelAccess(page)).state, "case I must run before the member's first capture").toBe("not_configured");
+
+  // (1) THE RUNS BOARD — a screen that has never mentioned model access. The
+  // strip is a LAZY chunk behind a Suspense fallback of null (app-shell.tsx),
+  // and the door says nothing at all until /me has resolved the viewer, so this
+  // is awaited rather than read on the first frame.
+  await page.goto("/runs");
+  await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeVisible({ timeout: 60_000 });
+  // EXACT, and that is the finding-1 negative in miniature: the rail's own
+  // control carries the same LABEL under a different accessible name
+  // (RAIL_MODEL_ACCESS.SIGN_IN_ARIA), and Playwright's default name match is a
+  // substring — so a loose locator here would pass for the wrong control on the
+  // New Run screen below.
+  await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true })).toBeVisible();
+  // The first-run state is the one a person may set aside (it is not an error);
+  // never CLICKED here — the dismissal is per browser context and per subject,
+  // and swallowing it would make every later assertion in this case vacuous.
+  await expect(page.getByRole("button", { name: MODEL_ACCESS_BANNER.NOT_NOW })).toBeVisible();
+
+  // (2) IT IS THE SHELL'S BAND, NOT A SCREEN'S. Navigated client-side (what a
+  // <NavLink> click does) rather than with a second full load: a full load
+  // re-mounts the whole console and would prove only that the strip renders
+  // twice, not that it rides the shell across a navigation.
+  await page.evaluate(() => {
+    window.history.pushState({}, "", "/workspaces");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+  await expect(page).toHaveURL(/\/workspaces$/);
+  await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeVisible({ timeout: 60_000 });
+
+  // (3) THE DOOR OPENS IN PLACE — the sign-in itself, on the screen they were
+  // on, with no navigation.
+  await page.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true }).click();
+  await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByTestId("harness-login-pane")).toBeVisible({ timeout: 60_000 });
+  await expect(page).toHaveURL(/\/workspaces$/);
+  // …and out again, WITHOUT launching. Escape routes through the pane's own
+  // handle (model-access-banner.tsx's onOpenChange), which is a no-op on a pane
+  // that never got a run id.
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("harness-login-pane")).toHaveCount(0);
+
+  // (4) NEW RUN — finding 1, in the state the rail was silent for. The rail
+  // CLAIMS the door while it renders its own control, so the strip keeps its
+  // sentence and drops its button: two controls named the same thing on one
+  // screen is the defect U-13 already fixed once.
+  await page.goto("/runs/new");
+  await page.getByRole("radio", { name: /^Autonomous/ }).click();
+  await expect(page.getByText(RAIL_MODEL_ACCESS.NOT_SIGNED_IN)).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeVisible();
+  await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true })).toHaveCount(0);
+  // THE FINDING-1 NEGATIVE, and it is live evidence that came back as a fix.
+  //
+  // Part 1 of this lane could not assert it: `setupBedrock` grades `llm_ready`
+  // through the CALLER's own per-user AWS scope, so a member who has never
+  // signed in reads SSOPresent=false -> Ready=false -> llm_ready=false ->
+  // showModelWarning=true, and the rail stacked "No model provider is
+  // connected" — false on a deployment whose admin row plainly exists — under
+  // the true new sentence. The walk found it, fc8e2860 fixed it (the
+  // per-person line SUPERSEDES the deployment one whenever both would render),
+  // and this is the assertion that keeps it fixed. The deployment sentence
+  // still covers every other no-model-path shape; it simply does not speak
+  // over a more specific true one.
+  await expect(page.getByText(RAIL_MODEL_ACCESS.NO_PROVIDER)).toHaveCount(0);
+
+  // (5) THE ONE SUPPRESSION A MEMBER GETS, and the one they deliberately do
+  // NOT. Getting Started IS the door, so the strip is withheld there — the card
+  // below is what says it instead.
+  await page.goto("/setup");
+  await expect(page.getByText(YOUR_MODEL_KEY.NOT_SIGNED_IN_CHIP).first()).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toHaveCount(0);
+  // …and on /settings a MEMBER keeps it, deliberately: that card's AWS button
+  // is admin-only, so hiding the strip there would strand exactly the person a
+  // refusal sends to the page (the suppression is operator-only —
+  // model-access-banner.tsx's `suppressed`).
+  await page.goto("/settings");
+  await expect(page.getByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeVisible({ timeout: 60_000 });
   await dexSignOut(page);
 });
 

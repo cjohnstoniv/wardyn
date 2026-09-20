@@ -118,8 +118,15 @@ func sinkReservedSecret(name string) bool {
 // the sinks: a subscription/managed policy legitimately names the sentinel in an
 // api_key grant, which validateInlineSecretRefs and the injection sink allow via
 // the provider switch (oauthProviderForSentinel), which runs AFTER this guard.
+//
+// types.AWSSSOAccessTokenSecret (0.7.6) is the THIRD sentinel and is here for
+// the identical reason: resolveAWSSSOInjection resolves it from the captured
+// AWS SSO blob, so a value Put under that name would be silently shadowed. It
+// is likewise NOT in sinkReservedSecret — being resolved at that sink is the
+// whole point.
 func secretsAPIReserved(name string) bool {
-	return reservedSecret(name) || name == types.SubscriptionOAuthSecret || name == types.ManagedOAuthSecret
+	return reservedSecret(name) || name == types.SubscriptionOAuthSecret ||
+		name == types.ManagedOAuthSecret || name == types.AWSSSOAccessTokenSecret
 }
 
 type putSecretRequest struct {

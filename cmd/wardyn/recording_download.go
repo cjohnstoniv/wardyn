@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -63,8 +64,9 @@ func runRecordingCmd(client clientFn) *cobra.Command {
 			// much later somewhere else. finalizePartFile makes the rename
 			// atomic on the same directory, so outPath either does not exist or
 			// is the whole file.
-			partPath := outPath + ".part"
-			f, err := os.Create(partPath)
+			// A private, unique sibling cannot overwrite a pre-existing .part
+			// or share its inode with another concurrent download.
+			f, err := os.CreateTemp(filepath.Dir(outPath), ".wardyn-recording-*.part")
 			if err != nil {
 				return err
 			}
@@ -76,7 +78,7 @@ func runRecordingCmd(client clientFn) *cobra.Command {
 			if closeErr := f.Close(); copyErr == nil {
 				copyErr = closeErr
 			}
-			if err := finalizePartFile(partPath, outPath, copyErr); err != nil {
+			if err := finalizePartFile(f.Name(), outPath, copyErr); err != nil {
 				return fmt.Errorf("recording download for run %s did not complete: %w", id, err)
 			}
 			fmt.Fprintf(os.Stderr, "wrote %s\n", outPath)
@@ -89,7 +91,7 @@ func runRecordingCmd(client clientFn) *cobra.Command {
 	return rec
 }
 
-// finalizePartFile finishes a "<path>.part" temp file that already exists on
+// finalizePartFile finishes a temporary sibling file that already exists on
 // disk (its writer/encoder is already fully closed by the caller): if err is
 // non-nil, partPath is removed and err is returned unchanged; otherwise
 // partPath is renamed to path (atomic on the same directory), and a rename

@@ -290,14 +290,22 @@ services:
       # UNREACHABLE, not "off" (docs/ENV.md WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS
       # / WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS / WARDYN_LLM_SCAN already
       # documents the container-runner forward; this is the missing host hop).
-      # Empty default in all three: each var's own reader (cmd/wardyn-proxy's
+      # Empty default in all of them: each var's own reader (cmd/wardyn-proxy's
       # WARDYN_LLM_SCAN switch, internal/egress/proxy.branchNSSwitch) treats an
-      # unset OR explicitly-empty value as "leave the compiled default", so
+      # unset OR explicitly-empty value as "leave the compiled default" — the
+      # re-auth hold's budget included (credentialReauthBudget clamps and falls
+      # back on anything it cannot parse) — so
       # `docker run -e VAR` / an unset host var / a compose `VAR=` passthrough
       # are indistinguishable and all resolve to the same safe default.
       WARDYN_LLM_SCAN: "${WARDYN_LLM_SCAN:-}"
       WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS: "${WARDYN_GIT_BROKER_ENFORCE_BRANCH_NS:-}"
       WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS: "${WARDYN_GIT_PAT_BROKER_ENFORCE_BRANCH_NS:-}"
+      WARDYN_CREDENTIAL_REAUTH_TIMEOUT: "${WARDYN_CREDENTIAL_REAUTH_TIMEOUT:-}"
+      # Phase B kill switch (docs/OPERATIONS.md "Turning the lane off"): "off"
+      # restores the pre-0.7.6 behaviour for NEW dispatches only. Empty
+      # default lands on flagEnv's own compiled default ("on") like every
+      # other empty passthrough above.
+      WARDYN_AWS_SSO_PROXY_INJECT: "${WARDYN_AWS_SSO_PROXY_INJECT:-}"
       WARDYN_CONTROL_PLANE_URL: "http://wardynd:8080"
       # Devcontainer image builds — ON by default on the compose stack: the
       # wizard's DEFAULT card is "Recommended — built for this workspace", and a
@@ -342,9 +350,11 @@ services:
       # Runner tools the finalize stage layers onto built images — shipped IN
       # the wardynd image (Dockerfile.wardynd), so this is zero-config too.
       WARDYN_ENVBUILD_TOOLS_DIR: "${WARDYN_ENVBUILD_TOOLS_DIR:-/wardyn-tools}"
-      # CC1 (runc) demo policy: plain Docker hosts without gVisor (CC2) can still
-      # launch runs. Override with WARDYN_DEFAULT_POLICY=/examples/policies/default.json
-      # on a CC2-capable host (the default.json policy demands CC2).
+      # CC1 (runc) demo policy — both example policies float at CC1 as of
+      # 0.7.8, so a run now defaults to the strongest class the host actually
+      # advertises regardless of which one is loaded. Override with
+      # WARDYN_DEFAULT_POLICY=/examples/policies/default.json for its wider
+      # allowed-domains list, not for confinement.
       WARDYN_DEFAULT_POLICY: "${WARDYN_DEFAULT_POLICY:-/examples/policies/demo.json}"
       # Corporate CA trust (docs/ENV.md): a PATH to a PEM bundle of additional
       # trusted roots — e.g. a file under the WARDYN_MANAGED_DIR mount below.

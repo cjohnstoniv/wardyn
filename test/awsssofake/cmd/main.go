@@ -24,6 +24,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,6 +39,17 @@ func main() {
 	// be settable from the same place the manifest sets everything else.
 	accounts := flag.String("accounts", envOr("AWSSSOFAKE_ACCOUNTS", ""),
 		`entitlement fixture as JSON, e.g. [{"account_id":"222222222222","roles":["WardynDev"]}] (empty = the package default, one account 111111111111/AdministratorAccess)`)
+	// The 0.7.6 re-auth knobs. Durations, so a manifest can say "12m" rather
+	// than a second unit nobody can read back.
+	tokenTTL := flag.Duration("token-ttl", envDuration("AWSSSOFAKE_TOKEN_TTL"),
+		"lifetime CreateToken advertises for the access token (0 = the 3600s default). 12m is what the mid-run re-auth walk uses: the hold is reachable only when the proxy re-resolves, inside injectRefreshMargin of expiry")
+	roleCredTTL := flag.Duration("role-cred-ttl", envDuration("AWSSSOFAKE_ROLE_CRED_TTL"),
+		"lifetime of each GetRoleCredentials answer, stamped PER CALL (0 = one absolute expiry fixed at construction). 3m is what the walk uses: it makes the sandbox SDK re-call portal.sso at roughly T+3/6/9")
+	reauthAfter := flag.Int("reauth-after", envInt("AWSSSOFAKE_REAUTH_AFTER"),
+		"retire the session on the Nth REFRESH redemption: CreateToken then answers invalid_grant, the shape a consumed grant really has (0 = never). Also settable at runtime: POST /_control/reauth?after=N")
+	tlsCert := flag.String("tls-cert", envOr("AWSSSOFAKE_TLS_CERT", ""),
+		"serve HTTPS with this certificate (PEM). With -tls-key, it makes the fake's lane PRODUCTION-SHAPED: a TLS CONNECT the proxy terminates, so header injection, CA trust and the timeout body are exercised instead of simulated")
+	tlsKey := flag.String("tls-key", envOr("AWSSSOFAKE_TLS_KEY", ""), "private key (PEM) for -tls-cert")
 	flag.Parse()
 
 	s, h := awsssofake.NewHandler()
@@ -67,16 +79,70 @@ func main() {
 	// Nothing here is deciding anything security-relevant: an unsigned fake that
 	// mints fixture credentials has no approval to withhold.
 	s.Approve()
+	s.SetTokenTTL(*tokenTTL)
+	s.SetRoleCredTTL(*roleCredTTL)
+	s.SetReauthAfter(*reauthAfter)
 
 	srv := &http.Server{
 		Addr:              *addr,
 		Handler:           h,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	// TLS when the operator supplied a pair, for a client that speaks TLS inside
+	// its tunnel; a client that speaks plain HTTP inside the tunnel (the real SDK)
+	// is served by the terminator either way. On the un-terminated plain forward
+	// lane injection errors are swallowed (that client sees the fake's own 401), so the timeout's 401
+	// UnauthorizedException body and the MITM path that writes it are only
+	// exercised over a TLS CONNECT the proxy terminates.
+	if *tlsCert != "" || *tlsKey != "" {
+		if *tlsCert == "" || *tlsKey == "" {
+			log.Fatalf("awsssofake: -tls-cert and -tls-key must be given together")
+		}
+		logEffective(*addr, *tokenTTL, *roleCredTTL, *reauthAfter, true)
+		log.Printf("awsssofake: serving sso-oidc + sso portal + bedrock-runtime stub over TLS on %s", *addr)
+		if err := srv.ListenAndServeTLS(*tlsCert, *tlsKey); err != nil {
+			log.Fatalf("awsssofake: %v", err)
+		}
+		return
+	}
+	logEffective(*addr, *tokenTTL, *roleCredTTL, *reauthAfter, false)
 	log.Printf("awsssofake: serving sso-oidc + sso portal + bedrock-runtime stub on %s", *addr)
 	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("awsssofake: %v", err)
 	}
+}
+
+// envDuration reads a duration knob. An ABSENT one is 0 (the default); a
+// MALFORMED one is fatal, naming the variable and the value.
+//
+// It used to swallow both alike, "because a test fake must not refuse to start
+// over a typo in a manifest" — which had it exactly backwards. A fake that
+// silently ignores the TTL it was given still serves, so the typo surfaces ten
+// minutes later as a walk case failing with "no hold" and nothing anywhere
+// saying the knob was never read. Refusing at startup costs one restart and
+// names the cause; the alternative costs a walk and a root-cause hunt.
+func envDuration(key string) time.Duration {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d < 0 {
+		log.Fatalf("awsssofake: %s=%q is not a non-negative duration (e.g. 90s, 5m): %v", key, raw, err)
+	}
+	return d
+}
+
+func envInt(key string) int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 {
+		log.Fatalf("awsssofake: %s=%q is not a non-negative integer: %v", key, raw, err)
+	}
+	return n
 }
 
 func envOr(key, def string) string {
@@ -84,4 +150,14 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// logEffective prints the knobs this process ACTUALLY resolved, once, at
+// startup. Without it the only way to tell a knob that was read from one that
+// was ignored is to watch the behaviour it was supposed to change — which is
+// the ten-minute feedback loop this line replaces. 0 means "the built-in
+// default", which is what an absent knob resolves to.
+func logEffective(addr string, tokenTTL, roleCredTTL time.Duration, reauthAfter int, tls bool) {
+	log.Printf("awsssofake: effective knobs addr=%s tls=%t token_ttl=%s role_cred_ttl=%s reauth_after=%d "+
+		"(0 = the built-in default)", addr, tls, tokenTTL, roleCredTTL, reauthAfter)
 }

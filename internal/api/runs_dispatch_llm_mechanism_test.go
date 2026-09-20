@@ -5,6 +5,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -381,11 +382,12 @@ func TestLLMMechanismRefusal_NamesBothLanes(t *testing.T) {
 	if strings.Contains(mismatch, llmMechanismStateNotConfigured) {
 		t.Errorf("mismatch refusal %q calls a working credential unconfigured", mismatch)
 	}
-	if got := llmMechanismRefusal(row, "", false, awsSSORefreshSpentSentence); got != awsSSORefreshSpentSentence {
+	spent := awsSSORefreshSpentRefusal(false)
+	if got := llmMechanismRefusal(row, "", false, spent); got != spent {
 		t.Errorf("a renewal failure must carry its own sentence, got %q", got)
 	}
 	// Another declared lane's refusal must not borrow the SSO sentence.
-	if got := llmMechanismRefusal(apiKeyRow, "", false, awsSSORefreshSpentSentence); got == awsSSORefreshSpentSentence {
+	if got := llmMechanismRefusal(apiKeyRow, "", false, spent); got == spent {
 		t.Error("an api-key row must not report an AWS SSO renewal failure")
 	}
 	// Every closed mechanism has words: a refusal must never name an empty lane.
@@ -438,7 +440,7 @@ func TestEnforceCreateLLMMechanism_RefusesBeforeARunExists(t *testing.T) {
 			srv := New(cfg)
 			rec := httptest.NewRecorder()
 
-			ok := srv.enforceCreateLLMMechanism(context.Background(), rec, c.req, types.RunPolicySpec{}, nil, "", nil)
+			ok := srv.enforceCreateLLMMechanism(context.Background(), rec, c.req, types.RunPolicySpec{}, nil, "", nil, true)
 			if ok == c.wantRefused {
 				t.Fatalf("admitted = %v, want refused = %v (body %q)", ok, c.wantRefused, rec.Body.String())
 			}
@@ -451,6 +453,14 @@ func TestEnforceCreateLLMMechanism_RefusesBeforeARunExists(t *testing.T) {
 			if !strings.Contains(rec.Body.String(), "does not substitute a different model provider") {
 				t.Errorf("body = %q, want the declared-mechanism refusal", rec.Body.String())
 			}
+			// The class the console acts on: the New Run rail opens the AWS
+			// sign-in on it and launches again once the capture lands.
+			var body struct {
+				Reason string `json:"reason"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body.Reason != llmRefusalAuditReason {
+				t.Errorf("reason = %q (err %v), want %q", body.Reason, err, llmRefusalAuditReason)
+			}
 		})
 	}
 }
@@ -460,13 +470,28 @@ func TestEnforceCreateLLMMechanism_RefusesBeforeARunExists(t *testing.T) {
 // widget's only join key), and it is absent — not empty — when nothing narrowed.
 func TestCreateRunAuditData_CarriesClampWarnings(t *testing.T) {
 	warns := []string{"resources capped to operator maximum", `dropped 1 egress domain(s) not in operator allowlist: ["evil.example"]`}
-	data := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), "jti", warns)
+	data := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), types.ConfinementClass("CC2"), "jti", warns)
 	got, ok := data["clamp_warnings"].([]string)
 	if !ok || len(got) != len(warns) || got[0] != warns[0] {
 		t.Fatalf("clamp_warnings = %#v, want %#v", data["clamp_warnings"], warns)
 	}
-	if _, present := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), "jti", nil)["clamp_warnings"]; present {
+	if _, present := createRunAuditData(createRunRequest{Agent: "claude-code"}, nil, types.ConfinementClass("CC2"), types.ConfinementClass("CC2"), "jti", nil)["clamp_warnings"]; present {
 		t.Error("clamp_warnings must be absent when launch narrowed nothing")
+	}
+}
+
+// TestCreateRunAuditData_ConfinementSource is 0.7.8: reqCC ("" for an
+// unspecified request) is what decides confinement_source, never enforced —
+// enforced alone cannot tell a caller who asked for CC1 apart from a runner
+// that only had CC1 to offer, and the audit row is the one place that
+// distinction survives (docs/AUDIT-ACTIONS.md's run.create row).
+func TestCreateRunAuditData_ConfinementSource(t *testing.T) {
+	req := createRunRequest{Agent: "claude-code"}
+	if got := createRunAuditData(req, nil, types.CC1, "", "jti", nil)["confinement_source"]; got != "defaulted" {
+		t.Errorf("confinement_source = %v, want \"defaulted\" for an empty reqCC", got)
+	}
+	if got := createRunAuditData(req, nil, types.CC1, types.CC1, "jti", nil)["confinement_source"]; got != "requested" {
+		t.Errorf("confinement_source = %v, want \"requested\" when the caller named CC1 explicitly", got)
 	}
 }
 
@@ -689,5 +714,144 @@ func TestResolveLLMInjections_RefusesBeforeResolvingAnySSOScope(t *testing.T) {
 	}
 	if len(sandboxEnv) != 0 {
 		t.Errorf("the refused run had credential env staged anyway: %v", sandboxEnv)
+	}
+}
+
+// TestEnforceConfiguredLLMMechanism_AuditsTheCredentialReason is Finding 3's
+// server half: the dispatch refusal is a complete sentence with no
+// machine-readable class, so the console could only render it as prose under
+// ending kind `unknown`. The class is one map key on the audit row the refusal
+// ALREADY writes — no column, no new action — plus the DECLARED lane, so the
+// console's door binds to the run's own mechanism rather than to whatever the
+// viewer's Claude Code row happens to say today.
+func TestEnforceConfiguredLLMMechanism_AuditsTheCredentialReason(t *testing.T) {
+	h := newHarness(t)
+	st := &mechanismGateStore{}
+	cfg := Config{}
+	cfg.Identity, cfg.Audit, cfg.Store = h.idp, h.audit, st
+	srv := New(cfg)
+	run := types.AgentRun{ID: uuid.New(), Agent: "claude-code", Task: "ship it", State: types.RunStarting}
+	sc := agentRoster(perUserAWSRow())
+	policy := &types.RunPolicySpec{AllowedDomains: []string{"git.example.com"}}
+	llm := srv.resolveLLMTransport(context.Background(), run, policy, map[string]string{},
+		nil, false, "", "http://wardyn-proxy:3128", nil, awsSSOScope{perUser: true, owner: "member@corp.example"})
+
+	if srv.enforceConfiguredLLMMechanism(context.Background(), run, sc, llm, nil) {
+		t.Fatal("a per_user row with no captured session must refuse the dispatch")
+	}
+
+	var data map[string]any
+	var found bool
+	for _, ev := range h.audit.events {
+		if ev.Action != "run.create" || ev.Outcome != "failure" {
+			continue
+		}
+		found = true
+		if err := json.Unmarshal(ev.Data, &data); err != nil {
+			t.Fatalf("audit data: %v", err)
+		}
+	}
+	if !found {
+		t.Fatalf("no run.create/failure row in %d audit events", len(h.audit.events))
+	}
+	if data["reason"] != llmRefusalAuditReason {
+		t.Errorf("reason = %v, want %q — the console grades the ending from this key", data["reason"], llmRefusalAuditReason)
+	}
+	if data["mechanism"] != string(types.AgentMechanismBedrockSSO) {
+		t.Errorf("mechanism = %v, want the DECLARED lane %q", data["mechanism"], types.AgentMechanismBedrockSSO)
+	}
+	// The sentence itself is unchanged in kind: still the whole refusal, still
+	// under `error`, because that is what the run's failure_hint and the CLI
+	// both print.
+	if s, _ := data["error"].(string); !strings.Contains(s, "does not substitute a different model provider") {
+		t.Errorf("error = %q, want the refusal sentence", s)
+	}
+}
+
+// TestEnforceCreateLLMMechanism_AuditsNothing: the 422 twin refuses BEFORE a run
+// row exists, so there is no run to audit against and no `credential` ending for
+// the console to grade — the rail renders the same sentence at the click. Pinned
+// because the client's grading rule ("a run.create failure carrying this
+// reason") would quietly acquire a second, run-less source if this ever emitted.
+func TestEnforceCreateLLMMechanism_AuditsNothing(t *testing.T) {
+	h := newHarness(t)
+	st := &mechanismGateStore{sc: agentRoster(perUserAWSRow())}
+	cfg := bedrockBearerCfg()
+	cfg.Identity, cfg.Audit, cfg.Store = h.idp, h.audit, st
+	srv := New(cfg)
+	rec := httptest.NewRecorder()
+
+	if srv.enforceCreateLLMMechanism(context.Background(), rec, createRunRequest{Agent: "claude-code", Task: "ship it"},
+		types.RunPolicySpec{}, nil, "member@corp.example", nil, true) {
+		t.Fatal("a per_user row with no captured session must refuse at create")
+	}
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422", rec.Code)
+	}
+	for _, ev := range h.audit.events {
+		if ev.Action == "run.create" {
+			t.Fatalf("create-time refusal audited %s/%s; it must not", ev.Action, ev.Outcome)
+		}
+	}
+}
+
+// TestLLMMechanismRemedy_TheDestinationIsThePersonsOwnDoor pins UX round B1: the
+// refusal used to send every reader to "Settings → Model provider", which is the
+// ADMIN's page — under a per_user row its AWS button is admin-only, so the one
+// person who could repair their own captured session was sent to the one page
+// that will not let them. Asserted THROUGH the constants; the sentences are
+// DRAFT until M2 canon rules them.
+func TestLLMMechanismRemedy_TheDestinationIsThePersonsOwnDoor(t *testing.T) {
+	sharedRow := types.AgentProvider{
+		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
+		CredentialSource: types.CredentialSourceShared,
+	}
+
+	// The dispatch/create refusal, per_user: the member's own two doors.
+	perUserDead := llmMechanismRefusal(perUserAWSRow(), "", false, "")
+	if !strings.Contains(perUserDead, llmMechanismRemedyPerUser) {
+		t.Errorf("per_user refusal = %q, want the member's own destination %q", perUserDead, llmMechanismRemedyPerUser)
+	}
+	if strings.Contains(perUserDead, "Settings → Model provider") {
+		t.Errorf("per_user refusal = %q, must not send a member to the admin's page", perUserDead)
+	}
+
+	// Shared: the admin's page stays, and "again" is dropped for the one arm
+	// where nothing ever fired here.
+	sharedNothing := llmMechanismRefusal(sharedRow, "", false, "")
+	if !strings.Contains(sharedNothing, llmMechanismRemedySharedFirst) || strings.Contains(sharedNothing, "sign in again") {
+		t.Errorf("shared not-configured refusal = %q, want %q with no \"again\"", sharedNothing, llmMechanismRemedySharedFirst)
+	}
+	sharedWrongLane := llmMechanismRefusal(sharedRow, types.AgentMechanismAnthropicAPIKey, true, "")
+	if !strings.Contains(sharedWrongLane, llmMechanismRemedyShared) {
+		t.Errorf("shared wrong-lane refusal = %q, want %q", sharedWrongLane, llmMechanismRemedyShared)
+	}
+
+	// The stored-identity refusal carries the same clause: the blob it names is
+	// the member's own.
+	sc := agentRoster(types.AgentProvider{
+		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO, CredentialSource: types.CredentialSourcePerUser,
+		SSOStartURL: perUserPortal, SSOAccountID: "222222222222", SSORoleName: "New",
+	})
+	// ssoInject: only the captured-SSO lane carries a stored identity for a
+	// roster pin to disagree with (bedrockBlobPinMismatch).
+	b := bedrockAuth{ssoInject: true, ssoAccountID: "111111111111", ssoRoleName: "Old"}
+	pin := pinContradictionRefusal(sc, b, true)
+	if pin == "" {
+		t.Fatal("a stored pair the roster no longer pins must refuse")
+	}
+	if !strings.Contains(pin, llmMechanismRemedyPerUser) {
+		t.Errorf("per_user pin refusal = %q, want %q", pin, llmMechanismRemedyPerUser)
+	}
+	if !strings.Contains(pinContradictionRefusal(sc, b, false), llmMechanismRemedyShared) {
+		t.Errorf("shared pin refusal = %q, want %q", pinContradictionRefusal(sc, b, false), llmMechanismRemedyShared)
+	}
+
+	// And the spent-renewal sentence — the one the field report quoted.
+	if !strings.Contains(awsSSORefreshSpentRefusal(true), llmMechanismRemedyPerUser) {
+		t.Errorf("per_user spent refusal = %q, want %q", awsSSORefreshSpentRefusal(true), llmMechanismRemedyPerUser)
+	}
+	if !strings.Contains(awsSSORefreshSpentRefusal(false), llmMechanismRemedyShared) {
+		t.Errorf("shared spent refusal = %q, want %q", awsSSORefreshSpentRefusal(false), llmMechanismRemedyShared)
 	}
 }

@@ -229,7 +229,9 @@ const SESSION_CHECK_MS = 15 * 1000;
 // the second.
 export type SessionExpiryState = "none" | "soon" | "expired";
 // DRAFT (M2 canon pending) — F3-F11's two new arms (was one string, "soon" only).
-const SESSION_EXPIRY_COPY = {
+// Exported so a suite asserting the banner STACK's order reads the shipped
+// sentence rather than a second, hand-copied one.
+export const SESSION_EXPIRY_COPY = {
   soon: ["Your session is expiring soon.", "to avoid losing your place."],
   expired: ["Your session has expired.", "to get back in."],
 } as const;
@@ -364,6 +366,16 @@ const FocusContext = React.createContext<FocusMode>({
 export function useFocusMode(): FocusMode {
   return React.useContext(FocusContext);
 }
+
+// LAZY, like every route in App.tsx and for the same dependency: the strip
+// carries the AWS sign-in dialog and the whole AGENTS copy table behind it, and
+// this file is in the ENTRY chunk — imported statically it put 17 kB of copy
+// into the first paint of every screen (bundle-split.test.ts's entry budget).
+// `fallback={null}`: the band is a notification, so a frame without it reads as
+// "nothing to say", which is what it renders in the common case anyway.
+const ModelAccessBanner = React.lazy(() =>
+  import("../wardyn/model-access-banner").then((m) => ({ default: m.ModelAccessBanner })),
+);
 
 const navLinkClass = (isActive: boolean) =>
   cn(
@@ -621,6 +633,21 @@ export function AppShell({
                 <span>{SESSION_EXPIRY_COPY[sessionExpiry][1]}</span>
               </div>
             )}
+            {/* LAST in the stack, and not hidden in focus mode: a dead control
+          plane, an unknown identity and a dying session are each the better
+          explanation of what you are looking at and are read first — but this
+          one is the only band that carries its own repair, and 0.7.6's mid-run
+          re-authentication needs exactly this surface on the cockpit. Renders
+          nothing when there is nothing to say. */}
+            {/* The live region is EAGER and the strip inside it is not: a
+          `role="status"` region announces CHANGES to its content, so a region
+          that arrives WITH its first sentence (as a lazy chunk does) announces
+          nothing. The wrapper is here from the first paint; the chunk fills it. */}
+            <div role="status">
+              <React.Suspense fallback={null}>
+                <ModelAccessBanner />
+              </React.Suspense>
+            </div>
             <div className="flex min-h-0 flex-1">
               {!focus && (
                 <aside className="hidden w-[228px] shrink-0 flex-col border-r border-sidebar-border bg-sidebar px-3 py-4 md:flex">

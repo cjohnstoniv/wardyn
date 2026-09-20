@@ -31,9 +31,13 @@ import {
   DropdownMenuTrigger,
 } from "../../ui/dropdown-menu";
 import { AgentBadge, ConfinementChip, RunStateBadge } from "../../wardyn/primitives";
+import { usePrincipal } from "../../wardyn/operator-context";
 import { RunStateGlyph } from "../../wardyn/run-state-glyph";
 import { KillRunDialog } from "../../wardyn/kill-run-dialog";
 import { RUN, RUN_COCKPIT } from "../../wardyn/copy";
+// THE LEAF, not wardyn/model-access-copy: this card is on the eager graph and
+// that module is lazy-side (see lib/reauth-waiting-copy.ts).
+import { waitingReauth } from "../../../lib/reauth-waiting-copy";
 import { Mono } from "../../wardyn/code-block";
 import { cn } from "../../ui/utils";
 import { repoLabel, rowHeadline, runAttention, shortId, signalsFor, type RunSignals } from "./board-groups";
@@ -41,6 +45,7 @@ import { repoLabel, rowHeadline, runAttention, shortId, signalsFor, type RunSign
 // this door and the run header's (run-detail.tsx onClone) share ONE refusal
 // path and ONE string, rather than reimplementing the same guard twice.
 import { cloneFromAudit, CLONE_LOAD_FAILED, CLONE_UNREADABLE } from "../new-run/wizard-types";
+import { statusDetailSentence } from "../run-status-detail";
 
 export function CardGrid({ children }: { children: React.ReactNode }) {
   // auto-fill with a min(100%, floor) track: cards reflow and collapse to ONE
@@ -107,6 +112,10 @@ export function RunCard({
   onKill: (id: string) => void;
 }) {
   const s = signalsFor(run, signals);
+  // The viewer, for the one sentence on this card that is audience-dependent:
+  // whose AWS sign-in a held run is waiting on. usePrincipal()'s default is ""
+  // — "not mine" — which is the fail-closed direction for this comparison.
+  const principal = usePrincipal();
   const attention = runAttention(run, signals);
   const terminal = isTerminalRunState(run.state);
   const done = terminal;
@@ -201,12 +210,27 @@ export function RunCard({
         </span>
         <ConfinementChip value={run.confinement_class} />
         <RunStateBadge state={run.state} variant="label" />
+        {/* 0.7.6 finding 6: the same reason the table row carries, so a person
+            reading the board in card mode is not the one left guessing. */}
+        {statusDetailSentence(run.status_detail, run.status_reason) && (
+          <span className="min-w-0 truncate text-muted-foreground">
+            {statusDetailSentence(run.status_detail, run.status_reason)}
+          </span>
+        )}
         {/* A held approval says what is waiting; a failure says nothing extra —
             the glyph and Review already carry it, and a sentence repeating the
             state was three words of noise on every attention card. */}
         {s.pending > 0 && (
           <span className="whitespace-nowrap text-warning">
-            {s.held ? RUN_COCKPIT.waitingHeld(s.pending) : RUN_COCKPIT.waiting(s.pending)}
+            {s.reauth
+              ? /* Whose sign-in — the board shows an admin every run, and a
+                   member the shared-lane rows their own runs raised (W6-U
+                   SHOULD-1). An unresolved /me reads as "not mine", the same
+                   fail-closed direction the cockpit's door takes. */
+                waitingReauth(s.pending, !!principal && run.created_by === principal)
+              : s.held
+                ? RUN_COCKPIT.waitingHeld(s.pending)
+                : RUN_COCKPIT.waiting(s.pending)}
           </span>
         )}
         <span className="ml-auto flex items-center gap-2.5">

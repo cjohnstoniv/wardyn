@@ -34,14 +34,22 @@ type fakeRunner struct {
 	// sandbox it cannot bring up. The spec is still recorded, so a test can
 	// assert both what dispatch composed AND what it did not audit afterwards.
 	createErr error
+	// capsClasses overrides Capabilities' advertised set (0.7.8 confinement-default
+	// matrix tests need a runner that advertises less than all three classes, e.g.
+	// a Kata-only [CC1, CC3]); nil keeps every existing caller's [CC1, CC2, CC3].
+	capsClasses []types.ConfinementClass
 }
 
 func (f *fakeRunner) Name() string { return "fake" }
 
 func (f *fakeRunner) Capabilities(context.Context) (runner.Capabilities, error) {
+	classes := f.capsClasses
+	if classes == nil {
+		classes = []types.ConfinementClass{types.CC1, types.CC2, types.CC3}
+	}
 	return runner.Capabilities{
 		Driver:             "fake",
-		ConfinementClasses: []types.ConfinementClass{types.CC1, types.CC2, types.CC3},
+		ConfinementClasses: classes,
 		StructuralEgress:   true,
 		// This double's CreateSandbox accepts any spec, spec.Drive included, so
 		// the declaration has to say so: api.driveIsMountableHere refuses a

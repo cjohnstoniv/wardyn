@@ -141,7 +141,7 @@ export const VIEWER_APPROVAL_BLOCKS_NOTE =
 // Approval blast-radius banners (D1) — every approval kind gets two lines:
 // what you're approving, and the worst realistic outcome. The scope-specific
 // text is filled by the Approvals screen; these are the fixed labels + intents.
-export type ApprovalKind = "tool" | "credential" | "egress";
+export type ApprovalKind = "tool" | "credential" | "egress" | "reauth";
 export const APPROVAL_BANNER_LABEL = {
   what: "What you're approving:",
   blast: "Blast radius:",
@@ -150,6 +150,7 @@ export const APPROVAL_KIND_LABEL: Record<ApprovalKind, string> = {
   tool: "Tool call",
   credential: "Credential",
   egress: "Network egress",
+  reauth: "AWS sign-in",
 };
 
 // The ONE console label for the CANCELLED approval state (the run ended before
@@ -558,6 +559,10 @@ export const WIRE_TO_COPY: Record<WireApprovalKind, ApprovalKind> = {
   credential: "credential",
   egress_domain: "egress",
   tool_call: "tool",
+  // Its OWN kind, not "credential" (UX round B3): mapping it there made
+  // /approvals title the row "Mint a scoped credential" and paint the
+  // blast-radius banner over a request that mints nothing.
+  credential_reauth: "reauth",
 };
 
 // Hoisted from approvals.tsx (kept out of live-approvals.tsx's own module,
@@ -856,6 +861,14 @@ export const RUN = {
   // silently contradicted.
   SAVED_POLICY_GOVERNS: (barrier: string, egress: string) =>
     `The stored spec governs this run — barrier floor ${barrier}, ${egress}. Your attached workspace mounts into it; nothing else on this page is merged.`,
+  // 0.7.8, item 3 — exactly one installed class meets the floor: nothing to
+  // ask, so the Seg collapses to this sentence instead (new-run-screen.tsx).
+  BARRIER_ONLY_QUALIFIER: "— the only barrier this run can use.",
+  // 0.7.8, item 2 — an inconclusive host probe never blocks launch and no
+  // longer leaves every tier guessably selectable either: an untouched pick
+  // sends no confinement_class at all, so the server's own read decides.
+  BARRIER_UNKNOWN:
+    "Couldn't check which barriers this host has — leave this alone and Wardyn will use the strongest one it can, or pick one yourself.",
 } as const;
 
 // DRAFT (M2 canon pending) — R4-F144, WCAG 2.1.2: the cockpit terminal takes

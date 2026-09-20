@@ -252,6 +252,20 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 			// each other, and "who signed in" is the first question after an incident.
 			"owner": scope.owner, "credential_source": awsSSOCredentialSourceLabel(scope),
 		})))
+
+	// A SIGN-IN ANSWERS ANY HELD RUN (Finding 4). Every PENDING credential_reauth
+	// this capture satisfies moves to APPROVED, so the sidecar holding that run's
+	// model call wakes on its next poll instead of running out its budget.
+	//
+	// AFTER the captured emit above, never before: invariant I7's chain is
+	// captured -> resolved -> retry, and a resolution recorded ahead of the
+	// capture that justifies it is a credential-bearing retry with no auditable
+	// predecessor. Best-effort and never fatal — the credential is already
+	// stored, and an unresolved row is repaired by the idempotent
+	// reconcile-on-read rather than by asking the person to sign in twice.
+	if live, rerr := s.cfg.Store.GetRun(r.Context(), claims.RunID); rerr == nil {
+		s.resolvePendingReauth(r.Context(), scope, claims.Sub, live)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

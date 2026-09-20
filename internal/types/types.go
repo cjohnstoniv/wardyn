@@ -209,6 +209,32 @@ type AgentRun struct {
 	// carries its exit code instead, and success/terminal-by-kill carry nothing).
 	// Display-only; never interpreted by the control plane.
 	FailureHint string `json:"failure_hint,omitempty"`
+	// StatusDetail is what the SUBSTRATE says this run is waiting on while it is
+	// STARTING, in the substrate's own words — the
+	// `<component>: <Reason>[: <message>]` shape the kubelet's container status,
+	// the scheduler's PodScheduled condition and docker's first pull all render
+	// into ("agent: ImagePullBackOff: …", "pod: Unschedulable: …", "image:
+	// Pulling: <ref>"). Written from inside CreateSandbox (migration 0063,
+	// runner.SandboxSpec.OnWaiting), once per CHANGE of reason, because the whole
+	// STARTING window happens before the run has a sandbox_ref and nothing
+	// outside the driver can ask a substrate anything.
+	//
+	// DISPLAY-ONLY, and never interpreted by the control plane: it is whatever
+	// the platform said. It is also never CLEARED by a write — the read path
+	// blanks it for any run that is not STARTING (except a run that FAILED on a
+	// TERMINAL reason, where the reason IS the failure and a reader that missed
+	// the last STARTING poll would otherwise see a reason-less FAILED badge), so
+	// the last reason survives on the row for a postmortem without the console
+	// ever narrating a finished run's old wait.
+	StatusDetail string `json:"status_detail,omitempty"`
+	// StatusReason is the bare reason token out of StatusDetail
+	// (`ContainerCreating`, `ImagePullBackOff`, `Unschedulable`, `Pulling`,
+	// `Pending`…) — DERIVED at read and never stored, the same way HasRecording
+	// and its two siblings below are. It exists so that everything which is not a
+	// person (metrics, the live specs, later automation) reasons on a token while
+	// the console owns the sentence; the raw StatusDetail stays on the wire
+	// because only it carries the registry's or the scheduler's own message.
+	StatusReason string `json:"status_reason,omitempty"`
 	// HasRecording, RecordingBytes and RecordingDurationSec (R4-F077) are
 	// DERIVED, never stored: projected by handleListRuns/handleGetRun from
 	// RecordingStore.StatAndTail(id) after the store read — but ONLY when the
@@ -306,6 +332,28 @@ const SubscriptionOAuthSecret = "anthropic-subscription-oauth"
 // which one credentialed a run.
 const ManagedOAuthSecret = "anthropic-managed-oauth"
 
+// AWSSSOAccessTokenSecret is a SENTINEL secret name (NOT a stored secret) that
+// works exactly like the two OAuth sentinels above at the injection sink
+// (host-pinned, forced header, masked), and resolves to the run's OWN captured
+// AWS IAM Identity Center access token -- the credential an `aws sso login`
+// captured into wardynd's secret store as a whole blob, not as a value under
+// this name.
+//
+// It is what makes Phase B (0.7.6) possible: portal.sso.<region>
+// GetRoleCredentials is `authtype:none`, so the proxy can carry the session as
+// the x-amz-sso_bearer_token HEADER and the sandbox never holds the token. The
+// resolver is internal/api's resolveAWSSSOInjection, which additionally
+// re-derives the credential's scope from the roster and refuses any drift from
+// the snapshot the grant was authored with.
+//
+// Deliberately NOT in sinkReservedSecret. That guard refuses names an api_key
+// grant must never resolve; this name's ENTIRE purpose is to be resolved
+// through that sink, host-pinned, exactly as bedrock-api-key is (see
+// internal/api/secrets.go, which explains why that one is excluded too). And
+// nothing is stored under it: a secrets-API Put of this name would be a value
+// the sentinel arm never reads.
+const AWSSSOAccessTokenSecret = "aws-sso-access-token"
+
 // GrantSpec is a credential scope description. The broker enforces the
 // invariant: a minted credential's scope is exactly the approved scope —
 // never wider (no scope-widening between request and mint).
@@ -367,7 +415,29 @@ const (
 	ApprovalCredential   ApprovalKind = "credential"
 	ApprovalEgressDomain ApprovalKind = "egress_domain"
 	ApprovalToolCall     ApprovalKind = "tool_call"
+	// ApprovalCredentialReauth: the run's own model credential lapsed MID-RUN
+	// and cannot be renewed, so the proxy is HOLDING the sandbox's next
+	// credential exchange while the credential's owner signs in again
+	// (internal/api/injection_awssso.go, internal/egress/proxy/credhold.go).
+	//
+	// It is NOT a decision. Nobody approves or denies it: it is resolved by the
+	// owner completing the sign-in, which is why Server.decide answers 409 for
+	// this kind and the console renders a door instead of an Approve/Deny pair.
+	// The row still moves to APPROVED — so every existing list, count and
+	// terminal-cascade reader works unchanged — but through ResolveReauth and
+	// its own credential.reauth.resolved audit action, never approval.decide.
+	ApprovalCredentialReauth ApprovalKind = "credential_reauth"
 )
+
+// ApprovalKinds is the closed set. It exists for the same reason
+// ApprovalStates does, and it was missing for longer: internal/db's
+// closedEnumChecks covered approvals.state and approvals.decision_scope but NOT
+// approvals.kind, so a Go constant the database CHECK rejects would have left
+// every gate green. TestApprovalKindsCoversEveryConstant keeps it honest
+// against the constants above.
+var ApprovalKinds = []ApprovalKind{
+	ApprovalCredential, ApprovalEgressDomain, ApprovalToolCall, ApprovalCredentialReauth,
+}
 
 // ApprovalState is the approval lifecycle.
 type ApprovalState string

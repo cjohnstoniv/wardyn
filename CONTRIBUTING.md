@@ -130,9 +130,11 @@ WARDYN_TEST_PG="postgres://user:pass@localhost/testdb" make test-report-pg
 WARDYN_TEST_PG="postgres://user:pass@localhost/testdb" make test-race-pg
 ```
 
-Cluster-dependent lanes need a real Kubernetes cluster and self-skip without
-`WARDYN_TEST_K8S=1`; no workflow runs them, so they are manual proofs you run
-against `make kind-quickstart`. Among them is the **AWS SSO walk**,
+Kubernetes conformance runs in `.github/workflows/ci.yml`'s `conformance-k8s`
+job against kind with Calico; see that job's setup for a local run. The additional
+cluster walks, including `scripts/run-e2e-ssh-k8s.sh` and the **AWS SSO walk**,
+are manual proofs against `make kind-quickstart` and self-skip without
+`WARDYN_TEST_K8S=1`. No workflow runs the AWS SSO walk,
 `scripts/kind-sso-walk.sh`: with `make kind-sso` it stands up Dex with two
 principals and an on-cluster fake of AWS IAM Identity Center, then proves that a
 MEMBER signing in from their own seat gets a credential that is theirs and not
@@ -147,11 +149,11 @@ and the one precondition (`internal_hosts`) that fails first if you skip it.
 
 The UI is a React + Vite app with its own blocking CI jobs (typecheck, unit
 tests with coverage, build, and a Playwright e2e suite) — a PR that touches
-`ui/` must pass all of them. Locally:
+`ui/` must pass all of them. Run these commands from the repository root:
 
 ```bash
-cd ui && pnpm install --frozen-lockfile     # Node 22 + pnpm 9 (package.json pins packageManager)
-npx playwright install chromium             # once; run-ui-e2e.sh also needs jq on PATH
+(cd ui && pnpm install --frozen-lockfile)   # Node 22 + pnpm 9 (package.json pins packageManager)
+(cd ui && pnpm exec playwright install chromium) # once; run-ui-e2e.sh also needs jq on PATH
 make ui-typecheck         # tsc --noEmit
 make ui-test              # vitest with coverage
 make ui                   # production build (vite)

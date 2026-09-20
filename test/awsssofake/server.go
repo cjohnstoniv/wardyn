@@ -28,6 +28,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -96,6 +97,37 @@ type Server struct {
 	accounts []Account
 	roleCred RoleCredentials
 
+	// tokenTTL / roleCredTTL are the two 0.7.6 knobs the mid-run re-auth walk
+	// needs (AWSSSOFAKE_TOKEN_TTL / AWSSSOFAKE_ROLE_CRED_TTL). The hold this
+	// lane exists to prove is reachable only when the PROXY re-resolves, i.e.
+	// inside injectRefreshMargin (5 min) of the token's expiry and after
+	// dispatch's 10-minute skew — so against the stock 1-hour TTLs a live case
+	// would take about fifty-five minutes. With 12 min / 3 min the SDK re-calls
+	// portal.sso at roughly T+3/6/9 and the T+9 call re-resolves.
+	//
+	// Zero means "the shipped default": 3600s for the token, and for role
+	// credentials the absolute Expiration New() fixed at construction, so a
+	// deployment that sets neither is byte-identical to before these existed.
+	tokenTTL    time.Duration
+	roleCredTTL time.Duration
+	// reauthAfter makes CreateToken answer invalid_grant on demand — the
+	// control that KILLS a session mid-run. 0 = never. It counts REFRESH
+	// redemptions, not device-flow issuances: the walk signs in first and the
+	// session must survive that.
+	reauthAfter  int
+	refreshCalls int
+	// parkRoleCreds PARKS every GetRoleCredentials answer for this long — the
+	// fake standing in for the proxy's hold, so the SDK's own tolerance for a
+	// parked credential exchange can be MEASURED against a real agent image
+	// without a whole Wardyn stack in the way. 0 = answer immediately.
+	//
+	// roleCredCalls timestamps every call, which is the second half of the
+	// measurement: an SDK's RE-CALL CADENCE decides whether a 3-minute
+	// role-credential TTL produces the T+3/6/9 pattern a walk budgets for.
+	parkRoleCreds time.Duration
+	roleCredCalls []time.Time
+	parkRelease   chan struct{}
+
 	// startURLSeen/regionSeen let a test assert the CLI actually round-tripped
 	// what the operator configured.
 	startURLSeen string
@@ -163,8 +195,93 @@ func NewHandler() (*Server, http.Handler) {
 	// RoleCredentialsSeen() in-process, and a bedrock-runtime stub, because
 	// nothing else ever SPENDS the role credentials this portal mints.
 	mux.HandleFunc("/_seen", s.handleSeen)
+	mux.HandleFunc("/_control/reauth", s.handleReauthControl)
 	mux.HandleFunc("/model/", s.handleBedrockRuntime)
 	return s, mux
+}
+
+// SetParkRoleCreds parks every GetRoleCredentials answer for d (0 = off), and
+// resets the release channel so a later ReleaseParkedRoleCreds frees the calls
+// parked from now on.
+func (s *Server) SetParkRoleCreds(d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.parkRoleCreds = d
+	s.parkRelease = make(chan struct{})
+}
+
+// ReleaseParkedRoleCreds frees every parked call at once and stops parking new
+// ones — the fake's stand-in for "the owner signed in".
+func (s *Server) ReleaseParkedRoleCreds() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.parkRoleCreds = 0
+	if s.parkRelease != nil {
+		close(s.parkRelease)
+		s.parkRelease = nil
+	}
+}
+
+// RoleCredentialCallTimes returns when each GetRoleCredentials landed — the
+// SDK's observed RE-CALL CADENCE.
+func (s *Server) RoleCredentialCallTimes() []time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]time.Time(nil), s.roleCredCalls...)
+}
+
+// SetTokenTTL sets the lifetime CreateToken advertises (0 = the 3600s default).
+func (s *Server) SetTokenTTL(d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tokenTTL = d
+}
+
+// SetRoleCredTTL sets how long each GetRoleCredentials answer is good for,
+// stamped PER CALL (0 = the absolute Expiration New() fixed at construction).
+func (s *Server) SetRoleCredTTL(d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.roleCredTTL = d
+}
+
+// SetReauthAfter retires the session on the Nth REFRESH redemption: CreateToken
+// then answers invalid_grant, which is what a consumed or revoked grant gets
+// from the real service and what Wardyn classifies as "spent". 0 = never.
+//
+// Refresh redemptions, not device-flow issuances: a walk signs in first, and
+// that sign-in must succeed.
+func (s *Server) SetReauthAfter(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reauthAfter = n
+	s.refreshCalls = 0
+}
+
+// handleReauthControl is the ON-CLUSTER form of SetReauthAfter: a test driving
+// a POD cannot call the setter in-process. POST /_control/reauth?after=N — and
+// N=0 puts the session back, so one walk can kill and restore a session without
+// restarting the fake.
+func (s *Server) handleReauthControl(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.NotFound(w, r)
+		return
+	}
+	n, err := strconv.Atoi(cmpOr(r.URL.Query().Get("after"), "1"))
+	if err != nil || n < 0 {
+		http.Error(w, "after must be a non-negative integer", http.StatusBadRequest)
+		return
+	}
+	s.SetReauthAfter(n)
+	writeJSON(w, http.StatusOK, map[string]any{"reauth_after": n})
+}
+
+// cmpOr is strings-package-free "first non-empty".
+func cmpOr(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }
 
 // URL is the base URL for BOTH AWS_ENDPOINT_URL_SSO_OIDC and
@@ -353,6 +470,15 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The token lifetime BOTH arms answer with. 3600 is the shipped default, so
+	// a fake nobody configured is byte-identical to before this knob existed.
+	s.mu.Lock()
+	expiresIn := 3600
+	if s.tokenTTL > 0 {
+		expiresIn = int(s.tokenTTL.Seconds())
+	}
+	s.mu.Unlock()
+
 	switch req.GrantType {
 	case deviceGrantType:
 		s.mu.Lock()
@@ -369,19 +495,37 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		// Rotate on issuance so checkBearer only accepts the token this
 		// login just handed out.
 		s.accessToken = "fake-access-token-" + randHex(8)
+		// BOTH tokens rotate on a device-flow redemption too, as on a refresh
+		// (the refresh arm below says why): the real service issues a fresh
+		// refresh token per sign-in, and wardynd keys its spent-mark by the
+		// refresh token's fingerprint — a fake that hands out ONE refresh token
+		// for its whole life makes every re-sign-in after a spent mark read as
+		// still spent (walk-6 FINDING-fake-refresh-token.txt).
+		s.refreshToken = "fake-refresh-token-" + randHex(8)
 		access := s.accessToken
 		refresh := s.refreshToken
 		s.mu.Unlock()
 		writeJSON(w, http.StatusOK, map[string]any{
 			"accessToken":  access,
 			"tokenType":    "Bearer",
-			"expiresIn":    3600,
+			"expiresIn":    expiresIn,
 			"refreshToken": refresh,
 		})
 		return
 
 	case refreshGrantType:
 		s.mu.Lock()
+		// THE MID-RUN KILL. A real session dies at AWS, not in Wardyn, and the
+		// only shape the control plane can observe is invalid_grant on the
+		// refresh redemption — which is exactly what awsSSOErrorIsSpent reads as
+		// "spent". Counted on REFRESH redemptions so a walk can sign in, run,
+		// and then have the Nth renewal be the one that fails.
+		s.refreshCalls++
+		if s.reauthAfter > 0 && s.refreshCalls >= s.reauthAfter {
+			s.mu.Unlock()
+			writeOIDCError(w, "InvalidGrantException", "invalid_grant", "this fake was told to retire the session (AWSSSOFAKE_REAUTH_AFTER)")
+			return
+		}
 		if req.RefreshToken == "" || req.RefreshToken != s.refreshToken {
 			s.mu.Unlock()
 			// invalid_grant, which is exactly what a CONSUMED or unknown refresh
@@ -403,7 +547,7 @@ func (s *Server) handleCreateToken(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"accessToken":  access,
 			"tokenType":    "Bearer",
-			"expiresIn":    3600,
+			"expiresIn":    expiresIn,
 			"refreshToken": refresh,
 		})
 		return
@@ -448,6 +592,14 @@ func (s *Server) handleGetRoleCredentials(w http.ResponseWriter, r *http.Request
 		http.NotFound(w, r)
 		return
 	}
+	// RECORDED BEFORE THE BEARER CHECK, on purpose: what this feeds is the
+	// SDK's own RE-CALL CADENCE, and a REJECTED attempt is still an attempt.
+	// Recording only the accepted ones would make a retry storm look like
+	// silence — which is exactly what it looked like the first time this
+	// measurement was run against a placeholder token.
+	s.mu.Lock()
+	s.roleCredCalls = append(s.roleCredCalls, time.Now())
+	s.mu.Unlock()
 	if !s.checkBearer(w, r) {
 		return
 	}
@@ -456,13 +608,39 @@ func (s *Server) handleGetRoleCredentials(w http.ResponseWriter, r *http.Request
 		AccountID: r.URL.Query().Get("account_id"),
 		Roles:     []string{r.URL.Query().Get("role_name")},
 	}
+	park, release := s.parkRoleCreds, s.parkRelease
+	s.mu.Unlock()
+	if park > 0 {
+		// PARKED, exactly as the proxy parks it — released early if a caller
+		// flips the control, so a test can measure the give-up point AND then
+		// prove the same process resumes.
+		timer := time.NewTimer(park)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-release:
+		case <-r.Context().Done():
+			return // the client hung up: the honest end of a parked call
+		}
+	}
+	s.mu.Lock()
+	// STAMPED PER CALL when a TTL is set, and this is not a detail. New() fixes
+	// ONE absolute Expiration at construction and every answer echoed it, so a
+	// constructor-only TTL would make every answer after the first
+	// already-expired — the SDK would refresh in a tight loop instead of at the
+	// T+3/T+6/T+9 cadence a walk budgets for. With no TTL set the construction
+	// value is echoed exactly as before.
+	cred := s.roleCred
+	if s.roleCredTTL > 0 {
+		cred.Expiration = time.Now().Add(s.roleCredTTL)
+	}
 	s.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"roleCredentials": map[string]any{
-			"accessKeyId":     s.roleCred.AccessKeyID,
-			"secretAccessKey": s.roleCred.SecretAccessKey,
-			"sessionToken":    s.roleCred.SessionToken,
-			"expiration":      s.roleCred.Expiration.UnixMilli(),
+			"accessKeyId":     cred.AccessKeyID,
+			"secretAccessKey": cred.SecretAccessKey,
+			"sessionToken":    cred.SessionToken,
+			"expiration":      cred.Expiration.UnixMilli(),
 		},
 	})
 }

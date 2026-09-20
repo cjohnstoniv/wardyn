@@ -36,7 +36,12 @@ import {
   SectionLabel,
 } from "../../wardyn/primitives";
 import { EPISODES_COPY as EP, MEMBER_GETTING_STARTED as T } from "../../wardyn/copy";
-import { AGENTS, MODEL_ACCESS_ACTIONABLE, MODEL_ACCESS_CHIP_LABEL } from "../../../lib/workspace-providers-copy";
+import {
+  AGENTS,
+  MODEL_ACCESS_ACTIONABLE,
+  MODEL_ACCESS_CHIP_LABEL,
+  modelAccessActionLine,
+} from "../../../lib/workspace-providers-copy";
 import { HarnessLoginPane } from "../settings/harness-login-pane";
 import { CC_META } from "../../wardyn/cc-meta";
 import { strongestAvailable } from "../../wardyn/default-confinement";
@@ -350,7 +355,7 @@ export function MemberGettingStarted() {
               {/* The server's own words, verbatim, as the chip row's own line
                   — never reworded client-side (C4.5). */}
               {!ownKeyCounts && status?.model_access?.action && (
-                <p className="mt-2 text-sm text-warning">{status.model_access.action}</p>
+                <p className="mt-2 text-sm text-warning">{modelAccessActionLine(status.model_access)}</p>
               )}
               {/* not_configured / expired_signin / expiring are the per_user
                   states — the member's OWN sign-in. shared_expired (an

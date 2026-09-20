@@ -16,7 +16,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ProfileObservations, RecordResult, Workspace } from "../../../lib/types";
 import { OperatorProvider } from "../../wardyn/operator-context";
-import { OPERATOR_ONLY_REASON } from "../../wardyn/copy";
+import { OPERATOR_ONLY_REASON, SECURITY_ONLY_REASON } from "../../wardyn/copy";
 
 // The embedded terminal is heavy (xterm) and irrelevant to what this pane decides,
 // so stub it to a marker — we only assert it MOUNTS for a recording session.
@@ -833,9 +833,9 @@ describe("RecordPane — a viewer's controls are disabled", () => {
     renderPane({ record_results: { "build-test": recorded } }, {}, true, false, null, null, false);
     expect(screen.getByLabelText(/session name/i)).toBeDisabled();
     expect(screen.getByRole("button", { name: /^replay confined$/i })).toBeDisabled();
-    // Twice: the pane-level note AND NewSessionForm's own — both gates are shut
-    // for a member, and each states why where it sits.
-    expect(screen.getAllByText(OPERATOR_ONLY_REASON)).toHaveLength(2);
+    expect(screen.getByText(SECURITY_ONLY_REASON)).toBeInTheDocument();
+    expect(screen.getByTestId("record-new-session")).toHaveTextContent(OPERATOR_ONLY_REASON);
+    expect(screen.getAllByText(OPERATOR_ONLY_REASON)).toHaveLength(1);
   });
 
   it("disables the New-session field, Start recording, and a session's Replay/Re-record buttons", () => {

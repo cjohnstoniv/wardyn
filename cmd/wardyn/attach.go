@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -48,13 +49,19 @@ func attachCmd(client clientFn) *cobra.Command {
 		Short: "Attach an interactive terminal to a running sandbox",
 		Long: `Attach an interactive PTY to a RUNNING Wardyn sandbox.
 
-Connects to the WebSocket attach endpoint using the admin bearer token.
+Mints a single-use, 30s-TTL attach ticket with your configured token (the
+same door the console's own terminal uses: POST /runs/{id}/attach-ticket,
+owner-or-admin — a member may mint one for a run THEY created) and dials the
+WebSocket attach endpoint with it, so a member never needs the shared admin
+token to attach to their own run. When no ticket can be minted (e.g. an older
+control plane without the route), the CLI falls back to dialing directly with
+the configured token, exactly as before this ticket lane existed.
 The local terminal is placed into raw mode for the duration of the session:
 Ctrl-C is relayed to the remote PTY as input, not used locally to detach.
 Send TERM/HUP/INT from another terminal (or let the remote side close the
 session) to detach.
 
-Authentication: WARDYN_ADMIN_TOKEN (or --token).
+Authentication: your own token (WARDYN_TOKEN) or WARDYN_ADMIN_TOKEN (or --token).
 `,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -74,11 +81,13 @@ Authentication: WARDYN_ADMIN_TOKEN (or --token).
 }
 
 // runAttach performs the attach flow:
-//  1. Builds the wss/ws URL from the configured base URL.
-//  2. Dials the WebSocket with the admin bearer token.
-//  3. Switches stdin to raw mode (deferred restore).
-//  4. Sends an initial resize frame, wires SIGWINCH for subsequent resizes.
-//  5. Runs the bidirectional pump until disconnect/EOF/signal.
+//  1. Mints a single-use attach ticket with the configured token (falls back
+//     to a bare dial on the configured token when minting is inconclusive).
+//  2. Builds the wss/ws URL from the configured base URL, ticket included.
+//  3. Dials the WebSocket.
+//  4. Switches stdin to raw mode (deferred restore).
+//  5. Sends an initial resize frame, wires SIGWINCH for subsequent resizes.
+//  6. Runs the bidirectional pump until disconnect/EOF/signal.
 func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 	// TERM/HUP/INT are wired HERE, local to the attach session — never at a
 	// root ExecuteContext. Raw mode clears ISIG, so an operator's Ctrl-C
@@ -110,12 +119,51 @@ func runAttach(ctx context.Context, c *sdk.Client, runID string) error {
 	// wiring existed.
 	go func() { <-ctx.Done(); stopSignals() }()
 
-	wsURL := buildWSURL(c.BaseURL, runID)
+	// Mint-then-dial (item 1 of the ticket lane): a member's own token can
+	// already mint a ticket for a run THEY own (POST /runs/{id}/attach-ticket
+	// is owner-or-admin, internal/api/attach_ticket.go) even though the WS
+	// route itself falls through to requireOperator for a bare bearer — so
+	// minting first is what lets a member attach at all without the shared
+	// admin token. The ticket is single-use with a 30s TTL (consumed by a
+	// DELETE-and-return on first redemption), so it is minted here, immediately
+	// before the one dial below, and NEVER cached or reused across calls.
+	//
+	// A definitive server answer (any HTTP status, e.g. the 404 a foreign run
+	// now gets instead of the WS route's old blanket 403) is surfaced AS-IS —
+	// the server has already made the authoritative call for this run and this
+	// token, and silently retrying a different lane would only paper over it.
+	// Only a TRANSPORT-level failure (no HTTP response at all: an unreachable
+	// control plane, or an older one with no attach-ticket route to answer)
+	// falls back to dialing directly with the configured token, exactly as
+	// this command behaved before the ticket lane existed — so an admin-token
+	// CI caller pointed at such a deployment is unaffected.
+	//
+	// Skipped entirely once ctx is already Done: a caller cancellation that
+	// lands before the mint even starts can otherwise race the mint's own HTTP
+	// round trip (does it fail fast on the dead ctx, or does it slip through
+	// to a real response first?) — R-02 below needs that race not to matter,
+	// and "don't bother" is also just correct: nothing this mint could return
+	// is going anywhere once ctx is dead.
+	var ticket string
+	if ctx.Err() == nil {
+		var mintErr error
+		ticket, mintErr = mintAttachTicket(ctx, c, runID)
+		var apiErr *sdk.APIError
+		if mintErr != nil && errors.As(mintErr, &apiErr) {
+			return apiErr
+		}
+	}
+
+	wsURL := buildWSURL(c.BaseURL, runID, ticket)
 
 	// Dial the WebSocket with the bearer token in the HTTP Upgrade header, when
 	// one is configured (mirrors pkg/client.Client.do: local host-mode deployments
 	// run without a token, so an empty token is not a client-side error here either
-	// — let the server's 401 be the signal if auth is actually required).
+	// — let the server's 401 be the signal if auth is actually required). Sent
+	// alongside a minted ticket too: the ticket lane (?ticket=) is checked
+	// first server-side and wins when present, so the header is inert but
+	// harmless in that case, and is exactly what authenticates the dial when
+	// mint fell back above.
 	// InsecureSkipVerify is intentionally NOT set on the client — the CLI is a
 	// CLI-origin connection (not a browser), but we still want TLS validation
 	// for wss:// URLs; the server's same-origin check does not apply to non-browser
@@ -289,11 +337,17 @@ func sendResize(ctx context.Context, conn *websocket.Conn, cols, rows uint16) er
 }
 
 // buildWSURL converts the base HTTP URL to a WebSocket URL for the attach
-// endpoint:
+// endpoint, with the minted ticket (if any) as ?ticket=:
 //
 //	https://host/  ->  wss://host/api/v1/runs/<id>/attach
 //	http://host/   ->  ws://host/api/v1/runs/<id>/attach
-func buildWSURL(baseURL, runID string) string {
+//	(ticket != "") ->  ...&/api/v1/runs/<id>/attach?ticket=<t>
+//
+// net/url.Values.Encode does the query-escaping — a raw ticket is 64 hex
+// chars (attach_ticket.go's mintAttachTicket) and would never need it in
+// practice, but hand-splicing it into the URL is the same class of mistake
+// runID's own doc comment on attachCmd already calls out for the path.
+func buildWSURL(baseURL, runID, ticket string) string {
 	base := strings.TrimRight(baseURL, "/")
 	// Replace the scheme: https -> wss, http -> ws.
 	switch {
@@ -303,7 +357,86 @@ func buildWSURL(baseURL, runID string) string {
 		base = "ws://" + strings.TrimPrefix(base, "http://")
 		// If already ws/wss or some other scheme, leave it alone.
 	}
-	return base + "/api/v1/runs/" + runID + "/attach"
+	path := base + "/api/v1/runs/" + runID + "/attach"
+	if ticket == "" {
+		return path
+	}
+	u, err := url.Parse(path)
+	if err != nil {
+		// base is caller-configured (WARDYN_URL/--url), already dialed
+		// elsewhere in this process before reaching here — not expected to
+		// fail to parse. Fall back to the un-ticketed path rather than a
+		// panic or a silently-wrong dial target.
+		return path
+	}
+	q := u.Query()
+	q.Set("ticket", ticket)
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+// mintAttachTicket POSTs /api/v1/runs/{id}/attach-ticket with the configured
+// token and returns the single-use ticket string. Deliberately a raw request,
+// not an sdk.Client method: pkg/client's doc comment and its three pinning
+// tests (TestClientCoversRouteFamilies / TestRouteFamiliesCoverEveryMethod /
+// TestSDKCensusNamesEveryRouteFamily) enumerate the whole attach family —
+// attach, attach-ticket, attach-holder, attach/takeover — as DELIBERATELY
+// unwrapped, so adding a method here would fight that pin rather than use it.
+//
+// Returns ("", nil) — NOT an error — in two cases the caller treats alike, by
+// falling back to the pre-ticket-lane bare dial: the request never produced
+// an HTTP response at all (dial failure, timeout), OR it produced one that
+// cannot be the control plane's own answer — a non-2xx whose body is not the
+// server's standard JSON error envelope (writeError, internal/api/http.go,
+// always emits one; a router's plain-text "404 page not found" for a route
+// an OLDER control plane never registered does not), or a 2xx with no
+// readable ticket. Anything else — any status whose body IS that JSON
+// envelope — is the server's own decisive answer and is returned as such: a
+// non-2xx becomes *sdk.APIError (errors.As-able, same as every other SDK
+// call) for the caller to surface verbatim rather than mask with a fallback.
+func mintAttachTicket(ctx context.Context, c *sdk.Client, runID string) (string, error) {
+	target := strings.TrimRight(c.BaseURL, "/") + "/api/v1/runs/" + runID + "/attach-ticket"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, nil)
+	if err != nil {
+		return "", nil
+	}
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	hc := c.HTTPClient
+	if hc == nil {
+		hc = http.DefaultClient
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return "", nil // transport-level: inconclusive, caller falls back
+	}
+	defer resp.Body.Close()
+
+	// Same 2 KiB error-body cap pkg/client.maxErrBody uses, kept local rather
+	// than exported for one constant a single call site needs.
+	const maxAttachTicketErrBody = 2048
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxAttachTicketErrBody))
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		if !json.Valid(body) {
+			return "", nil // not the server's own envelope: inconclusive, fall back
+		}
+		return "", &sdk.APIError{Status: resp.StatusCode, Body: string(body)}
+	}
+
+	var out struct {
+		Ticket string `json:"ticket"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil || out.Ticket == "" {
+		// A 2xx that doesn't look like the mint response this CLI knows how
+		// to read (e.g. a proxy or an incompatible server) is exactly as
+		// inconclusive as never getting a response: fall back rather than
+		// dial a URL with a garbage ?ticket=.
+		return "", nil
+	}
+	return out.Ticket, nil
 }
 
 // isNormalClose reports whether err represents a clean WebSocket or context

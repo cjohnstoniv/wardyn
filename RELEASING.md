@@ -34,14 +34,17 @@ WARDYN_TEST_PG=postgres://... make release-check   # runs `make ci`, plus the Po
                                                    # lane and the `## [Unreleased]` check
 ```
 
-Eight CI jobs cannot run locally at all, because they need a live daemon or
-service: `conformance` (`make test-conformance-docker`), `conformance-k8s`
-(`make test-conformance-k8s`, needs a local `kind` cluster + a registered
-`k8s`-tagged build), `envbuild-integration` (`make test-envbuild-integration`),
+The live-service jobs are outside `make release-check`: `conformance`
+(`make test-conformance-docker`), `conformance-k8s`
+(`make test-conformance-k8s`, needs a kind/Calico cluster and the test images
+from that CI job), `envbuild-integration` (`make test-envbuild-integration`),
 `helm-install-test` (`make helm-install-test`, also needs a local `kind`
 cluster), the Playwright `ui-e2e` job, `desktop-envelope` (compose build +
-up), `buildx-smoke`, and `trivy` (both docker builds). Without
-`WARDYN_TEST_PG` the Postgres suite prints a loud SKIPPED line.
+up), `buildx-smoke`, and `trivy` (both docker builds). Their checks can run
+locally with the required services; follow `.github/workflows/ci.yml` for
+image builds, cluster setup, and environment variables. Run the Playwright
+lane with `scripts/run-ui-e2e.sh`. Without `WARDYN_TEST_PG` the Postgres
+suite prints a loud SKIPPED line.
 
 Screenshot freshness is CI-only for a different reason: `ci.yml`'s
 `screenshots-fresh` job compares the PR diff, so it can tell "you changed the
@@ -56,6 +59,13 @@ reason not to tag", not "CI is green" — check the actual CI run on the commit
 before step 3.
 
 ## Steps
+
+For a patch release, choose `X.Y.Z` **before** updating version strings: refresh
+tags with `git fetch origin --tags`, then inspect
+`git tag -l "vX.Y.*" --sort=-v:refname` and select the next unused patch number
+in that minor line. Tags are repository-wide, not branch-local. Coordinate one
+release owner at a time: reading tags does not reserve the next number against
+another maintainer. Use the chosen version throughout this checklist.
 
 1. **Update the CHANGELOG.** Rename the working `## [Unreleased]` heading (or add the
    section) to `## [X.Y.Z] — YYYY-MM-DD` in [CHANGELOG.md](CHANGELOG.md), following the
@@ -133,20 +143,10 @@ before step 3.
    exception rather than as a rule change, and in the
    [CHANGELOG.md](CHANGELOG.md) section for 0.7.2 (`[Unreleased]` until step 1 of
    this checklist renames it). The rule above stands for every later line.
-4. **Tag** on the release branch: `git tag vX.Y.Z` (tags are `v`-prefixed —
-   `v0.1.0` … `v0.4.3`). For a patch release, compute the next patch number
-   from the branch's own tags rather than by hand — auto-increment, so two
-   people cutting patches never collide:
-
-   ```sh
-   git checkout release/X.Y
-   LAST=$(git tag -l "vX.Y.*" --sort=-v:refname | head -1)   # e.g. vX.Y.3
-   NEXT="vX.Y.$(( ${LAST##*.} + 1 ))"                        # -> vX.Y.4
-   git tag "$NEXT"
-   ```
-
-   (Bump `internal/version/version.go` + the CHANGELOG section on the release
-   branch in the same stroke — `make release-check` holds there too.)
+4. **Tag the prepared release commit** on `release/X.Y`: `git tag vX.Y.Z`.
+   Use the same `X.Y.Z` committed in step 2; do not recompute a patch number
+   here. The version and CHANGELOG updates must already be committed, with
+   `make release-check` and CI green on that commit, before creating the tag.
 5. **Push** the branch and the tag:
    `git push origin release/X.Y && git push origin vX.Y.Z`
    (and `git push origin main` if step 2's commit landed there).

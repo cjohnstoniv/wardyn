@@ -24,7 +24,16 @@
 // canary reports `ContainerCreating` for a pull and for everything else, and
 // "Pulling" is an Event reason the chart grants no verb to read. The slow-start
 // sentence is hedged for that reason.
+//
+// 0.7.6 (finding 6) changes the SHAPE of that concession rather than the
+// budget: the substrate's reason now reaches this file (`agent_runs.status_detail`),
+// so the clock stops being the verdict and becomes the FALLBACK for when there
+// is no reason to read. ImagePullBackOff for two seconds is terminal;
+// ContainerCreating for two minutes is normal. A run with no detail — a Docker
+// host whose image was already warm, a pre-0.7.6 daemon — grades exactly as it
+// did in 0.7.5.
 import { LAUNCH_DEADLINE_MS } from "../../../lib/api/core";
+import { isTerminalStatusReason, parseStatusDetail } from "../run-status-detail";
 
 // The wall-clock budget before the pane says it cannot read the run. The SAME
 // number the console already spends on a call that brings a sandbox up
@@ -73,8 +82,20 @@ export const LOGIN_SANDBOX_SLOW_START =
 export const LOGIN_SANDBOX_READ_RETRYING =
   "Wardyn can't read the sign-in sandbox right now — still trying. It may be starting normally.";
 
-// The four states the wait can be in. `unreadable` is the only one that ENDS it.
-export type StartWaitVerdict = "starting" | "slow" | "retrying" | "unreadable";
+// DRAFT (M2 canon pending) — the wait ending on a REASON rather than a clock.
+// The sentence that follows is the SUBSTRATE's (statusDetailSentence); this is
+// only the lead-in that names the speaker, as SANDBOX_REFUSAL_LEAD_IN does.
+//
+// round-2 UX S11: it does NOT say "image". The same verdict fires for
+// CreateContainerError, CreateContainerConfigError and CrashLoopBackOff, none of
+// which a new image reference fixes.
+export const LOGIN_SANDBOX_STUCK_LEAD_IN =
+  "The sign-in sandbox cannot start — this needs your admin; trying again gets the same answer until they fix it.";
+
+// The five states the wait can be in. `unreadable` and `stuck` are the two that
+// END it — the first because Wardyn cannot see the run, the second because the
+// substrate has already given its final answer.
+export type StartWaitVerdict = "starting" | "slow" | "retrying" | "unreadable" | "stuck";
 
 export type StartWaitInput = {
   now: number;
@@ -85,11 +106,25 @@ export type StartWaitInput = {
   failingSince: number | null;
   // How many consecutive reads have failed.
   failures: number;
+  // The run's status_detail as of the last SUCCESSFUL read, or null — an absent
+  // reason is the 0.7.5 case and grades on the clock alone. A failed read
+  // carries no detail by construction, which is why a reason can never be stale
+  // relative to what the caller believes about the run.
+  detail?: string | null;
+  // The server's derived status_reason, when it sent one (it is the authority;
+  // the detail is parsed only for a pre-0.7.6 daemon).
+  reason?: string | null;
 };
 
 // startWaitVerdict grades one poll tick. Pure, so the table is testable without
 // a component, a clock or a poll loop.
-export function startWaitVerdict({ now, startedAt, failingSince, failures }: StartWaitInput): StartWaitVerdict {
+export function startWaitVerdict({ now, startedAt, failingSince, failures, detail, reason }: StartWaitInput): StartWaitVerdict {
+  // FIRST, and with no clock at all: a terminal reason is the substrate's final
+  // answer, and waiting out a five-minute budget for one is the exact defect
+  // finding 6 names ("ImagePullBackOff for two seconds is terminal"). It can
+  // only be set from a read that SUCCEEDED, so it never races the failure arms
+  // below.
+  if (isTerminalStatusReason(parseStatusDetail(detail, reason).reason)) return "stuck";
   if (failingSince !== null) {
     const failingFor = now - failingSince;
     // BOTH bounds, never either: the clock says the outage is real, the counter

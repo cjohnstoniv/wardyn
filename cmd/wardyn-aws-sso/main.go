@@ -125,14 +125,14 @@ func run() error {
 	}
 	// SUCCESS-ONLY marker, and a byte-for-byte contract: the setup UI's login pane
 	// scrapes the attach PTY for exactly this line to end the login
-	// (ui/.../harness-login-pane.tsx doneMarker). Printing it on a failed upload
+	// (ui/.../login-flows.tsx doneMarker). Printing it on a failed upload
 	// would report a credential that was never stored.
 	fmt.Fprintln(stdout, successMarker)
 	return nil
 }
 
 // successMarker is the PTY line the UI waits for. Keep it in sync with
-// harness-login-pane.tsx's LOGIN_FLOWS.aws doneMarker.
+// login-flows.tsx's LOGIN_FLOWS.aws doneMarker.
 const successMarker = "wardyn: aws sso credential captured"
 
 // stdout / stdin / stdinIsTerminal are the process's own streams, as VARIABLES
@@ -156,7 +156,7 @@ var (
 // its absence was a bug: a refused upload logged to stderr and printed nothing
 // on stdout, so the setup UI's login pane — which ends the login only on seeing
 // a marker — span forever on a credential that had already been refused. Keep
-// it in sync with harness-login-pane.tsx's LOGIN_FLOWS.aws failMarker
+// it in sync with login-flows.tsx's LOGIN_FLOWS.aws failMarker
 // (TestFailMarker_UIParity, the sibling of TestSuccessMarker_UIParity).
 //
 // NO TRAILING SPACE: the pane matches the marker as a prefix, and the sentence

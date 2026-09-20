@@ -41,6 +41,8 @@ import { JsonBlock } from "../wardyn/code-block";
 import { EmptyState, ErrorState, TableSkeleton, TruncatedNote } from "../wardyn/states";
 import { PageHeader } from "../wardyn/page-header";
 import { ReasonDialog } from "../wardyn/reason-dialog";
+import { REAUTH_ROW, REAUTH_TITLE, reauthAudience, reauthRowHint, type ReauthAudience } from "../wardyn/model-access-copy";
+import { useClaimModelAccessDoor, useModelAccessDoor } from "../wardyn/model-access-context";
 import { useOperator, useRole, useSecurityOperator } from "../wardyn/operator-context";
 import {
   APPROVAL,
@@ -151,6 +153,11 @@ function deriveTitle(kind: ApprovalKind, scope: Scope): string {
       const cmd = str(scope, "cmd", "command", "tool");
       return cmd ? `Run ${cmd}` : "Run a tool call";
     }
+    // The re-auth request is not a mint and not a decision (UX round B3):
+    // mapping it to "credential" titled it "Mint a scoped credential" and
+    // painted a blast-radius banner over a row that grants nothing.
+    case "credential_reauth":
+      return REAUTH_TITLE;
     default:
       return kindLabel(kind);
   }
@@ -160,6 +167,9 @@ interface Banner {
   what: string;
   blast: string;
 }
+
+// The fail-closed audience: no viewer in hand is "this is not yours to clear".
+const NO_REAUTH_AUDIENCE: ReauthAudience = { canAct: false, shared: false, owner: "" };
 
 // This is a PRE-decision preview, not a live readout of a scope in progress:
 // PendingCard calls it before any scope has been chosen (the picker lives
@@ -174,9 +184,20 @@ interface Banner {
 // before-you-pick UX than one line that changes under you. If a live banner is
 // ever wanted here, it belongs inside ReasonDialog itself, driven by its own
 // `scope` state — not bolted onto this pre-decision preview.
-function deriveBanner(kind: ApprovalKind, scope: Scope): Banner {
+function deriveBanner(kind: ApprovalKind, scope: Scope, reauth?: ReauthAudience): Banner {
   const ttl = ttlPhrase(scope);
   switch (kind) {
+    // NO BLAST RADIUS, because nothing is granted: this row asks its owner to
+    // sign in again to a credential the deployment already configured. The
+    // "what" states the need and the both-branches hint the row's own copy
+    // carries — never a promise that a run will continue (Codex #5).
+    case "credential_reauth":
+      // The hint is AUDIENCE-DEPENDENT and the audience is the viewer, not the
+      // scope: the door's own both-branches sentence for the person whose
+      // sign-in clears it, and the sentence naming who CAN clear it for
+      // everybody else (W6-U BLOCKER-1/BLOCKER-2). `reauth` is undefined only
+      // for a caller with no viewer in hand, which grades as "not yours".
+      return { what: REAUTH_ROW.label + ".", blast: reauthRowHint(reauth ?? NO_REAUTH_AUDIENCE) };
     case "egress_domain": {
       const host = str(scope, "host", "domain");
       // egressBlastRadius (copy.ts) is scope-aware — honesty rule: "we only
@@ -504,7 +525,15 @@ function PendingCard({
   const scope = item.requested_scope ?? {};
   const KindIcon = KIND_ICON[item.kind] ?? ShieldCheck;
   const cap = capabilityLabel(item.kind, scope);
-  const banner = deriveBanner(item.kind, scope);
+  // ONE ownership rule, shared with the cockpit row (live-approvals.tsx's
+  // ReauthRow): the door renders only for the viewer whose own sign-in the
+  // server would accept for THIS row. door.operator / door.principal rather
+  // than useOperator() / usePrincipal(), because those answer the fail-open
+  // default in exactly the window the answer is audience-dependent and the
+  // audience is unknown.
+  const door = useModelAccessDoor();
+  const reauth = reauthAudience(item, { operator: door.operator, principal: door.principal });
+  const banner = deriveBanner(item.kind, scope, reauth);
   // Deciding an egress_domain approval on an owned run is a MEMBER act (B3,
   // decide() in approvals.go); credential and tool_call stay admin-only
   // regardless of ownership — see canDecideApproval's doc for why. This list
@@ -562,8 +591,17 @@ function PendingCard({
         <p className="text-foreground">
           <span className="font-semibold">{APPROVAL_BANNER_LABEL.what}</span> {banner.what}
         </p>
+        {/* NO BLAST RADIUS for a re-auth request (UX ruling B3, general S4):
+            the row grants nothing — it asks its owner to sign in again to a
+            credential the deployment already configured — and "Blast radius:"
+            over the row's own both-branches hint claimed a capability that does
+            not exist. The hint still renders; only the label that made it a
+            capability claim is gone. */}
         <p className="text-muted-foreground">
-          <span className="font-semibold text-foreground/80">{APPROVAL_BANNER_LABEL.blast}</span> {banner.blast}
+          {item.kind !== "credential_reauth" && (
+            <span className="font-semibold text-foreground/80">{APPROVAL_BANNER_LABEL.blast}</span>
+          )}{" "}
+          {banner.blast}
         </p>
         {item.minted_jti && (
           <p className="pt-0.5 font-mono text-xs text-muted-foreground">minted jti: {item.minted_jti}</p>
@@ -596,6 +634,13 @@ function PendingCard({
         {runEnded ? (
           <p className="max-w-[72ch] text-xs text-muted-foreground">{APPROVAL.CANCELLED_BODY}</p>
         ) : (
+          item.kind === "credential_reauth" ? (
+          /* A DOOR, NOT A DECISION (UX round B3). The pair is REMOVED, not
+             disabled: a disabled Approve reads as "an admin can do this", and
+             no tier can — the server answers 409 to either verb. The one
+             control opens the same dialog every other sign-in surface opens. */
+          reauth.canAct ? <ReauthAction /> : null
+        ) : (
           <>
             <Button size="sm" variant="info" onClick={() => onAct("approve")} disabled={!canDecide}>
               <Check className="size-4" /> Approve
@@ -612,6 +657,7 @@ function PendingCard({
               <Chip tone="neutral">{hostUngranted ? DENIED.APPROVE_CHIP : SECURITY_ONLY_REASON}</Chip>
             )}
           </>
+          )
         )}
         <span className="ml-auto text-xs text-muted-foreground" title={item.requested_at}>
           requested {relativeTime(item.requested_at)}
@@ -670,3 +716,27 @@ function DecidedRow({ item }: { item: ApprovalRequest }) {
   );
 }
 
+
+/**
+ * ReauthAction — the /approvals card's control for a mid-run AWS sign-in
+ * request: ONE button, opening the same dialog every other sign-in surface
+ * opens, and claiming the door while it renders so the global strip drops its
+ * own button on this page.
+ *
+ * No Approve, no Deny, no disabled pair: the server answers 409 to either verb
+ * (decide()'s rule 3b), and a disabled control would name a role that could
+ * decide it — none can.
+ *
+ * Rendered ONLY for a viewer reauthAudience grades as able to clear the row;
+ * everyone else reads the card's hint, which names whose sign-in is awaited,
+ * and gets no control at all.
+ */
+function ReauthAction() {
+  const door = useModelAccessDoor();
+  useClaimModelAccessDoor(true);
+  return (
+    <Button size="sm" variant="info" aria-label={REAUTH_ROW.ariaLabel} onClick={() => door.openDoor()}>
+      {REAUTH_ROW.action}
+    </Button>
+  );
+}

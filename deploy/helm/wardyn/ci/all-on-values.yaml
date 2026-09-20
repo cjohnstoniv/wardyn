@@ -166,6 +166,11 @@ trustedCA: |
   MIIBnotarealcertificateitisonlyrenderedneverinstalledAAAAAAAAAAAA
   -----END CERTIFICATE-----
 
+# Phase B kill switch, the "other side" of its default (empty => wardynd's
+# own "on"). Left at its default neither of helm-lint's two renders touched
+# the named WARDYN_AWS_SSO_PROXY_INJECT env entry at all.
+awsSSOProxyInject: "off"
+
 # Explicit requests/limits: the values.yaml default is `{}` (no resources
 # stanza at all), so the passthrough was likewise rendered by neither gate.
 resources:

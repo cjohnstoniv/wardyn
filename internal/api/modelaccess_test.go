@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -334,31 +335,32 @@ func TestAWSSSOCredentialState_TheFiveStates(t *testing.T) {
 		blob    awsSSOBlob
 		found   bool
 		perUser bool
+		spent   bool // every row here is !spent — see TestAWSSSOCredentialState_SpentBoundary
 		want    string
 	}{
-		{"renewable with a long registration", live(nil), true, true, modelAccessLive},
+		{"renewable with a long registration", live(nil), true, true, false, modelAccessLive},
 		{"expired ACCESS token but renewable folds into live",
-			live(func(b *awsSSOBlob) { b.ExpiresAt = now.Add(-time.Minute) }), true, true, modelAccessLive},
+			live(func(b *awsSSOBlob) { b.ExpiresAt = now.Add(-time.Minute) }), true, true, false, modelAccessLive},
 		{"a zero registration timestamp is live (the helper saw none)",
-			live(func(b *awsSSOBlob) { b.RegistrationExpiresAt = time.Time{} }), true, true, modelAccessLive},
+			live(func(b *awsSSOBlob) { b.RegistrationExpiresAt = time.Time{} }), true, true, false, modelAccessLive},
 		{"the registration lapses within a day",
-			live(func(b *awsSSOBlob) { b.RegistrationExpiresAt = now.Add(6 * time.Hour) }), true, true, modelAccessExpiring},
+			live(func(b *awsSSOBlob) { b.RegistrationExpiresAt = now.Add(6 * time.Hour) }), true, true, false, modelAccessExpiring},
 		{"no refresh token, access token within a day",
-			live(func(b *awsSSOBlob) { b.RefreshToken = ""; b.ExpiresAt = now.Add(2 * time.Hour) }), true, true, modelAccessExpiring},
+			live(func(b *awsSSOBlob) { b.RefreshToken = ""; b.ExpiresAt = now.Add(2 * time.Hour) }), true, true, false, modelAccessExpiring},
 		{"no refresh token, access token expired",
-			live(func(b *awsSSOBlob) { b.RefreshToken = ""; b.ExpiresAt = now.Add(-time.Minute) }), true, true, modelAccessExpiredSignin},
+			live(func(b *awsSSOBlob) { b.RefreshToken = ""; b.ExpiresAt = now.Add(-time.Minute) }), true, true, false, modelAccessExpiredSignin},
 		{"a lapsed registration cannot be renewed",
 			live(func(b *awsSSOBlob) {
 				b.RegistrationExpiresAt = now.Add(-time.Hour)
 				b.ExpiresAt = now.Add(-time.Minute)
-			}), true, true, modelAccessExpiredSignin},
-		{"per_user with nothing captured", awsSSOBlob{}, false, true, modelAccessNotConfigured},
-		{"shared with nothing captured", awsSSOBlob{}, false, false, modelAccessSharedExpired},
+			}), true, true, false, modelAccessExpiredSignin},
+		{"per_user with nothing captured", awsSSOBlob{}, false, true, false, modelAccessNotConfigured},
+		{"shared with nothing captured", awsSSOBlob{}, false, false, false, modelAccessSharedExpired},
 		{"shared and dead is the ADMIN's problem, not the member's",
-			live(func(b *awsSSOBlob) { b.RefreshToken = ""; b.ExpiresAt = now.Add(-time.Minute) }), true, false, modelAccessSharedExpired},
+			live(func(b *awsSSOBlob) { b.RefreshToken = ""; b.ExpiresAt = now.Add(-time.Minute) }), true, false, false, modelAccessSharedExpired},
 	}
 	for _, c := range cases {
-		if got := awsSSOCredentialState(c.blob, c.found, c.perUser, now); got != c.want {
+		if got := awsSSOCredentialState(c.blob, c.found, c.perUser, c.spent, now); got != c.want {
 			t.Errorf("%s: state = %q, want %q", c.name, got, c.want)
 		}
 	}
@@ -379,8 +381,147 @@ func TestAWSSSOCredentialState_TheFiveStates(t *testing.T) {
 	// The deadline the expiring line names is the REGISTRATION's while the blob
 	// can be renewed: the access token's own expiry is not what runs out.
 	reg := live(func(b *awsSSOBlob) { b.RegistrationExpiresAt = now.Add(6 * time.Hour) })
-	if got := modelAccessDeadline(reg, true, now); got != reg.RegistrationExpiresAt.UTC().Format(time.RFC3339) {
+	if got := modelAccessDeadline(reg, true, false, now); got != reg.RegistrationExpiresAt.UTC().Format(time.RFC3339) {
 		t.Errorf("deadline = %q, want the registration's lapse", got)
+	}
+	// The third Cause: no working refresh token, the access token itself is
+	// what is running out.
+	noRefresh := live(func(b *awsSSOBlob) { b.RefreshToken = ""; b.ExpiresAt = now.Add(2 * time.Hour) })
+	if got := awsSSOCredentialCause(noRefresh, false, now); got != causeTokenExpiring {
+		t.Errorf("cause = %q, want %q", got, causeTokenExpiring)
+	}
+}
+
+// TestAWSSSOCredentialState_SpentBoundary is Finding 5's regression: a SPENT
+// refresh token must grade DEAD once the access token is inside the refresh
+// skew (dispatch would already refuse this run), and `expiring` — never
+// `live` — while it is still comfortably outside it. Before this a spent
+// token graded `live` until the CLIENT REGISTRATION lapsed, days later, while
+// every dispatch refused the person's runs. Round-1 general S4 / Codex #6:
+// grading `expiring` INSIDE the skew would promise a launch dispatch does not
+// honour, so the boundary is needsRefresh(now), not the registration.
+func TestAWSSSOCredentialState_SpentBoundary(t *testing.T) {
+	now := awsSSOTestFixedNow
+	base := func(mut func(*awsSSOBlob)) awsSSOBlob {
+		b := awsSSOBlob{
+			AccessToken: "a", RefreshToken: "r", StartURL: "https://x.awsapps.com/start",
+			Region: "us-east-1", AccountID: "1", RoleName: "R",
+			ExpiresAt:             now.Add(time.Hour),
+			RegistrationExpiresAt: now.Add(90 * 24 * time.Hour),
+		}
+		if mut != nil {
+			mut(&b)
+		}
+		return b
+	}
+	cases := []struct {
+		name    string
+		blob    awsSSOBlob
+		perUser bool
+		want    string
+	}{
+		// The boundary table: just before / exactly at / just after ExpiresAt-skew.
+		{"just before the skew boundary: still outside it, expiring",
+			base(func(b *awsSSOBlob) { b.ExpiresAt = now.Add(awsSSORefreshSkew + time.Second) }), true, modelAccessExpiring},
+		{"exactly at the skew boundary: needsRefresh fires, dead",
+			base(func(b *awsSSOBlob) { b.ExpiresAt = now.Add(awsSSORefreshSkew) }), true, modelAccessExpiredSignin},
+		{"just after (already inside the skew): dead",
+			base(func(b *awsSSOBlob) { b.ExpiresAt = now.Add(awsSSORefreshSkew - time.Second) }), true, modelAccessExpiredSignin},
+		// Nominal expiry: the access token has already lapsed outright.
+		{"nominal expiry: already lapsed, dead",
+			base(func(b *awsSSOBlob) { b.ExpiresAt = now.Add(-time.Minute) }), true, modelAccessExpiredSignin},
+		// Per-user vs shared-member projection of the dead state.
+		{"spent + inside the skew, shared: shared_expired, not expired_signin",
+			base(func(b *awsSSOBlob) { b.ExpiresAt = now.Add(time.Minute) }), false, modelAccessSharedExpired},
+	}
+	for _, c := range cases {
+		if got := awsSSOCredentialState(c.blob, true, c.perUser, true, now); got != c.want {
+			t.Errorf("%s: state = %q, want %q", c.name, got, c.want)
+		}
+	}
+
+	// spent SKIPS the renewable arm entirely: a lapsed registration changes
+	// nothing for a spent credential — only needsRefresh decides — which a
+	// !spent blob with the SAME shape would grade differently (renewable's own
+	// registrationLapsed check never fires because renewable() is false, so it
+	// falls through to the plain-expiry arms and reads live, since the access
+	// token has 48h of its own headroom left).
+	lapsedRegBlob := base(func(b *awsSSOBlob) {
+		b.ExpiresAt = now.Add(48 * time.Hour)
+		b.RegistrationExpiresAt = now.Add(-time.Hour)
+	})
+	if got := awsSSOCredentialState(lapsedRegBlob, true, true, true, now); got != modelAccessExpiring {
+		t.Errorf("spent + lapsed registration + 48h access-token headroom = %q, want expiring (needsRefresh alone decides)", got)
+	}
+	if got := awsSSOCredentialState(lapsedRegBlob, true, true, false, now); got != modelAccessLive {
+		t.Errorf("sanity: the SAME blob !spent should read live (unchanged behaviour), got %q", got)
+	}
+
+	// The transient-refresh-with-a-usable-token path is UNCHANGED: !spent with a
+	// token near expiry but still renewable and far from its registration lapse
+	// folds into `live` exactly as before — dispatch renews it, so a near
+	// expiry here is not yet the person's problem. This is the same fixture the
+	// spent boundary cases above grade `expiring`/`dead`, which is the whole
+	// point of the boundary: `spent` is what turns "renewable" off.
+	transient := base(func(b *awsSSOBlob) { b.ExpiresAt = now.Add(time.Minute) })
+	if got := awsSSOCredentialState(transient, true, true, false, now); got != modelAccessLive {
+		t.Errorf("transient (!spent) near-expiry state = %q, want live (renewable, registration far out — unchanged)", got)
+	}
+
+	// modelAccessDeadline: the spent arm returns ExpiresAt-skew explicitly,
+	// never the registration's lapse a spent credential can no longer redeem.
+	spentBlob := base(func(b *awsSSOBlob) { b.ExpiresAt = now.Add(20 * time.Minute) })
+	wantDeadline := spentBlob.ExpiresAt.Add(-awsSSORefreshSkew).UTC().Format(time.RFC3339)
+	if got := modelAccessDeadline(spentBlob, true, true, now); got != wantDeadline {
+		t.Errorf("spent deadline = %q, want ExpiresAt-skew %q", got, wantDeadline)
+	}
+	if got := modelAccessDeadline(spentBlob, true, false, now); got != spentBlob.RegistrationExpiresAt.UTC().Format(time.RFC3339) {
+		t.Errorf("non-spent deadline changed: got %q, want the registration's own lapse (unaffected by this lane)", got)
+	}
+}
+
+// TestSetupModelAccess_SpentGradesExpiringWithCause is the SetupModelAccess
+// assembly for Finding 5: a spent credential still inside the skew grades
+// `expiring` with the ExpiresAt-skew deadline AND Cause == "renewal_spent", so
+// the admin checklist row (awsSSOCredentialRow) can say WHICH fact this is —
+// AWS retiring the grant, not a registration lapsing on its own schedule.
+func TestSetupModelAccess_SpentGradesExpiringWithCause(t *testing.T) {
+	now := awsSSOTestFixedNow
+	blob := awsSSOBlob{
+		AccessToken: "a", RefreshToken: "r", StartURL: "https://x.awsapps.com/start",
+		Region: "us-east-1", AccountID: "1", RoleName: "R",
+		ExpiresAt:             now.Add(20 * time.Minute),
+		RegistrationExpiresAt: now.Add(90 * 24 * time.Hour),
+	}
+	scope := awsSSOScope{perUser: true, owner: "m"}
+	got := setupModelAccess(agentRoster(mechanismRow()), blob, true, true, scope, true, now)
+	if got.State != modelAccessExpiring {
+		t.Fatalf("state = %q, want expiring", got.State)
+	}
+	wantDeadline := blob.ExpiresAt.Add(-awsSSORefreshSkew).UTC().Format(time.RFC3339)
+	if got.Deadline != wantDeadline {
+		t.Errorf("deadline = %q, want ExpiresAt-skew %q", got.Deadline, wantDeadline)
+	}
+	if got.Cause != causeRenewalSpent {
+		t.Errorf("cause = %q, want %q", got.Cause, causeRenewalSpent)
+	}
+	if got.Action != fmt.Sprintf(modelAccessExpiringAction, wantDeadline) {
+		t.Errorf("action = %q, does not name the graded deadline", got.Action)
+	}
+
+	// The admin checklist row must use the spent-specific sentence, not the
+	// registration one — it would say something false about why this credential
+	// stops working.
+	h := SetupHarness{Provider: awsSSOProvider, Captured: true, ExpiresAt: blob.ExpiresAt.Format(time.RFC3339)}
+	row, shown := harnessCredentialCheck(h, got)
+	if !shown {
+		t.Fatal("the AWS row must be shown for a captured session")
+	}
+	if want := fmt.Sprintf(harnessCredentialAWSRenewalSpentDetail, wantDeadline); row.Detail != want {
+		t.Errorf("admin row detail = %q, want the renewal-spent sentence through the constant: %q", row.Detail, want)
+	}
+	if !strings.Contains(row.Detail, wantDeadline) {
+		t.Errorf("admin row detail = %q, does not name the graded deadline", row.Detail)
 	}
 }
 
@@ -389,7 +530,7 @@ func TestAWSSSOCredentialState_TheFiveStates(t *testing.T) {
 // chip it always did rather than claiming a state nobody configured.
 func TestSetupModelAccess_SilentWithNothingToSay(t *testing.T) {
 	now := awsSSOTestFixedNow
-	if got := setupModelAccess(types.SiteConfig{}, awsSSOBlob{}, false, awsSSOScope{}, true, now); got.State != "" {
+	if got := setupModelAccess(types.SiteConfig{}, awsSSOBlob{}, false, false, awsSSOScope{}, true, now); got.State != "" {
 		t.Errorf("legacy open mode with no capture must say nothing, got %+v", got)
 	}
 	// A declared bedrock_sso lane speaks even with nothing captured — that IS
@@ -398,7 +539,7 @@ func TestSetupModelAccess_SilentWithNothingToSay(t *testing.T) {
 		ID: "claude-code", Mechanism: types.AgentMechanismBedrockSSO,
 		CredentialSource: types.CredentialSourcePerUser, SSOStartURL: "https://acme.awsapps.com/start",
 	}
-	got := setupModelAccess(agentRoster(row), awsSSOBlob{}, false, awsSSOScope{perUser: true, owner: "m"}, true, now)
+	got := setupModelAccess(agentRoster(row), awsSSOBlob{}, false, false, awsSSOScope{perUser: true, owner: "m"}, true, now)
 	if got.State != modelAccessNotConfigured || got.Mechanism != string(types.AgentMechanismBedrockSSO) || got.Action == "" {
 		t.Errorf("a declared per_user lane with no capture = %+v, want not_configured with a mechanism and an action", got)
 	}
@@ -421,7 +562,7 @@ func mechanismRow() types.AgentProvider {
 // caller cannot take.
 func TestSetupModelAccess_AdminTokenUnderPerUserIsNotApplicable(t *testing.T) {
 	scope := awsSSOScope{perUser: true, owner: adminTokenPrincipal}
-	got := setupModelAccess(agentRoster(mechanismRow()), awsSSOBlob{}, false, scope, true, awsSSOTestFixedNow)
+	got := setupModelAccess(agentRoster(mechanismRow()), awsSSOBlob{}, false, false, scope, true, awsSSOTestFixedNow)
 	if got.State != modelAccessNotApplicable {
 		t.Fatalf("state = %q, want not_applicable", got.State)
 	}
@@ -440,7 +581,7 @@ func TestSetupModelAccess_AdminTokenWithACapturedSessionGradesItNormally(t *test
 	scope := awsSSOScope{perUser: true, owner: adminTokenPrincipal}
 	blob := sharedExpiringBlob(now)
 	blob.RegistrationExpiresAt = now.Add(30 * 24 * time.Hour) // far outside modelAccessExpiringWindow
-	got := setupModelAccess(agentRoster(mechanismRow()), blob, true, scope, true, now)
+	got := setupModelAccess(agentRoster(mechanismRow()), blob, true, false, scope, true, now)
 	if got.State == modelAccessNotApplicable {
 		t.Fatalf("a REAL captured session must be graded, not hidden behind not_applicable: %+v", got)
 	}
@@ -456,7 +597,7 @@ func TestSetupModelAccess_AdminTokenWithACapturedSessionGradesItNormally(t *test
 // principal — not_configured with a real sign-in action, never not_applicable.
 func TestSetupModelAccess_AdminTokenNoOIDCKeepsTodaysStates(t *testing.T) {
 	scope := awsSSOScope{perUser: true, owner: adminTokenPrincipal}
-	got := setupModelAccess(agentRoster(mechanismRow()), awsSSOBlob{}, false, scope, false, awsSSOTestFixedNow)
+	got := setupModelAccess(agentRoster(mechanismRow()), awsSSOBlob{}, false, false, scope, false, awsSSOTestFixedNow)
 	if got.State == modelAccessNotApplicable {
 		t.Fatalf("no OIDC ⇒ the admin token is the only capture path here, got %+v", got)
 	}
@@ -470,7 +611,7 @@ func TestSetupModelAccess_AdminTokenNoOIDCKeepsTodaysStates(t *testing.T) {
 // reading not_configured (a real sign-in it can complete), not not_applicable.
 func TestSetupModelAccess_LocalOperatorIsAPerson(t *testing.T) {
 	scope := awsSSOScope{perUser: true, owner: "local:operator"}
-	got := setupModelAccess(agentRoster(mechanismRow()), awsSSOBlob{}, false, scope, true, awsSSOTestFixedNow)
+	got := setupModelAccess(agentRoster(mechanismRow()), awsSSOBlob{}, false, false, scope, true, awsSSOTestFixedNow)
 	if got.State == modelAccessNotApplicable {
 		t.Fatalf("local mode's own seat is a real person, not the mechanism principal, got %+v", got)
 	}
@@ -991,9 +1132,12 @@ func TestAWSSSOCredentialRow_NamesTheGradedDeadline(t *testing.T) {
 	}
 	ma := setupModelAccess(agentRoster(types.AgentProvider{
 		ID: modelAccessAgent, Mechanism: types.AgentMechanismBedrockSSO,
-	}), blob, true, awsSSOScope{}, true, now)
+	}), blob, true, false, awsSSOScope{}, true, now)
 	if ma.State != modelAccessExpiring {
 		t.Fatalf("state = %q, want expiring", ma.State)
+	}
+	if ma.Cause != causeRegistrationLapsing {
+		t.Errorf("cause = %q, want %q — this blob is renewable, not spent", ma.Cause, causeRegistrationLapsing)
 	}
 	h := SetupHarness{
 		Provider: awsSSOProvider, Captured: true,
@@ -1003,6 +1147,9 @@ func TestAWSSSOCredentialRow_NamesTheGradedDeadline(t *testing.T) {
 	row, shown := harnessCredentialCheck(h, ma)
 	if !shown {
 		t.Fatal("the AWS row must be shown for a captured session")
+	}
+	if renewalSpentPrefix := strings.SplitN(harnessCredentialAWSRenewalSpentDetail, "%s", 2)[0]; strings.HasPrefix(row.Detail, renewalSpentPrefix) {
+		t.Errorf("admin row detail = %q, must NOT use the renewal-spent sentence for a registration lapsing on schedule", row.Detail)
 	}
 	wantDeadline := blob.RegistrationExpiresAt.UTC().Format(time.RFC3339)
 	if !strings.Contains(row.Detail, wantDeadline) {

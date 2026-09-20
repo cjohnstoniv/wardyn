@@ -12,7 +12,10 @@
 // parks the sandbox while the run is still RUNNING, so the state says nothing
 // about it — the signal comes from the PENDING approvals list, joined here.
 import type { AgentRun, ApprovalRequest } from "../../../lib/types";
-import { isHeld } from "../../wardyn/live-approvals";
+// THE PREDICATE, not the strip: importing it from live-approvals.tsx hoisted
+// that whole module (and everything it imports) into the eager entry chunk —
+// see isHeld's own doc in lib/types/approvals.ts.
+import { isHeld } from "../../../lib/types";
 import {
   attentionFor,
   attentionRank,
@@ -28,6 +31,10 @@ const ATTENTION_RANK = 3;
  *  card states ("2 waiting · sandbox held"). */
 interface RunApprovalSignals extends AttentionSignals {
   pending: number;
+  /** At least one pending row is a mid-run AWS sign-in request — the board and
+   *  the cockpit header then say "Waiting for your AWS sign-in" instead of
+   *  "sandbox held", because this hold is the person's own to clear. */
+  reauth?: boolean;
 }
 
 export type RunSignals = ReadonlyMap<string, RunApprovalSignals>;
@@ -59,6 +66,11 @@ export function approvalSignals(pending: readonly ApprovalRequest[]): RunSignals
     // never downgrade that.
     if (isHeld(a)) cur.held = true;
     else cur.passiveHold = true;
+    // A mid-run AWS sign-in request is the ONE hold a person can act on
+    // directly, and the board and the cockpit header say so instead of the
+    // generic "sandbox held" — which would send them looking for an Approve
+    // button that does not exist for this kind.
+    if (a.kind === "credential_reauth") cur.reauth = true;
     by.set(a.run_id, cur);
   }
   return by;

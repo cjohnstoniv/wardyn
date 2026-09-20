@@ -15,6 +15,9 @@
 package egress
 
 import (
+	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -48,6 +51,25 @@ type DecisionLog struct {
 	Decision   Decision   `json:"decision"`
 	RuleSource string     `json:"rule_source"` // "policy" | "approval:<id>" | "builtin:private-ip" | "builtin:resolve-failed" | ...
 	ApprovalID *uuid.UUID `json:"approval_id,omitempty"`
+	// Cause is the masked, topology-redacted sentence naming WHY a builtin
+	// dial-shaped refusal happened and at what STAGE (a TCP dial, the origin's
+	// TLS handshake, the operator's own upstream-proxy CONNECT exchange) —
+	// never just "dial failed", which is the one lie that cost a reported
+	// operator an hour tracing a corp-proxy 502 back to its cause. It runs
+	// through the SAME two passes a sandbox-facing error body already does
+	// (maskDecisionBytes, then Proxy.redactTopology) before it ever reaches
+	// this field: auditScope (internal/api/audit.go) hands a run's OWN CREATOR
+	// this whole row, not just the operator (docs/AUDIT-ACTIONS.md), so the
+	// full unredacted text stays on the sidecar's own slog.Warn line and never
+	// rides the wire twice. Empty on every decision that is not a dial-shaped
+	// refusal.
+	Cause string `json:"cause,omitempty"`
+	// Via names the CLASS of hop a dial-shaped refusal attempted —
+	// "upstream-proxy" or "direct" — and NEVER an address: an address is
+	// exactly the topology Cause's redaction pass exists to strip, and Via
+	// must not reopen that hole beside it. Empty on every decision that is not
+	// a dial-shaped refusal.
+	Via string `json:"via,omitempty"`
 	// Scan, when non-nil, carries the OUTBOUND content-inspection summary for an
 	// LLM route decision (off-by-default; nil when inspection is disabled). It
 	// makes per-decision coverage honest: a tunneled-opaque LLM CONNECT is
@@ -134,6 +156,107 @@ type InjectionRule struct {
 	//
 	// Default false = today's behaviour, so no shipped policy changes meaning.
 	RequireTLS bool `json:"require_tls,omitempty"`
+	// PinPath and PinQuery narrow this rule's credential to ONE request shape:
+	// a GET of PinPath whose query carries exactly these key=value pairs. Any
+	// other request to the same host is forwarded WITHOUT the header, and the
+	// origin answers it however it answers an unauthenticated call — nothing
+	// Wardyn holds is exposed either way.
+	//
+	// It exists because an injected credential otherwise rides EVERY request the
+	// sandbox makes to that host. For the captured-AWS-SSO lane that includes
+	// `POST /logout`, which AWS documents as invalidating the owner's server-side
+	// sign-in session, and a GetRoleCredentials for any other account/role the
+	// session holds. In 0.7.5 the token was resident in the sandbox, so its reach
+	// was the same and nothing could narrow it; proxy-side injection is the first
+	// point at which an admin-asserted identity can become an enforced one.
+	//
+	// Both empty = unpinned = today's behaviour, which is every other rule.
+	PinPath  string            `json:"pin_path,omitempty"`
+	PinQuery map[string]string `json:"pin_query,omitempty"`
+}
+
+// Pinned reports whether this rule narrows its credential to one request shape.
+func (r InjectionRule) Pinned() bool { return r.PinPath != "" }
+
+// AllowsInjection reports whether a request may carry this rule's credential.
+// An UNPINNED rule allows every request, which is what every rule but the
+// captured-AWS-SSO one does today.
+//
+// IT TAKES THE RAW QUERY, NOT url.Values, and that is the whole correctness of
+// the query arm (security re-round SHOULD-1). Matching on a parsed
+// url.Values.Get accepted four shapes that carry a SECOND account or role
+// alongside the pinned one, with the credential attached and RawQuery forwarded
+// verbatim:
+//
+//	account_id=<pinned>&account_id=other          Get returns the first value
+//	role_name=<pinned>&role_name=other            likewise
+//	...&x=1;account_id=other                      Go >= 1.17 DROPS a pair containing
+//	                                              ';', so the pin never sees it
+//	account_id=<pinned>&account%5Fid=other        a second spelling of the key
+//
+// Whether the ORIGIN honours the extra value is its own business — the fake
+// takes the first, and the real portal's duplicate-parameter and ';' semantics
+// are undocumented and could not be measured offline. That is exactly why this
+// refuses them: a pin that a second &account_id= can argue with is enforced only
+// for origins that happen to take the first value, and the threat model says
+// this pair is ENFORCED.
+//
+// So the query must be unambiguous by construction: no ';' in the raw query at
+// all, every pinned key present EXACTLY once, each equal to the pin, and no key
+// whose literal spelling differs from its decoded one. Other keys are left
+// alone — the pin narrows WHICH account and role the session may be spent on,
+// not what else a caller may ask for.
+func (r InjectionRule) AllowsInjection(method, path, rawQuery string) bool {
+	if !r.Pinned() {
+		return true
+	}
+	if method != http.MethodGet || path != r.PinPath {
+		return false
+	}
+	if len(r.PinQuery) == 0 {
+		return true
+	}
+	// ';' is refused on the RAW query, before any parse. DEFENCE IN DEPTH, and
+	// labelled as such: on this Go, url.ParseQuery already answers
+	// "invalid semicolon separator in query" and the err arm below refuses it —
+	// verified, not assumed. It is spelled out anyway because that behaviour is
+	// exactly what CHANGED in Go 1.17 (before it, ';' was accepted as a
+	// separator, which is this bypass), so the refusal should not be a property
+	// of whichever parser happens to be linked.
+	if strings.Contains(rawQuery, ";") {
+		return false
+	}
+	vals, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return false
+	}
+	// ONE SPELLING PER KEY. A key whose literal bytes differ from its decoded
+	// form (account%5Fid, account+id, ...) is a second way to write a name this
+	// rule pins, and the origin may read it as the first.
+	//
+	// ALSO defence in depth today: ParseQuery DECODES keys, so account%5Fid
+	// lands in vals["account_id"] and the one-value arm below already refuses it
+	// (verified). What this adds is independence from that decoding — a spelling
+	// the parser does NOT fold would otherwise reach the origin unexamined —
+	// and it is why the refusal reads the same for every encoding trick rather
+	// than only for the ones Go happens to normalise.
+	for _, pair := range strings.Split(rawQuery, "&") {
+		if pair == "" {
+			continue
+		}
+		literal, _, _ := strings.Cut(pair, "=")
+		decoded, derr := url.QueryUnescape(literal)
+		if derr != nil || decoded != literal {
+			return false
+		}
+	}
+	for k, want := range r.PinQuery {
+		got := vals[k]
+		if len(got) != 1 || got[0] != want {
+			return false
+		}
+	}
+	return true
 }
 
 // ValidHeaderName reports whether name is a legal HTTP field-name — an RFC 9110

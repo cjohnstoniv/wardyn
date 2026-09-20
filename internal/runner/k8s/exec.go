@@ -204,12 +204,15 @@ func (d *Driver) Wait(ctx context.Context, ref string) (int, error) {
 			if !slices.ContainsFunc(pod.Spec.EphemeralContainers, func(ec corev1.EphemeralContainer) bool { return ec.Name == execContainerName }) {
 				return 0, fmt.Errorf("k8s: exec wait: no agent exec tracked for ref %q (Exec not called?)", ref)
 			}
+			if st, done := terminalExecStatus(pod, execContainerName); done {
+				if st.ExitCode != nil {
+					return *st.ExitCode, nil
+				}
+				return notFoundExitCode, nil
+			}
 			for _, cs := range pod.Status.EphemeralContainerStatuses {
 				if cs.Name != execContainerName {
 					continue
-				}
-				if t := cs.State.Terminated; t != nil {
-					return int(t.ExitCode), nil
 				}
 				// Fail closed on a Waiting status the platform will never
 				// resolve on its own (terminalWaitingReasons, canary.go) --
@@ -260,13 +263,12 @@ func (d *Driver) AgentStatus(ctx context.Context, ref, agentExecID string) (runn
 		}
 		return runner.Status{}, fmt.Errorf("k8s: agent status: get pod: %w", err)
 	}
+	if st, done := terminalExecStatus(pod, agentExecID); done {
+		return st, nil
+	}
 	for _, cs := range pod.Status.EphemeralContainerStatuses {
 		if cs.Name != agentExecID {
 			continue
-		}
-		if t := cs.State.Terminated; t != nil {
-			code := int(t.ExitCode)
-			return runner.Status{State: types.RunStopped, ExitCode: &code}, nil
 		}
 		if cs.State.Running != nil {
 			return runner.Status{State: types.RunRunning}, nil
@@ -297,6 +299,25 @@ func (d *Driver) AgentStatus(ctx context.Context, ref, agentExecID string) (runn
 		}
 	}
 	return runner.Status{State: types.RunStopped, Message: "agent exec not found"}, nil
+}
+
+func terminalExecStatus(pod *corev1.Pod, execID string) (runner.Status, bool) {
+	for _, cs := range pod.Status.EphemeralContainerStatuses {
+		if cs.Name == execID && cs.State.Terminated != nil {
+			code := int(cs.State.Terminated.ExitCode)
+			return runner.Status{State: types.RunStopped, ExitCode: &code}, true
+		}
+	}
+	// Eviction or node loss can terminate the pod without an updated exec status.
+	// The idle main container's success does not prove the task finished.
+	switch pod.Status.Phase {
+	case corev1.PodFailed:
+		return runner.Status{State: types.RunFailed, Message: failureDetail(pod)}, true
+	case corev1.PodSucceeded:
+		return runner.Status{State: types.RunFailed, Message: "sandbox stopped without an agent exit status"}, true
+	default:
+		return runner.Status{}, false
+	}
 }
 
 // execNeverStartedReasons are the Waiting reasons under which the ephemeral

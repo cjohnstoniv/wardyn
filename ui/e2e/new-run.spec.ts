@@ -13,14 +13,16 @@
 // preset stack and a dialog; the spec JSON is the envelope now.
 //
 // Notes on the seeded backend (scripts/e2e-backend.sh): wardynd runs with
-// -runner none, so /healthz advertises NO confinement_classes — unknown, not
-// confirmed-absent, so all three barrier tiers stay selectable and the runner
-// capability gate (runs_create.go) is skipped entirely. There IS an
+// -runner none, so /setup/status reports runner.driver:"none" — no runner AT
+// ALL, which new-run-screen.tsx treats as unknown availability, not
+// confirmed-absent (0.7.8), so all three barrier tiers stay selectable and the
+// runner capability gate (runs_create.go) is skipped entirely. There IS an
 // ai_provider integration now (console-agents, 0.7.3: a Bedrock region+model
 // are configured for the roster-pin e2e), so the model-provider warning
 // below is unconditionally absent, not merely an environment fact.
 import { test, expect, gotoConsole, ADMIN_TOKEN, launchRun } from "./fixtures";
 import { RAIL_CREDENTIAL, RAIL_RECORDING_ON, RECORDING_DISABLED_TITLE, RUN } from "../src/app/components/wardyn/copy";
+import { MODEL_ACCESS_BANNER, RAIL_MODEL_ACCESS } from "../src/app/components/wardyn/model-access-copy";
 import { CC_META } from "../src/app/components/wardyn/cc-meta";
 import { AGENTS, PROVIDERS } from "../src/app/lib/workspace-providers-copy";
 import type { Page } from "@playwright/test";
@@ -616,5 +618,80 @@ test.describe("New run rail — credentials and recording are read, not asserted
     expect(box, "Launch run boundingBox").not.toBeNull();
     expect(box!.y, "Launch run top edge").toBeGreaterThanOrEqual(0);
     expect(box!.y + box!.height, "Launch run bottom edge").toBeLessThanOrEqual(650);
+  });
+
+  // Finding 1: model_access is a per-PERSON fact, independent of the
+  // deployment-wide llm_ready check the other cases in this describe cover.
+  // This daemon declares no per-user roster (scripts/e2e-backend.sh), so the
+  // state is faked at the wire the same way the height case above fakes
+  // credential_residency — the LIVE proof against a real captured/lapsed
+  // session is e2e-sso-path's case A(rail)+.
+  // The per_user claude-code row every launch-door case below runs under.
+  async function perUserRow(page: Page) {
+    await page.route("**/api/v1/setup/status*", async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      body.model_access = { state: "not_configured", action: AGENTS.SIGN_IN_AWS };
+      body.harnesses = (body.harnesses ?? []).map((h: { id: string }) =>
+        h.id === "claude-code"
+          ? { ...h, enabled: true, mechanism: "bedrock_sso", credential_source: "per_user" }
+          : h,
+      );
+      await route.fulfill({ response, json: body });
+    });
+  }
+  // The exact refusal is dispatch's own (llmMechanismRefusal) — these pin the
+  // WIRING (create's 422 lands untruncated in the rail, launch.error), not
+  // the server's wording, which the door/dispatch lanes own.
+  const refusal = "this deployment gives each person their own AWS sign-in; sign in before launching.";
+  async function refuseLaunch(page: Page, body: Record<string, string>) {
+    await page.route("**/api/v1/runs", async (route) => {
+      if (route.request().method() !== "POST") return route.fallback();
+      await route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify(body) });
+    });
+  }
+
+  test("a not_configured claude-code row states the rail's own sign-in, and a Launch 422 carrying reason model_credential opens the sign-in itself", async ({
+    page,
+  }) => {
+    await perUserRow(page);
+    // 0.7.7: the create-time credential refusal names its class; the rail
+    // answers it with the door, with no click on any sign-in control.
+    await refuseLaunch(page, { error: refusal, reason: "model_credential" });
+
+    await openNewRun(page);
+    await expect(page.getByText(RAIL_MODEL_ACCESS.NOT_SIGNED_IN)).toBeVisible();
+    await expect(page.getByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeVisible();
+    // The distinct name (U-13): the strip's/Getting Started's own control is
+    // never reached from the rail. `exact: true` matters here — Playwright's
+    // getByRole name match is substring by default, and the rail's own
+    // accessible name ("Sign in to AWS — from the New Run rail") CONTAINS this
+    // string, which would otherwise pass for the wrong reason.
+    await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true })).toHaveCount(0);
+
+    await page.getByLabel("Title").fill("e2e model access refusal");
+    await page.getByRole("button", { name: "Launch run" }).click();
+    await expect(page.getByText(refusal)).toBeVisible();
+    // The door opened itself: the dialog, with the real pane in it.
+    await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible();
+    await expect(page.getByTestId("harness-login-pane")).toBeVisible();
+    // Escape: nothing launched, the sentence stays, the rail's own control
+    // (there throughout under not_configured) is usable, and the page never left.
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("harness-login-pane")).toHaveCount(0);
+    await expect(page.getByText(refusal)).toBeVisible();
+    await expect(page.getByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeVisible();
+    await expect(page).toHaveURL(/\/runs\/new$/);
+  });
+
+  test("a Launch 422 with no reason — a policy error — shows the sentence and opens nothing", async ({ page }) => {
+    await perUserRow(page);
+    await refuseLaunch(page, { error: refusal });
+    await openNewRun(page);
+    await page.getByLabel("Title").fill("e2e plain refusal");
+    await page.getByRole("button", { name: "Launch run" }).click();
+    await expect(page.getByText(refusal)).toBeVisible();
+    await expect(page.getByTestId("harness-login-pane")).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toHaveCount(0);
   });
 });

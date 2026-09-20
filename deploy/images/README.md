@@ -165,7 +165,7 @@ gains `tmux` (the same attach-shell fallback chain as every other image) and
 the same two SSH-gateway binaries, but deliberately **not** `openssh-client`/
 `corkscrew`/baked host keys — its SSH-clone story is unchanged.
 
-### An image that runs Claude Code (`claude-code`, `full`, BYOI `FROM agent-base`)
+### An image that runs Claude Code (`claude-code`, `full`, BYOI `FROM ghcr.io/cjohnstoniv/agent-base:0.7.6`)
 
 Also not part of the numbered contract — no other agent's CLI reads any of it —
 but an image whose agent is **Claude Code** must carry two things, or its first
@@ -173,7 +173,7 @@ interactive run parks first-use approvals on hosts the operator never chose and
 opens on a product tour instead of the agent:
 
 1. **These three `ENV` lines, in the Dockerfile.** `agent-base` already sets
-   them, so `FROM agent-base` inherits them and a BYOI author needs to do
+   them, so `FROM ghcr.io/cjohnstoniv/agent-base:0.7.6` inherits them and a BYOI author needs to do
    nothing; an image built from some other base must set them itself.
 
    ```dockerfile

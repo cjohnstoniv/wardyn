@@ -25,7 +25,7 @@ import { Loader2, ShieldCheck, TriangleAlert, KeyRound, Square, ExternalLink, Co
 import { HttpError } from "../../../lib/api/core";
 import { harnessAuth as harnessAuthApi } from "../../../lib/api/harness-auth";
 import { runs as runsApi } from "../../../lib/api/runs";
-import { isTerminalRunState } from "../../../lib/types";
+import { isTerminalRunState, type AgentRun } from "../../../lib/types";
 import { usePoll } from "../../../lib/use-poll";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import { AttachTerminal, type AttachTerminalHandle } from "../../attach-terminal";
@@ -34,47 +34,51 @@ import { Input } from "../../ui/input";
 import {
   LOGIN_SANDBOX_READ_RETRYING,
   LOGIN_SANDBOX_SLOW_START,
+  LOGIN_SANDBOX_STUCK_LEAD_IN,
   startWaitVerdict,
   type StartWaitVerdict,
 } from "./login-start-wait";
+import { isTerminalStatusReason, statusDetailSentence } from "../run-status-detail";
 import {
   CAPTURE_CHECK_UNREACHABLE,
+  CAPTURE_HANDOFF,
   CAPTURE_NOT_CORROBORATED,
   CAPTURE_VERIFYING,
   confirmCaptureWithServer,
+  extractSignedIn,
+  watchForCapture,
 } from "./capture-confirm";
 
 // RE-EXPORTED, not re-declared (R1-F7): the corroboration rule and its refusal
 // sentence moved to capture-confirm.ts to keep this file under the size cap, and
 // every existing importer — this pane's tests, ui/e2e — keeps its import path.
 export { CAPTURE_NOT_CORROBORATED, serverConfirmsCapture } from "./capture-confirm";
+// Finding 7a: the verification tab's open/navigate/close lifecycle.
+import { AUTH_TAB_BLOCKED_NOTE, openAuthTab, type AuthTab } from "./auth-tab-handle";
 import {
-  AWS_BLURB_MANAGED_OPENING,
   LOGIN_SANDBOX_STARTING,
   LOGIN_SANDBOX_UNREADABLE,
   SELFRUN_MARKER,
 } from "./login-pane-copy";
 export { LOGIN_SANDBOX_STARTING, LOGIN_SANDBOX_UNREADABLE, SELFRUN_MARKER } from "./login-pane-copy";
-
-// DRAFT (M2 canon pending) — U2-05 (blind round 2, lens-U2): the refusal
-// sentence below the lead-in is the SANDBOX's prose, printed by
-// cmd/wardyn-aws-sso — the very binary a forged login image replaces (the S-13
-// threat model, applied to the success path). Rendered bare inside Wardyn's
-// own warning box it read as Wardyn's finding. This fixed, Wardyn-authored
-// lead-in names the speaker; FAIL_SENTENCE_MAX bounds what the speaker gets to
-// say, client-side, rather than trusting the helper's own 300-rune cap.
-export const SANDBOX_REFUSAL_LEAD_IN = "The login sandbox reported:";
-// Same bound wardyn-aws-sso applies (main.go), re-applied where a replaced
-// image cannot reach it.
-const FAIL_SENTENCE_MAX = 300;
-// RV-03: and the same ANSI strip, for the same reason — CSI (colour, cursor),
-// OSC (title/hyperlink, terminated by BEL or ST) and the bare Fe escapes. A
-// sandbox that can print its own sentence can print escape bytes around it;
-// stripping them here means the 300-char budget is spent on characters the
-// operator actually reads, and the alert renders text rather than control
-// codes. Runs BEFORE the cap.
-// eslint-disable-next-line no-control-regex
-const ANSI_ESCAPES = /\u001b(?:\][^\u0007\u001b]*(?:\u0007|\u001b\\)?|\[[0-9;:?]*[ -/]*[@-~]|[@-Z\\-_])/g;
+// review-1 S4: the per-provider flow table is pure data + one presentational
+// component (ExpectList) — EXTRACTED to login-flows.tsx to keep this file
+// under the size cap. Re-exported so agents-tab.tsx and this pane's own
+// pinned tests keep their import path.
+import { ExpectList, loginFlow } from "./login-flows";
+export { loginFlow, LOGIN_FLOWS } from "./login-flows";
+export type { CaptureMode, LoginFlow } from "./login-flows";
+// review-1 S4: the raw-PTY extractors are pure functions — no React, no pane
+// state — EXTRACTED to login-pty-extract.ts to keep this file under the size
+// cap. Re-exported so this pane's own pinned tests keep their import path.
+import {
+  SANDBOX_REFUSAL_LEAD_IN,
+  extractAuthUrl,
+  extractDeviceVerificationUrl,
+  extractFailSentence,
+  extractSetupToken,
+} from "./login-pty-extract";
+export { SANDBOX_REFUSAL_LEAD_IN, extractAuthUrl, extractFailSentence, extractSetupToken } from "./login-pty-extract";
 
 // "intro" is the consent gate: nothing launches until the operator has read
 // what is about to happen and clicked Start. The pane used to fire on mount —
@@ -128,48 +132,6 @@ const LOGIN_SANDBOX_ENDED = "The sign-in sandbox stopped before it was ready —
 // SELFRUN_MARKER itself is declared in ./login-pane-copy for the same reason.
 const SELFRUN_GRACE_MS = 12_000;
 
-// Per-provider login conventions. Adding a provider is a new row here (mirrors
-// the server-side agentHarnessLogin table), not a forked component.
-//
-// The two flows differ in HOW the credential comes back:
-//   · anthropic — `claude setup-token` PRINTS the token, so we scrape it off the
-//     PTY and PUT it (capture: "scrape").
-//   · aws — `aws sso login` writes its token to ~/.aws/sso/cache/*.json and
-//     prints only a short-lived device code + verification URL. The in-sandbox
-//     `wardyn-aws-sso` helper uploads the file through the brokered internal
-//     endpoint, so the pane never sees (and must never scrape) a credential —
-//     it just watches for the helper's success marker (capture: "helper").
-type CaptureMode = "scrape" | "helper";
-type LoginFlow = {
-  cmd: string;
-  title: string;
-  // U-8: taken as a FUNCTION of `startURLManaged` because the aws flow's opening
-  // clause is false under a managed row (there is no field, and the server
-  // ignores a supplied URL). Every other flow ignores the argument.
-  blurb: (startURLManaged: boolean) => React.ReactNode;
-  capture: CaptureMode;
-  // What the "done" phase's success line names as connected — provider-specific
-  // so an AWS SSO capture never claims a Claude subscription (or vice versa).
-  doneLabel: string;
-  // Marker the in-sandbox helper prints on success (capture: "helper" only).
-  doneMarker?: string;
-  // Marker the in-sandbox helper prints on a refused capture (capture: "helper"
-  // only). Unused for now — cmd/wardyn-aws-sso's TestFailMarker_UIParity reads
-  // this literal by source parse, the same way TestSuccessMarker_UIParity reads
-  // doneMarker above, so it stays byte-identical across the two languages.
-  failMarker?: string;
-  // The flow cannot start until the operator supplies their AWS access-portal
-  // start URL: `aws sso login` reads sso_start_url + sso_region from the
-  // sandbox's ~/.aws/config, and Wardyn stores no start URL anywhere (the region
-  // is boot config; the start URL is per-organization and asked for here). The
-  // server seeds both into the sandbox before the command is auto-typed.
-  needsStartUrl?: boolean;
-  // "What happens next" — shown BEFORE anything launches (the intro phase, or
-  // above the AWS start-URL form), so the terminal and the browser auth prompt
-  // arrive announced. Includes what is required of the operator.
-  expects: React.ReactNode[];
-};
-
 // isLikelyStartUrl mirrors the server's validateSSOStartURL (harnesscred.go) so
 // the operator sees the problem before a round trip. Deliberately loose — the
 // server is the authority, and the egress policy, not this check, decides what
@@ -177,85 +139,6 @@ type LoginFlow = {
 export function isLikelyStartUrl(s: string): boolean {
   const v = s.trim();
   return /^https:\/\/[^\s/]+/.test(v);
-}
-
-const LOGIN_FLOWS: Record<string, LoginFlow> = {
-  anthropic: {
-    cmd: "claude setup-token",
-    title: "Connect a Claude subscription via container login",
-    capture: "scrape",
-    doneLabel: "your Claude subscription is connected",
-    expects: [
-      <>
-        A sandboxed login run starts and a terminal appears here, running{" "}
-        <code className="rounded bg-background/70 px-1 py-0.5 font-mono">claude setup-token</code>. Nothing on this
-        machine is touched.
-      </>,
-      <>
-        A new tab opens on claude.ai asking you to sign in and approve — you&apos;ll need an active Claude
-        subscription. If the pop-up is blocked, a click-through link appears here instead.
-      </>,
-      <>Some logins hand you a code: paste it into the field under the terminal, not the terminal itself.</>,
-      <>
-        The token it prints is captured, stored write-only, and the login sandbox is shut down. Runs get it injected
-        proxy-side — a run&apos;s sandbox never holds it.
-      </>,
-    ],
-    blurb: () => (
-      <>
-        Wardyn opened a sandbox and is running{" "}
-        <code className="rounded bg-background/70 px-1 py-0.5 font-mono">claude setup-token</code> for you. It opens the
-        Claude login page in a new tab — approve it, then paste the code it gives you into the{" "}
-        <span className="font-medium">field below</span> (not the terminal) and hit Send. Wardyn captures the printed
-        token automatically and connects your subscription; the token is injected proxy-side into every run and the
-        sandbox never holds a live credential.
-      </>
-    ),
-  },
-  aws: {
-    // --sso-session wardyn selects the [sso-session wardyn] block the server
-    // seeded into ~/.aws/config; chained so the helper uploads the moment the
-    // login succeeds — the operator never has to run a second command.
-    cmd: "aws sso login --sso-session wardyn --no-browser --use-device-code && wardyn-aws-sso",
-    title: "Connect an AWS SSO session via container login",
-    doneLabel: "your AWS SSO session is connected",
-    capture: "helper",
-    doneMarker: "wardyn: aws sso credential captured",
-    failMarker: "wardyn: aws sso credential rejected:",
-    needsStartUrl: true,
-    expects: [
-      <>
-        A sandboxed login run starts and a terminal appears here, running{" "}
-        <code className="rounded bg-background/70 px-1 py-0.5 font-mono">aws sso login</code> — with no credential to
-        start from.
-      </>,
-      <>
-        A browser tab opens the AWS verification page: enter the short code the terminal shows and approve with your
-        IAM Identity Center login.
-      </>,
-      <>
-        The SSO session is uploaded from inside the sandbox and stored write-only; Bedrock runs exchange it for
-        short-lived role credentials.
-      </>,
-    ],
-    blurb: (startURLManaged: boolean) => (
-      <>
-        {startURLManaged ? `${AWS_BLURB_MANAGED_OPENING} Wardyn` : "Give Wardyn your organization\u2019s AWS access portal URL and it"}{" "}
-        opens a sandbox, writes a minimal{" "}
-        <code className="rounded bg-background/70 px-1 py-0.5 font-mono">~/.aws/config</code> holding just that URL and
-        the configured SSO region (no credential — the sandbox has none to start with), and runs{" "}
-        <code className="rounded bg-background/70 px-1 py-0.5 font-mono">aws sso login</code> for you. It prints a
-        verification URL and a short user code — open the link in any browser, enter the code, and approve. Wardyn then
-        captures the SSO session automatically so later Bedrock runs can exchange it for short-lived role credentials —
-        with no host <code className="rounded bg-background/70 px-1 py-0.5 font-mono">~/.aws</code> mount and no static
-        keys.
-      </>
-    ),
-  },
-};
-
-export function loginFlow(provider: string): LoginFlow {
-  return LOGIN_FLOWS[provider] ?? LOGIN_FLOWS.anthropic;
 }
 
 // Force the login terminal wide so `claude setup-token` never hard-wraps the
@@ -269,91 +152,13 @@ export function loginFlow(provider: string): LoginFlow {
 // the URL ends and the next word begins, and a fused tail corrupts &state=.
 const LOGIN_PTY_COLS = 512;
 
-// With the single wide grid above, `claude setup-token` prints the OAuth URL and
-// the sk-ant-oat token each on a SINGLE line, so these two single-line
-// extractors are correct and need no reassembly.
-
-// extractSetupToken pulls a COMPLETE `claude setup-token` token out of a chunk of
-// terminal output. Shape: `sk-ant-oat<2 digits>-<long url-safe body>`. We only
-// return a match followed by another character (newline, ANSI reset, …) — proof
-// the token finished printing — so a token still streaming in (truncated at the
-// buffer's end) is not captured early. Exported for tests.
-export function extractSetupToken(s: string): string | null {
-  const re = /sk-ant-oat\d{2}-[A-Za-z0-9_-]{40,}/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(s)) !== null) {
-    if (m.index + m[0].length < s.length) return m[0];
-  }
-  return null;
-}
-
-// extractFailSentence pulls the sentence off wardyn-aws-sso's refusal line:
-// `<marker> <sentence>`, one line, printed on a REFUSED capture (a
-// wrong-account pin, a portal error — never on success, where doneMarker
-// prints instead). Same trailing-boundary rule as the other extractors: only
-// returns once the line has actually finished printing (a trailing newline),
-// so a still-streaming prefix is never read as the whole refusal. U2-05: and
-// it is stripped of ANSI escapes and capped HERE, at FAIL_SENTENCE_MAX, so
-// both survive a replaced login image (RV-03). Exported for tests.
-export function extractFailSentence(s: string, marker: string): string | null {
-  const idx = s.indexOf(marker);
-  if (idx === -1) return null;
-  const rest = s.slice(idx + marker.length);
-  const nl = rest.indexOf("\n");
-  if (nl === -1) return null;
-  return rest.slice(0, nl).replace(/\r$/, "").replace(ANSI_ESCAPES, "").trim().slice(0, FAIL_SENTENCE_MAX);
-}
-
-// extractAuthUrl pulls the `claude setup-token` OAuth authorization URL out of a
-// chunk of terminal output so we can open it in a new tab. Restricted to the known
-// Claude/Anthropic auth hosts (never api.anthropic.com — that's the token exchange,
-// not a user-facing page). Same trailing-boundary rule as the token so a
-// still-streaming URL isn't opened truncated. Exported for tests.
-export function extractAuthUrl(s: string): string | null {
-  const re = /https:\/\/(?:claude\.ai|claude\.com|console\.anthropic\.com|platform\.claude\.com)\/[^\s'"<>]+/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(s)) !== null) {
-    if (m.index + m[0].length < s.length) return m[0].replace(/[.,)]+$/, "");
-  }
-  return null;
-}
-
-// extractDeviceVerificationUrl pulls the AWS SSO device-authorization verification
-// URL out of `aws sso login --no-browser --use-device-code` output. Restricted to
-// the IAM Identity Center device endpoint + the org access portal; the CLI prints
-// both a bare URL and (usually) a `verificationUriComplete` with ?user_code=…,
-// and we prefer the complete one since it pre-fills the code. Same
-// trailing-boundary rule as the others so a still-streaming URL isn't opened
-// truncated. Exported for tests.
-function extractDeviceVerificationUrl(s: string): string | null {
-  const re = /https:\/\/(?:device\.sso\.[a-z0-9-]+\.amazonaws\.com|[a-z0-9-]+\.awsapps\.com)\/[^\s'"<>]*/gi;
-  let best: string | null = null;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(s)) !== null) {
-    if (m.index + m[0].length >= s.length) continue; // still streaming
-    const url = m[0].replace(/[.,)]+$/, "");
-    // Prefer the pre-filled variant so the operator doesn't retype the code.
-    if (url.includes("user_code=")) return url;
-    best = url;
-  }
-  return best;
-}
-
-// The numbered "what happens next" — the consent gate's content. Each flow
-// states its own steps and what is required of the operator.
-function ExpectList({ items }: { items: React.ReactNode[] }) {
-  return (
-    <ol className="space-y-1.5">
-      {items.map((item, i) => (
-        <li key={i} className="flex gap-2 text-xs leading-relaxed text-muted-foreground">
-          <span className="mt-px inline-flex size-4 shrink-0 items-center justify-center rounded-full border border-border font-mono text-meta text-foreground">
-            {i + 1}
-          </span>
-          <span className="min-w-0">{item}</span>
-        </li>
-      ))}
-    </ol>
-  );
+/** What a PARENT can make this pane do. One verb: the pane owns the login run's
+ *  id, so it is the only thing that can end that run — and a dialog's Escape /
+ *  overlay click closes the PARENT, which `onCancel` (child-to-parent) cannot
+ *  reach back into. Without this a dismissed dialog left a "wardyn: sign-in
+ *  running" run on the member's board for up to 30 minutes. */
+export interface HarnessLoginPaneHandle {
+  cancel: () => void;
 }
 
 export function HarnessLoginPane({
@@ -361,6 +166,7 @@ export function HarnessLoginPane({
   startURLManaged = false,
   onDone,
   onCancel,
+  paneRef,
 }: {
   provider?: string;
   // The ORG's access portal is already stored and the server will use it: this
@@ -378,9 +184,25 @@ export function HarnessLoginPane({
   onDone: () => void;
   // Called when the operator backs out before capturing.
   onCancel: () => void;
+  // Optional: a parent that can be dismissed from OUTSIDE the pane (the
+  // model-access door's dialog) holds this to route that dismissal through the
+  // pane's own cancellation. Omitted everywhere the pane's own Cancel is the
+  // only way out.
+  paneRef?: React.Ref<HarnessLoginPaneHandle>;
 }) {
   const flow = loginFlow(provider);
   const askStartUrl = !!flow.needsStartUrl && !startURLManaged;
+  // review-1 B1: every mount site passes an INLINE `onDone` — a fresh function
+  // identity on every parent re-render. `completeCapture` used to list `onDone`
+  // in its own deps, which put a fresh `completeCapture` in the watch effect's
+  // deps, which tore the watch down and restarted it (a fresh 45-min deadline,
+  // a fresh 5-min grace, the back-off reset to 2s) on every unrelated parent
+  // render — 63 audit reads in 5 minutes, probed. Same ref pattern
+  // attach-terminal.tsx:237-240 already uses for `onOutput`/`autoRun`.
+  const onDoneRef = React.useRef(onDone);
+  React.useEffect(() => {
+    onDoneRef.current = onDone;
+  }, [onDone]);
   const [phase, setPhase] = React.useState<Phase>(askStartUrl ? "prompt" : "intro");
   const [startUrl, setStartUrl] = React.useState("");
   const [runId, setRunId] = React.useState<string | null>(null);
@@ -397,16 +219,53 @@ export function HarnessLoginPane({
   // Reset on every launch attempt (see `launch`), so a refusal cannot outlive
   // the condition that caused it.
   const [refused, setRefused] = React.useState(false);
+  // 0.7.6 finding 6: whether the SUBSTRATE gave a terminal answer. Suppresses
+  // "Try again" for the reason `refused` does — the next attempt earns the same
+  // answer — but a separate flag, because who can fix it differs. Reset per launch.
+  const [stuck, setStuck] = React.useState(false);
   const [authUrl, setAuthUrl] = React.useState("");
   const [code, setCode] = React.useState("");
+  // Finding 7a: the browser blocked even the click-backed tab — 0.7.5's link is the fallback.
+  const [tabBlocked, setTabBlocked] = React.useState(false);
+  // Finding 7b: the CLI's own success line — a HINT (S-13's own reasoning), never trusted alone.
+  const [signedIn, setSignedIn] = React.useState(false);
 
   const termRef = React.useRef<AttachTerminalHandle>(null);
+  // Opened on the click, navigated once the URL is known, closed on every exit path.
+  const authTabRef = React.useRef<AuthTab | null>(null);
+  const closeAuthTab = React.useCallback(() => {
+    authTabRef.current?.close();
+    authTabRef.current = null;
+  }, []);
+  // Aborts the background capture watch (Finding 7b) on unmount/relaunch/cancel.
+  const watchAbortRef = React.useRef<AbortController | null>(null);
+  // review-1 S2: the watch's "immediate tick" wake channel — a `new
+  // Event("tick")` dispatched here cuts its current back-off wait short. One
+  // instance for the pane's life; the watch effect passes it straight through.
+  const watchWakeRef = React.useRef<EventTarget>(new EventTarget());
 
   // Rolling buffer of recent PTY output + latches so we act on each thing once.
   const outBufRef = React.useRef("");
   const savedRef = React.useRef(false);
+  // THE LAUNCH-AFTER-DISMISS RACE. harnessLogin's POST answers with the run id
+  // AFTER dispatch has already created the run, so a cancellation that lands
+  // while it is in flight sees `runId === null` and kills nothing — the run is
+  // born orphaned. Latched here on the way out and re-checked once the id
+  // exists.
+  const dismissedRef = React.useRef(false);
   const failedRef = React.useRef(false);
   const openedUrlRef = React.useRef(false);
+  const signedInRef = React.useRef(false);
+  // Once-only completion (Codex #9): guards completeCapture below.
+  const completedRef = React.useRef(false);
+  // N1: confirmCapture kills the run BEFORE the corroboration round trip
+  // (R-7) and, on success, calls completeCapture — which would otherwise kill
+  // it a second time. One guard, shared by both.
+  const killedRef = React.useRef(false);
+  // review-1 S1: which sentence the SHORT round trip would have shown, so the
+  // background watch's eventual refusal (if it gives up) says the same thing
+  // — "" until a marker's own corroboration actually disagrees.
+  const verifyFailSentenceRef = React.useRef("");
   // Consecutive unreadable polls of the starting run, not a total: one blip must
   // not end a sign-in that is working. A ref, not state — it drives no render
   // and must not churn the poll callback's identity. Same for the two clocks
@@ -419,14 +278,33 @@ export function HarnessLoginPane({
   // nothing does not re-render the pane every two seconds.
   const [waitNote, setWaitNote] = React.useState<StartWaitVerdict>("starting");
   const waitNoteRef = React.useRef<StartWaitVerdict>("starting");
+  // The substrate's sentence for the CURRENT wait, or "". It REPLACES the hedged
+  // slow-start line rather than joining it: one wait, one sentence.
+  const [startingSentence, setStartingSentence] = React.useState("");
   // ONE self-run grace timer per launch, armed on the FIRST attach.
   const selfRunArmedRef = React.useRef(false);
 
   const launch = React.useCallback(async () => {
+    // LOUD COMMENT (Finding 7a) — MUST stay first, BEFORE any `await` below:
+    // the click is the only user gesture this flow ever gets, and a popup
+    // blocker only allows a tab while the call stack is inside that gesture.
+    // Hoisting an `await` above this line silently reverts the lane.
+    authTabRef.current?.close();
+    const tab = openAuthTab();
+    authTabRef.current = tab;
+    setTabBlocked(!tab);
+    watchAbortRef.current?.abort();
+    watchAbortRef.current = null;
+    completedRef.current = false;
+    killedRef.current = false;
+    verifyFailSentenceRef.current = "";
+    signedInRef.current = false;
+    setSignedIn(false);
     setPhase("launching");
     setError("");
     outBufRef.current = "";
     savedRef.current = false;
+    dismissedRef.current = false;
     failedRef.current = false;
     openedUrlRef.current = false;
     setAutoCaptured(false);
@@ -436,8 +314,10 @@ export function HarnessLoginPane({
     failingSinceRef.current = null;
     waitNoteRef.current = "starting";
     setWaitNote("starting");
+    setStartingSentence("");
     selfRunArmedRef.current = false;
     setRefused(false);
+    setStuck(false);
     setAuthUrl("");
     try {
       const id = await harnessAuthApi.harnessLogin(provider, startUrl.trim());
@@ -445,6 +325,12 @@ export function HarnessLoginPane({
       // Cancel able to kill a sandbox that is still coming up — before P5 the
       // POST did not answer until dispatch was done, so a timed-out launch left
       // an orphan nobody could name.
+      // …and if the way out was taken WHILE that POST was in flight, this id is
+      // the only handle anybody will ever have on the run it created.
+      if (dismissedRef.current) {
+        runsApi.killRun(id).catch(() => {});
+        return;
+      }
       setRunId(id);
       setPhase("starting");
     } catch (e) {
@@ -456,10 +342,21 @@ export function HarnessLoginPane({
       // which is the loop the preview walked an admin into.
       setRefused(e instanceof HttpError && e.status === 409);
       setPhase("error");
+      closeAuthTab();
     }
-  }, [provider, startUrl]);
+  }, [provider, startUrl, closeAuthTab]);
 
-  // pollRun is the `starting` phase's whole machine: ask the run whether it is
+  // startingSentenceOf is the substrate's sentence for this read, or "". The lead-in
+// below promises the reader words after it, so BOTH arms that use it check for
+// "" first and fall through — to the clock, or to the run's own failure_hint —
+// rather than putting a promise on screen with nothing behind it (review S2).
+// run-status-detail.ts already guarantees a terminal reason gets a sentence, so
+// this is defence in depth against a future daemon, not a reachable state today.
+function startingSentenceOf(run: AgentRun | undefined): string {
+  return statusDetailSentence(run?.status_detail, run?.status_reason);
+}
+
+// pollRun is the `starting` phase's whole machine: ask the run whether it is
   // up yet, mount the terminal when it is, and end the wait honestly when the
   // run ends instead. Nothing here attaches — AttachTerminal's own mint is
   // owner-or-admin and one failed mint is terminal in that component, so the
@@ -477,15 +374,35 @@ export function HarnessLoginPane({
       pollFailuresRef.current = 0;
       failingSinceRef.current = null;
     }
+    setStartingSentence(startingSentenceOf(run));
     const verdict = startWaitVerdict({
       now,
       startedAt: startedAtRef.current,
       failingSince: failingSinceRef.current,
       failures: pollFailuresRef.current,
+      // Null on a failed read by construction — the wait then grades on the
+      // clock exactly as it did in 0.7.5.
+      detail: run?.status_detail ?? null,
+      reason: run?.status_reason ?? null,
     });
     if (verdict === "unreadable") {
       setError(LOGIN_SANDBOX_UNREADABLE);
       setPhase("error");
+      closeAuthTab();
+      return;
+    }
+    // The wait ending on a REASON rather than a clock: the substrate has given
+    // its final answer, and the five minutes that used to follow it were five
+    // minutes of waiting for news that had already arrived.
+    if (verdict === "stuck" && startingSentenceOf(run)) {
+      setStuck(true);
+      setError(`${LOGIN_SANDBOX_STUCK_LEAD_IN} ${startingSentenceOf(run)}`);
+      setPhase("error");
+      // The placeholder tab was FOREGROUNDED by the click and reads "this page
+      // changes to your provider's sign-in page by itself" — on the one start
+      // that never will. Every other exit from the wait closes it; this arm
+      // returned early and left it open with the error on the tab behind it.
+      closeAuthTab();
       return;
     }
     if (verdict !== waitNoteRef.current) {
@@ -499,13 +416,24 @@ export function HarnessLoginPane({
       return;
     }
     if (isTerminalRunState(run.state)) {
+      // Codex #11: the run that went STARTING -> FAILED between two polls. The
+      // server keeps a TERMINAL reason on a FAILED run so this branch can still
+      // say what happened — failure_hint is only dispatch's wrapper around it.
+      if (isTerminalStatusReason(run.status_reason) && startingSentenceOf(run)) {
+        setStuck(true);
+        setError(`${LOGIN_SANDBOX_STUCK_LEAD_IN} ${startingSentenceOf(run)}`);
+        setPhase("error");
+        closeAuthTab(); // same reason as the STARTING arm above
+        return;
+      }
       // The run's OWN sentence when it has one (D9's failure_hint covers the
       // pre-agent-start class this wait actually hits: an image that would not
       // pull, a ceiling that would not resolve); never a reworded guess.
       setError(run.failure_hint || LOGIN_SANDBOX_ENDED);
       setPhase("error");
+      closeAuthTab();
     }
-  }, [runId]);
+  }, [runId, closeAuthTab]);
 
   // usePoll drives BACKGROUND refreshes only (its own contract), so the first
   // ask is made here — otherwise every sign-in waits a full tick on a sandbox
@@ -534,6 +462,23 @@ export function HarnessLoginPane({
     return () => clearTimeout(timer);
   }, [phase, flow]);
 
+  // completeCapture (Codex #9): the ONE, once-only-guarded place either the
+  // marker below or the background watch ends the pane. Deps deliberately
+  // exclude `onDone` (B1, above) — `onDoneRef` carries it.
+  const completeCapture = React.useCallback(() => {
+    if (completedRef.current) return;
+    completedRef.current = true;
+    watchAbortRef.current?.abort();
+    if (runId && !killedRef.current) {
+      killedRef.current = true;
+      void runsApi.killRun(runId).catch(() => {});
+    }
+    closeAuthTab();
+    setAutoCaptured(true);
+    setPhase("done");
+    onDoneRef.current();
+  }, [runId, closeAuthTab]);
+
   // saveToken stores a token (explicit from auto-capture, or the pasted field).
   const saveToken = React.useCallback(
     async (explicit?: string) => {
@@ -545,6 +490,7 @@ export function HarnessLoginPane({
       try {
         await harnessAuthApi.harnessCredentialPaste(provider, t);
         if (runId) await runsApi.killRun(runId).catch(() => {});
+        closeAuthTab(); // Finding 7a: the tab must not outlive a completed sign-in.
         setPhase("done");
         onDone();
       } catch (e) {
@@ -553,7 +499,7 @@ export function HarnessLoginPane({
         savedRef.current = false; // allow another attempt (auto or manual)
       }
     },
-    [provider, token, runId, onDone],
+    [provider, token, runId, onDone, closeAuthTab],
   );
 
   // confirmCapture is the PHASE half of the corroboration; the rule and the
@@ -565,20 +511,29 @@ export function HarnessLoginPane({
   // time the helper prints its marker, so the login sandbox has no reason to
   // outlive it by a round trip, and ssotoken.go's already_captured latch
   // covers a repeat. Then "saving", so the spinner covers the wait (R-8).
+  //
+  // review-1 S1 — Codex #9 design point 3 STANDS: a mismatch here does NOT
+  // refuse. It stays on CAPTURE_VERIFYING (with Cancel, below) and hands off
+  // to the background watch, which is ALREADY running (it started when the
+  // pane attached, unconditionally — see the effect below) and keeps trying
+  // up to its own bound. `verifyFailSentenceRef` remembers which sentence
+  // this round trip would have shown, so the watch's eventual refusal (if it
+  // gives up) says the SAME thing a person watching this screen the whole
+  // time would expect — S-13's property (a forged marker never confirms) is
+  // unchanged, only WHEN the refusal lands.
   const confirmCapture = React.useCallback(async () => {
-    if (runId) void runsApi.killRun(runId).catch(() => {});
+    if (runId && !killedRef.current) {
+      killedRef.current = true;
+      void runsApi.killRun(runId).catch(() => {});
+    }
     setPhase("saving");
     const { confirmed, unreachable } = await confirmCaptureWithServer(provider, runId);
     if (confirmed) {
-      setAutoCaptured(true);
-      setPhase("done");
-      onDone();
+      completeCapture();
       return;
     }
-    failedRef.current = true;
-    setError(unreachable ? CAPTURE_CHECK_UNREACHABLE : CAPTURE_NOT_CORROBORATED);
-    setPhase("error");
-  }, [provider, runId, onDone]);
+    verifyFailSentenceRef.current = unreachable ? CAPTURE_CHECK_UNREACHABLE : CAPTURE_NOT_CORROBORATED;
+  }, [provider, runId, completeCapture]);
 
   // Watch the login terminal: open the OAuth URL in a new tab, then capture and
   // save the printed token — both automatically.
@@ -590,14 +545,21 @@ export function HarnessLoginPane({
         if (url) {
           openedUrlRef.current = true;
           setAuthUrl(url);
-          // Best-effort auto-open. A browser may block a popup not tied to a user
-          // gesture; the surfaced link below is the reliable one-click fallback.
-          try {
-            window.open(url, "_blank", "noopener,noreferrer");
-          } catch {
-            /* blocked — the visible link covers it */
-          }
+          // Finding 7a: NAVIGATE the tab opened on the click (launch(), top)
+          // rather than opening a fresh one from this PTY callback — a
+          // callback can never satisfy the gesture requirement a fresh
+          // window.open would need.
+          authTabRef.current?.navigate(url);
         }
+      }
+      // Finding 7b: a HINT; only swaps CAPTURE_HANDOFF in (checked before the
+      // marker latches so it fires even when the marker never arrives).
+      // review-1 S2: also wakes the watch — the CLI's own success line is
+      // exactly the moment a capture becomes plausible soon.
+      if (!signedInRef.current && extractSignedIn(outBufRef.current)) {
+        signedInRef.current = true;
+        setSignedIn(true);
+        watchWakeRef.current.dispatchEvent(new Event("tick"));
       }
       if (savedRef.current || failedRef.current) return;
       // Helper-capture providers (AWS SSO): the credential is uploaded by the
@@ -615,6 +577,7 @@ export function HarnessLoginPane({
             setError(`${SANDBOX_REFUSAL_LEAD_IN} ${sentence}`);
             setPhase("error");
             if (runId) void runsApi.killRun(runId).catch(() => {});
+            closeAuthTab();
             return;
           }
         }
@@ -631,7 +594,7 @@ export function HarnessLoginPane({
         void saveToken(tok);
       }
     },
-    [saveToken, confirmCapture, flow, runId, onDone],
+    [saveToken, confirmCapture, flow, runId, onDone, closeAuthTab],
   );
 
   // Bridge the pasted login code into the terminal's stdin, so the operator uses
@@ -644,9 +607,74 @@ export function HarnessLoginPane({
   }, [code]);
 
   const cancel = React.useCallback(() => {
+    dismissedRef.current = true;
     if (runId) runsApi.killRun(runId).catch(() => {});
+    watchAbortRef.current?.abort();
+    closeAuthTab();
     onCancel();
-  }, [runId, onCancel]);
+  }, [runId, onCancel, closeAuthTab]);
+
+  // Codex #15: the hosting dialog's Escape / overlay-close reaches `cancel` via `paneRef`.
+  React.useImperativeHandle(paneRef, () => ({ cancel }), [cancel]);
+
+  // review-1 B1: read through a ref (same reasoning as onDoneRef above) so
+  // this effect's deps can drop `completeCapture` — a parent re-render must
+  // never restart the watch (it would reset the 45-min deadline, the 5-min
+  // post-terminal grace and the back-off to its 2s floor every time).
+  const completeCaptureRef = React.useRef(completeCapture);
+  React.useEffect(() => {
+    completeCaptureRef.current = completeCapture;
+  }, [completeCapture]);
+
+  // The markerless path to onDone (Codex #8, #9): starts once attached, so a
+  // lost marker AND a lost success line still converge. AWS/helper only. A
+  // parent re-render does not restart this — only `watchEligible`/
+  // flow.capture/provider/runId changing does.
+  //
+  // review-1 S1: eligible through BOTH "attached" and "saving" — a plain
+  // boolean, not `phase` itself, so the transition INTO "saving" (confirmCapture
+  // narrating the short round trip) does not toggle the effect's own identity
+  // and tear the watch down mid-flight. The watch is what design point 3
+  // hands the refusal to: a `false` resolution here is what actually ends
+  // the wait now (`verifyFailSentenceRef` carries the short round trip's own
+  // verdict, if one ran, so the sentence a person sees is the same whichever
+  // path ends it — only WHEN differs, and S-13's property does not).
+  const watchEligible = phase === "attached" || phase === "saving";
+  React.useEffect(() => {
+    if (!watchEligible || flow.capture !== "helper" || !runId) return;
+    const controller = new AbortController();
+    watchAbortRef.current = controller;
+    const wake = watchWakeRef.current;
+    void watchForCapture({ provider, runId, signal: controller.signal, wake }).then((confirmed) => {
+      if (controller.signal.aborted) return;
+      if (confirmed) {
+        completeCaptureRef.current();
+        return;
+      }
+      failedRef.current = true;
+      setError(verifyFailSentenceRef.current || CAPTURE_NOT_CORROBORATED);
+      setPhase("error");
+      closeAuthTab();
+    });
+    // review-1 S2: return-to-visible wakes the watch too (the same idiom
+    // usePoll already uses elsewhere in this console) — a tab backgrounded
+    // through part of the schedule's slower tiers should not stay quiet
+    // longer than a foregrounded one would have.
+    const onVisible = () => {
+      if (!document.hidden) wake.dispatchEvent(new Event("tick"));
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      controller.abort();
+      // N3: never leave a stale (aborted) controller behind for a later
+      // `cancel()`/completeCapture to read as though it were still live.
+      if (watchAbortRef.current === controller) watchAbortRef.current = null;
+    };
+  }, [watchEligible, flow.capture, provider, runId, closeAuthTab]);
+
+  // Finding 7a's fourth exit path: the tab must not outlive the pane.
+  React.useEffect(() => closeAuthTab, [closeAuthTab]);
 
   return (
     <div className="space-y-3 rounded-lg border border-border bg-surface-2/40 p-3" data-testid="harness-login-pane">
@@ -737,10 +765,12 @@ export function HarnessLoginPane({
         <div className="flex flex-wrap items-center gap-2" data-testid="login-sandbox-starting">
           <p role="status" className="flex flex-1 items-center gap-2 text-xs leading-relaxed text-muted-foreground">
             <Loader2 className="size-3.5 shrink-0 animate-spin" />{" "}
+            {/* A reason always beats the clock's hedged guess; with none to
+                read this is 0.7.5's ladder byte for byte. */}
             {waitNote === "retrying"
               ? LOGIN_SANDBOX_READ_RETRYING
               : waitNote === "slow"
-                ? LOGIN_SANDBOX_SLOW_START
+                ? startingSentence || LOGIN_SANDBOX_SLOW_START
                 : LOGIN_SANDBOX_STARTING}
           </p>
           <Button size="sm" variant="outline" onClick={cancel}>
@@ -753,7 +783,7 @@ export function HarnessLoginPane({
         <div className="flex flex-wrap gap-2">
           {/* U-11: suppressed on a 409 — the refusal above already says why, and
               a retry earns the identical answer. Cancel remains the way out. */}
-          {!refused && (
+          {!refused && !stuck && (
             <Button size="sm" onClick={() => void launch()}>
               <KeyRound className="size-3.5" /> Try again
             </Button>
@@ -792,6 +822,12 @@ export function HarnessLoginPane({
               {flow.capture === "helper" ? "Open the AWS verification page ↗" : "Open the Claude login page ↗"}
             </a>
           )}
+          {/* Finding 7a: shown only once a link exists AND the tab was blocked. */}
+          {authUrl && phase !== "error" && tabBlocked && (
+            <p className="text-xs text-muted-foreground" data-testid="auth-tab-blocked-note">
+              {AUTH_TAB_BLOCKED_NOTE}
+            </p>
+          )}
           <AttachTerminal
             ref={termRef}
             runId={runId}
@@ -812,13 +848,25 @@ export function HarnessLoginPane({
                it — a note that narrates a silent round trip is silence again
                for a screen-reader user. role="status" (polite), not "alert":
                this is one bounded fetch, not the Agents banner's poll loop. */
-            <p
-              role="status"
-              className="flex items-center gap-2 text-xs text-muted-foreground"
-              data-testid="capture-verifying-note"
-            >
-              <Loader2 className="size-3.5 animate-spin" /> {CAPTURE_VERIFYING}
-            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <p
+                role="status"
+                className="flex flex-1 items-center gap-2 text-xs text-muted-foreground"
+                data-testid="capture-verifying-note"
+              >
+                <Loader2 className="size-3.5 animate-spin" /> {CAPTURE_VERIFYING}
+              </p>
+              {/* review-1 S1 (design point 3): the SHORT round trip disagreeing
+                  no longer ends the pane — the background watch keeps trying,
+                  up to its own bound (terminal + 5 min grace, or 45 min
+                  absolute). Without a way out here, a forged marker parked a
+                  person on this note with nothing to do for however long that
+                  takes. `cancel` kills the run, aborts the watch and closes
+                  the tab — the same button does that everywhere else. */}
+              <Button size="sm" variant="outline" onClick={cancel}>
+                <Square className="size-3.5" /> Cancel
+              </Button>
+            </div>
           ) : autoCaptured ? (
             <p className="flex items-center gap-2 text-xs text-success" data-testid="auto-capture-note">
               {phase === "saving" ? <Loader2 className="size-3.5 animate-spin" /> : <ShieldCheck className="size-3.5" />}
@@ -829,11 +877,14 @@ export function HarnessLoginPane({
           ) : flow.capture === "helper" ? (
             /* Device-code flow: the code is entered on the AWS verification PAGE,
                not in the terminal, and the credential is uploaded by the in-sandbox
-               helper — so there is no code field and nothing to paste here. */
+               helper — so there is no code field and nothing to paste here.
+               Finding 7b: swaps to CAPTURE_HANDOFF once `signedIn` (a hint). */
             <div className="flex flex-wrap items-center gap-2">
-              <p className="flex-1 text-xs leading-relaxed text-muted-foreground">
-                Open the verification link above, enter the user code shown in the terminal, and approve. Wardyn
-                captures the session automatically when the login completes.
+              <p className="flex-1 text-xs leading-relaxed text-muted-foreground" data-testid="helper-flow-note">
+                {signedIn
+                  ? CAPTURE_HANDOFF
+                  : "In the tab that opened (or the link above), enter the user code shown in the terminal and approve. " +
+                    "Wardyn captures the session automatically when the login completes."}
               </p>
               <Button size="sm" variant="outline" onClick={cancel}>
                 <Square className="size-3.5" /> Cancel

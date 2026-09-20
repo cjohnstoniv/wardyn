@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -61,6 +62,11 @@ type injector struct {
 	base   string
 	token  *tokenSource
 	client *http.Client
+	// reauth owns the bounded mid-run credential re-auth workflows (credhold.go).
+	// Nil is safe and means "no hold" — a resolve that would have held fails
+	// closed instead, which is the pre-0.7.6 behaviour.
+	reauth    *reauthCoordinator
+	approvals approvalReader
 }
 
 type injectedHeader struct {
@@ -76,11 +82,20 @@ type injEntry struct {
 	grantID uuid.UUID
 	reMu    sync.Mutex
 	header  injectedHeader
+	// reauth is the re-auth workflow currently open for THIS entry, if any —
+	// the single-flight that stops a second control-plane call for one lapse.
+	// Guarded by reMu like header/expiresAt, and read only while it is held; the
+	// WAIT on it happens with reMu released (see resolveCtx).
+	reauth *reauthWorkflow
 	// requireTLS is the rule's own transport declaration (egress.InjectionRule).
 	// Immutable after buildInjector — it comes from the authored rule, never from
 	// a re-resolve — so it needs no lock.
 	requireTLS bool
-	expiresAt  int64 // unix ms
+	// rule is the authored rule itself, kept for the fields that describe WHICH
+	// requests may carry the credential (PinPath/PinQuery). Immutable after
+	// buildInjector for requireTLS's reason, so it needs no lock.
+	rule      egress.InjectionRule
+	expiresAt int64 // unix ms
 }
 
 // buildInjector mints each injection rule's secret once and formats its
@@ -91,7 +106,11 @@ func buildInjector(ctx context.Context, base string, token *tokenSource, pol *Po
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
 	}
-	inj := &injector{byHost: make(map[string]*injEntry), base: base, token: token, client: client}
+	inj := &injector{
+		byHost: make(map[string]*injEntry), base: base, token: token, client: client,
+		reauth:    newReauthCoordinator(),
+		approvals: httpApprovalReader{base: base, token: token, client: client},
+	}
 	for _, r := range rules {
 		host := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(r.Host), "."))
 		if host == "" {
@@ -103,6 +122,11 @@ func buildInjector(ctx context.Context, base string, token *tokenSource, pol *Po
 		if r.GrantID == uuid.Nil {
 			return nil, fmt.Errorf("injection rule for %q missing grant_id", host)
 		}
+		// NO HOLD AT BOOT, deliberately (round-2 general B3). This runs under the
+		// proxy's 30s startupCtx, seconds after dispatch refreshed the credential
+		// synchronously — a dead credential HERE is a race measured in seconds,
+		// not a person who needs to sign in, and holding would fight the canary.
+		// A 423 at boot is an error like any other: fail closed, exactly as today.
 		resolved, err := resolveInjection(ctx, base, token.Get(), r.GrantID, client)
 		if err != nil {
 			return nil, fmt.Errorf("resolve injection for %q: %w", host, err)
@@ -114,6 +138,7 @@ func buildInjector(ctx context.Context, base string, token *tokenSource, pol *Po
 			grantID:    r.GrantID,
 			header:     injectedHeader{name: resolved.Header, value: resolved.Value},
 			requireTLS: r.RequireTLS,
+			rule:       r.InjectionRule,
 			expiresAt:  resolved.ExpiresAt,
 		}
 
@@ -133,6 +158,15 @@ func buildInjector(ctx context.Context, base string, token *tokenSource, pol *Po
 // but its (dynamic) credential could not be refreshed — the caller MUST fail
 // closed rather than forward a stale credential.
 func (i *injector) resolve(host string) (injectedHeader, bool, error) {
+	return i.resolveCtx(context.Background(), host)
+}
+
+// resolveCtx is resolve with the CALLER's context, which the re-resolve's hold
+// needs: the MITM request's ctx is what makes a disconnected SDK release reMu
+// instead of pinning it for the whole re-auth budget. resolve() keeps the
+// background ctx for the callers that have none to give (the plain lane's
+// apply, headerFor), whose behaviour is unchanged.
+func (i *injector) resolveCtx(ctx context.Context, host string) (injectedHeader, bool, error) {
 	if i == nil {
 		return injectedHeader{}, false, nil
 	}
@@ -144,23 +178,132 @@ func (i *injector) resolve(host string) (injectedHeader, bool, error) {
 		return injectedHeader{}, false, nil
 	}
 
-	// Single-flight per host: hold reMu across the (rare) re-resolve so concurrent
-	// requests for this host block once, then read the refreshed value. Other
-	// hosts are unaffected (separate entries/locks).
-	e.reMu.Lock()
-	defer e.reMu.Unlock()
-	if e.expiresAt == 0 || time.Now().Before(time.UnixMilli(e.expiresAt).Add(-injectRefreshMargin)) {
-		return e.header, true, nil // static, or dynamic and still fresh
-	}
+	// reMu single-flights the ORDINARY re-resolve (the subscription OAuth token's
+	// refresh) exactly as it always has: concurrent requests for one host make
+	// ONE control-plane call and the rest read the refreshed value.
+	//
+	// WHAT IT NO LONGER DOES is span a HOLD. Holding it across a re-auth wait
+	// made every later caller queue on an uncancellable mutex for up to the
+	// whole budget, so a hung-up SDK was never released and, when the budget
+	// ended, each queued caller in turn opened a NEW full-budget workflow for
+	// the SAME lapse (security BLOCKER-1 / general B1). The wait now belongs to
+	// the workflow, which owns its own goroutine and deadline; reMu is taken
+	// only to read freshness, to publish or drop the in-flight workflow, and to
+	// install a refreshed header — never across a network call that can block
+	// for minutes.
+	for {
+		e.reMu.Lock()
+		if e.expiresAt == 0 || time.Now().Before(time.UnixMilli(e.expiresAt).Add(-injectRefreshMargin)) {
+			h := e.header
+			e.reMu.Unlock()
+			return h, true, nil // static, or dynamic and still fresh
+		}
+		if wf := e.reauth; wf != nil {
+			if wf.finished() {
+				// The hold is over. Drop it and re-resolve: the owner may have
+				// signed in (200), or the control plane may name a NEW request.
+				// The coordinator still holds the old workflow by approval id,
+				// so a 423 repeating that id gets its terminal result at once
+				// rather than a second hold.
+				e.reauth = nil
+				e.reMu.Unlock()
+				continue
+			}
+			// A hold is open for this entry: JOIN it rather than make a second
+			// control-plane call for one lapse. reMu is released first — the
+			// wait is cancellable and belongs to this caller's own ctx.
+			e.reMu.Unlock()
+			resolved, err := wf.await(ctx)
+			if err != nil {
+				e.dropIfFinished(wf)
+				return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, err)
+			}
+			return i.installHeader(e, wf, resolved), true, nil
+		}
 
-	resolved, err := resolveInjection(context.Background(), i.base, i.token.Get(), e.grantID, i.client)
-	if err != nil {
-		return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, err)
+		resolved, err := resolveInjection(ctx, i.base, i.token.Get(), e.grantID, i.client)
+		if err == nil {
+			e.header = injectedHeader{name: resolved.Header, value: resolved.Value}
+			e.expiresAt = resolved.ExpiresAt
+			h := e.header
+			e.reMu.Unlock()
+			registerHeaderCredential(resolved.Value)
+			return h, true, nil
+		}
+		var pending errReauthPending
+		if !errors.As(err, &pending) {
+			e.reMu.Unlock()
+			// errReauthTimedOut travels out WRAPPED but intact: serveMITMRequest
+			// tests errors.Is for it, and a wrapped sentinel still answers true.
+			return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, err)
+		}
+		// 423: the control plane is asking for a human. Open the workflow (or
+		// join the one this approval id already has), publish it on the entry,
+		// and release reMu before waiting.
+		if i.reauth == nil || i.approvals == nil {
+			e.reMu.Unlock()
+			// No hold lane on this injector: the 423 is a refusal the sandbox
+			// still has to be told about, but nothing expired.
+			return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key,
+				errReauthEnded{reason: "this proxy has no re-auth hold lane"})
+		}
+		wf, fresh, admitted := i.reauth.admit(pending.approvalID, credentialReauthBudget())
+		if !admitted {
+			e.reMu.Unlock()
+			return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, errReauthCapped)
+		}
+		e.reauth = wf
+		e.reMu.Unlock()
+		if fresh {
+			go wf.run(i.base, i.token, e.grantID, i.client, i.approvals)
+		}
+		// WAIT HERE, not around the loop. Looping back would re-read the entry,
+		// see a workflow that is ALREADY terminal (the sticky one this approval
+		// id just returned), drop it and re-resolve — round and round until the
+		// control plane's answer changed. A caller that has just been handed a
+		// workflow takes ITS result, terminal or not.
+		held, herr := wf.await(ctx)
+		if herr != nil {
+			e.dropIfFinished(wf)
+			return injectedHeader{}, true, fmt.Errorf("re-resolve injection for %q: %w", key, herr)
+		}
+		return i.installHeader(e, wf, held), true, nil
 	}
+}
+
+// dropIfFinished takes a workflow off the entry, but ONLY once it is terminal.
+//
+// A caller that hangs up must leave a LIVE hold in place (security NIT-A):
+// dropping it made the next retry call resolveInjection first — a broker mint
+// and a credential.mint audit row — and only THEN join, through the
+// coordinator, the very workflow it should have joined without asking. One
+// spare mint per disconnect, and the lane's own "two hits per lapse" property
+// broke on every one of them.
+func (e *injEntry) dropIfFinished(wf *reauthWorkflow) {
+	if !wf.finished() {
+		return
+	}
+	e.reMu.Lock()
+	if e.reauth == wf {
+		e.reauth = nil // the next caller re-resolves
+	}
+	e.reMu.Unlock()
+}
+
+// installHeader writes a hold's resolved credential onto the entry and returns
+// it. Separate so the wait above holds no lock while it waits and takes reMu
+// only for the write.
+func (i *injector) installHeader(e *injEntry, wf *reauthWorkflow, resolved types.ResolvedInjection) injectedHeader {
+	e.reMu.Lock()
 	e.header = injectedHeader{name: resolved.Header, value: resolved.Value}
 	e.expiresAt = resolved.ExpiresAt
+	if e.reauth == wf {
+		e.reauth = nil // the hold is over and its credential is installed
+	}
+	h := e.header
+	e.reMu.Unlock()
 	registerHeaderCredential(resolved.Value)
-	return e.header, true, nil
+	return h
 }
 
 // requiresTLS reports whether host has an injection rule that declares
@@ -289,7 +432,16 @@ func registerBasicAuthCredential(user, tok string) {
 //
 // Proxy-Authorization is deliberately absent: it is hop-by-hop and already
 // removed by removeHopByHop (proxy.go) on every one of these paths.
-func stripSandboxCredentials(h http.Header) {
+// owned is the header THIS rule supplies. It is stripped alongside the fixed
+// list because the fixed list cannot know it: a rule may inject under any header
+// (the captured-AWS-SSO lane uses x-amz-sso_bearer_token, which is on no generic
+// credential list), and while an INJECTED request overwrites it anyway, a
+// request whose injection the rule's pin withholds does not — so the sandbox's
+// own value rode exactly the requests the pin exists to narrow (W6-S F3).
+func stripSandboxCredentials(h http.Header, owned string) {
+	if owned != "" {
+		h.Del(owned)
+	}
 	for _, name := range []string{
 		"Authorization",
 		"X-Api-Key",
@@ -432,7 +584,16 @@ func (i *injector) apply(req *http.Request, host string, port int) {
 	if err != nil || !ok {
 		return
 	}
-	stripSandboxCredentials(req.Header)
+	// STRIP ALWAYS, INJECT ONLY WHERE THE RULE'S PIN ALLOWS — the same two
+	// decisions the MITM lane makes (forwardInspectedLLM), and they have to be
+	// made here too or the pin is bypassable by simply not using TLS: the plain
+	// lane reaches the very same portal host, and a `POST /logout` sent as an
+	// ordinary absolute-URI request would have been injected while the tunnelled
+	// one was not.
+	stripSandboxCredentials(req.Header, h.name)
+	if !i.allowsInjection(host, req.Method, req.URL.Path, req.URL.RawQuery) {
+		return
+	}
 	req.Header.Set(h.name, h.value)
 }
 
@@ -472,6 +633,17 @@ func resolveInjection(ctx context.Context, base, token string, grantID uuid.UUID
 		// amplifier for control-plane text. Enough to diagnose a fail-closed
 		// startup, not a 4 KiB relay. (The mask still covers it — see httpError.)
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		// 423 IS NOT A REFUSAL: the control plane is asking for a human. It is
+		// answered by exactly one resolve (the captured-AWS-SSO session, whose
+		// owner has to sign in again) and becomes a typed error the re-resolve
+		// path can HOLD on — see credhold.go. Checked BEFORE the generic
+		// status-error branch, and nowhere else: every other status is
+		// byte-identical to before this existed, including at boot.
+		if resp.StatusCode == http.StatusLocked {
+			if pending, ok := reauthPendingFrom(b); ok {
+				return types.ResolvedInjection{}, pending
+			}
+		}
 		return types.ResolvedInjection{}, fmt.Errorf("injection status %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
 	}
 	var ri types.ResolvedInjection
@@ -482,4 +654,47 @@ func resolveInjection(ctx context.Context, base, token string, grantID uuid.UUID
 		return types.ResolvedInjection{}, fmt.Errorf("injection resolve returned empty header/value")
 	}
 	return ri, nil
+}
+
+// allowsInjection reports whether host's rule lets THIS request carry the
+// credential. True for an unknown host (no rule, nothing to narrow) and for
+// every unpinned rule, so every lane but the captured-AWS-SSO one is unchanged.
+func (i *injector) allowsInjection(host, method, path, rawQuery string) bool {
+	if i == nil {
+		return true
+	}
+	key := strings.ToLower(strings.TrimSuffix(host, "."))
+	i.mu.Lock()
+	e, ok := i.byHost[key]
+	i.mu.Unlock()
+	if !ok {
+		return true
+	}
+	return e.rule.AllowsInjection(method, path, rawQuery)
+}
+
+// applyCredential puts a rule's credential on an upstream request.
+//
+// STRIP AND INJECT ARE TWO DECISIONS, not one. A host with an injection rule
+// always has the sandbox's own credential headers removed — including the header
+// that rule supplies — because the rule says this host's credential is Wardyn's
+// to provide. Whether one is then provided is the rule's PIN (W6-S F3): a
+// request the pin does not cover is forwarded with NEITHER the sandbox's header
+// nor Wardyn's, and the origin answers it unauthenticated.
+//
+// Folding the two together is what let a withheld injection fall through to the
+// "no rule at all" branch, which PRESERVES the agent's own header — so the
+// sandbox's placeholder, or anything else it chose to send, reached the portal on
+// exactly the requests the pin exists to narrow.
+//
+// ownedHeader == "" means no rule governs this host, and then nothing is
+// stripped: the agent's own resident credential is its own business.
+func applyCredential(h http.Header, ownedHeader string, hdr *injectedHeader) {
+	if ownedHeader == "" {
+		return
+	}
+	stripSandboxCredentials(h, ownedHeader)
+	if hdr != nil {
+		h.Set(hdr.name, hdr.value)
+	}
 }

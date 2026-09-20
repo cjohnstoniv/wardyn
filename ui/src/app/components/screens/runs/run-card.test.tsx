@@ -13,6 +13,8 @@ import { RunCard } from "./run-card";
 import { approvalSignals, type RunSignals } from "./board-groups";
 import { RUN } from "../../wardyn/copy";
 import { CLONE_LOAD_FAILED } from "../new-run/wizard-types";
+import { OperatorProvider } from "../../wardyn/operator-context";
+import { waitingReauth } from "../../../lib/reauth-waiting-copy";
 
 // review C-01/C-06/C-07 — cloneRun's own behaviour, not just the menu item's
 // gating. listAudit is stubbed; createRequestFromAudit stays REAL so the
@@ -47,13 +49,27 @@ const run = (over: Partial<AgentRun> = {}): AgentRun => ({
   ...over,
 });
 
-function renderCard(r: AgentRun, signals: RunSignals = new Map()) {
+function renderCard(r: AgentRun, signals: RunSignals = new Map(), principal = "") {
   return render(
-    <MemoryRouter>
-      <RunCard run={r} signals={signals} onOpen={vi.fn()} onKill={vi.fn()} />
-    </MemoryRouter>,
+    <OperatorProvider operator principal={principal}>
+      <MemoryRouter>
+        <RunCard run={r} signals={signals} onOpen={vi.fn()} onKill={vi.fn()} />
+      </MemoryRouter>
+    </OperatorProvider>,
   );
 }
+
+const reauthSignals = (runId: string) =>
+  approvalSignals([
+    {
+      id: "a-reauth",
+      run_id: runId,
+      kind: "credential_reauth",
+      requested_scope: { mechanism: "bedrock_sso", credential_source: "per_user", owner: "me" },
+      state: "PENDING",
+      requested_at: new Date().toISOString(),
+    },
+  ]);
 
 // CONSOLE-RULES §5: every actor on a row is two adjacent glyphs, never fused —
 // WHO (the agent monogram) and WHAT (the state). The state's WORD moved to
@@ -67,6 +83,21 @@ describe("RunCard — two-row anatomy", () => {
     expect(screen.getByRole("img", { name: "Needs you" })).toBeInTheDocument();
     // …and the word the e2e suite asserts.
     expect(screen.getByText("Awaiting confirmation")).toBeInTheDocument();
+  });
+
+  // W6-U SHOULD-1 — the board shows an admin every run, and a member the
+  // shared-lane rows their own runs raised, so "your AWS sign-in" was false on
+  // the very cards a support scenario opens. Only the owner's sign-in clears
+  // the hold.
+  it("a run held on an AWS sign-in names whose sign-in, by the reader", () => {
+    renderCard(run(), reauthSignals("run_3b7f10c4aa99"), "me");
+    expect(screen.getByText(waitingReauth(1))).toBeInTheDocument();
+  });
+
+  it("…and the same card read by somebody else says the owner's", () => {
+    renderCard(run(), reauthSignals("run_3b7f10c4aa99"), "admin@corp");
+    expect(screen.getByText(waitingReauth(1, false))).toBeInTheDocument();
+    expect(screen.queryByText(waitingReauth(1))).not.toBeInTheDocument();
   });
 
   it("row 2 carries repo, barrier, short id and age", () => {

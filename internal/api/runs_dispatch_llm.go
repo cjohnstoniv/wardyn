@@ -51,6 +51,14 @@ type llmTransport struct {
 	// injectBedrockBearer: Bedrock in BEARER mode — proxy-side token injection
 	// into bedrock-runtime (never-resident), the only inspectable Bedrock path.
 	injectBedrockBearer bool
+	// injectBedrockSSO: Bedrock on the CAPTURED-AWS-SSO lane with Phase B on —
+	// the SSO access token is injected proxy-side onto this run's own
+	// portal.sso host (TLS-MITM) and the sandbox's token cache holds only a
+	// placeholder. Distinct from injectBedrockBearer: a different host, a
+	// different header, a different credential, and the only one of the two
+	// whose credential can lapse mid-run and be recovered by a person signing
+	// in (see internal/api/injection_awssso.go).
+	injectBedrockSSO bool
 	// secretEnvKeys are the sandboxEnv variables applyBedrockTransport filled
 	// with REAL credential material — the resident SigV4 keys, or the captured
 	// AWS SSO blob. Nil for every never-resident mode (bearer, ~/.aws mount) and
@@ -157,7 +165,7 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	// bedrockRef is the picked workspace/container's per-run region/model
 	// override (nil => the global operator config).
 	if !t.harnessLogin {
-		// refresh=true: dispatch is the ONE pass allowed to redeem a captured AWS SSO
+		// refresh=true: dispatch (like the real launch's create) may redeem a captured AWS SSO
 		// session's rotating refresh token and persist the rotated pair.
 		t.bedrock = s.resolveBedrockAuth(ctx, run.Agent, t.subscription, modelRun, true, bedrockRef, sso)
 		t.bedrockReady = t.bedrock.ready
@@ -165,6 +173,12 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 		// (never-resident); consumed by the CA / injection / MITM-host wiring
 		// alongside the subscription path.
 		t.injectBedrockBearer = t.bedrockReady && t.bedrock.bearer
+		// injectBedrockSSO wires the run's own portal.sso host for proxy-side
+		// injection of the captured SSO access token (PHASE B). Same shape as
+		// the bearer flag above, and gated on the same resolved posture: it is
+		// true only when resolveBedrockAuth actually SELECTED the captured-SSO
+		// lane AND the kill switch was on when it did.
+		t.injectBedrockSSO = t.bedrockReady && t.bedrock.ssoInject && t.bedrock.ssoProxyInject
 	}
 
 	// MANAGED subscription: when there is no resident ~/.claude mount and no
@@ -319,8 +333,16 @@ func (s *Server) applyBedrockTransport(ctx context.Context, run types.AgentRun, 
 	case b.bearer:
 		detail = "bearer token injected proxy-side into bedrock-runtime (TLS-MITM); sandbox holds only a placeholder — never resident"
 		mode = "bearer"
+	case b.ssoInject && b.ssoProxyInject:
+		// PHASE B (0.7.6). The synthetic ~/.aws still exists — the SDK needs the
+		// profile to know WHICH account/role to ask for — but its token cache
+		// holds an inert placeholder, and the session itself is set on the wire
+		// by the proxy at that one host. The ROLE credentials the SDK mints from
+		// it are still resident; SigV4 signs in-process and always will.
+		detail = "captured AWS SSO session injected proxy-side as x-amz-sso_bearer_token on the run's own portal.sso host (TLS-MITM); the sandbox's token cache holds only a placeholder — the SSO access token is never resident. The short-lived role credentials the SDK mints from it still are (SigV4 signs client-side)"
+		mode = "sso-inject-proxy"
 	case b.ssoInject:
-		detail = "captured AWS SSO session materialized as a minimal synthetic ~/.aws; the sandbox SDK exchanges it for short-lived role credentials (portal.sso GetRoleCredentials). The SSO access token IS resident for now — Phase B injects it proxy-side on portal.sso instead"
+		detail = "captured AWS SSO session materialized as a minimal synthetic ~/.aws; the sandbox SDK exchanges it for short-lived role credentials (portal.sso GetRoleCredentials). The SSO access token IS resident — Phase B (WARDYN_AWS_SSO_PROXY_INJECT) injects it proxy-side on portal.sso instead"
 		mode = "sso-inject"
 	case b.awsMount:
 		detail = "host ~/.aws bind-mounted read-only; the AWS SDK resolves credentials (incl. auto-refreshing SSO) from the mount — no static keys stored, none resident in env"
@@ -691,7 +713,7 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 	// provisionDispatchMITMCA for the trust-store wiring.
 	mitmForInspect := llmInspectMITMEnabled(policy)
 	var mitmCACertPEM, mitmCAKeyPEM string
-	if llm.injectSub || llm.injectManaged || mitmForInspect || artifactInject || llm.injectBedrockBearer {
+	if llm.injectSub || llm.injectManaged || mitmForInspect || artifactInject || llm.injectBedrockBearer || llm.injectBedrockSSO {
 		var ok bool
 		if mitmCACertPEM, mitmCAKeyPEM, ok = s.provisionDispatchMITMCA(ctx, run, sandboxEnv); !ok {
 			return dispatchLLMPlan{}, false
@@ -724,6 +746,19 @@ func (s *Server) resolveLLMInjections(ctx context.Context, run types.AgentRun, p
 		if injections, bedrockMITMHosts, ok = s.authorBedrockBearerInjection(ctx, run, llm, injections); !ok {
 			return dispatchLLMPlan{}, false
 		}
+	}
+
+	// Captured-AWS-SSO injection + its per-run MITM host (PHASE B, see
+	// authorBedrockSSOInjection). Same stop-on-failure contract as the bearer
+	// block above, and it appends to the SAME MITM host list: a run is on one
+	// Bedrock lane or the other, never both, so the two never collide.
+	if llm.injectBedrockSSO {
+		var ok bool
+		var ssoMITMHosts []string
+		if injections, ssoMITMHosts, ok = s.authorBedrockSSOInjection(ctx, run, llm, sso, injections); !ok {
+			return dispatchLLMPlan{}, false
+		}
+		bedrockMITMHosts = append(bedrockMITMHosts, ssoMITMHosts...)
 	}
 
 	// Artifact-redirect token injections (authored in planArtifactRedirect, whose

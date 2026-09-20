@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"net"
 	"net/url"
 	"os"
 	"strings"
@@ -245,10 +246,22 @@ type bedrockAuth struct {
 	// for a blob captured by a binary that did not record them — see
 	// bedrockBlobPinMismatch for why empty must never refuse.
 	ssoAccountID, ssoRoleName string
+	// ssoRegion is the captured session's OWN region (blob.Region), which may
+	// differ from the Bedrock region: it is what ssoPortalHost derives the one
+	// injectable host from, and what the dispatch-time scope SNAPSHOT records so
+	// a resolve mid-run compares against the region this run was authored with
+	// rather than whatever the roster says later.
+	ssoRegion string
+	// ssoProxyInject is PHASE B: the captured SSO access token is injected by the
+	// proxy on portal.sso instead of being written into the sandbox
+	// (WARDYN_AWS_SSO_PROXY_INJECT). Read ONCE at dispatch and carried, so a
+	// running sandbox never changes lane under the operator's flip. False =
+	// 0.7.5, byte for byte.
+	ssoProxyInject bool
 	// ssoRefreshFailure carries the refusal sentence when a captured AWS SSO
 	// credential COULD have been renewed but the renewal did not land (the
 	// refresh token is spent, or the OIDC call did not complete). It is set only
-	// on the dispatch pass (refresh=true) and is independent of ready: the SSO
+	// on a refresh=true pass (the real launch, dispatch) and is independent of ready: the SSO
 	// lane simply did not fire, and within Bedrock the mount/static lanes below
 	// it still may. It exists so the dispatch gate can refuse the run with a
 	// reason instead of letting a run boot toward a model it cannot reach.
@@ -299,12 +312,70 @@ func (s *Server) bedrockDataPlaneHost(region string) string {
 // (every real deployment) returns exactly what it always did.
 func ssoEgressHosts(ssoRegion, endpointOverride string) []string {
 	if h := gatewayHost(endpointOverride); h != "" {
+		// PORT-QUALIFIED BESIDE THE BARE HOST when the override names one. The
+		// bare entry is what buildInjector's AllowedExactHost check and both
+		// resolve lanes ask for; the PORT is what decides whether the transport
+		// may carry the credential at all. injectableTransport asks
+		// Policy.AuthoredPortFor(host, port) for every non-80 port, and with one
+		// bare entry that answers false -- so the cleartext fake lane on :8090
+		// was allowlisted, MITM-less and silently UNCREDENTIALED: the SDK saw the
+		// fake's own 401 and nothing in the proxy said why. A port-qualified
+		// entry still satisfies the bare-host question (exact_host_binding.go),
+		// so adding it widens nothing: the same one host, now with its transport
+		// declared.
+		if u, err := url.Parse(endpointOverride); err == nil && u.Port() != "" {
+			return []string{h, net.JoinHostPort(h, u.Port())}
+		}
 		return []string{h}
 	}
 	return []string{
 		fmt.Sprintf("oidc.%s.amazonaws.com", ssoRegion),
 		fmt.Sprintf("portal.sso.%s.amazonaws.com", ssoRegion),
 	}
+}
+
+// ssoPortalHost is the ONE host the captured SSO access token may be injected
+// to (Phase B, 0.7.6): the run's own regional IAM Identity Center portal, where
+// the sandbox SDK exchanges the session for role credentials. It is the second
+// of ssoEgressHosts' two regional entries, and the override's host when the
+// test hatch moved them.
+//
+// BARE, never host:port -- deliberately, and for the reason
+// authorBedrockBearerInjection states for its own scope: buildInjector keys
+// byHost on the rule host VERBATIM (inject.go) and both resolve lanes ask with
+// a bare host, so a port-qualified scope host is a rule nothing ever matches.
+// The port rides two other places instead: the MITM-eligibility entry
+// (net.JoinHostPort, so a bare any-port entry cannot have some other port's
+// tunnel terminated with the Wardyn leaf) and the egress allowlist above.
+// ssoPortalPort is the port the sandbox actually reaches the portal on: the
+// override's when it names one, else the override's SCHEME default (80 for
+// http://, 443 otherwise). It is the MITM-eligibility entry's port, and it must
+// track ssoEgressHosts' own port entry — an entry authored at a port the run
+// never dials is a tunnel nobody terminates.
+func ssoPortalPort(endpointOverride string) string {
+	u, err := url.Parse(endpointOverride)
+	if err != nil {
+		return "443"
+	}
+	if p := u.Port(); p != "" {
+		return p
+	}
+	// THE SCHEME'S OWN DEFAULT, not a flat 443. An http:// override with no port
+	// means port 80, and answering 443 there authored BOTH the allowlist entry
+	// and the TLS-MITM entry on a port nothing is listening on — the credential
+	// withheld on the port actually dialled, for a shape that reads correct in
+	// every config dump. No override at all stays 443, which is the real portal.
+	if strings.EqualFold(u.Scheme, "http") {
+		return "80"
+	}
+	return "443"
+}
+
+func ssoPortalHost(ssoRegion, endpointOverride string) string {
+	if h := gatewayHost(endpointOverride); h != "" {
+		return h
+	}
+	return fmt.Sprintf("portal.sso.%s.amazonaws.com", ssoRegion)
 }
 
 // sandboxAWSDir is where the host ~/.aws is bind-mounted read-only in the run
@@ -317,6 +388,22 @@ const sandboxAWSDir = "/home/agent/.aws"
 // operator-configured: this profile exists only inside the ephemeral sandbox
 // ~/.aws Wardyn generates, so there is no collision to name around.
 const awsSSOProfileName = "wardyn"
+
+// awsSSOPlaceholderToken is the inert value the Phase-B sandbox cache carries
+// where the real SSO access token used to be. It is the SAME spelling the
+// Bedrock BEARER lane already stages in AWS_BEARER_TOKEN_BEDROCK, on purpose:
+// one string an operator can grep for that means "this credential is injected
+// proxy-side, and what you are looking at is not a secret".
+//
+// It is NEVER mask-registered: registering it would redact a marker that exists
+// to be visible, in every run's stream.
+const awsSSOPlaceholderToken = "wardyn-proxy-injected"
+
+// awsSSOPlaceholderCacheTTL is how far out the placeholder cache file's expiry
+// is stamped: long enough that no run outlives it (the SDK refuses a cache it
+// reads as expired, and would try to refresh a placeholder inside five minutes
+// of it), short enough to stay a plainly synthetic value.
+const awsSSOPlaceholderCacheTTL = 30 * 24 * time.Hour
 
 // awsSSOConfigEnvVar carries the generated ~/.aws files (config + SSO token
 // cache) into the sandbox: same shape as WARDYN_ARTIFACT_CONFIG_B64 —
@@ -387,12 +474,39 @@ func awsSSOLoginConfigFileContents(startURL, region string) string {
 //
 // A blob with NO refresh token keeps today's bytes exactly: there is nothing to
 // rotate, so the registration fields are harmless where they exist.
-func awsSSOCacheFileContents(b awsSSOBlob) string {
+//
+// proxyInjected is PHASE B (0.7.6, WARDYN_AWS_SSO_PROXY_INJECT): when true the
+// real access token does not reach the sandbox at all. The file carries the
+// inert awsSSOPlaceholderToken and an expiry far enough out that the SDK never
+// tries to refresh it -- the token itself is set on the wire by the proxy as
+// x-amz-sso_bearer_token, on that one portal host, from a value the sandbox
+// never holds. The rest of the file is unchanged, because the SDK still needs
+// the session identity (start URL, region) to resolve the profile at all, and
+// neither is a credential. With the switch off this argument is false and the
+// bytes are 0.7.5's, byte for byte.
+func awsSSOCacheFileContents(b awsSSOBlob, proxyInjected bool) string {
+	accessToken, expiresAt := b.AccessToken, b.ExpiresAt.UTC()
+	if proxyInjected {
+		// The expiry is LOCAL to the sandbox's SDK, which validates it before
+		// making any call and attempts its own refresh inside five minutes of it
+		// (aws-sdk-js-v3) -- against a cache with no registration fields, which
+		// would fail. botocore raises only once expired. Either way the file has
+		// to outlive every run, so it is stamped far out rather than mirroring
+		// the real token's expiry: the real expiry is the CONTROL PLANE's to know.
+		accessToken = awsSSOPlaceholderToken
+		expiresAt = time.Now().UTC().Add(awsSSOPlaceholderCacheTTL)
+	}
 	cache := map[string]any{
 		"startUrl":    b.StartURL,
 		"region":      b.Region,
-		"accessToken": b.AccessToken,
-		"expiresAt":   b.ExpiresAt.UTC().Format(time.RFC3339),
+		"accessToken": accessToken,
+		"expiresAt":   expiresAt.Format(time.RFC3339),
+	}
+	if proxyInjected {
+		// NOTHING rotatable, ever: the placeholder cannot be refreshed and the
+		// registration pair is exactly what a sandbox-side refresh would need.
+		raw, _ := json.Marshal(cache)
+		return string(raw)
 	}
 	if b.RefreshToken == "" {
 		if b.ClientID != "" {
@@ -443,10 +557,10 @@ func awsSSOCacheFileContents(b awsSSOBlob) string {
 // reachable for a member.
 //
 // refresh authorizes SIDE EFFECTS: only with refresh=true may the captured-SSO
-// lane redeem its rotating refresh token and persist the rotated pair. ONLY
-// DISPATCH sets it. Create and preflight pass false — a dry run must never spend
-// a one-use token, and it does not need to: an expired-but-renewable credential
-// reads READY there, because dispatch renews it (see the captured-SSO branch).
+// lane redeem its rotating refresh token and persist the rotated pair. The REAL
+// LAUNCH (create) and DISPATCH pass true; Review's preflight and the create
+// advisory pass false — a dry run must never spend a one-use token, and it does
+// not need to: an expired-but-renewable credential reads READY there.
 // bedrockRegionModel is the EFFECTIVE region and model for a run: the picked
 // workspace/container's per-run override where it names one, else the global
 // operator config.
@@ -607,9 +721,17 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 			// is exactly right here — the only credential source is the SSO cache.
 			env["AWS_SHARED_CREDENTIALS_FILE"] = sandboxAWSDir + "/credentials"
 			env["AWS_PROFILE"] = awsSSOProfileName
+			// PHASE B (0.7.6): with WARDYN_AWS_SSO_PROXY_INJECT on, the cache file
+			// carries an inert placeholder and the real access token is injected
+			// on the wire at portal.sso by the proxy. The switch is read ONCE,
+			// here, at dispatch: a run already dispatched keeps the lane it was
+			// authored with (its placeholder cache, its grant and its MITM entry)
+			// until it ends, so flipping the switch is a change to NEW dispatches
+			// and never a change under a running sandbox.
+			proxyInjected := s.cfg.AWSSSOProxyInject
 			env[awsSSOConfigEnvVar] = encodeArtifactConfig(map[string]string{
 				".aws/config": awsSSOConfigFileContents(blob),
-				".aws/sso/cache/" + awsSSOCacheFileName(awsSSOProfileName) + ".json": awsSSOCacheFileContents(blob),
+				".aws/sso/cache/" + awsSSOCacheFileName(awsSSOProfileName) + ".json": awsSSOCacheFileContents(blob, proxyInjected),
 			})
 			// The TEST endpoint hatch, if the operator set it: the SDK resolves
 			// this cache by CALLING GetRoleCredentials, so pointing the egress
@@ -627,11 +749,12 @@ func (s *Server) resolveBedrockAuth(ctx context.Context, runAgent string, subscr
 			s.cfg.MaskRegistry.AddGlobal([]byte(blob.AccessToken))
 			s.cfg.MaskRegistry.AddGlobal([]byte(blob.RefreshToken))
 			s.cfg.MaskRegistry.AddGlobal([]byte(blob.ClientSecret))
-			// The POST-refresh blob's own pair: dispatch is the one pass allowed
+			// The POST-refresh blob's own pair: a refresh=true pass is the one allowed
 			// to redeem the rotating refresh token, and the identity the gate
 			// compares must be the one this run will actually present.
 			return ready(bedrockAuth{env: env, egressHosts: hosts, ssoInject: true,
-				ssoAccountID: blob.AccountID, ssoRoleName: blob.RoleName})
+				ssoAccountID: blob.AccountID, ssoRoleName: blob.RoleName,
+				ssoRegion: blob.Region, ssoProxyInject: proxyInjected})
 		}
 	}
 
@@ -815,11 +938,17 @@ func (s *Server) setupBedrock(ctx context.Context, present map[string]bool, sso 
 	// operator to re-login hourly for a credential that heals itself — and, once
 	// a declared mechanism can refuse a run, would refuse a run dispatch heals.
 	// Reading NO refresh is done here: this is a read-only probe.
+	//
+	// renewable(now) is not enough on its own (Finding 5 sibling drift): a
+	// refresh token AWS has already retired still reads renewable() == true
+	// (a refresh token is PRESENT and the registration has not lapsed) even
+	// though redeeming it will fail every time — awsSSOTokenSpentFor is the
+	// same spent-set consult setupModelAccess grades against.
 	ssoLive, ssoDead := false, false
 	ssoAccount, ssoRole := "", ""
 	if blob, found, err := s.readAWSSSOBlob(ctx, sso); err == nil && found {
 		now := s.cfg.Now()
-		ssoLive = blob.renewable(now) || !blob.expired(now)
+		ssoLive = (blob.renewable(now) && !s.awsSSOTokenSpentFor(blob)) || !blob.expired(now)
 		ssoDead = !ssoLive
 		ssoAccount, ssoRole = blob.AccountID, blob.RoleName
 	}

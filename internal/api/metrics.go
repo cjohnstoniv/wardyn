@@ -75,6 +75,85 @@ type metrics struct {
 	// message. Never the drive, the subject or the path — those are the audit
 	// log's and the slog line's, both of which this counter points at.
 	driveRefusals map[string]int64
+	// ssoRefreshOutcomes counts each control-plane AWS SSO renewal ATTEMPT
+	// (refreshAWSSSOBlob's CreateToken call), by outcome — the same four the
+	// harness.credential.refresh audit row's own branching already
+	// distinguishes (Finding 5): success is "redeemed at AWS" — the increment
+	// fires the instant CreateToken succeeds, BEFORE the re-Put; a persist
+	// failure afterward is still audited failure/persist_error, but counts
+	// here too, since the run was served from the renewed pair either way.
+	// spent is the refresh token being newly discovered dead — it increments
+	// ONCE per token, at the CreateToken call that first sees invalid_grant et
+	// al.; every LATER dispatch on that same token exits at an earlier,
+	// uncounted short-circuit (the in-memory dead-mark check, before
+	// CreateToken is ever called again), so this series reads "how many
+	// distinct sessions AWS retired," not "how many times someone hit a dead
+	// one." transport_error is a transient failure that still served the run
+	// from a still-valid token; unavailable is a transient failure with
+	// nothing left to serve. BY OUTCOME, CLOSED set (ssoRefreshOutcomeValues):
+	// a graphable "how often does renewal fail, and which way" that the audit
+	// trail alone is not (nobody alerts on a log line they do not know to
+	// grep for).
+	ssoRefreshOutcomes map[string]int64
+
+	// credentialReauthOutcomes counts each mid-run credential re-auth WORKFLOW's
+	// outcome (Finding 4): requested when a lapsed credential opens a hold,
+	// resolved when a sign-in answers it, and expired/cancelled when the row was
+	// aged out or the run ended under it. timeout is the one the operator
+	// actually tunes on — it means the sandbox's SDK was told to fail because
+	// nobody signed in inside WARDYN_CREDENTIAL_REAUTH_TIMEOUT, and a series that
+	// is mostly timeouts is a deployment whose people are not seeing the request.
+	//
+	// BY OUTCOME, CLOSED set (credentialReauthOutcomeValues) for the reason
+	// driveRefusals gives: a label nobody enumerated is one series per string.
+	//
+	// EVERY label is counted AT ITS OWN TRANSITION, which is the whole
+	// correction: requested at the raise, resolved at the resolution, expired
+	// where the sweeper ages a row out, cancelled where a terminal run cancels
+	// one, timeout where the daemon ingests the sidecar's decision row. The
+	// first shape bumped expired/cancelled at a later RESOLVE that happened to
+	// meet a terminal row, which counts retries rather than outcomes (with the
+	// measured ~30 s cadence, dozens per row) and never fired at all once the
+	// sidecar had given up.
+	credentialReauthOutcomes map[string]int64
+	// credentialReauthWaitSum / Count are how long a re-auth request stayed
+	// open — raised to resolved. Sum and count, i.e. an average, and no
+	// histogram until someone needs a p99 (this type's ponytail note).
+	//
+	// It is the number an operator tunes the knob against: if the average wait
+	// approaches WARDYN_CREDENTIAL_REAUTH_TIMEOUT, people are only just making
+	// it, and the holds that DIDN'T make it are the timeouts beside them.
+	// Measured at the RESOLUTION, in the control plane, because that is the one
+	// party that sees both ends; the sidecar sees only its own budget.
+	credentialReauthWaitSum   float64
+	credentialReauthWaitCount int64
+
+	// startWaitSum / startWaitCount are how long a sandbox that was still being
+	// created spent on each SUBSTRATE reason — the series that turns finding 6's
+	// anecdote ("127s and 131s, on two occasions") into something an operator can
+	// graph. Same shape as launchSum/launchCount: sum and count, i.e. an average,
+	// and no histogram until someone needs a p99 (see this type's ponytail note).
+	//
+	// BY REASON, with a CLOSED label set (startWaitReasons), for exactly the
+	// argument driveRefusals makes: a substrate reason is not Wardyn's to
+	// enumerate — a future kubelet can invent one — and a free-form label here
+	// would be one series per string the platform ever says. Anything unknown
+	// lands on "other", which is itself the signal that the vocabulary needs a row.
+	startWaitSum   map[string]float64
+	startWaitCount map[string]int64
+}
+
+// startWaited records one stretch a starting sandbox spent on one reason.
+func (m *metrics) startWaited(reason string, d time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.startWaitSum == nil {
+		m.startWaitSum = map[string]float64{}
+		m.startWaitCount = map[string]int64{}
+	}
+	label := startWaitReasonLabel(reason)
+	m.startWaitSum[label] += d.Seconds()
+	m.startWaitCount[label]++
 }
 
 // driveRefused records one run refused its user drive, by reason.
@@ -85,6 +164,89 @@ func (m *metrics) driveRefused(reason string) {
 		m.driveRefusals = map[string]int64{}
 	}
 	m.driveRefusals[reason]++
+}
+
+// ssoRefreshOutcomeValues is the closed label set ssoRefreshRecorded accepts,
+// declared up front for the same reason driveRefusalReasons is: it seeds
+// every series at zero on the first scrape rather than waiting for the first
+// occurrence of each, and a caller passing anything outside this list is
+// dropped rather than starting a new, uncounted series (see ssoRefreshRecorded).
+var ssoRefreshOutcomeValues = []string{
+	ssoRefreshOutcomeSuccess, ssoRefreshOutcomeSpent, ssoRefreshOutcomeTransportError, ssoRefreshOutcomeUnavailable,
+}
+
+const (
+	ssoRefreshOutcomeSuccess        = "success"
+	ssoRefreshOutcomeSpent          = "spent"
+	ssoRefreshOutcomeTransportError = "transport_error"
+	ssoRefreshOutcomeUnavailable    = "unavailable"
+)
+
+// credentialReauthOutcomeValues is the closed label set
+// credentialReauthRecorded accepts.
+var credentialReauthOutcomeValues = []string{
+	credentialReauthOutcomeRequested, credentialReauthOutcomeResolved,
+	credentialReauthOutcomeExpired, credentialReauthOutcomeCancelled,
+	credentialReauthOutcomeTimeout,
+}
+
+const (
+	credentialReauthOutcomeRequested = "requested"
+	credentialReauthOutcomeResolved  = "resolved"
+	credentialReauthOutcomeExpired   = "expired"
+	credentialReauthOutcomeCancelled = "cancelled"
+	// timeout: the proxy's hold ran out and the sandbox's call was failed.
+	// Counted where the daemon INGESTS the sidecar's decision row for
+	// credential:reauth-timeout (handlePostDecision), which is the one place
+	// the control plane learns a hold expired — the expiry happens in the
+	// sidecar and the approval row deliberately stays PENDING.
+	credentialReauthOutcomeTimeout = "timeout"
+)
+
+// credentialReauthRecorded records one re-auth workflow transition. Silently
+// drops anything outside the closed set, exactly as ssoRefreshRecorded does.
+func (m *metrics) credentialReauthRecorded(outcome string) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !slices.Contains(credentialReauthOutcomeValues, outcome) {
+		return
+	}
+	if m.credentialReauthOutcomes == nil {
+		m.credentialReauthOutcomes = map[string]int64{}
+	}
+	m.credentialReauthOutcomes[outcome]++
+}
+
+// credentialReauthResolved records one re-auth request answered, and how long
+// it was open. A negative or absurd duration (a clock step, a row with no
+// requested_at) is counted as an outcome but not as a wait.
+func (m *metrics) credentialReauthResolved(waited time.Duration) {
+	m.credentialReauthRecorded(credentialReauthOutcomeResolved)
+	if waited <= 0 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.credentialReauthWaitSum += waited.Seconds()
+	m.credentialReauthWaitCount++
+}
+
+// ssoRefreshRecorded records one control-plane AWS SSO renewal attempt's
+// outcome. Silently drops anything outside ssoRefreshOutcomeValues — a typo'd
+// label must not start an uncounted, un-zeroed series.
+func (m *metrics) ssoRefreshRecorded(outcome string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !slices.Contains(ssoRefreshOutcomeValues, outcome) {
+		return
+	}
+	if m.ssoRefreshOutcomes == nil {
+		m.ssoRefreshOutcomes = map[string]int64{}
+	}
+	m.ssoRefreshOutcomes[outcome]++
 }
 
 // authFailedSuppressedInc records one dropped auth.failed audit emit.
@@ -133,26 +295,37 @@ func (m *metrics) egressDenied() {
 // Non-policy DENY rule_sources. An egress.Deny decision log carries one of these
 // when nothing was denied by policy at all:
 //
-//   - builtin:dial-failed — emitted from four sites in internal/egress/proxy.
-//     THREE are genuine dial failures on a request policy ALLOWED, where the
-//     network lost it: proxy.go's forward-path round trip, proxy.go's CONNECT
-//     tunnel dial, and llm_routes.go's brokered-LLM round trip. The FOURTH is
-//     NOT a dial failure — llm_routes.go's gatewayTarget arm reuses this source
-//     when gatewayTarget returns errGatewayVet, which is vetTrustedHost's GUARD
-//     refusal of the configured model gateway (it resolved to loopback /
-//     link-local / this proxy's own control-plane network, or did not resolve at
-//     all). That request was REFUSED, not lost, and this exclusion stops it
-//     moving the counter too. ACCEPTED RESIDUAL (F065-gatewayvet): the class is
-//     not separable HERE — rule_source is all handlePostDecision sees — and it
-//     still records its full egress.deny AUDIT row. Separating it needs a
-//     distinct rule_source at the emitting site, which is the egress lane's file.
+//   - builtin:dial-failed — emitted from exactly three sites in
+//     internal/egress/proxy, all genuine dial failures on a request policy
+//     ALLOWED, where the network lost it: proxy.go's forward-path round trip,
+//     proxy.go's CONNECT tunnel dial, and llm_routes.go's brokered-LLM round
+//     trip. RESOLVED (F065-gatewayvet, was an ACCEPTED RESIDUAL): a fourth
+//     site — llm_routes.go's gatewayTarget arm, on errGatewayVet, vetTrustedHost's
+//     GUARD refusal of the configured model gateway — USED TO reuse this same
+//     source, which excluded a config problem the operator's own gateway can
+//     never satisfy from the counter alongside failures the network actually
+//     caused. It now carries its own rule_source (ruleSourceGatewayVetFailed,
+//     egress lane) and is DELIBERATELY absent from this exclusion list below —
+//     a guard refusal counts as a denial like any other.
 //   - egress.decisions.dropped:<n> — decisions.go's synthetic summary for
 //     decision records the buffer had to drop. An audit-FIDELITY alert about a
 //     wedged control plane, not a denial of anything; the count rides in the
 //     rule_source, hence the prefix match.
+//   - credential:reauth-timeout — the proxy held a sandbox's AWS SSO credential
+//     exchange while its owner was asked to sign in again, and nobody signed in
+//     before the budget ended. Policy allowed that host and allowed that
+//     request; what ran out was a HUMAN's time. Counting it here would page
+//     security for a person who went to lunch, on the one series whose HELP
+//     promises "denial by policy". It keeps its egress.deny audit row and its
+//     own wardyn_credential_reauth_total{outcome="timeout"}, which is the
+//     series an operator actually wants for it.
 const (
 	ruleSourceDialFailed       = "builtin:dial-failed"
 	ruleSourceDroppedDecisions = "egress.decisions.dropped:"
+	// Mirrors internal/egress/proxy's ruleSourceCredentialReauthTimeout; the
+	// two packages do not import each other, and the decision arrives here as
+	// a string on the wire.
+	ruleSourceCredentialReauthTimeout = "credential:reauth-timeout"
 )
 
 // isPolicyDeny reports whether an egress.Deny with this rule_source is a DENIAL
@@ -166,7 +339,9 @@ const (
 // counter failing quiet — while this list fails toward counting: a source nobody
 // classified still moves the series, and only the two known non-denials do not.
 func isPolicyDeny(ruleSource string) bool {
-	return ruleSource != ruleSourceDialFailed && !strings.HasPrefix(ruleSource, ruleSourceDroppedDecisions)
+	return ruleSource != ruleSourceDialFailed &&
+		ruleSource != ruleSourceCredentialReauthTimeout &&
+		!strings.HasPrefix(ruleSource, ruleSourceDroppedDecisions)
 }
 
 func (m *metrics) credentialMinted() {
@@ -203,6 +378,20 @@ func (m *metrics) write(w io.Writer) {
 	for _, reason := range driveRefusalReasons {
 		fmt.Fprintf(w, "wardyn_drive_refusals_total{reason=%q} %d\n", reason, m.driveRefusals[reason])
 	}
+	fmt.Fprint(w, "# HELP wardyn_sso_refresh_total Control-plane AWS SSO CreateToken renewal attempts, by outcome.\n"+
+		"# TYPE wardyn_sso_refresh_total counter\n")
+	for _, outcome := range ssoRefreshOutcomeValues {
+		fmt.Fprintf(w, "wardyn_sso_refresh_total{outcome=%q} %d\n", outcome, m.ssoRefreshOutcomes[outcome])
+	}
+	fmt.Fprint(w, "# HELP wardyn_credential_reauth_total Mid-run model-credential re-auth workflows, by outcome (a lapsed captured AWS SSO session held while its owner signs in again).\n"+
+		"# TYPE wardyn_credential_reauth_total counter\n")
+	for _, outcome := range credentialReauthOutcomeValues {
+		fmt.Fprintf(w, "wardyn_credential_reauth_total{outcome=%q} %d\n", outcome, m.credentialReauthOutcomes[outcome])
+	}
+	fmt.Fprintf(w, "# HELP wardyn_credential_reauth_wait_seconds Time a mid-run model-credential re-auth request stayed open, from the raise to the sign-in that answered it.\n"+
+		"# TYPE wardyn_credential_reauth_wait_seconds summary\n"+
+		"wardyn_credential_reauth_wait_seconds_sum %g\nwardyn_credential_reauth_wait_seconds_count %d\n",
+		m.credentialReauthWaitSum, m.credentialReauthWaitCount)
 	// HELP text: DRAFT (M2 canon pending) — R4-F065. M2 recommends the HELP-only
 	// remediation (this wording change) over the filed alternative that also
 	// splits the series into {reason="policy"|"dial_failed"|"decisions_dropped"};
@@ -216,6 +405,12 @@ func (m *metrics) write(w io.Writer) {
 		"# TYPE wardyn_auth_failed_suppressed_total counter\nwardyn_auth_failed_suppressed_total %d\n", m.authFailedSuppressed)
 	fmt.Fprintf(w, "# HELP wardyn_auth_store_errors_total Requests an authentication lane could not decide because its store read failed (answered 500). Not covered by wardyn_store_up, which only pings.\n"+
 		"# TYPE wardyn_auth_store_errors_total counter\nwardyn_auth_store_errors_total %d\n", m.authStoreErrors)
+	fmt.Fprint(w, "# HELP wardyn_run_start_wait_seconds Time a sandbox still being created spent waiting on each substrate reason (pulling an image, waiting for a node, a reference that will not pull).\n"+
+		"# TYPE wardyn_run_start_wait_seconds summary\n")
+	for _, reason := range startWaitReasons {
+		fmt.Fprintf(w, "wardyn_run_start_wait_seconds_sum{reason=%q} %g\n", reason, m.startWaitSum[reason])
+		fmt.Fprintf(w, "wardyn_run_start_wait_seconds_count{reason=%q} %d\n", reason, m.startWaitCount[reason])
+	}
 	// A summary with no quantiles: sum/count only, i.e. an average launch time.
 	fmt.Fprintf(w, "# HELP wardyn_sandbox_launch_seconds Time from run creation to RUNNING.\n"+
 		"# TYPE wardyn_sandbox_launch_seconds summary\n"+
@@ -294,5 +489,16 @@ func (s *Server) writeSinkDrops(w io.Writer) {
 		"# TYPE wardyn_audit_sink_drops_total counter\n")
 	for _, name := range names {
 		fmt.Fprintf(w, "wardyn_audit_sink_drops_total{sink=%q} %d\n", name, drops[name])
+	}
+}
+
+// RecordCredentialReauthExpired counts credential_reauth rows the approval
+// sweeper aged out. Exported for cmd/wardynd's sweeper goroutine, which is the
+// ONLY place this transition happens: by the time a row expires the sidecar
+// that held for it gave up hours ago, so no resolve will ever meet it and
+// counting at a resolve would count nothing at all (security NIT-3).
+func (s *Server) RecordCredentialReauthExpired(n int) {
+	for i := 0; i < n; i++ {
+		s.metrics.credentialReauthRecorded(credentialReauthOutcomeExpired)
 	}
 }

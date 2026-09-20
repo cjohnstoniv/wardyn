@@ -390,6 +390,19 @@ type Config struct {
 	// reason as BedrockBaseURL (PF-43): a runtime-writable spelling would let an
 	// admin re-point a credential exchange with no restart and no boot log.
 	AWSSSOEndpointOverride string
+
+	// AWSSSOProxyInject is the PHASE B kill switch (WARDYN_AWS_SSO_PROXY_INJECT,
+	// resolved by ResolveAWSSSOProxyInject at boot): when true a captured-AWS-SSO
+	// Bedrock dispatch stages an inert placeholder in the sandbox's token cache
+	// and authors a proxy-side injection of the real token onto that run's own
+	// portal.sso host, so the session is never resident; when false the 0.7.5
+	// bytes are restored for NEW dispatches (a run already dispatched keeps its
+	// authored lane until it ends).
+	//
+	// It is the rollback for an SDK or corporate-MITM surprise without a
+	// downgrade. See runs_dispatch_sso_inject.go for the default and docs/ENV.md
+	// for the operator-facing contract.
+	AWSSSOProxyInject bool
 	// BedrockAWSConfigDir, when set, bind-mounts a host AWS config directory
 	// (a `~/.aws`) READ-ONLY into the sandbox at /home/agent/.aws, so the AWS
 	// SDK inside the run resolves credentials itself — including short-lived AWS
@@ -667,6 +680,11 @@ type Server struct {
 	// constant" (attachKeepaliveEvery). Per-server rather than a package var so
 	// two tests running side by side cannot race on it.
 	keepaliveEvery time.Duration
+	// pingEvery overrides attachPingInterval for THIS server only (D1's
+	// liveness probe on an otherwise-idle attach socket) — same reason and same
+	// per-server shape as keepaliveEvery above: a test drives a dead-peer holder
+	// on a millisecond clock instead of the real 30s budget.
+	pingEvery time.Duration
 	// refRuleset caches the ONE outbound GitHub call the setup checklist makes,
 	// so polling /setup/status (which the wizard does) cannot turn into a
 	// per-poll API call or a rate-limit. Zero value is ready to use.
@@ -763,7 +781,10 @@ type Server struct {
 	// like sshSessions and lastTouch above, and correct for the same reason
 	// (replicas>1 is refused by construction). Zero values are ready to use.
 	// ponytail: ssoRefreshSpent grows one small entry per spent token per daemon
-	// lifetime — bound it only if that ever stops being negligible.
+	// lifetime — bound it only if that ever stops being negligible. Grading
+	// reads it too now (setupModelAccess, Finding 5), not only the refresher's
+	// own short-circuit — so a restart re-grades a spent credential `live`
+	// until the next dispatch marks it spent again, same as the refresher did.
 	ssoRefreshMu    sync.Mutex
 	ssoRefreshLocks map[string]*sync.Mutex
 	ssoRefreshSpent map[string]bool

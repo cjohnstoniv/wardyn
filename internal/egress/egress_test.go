@@ -5,6 +5,8 @@ package egress
 
 import (
 	"encoding/json"
+	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -189,7 +191,9 @@ func TestInjectionRuleJSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(b, &out); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if out != in {
+	// reflect.DeepEqual, not ==: the rule carries a PinQuery map now, and a
+	// struct with a map in it is not comparable.
+	if !reflect.DeepEqual(out, in) {
 		t.Errorf("round-trip mismatch: got %+v, want %+v", out, in)
 	}
 }
@@ -250,5 +254,59 @@ func TestValidHeaderName(t *testing.T) {
 		if ValidHeaderName(name) {
 			t.Errorf("ValidHeaderName(%q) = true, want false (%s)", name, why)
 		}
+	}
+}
+
+// THE PIN'S QUERY ARM IS UNAMBIGUOUS BY CONSTRUCTION (security re-round
+// SHOULD-1). Pinned here as well as through both proxy lanes, because this is
+// where the rule is decided and the shapes are easier to read without a server
+// in the way.
+//
+// Each refused case carries the pinned pair AND a second account or role. The
+// first-value match this replaces accepted all four, with the credential
+// attached and RawQuery forwarded verbatim — so whether the second value was
+// honoured was the ORIGIN's decision. The real portal's duplicate-parameter and
+// ';' semantics are undocumented, which is the reason to refuse rather than to
+// reason about them.
+func TestInjectionRuleAllowsInjection_QueryMustBeUnambiguous(t *testing.T) {
+	r := InjectionRule{
+		Host: "portal.sso.eu-west-2.amazonaws.com", Header: "x-amz-sso_bearer_token", Format: "%s",
+		PinPath:  "/federation/credentials",
+		PinQuery: map[string]string{"account_id": "111122223333", "role_name": "WardynAgent"},
+	}
+	const pinned = "account_id=111122223333&role_name=WardynAgent"
+	for _, tc := range []struct {
+		name  string
+		query string
+		want  bool
+	}{
+		{"the dispatched pair", pinned, true},
+		{"the pair, other order", "role_name=WardynAgent&account_id=111122223333", true},
+		{"an unrelated extra parameter", pinned + "&debug=1", true},
+		{"a duplicated account_id", "account_id=111122223333&account_id=999988887777&role_name=WardynAgent", false},
+		{"a duplicated role_name", pinned + "&role_name=AdministratorAccess", false},
+		{"a semicolon-separated second account", pinned + "&x=1;account_id=999988887777", false},
+		{"a percent-encoded second spelling", "account_id=111122223333&account%5Fid=999988887777&role_name=WardynAgent", false},
+		{"a different account", "account_id=999988887777&role_name=WardynAgent", false},
+		{"a missing key", "account_id=111122223333", false},
+		{"no query at all", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := r.AllowsInjection(http.MethodGet, "/federation/credentials", tc.query); got != tc.want {
+				t.Errorf("AllowsInjection(GET, /federation/credentials, %q) = %v, want %v", tc.query, got, tc.want)
+			}
+		})
+	}
+	// The verb and the path still decide first.
+	if r.AllowsInjection(http.MethodPost, "/federation/credentials", pinned) {
+		t.Error("a POST to the pinned path was allowed the credential")
+	}
+	if r.AllowsInjection(http.MethodPost, "/logout", "") {
+		t.Error("POST /logout was allowed the credential")
+	}
+	// An UNPINNED rule narrows nothing — every other injection lane.
+	u := InjectionRule{Host: r.Host, Header: r.Header, Format: r.Format}
+	if !u.AllowsInjection(http.MethodPost, "/logout", "anything=goes") {
+		t.Error("an unpinned rule refused a request")
 	}
 }

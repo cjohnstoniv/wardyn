@@ -199,14 +199,29 @@ func requestedScopeHost(scope json.RawMessage) string {
 // the cutoff (time.Now().UTC().Add(-olderThan)) to EXPIRED and emits one
 // audit event per expiration. Returns the number of approvals expired.
 func ExpireStale(ctx context.Context, st Store, olderThan time.Duration) (int, error) {
+	n, _, err := ExpireStaleByKind(ctx, st, olderThan)
+	return n, err
+}
+
+// ExpireStaleByKind is ExpireStale plus a per-KIND tally of what it moved.
+//
+// It exists because a metric that counts a state transition has to be
+// incremented WHERE THE STATE CHANGES. The credential re-auth counter used to
+// be bumped at a later resolve that happened to meet a terminal row, which
+// counts retries rather than outcomes — with the measured ~30 s SDK cadence one
+// aged-out request scored dozens of "expired" — and never fired at all for a
+// run whose sidecar had already given up. A separate function rather than a
+// changed signature: every existing caller asks the question it always asked.
+func ExpireStaleByKind(ctx context.Context, st Store, olderThan time.Duration) (int, map[types.ApprovalKind]int, error) {
 	cutoff := time.Now().UTC().Add(-olderThan)
 
 	pending, err := st.ListApprovals(ctx, types.ApprovalPending)
 	if err != nil {
-		return 0, fmt.Errorf("approval: list for expiry: %w", err)
+		return 0, nil, fmt.Errorf("approval: list for expiry: %w", err)
 	}
 
 	expired := 0
+	byKind := map[types.ApprovalKind]int{}
 	// COLLECTED, NOT RETURNED ON THE FIRST FAILURE. ListApprovals is ordered
 	// (ORDER BY requested_at DESC in the store) and the sweeper re-lists in the
 	// same order every tick, so a single permanently failing PENDING row used to
@@ -234,6 +249,7 @@ func ExpireStale(ctx context.Context, st Store, olderThan time.Duration) (int, e
 			continue
 		}
 		expired++
+		byKind[ap.Kind]++
 
 		auditData, _ := json.Marshal(map[string]any{
 			"approval_id": ap.ID,
@@ -256,7 +272,7 @@ func ExpireStale(ctx context.Context, st Store, olderThan time.Duration) (int, e
 			audit.LogWriteFailure(ctx, ev, err)
 		}
 	}
-	return expired, errors.Join(failures...)
+	return expired, byKind, errors.Join(failures...)
 }
 
 // CancelForRun transitions every still-PENDING approval belonging to runID to

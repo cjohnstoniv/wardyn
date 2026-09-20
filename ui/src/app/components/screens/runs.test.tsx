@@ -47,6 +47,7 @@ import { RoleProvider, type Role } from "../wardyn/operator-context";
 import { AttentionPublisherProvider } from "../../lib/attention-context";
 import { baseStatus } from "../../lib/test-fixtures";
 import { DEMOS } from "./demos/demo-catalog";
+import { STARTING_UNSCHEDULABLE } from "./run-status-detail";
 
 const run: AgentRun = {
   id: "run-1",
@@ -737,5 +738,42 @@ describe("RunsScreen — the member's empty board", () => {
     renderScreen("admin");
     expect(await screen.findByText("No runs yet")).toBeInTheDocument();
     expect(screen.queryByText("Runs you launch appear here")).not.toBeInTheDocument();
+  });
+});
+
+// 0.7.6 finding 6: the board is where a person scanning several runs can tell a
+// pull from a scheduling failure without opening any of them. The FULL sentence
+// here, not the header's short register — the cell has the width for it.
+describe("RunsScreen — what a starting run is waiting on", () => {
+  it("carries the substrate's sentence under the badge, on the card and in the table row", async () => {
+    listRunsMock.mockResolvedValue([
+      {
+        ...run,
+        id: "run-starting",
+        state: "STARTING",
+        task: "waiting on the cluster",
+        status_detail: "pod: Unschedulable: 0/1 nodes are available: 1 node(s) had untolerated taint",
+        status_reason: "Unschedulable",
+      },
+    ]);
+    renderScreen();
+
+    expect(await screen.findByText("waiting on the cluster")).toBeInTheDocument();
+    expect(screen.getAllByText(STARTING_UNSCHEDULABLE).length).toBeGreaterThan(0);
+
+    await userEvent.click(screen.getByRole("button", { name: "Table" }));
+    expect(within(await screen.findByRole("table")).getByText(STARTING_UNSCHEDULABLE)).toBeInTheDocument();
+  });
+
+  // The server blanks status_detail for every run that is not STARTING, so the
+  // board renders whatever it is sent — but a run carrying nothing must render
+  // nothing, never an empty line under the badge.
+  it("says nothing for a run with no reason", async () => {
+    listRunsMock.mockResolvedValue([{ ...run, state: "STARTING" }]);
+    renderScreen();
+
+    expect(await screen.findByText("Fix flaky auth tests")).toBeInTheDocument();
+    expect(screen.queryByText(STARTING_UNSCHEDULABLE)).toBeNull();
+    expect(screen.queryByText(/^Waiting:/)).toBeNull();
   });
 });

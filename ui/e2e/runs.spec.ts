@@ -7,6 +7,14 @@ import { randomUUID } from "node:crypto";
 import { test, expect, gotoConsole, navTo, sidebarLink, sql } from "./fixtures";
 import { RUN, RUN_COCKPIT } from "../src/app/components/wardyn/copy";
 import { LOGIN_SANDBOX_NOTE } from "../src/app/components/screens/run-detail/login-sandbox-note";
+import { MODEL_ACCESS_BANNER, MODEL_ACCESS_RUN_DOOR } from "../src/app/components/wardyn/model-access-copy";
+import { AGENTS } from "../src/app/lib/workspace-providers-copy";
+import {
+  CHIP_IMAGE_PULL_FAILED,
+  CHIP_SETTING_UP,
+  STARTING_CONTAINER_CREATING,
+  STUCK_IMAGE_PULL,
+} from "../src/app/components/screens/run-status-detail";
 import type { Page, Locator } from "@playwright/test";
 
 // ============================================================================
@@ -417,6 +425,59 @@ test.describe("Run detail (/runs/:id)", () => {
 // well below the bar's floor (~1300px on a single-line row before the fix),
 // stressing the truncate/overflow-hidden path harder than the width loop above.
 test.describe("Run header — the failure-hint chip survives a narrow viewport (F1-F4)", () => {
+  // 0.7.6 finding 6: a STARTING run says what it is waiting ON. The seeded
+  // backend has no real substrate behind fixture 1, so the reason is injected on
+  // the read the console actually makes — the same route-intercept shape the
+  // failure_hint case above uses.
+  test("a STARTING run's header carries the substrate's reason, in the short register, with the sentence on its title", async ({
+    page,
+  }) => {
+    await page.route("**/api/v1/runs/*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      if (json.task === "e2e fixture 1") {
+        json.status_detail = "agent: ContainerCreating";
+        json.status_reason = "ContainerCreating";
+      }
+      await route.fulfill({ response, json });
+    });
+    await openRuns(page);
+    await page.getByText("e2e fixture 1").click();
+    await expect(page).toHaveURL(/\/runs\/.+/);
+
+    const header = page.getByTestId("run-summary-header");
+    await expect(header.getByText("Starting", { exact: true })).toBeVisible();
+    // The SHORT register on screen, the sentence on the title: at max-w-[160px]
+    // the sentence would truncate to a restatement of the badge beside it.
+    await expect(header.getByText(CHIP_SETTING_UP)).toBeVisible();
+    await expect(header.getByTitle(STARTING_CONTAINER_CREATING)).toBeVisible();
+  });
+
+  // The terminal arm, which is the one the 0.7.5 estate needed: the reason that
+  // will not resolve, in the register that survives the chip's width.
+  test("a terminal startup reason reads as a failure, not as progress", async ({ page }) => {
+    await page.route("**/api/v1/runs/*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      if (json.task === "e2e fixture 1") {
+        json.status_detail = "agent: ImagePullBackOff: rpc error: pull access denied";
+        json.status_reason = "ImagePullBackOff";
+      }
+      await route.fulfill({ response, json });
+    });
+    await openRuns(page);
+    await page.getByText("e2e fixture 1").click();
+    await expect(page).toHaveURL(/\/runs\/.+/);
+
+    const header = page.getByTestId("run-summary-header");
+    await expect(header.getByText(CHIP_IMAGE_PULL_FAILED)).toBeVisible();
+    // The registry's own words are what name the fix, so they must survive to
+    // the title even though the chip cannot hold them.
+    await expect(header.getByTitle(new RegExp(`${STUCK_IMAGE_PULL} .*pull access denied`))).toBeVisible();
+  });
+
   test("no horizontal overflow at 420px, Kill stays in the viewport, and the hint chip is still visible", async ({
     page,
   }) => {
@@ -930,5 +991,119 @@ test.describe("Focus mode — Escape inside a Deny confirm (F1-F3 repro)", () =>
     } finally {
       sql(`DELETE FROM approvals WHERE id = '${approvalId}'`);
     }
+  });
+});
+
+// ── 0.7.6 Finding 3 — "the failure names a destination instead of being one" ──
+//
+// The dispatch-time model-credential refusal now stamps `reason` and the
+// DECLARED `mechanism` on the run.create/failure row it already wrote; the
+// console grades that ending `credential` and puts the sign-in under the
+// server's own sentence.
+//
+// Harness ceiling, the same one model-access-banner.spec.ts opens with: the
+// seeded backend authenticates with a bare admin bearer token, has no per-user
+// AWS session to grade and no run that reached dispatch with a dead credential —
+// so the trail row, `model_access` and the viewer's own subject are spliced.
+// What only a browser proves is what is spliced here and asserted below: that
+// this ending reaches the failure block as prose PLUS a door, on the run page,
+// with no second "Sign in to AWS" beside it. The real refusal, from a real
+// per-user AWS session that lapsed, is live case J (lane e2e-sso-path).
+const CREDENTIAL_REFUSAL =
+  "this run's model access is configured as Amazon Bedrock (captured AWS SSO session), and that session can no longer be renewed — sign in to AWS from Getting started in the console, or from the sign-in banner the console shows on every page. Wardyn does not substitute a different model provider.";
+const CREDENTIAL_VIEWER = "alice@corp.example";
+
+/** The viewer's own subject, so `created_by === principal` can be true of a
+ *  seeded run: the door is the VIEWER's credential and an admin reading
+ *  somebody else's failed run is not offered it. */
+async function mockPrincipal(page: Page, principal: string): Promise<void> {
+  await page.route("**/api/v1/me", async (route) => {
+    const response = await route.fetch();
+    const json = await response.json();
+    json.principal = principal;
+    await route.fulfill({ response, json });
+  });
+}
+
+/** A graded per-user model access + the bedrock_sso roster row, cached and
+ *  served (the landing redirect, the shell poll and the block's own refresh all
+ *  hit this endpoint). */
+async function mockActionableModelAccess(page: Page): Promise<void> {
+  let cached: Record<string, unknown> | null = null;
+  await page.route("**/api/v1/setup/status*", async (route) => {
+    if (!cached) {
+      const body = (await (await route.fetch()).json()) as Record<string, unknown>;
+      body.model_access = { state: "expired_signin", action: AGENTS.SIGN_IN_AWS };
+      body.harnesses = ((body.harnesses ?? []) as { id: string }[]).map((h) =>
+        h.id === "claude-code"
+          ? { ...h, enabled: true, mechanism: "bedrock_sso", credential_source: "per_user" }
+          : h,
+      );
+      cached = body;
+    }
+    await route.fulfill({ json: cached! });
+  });
+}
+
+test.describe("a run refused for a model credential carries the sign-in, not directions to it", () => {
+  test("the failure block states the server's sentence and opens the AWS sign-in in place", async ({ page }) => {
+    await mockPrincipal(page, CREDENTIAL_VIEWER);
+    await mockActionableModelAccess(page);
+    // The refused run: the server's sentence on the row (failure_hint), and the
+    // viewer as its creator.
+    await page.route("**/api/v1/runs/*", async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const response = await route.fetch();
+      const json = await response.json();
+      if (json.task === "e2e fixture 6") {
+        json.failure_hint = CREDENTIAL_REFUSAL;
+        json.created_by = CREDENTIAL_VIEWER;
+      }
+      await route.fulfill({ response, json });
+    });
+    // …and the class, on the run.create/failure row the refusal writes.
+    await page.route("**/api/v1/audit*", async (route) => {
+      const response = await route.fetch();
+      const rows = (await response.json()) as Record<string, unknown>[];
+      if (!Array.isArray(rows) || rows.length === 0) return route.fulfill({ response, json: rows });
+      const runID = rows[0].run_id;
+      rows.unshift({
+        id: randomUUID(),
+        time: new Date().toISOString(),
+        run_id: runID,
+        actor_type: "system",
+        actor: "wardynd",
+        action: "run.create",
+        target: String(runID),
+        outcome: "failure",
+        data: { error: CREDENTIAL_REFUSAL, reason: "model_credential", mechanism: "bedrock_sso" },
+      });
+      await route.fulfill({ response, json: rows });
+    });
+
+    await openRuns(page);
+    await page.getByText("e2e fixture 6").click();
+    await expect(page).toHaveURL(/\/runs\/.+/);
+
+    const block = page.getByTestId("run-failure-block");
+    await expect(block).toHaveAttribute("data-ending", "credential");
+    // The SERVER's sentence, once, unchanged — no copy of ours restating it.
+    await expect(block.getByText(CREDENTIAL_REFUSAL)).toHaveCount(1);
+    await expect(block.getByText(MODEL_ACCESS_RUN_DOOR.NOTE)).toBeVisible();
+
+    // ONE "Sign in to AWS" on the page: the block owns the door while it has
+    // one, so the shell strip keeps its sentence and drops its button.
+    await expect(page.getByText(MODEL_ACCESS_BANNER.EXPIRED_SHORT)).toBeVisible();
+    await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true })).toHaveCount(0);
+
+    // A DOOR, not a signpost: the sign-in opens here, on the run's own page.
+    const before = new URL(page.url()).pathname;
+    await block.getByRole("button", { name: MODEL_ACCESS_RUN_DOOR.SIGN_IN_ARIA }).click();
+    await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible();
+    await expect(page.getByTestId("harness-login-pane")).toBeVisible();
+    expect(new URL(page.url()).pathname).toBe(before);
+
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toHaveCount(0);
   });
 });

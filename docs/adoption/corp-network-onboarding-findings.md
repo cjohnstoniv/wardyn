@@ -102,6 +102,82 @@ the mirror hasn't onboarded the agent package. On a fully air-gapped build, stag
 native binary on disk and building with the native flag avoids npm entirely. **This shipped feature
 is correct**; recorded here only as a confirmation that it solves the corp case.
 
+### A5. wardynd's own outbound calls had no supported way to follow a corporate proxy
+
+Distinct from A2 above, which is the **sandbox's** egress hop. This is wardynd's own: OIDC discovery at
+boot, the audit webhook sink, GitHub App token minting, AWS SSO token renewal, Entra sync. Two files in
+the repo gave opposite instructions — one said the AWS SSO renewal call "honours the PROCESS proxy
+environment... a deployment behind a corporate proxy needs this hop to follow it," and `docs/ENV.md`
+said "**Never set** [`HTTP_PROXY`] as wardynd runtime env," for the correct reason that the standard
+names are process-wide and would also silently reroute the Kubernetes client's own API access. Setting
+them anyway is what this deployment did, and a wrong `NO_PROXY` there took the control plane down for
+nine minutes.
+
+**Fixed:** `WARDYN_DAEMON_PROXY_URL` / `WARDYN_DAEMON_NO_PROXY` — a knob scoped to exactly wardynd's own
+outbound calls, applied to `http.DefaultTransport` only, with three hosts auto-bypassed
+(`KUBERNETES_SERVICE_HOST`, the AWS SSO test-endpoint override host, and the OIDC internal-issuer host),
+and boot refused on a malformed value. See `docs/OPERATIONS.md` "wardynd behind a corporate proxy" and
+`docs/ENV.md`.
+
+### A6. "One dropped packet" was two attempts, and the grading was worse than the symptom
+
+The field report's framing: a captured AWS SSO session's refresh token was retired by AWS
+(`invalid_grant`) after what looked like a single dropped packet at 01:09, and the console kept
+reporting that session `live` until the underlying OIDC client registration lapsed days later — while
+every dispatch in between was silently refusing the person's Bedrock runs with no visible reason.
+
+**Two separate things were wrong, and only one was about retries.** `createAWSSSOTokenWithRetry`
+already retries once on any transient failure before giving up — the 01:09 incident was two attempts,
+not one, and the failure audit only ever recorded the last error, which is what made it read as a
+single dropped packet. The retry needed no changing; it needed to be LEGIBLE: the failure audit row now
+carries `attempts` (1 or 2) and, on two failures, both errors joined together, so a reader can tell "one
+network hiccup, retried and still failed" from "AWS said no twice."
+
+**The grading bug was the real gap.** `awsSSOCredentialState` graded a session solely off
+`blob.renewable(now)` — a refresh token being PRESENT, plus the client registration not having lapsed —
+never off whether that specific refresh token had already been marked dead by an earlier renewal
+attempt. A spent refresh token with a registration that does not expire for another 89 days read `live`
+for those 89 days, while every dispatch that tried to use it hit `invalid_grant` immediately. Fixed:
+grading now consults the same in-memory spent-marks map the refresher already maintains
+(`ssoRefreshSpent`); a spent credential grades `expiring` (with a sign-in action) WHILE the access
+token is still OUTSIDE its own renewal skew window (`needsRefresh(now) == false`), and `dead` the
+moment it enters that window — inside the skew, dispatch itself would already refuse the run, so
+grading anything but `dead` there would promise a launch that does not work. Never `live` on the
+strength of a registration timestamp a spent token can no longer redeem. See `docs/AUDIT-ACTIONS.md`'s
+`harness.credential.refresh` row and `CHANGELOG.md`.
+
+### A7. "A credential that lapses mid-run kills the run" — RESOLVED in 0.7.6, behind a switch
+
+On the captured-AWS-SSO Bedrock lane the proxy now injects the session on the wire instead of writing
+it into the sandbox, and a session that lapses mid-run HOLDS the sandbox's next credential exchange
+while its owner signs in again, bounded by `WARDYN_CREDENTIAL_REAUTH_TIMEOUT`. The person is told in
+the run's own cockpit, and the sign-in they were going to do anyway is what resumes the call.
+
+**What the report asked for and 0.7.6 does not claim:** the agent is not *paused* — its tool call is
+slow, and a client that gives up first still loses the turn. **What it does not do at all:** the other
+Bedrock lanes (the host `~/.aws` mount, static keys, the bearer token) have nothing Wardyn can hold on,
+and create-time refusals are still refusals — Finding 3 gives those a door instead. See
+`docs/OPERATIONS.md` "A run is holding for a sign-in" and `threatmodel/THREAT-MODEL.md` residual #46.
+
+### A8. Per-user AWS SSO behind a corporate proxy: the Phase B MITM lane was undocumented, not unproxied
+
+A private-endpoint Kubernetes estate reported every per-user Bedrock run hanging on its first model
+call on 0.7.6/0.7.7 (`portal.sso.<region>` allowed by policy, then `builtin:dial-failed`, in a tight
+loop) and read the pattern as the Phase B MITM lane refusing to honour `SiteConfig.upstream_proxy_url`
+— the lane worked on 0.7.5, before Phase B replaced a blind CONNECT tunnel with terminate-and-re-originate.
+
+**Investigated: it isn't.** `serveMITMRequest` resolves its dial target through the same
+`egressTarget` / shared-transport path every other forward dial uses, so the re-origination already
+traverses the configured upstream proxy — nothing operator-facing said so, which is what let this
+join `WARDYN_DAEMON_PROXY_URL` (A5) and `upstream_proxy_no_proxy`'s own origin story as the third
+report of one class of bug: a new outbound path that does not visibly inherit the operator's proxy
+configuration. **Fixed:** `docs/OPERATIONS.md` now names the lane and states the sandbox/wardynd
+proxy-scope invariant once; the corp-CA asymmetry the report's likely root cause traces to (sandbox
+images bake `corp-ca.pem`, the proxy image does not unless staged at its own build) is recorded there
+and in `docs/ENV.md`. See `docs/adoption/aws-sso-mitm-upstream-proxy.md` for the full report and the
+maintainer's analysis of the remaining candidates — the proxy-pod logs that would confirm which one
+were never in the operator's hands (Ask 2 of that report).
+
 ---
 
 ## B. Structural gaps

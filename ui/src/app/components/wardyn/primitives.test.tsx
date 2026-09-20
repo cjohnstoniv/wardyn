@@ -101,9 +101,10 @@ describe("fail-soft enum badges", () => {
 // semantics ("Permissive sandbox" / "Scoped credentials + egress filtering" /
 // "Hardened: HITL approvals required") that the backend does not tie to the
 // confinement class. The hint now comes from the shared, honest
-// wardyn/cc-meta.ts (same source step-confinement.tsx reads) — substrate
-// only. These tests pin the honest wording and guard against the fabricated
-// strings creeping back in.
+// wardyn/cc-meta.ts (same source New Run's Barrier control and the
+// Getting-started/Settings barrier matrix read) — substrate only. These
+// tests pin the honest wording and guard against the fabricated strings
+// creeping back in.
 describe("ConfinementChip tooltip honesty", () => {
   function titleOf(value: ConfinementClass): string {
     const { container } = render(<ConfinementChip value={value} />);

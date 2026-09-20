@@ -10,9 +10,6 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AGENTS } from "../../../lib/workspace-providers-copy";
 import {
-  extractSetupToken,
-  extractAuthUrl,
-  extractFailSentence,
   SANDBOX_REFUSAL_LEAD_IN,
   isLikelyStartUrl,
   serverConfirmsCapture,
@@ -24,129 +21,12 @@ import {
   LOGIN_SANDBOX_UNREADABLE,
 } from "./harness-login-pane";
 import { LOGIN_SANDBOX_READ_RETRYING, LOGIN_SANDBOX_SLOW_START } from "./login-start-wait";
+import { CAPTURE_POST_RUN_GRACE_MS } from "./capture-confirm";
 import { runs as runsApiMocked } from "../../../lib/api/runs";
 import type { AgentRun, SetupStatus } from "../../../lib/types";
 
 // A realistic setup-token body: sk-ant-oat<2 digits>-<long url-safe blob>.
 const TOKEN = "sk-ant-oat01-" + "A".repeat(60) + "-_" + "b3".repeat(10);
-
-describe("extractSetupToken", () => {
-  it("captures a complete token followed by a newline", () => {
-    expect(extractSetupToken(`Your token:\n${TOKEN}\n`)).toBe(TOKEN);
-  });
-
-  it("captures a token even when ANSI/reset codes follow it", () => {
-    expect(extractSetupToken(`${TOKEN}\x1b[0m\r\n`)).toBe(TOKEN);
-  });
-
-  it("does NOT capture a token still streaming at the buffer's end", () => {
-    // No trailing char yet → treat as truncated, wait for more output.
-    expect(extractSetupToken(`prefix ${TOKEN}`)).toBeNull();
-  });
-
-  it("returns null when there is no token", () => {
-    expect(extractSetupToken("just some\r\nterminal output\n")).toBeNull();
-  });
-
-  it("ignores a too-short lookalike (not a real token)", () => {
-    expect(extractSetupToken("sk-ant-oat01-short\n")).toBeNull();
-  });
-
-  it("finds the token embedded in noisy multi-line output", () => {
-    const out = `\x1b[32m✓\x1b[0m Authenticated\r\nCopy this token:\r\n  ${TOKEN}  \r\nDone.`;
-    expect(extractSetupToken(out)).toBe(TOKEN);
-  });
-});
-
-describe("extractAuthUrl", () => {
-  it("captures a claude.ai OAuth URL followed by a newline", () => {
-    const url = "https://claude.ai/oauth/authorize?code=true&client_id=abc123&scope=user";
-    expect(extractAuthUrl(`Visit:\r\n${url}\r\n`)).toBe(url);
-  });
-
-  it("captures a console.anthropic.com auth URL", () => {
-    const url = "https://console.anthropic.com/oauth/authorize?x=1";
-    expect(extractAuthUrl(`${url}\n`)).toBe(url);
-  });
-
-  it("strips trailing punctuation", () => {
-    const url = "https://claude.ai/oauth/authorize?code=true";
-    expect(extractAuthUrl(`Open (${url}).\n`)).toBe(url);
-  });
-
-  it("does NOT capture a URL still streaming at the buffer's end", () => {
-    expect(extractAuthUrl("go to https://claude.ai/oauth/authorize?code=tru")).toBeNull();
-  });
-
-  it("ignores the token-exchange host (api.anthropic.com) and unrelated URLs", () => {
-    expect(extractAuthUrl("POST https://api.anthropic.com/v1/oauth/token \n")).toBeNull();
-    expect(extractAuthUrl("see https://example.com/docs \n")).toBeNull();
-  });
-
-  it("captures a full ~200-char OAuth URL on one line (login PTY is forced wide so it never wraps)", () => {
-    // The login flow forces LOGIN_PTY_COLS so claude prints this on a single line;
-    // response_type=code (dropped by the old narrow-PTY wrap bug) survives intact.
-    const url =
-      "https://claude.ai/oauth/authorize?response_type=code&client_id=abcdef0123456789&redirect_uri=https%3A%2F%2Fconsole.anthropic.com%2Foauth%2Fcode%2Fcallback&scope=org%3Acreate_api_key+user%3Aprofile&code_challenge=Zm9vYmFyYmF6cXV4&code_challenge_method=S256&state=deadbeefcafef00d";
-    expect(extractAuthUrl(`Visit:\r\n${url}\r\nPaste the code here:\r\n`)).toBe(url);
-    expect(new URL(extractAuthUrl(`\r\n${url}\r\n`)!).searchParams.get("response_type")).toBe("code");
-  });
-});
-
-// wardyn-aws-sso prints `<failMarker> <sentence>\n` on a refused capture — a
-// wrong-account pin, a portal error — and never prints the doneMarker in that
-// case, so without this the pane just spins on "waiting" forever (Appendix A
-// finding 1's fail-fast ask, pane half).
-describe("extractFailSentence", () => {
-  const MARKER = "wardyn: aws sso credential rejected:";
-
-  it("returns the sentence once the line has finished printing", () => {
-    expect(extractFailSentence(`${MARKER} the pinned account is not entitled to this session.\n`, MARKER)).toBe(
-      "the pinned account is not entitled to this session.",
-    );
-  });
-
-  it("does NOT return a still-streaming line (no trailing newline yet)", () => {
-    expect(extractFailSentence(`${MARKER} the pinned acco`, MARKER)).toBeNull();
-  });
-
-  it("returns null when the marker never printed", () => {
-    expect(extractFailSentence("some other terminal output\n", MARKER)).toBeNull();
-  });
-
-  it("strips a trailing carriage return (PTY line endings)", () => {
-    expect(extractFailSentence(`${MARKER} refused.\r\n`, MARKER)).toBe("refused.");
-  });
-
-  // U2-05 (blind round 2, lens-U2): the 300-rune cap, the ANSI strip and the
-  // marker defang all live in cmd/wardyn-aws-sso — i.e. in the binary a forged
-  // login image REPLACES, which is the threat model S-13 hardened the success
-  // path against. The client keeps a bound of its own so a sandbox cannot
-  // paint a screenful of its own prose into Wardyn's alert.
-  it("caps the sentence at 300 characters, whatever the sandbox printed", () => {
-    const long = "x".repeat(5000);
-    expect(extractFailSentence(`${MARKER} ${long}\n`, MARKER)).toHaveLength(300);
-  });
-
-  it("leaves a sentence within the bound untouched", () => {
-    expect(extractFailSentence(`${MARKER} refused.\n`, MARKER)).toBe("refused.");
-  });
-
-  // RV-03 (review follow-up): the ANSI strip lived only in cmd/wardyn-aws-sso,
-  // beside the cap U2-05 already re-applied here — same argument, same place.
-  // Colour/cursor CSI and an OSC title-set are the shapes a PTY actually emits.
-  it("strips ANSI CSI and OSC sequences the sandbox printed", () => {
-    expect(extractFailSentence(`${MARKER} \u001b[1;31mrefused\u001b[0m.\n`, MARKER)).toBe("refused.");
-    expect(extractFailSentence(`${MARKER} \u001b]0;pwned title\u0007refused.\n`, MARKER)).toBe("refused.");
-  });
-
-  // The strip runs BEFORE the cap, so escape bytes cannot spend the 300-char
-  // budget on the operator's behalf.
-  it("caps on visible characters, not on escape bytes", () => {
-    const noisy = "\u001b[31mx\u001b[0m".repeat(400);
-    expect(extractFailSentence(`${MARKER} ${noisy}\n`, MARKER)).toBe("x".repeat(300));
-  });
-});
 
 describe("isLikelyStartUrl", () => {
   it("accepts a real AWS access portal URL", () => {
@@ -216,6 +96,10 @@ vi.mock("../../../lib/api/harness-auth", () => ({
 vi.mock("../../../lib/api/runs", () => ({ runs: { killRun: vi.fn(), getRun: vi.fn() } }));
 const getSetupStatusMock = vi.fn();
 vi.mock("../../../lib/api/setup", () => ({ setup: { getSetupStatus: (...a: unknown[]) => getSetupStatusMock(...a) } }));
+// review-1 S1: the watch polls the run's audit trail as a hint; defaulted to
+// "no hint" so the 4 rewritten S-13 pins exercise its 30s STATUS fallback.
+const listAuditMock = vi.fn();
+vi.mock("../../../lib/api/audit", () => ({ audit: { listAudit: (...a: unknown[]) => listAuditMock(...a) } }));
 
 describe("HarnessLoginPane — the consent gate", () => {
   beforeEach(() => {
@@ -232,6 +116,7 @@ describe("HarnessLoginPane — the consent gate", () => {
       .mockReset()
       .mockResolvedValue({ id: "run-123", state: "RUNNING" } as AgentRun);
     getSetupStatusMock.mockReset();
+    listAuditMock.mockReset().mockResolvedValue([]);
   });
 
   it("launches NOTHING on mount: the intro says what to expect and what's required", () => {
@@ -350,6 +235,17 @@ describe("HarnessLoginPane — the consent gate", () => {
       await screen.findByRole("alert");
       expect(screen.queryByText(/session captured/i)).not.toBeInTheDocument();
     });
+
+    // Owner field report, end to end: the opened tab's href is the artifact
+    // the owner actually saw junk in. Pin it at the seam they hit — a
+    // colorized device URL through the same onOutput callback the real PTY
+    // drives — not just at extractDeviceVerificationUrl's own unit tests.
+    it("the AWS verification link's href is clean even when the PTY colorizes the device URL", async () => {
+      await attachAwsRun();
+      const clean = "https://d-1234567890.awsapps.com/start/#/device?user_code=ABCD-EFGH";
+      await act(async () => lastAttachOutput?.(`\x1b[32m${clean}\x1b[0m\r\n`));
+      expect(await screen.findByTestId("auth-url-link")).toHaveAttribute("href", clean);
+    });
   });
 
   // RR-2: `saving` with no autoCapture is TWO different states. On a helper
@@ -389,21 +285,48 @@ describe("HarnessLoginPane — the consent gate", () => {
       return { onDone, onCancel };
     }
 
-    // Red: a forged doneMarker with no server-side corroboration must NOT
-    // call onDone — it must land on the error phase with the mismatch
-    // sentence and kill the run, exactly like a real refusal would.
-    it("a forged marker with no server-side capture does not call onDone and shows the mismatch error", async () => {
-      getSetupStatusMock.mockResolvedValue({ harness: [], model_access: undefined } as unknown as SetupStatus);
-      const { onDone } = await attachAwsRun();
+    // review-1 S1: fake-timer-aware click (`attachedOnFakeTimers`'s pattern).
+    async function attachAwsRunUnderFakeTimers(onDone = vi.fn(), onCancel = vi.fn()) {
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      render(<HarnessLoginPane provider="aws" startURLManaged onDone={onDone} onCancel={onCancel} />);
+      await user.click(screen.getByRole("button", { name: /start login/i }));
+      await screen.findByTestId("fake-terminal");
+      return { onDone, onCancel };
+    }
+    async function advanceUnderFakeTimers(ms: number) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+    }
+    // The watch's own bound: terminal, then the upload grace elapses.
+    async function watchGivesUp() {
+      vi.mocked(runsApiMocked.getRun).mockResolvedValue({ id: "run-123", state: "COMPLETED" } as AgentRun);
+      await advanceUnderFakeTimers(CAPTURE_POST_RUN_GRACE_MS + 60_000);
+    }
 
-      await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
-      await act(async () => {}); // flush the getSetupStatus microtask
+    // review-1 S1 (Codex #9): hands off to the watch instead of refusing
+    // alone — only WHEN the refusal lands changes, not the property.
+    it("a forged marker with no server-side capture keeps verifying, then ends in the mismatch error once the watch gives up", async () => {
+      const onDone = vi.fn();
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        getSetupStatusMock.mockResolvedValue({ harness: [], model_access: undefined } as unknown as SetupStatus);
+        await attachAwsRunUnderFakeTimers(onDone);
 
-      // The wait is the read-after-write tolerance (finding 7): a status that
-      // answers and never shows this run's row is re-read CAPTURE_CONFIRM_RETRIES
-      // times over 1.5s before the refusal. A forged marker never converges, so
-      // the assertion is unchanged — it just arrives a second and a half later.
-      const alertBox = await screen.findByRole("alert", {}, { timeout: 3000 });
+        await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
+        // The short round trip's re-read window, asserted BEFORE advancing further.
+        await advanceUnderFakeTimers(2_000);
+        expect(screen.getByTestId("capture-verifying-note")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
+        expect(screen.queryByRole("alert")).toBeNull();
+        expect(onDone).not.toHaveBeenCalled();
+
+        await watchGivesUp();
+      } finally {
+        vi.useRealTimers();
+      }
+
+      const alertBox = screen.getByRole("alert");
       expect(alertBox).toHaveTextContent(CAPTURE_NOT_CORROBORATED);
       expect(runsApiMocked.killRun).toHaveBeenCalledWith("run-123");
       expect(onDone).not.toHaveBeenCalled();
@@ -427,21 +350,30 @@ describe("HarnessLoginPane — the consent gate", () => {
       expect(screen.queryByRole("alert")).toBeNull();
     });
 
-    // R-1, the reconnect case the product's own "re-run the login" fix line
-    // creates: a PREVIOUS sign-in's credential is sitting there, so both
-    // presence legs agree — but it is not THIS run's capture, and a forged
-    // marker must not be re-admitted by it.
-    it("a forged marker over a PREVIOUS run's credential is refused", async () => {
-      getSetupStatusMock.mockResolvedValue({
-        harness: [{ provider: "aws", captured: true, source_run_id: "run-000-earlier" }],
-        model_access: { state: "live" },
-      } as unknown as SetupStatus);
-      const { onDone } = await attachAwsRun();
+    // R-1: a PREVIOUS sign-in's credential agrees on both presence legs but
+    // is not THIS run's capture — must not be re-admitted.
+    it("a forged marker over a PREVIOUS run's credential keeps verifying, then is refused once the watch gives up", async () => {
+      const onDone = vi.fn();
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        getSetupStatusMock.mockResolvedValue({
+          harness: [{ provider: "aws", captured: true, source_run_id: "run-000-earlier" }],
+          model_access: { state: "live" },
+        } as unknown as SetupStatus);
+        await attachAwsRunUnderFakeTimers(onDone);
 
-      await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
-      await act(async () => {});
+        await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
+        await advanceUnderFakeTimers(2_000);
+        expect(screen.getByTestId("capture-verifying-note")).toBeInTheDocument();
+        expect(screen.queryByRole("alert")).toBeNull();
+        expect(onDone).not.toHaveBeenCalled();
 
-      const alertBox = await screen.findByRole("alert", {}, { timeout: 3000 });
+        await watchGivesUp();
+      } finally {
+        vi.useRealTimers();
+      }
+
+      const alertBox = screen.getByRole("alert");
       expect(alertBox).toHaveTextContent(CAPTURE_NOT_CORROBORATED);
       expect(onDone).not.toHaveBeenCalled();
     });
@@ -462,44 +394,57 @@ describe("HarnessLoginPane — the consent gate", () => {
       expect(screen.queryByRole("alert")).toBeNull();
     });
 
-    // Fail-closed: a getSetupStatus rejection (network error, 401 propagated)
-    // is treated the same as a disagreement — never assume the marker was
-    // honest because the corroboration check itself failed.
-    it("fails closed when the status fetch itself rejects", async () => {
-      getSetupStatusMock.mockRejectedValue(new Error("network error"));
-      const { onDone } = await attachAwsRun();
+    // Fail-closed: a rejection is a disagreement, never an honest marker.
+    it("fails closed when the status fetch itself rejects — keeps verifying, refused once the watch gives up", async () => {
+      const onDone = vi.fn();
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        getSetupStatusMock.mockRejectedValue(new Error("network error"));
+        await attachAwsRunUnderFakeTimers(onDone);
 
-      await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
-      await act(async () => {});
+        await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
+        await advanceUnderFakeTimers(2_000);
+        // A THROW is an answer, not a blip: one read is all the short round
+        // trip makes, asserted before the watch's own 30s fallback is due.
+        expect(getSetupStatusMock).toHaveBeenCalledTimes(1);
+        expect(screen.getByTestId("capture-verifying-note")).toBeInTheDocument();
+        expect(screen.queryByRole("alert")).toBeNull();
+        expect(onDone).not.toHaveBeenCalled();
 
-      // No retry loop on this arm, deliberately: a THROW is an answer (a
-      // propagated 401), not the read-after-write gap, so the refusal is
-      // immediate and one read is all this case ever makes.
-      const alertBox = await screen.findByRole("alert");
+        await watchGivesUp();
+      } finally {
+        vi.useRealTimers();
+      }
+
+      const alertBox = screen.getByRole("alert");
       expect(alertBox).toHaveTextContent(CAPTURE_NOT_CORROBORATED);
-      expect(getSetupStatusMock).toHaveBeenCalledTimes(1);
       expect(onDone).not.toHaveBeenCalled();
     });
 
-    // R-9: this is how the real client behaves for a 5xx or a dropped socket —
-    // getSetupStatus RESOLVES the synthetic READY_FALLBACK (`unreachable:true`,
-    // no harness, no model_access), it does not throw. The rejection case above
-    // passes for the right reason only by accident, so the realistic transient
-    // path gets its own pin.
-    //
-    // R-3: an honest capture DID land; the check is what failed. The pane must
-    // not print the accusation — it retries once, then says it could not reach
-    // the server.
-    it("an unreachable status check retries once and then says SO — never that the server does not have it", async () => {
-      getSetupStatusMock.mockResolvedValue({ unreachable: true, ready: true } as unknown as SetupStatus);
-      const { onDone } = await attachAwsRun();
+    // R-9/R-3: unreachable RESOLVES (does not throw); an honest capture that
+    // DID land must not be accused — retry once, then say the check failed.
+    it("an unreachable status check retries once, keeps verifying, then says SO once the watch gives up", async () => {
+      const onDone = vi.fn();
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      try {
+        getSetupStatusMock.mockResolvedValue({ unreachable: true, ready: true } as unknown as SetupStatus);
+        await attachAwsRunUnderFakeTimers(onDone);
 
-      await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
+        await act(async () => lastAttachOutput?.("wardyn: aws sso credential captured\n"));
+        await advanceUnderFakeTimers(2_000);
+        expect(getSetupStatusMock).toHaveBeenCalledTimes(2);
+        expect(screen.getByTestId("capture-verifying-note")).toBeInTheDocument();
+        expect(screen.queryByRole("alert")).toBeNull();
+        expect(onDone).not.toHaveBeenCalled();
 
-      const alertBox = await screen.findByRole("alert", {}, { timeout: 3000 });
+        await watchGivesUp();
+      } finally {
+        vi.useRealTimers();
+      }
+
+      const alertBox = screen.getByRole("alert");
       expect(alertBox).toHaveTextContent("Wardyn couldn't reach the server to verify this sign-in — try again.");
       expect(alertBox).not.toHaveTextContent("the server does not have");
-      expect(getSetupStatusMock).toHaveBeenCalledTimes(2);
       expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
       expect(onDone).not.toHaveBeenCalled();
     });

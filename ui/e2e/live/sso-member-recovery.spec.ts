@@ -25,7 +25,7 @@
  * ── EXECUTION ORDER IS LOAD-BEARING ─────────────────────────────────────────
  * The letters below are the REPORT's topics, not the order. The order is:
  *
- *   B → A → A(rail) → C → D → E → G → H → F
+ *   B → A → A(rail) → C → D → E → G → H → I → E2 → L0 → F → L
  *
  * B runs FIRST because it reads the member's SIGNED-IN card while the member is
  * still `live` from the previous file — case A's console save is what flips the
@@ -33,9 +33,26 @@
  * AWS, which breaks sso-member.spec.ts:"the capture belongs to the member
  * alone"'s admin-stays-`not_configured` invariant for anything after it.
  *
+ * 0.7.6 adds I and E2, and their slot is the reason they are where they are: I
+ * ends by SIGNING THE MEMBER IN (it drives the strip's own door), so it must
+ * come after G and H, which need a `live` member to launch an agent run at all;
+ * E2 RESTARTS THE DAEMON to re-point its agent-image map, so it goes after
+ * everything that would rather not be interrupted and restores the map in a
+ * `finally`. Both leave the member where the next case needs them: I heals to
+ * `live`, E2's sign-in fails and leaves the member actionable, and F is an
+ * ADMIN case that cares about neither.
+ *
  * A leaves the member ACTIONABLE (expired_signin) and C consumes that window;
  * C heals the member back to `live`, and D and E each call
  * makeMemberActionable() for their own.
+ *
+ * 0.7.7 adds L0 and L. L0 CAPTURES the admin's own AWS session and then lapses
+ * it (ensureActionable's roster-pin flip — 0.7.8: a never-captured admin never
+ * emitted harness_credential_aws at all, so the case proved nothing about the
+ * row it was named for), so it sits right before F, which re-signs the admin
+ * in from whatever L0 left them at. L makes its own lapse (makeMemberActionable)
+ * and ends by HEALING the member through a completed sign-in, so it goes where
+ * nothing after it needs the member lapsed.
  *
  * ── NOTHING IS SKIPPED HERE ─────────────────────────────────────────────────
  * Every case runs live (D and E were flipped when lane `login-pane` merged).
@@ -45,13 +62,24 @@
  * Self-skips without WARDYN_TEST_K8S=1, same as its sibling.
  */
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { MEMBER_MODE } from "../../src/app/components/wardyn/member-mode-banner";
 import { LOGIN_SANDBOX_NOTE } from "../../src/app/components/screens/run-detail/login-sandbox-note";
 import { CAPTURE_NOT_CORROBORATED } from "../../src/app/components/screens/settings/capture-confirm";
 import { LOGIN_SANDBOX_UNREADABLE } from "../../src/app/components/screens/settings/login-pane-copy";
-import { LOGIN_SANDBOX_SLOW_START, LOGIN_SANDBOX_READ_RETRYING } from "../../src/app/components/screens/settings/login-start-wait";
+import {
+  LOGIN_SANDBOX_SLOW_START,
+  LOGIN_SANDBOX_READ_RETRYING,
+  LOGIN_SANDBOX_STUCK_LEAD_IN,
+} from "../../src/app/components/screens/settings/login-start-wait";
+// 0.7.6 lane starting-detail (finding 6). run-status-detail.ts is deliberately
+// CSS-free and component-free so a Playwright spec can import it — the same
+// rule helpers.ts states for SELFRUN_MARKER.
+import { STARTING_UNSCHEDULABLE, STUCK_IMAGE_PULL } from "../../src/app/components/screens/run-status-detail";
+// 0.7.6 lanes ui-model-access-door (the strip) and ui-new-run-model-access (the
+// rail), by constant name from local/v076/canon/*-docs.md.
+import { MODEL_ACCESS_BANNER, RAIL_MODEL_ACCESS } from "../../src/app/components/wardyn/model-access-copy";
 import {
   MEMBER_GETTING_STARTED,
   RAIL_CREDENTIAL,
@@ -106,6 +134,13 @@ const KUBE_CONTEXT = process.env.WARDYN_LIVE_KUBE_CONTEXT || "kind-wardyn-quicks
 // Where RUN pods land (k8s.runsNamespace) — not the release namespace.
 const KUBE_NAMESPACE = process.env.WARDYN_LIVE_KUBE_NAMESPACE || "wardyn-runs";
 const KUBE_NODE = process.env.WARDYN_LIVE_KUBE_NODE || "wardyn-quickstart-control-plane";
+/** The RELEASE namespace (the daemon Deployment), not the runs one. Case E2
+ *  re-points the daemon's agent-image map, which is boot env on that Deployment.
+ *  Defaulted rather than exported by the walk, which currently exports only the
+ *  three coordinates the taint case needed — overridable for the same reason
+ *  those are: a renamed install must red this case, not make it vacuous. */
+const KUBE_RELEASE_NAMESPACE = process.env.WARDYN_LIVE_KUBE_RELEASE_NAMESPACE || "wardyn";
+const KUBE_RELEASE = process.env.WARDYN_LIVE_KUBE_RELEASE || "wardyn";
 const COLDPULL_TAINT = "wardyn-coldpull=1:NoSchedule";
 
 /** `stdio: "pipe"`, deliberately: an untaint of a node that is not tainted
@@ -127,6 +162,42 @@ function kubectlOrEmpty(...args: string[]): string {
   } catch {
     return "";
   }
+}
+
+/** The daemon's WARDYN_AGENT_IMAGES map, as the running Deployment holds it. */
+function agentImagesEnv(): string {
+  return kubectlOrEmpty(
+    "-n",
+    KUBE_RELEASE_NAMESPACE,
+    "get",
+    "deployment",
+    KUBE_RELEASE,
+    "-o",
+    `jsonpath={.spec.template.spec.containers[0].env[?(@.name=="WARDYN_AGENT_IMAGES")].value}`,
+  );
+}
+
+/** Write that map back and WAIT for the new pod to serve.
+ *
+ *  `kubectl set env` edits the Deployment's own env entry in place (the chart
+ *  renders it as a literal value, which is why kind-sso-walk.sh can read it with
+ *  the same jsonpath), so this is one rollout and no Helm involvement. Waited
+ *  for, always: the rollout is what makes the change real, and a case that
+ *  launched against the OLD pod would prove nothing while looking green. */
+function setAgentImagesEnv(images: string): void {
+  kubectl("-n", KUBE_RELEASE_NAMESPACE, "set", "env", `deployment/${KUBE_RELEASE}`, `WARDYN_AGENT_IMAGES=${images}`);
+  kubectl("-n", KUBE_RELEASE_NAMESPACE, "rollout", "status", `deployment/${KUBE_RELEASE}`, "--timeout=300s");
+}
+
+/** The member, in a state where a sign-in can be STARTED.
+ *
+ *  makeMemberActionable() FLIPS the pin, so calling it on a member who is
+ *  already contradicted would HEAL them instead — the cases below can arrive
+ *  either way (a red earlier in the file leaves its own state), so the flip is
+ *  conditional and the postcondition is asserted rather than assumed. */
+async function ensureActionable(page: Page, request: APIRequestContext): Promise<void> {
+  if ((await modelAccess(page)).state === "live") await makeMemberActionable(request);
+  await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).not.toBe("live");
 }
 
 type RunRow = { id: string; task?: string; state?: string; created_at?: string };
@@ -404,6 +475,28 @@ test("A(rail): the New Run rail states THIS run's credential residency, with no 
   // settles residency without a dry run, so RESOLVED_AT_LAUNCH belongs to every
   // OTHER estate and would be the quiet failure here.
   await expect(page.getByText(RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH)).toHaveCount(0);
+
+  // ── A(rail)+ — 0.7.6 finding 1: the rail names the PERSON's state ─────────
+  //
+  // Case A left this member `expired_signin` (the pin flip), so the state the
+  // rail must name here is the LAPSE, not the first run. The `not_configured`
+  // sentence has exactly one seat on this walk — before the member's first
+  // capture — and is asserted there, in sso-member.spec.ts's case I, together
+  // with the `NO_PROVIDER` negative below.
+  await expect(page.getByText(RAIL_MODEL_ACCESS.EXPIRED)).toBeVisible({ timeout: 60_000 });
+  // THE FINDING-1 NEGATIVE, in the state the field report was written about:
+  // this deployment IS connected (the admin's per_user roster row exists), so
+  // the deployment-level sentence would be a falsehood on this estate. 0.7.5
+  // rendered nothing at all here; the assertion pins that the fix did not
+  // instead over-fire the other warning.
+  await expect(page.getByText(RAIL_MODEL_ACCESS.NO_PROVIDER)).toHaveCount(0);
+  // Two controls, DISTINCT accessible names (U-13's actual rule). The rail's
+  // own is an aria-label, so it is the accessible name Playwright matches; the
+  // strip's button is gone here because the rail CLAIMED the door, and `exact`
+  // is what makes that assertion mean anything — the default name match is a
+  // substring, and the rail's visible LABEL is the strip's name.
+  await expect(page.getByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeVisible();
+  await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true })).toHaveCount(0);
 });
 
 // ── C — the sandbox signs itself in, and the Runs list joins that session ───
@@ -606,7 +699,19 @@ test("E (login-pane): a sign-in held 65 s in STARTING reads as slow, never as un
   }
   expect(codes.filter((c) => c !== 200), "the harness could not read the run for the whole hold").toHaveLength(0);
 
-  await expect(page.getByText(LOGIN_SANDBOX_SLOW_START)).toBeVisible();
+  // 0.7.6 FINDING 6, AND THIS IS A REPLACEMENT, NOT AN ADDITION (lane
+  // starting-detail's handoff says so in as many words). The taint leaves the
+  // PROXY pod Pending/Unschedulable — precisely waitingReason's
+  // PodScheduled-condition fallback — so the pane's "slow" arm now renders the
+  // SUBSTRATE's sentence instead of the hedged clock one: it names SCHEDULING
+  // for a wait that is not a pull, which is the whole of finding 6 in one
+  // assertion. The 65 s hold above is load-bearing for it: below
+  // RUN_POLL_SLOW_START_MS (60 s) the pane still shows LOGIN_SANDBOX_STARTING,
+  // because Unschedulable is NOT terminal and therefore grades on the clock.
+  await expect(page.getByText(STARTING_UNSCHEDULABLE)).toBeVisible();
+  // …and the sentence it REPLACED is gone. Asserting only the new one would
+  // pass on a pane that showed both, which is the thing finding 6 is against.
+  await expect(page.getByText(LOGIN_SANDBOX_SLOW_START)).toHaveCount(0);
   // BOTH of the other two sentences. The pane's terminal error is one of them;
   // the starting-phase "can't read it right now" line is the other, and a wait
   // that had silently flipped to retrying would pass an assertion that only
@@ -741,7 +846,233 @@ test("H (agent-boot-egress): an interactive run answers ONE trust prompt and rea
   expect(await approvalsFor(page, runID), "the run parked an approval after its first model call").toEqual([]);
 });
 
+// ── I — the strip carries the sign-in, on whatever screen you were on ───────
+
+test("I (model-access-banner): the strip rides every screen and clears without a reload", async ({
+  page,
+  request,
+}) => {
+  // Finding 2's live half that only a real capture can show. The FIRST-RUN
+  // sentence (MODEL_ACCESS_BANNER.NOT_SIGNED_IN) is asserted in
+  // sso-member.spec.ts's case I, which is the one seat on the walk where a
+  // member has never signed in — by the time this file runs the member owns a
+  // stored session and nothing in the product deletes one (DELETE
+  // /setup/harness-credential is operator-only AND scoped to the caller's own
+  // subject). So this case drives the LAPSE arm, which is the one that can be
+  // reached honestly here, and it is the arm that carries the door.
+  await dexSignIn(page, MEMBER_EMAIL);
+  await ensureActionable(page, request);
+
+  // (1) The Runs board — the strip, the sign-in, and no set-aside: a lapse of
+  // something you already had is never dismissable (model-access-copy.ts's
+  // NOT_NOW is offered for the first-run state and a dead SHARED credential
+  // only). The strip is a LAZY chunk behind `Suspense fallback={null}` and says
+  // nothing until /me resolves, so it is awaited, never read on the first frame.
+  await page.goto("/runs");
+  await expect(page.getByText(MODEL_ACCESS_BANNER.EXPIRED)).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: MODEL_ACCESS_BANNER.NOT_NOW })).toHaveCount(0);
+
+  // (2) It is the SHELL's band. Client-side navigation (what a <NavLink> click
+  // does), not a second full load — a full load would prove only that the strip
+  // renders twice.
+  await page.evaluate(() => {
+    window.history.pushState({}, "", "/workspaces");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+  await expect(page).toHaveURL(/\/workspaces$/);
+  await expect(page.getByText(MODEL_ACCESS_BANNER.EXPIRED)).toBeVisible({ timeout: 60_000 });
+
+  // THE NO-RELOAD WITNESS, planted before the door opens. "The strip is gone
+  // without a reload" is the claim; a strip that vanished because the document
+  // was re-fetched would satisfy every assertion below without it.
+  await page.evaluate(() => {
+    (window as unknown as { __wardynDocumentAge?: number }).__wardynDocumentAge = Date.now();
+  });
+  const urlBefore = page.url();
+
+  // (3) The sign-in ITSELF, in a dialog, on the screen they were on. Driven
+  // through signInThroughPane so the witness is the server's moved capture, not
+  // the terminal node — the pane unmounts it within half a second of the marker.
+  await signInThroughPane(page, async (p: Page) => {
+    await p.getByRole("button", { name: AGENTS.SIGN_IN_AWS, exact: true }).click();
+    await expect(p.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible({ timeout: 60_000 });
+    await expect(p.getByTestId("harness-login-pane")).toBeVisible({ timeout: 60_000 });
+    const start = p.getByRole("button", { name: "Start login" });
+    if (await start.isVisible().catch(() => false)) await start.click();
+  });
+
+  // (4) The three things the door promises on a completed capture: the toast
+  // (CONSOLE-RULES §9 — a surface that disappears is not a confirmation), the
+  // strip gone, and the page never left or reloaded.
+  await expect(page.getByText(MODEL_ACCESS_BANNER.SIGNED_IN_TOAST)).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(MODEL_ACCESS_BANNER.EXPIRED)).toHaveCount(0, { timeout: 60_000 });
+  await expect(page.getByTestId("harness-login-pane")).toHaveCount(0);
+  expect(page.url(), "the door navigated instead of opening in place").toBe(urlBefore);
+  expect(
+    await page.evaluate(
+      () => typeof (window as unknown as { __wardynDocumentAge?: number }).__wardynDocumentAge === "number",
+    ),
+    "the document was reloaded — the strip cleared for the wrong reason",
+  ).toBe(true);
+
+  // …and the server agrees with what the strip stopped saying.
+  await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
+});
+
+// ── E2 — a terminal reason ends the wait on the REASON, not on the clock ────
+
+test("E2 (starting-detail): a sign-in on an unpullable image fails in seconds with the registry's words", async ({
+  page,
+  request,
+}) => {
+  // Finding 6's other half. Case E proves a wait that IS ordinary is narrated;
+  // this proves a wait that will never end is not waited out. The 0.7.5 pane
+  // graded a start purely on a clock, so this sign-in sat "still starting" for
+  // FIVE MINUTES and then said Wardyn could not read the sandbox — which was
+  // false: it could read it perfectly, and the answer had been final since
+  // second ten.
+  //
+  // THE UNPULLABLE IMAGE IS THE DAEMON'S agent-image MAP, re-pointed. The login
+  // sandbox resolves `aws-sso` through WARDYN_AGENT_IMAGES (kind-sso-walk.sh
+  // adds that key for exactly this reason), so one env edit + one rollout puts a
+  // tag no registry serves behind the next sign-in. The repository does not
+  // exist on docker.io either, so the kubelet's answer is the registry's own
+  // refusal rather than a timeout.
+  const original = agentImagesEnv();
+  expect(original, "the deployment carries no WARDYN_AGENT_IMAGES — run this through scripts/kind-sso-walk.sh").not.toBe(
+    "",
+  );
+  const broken = JSON.stringify({
+    ...(JSON.parse(original) as Record<string, string>),
+    "aws-sso": "wardyn/agent-aws-sso:no-such-tag-0f0f",
+  });
+
+  setAgentImagesEnv(broken);
+  try {
+    // The rollout replaced the pod; wait for the new one to actually serve
+    // before driving a browser at it.
+    await expect
+      .poll(async () => (await request.get("/healthz")).status(), { timeout: 120_000 })
+      .toBe(200);
+
+    await dexSignIn(page, MEMBER_EMAIL);
+    await ensureActionable(page, request);
+    const prior = new Set((await myLoginRuns(page)).map((r) => r.id));
+    await openLoginPane(page);
+    // The budget IS the assertion. openLoginPane returns once "Start login" has
+    // been clicked, so the clock below starts no earlier than the POST — which
+    // only makes it stricter.
+    const started = Date.now();
+
+    // The lead-in names the speaker; the sentence after it is the SUBSTRATE's,
+    // and the registry's own message follows the colon because that is what
+    // names the fix.
+    await expect(page.getByText(STUCK_IMAGE_PULL)).toBeVisible({ timeout: 20_000 });
+    const elapsed = Date.now() - started;
+    expect(elapsed, "a terminal reason must end the wait on the reason, not on the 5-minute clock").toBeLessThan(
+      20_000,
+    );
+    await expect(page.getByText(LOGIN_SANDBOX_STUCK_LEAD_IN)).toBeVisible();
+    // Neither of the two clock-graded sentences: this wait never became "slow",
+    // and Wardyn could read the run throughout.
+    await expect(page.getByText(LOGIN_SANDBOX_SLOW_START)).toHaveCount(0);
+    await expect(page.getByText(LOGIN_SANDBOX_UNREADABLE)).toHaveCount(0);
+    // CANCEL ONLY. "Try again" is suppressed on a terminal reason (round-2 UX
+    // B3/S9) — trying again gets the same answer until somebody changes the
+    // image, and offering it would be the pane pretending the answer is not
+    // final.
+    await expect(page.getByRole("button", { name: /try again/i })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Cancel" }).first()).toBeVisible();
+
+    // The same evidence on the wire, which is what makes the sentence above
+    // more than a console string: a run that went STARTING → FAILED between two
+    // polls still carries its detail, because a TERMINAL reason survives FAILED
+    // (internal/api/runs_status_detail.go's projectStatusDetail).
+    const loginRun = await newLoginRun(page, prior);
+    const row = await page.evaluate(async (id: string) => {
+      const r = await fetch(`/api/v1/runs/${id}`, { credentials: "include" });
+      return (await r.json()) as { status_detail?: string; status_reason?: string };
+    }, loginRun.id);
+    expect(
+      ["ImagePullBackOff", "ErrImagePull"],
+      `the server graded the stuck start as ${row.status_reason}: ${row.status_detail}`,
+    ).toContain(row.status_reason);
+    expect(row.status_detail, "the registry's own words never reached the wire").toContain("no-such-tag-0f0f");
+
+    // Leave nothing running: Cancel kills the run by the id the POST handed
+    // back, which is the whole reason that control is on screen during a wait.
+    await page.getByRole("button", { name: "Cancel" }).first().click();
+  } finally {
+    // ALWAYS, and waited for: every case after this one launches a sandbox.
+    setAgentImagesEnv(original);
+  }
+});
+
 // ── F — the no-credential member preview (LAST: it signs the ADMIN in) ──────
+
+// ── L0 — 0.7.7: the setup gate never confiscates the console over a person ──
+
+test("L0 (setup gate): an admin with a lapsed AWS sign-in of their own opens New Run and stays there", async ({
+  page,
+  request,
+}) => {
+  // The 0.7.6 field report's exact shape, on the walk: a per_user roster, an
+  // install that never marked onboarding complete, and an admin whose OWN
+  // session has lapsed. 0.7.8 rewrote this case: the ORIGINAL 0.7.7 version
+  // never captured the admin's own AWS session at all, so harness_credential_aws
+  // (h.Captured-gated — internal/api/modelaccess.go's harnessCredentialCheck)
+  // never appeared and the case exercised llm_provider/bedrock_provider's
+  // per_user arms instead — real rows, but not the one the 0.7.6 field report
+  // was actually about. This version captures the admin's own session first,
+  // through the SAME pane F uses below, then lapses it exactly the way the
+  // owner's did in the field: a roster-pin flip (ensureActionable, the shared
+  // helper C/D/E/L all use).
+  //
+  // ensureActionable's flip is the ROSTER's one shared pin — it lapses EVERY
+  // captured session under the old pair, not just this admin's. Nothing
+  // downstream in this file depends on a live admin session surviving into F
+  // (F re-signs one in itself), so the side effect is harmless here — but it
+  // is real, and stated rather than silently relied on.
+  await dexSignIn(page, ADMIN_EMAIL);
+  await signInThroughPane(page, openAdminLoginPane);
+  await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
+  await ensureActionable(page, request);
+  await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("expired_signin");
+
+  const status = await page.evaluate(async () => {
+    const r = await fetch("/api/v1/setup/status", { credentials: "include" });
+    return (await r.json()) as {
+      onboarding_complete?: boolean;
+      checks?: Array<{ id: string; status: string; blocking?: boolean }>;
+    };
+  });
+  expect(status.onboarding_complete, "the walk's fresh install never marks onboarding complete").toBeFalsy();
+  expect(
+    status.checks?.find((c) => c.id === "harness_credential_aws")?.status,
+    "the admin's own captured AWS session was just lapsed by the pin flip — the row the 0.7.6 field report's gate misread",
+  ).toBe("warn");
+  // The non-vacuity guard, restated against the 0.7.8 contract: every
+  // warn/fail row present must be non-blocking, or the assertion below (New
+  // Run stays put) would be meaningless — a truly blocking row SHOULD gate.
+  const gating = (status.checks ?? []).filter((c) => c.status === "warn" || c.status === "fail");
+  expect(
+    gating.filter((c) => c.blocking).map((c) => c.id),
+    "no warn/fail row on this install may be blocking, or this case proves nothing",
+  ).toEqual([]);
+
+  // A full LOAD of a gated route: the once-per-load gate evaluates the landing
+  // /setup/status read. The rail's per-person line renders off that same read,
+  // so once it is on screen the answer that used to bounce us has landed — and
+  // the page is still New Run.
+  await page.goto("/runs/new");
+  await expect(page.getByRole("heading", { name: "New run" })).toBeVisible({ timeout: 60_000 });
+  // EXPIRED, not NOT_SIGNED_IN: new-run-rail.tsx's ModelAccessLine reads
+  // `expired_signin` to RAIL_MODEL_ACCESS.EXPIRED — a captured-then-lapsed
+  // session, not "never signed in".
+  await expect(page.getByText(RAIL_MODEL_ACCESS.EXPIRED)).toBeVisible({ timeout: 60_000 });
+  await expect(page).toHaveURL(/\/runs\/new$/);
+});
 
 test("F (member-preview): an admin previews the state a member is in before they sign in", async ({ page }) => {
   // LAST IN THE FILE, and it must stay last: it signs the ADMIN in to AWS,
@@ -797,4 +1128,91 @@ test("F (member-preview): an admin previews the state a member is in before they
   await page.getByRole("button", { name: MEMBER_MODE.EXIT }).click();
   await expect(page.getByText(MEMBER_MODE.BANNER_NEW)).toBeHidden({ timeout: 60_000 });
   await expect.poll(async () => (await modelAccess(page)).state, { timeout: 60_000 }).toBe("live");
+});
+
+// ── L — 0.7.7: Launch with a lapsed sign-in is one dialog, then the run ─────
+
+test("L (launch door): Launch with a lapsed AWS sign-in opens the sign-in itself, and the same run launches after it", async ({
+  page,
+  request,
+}) => {
+  // The 0.7.6 field report, driven end to end: the member's session is lapsed
+  // (a pin flip — helpers.ts's makeMemberActionable, the same lapse every
+  // sign-in case here drives), they fill in New Run and click Launch. The
+  // server refuses the run before any row exists (422, reason
+  // model_credential); the rail opens the AWS sign-in dialog ITSELF; the
+  // device flow completes on the fake; the SAME click's run launches. No trip
+  // to Getting started, no second click.
+  await dexSignIn(page, MEMBER_EMAIL);
+  // ensureActionable, not a blind flip: the pin is handed back and forth by
+  // every case before this one and E2 leaves the member ALREADY actionable, so
+  // an unconditional makeMemberActionable() healed them (walk-2, L red on the
+  // opening poll). The lapse here is the pin contradiction — the create-time
+  // refusal's stored-identity arm, reason model_credential like the spent one.
+  await ensureActionable(page, request);
+  await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("expired_signin");
+
+  await page.goto("/runs/new");
+  await page.getByRole("combobox", { name: "Title" }).fill("L launch door");
+  await page.getByRole("radio", { name: /^Autonomous/ }).click();
+  await page.locator("#nr-task").fill("Reply with the single word: ready.");
+  const urlBefore = page.url();
+  const clickedAt = new Date().toISOString();
+
+  // THE CLICK IS THE CHECK. Nothing on the console pre-grades the cached
+  // status; the server's refusal is what opens the door. Driven through
+  // signInThroughPane so the witness is the server's MOVED capture, not the
+  // terminal node (helpers.ts explains why the DOM cannot be the witness).
+  await signInThroughPane(page, async (p: Page) => {
+    await p.getByRole("button", { name: /^Launch/ }).click();
+    await expect(p.getByRole("heading", { name: MODEL_ACCESS_BANNER.DIALOG_TITLE })).toBeVisible({ timeout: 60_000 });
+    await expect(p.getByTestId("harness-login-pane")).toBeVisible({ timeout: 60_000 });
+    const start = p.getByRole("button", { name: "Start login" });
+    if (await start.isVisible().catch(() => false)) await start.click();
+  });
+
+  // The relaunch fired from the door's completion: this deployment's launch
+  // carries advisories (egress narrowed, resources capped), so the screen
+  // HOLDS with "Open run" exactly as a hand launch does (helpers.ts's
+  // launchAgentRun) — a run that launched with no advisories would have
+  // navigated already. NOT "Running" (walk-3): the fake answers inference in
+  // seconds and the agent exits, so the run can be FINISHED before this spec
+  // — which reaches the page only after signInThroughPane's capture poll — ever
+  // looks; the witness is the run ROW and its trail below, never a state chip.
+  const openRun = page.getByRole("button", { name: "Open run" });
+  await expect(openRun.or(page.getByRole("heading", { name: "L launch door" }))).toBeVisible({ timeout: SANDBOX_UP });
+  if (await openRun.isVisible().catch(() => false)) await openRun.click();
+  await expect(page).toHaveURL(/\/runs\/[0-9a-f-]{36}$/, { timeout: SANDBOX_UP });
+  const runID = runIDFromURL(page);
+  expect(page.url(), "the run page, not New Run or Getting started").not.toBe(urlBefore);
+  expect(new URL(page.url()).pathname, "never the setup funnel").not.toMatch(/^\/setup/);
+
+  // The server's own story of THIS click: created (never refused), credentialed
+  // on the fresh capture, and executed. A member reads their own run's trail.
+  const actions = (await page.evaluate(async (id: string) => {
+    const r = await fetch(`/api/v1/audit?run_id=${encodeURIComponent(id)}&limit=200`, { credentials: "include" });
+    const body = (await r.json()) as { items?: Array<{ action: string; outcome?: string }> } | Array<{ action: string; outcome?: string }>;
+    return (Array.isArray(body) ? body : (body.items ?? [])).map((e) => `${e.action}:${e.outcome ?? ""}`);
+  }, runID)) as string[];
+  expect(actions, "the relaunch created the run").toContain("run.create:success");
+  expect(actions, "the run was dispatched on the fresh capture and executed").toContain("run.exec:success");
+  expect(actions.filter((a) => a.startsWith("run.create:failure")), "never refused for its credential").toEqual([]);
+
+  // The server agrees on both halves: the member is live again, and the run
+  // that launched is the ONE this click created (a second create would mean the
+  // door relaunched twice).
+  await expect.poll(async () => (await modelAccess(page)).state, { timeout: 120_000 }).toBe("live");
+  const mine = (await page.evaluate(async () => {
+    const r = await fetch("/api/v1/runs?limit=1000", { credentials: "include" });
+    const body = (await r.json()) as
+      | { items?: Array<{ id: string; title?: string; created_at?: string }> }
+      | Array<{ id: string; title?: string; created_at?: string }>;
+    return Array.isArray(body) ? body : (body.items ?? []);
+  })) as Array<{ id: string; title?: string; created_at?: string }>;
+  // Scoped to THIS click: an iteration against a cluster an earlier walk left
+  // behind sees that walk's run of the same title too.
+  const created = mine.filter(
+    (r) => r.id === runID || (r.title === "L launch door" && (r.created_at ?? "") >= clickedAt),
+  );
+  expect(created.map((r) => r.id), "exactly one run for this click").toEqual([runID]);
 });

@@ -4,7 +4,8 @@
 package api
 
 // awssso_refresh.go renews a captured AWS IAM Identity Center (SSO) credential
-// CONTROL-PLANE SIDE, at dispatch, instead of shipping the refresh token into
+// CONTROL-PLANE SIDE — at the real launch, at dispatch and on a credential_reauth
+// hold; never on Review's preflight or the create advisory — instead of shipping the refresh token into
 // the sandbox and hoping the in-sandbox AWS SDK renews it.
 //
 // Why the control plane owns this. `CreateToken(grant_type=refresh_token)`
@@ -134,8 +135,11 @@ const (
 	// does not quietly bill a different model provider instead.
 	//
 	// DRAFT (M2 canon pending)
+	// %s is the REMEDY clause (llmMechanismRemedy): under a per_user row the
+	// person who must sign in again is the member, and Settings → Model provider
+	// is the page whose AWS button is admin-only (UX round B1).
 	awsSSORefreshSpentSentence = "this run's model access is configured as Amazon Bedrock (captured AWS SSO session), " +
-		"and that session can no longer be renewed — sign in again under Settings → Model provider. " +
+		"and that session can no longer be renewed — %s " +
 		"Wardyn does not substitute a different model provider."
 
 	// awsSSORefreshUnavailableSentence: the renewal could not be completed
@@ -158,6 +162,13 @@ const (
 	// DRAFT (M2 canon pending)
 	credSourceSSODesc = "your captured AWS SSO session (container login; Wardyn renews it at launch while its refresh token lives)"
 )
+
+// awsSSORefreshSpentRefusal composes the sentence above for the scope whose
+// credential is spent. A captured session always existed here, so the remedy is
+// its audience's "again" arm.
+func awsSSORefreshSpentRefusal(perUser bool) string {
+	return fmt.Sprintf(awsSSORefreshSpentSentence, llmMechanismRemedy(perUser, true))
+}
 
 // harnessCredentialAWSRenewingDetail / Fix are the admin setup row for a
 // captured SSO session whose ACCESS token has lapsed but whose refresh token has
@@ -332,16 +343,18 @@ func (s *Server) markAWSSSOTokenSpent(fingerprint string) {
 //
 // A Put that fails AFTER a successful redeem does NOT fail this run: the rotated
 // pair is already spent at AWS, so re-redeeming is impossible and refusing would
-// throw away a credential we hold. This run is served from the in-memory blob and
-// the persist failure is audited — the NEXT dispatch reads the old, now-spent
-// pair and asks the person to sign in again rather than redeeming it twice.
+// throw away a credential we hold. The DISPATCH caller serves this run from the
+// in-memory blob (the create caller discards it; its dispatch then reads the old
+// pair from the store), the persist failure is audited, and the old pair is
+// marked spent — so whoever reads it next is refused as spent rather than
+// redeeming it twice.
 func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob awsSSOBlob) (awsSSOBlob, string) {
 	now := s.cfg.Now()
 	if !blob.renewable(now) || !blob.needsRefresh(now) {
 		return blob, ""
 	}
 	if s.awsSSOTokenSpent(awsSSOTokenFingerprint(blob.RefreshToken)) {
-		return blob, awsSSORefreshSpentSentence
+		return blob, awsSSORefreshSpentRefusal(scope.perUser)
 	}
 
 	// SINGLE-FLIGHT, and non-blocking while the token in hand would still carry a
@@ -373,7 +386,7 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 	// per_user principal would renew — and re-persist — the wrong credential.
 	if cur, found, rerr := s.readAWSSSOBlob(ctx, scope); rerr == nil {
 		if !found {
-			return blob, awsSSORefreshSpentSentence
+			return blob, awsSSORefreshSpentRefusal(scope.perUser)
 		}
 		blob = cur
 	}
@@ -383,10 +396,10 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 	}
 	fingerprint := awsSSOTokenFingerprint(blob.RefreshToken)
 	if s.awsSSOTokenSpent(fingerprint) {
-		return blob, awsSSORefreshSpentSentence
+		return blob, awsSSORefreshSpentRefusal(scope.perUser)
 	}
 
-	resp, err := s.createAWSSSOTokenWithRetry(ctx, blob)
+	resp, attempts, err := s.createAWSSSOTokenWithRetry(ctx, blob)
 	if err != nil {
 		spent := errors.Is(err, errAWSSSOCredentialSpent)
 		if spent {
@@ -395,10 +408,11 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 		slog.ErrorContext(ctx, "wardynd: renewing the captured AWS SSO credential failed",
 			slog.Bool("credential_spent", spent), slog.Any("err", err))
 		s.auditAWSSSORefresh(ctx, scope, "failure", map[string]any{
-			"provider": awsSSOProvider, "spent": spent, "error": err.Error(),
+			"provider": awsSSOProvider, "spent": spent, "error": err.Error(), "attempts": attempts,
 		})
 		if spent {
-			return blob, awsSSORefreshSpentSentence
+			s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeSpent)
+			return blob, awsSSORefreshSpentRefusal(scope.perUser)
 		}
 		// A TRANSIENT failure is not a reason to stop using a token we still hold.
 		// needsRefresh fires a whole skew window (10 min) AHEAD of expiry, so most
@@ -409,10 +423,13 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 		// next dispatch renews it, and the failure is audited either way.
 		if !blob.expired(s.cfg.Now()) {
 			slog.WarnContext(ctx, "wardynd: renewing the captured AWS SSO credential failed, but the current token is still valid; serving it")
+			s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeTransportError)
 			return blob, ""
 		}
+		s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeUnavailable)
 		return blob, awsSSORefreshUnavailableSentence
 	}
+	s.metrics.ssoRefreshRecorded(ssoRefreshOutcomeSuccess)
 
 	next := blob
 	next.AccessToken = resp.AccessToken
@@ -432,6 +449,13 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 		"expires_at": next.ExpiresAt.Format(time.RFC3339),
 		"rotated":    rotated,
 	}
+	// attempts RIDES A SUCCESS ROW TOO when the retry is what made it succeed —
+	// a first-attempt success carries no field at all (the common case, no
+	// story to tell), but "took two tries" is as much a network signal on a
+	// success row as it is on a failure one.
+	if attempts == 2 {
+		data["attempts"] = attempts
+	}
 	// OMITTED WHEN ZERO (B2-F8), as awsSSOCacheFileContents already does for the
 	// same field: a zero RegistrationExpiresAt means the capturing helper saw no
 	// registration expiry, which registrationLapsed reads as LIVE. Formatting it
@@ -444,7 +468,11 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 	if perr := s.storeAWSSSOBlob(ctx, scope, next); perr != nil {
 		// Redeemed but not stored — see the doc comment. Audited as a failure so
 		// the row is not read as "the rotated pair is safe", and the run still
-		// gets its credential.
+		// gets its credential. The OLD pair is spent at AWS whatever the store
+		// says: mark it, so the next read of it (dispatch after a create-time
+		// redeem, or the next launch) is refused as spent at once rather than
+		// paying a token round trip to learn the same thing.
+		s.markAWSSSOTokenSpent(fingerprint)
 		outcome = "failure"
 		data["persist_error"] = perr.Error()
 		slog.ErrorContext(ctx, "wardynd: persisting the renewed AWS SSO credential failed; serving this run from memory",
@@ -472,17 +500,28 @@ func (s *Server) auditAWSSSORefresh(ctx context.Context, scope awsSSOScope, outc
 // createAWSSSOTokenWithRetry is createAWSSSOToken plus the ONE backoff retry a
 // transient failure gets. A spent credential is never retried — the answer will
 // not change, and hammering it is how a throttle becomes a fleet outage.
-func (s *Server) createAWSSSOTokenWithRetry(ctx context.Context, blob awsSSOBlob) (awsSSOTokenResponse, error) {
+//
+// Returns attempts (1 or 2) so the failure audit row can say whether a dropped
+// packet was one flaky call or two (Finding 5 — the retry already existed; this
+// makes it LEGIBLE rather than adding a second one). On a second failure the two
+// errors are errors.Join'd so BOTH are in the row: two EOFs read as a network
+// story, an EOF then invalid_grant already says spent, now with attempts:2
+// beside it.
+func (s *Server) createAWSSSOTokenWithRetry(ctx context.Context, blob awsSSOBlob) (awsSSOTokenResponse, int, error) {
 	resp, err := s.createAWSSSOToken(ctx, blob)
 	if err == nil || errors.Is(err, errAWSSSOCredentialSpent) {
-		return resp, err
+		return resp, 1, err
 	}
 	select {
 	case <-ctx.Done():
-		return resp, err
+		return resp, 1, err
 	case <-time.After(awsSSORefreshRetryDelay):
 	}
-	return s.createAWSSSOToken(ctx, blob)
+	resp2, err2 := s.createAWSSSOToken(ctx, blob)
+	if err2 != nil {
+		return resp2, 2, errors.Join(err, err2)
+	}
+	return resp2, 2, nil
 }
 
 // createAWSSSOToken performs the SSO-OIDC CreateToken refresh_token grant.
@@ -490,10 +529,14 @@ func (s *Server) createAWSSSOTokenWithRetry(ctx context.Context, blob awsSSOBlob
 // Hand-rolled over net/http on purpose: the call is `authtype:none` (unsigned,
 // no SigV4), the request and response are four JSON fields each, and the module
 // that would sign it is not a dependency of this repo. http.DefaultTransport is
-// the transport so the call honours the PROCESS proxy environment exactly as the
-// GitHub broker's client does — wardynd's own egress is a separate channel from
-// the sandbox proxy's, and a deployment behind a corporate proxy needs this hop
-// to follow it.
+// the transport, so the call follows WARDYN_DAEMON_PROXY_URL when set
+// (installDaemonProxy, cmd/wardynd/daemon_proxy.go, mutates that shared
+// transport at boot) — never the process HTTP_PROXY/HTTPS_PROXY/NO_PROXY
+// family, which stays unsupported for wardynd's own egress on purpose (see
+// docs/ENV.md). wardynd's own egress is a separate channel from the sandbox
+// proxy's; the same transport, and so the same knob, is what the other four
+// wardynd-side DefaultTransport consumers (OIDC discovery/JWKS, the audit
+// webhook sink, the GitHub App client, Entra sync) follow too.
 func (s *Server) createAWSSSOToken(ctx context.Context, blob awsSSOBlob) (awsSSOTokenResponse, error) {
 	var out awsSSOTokenResponse
 	// BEFORE the URL is composed, never after: a region that is not a region is

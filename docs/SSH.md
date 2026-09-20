@@ -19,9 +19,10 @@ surface: the daemon does not even generate a host key.
 > `ssh` **exec** output and **sftp** payloads are **not recorded** (and sftp
 > uploads are not byte-counted), so work done over those paths leaves no
 > session evidence — do not present Remote-SSH as the recommended developer
-> path without saying so. The interactive SSH **shell** *is* recorded, unmasked,
-> and there is **no delete-one route**: a secret pasted into it is stored in
-> cleartext, permanently.
+> path without saying so. The interactive SSH **shell** *is* recorded through
+> the browser terminal's same masking pipeline, but an unregistered secret can
+> remain in cleartext. There is **no delete-one route**; age-based retention
+> (default: keep forever) is the removal mechanism. See [Recording](#recording).
 
 ## 1. Register a public key
 
@@ -79,6 +80,36 @@ The freed fingerprint can then be re-registered by anyone — including,
 again, whoever squatted it — so pair this with actually identifying who the
 key belongs to, not just running the query.
 
+### Revoking access during an incident
+
+Registered SSH keys are independent credentials. A per-user API token can
+register one through `wardyn ssh-key ensure`; revoking that token, or running
+`wardyn sessions revoke --sub '<subject-or-email>'` (including its `--all`
+alternative), does **not** remove the key or prevent SSH authentication with
+it. The SSH gateway does not consult the session-revocation cutoff.
+`WARDYN_SSH_ROLE_TTL` bounds only the admin override, not access to runs the
+key's principal owns.
+
+Alongside the [session and API-token revocation procedure](OPERATIONS.md#per-user-api-tokens-stop-sharing-the-admin-token):
+
+- Prevent further sign-in or key registration through the deployment's
+  identity/access controls when offboarding or containing a compromised account.
+- Inspect the person's registered keys. `wardyn ssh-key list --json` lists
+  only the caller's keys; the owner can remove them in **Account → SSH keys**
+  or with `DELETE /api/v1/me/ssh-keys/{fingerprint}`. Percent-encode the
+  fingerprint as one path segment. There is no `ssh-key delete` command and
+  no admin API for another person's keys; an operator with database access
+  must identify that principal's keys and remove their registrations directly,
+  as in [the fingerprint-removal example](#reclaiming-a-squatted-fingerprint).
+- End access to affected sandboxes with `wardyn run kill <run-id>` and verify
+  teardown succeeded. Deleting a key prevents subsequent authentications;
+  it does not disconnect an already-authenticated SSH connection or stop it
+  opening more channels into the same running sandbox. Include foreign runs
+  reached through an admin override when determining which runs are affected.
+
+The `ssh_key.add`, `ssh_key.delete`, and `ssh.auth` events help identify the
+registered keys and accessed runs; see [Audit actions](AUDIT-ACTIONS.md).
+
 ## 2. Connect
 
 The run detail page's "Attach from your terminal" card shows the exact
@@ -93,9 +124,12 @@ address off `/healthz` and execs your local `ssh(1)` against it, so there is
 no connect string to copy. `wardyn ssh --print <run-id>` emits that command
 instead of running it (for a script or a demo) and `--config` emits the
 `ssh_config` block below — both byte-identical to what the card renders. It
-is a separate command from `wardyn attach`, deliberately: `attach` carries
-the admin bearer over a WebSocket, `ssh` carries your registered public key
-over the real SSH protocol.
+is a separate command from `wardyn attach`, deliberately: `attach` mints a
+single-use ticket with your configured token (`WARDYN_TOKEN` or
+`WARDYN_ADMIN_TOKEN`) and carries it over a WebSocket — the same door the
+console's own terminal uses, so a member needs no admin credential to attach
+to a run they own — `ssh` carries your registered public key over the real
+SSH protocol instead.
 
 `<run-id>` **is** the SSH username — the gateway has no session cookie to
 carry it any other way, so the run id is the addressing, the same way a
@@ -331,17 +365,16 @@ is binary protocol data, not terminal output, and is never recorded (masking
 and asciicast framing both assume text; recording binary transfer bytes
 would neither work nor mean anything).
 
-**Masking scope, stated plainly.** `internal/secretmask` masks values it was
-told about — platform-managed secrets and minted credentials registered into
-it at run start. A value a human **types** into the shell — pastes an API key,
-exports a token by hand — is not in that registry and is never masked: it
-lands in the recorded asciicast verbatim, permanently, subject to whatever
-retention window `WARDYN_RECORDING_RETENTION_DAYS` is set to (default:
+**Masking scope, stated plainly.** `internal/secretmask` masks values registered
+for the run, including credentials minted while a session is attached. An
+unregistered value a human **types** into the shell — pastes an API key,
+exports a token by hand — can appear verbatim in the recorded terminal output,
+subject to the retention window `WARDYN_RECORDING_RETENTION_DAYS` (default:
 forever). There is no route to delete or redact one recording in isolation
 once it exists; the only lever is the age-based retention sweep, which acts
-on all eligible recordings, not one. If a human types a secret into an SSH (or
-browser-attach) session, treat that recording as holding it in the clear until
-retention deletes it.
+on all eligible recordings, not one. If a human types an unregistered secret
+into an SSH (or browser-attach) session, treat that recording as holding it in
+the clear until retention deletes it.
 
 ## Bounds
 

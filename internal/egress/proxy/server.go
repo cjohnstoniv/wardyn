@@ -297,6 +297,11 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		<-s.renewStopped
 	}
 	httpErr := s.http.Shutdown(ctx)
+	// End any open credential re-auth hold: its poll loop is detached from the
+	// request that opened it (so a hung-up SDK cannot end a hold its owner is
+	// still signing in for), which also means nothing else would stop it
+	// talking to the control plane about a run that has ended.
+	s.proxy.stopReauthHolds()
 	// Run end closes every open private-ip streak (B6), BEFORE the sink drains,
 	// so a repeat count that never hit the eviction path is still recorded.
 	s.proxy.flushPrivateIPMemo()

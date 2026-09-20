@@ -150,6 +150,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 				return nil, err
 			}
 			s.projectRecordingMeta(r, runs)
+			projectStatusDetail(runs)
 			return runs, nil
 		}, nil)
 		return
@@ -162,6 +163,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 				return nil, err
 			}
 			s.projectRecordingMeta(r, runs)
+			projectStatusDetail(runs)
 			return runs, nil
 		}
 	}
@@ -171,6 +173,7 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 			return nil, err
 		}
 		s.projectRecordingMeta(r, runs)
+		projectStatusDetail(runs)
 		return runs, nil
 	})
 }
@@ -191,6 +194,7 @@ func (s *Server) handleGetRun(w http.ResponseWriter, r *http.Request) {
 	// a single run's own detail read must agree with what the list showed.
 	runs := []types.AgentRun{run}
 	s.projectRecordingMeta(r, runs)
+	projectStatusDetail(runs)
 	run = runs[0]
 	// ui_apps is a READ-ONLY denormalization of the run's EFFECTIVE policy onto
 	// the run payload — the console's UI-apps lane needs it, and the run row
@@ -296,6 +300,31 @@ func bestClass(classes []types.ConfinementClass) types.ConfinementClass {
 		}
 	}
 	return best
+}
+
+// strongestAdvertisedAtOrAbove is the DEFAULT confinement rule (0.7.8): the
+// strongest advertised class that meets floor — MEMBERSHIP, not rank (M8: a
+// Kata-only host advertises [CC1, CC3], no CC2, so a rank check could pick a
+// class the runner never declared). It reduces to bestClass over the
+// membership-filtered subset rather than a second "strongest of a set"
+// implementation.
+//
+// Falls back to floor UNCHANGED when nothing advertised meets it (including an
+// empty/nil classes) — never "" — so a caller that follows this with its own
+// runner-capability membership check (resolveEnforcedConfinement) still fails
+// closed exactly as an unenforceable floor did before this rule existed,
+// instead of silently dispatching an unenforceable class.
+func strongestAdvertisedAtOrAbove(classes []types.ConfinementClass, floor types.ConfinementClass) types.ConfinementClass {
+	var eligible []types.ConfinementClass
+	for _, c := range classes {
+		if confinementGE(c, floor) {
+			eligible = append(eligible, c)
+		}
+	}
+	if best := bestClass(eligible); best != "" {
+		return best
+	}
+	return floor
 }
 
 // classesOrNone renders an advertised confinement set for error messages, or

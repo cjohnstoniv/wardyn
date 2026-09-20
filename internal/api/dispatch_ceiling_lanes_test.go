@@ -128,8 +128,12 @@ func TestSourceScanLaneResolvesTheActingPrincipalsCeiling(t *testing.T) {
 		if len(spec.ProxyConfig.GitGrants) == 0 {
 			t.Error("the unassigned member's scan lost its git-broker lane — the fix must not narrow the no-profile path")
 		}
-		if spec.ConfinementClass != types.CC1 {
-			t.Errorf("confinement class = %q, want the deployment floor %q for an unassigned principal", spec.ConfinementClass, types.CC1)
+		// 0.7.8: the scan lane dispatches at the STRONGEST class the runner
+		// advertises at or above the deployment floor (strongestAdvertisedAtOrAbove),
+		// not the bare floor — fr (fakeRunner) advertises [CC1, CC2, CC3], so a
+		// CC1 floor resolves to CC3, never silently to the floor itself.
+		if spec.ConfinementClass != types.CC3 {
+			t.Errorf("confinement class = %q, want the strongest advertised class %q above the deployment floor CC1 for an unassigned principal", spec.ConfinementClass, types.CC3)
 		}
 	})
 }

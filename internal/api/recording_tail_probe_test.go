@@ -10,13 +10,13 @@
 // Invariant pinned, on BOTH recording sinks:
 //
 //	b2  Upload path (buildMaskingBody in recording.go): with a registered
-//	    secret (so the MaskingWriter pipe branch is taken), a body whose LAST
+//	    secret (so the MaskingWriter branch is taken), a body whose LAST
 //	    bytes end mid-escape-sequence and carry no trailing newline reaches
 //	    SaveCast byte-for-byte — the (maxLen-1)-byte retained tail
 //	    MaskingWriter.Write holds back is flushed by mw.Close()
 //	    (MaskingWriter.Close in internal/secretmask) and arrives BEFORE the
-//	    clean EOF. Fails if the copy goroutine stops calling Close, if Close
-//	    stops flushing, or if CloseWithError is stamped before the flush lands.
+//	    clean EOF. Fails if the reader stops calling Close, if Close
+//	    stops flushing, or if the source error is returned before the flush.
 //
 //	b3  Live attach path (newSessionRecorder in attach.go): a session whose
 //	    final PTY write ends in an escape prefix that is ALSO a strict prefix of
@@ -71,8 +71,7 @@ func TestProbeF4_BuildMaskingBody_MidEscapeTailReachesStoreVerbatim(t *testing.T
 		{"byte-at-a-time", func() io.Reader { return oneByteReader{r: strings.NewReader(body)} }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			r, cleanup := buildMaskingBody(tc.src(), reg, runID)
-			defer cleanup()
+			r := buildMaskingBody(tc.src(), reg, runID)
 			out, err := io.ReadAll(r)
 			if err != nil {
 				t.Fatalf("read masked body: %v (a clean EOF is required after the tail flush)", err)
@@ -89,8 +88,7 @@ func TestProbeF4_BuildMaskingBody_MidEscapeTailReachesStoreVerbatim(t *testing.T
 
 // TestProbeF4_BuildMaskingBody_TailFlushBeforeError pins the ordering the
 // handler depends on: when the SOURCE errors (MaxBytesError shape), the
-// retained tail is still flushed first (in buildMaskingBody, mw.Close() runs
-// before pw.CloseWithError), and the reader sees the error — never a clean EOF
+// retained tail is still flushed first, and the reader sees the error — never a clean EOF
 // that would let a truncated cast be audited as `recording.upload success`.
 func TestProbeF4_BuildMaskingBody_TailFlushBeforeError(t *testing.T) {
 	runID := uuid.New()
@@ -100,14 +98,13 @@ func TestProbeF4_BuildMaskingBody_TailFlushBeforeError(t *testing.T) {
 	prefix := `[0.20,"o","` + probeESC + `[`
 	src := io.MultiReader(strings.NewReader(prefix), errReader{srcErr})
 
-	r, cleanup := buildMaskingBody(src, reg, runID)
-	defer cleanup()
+	r := buildMaskingBody(src, reg, runID)
 	out, err := io.ReadAll(r)
 	if err == nil || err != srcErr {
 		t.Fatalf("reader err = %v, want the source error %v (never a clean EOF)", err, srcErr)
 	}
 	if string(out) != prefix {
-		t.Fatalf("bytes before the error = %q, want %q (tail must be flushed before CloseWithError)", out, prefix)
+		t.Fatalf("bytes before the error = %q, want %q (tail must be flushed before returning the error)", out, prefix)
 	}
 }
 
