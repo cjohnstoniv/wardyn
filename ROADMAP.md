@@ -26,6 +26,8 @@ versus which are only an interface) lives in [docs/PLUGGABILITY.md](docs/PLUGGAB
 | **v0.7.4** | **Governance hardening over the whole surface a member or an operator's identity touches.** Per-run credential residency and revocation, the five findings of the 0.7.3 field report plus the owner's two testability asks, a kind-provable AWS SSO test path, an admin's own "view as member", and a repo-wide review campaign's fixes across the runner substrate, the egress proxy and the console (below) | **Shipped (pre-alpha)** — `v0.7.4`, 2026-09-16 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.7.5** | A third field report from the same private-endpoint Kubernetes estate (Entra SSO, one enabled roster row: `claude-code` / `bedrock_sso` / `per_user`): the console stops asserting things that are false on that deployment shape (the New Run rail's credential-residency and Recording claims, the member's "Your model key" card, and Getting Started's lede), an admin can preview the not-signed-in member state, the AWS sign-in sandbox now runs the sign-in itself with every attach path joining it, a slow sign-in start no longer reads as unreadable and a new sign-in supersedes an orphaned one, a rebuilt Claude Code image boots without parking approvals on the CLI's own bootstrap, and on Kubernetes an autonomous run's `/tmp` and `/home/agent/work` are now inside `disk_mib` (narrowed, not closed) (below) | **Shipped (pre-alpha)** — `v0.7.5`, 2026-09-17 (see [CHANGELOG.md](CHANGELOG.md)) |
 | **v0.7.6** | "The facts exist; connect them to the person" — a fourth field report from the same estate: an actionable model-access state now rides a banner on every screen instead of only Getting Started, a run refused for a dead model credential offers the sign-in instead of directions to it, a slow start says what it is waiting on instead of a poll-tick guess, the AWS sign-in tab opens and closes itself, a spent refresh token stops grading `live` for days, and wardynd's own outbound calls (OIDC, AWS SSO renewal, Entra sync) gain a scoped corporate-proxy knob that does not share `HTTPS_PROXY`'s process-wide blast radius; a mid-run credential lapse holding the run instead of killing it ships behind a kill switch (below) | **Shipped (pre-alpha)** — `v0.7.6` (see [CHANGELOG.md](CHANGELOG.md); tag `v0.7.6`, 2026-09-18) |
+| **v0.7.7** | A fifth field report from the same estate: with an expired AWS SSO session, Launch bounced the console to Getting Started. The setup gate stops grading the two per-person model-provider rows, a create-time refusal carries the machine-readable reason `model_credential`, the console opens the sign-in from that refusal and relaunches the same run, and the launch redeems an expired session at the click instead of admitting a spent one (below) | **Shipped (pre-alpha)** — `v0.7.7`, 2026-09-18 (see [CHANGELOG.md](CHANGELOG.md)) |
+| **v0.7.8** | Three field reports and the terminal: the setup gate's blocking decision moved server-side (`SetupCheck.Blocking`), the shipped confinement floor is CC1 with the strongest installed class as the default, a dial refusal names its own cause and hop, AWS-lane refusals answer in SDK-readable JSON, `wardyn attach` rides a single-use ticket, and the terminal's holder and focus defects are fixed (below) | **Shipped (pre-alpha)** — `v0.7.8`, 2026-09-19 (see [CHANGELOG.md](CHANGELOG.md)) |
 
 ### What v0.4 shipped
 
@@ -667,6 +669,43 @@ posture, the Runs board's group header, and the three items already promised
 after 0.7.5 (the per-person supersede lock, a third Kubernetes cache volume,
 the admin-tier 5xx driver-text sweep) — none bundled into this release (O-1).
 
+### What v0.7.7 shipped
+
+Shipped as `v0.7.7`, 2026-09-18; [CHANGELOG.md](CHANGELOG.md)'s entry is the full
+list. One journey from the same private-endpoint estate — an admin with an expired
+AWS SSO session clicks Launch — and both halves of what went wrong:
+
+- **The setup gate no longer bounces a lapsed admin to Getting Started.** The two
+  per-person model-provider rows (`llm_provider`, `bedrock_provider`) are optional
+  per person and stop gating the console; host posture rows still do.
+- **A refused launch names its class.** The create-time 422 carries
+  `reason: model_credential`; the console opens the sign-in door from it and
+  relaunches the same run once the capture lands.
+- **Launch redeems an expired session at the click.** A spent refresh token is a
+  422 with the door; an AWS outage is a 422 without one ("launch again in a
+  moment") — the two are told apart, and neither launches a run that will fail.
+- Carried from 0.7.6, still open: the per-person sign-in supersede lock, the third
+  Kubernetes cache volume, the admin-tier 5xx driver-text sweep — all on the 0.8
+  plan.
+
+### What v0.7.8 shipped
+
+Shipped as `v0.7.8`, 2026-09-19; [CHANGELOG.md](CHANGELOG.md)'s entry is the full
+list. Three field reports (a lapsed-SSO admin bounced to setup, control bytes in a
+PTY-scraped device URL, an operator's corporate-proxy hour) plus the terminal:
+
+- **The setup gate is a daemon decision** (`SetupCheck.Blocking`): only a runner
+  failure, an unmeetable confinement floor or a missing role mapping confiscate
+  the console; every other row keeps its grade and stays out of the way.
+- **The confinement floor is CC1, the default is the strongest installed class**,
+  and a run records whether its class was requested or defaulted.
+- **A dial refusal says why**: `builtin:dial-failed` carries the failed stage,
+  the underlying error and the hop attempted; AWS-lane refusals answer in
+  SDK-readable JSON instead of a plain-text 502 handed to a JSON parser.
+- **`wardyn attach` rides a single-use ticket**, and the terminal's stranded
+  holder, focus and remount defects are fixed; in-place observer promotion and
+  the ordinary-use corpus are 0.8 items.
+
 ## Planned
 
 Everything below is **planned, unbuilt, and undated**. Where a seam exists but no
@@ -675,6 +714,11 @@ implementation does, [docs/PLUGGABILITY.md](docs/PLUGGABILITY.md) says so per ro
 v0.8 is the remaining path to alpha. The cloud base and permissioning 0.6 owed
 are shipped, and so is 0.7's governance and desktop work (above, through
 `v0.7.6`), so what is left below is the alpha RC and beyond.
+
+**v0.8 is in progress (from 2026-09-19).** The plan — every lane, decision and open
+question — is [docs/design/0.8/PLAN.md](docs/design/0.8/PLAN.md); the work is tracked on
+the `0.8.0` and `0.8.1` milestones, one issue per lane, and nothing starts before its issue
+carries the `approved` label ([CONTRIBUTING.md](CONTRIBUTING.md)).
 
 **New for 0.8: posture-gated autonomy** — an org-defined rubric mapping a
 sandbox's containment posture (egress reach, secrets present, confinement class)
