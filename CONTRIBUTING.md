@@ -221,6 +221,25 @@ make ui                   # production build (vite)
 
 UI visibly changed? Run `make screenshots` and commit the updated `docs/img` PNGs.
 
+### Design rounds
+
+A change to a console flow is settled in a prototype before it is built, not after.
+
+- **The prototype is clickable.** It carries the real states, the real copy and the
+  transitions between steps, so a reviewer can walk the process and answer "does this
+  work" rather than "does this screen look right". A single screen with no flow may be
+  a static mock; anything with steps, a decision, an error path or a wait state is a
+  prototype.
+- **The maintainer approves it before implementation starts.** Not while it is out for
+  review — a half-approved design and a half-written screen are how the two diverge.
+- **Its strings are canon.** Whatever the prototype says is what the app says, byte for
+  byte, and the tests assert against the same constants. A prototype whose copy is
+  approximate makes the review advisory instead of binding.
+
+The component library that prototypes draw on is kept in step with a claude.ai
+design-system project; [docs/design/SYNC.md](docs/design/SYNC.md) covers picking that up
+on a new account.
+
 ## Questions?
 
 Open an issue or reach out to the maintainers. We're here to help!

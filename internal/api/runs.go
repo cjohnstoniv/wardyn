@@ -399,17 +399,21 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 
 	// Resolve the sandbox image (BYOI wrap > devcontainer build > workspace
 	// profile > convention image) and persist it for provenance. A failed
-	// BYOI/devcontainer build has already marked the run FAILED and answered 201.
-	// The one image lane that DEGRADES rather than refusing. With no
-	// ImageBuilder wired a workspace base_image fails closed (inside
-	// resolveCreateRunImage) but a devcontainer_repo silently falls through to
-	// the convention image — otherwise visible only as an INFO setup row no CLI
-	// or API caller ever reads. Said on the 201 instead, which is the only
-	// channel this door has. Appended BEFORE the call so the warning is already
-	// on the list the build-failed arm answers 201 with.
+	// BYOI/devcontainer build has already marked the run FAILED; this frame
+	// answers the 201 with the refreshed (FAILED) run, since
+	// resolveCreateRunImage itself must stay callable off-request. The one
+	// image lane that DEGRADES rather than refusing. With no ImageBuilder wired
+	// a workspace base_image fails closed (inside resolveCreateRunImage) but a
+	// devcontainer_repo silently falls through to the convention image —
+	// otherwise visible only as an INFO setup row no CLI or API caller ever
+	// reads. Said on the 201 instead, which is the only channel this door has.
+	// Appended BEFORE the call so the warning is already on the list the
+	// build-failed arm answers 201 with.
 	warnings = s.appendDevcontainerNoBuilderWarning(warnings, req)
-	image, responded := s.resolveCreateRunImage(ctx, w, req, runID, created, warnings, wsRefs)
-	if responded {
+	image, failed := s.resolveCreateRunImage(ctx, req, runID, wsRefs)
+	if failed {
+		created = s.refreshRun(ctx, runID, created)
+		writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
 		return
 	}
 
