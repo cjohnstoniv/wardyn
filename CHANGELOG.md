@@ -10,6 +10,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **`resolveCreateRunImage` no longer writes the HTTP response.** It now returns
+  `(image string, failed bool)` instead of writing the 201 itself on a BYOI/devcontainer build
+  failure, so it can be called from a background worker. `internal/api/runs.go`'s
+  `handleCreateRun` answers the 201 (refreshed FAILED run + warnings) one frame up.
 - **Doc citations name a SYMBOL, never a line number.** `docs/AUDIT-ACTIONS.md`'s 215 emit-site
   citations and `docs/design/CONSOLE-RULES.md`'s 51 component citations moved from `path/file.go:NNN`
   to `path/file.go#Symbol` (`#Type.Method` for a method, `#heading-slug` into another document,

@@ -678,19 +678,19 @@ func warnCeilingDeniedWorkspaceEgress(ceiling governanceCeiling, wsRefs []types.
 // convention image. Precedence: a BYOI wrap (top) > a request-level
 // devcontainer build > the primary onboarded workspace's profile. A BYOI or
 // DEVCONTAINER-REPO build failure marks the run FAILED (observable, never a
-// 500) and WRITES the 201 response itself (responded=true — the handler must
-// stop); a WORKSPACE image build failure is fail-open (keeps the convention
-// image), since onboarding is a convenience, not a gate. The resolved image is
-// persisted for provenance (best-effort: a failed write must not block dispatch
-// — the audit trail still carries build events). Extracted verbatim from
-// handleCreateRun; ctx is already detached from client cancellation.
-func (s *Server) resolveCreateRunImage(ctx context.Context, w http.ResponseWriter, req createRunRequest, runID uuid.UUID, created types.AgentRun, warnings []string, wsRefs []types.Workspace) (string, bool) {
+// 500) and returns failed=true — the caller (one frame up, off-request-capable)
+// owns refreshing the run and answering the response; a WORKSPACE image build
+// failure is fail-open (keeps the convention image), since onboarding is a
+// convenience, not a gate. The resolved image is persisted for provenance
+// (best-effort: a failed write must not block dispatch — the audit trail
+// still carries build events). Extracted verbatim from handleCreateRun; ctx is
+// already detached from client cancellation.
+func (s *Server) resolveCreateRunImage(ctx context.Context, req createRunRequest, runID uuid.UUID, wsRefs []types.Workspace) (string, bool) {
 	image := agentImage(req.Agent, s.cfg.AgentImages)
 
 	// Shared FAILED path for the two explicit build lanes (BYOI + devcontainer):
 	// CAS from PENDING so a run a concurrent kill already moved to KILLED is not
-	// silently clobbered back to FAILED (was: unconditional write), audit, and
-	// answer 201 with the refreshed (FAILED) run + warnings.
+	// silently clobbered back to FAILED (was: unconditional write), and audit.
 	buildFailed := func(auditData map[string]any) {
 		// Surface the build failure under the FAILED badge, not only in the
 		// run.build audit row. The error text is already in auditData["error"].
@@ -701,8 +701,6 @@ func (s *Server) resolveCreateRunImage(ctx context.Context, w http.ResponseWrite
 		s.failAndRevoke(ctx, runID, types.RunPending, hint)
 		s.recordAudit(ctx, s.auditEvent(&runID, types.ActorSystem, "wardynd", "run.build",
 			runID.String(), "failure", mustJSON(auditData)))
-		created = s.refreshRun(ctx, runID, created)
-		writeJSON(w, http.StatusCreated, createRunResponse{AgentRun: created, Warnings: warnings})
 	}
 
 	switch {
