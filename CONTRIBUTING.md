@@ -25,7 +25,7 @@ All contributions to Wardyn are made under the Apache License 2.0. By contributi
 
 ## Security Invariants
 
-All contributors and subagents MUST preserve the six security invariants documented in [ARCHITECTURE.md](./ARCHITECTURE.md). These are non-negotiable and form the foundation of Wardyn's security model:
+All contributors MUST preserve the six security invariants documented in [ARCHITECTURE.md](./ARCHITECTURE.md). These are non-negotiable and form the foundation of Wardyn's security model:
 
 1. **Secrets never enter the sandbox** — Late binding via the broker; no secrets in env, disk, or args, except the named, bounded exceptions ARCHITECTURE.md invariant 1 enumerates (credentials that structurally cannot be proxy-injected). That enumeration is authoritative — do not restate a count here, it is what drifts.
 2. **Approval mints the credential** — Credential scope is verified atomically in the same transaction.
