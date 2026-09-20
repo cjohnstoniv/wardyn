@@ -126,6 +126,7 @@ ds-bundle/
 # 0.8/ ships for the same reason: the 0.8 issues and ROADMAP.md's v0.8 row both
 # link to the design document, so it has to be in the repo they link from.
 !/docs/design/0.8/
+!/docs/design/first-contact-prototype/
 /test/e2e/campaign/
 /test/e2e/RESULTS.md
 

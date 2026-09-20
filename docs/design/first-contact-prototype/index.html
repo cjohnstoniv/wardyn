@@ -1,0 +1,1415 @@
+<!doctype html>
+<!--
+  Copyright 2025 The Wardyn Authors
+  SPDX-License-Identifier: Apache-2.0
+-->
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wardyn — First contact prototype</title>
+<!-- inline, so the page makes no request of any kind -->
+<link rel="icon" href="data:,">
+
+<!--
+  FIRST CONTACT PROTOTYPE — the first ten minutes a new admin spends in the
+  console. Clickable, not a picture: sign in, walk setup, reach the
+  no-confinement dead end, and find the way out of it.
+
+  Settles three approved issues together: #212 (the sign-in screen stops
+  advertising the demo admin token), #213 (setup counts only the steps that
+  block, and recommends what is installed), #214 (a host with no confinement
+  available says so instead of a disabled Launch).
+
+  No build, no dependencies, no network. Open the file.
+
+  SCAFFOLD vs PRODUCT. Everything in `.scaffold` — the sticky bar at the top,
+  the three switches, the `.walk` strips and the HTML comments — is REVIEW
+  SCAFFOLDING and ships nowhere. Everything inside `.app` is the product.
+
+  Three scaffold switches:
+    - Theme      light / dark. The console is dark-first; both must work.
+    - Host       A = a Linux host with KVM present and only Fence installed
+                 (the #213 recommendation case).
+                 B = the same host with no container runtime answering, so the
+                 runner reports no confinement classes at all (the #214 case).
+    - Proposal   Before = what the console does today.
+                 After  = what these three issues propose. This is the thing
+                 being approved.
+
+  Tokens are copied verbatim from ui/src/styles/theme.css (`:root` light,
+  `.dark`). Product strings are either canon reused unchanged from the source
+  named beside them, or a deliberate copy proposal listed in README.md.
+-->
+<style>
+/* ---- tokens: verbatim from ui/src/styles/theme.css :root (light) ---- */
+:root{
+  --font-sans:"Inter",ui-sans-serif,system-ui,-apple-system,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  --text-meta:0.6875rem; --text-body:0.8125rem;
+  --background:#ffffff; --foreground:#171717;
+  --card:#ffffff; --card-foreground:#171717; --surface-2:#f4f4f5;
+  --primary:#0f766e; --primary-foreground:#ffffff;
+  --muted:#f4f4f5; --muted-foreground:#6b6b6b;
+  --placeholder-foreground:#696969;
+  --accent:#f4f4f5; --accent-foreground:#171717;
+  --success:#047857; --success-subtle:rgba(16,185,129,.13); --success-foreground:#ffffff;
+  --warning:#92400e; --warning-subtle:rgba(245,158,11,.13);
+  --danger:#b91c1c;  --danger-subtle:rgba(239,68,68,.13); --danger-foreground:#ffffff;
+  --info:#1d4ed8;    --info-subtle:rgba(29,78,216,.13);
+  --cyan:#0e7490;    --cyan-subtle:rgba(14,116,144,.1);
+  --agent-claude:#d97757;
+  --fence-bg:rgba(176,114,58,.14); --fence-fg:#8f5825; --fence-border:rgba(176,114,58,.45);
+  --wall-bg:rgba(154,163,171,.18); --wall-fg:#5c6a74;  --wall-border:rgba(154,163,171,.6);
+  --vault-bg:rgba(201,162,39,.16); --vault-fg:#8a6a12; --vault-border:rgba(201,162,39,.5);
+  --border:#e5e5e5; --border-strong:#d4d4d4;
+  --input:#e5e5e5; --input-background:#ffffff;
+  --ring:#6b6b6b;
+  --radius:0.625rem; --radius-sm:0.375rem;
+  --sidebar:#ffffff; --sidebar-primary:#171717; --sidebar-accent:#f4f4f5; --sidebar-border:#e5e5e5;
+  --neutral-subtle:rgba(107,107,107,.12);
+  --shadow-floating:0 12px 32px -8px rgb(0 0 0 / .22), 0 4px 12px -4px rgb(0 0 0 / .12);
+}
+/* ---- tokens: verbatim from theme.css .dark ---- */
+html[data-theme="dark"]{
+  --background:#0a0a0a; --foreground:#ededed;
+  --card:#111111; --card-foreground:#ededed; --surface-2:#1f1f1f;
+  --primary:#14b8a6; --primary-foreground:#0a0a0a;
+  --muted:#1f1f1f; --muted-foreground:#a3a3a3;
+  --placeholder-foreground:#878787;
+  --accent:#1f1f1f; --accent-foreground:#ededed;
+  --success:#10b981; --success-subtle:rgba(16,185,129,.13); --success-foreground:#0a0a0a;
+  --warning:#f59e0b; --warning-subtle:rgba(245,158,11,.13);
+  --danger:#f87171;  --danger-subtle:rgba(248,113,113,.13); --danger-foreground:#0a0a0a;
+  --info:#60a5fa;    --info-subtle:rgba(96,165,250,.13);
+  --cyan:#06b6d4;    --cyan-subtle:rgba(6,182,212,.1);
+  --fence-bg:rgba(176,114,58,.12); --fence-fg:#cf9862; --fence-border:rgba(176,114,58,.38);
+  --wall-bg:rgba(154,163,171,.12); --wall-fg:#b7c0c7;  --wall-border:rgba(154,163,171,.38);
+  --vault-bg:rgba(201,162,39,.12); --vault-fg:#d8b83f; --vault-border:rgba(201,162,39,.4);
+  --border:#262626; --border-strong:#404040;
+  --input:#262626; --input-background:#1f1f1f;
+  --ring:#a3a3a3;
+  --sidebar:#0a0a0a; --sidebar-primary:#ededed; --sidebar-accent:#1f1f1f; --sidebar-border:#262626;
+  --neutral-subtle:rgba(163,163,163,.14);
+}
+
+*{box-sizing:border-box}
+/* The barrier matrix is a 700px table inside its own horizontal scroller. On a
+   phone that scroller's content still inflates the ROOT scroll width, so the
+   page could be dragged sideways into empty background. `clip` stops that
+   without creating a scrollport, so position:sticky keeps working. */
+html,body{overflow-x:clip}
+html,body{margin:0;padding:0;max-width:100%}
+body{background:var(--background);color:var(--foreground);
+  font-family:var(--font-sans);font-size:14px;line-height:1.5;letter-spacing:.01em;
+  -webkit-font-smoothing:antialiased}
+h1,h2,h3,h4{margin:0;font-weight:600}
+h1{font-size:1.5rem;line-height:1.3;letter-spacing:-.01em}
+h2{font-size:1.125rem;line-height:1.35;letter-spacing:-.005em}
+h3{font-size:1rem;line-height:1.4}
+h4{font-size:.875rem;line-height:1.4;font-weight:500}
+p{margin:0}
+ul{margin:0}
+button,input,label{font:inherit;letter-spacing:inherit}
+button{font-weight:500}
+label{font-weight:500}
+code,.mono{font-family:var(--font-mono);font-size:var(--text-body)}
+a{color:var(--info)}
+a:hover{text-decoration:underline}
+:focus-visible{outline:3px solid var(--ring);outline-offset:1px;border-radius:var(--radius-sm)}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;
+    transition-duration:.001ms!important;scroll-behavior:auto!important}
+}
+
+/* ====================== REVIEW SCAFFOLD (not the product) ================= */
+.scaffold{position:sticky;top:0;z-index:40;background:var(--card);
+  border-bottom:1px solid var(--border);padding:10px 16px;
+  display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center}
+.scaffold .brand{font-size:13px;font-weight:600}
+.scaffold .brand span{display:block;font-size:var(--text-meta);font-weight:400;
+  color:var(--muted-foreground);letter-spacing:.02em}
+.sw{display:flex;align-items:center;gap:6px}
+.sw>b{font-size:var(--text-meta);font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted-foreground)}
+.seg{display:inline-flex;border:1px solid var(--border-strong);border-radius:8px;overflow:hidden}
+.seg button{border:0;background:var(--card);color:var(--muted-foreground);
+  padding:5px 10px;font-size:12px;cursor:pointer;white-space:nowrap}
+.seg button+button{border-left:1px solid var(--border-strong)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--foreground);font-weight:600}
+.scaffold .note{font-size:12px;color:var(--muted-foreground);max-width:46ch}
+.walk{max-width:1240px;margin:0 auto;padding:10px 16px 26px;
+  font-size:var(--text-meta);letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted-foreground);display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.walk button{font-size:11px;letter-spacing:.04em;text-transform:none;font-weight:400;
+  padding:4px 9px;border-radius:6px;border:1px dashed var(--border-strong);
+  background:transparent;color:var(--muted-foreground);cursor:pointer}
+.walk button:hover{color:var(--foreground);border-color:var(--foreground)}
+
+/* ============================ PRODUCT ==================================== */
+.app{max-width:1240px;margin:0 auto;border:1px solid var(--border);border-radius:14px;
+  overflow:hidden;background:var(--background);margin-top:18px}
+@media (max-width:640px){.app{border-radius:0;border-left:0;border-right:0;margin-top:10px}}
+
+/* --- primitives: buttons (button.tsx#buttonVariants) --- */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  height:36px;padding:0 14px;border-radius:var(--radius);border:1px solid transparent;
+  font-size:14px;font-weight:500;cursor:pointer;white-space:nowrap;background:transparent;
+  color:var(--foreground)}
+.btn svg{width:16px;height:16px;flex:none}
+.btn-sm{height:32px;padding:0 10px;font-size:13px}
+.btn-default{background:var(--primary);color:var(--primary-foreground)}
+.btn-outline{border-color:var(--border-strong);background:var(--card);
+  box-shadow:0 1px 2px 0 rgb(0 0 0 / .05)}
+.btn-ghost{color:var(--muted-foreground)}
+.btn-ghost:hover{background:var(--accent);color:var(--foreground)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn-icon{width:36px;height:36px;padding:0}
+.btn-link{background:none;border:0;padding:0;height:auto;color:var(--info);
+  font-size:13px;font-weight:500;cursor:pointer;text-align:left}
+.btn-link:hover{text-decoration:underline}
+
+/* --- primitives: chips (primitives.tsx#Chip / status-chip.tsx) --- */
+.chip{display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;
+  border-radius:8px;font-size:12px;font-weight:400;border:1px solid transparent;white-space:nowrap}
+.chip .dot{width:6px;height:6px;border-radius:99px;flex:none;background:currentColor}
+.chip.neutral{background:var(--neutral-subtle);color:var(--muted-foreground);border-color:var(--border)}
+.chip.success{background:var(--success-subtle);color:var(--success);border-color:var(--success)}
+.chip.warning{background:var(--warning-subtle);color:var(--warning);border-color:var(--warning)}
+.chip.danger{background:var(--danger-subtle);color:var(--danger);border-color:var(--danger)}
+.chip.info{background:var(--info-subtle);color:var(--info);border-color:var(--info)}
+.chip.primary{background:color-mix(in oklab,var(--primary) 14%,transparent);color:var(--primary);
+  border-color:var(--primary)}
+.chip.up{text-transform:uppercase;letter-spacing:.06em;font-size:11px}
+.chip.mono{font-family:var(--font-mono);font-size:11px}
+
+/* --- primitives: inputs (input.tsx#Input) --- */
+.input{width:100%;height:36px;padding:0 12px;border-radius:var(--radius-sm);
+  border:1px solid var(--input);background:var(--input-background);color:var(--foreground);
+  font-size:14px;font-weight:400}
+.input::placeholder{color:var(--placeholder-foreground)}
+.input:focus-visible{outline:3px solid var(--ring);outline-offset:0;border-color:var(--ring)}
+textarea.input{height:auto;padding:9px 12px;resize:vertical;font-family:inherit}
+.hint{font-size:12px;color:var(--muted-foreground)}
+.eyebrow{font-size:var(--text-meta);font-weight:600;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--muted-foreground)}
+
+/* --- cards (primitives.tsx#SectionCard / WidgetCard) --- */
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px}
+.card.lg{padding:20px}
+.widget{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:14px}
+
+/* ============================ SIGN IN ==================================== */
+.signin{position:relative;min-height:600px;display:flex;align-items:center;justify-content:center;
+  padding:48px 16px;background:var(--background);overflow:hidden}
+.signin .glow{position:absolute;inset:0;opacity:.6;pointer-events:none;
+  background-image:radial-gradient(60% 50% at 50% 0%,
+    color-mix(in oklab,var(--primary) 16%,transparent),transparent 70%)}
+.signin .grid{position:absolute;inset:0;opacity:.35;pointer-events:none;
+  background-image:linear-gradient(var(--border) 1px,transparent 1px),
+                   linear-gradient(90deg,var(--border) 1px,transparent 1px);
+  background-size:44px 44px;
+  -webkit-mask-image:radial-gradient(60% 60% at 50% 40%,black,transparent);
+          mask-image:radial-gradient(60% 60% at 50% 40%,black,transparent)}
+.signin .wrap{position:relative;width:100%;max-width:400px}
+.signin .mark{display:flex;flex-direction:column;align-items:center;gap:12px;
+  text-align:center;margin-bottom:28px}
+.signin .ring{width:48px;height:48px;border-radius:99px;display:flex;align-items:center;
+  justify-content:center;border:1px solid color-mix(in oklab,var(--primary) 25%,transparent);
+  background:color-mix(in oklab,var(--primary) 12%,transparent);color:var(--primary)}
+.signin .ring svg{width:24px;height:24px}
+.signin .mark h1{font-size:1.25rem}
+.signin .box{border-radius:14px;border:1px solid var(--border);background:var(--card);
+  padding:24px;box-shadow:var(--shadow-floating)}
+.signin .box h2{font-size:1rem}
+.field{display:flex;flex-direction:column;gap:8px}
+.key{position:relative}
+.key svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);
+  width:16px;height:16px;color:var(--muted-foreground);pointer-events:none}
+.key .input{padding-left:34px;font-family:var(--font-mono);font-size:var(--text-body)}
+.alert{display:flex;gap:8px;align-items:flex-start;margin-top:12px;padding:8px 12px;
+  border-radius:var(--radius-sm);font-size:12px;
+  border:1px solid color-mix(in oklab,var(--danger) 30%,transparent);
+  background:var(--danger-subtle);color:var(--danger)}
+.alert svg{width:16px;height:16px;flex:none;margin-top:2px}
+.or{display:flex;align-items:center;gap:12px;margin:20px 0}
+.or .rule{height:1px;flex:1;background:var(--border)}
+.or span{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted-foreground)}
+.check{display:flex;align-items:flex-start;gap:8px;font-size:12px;font-weight:400;
+  color:var(--muted-foreground);cursor:pointer}
+.check input{margin:2px 0 0;width:16px;height:16px;accent-color:var(--primary);flex:none}
+
+/* ============================ APP SHELL ================================== */
+.shell{display:grid;grid-template-columns:216px minmax(0,1fr);min-height:640px;
+  background:var(--background)}
+@media (max-width:900px){.shell{grid-template-columns:minmax(0,1fr)}}
+.side{background:var(--sidebar);border-right:1px solid var(--sidebar-border);padding:12px 8px}
+/* Below the sidebar breakpoint the rail collapses to a horizontal strip rather
+   than disappearing — hiding it leaves a phone with no way between sections. */
+@media (max-width:900px){
+  .side{display:flex;gap:4px;overflow-x:auto;padding:6px 8px;
+    border-right:0;border-bottom:1px solid var(--sidebar-border);
+    scrollbar-width:thin}
+  .side .eyebrow{display:none}
+  .navlink{width:auto;flex:none;border-left:0;border-bottom:2px solid transparent;
+    border-radius:var(--radius-sm) var(--radius-sm) 0 0;white-space:nowrap}
+  .navlink[aria-current="page"]{border-left-color:transparent;
+    border-bottom-color:var(--sidebar-primary)}
+  .side .badge{margin-left:4px}
+}
+.side .eyebrow{padding:8px 10px 6px}
+.navlink{display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+  padding:8px 10px;border:0;border-left:2px solid transparent;border-radius:var(--radius-sm);
+  background:transparent;color:var(--muted-foreground);font-size:var(--text-body);
+  font-weight:500;cursor:pointer}
+.navlink:hover{background:var(--accent);color:var(--foreground)}
+.navlink[aria-current="page"]{background:var(--sidebar-accent);color:var(--foreground);
+  border-left-color:var(--sidebar-primary)}
+.navlink svg{width:16px;height:16px;flex:none}
+.side .badge{margin-left:auto;font-size:11px;color:var(--muted-foreground)}
+.topbar{display:flex;height:56px;flex:none;align-items:center;gap:12px;
+  border-bottom:1px solid var(--border);background:color-mix(in oklab,var(--card) 70%,transparent);
+  padding:0 16px}
+.topbar .who{margin-left:auto;display:flex;align-items:center;gap:8px}
+.topbar .logo{display:flex;align-items:center;gap:8px;font-weight:600;font-size:14px}
+.topbar .logo svg{width:18px;height:18px;color:var(--primary)}
+.main{min-width:0;display:flex;flex-direction:column}
+.page{padding:26px 24px 56px;min-width:0}
+@media (max-width:640px){.page{padding:20px 16px 44px}}
+
+/* shell banner (app-shell.tsx#AppShell) */
+.banner{display:flex;flex-wrap:wrap;gap:8px 14px;align-items:flex-start;
+  padding:10px 16px;border-bottom:1px solid var(--border);font-size:var(--text-body)}
+.banner.danger{background:var(--danger-subtle);color:var(--danger);
+  border-bottom-color:color-mix(in oklab,var(--danger) 30%,transparent)}
+.banner svg{width:16px;height:16px;flex:none;margin-top:2px}
+.banner .body{min-width:0;flex:1}
+.banner .body b{font-weight:500;color:var(--foreground)}
+.banner .body p{color:var(--muted-foreground);font-size:12px;margin-top:2px}
+
+/* ============================ SETUP ====================================== */
+.setup-head{display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between;
+  align-items:flex-start;margin-bottom:22px}
+.setup-head p{color:var(--muted-foreground);margin-top:4px;font-size:14px}
+.hostbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;
+  border:1px solid var(--border);border-radius:var(--radius);background:var(--surface-2);
+  padding:8px 12px;margin-bottom:22px;font-size:var(--text-body);color:var(--muted-foreground)}
+.setup-grid{display:grid;grid-template-columns:230px minmax(0,1fr);gap:30px}
+@media (max-width:1000px){.setup-grid{grid-template-columns:minmax(0,1fr);gap:20px}}
+.rail{align-self:start}
+.rail .group{margin-bottom:14px}
+.rail .group>.eyebrow{display:flex;align-items:center;gap:6px;padding:0 6px 6px}
+.rail .group>.eyebrow .n{font-weight:400;letter-spacing:0;text-transform:none;
+  color:var(--muted-foreground)}
+.railitem{display:flex;align-items:center;gap:8px;width:100%;text-align:left;
+  border:0;border-left:2px solid transparent;border-radius:var(--radius-sm);
+  background:transparent;padding:6px 8px;color:var(--muted-foreground);
+  font-size:var(--text-body);cursor:pointer}
+.railitem:hover{background:var(--accent);color:var(--foreground)}
+.railitem[aria-current="step"]{background:var(--sidebar-accent);color:var(--foreground);
+  border-left-color:var(--sidebar-primary);font-weight:500}
+.railitem .num{width:18px;flex:none;font-size:11px;color:var(--muted-foreground);
+  font-variant-numeric:tabular-nums}
+.railitem .lbl{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.railitem .tail{margin-left:auto;flex:none}
+.rail details{margin:2px 0}
+.rail summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:8px;
+  padding:6px 8px;border-left:2px solid transparent;border-radius:var(--radius-sm);
+  font-size:var(--text-body);color:var(--muted-foreground)}
+.rail summary::-webkit-details-marker{display:none}
+.rail summary:hover{background:var(--accent);color:var(--foreground)}
+.rail summary .caret{margin-left:auto;transition:transform .15s}
+.rail details[open] summary .caret{transform:rotate(90deg)}
+.rail details ul{list-style:none;padding:0 0 0 18px;margin:0}
+.step-count{margin-bottom:8px}
+.step-count .line2{display:block;margin-top:3px;font-size:12px;font-weight:400;
+  letter-spacing:0;text-transform:none;color:var(--muted-foreground)}
+.step-title{display:flex;flex-wrap:wrap;align-items:baseline;gap:12px;margin-bottom:16px}
+.step-foot{margin-top:38px;padding-top:20px;border-top:1px solid var(--border);
+  display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:flex-end}
+.step-foot .gate{min-width:0;max-width:420px;margin-right:auto}
+.step-foot .gate .head{display:flex;gap:7px;align-items:flex-start;
+  font-size:var(--text-body);font-weight:500;color:var(--warning);line-height:1.35}
+.step-foot .gate .head .dot{width:6px;height:6px;border-radius:99px;background:var(--warning);
+  flex:none;margin-top:6px}
+.step-foot .gate .why{font-size:12px;color:var(--muted-foreground);padding-left:13px;margin-top:2px}
+
+/* --- the barrier matrix (setup/environment-step.tsx) --- */
+.matrix-wrap{border:1px solid var(--border);border-radius:14px;overflow-x:auto}
+.matrix-wrap.inert{opacity:.6}
+.matrix{width:100%;min-width:900px;table-layout:fixed;border-collapse:collapse;font-size:14px}
+.matrix th,.matrix td{padding:12px 16px;vertical-align:top;text-align:left;
+  border-bottom:1px solid var(--border)}
+.matrix thead th{background:color-mix(in oklab,var(--muted) 40%,transparent);
+  padding-top:16px;padding-bottom:12px;font-weight:400}
+.matrix thead th:first-child{width:200px;vertical-align:bottom}
+.matrix tbody tr:last-child td{border-bottom:0}
+.matrix .rowlabel{color:var(--muted-foreground);font-size:var(--text-body)}
+.matrix td.cc{text-align:center}
+.matrix col.sel{background:color-mix(in oklab,var(--primary) 5%,transparent)}
+.matrix th.selcol,.matrix td.selcol{border-left:2px solid var(--primary);
+  border-right:2px solid var(--primary)}
+.matrix thead th.selcol{border-top:2px solid var(--primary)}
+.matrix tbody tr:last-child td.selcol{border-bottom:2px solid var(--primary)}
+.cc-head{display:flex;flex-direction:column;gap:2px}
+.cc-radio{display:flex;align-items:center;gap:8px;border:0;background:none;padding:0;
+  cursor:pointer;text-align:left;color:inherit;font:inherit}
+.cc-radio:disabled{cursor:not-allowed}
+.cc-radio .ring{width:16px;height:16px;border-radius:99px;border:1px solid var(--border-strong);
+  flex:none;display:flex;align-items:center;justify-content:center;background:var(--input-background)}
+.cc-radio[aria-checked="true"] .ring{border-color:var(--primary);
+  background:color-mix(in oklab,var(--primary) 14%,transparent)}
+.cc-radio[aria-checked="true"] .ring::after{content:"";width:8px;height:8px;border-radius:99px;
+  background:var(--primary)}
+.cc-name{font-weight:500}
+.cc1 .cc-name{color:var(--fence-fg)} .cc2 .cc-name{color:var(--wall-fg)} .cc3 .cc-name{color:var(--vault-fg)}
+.cc-wire{font-family:var(--font-mono);font-size:11px;color:var(--muted-foreground)}
+.cc-tag{font-size:12px;color:var(--muted-foreground)}
+/* #213 bullet 3 — the chip row is FIXED HEIGHT so the matrix cannot shift
+   when the Recommended chip appears or moves. */
+.chiprow{display:flex;align-items:center;gap:8px;margin-top:12px;
+  height:22px;overflow:hidden}
+.chiprow.legacy{flex-wrap:wrap;height:auto;overflow:visible}
+.cc-state{margin-top:8px;display:flex;flex-direction:column;gap:8px;align-items:flex-start}
+.cc-state p{font-size:12px;color:var(--muted-foreground);line-height:1.45}
+.cmd{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;
+  border:1px solid var(--border);border-radius:var(--radius);background:var(--muted);
+  padding:6px 10px}
+.cmd code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--foreground)}
+.mark{display:inline-flex;width:18px;height:18px}
+.mark svg{width:18px;height:18px}
+.mark.yes{color:var(--success)} .mark.caveat{color:var(--warning)} .mark.no{color:var(--danger)}
+.constant-note{margin-top:14px;font-size:12px;color:var(--muted-foreground);max-width:78ch}
+.rec-note{margin-top:14px;display:flex;gap:8px;align-items:flex-start;font-size:var(--text-body);
+  color:var(--muted-foreground);max-width:78ch}
+.rec-note svg{width:16px;height:16px;flex:none;margin-top:2px;color:var(--muted-foreground)}
+
+/* no-runner danger card (environment-step.tsx) */
+.dangercard{border:1px solid color-mix(in oklab,var(--danger) 40%,transparent);
+  border-radius:14px;background:var(--danger-subtle);padding:18px;
+  display:flex;gap:12px;align-items:flex-start;margin-bottom:20px}
+.dangercard svg{width:20px;height:20px;flex:none;margin-top:2px;color:var(--danger)}
+.dangercard .t{color:var(--foreground)}
+.dangercard p{margin-top:4px;font-size:14px;color:var(--muted-foreground)}
+.dangercard .acts{margin-top:12px;display:flex;flex-wrap:wrap;gap:8px}
+
+/* checklist rows (setup/step-bodies.tsx#CheckRow) */
+.checkrow{display:flex;gap:10px;align-items:flex-start;padding:11px 0;
+  border-bottom:1px solid var(--border)}
+.checkrow:last-child{border-bottom:0}
+.checkrow svg{width:16px;height:16px;flex:none;margin-top:2px}
+.checkrow .t{font-size:var(--text-body);font-weight:500}
+.checkrow .d{font-size:12px;color:var(--muted-foreground);margin-top:2px}
+.optlist{list-style:none;padding:0;display:grid;gap:2px}
+.optlist li{display:flex;gap:8px;align-items:baseline;font-size:var(--text-body);
+  color:var(--muted-foreground);padding:4px 0}
+.optlist li .n{color:var(--muted-foreground);font-size:11px;width:18px;flex:none;
+  font-variant-numeric:tabular-nums}
+
+/* ============================ RUNS BOARD ================================= */
+.board-head{display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between;
+  align-items:flex-start;margin-bottom:20px}
+.hero{text-align:center;padding:34px 16px 8px;max-width:640px;margin:0 auto}
+.hero .ring{width:48px;height:48px;border-radius:14px;margin:0 auto 14px;
+  display:flex;align-items:center;justify-content:center;
+  border:1px solid color-mix(in oklab,var(--primary) 25%,transparent);
+  background:color-mix(in oklab,var(--primary) 12%,transparent);color:var(--primary)}
+.hero .ring svg{width:22px;height:22px}
+.hero p{color:var(--muted-foreground);margin-top:8px}
+.hero .acts{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:20px}
+.hero .tour{display:inline-block;margin-top:14px;font-size:12px;color:var(--muted-foreground)}
+.steps3{display:grid;gap:10px;margin-top:26px;text-align:left}
+.steps3 li{display:flex;gap:10px;align-items:flex-start;list-style:none;
+  border:1px solid var(--border);border-radius:var(--radius);background:var(--card);padding:11px 13px}
+.steps3 svg{width:16px;height:16px;flex:none;margin-top:2px}
+.steps3 .ok{color:var(--success)} .steps3 .bad{color:var(--danger)} .steps3 .warn{color:var(--muted-foreground)}
+.steps3 .t{font-size:var(--text-body);font-weight:500}
+.steps3 .d{font-size:12px;color:var(--muted-foreground);margin-top:2px}
+
+/* ============================ NEW RUN ==================================== */
+.run-grid{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:24px;align-items:start}
+@media (max-width:1000px){.run-grid{grid-template-columns:minmax(0,1fr)}}
+.section{margin-bottom:16px}
+.section>.eyebrow{margin-bottom:8px}
+.seg-wide{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+@media (max-width:560px){.seg-wide{grid-template-columns:minmax(0,1fr)}}
+.optcard{text-align:left;border:1px solid var(--border);border-radius:var(--radius);
+  background:var(--card);padding:10px 12px;cursor:pointer;color:inherit;font:inherit;
+  display:flex;flex-direction:column;gap:3px}
+.optcard:hover:not(:disabled){border-color:var(--border-strong);background:var(--accent)}
+.optcard[aria-checked="true"]{border-color:var(--primary);
+  background:color-mix(in oklab,var(--primary) 8%,transparent)}
+.optcard:disabled{opacity:.5;cursor:not-allowed}
+.optcard .t{font-weight:500}
+.optcard.cc1 .t{color:var(--fence-fg)} .optcard.cc2 .t{color:var(--wall-fg)} .optcard.cc3 .t{color:var(--vault-fg)}
+.optcard .d{font-size:12px;color:var(--muted-foreground);line-height:1.4}
+.rail-card{border:1px solid var(--border);border-radius:14px;background:var(--card);padding:16px;
+  position:sticky;top:16px}
+.rail-card h3{font-size:14px}
+.rail-line{display:flex;gap:8px;align-items:baseline;justify-content:space-between;
+  padding:7px 0;border-bottom:1px solid var(--border);font-size:var(--text-body)}
+.rail-line:last-of-type{border-bottom:0}
+.rail-line .k{color:var(--muted-foreground)}
+.launch-why{margin-top:10px;font-size:12px;color:var(--muted-foreground);line-height:1.45}
+.launch-why .btn-link{font-size:12px}
+.bare-fail{margin-top:12px;font-size:12px;color:var(--danger);display:flex;gap:6px;
+  align-items:flex-start}
+.bare-fail svg{width:14px;height:14px;flex:none;margin-top:2px}
+
+/* run rows */
+.runrow{display:flex;gap:12px;align-items:center;padding:12px 14px;
+  border:1px solid var(--border);border-radius:14px;background:var(--card);margin-bottom:8px}
+.runrow .who{width:26px;height:26px;border-radius:8px;flex:none;display:flex;
+  align-items:center;justify-content:center;font-size:11px;font-weight:600;
+  background:color-mix(in oklab,var(--agent-claude) 18%,transparent);color:var(--agent-claude)}
+.runrow .t{min-width:0;flex:1}
+.runrow .t .task{font-size:var(--text-body);font-weight:500;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.runrow .t .meta{font-size:11px;color:var(--muted-foreground);margin-top:2px;
+  display:flex;flex-wrap:wrap;gap:8px}
+.sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+  clip:rect(0,0,0,0);white-space:nowrap;border:0}
+</style>
+</head>
+<body>
+
+<!-- ======================= REVIEW SCAFFOLD ======================= -->
+<div class="scaffold">
+  <div class="brand">Wardyn — first contact<span>prototype · #212 · #213 · #214</span></div>
+
+  <div class="sw"><b>Theme</b>
+    <div class="seg" id="sw-theme">
+      <button type="button" data-v="dark">Dark</button><button type="button" data-v="light">Light</button>
+    </div>
+  </div>
+
+  <div class="sw"><b>Host</b>
+    <div class="seg" id="sw-host">
+      <button type="button" data-v="A">A · Fence only</button><button type="button" data-v="B">B · no barrier</button>
+    </div>
+  </div>
+
+  <div class="sw"><b>Proposal</b>
+    <div class="seg" id="sw-mode">
+      <button type="button" data-v="before">Before</button><button type="button" data-v="after">After</button>
+    </div>
+  </div>
+
+  <button type="button" class="btn btn-ghost btn-sm" id="restart">Restart the walk</button>
+  <p class="note" id="scaffold-note"></p>
+</div>
+
+<div id="root"></div>
+<div class="walk" id="walkstrip"></div>
+
+<script>
+"use strict";
+/* ============================================================================
+   PROTOTYPE STATE. No network, no storage, no dependencies.
+   ========================================================================= */
+var S = {
+  theme: "dark",
+  host: "A",          // A = Fence installed; B = no confinement class at all
+  mode: "after",      // before = today; after = what these issues propose
+  screen: "signin",
+  signinAlert: null,  // rejected | unreachable | domain
+  token: "",
+  remember: false,
+  step: "environment",
+  barrier: null,
+  cmdOpen: {},
+  launchFailed: false,
+  launchAnnounced: false,
+  demosOpen: false
+};
+var after = function(){ return S.mode === "after"; };
+var hostB  = function(){ return S.host === "B"; };
+
+/* --- the host, as the daemon would report it (lib/types.ts SetupStatus) ---
+   Host A: docker driver, /dev/kvm present, ONLY CC1 registered.
+   Host B: the runtime is not answering, so no confinement class is reported. */
+function hostStatus(){
+  return S.host === "A"
+    ? { driver:"docker", classes:["CC1"], kvm:true,  substrate:{ CC1:"runc" } }
+    : { driver:"docker", classes:[],      kvm:true,  substrate:{} };
+}
+function noRunner(){ return hostStatus().classes.length === 0; }
+
+/* --- CC canon: ui/src/app/components/wardyn/cc-meta.ts, verbatim --------- */
+var CC_ORDER = ["CC1","CC2","CC3"];
+var CC_META = {
+  CC1:{ label:"Fence", tagline:"Weakest · runs anywhere",
+        doesntProtect:"A kernel exploit or container escape — it shares your machine's kernel (the “holes” in the fence)." },
+  CC2:{ label:"Wall",  tagline:"Default · needs one-time setup",
+        doesntProtect:"A flaw in the sandbox software itself (rare); it's still not a fully separate machine." },
+  CC3:{ label:"Vault", tagline:"Strongest · experimental · needs KVM hardware",
+        doesntProtect:"A flaw in the virtualization layer itself — a very rare hypervisor- or CPU-level escape." }
+};
+var PICK_WHEN = {
+  CC1:"Trying Wardyn out, or the code is your own — quickest start, works on any host.",
+  CC2:"Real work on real repos — closes the Fence's holes so the agent never touches your kernel.",
+  CC3:"Untrusted code or secrets nearby — the strongest box Wardyn can build."
+};
+var CC_MATRIX_ROWS = [
+  { label:"Isolated from your files, processes, and network", cells:{CC1:"yes",CC2:"yes",CC3:"yes"} },
+  { label:"A kernel exploit can't reach your host kernel",    cells:{CC1:"no", CC2:"caveat",CC3:"yes"} },
+  { label:"A full break-in stays sealed inside",              cells:{CC1:"no", CC2:"caveat",CC3:"caveat"} }
+];
+var CC_MATRIX_WHERE = { label:"Where it runs",
+  cells:{ CC1:"Any host", CC2:"Native Docker engine + setup", CC3:"Needs KVM hardware" } };
+var RESIDUAL_PREFIX = "Doesn't stop:";
+var CONFINEMENT_CONSTANT_NOTE =
+  "Whatever the barrier, every run still gets Wardyn's egress filtering, short-lived brokered credentials, " +
+  "human approvals, and full audit — those are set by policy, not the barrier. The barrier only decides how " +
+  "strongly the sandbox is walled off from your machine.";
+var TIER_GUIDE = { CC2:"wardyn setup wall", CC3:"wardyn setup vault" };
+var STATUS_LABEL = { ready:"Ready", "needs-setup":"Needs setup", incompatible:"Incompatible here" };
+var STATUS_TONE  = { ready:"success", "needs-setup":"warning", incompatible:"danger" };
+
+/* --- #213: the recommendation -------------------------------------------
+   BEFORE — recommendedTier() (environment-step.tsx) skips only a
+   hardware-impossible class, and infers KVM from the operating system when
+   the daemon did not probe it. On this Linux host that returns CC3 — the
+   experimental class, which is not installed.
+   AFTER  — the strongest class the host REPORTS as installed. No inference.
+   Nothing is recommended when the host reports nothing.                    */
+function recommended(){
+  var st = hostStatus();
+  if (!after()) {
+    var compatible = CC_ORDER.filter(function(cc){
+      return !(cc === "CC3" && !st.kvm && st.classes.indexOf(cc) === -1);
+    });
+    return compatible[compatible.length - 1];
+  }
+  var installed = CC_ORDER.filter(function(cc){ return st.classes.indexOf(cc) !== -1; });
+  return installed.length ? installed[installed.length - 1] : null;
+}
+function tierState(cc){
+  var st = hostStatus();
+  if (st.classes.indexOf(cc) !== -1) return "ready";
+  if (cc === "CC3" && !st.kvm) return "incompatible";
+  return "needs-setup";
+}
+function selectable(cc){ return !noRunner() && tierState(cc) === "ready"; }
+
+/* --- #213: the step model (setup/steps.ts) -------------------------------
+   The walked order on a fresh host is 17 steps: 4 essentials, 10 demos
+   (6 of the 16 in the catalogue are dropped — they need a connected model or
+   a stored secret), 2 "your work", 1 finish.
+   BLOCKING steps are the ones a first run cannot happen without.            */
+var REQUIRED = [
+  { id:"environment",  label:"Environment", heading:"Pick your barrier" },
+  { id:"people",       label:"People",      heading:"Who can sign in" },
+  { id:"corp_network", label:"Network",     heading:"Network" },
+  { id:"review",       label:"Review",      heading:"Review readiness" }
+];
+var OPTIONAL_SECRETS   = { id:"integrations", label:"Secrets",  heading:"Secrets" };
+var OPTIONAL_PROVIDERS = { id:"providers",    label:"Workspace providers", heading:"Workspace providers" };
+var OPTIONAL_WORKSPACES= { id:"workspaces",   label:"Workspaces", heading:"Onboard a workspace" };
+var DEMOS_EGRESS = [
+  "The sealed box","Fail, then approve","Held at the door","Lines that can't be crossed",
+  "Denied, however you spell it","Record a policy","Once, or for good"
+].map(function(t,i){ return { id:"eg"+i, label:t, heading:t }; });
+var DEMOS_SECRETS = [
+  "Write-only, even for you","A token the sandbox never even sees","No identity, no credential"
+].map(function(t,i){ return { id:"se"+i, label:t, heading:t }; });
+var OPTIONAL = [OPTIONAL_SECRETS].concat(DEMOS_EGRESS, DEMOS_SECRETS,
+                                         [OPTIONAL_PROVIDERS, OPTIONAL_WORKSPACES]);
+/* BEFORE walks required and optional interleaved as one numbered run of 17
+   (Essentials → Egress demos → Secrets demos → Your work → Finish). */
+var LEGACY_ORDER = [REQUIRED[0],REQUIRED[1],REQUIRED[2],OPTIONAL_SECRETS]
+  .concat(DEMOS_EGRESS, DEMOS_SECRETS, [OPTIONAL_PROVIDERS, OPTIONAL_WORKSPACES, REQUIRED[3]]);
+var ALL_STEPS = REQUIRED.concat(OPTIONAL);
+function stepById(id){
+  for (var i=0;i<ALL_STEPS.length;i++) if (ALL_STEPS[i].id === id) return ALL_STEPS[i];
+  return REQUIRED[0];
+}
+function isRequired(id){ return REQUIRED.some(function(s){ return s.id === id; }); }
+/* The walk order: AFTER = the four blocking steps. BEFORE = all seventeen. */
+function walkOrder(){ return after() ? REQUIRED : LEGACY_ORDER; }
+
+/* ------------------------------ helpers -------------------------------- */
+function h(tag, attrs, kids){
+  var el = document.createElement(tag);
+  if (attrs) Object.keys(attrs).forEach(function(k){
+    var v = attrs[k];
+    if (v === null || v === undefined || v === false) return;
+    if (k === "class") el.className = v;
+    else if (k === "text") el.textContent = v;
+    else if (k === "html") el.innerHTML = v;
+    else if (k.slice(0,2) === "on") el.addEventListener(k.slice(2), v);
+    else el.setAttribute(k, v === true ? "" : v);
+  });
+  (kids || []).forEach(function(c){ if (c) el.appendChild(typeof c === "string" ? document.createTextNode(c) : c); });
+  return el;
+}
+/* lucide-react path data, inlined — the console's own icon set. */
+var ICONS = {
+  shieldCheck:'<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
+  key:'<path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5" fill="currentColor"/>',
+  arrowRight:'<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>',
+  arrowLeft:'<path d="M19 12H5"/><path d="m12 19-7-7 7-7"/>',
+  alertCircle:'<circle cx="12" cy="12" r="10"/><line x1="12" x2="12" y1="8" y2="12"/><line x1="12" x2="12.01" y1="16" y2="16"/>',
+  alertOctagon:'<path d="M2.586 16.726A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2h6.624a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586z"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
+  triangleAlert:'<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  circleCheck:'<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+  circleAlert:'<circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/>',
+  circleX:'<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>',
+  building:'<path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/><path d="M10 6h4"/><path d="M10 10h4"/><path d="M10 14h4"/><path d="M10 18h4"/>',
+  sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+  moon:'<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9"/>',
+  plus:'<path d="M5 12h14"/><path d="M12 5v14"/>',
+  play:'<polygon points="6 3 20 12 6 21 6 3"/>',
+  layers:'<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"/><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"/>',
+  rocket:'<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91 0z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>',
+  settings:'<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
+  terminal:'<polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/>',
+  rotate:'<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>',
+  chevron:'<path d="m9 18 6-6-6-6"/>',
+  copy:'<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>'
+};
+function icon(name, cls){
+  var s = document.createElementNS("http://www.w3.org/2000/svg","svg");
+  s.setAttribute("viewBox","0 0 24 24"); s.setAttribute("fill","none");
+  s.setAttribute("stroke","currentColor"); s.setAttribute("stroke-width","2");
+  s.setAttribute("stroke-linecap","round"); s.setAttribute("stroke-linejoin","round");
+  s.setAttribute("aria-hidden","true");
+  if (cls) s.setAttribute("class", cls);
+  s.innerHTML = ICONS[name] || "";
+  return s;
+}
+function chip(text, tone, extra){
+  return h("span",{class:"chip "+(tone||"neutral")+(extra?" "+extra:"")},
+    [h("span",{class:"dot"}), text]);
+}
+function statusChip(kind){ return chip(STATUS_LABEL[kind], STATUS_TONE[kind]); }
+function go(screen, step){ S.screen = screen; if (step) S.step = step; render(); window.scrollTo(0,0); }
+
+/* ============================================================================
+   SCREEN 1 — SIGN IN   (#212)
+   ========================================================================= */
+var SIGNIN_ALERTS = {
+  rejected: {
+    /* canon, unchanged — sign-in.tsx#submitToken */
+    before:"That admin token was rejected. Check the value and try again.",
+    after :"That admin token was rejected. Check the value and try again."
+  },
+  unreachable: {
+    /* canon today — sign-in.tsx#submitToken. No next step at all. */
+    before:"Could not reach the control plane.",
+    /* PROPOSED — names Wardyn and names one thing to check. */
+    after :"Wardyn isn't answering at this address. Check that the wardynd daemon is running, then try again."
+  },
+  domain: {
+    /* canon today — sign-in.tsx#authErrorMessage, "email_domain". Tells a
+       reader who has not authenticated to go and set an environment variable. */
+    before:"This email's domain isn't allowed to sign in to this console. Ask an operator to add it to WARDYN_OIDC_EMAIL_DOMAINS.",
+    /* PROPOSED — the remedy belongs to the admin, and to the operator docs. */
+    after :"This email's domain isn't allowed to sign in to this console. Ask your Wardyn admin to allow it."
+  }
+};
+
+function signIn(){
+  var alertText = S.signinAlert ? SIGNIN_ALERTS[S.signinAlert][S.mode] : null;
+
+  var input = h("input",{
+    class:"input", id:"token", type:"password", autocomplete:"off",
+    /* #212 — the placeholder is the whole issue. */
+    placeholder: after() ? "" : "demo-admin-token",
+    value: S.token,
+    "aria-describedby":"token-hint",
+    oninput:function(e){ S.token = e.target.value; if (S.signinAlert){ S.signinAlert = null; render(); refocus(); } else { submitBtn.disabled = !S.token; } }
+  });
+
+  var submitBtn = h("button",{class:"btn btn-default",type:"submit",disabled:!S.token,
+    style:"width:100%;margin-top:4px"},["Sign in", icon("arrowRight")]);
+
+  var form = h("form",{class:"field",onsubmit:function(e){
+    e.preventDefault();
+    if (!S.token) return;
+    S.signedIn = true; S.signinAlert = null;
+    go("setup","environment");
+  }},[
+    h("label",{for:"token",text:"Admin token"}),
+    h("div",{class:"key"},[ icon("key"), input ]),
+    h("p",{class:"hint",id:"token-hint",text: after()
+      /* PROPOSED — says what belongs in the field and where to find it.
+         The environment-variable name and the compose demo token are gone. */
+      ? "The token this Wardyn daemon was started with. Your install printed it when it finished."
+      /* canon today — sign-in.tsx */
+      : "Paste the token this control plane was started with (WARDYN_ADMIN_TOKEN; the compose demo uses demo-admin-token)."}),
+    h("label",{class:"check"},[
+      h("input",{type:"checkbox",checked:S.remember,
+        onchange:function(e){ S.remember = e.target.checked; }}),
+      h("span",{},["Remember on this device ",
+        h("span",{class:"hint",style:"display:inline",text:"(keeps the token after the browser closes)"})])
+    ]),
+    submitBtn
+  ]);
+
+  var box = h("div",{class:"box"},[
+    h("div",{style:"margin-bottom:16px"},[
+      h("h2",{text:"Sign in"}),
+      h("p",{class:"hint",style:"margin-top:4px;font-size:14px",
+             text:"This console governs the agents on this host."})
+    ]),
+    form,
+    alertText ? h("div",{class:"alert",role:"alert"},[ icon("alertCircle"), h("span",{text:alertText}) ]) : null,
+    h("div",{class:"or"},[ h("div",{class:"rule"}), h("span",{text:"or"}), h("div",{class:"rule"}) ]),
+    h("button",{class:"btn btn-outline",style:"width:100%",disabled:true},
+      [ icon("building"), "Sign in with SSO" ]),
+    h("p",{class:"hint",style:"margin-top:8px;text-align:center",
+      text:"SSO sign-in isn't configured on this control plane — use an admin token."})
+  ]);
+
+  return h("div",{class:"signin"},[
+    h("div",{class:"glow"}), h("div",{class:"grid"}),
+    h("div",{class:"wrap"},[
+      h("div",{class:"mark"},[
+        h("div",{class:"ring"},[icon("shieldCheck")]),
+        h("h1",{text:"Wardyn"})
+      ]),
+      box
+    ])
+  ]);
+}
+function refocus(){ var t = document.getElementById("token"); if (t){ t.focus(); t.setSelectionRange(t.value.length,t.value.length); } }
+
+/* ============================================================================
+   APP SHELL — sidebar + top bar (#214's third route to the Environment step)
+   ========================================================================= */
+function shell(page){
+  var nav = [
+    { id:"board",  label:"Runs",            ic:"play" },
+    { id:"setup",  label:"Getting started", ic:"layers" },
+    { id:"settings",label:"Settings",       ic:"settings" }
+  ].map(function(n){
+    return h("button",{class:"navlink","aria-current": S.screen===n.id ? "page" : null,
+      onclick:function(){ if (n.id!=="settings") go(n.id); }},
+      [ icon(n.ic), h("span",{text:n.label}),
+        n.id==="setup" && after() ? h("span",{class:"badge",text:"1/4"}) :
+        n.id==="setup" ? h("span",{class:"badge",text:"1/17"}) : null ]);
+  });
+
+  var topRight = [];
+  /* #214 — the top bar's route to the Environment step. On a host where no
+     barrier can be built, an info link sits beside New run. New run itself
+     stays live: the wizard is where the reason is stated, beside the one
+     control that genuinely cannot work. */
+  if (after() && noRunner())
+    topRight.push(h("button",{class:"btn-link",onclick:function(){ go("setup","environment"); },
+      text:"Set up a barrier"}));
+  topRight.push(h("button",{class:"btn btn-default btn-sm","aria-label":"New run",
+    onclick:function(){ S.launchFailed=false; go("newrun"); }},[ icon("plus"), h("span",{text:"New run"}) ]));
+  topRight.push(h("button",{class:"btn btn-ghost btn-icon","aria-label":"Toggle theme",
+    onclick:function(){ setTheme(S.theme==="dark"?"light":"dark"); }},[ icon(S.theme==="dark"?"sun":"moon") ]));
+
+  var banners = [];
+  /* #214 — the board/shell banner. BEFORE there is no banner at all: nothing
+     on the board says the host cannot run anything, and nothing links out. */
+  if (after() && noRunner())
+    banners.push(h("div",{class:"banner danger",role:"status"},[
+      icon("alertOctagon"),
+      h("div",{class:"body"},[
+        h("b",{text:"No barrier can be built on this host — runs can't launch."}),
+        h("p",{text:"Wardyn confines every run. Until a container runtime answers, there is nothing to confine it with."})
+      ]),
+      h("button",{class:"btn-link",onclick:function(){ go("setup","environment"); },
+        text:"Set up a barrier"})
+    ]));
+
+  return h("div",{class:"shell"},[
+    h("nav",{class:"side","aria-label":"Sections"},
+      [ h("div",{class:"eyebrow",text:"Wardyn"}) ].concat(nav)),
+    h("div",{class:"main"},[
+      h("header",{class:"topbar"},[
+        h("div",{class:"logo"},[ icon("shieldCheck"), h("span",{text:"Wardyn"}) ]),
+        h("div",{class:"who"}, topRight)
+      ])
+    ].concat(banners, [ h("div",{class:"page"},[page]) ]))
+  ]);
+}
+
+/* ============================================================================
+   SCREEN 2 — GETTING STARTED   (#213, and #214's destination)
+   ========================================================================= */
+function railItem(s, num){
+  return h("button",{class:"railitem","aria-current": S.step===s.id ? "step" : null,
+    onclick:function(){ go("setup", s.id); }},[
+      h("span",{class:"num",text: num ? String(num) : "·"}),
+      h("span",{class:"lbl",text:s.label})
+    ]);
+}
+function railGroup(title, count, items, startNum){
+  var kids = [ h("div",{class:"eyebrow"},[ h("span",{text:title}),
+    count ? h("span",{class:"n",text:"· "+count}) : null ]) ];
+  items.forEach(function(s,i){ kids.push(railItem(s, startNum ? startNum+i : null)); });
+  return h("div",{class:"group"}, kids);
+}
+function demoDetails(title, list){
+  return h("details",{open:S.demosOpen,ontoggle:function(e){ S.demosOpen = e.target.open; }},[
+    h("summary",{},[ h("span",{class:"num",text:"·"}), h("span",{class:"lbl",text:title}),
+      h("span",{class:"n",style:"font-size:11px",text:String(list.length)}),
+      icon("chevron","caret") ]),
+    h("ul",{}, list.map(function(s){ return h("li",{},[ railItem(s) ]); }))
+  ]);
+}
+
+function setupRail(){
+  if (!after()){
+    /* BEFORE — one numbered run of seventeen, essentials and demos alike. */
+    var n = 0, groups = [];
+    function grp(label, items){
+      var start = n + 1; n += items.length;
+      groups.push(railGroup(label, null, items, start));
+    }
+    grp("Essentials", [REQUIRED[0],REQUIRED[1],REQUIRED[2],OPTIONAL_SECRETS]);
+    grp("Egress demos", DEMOS_EGRESS);
+    grp("Secrets demos", DEMOS_SECRETS);
+    grp("Your work", [OPTIONAL_PROVIDERS, OPTIONAL_WORKSPACES]);
+    grp("Finish", [REQUIRED[3]]);
+    return h("div",{class:"rail"}, groups);
+  }
+  /* AFTER — what blocks, numbered; what does not, listed after it as optional. */
+  return h("div",{class:"rail"},[
+    railGroup("Required", "4", REQUIRED, 1),
+    h("div",{class:"group"},[
+      h("div",{class:"eyebrow"},[ h("span",{text:"Optional"}), h("span",{class:"n",text:"· 13"}) ]),
+      railItem(OPTIONAL_SECRETS),
+      demoDetails("Egress demos", DEMOS_EGRESS),
+      demoDetails("Secrets demos", DEMOS_SECRETS),
+      railItem(OPTIONAL_PROVIDERS),
+      railItem(OPTIONAL_WORKSPACES)
+    ])
+  ]);
+}
+
+function stepCounter(){
+  var order = walkOrder();
+  var idx = order.map(function(s){return s.id;}).indexOf(S.step);
+  if (!after())
+    return h("div",{class:"eyebrow step-count",
+      text:"Step "+(Math.max(0,idx)+1)+" of "+order.length});
+  if (idx === -1)
+    /* An optional step carries no number — it is not on the way anywhere. */
+    return h("div",{class:"eyebrow step-count"},[
+      h("span",{text:"Optional"}),
+      h("span",{class:"line2",text:"Not required before a run can launch."})
+    ]);
+  return h("div",{class:"eyebrow step-count"},[
+    h("span",{text:"Step "+(idx+1)+" of "+order.length}),
+    h("span",{class:"line2",text:"Required before a run can launch. 13 optional steps follow."})
+  ]);
+}
+
+/* --- the barrier matrix ------------------------------------------------- */
+function markCell(kind, cc){
+  var name = kind==="yes" ? "circleCheck" : kind==="caveat" ? "circleAlert" : "circleX";
+  var title = kind==="caveat" ? RESIDUAL_PREFIX+" "+CC_META[cc].doesntProtect : null;
+  var sp = h("span",{class:"mark "+kind, title:title},[ icon(name) ]);
+  sp.appendChild(h("span",{class:"sr",
+    text: kind==="yes" ? "Protected" : kind==="caveat" ? (RESIDUAL_PREFIX+" "+CC_META[cc].doesntProtect) : "Not protected"}));
+  return sp;
+}
+function ccHead(cc){
+  var st = tierState(cc), can = selectable(cc), rec = recommended() === cc;
+  var radio = h("button",{class:"cc-radio",role:"radio","aria-checked": S.barrier===cc ? "true":"false",
+    disabled: !can, tabindex: can ? "0" : "-1",
+    onclick:function(){ if (can){ S.barrier = cc; render(); } }},[
+      h("span",{class:"ring"}),
+      h("span",{class:"cc-name",text:CC_META[cc].label}),
+      h("span",{class:"cc-wire",text:cc})
+    ]);
+
+  var chips = [ statusChip(st) ];
+  if (rec)
+    /* CONSOLE-RULES §2 names `<Chip tone="primary">Recommended</Chip>` as a
+       known violation: a recommendation is not an action. Neutral here. */
+    chips.push(chip("Recommended", after() ? "neutral" : "primary", "up"));
+
+  var state = [];
+  if (st === "ready" && hostStatus().substrate[cc])
+    state.push(h("p",{},["Running here as ", h("span",{class:"mono",text:hostStatus().substrate[cc]})]));
+  if (st === "needs-setup" && TIER_GUIDE[cc]){
+    if (S.cmdOpen[cc]) {
+      state.push(h("div",{class:"cmd"},[
+        h("code",{text:"$ "+TIER_GUIDE[cc]}),
+        h("button",{class:"btn btn-ghost btn-sm","aria-label":"Copy setup command"},[icon("copy")])
+      ]));
+    } else {
+      state.push(h("button",{class:"btn btn-outline btn-sm",disabled:noRunner(),
+        onclick:function(){ S.cmdOpen[cc]=true; render(); }},[ icon("terminal"), "Show setup command" ]));
+    }
+  }
+  if (st === "incompatible")
+    state.push(h("p",{text:"Vault needs KVM virtualization and this host doesn't expose /dev/kvm."}));
+
+  return h("div",{class:"cc-head "+cc.toLowerCase()},[
+    radio,
+    h("div",{class:"cc-tag",text:CC_META[cc].tagline}),
+    h("div",{class:"chiprow"+(after()?"":" legacy")}, chips),
+    h("div",{class:"cc-state"}, state)
+  ]);
+}
+function matrix(){
+  var sel = S.barrier;
+  var head = h("tr",{},[ h("th",{},[ h("span",{class:"eyebrow",text:"Barrier tier"}) ]) ].concat(
+    CC_ORDER.map(function(cc){
+      return h("th",{class: sel===cc ? "selcol":"", onclick:function(){ if (selectable(cc)){ S.barrier=cc; render(); } }},
+        [ ccHead(cc) ]);
+    })));
+  var body = CC_MATRIX_ROWS.map(function(r){
+    return h("tr",{},[ h("td",{class:"rowlabel",text:r.label}) ].concat(
+      CC_ORDER.map(function(cc){
+        return h("td",{class:"cc"+(sel===cc?" selcol":"")},[ markCell(r.cells[cc], cc) ]);
+      })));
+  });
+  body.push(h("tr",{},[ h("td",{class:"rowlabel",text:CC_MATRIX_WHERE.label}) ].concat(
+    CC_ORDER.map(function(cc){
+      return h("td",{class:(sel===cc?"selcol":""),style:"font-size:var(--text-body)",
+        text:CC_MATRIX_WHERE.cells[cc]});
+    }))));
+  body.push(h("tr",{},[ h("td",{class:"rowlabel",text:"Pick this when"}) ].concat(
+    CC_ORDER.map(function(cc){
+      return h("td",{class:(sel===cc?"selcol":""),style:"font-size:12px;color:var(--muted-foreground)",
+        text:PICK_WHEN[cc]});
+    }))));
+
+  return h("div",{class:"matrix-wrap"+(noRunner()?" inert":""),role:"radiogroup","aria-label":"Barrier tier"},[
+    h("table",{class:"matrix"},[ h("thead",{},[head]), h("tbody",{}, body) ])
+  ]);
+}
+
+function environmentStep(){
+  var kids = [];
+
+  if (noRunner()){
+    /* canon, unchanged — environment-step.tsx's no-runner danger card.
+       AFTER adds the Re-check button to the card itself, so the fix and the
+       control that proves it are in the same place. */
+    var acts = after() ? h("div",{class:"acts"},[
+      h("button",{class:"btn btn-outline btn-sm",onclick:function(){ render(); }},[ icon("rotate"), "Re-check" ])
+    ]) : null;
+    kids.push(h("div",{class:"dangercard"},[
+      icon("alertOctagon"),
+      h("div",{},[
+        h("div",{class:"t",text:"No sandbox runner — runs can't launch."}),
+        h("p",{text:"Fix: start the Docker daemon (or install a container runtime) so Wardyn can build a barrier, then re-check."}),
+        acts
+      ])
+    ]));
+  }
+
+  kids.push(h("p",{class:"hint",style:"font-size:14px;margin-bottom:18px",text: noRunner()
+    ? "The tier matrix is shown for reference — tiers can't be selected until a runner is available."
+    : "Weakest to strongest — pick a column to save it in this browser as the default barrier for new runs."}));
+
+  kids.push(matrix());
+
+  /* #213 — when the recommendation is not the strongest class, say why.
+     BEFORE there is no such line: RECOMMENDED sits on Vault and nothing
+     explains that Vault is neither installed nor non-experimental. */
+  if (after() && !noRunner()){
+    var rec = recommended();
+    var stronger = CC_ORDER.slice(CC_ORDER.indexOf(rec)+1)
+      .map(function(cc){ return CC_META[cc].label; });
+    if (stronger.length)
+      kids.push(h("div",{class:"rec-note"},[ icon("circleAlert"),
+        h("p",{text:"Recommended is the strongest barrier installed on this host. "
+          + stronger.join(" and ") + " are stronger and each needs a one-time setup step."}) ]));
+  }
+  if (after() && noRunner())
+    kids.push(h("div",{class:"rec-note"},[ icon("circleAlert"),
+      h("p",{text:"Nothing is recommended while the host reports no barrier. Wardyn recommends what it can see, not what the operating system suggests."}) ]));
+
+  kids.push(h("p",{class:"constant-note",text:CONFINEMENT_CONSTANT_NOTE}));
+  return h("div",{}, kids);
+}
+
+function peopleStep(){
+  return h("div",{},[
+    h("p",{class:"hint",style:"font-size:14px;margin-bottom:16px",
+      text:"Everyone is an admin until a role map or an operator allowlist is set. Decide that before anyone else has the address."}),
+    h("div",{class:"card"},[
+      h("div",{class:"checkrow"},[ icon("circleAlert"),
+        h("div",{},[ h("div",{class:"t",text:"Single admin token"}),
+          h("div",{class:"d",text:"One shared token signs in as an admin. Every action is audited to the token, not to a person."}) ]) ]),
+      h("div",{class:"checkrow"},[ icon("circleX"),
+        h("div",{},[ h("div",{class:"t",text:"SSO not configured"}),
+          h("div",{class:"d",text:"Connect an identity provider to give each person their own sign-in and their own role."}) ]) ])
+    ])
+  ]);
+}
+function networkStep(){
+  return h("div",{},[
+    h("p",{class:"hint",style:"font-size:14px;margin-bottom:16px",
+      text:"Whether a sandbox can reach the outside world at all, and through what. A model provider or a git host added before this is settled looks like a bad credential when it is really the network."}),
+    h("div",{class:"card"},[
+      h("div",{class:"checkrow"},[ icon("circleCheck"),
+        h("div",{},[ h("div",{class:"t",text:"Direct internet access"}),
+          h("div",{class:"d",text:"Reached https://api.anthropic.com through Wardyn's proxy. No corporate proxy detected."}) ]) ]),
+      h("div",{class:"checkrow"},[ icon("circleCheck"),
+        h("div",{},[ h("div",{class:"t",text:"No egress redirection"}),
+          h("div",{class:"d",text:"Nothing is rewritten. Sandboxes reach the hosts their policy allows, unchanged."}) ]) ])
+    ])
+  ]);
+}
+function reviewStep(){
+  var rows = noRunner()
+    ? [["circleX","No barrier available","Wardyn can't confine a run on this host, so no run can launch. Start a container runtime and re-check."],
+       ["circleCheck","Egress governed","Every sandbox reaches the network through Wardyn's inspecting proxy."],
+       ["circleAlert","One shared admin token","Actions are audited to the token, not to a person."]]
+    : [["circleCheck","Barrier ready","Fence is installed and selected as the default barrier for new runs."],
+       ["circleCheck","Egress governed","Every sandbox reaches the network through Wardyn's inspecting proxy."],
+       ["circleAlert","One shared admin token","Actions are audited to the token, not to a person."],
+       ["circleAlert","No model connected","Runs can start, but no agent harness will have a model to call."]];
+
+  var kids = [
+    h("p",{class:"hint",style:"font-size:14px;margin-bottom:16px",
+      text:"What this host can and cannot do right now."}),
+    h("div",{class:"card"}, rows.map(function(r){
+      return h("div",{class:"checkrow"},[ icon(r[0]),
+        h("div",{},[ h("div",{class:"t",text:r[1]}), h("div",{class:"d",text:r[2]}) ]) ]);
+    }))
+  ];
+
+  /* #213 — the optional work, named as optional and listed after the
+     required steps rather than counted alongside them. */
+  if (after()){
+    var n = 0;
+    kids.push(h("h3",{style:"margin-top:26px;margin-bottom:8px",text:"Optional, whenever you want them"}));
+    kids.push(h("p",{class:"hint",style:"margin-bottom:10px",
+      text:"13 steps that teach Wardyn's guarantees or connect your own work. None of them blocks a run."}));
+    kids.push(h("ul",{class:"optlist"}, OPTIONAL.map(function(s){
+      n++;
+      return h("li",{},[ h("span",{class:"n",text:String(n)}),
+        h("button",{class:"btn-link",onclick:(function(id){ return function(){ go("setup",id); }; })(s.id),
+          text:s.label}) ]);
+    })));
+  }
+  return h("div",{}, kids);
+}
+function optionalStep(){
+  var s = stepById(S.step);
+  return h("div",{},[
+    h("p",{class:"hint",style:"font-size:14px;margin-bottom:16px",
+      text:"A two-minute walk-through you can run now or never. Nothing here changes what this host can launch."}),
+    h("div",{class:"card"},[
+      h("h3",{text:s.heading}),
+      h("p",{class:"hint",style:"margin-top:6px",
+        text:"The demo runs a real agent under a real policy and shows you the audit row it produced."}),
+      h("div",{style:"margin-top:14px;display:flex;gap:8px;flex-wrap:wrap"},[
+        h("button",{class:"btn btn-default btn-sm",disabled:noRunner()},[ icon("play"), "Start the demo" ]),
+        noRunner() ? h("span",{class:"hint",style:"align-self:center",
+          text:"Needs a barrier — no runner on this host."}) : null
+      ])
+    ])
+  ]);
+}
+
+function setupFoot(){
+  var order = walkOrder(), ids = order.map(function(s){return s.id;});
+  var idx = ids.indexOf(S.step);
+  var prev = idx > 0 ? order[idx-1] : null;
+  var next = idx >= 0 && idx < order.length-1 ? order[idx+1] : null;
+
+  var left = null, nextCtl;
+
+  /* #214/#213 — on a host with no barrier the forward gate says so and hands
+     over the control that can change it, rather than a live Next that walks
+     the admin past the one thing that blocks them. */
+  if (after() && noRunner() && S.step === "environment"){
+    left = h("div",{class:"gate",role:"status"},[
+      h("p",{class:"head"},[ h("span",{class:"dot"}), "No barrier is available on this host." ]),
+      h("p",{class:"why",text:"Runs can't launch until one can be built. Re-check once a container runtime is answering."})
+    ]);
+    nextCtl = h("button",{class:"btn btn-default",onclick:function(){ render(); }},[ icon("rotate"), "Re-check" ]);
+  } else if (next){
+    nextCtl = h("button",{class:"btn btn-default",
+      onclick:function(){ go("setup", next.id); }},["Next", icon("arrowRight")]);
+  } else {
+    nextCtl = h("button",{class:"btn btn-default",disabled: after() && noRunner(),
+      onclick:function(){ go("board"); }},["Finish setup", icon("arrowRight")]);
+    if (after() && noRunner() && idx !== -1)
+      left = h("div",{class:"gate",role:"status"},[
+        h("p",{class:"head"},[ h("span",{class:"dot"}), "Setup can't finish without a barrier." ]),
+        h("p",{class:"why"},["Wardyn confines every run. ",
+          h("button",{class:"btn-link",style:"font-size:12px",
+            onclick:function(){ go("setup","environment"); },text:"Set up a barrier"}), "."])
+      ]);
+  }
+  /* An optional step is off the numbered walk: it returns to where it belongs. */
+  if (idx === -1)
+    return h("footer",{class:"step-foot"},[
+      h("button",{class:"btn btn-outline",onclick:function(){ go("setup","review"); }},[ icon("arrowLeft"), "Back to required steps" ]),
+      h("button",{class:"btn btn-default",onclick:function(){ go("setup","review"); }},["Done with this one", icon("arrowRight")])
+    ]);
+
+  return h("footer",{class:"step-foot"},[ left,
+    h("button",{class:"btn btn-outline",disabled:!prev,
+      onclick:function(){ if (prev) go("setup", prev.id); }},[ icon("arrowLeft"), "Back" ]),
+    nextCtl ]);
+}
+
+function setupPage(){
+  var s = stepById(S.step);
+  var body = s.id==="environment" ? environmentStep()
+           : s.id==="people"      ? peopleStep()
+           : s.id==="corp_network"? networkStep()
+           : s.id==="review"      ? reviewStep()
+           : optionalStep();
+
+  var title = [ h("h2",{text:s.heading}) ];
+  if (!isRequired(s.id)) title.push(chip("Optional","neutral"));
+
+  return h("div",{},[
+    h("div",{class:"setup-head"},[
+      h("div",{},[ h("h1",{text:"Getting started"}),
+        h("p",{text:"Governed sandboxes for anything you run — on your own infrastructure, free."}) ])
+    ]),
+    h("div",{class:"hostbar"},[
+      h("span",{text: noRunner() ? "Host checked just now — no container runtime answering."
+                                 : "Host checked just now — Docker engine, 1 barrier available."}),
+      h("button",{class:"btn btn-ghost btn-sm",onclick:function(){ render(); }},[ icon("rotate"), "Re-check" ])
+    ]),
+    h("div",{class:"setup-grid"},[
+      setupRail(),
+      h("div",{style:"min-width:0"},[ stepCounter(), h("div",{class:"step-title"}, title), body, setupFoot() ])
+    ])
+  ]);
+}
+
+/* ============================================================================
+   SCREEN 3 — RUNS BOARD
+   ========================================================================= */
+function boardPage(){
+  var st = hostStatus();
+  var labels = CC_ORDER.filter(function(cc){ return st.classes.indexOf(cc) !== -1; })
+                       .map(function(cc){ return CC_META[cc].label; });
+  var haveBarrier = labels.length > 0;
+
+  /* The shipped first-run readiness rows (runs-first-run.tsx) — two derived
+     facts, not a stepper. The barrier row already goes red on a host with
+     none; what it has never carried is a way to DO something about it. */
+  var barrierRow = h("li",{},[
+    icon(haveBarrier ? "circleCheck" : "circleX",
+         haveBarrier ? "ok" : "bad"),
+    h("div",{style:"min-width:0"},[
+      h("div",{class:"t",text:"Sandbox barrier"}),
+      h("div",{class:"d"},[
+        haveBarrier ? labels.join(", ") + " available on this host."
+                    : "None available on this host.",
+        /* #214 — the board's route to the step that fixes it. */
+        (!haveBarrier && after()) ? h("span",{},[" ",
+          h("button",{class:"btn-link",style:"font-size:12px",
+            onclick:function(){ go("setup","environment"); },text:"Set up a barrier \u2192"})]) : null
+      ])
+    ])
+  ]);
+  var modelRow = h("li",{},[
+    icon("circleAlert","warn"),
+    h("div",{style:"min-width:0"},[
+      h("div",{class:"t",text:"Model provider"}),
+      h("div",{class:"d",text:"Not connected — agent runs need one. Governed commands run without one."})
+    ])
+  ]);
+
+  var hero = h("div",{class:"hero"},[
+    h("div",{class:"ring"},[icon("rocket")]),
+    h("h2",{text:"No runs yet"}),
+    h("p",{text:"A run is a workload in a sealed box. You watch it, approve what it reaches for, and keep the recording."}),
+    h("ul",{class:"steps3"},[ barrierRow, modelRow ]),
+    h("div",{class:"acts"},[
+      h("button",{class:"btn btn-default",onclick:function(){ S.launchFailed=false; go("newrun"); }},[ icon("plus"), "New run" ]),
+      h("button",{class:"btn btn-outline",onclick:function(){ go("setup", DEMOS_EGRESS[0].id); }},["Try it without a repo"])
+    ]),
+    h("button",{class:"btn-link tour",onclick:function(){ go("setup","environment"); },
+      text:"Or take the guided tour \u2192"})
+  ]);
+  return h("div",{},[
+    h("div",{class:"board-head"},[ h("h1",{text:"Runs"}) ]),
+    hero
+  ]);
+}
+
+/* ============================================================================
+   SCREEN 4 — NEW RUN   (#214)
+   ========================================================================= */
+function barrierPicker(){
+  var st = hostStatus();
+  var cards = CC_ORDER.map(function(cc){
+    var installed = st.classes.indexOf(cc) !== -1;
+    var reason = installed ? null
+      : noRunner() ? "Not available — no container runtime is answering."
+      : (cc === "CC3" && !st.kvm) ? "Not available — this host doesn't expose /dev/kvm."
+      : "Not available — not set up on this host.";
+    return h("button",{class:"optcard "+cc.toLowerCase(),role:"radio",
+      "aria-checked": S.barrier===cc ? "true" : "false", disabled: !installed,
+      onclick:function(){ if (installed){ S.barrier=cc; render(); } }},[
+        h("span",{class:"t"},[ CC_META[cc].label, " ",
+          h("span",{class:"cc-wire",text:cc}) ]),
+        h("span",{class:"d",text: reason || CC_META[cc].tagline})
+      ]);
+  });
+  return h("div",{class:"seg-wide",role:"radiogroup","aria-label":"Barrier"}, cards);
+}
+
+function newRunPage(){
+  var none = noRunner();
+
+  /* #214 — the Barrier control moves OUT of the Policy card into its own
+     section. It is the choice that decides whether a run is confined; it was
+     the hardest one to find. */
+  var barrierSection = h("div",{class:"section"},[
+    h("div",{class:"eyebrow",text:"Barrier"}),
+    barrierPicker(),
+    h("p",{class:"hint",style:"margin-top:8px",text:CONFINEMENT_CONSTANT_NOTE})
+  ]);
+
+  var policySection = h("div",{class:"section"},[
+    h("div",{class:"eyebrow",text:"Policy"}),
+    h("div",{class:"card"},[
+      after() ? null : barrierSection,
+      h("div",{class:"rail-line"},[ h("span",{class:"k",text:"Template"}), h("span",{text:"Minimal"}) ]),
+      h("div",{class:"rail-line"},[ h("span",{class:"k",text:"Egress"}), h("span",{text:"Ask before each new host"}) ]),
+      h("div",{class:"rail-line"},[ h("span",{class:"k",text:"Tool approvals"}), h("span",{text:"Hold for a human"}) ])
+    ])
+  ]);
+
+  var form = h("div",{},[
+    h("div",{class:"section"},[
+      h("div",{class:"eyebrow",text:"Task"}),
+      h("textarea",{class:"input",rows:"3",
+        placeholder:"What should the agent do?"})
+    ]),
+    h("div",{class:"section"},[
+      h("div",{class:"eyebrow",text:"Workspace"}),
+      h("div",{class:"card"},[
+        h("div",{style:"font-weight:500;font-size:var(--text-body)",text:"No workspace attached"}),
+        h("p",{class:"hint",style:"margin-top:4px",
+          text:"The agent starts in an empty sandbox. Attach one to give it a directory or a repository."})
+      ])
+    ]),
+    after() ? barrierSection : null,
+    policySection
+  ]);
+
+  /* --- the rail, and the Launch control --- */
+  var launchKids = [];
+  var launchDisabled = after() && none;
+
+  launchKids.push(h("h3",{text:"What this run can do"}));
+  launchKids.push(h("div",{style:"margin-top:8px"},[
+    h("div",{class:"rail-line"},[ h("span",{class:"k",text:"Barrier"}),
+      h("span",{text: S.barrier ? CC_META[S.barrier].label : (none ? "None available" : "Not picked")}) ]),
+    h("div",{class:"rail-line"},[ h("span",{class:"k",text:"Network"}), h("span",{text:"Held at the proxy"}) ]),
+    h("div",{class:"rail-line"},[ h("span",{class:"k",text:"Secrets"}), h("span",{text:"None attached"}) ])
+  ]));
+
+  /* BEFORE — the launch failure is a bare paragraph with no role, so nothing
+     announces it. AFTER — Launch never fires, and a failure that does happen
+     is announced. */
+  if (S.launchFailed && !after())
+    launchKids.push(h("p",{class:"bare-fail"},[ icon("triangleAlert"),
+      h("span",{text:"Failed to launch run."}) ]));
+  if (S.launchFailed && after())
+    launchKids.push(h("p",{class:"bare-fail",role:"alert"},[ icon("triangleAlert"),
+      h("span",{text:"Failed to launch run."}) ]));
+
+  launchKids.push(h("button",{class:"btn btn-default",style:"width:100%;margin-top:14px",
+    disabled: launchDisabled,
+    onclick:function(){ S.launchFailed = true; render(); }},["Launch run"]));
+
+  if (launchDisabled)
+    /* #214 — the reason is stated beside Launch, not hidden in a tooltip,
+       and it carries the route to the step that fixes it. */
+    launchKids.push(h("p",{class:"launch-why"},[
+      "No barrier can be built on this host, so no run can be confined. ",
+      h("button",{class:"btn-link",onclick:function(){ go("setup","environment"); },
+        text:"Set up a barrier"}), "."
+    ]));
+
+  return h("div",{},[
+    h("h1",{text:"New run",style:"margin-bottom:20px"}),
+    h("div",{class:"run-grid"},[ form, h("aside",{class:"rail-card"}, launchKids) ])
+  ]);
+}
+
+/* ============================================================================
+   RENDER + SCAFFOLD
+   ========================================================================= */
+function setTheme(t){ S.theme = t; document.documentElement.setAttribute("data-theme", t); syncSwitches(); }
+function syncSwitches(){
+  [["sw-theme",S.theme],["sw-host",S.host],["sw-mode",S.mode]].forEach(function(p){
+    var box = document.getElementById(p[0]); if (!box) return;
+    Array.prototype.forEach.call(box.querySelectorAll("button"), function(b){
+      b.setAttribute("aria-pressed", b.getAttribute("data-v") === p[1] ? "true" : "false");
+    });
+  });
+}
+var NOTES = {
+  "A/before":"Host A, today: RECOMMENDED sits on Vault — experimental, and not installed — and setup counts all seventeen steps.",
+  "A/after" :"Host A, proposed: RECOMMENDED sits on Fence, the strongest class the host reports installed. Four blocking steps; thirteen optional.",
+  "B/before":"Host B, today: all three barriers render disabled and Launch stays enabled. Nothing links to the step that fixes it.",
+  "B/after" :"Host B, proposed: Launch is disabled with its reason beside it, and the board, the wizard and the top bar all route to the Environment step."
+};
+var WALKS = {
+  signin:[["Token rejected","rejected"],["Wardyn unreachable","unreachable"],["Email domain not allowed","domain"]]
+};
+function walkStrip(){
+  var strip = document.getElementById("walkstrip");
+  strip.textContent = "";
+  if (S.screen === "signin"){
+    strip.appendChild(h("span",{text:"Scaffold · walk a refusal:"}));
+    WALKS.signin.forEach(function(w){
+      strip.appendChild(h("button",{onclick:(function(k){ return function(){ S.signinAlert = k; render(); }; })(w[1]),
+        text:w[0]}));
+    });
+    strip.appendChild(h("button",{onclick:function(){ S.signinAlert=null; render(); },text:"Clear"}));
+    strip.appendChild(h("span",{style:"text-transform:none;letter-spacing:0",
+      text:"· any token signs in"}));
+  } else if (S.screen === "newrun" && S.launchFailed){
+    strip.appendChild(h("span",{text:"Scaffold ·"}));
+    strip.appendChild(h("button",{onclick:function(){ S.launchFailed=false; render(); },text:"Clear the failure"}));
+  } else {
+    strip.appendChild(h("span",{text:"Scaffold ·"}));
+    strip.appendChild(h("button",{onclick:function(){ go("signin"); },text:"Back to sign in"}));
+    if (S.screen !== "newrun" && after() && noRunner())
+      strip.appendChild(h("span",{style:"text-transform:none;letter-spacing:0",
+        text:"· three routes to Environment: the banner, the top bar, and New run's Launch reason"}));
+  }
+}
+function render(){
+  var root = document.getElementById("root");
+  root.textContent = "";
+  var page = S.screen === "signin" ? signIn()
+           : shell(S.screen === "setup" ? setupPage()
+                 : S.screen === "newrun" ? newRunPage()
+                 : boardPage());
+  root.appendChild(S.screen === "signin" ? h("div",{class:"app"},[page]) : h("div",{class:"app"},[page]));
+  document.getElementById("scaffold-note").textContent = NOTES[S.host+"/"+S.mode];
+  walkStrip();
+  syncSwitches();
+}
+document.getElementById("sw-theme").addEventListener("click", function(e){
+  var b = e.target.closest("button"); if (b) setTheme(b.getAttribute("data-v"));
+});
+document.getElementById("sw-host").addEventListener("click", function(e){
+  var b = e.target.closest("button"); if (!b) return;
+  S.host = b.getAttribute("data-v"); S.barrier = null; S.launchFailed = false; S.cmdOpen = {}; render();
+});
+document.getElementById("sw-mode").addEventListener("click", function(e){
+  var b = e.target.closest("button"); if (!b) return;
+  S.mode = b.getAttribute("data-v");
+  if (!walkOrder().some(function(s){ return s.id === S.step; }) && isRequired(S.step) === false) S.step = "environment";
+  S.launchFailed = false; render();
+});
+document.getElementById("restart").addEventListener("click", function(){
+  S.screen = "signin"; S.step = "environment"; S.token = ""; S.barrier = null;
+  S.signinAlert = null; S.launchFailed = false; S.cmdOpen = {}; render();
+});
+setTheme("dark");
+render();
+</script>
+</body>
+</html>
