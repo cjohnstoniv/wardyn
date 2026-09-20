@@ -61,3 +61,5 @@ Comment the *why*, never the *what*. The test for keeping one:
 
 Grep-dead is not purposeless. Run `git log -S <symbol>` and read why it was written; check `local/` too —
 working notes invoke tools by prompt text, not by Makefile. Record the provenance in the commit body.
+
+**Authorship.** Commits are authored, committed and DCO-signed by the maintainer who submits them (`cjohnstoniv`). Commit messages carry no tool-attribution trailers.
