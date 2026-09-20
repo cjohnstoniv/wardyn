@@ -150,6 +150,13 @@ type fakeDocker struct {
 	listItems       []container.Summary
 	lastListFilters client.Filters
 	lastListAll     bool
+
+	// probeExitCode is the exit code ContainerWait reports for a container
+	// whose name carries the drive-probe prefix ("wardyn-drive-probe-") —
+	// there is no real command interpreter here to run `test -r/-x` against a
+	// bind mount, so a ProbeDrive test scripts the answer this way instead.
+	// Zero (readable) unless a test overrides it.
+	probeExitCode int64
 }
 
 // ContainerList makes this fake a containerListerAPI, the narrow seam
@@ -328,7 +335,15 @@ func (f *fakeDocker) ContainerStart(ctx context.Context, id string, _ client.Con
 	if c == nil {
 		return client.ContainerStartResult{}, fakeNotFound{msg: "no such container: " + id}
 	}
-	c.state = &container.State{Status: "running", Running: true}
+	if strings.HasPrefix(c.name, "wardyn-drive-probe-") {
+		// No real command interpreter here to run the probe's `test -r/-x`
+		// against a bind mount — model it as already exited with the
+		// scripted code, the same "immediate" shape a real one-shot process
+		// this fast would leave ContainerWait to observe.
+		c.state = &container.State{Status: "exited", ExitCode: int(f.probeExitCode)}
+	} else {
+		c.state = &container.State{Status: "running", Running: true}
+	}
 	f.startedNames = append(f.startedNames, id)
 	return client.ContainerStartResult{}, nil
 }
