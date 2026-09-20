@@ -273,6 +273,12 @@ services:
       WARDYN_MEMBER_WORKSPACE_ROOTS_MAP: "${WARDYN_MEMBER_WORKSPACE_ROOTS_MAP:-}"
       WARDYN_MEMBER_WRITABLE_ROOTS: "${WARDYN_MEMBER_WRITABLE_ROOTS:-}"
       WARDYN_MEMBER_WRITABLE_DENY: "${WARDYN_MEMBER_WRITABLE_DENY:-}"
+      # HYBRID BOOT (issue #100): the org control-plane settings. Unset (the
+      # defaults) is no hybrid posture at all — see docs/ENV.md and
+      # validateHybridPosture (cmd/wardynd/boot_posture.go).
+      WARDYN_ORG_URL: "${WARDYN_ORG_URL:-}"
+      WARDYN_ORG_ENROLMENT_TOKEN: "${WARDYN_ORG_ENROLMENT_TOKEN:-}"
+      WARDYN_ORG_DEVICE_NAME: "${WARDYN_ORG_DEVICE_NAME:-}"
       # Four-eyes on egress approvals: the human who DECIDES an egress_domain
       # approval must not be the human who created the run. Unforwarded, the m'
       # envelope's WARDYN_EGRESS_SECOND_HUMAN=true read as ON in the file MDM

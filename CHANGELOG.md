@@ -8,6 +8,13 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ## [Unreleased]
 
+### Added
+
+- **Org control-plane settings for hybrid boot.** `WARDYN_ORG_URL`, `WARDYN_ORG_ENROLMENT_TOKEN` and
+  `WARDYN_ORG_DEVICE_NAME` tell a managed laptop which org control plane it belongs to. Boot is
+  refused when an org URL is set without `WARDYN_MEMBER_MODE`, when the URL is plaintext and not
+  loopback, or when an enrolment token is set with no org URL to send it to. See `docs/ENV.md`.
+
 ### Changed
 
 - **Doc citations name a SYMBOL, never a line number.** `docs/AUDIT-ACTIONS.md`'s 215 emit-site
