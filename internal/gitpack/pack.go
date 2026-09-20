@@ -83,10 +83,16 @@ const (
 	// maxTreeDepth bounds directory nesting. Real trees are shallow; a pack that
 	// claims otherwise is trying to exhaust the stack.
 	maxTreeDepth = 64
-	// maxTreeNodes bounds how many trees one inspection expands, which
+	// maxTreeNodes bounds how many tree ENTRIES one inspection walks, which
 	// maxTreeDepth does not: trees are a DAG, so d levels that each name the
-	// level below b times describe b^d paths in a few kilobytes of objects. Five
-	// times maxChanges, so no push whose change set is inspectable can reach it.
+	// level below b times describe b^d paths in a few kilobytes of objects.
+	// Entries rather than expansions, so that a wide tree costs what its width
+	// says. The headroom over maxChanges is a factor, not an order: git cannot
+	// store an empty directory, so an ordinary repository spends a few entries
+	// per path it reports — binary fan-out with one file per leaf directory is
+	// the dense case, near three — and maxChanges refuses first. What reaches
+	// this ceiling instead is a shape spending many entries per path, which
+	// means long single-child chains.
 	maxTreeNodes = 5 * maxChanges
 	// maxPeel bounds tag-to-tag chasing when a push updates a tag ref.
 	maxPeel = 8

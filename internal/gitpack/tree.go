@@ -14,23 +14,30 @@ import (
 	"strings"
 )
 
-// modeTree is the mode a tree entry carries for a subdirectory, as a NUMBER.
+// modeTree and modeFormat are git's S_ISDIR: a tree entry is a directory when
+// the format bits of its mode are S_IFDIR, whatever the remaining bits say.
+//
 // `git ls-tree` prints "040000" and a tree object normally stores "40000", but
-// git's own tree walk reads the digits rather than matching the string, so a
-// hand-written tree spelling the mode "040000" is a directory to every
-// receiving side whose fsck is off — the default. Matching the string here
-// classified that entry as a leaf and hid every path beneath it.
-const modeTree = 0o40000
+// git parses the digits and MASKS them, so "040000", "40001", "40644" and
+// "47777" are all directories it recurses into. Neither matching the string
+// "40000" nor comparing the whole number for equality sees that: the entry
+// became a leaf, and every path beneath it vanished from the answer. Nothing
+// downstream covers the gap either — receive.fsckObjects rejects "040000" as
+// zeroPaddedFilemode but lets "40001" through with a badFilemode warning.
+const (
+	modeTree   = 0o040000
+	modeFormat = 0o170000
+)
 
 // treeEntry is one entry of a tree object: a mode, a name and the object id of
 // what the name points at.
 type treeEntry struct{ mode, name, oid string }
 
-// isTree compares the parsed mode, never the spelling. parseTree has already
+// isTree masks the parsed mode, never the spelling. parseTree has already
 // rejected a mode that is not octal.
 func (e treeEntry) isTree() bool {
 	m, err := strconv.ParseUint(e.mode, 8, 32)
-	return err == nil && m == modeTree
+	return err == nil && m&modeFormat == modeTree
 }
 
 // parseTree reads a tree object: "<mode> <name>\0<object-id>" repeated, with the
@@ -238,10 +245,13 @@ type walker struct {
 	// depth is the prefix's component count — and leaf already deduplicates, so
 	// the second expansion could only re-emit what the first did.
 	walked map[string]bool
-	// nodes counts expansions against maxTreeNodes. The memo collapses a repeat
-	// of the same path; it cannot collapse b^d distinct paths through d levels of
-	// fan-out, and a fan-out whose subtrees resolve to no leaves never reaches
-	// maxChanges either.
+	// nodes counts the tree ENTRIES walked, against maxTreeNodes. The memo
+	// collapses a repeat of the same path; it cannot collapse b^d distinct paths
+	// through d levels of fan-out, and a fan-out whose subtrees resolve to no
+	// leaves never reaches maxChanges either. Entries rather than one unit per
+	// expansion, because every entry costs a lookup whether or not the pack
+	// carries what it names — charging per expansion left width free, and a
+	// wide-and-deep pack spent minutes inside the ceiling.
 	nodes int
 	out   []Change
 }
@@ -250,10 +260,10 @@ func newWalker(i *index) *walker {
 	return &walker{idx: i, seen: map[Change]bool{}, walked: map[string]bool{}}
 }
 
-// node charges one tree expansion.
-func (w *walker) node() error {
-	if w.nodes++; w.nodes > maxTreeNodes {
-		return fmt.Errorf("%w: the push expands more than %d tree objects", ErrUninspectable, maxTreeNodes)
+// charge accounts for n tree entries about to be walked.
+func (w *walker) charge(n int) error {
+	if w.nodes += n; w.nodes > maxTreeNodes {
+		return fmt.Errorf("%w: the push walks more than %d tree entries", ErrUninspectable, maxTreeNodes)
 	}
 	return nil
 }
@@ -299,15 +309,15 @@ func (w *walker) diff(prefix, oldOID, newOID string, depth int) error {
 	if err != nil || !ok {
 		return err
 	}
-	if err := w.node(); err != nil {
-		return err
-	}
 	prev, ok, err := w.idx.tree(oldOID)
 	if err != nil {
 		return err
 	}
 	if !ok {
 		return w.walkEntries(prefix, next, depth)
+	}
+	if err := w.charge(len(prev) + len(next)); err != nil {
+		return err
 	}
 	was := make(map[string]treeEntry, len(prev))
 	for _, e := range prev {
@@ -353,7 +363,7 @@ func (w *walker) walkEntries(prefix string, entries []treeEntry, depth int) erro
 	if depth > maxTreeDepth {
 		return fmt.Errorf("gitpack: trees nested deeper than %d", maxTreeDepth)
 	}
-	if err := w.node(); err != nil {
+	if err := w.charge(len(entries)); err != nil {
 		return err
 	}
 	for _, e := range entries {

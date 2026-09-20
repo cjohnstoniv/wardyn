@@ -432,31 +432,50 @@ func TestPackCommit_HeadersGitWouldNotReadAreRefused(t *testing.T) {
 	}
 }
 
-// TestPackInspect_ZeroPaddedDirectoryModeIsWalked: "040000" is a directory to
-// git, which parses the digits, and was a leaf here, which matched the string —
-// so the entry was reported as one path named after the directory and every
-// path beneath it disappeared. receive.fsckObjects would reject this object,
-// but it is off by default, so the inspector cannot lean on it.
-func TestPackInspect_ZeroPaddedDirectoryModeIsWalked(t *testing.T) {
-	blob := []byte("SECRET=1\n")
-	sub := mkTree(treeLine{"100644", "secrets.env", hashObject("blob", blob)})
-	root := mkTree(treeLine{"040000", "config", hashObject("tree", sub)})
-	commit := mkCommit(hashObject("tree", root))
-	pack := buildPack(t,
-		rawObject{typ: objBlob, payload: blob},
-		rawObject{typ: objTree, payload: sub},
-		rawObject{typ: objTree, payload: root},
-		rawObject{typ: objCommit, payload: commit},
-	)
-	zero := strings.Repeat("0", 40)
-	body := append(commandSection("report-status object-format=sha1",
-		zero+" "+hashObject("commit", commit)+" refs/heads/main"), pack...)
+// TestPackInspect_DirectoryModeIsMaskedLikeGit: git's test for a directory is
+// S_ISDIR — the FORMAT bits of the mode, masked — so every spelling below whose
+// format bits are 0o040000 is a directory it recurses into. A check that
+// matched the string "40000", or compared the whole parsed mode for equality,
+// read a leaf instead and lost every path beneath it.
+//
+// The fsck severities are what leave the inspector alone with this: strict
+// receive.fsckObjects REJECTS "040000" (zeroPaddedFilemode, an error) and
+// ACCEPTS "40001" (badFilemode, only a warning), so for every spelling but the
+// zero-padded one there is no backstop behind this check.
+//
+// "140000" is the control: those format bits are not S_IFDIR, git reads a leaf
+// there, and so must this.
+func TestPackInspect_DirectoryModeIsMaskedLikeGit(t *testing.T) {
+	for _, tc := range []struct{ mode, want string }{
+		{"40000", "config/secrets.env 100644 9"},
+		{"040000", "config/secrets.env 100644 9"},
+		{"40001", "config/secrets.env 100644 9"},
+		{"40644", "config/secrets.env 100644 9"},
+		{"47777", "config/secrets.env 100644 9"},
+		{"140000", "config 140000 -1"},
+	} {
+		t.Run(tc.mode, func(t *testing.T) {
+			blob := []byte("SECRET=1\n")
+			sub := mkTree(treeLine{"100644", "secrets.env", hashObject("blob", blob)})
+			root := mkTree(treeLine{tc.mode, "config", hashObject("tree", sub)})
+			commit := mkCommit(hashObject("tree", root))
+			pack := buildPack(t,
+				rawObject{typ: objBlob, payload: blob},
+				rawObject{typ: objTree, payload: sub},
+				rawObject{typ: objTree, payload: root},
+				rawObject{typ: objCommit, payload: commit},
+			)
+			zero := strings.Repeat("0", 40)
+			body := append(commandSection("report-status object-format=sha1",
+				zero+" "+hashObject("commit", commit)+" refs/heads/main"), pack...)
 
-	res, err := Inspect(body)
-	if err != nil {
-		t.Fatalf("Inspect: %v", err)
+			res, err := Inspect(body)
+			if err != nil {
+				t.Fatalf("Inspect: %v", err)
+			}
+			wantChanges(t, res.Changes, tc.want)
+		})
 	}
-	wantChanges(t, res.Changes, "config/secrets.env 100644 9")
 }
 
 // ─── the wire ───────────────────────────────────────────────────────────────
@@ -661,29 +680,76 @@ func fanOut(idx *index, bottom []byte, levels int, names ...string) string {
 	return oid
 }
 
+// absentSubtrees is a tree whose every entry names a subtree the pack does not
+// carry: a fan-out that bottoms out here resolves to no leaves, so maxChanges
+// is never reached and only the node ceiling can stop the walk.
+func absentSubtrees(n int) []byte {
+	absent := strings.Repeat("0", 40)
+	lines := make([]treeLine, 0, n)
+	for i := range n {
+		lines = append(lines, treeLine{"40000", fmt.Sprintf("s%04d", i), absent})
+	}
+	return mkTree(lines...)
+}
+
 // TestPackTree_FanOutDAGIsChargedAgainstMaxTreeNodes is the cheapest denial of
 // service the format allows: 65 tree objects, 3 KB, and 2^65 expansions if the
-// walk follows every path. The bottom names SUBTREES the pack does not carry,
-// so the fan-out resolves to no leaves and maxChanges is never reached — and
-// maxTreeDepth is satisfied the whole way down, because depth is not what is
-// unbounded here.
+// walk follows every path. maxTreeDepth is satisfied the whole way down,
+// because depth is not what is unbounded here.
+//
+// The wide case is the same attack with the bottom widened. It is the reason
+// the ceiling counts tree ENTRIES: charging one unit per expansion made width
+// free, so the same ceiling admitted hundreds of times the work — a larger body
+// stopped at the identical node count after minutes rather than a second.
 //
 // The assertion is the work done, not the time taken: a wall clock would only
 // say this machine was fast today.
 func TestPackTree_FanOutDAGIsChargedAgainstMaxTreeNodes(t *testing.T) {
+	for _, width := range []int{2, 256} {
+		t.Run(fmt.Sprintf("bottom of %d", width), func(t *testing.T) {
+			idx := newIndex(sha1Format)
+			root := fanOut(idx, absentSubtrees(width), maxTreeDepth, "a", "b")
+
+			w := newWalker(idx)
+			err := w.walk("", root, 0)
+			if !errors.Is(err, ErrUninspectable) {
+				t.Fatalf("walk = %v, want ErrUninspectable", err)
+			}
+			// One charge covers a whole tree, so the count may overshoot by at
+			// most the widest tree in the pack — never by a multiple of it.
+			if w.nodes > maxTreeNodes+width {
+				t.Errorf("walked %d entries, want the walk stopped at %d", w.nodes, maxTreeNodes)
+			}
+			// Every tree here holds at least two entries, so a ceiling that
+			// bounds WORK cannot have admitted more than half its budget in
+			// expansions. Charging a flat unit per expansion satisfies the count
+			// above while doing `width` times the lookups underneath it.
+			if trees := len(w.walked); 2*trees > w.nodes {
+				t.Errorf("expanded %d trees of >=2 entries each but charged %d: width is not charged",
+					trees, w.nodes)
+			}
+			if len(w.out) != 0 {
+				t.Errorf("Changes = %v, want none", paths(w.out))
+			}
+		})
+	}
+}
+
+// TestPackTree_WidthIsChargedNotJustDepth: a tree's entries each cost a lookup
+// whether or not the pack carries what they name, so one wide-and-shallow tree
+// is charged for its width. Charging a flat unit per expansion left that work
+// outside every ceiling.
+func TestPackTree_WidthIsChargedNotJustDepth(t *testing.T) {
+	const width = 4096
 	idx := newIndex(sha1Format)
-	absent := strings.Repeat("0", 40)
-	root := fanOut(idx, mkTree(
-		treeLine{"40000", "a", absent}, treeLine{"40000", "b", absent}),
-		maxTreeDepth, "a", "b")
+	root := idx.put(objTree, absentSubtrees(width))
 
 	w := newWalker(idx)
-	err := w.walk("", root, 0)
-	if !errors.Is(err, ErrUninspectable) {
-		t.Fatalf("walk = %v, want ErrUninspectable", err)
+	if err := w.walk("", root, 0); err != nil {
+		t.Fatalf("walk: %v", err)
 	}
-	if w.nodes > maxTreeNodes+1 {
-		t.Errorf("expanded %d trees, want the walk stopped at %d", w.nodes, maxTreeNodes)
+	if w.nodes != width {
+		t.Errorf("walked %d entries, want %d — the tree's width", w.nodes, width)
 	}
 	if len(w.out) != 0 {
 		t.Errorf("Changes = %v, want none", paths(w.out))
@@ -709,12 +775,15 @@ func TestPackTree_RepeatedSubtreeIsExpandedOnce(t *testing.T) {
 		t.Fatalf("walk: %v", err)
 	}
 	wantChanges(t, w.out, "one/f.txt 100644 2", "two/f.txt 100644 2")
-	// The root and the subtree under each of its two prefixes.
-	if w.nodes != 3 {
-		t.Errorf("expanded %d trees, want 3", w.nodes)
+	// The root's two entries, then the subtree's one entry under each of the two
+	// prefixes it is reached by.
+	const want = 2 + 1 + 1
+	if w.nodes != want {
+		t.Errorf("walked %d entries, want %d", w.nodes, want)
 	}
-	if err := w.walk("", root, 0); err != nil || w.nodes != 3 {
-		t.Errorf("re-walking the same root: err=%v, expanded %d trees, want 3", err, w.nodes)
+	// The memo, which is the whole point: the second walk charges nothing.
+	if err := w.walk("", root, 0); err != nil || w.nodes != want {
+		t.Errorf("re-walking the same root: err=%v, walked %d entries, want %d", err, w.nodes, want)
 	}
 }
 
