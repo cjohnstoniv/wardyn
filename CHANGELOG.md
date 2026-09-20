@@ -10,6 +10,12 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Fixed
 
+- **A reaped never-dispatched run now carries a failure reason, not a blank chip.** `reconcileFinalize`
+  finalizes stranded runs that were never dispatched, but only `failAndRevoke` used to write a
+  `failure_hint` — so a reaped run rendered a FAILED badge with no reason. It now writes the
+  reconciler's reason as the failure hint, best-effort, gated strictly on the transition landing on
+  FAILED so a run reaching a successful terminal state through the same path gets no hint.
+
 - **Two concurrent sign-ins can no longer leave two live credential-bearing sandboxes.** A sign-in
   supersedes the caller's older ones across several independent statements — the first supersede
   pass, the run insert, the second pass — and because `created_at` is stamped in-process BEFORE the
@@ -33,6 +39,10 @@ and does not yet follow semantic versioning (interfaces are not stable).
 
 ### Changed
 
+- **`resolveCreateRunImage` no longer writes the HTTP response.** It now returns
+  `(image string, failed bool)` instead of writing the 201 itself on a BYOI/devcontainer build
+  failure, so it can be called from a background worker. `internal/api/runs.go`'s
+  `handleCreateRun` answers the 201 (refreshed FAILED run + warnings) one frame up.
 - **Doc citations name a SYMBOL, never a line number.** `docs/AUDIT-ACTIONS.md`'s 215 emit-site
   citations and `docs/design/CONSOLE-RULES.md`'s 51 component citations moved from `path/file.go:NNN`
   to `path/file.go#Symbol` (`#Type.Method` for a method, `#heading-slug` into another document,
