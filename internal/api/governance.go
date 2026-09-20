@@ -42,7 +42,7 @@ const maxGovernanceProfileNameLen = 128
 // were born there, before oidc.RoleSecurityAdmin existed; routes.go now hands
 // this function the `securityOps` group instead, which is the widening they
 // were registered on the safe tier to wait for. The group a mount function
-// receives is decided AT THE CALL SITE, never by this parameter's name —
+// receives is decided at the call site, never by this parameter's name —
 // routes.go says so at the call, and authz_test.go's chi.Walk matrix is what
 // enforces it.
 //
@@ -436,7 +436,7 @@ const maxGovernancePreviewClaims = 256
 // cannot tell. So the console sends EVERY typed claim in BOTH lists, and this
 // endpoint offers each to both tiers exactly as given. That is the same shape
 // POST /access/preview already takes ({roles: lines, groups: lines}), and it is
-// honest because the RESPONSE SAYS WHICH TIER MATCHED: matched_tier names the
+// honest because the response says which tier matched: matched_tier names the
 // row that won, which is what the console renders ("matched by a group
 // assignment"). An answer that could only have come from a group assignment
 // says so, and one that could only have come from a user assignment says that.
@@ -456,7 +456,7 @@ type governancePreviewRequest struct {
 // governancePreviewResponse names the profile that would bind a principal
 // presenting those claims, and the TIER of the assignment that won.
 //
-// EVERY FIELD IS omitempty, and an empty object is the answer for "no
+// Every field is omitempty, and an empty object is the answer for "no
 // assignment matched" — the deployment ceiling. That is the same additive/
 // absent doctrine defaultPolicyResponse.GovernanceProfileName follows: an
 // absent key already decodes as "no profile" in the TS mirror, while "" would
@@ -638,7 +638,7 @@ const groupsSnapshotStaleMsg = "groups_snapshot_stale: your group membership sna
 // writeCeilingError answers an effectiveCeiling failure at an HTTP site: 403
 // for the stale/truncated snapshot, 500 for everything else.
 //
-// 500 IS THE POINT for the everything-else arm. A store failure means the
+// 500 is the point for the everything-else arm. A store failure means the
 // ceiling is unknown, and the adjacent GetSiteConfig idiom — log it, carry on
 // with the zero value — must NOT be copied here: carrying on means silently
 // substituting the deployment ceiling for a profile that may be far narrower,

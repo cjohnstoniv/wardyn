@@ -407,7 +407,7 @@ func sshKeyScopeFields(scope json.RawMessage) (host, keySecretRef, username, kno
 }
 
 // envSecretScopeFields decodes an env_secret grant scope {name, secret_name}.
-// Both are REQUIRED (fail closed). name is the SANDBOX ENV VAR the stored
+// Both are REQUIRED (fail closed). name is the sandbox env var the stored
 // secret_name's value lands under at dispatch (resolveEnvSecretGrants).
 //
 // The name is VALIDATED here, not merely decoded, because it is written into a

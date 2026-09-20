@@ -16,7 +16,7 @@ import (
 //
 // Two things live here because they are the same question asked twice. An
 // AgentProviders row says whether a deployment's model credential is ONE
-// credential for everyone (`shared`, today) or ONE PER PERSON (`per_user`,
+// credential for everyone (`shared`, today) or one per person (`per_user`,
 // captured by that person's own AWS SSO sign-in), and every lane that reads or
 // writes a captured AWS SSO session has to resolve that before it touches the
 // secret store — a member served the admin's session is the exact failure
@@ -135,7 +135,7 @@ func setupStatusSSOScope(sc types.SiteConfig, scOK, storeConfigured bool, subjec
 }
 
 // awsSSOScopeForAgent is awsSSOScopeFor for a caller that does NOT already hold
-// a site config. ok=false means THE ROSTER COULD NOT BE READ, and the scope
+// a site config. ok=false means the roster could not be read, and the scope
 // returned with it is the old legacy-open answer (the operator namespace) —
 // never a scope a caller may write or delete under.
 //
@@ -166,7 +166,7 @@ const (
 	// modelAccessLive: nothing for the person to do. A refresh token is present
 	// and the registration is not near lapsing (or carries no expiry at all —
 	// see registrationLapsed for why a zero timestamp counts as live).
-	// expired_renewable FOLDS IN HERE deliberately: dispatch renews it, so
+	// expired_renewable folds in here deliberately: dispatch renews it, so
 	// reporting it as a problem would ask for an hourly re-login the product no
 	// longer needs.
 	modelAccessLive = "live"
@@ -273,7 +273,7 @@ type SetupModelAccess struct {
 	// Deadline is the instant Action names — the registration's lapse, or the
 	// access token's expiry for a blob that cannot be renewed. It serves the
 	// admin's checklist row, which prints the same one the member's action line
-	// does, and it is ON THE WIRE.
+	// does, and it is on the wire.
 	//
 	// Localisation is why: `expiring`
 	// rides a strip on every screen for the whole 24-hour window, and the
@@ -295,8 +295,8 @@ type SetupModelAccess struct {
 	// tell an operator their live session "expired at <ts> and cannot be
 	// renewed", which of this one credential is simply false.
 	PinMismatch bool `json:"-"`
-	// PerUser says whether this answer is about a credential THIS PRINCIPAL
-	// OWNS. IN-PROCESS only (json:"-"): it is not a fact the console renders, it
+	// PerUser says whether this answer is about a credential this principal
+	// owns. IN-PROCESS only (json:"-"): it is not a fact the console renders, it
 	// is what memberModelAccess needs to decide whether a member may be told a
 	// deadline or offered a sign-in at all. False is `shared` AND legacy open
 	// mode — in both, the graded blob is the OPERATOR's.
@@ -491,7 +491,7 @@ func setupModelAccess(sc types.SiteConfig, blob awsSSOBlob, found, spent bool, s
 	row, declared := agentProviderFor(sc, modelAccessAgent)
 	ssoLane := declared && !row.Disabled && row.Mechanism == types.AgentMechanismBedrockSSO
 	// The caller is the shared admin bearer token, not a person: no sign-in it
-	// could complete FOR A NEW SESSION. It is NOT an unreadable namespace —
+	// could complete for a new session. It is NOT an unreadable namespace —
 	// "admin-token" is a non-empty owner, read and written like any other
 	// (readAWSSSOBlob only refuses an EMPTY owner) — so a session already
 	// captured there is real and dispatch still serves it to admin-token-
@@ -509,7 +509,7 @@ func setupModelAccess(sc types.SiteConfig, blob awsSSOBlob, found, spent bool, s
 	if state == modelAccessExpiring {
 		out.Cause = awsSSOCredentialCause(blob, spent, now)
 	}
-	// A STORED SESSION THE ROSTER NO LONGER ALLOWS grades expired_signin, which
+	// A stored session the roster no longer allows grades expired_signin, which
 	// is the one thing that matters here: MODEL_ACCESS_ACTIONABLE
 	// (workspace-providers-copy.ts) is what decides whether the console offers
 	// "Sign in to AWS" at all, and this session grades `live` on expiry alone —

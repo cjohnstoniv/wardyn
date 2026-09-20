@@ -404,7 +404,7 @@ func applyDispatchModeEnv(sandboxEnv map[string]string, run types.AgentRun, p di
 	// — the feature would look like it worked while changing nothing.
 	//
 	// agent-run learns which hosts to route through the broker from
-	// WARDYN_GIT_PAT_BROKER_HOSTS below, which carries HOST NAMES ONLY and no
+	// WARDYN_GIT_PAT_BROKER_HOSTS below, which carries host names only and no
 	// grant id, so it cannot be used to mint anything.
 	if p.PATBroker && len(gitPATGrants) > 0 {
 		hosts := slices.Sorted(maps.Keys(gitPATGrants))
@@ -545,7 +545,7 @@ func applyUserDriveEnv(sandboxEnv map[string]string, drive *types.DriveMount) {
 //
 // WHICH storage it names depends on WHO can read the row, and that is
 // driveAuditTarget's whole subject: a member reads their own run's rows through
-// GET /audit?run_id=, so a share's absolute host path ANYWHERE ON THIS ROW would
+// GET /audit?run_id=, so a share's absolute host path anywhere on this row would
 // hand them the operator's filesystem layout — the exact thing
 // driveShareIsBindable refuses to put in a refusal and applyUserDriveEnv refuses
 // to put in the sandbox. A share's target is therefore "<drive>/<home>"; a

@@ -546,7 +546,7 @@ func awsSSOCacheFileContents(b awsSSOBlob, proxyInjected bool) string {
 //
 // sso.perUser INVERTS that for the whole function, which is why it is a
 // parameter and not a lookup: the org declared that this agent's model
-// credential is ONE PER PERSON, so the ONLY admissible lane is that principal's
+// credential is one per person, so the ONLY admissible lane is that principal's
 // own captured session. The bearer, ~/.aws-mount and static-key arms are all
 // bare operator-namespace reads, so under per_user they are SKIPPED ENTIRELY —
 // a member with no session of their own is not-configured, never silently

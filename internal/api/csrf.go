@@ -132,7 +132,7 @@ func (s *Server) sameOriginOrRefuse(r *http.Request) error {
 
 // originNamesThisDeployment reports whether a PRESENT Origin names one of the
 // two hosts this deployment answers to: r.Host, or the host of the configured
-// OIDC redirect URL (the ingress case — see WHY TWO ACCEPTED HOSTS above). It
+// OIDC redirect URL (the ingress case — see why two accepted hosts above). It
 // is the ONE predicate three callers share (the session guard above, the
 // PTY-attach socket below, and — for its r.Host half — http.go's LocalMode
 // arm), so "which origins are us" cannot diverge between them. Fails closed on

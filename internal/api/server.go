@@ -172,7 +172,7 @@ type Config struct {
 	// AdminToken gates the public API (constant-time bearer compare). Empty
 	// disables the public API entirely (fail closed) except /healthz.
 	AdminToken string
-	// LocalMode enables LOCAL HOST MODE: the public-API auth (humanOrAdminAuth)
+	// LocalMode enables local host mode: the public-API auth (humanOrAdminAuth)
 	// is bypassed entirely and every admin-gated action is attributed to
 	// LocalOperator. This is the single-developer localhost path — no SSO, no
 	// token, no Dex. It NEVER affects internalAuth (sidecar/run-token
@@ -529,8 +529,8 @@ type Config struct {
 	// (making it operator_set), which is the action the gate exists to require.
 	// Set false to auto-add scan_seeded egress requirements again.
 	RequireOperatorSetEgress bool
-	// DisableGitPATBroker (WARDYN_GIT_PAT_BROKER=off) is the OPERATOR ESCAPE
-	// HATCH for the never-resident git_pat lane.
+	// DisableGitPATBroker (WARDYN_GIT_PAT_BROKER=off) is the operator escape
+	// hatch for the never-resident git_pat lane.
 	//
 	// With the broker on (the default), a git_pat for a non-GitHub forge is
 	// minted PROXY-SIDE and injected on the outbound leg, so the PAT never enters

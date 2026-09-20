@@ -322,7 +322,7 @@ func (s *Server) getWorkspaceReadable(w http.ResponseWriter, r *http.Request, id
 }
 
 // mayLaunchWorkspace reports whether the caller of r may turn ws's id into
-// BOUND HOST STATE inside a sandbox they control — the launch tier, which is
+// bound host state inside a sandbox they control — the launch tier, which is
 // deliberately NARROWER than the read tier next door.
 //
 // Operator-owned (OwnedBy == "") is launchable by every authenticated caller:
@@ -531,7 +531,7 @@ func decodeStrictMsg(w http.ResponseWriter, r *http.Request, dst any) string {
 	return ""
 }
 
-// decodeStrictKeys is decodeStrictMsg plus the SET OF TOP-LEVEL KEYS the body
+// decodeStrictKeys is decodeStrictMsg plus the set of top-level keys the body
 // actually carried, for the one thing a decoded struct cannot answer: whether a
 // zero value was WRITTEN or merely OMITTED.
 //
@@ -720,8 +720,8 @@ func redactWorkspaceForRead(ws types.Workspace, tier workspaceReadTier) types.Wo
 // the `secret:` and `write:` requirement keys they duplicate.
 var profileHostAxisKeys = []string{"required_secrets", "secret_files_present", "leak_findings"}
 
-// profileEgressAxisKeys are the scanned-profile keys carrying INTERNAL EGRESS
-// HOSTS. Gone at the member tier and kept at the security tier, exactly like the
+// profileEgressAxisKeys are the scanned-profile keys carrying internal egress
+// hosts. Gone at the member tier and kept at the security tier, exactly like the
 // `egress:` requirement keys they duplicate — the security admin decides this
 // workspace's egress and cannot decide blind.
 var profileEgressAxisKeys = []string{"egress_domains", "suggested_egress"}

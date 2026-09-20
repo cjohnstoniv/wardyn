@@ -48,7 +48,7 @@ type AuditSpool struct {
 	// COMPLETE, and after a quarantine those two differ.
 	//
 	// Seeded from the sidecar at NewAuditSpool, because the condition it reports
-	// is PERSISTENT ON DISK while a process-local counter is not. Any restart
+	// is persistent on disk while a process-local counter is not. Any restart
 	// after a quarantine returned it to 0 while the sidecar still held the
 	// missing events, and /metrics then showed a completely healthy audit
 	// surface over a trail that is permanently incomplete.

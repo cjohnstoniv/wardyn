@@ -6,7 +6,7 @@
 // internal/auth/oidc's RoleMappingSource. Modeled on permissions.go's shape —
 // one read that shows the whole picture, small validated writes, an audit
 // event per write — but with two guards permissions.go has no analogue for:
-// this table decides who derives ADMIN AT ALL, so a bad write here can either
+// this table decides who derives admin at all, so a bad write here can either
 // silently widen access (a collision with the operator allowlist) or lock the
 // acting admin out of their own deployment (see the posture-flip and lockout
 // guards below).
@@ -364,7 +364,7 @@ func writeAccessCollision(w http.ResponseWriter, value, cause string) {
 	})
 }
 
-// accessCandidateRows builds the role-mapping set AS IT WOULD BE after a
+// accessCandidateRows builds the role-mapping set as it would be after a
 // proposed write — replace/add valueRole (role == "" means: this write is a
 // DELETE, drop the row instead), leaving every other existing row untouched —
 // so the lockout guard can hand it to PreviewRoleAgainst and ask "would the

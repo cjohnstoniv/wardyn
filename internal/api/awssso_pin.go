@@ -181,7 +181,7 @@ var awsAccountID = regexp.MustCompile(`^\d{12}$`)
 // boot when the model LOOKS like an ARN and this still answers "" (see
 // cmd/wardynd's bedrockModelAccountWarning).
 //
-// "" IS A VALID, COMMON ANSWER, and everything downstream must treat it as SKIP
+// "" is a valid, COMMON ANSWER, and everything downstream must treat it as SKIP
 // rather than as a failure: WARDYN_BEDROCK_MODEL is passed verbatim
 // (boot_flags.go) and is most often a bare cross-region inference profile id
 // ("us.anthropic.claude-…"), which carries no account. Failing closed on that
@@ -279,8 +279,8 @@ func bedrockPinDisagreement(sc types.SiteConfig, model string) (pinAccount, mode
 //   - a stored pair Wardyn does not know. account_id/role_name are `omitempty`
 //     on the wire (awsSSOBlob, harnesscred.go) and a blob written by an older
 //     binary may carry neither; refusing on absence would be that same upgrade
-//     regression, for a comparison there is no data for. BOTH HALVES OR
-//     NEITHER on this side too, not merely the account: a half-known stored
+//     regression, for a comparison there is no data for. Both halves or
+//     neither on this side too, not merely the account: a half-known stored
 //     pair (reachable the same way a half-pinned row is — a hand-edited store
 //     row) would otherwise return mismatch=true with a pair no caller can name,
 //     and every caller here composes a sentence that names both halves.

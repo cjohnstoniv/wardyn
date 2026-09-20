@@ -274,7 +274,7 @@ func residentHostReason(env capEnv) string {
 // credential fallback. Residency follows the lane (bearer is injected on the
 // wire; every other lane puts AWS credentials inside the sandbox).
 //
-// Region/model are read from THE INTEGRATION FIRST, with the boot flags
+// Region/model are read from the integration first, with the boot flags
 // (env.Bedrock*Set) as the fallback — the same precedence resolveBedrockAuth
 // applies at dispatch (`cmp.Or(ws.Region, s.cfg.BedrockRegion)`, runs_bedrock.go:
 // "a selection wins only the fields it sets"). Reading the boot flags alone is

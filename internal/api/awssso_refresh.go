@@ -225,7 +225,7 @@ func (b awsSSOBlob) registrationLapsed(now time.Time) bool {
 }
 
 // servableFor reports whether this access token has enough validity left to
-// START A RUN ON — more than floor, and therefore not merely "not expired yet".
+// start a run on — more than floor, and therefore not merely "not expired yet".
 // See awsSSORefreshServeFloor for why that is the question at the single-flight
 // fast path.
 func (b awsSSOBlob) servableFor(now time.Time, floor time.Duration) bool {
@@ -445,7 +445,7 @@ func (s *Server) refreshAWSSSOBlob(ctx context.Context, scope awsSSOScope, blob 
 		"expires_at": next.ExpiresAt.Format(time.RFC3339),
 		"rotated":    rotated,
 	}
-	// attempts RIDES A SUCCESS ROW TOO when the retry is what made it succeed —
+	// attempts rides a success row too when the retry is what made it succeed —
 	// a first-attempt success carries no field at all (the common case, no
 	// story to tell), but "took two tries" is as much a network signal on a
 	// success row as it is on a failure one.

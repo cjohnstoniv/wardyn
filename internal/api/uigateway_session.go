@@ -263,7 +263,7 @@ func (s *Server) uiSessionStillAuthorized(ctx context.Context, sess uiSession, r
 	// on the OIDC lane is the sub — the email rides a separate context key the
 	// ticket has no column for. IsSessionRevoked takes both identities, so the
 	// sub goes in both slots and its two arms collapse into one. CONSEQUENCE,
-	// stated because it is a real gap: a revoke that NAMES THE EMAIL does not
+	// stated because it is a real gap: a revoke that names the email does not
 	// reach an open relay session, though it does stop the same human's console
 	// session. Name the sub, or use all:true — the reserved global cutoff
 	// always reaches this. Closing it properly means carrying the email on

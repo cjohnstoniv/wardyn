@@ -138,7 +138,7 @@ type ceilingMemo struct {
 	err   error
 }
 
-// do is the memo's whole contract: resolve AT MOST ONCE, and hand every caller
+// do is the memo's whole contract: resolve at most once, and hand every caller
 // that one answer.
 //
 // Single-flight, not last-writer-wins: releasing the lock between the check
@@ -149,7 +149,7 @@ type ceilingMemo struct {
 // mid-request could still land a run whose egress was clamped under one
 // ceiling and whose grants were filtered under another.
 //
-// The lock is HELD ACROSS THE RESOLVE, deliberately. A concurrent caller waits
+// The lock is held across the resolve, deliberately. A concurrent caller waits
 // for the answer instead of starting a second read, which is the point — the
 // alternative (resolve twice, keep the first) still asks the store twice and
 // still lets the two reads straddle a profile edit. The cost is bounded by the

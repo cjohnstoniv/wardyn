@@ -465,7 +465,7 @@ func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, req c
 
 // driveShareBindFailure is driveMountFor's host_path arm (driveBindFailureHere is its only
 // caller): the two facts a share
-// bind depends on that the ROW CANNOT CARRY, re-established at the moment of
+// bind depends on that the row cannot carry, re-established at the moment of
 // the mount. It writes its own 422 and returns false once it has.
 //
 // It runs for host_path ONLY. Every other backend is either an object Wardyn
@@ -504,7 +504,7 @@ func (s *Server) driveMountFor(ctx context.Context, w http.ResponseWriter, req c
 // created directories there would be authoring on a filesystem it does not own.
 // So a missing home is a REFUSAL — and it has to be raised here rather than
 // left to the driver, because a bind mount of a non-existent source is one of
-// the few places Docker HELPFULLY CREATES IT: an empty root-owned directory
+// the few places Docker helpfully creates it: an empty root-owned directory
 // appears on the operator's share, the run launches, and the member's work goes
 // somewhere no admin allocated.
 //
@@ -624,7 +624,7 @@ const driveShareProbeTimeout = 5 * time.Second
 // thread has been started and has not come back, and when it started.
 //
 // Process-scoped on purpose, not a Server field. What it remembers is a
-// STRANDED KERNEL THREAD, and threads belong to the process rather than to any
+// stranded kernel thread, and threads belong to the process rather than to any
 // one Server: two Servers over one hung mount strand into the same pool, and a
 // per-Server map would let the second start the probes the first already
 // learned not to. Keys are absolute paths, so distinct shares never collide.

@@ -81,7 +81,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// choose which banner sentence to paint — the ceilings differ, and the
 		// one nobody may misread is that sign-in is refused until they exit.
 		"member_mode_no_credential": oidc.MemberPreviewNoCredential(r.Context()),
-		// WHETHER THE PREVIEW IS WORTH OFFERING on this deployment: the
+		// Whether the preview is worth offering on this deployment: the
 		// posture hides something only where the model-access agent's roster row
 		// is per_user, so on a `shared` install the console must not offer an
 		// entry whose banner would assert a state that deployment contradicts.
@@ -169,7 +169,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		// POST /runs told them "sign in again (or re-mint your API token)". One
 		// of those is theirs to act on, and it was the one being discarded.
 		//
-		// SCOPED TO THAT TOKEN rather than to "any narrower reason", because the
+		// Scoped to that token rather than to "any narrower reason", because the
 		// key exists for the CLIENT to pick a remedy: `unavailable` and
 		// `governance_unavailable` both mean "the server could not answer — wait
 		// or ask an operator", so preferring one over the other tells the member

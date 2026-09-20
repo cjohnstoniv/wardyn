@@ -166,7 +166,7 @@ func (s *Server) FlushAuthFailedStreak() {
 }
 
 // recordAuthFailedSummary is the ONE way a closing streak's summary row reaches
-// the trail, and it is CHARGED TO THE SAME RATE LIMITER a first row pays.
+// the trail, and it is charged to the same rate limiter a first row pays.
 // Going straight to recordAudit instead would let the coalescer's own closing
 // behavior — a streak closes on every KEY CHANGE and summarises any streak of 2
 // or more — become an unbounded emit path: an unauthenticated client

@@ -151,7 +151,7 @@ func (s *Server) runApprovals(ctx context.Context, runID uuid.UUID, state types.
 //  2. the scope is RE-DERIVED from the live roster and required equal (I3);
 //  3. on the per_user lane the snapshot's owner must be the run token's own
 //     subject (I2), so a policy-authored grant cannot name another owner;
-//  4. the blob is read THROUGH THAT SCOPE (never the operator's row for a
+//  4. the blob is read through that scope (never the operator's row for a
 //     per-user principal), renewed through the same single-flight dispatch uses;
 //  5. the host is pinned to the credential's OWN portal host (I4);
 //  6. live -> 200 + per-run mask + secret.read success;

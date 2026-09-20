@@ -422,7 +422,7 @@ func laneAllowed(row types.GitProvider, lane types.GitLane) bool {
 }
 
 // admittingRows is the row that ADMITTED this repository — as a one-element
-// list, or none. THE ROW THAT ADMITTED IS THE ROW THAT DECIDES ITS LANES, and
+// list, or none. The row that admitted is the row that decides its lanes, and
 // the distinction is not academic: two rows of the same kind are a supported
 // configuration (a GHES row and a github.com row are both `kind: github`, and
 // two rows on one host with different lanes is exactly how an admin runs a

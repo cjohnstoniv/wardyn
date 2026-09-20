@@ -47,7 +47,7 @@ const (
 	llmMechanismDeadSentence = "this run's model access is configured as %s, and that credential %s — %s " +
 		"Wardyn does not substitute a different model provider."
 
-	// llmMechanismPinContradictedSentence is the refusal for a STORED AWS SSO
+	// llmMechanismPinContradictedSentence is the refusal for a stored AWS SSO
 	// session whose account/role the roster no longer allows. It is its own
 	// sentence rather than a state of the one above because nothing here is
 	// missing or expired: the declared lane fired, the credential is live, and
@@ -357,8 +357,8 @@ func (s *Server) enforceConfiguredLLMMechanism(ctx context.Context, run types.Ag
 	return false
 }
 
-// enforceReadableRosterForCredential refuses a dispatch whose ROSTER READ
-// FAILED, before the AWS SSO credential scope is resolved from a zero site
+// enforceReadableRosterForCredential refuses a dispatch whose roster read
+// failed, before the AWS SSO credential scope is resolved from a zero site
 // config.
 //
 // That scope decides WHOSE captured session credentials the run

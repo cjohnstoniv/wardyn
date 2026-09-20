@@ -66,8 +66,8 @@ func ValidateLLMGateways(anthropicRaw, openaiRaw string) (map[string]string, err
 // the value is the operator's own either way, and the ceiling is already one
 // data-plane host per deployment.
 //
-// allowTestEndpoints (WARDYN_ALLOW_TEST_ENDPOINTS) relaxes RULE 1 AND NOTHING
-// ELSE: a plain http:// data-plane host becomes acceptable. It exists for one
+// allowTestEndpoints (WARDYN_ALLOW_TEST_ENDPOINTS) relaxes RULE 1 and nothing
+// else: a plain http:// data-plane host becomes acceptable. It exists for one
 // caller — the kind SSO walk, which points this at test/awsssofake's
 // bedrock-runtime stub so a member's minted role credential is actually SPENT
 // by something. That stub serves no TLS, and this is the SigV4 lane, so no

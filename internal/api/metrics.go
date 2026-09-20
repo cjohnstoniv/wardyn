@@ -107,7 +107,7 @@ type metrics struct {
 	// By outcome, CLOSED set (credentialReauthOutcomeValues) for the reason
 	// driveRefusals gives: a label nobody enumerated is one series per string.
 	//
-	// Every label is counted AT ITS OWN TRANSITION, which is the whole
+	// Every label is counted at its own transition, which is the whole
 	// correction: requested at the raise, resolved at the resolution, expired
 	// where the sweeper ages a row out, cancelled where a terminal run cancels
 	// one, timeout where the daemon ingests the sidecar's decision row. The
@@ -328,8 +328,8 @@ const (
 	ruleSourceCredentialReauthTimeout = "credential:reauth-timeout"
 )
 
-// isPolicyDeny reports whether an egress.Deny with this rule_source is a DENIAL
-// BY POLICY — the thing wardyn_egress_denies_total's HELP string promises and
+// isPolicyDeny reports whether an egress.Deny with this rule_source is a denial
+// by policy — the thing wardyn_egress_denies_total's HELP string promises and
 // the only thing an operator alerting on that series wants to be paged for.
 //
 // Exclusion, not an allowlist, on purpose: the policy/guard sources are open-

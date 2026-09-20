@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Agent providers: the org-level policy for WHICH coding agents this deployment
-// offers and HOW EACH ONE REACHES ITS MODEL. This file owns the write boundary —
+// offers and how each one reaches its model. This file owns the write boundary —
 // validation, the two endpoints, the audit row — and the predicates every later
 // site reads:
 //

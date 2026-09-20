@@ -4,7 +4,7 @@
 // POST /drives/preview — the ADMIN's answer to "whose drive resolves for these
 // claims, and would it actually mount".
 //
-// SPLIT OUT OF user_drives_resolve.go when that file crossed the 1000-line
+// Split out of user_drives_resolve.go when that file crossed the 1000-line
 // ceiling scripts/check-file-size.sh holds, at the seam its own banner already
 // drew: everything here is the preview ENDPOINT (its response shape, its
 // warning, its three gates), and everything left behind is the resolver the
@@ -30,7 +30,7 @@ import (
 // `docker volume rm` / `kubectl delete pvc` can be copied rather than computed
 // from a hash by hand.
 //
-// EVERY FIELD IS omitempty and an empty object is the answer for "no grant
+// Every field is omitempty and an empty object is the answer for "no grant
 // matched", the same additive/absent doctrine governancePreviewResponse
 // follows: an absent key already decodes as "no drive" in the TS mirror, while
 // "" would be a value the console then has to special-case.
@@ -52,7 +52,7 @@ type userDrivePreviewResponse struct {
 	// console sends one kind-less box, and the resolver reads position (the
 	// caller's stable subject first, their email last). So an admin who pasted
 	// only an address against a `hash` or `sub` drive gets a perfectly
-	// well-formed object name that NO RUN WILL EVER MOUNT — derived from the
+	// well-formed object name that no run will ever mount — derived from the
 	// address, where the run derives from the sign-in subject. Naming the claim
 	// the answer keys on is what makes that visible instead of confidently
 	// wrong. Absent on a paused row, where nothing is derived at all.
@@ -119,7 +119,7 @@ func drivePreviewWarning(tmpl types.HomeTemplate, users []string) string {
 // launch path's gates run above and below it, so each is run here too — in
 // the enforcement path's own order and words:
 //
-//  0. THE ORG SWITCH (storage.user_drive.disabled), raised by
+//  0. The org switch (storage.user_drive.disabled), raised by
 //     driveSizeCeilingFor as errDrivesDisabled and answered 422 in the
 //     REFUSED_BACKEND family with the launch door's own bytes. It runs ahead of
 //     the door because the two answer different questions and only the second
@@ -129,7 +129,7 @@ func drivePreviewWarning(tmpl types.HomeTemplate, users []string) string {
 //     doing the previewing (driveDoorShut over ResolveGovernanceProfile).
 //     seedRequestDrive runs it after the switch and before the resolver, so a
 //     403 beats a 500 or an allocation-shaped 422; so does this.
-//  2. THE UNANSWERABLE GROUP TIER. A request that carries no `groups` at all
+//  2. The unanswerable group tier. A request that carries no `groups` at all
 //     has not evaluated the group tier, which is the same condition a nil
 //     snapshot creates at launch — and answering it from the `all` row is how
 //     an admin gets a confident preview of a drive no run will mount. So the
@@ -138,7 +138,7 @@ func drivePreviewWarning(tmpl types.HomeTemplate, users []string) string {
 //     deployment with no group-tier grants is served, and anything else is the
 //     403 the launch gives. The console always sends both lists (previewClaims
 //     splits one box into both), so this arm answers the hand-made request.
-//  3. WOULD IT ACTUALLY BIND HERE (driveIsMountableHere): the backend/runner
+//  3. Would it actually bind here (driveIsMountableHere): the backend/runner
 //     mismatch and, for a share, driveShareIsBindable's ceiling re-check and
 //     the home's existence. The share arm is what TOP RISK 5 was about — a
 //     drive whose /srv/homes/bob does not exist previewed as "nas via the user
@@ -199,7 +199,7 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, msg)
 		return
 	}
-	// (0) THE ORG SWITCH, ahead of the door — the launch path's own order, and
+	// (0) the org switch, ahead of the door — the launch path's own order, and
 	// the order is the argument: storage.user_drive.disabled is a 422 about the
 	// DEPLOYMENT and DenyUserDrive is a 403 about one member, so a deployment
 	// with drives switched off must answer 422 rather than tell an admin that a
@@ -296,7 +296,7 @@ func (s *Server) handlePreviewUserDrive(w http.ResponseWriter, r *http.Request) 
 // returns a nil profile, and treating that as no-door would fail open on
 // exactly the deployment whose database is unhappy.
 //
-// AND AN EMPTY `groups` IS THE UNANSWERABLE GROUP TIER HERE TOO, which this
+// And an empty `groups` is the unanswerable group tier here too, which this
 // gate did not say and its own resolver two functions down does
 // (previewResolveUserDrive → driveWithUnusableGroups). The launch path resolves
 // its ceiling through effectiveCeiling, which takes ceilingWithUnusableGroups on

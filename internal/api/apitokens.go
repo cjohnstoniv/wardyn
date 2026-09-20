@@ -137,7 +137,7 @@ func (s *Server) apiTokenAuth(next, fallback http.Handler) http.Handler {
 		// race at all: the sweep still runs (it is what makes GET /api/v1/tokens
 		// show the row revoked), but a row it missed no longer authenticates.
 		//
-		// A token created AT OR BEFORE the cutoff is not a credential; one
+		// A token created at or before the cutoff is not a credential; one
 		// minted AFTER it is, which is correct — that is a new credential the
 		// principal minted from a session that itself cleared the cutoff.
 		//
@@ -297,7 +297,7 @@ func (s *Server) handleCreateAPIToken(w http.ResponseWriter, r *http.Request) {
 	// persona whose surfaces ship API-first.
 	//
 	// Safe, and not by accident: the three consumers that turn a stamped role
-	// into REACH INTO SOMEONE ELSE'S RUN all require == oidc.RoleAdmin
+	// into reach into someone else's run all require == oidc.RoleAdmin
 	// (attach.go's ticket lane, uigateway.go, sshgateway.go), so a
 	// security_admin stamp grants precisely zero run reach. The SSH-key and
 	// attach-ticket stamps keep their never-stamp-anything-but-admin/member
@@ -540,7 +540,7 @@ func roleSnapshotCtx(role string) context.Context {
 // http.go states that a predicate there is the tier's ONLY definition and
 // nothing in this package may re-derive one from a role comparison of its own.
 //
-// Both are asked because the tiers DO NOT NEST — RoleSecurityAdmin is beside
+// Both are asked because the tiers do not nest — RoleSecurityAdmin is beside
 // RoleAdmin, not below it. security_admin ⇒ admin takes nothing away (a super
 // admin is a security admin too); admin ⇒ security_admin takes away the run
 // reach an admin stamp carries and IS a drop. A ladder would get exactly one of

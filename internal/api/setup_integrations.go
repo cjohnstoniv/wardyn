@@ -276,7 +276,7 @@ func memberSafeIntegrations(rows []SetupIntegration) []SetupIntegration {
 // handleListIntegrations returns the effective integration set (stored ∪
 // legacy-derived) with each row's live capabilities. Read-only, humanOrAdmin.
 //
-// PROJECTED FOR A NON-OPERATOR (memberSafeIntegration): a secret name IS a
+// Projected for a non-operator (memberSafeIntegration): a secret name IS a
 // credential ref, the same reason GET /site-config is operatorOnly, so a
 // member may not read secrets[].secret_name or the internal egress hosts
 // through this route either, even though the identical rows sit behind that
@@ -492,7 +492,7 @@ type SetupHarnessTool struct {
 	// does not mention at all.
 	//
 	// NOT omitempty, and that is the whole point: false is the value that has to
-	// reach the console, which renders a disabled row DISABLED WITH A REASON
+	// reach the console, which renders a disabled row disabled with a reason
 	// rather than hiding it. A roster that silently drops agents is how "Claude
 	// Code is just gone" becomes a support ticket.
 	Enabled bool `json:"enabled"`

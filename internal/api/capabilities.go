@@ -73,7 +73,7 @@ const (
 	// at denyMemberRequest, on the one member-authored input, and never inside
 	// resolveRunIntegration — which operator callers reach too.
 	capIntegration = "integration"
-	// capWorkspaceProvider NARROWS: it bounds which GIT PROVIDER ROW a member's
+	// capWorkspaceProvider NARROWS: it bounds which git provider row a member's
 	// work may come from — the row workspace_providers.go's providerFor resolves
 	// a repository's derived clone URL to. Values are the provider row's own id
 	// (the lowercase-ASCII slug an integration id is written in), plus `*`.
@@ -403,7 +403,7 @@ func (s *Server) capUnresolvableGroupDeny(ctx context.Context, kind, value strin
 	return false, nil
 }
 
-// capSeamAllowed is capAllowed AT AN ENFORCEMENT SEAM — same answer, plus the
+// capSeamAllowed is capAllowed at an enforcement seam — same answer, plus the
 // one case a seam has and the resolver deliberately refuses to guess at: a
 // deployment with no Store cannot hold a grant OR an enforcement row, so there
 // is nothing to enforce and the seam behaves exactly as 0.5 did.

@@ -329,7 +329,7 @@ func effectiveToolApprovals(req createRunRequest, ceiling governanceCeiling) str
 //     convenience: the agent feeds the managed-subscription eligibility test, so
 //     every agentless exec run would become eligible for the operator's live
 //     subscription credential.
-//  2. Defaulting to "byoa"/"none" resolves to an image that DOES NOT EXIST. The
+//  2. Defaulting to "byoa"/"none" resolves to an image that does not exist. The
 //     ghcr convention fallback yields agent-byoa / agent-none, both unpublished
 //     — and the catalog's BYOA row is {ID: "none"}, so even the "correct" key
 //     404s. The run would 201 and then fail at pull, which an acceptance test
@@ -563,7 +563,7 @@ func (s *Server) denyMemberGovernance(w http.ResponseWriter, r *http.Request, re
 //
 // 0 (the zero value, and any negative) is UNLIMITED, matching the two booleans'
 // rule: a profile that omits limits behaves exactly as one written before this
-// field existed. ASSIGNED SUBJECTS ONLY — an unassigned member has no profile,
+// field existed. Assigned subjects only — an unassigned member has no profile,
 // so there is no cap to read and no global default one to fall back to (the
 // `all` assignment IS the opt-in for a deployment-wide cap).
 //

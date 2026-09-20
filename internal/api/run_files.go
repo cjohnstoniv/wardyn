@@ -111,7 +111,7 @@ const (
 // substrate that dropped exec env would otherwise `cd ""`, fail, and report
 // vcs=none for a workspace we never actually looked at.
 //
-// WHY IT SEARCHES rather than trusting one path: /home/agent/work is only the
+// Why it searches rather than trusting one path: /home/agent/work is only the
 // FALLBACK mount target (composerWorkspaceTarget) — a workspace source may set
 // its own Target (workspace_run.go), and the run row does not carry the
 // resolved path, so a hardcoded guess would report vcs=none for a real repo
@@ -183,7 +183,7 @@ type runFilesResponse struct {
 	Files []runFileStat `json:"files"`
 	// Path is the in-sandbox directory actually inspected. Present on BOTH
 	// outcomes on purpose: on vcs:"none" it is the evidence that turns "no repo
-	// here" into "no repo AT THIS PATH", which is what an operator needs when a
+	// here" into "no repo at this path", which is what an operator needs when a
 	// workspace is mounted at a non-default target.
 	Path      string `json:"path,omitempty"`
 	Truncated bool   `json:"truncated"`

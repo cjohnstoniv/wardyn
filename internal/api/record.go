@@ -104,7 +104,7 @@ type RecordTaskResult struct {
 	// a CONFINED entry (nil for an open recording — the verdict only means
 	// something under confinement). Absent (nil) also covers old rows written
 	// before this field existed: unknown, not "not clean" — render neutral,
-	// never red. Clean means clean FOR WHAT WAS REPLAYED: reconcile finalizes
+	// never red. Clean means clean for what was replayed: reconcile finalizes
 	// on any terminal state, so a replay the operator ends early earns the
 	// same verdict as a full one.
 	Clean *bool `json:"clean,omitempty"`

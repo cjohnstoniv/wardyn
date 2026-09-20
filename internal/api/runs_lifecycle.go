@@ -386,7 +386,7 @@ const RunSecretGrace = time.Hour
 // runs that went terminal more than RunSecretGrace ago, and reports how many it
 // evicted.
 //
-// Eligibility is read from the RUN'S OWN STATE rather than hooked onto a
+// Eligibility is read from the run's own state rather than hooked onto a
 // terminal-transition call site, so every path that ends a run (watcher, kill,
 // idle reaper, boot reconcile, failAndRevoke) is covered by construction and no
 // new one can be forgotten. It fails CLOSED on anything it cannot positively

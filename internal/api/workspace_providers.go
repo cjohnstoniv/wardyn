@@ -69,7 +69,7 @@ const maxProviderBaseURLPathSegments = 2
 // map lists mounts, not individual routes.
 //
 // operatorOnly for BOTH, for the identical reason the /site-config pair is: a
-// base URL NAMES CORPORATE TOPOLOGY (the org's forge hosts and org paths), so the
+// base URL names corporate topology (the org's forge hosts and org paths), so the
 // GET is the same disclosure the sibling GET was narrowed for. A member never
 // needs it — a member's refusal names the provider KIND only, never the allowed
 // addresses — and the member-safe projection (memberSafeIntegration's shape) is
@@ -96,7 +96,7 @@ func gitProviderRows(sc types.SiteConfig) []types.GitProvider {
 // existed (the absent-row doctrine capEnforced and every GovernanceLimits zero
 // value already follow).
 //
-// It counts rows ENABLED OR DISABLED: a disabled row is still configuration —
+// It counts rows enabled or disabled: a disabled row is still configuration —
 // the admin saying "off" — and falling back to legacy open mode because the only
 // row is switched off would be the opposite of what they wrote down.
 func providersConfigured(sc types.SiteConfig) bool {
@@ -371,8 +371,8 @@ func validateStorageProviders(st *types.StorageProviders) error {
 
 // cloneTarget is a clone URL reduced to the three facts the match rule compares.
 // SSH is its own shape because an SSH clone URL carries no comparable path
-// (git@ssh.dev.azure.com:v3/org/... is not /org/...), so ORG-PATH SCOPING IS
-// HOST-LEVEL ONLY FOR SSH in v1 — a documented ceiling, not an oversight.
+// (git@ssh.dev.azure.com:v3/org/... is not /org/...), so org-path scoping is
+// host-level only for SSH in v1 — a documented ceiling, not an oversight.
 type cloneTarget struct {
 	scheme string
 	host   string
@@ -707,7 +707,7 @@ type workspaceProvidersPutResponse struct {
 // handleGetWorkspaceProviders returns the stored provider block.
 //
 // operatorOnly, for the same reason GET /site-config is (routes.go): base URLs
-// NAME CORPORATE TOPOLOGY. A member-safe projection (the memberSafeIntegration
+// name corporate topology. A member-safe projection (the memberSafeIntegration
 // shape) is the later one-line widening — the safe direction.
 //
 // The response carries an ETag so a caller that means to base a later PUT on

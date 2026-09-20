@@ -176,7 +176,7 @@ func (s *Server) egressDecisionsToReconcile(ctx context.Context) ([]egressDecisi
 // check, a run that no longer exists, or a run with no recorded workspace link.
 //
 // These are the predicates that need only the APPROVAL. The live decide path
-// applies two more that need the CURRENT WORKSPACE ROW — approveAlwaysRejects
+// applies two more that need the current workspace row — approveAlwaysRejects
 // and denyAlwaysReject — and this function deliberately does not: it is called
 // per approval, while the workspace is read once per decision in the caller's
 // loop, which is where healRejects asks them. Skipping these two predicates

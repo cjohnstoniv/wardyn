@@ -145,7 +145,7 @@ func validSiteURLOrHost(raw string) bool {
 }
 
 // normalizeSiteConfigTopology canonicalizes PUT /site-config's plain-string
-// topology fields IN THE HANDLER, beside normalizeWorkspaceProviders, before
+// topology fields in the handler, beside normalizeWorkspaceProviders, before
 // validateSiteConfig runs. Without this, a field validated only
 // because HostOf/validSiteHost trim+lowercase a THROWAWAY copy before
 // checking it (hostrules.go) still PERSISTED whatever case/whitespace the
@@ -324,7 +324,7 @@ func validateSiteConfig(cfg types.SiteConfig) error {
 	//
 	// The SIBLING agent_providers block is validated by its own gate at each of
 	// those two doors instead of here (validateAgentProviders, agent_providers.go):
-	// admitting a row needs the BOOT AGENT-IMAGE MAP, which is server state this
+	// admitting a row needs the boot agent-image map, which is server state this
 	// deliberately pure function has no access to. Both doors run it, so the
 	// "one validator, two doors" property is the same.
 	return validateWorkspaceProviders(cfg.WorkspaceProviders)
@@ -539,7 +539,7 @@ func (s *Server) handleGetSiteConfig(w http.ResponseWriter, r *http.Request) {
 // vocabulary cannot NAME these, so their absence from its body is not a
 // decision.
 //
-// ADD A KEY HERE WHEN YOU ADD ONE TO types.SiteConfig, and
+// Add a key here when you add one to types.SiteConfig, and
 // TestSiteConfigRoundTripKeepsFieldsAnOlderClientCannotName fails until you
 // have decided which side of this line it sits on.
 var siteConfigFieldsAfter066 = []string{"upstream_proxy_no_proxy", "internal_hosts", "workspace_providers", "agent_providers"}
@@ -730,7 +730,7 @@ func (s *Server) handlePutSiteConfig(w http.ResponseWriter, r *http.Request) {
 	hostSuffixes := auditInternalHostSuffixes(saved.InternalHosts)
 	datum := map[string]any{
 		// upstream_proxy_url/upstream_proxy_secret_ref, the egress_redirects
-		// from→to pairs and internal_hosts[].host_suffix are IN THE CLEAR on
+		// from→to pairs and internal_hosts[].host_suffix are in the clear on
 		// purpose — same precedent as workspace_provider.write's base_urls:
 		// topology, not a credential (a secret ref is a NAME, never the value it
 		// names). Without them, an MDM-applied narrowing or opening of the

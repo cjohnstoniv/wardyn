@@ -14,14 +14,14 @@
 //
 // Two things are specific to this table, and neither is optional:
 //
-//  1. THE ENV CEILING. A host_path drive's host_root is authored HERE, in the
+//  1. The env ceiling. A host_path drive's host_root is authored HERE, in the
 //     database, and then bound into OTHER PEOPLE's sandboxes. So the write
 //     boundary composes two checks: types.ValidateUserDrive for the row's shape
 //     and runner.UserDriveHostRootCheck for the deployment's operator/MDM-set
 //     ceiling over it. A deployment that sets no roots can author no host_path
 //     drive at all — an admin cannot widen the ceiling from inside the product.
 //
-//  2. A NEW GRANT IS ENABLED. The store writes UserDriveGrant.Enabled verbatim,
+//  2. A new grant is enabled. The store writes UserDriveGrant.Enabled verbatim,
 //     so a zero-valued grant is a PAUSED one. `enabled` therefore decodes as a
 //     *bool defaulting true here, at the request boundary, which is the only
 //     place that can tell "the client said false" from "the client said
@@ -51,7 +51,7 @@ import (
 //
 // The parameter is spelled `operatorOnly` because that is the group routes.go
 // hands it and the tier these were born on; the group a mount function receives
-// is decided AT THE CALL SITE, never by this parameter's name, and
+// is decided at the call site, never by this parameter's name, and
 // authz_test.go's chi.Walk matrix is what enforces the classification.
 //
 // Registered UNCONDITIONALLY, with no `if s.cfg.Store != nil` arm: a route that
@@ -84,11 +84,11 @@ func (s *Server) mountUserDriveRoutes(operatorOnly chi.Router) {
 //
 //   - HostRootsConfigured says whether a host_path drive can be authored on
 //     this deployment AT ALL, so the backend picker can disable `host_path`
-//     WITH THE REASON rather than offering an option whose every save 422s. It
+//     with the reason rather than offering an option whose every save 422s. It
 //     is a BOOLEAN, never the roots themselves: the console needs to know that
 //     a ceiling exists, not where the operator's filesystem is laid out.
 //
-//     IT IS NOT len(roots) > 0, and that was the bug it was named after. Three
+//     It is not len(roots) > 0, and that was the bug it was named after. Three
 //     configured values are DEAD ceilings — "/" (withinAnyRoot matches `real ==
 //     root` or `real` under `root + "/"`, and no cleaned absolute path begins
 //     "//", so a root of "/" matches nothing), a root under a denied bind
@@ -139,7 +139,7 @@ type userDrivesResponse struct {
 // measured at 50,000 allocations as a 5.5 MB on-disk external merge and a ~15 MB
 // body. Bounded, the same query is a top-N heapsort in 301 kB.
 //
-// THE DEFAULT IS maxListLimit, NOT defaultListLimit, and the difference is
+// The default is maxListLimit, NOT defaultListLimit, and the difference is
 // whether this change can take rows away from anyone. A deployment with 1,000
 // allocations or fewer gets a byte-identical answer to the one it got before;
 // past that the page is capped and says so, where the old behaviour shipped
@@ -155,7 +155,7 @@ func (s *Server) handleGetUserDrives(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// The org switch is read, NOT ASSUMED OPEN, and a site-config read that fails
+	// The org switch is read, not assumed open, and a site-config read that fails
 	// is a 500 rather than a `false`: "drives are on" is an affirmative claim, and
 	// serving it for a read that could not answer would draw the whole admin
 	// screen as if the switch were on for a deployment where every write 422s.
@@ -259,7 +259,7 @@ func (s *Server) userDriveProvider(ctx context.Context) (types.UserDriveProvider
 // order, for an admin write carrying sizeMiB. It returns the status and message
 // the caller answers with, or (0, "") when the write may proceed.
 //
-// THE SWITCH IS FIRST because the two answer different questions and only one of
+// The switch is first because the two answer different questions and only one of
 // them is about the number: with drives off there is nothing for a ceiling to
 // bound. The per-profile DenyUserDrive door is not asked here at all — it is a
 // MEMBER's door, keyed on a principal these routes do not have.

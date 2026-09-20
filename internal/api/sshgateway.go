@@ -210,7 +210,7 @@ func (s *Server) sshGatewayHealthz() map[string]any {
 //
 // Every REJECTION is audited under ssh.auth right here — including an
 // unknown key or an unparseable/unknown run id — so a scan against the
-// gateway leaves a trail. SUCCESS is deliberately NOT audited here (W25.4-1):
+// gateway leaves a trail. SUCCESS is deliberately NOT audited here:
 // golang.org/x/crypto/ssh calls PublicKeyCallback on the UNSIGNED "query"
 // every pubkey auth attempt opens with (RFC 4252 §7), and even for a direct
 // signed attempt this callback still runs BEFORE the signature is verified —

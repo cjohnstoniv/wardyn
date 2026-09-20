@@ -141,7 +141,7 @@ func (s *Server) resolveLLMTransport(ctx context.Context, run types.AgentRun, po
 	// layer exists so the refusal is legible.
 	t.injectSub = s.cfg.SubscriptionPostureOK && modelRun && t.subscription && s.cfg.SubscriptionToken != nil && !s.cfg.DisableSubscriptionInject
 
-	// A HARNESS LOGIN run has no credential yet — its whole purpose is for the
+	// A harness login run has no credential yet — its whole purpose is for the
 	// operator to run `claude setup-token` in the attach shell and mint one. Point
 	// the CLI at the real API (its OAuth flow tunnels to the allowlisted OAuth
 	// hosts through HTTPS_PROXY) and seed NO api-key placeholder, so nothing

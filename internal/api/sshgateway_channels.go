@@ -477,7 +477,7 @@ func (s *Server) bridgeSSHShell(ctx context.Context, runID uuid.UUID, principal 
 			// goroutine so a client that has stopped reading its window cannot
 			// wedge the take-over HTTP request behind a blocked write.
 			//
-			// THE CANCEL IS THE ACT; the line is a courtesy, so the cancel is on
+			// The cancel is the act; the line is a courtesy, so the cancel is on
 			// a TIMER the write cannot outlive. x/crypto's WriteExtended blocks
 			// on the channel's remote window with no context and no deadline, so
 			// a displaced client that stopped reading (a suspended ssh(1)) used

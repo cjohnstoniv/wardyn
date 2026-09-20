@@ -190,7 +190,7 @@ func (s *Server) handleInternalInjection(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// CAPTURED AWS SSO path (PHASE B): the third sentinel, and the only one that
+	// Captured AWS SSO path (PHASE B): the third sentinel, and the only one that
 	// can answer 423. It re-derives the credential's scope from the live roster,
 	// requires equality with the grant's dispatch-time snapshot, and either
 	// injects the live session or raises a human-visible sign-in request. It is

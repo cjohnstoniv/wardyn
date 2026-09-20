@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// The AWS SSO ENDPOINT OVERRIDE — one test-only knob
+// The AWS SSO endpoint override — one test-only knob
 // (WARDYN_AWS_SSO_ENDPOINT_OVERRIDE, Config.AWSSSOEndpointOverride) that moves
 // every derivation naming an AWS IAM Identity Center endpoint at once:
 //

@@ -104,13 +104,13 @@ func (s *Server) routes() chi.Router {
 			// securityOps is the second admin tier: admin OR security_admin, via
 			// requireSecurityOperator / isSecurityOperator (http.go). What the tier
 			// MEANS — the line every assignment above is measured against — is
-			// AUTHORITY OVER THE VERDICT AND OVER THE ORG'S CEILINGS, and never reach
+			// authority over the verdict and over the org's ceilings, and never reach
 			// INTO a run, never credential material, never the host: decide/see any
 			// approval, verify the audit chain, hold the org allow/denylist, revoke a
 			// human's session or another human's API token, promote a workspace's
 			// observed egress, author governance profiles.
 			//
-			// "a human's" INCLUDES A SUPER ADMIN'S, and the revoke route's
+			// "a human's" includes a super admin's, and the revoke route's
 			// {"all":true} arm is deployment-wide — see handleRevokeSessions
 			// (sessions.go) for why that is the tier working rather than a hole,
 			// and TestSecurityAdminRevokesSuperAdmin for the pin. Stated here
@@ -127,8 +127,8 @@ func (s *Server) routes() chi.Router {
 			// widening later is the one-line move this group exists for,
 			// narrowing after the fact is a regression nobody notices.
 			//
-			// The invariant that makes /permissions delegable at all: NO CAPABILITY
-			// KIND CAN EVER REACH THE ADMIN TIER. capAllowed / capGranted
+			// The invariant that makes /permissions delegable at all: No capability
+			// kind can ever reach the admin tier. capAllowed / capGranted
 			// short-circuit on isOperator ALONE (capabilities.go), so a security
 			// admin is capability-bounded exactly like a member — they may self-grant
 			// through the /permissions routes below, audited, and still reach nothing
@@ -330,8 +330,8 @@ func (s *Server) routes() chi.Router {
 			// older rows carry) still answers a member's mutation with the same 403
 			// requireOperator wrote.
 			//
-			// A route that WIDENS AN EGRESS CEILING, BINDS CREDENTIAL MATERIAL, or
-			// WRITES THE HOST stays gated below; owning a workspace does not make
+			// A route that widens an egress ceiling, binds credential material, or
+			// writes the host stays gated below; owning a workspace does not make
 			// a member the operator of it. That set is split across the two admin
 			// tiers: the EGRESS-DECISION lane — approved-egress,
 			// denied-egress and record/{task}/promote-egress — is securityOps
@@ -347,8 +347,8 @@ func (s *Server) routes() chi.Router {
 			//
 			// Record is not an egress decision, which is why it is not in that
 			// lane. It was grouped there by association with promote-egress, but
-			// the two do categorically different things: promote-egress WRITES A
-			// LIST, while record LAUNCHES AN INTERACTIVE SANDBOX — open egress by
+			// the two do categorically different things: promote-egress writes a
+			// list, while record launches an interactive sandbox — open egress by
 			// default (AllowAllEgress = !confined), the workspace's local_dir
 			// bind-mounted (read-WRITE when the owning member ticked Writable),
 			// the repo clone credential minted, the workspace's required secret:/
@@ -634,7 +634,7 @@ func (s *Server) routes() chi.Router {
 			// by any brokered local route — the sandbox cannot reach it.
 			r.Post("/internal/token/renew", s.handleInternalTokenRenew)
 
-			// Injection resolve: returns the FORMATTED SECRET VALUE for an
+			// Injection resolve: returns the formatted secret value for an
 			// api_key grant. SECURITY: this path must NEVER be forwarded by a
 			// wardyn-proxy brokered local route — the proxy calls it directly
 			// at startup; the sandbox has no network path to it (the brokered

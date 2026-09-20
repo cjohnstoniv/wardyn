@@ -130,7 +130,7 @@ func writeDirectoryUnconfigured(w http.ResponseWriter) {
 // to see it failing (a lapsed secret, a revoked consent, an unreachable tenant)
 // without an admin having to report "the picker is empty".
 //
-// The DATA IS CONTENT-FREE, and that is the same care the searches-are-not-
+// The data is content-free, and that is the same care the searches-are-not-
 // audited decision is made with: the provider, the failing operation and the
 // upstream status come from directory.ProviderError's typed fields — never the
 // query string, which is the name of a person an admin was looking up.

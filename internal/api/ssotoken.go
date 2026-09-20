@@ -78,7 +78,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "run is not an aws sso container-login run")
 		return
 	}
-	// A KILLED run MAY STILL REACH THIS ROUTE, and that is the belt the supersede
+	// A KILLED run may still reach this route, and that is the belt the supersede
 	// needs. Killing a run revokes its identity and token verification fails
 	// closed on a revoked run (internal/identity/embedded.go) — but RevokeRun is
 	// best-effort (a failed revoke is reported, not retried forever), and
@@ -122,7 +122,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// WHOSE credential this is — DECIDED AT LAUNCH, read back here, never
+	// WHOSE credential this is — Decided at launch, read back here, never
 	// recomputed from the live roster. The roster says whether this deployment
 	// keeps ONE model credential for everyone (`shared`, today) or one per person
 	// (`per_user`), and the namespace is the login run's own identity subject
@@ -269,7 +269,7 @@ func (s *Server) handleUploadSSOToken(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// bindSSOBlob binds WHAT is uploaded to WHAT THE OPERATOR ASKED FOR, and is the
+// bindSSOBlob binds WHAT is uploaded to what the operator asked for, and is the
 // whole of this handler's content check. Extracted from the handler body so
 // handleUploadSSOToken stays a readable sequence of authorize / bind / store
 // (and under the cyclomatic cap as the bindings grew from three to five).

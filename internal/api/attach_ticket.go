@@ -39,7 +39,7 @@ const attachTicketTTL = 30 * time.Second
 // another, and a restart no longer invalidates every outstanding ticket.
 
 // mintAttachTicket issues a fresh single-use ticket bound to runID, to the
-// minting principal, and to that principal's role (admin/member) AT MINT TIME
+// minting principal, and to that principal's role (admin/member) at mint time
 // — the WS attach route's ?ticket= lane bypasses humanOrAdminAuth entirely, so
 // this stamped role is the only signal available to re-check owner-or-admin
 // when the ticket is consumed (see attach.go's handleAttachWS).
@@ -82,8 +82,8 @@ type ticketActorCtxKey struct{}
 type ticketActor struct {
 	actorType types.ActorType
 	principal string
-	// role is the minting principal's role (oidc.RoleAdmin / oidc.RoleMember) AT
-	// MINT TIME, stamped by handleAttachTicket. It is the ONLY role source
+	// role is the minting principal's role (oidc.RoleAdmin / oidc.RoleMember) at
+	// mint time, stamped by handleAttachTicket. It is the ONLY role source
 	// available in the ?ticket= WS lane (ticketOrHumanAuth bypasses
 	// humanOrAdminAuth for it entirely) — see handleAttachWS's owner-or-admin
 	// re-check.

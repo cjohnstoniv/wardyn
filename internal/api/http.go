@@ -25,7 +25,7 @@ import (
 // claimsCtxKey carries the verified run claims through the internal handlers.
 type claimsCtxKey struct{}
 
-// localPrincipalCtxKey carries the LOCAL HOST MODE operator principal placed by
+// localPrincipalCtxKey carries the local host mode operator principal placed by
 // humanOrAdminAuth so principalFromRequest can attribute admin-gated actions to
 // the local operator without an OIDC session or an X-Wardyn-Principal header.
 type localPrincipalCtxKey struct{}
@@ -111,7 +111,7 @@ func oidcRoleFromContext(ctx context.Context) string {
 // middleware stays the single place that trusts the oidc package. It is what a
 // `group`-subject capability grant matches against — see capabilities.go.
 //
-// NIL AND EMPTY ARE DIFFERENT (see oidc.GroupsFromContext). Empty: the IdP sent
+// Nil and empty are different (see oidc.GroupsFromContext). Empty: the IdP sent
 // no usable group identity, and group grants genuinely do not apply. Nil:
 // either there is no SSO session at all, or the human holds a PRE-0.6 cookie
 // that predates the field. A caller that already knows a session is present
@@ -510,7 +510,7 @@ func (s *Server) requireOperator(next http.Handler) http.Handler {
 // named predicates, and the distinction is load-bearing:
 //
 //   - isOperator (here): binds credentials, writes the host, administers users,
-//     and REACHES RUNS ITS HOLDER DOES NOT OWN. It is what a role SNAPSHOT
+//     and reaches runs its holder does not own. It is what a role SNAPSHOT
 //     stamped on an SSH key or an attach ticket means (sshkeys.go,
 //     attach_ticket.go), which is why oidc.RoleSecurityAdmin is not "below"
 //     RoleAdmin on a ladder — it is beside it.
@@ -918,7 +918,7 @@ func (s *Server) internalAuth(next http.Handler) http.Handler {
 		claims, err := s.cfg.Identity.Verify(r.Context(), tok, internalAudience)
 		if err != nil {
 			// Do not leak the verification reason (revoked vs expired vs forged)
-			// TO THE CALLER. The audit row is equally coarse — one reason for the
+			// to the caller. The audit row is equally coarse — one reason for the
 			// whole verify failure — so the trail records THAT a run token was
 			// refused without telling a brute-forcer which half it got wrong.
 			s.auditAuthFailedAs(r, internalAuthActor, "invalid_run_token")
@@ -965,7 +965,7 @@ func (s *Server) internalAuthGroundtruth(next http.Handler) http.Handler {
 		}
 		if _, err := s.cfg.Identity.Verify(r.Context(), tok, groundtruthAudience); err != nil {
 			// Do not leak the verification reason (revoked vs expired vs
-			// wrong-audience vs forged) TO THE CALLER; the audit row is equally
+			// wrong-audience vs forged) to the caller; the audit row is equally
 			// coarse for the same reason.
 			s.auditAuthFailedAs(r, groundtruthAuthActor, "invalid_sensor_token")
 			writeError(w, http.StatusUnauthorized, "invalid sensor token")

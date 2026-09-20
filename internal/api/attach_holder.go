@@ -243,8 +243,8 @@ func writeAttachMode(ctx context.Context, c *websocket.Conn, readOnly bool, hold
 // attachHolderRegistry is the per-daemon map of run id -> current PTY holder.
 //
 // Ceiling: it is IN-PROCESS. A multi-replica control plane sees only its OWN
-// replica's holders, so "held:false" means "nobody is attached THROUGH THIS
-// DAEMON" — the UI copy must not claim more than that. Wardyn refuses
+// replica's holders, so "held:false" means "nobody is attached through this
+// daemon" — the UI copy must not claim more than that. Wardyn refuses
 // replicas>1 by construction today (deployment.yaml, same assumption as
 // Server.siteConfigMu and secretmask.Registry), so this is exact, not hopeful.
 // ponytail: in-process holder registry, single-daemon truth. Upgrade path is a

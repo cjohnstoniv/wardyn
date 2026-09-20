@@ -19,7 +19,7 @@ const maxHarnessPasteTokenLen = 8 << 10
 // DRAFT (M2 canon pending)
 const (
 	// harnessPasteViaHelperRefusal answers PUT /setup/harness-credential/{p} for
-	// a provider whose credential is CAPTURED BY A HELPER inside a login sandbox
+	// a provider whose credential is captured by a helper inside a login sandbox
 	// (harnessLogin.captureViaHelper), not pasted. aws is the live case: its
 	// reserved secret holds a structured SSO blob, and a pasted {"token":…} both
 	// destroys that blob — Bedrock then silently falls through to ~/.aws or

@@ -398,7 +398,7 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 			return fmt.Errorf("eligible_grants[%d]: api_key %w", i, err)
 		}
 	}
-	// A git_pat grant returns the STORED PAT VALUE to the git credential
+	// A git_pat grant returns the stored PAT value to the git credential
 	// helper (unlike api_key, whose value never leaves the broker). Require
 	// host + secret_name and reject a reserved platform-internal secret at
 	// WRITE time — fail closed so a policy can never exfiltrate
@@ -431,7 +431,7 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 			return fmt.Errorf("eligible_grants[%d]: ssh_key host %q is not a supported SSH-over-443 provider (github.com / dev.azure.com)", i, host)
 		}
 	}
-	// An env_secret grant puts a STORED SECRET VALUE in the sandbox env for the
+	// An env_secret grant puts a stored secret value in the sandbox env for the
 	// whole run (see GrantEnvSecret). Require a portable, non-WARDYN_ env var
 	// name and a secret_name, and reject a reserved platform-internal secret at
 	// WRITE time — the same fail-closed shape git_pat/ssh_key get, and for the
@@ -478,7 +478,7 @@ func validateEligibleGrant(i int, g types.GrantSpec) error {
 // know whether a given run will be brokered; the rule it enforces is DECLARATIVE
 // (you may not declare both lanes to one forge), and the message says so.
 //
-// A git_pat FOR A BROKERED FORGE IS COVERED TOO. Exempting it on the reasoning
+// A git_pat for a brokered forge is covered too. Exempting it on the reasoning
 // that such a grant is "already dead twice over" does not hold:
 // wardyn-git-helper refuses on isGitHubHost before the PAT fallback whenever
 // WARDYN_GIT_BROKER_REPOS is set, and github.com is one of the four broker

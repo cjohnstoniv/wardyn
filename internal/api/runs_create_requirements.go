@@ -118,7 +118,7 @@ func (s *Server) applyWorkspaceRequirements(ctx context.Context, spec *types.Run
 // record route and every existing test keep that.
 func (s *Server) applyWorkspaceRequirementsFor(ctx context.Context, present map[string]bool, spec *types.RunPolicySpec, agent string, wsRefs []types.Workspace, selections map[string]client.WorkspaceSelection) []requirementAuditEntry {
 	var events []requirementAuditEntry
-	// Resolved AT MOST ONCE per call, lazily on the first integration key
+	// Resolved at most once per call, lazily on the first integration key
 	// found — effectiveIntegrations reads the site-config
 	// store, a full secret listing, and peeks the subscription/Bedrock state,
 	// so recomputing it per requirement (a workspace with 6 integration

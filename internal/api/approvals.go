@@ -23,7 +23,7 @@ import (
 // decisionRequest is the approve/deny body.
 type decisionRequest struct {
 	Reason string `json:"reason"`
-	// Scope/ExpiresAt are named decision_* ON THE WIRE deliberately, not for
+	// Scope/ExpiresAt are named decision_* on the wire deliberately, not for
 	// symmetry with the stored column. A bare "scope" collides with the
 	// approval's own RequestedScope — the host JSON that is part of the PENDING
 	// dedup index, and the identifier the console already binds to on three
@@ -122,7 +122,7 @@ func (s *Server) handleListApprovals(w http.ResponseWriter, r *http.Request) {
 	var pageFn func(store.Page) ([]types.ApprovalRequest, error)
 	switch {
 	case runID != uuid.Nil:
-		// Run-scoped: filter AT THE DB. Fail-SAFE (not fail-closed): a backend
+		// Run-scoped: filter at the DB. Fail-SAFE (not fail-closed): a backend
 		// without the capability falls through to the fetch-all closure below,
 		// which returns the identical rows. Ownership was already proven above.
 		if pager, capable := s.cfg.Approvals.(store.ApprovalsByRunPager); capable {
@@ -256,7 +256,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 		return
 	}
 
-	// Loaded AT MOST ONCE each. The member gate needs both for its own checks
+	// Loaded at most once each. The member gate needs both for its own checks
 	// and the scope rules reuse whatever it loaded; an OPERATOR's decide read
 	// nothing from the store before this change, and the scope-gated loads
 	// further down keep it that way for the default `run` scope and for every
@@ -335,7 +335,7 @@ func (s *Server) decide(w http.ResponseWriter, r *http.Request, approve bool) {
 	// early read above is best-effort (a store blip there must not turn a
 	// not-decidable kind into a decidable one).
 	//
-	// A credential_reauth row is NOT A DECISION and is refused to
+	// A credential_reauth row is not a decision and is refused to
 	// every tier, security operator included (409, not 403: the request is real
 	// and readable, it is the VERB that does not apply).
 	//

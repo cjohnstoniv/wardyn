@@ -67,7 +67,7 @@ const (
 	// attach ticket.
 	uiEnterPath = "/__wardyn/enter"
 	// uiRunPrefix roots every relayed request: /r/<run-id>/<app>/<app path>.
-	// The run id AND the app are IN THE PATH so the session cookie can be
+	// The run id AND the app are in the path so the session cookie can be
 	// Path-scoped to both — one run's page cannot make the browser attach
 	// another run's cookie, and one app's session cannot be the other's
 	// (uiCookiePath, uigateway_session.go).

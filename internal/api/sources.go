@@ -44,7 +44,7 @@ import (
 // its own now-removed route) are gone, not stubbed.
 // The reads are operatorOnly too, matching their writes. They were the member
 // group's, and the split was made by VERB rather than by what the document
-// carries: a Source row carries Locator — the HOST FILESYSTEM PATH of a
+// carries: a Source row carries Locator — the host filesystem path of a
 // local_dir source — and Requirements keyed `secret:<name>` / `egress:<host>`,
 // so a plain member GET returned the operator's on-disk layout and the NAMES of
 // the secrets and internal hosts every library entry needs. A BaseImageEntry

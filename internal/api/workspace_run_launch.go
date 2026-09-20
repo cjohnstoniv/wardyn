@@ -306,7 +306,7 @@ func scanRunGovernance(ceiling governanceCeiling) stepRunGovernance {
 // whose answer differs from the rest.
 //
 // deny_interactive does NOT bind it, deliberately and narrowly. That limit is
-// about a person getting a shell for THEIR OWN WORKLOAD; this box carries no
+// about a person getting a shell for their own workload; this box carries no
 // workload, mounts nothing, mints nothing, and its "terminal" shows a device
 // code and a verification URL — it is a credential-capture step WARDYN authors
 // and auto-types, not the member's session. It is also the only way a principal
@@ -397,7 +397,7 @@ func (s *Server) recordSessionPolicy(ws types.Workspace, cc types.ConfinementCla
 	}
 	return types.RunPolicySpec{
 		MinConfinementClass: cc,
-		// A CONFINED REPLAY session is default-deny, limited to AllowedDomains
+		// A confined replay session is default-deny, limited to AllowedDomains
 		// (baseline clone/registry hosts ∪ the workspace's approved egress) — so
 		// re-running the same steps proves they work under least privilege. A
 		// learning session (open) allows all egress so the capture is complete.

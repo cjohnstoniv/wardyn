@@ -70,7 +70,7 @@ type revokeSessionsRequest struct {
 //     incident-response 'log everyone out' lever", and a lever that exempts the
 //     most privileged accounts is not one — a compromised super-admin session
 //     is precisely the case you buy it for.
-//   - The tiers deliberately DO NOT NEST (routes.go's securityOps rationale).
+//   - The tiers deliberately do not nest (routes.go's securityOps rationale).
 //     "security_admin may not act on admin" would be a ladder assertion, and
 //     the ladder is the shape this design refuses; the asymmetry it DOES keep
 //     is the one that matters — a security admin's SSH key and attach ticket

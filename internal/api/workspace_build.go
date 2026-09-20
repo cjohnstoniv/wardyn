@@ -38,7 +38,7 @@ type buildState struct {
 	// Log is the bounded tail of this build's output (maxBuildLogLines), fed by
 	// buildLogWriter. Same in-memory-only caveat as the rest of buildState.
 	Log []string `json:"log,omitempty"`
-	// Key is the workspace's image cache key AT THE MOMENT THIS BUILD STARTED
+	// Key is the workspace's image cache key at the moment this build started
 	// (Server.workspaceBuiltImageKey) — what the build was building, not what
 	// it produced. The `done` half of a stale entry is answered by the row, but
 	// a FAILED build has no ref for the row to disagree with, so without this a

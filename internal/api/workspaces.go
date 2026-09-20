@@ -32,8 +32,8 @@ import (
 type workspaceRequest = client.WorkspaceRequest
 
 // validateWorkspaceLLMCred checks an operator-supplied cred binding: a NAME
-// only (whether the named Integration actually exists/resolves is W5's job —
-// see resolveWorkspaceIntegration in llmcred.go). nil, or an empty
+// only — whether the named Integration actually exists/resolves is
+// resolveWorkspaceIntegration's job (llmcred.go). nil, or an empty
 // IntegrationRef (clears the binding), is always valid.
 func validateWorkspaceLLMCred(c *types.WorkspaceLLMCred) string {
 	if c == nil || c.IntegrationRef == "" {
@@ -639,7 +639,7 @@ func (s *Server) handleUpdateWorkspace(w http.ResponseWriter, r *http.Request) {
 		ws.ApprovedEgress = nil
 		ws.Requirements = nil
 		ws.RecordResults = nil
-		// Stamp the clear (0055) — asked for here, WRITTEN BY THE DATABASE. This
+		// Stamp the clear (0055) — asked for here, written by the database. This
 		// handler is the THIRD durable writer of approved_egress, beside the two
 		// scoped setters migration 0055 named. The boot heal
 		// (ReconcileWorkspaceEgressDecisions) re-applies every decided `always`
@@ -739,7 +739,7 @@ func (s *Server) handleSetApprovedEgress(w http.ResponseWriter, r *http.Request)
 		Domains []string `json:"domains"`
 	}
 	// A host the git broker (or the control plane itself) already
-	// owns is DEAD BY CONSTRUCTION as a direct ApprovedEgress entry — dispatch
+	// owns is dead by construction as a direct ApprovedEgress entry — dispatch
 	// routes it through the broker/proxy specially, never as a plain allowlist
 	// host, so "approving" one here writes a row a real run's proxy will never
 	// consult. This is the SAME static skip-set promoteSkipHosts applies to the

@@ -453,7 +453,7 @@ func (s *Server) secretOwnerFromRequest(r *http.Request) string {
 }
 
 // runIdentitySubject resolves the subject a RUN IDENTITY is minted with — the
-// string that becomes claims.Sub and therefore SELECTS THE SECRET NAMESPACE
+// string that becomes claims.Sub and therefore selects the secret namespace
 // every credential-bearing path resolves against: broker ownerOf(caller) ==
 // caller.Sub (internal/broker/broker_mint_kinds.go, used by mintGitPAT and
 // mintSSHKey), the injection sink's Secrets.For(claims.Sub)

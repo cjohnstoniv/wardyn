@@ -73,7 +73,7 @@ type harnessLogin struct {
 	injectHost    string   // the ONLY host the sentinel may inject to
 	tokenPrefix   string   // accepted setup-token prefix (format guard, not auth); "" = validate structurally
 	egress        []string // region-free hosts the interactive login flow must reach
-	// regionalSSOEgress: the flow also dials REGION-SCOPED AWS SSO endpoints,
+	// regionalSSOEgress: the flow also dials region-scoped AWS SSO endpoints,
 	// which no static allowlist entry can express (see loginEgress) — they are
 	// derived from the operator's configured SSO region at launch.
 	regionalSSOEgress bool
@@ -530,7 +530,7 @@ func (s *Server) launchHarnessLoginRun(ctx context.Context, actor string, hl har
 			// handleUploadSSOToken — never recomputed there.
 			"credential_source": awsSSOCredentialSourceLabel(scope),
 			"owner":             scope.owner,
-			// The pin AS IT READ AT LAUNCH — what the upload binds to.
+			// The pin as it read at launch — what the upload binds to.
 			"sso_account_id": pin.AccountID,
 			"sso_role_name":  pin.RoleName,
 		})))
@@ -562,7 +562,7 @@ const maxLoginStartAuditScan = 100
 // the same read-back-your-own-run's-trail shape already serves execSucceeded.
 //
 // This exists so handleUploadSSOToken can bind WHAT a login sandbox uploads to
-// WHAT THE OPERATOR ASKED FOR AT LAUNCH, without a new run column or a new
+// what the operator asked for at launch, without a new run column or a new
 // trust source. A missing/blank SSOStartURL is NOT an error: the caller
 // compares it to the uploaded value, so "no operator declaration on record"
 // fails the comparison and the upload is refused — fail-closed by construction.
@@ -574,7 +574,7 @@ type loginRunStamp struct {
 	SSOStartURL      string `json:"sso_start_url"`
 	CredentialSource string `json:"credential_source"`
 	Owner            string `json:"owner"`
-	// SSOAccountID/SSORoleName are the roster row's pin AS IT READ AT LAUNCH:
+	// SSOAccountID/SSORoleName are the roster row's pin as it read at launch:
 	// a roster edit while a login sandbox is alive must not re-point a capture
 	// in flight. Empty means "launched unpinned", which the upload accepts.
 	SSOAccountID string `json:"sso_account_id,omitempty"`
@@ -696,7 +696,7 @@ const (
 // any other principal — needs TWO things, and the predicate lives HERE rather
 // than at the router because both are per-request facts the router cannot see:
 // an enabled per_user row for this provider (the org saying "each person signs
-// in"), and capAgent on THAT ROW'S AGENT. capAgent, not the login sandbox's own
+// in"), and capAgent on that row's agent. capAgent, not the login sandbox's own
 // aws-sso image: what a grant bounds is which agent's runs a member may launch,
 // and the credential this captures is for the row's agent.
 //

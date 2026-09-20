@@ -34,7 +34,7 @@ import (
 // (scripts/check-file-size.sh), the same way the broker and mount halves were.
 
 // dispatchCeiling is the acting principal's ceiling in the shape dispatch needs
-// it, and it is a REQUIRED POSITIONAL ARGUMENT of dispatchRun/dispatchAndSettle
+// it, and it is a required positional argument of dispatchRun/dispatchAndSettle
 // rather than a field on dispatchParams. That is the fix for the defect class,
 // not a style preference.
 //
@@ -149,7 +149,7 @@ type effectivePolicyDatum struct {
 //
 // Scope, which differs per ceiling on purpose: storage.ephemeral.max_disk_mib is
 // the ORG's number and binds EVERY caller, operators and unassigned members
-// included; MaxEphemeralDiskMiB binds ASSIGNED MEMBERS ONLY, because
+// included; MaxEphemeralDiskMiB binds assigned members only, because
 // ceilingForDispatch above returns no limits at all for Profile == nil (an
 // operator short-circuits earlier still, at effectiveCeiling's step 1).
 //
@@ -322,7 +322,7 @@ func (s *Server) resolveDispatchCeiling(ctx context.Context) (dispatchCeiling, g
 // ceilingDenies reports whether the CEILING's deny list covers host — an exact
 // bare host, a "*." wildcard entry, or either carrying a ":port" qualifier.
 //
-// THE LIST IS THE CEILING'S ALONE, and that is not a detail. A matcher compiled
+// The list is the ceiling's alone, and that is not a detail. A matcher compiled
 // from the run's merged policy.DeniedDomains would be wrong in the most
 // expensive direction: dispatch pollutes that list on purpose —
 // confineGitBrokerEgress appends github.com and the forge's SSH host to EVERY
@@ -405,7 +405,7 @@ func unionCeilingDenies(policy *types.RunPolicySpec, deny []string) []string {
 //     egress and a sidecar boot error. Five lines convert that into a disclosed
 //     drop.
 //
-//  3. DROP the BROKERED CREDENTIAL LANES the ceiling denies — the one a
+//  3. DROP the brokered credential lanes the ceiling denies — the one a
 //     naive implementation misses. The proxy's /wardyn/gh/ and /wardyn/git/
 //     routes mint proxy-side and re-originate WITHOUT consulting DeniedDomains;
 //     confineGitBrokerEgress makes "github.com denied at evalHost while broker
@@ -581,7 +581,7 @@ const bedrockCeilingLane = "bedrock"
 // acting principal's profile denies a host that lane's traffic goes to, and
 // reports whether it did.
 //
-// WHY THIS EXISTS ALONGSIDE dropBrokeredLanes. The re-assertion already
+// Why this exists alongside dropBrokeredLanes. The re-assertion already
 // dropped the Bedrock BEARER injection, because a bearer token rides an
 // injection rule and injection rules are filtered by host. But the bearer is the
 // one Bedrock mode that is NEVER RESIDENT. The resident modes were untouched:

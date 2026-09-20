@@ -144,7 +144,7 @@ func (s *Server) supersedeOneLoginRun(ctx context.Context, run types.AgentRun, a
 // follow, and they are the whole design — the first of them holds in all but one
 // named interleaving, which is stated rather than claimed away:
 //
-//   - TWO BECOMES UNLIKELY, NOT IMPOSSIBLE — and the residue is named rather
+//   - two becomes unlikely, NOT IMPOSSIBLE — and the residue is named rather
 //     than papered over. Whenever a pass sees BOTH rows it ends the earlier one,
 //     which covers the ordinary double-click: the second launch's first pass, or
 //     one of the two second passes, sees the sibling. What defeats it is

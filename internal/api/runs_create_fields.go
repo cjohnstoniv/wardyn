@@ -67,7 +67,7 @@ type runTextField struct {
 // answering the 400 shape title/description already answered. It writes its own
 // error and returns false once it has responded.
 //
-// A METHOD ON Server, although it reads nothing from the receiver: preflight
+// A method on Server, although it reads nothing from the receiver: preflight
 // parity is enforced structurally over `s.<Gate>(…)` calls
 // (TestPreflightMirrorsLaunchGates), so a package-level function would be a gate
 // that guard cannot see — which is exactly how the gap survived. Both doors

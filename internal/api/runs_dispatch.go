@@ -89,7 +89,7 @@ type dispatchParams struct {
 	// allocated no drives, and every scan/probe/harness lane, none of which
 	// carries a member principal to resolve a drive for.
 	//
-	// A CREATE-TIME SNAPSHOT by necessity, not by preference: resolution keys on
+	// A create-time snapshot by necessity, not by preference: resolution keys on
 	// capabilitySubjects (the caller's OIDC sub/email/groups) and the run row
 	// carries only CreatedBy, so there is nothing here to re-resolve from —
 	// exactly the constraint dispatchCeiling is a snapshot for. dispatchRun
@@ -496,7 +496,7 @@ func (s *Server) dispatchRun(ctx context.Context, run types.AgentRun, ceiling di
 	// LLMInspection + mount read-only flags + resource caps. auditablePolicy
 	// redacts LLMInspection.WorkspaceSecretValues (which resolveLLMInspectionSecrets
 	// just populated with the REAL resolved corpus for the proxy above) — that
-	// field's own doc comment says NEVER logged (W12-A-2), so the audited copy is a
+	// field's own doc comment says NEVER logged, so the audited copy is a
 	// Clone with the values replaced by a count; the live `policy` the ProxyConfig
 	// snapshot below references still carries the real values.
 	s.recordAudit(ctx, s.auditEvent(&run.ID, types.ActorSystem, "wardynd", "run.policy.effective",
@@ -745,7 +745,7 @@ func (s *Server) startAgentOrIdle(ctx context.Context, run types.AgentRun, ref, 
 
 // auditablePolicy returns a Clone of policy safe to write to the append-only
 // audit log: LLMInspection.WorkspaceSecretValues (the real resolved corpus, whose
-// own doc comment says NEVER logged, W12-A-2) is replaced by a redacted count.
+// own doc comment says NEVER logged) is replaced by a redacted count.
 // The caller's live policy is never mutated.
 func auditablePolicy(policy types.RunPolicySpec) types.RunPolicySpec {
 	out := policy.Clone()

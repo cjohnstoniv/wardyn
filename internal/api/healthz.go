@@ -112,8 +112,8 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		// "Connect via SSH" pane needs to render its command/config block before
 		// a human is authenticated (anonymous, like every other /healthz field):
 		// advertise_addr (WARDYN_SSH_ADVERTISE, purely advisory copy) and the
-		// host key's SHA256 fingerprint ("verify on first connect" — PUBLIC BY
-		// DESIGN, it identifies the server, it authenticates no one; see
+		// host key's SHA256 fingerprint ("verify on first connect" — Public by
+		// design, it identifies the server, it authenticates no one; see
 		// docs/SSH.md). nil (renders as JSON null) when the gateway is
 		// disabled — the smallest honest wire change: no new endpoint, one
 		// field a deployment without SSH simply omits populating.

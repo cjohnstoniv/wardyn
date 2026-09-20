@@ -35,8 +35,8 @@ const setupRecheckParam = "recheck"
 //
 // GET /api/v1/setup/status returns the aggregate a first-run "Getting started"
 // wizard needs to detect the environment, providers, credentials, and runner
-// capability of THIS control plane. The struct types below are the SINGLE
-// FROZEN CONTRACT shared with the UI (ui/src/app/lib/types.ts SetupStatus) —
+// capability of THIS control plane. The struct types below are the single
+// frozen contract shared with the UI (ui/src/app/lib/types.ts SetupStatus) —
 // keep the two in exact sync (snake_case wire fields).
 
 // SetupStatus is the aggregate readiness snapshot for GET /api/v1/setup/status.
@@ -61,7 +61,7 @@ type SetupStatus struct {
 	// HasRuns drives the wizard's "launch your first run" done state.
 	HasRuns bool `json:"has_runs"`
 	// OnboardingComplete reports whether an operator has finished (or
-	// deliberately left) the Getting Started funnel ON THIS INSTALL —
+	// deliberately left) the Getting Started funnel on this install —
 	// SiteConfig.OnboardingCompletedAt, flattened to the only bit the console
 	// needs. It is a fact about the install, not about the browser: browser
 	// localStorage would outlive wiped databases and disagree with itself
@@ -807,7 +807,7 @@ func redactSetupStatusForMember(st SetupStatus, ownAWSRow bool) SetupStatus {
 	// separating "this sign-in captured something" from "a credential was
 	// already there" (S-13 / R-1, harness-login-pane.tsx). Any other row — a
 	// shared/legacy aws row, the unscoped anthropic blob — is the OPERATOR's.
-	// THE SAME ROWS /integrations publishes, and the same projection. Dropping
+	// The same rows /integrations publishes, and the same projection. Dropping
 	// SetupSecrets.Present as "secret NAMES" while shipping
 	// integrations[].secrets[].secret_name in the SAME response body was the
 	// contradiction: one credential-ref list withheld, an equivalent one beside

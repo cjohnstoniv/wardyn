@@ -385,7 +385,7 @@ func subscriptionLane(integ types.Integration) string {
 // secret: requirement (applyRequiredSecretGrant, runs_create.go) or an
 // explicit run grant, never from an integration binding.
 // `owner` is the caller's secret namespace (secretOwnerFromRequest): the
-// uniform-fold branch checks the row's credential is stored FOR THIS CALLER,
+// uniform-fold branch checks the row's credential is stored for this caller,
 // so a member's own copy of the provider-convention name folds exactly as an
 // operator's row does ("" = operator namespace).
 func (s *Server) applyIntegrationCreds(ctx context.Context, owner string, spec *types.RunPolicySpec, integ types.Integration, agent string) (kind string, bedrockRef *types.WorkspaceBedrockRef) {

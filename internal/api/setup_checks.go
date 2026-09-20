@@ -375,7 +375,7 @@ func bedrockProviderCheck(bedrock SetupBedrock, sc types.SiteConfig, scOK bool) 
 		chk.Fix = strings.TrimSpace(chk.Fix + " " + bedrockUnenforcedPinFix)
 		return chk, true
 	}
-	// A PIN THE SAVE DOOR TOOK although the configured model lives in another
+	// A pin the save door took although the configured model lives in another
 	// account — asked only here, where something is pinned.
 	if pinAccount, modelAccount := bedrockPinDisagreement(sc, bedrock.Model); pinAccount != "" {
 		chk.Status = "warn"

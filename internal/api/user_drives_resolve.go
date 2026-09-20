@@ -74,7 +74,7 @@ var errDrivesDisabled = errors.New("drives_disabled")
 // wording would make one deployment problem read as two), 422 for an
 // unmountable drive, 500 for everything else.
 //
-// 500 IS THE POINT for the everything-else arm, for the reason writeCeilingError
+// 500 is the point for the everything-else arm, for the reason writeCeilingError
 // states: a store failure means the answer is unknown, and carrying on with the
 // zero value would silently mean "you have no drive" for a member who does —
 // mounting nothing where an admin allocated something.
@@ -193,7 +193,7 @@ func writeDriveError(w http.ResponseWriter, err error) {
 //     grant would hand every identity-less caller ONE shared directory. An SSO
 //     ADMIN is not in this arm and resolves like anyone else — the drive door
 //     (GovernanceLimits.DenyUserDrive) is what keys on isOperator, not this.
-//  3. UNANSWERABLE GROUP SNAPSHOT ⇒ user-tier only, and a refusal in exactly
+//  3. Unanswerable group snapshot ⇒ user-tier only, and a refusal in exactly
 //     one shape (see driveWithUnusableGroups).
 //  4. STORE ERROR ⇒ ERROR. Never "no drive": a database hiccup would silently
 //     drop a member's storage out of a run that then writes its work into a
@@ -244,7 +244,7 @@ func (s *Server) resolveUserDrive(ctx context.Context, profileMaxDriveMiB int) (
 //     INCLUDING when that row is paused, which is an answer and not an absence:
 //     no group-tier grant can outrank it, so nothing the snapshot is hiding
 //     could change it.
-//   - NO GROUP-TIER GRANT EXISTS AT ALL. Nothing an unknown group could have
+//   - no group-tier grant exists at all. Nothing an unknown group could have
 //     matched, so nothing a nil snapshot could be hiding.
 //
 // Otherwise it refuses, and the refusal is the honest answer: with the group
@@ -285,7 +285,7 @@ func (s *Server) driveWithUnusableGroups(ctx context.Context, users []string, ce
 		// context, and auditing at the write sites would mean one emit per seam.
 		// This is the only place the drive refusal is DECIDED.
 		//
-		// runs.drive IS THE TARGET, matching denyMemberDrive — the other refusal
+		// runs.drive is the target, matching denyMemberDrive — the other refusal
 		// this seam writes — rather than governance.ceiling. The two rows say
 		// different things: one is "your profile shuts the drive door", the
 		// other "nobody can tell whether it is shut", and an operator filtering
@@ -317,7 +317,7 @@ func (s *Server) driveWithUnusableGroups(ctx context.Context, users []string, ce
 // before the mark existed: three /me polls, three rows.
 //
 // That is the same argument resolveMeUserDrive already makes one layer up about
-// the metric and the WARN ("THE DECISION, NOT THE REFUSAL: a /me poll is a
+// the metric and the WARN ("The decision, not the refusal: a /me poll is a
 // display read on a timer, so running the writer here would inflate
 // wardyn_user_drive_refused_total and fill the log with WARNs for a member who
 // never asked for a run"), and an audit row is a STRONGER artefact than a WARN:
@@ -329,7 +329,7 @@ func (s *Server) driveWithUnusableGroups(ctx context.Context, users []string, ce
 // suppression: seedRequestDrive, the launch and preflight paths and every other
 // caller reach the deciding sites unmarked and keep recording. There are two
 // display callers — GET /me, and POST /drives/preview, whose handler doc has
-// always said it is "STILL NOT AUDITED" and whose steps reach both deciding
+// always said it is "still not audited" and whose steps reach both deciding
 // sites; the preview is the sharper case, because the row it wrote named the
 // ADMIN asking about somebody else as the refused principal. The DECISION is
 // unchanged either way — /me still refuses to answer, and still reports
@@ -464,7 +464,7 @@ func (s *Server) driveSizeCeilingFor(ctx context.Context, profileMaxMiB int) (dr
 // runner or a preview needs. Four folds, each of which could have gone the
 // other way:
 //
-//   - A DISABLED WINNER IS PAUSED, and it returns before anything is derived.
+//   - a disabled winner is paused, and it returns before anything is derived.
 //     The store hands back the row that won its tier whether or not it is
 //     enabled (DESIGN §2.2), so this is the single place that tells the two
 //     apart — and a paused drive mounts nothing, which makes a home name a
@@ -473,7 +473,7 @@ func (s *Server) driveSizeCeilingFor(ctx context.Context, profileMaxMiB int) (dr
 //     paused member with the wrong refusal entirely (422 "your claim cannot
 //     name a directory") for a drive that was never going to mount.
 //
-//   - HOME OVERRIDE applies on the USER TIER ONLY. types.ValidateUserDriveGrant
+//   - HOME OVERRIDE applies on the user tier only. types.ValidateUserDriveGrant
 //     already refuses to store one on a group or all row; the tier gate is
 //     repeated here because a row written by an older binary — or by hand —
 //     would otherwise hand an entire group ONE directory, which is precisely

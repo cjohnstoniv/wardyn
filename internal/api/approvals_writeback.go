@@ -8,7 +8,7 @@
 // They belong together because they are one question — an `always` decision and
 // a verify-loop approval both reach past the approval and edit a workspace an
 // operator may not have been looking at — and because they share one contract
-// the rest of this package does not: FAIL SILENT BUT AUDITED. The decision
+// the rest of this package does not: Fail silent but audited. The decision
 // itself already stands by the time these run, so none of them may fail the
 // request; every give-up path therefore has to leave an audit row instead, or
 // the operator gets a green UI and a workspace that learned nothing.
@@ -252,7 +252,7 @@ func (s *Server) learnVerifyEgress(ctx context.Context, ap types.ApprovalRequest
 	}
 	// UNFOLDED from the kind check above and from the run-shape check below,
 	// because a missing store and an unreadable run are GIVE-UPS, not
-	// not-applicable conditions: this file's contract is FAIL SILENT BUT AUDITED
+	// not-applicable conditions: this file's contract is fail silent but audited
 	// (header), so each one has to leave a workspace.requirement.write failure
 	// naming its cause. Both carry an EMPTY target: the workspace link lives on
 	// the run row neither branch got to read, so naming a workspace here would
