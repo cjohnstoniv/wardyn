@@ -54,9 +54,7 @@ import { RUN_COCKPIT, TERMINAL } from "./wardyn/copy";
 import { useOperator, useOperatorResolved, usePrincipal } from "./wardyn/operator-context";
 import { useTerminalFullscreen } from "./use-attach-terminal-fullscreen";
 
-// ---------------------------------------------------------------------------
 // Auth-mode detection
-// ---------------------------------------------------------------------------
 // api.ts stores the admin token in localStorage under this key.  When the
 // token is present AND there is no valid OIDC session (we can't read
 // HttpOnly cookies from JS, but we know the UI only uses a token when the
@@ -67,9 +65,7 @@ function isAdminTokenOnlyMode(): boolean {
   return getToken() !== null;
 }
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 function buildWsUrl(runId: string, ticket?: string): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
   const host = window.location.host; // same-origin → cookie is sent
@@ -77,9 +73,7 @@ function buildWsUrl(runId: string, ticket?: string): string {
   return ticket ? `${base}?ticket=${encodeURIComponent(ticket)}` : base;
 }
 
-// ---------------------------------------------------------------------------
 // Component
-// ---------------------------------------------------------------------------
 export interface AttachTerminalProps {
   runId: string;
   /** Called when the WebSocket closes (graceful or error) */
@@ -146,27 +140,29 @@ const MAX_RECONNECT_ATTEMPTS = 4;
 const RECONNECT_BASE_DELAY_MS = 600;
 const RECONNECT_MAX_DELAY_MS = 5000;
 
-// A HANDSHAKE THAT NEITHER COMPLETES NOR CLOSES (R4-F143). Every state here is
-// driven off the socket's open/close/error events, and a WebSocket upgrade can
-// do none of the three — the deploy README's own warning, "an ingress
-// controller in front of it must not buffer or strip the 101 upgrade"
-// (deploy/helm/wardyn/README.md), names exactly a proxy that accepts the TCP
-// connection and then sits on it. Measured in Chromium: "Connecting…" with a
-// spinner, no message, indefinitely. This deadline turns that silence into a
-// FAILED ATTEMPT for the reconnect budget below, so the panel reaches the same
-// honest closed state a refused socket does. Longer than any healthy upgrade
-// (one round trip), shorter than a human's patience.
+// ponytail: a handshake that neither completes nor closes (R4-F143). Every
+// state here is driven off the socket's open/close/error events, and a
+// WebSocket upgrade can do none of the three — the deploy README's own
+// warning, "an ingress controller in front of it must not buffer or strip
+// the 101 upgrade" (deploy/helm/wardyn/README.md), names exactly a proxy
+// that accepts the TCP connection and then sits on it. Measured in Chromium:
+// "Connecting…" with a spinner, no message, indefinitely. This deadline
+// turns that silence into a failed attempt for the reconnect budget below,
+// so the panel reaches the same honest closed state a refused socket does.
+// Longer than any healthy upgrade (one round trip), shorter than a human's
+// patience.
 const CONNECT_TIMEOUT_MS = 15_000;
 
-// THE DISPLACEMENT CONTRACT (internal/api/attach_holder.go). A take-over closes
-// the displaced client's socket with code 1008 (StatusPolicyViolation) and a
-// reason of exactly `taken over by <principal>`. That close MUST NOT take the
-// bounded-reconnect path above: the reconnect would land this browser straight
-// back on the PTY as a competing client — the exact two-clients-fighting state
-// the holder registry exists to end — and it would do it while the new holder
-// is typing. We match on the code AND on the reason prefix (a proxy that
-// rewrites the code still forwards the reason, and vice versa: either signal
-// alone is enough to stop). Every OTHER close keeps today's behavior.
+// The displacement contract (internal/api/attach_holder.go): a take-over
+// closes the displaced client's socket with code 1008 (StatusPolicyViolation)
+// and a reason of exactly `taken over by <principal>`. That close must not
+// take the bounded-reconnect path above: the reconnect would land this
+// browser straight back on the PTY as a competing client — the exact
+// two-clients-fighting state the holder registry exists to end — and it
+// would do it while the new holder is typing. We match on the code and on
+// the reason prefix (a proxy that rewrites the code still forwards the
+// reason, and vice versa: either signal alone is enough to stop). Every
+// other close keeps the reconnect path.
 const TAKEN_OVER_CLOSE_CODE = 1008;
 const TAKEN_OVER_REASON_PREFIX = "taken over by ";
 
@@ -322,7 +318,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     const mount = containerRef.current;
     if (!mount) return;
 
-    // --- xterm setup --------------------------------------------------------
+    // xterm setup
     const term = new Terminal({
       cursorBlink: true,
       scrollback: 50000,
@@ -364,7 +360,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     // real glyph width (a fit measured against the fallback font would misalign).
     document.fonts.ready.then(() => refit()).catch(() => {});
 
-    // --- WebSocket (with bounded reconnect) ---------------------------------
+    // WebSocket (with bounded reconnect)
     // The terminal/xterm instance above persists across reconnects; only the
     // socket is re-created. Input handlers read the *current* socket from
     // wsRef.current so they keep working after a reconnect swaps the socket.
@@ -379,7 +375,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     let autoRunSent = false;
     let autoRunTimer: ReturnType<typeof setTimeout> | null = null;
     let connectTimer: ReturnType<typeof setTimeout> | null = null;
-    // D1+D2 aggravator: an observer PROMOTED in place (read_only true→false on
+    // An observer promoted in place (read_only true→false on
     // the same socket, no reconnect) inherits the departed holder's tmux
     // geometry — the server skips handshake geometry for a non-writer and
     // drops an observer's resize frames, so refit() never ran for this
@@ -542,7 +538,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
       ws.onclose = (ev) => {
         clearConnectTimer();
         if (disposed) return;
-        // DISPLACED — checked BEFORE the reconnect path, because it is the one
+        // Displaced — checked before the reconnect path, because it is the one
         // close that looks unexpected and must never be retried. See
         // TAKEN_OVER_CLOSE_CODE: reconnecting here re-claims the PTY on top of
         // the human who just took it, which is the whole bug this state exists
@@ -598,20 +594,20 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
 
       ws.onerror = () => {
         clearConnectTimer();
-        // F1-F8: an error is always followed by a close event, and onclose's
+        // An error is always followed by a close event, and onclose's
         // own "budget exhausted" arm unconditionally sets "closed" right
-        // after — so a setConnState("error") here was DEAD, never observable
+        // after — so a setConnState("error") here is dead, never observable
         // (attach-terminal.test.tsx pins the [closed] text that arm renders,
         // R4-F143 — deliberate, untouched). connState "error" is reached
         // elsewhere, from the caller's own refusal to attach at all.
       };
     };
 
-    // TAKE-OVER EVICTS, IT DOES NOT PROMOTE (handleAttachTakeover). After the
-    // POST returns 200 the OLD holder's socket is closed, but OURS is still the
+    // Take-over evicts, it does not promote (handleAttachTakeover). After the
+    // POST returns 200 the old holder's socket is closed, but ours is still the
     // read-only one the server admitted — the server has no mid-stream "you may
     // now type" message, and inventing one on both ends buys nothing over the
-    // reconnect this component already does perfectly. So: drop our socket and
+    // reconnect this component already does. So: drop our socket and
     // attach again; the fresh attach registers as holder. Between the eviction
     // and that attach the holder endpoint honestly reports held:false.
     reclaimRef.current = () => {
@@ -691,7 +687,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     };
     mount.addEventListener("paste", onPaste, true);
 
-    // --- Resize wiring ------------------------------------------------------
+    // Resize wiring
     // Observe the terminal's own (flex-grown) box so any layout change — panel
     // resize, fullscreen toggle, window resize — refits and re-sizes the PTY.
     const resizeObserver = new ResizeObserver(() => refit());
@@ -699,7 +695,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
     const onWinResize = () => refit();
     window.addEventListener("resize", onWinResize);
 
-    // --- Cleanup ------------------------------------------------------------
+    // Cleanup
     return () => {
       // Stop any pending backoff from spawning a new socket after unmount, and
       // mark the close as intentional (so the in-flight ws.onclose won't retry).
@@ -738,7 +734,7 @@ export const AttachTerminal = React.forwardRef<AttachTerminalHandle, AttachTermi
   // hook purely to keep this file under its line cap.
   const { fullscreen, toggleFullscreen } = useTerminalFullscreen(panelRef, refit);
 
-  // --- Holder / take-over ---------------------------------------------------
+  // Holder / take-over
   // Spectator: the server admitted us read-only because someone else holds the
   // PTY. Our keystrokes and resize frames are dropped SERVER-side (attachPump),
   // so this is purely about saying so — the UI never had words for a state the

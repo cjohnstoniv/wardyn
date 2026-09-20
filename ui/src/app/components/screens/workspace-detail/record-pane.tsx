@@ -4,22 +4,22 @@
  */
 
 // RecordPane — the workspace detail page's Sessions card body. The operator
-// records one or more NAMED SESSIONS: each spins up an open (allow-all-egress)
+// records one or more named sessions: each spins up an open (allow-all-egress)
 // interactive sandbox with the repo cloned + the configured model provider
 // wired, the operator drives the real activity (build, test, run the agent) in
 // the embedded AttachTerminal, then clicks "Done recording" (capture happens
-// on run termination). Once recorded, a session can be REPLAYED CONFINED
+// on run termination). Once recorded, a session can be replayed confined
 // (default-deny egress, limited to the approved set) to prove the approved set
 // is enough — the least-privilege proof. Each session card lives through its
 // own lifecycle in place: recording -> recorded -> [Replay confined] ->
-// replaying -> replayed. There is NO derived build/test taxonomy — sessions
-// are whatever the operator names them, and NO separate Record/Verify mode
+// replaying -> replayed. There is no derived build/test taxonomy — sessions
+// are whatever the operator names them, and no separate Record/Verify mode
 // toggle — every session shows whichever stage it's actually in.
 //
 // This pane never navigates away and is never unmounted by its caller for an
 // in-flight session — the detail page keeps sessions running across
 // navigation (see workspace-copy.ts's C.SESSION_SURVIVES); it does not kill
-// any in-flight run on its own unmount, unlike the retired import panel.
+// any in-flight run on its own unmount.
 import * as React from "react";
 import {
   Check,
@@ -71,11 +71,11 @@ import { Checkbox } from "../../ui/checkbox";
 import { Input } from "../../ui/input";
 import { C } from "../../../lib/workspace-copy";
 
-// W19-W19b-1: a held request approved during a confined replay does more than
+// A held request approved during a confined replay does more than
 // release the connection — learnVerifyEgress (internal/api/approvals.go) folds
 // the host into this workspace's required egress contract, so future runs
 // never ask again. POLICIES.md's "Approval decision scopes" section already
-// spells this out; the click surface itself didn't. Local rather than
+// spells this out; the click surface itself must say so too. Local rather than
 // workspace-copy.ts's mock-sourced canon — this line has no mock counterpart.
 const VERIFY_APPROVE_LEARNS_HINT =
   "Approving a held request here also adds that host to this workspace's requirements — future runs won't ask again.";
@@ -100,8 +100,8 @@ export function RecordPane({
   // Inline notice from the last record/replay attempt (400 bad name; 503 no
   // runner; 409 another session already running).
   notice: { status: number; detail?: string } | null;
-  // The last successful launch's own warnings + REAL confinement class
-  // (handleRecordWorkspace's 202 body) — W20-S1-2: never dropped, and the
+  // The last successful launch's own warnings + real confinement class
+  // (handleRecordWorkspace's 202 body) — never dropped, and the
   // authoritative source for the CC1 banner below once a session has
   // actually launched (`tier` below is only a pre-launch guess).
   launch?: { warnings?: string[]; confinementClass?: string } | null;
@@ -109,21 +109,19 @@ export function RecordPane({
   // open (re-)record, or verifyKeyOf(key) for a confined (re-)replay. Disables
   // just that session's matching button.
   busyTask: string | null;
-  // Whether the operator has ANY working model/LLM path (subscription login, a
+  // Whether the operator has any working model/LLM path (subscription login, a
   // stored provider key, or a real composer backend) — a session runs the
   // agent, so without one the agent's model calls would be denied.
   modelReady: boolean;
   // The runner's declared confinement classes (setup status). A recording
-  // launches under the STRONGEST of these (workspace_run.go's bestClass), so
+  // launches under the strongest of these (workspace_run.go's bestClass), so
   // the banner's tier line derives from it pre-launch — never from New Run's
-  // OWN pre-launch preview (an unrelated screen's guess) or, before 0.7.8, a
-  // browser-persisted default that once printed "Fence" under a Vault
-  // capture, on camera.
+  // own pre-launch preview (an unrelated screen's guess).
   hostClasses?: ConfinementClass[] | null;
-  // Start (or re-start) an OPEN session by name; the server slugs it to the
+  // Start (or re-start) an open session by name; the server slugs it to the
   // record key.
   onRecord: (name: string) => void;
-  // Replay an existing session CONFINED (default-deny egress, limited to
+  // Replay an existing session confined (default-deny egress, limited to
   // approved) by its name — first run or a re-run.
   onReplayConfined: (name: string) => void;
   // Interactive "Done" — kills whichever run is active (open or confined); the
@@ -131,28 +129,28 @@ export function RecordPane({
   onDoneRecording: (runId: string) => void;
   // Approve an open session's observed hosts (promote-egress).
   onPromoteEgress: (taskKey: string) => void;
-  // Approve the off-policy hosts a confined replay caught, as ONE requirements
+  // Approve the off-policy hosts a confined replay caught, as one requirements
   // write (widens the workspace's approved egress for every future replay).
   // `replayName` is the guided one-step loop: approve the selection, then
-  // immediately replay THAT session confined again — the caller chains them so
+  // immediately replay that session confined again — the caller chains them so
   // the replay only fires once the approval has actually landed.
   onApproveHosts: (hosts: string[], replayName?: string) => void;
   // Open the existing ProfileReview drawer on a record run (Save profile).
   onOpenProfile: (runId: string, suggestedName?: string) => void;
 }) {
-  // useSecurityOperator, not useOperator (0.7 §B): the DECISION route this
+  // useSecurityOperator, not useOperator (0.7 §B): the decision route this
   // pane drives is on securityOps — .../record/{task}/promote-egress.
-  // Promoting a workspace's observed egress into its allowlist IS the security
+  // Promoting a workspace's observed egress into its allowlist is the security
   // tier's loop, so the pane as a whole opens to a security admin.
   //
   // Two families of control are the exception and gate themselves, in the
   // components that own them, because their calls land on operatorOnly:
-  //   - LAUNCH (NewSessionForm, SessionCard): R1 moved POST
+  //   - launch (NewSessionForm, SessionCard): R1 moved POST
   //     /workspaces/{id}/record there — it decides no egress question, it
   //     starts a sandbox with open egress, the local_dir bind-mounted, the
   //     clone credential minted and the operator's LLM credential attached.
-  //   - APPROVE HOSTS (CaughtHosts): the approve-hosts path no longer PUTs
-  //     .../approved-egress — workspace-detail.tsx's approveHosts writes ONE
+  //   - approve hosts (CaughtHosts): the approve-hosts path no longer PUTs
+  //     .../approved-egress — workspace-detail.tsx's approveHosts writes one
   //     PUT .../requirements for N hosts, and requirements is operatorOnly
   //     (F031).
   // Same pattern as "Save profile", gated in profile-review.tsx over the
@@ -164,27 +162,27 @@ export function RecordPane({
   // The record sandbox runs under the strongest class the host supports
   // (workspace_run.go's bestClass — never the policy floor, never the New-Run
   // default). Once a session has actually launched, `launch.confinementClass`
-  // is the SERVER's own verdict for that run — use it; before any launch,
+  // is the server's own verdict for that run — use it; before any launch,
   // derive the same answer from the runner's declared classes. The bare-CC1
   // fallback covers only an older server that reports neither.
   const tier = launch?.confinementClass ?? strongestAvailable(hostClasses ?? []) ?? "CC1";
   // Scan-detected commands become copy-paste hints so a clueless operator
   // knows what to run in the session — guidance without a taxonomy.
   const detected = ((ws.profile ?? {}) as WorkspaceProfile).setup_commands ?? [];
-  // Workstream B3: the workspace-wide roll-up — has the loop closed clean at
-  // least once, for ANY session? Client-derived, no new WorkspaceStatus.
+  // The workspace-wide roll-up — has the loop closed clean at
+  // least once, for any session? Client-derived, no new WorkspaceStatus.
   const cleanReplay = lastCleanReplay(ws);
 
   return (
     // Every control in this pane (record/replay/approve-host/promote-egress)
-    // needs at LEAST the security tier server-side; a member would see them
+    // needs at least the security tier server-side; a member would see them
     // all enabled and 403 on the first click. A native disabled fieldset gates
     // the whole subtree at once — same disabled:opacity-50 every Button here
     // already carries — instead of threading `disabled={!securityOperator}`
     // through SessionCard/RecordReviewCard/ConfinedReviewCard/NewSessionForm
     // one by one. The border/padding/min-width a bare <fieldset> adds are
     // reset so it stays visually identical to the plain <div> it replaces.
-    // This is the FLOOR, not the whole answer: the launch and approve-host
+    // This is the floor, not the whole answer: the launch and approve-host
     // controls need the higher operatorOnly tier on top of it, and add their
     // own useOperator gate where they live (see the note above).
     <fieldset disabled={!securityOperator} className="m-0 min-w-0 border-0 p-0 space-y-4">
@@ -337,9 +335,9 @@ function NewSessionForm({
   disabled: boolean;
   onRecord: (name: string) => void;
 }) {
-  // LAUNCH, not a decision: POST /workspaces/{id}/record is operatorOnly
+  // A launch, not a decision: POST /workspaces/{id}/record is operatorOnly
   // (routes.go), so a security admin sees this whole form disabled rather than
-  // enabled-then-403 — the pane's own rule for a super-only control. The FORM,
+  // enabled-then-403 — the pane's own rule for a super-only control. The form,
   // not just its button: a live name field over a dead Start is a worse lie
   // than a form that plainly says who may use it.
   const operator = useOperator();
@@ -376,10 +374,10 @@ function NewSessionForm({
   );
 }
 
-// Open-egress warning — every open recording allows ALL egress, on every tier
+// Open-egress warning — every open recording allows all egress, on every tier
 // (that is how it learns what the task uses), so the exfiltration window is
 // real regardless of barrier strength and the banner always shows. The
-// "weakest barrier" line is ADDED only when the session genuinely runs under
+// "weakest barrier" line is added only when the session genuinely runs under
 // CC1 (Fence) — the shared-kernel case — per the launch's own verdict or the
 // runner's strongest class; asserting a tier the run doesn't have is worse
 // than no warning at all.
@@ -445,7 +443,7 @@ function SessionCard({
   const stage = sessionStage(ws, sessionKey);
   const openRR = recordResult(ws, sessionKey);
   const confinedRR = recordResult(ws, verifyKeyOf(sessionKey));
-  // ui-wsDetail-3: both buttons below fire the launch immediately on click;
+  // Both buttons below fire the launch immediately on click;
   // the settled review they're sitting next to (RecordReviewCard /
   // ConfinedReviewCard) gets replaced by the live attach terminal on the
   // next poll with no chance to back out. Route through the same
@@ -466,9 +464,9 @@ function SessionCard({
       {stage === "recording" && openRR && (
         <div className="mt-3 space-y-2">
           <DetectedHints commands={detected} />
-          {/* OPERATOR-ONLY, like every control in this pane. The session itself
+          {/* Operator-only, like every control in this pane. The session itself
               is an operator's (the launch routes are operatorOnly, routes.go),
-              so a member VIEWING this workspace never owns the run — mounting
+              so a member viewing this workspace never owns the run — mounting
               the terminal for them only produces a failed ticket mint and one
               authz.denied{not_owner} row per mount. Nothing is hidden that they
               could otherwise have used. */}
@@ -500,7 +498,7 @@ function SessionCard({
         </div>
       )}
 
-      {/* replaying — attach + LIVE approvals + Done */}
+      {/* replaying — attach + live approvals + Done */}
       {stage === "replaying" && confinedRR && (
         <div className="mt-3 space-y-2">
           <AuthModeLine rr={confinedRR} />
@@ -635,8 +633,8 @@ function OrphanedSessionCard({
   );
 }
 
-// Per-session review card, shown once the OPEN recording settles. Renders the
-// SAME Observations block profile-review uses, a one-click egress-promotion
+// Per-session review card, shown once the open recording settles. Renders the
+// same Observations block profile-review uses, a one-click egress-promotion
 // diff, secrets proven-used chips, a Save-profile hand-off to the
 // ProfileReview drawer, and the honesty notes.
 function RecordReviewCard({
@@ -654,7 +652,7 @@ function RecordReviewCard({
 }) {
   const empty = isEmptyCapture(rr);
 
-  // Empty capture is a FAILURE, never a success — render the reachability hint and
+  // Empty capture is a failure, never a success — render the reachability hint and
   // stop (there are no trustworthy observations to promote from).
   if (rr.status === "record_failed" || empty) {
     return (
@@ -672,7 +670,7 @@ function RecordReviewCard({
   }
 
   // Egress promotion diff: hosts observed (allow_count>0) bucketed into
-  // approvable / already-approved / platform-plumbing (W20-S1-1) — one
+  // approvable / already-approved / platform-plumbing — one
   // function so a host can't land in more than one bucket. selfHost mirrors
   // the server's own control-plane-host exclusion; the console is always
   // same-origin with wardynd (lib/api/core.ts's relative BASE), so the
@@ -680,13 +678,13 @@ function RecordReviewCard({
   const diff = egressPromotionDiff(ws, sessionKey, window.location.hostname);
   const newHosts = diff.approvable;
   const alreadyApproved = diff.alreadyApproved;
-  // Distinct from "nothing NEW because it's already allowed": these hosts
+  // Distinct from "nothing new because it's already allowed": these hosts
   // were never approvable at all (harness/control-plane plumbing), so
   // claiming "already allowed" would misattribute them to an operator
   // decision that never happened.
   const onlyPlumbingObserved = newHosts.length === 0 && alreadyApproved.length === 0 && diff.plumbing.length > 0;
 
-  // Secrets proven-used = the workspace's DECLARED required-secret names that this
+  // Secrets proven-used = the workspace's declared required-secret names that this
   // run actually minted a grant for. Render-derived intersection — never mutates
   // the scan-owned profile.
   const profile = (ws.profile ?? {}) as WorkspaceProfile;
@@ -699,10 +697,10 @@ function RecordReviewCard({
       {/* --- observed egress + one-click promotion --- */}
       <section className="space-y-2">
         <SectionLabel>Observed egress</SectionLabel>
-        {/* egress_promoted is a BOOLEAN the server flips on any promoted>0, and
+        {/* egress_promoted is a boolean the server flips on any promoted>0, and
             which hosts a promote landed is not persisted — so a partial promote
             (now reachable: the confirm's checkboxes send a subset) can't be
-            reported as "N of M". The only honest count is what's STILL
+            reported as "N of M". The only honest count is what's still
             approvable right now, straight from the buckets; the remainder keeps
             its listing and its Approve button instead of hiding behind a
             green all-done chip. */}
@@ -795,10 +793,10 @@ function RecordReviewCard({
   );
 }
 
-// Review card for a settled CONFINED replay. Unlike the open-record card
+// Review card for a settled confined replay. Unlike the open-record card
 // (which promotes newly-observed hosts), this proves least privilege: it splits
-// what the run reached into ALLOWED (worked within the approved set), BLOCKED
-// (off-policy, denied live — the containment proof), and PENDING (first-use,
+// what the run reached into allowed (worked within the approved set), blocked
+// (off-policy, denied live — the containment proof), and pending (first-use,
 // awaiting approval). Blocked/pending hosts are one click to approve if they're
 // legitimately needed. All counts come straight from the capture — no extra fetch.
 function ConfinedReviewCard({
@@ -832,22 +830,22 @@ function ConfinedReviewCard({
   }
 
   const domains = rr.observations?.domains ?? [];
-  // Subtract the SAME union egressPromotionDiff subtracts (legacy
+  // Subtract the same union egressPromotionDiff subtracts (legacy
   // ApprovedEgress + profile.egress_domains + egress: requirement rows), not
   // ws.approved_egress alone — promote and the per-host approve both write the
-  // REQUIREMENTS lane now, so a bucket reading only the legacy lane kept
-  // listing hosts that are already granted, under a button that would fold in
-  // nothing. (Chip vs bucket CAN diverge, by design: the chip is the server's
+  // requirements lane now, so a bucket reading only the legacy lane must not
+  // list hosts that are already granted, under a button that would fold in
+  // nothing. (Chip vs bucket can diverge, by design: the chip is the server's
   // verdict for the replay as it happened — an immutable fact — while these
-  // buckets are "what is still off-policy RIGHT NOW". Approve a caught host
+  // buckets are "what is still off-policy right now". Approve a caught host
   // and the bucket empties while "Replayed — caught 2" stands, because it did.
   // The loop's answer to a stale verdict is a fresh replay, not a re-render.)
   const approved = approvedEgressSet(ws);
   const allowed = domains.filter((d) => d.allow_count > 0).map((d) => d.host);
-  // ONE row per caught host: a host both denied AND held used to render twice
+  // One row per caught host: a host both denied and held must not render twice
   // (two independent filters), and the checkbox list below can't have a host
   // in two states at once. `denied` wins the label — it's the stronger fact,
-  // and it's what defaults the checkbox OFF.
+  // and it's what defaults the checkbox off.
   const caught = domains
     .filter((d) => (d.deny_count > 0 || d.pending_count > 0) && !approved.has(d.host))
     .map((d) => ({ host: d.host, denied: d.deny_count > 0 }));
@@ -897,7 +895,7 @@ function ConfinedReviewCard({
 //
 // Bulk-approving everything caught is a footgun the moment one of them is a
 // genuine villain — which is the whole reason the replay ran. So a host that
-// was DENIED LIVE (deny_count > 0) starts UNCHECKED and a merely-held one
+// was denied live (deny_count > 0) starts unchecked and a merely-held one
 // starts checked: the default is "approve the misses, leave the denials out",
 // and changing it is a visible, deliberate click. The per-host Approve buttons
 // stay for the one-off case (and route through the untrusted-content confirm
@@ -914,15 +912,15 @@ function CaughtHosts({
   // A settled replay's observations are immutable, so seeding once is right —
   // and it means an operator's un/checking is never stomped by the detail
   // page's poll. (A re-replay unmounts this card via the "replaying" stage.)
-  // approveHosts writes PUT /workspaces/{id}/requirements — operatorOnly, NOT
+  // approveHosts writes PUT /workspaces/{id}/requirements — operatorOnly, not
   // the securityOps tier the pane's fieldset gates. Without this second gate a
-  // security admin got live Approve buttons over a route the server refuses,
-  // and the guided approve→replay chain silently never fired (F031).
+  // security admin would get live Approve buttons over a route the server
+  // refuses, and the guided approve→replay chain would silently never fire (F031).
   const operator = useOperator();
   const [selected, setSelected] = React.useState<Set<string>>(
     () => new Set(caught.filter((c) => !c.denied).map((c) => c.host)),
   );
-  // Intersect with what's STILL caught: approving a host shrinks the list
+  // Intersect with what's still caught: approving a host shrinks the list
   // under us, and a stale selection must never widen the next write.
   const picked = caught.filter((c) => selected.has(c.host)).map((c) => c.host);
 

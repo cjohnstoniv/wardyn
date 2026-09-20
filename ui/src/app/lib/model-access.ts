@@ -33,7 +33,7 @@ import type { SetupHarnessTool, SetupStatus } from "./types";
 // literal sets that could drift on a sixth state.
 export const MODEL_ACCESS_ACTIONABLE = new Set(["not_configured", "expired_signin", "expiring"]);
 
-// R-01 (fix-console-u review): the "is this harness row a per-person AWS SSO
+// R-01: the "is this harness row a per-person AWS SSO
 // lane" predicate — `h.enabled !== false` (not truthiness) is load-bearing, not
 // decorative: a DISABLED row still legally carries mechanism/credential_source
 // (validateAgentCredentialSource never looks at Disabled), but the server's

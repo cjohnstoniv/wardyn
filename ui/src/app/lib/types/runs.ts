@@ -23,9 +23,9 @@ export type ConfinementClass = "CC1" | "CC2" | "CC3";
 
 // One in-sandbox loopback HTTP app the UI gateway may relay (mirrors Go's
 // internal/types/policy.go UIApp). Operator-authored via policy, never
-// user-editable in the console (0.6 has no UIApp editor). port is the
-// in-sandbox port the app listens on; path is the landing path after the
-// gateway's ticket handoff (empty means "/").
+// user-editable in the console. port is the in-sandbox port the app listens
+// on; path is the landing path after the gateway's ticket handoff (empty
+// means "/").
 export interface UIApp {
   name: string;
   port: number;
@@ -149,7 +149,6 @@ export interface AgentRun {
   status_reason?: string;
 }
 
-// ============================================================
 // Live-run evidence reads (the run-detail cockpit's widgets). These mirror
 // internal/api/run_files.go and internal/api/run_resources.go — hand-maintained,
 // with no parity test between the two, so a field renamed on the Go side is a
@@ -161,7 +160,7 @@ export interface RunFileStat {
   // git's porcelain code, position padding trimmed: "M", "A", "D", "??", "MM"…
   // Absent when the file was in the diff but not in `git status`.
   status?: string;
-  // OPTIONAL ON PURPOSE, and the widget must keep them optional: a count that
+  // Optional on purpose, and the widget must keep them optional: a count that
   // was never read — a binary file, an untracked file (numstat never lists
   // one) — is ABSENT, not 0. Rendering `+0 −0` for a binary asset the agent
   // just rewrote is a claim that nothing changed, which is false. Never
@@ -317,7 +316,6 @@ export interface CreateRunInput {
 // expect an AgentRun keep working.
 export type CreateRunResult = AgentRun & { warnings?: string[] };
 
-// ============================================================
 // Deterministic risk grade + setup-readiness checklist — mirror
 // internal/composer's RiskItem/SetupItem and internal/api's PreflightResult.
 // Moved here from the (now-deleted) AI Run Composer's own types/compose.ts:
@@ -362,14 +360,13 @@ export interface ComposeRunProposal {
   devcontainer_repo?: string;
 }
 
-// ============================================================
 // Setup readiness checklist — mirrors internal/api/compose_setup.go's
 // SetupItem/SetupFix EXACTLY (snake_case; FROZEN CONTRACT, same PR). Computed
 // DETERMINISTICALLY from the FINAL post-clamp spec — never the model's
 // self-assessment (same trust rule as risk_assessment above). v1 verification
 // depth is declared-present only: "satisfied" means the referenced secret/
 // workspace/grant IS THERE, not that Wardyn live-probed it actually works — so
-// UI copy for it must say "configured", never "verified" (decision 3).
+// UI copy for it must say "configured", never "verified".
 export type SetupItemKind =
   | "llm_access"
   | "secret"
@@ -440,15 +437,15 @@ export interface SetupItem {
 // an absent value renders no risk panel and no acknowledgment gate rather
 // than crashing. Advisory only, never a gate.
 //
-// WHERE THESE ARE READ, honestly: the sole consumer is the new-run rail's
+// Where these are read, honestly: the sole consumer is the new-run rail's
 // preflight block (new-run-rail.tsx's RunRail), which renders overall_risk,
 // enforced_confinement_class and warnings. `setup_items` has NO consumer — the
 // five-step wizard's Review step (step-review.tsx) that used to render it was
 // deleted with the wizard, and nothing replaced that surface. It is fetched on
 // every Review and discarded; the field and its SetupItem subtree stay declared
 // because they are a live server contract (compose_setup.go) and the mirror
-// rule forbids dropping a wire field the daemon still sends. Rendering it again
-// is FILED as a 0.7.1 follow-up (R4-F009), not decided here.
+// rule forbids dropping a wire field the daemon still sends. Whether to
+// render it again is an open question, not decided here.
 export interface PreflightResult {
   setup_items: SetupItem[];
   enforced_confinement_class: ConfinementClass;

@@ -59,11 +59,10 @@ import {
 type Filter = "PENDING" | "decided";
 type Scope = Record<string, unknown>;
 
-// ============================================================
-// Blast-radius derivation (finding D1) — EVERY approval kind gets a two-line
-// banner built from the REAL requested_scope. The rule is honesty: we only state
+// Blast-radius derivation (D1) — every approval kind gets a two-line
+// banner built from the real requested_scope. The rule is honesty: we only state
 // capabilities the scope actually grants. Where a field is absent we fall back to
-// wording keyed on the KIND alone (which we always know) and never invent one.
+// wording keyed on the kind alone (which we always know) and never invent one.
 //
 // Real scope shapes (from the Go backend):
 //   egress_domain — { host }                       (internal/egress/proxy)
@@ -73,10 +72,9 @@ type Scope = Record<string, unknown>;
 //                     git_pat      { host, secret_name, username? }
 //   tool_call     — { tool, cmd, env } (raised by wardyn-toolgate, via the
 //                    proxy's brokered approvals route — the only producer)
-// The grant KIND is not carried in requested_scope, so we infer the credential
+// The grant kind is not carried in requested_scope, so we infer the credential
 // sub-kind from which keys are present — importantly to keep the git_pat nuance
 // (that token is readable by the agent's process, unlike a brokered credential).
-// ============================================================
 
 const KIND_ICON: Record<string, React.ElementType> = {
   credential: KeyRound,
@@ -187,7 +185,7 @@ const NO_REAUTH_AUDIENCE: ReauthAudience = { canAct: false, shared: false, owner
 function deriveBanner(kind: ApprovalKind, scope: Scope, reauth?: ReauthAudience): Banner {
   const ttl = ttlPhrase(scope);
   switch (kind) {
-    // NO BLAST RADIUS, because nothing is granted: this row asks its owner to
+    // No blast radius, because nothing is granted: this row asks its owner to
     // sign in again to a credential the deployment already configured. The
     // "what" states the need and the both-branches hint the row's own copy
     // carries — never a promise that a run will continue (Codex #5).
@@ -201,10 +199,11 @@ function deriveBanner(kind: ApprovalKind, scope: Scope, reauth?: ReauthAudience)
     case "egress_domain": {
       const host = str(scope, "host", "domain");
       // egressBlastRadius (copy.ts) is scope-aware — honesty rule: "we only
-      // state capabilities the scope actually grants… never invent one." The
-      // OLD hardcoded "for its remaining lifetime" claim was wrong for `once`
-      // and hid `always`'s durability entirely. Always "run" here: see this
-      // function's own doc for why that's correct, not a shortcut.
+      // state capabilities the scope actually grants… never invent one." A
+      // hardcoded "for its remaining lifetime" claim would be wrong for
+      // `once` and would hide `always`'s durability entirely, so this always
+      // passes "run" here: see this function's own doc for why that's
+      // correct, not a shortcut.
       return egressBlastRadius("run", host ?? "the requested host");
     }
     case "credential": {
@@ -302,9 +301,9 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   // already been decided; the default stays the pending queue.
   const [searchParams, setSearchParams] = useSearchParams();
   const [filter, setFilter] = React.useState<Filter>(searchParams.get("tab") === "decided" ? "decided" : "PENDING");
-  // X3-F14: ?tab= is read at mount but was never written back — the Decided
-  // view couldn't be reloaded/shared/reached by Back. Mirrors audit.tsx's
-  // run_id filter, the setSearchParams-on-every-change idiom.
+  // X3-F14: ?tab= must be written back too, not just read at mount, or the
+  // Decided view can't be reloaded/shared/reached by Back. Mirrors
+  // audit.tsx's run_id filter, the setSearchParams-on-every-change idiom.
   const setFilterParam = React.useCallback(
     (f: Filter) => {
       setFilter(f);
@@ -314,9 +313,9 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   );
   const [prompt, setPrompt] = React.useState<{ id: string; action: "approve" | "deny"; kind: ApprovalRequest["kind"] } | null>(null);
 
-  // MEDIUM fix: EXPIRED approvals were never fetched, so a request that timed
-  // out without a human decision silently vanished from the console. Include
-  // EXPIRED in the decided view alongside APPROVED/DENIED (finding D12).
+  // EXPIRED approvals must be fetched too, or a request that timed out
+  // without a human decision silently vanishes from the console. Include
+  // EXPIRED in the decided view alongside APPROVED/DENIED.
   // CANCELLED is fetched for the same reason (B4): a run's terminal transition
   // moves its PENDING approvals there, and a row that left the pending queue
   // without appearing in the decided one would just vanish.
@@ -349,18 +348,18 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
   }, [fetchAll]);
   React.useEffect(load, [load]);
 
-  // MEDIUM fix: a HITL queue is blocking — newly-arrived requests must surface
+  // A HITL queue is blocking — newly-arrived requests must surface
   // without a manual reload, and the nav badge (driven by onChanged) must not go
   // stale. Poll on an interval. We refresh silently (no loading flicker) by
   // re-fetching directly rather than calling load(), and notify the shell so the
   // pending-count badge updates.
   //
-  // F5-F4: a single transient failure on mount left status="error" forever —
-  // the poll kept silently filling pendingItems (and the nav badge) while the
-  // main view stayed stuck on "Something went wrong". A successful tick now
-  // HEALS status back to "ready" (audit.tsx's tick precedent); paused only
-  // while the foreground load is in flight, so a tick during the error state
-  // can still recover it.
+  // F5-F4: a single transient failure on mount must not leave status="error"
+  // forever — the poll would keep silently filling pendingItems (and the nav
+  // badge) while the main view stays stuck on "Something went wrong". A
+  // successful tick heals status back to "ready" (audit.tsx's tick
+  // precedent); paused only while the foreground load is in flight, so a
+  // tick during the error state can still recover it.
   const POLL_MS = 10_000;
   usePoll(() => {
     fetchAll()
@@ -373,11 +372,11 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       });
   }, POLL_MS, status === "loading");
 
-  // HIGH fix (error handling): approve/deny can reject — a 409 (already decided
-  // / expired), a 403, or a network drop. We surface the failure as a toast and
-  // signal success/failure back to the dialog so it can reset its busy state and
-  // only close on success. Returns true on success so ReasonDialog knows whether
-  // to close.
+  // approve/deny can reject — a 409 (already decided / expired), a 403, or a
+  // network drop. We surface the failure as a toast and signal
+  // success/failure back to the dialog so it can reset its busy state and
+  // only close on success. Returns true on success so ReasonDialog knows
+  // whether to close.
   const decide = async (reason: string, decisionScope: ApprovalScope, until?: string): Promise<boolean> => {
     if (!prompt) return false;
     try {
@@ -386,11 +385,12 @@ export function ApprovalsScreen({ onChanged }: { onChanged?: () => void }) {
       else await api.deny(prompt.id, reason, ...args);
       toast.success(prompt.action === "approve" ? "Request approved" : "Request denied");
       setPrompt(null);
-      // F5-F11: load() flips status back to "loading" first — the whole
-      // queue flashed to a skeleton after every single decision, losing
+      // F5-F11: load() would flip status back to "loading" first — the whole
+      // queue would flash to a skeleton after every single decision, losing
       // scroll position. fetchAll() is the same silent refresh the poll
-      // uses; a refresh failure here is not fatal — the decide itself
-      // already succeeded, and the next poll tick will catch the view up.
+      // uses instead; a refresh failure here is not fatal — the decide
+      // itself already succeeded, and the next poll tick will catch the
+      // view up.
       fetchAll().catch(() => {
         /* transient refresh failure — decide() itself already succeeded */
       });
@@ -591,7 +591,7 @@ function PendingCard({
         <p className="text-foreground">
           <span className="font-semibold">{APPROVAL_BANNER_LABEL.what}</span> {banner.what}
         </p>
-        {/* NO BLAST RADIUS for a re-auth request (UX ruling B3, general S4):
+        {/* No blast radius for a re-auth request (UX ruling B3, general S4):
             the row grants nothing — it asks its owner to sign in again to a
             credential the deployment already configured — and "Blast radius:"
             over the row's own both-branches hint claimed a capability that does
@@ -616,11 +616,11 @@ function PendingCard({
         <JsonBlock value={scope} className="mt-2" />
       </details>
 
-      {/* P0.3 (R3-F001/F108/F145) — an egress_domain approval is HOST-WIDE, and
+      {/* P0.3 (R3-F001/F108/F145) — an egress_domain approval is host-wide, and
           has been all along: the proxy strips any port before it keys the
-          decision (approvalHostKey). 0.7.2 aligns the surfaces to SAY so rather
-          than rely on it quietly, because "allow api.example.com" reads as the
-          one connection in front of you. The scope words above are canon and
+          decision (approvalHostKey). The UI must say so rather than rely on
+          it quietly, because "allow api.example.com" reads as the one
+          connection in front of you. The scope words above are canon and
           not paraphrased, so this is its own line. */}
       {item.kind === "egress_domain" && (
         <p className="mt-2.5 max-w-[72ch] text-xs text-muted-foreground">{APPROVAL.HOST_WIDE_NOTE}</p>
@@ -635,7 +635,7 @@ function PendingCard({
           <p className="max-w-[72ch] text-xs text-muted-foreground">{APPROVAL.CANCELLED_BODY}</p>
         ) : (
           item.kind === "credential_reauth" ? (
-          /* A DOOR, NOT A DECISION (UX round B3). The pair is REMOVED, not
+          /* A door, not a decision (UX round B3). The pair is removed, not
              disabled: a disabled Approve reads as "an admin can do this", and
              no tier can — the server answers 409 to either verb. The one
              control opens the same dialog every other sign-in surface opens. */

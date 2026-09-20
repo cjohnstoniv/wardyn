@@ -29,7 +29,7 @@
 
 import { PEOPLE } from "./people-access-copy";
 
-// ==================== §7.1 — reused canon, referenced never re-frozen ========
+// §7.1 — reused canon, referenced never re-frozen
 //
 // These already exist and are IMPORTED, not retyped. Re-exported from here so
 // a governance surface has one import site and cannot accidentally grow a
@@ -83,7 +83,7 @@ export { ACCESS_STATE, PEOPLE, PREVIEW } from "./people-access-copy";
 // belt-and-braces ACCESS_ERROR.EMAIL_KEY_REFUSED already uses against
 // access.go's accessEmailKeyRefused const. See MEMBER's own note.
 
-// ==================== §7.2-§7.5 — GOVERNANCE, the admin screen ==============
+// §7.2-§7.5 — GOVERNANCE, the admin screen
 
 export const GOVERNANCE = {
   // ---- §7.2 the profiles block ----
@@ -111,11 +111,12 @@ export const GOVERNANCE = {
   // Inline pluralisation, the shape PERM.ENFORCE_ON_BODY already uses — not a
   // second pluralisation helper (§7.2).
   ASSIGNED_COUNT: (n: number) => `${n} subject${n === 1 ? "" : "s"}`,
-  // ADDITION to §7.2 (0.7 R4/F032): the Limits cell tested only the three
-  // BOOLEAN doors, so a profile whose one limit is a run quota read "None" —
-  // while denyMemberRunQuota (internal/api/runs_create_validate.go) was
-  // refusing that member's fourth run with a 422. Same inline pluralisation as
-  // ASSIGNED_COUNT; the wording tracks the server's own "too many runs at once".
+  // ADDITION to §7.2 (R4/F032): the Limits cell must also account for a run
+  // quota, not just the three BOOLEAN doors — otherwise a profile whose one
+  // limit is a run quota reads "None" while denyMemberRunQuota (internal/api/
+  // runs_create_validate.go) still refuses that member's fourth run with a
+  // 422. Same inline pluralisation as ASSIGNED_COUNT; the wording tracks the
+  // server's own "too many runs at once".
   LIMIT_QUOTA_LABEL: (n: number) => `Max ${n} run${n === 1 ? "" : "s"} at once`,
   LIMITS_NONE: "None",
   EMPTY_TITLE: "No profiles yet",
@@ -141,14 +142,14 @@ export const GOVERNANCE = {
   LIMIT_DRIVE_LABEL: "Deny mounting a user drive",
   LIMIT_DRIVE_HINT:
     "A run under this profile cannot mount the person's drive, even when one is allocated to them.",
-  // ADDITION to §7.2 (0.7.2 U2): the three integer limits LimitRow (a Switch)
-  // cannot carry — max_concurrent_runs (R4/F032, previously chip-only),
-  // MaxEphemeralDiskMiB and MaxDriveSizeMiB (§5.6/§6.3-§6.4). One zero rule
-  // across all three: 0 means no limit under this profile.
+  // ADDITION to §7.2: the three integer limits LimitRow (a Switch) cannot
+  // carry — max_concurrent_runs (R4/F032), MaxEphemeralDiskMiB and
+  // MaxDriveSizeMiB (§5.6/§6.3-§6.4). One zero rule across all three: 0
+  // means no limit under this profile.
   LIMIT_CONCURRENT_LABEL: "Concurrent runs",
-  // F4-F8 (Appendix A V8, reclassified Low copy): LimitNumberRow's numberField
-  // renders 0 as blank — 0 IS "no limit" on the wire, but "0 means..." named a
-  // value the field can't display. "Leave blank" is what the operator can do.
+  // F4-F8: LimitNumberRow's numberField renders 0 as blank — 0 IS "no limit"
+  // on the wire, but "0 means..." named a value the field can't display.
+  // "Leave blank" is what the operator can do.
   LIMIT_CONCURRENT_HINT: "How many runs a person under this profile may have going at once. Leave blank for no limit.",
   LIMIT_EPHEMERAL_LABEL: "Largest ephemeral scratch (MiB)",
   LIMIT_EPHEMERAL_HINT:
@@ -244,7 +245,7 @@ export const GOVERNANCE = {
     "Something went wrong reaching the server. Profiles that are already assigned still bound every run — this list just can't show them right now.",
 } as const;
 
-// ==================== §7.6-§7.7 — MEMBER ====================================
+// §7.6-§7.7 — MEMBER
 
 // §7.6's two moments render ONLY when a profile is assigned. With no
 // assignment there is no chip, no line and no placeholder — today's screens
@@ -309,7 +310,7 @@ export const MEMBER = {
     "llm_cred is operator-only — an admin binds a workspace's model/harness credential (PUT /workspaces/{id}/llm-cred); create your workspace without it and ask for the binding",
 } as const;
 
-// ==================== §7.8 — POSITIONING ====================================
+// §7.8 — POSITIONING
 
 // Four words carrying the combination the product actually has: sandbox depth,
 // org-level governance, the org's own infrastructure, and no paywall. The
@@ -321,7 +322,7 @@ export const POSITIONING = {
   SETUP_SUBTITLE: "Governed sandboxes for anything you run — on your own infrastructure, free.",
 } as const;
 
-// ==================== §7.9 — DIRECTORY ======================================
+// §7.9 — DIRECTORY
 
 // SUGGEST_ROW's {displayName} is plain text and {detail} is mono (an email, an
 // object id, an app-role value) — the row is the one place both appear
@@ -330,7 +331,7 @@ export const POSITIONING = {
 // stops that from being a lie, and is why the group case gets a chip at all
 // while a user's email needs none.
 //
-// ABSENT MODE HAS NO STRING: with no directory configured the endpoint answers
+// Absent mode has no string: with no directory configured the endpoint answers
 // with its unconfigured code and the control IS the plain input — no note, no
 // banner, no disabled state, nothing for a reader to act on. SEARCHING and
 // MIN_CHARS_HINT are frozen here but their DISPLAY behaviour is Q7.

@@ -65,7 +65,7 @@ const POLL_MS = 2000;
 
 // A pending deny, carrying the scope the caret menu picked (or "run", the
 // bare Deny button's default — today's behavior). Deny always confirms
-// (W20-hold-fsm-6) regardless of scope, so picking a scope from the menu
+// regardless of scope, so picking a scope from the menu
 // opens this same dialog rather than deciding immediately — unlike Approve,
 // where a non-default scope decides on the spot (see decide() below).
 interface DenyTarget {
@@ -116,7 +116,7 @@ function clip(s: string): string {
   return s.length > STRIP_LABEL_MAX ? s.slice(0, STRIP_LABEL_MAX - 1) + "…" : s;
 }
 
-// M3: two rows, then the overflow link — the strip sits UNDER the terminal it
+// Two rows, then the overflow link — the strip sits UNDER the terminal it
 // belongs to and must never grow past it. A fifth held row pushing the session
 // off the screen is the strip defeating the surface it exists to serve.
 const STRIP_ROWS = 2;
@@ -124,9 +124,8 @@ const STRIP_ROWS = 2;
 // The strip's own precedence, read from the ONE rank table the board's glyph
 // reads (run-state-glyph.tsx): a held request — the sandbox is parked on this
 // decision right now — is "permission" and outranks a passive pending, which is
-// "monitoring". It used to be implicit in whatever order the API returned,
-// which was harmless while every row was visible and is not harmless now that
-// only two are: the held row must never be the one behind "Show all".
+// "monitoring". With only two rows shown at a time, the held row must never be
+// the one behind "Show all".
 function rowRank(a: ApprovalRequest): number {
   return attentionRank(isHeld(a) ? "permission" : "monitoring");
 }
@@ -171,8 +170,8 @@ export function LiveApprovals({
   // (`busy === a.id`) — only the spinner needs deferring, so only showSpinner
   // is read from the hook.
   const { showSpinner: decidingSpinner } = useDeferredBusy(busy !== null);
-  // W20-hold-fsm-5: a failed poll used to fall silently back to the last
-  // snapshot, which for an empty snapshot renders the SAME affirmative
+  // A failed poll must not fall silently back to the last
+  // snapshot, which for an empty snapshot would render the SAME affirmative
   // "Watching for…" idle text as a confirmed-empty poll — the one state where
   // silence is indistinguishable from "nothing pending." Tracked separately
   // from `pending` so a transient failure doesn't clear rows already shown.
@@ -207,7 +206,7 @@ export function LiveApprovals({
       // there would be a regression. Those route via the run detail's "Waiting
       // for your confirmation" banner to the Approvals screen's kind-aware
       // card instead.
-      // THE ONE "IT WORKED" MOMENT for a re-auth row. The row simply VANISHES
+      // The one "it worked" moment for a re-auth row. The row simply VANISHES
       // from the PENDING list on the next 4s poll — whether the person signed
       // in, the run ended, or the 24h sweeper aged it out — so without this the
       // person who just completed a device flow sees nothing at all.
@@ -325,7 +324,7 @@ export function LiveApprovals({
   const anyHeld = pending.some(isHeld);
   // Never claim "egress" over a set that holds a tool call, and never claim
   // "held" over one nothing is waiting on.
-  // THE THREE SENTENCES THAT ARE FALSE FOR A RE-AUTH ROW (UX round B2).
+  // Three sentences that are false for a re-auth row (UX round B2):
   // "approve to let it through" names a decision nobody makes for this kind;
   // when every pending row is one, the heading names the need instead.
   const allReauth = pending.length > 0 && pending.every((a) => a.kind === "credential_reauth");
@@ -470,7 +469,7 @@ export function LiveApprovals({
             <AlertDialogTitle>
               Deny <Mono>{denyTarget ? clip(rowLabel(denyTarget.request)) : ""}</Mono>?
             </AlertDialogTitle>
-            {/* Scope-dependent (Phase 0 §3) — replaces a sentence that was
+            {/* Scope-dependent — replaces a sentence that was
                 false for two of the four scopes: `once` re-raises on the next
                 attempt, and `always` outlives "the session" AND can be undone
                 in the workspace's egress settings, neither of which "no undo
@@ -495,7 +494,7 @@ export function LiveApprovals({
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              // F2-F9: nothing gated this before — a double-click (or a second
+              // A double-click (or a second
               // Enter while the first decide() was still in flight) could fire
               // confirmDeny() twice concurrently, same race the row buttons
               // already guard against via `busy === a.id`.
@@ -664,7 +663,7 @@ function ScopeMenu({
  * global strip and the New Run rail open, so a person never learns two ways to
  * sign in to AWS.
  *
- * While it renders that control it CLAIMS the door (round-2 UX B1 / the
+ * While it renders that control it CLAIMS the door (the
  * one-primary-recovery-action-per-state-per-screen rule): the global strip
  * keeps its sentence and drops its button on this page, so the cockpit offers
  * exactly one place to press.

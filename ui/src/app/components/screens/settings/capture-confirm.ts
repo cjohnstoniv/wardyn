@@ -3,13 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// THE CORROBORATION — the sign-in pane's answer to "the sandbox says it
+// The corroboration — the sign-in pane's answer to "the sandbox says it
 // captured a credential; did it?"
 //
-// EXTRACTED from harness-login-pane.tsx (R1-F7), which was nine lines under the
-// 1000-line cap with two more lanes still to touch it. Nothing here is new: the
-// rule (serverConfirmsCapture), its reasoning and its sentences are that file's
-// own, moved VERBATIM. What the pane keeps is the phase machine that calls this.
+// Extracted from harness-login-pane.tsx (R1-F7): the rule
+// (serverConfirmsCapture), its reasoning and its sentences are that file's
+// own, moved verbatim. What the pane keeps is the phase machine that calls
+// this.
 //
 // A pure module on purpose — no React, no component state — so the forgery rule
 // is exercisable as a function, which is how S-13's pins already read it.
@@ -27,24 +27,23 @@ import { isTerminalRunState, type SetupStatus } from "../../../lib/types";
 // truth the sandbox cannot write. This is the sentence shown when the two
 // disagree.
 //
-// 0.7.4 field report, finding 7: the old sentence ("— sign in again.") told a
-// person whose interrupted first attempt had just been retried SUCCESSFULLY to
-// do the thing they had just done. The two causes need different actions from
-// the human and the pane cannot tell them apart, so the sentence names both.
-// Exported so ui/e2e and the tests assert THROUGH the constant rather than
-// re-typing it.
+// finding 7: a person whose interrupted first attempt was just retried
+// successfully must not be told to do the thing they just did — but the pane
+// cannot tell the two causes (an interrupted retry vs. a genuine mismatch)
+// apart, so the sentence names both. Exported so ui/e2e and the tests assert
+// through the constant rather than re-typing it.
 //
-// U-7 (W6 blind lens) — WHO IS READING IT. This pane has three mounts and two of
-// them are the ADMIN's (agents-tab.tsx, connection-cards.tsx), so "sign in again
-// from Getting Started" named a page the reader is not on — while the pane's own
-// "Try again" sits directly below — and "tell your admin" was addressed to the
-// admin. The location and the escalation both go; the retry says only to sign in
-// again, which is true wherever this renders.
+// (W6 blind lens): who is reading it. This pane has three mounts and two of
+// them are the admin's (agents-tab.tsx, connection-cards.tsx), so the copy
+// must not name a specific page ("sign in again from Getting Started") or
+// address a specific audience ("tell your admin") — the retry instruction
+// says only to sign in again, which is true wherever this renders.
 //
-// "starting a new sign-in closes the old one" goes too: the supersede it
-// describes (harnesscred_supersede.go) is NEW in 0.7.5, and during a rolling
-// upgrade a 0.7.4 replica answers the same call without it. The audit trail is
-// what a reader can actually check either way.
+// Copy must not promise "starting a new sign-in closes the old one": the
+// supersede it would describe (harnesscred_supersede.go) is not guaranteed
+// during a rolling upgrade, when a pre-0.7.5 replica can still answer the
+// same call without it. The audit trail is what a reader can actually check
+// either way.
 export const CAPTURE_NOT_CORROBORATED =
   "The sandbox reported a capture the server does not have. If your last attempt was interrupted, sign in again. " +
   "If it keeps happening, the sandbox's report and the server disagree — check the run's audit trail.";
@@ -93,7 +92,7 @@ const CAPTURE_CONFIRM_RETRIES = 3;
 // credential (R-2). anthropic has no per-caller model_access shape here, so
 // its own harness row is all it has.
 //
-// TODAY ONLY THE aws FLOW REACHES THIS (R-5): it is the only flow with a
+// Only the aws flow reaches this today (R-5): it is the only flow with a
 // doneMarker. anthropic ends through saveToken (capture: "scrape"). Its
 // branch is kept because it is the right rule for the next helper flow.
 //
@@ -151,7 +150,7 @@ export async function confirmCaptureWithServer(
     await new Promise((r) => setTimeout(r, CONFIRM_RETRY_MS));
     status = await read();
   }
-  // THE READ TOLERATES ITS OWN WRITE (finding 7). The read above SUCCEEDED and
+  // The read tolerates its own write (finding 7). The read above succeeded and
   // simply shows no row for this run yet — or shows the row of a sign-in the
   // supersede is in the middle of ending. Both converge within a tick or two,
   // so re-read before accusing the sandbox. A forged marker never converges
@@ -167,10 +166,10 @@ export async function confirmCaptureWithServer(
   return { confirmed: false, unreachable: !!status?.unreachable };
 }
 
-// ─── Finding 7b: the pane sits on a sign-in that worked ─────────────────────
+// Finding 7b: the pane sits on a sign-in that worked
 //
 // What was actually missing (reconciled): the corroboration above already
-// shipped in 0.7.5. The gap is ONE STEP EARLIER — the window between the
+// shipped in 0.7.5. The gap is one step earlier — the window between the
 // CLI's own success line and the helper's marker, where the pane still showed
 // "open the link, enter the code, approve" — and a path to `onDone` that does
 // not depend on that marker byte reaching the browser at all.
@@ -208,7 +207,7 @@ export const CAPTURE_WATCH_MAX_MS = 45 * 60_000;
 // server itself grants an upload after a run goes terminal.
 export const CAPTURE_POST_RUN_GRACE_MS = 5 * 60_000;
 
-// O-5 (round-1 ruling): the audit hint's own back-off — fast while a capture
+// The audit hint's own back-off — fast while a capture
 // is plausible soon, slower once it is not. `/setup/status` piggybacks on a
 // hit immediately; otherwise it falls back to its own slow cadence — see
 // CAPTURE_WATCH_STATUS_FALLBACK_MS in watchForCapture below.

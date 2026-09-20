@@ -23,13 +23,13 @@
 //     Allocate at rest; Save drive while the editor is open (the allocation
 //     form collapses and takes its teal with it); New drive when there are no
 //     drives at all and the empty state carries the action that fills it.
-//  2. DELETE IS TWO DIFFERENT REFUSALS. The list already knows grant_count, so
+//  2. Delete is two different refusals. The list already knows grant_count, so
 //     at count > 0 the dialog opens PRE-FILLED with the restriction and its
 //     confirm disabled — there is nothing to attempt. The server's 409 stays
 //     authoritative for the race that count cannot see, and that path is
 //     COUNT-FREE: the client believed the count was zero, and the shipped 409
 //     carries no n and must not grow one.
-//  3. A SIZE IS NEVER WARNED ABOUT, ONLY STATED. Wardyn enforces no drive's
+//  3. A size is never warned about, only stated. Wardyn enforces no drive's
 //     size itself; HONESTY says so once under the table and every rendered size
 //     carries its ENFORCEMENT_* gloss, so the honesty is on each number.
 import * as React from "react";
@@ -306,7 +306,7 @@ export function DrivesScreen() {
                   {/* Once, under the table (Q1) — never a per-number warning and
                       never a second wording of "we do not enforce this".
 
-                      THE SPAN IS NOT DECORATION. Note is a flex COLUMN (its
+                      The span is not decoration: Note is a flex COLUMN (its
                       children are the stacked blocks a refusal note wants:
                       heading over body), and withMono returns an ARRAY — a text
                       run, the `disk_mib` Mono, another text run. Handed to Note

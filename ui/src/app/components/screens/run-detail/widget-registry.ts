@@ -122,7 +122,7 @@ export type WidgetDef = {
   required?: boolean;
 };
 
-// THE TERMINAL IS THE HERO and the layout may not take that away: `required`
+// The terminal is the hero and the layout may not take that away: `required`
 // makes the catalog refuse to remove it and normalizeLayout put it back if a
 // layout arrives without it, and minW/minH keep a resize from shrinking it to
 // a stub. Both are cheap; the pair means neither a drag, a resize, a catalog

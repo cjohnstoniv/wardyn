@@ -16,7 +16,7 @@
 // integration (named, configured) → capabilities (ON / OFF / impossible-as-
 // fact). There is no test-connect anywhere by design (T.FOOTNOTE).
 
-// ============================ COPY CANON (verbatim) ============================
+// Copy canon (verbatim)
 export const T = {
   LEDE: "Named connections to systems outside Wardyn — model providers, git hosts, package feeds, container registries, cloud providers, data stores, MCP servers, work tracking, observability, or anything else as an Other service. Wardyn runs without any of them.",
   // One exception now, not three: the Host proxy / Egress redirection Test
@@ -32,10 +32,10 @@ export const T = {
     "First, and usually ten seconds: prove a sandbox on this host can reach the internet, and every step after this one can trust the answer. On most hosts that's one click — Test connectivity, see Reached, keep moving. Configure something here only if this machine reaches the internet through a corporate proxy, or has to fetch through internal mirrors — the proof then runs through that same path, exactly as a run would.",
   // The pair of pointers at the SAME consolidation, one per surface: the
   // Getting Started embed points one step back, the full page points forward
-  // into Getting started. Both verbatim from the mock (round G).
-  // UX-8: was "...shows the same two categories" — false (the embed renders
-  // all ten). State what's actually true instead of a category count that
-  // can go stale the next time a category is added.
+  // into Getting started. Both verbatim from the mock.
+  // State what's actually true (the embed renders all ten categories)
+  // instead of a category count that can go stale the next time a category
+  // is added.
   EMBED_SCOPE_NOTE:
     "This is the full Integrations page. Your corporate proxy and any egress redirects live one step back, in Network.",
   CORP_POINTER:
@@ -164,12 +164,12 @@ export const T = {
   // prompt-v1-demo-step.md) — not a mock-export transcription like the rest of
   // this file (no mockup round covers this step yet); copy is verbatim from
   // that design prompt.
-  // Claude Code only (H3, post-review fix): the catalog's task/policy are
-  // Anthropic-specific, and the codex-cli agent image carries no claude
-  // binary — an OpenAI-only deployment stays locked, honestly, with a reason.
+  // Claude Code only: the catalog's task/policy are Anthropic-specific, and
+  // the codex-cli agent image carries no claude binary — an OpenAI-only
+  // deployment stays locked, honestly, with a reason.
 };
 
-// ============================ EGRESS REDIRECT SUGGESTIONS (verbatim) ============================
+// Egress redirect suggestions (verbatim)
 // The Corporate network / Egress redirection "From" combobox's suggested-source
 // list (mockup's EGRESS_SUGGEST) — the label IS the URL; the ecosystem is only a
 // muted secondary hint, not a selectable field (typing anything else — a full
@@ -201,7 +201,7 @@ export const ECOSYSTEM_CONFIG_FILE: Readonly<Record<string, string>> = {
   nuget: "NuGet.config",
 };
 
-// ============================ CAPABILITY-LINE NOTES (verbatim) ============================
+// Capability-line notes (verbatim)
 // mockup/wardyn-integrations.js's `CAPS` — one capability table per AI
 // credential type, rendered as ON (note) / OFF-but-fixable (`note` with no
 // `fact` — `sub`'s hostCli row below IS this case: the mock predicted it
@@ -272,7 +272,7 @@ export const CAPS = {
   },
 };
 
-// ============================ STRUCTURED METADATA (this module's own design) ============================
+// Structured metadata (this module's own design)
 // Everything below is NOT a mock transcription — it's metadata later
 // list/add/detail pages will index into, built ON TOP of the verbatim T/CAPS
 // canon above (referenced, never re-typed) so the two can't drift apart.

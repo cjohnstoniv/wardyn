@@ -80,7 +80,7 @@ export function PoliciesScreen() {
   const [selected, setSelected] = React.useState<string | null>(null);
   const [editor, setEditor] = React.useState<{ mode: "create" | "edit"; policy?: RunPolicy } | null>(null);
   const [toDelete, setToDelete] = React.useState<RunPolicy | null>(null);
-  // W14-S1-6: the default (ceiling) policy — best-effort, never blocks the
+  // The default (ceiling) policy — best-effort, never blocks the
   // main list on failure (an old daemon without the route, a transient
   // error). undefined = not loaded yet / unavailable, distinct from an
   // empty-but-loaded RunPolicySpec.
@@ -122,7 +122,7 @@ export function PoliciesScreen() {
         }
       />
 
-      {/* W14-S1-6: GET /api/v1/policies/default now exposes the ceiling — a
+      {/* GET /api/v1/policies/default now exposes the ceiling — a
           run created without a policy_id falls back to it, and it's the same
           ceiling composer.Clamp bounds a member's inline policy against.
           Best-effort: an old daemon or a transient fetch failure just falls

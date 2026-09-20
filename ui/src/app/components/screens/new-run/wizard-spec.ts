@@ -187,8 +187,8 @@ export function buildSpec(
   // --- onboarded workspace selections -> workspace_mounts[] / workspace_repos[]
   // ---
   // The FIRST selection is the PRIMARY: its kind/source drives the run's `repo`
-  // label (and, per the synthesis doc, the sandbox's base image) — additional
-  // selections are just attached alongside it.
+  // label and the sandbox's base image — additional selections are just
+  // attached alongside it.
   const workspaceMounts: WorkspaceMount[] = [];
   const workspaceRepos: WorkspaceRepo[] = [];
   state.workspaces.forEach((sel, i) => {
@@ -196,8 +196,8 @@ export function buildSpec(
     if (!w) return; // stale selection — defensively skip rather than dangle
     // One entry per SOURCE this workspace carries (PARITY-2) — a multi-source
     // or migrated-ephemeral workspace has no single mount/repo to flatten to;
-    // the old w.kind/w.source read was EMPTY for exactly those cases, so it
-    // silently attached nothing at all.
+    // reading w.kind/w.source directly is empty for exactly those cases, and
+    // would silently attach nothing at all.
     const { mounts, repos } = resolveWorkspaceMounts(w, sel);
     workspaceMounts.push(...mounts);
     workspaceRepos.push(...repos);
@@ -457,9 +457,9 @@ function llmHostForSecret(agent: WizardAgent, _secret: string): string | undefin
   return agent === "codex-cli" ? "api.openai.com" : "api.anthropic.com";
 }
 
-// The injection header + format are per-host: Anthropic wants the RAW key in
-// x-api-key (the prior always-"Authorization: Bearer" was the bug); OpenAI wants
-// "Authorization: Bearer <key>".
+// The injection header + format are per-host: Anthropic wants the raw key in
+// x-api-key — sending "Authorization: Bearer" unconditionally authenticates
+// nothing there; OpenAI wants "Authorization: Bearer <key>".
 function apiKeyInjectionFor(host: string): { header: string; format: string } {
   if (host === "api.anthropic.com") return { header: "x-api-key", format: "%s" };
   return { header: "Authorization", format: "Bearer %s" };

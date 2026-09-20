@@ -176,7 +176,7 @@ describe("workspace client methods", () => {
     expect(JSON.parse(String(init?.body))).toEqual({ requirements: reqs });
   });
 
-  // W20-S1-2: a 202 body always carries `warnings` (the masking caveat, at
+  // A 202 body always carries `warnings` (the masking caveat, at
   // minimum) and the launch's real `confinement_class` — recordTask() must
   // surface both rather than discarding everything but record_run_id.
   it("recordTask() surfaces the 202 body's warnings and confinement_class, not just record_run_id", async () => {

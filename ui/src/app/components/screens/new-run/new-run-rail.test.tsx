@@ -11,10 +11,10 @@
 // rather than through literals (a canon swap must not silently rewrite what
 // these pin).
 //
-// Three cases are regression pins for the fix pass's review findings and say so:
-// the sentence must never be chosen from the roster's DECLARED mechanism (F1), a
-// run with no model credential gets no sentence at all (F4), and an unread
-// /healthz makes no promise either way (F3).
+// Three cases are regression pins and say so: the sentence must never be
+// chosen from the roster's DECLARED mechanism (F1), a run with no model
+// credential gets no sentence at all (F4), and an unread /healthz makes no
+// promise either way (F3).
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -30,8 +30,8 @@ vi.mock("../../../lib/api/health", () => ({
   },
 }));
 
-// S1 (review-1): the focus-return cases below mount the REAL door dialog, so
-// its login pane is faked to one button — exactly as
+// S1: the focus-return cases below mount the REAL door dialog, so its login
+// pane is faked to one button — exactly as
 // model-access-banner.test.tsx fakes it, which owns the pane's own suite;
 // this file only needs "the sign-in completed".
 vi.mock("../settings/harness-login-pane", () => ({
@@ -62,7 +62,7 @@ const RECORDING_ON = RAIL_RECORDING_ON;
 
 // The server publishes credential_residency for ONE row shape, so these fixtures
 // carry the declared mechanism the real wire carries — precisely so that a
-// sentence picked off it would show up here. That it did not is how F1 shipped.
+// sentence wrongly picked off it (F1) would show up here.
 function harnessRow(residency?: "sandbox"): SetupHarnessTool {
   return {
     id: "claude-code",
@@ -184,7 +184,7 @@ function modelAccessRow(overrides: Partial<SetupHarnessTool> = {}): SetupHarness
   return { ...harnessRow(), ...overrides };
 }
 
-// THE SIX SENTENCES, each keyed on what PREFLIGHT resolved. `mechanism` here is
+// The six sentences, each keyed on what PREFLIGHT resolved. `mechanism` here is
 // the RESOLVED lane, which is the only mechanism the rail may ever read.
 const credentialArms: { name: string; cred: ModelCredential; want: string }[] = [
   {
@@ -240,11 +240,12 @@ describe("New run rail — the two facts it used to assert (Appendix A finding 1
     }
   }
 
-  // F1 REGRESSION PIN. The status row settles residency only for the per-user
+  // F1 regression pin. The status row settles residency only for the per-user
   // Bedrock SSO shape; everywhere else it is absent while `mechanism` is still
-  // populated. The rail used to pick its sentence off that DECLARED field, so a
-  // compose deployment with a ~/.claude mount read "AWS credentials sign inside
-  // the sandbox" over a Claude sign-in. A row that settles nothing says nothing.
+  // populated. The rail must never pick its sentence off that DECLARED field —
+  // doing so would read "AWS credentials sign inside the sandbox" over a
+  // Claude sign-in for a compose deployment with a ~/.claude mount. A row that
+  // settles nothing says nothing.
   it("a row with no graded residency says only that it is not resolved yet", async () => {
     renderRail({ agentRow: harnessRow() });
     expect(await screen.findByText(RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH)).toBeInTheDocument();
@@ -288,9 +289,8 @@ describe("New run rail — the two facts it used to assert (Appendix A finding 1
     expect(screen.queryByText(RAIL_CREDENTIAL.SANDBOX_BEDROCK_CHIP_PER_USER)).toBeNull();
   });
 
-  // THE NEGATIVE CONTROL. Nothing resolved — the state every user is in before
-  // pressing anything, and the state the old copy answered with "never written
-  // into the sandbox".
+  // The negative control: nothing resolved — the state every user is in
+  // before pressing anything — and the proxy sentence must never render.
   it("with neither source the proxy sentence never renders", async () => {
     renderRail({ agentRow: harnessRow() });
     expect(await screen.findByText(RAIL_CREDENTIAL.RESOLVED_AT_LAUNCH)).toBeInTheDocument();
@@ -298,7 +298,7 @@ describe("New run rail — the two facts it used to assert (Appendix A finding 1
     expect(screen.queryByText(RAIL_CREDENTIAL.PROXY_STAGED)).toBeNull();
   });
 
-  // F4 REGRESSION PIN. A shell command gets no model credential, so the screen
+  // F4 regression pin. A shell command gets no model credential, so the screen
   // withholds the agent row and there is nothing to say — not even "not resolved
   // yet", which would imply one is coming.
   it("a run with no model credential renders no Credentials section at all", async () => {
@@ -347,7 +347,7 @@ describe("New run rail — the two facts it used to assert (Appendix A finding 1
     expect(screen.getByText(/No model provider is connected/)).toBeInTheDocument();
   });
 
-  // F3 REGRESSION PIN. An unread /healthz is not evidence that recording is on,
+  // F3 regression pin. An unread /healthz is not evidence that recording is on,
   // and this rail is where the promise about it gets made.
   it("recording says nothing until /healthz has actually answered", async () => {
     recordingSelected.value = undefined;
@@ -362,11 +362,11 @@ describe("New run rail — the two facts it used to assert (Appendix A finding 1
   });
 });
 
-// Finding 1 (Appendix A / plan lane ui-new-run-model-access): llmReady is a
-// DEPLOYMENT fact, true the moment an admin saves a per_user roster row — so
-// the warning above never reached the member who had not signed in. The rail
-// now reads the shared model-access door for the claude-code row and states
-// which per-person state the launcher is in, in the server's own words.
+// Finding 1: llmReady is a DEPLOYMENT fact, true the moment an admin saves a
+// per_user roster row — the warning above must not stay silent for a member
+// who has not signed in. The rail reads the shared model-access door for the
+// claude-code row and states which per-person state the launcher is in, in
+// the server's own words.
 //
 // A test-only sibling that closes the shared door — the real dialog lives in
 // model-access-banner.tsx (the door lane's file, out of scope here).
@@ -380,7 +380,7 @@ function DoorCloser() {
 }
 
 describe("Finding 1 — the rail states WHO needs to sign in, not just whether a provider is connected", () => {
-  // N3: this pins that the action is NOT printed a second time — rename kept
+  // This pins that the action is NOT printed a second time — rename kept
   // in step with what the assertion actually checks.
   it("not_configured states the person is not signed in — the server's action, byte-identical to the button label, is not printed a second time", async () => {
     renderRail({
@@ -394,13 +394,12 @@ describe("Finding 1 — the rail states WHO needs to sign in, not just whether a
     expect(screen.getAllByText(AGENTS.SIGN_IN_AWS)).toHaveLength(1);
   });
 
-  // Live-walk finding (kind walk, case I): setupBedrock grades llm_ready
-  // through the CALLER's own AWS scope, so a never-signed-in per_user member
-  // reads SSOPresent=false -> llm_ready=false -> showModelWarning=true on a
-  // deployment that unambiguously HAS a model path — the admin's row exists.
-  // Before the fix, BOTH sentences rendered stacked: the true per-person line
-  // and the false "No model provider is connected." The per-person line
-  // supersedes the deployment one whenever it applies.
+  // setupBedrock grades llm_ready through the CALLER's own AWS scope, so a
+  // never-signed-in per_user member reads SSOPresent=false -> llm_ready=false
+  // -> showModelWarning=true on a deployment that unambiguously HAS a model
+  // path — the admin's row exists. The two sentences must never render
+  // stacked: the per-person line supersedes the deployment one whenever it
+  // applies.
   it("a never-signed-in per_user member sees the per-person line and NOT the no-provider sentence", async () => {
     renderRail({
       agentRow: modelAccessRow(),
@@ -412,7 +411,7 @@ describe("Finding 1 — the rail states WHO needs to sign in, not just whether a
     expect(screen.queryByText(RAIL_MODEL_ACCESS.NO_PROVIDER_CTA)).toBeNull();
   });
 
-  // N2: expired_signin's OTHER shape — a pin contradiction — carries a real
+  // expired_signin's OTHER shape — a pin contradiction — carries a real
   // account/role pair the sentence cannot say, so unlike not_configured this
   // one DOES render the server's action beside the sentence and the control.
   it("expired_signin with a pin-contradicted pair states EXPIRED, the server's pair, and offers the control", () => {
@@ -456,7 +455,7 @@ describe("Finding 1 — the rail states WHO needs to sign in, not just whether a
     expect(screen.queryByText(`Sign in again before ${deadline}`)).toBeNull();
   });
 
-  // S3 (review-1): an older daemon sends `expiring` with no `deadline` field.
+  // An older daemon sends `expiring` with no `deadline` field.
   // The sentence needs `{when}` and cannot form, but the state is still
   // needsAttention/actionable, so the rail still CLAIMS the door — without
   // the fallback below that leaves zero sign-in controls on /runs/new.
@@ -482,7 +481,7 @@ describe("Finding 1 — the rail states WHO needs to sign in, not just whether a
     expect(screen.queryByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeNull();
   });
 
-  // S2 (review-1): an OPERATOR under a dead SHARED row is the person who can
+  // An OPERATOR under a dead SHARED row is the person who can
   // repair it — they read their OWN sentence, never the member's "ask them to
   // reconnect it" instruction about themselves, and no duplicate action line.
   it("an operator's shared_expired states the admin sentence alone, never the member's instruction", () => {
@@ -498,9 +497,9 @@ describe("Finding 1 — the rail states WHO needs to sign in, not just whether a
     expect(screen.getByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeInTheDocument();
   });
 
-  // CODEX-ROW NEGATIVE. model_access grades the claude-code row alone
-  // (internal/api/modelaccess.go's modelAccessAgent) — a different selected
-  // agent renders nothing whatever the door says.
+  // A codex-row negative control: model_access grades the claude-code row
+  // alone (internal/api/modelaccess.go's modelAccessAgent) — a different
+  // selected agent renders nothing whatever the door says.
   it("a codex row with an actionable claude-code model_access renders nothing", () => {
     renderRail({
       agentRow: { ...modelAccessRow(), id: "codex", display: "Codex" },
@@ -510,8 +509,8 @@ describe("Finding 1 — the rail states WHO needs to sign in, not just whether a
     expect(screen.queryByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeNull();
   });
 
-  // LIVE BYTE-IDENTICAL. A graded door that needs no attention must not change
-  // one byte of what the rail renders today.
+  // A graded door that needs no attention must not change one byte of what
+  // the rail renders.
   it("model_access live leaves today's rail byte-identical", () => {
     const withoutDoor = renderRail({ agentRow: harnessRow("sandbox") });
     const withLiveDoor = renderRail({
@@ -521,7 +520,7 @@ describe("Finding 1 — the rail states WHO needs to sign in, not just whether a
     expect(withLiveDoor.container.innerHTML).toBe(withoutDoor.container.innerHTML);
   });
 
-  // THE FAIL-OPEN CONTRACT. With no <ModelAccessProvider> above (every one of
+  // The fail-open contract: with no <ModelAccessProvider> above (every one of
   // the ~15 pre-existing cases in this file), the rail must render exactly
   // today's output — proven directly here rather than only by inference.
   it("with no ModelAccessProvider above, the rail offers no model-access line or control", () => {
@@ -530,7 +529,7 @@ describe("Finding 1 — the rail states WHO needs to sign in, not just whether a
     expect(screen.queryByRole("button", { name: RAIL_MODEL_ACCESS.SIGN_IN_ARIA })).toBeNull();
   });
 
-  // S1 (review-1): focus after the door closes. Radix's FocusScope is still
+  // S1: focus after the door closes. Radix's FocusScope is still
   // mounted while onDone/onCancel run, so anything focused there is taken
   // back; onCloseAutoFocus is the callback that fires after the trap
   // releases, and every assertion below has to wait a macrotask for it —
@@ -581,7 +580,7 @@ describe("Finding 1 — the rail states WHO needs to sign in, not just whether a
       expect(document.activeElement).not.toBe(document.getElementById("main-content"));
     });
 
-    // NEGATIVE: a door someone ELSE opened (the rail never claimed it and
+    // A door someone ELSE opened (the rail never claimed it and
     // never rendered its own control here — showModelAccess false) must not
     // steal focus to Launch when it closes.
     it("does not move focus when the door was never opened from this rail", async () => {
@@ -598,7 +597,7 @@ describe("Finding 1 — the rail states WHO needs to sign in, not just whether a
   });
 });
 
-// 0.7.6 field report: Launch with a lapsed AWS SSO session. The server refuses
+// Launch with a lapsed AWS SSO session. The server refuses
 // the run (422, reason model_credential — before any run exists); the rail
 // answers THAT refusal with the door and launches again when the sign-in
 // completes. Launch is never pre-checked on the cached status: the server is
@@ -719,7 +718,7 @@ describe("the launch door — the server's credential refusal opens the sign-in,
     await userEvent.click(screen.getByRole("button", { name: "fake pane" }));
     expect(onLaunch).not.toHaveBeenCalled();
     // The click was consumed while the door was open: its closing must not
-    // re-open it with a relaunch armed (review-1 finding 1).
+    // re-open it with a relaunch armed.
     await afterFocusSettles();
     expect(dialog()).toBeNull();
   });

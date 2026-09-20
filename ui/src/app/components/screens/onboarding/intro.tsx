@@ -32,12 +32,10 @@ export function IntroBlurb() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// The single 5-node "how it works" strip (replaces the old 7-page tour). Tones
-// are semantic (muted / primary / warning) — teal (primary) is reserved for the
-// barrier node, warning for the "you gate the risky bits" node (honest: a grant
-// is never a reassuring green).
-// ---------------------------------------------------------------------------
+// The single 5-node "how it works" strip. Tones are semantic (muted /
+// primary / warning) — teal (primary) is reserved for the barrier node,
+// warning for the "you gate the risky bits" node (honest: a grant is never
+// a reassuring green).
 type NodeTone = "muted" | "primary" | "warning";
 const HOW_IT_WORKS: { Icon: React.ElementType; title: string; sub: string; tone: NodeTone }[] = [
   { Icon: Fingerprint, title: "Own identity", sub: "Every run, cryptographically scoped", tone: "muted" },

@@ -89,7 +89,7 @@ describe("AppShell (control plane unreachable)", () => {
   });
 });
 
-// W31-S1-7: the SSO session dies outright at its expiry with no refresh —
+// The SSO session dies outright at its expiry with no refresh —
 // this is the warning that never existed, pinned against /me's
 // session_expires_at (an admin-token/local session, absent here, must never
 // warn: it has nothing to expire).
@@ -159,17 +159,18 @@ describe("AppShell — session-expiry warning (W31-S1-7)", () => {
     expect(screen.queryByText(/session is expiring soon/i)).toBeNull();
   });
 
-  // F3-F11: a session already past its expiry used to read "expiring soon"
-  // forever (the predicate was one-sided) — the third state names it.
+  // A session already past its expiry must read "has expired", not
+  // "expiring soon" forever — a one-sided predicate would never resolve to
+  // the third state.
   it("F3-F11: a session already past its expiry reads 'has expired', not 'expiring soon'", async () => {
     renderWithMe(new Date(Date.now() - 60 * 1000).toISOString());
     expect(await screen.findByText(/session has expired/i)).toBeInTheDocument();
     expect(screen.queryByText(/expiring soon/i)).toBeNull();
   });
 
-  // F3-F11: `new Date("not-a-date")` parses to an Invalid Date, not null —
-  // every arithmetic read off it used to be NaN, disabling the banner
-  // silently instead of failing loudly or falling back safely.
+  // `new Date("not-a-date")` parses to an Invalid Date, not null — any
+  // arithmetic read off it is NaN, so the banner must guard against that
+  // rather than disabling itself silently.
   it("F3-F11: an unparseable session_expires_at never warns (guarded, not NaN'd into silence)", async () => {
     renderWithMe("not-a-real-date");
     await screen.findByText("cj");
@@ -178,10 +179,10 @@ describe("AppShell — session-expiry warning (W31-S1-7)", () => {
   });
 });
 
-// L1 review fix: the role chip used to render unconditionally (fail-open
-// "admin"), so it flashed ADMIN in the account menu next to a still-"unknown"
-// principal before /me resolves — or forever, if /me never resolves at all.
-// Gated on meta.method now, same as its sibling line just below it.
+// The role chip must not render unconditionally (fail-open "admin") — that
+// would flash ADMIN in the account menu next to a still-"unknown" principal
+// before /me resolves, or forever if /me never resolves at all. Gated on
+// meta.method, same as its sibling line just below it.
 describe("AppShell — account-menu role chip gating (L1)", () => {
   afterEach(() => vi.unstubAllGlobals());
 
@@ -214,7 +215,7 @@ describe("AppShell — account-menu role chip gating (L1)", () => {
   });
 });
 
-// W31-S1-1: local-mode installs bypass auth entirely server-side
+// Local-mode installs bypass auth entirely server-side
 // (internal/api/http.go humanOrAdminAuth), so "Sign out" is a no-op that only
 // drops the user onto a SignIn screen whose admin-token field is unchecked
 // (probeAuth trivially re-succeeds against the auth-bypassed API on whatever's
@@ -289,7 +290,7 @@ describe("AppShell — Sign out hidden in local mode (W31-S1-1)", () => {
   });
 });
 
-// ui-shellAuth-4: the account-menu trigger must render via the shared Button
+// The account-menu trigger must render via the shared Button
 // component (like every sibling header control) so keyboard focus gets the
 // app's focus-visible ring instead of falling back to a raw <button>'s bare
 // unthemed browser-default outline.
@@ -445,7 +446,7 @@ describe("MobileNav (below-md nav fallback)", () => {
 // B3: member nav is Runs · Approvals · Workspaces, nothing else — no Policies/
 // Permissions/Secrets/Audit/Recordings. Hiding is cosmetic (the server is the
 // real boundary); this pins the UI half of that contract. Demos/Integrations
-// left the sidebar entirely (stage-1 flatten) — Demos moved to the account
+// left the sidebar entirely — Demos moved to the account
 // menu (TopBar), which since Phase 5 hides it for members (its own describe
 // block below) — routes.go still has no server-side gate on it at all.
 describe("SidebarNav (member role — B3)", () => {
@@ -582,7 +583,7 @@ describe("TopBar — account-menu Demos entry (Phase 5)", () => {
     expect(within(menu).queryByText("Demos")).toBeNull();
   });
 
-  // W6-3: the item deep-links to /setup?step=sealed-box, which only the SUPER
+  // The item deep-links to /setup?step=sealed-box, which only the SUPER
   // admin's SetupScreen honours. A security admin's /setup/status is redacted
   // on the same !isOperator predicate a member's is (internal/api/setup.go), so
   // they land where a member lands — a Getting Started that ignores ?step — and
@@ -735,12 +736,12 @@ describe("AppShell — /me's drive bits reach UserDriveContext", () => {
 
   // R4/F091 — the THIRD key. /me suppresses the allocation for all four of
   // these (me.go:119-123), so `drive: null` is the SAME answer for every one of
-  // them and the reason is the only thing that tells them apart. The shell
-  // typed the key and read it nowhere, so the context handed every consumer
-  // "you have no allocation" — the one remedy that is wrong in all four cases.
+  // them and the reason is the only thing that tells them apart — the context
+  // must read and carry this key, or every consumer sees only "you have no
+  // allocation", the one remedy that is wrong in all four cases.
   // One case per token in the server's closed vocabulary
   // (user_drives_resolve.go:87-99): a token this test does not carry is a
-  // token the console silently drops again.
+  // token the console would silently drop.
   it.each([
     ["groups_snapshot_stale"],
     ["unmountable"],

@@ -19,8 +19,8 @@
 // server concepts: every field on IntegrationRow traces back to a real
 // response field, named in the comment next to it.
 //
-// W5: marks every seam that's a deliberate stand-in for something a later
-// wave should replace with a real field/endpoint (GitHub ref-confinement,
+// Some seams below are deliberate stand-ins for something a later wave
+// should replace with a real field/endpoint (GitHub ref-confinement,
 // per-integration "default" persistence, an Azure endpoint URL, workspace
 // pin-counts for the blast radius).
 import type { BedrockLane, IntegrationCategory, ResidencyKind } from "../integrations";
@@ -88,7 +88,7 @@ export interface IntegrationsData {
   scm: IntegrationRow[];
 }
 
-// ---- AI providers ----------------------------------------------------------
+// AI providers
 
 const AI_TYPE_LABEL: Record<string, string> = {
   anthropic_api_key: "anthropic · api key",
@@ -123,8 +123,8 @@ const FEATURES_SLOT = /^Wardyn features/;
 // The server-side adoptable id for a legacy AI row of this type/lane — the
 // SAME ids deriveAiRows below stamps as serverId, factored out so a caller
 // that hasn't loaded a derived row yet (the Add dialog, before its first
-// reload) can still resolve which wire row to adopt/PUT (UI-WS-2). Undefined
-// Every AiType now maps to a server-side id.
+// reload) can still resolve which wire row to adopt/PUT. Every AiType maps
+// to a server-side id.
 export function aiServerId(type: AiType, hostCli?: boolean): string | undefined {
   switch (type) {
     case "anthropic_api_key":
@@ -364,7 +364,7 @@ function deriveAiRows(status: SetupStatus, present: string[]): IntegrationRow[] 
   return rows;
 }
 
-// ---- SCM hosts --------------------------------------------------------------
+// SCM hosts
 
 // Only the kinds a stored credential can actually produce (deriveProviders
 // only pushes a lane when its secret/App flag is real) — brokered for the App,
@@ -383,13 +383,13 @@ function deriveScmRows(status: SetupStatus, siteConfig: SiteConfig | null, prese
   // second opinion about the rule.
   const rows = deriveProviders(present, siteConfig?.effective_scm_hosts ?? siteConfig?.scm_hosts ?? [], status.secrets.github_app);
   return rows.map((r) => {
-    // SCM-SEAM-2: a host registered in scm_hosts but with no stored credential
-    // yet still widens every future run's egress allowlist the moment it's
-    // added — dropping the row here (as this used to) makes that add look
-    // like a no-op while it silently keeps widening egress. Render it as a
-    // minimal, real, deletable row instead of hiding it. `derivedFrom` guess
-    // rows never reach this branch (deriveProviders always seeds one lane for
-    // those), so this is exactly the scm_hosts-registered, credential-less case.
+    // A host registered in scm_hosts but with no stored credential yet still
+    // widens every future run's egress allowlist the moment it's added, so
+    // dropping the row here would make that add look like a no-op while it
+    // silently keeps widening egress. Render it as a minimal, real, deletable
+    // row instead of hiding it. `derivedFrom` guess rows never reach this
+    // branch (deriveProviders always seeds one lane for those), so this is
+    // exactly the scm_hosts-registered, credential-less case.
     if (r.lanes.length === 0) {
       return {
         id: `scm:${r.host}`,
@@ -425,10 +425,10 @@ function deriveScmRows(status: SetupStatus, siteConfig: SiteConfig | null, prese
       typeLabel: r.host,
       chips: r.lanes.map((l) => ({ label: LANE_META[l].label, tone: LANE_META[l].tone, tooltip: LANE_META[l].tooltip })),
       residency: scmResidency(r.lanes),
-      // W5: the ref-confinement check that would answer Ref-confined/
-      // Unconfined doesn't exist server-side yet — Unknown is the honest
-      // default until it does. Re-check still refreshes real local facts
-      // (e.g. the Stored check below), so it's wired, not decorative.
+      // The ref-confinement check that would answer Ref-confined/Unconfined
+      // doesn't exist server-side yet — Unknown is the honest default until
+      // it does. Re-check still refreshes real local facts (e.g. the Stored
+      // check below), so it's wired, not decorative.
       posture: isGithubApp ? { kind: "gh_verdict", verdict: "unknown", checkedLabel: "not yet" } : { kind: "configured" },
       secretNames,
       checkIds: ["scm_provider"],
@@ -438,16 +438,12 @@ function deriveScmRows(status: SetupStatus, siteConfig: SiteConfig | null, prese
   });
 }
 
-// ---- Host proxy / egress redirection: NOT derived here ----------------------
-// Both used to be categories on this page. They aren't integrations: an
-// integration is an account with a system outside Wardyn, while a proxy and an
-// internal mirror are network topology. Corporate network is their single home
-// now; nothing here derives a row for either.
-//
-// proxyBannerNeeded() lived here to raise the "a proxy was DETECTED but nothing
-// is connected" banner on the deleted /integrations page. Its replacement is
-// isProxyConfigured/proxyDetected (screens/setup/corp-network-proxy.tsx), which
-// the Corporate network step already uses.
+// Host proxy / egress redirection are not derived here. Neither is an
+// integration: an integration is an account with a system outside Wardyn,
+// while a proxy and an internal mirror are network topology. Corporate
+// network is their single home; the "a proxy was detected but nothing is
+// connected" banner is driven by isProxyConfigured/proxyDetected
+// (screens/setup/corp-network-proxy.tsx).
 
 export function deriveIntegrations(status: SetupStatus, siteConfig: SiteConfig | null, secretNames: string[]): IntegrationsData {
   const present = secretNames.length ? secretNames : status.secrets.present;
@@ -460,11 +456,9 @@ export function deriveIntegrations(status: SetupStatus, siteConfig: SiteConfig |
 export const integrationsApi = {
   // GET /api/v1/integrations exists, but returns the flat wire row — no posture,
   // no SCM lane breakdown, no capability chips — so this composes the three
-  // endpoints that carry those facts and derives rows client-side.
-  //
-  // adoptIntegration() sat here too, POSTing /integrations/{id}/adopt to promote
-  // a derived row into a stored one so the old catalog could edit it. That route
-  // and that catalog are both gone, and nothing ever called this client for it.
+  // endpoints that carry those facts and derives rows client-side. There is no
+  // promote-a-derived-row-into-a-stored-one call: nothing in the console adopts
+  // a row through this client.
   async list(): Promise<IntegrationsData> {
     const [status, siteConfig, secretNames] = await Promise.all([
       setupApi.getSetupStatus(),
@@ -475,11 +469,6 @@ export const integrationsApi = {
   },
 };
 
-// The GENERIC-integration half of this module lived below: genericIntegrations,
-// genericSections, baseSummary, baseBlastRadius, probeChip, IntegrationWrite,
-// SECRET_DELIVERY_NOTE and the genericIntegrationsApi REST client, alongside the
-// display helpers findRow/describePosture/blastRadius. All of it rendered the
-// /integrations catalog page and its Add dialog. Both are deleted, generic kinds
-// are no longer a kind Wardyn accepts, and lib/integration-catalog.ts — their
-// only data source — went with them. What remains above is the AI/SCM derivation
-// that lib/readiness.ts and settings/connection-cards.tsx read.
+// Generic integration kinds are no longer a kind Wardyn accepts — there is no
+// /integrations catalog page or Add dialog. What remains above is the AI/SCM
+// derivation that lib/readiness.ts and settings/connection-cards.tsx read.

@@ -7,8 +7,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-// MEDIUM fixes pinned here:
-//  - a failed deleteSecret() must surface a toast.error (was silent).
+// Fixes pinned here:
+//  - a failed deleteSecret() must surface a toast.error.
 //  - AddSecretDialog must warn before overwriting an existing secret name.
 
 const toastError = vi.fn();

@@ -83,7 +83,7 @@ export function RecordingScreen() {
   const [playingRecording, setPlayingRecording] = React.useState<Recording | null>(null);
   const [playError, setPlayError] = React.useState<string | null>(null);
 
-  // W21-S1-7, now the shared hook: the same /healthz read the run cockpit and
+  // Now the shared hook: the same /healthz read the run cockpit and
   // the New Run rail make. See use-recording-disabled.ts.
   const recordingDisabled = useRecordingDisabled() === true;
 

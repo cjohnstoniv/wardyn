@@ -3,13 +3,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// WORKSPACE DETAIL — the addressable hub at /workspaces/:id. Three cards:
-// Recorded sessions (RecordPane — Record Mode, untouched), Allowed hosts, and
-// Denied hosts (Phase 4 revocation — the only console surface for undoing a
-// `deny · always` decision). A workspace is usable the instant it's created
-// (POST /workspaces already accepts {name, sources[], base_image?}), so this
-// page no longer surfaces scan/build machinery at all — Stage 2 stops calling
-// those endpoints.
+// The addressable hub at /workspaces/:id. Three cards: Recorded sessions
+// (RecordPane — Record Mode, untouched), Allowed hosts, and Denied hosts
+// (the only console surface for undoing a `deny · always` decision). A
+// workspace is usable the instant it's created (POST /workspaces already
+// accepts {name, sources[], base_image?}), so this page no longer surfaces
+// scan/build machinery at all — Stage 2 stops calling those endpoints.
 import * as React from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { AlertTriangle, ChevronRight, Trash2 } from "lucide-react";
@@ -125,9 +124,9 @@ export function WorkspaceDetailScreen() {
       .then((s) => {
         // F6-F3 (site 2): getSetupStatus() degrades to the synthetic
         // READY_FALLBACK (unreachable:true) on any non-401 failure, and
-        // hasLlmPath(READY_FALLBACK) is always false — so this used to tell
-        // the operator "no model provider configured" for a daemon that
-        // simply never answered.
+        // hasLlmPath(READY_FALLBACK) is always false — `unreachable` is
+        // checked first so a daemon that simply never answered doesn't read
+        // as "no model provider configured".
         setLlmReady(s.unreachable ? null : hasLlmPath(s));
         setHostClasses(s.runner?.confinement_classes ?? null);
       })
@@ -230,19 +229,20 @@ export function WorkspaceDetailScreen() {
   // overlay (the PUT is a full replacement); last-write-wins is accepted, same
   // as the lane it replaces.
   //
-  // TIER, since the move changed it: PUT /workspaces/{id}/requirements is
-  // registered on operatorOnly, while the pane that offers these controls is
-  // gated on the securityOps tier. The Approve controls therefore carry their
-  // OWN useOperator gate, in CaughtHosts where they live (F031) — anything
-  // that grows a new caller of approveHosts owes the same gate.
+  // PUT /workspaces/{id}/requirements is registered on operatorOnly, while
+  // the pane that offers these controls is gated on the securityOps tier —
+  // a different tier. The Approve controls therefore carry their own
+  // useOperator gate, in CaughtHosts where they live (F031) — anything that
+  // grows a new caller of approveHosts owes the same gate.
   const approveHosts = async (hosts: string[]) => {
     if (!ws || hosts.length === 0) return;
     try {
       // Merge onto the FRESHEST overlay, not the one captured at click time —
       // the confirm dialog can sit open for minutes, and the PUT is a full
-      // replacement. Inside the try: a rejected fetch here used to reject the
-      // whole call, which the guided approve→replay chain void-discarded — the
-      // replay silently never fired, with no toast to say why.
+      // replacement. Inside the try: a rejected fetch here must not reject
+      // the whole call — the guided approve→replay chain void-discards the
+      // rejection, so an unhandled one would leave the replay silently never
+      // firing, with no toast to say why.
       const fresh = (await workspacesApi.getWorkspace(ws.id).catch(() => null)) ?? ws;
       const next = { ...(fresh.requirements ?? {}) };
       for (const host of hosts) next[`egress:${host}`] = { level: "required", provenance: "operator_set" };

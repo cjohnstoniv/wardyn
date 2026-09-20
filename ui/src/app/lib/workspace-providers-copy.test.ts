@@ -24,10 +24,10 @@ import { DRIVES, DRIVE_MEMBER, DRIVE_RUN } from "./user-drives-copy";
 //
 // Two normalisations, both documented rules rather than fudges (the drives
 // precedent):
-//   - BACKTICKS ARE STRIPPED from the doc cell. §7's header note makes mono a
-//     DISPLAY concern applied by the consuming component; the frozen string
+//   - Backticks are stripped from the doc cell. §7's header note makes mono a
+//     display concern applied by the consuming component; the frozen string
 //     itself is plain text.
-//   - A PARAMETERIZED key is called with its own placeholder text, so
+//   - A parameterized key is called with its own placeholder text, so
 //     REMOVE_CONFIRM_TITLE("{kind}") must reproduce the doc's `Remove the {kind}
 //     row?` character for character. The pluralised keys (§5 #9) can't be
 //     checked that way and get their own tests below.

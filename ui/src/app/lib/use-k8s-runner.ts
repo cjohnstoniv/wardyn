@@ -23,10 +23,10 @@ import { setup as setupApi } from "./api/setup";
 // (the "hiding is cosmetic" rule applies here too — nothing server-side reads
 // this hook), so a slow probe must never hide a legitimate option.
 //
-// MEMBER COUPLING: redactSetupStatusForMember zeroes runner (Driver becomes
+// Member coupling: redactSetupStatusForMember zeroes runner (Driver becomes
 // "", the Go zero value, not "k8s") — so for a signed-in member this hook
-// ALWAYS reads false, on k8s or not, and would offer local directories to a
-// member on a real k8s deployment. That is harmless ONLY because both of
+// always reads false, on k8s or not, and would offer local directories to a
+// member on a real k8s deployment. That is harmless only because both of
 // today's callers are already operator-gated one level up (SourcesLibrary's
 // "Add directory or repo" / WorkspacesStep's "Add workspace" buttons carry
 // their own disabled={!operator}), so a member can never reach the point of
@@ -36,9 +36,9 @@ import { setup as setupApi } from "./api/setup";
 //
 // `enabled` (default true) defers the fetch: AddSourceDialog is mounted
 // (closed) for as long as its parent SourcesLibrary is on screen, not just
-// while actually open — an unconditional fetch here fired one extra
-// /setup/status round trip every time the Getting-started walk merely PASSED
-// THROUGH the Sources step. Pass `open` (or similar) from a caller shaped
+// while actually open — an unconditional fetch here fires one extra
+// /setup/status round trip every time the Getting-started walk merely passes
+// through the Sources step. Pass `open` (or similar) from a caller shaped
 // like that; a caller that only ever mounts while genuinely relevant (e.g. a
 // wizard step body) can ignore the parameter.
 export function useK8sRunner(enabled = true): boolean {

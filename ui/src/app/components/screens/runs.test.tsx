@@ -9,10 +9,9 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation } from "react-router-dom";
 import type { AgentRun } from "../../lib/types";
 
-// fix: the board's "Kill run" action used to fire api.killRun immediately
-// from the dropdown — no confirmation — unlike the identical action on Run
-// Detail, which is AlertDialog-gated. These tests pin that the board now asks
-// first.
+// fix: the board's "Kill run" action must ask for confirmation before it
+// fires api.killRun — the same AlertDialog gate as the identical action on
+// Run Detail. These tests pin that the board asks first.
 
 const listRunsMock = vi.fn();
 const killRunMock = vi.fn();
@@ -165,8 +164,8 @@ describe("RunsScreen — first-run empty state", () => {
     expect(await screen.findByText(run.task)).toBeInTheDocument();
   });
 
-  // W2-S1-4: /setup/status is a full ListRuns plus a shell-out host sweep. It
-  // is polled only while there is actually something to watch for — the
+  // /setup/status is a full ListRuns plus a shell-out host sweep. It is
+  // polled only while there is actually something to watch for — the
   // no-barrier blocker clearing, or an unreachable daemon coming back — never
   // forever on the landing screen of every open tab.
   it("stops polling /setup/status on a healthy host, keeps polling while the no-barrier blocker is up", async () => {
@@ -249,10 +248,9 @@ describe("RunsScreen board — Kill run confirms before killing", () => {
 });
 
 // #10/D14: workspace-detail's "Start a run" CTA navigates here with route
-// state. That used to OPEN a dialog on this screen; New run is its own page
-// now, so the same intent is a redirect to it — and the redirect replaces the
-// history entry, so Back goes where the operator came from instead of bouncing
-// through this screen and redirecting again.
+// state. New run is its own page, so the same intent redirects to it — and
+// the redirect replaces the history entry, so Back goes where the operator
+// came from instead of bouncing through this screen and redirecting again.
 describe("RunsScreen — Start-a-run route state redirects to the New run page", () => {
   function LocationProbe() {
     const location = useLocation();
@@ -297,19 +295,18 @@ describe("RunsScreen — member vs admin count line", () => {
   });
 });
 
-// fix: the board card and the table row used to be role="button" tabIndex={0}
+// fix: the board card and the table row must not be role="button" tabIndex={0}
 // containers directly nesting the real Attach/Review/kebab <button>s inside
-// them — an invalid, double-nested interactive-widget structure (a11y
-// blocker). Dropped the role/tabIndex; mouse click-to-open stays via plain
-// onClick, keyboard/AT users reach the same action via the existing "Open
-// detail" menu item.
+// them — that is an invalid, double-nested interactive-widget structure (a11y
+// blocker). Mouse click-to-open stays via plain onClick; keyboard/AT users
+// reach the same action via the existing "Open detail" menu item.
 describe("RunsScreen — row/card container is not itself a redundant role=button widget (a11y)", () => {
   it("board density: the card is not exposed as its own button widget nesting the real action buttons", async () => {
     renderScreen();
     await screen.findByRole("button", { name: /run actions/i });
-    // Before the fix, role="button" on the card computed its accessible name
-    // from its text content — including the task text — so this query would
-    // have matched the outer card div itself.
+    // If the card were role="button", its accessible name would compute from
+    // its text content — including the task text — and this query would
+    // match the outer card div itself.
     expect(screen.queryByRole("button", { name: /fix flaky auth tests/i })).not.toBeInTheDocument();
   });
 
@@ -337,9 +334,9 @@ describe("RunsScreen — row/card container is not itself a redundant role=butto
   });
 });
 
-// fix: the loading skeleton used to always render the Board card-grid shape,
-// even in Table density — flashing the wrong skeleton on every manual
-// Refresh / re-navigation while Table density was active.
+// fix: the loading skeleton must match the active density — rendering the
+// Board card-grid shape in Table density flashes the wrong skeleton on every
+// manual Refresh / re-navigation.
 describe("RunsScreen — loading skeleton matches the active density", () => {
   it("shows the Board card-grid skeleton by default, and the Table skeleton once Table density is picked while still loading", async () => {
     let resolveList!: (v: AgentRun[]) => void;
@@ -366,14 +363,14 @@ describe("RunsScreen — loading skeleton matches the active density", () => {
   });
 });
 
-// F1-F7: the table cap budgeted headers GLOBALLY against the data cap
-// (`flat.slice(0, cap + groups.length)`), so a header could land exactly on
+// F1-F7: the table cap must not budget headers GLOBALLY against the data cap
+// (`flat.slice(0, cap + groups.length)`), or a header could land exactly on
 // the cut and render as the LAST row with nothing under it.
 describe("RunsScreen table — the cap never ends on an orphan group header (F1-F7)", () => {
   it("caps at the data-row count, not the header+data count, and never leaves a trailing header", async () => {
     const inGroup = (id: string, title: string): AgentRun => ({ ...run, id, title, state: "COMPLETED" });
-    // Group A alone is exactly the default cap (25) — the classic trigger: the
-    // OLD code's slice landed exactly on Group B's header.
+    // Group A alone is exactly the default cap (25) — the classic trigger: a
+    // global slice lands exactly on Group B's header.
     const groupA = Array.from({ length: 25 }, (_, i) => inGroup(`a${i}`, "Group A"));
     const groupB = Array.from({ length: 25 }, (_, i) => inGroup(`b${i}`, "Group B"));
     listRunsMock.mockResolvedValue([...groupA, ...groupB]);
@@ -389,15 +386,16 @@ describe("RunsScreen table — the cap never ends on an orphan group header (F1-
   });
 });
 
-// F1-F10: "Refresh now" used to call `load`, which flips status to "loading"
+// F1-F10: "Refresh now" must not call `load`, which flips status to "loading"
 // and unmounts the WHOLE toolbar (search input, focus and all) for a round
 // trip the board already runs every POLL_MS in the background.
 describe("RunsScreen — Refresh now stays on the background path (F1-F10)", () => {
   it("never blanks the toolbar into a skeleton while the manual refresh is in flight", async () => {
-    // `load` (the old handler) flips status to "loading" SYNCHRONOUSLY, which
-    // unmounts the whole `status === "ready"` branch — search input, focus,
-    // toolbar and board — for the round trip. Hold the refresh's own fetch
-    // open so the mid-flight DOM is inspectable, not just the settled result.
+    // `load` flips status to "loading" SYNCHRONOUSLY, unmounting the whole
+    // `status === "ready"` branch — search input, focus, toolbar and board —
+    // for the round trip; "Refresh now" must stay off this path. Hold the
+    // refresh's own fetch open so the mid-flight DOM is inspectable, not just
+    // the settled result.
     let resolveRefresh!: (v: unknown[]) => void;
     listRunsMock
       .mockResolvedValueOnce([run]) // the initial foreground load
@@ -452,13 +450,12 @@ describe("RunsScreen — publishes its counts up for the shell's paused badge po
   });
 });
 
-// fix: the board's collapse toggle used to be gated on `shownCount >=
-// done.length` — a count coincidence true even when nothing had ever been
-// expanded, whenever every group happened to fit within GROUP_PREVIEW. That
-// rendered a dead "Show fewer" button wired to a no-op. The section it lived on
-// (Done, grouped by outcome) is gone — the board groups by title now — but the
-// invariant is the same and rides on the same GROUP_PREVIEW: never render a
-// control that has nothing to do.
+// fix: the board's collapse toggle must not be gated on a count coincidence
+// like `shownCount >= done.length` — true even when nothing had ever been
+// expanded, whenever every group happened to fit within GROUP_PREVIEW, which
+// renders a dead "Show fewer" button wired to a no-op. The board groups by
+// title now, not by outcome, but the invariant is the same and rides on the
+// same GROUP_PREVIEW: never render a control that has nothing to do.
 describe("RunsScreen board — a group's collapse toggle is never a dead control", () => {
   const inGroup = (id: string, over: Partial<AgentRun> = {}): AgentRun => ({
     ...run,
@@ -551,11 +548,11 @@ describe("RunsScreen — runs are grouped by title", () => {
   });
 });
 
-// ── mock M2: the pinned "Needs you" lane ────────────────────────────────────
-// The board used to flatten held approvals and failures into one amber
-// treatment. They are not one thing: an approval is a REQUEST (someone is
-// waiting on you) and a failure is a REPORT (something is over). The request
-// pins to a lane at the top; the report stays with the work it belongs to.
+// mock M2: the pinned "Needs you" lane
+// Held approvals and failures must not flatten into one amber treatment.
+// They are not one thing: an approval is a REQUEST (someone is waiting on
+// you) and a failure is a REPORT (something is over). The request pins to a
+// lane at the top; the report stays with the work it belongs to.
 describe("RunsScreen board — the pinned Needs-you lane", () => {
   const held = (runId: string) => ({
     id: `a-${runId}`,
@@ -714,15 +711,16 @@ describe("RunsScreen — the member's empty board", () => {
     expect(screen.getByRole("link", { name: /getting started/i })).toHaveAttribute("href", "/setup");
   });
 
-  // W6-3: the predicate is `role !== "admin"`, not `role === "member"`.
+  // The predicate must be `role !== "admin"`, not `role === "member"`.
   // /setup/status is redacted on !isOperator (internal/api/setup.go), and
   // isOperator is SUPER-admin only — so a security admin's status arrives with
   // checks [], secrets.present [] and the driver withheld, exactly like a
-  // member's. Through `role === "member"` this tier fell into the operator
-  // funnel and read every withheld field as a fact: "Needs the <name> secret"
-  // for secrets that may well exist, over two /setup deep links that land on a
-  // Getting Started which ignores ?step. Every sibling in this cluster
-  // (setupGateActive, GettingStarted) already uses the three-valued form.
+  // member's. Through `role === "member"` this tier would fall into the
+  // operator funnel and read every withheld field as a fact: "Needs the
+  // <name> secret" for secrets that may well exist, over two /setup deep
+  // links that land on a Getting Started which ignores ?step. Every sibling
+  // in this cluster (setupGateActive, GettingStarted) already uses the
+  // three-valued form.
   it("a security admin with no runs gets the member empty state too — their /setup/status is redacted the same way", async () => {
     listRunsMock.mockResolvedValue([]);
     renderScreen("security_admin");

@@ -208,10 +208,10 @@ describe("light-theme WCAG AA contrast (C004)", () => {
     // class (its :is(.dark *) selector has higher specificity — confirmed in the
     // built CSS), so no field is ever --input-background itself: it is --input,
     // translucent, over whatever the field's CONTAINER paints. A gate on that
-    // token therefore has to model the LIGHTEST real container — the first
-    // version of this test modelled input/30-over---card and certified a value
-    // that four shipped fields, sitting on a bg-surface-2/40 pane, rendered
-    // under AA. The lightest real field in the app is the build-steps Textarea
+    // token therefore has to model the LIGHTEST real container — modelling
+    // input/30-over-card alone would certify a value that four shipped fields,
+    // sitting on a bg-surface-2/40 pane, render under AA. The lightest real
+    // field in the app is the build-steps Textarea
     // (workspace-wizard/step-base-image.tsx:163): bg-surface-2/40 (:144) inside
     // the selected card's bg-primary/10 (:229-232, the disclosed body renders
     // only when selected), on the wizard dialog's bg-background. Clear AA there
@@ -268,9 +268,9 @@ describe("light-theme WCAG AA contrast (C004)", () => {
       readFileSync(f, "utf8")
         .split("\n")
         .forEach((ln, i) => {
-          // TESTSPEC-5: numeric compare, not a multiples-of-ten regex — the old
-          // /[0-9]0/ pattern matched /70 or /90 but missed /75, a standard
-          // Tailwind step this comment already claimed was caught.
+          // A numeric compare, not a multiples-of-ten regex — a /[0-9]0/
+          // pattern would match /70 or /90 but miss /75, a standard Tailwind
+          // step.
           const m = ln.match(re);
           if (m && +m[1] < 100) offenders.push(`${f}:${i + 1}`);
         });
@@ -300,10 +300,10 @@ describe("light-theme WCAG AA contrast (C004)", () => {
   // directly) never had an opaque-fill-calibrated text token riding on it in
   // the first place. Auditing those ~20 pre-existing sites is out of scope
   // for R-01; this gate pins the class of bug R-01 actually is.
-  // R-08 (blind re-review): the default button's HOVER fill is the one diluted
-  // site of the R-01 shape that actually fails — --primary at /90 over the light
-  // --background reads 4.48:1 under --primary-foreground, 0.02 under AA. The
-  // alpha is read from button.tsx so the pin follows the class, not a guess.
+  // The default button's HOVER fill is the one diluted site of the R-01
+  // shape that actually fails — --primary at /90 over the light --background
+  // reads 4.48:1 under --primary-foreground, 0.02 under AA. The alpha is
+  // read from button.tsx so the pin follows the class, not a guess.
   it("the default button's hover fill keeps --primary-foreground at AA in the light theme", () => {
     const src = readFileSync("src/app/components/ui/button.tsx", "utf8");
     const m = /default:\s*"[^"]*hover:bg-primary\/(\d{1,3})/.exec(src);
@@ -365,7 +365,7 @@ describe("light-theme WCAG AA contrast (C004)", () => {
     expect(offenders, `raw text-white — use the matching *-foreground token:\n${offenders.join("\n")}`).toHaveLength(0);
   });
 
-  // UI-LIB-2: placeholder:text-muted-foreground is the exact dark-theme defect
+  // placeholder:text-muted-foreground is the exact dark-theme defect
   // this file documents below (2.16:1) — input.tsx/textarea.tsx moved to
   // placeholder:text-placeholder-foreground; forbid the old token everywhere,
   // INCLUDING components/ui/ (command.tsx was the regression this gate
@@ -385,7 +385,7 @@ describe("light-theme WCAG AA contrast (C004)", () => {
     ).toHaveLength(0);
   });
 
-  // /S3: raw Tailwind palette *text* colors (e.g. text-amber-600 ≈ 3.4:1)
+  // Raw Tailwind palette *text* colors (e.g. text-amber-600 ≈ 3.4:1)
   // bypass the WCAG-verified semantic tokens proven above. Forbid them so a
   // revert of the compose-Q&A risk text (text-warning) back to text-amber-600 —
   // or any new palette-color status text — fails here instead of shipping

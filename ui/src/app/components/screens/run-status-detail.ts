@@ -3,17 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// WHAT A STARTING RUN IS WAITING ON (0.7.5 field report, finding 6).
+// What a starting run is waiting on.
 //
-// The server sends the SUBSTRATE's own line — `<component>: <Reason>[: <message>]`
+// The server sends the substrate's own line — `<component>: <Reason>[: <message>]`
 // — plus the bare reason token it derived from it (`status_reason`,
-// internal/api/runs_status_detail.go). This module owns the COPY: the server
+// internal/api/runs_status_detail.go). This module owns the copy: the server
 // never composes a sentence, because the same reason has to read differently on
 // a header chip, in a board row and in the sign-in pane, and because a reason
 // Wardyn has no sentence for must still degrade to something honest.
 //
-// NO CSS, NO COMPONENT IMPORTS, ON PURPOSE. The run header, the Runs board, the
-// sign-in pane AND ui/e2e's live specs all read these constants; a Playwright
+// No CSS, no component imports, on purpose. The run header, the Runs board, the
+// sign-in pane and ui/e2e's live specs all read these constants; a Playwright
 // spec runs in Node and cannot load `xterm.css`, which is what any import path
 // through the pane drags in. Keep this file dependency-free.
 
@@ -38,54 +38,54 @@ export function isTerminalStatusReason(reason: string | null | undefined): boole
   return !!reason && TERMINAL_STATUS_REASONS.includes(reason);
 }
 
-// ─── DRAFT strings (M2 canon pending) ────────────────────────────────────────
-// One block, one file. Every test asserts THROUGH these constants.
+// Draft strings (M2 canon pending)
+// One block, one file. Every test asserts through these constants.
 
 // DRAFT (M2 canon pending) — the ordinary wait. The kubelet reports
 // ContainerCreating for a pull and for everything else it does before a
 // container runs (canary.go's own comment), so the pull is named as the usual
-// CAUSE, conditionally, never as the diagnosis — the hedge login-pane-copy.ts's
+// cause, conditionally, never as the diagnosis — the hedge login-pane-copy.ts's
 // U-12 note settled on.
 export const STARTING_CONTAINER_CREATING =
-  "Starting the sandbox. The first start after an update can take a couple of minutes while the image downloads."; // UX round S9: no k8s nouns for a member; still conditional
-// DRAFT (M2 canon pending) — docker only, the one place a FIRST PULL can
-// honestly be ASSERTED (ensureImage).
+  "Starting the sandbox. The first start after an update can take a couple of minutes while the image downloads."; // no k8s nouns for a member; still conditional
+// DRAFT (M2 canon pending) — docker only, the one place a first pull can
+// honestly be asserted (ensureImage).
 export const STARTING_FIRST_PULL =
-  "Downloading the image. The first start after an update takes a couple of minutes."; // Codex #11: imagePresent=false proves the image is not cached NOW — pruning invalidates any "never ran here" claim
+  "Downloading the image. The first start after an update takes a couple of minutes."; // Codex #11: imagePresent=false proves the image is not cached now — pruning invalidates any "never ran here" claim
 // DRAFT (M2 canon pending) — the pod exists but nothing will take it. Not terminal.
 export const STARTING_UNSCHEDULABLE = "Waiting for a machine with room for this sandbox.";
 // DRAFT (M2 canon pending) — Pending with no container status at all.
 export const STARTING_WAITING_FOR_NODE = "Waiting for a machine to start it on.";
-// DRAFT (M2 canon pending) — TERMINAL; the registry's own words follow the colon
+// DRAFT (M2 canon pending) — terminal; the registry's own words follow the colon
 // because they name the fix.
 export const STUCK_IMAGE_PULL = "The image could not be pulled:";
-// DRAFT (M2 canon pending) — TERMINAL, and nothing about the cluster will change it.
+// DRAFT (M2 canon pending) — terminal, and nothing about the cluster will change it.
 export const STUCK_IMAGE_NAME = "That image reference is not valid:";
-// DRAFT (M2 canon pending) — TERMINAL. The image exists; the kubelet would not
+// DRAFT (M2 canon pending) — terminal. The image exists; the kubelet would not
 // make a container from it.
 export const STUCK_CREATE_CONTAINER = "The sandbox container could not be created:";
-// DRAFT (M2 canon pending) — TERMINAL for a START: the container starts and
+// DRAFT (M2 canon pending) — terminal for a start: the container starts and
 // exits, repeatedly.
 export const STUCK_CRASH_LOOP = "The sandbox container keeps exiting as it starts:";
 // DRAFT (M2 canon pending) — the lead-in for a reason this console has no
-// sentence for. Prefixed so a bare `pod: SomeReason: msg` never LEADS: the same
+// sentence for. Prefixed so a bare `pod: SomeReason: msg` never leads: the same
 // honest degradation failure_hint already has, with a word in front of it
 // saying that the rest is the platform talking.
 export const STARTING_RAW_PREFIX = "Waiting: ";
 
-// The SHORT register (round-2 UX S9). The header chip is `max-w-[160px]`, so the
-// sentences above truncate to a restatement of the STARTING badge — "Starting
+// The short register. The header chip is `max-w-[160px]`, so the
+// sentences above truncate to a restatement of the starting badge — "Starting
 // the sandbo…" — and the registry's words, the whole point of a terminal
 // reason, never appear at all. These are ~20 characters and say the one thing
 // the badge does not.
 export const CHIP_DOWNLOADING = "Downloading the image";
-export const CHIP_SETTING_UP = "Setting up the container"; // lane-added: ContainerCreating/PodInitializing are the commonest state and "Starting the sandbox" would only restate the badge
+export const CHIP_SETTING_UP = "Setting up the container"; // ContainerCreating/PodInitializing are the commonest state and "Starting the sandbox" would only restate the badge
 export const CHIP_WAITING_FOR_MACHINE = "Waiting for a machine";
 export const CHIP_IMAGE_PULL_FAILED = "Image pull failed";
-export const CHIP_BAD_IMAGE_REF = "Bad image reference"; // lane-added: nothing was pulled for InvalidImageName, so "Image pull failed" would be false
+export const CHIP_BAD_IMAGE_REF = "Bad image reference"; // nothing was pulled for InvalidImageName, so "Image pull failed" would be false
 export const CHIP_CONTAINER_WONT_START = "Container won't start";
 
-// ─── parsing ─────────────────────────────────────────────────────────────────
+// Parsing
 
 export type ParsedStatusDetail = {
   // "agent", "proxy", "pod", "image" — which part of the substrate is talking.
@@ -96,12 +96,12 @@ export type ParsedStatusDetail = {
   message: string;
 };
 
-// parseStatusDetail splits the raw line on its FIRST TWO colons: a component
+// parseStatusDetail splits the raw line on its first two colons: a component
 // name and a substrate reason never contain one, and everything after the second
 // is the platform's message, which very often does ("rpc error: code = Unknown
 // desc = …").
 //
-// `reason` (the server's derived status_reason) WINS when present — the server
+// `reason` (the server's derived status_reason) wins when present — the server
 // did the same split and is the authority on it. The string is parsed only for a
 // pre-0.7.6 daemon, which sends the detail and no token.
 //
@@ -130,11 +130,11 @@ export function statusDetailSentence(raw: string | null | undefined, reason?: st
   const text = (raw ?? "").trim();
   const d = parseStatusDetail(text, reason);
   if (!text) {
-    // Defence in depth (review S2): the server rebuilds the detail from
-    // failure_hint whenever it has a terminal reason, so a terminal reason with
-    // no words should be unreachable — and if it ever is reached, the pane has
-    // already promised the reader a sentence after its lead-in, so an empty
-    // string is the one answer that must not come back.
+    // Defence in depth: the server rebuilds the detail from failure_hint
+    // whenever it has a terminal reason, so a terminal reason with no words
+    // should be unreachable — and if it ever is reached, the pane has already
+    // promised the reader a sentence after its lead-in, so an empty string is
+    // the one answer that must not come back.
     return isTerminalStatusReason(d.reason) ? STARTING_RAW_PREFIX + d.reason : "";
   }
   const withMessage = (lead: string) => (d.message ? `${lead} ${d.message}` : lead);
@@ -148,9 +148,9 @@ export function statusDetailSentence(raw: string | null | undefined, reason?: st
       return STARTING_UNSCHEDULABLE;
     case "Pending":
       return STARTING_WAITING_FOR_NODE;
-    // An empty reason on a line that PARSED (it named a component) is the same
+    // An empty reason on a line that parsed (it named a component) is the same
     // "the pod is there and nothing has taken it" fact Pending states. A line
-    // that did not parse at all is NOT (review N2) — calling an unrecognised
+    // that did not parse at all is not — calling an unrecognised
     // string a node wait invents exactly the kind of diagnosis this module
     // exists to stop, so it falls through to the raw arm below.
     case "":
@@ -168,17 +168,17 @@ export function statusDetailSentence(raw: string | null | undefined, reason?: st
       return withMessage(STUCK_CRASH_LOOP);
     default:
       // A reason this console has no sentence for: hand the platform's own line
-      // over, prefixed so it never LEADS as if Wardyn had said it.
+      // over, prefixed so it never leads as if Wardyn had said it.
       return STARTING_RAW_PREFIX + text;
   }
 }
 
-// statusDetailChip is the SAME facts in the header's ~20-character register.
+// statusDetailChip is the same facts in the header's ~20-character register.
 // "" when there is nothing to say.
 export function statusDetailChip(raw: string | null | undefined, reason?: string | null): string {
   const text = (raw ?? "").trim();
   const d = parseStatusDetail(text, reason);
-  // Same defence as the sentence's (review S2): a terminal reason always gets a
+  // Same defence as the sentence's: a terminal reason always gets a
   // chip, detail or no detail.
   if (!text && !isTerminalStatusReason(d.reason)) return "";
   switch (d.reason) {
@@ -200,10 +200,10 @@ export function statusDetailChip(raw: string | null | undefined, reason?: string
     case "Pending":
       return CHIP_WAITING_FOR_MACHINE;
     default:
-      // An UNKNOWN reason is not a machine wait (review N1). The chip is the
+      // An unknown reason is not a machine wait. The chip is the
       // only register a narrow header ever shows, so asserting the wrong short
       // answer there is worse than carrying a long true one; the `title` has the
-      // full sentence either way. An ABSENT reason keeps the general chip.
+      // full sentence either way. An absent reason keeps the general chip.
       return d.reason ? STARTING_RAW_PREFIX + d.reason : CHIP_WAITING_FOR_MACHINE;
   }
 }

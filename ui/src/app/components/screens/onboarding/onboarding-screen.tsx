@@ -27,11 +27,9 @@ import { MemberGettingStarted } from "./member-getting-started";
 import { deriveReadiness } from "../../../lib/readiness";
 import { SetupScreen } from "../setup/setup-screen";
 
-// ---------------------------------------------------------------------------
 // "Have they seen the welcome" flag — localStorage, private-mode tolerant.
 // Distinct from wardyn-setup-dismissed so the welcome and the setup funnel track
 // separately (skipping the welcome must not dismiss the funnel).
-// ---------------------------------------------------------------------------
 const ONBOARDING_KEY = "wardyn-onboarding-seen";
 export function onboardingSeen(): boolean {
   return lsGet(ONBOARDING_KEY) === "1";
@@ -57,12 +55,13 @@ export function GettingStarted({
   status?: SetupStatus | null;
 }) {
   const role = useRole();
-  // The hero is a fact about the INSTALL now (status.onboarding_complete), not
-  // the browser: the per-browser flag was origin-scoped, so the same console
-  // reached at 127.0.0.1 and at localhost disagreed about whether the welcome
-  // had happened. The local flag survives as (a) the within-session handoff —
-  // clicking "Get started" advances without waiting for a status refetch — and
-  // (b) the legacy fallback for a daemon too old to report the field.
+  // The hero is a fact about the install (status.onboarding_complete), not
+  // the browser: a per-browser flag is origin-scoped, so the same console
+  // reached at 127.0.0.1 and at localhost would disagree about whether the
+  // welcome happened. The local flag survives as (a) the within-session
+  // handoff — clicking "Get started" advances without waiting for a status
+  // refetch — and (b) the legacy fallback for a daemon too old to report the
+  // field.
   const [seen, setSeen] = React.useState(onboardingSeen());
   const installOnboarded = status?.onboarding_complete ?? false;
   // Being IN the funnel satisfies the gate's purpose for this load. The gate's
@@ -75,14 +74,14 @@ export function GettingStarted({
   React.useEffect(() => {
     markGateFired();
   }, []);
-  // DELIBERATELY `!== "admin"`, NOT `role === "member"`, for the reason
+  // Deliberately `!== "admin"`, not `role === "member"`, for the reason
   // setupGateActive (setup/setup-gate.ts) is written the same way now that role
-  // is three-valued: GET /setup/status is REDACTED for every non-operator
+  // is three-valued: GET /setup/status is redacted for every non-operator
   // (handleSetupStatus -> redactSetupStatusForMember zeroes Checks, Providers
   // and Secrets, internal/api/setup.go), and every mutation the deployer funnel
   // drives is super-admin-only server-side. A security admin falling through
-  // here got the operator funnel built from a status they cannot act on and a
-  // wizard whose every button 403s.
+  // here would get the operator funnel built from a status they cannot act on
+  // and a wizard whose every button 403s.
   if (role !== "admin") {
     // No onDone: this is a page a member returns to, not a funnel step with
     // an exit action — the old MemberSetupNotice's "Go to Runs" button (and

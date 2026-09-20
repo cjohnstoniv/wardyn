@@ -6,11 +6,11 @@
 // The Git tab of /providers — one row per closed kind, always (§2.1): absent
 // (its host follows the legacy scm_hosts list), present and on (its base URLs
 // admit), present and off (its host is refused — never falls through to
-// legacy). The credential lanes render INSIDE the row, byte-for-byte
-// GitHostCard's shape — Lane/SecretLane/HostSummary, EXPORTED from
+// legacy). The credential lanes render inside the row, byte-for-byte
+// GitHostCard's shape — Lane/SecretLane/HostSummary, exported from
 // connection-cards.tsx rather than re-typed here (§9.1's file plan).
 //
-// This file owns the DRAFT array (`git: GitProvider[]`) the parent
+// This file owns the unsaved `git: GitProvider[]` array the parent
 // (providers-screen.tsx) holds; every edit calls `onChange` with the next
 // array, and the parent's single Save button PUTs the whole document.
 import * as React from "react";
@@ -41,19 +41,19 @@ import { appLaneAvailable, hostOf, invalidBaseURLLines, KIND_LABEL, LANE_META, l
 const ALL_LANES: GitLane[] = ["app", "pat", "ssh"];
 const ALL_KINDS: GitProviderKind[] = ["github", "azure_devops"];
 
-// The lanes THIS row's kind + base URLs can actually carry — never `app` on
+// The lanes this row's kind + base URLs can actually carry — never `app` on
 // azure_devops, never `ssh`/`app` on a self-hosted host that can't offer them
 // (laneUnavailableReason, the same predicate the checkbox itself disables
 // on). permittedLanes/withLaneToggled both filter through this, so an empty
 // `lanes` (wire convention: "every lane the kind supports") can never expand
-// into a lane the kind cannot carry — the bug where toggling `ssh` off an
-// Azure DevOps row wrote `["app","pat"]`, which the server 400s and the
-// disabled `app` checkbox then leaves no way to un-write.
+// into a lane the kind cannot carry: toggling `ssh` off an Azure DevOps row
+// must never write `["app","pat"]`, which the server 400s and the disabled
+// `app` checkbox then leaves no way to un-write.
 function availableLanes(kind: GitProviderKind, baseUrls: string[]): GitLane[] {
   return ALL_LANES.filter((l) => !laneUnavailableReason(l, kind, baseUrls));
 }
 
-// The one derivation of base_urls from textarea bytes — used BOTH to commit a
+// The one derivation of base_urls from textarea bytes — used both to commit a
 // change and to decide whether an outside change should re-seed the textarea.
 function normalizeBaseURLText(text: string): string[] {
   return text.split("\n").map((l) => l.trim()).filter(Boolean);
@@ -67,7 +67,7 @@ function permittedLanes(row: GitProvider): Set<GitLane> {
 
 // Wire convention: empty means every lane the kind supports — never a
 // three-item array (GitProvider.Lanes' doc comment) — "every lane" meaning
-// every AVAILABLE one, not literally all three.
+// every available one, not literally all three.
 function withLaneToggled(row: GitProvider, lane: GitLane): GitLane[] {
   const available = availableLanes(row.kind, row.base_urls);
   const next = permittedLanes(row);
@@ -77,22 +77,23 @@ function withLaneToggled(row: GitProvider, lane: GitLane): GitLane[] {
   return filtered.length === available.length ? [] : filtered;
 }
 
-// The one credential-host GitHostCard used to key its lanes by, now the row's
-// own: the first base URL's host, which is the common case (one provider row
-// = one forge instance). ponytail: a row spanning two distinct hosts under one
+// The credential-host lanes key off the row's own first base URL's host, the
+// common case (one provider row = one forge instance).
+//
+// ponytail: a row spanning two distinct hosts under one
 // kind shares one credential set keyed by the first — split it into two rows
 // (two kinds is the model's own escape hatch is not available here, since
 // both rows would be the same KIND; name the second host a second row is not
 // offered in v1) if that ever matters; the mock draws only the single-host
 // case.
 //
-// "" WHEN THERE IS NO PARSEABLE FIRST ADDRESS, and never a default. This used
-// to fall back to "github.com" — so an Azure DevOps row with an empty or
-// mid-typed address keyed every credential lane to github.com, and a PAT saved
-// inside a radiogroup labelled "Azure DevOps credentials" landed in
-// git-pat-github-com: the secret the GitHub clone helper reads. The empty host
-// is what the caller renders the lanes DISABLED on (LANES_NEED_ADDRESS), so
-// there is no name to save under until a real address exists.
+// "" when there is no parseable first address, never a default: an Azure
+// DevOps row with an empty or mid-typed address must not key its credential
+// lane to github.com, landing a PAT saved inside a radiogroup labelled "Azure
+// DevOps credentials" in git-pat-github-com — the secret the GitHub clone
+// helper reads. The empty host is what the caller renders the lanes disabled
+// on (LANES_NEED_ADDRESS), so there is no name to save under until a real
+// address exists.
 function rowHost(row: GitProvider): string {
   return hostOf(row.base_urls[0] ?? "");
 }
@@ -116,23 +117,23 @@ function Row({
   onUpdate: (next: GitProvider) => void;
   onRemove: () => void;
   onAdd: () => void;
-  /** F4-F2 (Appendix A V8): re-fires ONLY the parent's /setup/status read —
-   *  never `load()`, which would discard an unsaved base-URL draft edit on
-   *  this or a sibling row (agents-tab.tsx's onStatusRefresh precedent). */
+  /** Appendix A V8: re-fires only the parent's /setup/status read — never
+   *  `load()`, which would discard an unsaved base-URL draft edit on this or
+   *  a sibling row (agents-tab.tsx's onStatusRefresh precedent). */
   onStatusRefresh: () => void;
 }) {
   const [confirmRemove, setConfirmRemove] = React.useState(false);
-  // The textarea's RAW text, held here rather than derived from
+  // The textarea's raw text, held here rather than derived from
   // row.base_urls.join("\n") every render: splitting on every keystroke fed the
   // filtered array straight back into `value`, so a newline could never survive
   // one render and a second address typed after Enter concatenated onto the
   // first. Each change still commits the split/trimmed array to the row (so
   // Save needs no pending-text dance and the parent's draft is always current),
-  // but the DISPLAYED text — and the invalidLines/aria-invalid the field flags
+  // but the displayed text — and the invalidLines/aria-invalid the field flags
   // while typing — come from these bytes.
   const joinedURLs = (row?.base_urls ?? []).join("\n");
   const [baseURLText, setBaseURLText] = React.useState(joinedURLs);
-  // Re-seed only when the row's URLs changed from OUTSIDE this textarea (a
+  // Re-seed only when the row's URLs changed from outside this textarea (a
   // Retry reload, a 412 reload, a row just added): our own commits always
   // leave normalizeBaseURLText(baseURLText) === joinedURLs, so they never
   // clobber the newline the admin just typed. Setting state during render is
@@ -143,7 +144,7 @@ function Row({
   // "ssh" : appStored ? "app" : "pat") — a row's credential lanes open on
   // whatever is already connected, not always the first lane, and the mock
   // opens the populated GitHub row on App. Computed once, off the row's
-  // INITIAL host/props — a later edit to base_urls must not yank the
+  // initial host/props — a later edit to base_urls must not yank the
   // operator's own tab selection out from under them.
   const [credLane, setCredLane] = React.useState<GitLane>(() => {
     if (!row) return "pat";
@@ -154,8 +155,8 @@ function Row({
     return "pat";
   });
 
-  // F4-F13 (Appendix A V8): every hook call stays UNCONDITIONAL (above the
-  // `!row` early return below) — the lanes ACTUALLY RENDERED, in DOM order
+  // F4-F13 (Appendix A V8): every hook call stays unconditional (above the
+  // `!row` early return below) — the lanes actually rendered, in DOM order
   // (app/ssh are conditional on kind/base_urls, so the roving group's item
   // count and index must track exactly what's on screen, not the full
   // GitLane union). `row?.base_urls ?? []` because `row` can still be
@@ -192,14 +193,14 @@ function Row({
   const sshName = `ssh-key-${slug}`;
   const permitted = permittedLanes(row);
   const hosts = row.base_urls.map((u) => u.replace(/^https?:\/\//, "")).join(" · ");
-  // The TEXT, not the committed array: a line typed but not yet valid is
+  // The text, not the committed array: a line typed but not yet valid is
   // exactly what the admin needs flagged while typing, and a trailing blank
   // line the array drops must not un-flag the line above it.
   const invalidLines = invalidBaseURLLines(baseURLText, kind);
-  // A PRESENT row with zero addresses is invalid, not a saveable no-op: the
+  // A present row with zero addresses is invalid, not a saveable no-op: the
   // server refuses it outright (`git[i].base_urls: name at least one address`),
-  // and until this flagged it, clearing the textarea left Save enabled and the
-  // row's credential lanes keyed to a defaulted host.
+  // so this must be flagged — an unflagged empty textarea would leave Save
+  // enabled and the row's credential lanes keyed to a defaulted host.
   const noAddresses = normalizeBaseURLText(baseURLText).length === 0;
 
   return (
@@ -218,9 +219,9 @@ function Row({
         {/* Mock states 1 & 3: the row's own on/off fact as a neutral chip —
             off is a fact, never red (§4's colour rule) — not left to the
             switch position + collapsed-body prose alone. ROW_DISABLED_CHIP is
-            its OWN canon key (the AGENT_ROW_DISABLED_CHIP precedent), never
+            its own canon key (the AGENT_ROW_DISABLED_CHIP precedent), never
             ROW_DISABLED_HINT sliced at its colon: a canon edit that drops the
-            colon used to dump a whole sentence into the chip. */}
+            colon must not dump a whole sentence into the chip. */}
         <Chip tone="neutral">{row.disabled ? PROVIDERS.ROW_DISABLED_CHIP : PROVIDERS.FIELD_ENABLED}</Chip>
         <Button variant="outline" size="sm" disabled={!operator} onClick={() => setConfirmRemove(true)}>
           {PERM.REMOVE}
@@ -253,7 +254,7 @@ function Row({
               />
               {noAddresses ? (
                 // Its own sentence, not BASE_URL_INVALID: that one diagnoses a
-                // typed LINE ("must be an https:// URL with ...") and reads as
+                // typed line ("must be an https:// URL with ...") and reads as
                 // nonsense over an empty field.
                 <p className="text-xs leading-snug text-danger">{PROVIDERS.BASE_URLS_REQUIRED}</p>
               ) : (
@@ -287,28 +288,29 @@ function Row({
               </div>
               {/* The ceiling, said where the policy is written: an SSH clone URL
                   carries no org path, so a row scoped to one org admits SSH for
-                  the whole host (V1 lens A). The remedy is in the sentence —
-                  drop the ssh lane — which is the control right above it. */}
+                  the whole host. The remedy is in the sentence — drop the ssh
+                  lane — which is the control right above it. */}
               {sshScopedHostLevel(row.base_urls, permitted.has("ssh") && !laneUnavailableReason("ssh", kind, row.base_urls)) && (
                 <p className="text-xs leading-snug text-muted-foreground">{PROVIDERS.SSH_HOST_LEVEL_HINT}</p>
               )}
             </Field>
           </div>
 
-          {/* The credential lanes, INSIDE the row — GitHostCard's Lane/
-              SecretLane/HostSummary, unchanged, keyed to THIS row's host. No
+          {/* The credential lanes, inside the row — GitHostCard's Lane/
+              SecretLane/HostSummary, unchanged, keyed to this row's host. No
               free-text Host field: the host is the row's own (§2.1, Q4).
-              WITH NO HOST (no parseable first address) every lane is DISABLED
+              With no host (no parseable first address) every lane is disabled
               and names no secret: the secret name is derived from the host, so a
-              defaulted host wrote one row's token into another host's secret.
-              The moment a valid address exists the lanes key off ITS host.
+              defaulted host would write one row's token into another host's
+              secret. The moment a valid address exists the lanes key off its
+              host.
 
-              F4-F13 (Appendix A V8): the group had no roving tabindex or
-              arrow keys, and each lane's expanded form used to render INSIDE
-              it — a `role="radiogroup"` nesting a Save button is an ARIA
-              violation. Roving tabindex (wardyn/use-roving-radio.ts) over the
-              lanes ACTUALLY RENDERED for this row's kind/base_urls; the
-              selected lane's body is a SIBLING below the group instead. */}
+              F4-F13 (Appendix A V8): the group needs roving tabindex and
+              arrow keys (wardyn/use-roving-radio.ts) over the lanes actually
+              rendered for this row's kind/base_urls. A `role="radiogroup"`
+              nesting a Save button is an ARIA violation, so the selected
+              lane's body renders as a sibling below the group, not inside
+              it. */}
           <div role="radiogroup" aria-label={`${KIND_LABEL[kind]} credentials`} className="space-y-2" {...credGroup.containerProps}>
             {!host && <p className="text-xs leading-snug text-muted-foreground">{PROVIDERS.LANES_NEED_ADDRESS}</p>}
             <CredentialLane
@@ -356,11 +358,10 @@ function Row({
             <LaneBody>
               <SecretLane
                 label="Access token"
-                // THIS row's placeholder, not GitHub's (V2/F5): an Azure DevOps
-                // PAT carries no `ghp_` prefix, and suggesting one here is the
-                // cosmetic sibling of the very bug this screen exists to stop —
-                // an ADO token typed into git-pat-github-com. The discriminator
-                // is the KIND, not the host: a GitHub Enterprise Server row is
+                // This row's placeholder, not GitHub's: an Azure DevOps PAT
+                // carries no `ghp_` prefix, and suggesting one here risks an
+                // ADO token typed into git-pat-github-com. The discriminator
+                // is the kind, not the host: a GitHub Enterprise Server row is
                 // kind github on a corporate host and its PATs are ghp_ too.
                 placeholder={kind === "github" ? "ghp_…" : "Paste the token"}
                 secretName={patName}
@@ -425,7 +426,7 @@ function Row({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{PEOPLE.CANCEL}</AlertDialogCancel>
-            {/* Mock State 3: Remove is outline — it deletes no secret, only a
+            {/* Mock state 3: Remove is outline — it deletes no secret, only a
                 row, so it does not carry the destructive/teal weight the
                 shipped default gives every AlertDialogAction. */}
             <AlertDialogAction
@@ -450,9 +451,9 @@ export function GitTab({
   present,
   githubApp,
   operator,
-  // Whether the LOADED snapshot had zero rows — true legacy-open mode, where
+  // Whether the loaded snapshot had zero rows — true legacy-open mode, where
   // this tab's own Add provider is the state's one affirmative and the screen
-  // withholds Save. FALSE with an empty `git` means the admin just REMOVED the
+  // withholds Save. False with an empty `git` means the admin just removed the
   // last row: the banner still describes what an empty set means, but Save is
   // what commits that removal, so Add steps down to outline (CONSOLE-RULES §2
   // — one teal per surface).
@@ -465,9 +466,9 @@ export function GitTab({
   githubApp: boolean;
   operator: boolean;
   loadedEmpty?: boolean;
-  /** F4-F2 (Appendix A V8): every row's SecretLane onChanged threads here —
-   *  a setup-status-only refresh (never the screen's whole `load()`, which
-   *  would discard an unsaved base-URL draft edit on THIS or a sibling row). */
+  /** Appendix A V8: every row's SecretLane onChanged threads here — a
+   *  setup-status-only refresh (never the screen's whole `load()`, which
+   *  would discard an unsaved base-URL draft edit on this or a sibling row). */
   onStatusRefresh: () => void;
 }) {
   const rowFor = (kind: GitProviderKind) => git.find((r) => r.kind === kind);
@@ -479,7 +480,7 @@ export function GitTab({
 
   const addRow = (kind: GitProviderKind) =>
     // A fresh Azure DevOps row starts at `https://dev.azure.com/` — invalid on
-    // purpose (the org segment is REQUIRED there, §5.1), so the row shows
+    // purpose (the org segment is required there, §5.1), so the row shows
     // BASE_URL_INVALID until the admin appends their org; a bare
     // `https://github.com` is a valid host-wide row and needs no edit.
     onChange([...git, { id: kind, kind, base_urls: [kind === "github" ? "https://github.com" : "https://dev.azure.com/"] }]);
@@ -489,10 +490,10 @@ export function GitTab({
       <p className="text-body text-muted-foreground">{PROVIDERS.GIT_LEAD}</p>
 
       {git.length === 0 ? (
-        // True legacy open mode (mock State 2): the banner ALONE — no
+        // True legacy open mode (mock state 2): the banner alone — no
         // per-kind row list underneath it. Once one row exists, the still-
         // absent kind gets its own mini "Add provider" affordance instead
-        // (below), which is a DIFFERENT illustration in the mock, not this
+        // (below), which is a different illustration in the mock, not this
         // same state.
         <div className="rounded-lg border border-dashed border-border p-6 text-center">
           <h4 className="text-sm font-medium text-foreground">{PROVIDERS.LEGACY_OPEN_TITLE}</h4>

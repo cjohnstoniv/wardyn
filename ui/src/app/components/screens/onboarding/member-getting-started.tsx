@@ -167,7 +167,7 @@ export function MemberGettingStarted() {
   // an older daemon, and for a read that failed: all three render as today's
   // page, no chip and no sentence.
   //
-  // THE DOOR IS READ HERE TOO. This page does not merely NAME the allocation —
+  // The door is read here too. This page does not merely NAME the allocation —
   // GS_DRIVE_BODY sends the member to New run to mount it, and with the
   // profile's DenyUserDrive limit shut that instruction is refused one page
   // load later by NR_DENIED, which names the profile. So a shut door renders

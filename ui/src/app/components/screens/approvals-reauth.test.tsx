@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// THE /approvals CARD'S AUDIENCE for a mid-run AWS sign-in request (W6-U
+// The /approvals card's audience for a mid-run AWS sign-in request (W6-U
 // BLOCKER-1 / BLOCKER-2).
 //
 // Its own file rather than more cases in approvals.test.tsx (668 lines, one
@@ -11,7 +11,7 @@
 // different fixture — a reauth scope with a credential_source and an owner —
 // and a different provider stack, one viewer per case.
 //
-// The rule under test is the SAME rule the cockpit row follows
+// The rule under test is the same rule the cockpit row follows
 // (live-approvals-reauth.test.tsx), because it is one function: the door
 // renders only for the viewer whose own sign-in the server would accept for
 // this row — the subject the row names on the per_user lane, an operator on
@@ -108,8 +108,9 @@ describe("/approvals — who is offered the held run's sign-in door", () => {
   });
 
   it("a SHARED-lane member: the instruction, no door — the server refuses their sign-in", async () => {
-    // harnessLoginNotPerUserRefusal. The cockpit row has said this since the
-    // kind shipped; the card offered the button and called it "your sign-in".
+    // harnessLoginNotPerUserRefusal: a shared-lane member's own sign-in is
+    // never what the server would accept, so the cockpit row and this card
+    // both withhold the button rather than call it "your sign-in".
     await mount(SHARED, false, "alice@corp");
     expect(door()).not.toBeInTheDocument();
     expect(screen.getByText(REAUTH_ROW.sharedMemberHint)).toBeInTheDocument();

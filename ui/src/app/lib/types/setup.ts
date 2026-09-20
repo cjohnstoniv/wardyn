@@ -196,7 +196,7 @@ export interface WireIntegration {
   // Kind-validated non-secret config (e.g. "lane", "region", "ecosystems").
   config?: Record<string, unknown>;
   docs?: string;
-  // F6-F12 — capability names this integration does NOT support (mirrors
+  // Capability names this integration does NOT support (mirrors
   // internal/types/workspace.go's Integration.DisabledCapabilities), so a
   // caller doesn't need a hardcoded per-provider capability matrix.
   disabled_capabilities?: string[];
@@ -315,9 +315,9 @@ export interface SetupStatus {
   llm_ready?: boolean;
   // X3-F1 — true on a body the server stripped for this caller's tier
   // (redactSetupStatusForMember). It exists so the console can tell "withheld"
-  // from "absent": an empty `checks` list used to be read as a FACT about the
-  // deployment, and a member was shown "Image builder · Off" / operator-shaped
-  // runner fix advice for detail that was merely hidden from them. Absent on an
+  // from "absent": treating an empty `checks` list as a FACT about the
+  // deployment would show a member "Image builder · Off" / operator-shaped
+  // runner fix advice for detail that is merely hidden from them. Absent on an
   // operator's body and on any older daemon — treat absent as false.
   checks_redacted?: boolean;
   // The CALLER's own model-access state — kept through the member redaction on
@@ -328,9 +328,9 @@ export interface SetupStatus {
   model_access?: SetupModelAccess;
   /** Whether an operator has finished (or deliberately left) the Getting
    *  Started funnel ON THIS INSTALL — SiteConfig.OnboardingCompletedAt
-   *  flattened to one bit. A fact about the install, never the browser: the
-   *  browser flags this replaces outlived wiped databases and were
-   *  origin-scoped, so 127.0.0.1 and localhost disagreed. Optional for the
+   *  flattened to one bit. A fact about the install, never the browser —
+   *  browser-local flags don't survive a wiped database and are
+   *  origin-scoped (127.0.0.1 and localhost would disagree). Optional for the
    *  same fixture-compat reason as llm_ready — older daemons omit it; absent
    *  reads as false (not onboarded), which opens the funnel rather than
    *  hiding it. */
@@ -358,7 +358,7 @@ export interface SetupStatus {
     driver: "docker" | "k8s" | "none" | (string & {});
     confinement_classes: ConfinementClass[];
     confinement_substrates?: Record<string, string>;
-    // No network_policy_proven field on the wire (L2 review): the k8s
+    // No network_policy_proven field on the wire: the k8s
     // boot-time egress-canary verdict is consumed via the graded
     // k8s_egress_containment row in `checks` (environment-step.tsx finds it
     // by id) — a second, unconsumed copy of the same signal here would just
@@ -404,8 +404,8 @@ export interface SetupStatus {
   // The STATIC coding-agent harness catalog (harnessCatalog, harness.go) —
   // which tools Wardyn knows how to run and whether it can wire each one a
   // managed model credential or a container-login subscription. Distinct
-  // from `harness` above (a CAPTURED credential's live readiness). DEADCODE-2:
-  // not read client-side yet (same as `capabilities` above) — new-run's
+  // from `harness` above (a CAPTURED credential's live readiness). Not read
+  // client-side yet (same as `capabilities` above) — new-run's
   // WizardAgent literal union is a hand-maintained copy of the same facts,
   // pending consolidation onto this field. Optional for the same
   // fixture-compat reason as `bedrock`.

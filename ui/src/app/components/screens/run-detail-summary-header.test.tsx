@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// W25-1: SummaryHeader's "Interactive — attachable" chip must claim
+// SummaryHeader's "Interactive — attachable" chip must claim
 // attachability under the SAME predicate AttachTerminal itself gates on
 // (attach-terminal.tsx: `if (!operator) { ...requires the admin role }`)
 // — otherwise a member sees the chip promise attachability and then gets a
@@ -69,7 +69,7 @@ describe("SummaryHeader — attachable chip predicate (W25-1)", () => {
 });
 
 // Command-bar reshape (design board seg2a): the fat identity card became a
-// 52px single row at xl and up (wraps below — review R-16). These pin the
+// 52px single row at xl and up (wraps below). These pin the
 // shape that survived the squeeze — task as the page's h1, terminal-disabled
 // Kill, and the pending-approvals chip.
 describe("SummaryHeader — command bar", () => {
@@ -123,12 +123,12 @@ describe("SummaryHeader — command bar", () => {
   });
 });
 
-// review R-02: `truncate` on an `inline-flex` Chip clips mid-word with NO
+// `truncate` on an `inline-flex` Chip clips mid-word with NO
 // ellipsis — the anonymous flex child (the text node) gets min-content
-// sizing regardless of the parent's own overflow-hidden. Red-first: before
-// this fix the chip's className carried `truncate` directly and had no inner
-// span, so this test's selector found nothing with that class inside the
-// chip's text.
+// sizing regardless of the parent's own overflow-hidden. The chip's text
+// must sit in an inner block span carrying `truncate`, not on the chip's
+// own `inline-flex` className, or this test's selector finds nothing with
+// that class inside the chip's text.
 describe("SummaryHeader — failure_hint chip actually ellipsizes (review R-02)", () => {
   it("wraps the hint in a block span that carries truncate, not the inline-flex chip itself", () => {
     renderHeader(
@@ -148,11 +148,11 @@ describe("SummaryHeader — failure_hint chip actually ellipsizes (review R-02)"
   });
 });
 
-// 0.7.3 F7 — "Start a run like this one" on the header, for every terminal
+// "Start a run like this one" on the header, for every terminal
 // run (a strict superset of the failure block's 3 endings). Tab order clone
 // -> kill: outline, never the bar's one danger slot.
 describe("SummaryHeader — clone door (0.7.3 F7)", () => {
-  // review C-14: the component itself gates on the `terminal` PROP, never on
+  // The component itself gates on the `terminal` PROP, never on
   // `run.state` directly (run-detail-summary-header.tsx:233) — this loop pins
   // the CALLER's contract (every one of the 5 states in TERMINAL_RUN_STATES
   // is passed in as terminal={true} by run-detail.tsx), not a branch inside
@@ -209,12 +209,9 @@ describe("SummaryHeader — clone door (0.7.3 F7)", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// M3 — WHO beside WHAT. The identity glyph used to sit alone at the left of the
-// bar while the state chip lived four elements away past the repo and the
-// workspace path, so the same run read as two different shapes on the board and
-// in the cockpit. One pair, one attention vocabulary, no seam.
-// ---------------------------------------------------------------------------
+// WHO beside WHAT: the identity glyph and the state chip must sit adjacent,
+// or the same run reads as two different shapes on the board and in the
+// cockpit. One pair, one attention vocabulary, no seam.
 describe("SummaryHeader — the who + what glyph pair", () => {
   const glyph = () => document.querySelector("[data-attention]")!;
 
@@ -255,7 +252,7 @@ describe("SummaryHeader — the who + what glyph pair", () => {
     expect(glyph()).toHaveAttribute("data-attention", "permission");
   });
 
-  // Finding 4 — "sandbox held" would send the person looking for an Approve
+  // "sandbox held" would send the person looking for an Approve
   // button that does not exist for this kind. The chip names what they can do,
   // and KEEPS THE COUNT (round-2 UX S8): a count-free string would hide a
   // co-pending egress approval, so the person signs in and the run still sits.
@@ -350,10 +347,9 @@ describe("SummaryHeader — the who + what glyph pair", () => {
   });
 });
 
-// 0.7.6 finding 6: a STARTING run says what it is waiting ON, in the header's
-// own short register. The 0.7.5 field report's estate watched an identical
-// "Starting" badge for 131 seconds twice and had no way to tell a first pull
-// from a hang.
+// A STARTING run says what it is waiting ON, in the header's own short
+// register — an identical "Starting" badge alone gives no way to tell a
+// first pull from a hang.
 describe("SummaryHeader — the startup reason (finding 6)", () => {
   const starting = (extra: Partial<AgentRun>): AgentRun => ({
     ...runningInteractive,
@@ -380,7 +376,7 @@ describe("SummaryHeader — the startup reason (finding 6)", () => {
     expect(screen.queryByText(STARTING_CONTAINER_CREATING)).toBeNull();
   });
 
-  // review R-01/F1-F4's rule for the failure_hint chip applies here for the same
+  // The same rule as the failure_hint chip applies here for the same
   // reason: min-w-0 shrink lets it give up WIDTH, never existence. A `hidden …`
   // waterfall step would hide the one sentence a waiting person is waiting for.
   it("may never hide at any width", () => {

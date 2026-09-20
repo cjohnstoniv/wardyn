@@ -252,7 +252,7 @@ export const audit = {
   // GET /api/v1/audit?run_id=&action=   (both optional; server-side filter —
   // see parseAuditFilter, internal/api/audit.go). `action` narrows the
   // 1000-row cap to just that action instead of spending the whole budget
-  // on every action a chatty run logged (W21-S1-5): a run-scoped list is
+  // on every action a chatty run logged: a run-scoped list is
   // returned OLDEST-first, so a single wide fetch can cap out before it ever
   // reaches a later action's events.
   async listAudit(runId?: string, action?: string): Promise<AuditEvent[]> {

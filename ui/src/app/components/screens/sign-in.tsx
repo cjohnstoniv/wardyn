@@ -35,7 +35,7 @@ import { usePoll } from "../../lib/use-poll";
 // daemon that came up after the gate rendered.
 const SSO_POLL_MS = 10000;
 
-// W31-S1-5: the OIDC callback (internal/auth/oidc/oidc.go's CallbackHandler)
+// The OIDC callback (internal/auth/oidc/oidc.go's CallbackHandler)
 // redirects a user-actionable login denial to "/?auth_error=<code>" instead
 // of dead-ending the browser on a bare http.Error text page — but a redirect
 // nobody reads is no better: it silently bounces back to this exact screen
@@ -125,7 +125,7 @@ export function SignIn({
   React.useEffect(refreshSso, [refreshSso]);
   usePoll(refreshSso, SSO_POLL_MS, false);
 
-  // W31-S1-5: render the OIDC callback's ?auth_error=<code> (see
+  // Render the OIDC callback's ?auth_error=<code> (see
   // authErrorMessage above) inline, reusing the same alert box submitToken's
   // own failures render below — a redirect back to this screen with no
   // explanation is the same dead end the bare http.Error page used to be.
@@ -145,7 +145,7 @@ export function SignIn({
     );
   }, []);
 
-  // W31-S1-4: probeAuth collapsed every failure — a rejected token (401), a
+  // probeAuth collapsed every failure — a rejected token (401), a
   // daemon 5xx, and an unreachable control plane (network error) — to the
   // same boolean `false`, so every one of them rendered "That admin token
   // was rejected", even when the token was fine and the daemon just wasn't

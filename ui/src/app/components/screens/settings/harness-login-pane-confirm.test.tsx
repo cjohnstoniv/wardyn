@@ -197,7 +197,7 @@ describe("HarnessLoginPane — the CLI's own success line (Finding 7b)", () => {
     expect(onDone).not.toHaveBeenCalled();
   });
 
-  // review-1 S5: both the marker path (confirmCapture) and the background
+  // Both the marker path (confirmCapture) and the background
   // watch can independently reach a confirming status around the same tick
   // — `completedRef` inside completeCapture must let only the FIRST one act.
   it("a race between the marker and the watch converges on exactly one cleanup and one onDone", async () => {

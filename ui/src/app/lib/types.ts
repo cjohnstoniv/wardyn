@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// ============================================================
 // Wardyn API types — mirror the real REST API under /api/v1. All wire fields
 // are snake_case.
 //
@@ -11,7 +10,6 @@
 // `.../lib/types` import path (type-only re-exports => zero consumer churn).
 // Import directly from a domain module for new code if you prefer, but the
 // barrel is the stable public surface.
-// ============================================================
 export * from "./types/runs";
 export * from "./types/policy";
 export * from "./types/workspaces";

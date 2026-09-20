@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// RUN FAILURE BLOCK (M7(b)) — "What happened / What to do", above the terminal,
+// Run failure block (M7(b)) — "What happened / What to do", above the terminal,
 // for a run that ended badly.
 //
 // The gap: a FAILED run said what state it was in and nothing about why. The
@@ -22,9 +22,9 @@
 // — a mount failure etc. that never reaches the audit trail at all). No
 // INVENTED reason either way, and the "What to do" list is dropped rather
 // than filled with generic advice — a wrong instruction costs an operator
-// more than no instruction. review R-01: failure_hint used to be
-// header-chip-only, clipped to a handful of characters at 1280px; this is
-// its other, unclipped home.
+// more than no instruction. review R-01: failure_hint's header chip
+// (run-detail-summary-header.tsx) is clipped to a handful of characters at
+// 1280px; this is its other, unclipped home.
 import * as React from "react";
 import type { ReactNode } from "react";
 import { ScrollText } from "lucide-react";
@@ -39,7 +39,7 @@ import { useClaimModelAccessDoor, useModelAccessDoor } from "../../wardyn/model-
 import { usePrincipal } from "../../wardyn/operator-context";
 import { formatElapsed } from "../run-detail-summary-header";
 
-// COPY CHANGE (M7): the two labels, the action, and the four reason bodies.
+// Copy change (M7): the two labels, the action, and the four reason bodies.
 // Local to this file rather than copy.ts on purpose — nothing else renders
 // them, and copy.ts owns the vocabulary that MUST agree across surfaces
 // (CONSOLE-RULES §10). Sentence case, specific nouns, no filler.

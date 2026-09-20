@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// The shell's half of the 0.7.6 model-access door (finding 2). Its own file
+// The shell's half of the model-access door. Its own file
 // because app-shell.test.tsx is at the 1000-line gate
 // (scripts/check-file-size.sh) — and because this is a different seam: every
 // case here is about the BANNER STACK and the live region around it, not about
@@ -19,7 +19,7 @@ import { ModelAccessProvider } from "../wardyn/model-access-context";
 import { AGENTS } from "../../lib/workspace-providers-copy";
 import { baseStatus } from "../../lib/test-fixtures";
 
-// 0.7.6, finding 2 — THE MODEL-ACCESS STRIP'S PLACE IN THE STACK.
+// The model-access strip's place in the stack.
 //
 // The band itself is pinned by model-access-banner.test.tsx; what only the
 // shell can prove is WHERE it sits and where it is withheld. It renders LAST:
@@ -117,7 +117,7 @@ describe("AppShell (the model-access strip)", () => {
     expect(await screen.findByText(MODEL_ACCESS_BANNER.NOT_SIGNED_IN)).toBeInTheDocument();
   });
 
-  // S4: the live region is the SHELL's and it is EAGER. role="status" announces
+  // The live region is the SHELL's and it is EAGER. role="status" announces
   // CHANGES to a mounted region; a region that arrives together with its first
   // sentence — which is what a lazy chunk does — announces nothing.
   it("mounts its live region before the lazy strip, and with nothing to say", () => {
@@ -153,7 +153,7 @@ describe("AppShell (the model-access strip)", () => {
     expect(screen.getByRole("status")).toBeEmptyDOMElement();
   });
 
-  // S2: useOperator()'s fail-open default is TRUE, so until /me lands a member
+  // useOperator()'s fail-open default is TRUE, so until /me lands a member
   // under a dead shared credential would read the ADMIN's sentence and be
   // offered a sign-in the server refuses. The door says nothing until the
   // identity is known.

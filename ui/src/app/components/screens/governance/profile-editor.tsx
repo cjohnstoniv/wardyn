@@ -171,11 +171,11 @@ export function ProfileEditor({
           disabled={disabled}
           onChange={(v) => setLimits((l) => ({ ...l, deny_user_drive: v }))}
         />
-        {/* R4/F032 + 0.7.2 storage ceilings: three integer limits, one new row
-            shape (a Switch has no number to carry). 0 = unlimited on every
-            one, stated in each hint. The ephemeral row (and only it) carries
-            the Docker uncapped warning U1's Storage tab already renders under
-            its own two disk fields — same string, never a second copy. */}
+        {/* R4/F032: three integer limits, one row shape (a Switch has no
+            number to carry). 0 = unlimited on every one, stated in each
+            hint. The ephemeral row (and only it) carries the Docker uncapped
+            warning the Storage tab already renders under its own two disk
+            fields — same string, never a second copy. */}
         <LimitNumberRow
           id="governance-limit-concurrent"
           label={GOV.LIMIT_CONCURRENT_LABEL}
@@ -230,9 +230,8 @@ export function ProfileEditor({
 // One limit: the switch, its label, and the sentence saying why a ceiling
 // cannot reach that launch mode.
 //
-// The switch itself moved to wardyn/form-primitives.tsx when the drives editor
-// became the third screen to want one — which is what the note that stood here
-// said to do. This row is still local: it is the LIMITS layout (switch beside a
+// The switch itself lives in wardyn/form-primitives.tsx, shared across
+// screens. This row is still local: it is the LIMITS layout (switch beside a
 // label and a sentence), not a form field, and nothing else renders that shape.
 function LimitRow({
   label,

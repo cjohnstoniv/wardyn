@@ -146,9 +146,10 @@ describe("App — a 401 only carries a reason when the console WAS authed (H1)",
     cleanup();
   });
 
-  // The regression this pins: onUnauthorized used to fire unconditionally,
-  // so the cold mount probe's OWN 401 (no session ever established this tab)
-  // rendered "Your session ended…" to a visitor who never had one.
+  // The regression this pins: onUnauthorized must fire only when the console
+  // WAS authed — firing unconditionally would render "Your session ended…"
+  // to a visitor who never had one, off the cold mount probe's OWN 401 (no
+  // session ever established this tab).
   it("a cold-mount 401 (never signed in) renders SignIn with no alert", async () => {
     vi.stubGlobal("fetch", mockFetch({ probeUnauthed: true }).fetch);
     renderApp();
@@ -275,11 +276,11 @@ describe("roleCanReach — pure (M2)", () => {
     expect(roleCanReach("/workspaces", "member")).toBe(true);
   });
 
-  // M3: MEMBER_REACHABLE_PREFIXES was the member NAV set, not the member
-  // REACHABLE set — /secrets (self-service WRITE/DELETE since migration
-  // 0050) and /settings + /ssh-keys (rendered in the account menu for every
-  // role) have no sidebar entry but ARE reachable, so a member's own
-  // mid-session 401 on any of the three used to bounce to /runs instead of
+  // M3: MEMBER_REACHABLE_PREFIXES must be the member REACHABLE set, not
+  // merely the member NAV set — /secrets (self-service WRITE/DELETE since
+  // migration 0050) and /settings + /ssh-keys (rendered in the account menu
+  // for every role) have no sidebar entry but ARE reachable, or a member's
+  // own mid-session 401 on any of the three would bounce to /runs instead of
   // restoring.
   it("M3: a member reaches the three self-service routes with no sidebar entry", () => {
     expect(roleCanReach("/secrets", "member")).toBe(true);
@@ -432,7 +433,7 @@ describe("App — the setup-status poll behind the model-access door", () => {
     midSession401.resolve(jsonResponse(401, { error: "unauthorized" }));
     await screen.findByText("Admin token", { exact: true });
 
-    // THE STALE COMPLETION: the first person's snapshot arrives after they are
+    // The stale completion: the first person's snapshot arrives after they are
     // gone. It must not be stored.
     await act(async () => {
       landingRead.resolve(jsonResponse(200, SETUP_STATUS_READY));

@@ -56,9 +56,7 @@ import type { CorpNetworkGate, CorpNetworkState } from "./steps";
 import { HostProxyTab } from "./corp-network-proxy";
 export { hasUserinfo, isProxyConfigured, proxyDetected } from "./corp-network-proxy";
 
-// ------------------------------------------------------------
 // Top-level step
-// ------------------------------------------------------------
 
 // The step's imperative fix-it handlers, registered up to the orchestrator
 // (setup-screen.tsx) so the footer's gate action — rendered by SetupLayout,
@@ -117,7 +115,7 @@ export function CorpNetworkStep({
    *  falls back to its own state. */
   tab?: "proxy" | "egress";
   onTabChange?: (t: "proxy" | "egress") => void;
-  /** W12-W12-C-3: the store's live secret names — see HostProxyTab's
+  /** The store's live secret names — see HostProxyTab's
    *  secretRefDangling and the AddSecretDialog existingNames wiring below.
    *  Optional and UNKNOWN (not "empty") when omitted — a standalone/test
    *  render that doesn't wire the orchestrator's list up must never read a
@@ -203,9 +201,9 @@ export function CorpNetworkStep({
   // Latest known redirectProbes, updated SYNCHRONOUSLY inside onProbeResult
   // below as each result lands — never re-read from the `gate` prop after
   // this initial seed (re-entering the step). "Test all" fires every
-  // redirect's probe concurrently; onProbeResult used to materialize its
-  // patch from gate.redirectProbes at write time, a snapshot that lags a
-  // whole batch still resolving, so the LAST result to land clobbered every
+  // redirect's probe concurrently; materializing the patch from
+  // gate.redirectProbes at write time would use a snapshot that lags a whole
+  // batch still resolving, so the LAST result to land would clobber every
   // other one already accumulated (onGateChange's outer merge is a shallow
   // spread — a patch's redirectProbes key REPLACES the map wholesale, it
   // doesn't deep-merge). This ref sidesteps that: each call composes onto
@@ -248,7 +246,7 @@ export function CorpNetworkStep({
   const redirectRows = siteConfig?.egress_redirects ?? [];
   const egressDot = redirectRows.some((r) => gate.redirectProbes[r.from]?.state !== "reached");
 
-  // W13-S1-1: the server's graded host_proxy check — the SAME row the Review
+  // The server's graded host_proxy check — the SAME row the Review
   // step lists, surfaced here too (see HostProxyCheckNote) since Review sits
   // behind this step's own mandatory gate.
   const hostProxyCheck = status.checks.find((c) => c.id === "host_proxy");

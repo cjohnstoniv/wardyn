@@ -122,8 +122,8 @@ describe("RunCard — two-row anatomy", () => {
     renderCard(run(), held);
     expect(screen.getByText("1 waiting · sandbox held")).toBeInTheDocument();
 
-    // The sentence that used to restate the state on every attention card is
-    // gone — the glyph and the Review button carry it.
+    // A held approval or a failure adds nothing beyond the glyph and the
+    // Review button — no sentence restates the state.
     renderCard(run({ id: "run-2", state: "FAILED" }));
     expect(screen.queryByText(/Run failed — review what happened/)).toBeNull();
     expect(screen.queryByText(/Waiting for your confirmation/)).toBeNull();
@@ -216,9 +216,9 @@ describe("RunCard — cloneRun behaviour (review C-01/C-06/C-07)", () => {
     expect(opts.state.prefill.state.toolApprovals).toBe("hold");
   });
 
-  // U2-08 (blind round 2, lens-U2): the refusal sentence is a DRAFT constant
-  // beside CLONE_UNREADABLE, not a literal inline in this component — the two
-  // clone doors' OTHER string was hoisted for exactly that reason (U-01).
+  // The refusal sentence is a DRAFT constant beside CLONE_UNREADABLE, not a
+  // literal inline in this component — the two clone doors' OTHER string was
+  // hoisted for exactly that reason (U-01, blind round 2, lens-U2).
   it("a rejected fetch toasts CLONE_LOAD_FAILED and never navigates", async () => {
     listAuditMock.mockRejectedValue(new Error("network down"));
     renderCard(run({ state: "COMPLETED" }));
